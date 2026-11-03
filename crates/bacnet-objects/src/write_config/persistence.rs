@@ -34,6 +34,13 @@ pub struct TimerWriteConfig {
     /// `None` until then: what the application configures applies at each
     /// start.
     pub state_change: Option<TimerStateChange>,
+    /// Default_Timeout in milliseconds, once a write has set it (#2312).
+    /// `None` until then. A rebuilt Timer serves it only while it lies
+    /// within the Timer's Min_Pres_Value..=Max_Pres_Value range; see
+    /// [`TimerObject::set_pres_value_range`].
+    ///
+    /// [`TimerObject::set_pres_value_range`]: crate::timer::TimerObject::set_pres_value_range
+    pub default_timeout: Option<u64>,
 }
 
 /// The three properties a Timer serves together (Clause 12.57, Table 12-75
@@ -116,10 +123,17 @@ mod file {
     /// The format's tag. One format serves both object types; the octet
     /// after the shared header names which one the body is for.
     const MAGIC: &[u8; 8] = b"RBNWCF01";
-    /// A Timer's body follows.
-    const KIND_TIMER: u8 = 1;
+    /// A Timer's body as saved before Default_Timeout was kept (#2243): the
+    /// set alone. Still loaded, with no Default_Timeout written; never
+    /// saved.
+    const KIND_TIMER_SET_ONLY: u8 = 1;
     /// A Channel's body follows.
     const KIND_CHANNEL: u8 = 2;
+    /// A Timer's body follows: the set, then Default_Timeout (#2312). A new
+    /// kind rather than a part added to kind 1, so that a kind 1 file cut
+    /// short can't pass for one without the new part, and a reader that
+    /// predates it refuses the file instead of dropping the part.
+    const KIND_TIMER: u8 = 3;
     /// A full member list, or reference list, of the longest references
     /// takes about 30 KiB; the cap leaves room for large constructed
     /// State_Change_Values. Anything larger is not a file this backend
@@ -138,9 +152,11 @@ mod file {
     /// object keeps behind a presence octet, 0 or 1. Variable parts state
     /// their count and their length in octets first, and the file must end
     /// where its last part does, so a file cut short anywhere, or holding a
-    /// part of the wrong size, does not load. A Timer's set holds the
-    /// priority, the seven State_Change_Values and the references; a
-    /// Channel's parts are the members with their delays, Channel_Number,
+    /// part of the wrong size, does not load. A Timer's parts are its set,
+    /// which holds the priority, the seven State_Change_Values and the
+    /// references, then Default_Timeout in eight octets; a file saved before
+    /// Default_Timeout was kept names another kind and ends after the set,
+    /// and still loads. A Channel's parts are the members with their delays, Channel_Number,
     /// Control_Groups and Allow_Group_Delay_Inhibit, in that order. Values
     /// and references are in their BACnet encodings, integers big-endian. It
     /// does not coordinate between processes.
@@ -190,7 +206,10 @@ mod file {
                 at: 0,
             };
             let snapshot = match (reader.u8()?, object.object_type()) {
-                (KIND_TIMER, ObjectType::TIMER) => WriteConfigSnapshot::Timer(reader.timer()?),
+                (KIND_TIMER, ObjectType::TIMER) => WriteConfigSnapshot::Timer(reader.timer(true)?),
+                (KIND_TIMER_SET_ONLY, ObjectType::TIMER) => {
+                    WriteConfigSnapshot::Timer(reader.timer(false)?)
+                }
                 (KIND_CHANNEL, ObjectType::CHANNEL) => {
                     WriteConfigSnapshot::Channel(reader.channel()?)
                 }
@@ -256,7 +275,19 @@ mod file {
     }
 
     fn encode_timer(body: &mut BytesMut, config: &TimerWriteConfig) -> Result<(), Error> {
-        let Some(set) = &config.state_change else {
+        encode_timer_set(body, config.state_change.as_ref())?;
+        match config.default_timeout {
+            None => body.extend_from_slice(&[0]),
+            Some(timeout) => {
+                body.extend_from_slice(&[1]);
+                body.extend_from_slice(&timeout.to_be_bytes());
+            }
+        }
+        Ok(())
+    }
+
+    fn encode_timer_set(body: &mut BytesMut, set: Option<&TimerStateChange>) -> Result<(), Error> {
+        let Some(set) = set else {
             body.extend_from_slice(&[0]);
             return Ok(());
         };
@@ -354,6 +385,10 @@ mod file {
             Ok(u32::from_be_bytes(self.take(4)?.try_into().expect("four")))
         }
 
+        fn u64(&mut self) -> Result<u64, Error> {
+            Ok(u64::from_be_bytes(self.take(8)?.try_into().expect("eight")))
+        }
+
         /// A presence octet or a BOOLEAN: 0 or 1, nothing else.
         fn flag(&mut self) -> Result<bool, Error> {
             match self.u8()? {
@@ -386,9 +421,24 @@ mod file {
             Ok(elements)
         }
 
-        fn timer(&mut self) -> Result<TimerWriteConfig, Error> {
+        /// A Timer's body; `with_timeout` for one that goes on past its set
+        /// with Default_Timeout.
+        fn timer(&mut self, with_timeout: bool) -> Result<TimerWriteConfig, Error> {
+            let state_change = self.timer_set()?;
+            let default_timeout = if with_timeout && self.flag()? {
+                Some(self.u64()?)
+            } else {
+                None
+            };
+            Ok(TimerWriteConfig {
+                state_change,
+                default_timeout,
+            })
+        }
+
+        fn timer_set(&mut self) -> Result<Option<TimerStateChange>, Error> {
             if !self.flag()? {
-                return Ok(TimerWriteConfig::default());
+                return Ok(None);
             }
             let priority_for_writing = self.u8()?;
             if !(1..=16).contains(&priority_for_writing) {
@@ -401,13 +451,11 @@ mod file {
                 .map_err(|_| self.file.corrupt("holds other than seven values"))?;
             let count = self.count(MAX_TIMER_REFERENCES)?;
             let references = self.elements(count, decode_device_object_property_reference)?;
-            Ok(TimerWriteConfig {
-                state_change: Some(TimerStateChange {
-                    values,
-                    references,
-                    priority_for_writing,
-                }),
-            })
+            Ok(Some(TimerStateChange {
+                values,
+                references,
+                priority_for_writing,
+            }))
         }
 
         fn channel(&mut self) -> Result<ChannelWriteConfig, Error> {

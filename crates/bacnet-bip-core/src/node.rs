@@ -115,6 +115,7 @@
 //! | A foreign device takes Forwarded-NPDUs only from its BBMD by unicast | `node_receive.rs` `foreign_trust_takes_forwards_only_from_the_bbmd_by_unicast` |
 //! | Broadcasts are held, bounded, until the first registration attempt resolves | `node_registration.rs` `broadcasts_are_held_until_the_first_attempt_resolves` |
 //! | A foreign device refuses manual requests a success answers to its own BBMD, whose registration it owns | `node_registration.rs` `a_foreign_device_refuses_manual_requests_to_its_bbmd` |
+//! | With [`Foreign::release_previous`], a move to another BBMD asks the old one once to delete the device's entry (J.2.9, J.5.2.1.2); success, its NAK and silence are only counted, and the move never waits (#2307) | `node_release.rs` `a_move_asks_the_old_bbmd_to_delete_the_entry_and_its_success_counts`, `a_nak_from_the_old_bbmd_is_counted_and_the_move_stands`, `silence_from_the_old_bbmd_is_counted_as_unanswered` |
 //! | NPDUs longer than the datagram budget allows are refused | `node_send.rs` `the_budget_caps_each_cast` |
 //! | A unicast to one of the link's group addresses is refused before anything is encoded (#1677) | `node_send.rs` `unicast_group_destinations_are_rejected_before_encoding_or_send` |
 

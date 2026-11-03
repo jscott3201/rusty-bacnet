@@ -172,14 +172,25 @@ impl BACnetServer {
     /// TypeError or ValueError, as does `priority_for_writing` given alone;
     /// the Timer's setter refuses a priority outside 1..=16 with
     /// VALUE_OUT_OF_RANGE.
+    ///
+    /// With `storage_path` (a `str`), the Timer keeps in that file what a
+    /// peer writes to State_Change_Values, List_Of_Object_Property_References
+    /// (with Priority_For_Writing) and Default_Timeout (#2312), and a saved
+    /// write wins over the keywords at the next start. A write that cannot
+    /// be saved is refused with DEVICE / OPERATIONAL_PROBLEM.
+    /// `clear_written_config` drops what was saved first, so the keywords
+    /// apply. A file that doesn't load raises BacnetError.
     #[pyo3(signature = (
         instance,
         name,
         *,
         state_change_values=None,
         references=None,
-        priority_for_writing=None
+        priority_for_writing=None,
+        storage_path=None,
+        clear_written_config=false
     ))]
+    #[allow(clippy::too_many_arguments)]
     fn add_timer(
         &self,
         instance: u32,
@@ -187,14 +198,16 @@ impl BACnetServer {
         state_change_values: Option<Vec<Option<crate::types::PyPropertyValue>>>,
         references: Option<Bound<'_, PyAny>>,
         priority_for_writing: Option<u64>,
+        storage_path: Option<&str>,
+        clear_written_config: bool,
     ) -> PyResult<()> {
-        let mut obj = TimerObject::new(instance, name).map_err(to_py_err)?;
-        if state_change_values.is_none() && references.is_none() {
+        let set = if state_change_values.is_none() && references.is_none() {
             if priority_for_writing.is_some() {
                 return Err(pyo3::exceptions::PyValueError::new_err(
                     "priority_for_writing needs state_change_values or references",
                 ));
             }
+            None
         } else {
             // Past 255 is out of range too: the setter refuses 0 as it would.
             let priority = priority_for_writing.map_or(16, |p| u8::try_from(p).unwrap_or(0));
@@ -203,6 +216,15 @@ impl BACnetServer {
                 .map(|references| self.members_from_py(&references, "references"))
                 .transpose()?
                 .unwrap_or_default();
+            Some((values, references, priority))
+        };
+        let mut obj = match storage_path {
+            Some(path) => {
+                timer_on_storage(instance, name, path, clear_written_config).map_err(to_py_err)?
+            }
+            None => TimerObject::new(instance, name).map_err(to_py_err)?,
+        };
+        if let Some((values, references, priority)) = set {
             obj.set_state_change(values, references, priority)
                 .map_err(to_py_err)?;
         }
@@ -672,6 +694,29 @@ fn command(
 #[cfg(test)]
 #[path = "registration_tests.rs"]
 mod tests;
+
+/// A Timer kept in the file at `path`. With `clear`, what the file holds is
+/// dropped first, and the Timer opened again on the cleared file, so it
+/// serves what a new Timer does until the keywords configure it: a cleared
+/// object keeps serving the written values, and `add_timer` has no keyword
+/// for Default_Timeout to set it back.
+fn timer_on_storage(
+    instance: u32,
+    name: &str,
+    path: &str,
+    clear: bool,
+) -> Result<TimerObject, bacnet_types::error::Error> {
+    let storage = Arc::new(bacnet_objects::write_config::FileWriteConfigPersistence::new(path)?);
+    let open = || TimerObject::with_persistence(instance, name, storage.clone());
+    let mut obj = open()?;
+    if clear {
+        obj.clear_written_config()?;
+        // Dropping it waits for its saves.
+        drop(obj);
+        obj = open()?;
+    }
+    Ok(obj)
+}
 
 /// The seven State_Change_Values entries `add_timer` takes; all `no-value`
 /// when omitted.

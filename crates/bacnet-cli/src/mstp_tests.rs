@@ -261,6 +261,7 @@ fn the_cross_flag_checks_are_usage_errors() {
         &["-i", "10.0.0.5"],
         &["--sc-url", "wss://hub:443"],
         &["--ttl", "60"],
+        &["--nat-global-address", "203.0.113.7:61000"],
         &["-p", "47809"],
         &["--device-instance", "5"],
     ] {

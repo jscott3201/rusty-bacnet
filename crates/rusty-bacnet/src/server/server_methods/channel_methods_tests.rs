@@ -34,6 +34,7 @@ fn python_add_channel_settings_reach_the_channel() {
         execution_delay: Some(vec![0, 250]),
         control_groups: Some(vec![5, 7]),
         allow_group_delay_inhibit: true,
+        ..ChannelSettings::default()
     };
     let configured = channel(1, "CH-1", 65_535, settings).unwrap();
 
@@ -155,4 +156,34 @@ fn python_add_channel_refusals_come_from_the_channel() {
         ),
         "{error:?}"
     );
+}
+
+/// With `storage_path`, a peer's write wins over the arguments at the next
+/// build, Channel_Number included, until `clear_written_config` drops it
+/// (#2312).
+#[test]
+fn python_add_channel_storage_keeps_a_write_until_cleared() {
+    let directory = std::env::temp_dir().join(format!(
+        "rusty-bacnet-channel-storage-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("channel-1");
+    let path = path.to_str().unwrap();
+    let build = |clear_written_config| {
+        let settings = ChannelSettings {
+            storage_path: Some(path),
+            clear_written_config,
+            ..ChannelSettings::default()
+        };
+        channel(1, "CH-1", 4, settings).unwrap()
+    };
+    let number = PropertyIdentifier::CHANNEL_NUMBER;
+    build(false)
+        .write_property(number, None, PropertyValue::Unsigned(77), None)
+        .unwrap();
+    assert_eq!(read(&build(false), number), PropertyValue::Unsigned(77));
+    assert_eq!(read(&build(true), number), PropertyValue::Unsigned(4));
+    assert_eq!(read(&build(false), number), PropertyValue::Unsigned(4));
+    std::fs::remove_dir_all(&directory).unwrap();
 }

@@ -313,3 +313,72 @@ async fn bip_builder_joins_a_multicast_group_only_with_an_interface() {
     assert_eq!(client.transport().multicast(), Some(group));
     client.stop().await.unwrap();
 }
+
+/// A resolver that answers every name with one address.
+struct OneAddress(Ipv4Addr);
+
+impl bacnet_transport::bbmd_lookup::BbmdResolver for OneAddress {
+    fn resolve(&self, _host: &str) -> bacnet_transport::bbmd_lookup::BbmdLookup {
+        let ip = std::net::IpAddr::V4(self.0);
+        Box::pin(async move { Ok(vec![ip]) })
+    }
+}
+
+/// The builder hands its transport the BBMD resolver and the release of
+/// the BBMD a move leaves (#2307): a host name activated on the port moves
+/// the client to the BBMD the resolver names, which it registers with, and
+/// the BBMD it left is asked to delete its entry.
+#[tokio::test]
+async fn bip_builder_hands_the_transport_its_resolver_and_release() {
+    use bacnet_types::bip_port::{BipPortMode, ForeignDeviceChanges};
+    use bacnet_types::constructed::{BACnetHostAddress, BACnetHostNPort};
+    let socket = || tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0));
+    let (old, new) = (socket().await.unwrap(), socket().await.unwrap());
+    let mut client = BACnetClient::bip_builder()
+        .interface(Ipv4Addr::LOCALHOST)
+        .port(0)
+        .mode(BipMode::Foreign(ForeignDeviceConfig {
+            bbmd_ip: Ipv4Addr::LOCALHOST,
+            bbmd_port: old.local_addr().unwrap().port(),
+            ttl: 60,
+            renewal_interval: None,
+        }))
+        .release_previous_bbmd(true)
+        .bbmd_resolver(Arc::new(OneAddress(Ipv4Addr::LOCALHOST)))
+        .build()
+        .await
+        .unwrap();
+    let mut packet = [0; 64];
+    let (len, _) = old.recv_from(&mut packet).await.unwrap();
+    assert_eq!(&packet[..len], &[0x81, 5, 0, 6, 0, 60]);
+    let Some(BipPortMode::Foreign { registration }) =
+        client.transport().bip_port().map(|port| port.mode)
+    else {
+        panic!("a foreign device's port");
+    };
+    let mut changes = ForeignDeviceChanges::default();
+    changes.bbmd = Some(BACnetHostNPort {
+        host: BACnetHostAddress::Name("bbmd.test".into()),
+        port: new.local_addr().unwrap().port(),
+    });
+    registration.activate(&changes).unwrap();
+    let wait = Duration::from_secs(5);
+    let (len, _) = timeout(wait, new.recv_from(&mut packet))
+        .await
+        .expect("a registration with the new BBMD")
+        .unwrap();
+    assert_eq!(&packet[..len], &[0x81, 5, 0, 6, 0, 60]);
+    let own = client.transport().local_mac().to_vec();
+    let (len, _) = timeout(wait, old.recv_from(&mut packet))
+        .await
+        .expect("a release of the old BBMD")
+        .unwrap();
+    assert_eq!(&packet[..4], &[0x81, 0x08, 0, 10]);
+    assert_eq!(&packet[4..len], own);
+    let registration = client.foreign_registration().unwrap();
+    assert_eq!(
+        (registration.previous_releases, registration.bbmd_lookups),
+        (1, 1)
+    );
+    client.stop().await.unwrap();
+}
