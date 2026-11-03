@@ -2,7 +2,7 @@
 
 Part of [#1978](https://github.com/jscott3201/rusty-bacnet/issues/1978),
 items 1 and 7, counted one at a time with the counting harness
-(Benchmarks.md section 10.4). Item 1 changes how MAC addresses are copied
+(Benchmarks.md section 10.4); section 10.6 there summarizes it. Item 1 changes how MAC addresses are copied
 on the B/IP request path. Item 7 builds the server's response route once
 per request instead of twice.
 
