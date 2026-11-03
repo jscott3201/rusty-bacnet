@@ -6996,13 +6996,22 @@ class BipEndpoint:
         unconfirmed requests aren't paced."""
         ...
 
-    def add_analog_input(self, instance: int, name: str, units: EngineeringUnits | int = 62, present_value: float = 0.0) -> None: ...
-    def add_analog_value(self, instance: int, name: str, units: EngineeringUnits | int = 62, *, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None) -> None:
-        """Optional AV Audit rows: None is absent; priority 'inherit' is present NULL."""
+    def add_analog_input(self, instance: int, name: str, units: EngineeringUnits | int = 62, present_value: float = 0.0, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
+        """Profile keywords as on ``BACnetServer.add_analog_input``: each
+        provisions its optional row, served only when given."""
         ...
-    def add_binary_input(self, instance: int, name: str) -> None: ...
-    def add_binary_value(self, instance: int, name: str, *, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None) -> None:
-        """Optional BV Audit rows: None is absent; priority 'inherit' is present NULL."""
+    def add_analog_value(self, instance: int, name: str, units: EngineeringUnits | int = 62, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
+        """Optional AV Audit rows: None is absent; priority 'inherit' is present NULL.
+        Access, Value_Source and profile keywords as on
+        ``BACnetServer.add_analog_value``; tracking on a commandable object
+        raises ValueError."""
+        ...
+    def add_binary_input(self, instance: int, name: str, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
+        """Profile keywords as on ``add_analog_input``."""
+        ...
+    def add_binary_value(self, instance: int, name: str, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
+        """Optional BV Audit rows: None is absent; priority 'inherit' is present NULL.
+        Access, Value_Source and profile keywords as on ``add_analog_value``."""
         ...
     def add_group(
         self,
@@ -7109,13 +7118,22 @@ class ScEndpoint:
         ``device_write_policy`` are as for ``BipEndpoint``."""
         ...
 
-    def add_analog_input(self, instance: int, name: str, units: EngineeringUnits | int = 62, present_value: float = 0.0) -> None: ...
-    def add_analog_value(self, instance: int, name: str, units: EngineeringUnits | int = 62, *, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None) -> None:
-        """Optional AV Audit rows: None is absent; priority 'inherit' is present NULL."""
+    def add_analog_input(self, instance: int, name: str, units: EngineeringUnits | int = 62, present_value: float = 0.0, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
+        """Profile keywords as on ``BACnetServer.add_analog_input``: each
+        provisions its optional row, served only when given."""
         ...
-    def add_binary_input(self, instance: int, name: str) -> None: ...
-    def add_binary_value(self, instance: int, name: str, *, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None) -> None:
-        """Optional BV Audit rows: None is absent; priority 'inherit' is present NULL."""
+    def add_analog_value(self, instance: int, name: str, units: EngineeringUnits | int = 62, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
+        """Optional AV Audit rows: None is absent; priority 'inherit' is present NULL.
+        Access, Value_Source and profile keywords as on
+        ``BACnetServer.add_analog_value``; tracking on a commandable object
+        raises ValueError."""
+        ...
+    def add_binary_input(self, instance: int, name: str, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
+        """Profile keywords as on ``add_analog_input``."""
+        ...
+    def add_binary_value(self, instance: int, name: str, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
+        """Optional BV Audit rows: None is absent; priority 'inherit' is present NULL.
+        Access, Value_Source and profile keywords as on ``add_analog_value``."""
         ...
     def add_group(
         self,
@@ -7241,13 +7259,22 @@ class MstpEndpoint:
         """
         ...
 
-    def add_analog_input(self, instance: int, name: str, units: EngineeringUnits | int = 62, present_value: float = 0.0) -> None: ...
-    def add_analog_value(self, instance: int, name: str, units: EngineeringUnits | int = 62, *, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None) -> None:
-        """Optional AV Audit rows: None is absent; priority 'inherit' is present NULL."""
+    def add_analog_input(self, instance: int, name: str, units: EngineeringUnits | int = 62, present_value: float = 0.0, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
+        """Profile keywords as on ``BACnetServer.add_analog_input``: each
+        provisions its optional row, served only when given."""
         ...
-    def add_binary_input(self, instance: int, name: str) -> None: ...
-    def add_binary_value(self, instance: int, name: str, *, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None) -> None:
-        """Optional BV Audit rows: None is absent; priority 'inherit' is present NULL."""
+    def add_analog_value(self, instance: int, name: str, units: EngineeringUnits | int = 62, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
+        """Optional AV Audit rows: None is absent; priority 'inherit' is present NULL.
+        Access, Value_Source and profile keywords as on
+        ``BACnetServer.add_analog_value``; tracking on a commandable object
+        raises ValueError."""
+        ...
+    def add_binary_input(self, instance: int, name: str, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
+        """Profile keywords as on ``add_analog_input``."""
+        ...
+    def add_binary_value(self, instance: int, name: str, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
+        """Optional BV Audit rows: None is absent; priority 'inherit' is present NULL.
+        Access, Value_Source and profile keywords as on ``add_analog_value``."""
         ...
     def add_group(
         self,

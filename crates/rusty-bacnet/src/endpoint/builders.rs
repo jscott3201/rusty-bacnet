@@ -1,0 +1,178 @@
+//! The object builders the three endpoint owners share (#1867). They take
+//! the server builders' keywords, parsed by the same `object_options` code:
+//! `tags`, `profile_location` and `profile_name` on all four, plus
+//! `present_value_access`, `value_source_tracking` and the Audit policy on
+//! the Value objects. Each call builds its object once, so a bad keyword
+//! fails there, and keeps the parsed parameters for the rebuild at start.
+
+use pyo3::prelude::*;
+
+use crate::endpoint::common::ValueKeywords;
+use crate::object_options::present_value_access;
+
+/// The Value keywords, checked the way the server's Value builders check
+/// them.
+pub(super) fn value_keywords(
+    access: &str,
+    value_source_tracking: bool,
+    audit_level: Option<&str>,
+    auditable_operations: Option<&Bound<'_, PyAny>>,
+    audit_priority_filter: Option<&Bound<'_, PyAny>>,
+) -> PyResult<ValueKeywords> {
+    Ok(ValueKeywords {
+        access: present_value_access(access, value_source_tracking)?,
+        value_source_tracking,
+        audit_policy: crate::object_audit_policy::parse(
+            audit_level,
+            auditable_operations,
+            audit_priority_filter,
+        )?,
+    })
+}
+
+/// Generate the shared methods on one endpoint owner. Invoked in the
+/// owner's own module, so the expansion reaches its private `lifecycle` and
+/// `push_pending`.
+macro_rules! endpoint_builders {
+    ($endpoint:ty) => {
+        #[pymethods]
+        impl $endpoint {
+            /// Add an Analog Input object (before start).
+            ///
+            /// `tags`, `profile_location` and `profile_name` provision the
+            /// optional Tags, Profile_Location and Profile_Name rows, as on
+            /// `BACnetServer.add_analog_input`; each is served only when
+            /// given.
+            #[pyo3(signature = (
+                        instance, name, units=62, present_value=0.0, *,
+                        tags=None, profile_location=None, profile_name=None
+                    ))]
+            #[allow(clippy::too_many_arguments)]
+            fn add_analog_input(
+                &self,
+                instance: u32,
+                name: &str,
+                units: u32,
+                present_value: f32,
+                tags: Option<&Bound<'_, PyAny>>,
+                profile_location: Option<String>,
+                profile_name: Option<String>,
+            ) -> PyResult<()> {
+                let pending = $crate::endpoint::common::PendingObject::AnalogInput {
+                    instance,
+                    name: name.to_string(),
+                    units,
+                    present_value,
+                    profile: $crate::object_options::object_profile(tags, profile_location, profile_name)?,
+                };
+                pending.build()?;
+                self.push_pending(pending)
+            }
+
+            /// Add an Analog Value object (before start).
+            ///
+            /// `present_value_access`, `value_source_tracking`, the Audit
+            /// keywords and the profile keywords are as on
+            /// `BACnetServer.add_analog_value`.
+            #[pyo3(signature = (
+                        instance, name, units=62, *,
+                        present_value_access="commandable", value_source_tracking=false,
+                        audit_level=None, auditable_operations=None, audit_priority_filter=None,
+                        tags=None, profile_location=None, profile_name=None
+                    ))]
+            #[allow(clippy::too_many_arguments)]
+            fn add_analog_value(
+                &self,
+                instance: u32,
+                name: &str,
+                units: u32,
+                present_value_access: &str,
+                value_source_tracking: bool,
+                audit_level: Option<&str>,
+                auditable_operations: Option<&Bound<'_, PyAny>>,
+                audit_priority_filter: Option<&Bound<'_, PyAny>>,
+                tags: Option<&Bound<'_, PyAny>>,
+                profile_location: Option<String>,
+                profile_name: Option<String>,
+            ) -> PyResult<()> {
+                let pending = $crate::endpoint::common::PendingObject::AnalogValue {
+                    instance,
+                    name: name.to_string(),
+                    units,
+                    value: $crate::endpoint::builders::value_keywords(
+                        present_value_access,
+                        value_source_tracking,
+                        audit_level,
+                        auditable_operations,
+                        audit_priority_filter,
+                    )?,
+                    profile: $crate::object_options::object_profile(tags, profile_location, profile_name)?,
+                };
+                pending.build()?;
+                self.push_pending(pending)
+            }
+
+            /// Add a Binary Input object (before start). Profile keywords as
+            /// on `add_analog_input`.
+            #[pyo3(signature = (
+                        instance, name, *, tags=None, profile_location=None, profile_name=None
+                    ))]
+            fn add_binary_input(
+                &self,
+                instance: u32,
+                name: &str,
+                tags: Option<&Bound<'_, PyAny>>,
+                profile_location: Option<String>,
+                profile_name: Option<String>,
+            ) -> PyResult<()> {
+                let pending = $crate::endpoint::common::PendingObject::BinaryInput {
+                    instance,
+                    name: name.to_string(),
+                    profile: $crate::object_options::object_profile(tags, profile_location, profile_name)?,
+                };
+                pending.build()?;
+                self.push_pending(pending)
+            }
+
+            /// Add a Binary Value object (before start). Access, Value_Source,
+            /// Audit and profile keywords as on `add_analog_value`.
+            #[pyo3(signature = (
+                        instance, name, *,
+                        present_value_access="commandable", value_source_tracking=false,
+                        audit_level=None, auditable_operations=None, audit_priority_filter=None,
+                        tags=None, profile_location=None, profile_name=None
+                    ))]
+            #[allow(clippy::too_many_arguments)]
+            fn add_binary_value(
+                &self,
+                instance: u32,
+                name: &str,
+                present_value_access: &str,
+                value_source_tracking: bool,
+                audit_level: Option<&str>,
+                auditable_operations: Option<&Bound<'_, PyAny>>,
+                audit_priority_filter: Option<&Bound<'_, PyAny>>,
+                tags: Option<&Bound<'_, PyAny>>,
+                profile_location: Option<String>,
+                profile_name: Option<String>,
+            ) -> PyResult<()> {
+                let pending = $crate::endpoint::common::PendingObject::BinaryValue {
+                    instance,
+                    name: name.to_string(),
+                    value: $crate::endpoint::builders::value_keywords(
+                        present_value_access,
+                        value_source_tracking,
+                        audit_level,
+                        auditable_operations,
+                        audit_priority_filter,
+                    )?,
+                    profile: $crate::object_options::object_profile(tags, profile_location, profile_name)?,
+                };
+                pending.build()?;
+                self.push_pending(pending)
+            }
+        }
+    };
+}
+
+pub(super) use endpoint_builders;

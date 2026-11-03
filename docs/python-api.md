@@ -5429,6 +5429,15 @@ async with endpoint:
     value = await client.read_property("127.0.0.1:47808", oid, pid)
 ```
 
+The endpoint builders `add_analog_input`, `add_analog_value`,
+`add_binary_input` and `add_binary_value` take the same keyword-only options
+as `BACnetServer`'s (#1867), checked by the same code: `tags`,
+`profile_location` and `profile_name` on all four, and `present_value_access`
+and `value_source_tracking` on the two Value builders (see
+[Object profiles and Value_Source](#object-profiles-and-value_source)).
+The endpoint serves those rows to ReadProperty and ReadPropertyMultiple; its
+server role takes no writes to them.
+
 `await endpoint.status()` returns a redacted snapshot (`is_running`,
 `device_instance`, `vendor_id`, `max_apdu`, `transport`, `local_address`,
 `active_leases`, plus policy counters). `BipEndpoint` also takes `bbmd=` and
