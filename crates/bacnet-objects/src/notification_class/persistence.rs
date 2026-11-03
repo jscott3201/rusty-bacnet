@@ -87,7 +87,12 @@ impl FileNotificationClassPersistence {
     /// Keep the Recipient_List in the file at `path`.
     pub fn new(path: impl AsRef<Path>) -> Result<Self, Error> {
         Ok(Self {
-            file: ObjectFile::new(path.as_ref(), MAGIC, MAX_FILE_BYTES, "Notification Class")?,
+            file: ObjectFile::new(
+                path.as_ref(),
+                MAGIC,
+                MAX_FILE_BYTES,
+                "Notification Class file",
+            )?,
         })
     }
 

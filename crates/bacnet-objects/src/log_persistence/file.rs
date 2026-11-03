@@ -9,8 +9,9 @@ use bacnet_types::constructed::{BACnetEventLogRecord, BACnetLogMultipleRecord, B
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 
-use super::codec::{self, Decoded, MAX_SNAPSHOT_BYTES, SnapshotRecord};
+use super::codec::MAX_SNAPSHOT_BYTES;
 use super::{LogPersistence, LogSnapshot};
+use crate::snapshot::log::{self, LogRecord};
 
 /// Two-slot, versioned and checksummed file store for one log's snapshots,
 /// as [`FileAuditLogPersistence`](crate::audit::FileAuditLogPersistence)
@@ -29,6 +30,9 @@ use super::{LogPersistence, LogSnapshot};
 /// another object or uses a schema this build can't read, when reading
 /// either slot fails, and when both slots hold different snapshots of one
 /// generation. It does not coordinate several processes.
+///
+/// Each slot holds what [`snapshot::log::encode`](crate::snapshot::log::encode)
+/// returns; that module documents the format.
 #[derive(Clone, Debug)]
 pub struct FileLogPersistence {
     slot_paths: [PathBuf; 2],
@@ -79,45 +83,25 @@ impl FileLogPersistence {
         self.slot_paths.clone()
     }
 
-    fn load_slots<R: SnapshotRecord>(
+    fn load_slots<R: LogRecord>(
         &self,
         expected: ObjectIdentifier,
     ) -> Result<Option<LogSnapshot<R>>, Error> {
-        let mut newest: Option<LogSnapshot<R>> = None;
-        let mut damage = None;
-        for (slot, path) in self.slot_paths.iter().enumerate() {
-            let Some(data) = self.read_slot(slot)? else {
-                continue;
-            };
-            match codec::decode::<R>(&data, expected) {
-                Decoded::Refused(error) => return Err(error),
-                Decoded::Corrupt(error) => {
-                    log_warn!(slot = %path.display(), %error, "Passing over a damaged log snapshot slot");
-                    damage = Some(error);
-                }
-                Decoded::Valid(snapshot) => match &newest {
-                    Some(current) if current.generation > snapshot.generation => {}
-                    Some(current) if current.generation == snapshot.generation => {
-                        if *current != snapshot {
-                            return Err(Error::Encoding(
-                                "log snapshot slots hold different snapshots of one generation"
-                                    .into(),
-                            ));
-                        }
-                    }
-                    _ => newest = Some(snapshot),
-                },
+        let slots = [self.read_slot(0)?, self.read_slot(1)?];
+        let Some(newest) = log::newest::<R>(expected, [slots[0].as_deref(), slots[1].as_deref()])?
+        else {
+            return Ok(None);
+        };
+        for (path, error) in self.slot_paths.iter().zip(&newest.passed_over) {
+            if let Some(error) = error {
+                log_warn!(slot = %path.display(), %error, "Passing over a damaged log snapshot slot");
             }
         }
-        match (newest, damage) {
-            (Some(snapshot), _) => Ok(Some(snapshot)),
-            (None, Some(error)) => Err(error),
-            (None, None) => Ok(None),
-        }
+        Ok(Some(newest.snapshot))
     }
 
-    fn commit_slot<R: SnapshotRecord>(&self, snapshot: &LogSnapshot<R>) -> Result<(), Error> {
-        let bytes = codec::encode(snapshot)?;
+    fn commit_slot<R: LogRecord>(&self, snapshot: &LogSnapshot<R>) -> Result<(), Error> {
+        let bytes = log::encode(snapshot)?;
         let slot = (snapshot.generation % 2) as usize;
         #[cfg(feature = "test-support")]
         if let Some(memory) = &self.memory {
