@@ -132,7 +132,9 @@ pub trait Bindings {
 /// The host's invoke IDs, shared with the device's own client requests.
 pub trait InvokeIds {
     /// An invoke ID free for a request to `to`, now taken; `None` when none
-    /// is.
+    /// is. Hand them out in turn rather than reusing one just released, as
+    /// the server's coordinator does: a late answer to an ended request
+    /// would otherwise match the next one sent under its ID.
     fn take(&mut self, to: &BACnetAddress) -> Option<u8>;
     /// Give back `id`, taken for `to`: its request has ended.
     fn release(&mut self, to: &BACnetAddress, id: u8);
@@ -145,8 +147,9 @@ pub struct ReporterCounters {
     /// Subscriptions and notifications: the table's counts, and the
     /// notifications [`Reporter::pop`] handed out.
     pub cov: CovCounters,
-    /// Reports the outbox or the confirmed table had no room for, each
-    /// leaving its subscription owed a later look.
+    /// Reports refused for want of room in the outbox, or of an invoke ID
+    /// for a confirmed one, each leaving its subscription owed a later look
+    /// (unless it couldn't fit even an empty outbox).
     pub owed: u64,
     /// Confirmed notifications sent again after a timeout.
     pub resent: u64,

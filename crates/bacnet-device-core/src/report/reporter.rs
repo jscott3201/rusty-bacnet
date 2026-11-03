@@ -62,9 +62,12 @@ pub struct Reporter {
     /// References owed a fresh look now: an Ack held their changes back,
     /// or a fence left a report's outcome unknown.
     looks: Vec<CovSubscriptionKey>,
-    /// References whose report found no room, looked at again once the
-    /// outbox empties.
+    /// References whose report found no room, looked at again once room
+    /// frees.
     owed: Vec<CovSubscriptionKey>,
+    /// An entry left the outbox since the owed references were last looked
+    /// at.
+    room_freed: bool,
     /// Invoke IDs of fenced notifications, given back at the next call
     /// that has the host's [`InvokeIds`].
     releases: Vec<(BACnetAddress, u8)>,
@@ -92,6 +95,7 @@ impl Reporter {
             confirmed: ConfirmedTable::default(),
             looks: Vec::new(),
             owed: Vec::new(),
+            room_freed: false,
             releases: Vec::new(),
             snapshots: LifeSafetyCovSnapshots::default(),
             counters: ReporterCounters::default(),
@@ -198,7 +202,7 @@ impl Reporter {
     /// earliest lifetime, report deadline or overdue answer, or the latest
     /// `now` it gave when references are owed a look.
     pub fn next_deadline(&self) -> Option<Instant> {
-        let looks = !self.looks.is_empty() || (!self.owed.is_empty() && self.outbox.is_empty());
+        let looks = !self.looks.is_empty() || (!self.owed.is_empty() && self.room_freed);
         let resend = self.confirmed.resend_due();
         bacnet_time::earliest([
             self.table.next_expiry(),
@@ -220,8 +224,9 @@ impl Reporter {
             self.end_confirmed(out.token, Delivery::Failed, now);
         }
         let mut keys = core::mem::take(&mut self.looks);
-        if self.outbox.is_empty() {
+        if self.room_freed {
             keys.append(&mut self.owed);
+            self.room_freed = false;
         }
         self.look(db, keys, now);
     }
@@ -255,22 +260,33 @@ impl Reporter {
             return Some(notification);
         }
         loop {
-            let (token, key, to, params, confirmed) = self.outbox.pop(|entry, params| {
+            let (token, key, to, params, confirmed, begun) = self.outbox.pop(|entry, params| {
                 (
                     entry.token,
                     entry.key.clone(),
                     entry.to.clone(),
                     params.to_vec(),
                     entry.confirmed,
+                    entry.begun,
                 )
             })?;
+            self.room_freed = true;
             let start = out.len();
             let invoke_id = if confirmed {
+                // A report popped so late that its answers would be cut off
+                // ends as the server's worker cut off at its first poll
+                // does: failed, held off.
+                let cutoff = begun.saturating_add(self.timing.cutoff());
+                if now >= cutoff {
+                    self.end_confirmed(token, Delivery::Failed, now);
+                    continue;
+                }
                 let peer = peer_address(&to);
                 let Some(invoke_id) = ids.take(&peer) else {
                     // No invoke ID to send it under: it ends unsent, and the
                     // change is looked at again later.
                     self.table.delivered(token, Delivery::NotSent, now);
+                    self.counters.owed += 1;
                     self.owe(key);
                     continue;
                 };
@@ -279,7 +295,13 @@ impl Reporter {
                 let retries = self.timing.retries;
                 let (to, params) = (to.clone(), params);
                 self.confirmed.insert(Outstanding::new(
-                    token, peer, to, invoke_id, params, deadline, retries,
+                    token,
+                    peer,
+                    to,
+                    invoke_id,
+                    params,
+                    (deadline, cutoff),
+                    retries,
                 ));
                 Some(invoke_id)
             } else {
@@ -454,7 +476,9 @@ impl Reporter {
     }
 
     /// Evaluate a change of `object` for `subs` and queue what it reports.
-    /// A report the outbox has no room for leaves its subscription owed.
+    /// An unconfirmed report replaces the one queued for its subscription,
+    /// which ends unsent; a report the outbox has no room for leaves its
+    /// subscription owed.
     fn report(
         &mut self,
         object: &dyn bacnet_objects::traits::BACnetObject,
@@ -465,6 +489,7 @@ impl Reporter {
         let mut budget = EventBudget::new(self.table.policy());
         let mut room = self.outbox.room();
         let limits = self.outbox.limits();
+        let outbox = &self.outbox;
         let mut refused = Vec::new();
         let evaluation = Evaluation {
             device: self.device,
@@ -478,7 +503,7 @@ impl Reporter {
             &mut budget,
             now,
             |sub, octets| {
-                if room.take(octets) {
+                if room.take(octets, outbox.queued(sub.key())) {
                     return Some(());
                 }
                 // Too large for the whole outbox: owing it would only find
@@ -491,14 +516,23 @@ impl Reporter {
         self.settle();
         for report in reports {
             let sub = &subs[report.index];
-            let queued = self.outbox.push(
+            let pushed = self.outbox.push(
                 report.token,
                 sub.key().clone(),
                 sub.endpoint(),
                 sub.issue_confirmed_notifications,
+                now,
                 &report.params,
             );
-            debug_assert!(queued, "admission reserved the room");
+            if let Some(replaced) = pushed.replaced {
+                // Superseded before it was sent: its baseline never was.
+                self.table.delivered(replaced, Delivery::NotSent, now);
+            }
+            if !pushed.queued {
+                debug_assert!(false, "admission reserved the room");
+                self.table.delivered(report.token, Delivery::NotSent, now);
+                self.owe(sub.key().clone());
+            }
         }
         for (key, hopeless) in refused {
             self.counters.owed += 1;
@@ -535,9 +569,11 @@ impl Reporter {
         if fenced.is_empty() {
             return;
         }
+        let before = self.outbox.room();
         self.outbox.kill(|entry| {
             fenced.tokens.contains(&entry.token) || fenced.removed.contains(&entry.key)
         });
+        self.room_freed |= self.outbox.room().octets_free() > before.octets_free();
         for token in &fenced.tokens {
             if let Some(out) = self.confirmed.take(*token) {
                 self.releases.push((out.peer, out.invoke_id));

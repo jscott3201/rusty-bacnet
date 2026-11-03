@@ -23,6 +23,10 @@ fn ai() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap()
 }
 
+fn ai2() -> ObjectIdentifier {
+    ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 2).unwrap()
+}
+
 fn peer() -> SubscriberEndpoint {
     SubscriberEndpoint::new(&[0x0A, 0, 0, 5, 0xBA, 0xC0], None)
 }
@@ -77,7 +81,10 @@ impl Device {
             .with_services(SERVICES);
         let mut sensor = AnalogInputObject::new(1, "AI-1", EngineeringUnits::NO_UNITS).unwrap();
         sensor.set_present_value(10.0);
-        let db = build_database_with_extra(&identity, vec![Box::new(sensor)]).unwrap();
+        let second = AnalogInputObject::new(2, "AI-2", EngineeringUnits::NO_UNITS).unwrap();
+        let sensors: Vec<Box<dyn bacnet_objects::traits::BACnetObject>> =
+            vec![Box::new(sensor), Box::new(second)];
+        let db = build_database_with_extra(&identity, sensors).unwrap();
         let responder = Responder::new(identity, crate::responder::Limits::default()).unwrap();
         let config = ReportConfig::default()
             .with_outbox(outbox)
@@ -123,10 +130,20 @@ impl Device {
     }
 
     fn subscribe(&mut self, process: u32, confirmed: bool, now: Instant) {
+        self.subscribe_to(ai(), process, confirmed, now);
+    }
+
+    fn subscribe_to(
+        &mut self,
+        object: ObjectIdentifier,
+        process: u32,
+        confirmed: bool,
+        now: Instant,
+    ) {
         let mut body = BytesMut::new();
         SubscribeCOVRequest {
             subscriber_process_identifier: process,
-            monitored_object_identifier: ai(),
+            monitored_object_identifier: object,
             issue_confirmed_notifications: Some(confirmed),
             lifetime: Some(300),
         }
@@ -137,11 +154,21 @@ impl Device {
     }
 
     fn write(&mut self, property: P, value: PropertyValue, now: Instant) {
+        self.write_to(ai(), property, value, now);
+    }
+
+    fn write_to(
+        &mut self,
+        object: ObjectIdentifier,
+        property: P,
+        value: PropertyValue,
+        now: Instant,
+    ) {
         let mut encoded = BytesMut::new();
         encode_property_value(&mut encoded, &value).unwrap();
         let mut body = BytesMut::new();
         WritePropertyRequest {
-            object_identifier: ai(),
+            object_identifier: object,
             property_identifier: property,
             property_array_index: None,
             property_value: encoded.to_vec(),
@@ -271,7 +298,7 @@ fn a_change_held_by_an_outstanding_report_follows_its_ack() {
 }
 
 #[test]
-fn a_report_without_room_is_owed_until_the_outbox_empties() {
+fn a_report_without_room_is_owed_until_room_frees() {
     let mut device = Device::new(OutboxLimits {
         entries: 1,
         octets: 256,
@@ -324,4 +351,151 @@ fn reads_answer_the_device_list_from_the_table() {
     let empty = read(&mut device);
     device.subscribe(1, false, T0);
     assert!(read(&mut device) > empty, "the subscription is listed");
+}
+
+const fn at(millis: u64) -> Instant {
+    Instant::from_secs(1_000).saturating_add(Duration::from_millis(millis))
+}
+
+/// The process a notification reports to, and the Present_Value it carries.
+fn reported(apdu: &Apdu) -> (u32, PropertyValue) {
+    let params = match apdu {
+        Apdu::UnconfirmedRequest(request) => &request.service_request,
+        Apdu::ConfirmedRequest(request) => &request.service_request,
+        other => panic!("not a notification: {other:?}"),
+    };
+    let process = COVNotificationRequest::decode(params)
+        .unwrap()
+        .subscriber_process_identifier;
+    (process, Device::reported_pv(apdu))
+}
+
+/// Timing 3 s with one retry: a report's cutoff is 7.5 s after the table
+/// began it, its deadline 9 s.
+#[test]
+fn a_report_popped_late_is_cut_off_before_its_flight_ends() {
+    let mut device = Device::new(OutboxLimits::default());
+    device.subscribe(1, true, at(0));
+    // The link is busy: the first attempt goes out 4 s after evaluation.
+    let (sent, _) = device.pop(at(4_000)).unwrap();
+    let id = sent.invoke_id.unwrap();
+    assert_eq!(device.reporter.next_deadline(), Some(at(7_000)));
+    device.deadline();
+    let (again, _) = device.pop(at(7_000)).unwrap();
+    assert_eq!(again.invoke_id, Some(id));
+    assert_eq!(
+        device.reporter.next_deadline(),
+        Some(at(7_500)),
+        "the cutoff, before the attempt's 10 s and the table's 9 s"
+    );
+    device.deadline();
+    assert_eq!(device.reporter.counters().failed, 1);
+    assert!(device.ids.taken.is_empty(), "its invoke ID went back");
+    // An answer inside the last attempt's window but past the cutoff ends
+    // nothing, and nothing goes out again: the subscription holds off.
+    assert!(!device.ack(id, at(9_500)));
+    assert!(device.pop(at(9_600)).is_none());
+    assert_eq!(device.reporter.counters().cov.notifications_sent, 1);
+}
+
+#[test]
+fn an_answer_before_the_cutoff_commits_a_late_report() {
+    let mut device = Device::new(OutboxLimits::default());
+    device.subscribe(1, true, at(0));
+    let (sent, _) = device.pop(at(4_000)).unwrap();
+    device.deadline();
+    device.pop(at(7_000)).unwrap();
+    assert!(device.ack(sent.invoke_id.unwrap(), at(7_200)));
+    let baseline = device
+        .reporter
+        .table()
+        .entries()
+        .next()
+        .unwrap()
+        .last_notified_observation
+        .clone();
+    assert!(baseline.is_some(), "the Ack committed what it carried");
+    assert_eq!(device.reporter.counters().failed, 0);
+}
+
+#[test]
+fn a_report_popped_past_its_cutoff_fails_unsent() {
+    let mut device = Device::new(OutboxLimits::default());
+    device.subscribe(1, true, at(0));
+    assert!(device.pop(at(8_000)).is_none());
+    let counters = device.reporter.counters();
+    assert_eq!((counters.failed, counters.cov.notifications_sent), (1, 0));
+    assert!(device.ids.taken.is_empty());
+}
+
+/// One subscription changes twice for each notification the link sends;
+/// the other's one change still goes out, and the hot one never holds more
+/// than one queued entry, carrying its latest value.
+#[test]
+fn a_hot_subscription_holds_one_entry_and_others_still_report() {
+    let mut device = Device::new(OutboxLimits {
+        entries: 2,
+        octets: 256,
+    });
+    device.subscribe_to(ai(), 1, false, at(0));
+    device.subscribe_to(ai2(), 2, false, at(0));
+    for object in [ai(), ai2()] {
+        device.write_to(
+            object,
+            P::OUT_OF_SERVICE,
+            PropertyValue::Boolean(true),
+            at(0),
+        );
+    }
+    while let Some((sent, _)) = device.pop(at(0)) {
+        device
+            .reporter
+            .delivered(sent.token, Delivery::Sent, &mut device.ids, at(0));
+    }
+    let hot = device
+        .reporter
+        .table()
+        .entries()
+        .find(|entry| entry.subscriber_process_identifier == 1)
+        .unwrap()
+        .key()
+        .clone();
+    let mut other = None;
+    let mut last_hot = None;
+    for tick in 1..=8u64 {
+        let now = at(tick * 1_000);
+        for step in 0..2u64 {
+            let value = (100 + tick * 2 + step) as f32;
+            device.write_to(ai(), P::PRESENT_VALUE, PropertyValue::Real(value), now);
+            assert!(device.reporter.outbox.live_for(&hot) <= 1);
+        }
+        if tick == 2 {
+            device.write_to(ai2(), P::PRESENT_VALUE, PropertyValue::Real(50.0), now);
+        }
+        if device
+            .reporter
+            .next_deadline()
+            .is_some_and(|due| due <= now)
+        {
+            device
+                .reporter
+                .on_deadline(&device.db, &mut device.ids, now);
+        }
+        // The link sends one notification a tick.
+        if let Some((sent, apdu)) = device.pop(now) {
+            device
+                .reporter
+                .delivered(sent.token, Delivery::Sent, &mut device.ids, now);
+            match reported(&apdu) {
+                (2, value) => other = Some((tick, value)),
+                (_, value) => last_hot = Some(value),
+            }
+        }
+    }
+    assert_eq!(other, Some((3, PropertyValue::Real(50.0))), "its turn came");
+    assert_eq!(
+        last_hot,
+        Some(PropertyValue::Real(117.0)),
+        "the hot one's latest value at its turn"
+    );
 }

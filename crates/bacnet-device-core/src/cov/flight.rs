@@ -112,6 +112,15 @@ impl FlightTiming {
     pub fn deadline(self) -> Duration {
         self.timeout.saturating_mul(u32::from(self.retries) + 2)
     }
+
+    /// How long after it begins a live sender stops waiting for an answer
+    /// and reports a failure: the retry cycle and half a timeout, half a
+    /// timeout before the [deadline](Self::deadline), however late its
+    /// first attempt went out.
+    pub fn cutoff(self) -> Duration {
+        let half = Duration::from_nanos(self.timeout.as_nanos() >> 1);
+        self.hold_off().saturating_add(half)
+    }
 }
 
 /// One report: the token its outcome comes back with through

@@ -7624,9 +7624,10 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   of one object reports to its ordinary and Single subscriptions: it
   compares each with the observation its last delivered notification
   established, skips a confirmed one whose report is out, encodes each
-  notification's parameters and spends the input's `EventBudget`. A
-  confirmed report takes the host's lease (an invoke ID, an in-flight
-  slot) and begins its flight; every report comes back through
+  notification's parameters and spends the input's `EventBudget`. Every
+  report takes the host's lease first (for a confirmed one the server's
+  in-flight slot and invoke ID, for the `Reporter` room in its outbox), and
+  a confirmed one then begins its flight; every report comes back through
   `delivered`, where `Delivery::Sent` commits an unconfirmed one and an Ack
   commits what `begin_confirmed` kept and names the references owed a
   fresh look. The values a notification carries are in `cov::prepare`,
@@ -7643,8 +7644,13 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   Life Safety object from the values the write changed). `capture` and
   `changed` do the same for the host's own changes. The outbox is one
   buffer and one queue allocated at build (`OutboxLimits`: entries and
-  octets); a report it has no room for leaves its subscription owed, looked
-  at again once it empties. `pop(bindings, ids, now, out)` appends the next
+  octets). A subscription holds one unconfirmed entry: a newer report
+  replaces it in its turn, so one that changes faster than the link sends
+  can't crowd out the others. A report the outbox has no room for leaves
+  its subscription owed, looked at again as room frees. A confirmed
+  report's answers are cut off at `FlightTiming::cutoff` from when the
+  table began it, however late `pop` sent it, as the server's worker's
+  are. `pop(bindings, ids, now, out)` appends the next
   APDU and returns a `Notification` (token, `Destination`, `NotifyService`,
   invoke ID, priority); a confirmed one takes an invoke ID from the host's
   `InvokeIds`, which the device's own requests share. `reply(from, apdu,

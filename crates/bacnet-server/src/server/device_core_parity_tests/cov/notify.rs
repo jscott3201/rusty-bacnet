@@ -5,7 +5,11 @@
 //! sends is compared with what the `Reporter`'s outbox hands out then:
 //! unconfirmed APDUs octet for octet, confirmed ones with the invoke ID
 //! left out (each side lends its own), with the link MAC and the routed
-//! destination, as multisets. The test answers both as the subscriber
+//! destination, as multisets. Design §7.2 asks for their order too; a set
+//! it is, because the server starts a change's confirmed workers before
+//! it sends its unconfirmed notifications (PR 2a), so their order across
+//! subscriptions is its tasks' scheduling, not something the `Reporter`
+//! has to copy. The test answers both as the subscriber
 //! would, and between steps moves the clock to each of the `Reporter`'s
 //! deadlines, so the server's retry timers and the `Reporter`'s fire
 //! together. Each step also states how many notifications it calls for,
@@ -481,6 +485,11 @@ async fn a_renewal_fences_a_report() {
 
 /// A report whose server worker was aborted, and whose `Reporter` heard
 /// nothing, ends at its deadline; the next change is reported.
+///
+/// The two sides aren't alike here: the `Reporter` reaches the deadline
+/// only because the test stops calling it. A host that kept calling
+/// `on_deadline` would see the report fail at its cutoff, before the
+/// deadline, and hold off, as a server worker that kept running does.
 #[tokio::test(start_paused = true)]
 async fn an_abandoned_report_ends_at_its_deadline() {
     let mut cov = CovParity::start(CovPolicy::default()).await;

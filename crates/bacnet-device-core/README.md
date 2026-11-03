@@ -52,7 +52,8 @@ the database guard, the transport, addressing and time.
 - `report`: `Reporter`, the `Responder` with COV reporting for a host with
   nothing to await: it answers SubscribeCOV and SubscribeCOVProperty,
   queues the notifications a request or the host's own change calls for in
-  an outbox allocated once (`OutboxLimits`), hands them out through `pop`
+  an outbox allocated once (`OutboxLimits`; one unconfirmed entry per
+  subscription, the newest), hands them out through `pop`
   (a confirmed one under an invoke ID the host lends through `InvokeIds`),
   matches each answer (`reply`), resends or gives up at the deadline
   (`on_deadline`), and answers the Device's subscription lists from its
