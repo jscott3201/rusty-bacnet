@@ -2837,8 +2837,9 @@ class ForeignRegistrationStatus(TypedDict):
     (#2308) counts its lookups in ``bbmd_lookups``, the failed ones in
     ``bbmd_lookup_failures``, and names why the newest failed in
     ``last_bbmd_lookup_failure`` (``"not_resolved"``, ``"timed_out"`` after
-    10 seconds, ``"no_ipv4_address"``, ``"unusable_address"`` or
-    ``"abandoned"``), None once one succeeds and cleared when the owner
+    10 seconds, ``"no_ipv4_address"``, ``"unusable_address"``,
+    ``"abandoned"``, or ``"other"`` for a failure this version doesn't
+    name), None once one succeeds and cleared when the owner
     stops. ``waiting_for_bbmd`` is true while that name hasn't resolved yet:
     no attempt is due, and it is tried again 30 seconds after each
     failure."""
@@ -2855,7 +2856,9 @@ class ForeignRegistrationStatus(TypedDict):
     renewal_hints: int
     bbmd_lookups: int
     bbmd_lookup_failures: int
-    last_bbmd_lookup_failure: Optional[str]
+    last_bbmd_lookup_failure: Optional[Literal[
+        "not_resolved", "timed_out", "no_ipv4_address", "unusable_address", "abandoned",
+        "other"]]
     waiting_for_bbmd: bool
 
 

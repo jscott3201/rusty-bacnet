@@ -709,3 +709,38 @@ pub(crate) fn parse_ip(text: &str, what: &str) -> PyResult<Ipv4Addr> {
     text.parse()
         .map_err(|_| PyValueError::new_err(format!("{what}: '{text}' is not an IPv4 address")))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+    use std::io;
+    use std::net::Ipv4Addr;
+
+    use bacnet_transport::bbmd_lookup::BbmdLookupFailure;
+
+    use super::lookup_failure;
+
+    /// The words `last_bbmd_lookup_failure` takes are the closed set the
+    /// stub's `ForeignRegistrationStatus` lists (#2308): one for each
+    /// failure, and `"other"` for one this version doesn't name.
+    #[test]
+    fn lookup_failures_take_the_stubs_words() {
+        let stub = include_str!("../rusty_bacnet.pyi");
+        let field = "last_bbmd_lookup_failure: Optional[Literal[";
+        let rest = &stub[stub.find(field).expect("the stub's field")..];
+        let literal = &rest[..rest.find("]]").expect("the Literal's end")];
+        let listed: BTreeSet<&str> = literal.split('"').skip(1).step_by(2).collect();
+        let mut named: BTreeSet<&str> = [
+            BbmdLookupFailure::Error(io::ErrorKind::NotFound),
+            BbmdLookupFailure::TimedOut,
+            BbmdLookupFailure::NoAddress,
+            BbmdLookupFailure::Unusable(Ipv4Addr::BROADCAST.into()),
+            BbmdLookupFailure::Abandoned,
+        ]
+        .into_iter()
+        .map(lookup_failure)
+        .collect();
+        named.insert("other");
+        assert_eq!(named, listed);
+    }
+}

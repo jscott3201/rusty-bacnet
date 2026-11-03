@@ -994,8 +994,9 @@ is going without sending anything: `registered`, `lease_remaining` and
 attempt forward) totals. A BBMD named by host name (#2308) adds its lookups:
 `bbmd_lookups` and `bbmd_lookup_failures` count them, `last_bbmd_lookup_failure`
 says why the newest failed (`"not_resolved"`, `"timed_out"` when the resolver
-had no answer within 10 seconds, `"no_ipv4_address"`, `"unusable_address"` or
-`"abandoned"`), None once one succeeds, and `waiting_for_bbmd` is true while
+had no answer within 10 seconds, `"no_ipv4_address"`, `"unusable_address"`,
+`"abandoned"`, or `"other"` for a failure this version doesn't name), None once one
+succeeds, and `waiting_for_bbmd` is true while
 the name hasn't resolved yet, so no attempt is due. The latest attempt, the
 newest lookup failure and the wait clear when the owner stops; the totals stay. It raises `RuntimeError` before start and after stop. See
 [B/IP modes on the builders](rust-api.md#bip-modes-on-the-builders) for the

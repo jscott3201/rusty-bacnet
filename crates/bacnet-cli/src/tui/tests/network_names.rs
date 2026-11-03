@@ -8,7 +8,7 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use std::time::Duration;
 
 use bacnet_transport::bbmd_lookup::BbmdLookupFailure;
-use bacnet_transport::bip::{ForeignBbmd, ForeignRegistrationSnapshot};
+use bacnet_transport::bip::{ForeignBbmd, ForeignRegistrationOutcome, ForeignRegistrationSnapshot};
 use ratatui::crossterm::event::KeyCode;
 
 use super::*;
@@ -96,13 +96,17 @@ fn a_device_waiting_for_its_bbmds_name_says_so() {
 fn a_name_that_resolves_shows_its_address_and_the_tables_follow_it() {
     let mut app = waiting_app();
     assert_eq!(app.network.target, None);
+    report(&mut app, waiting(2));
+    assert!(app.network.registration_banner().is_some());
     worker(&mut app, WorkerEvent::Network(NetworkEvent::Bbmd(RESOLVED)));
     assert_eq!(app.network.target, Some(RESOLVED));
     let mut snapshot = ForeignRegistrationSnapshot::default();
     snapshot.bbmd_lookups = 3;
     snapshot.bbmd_lookup_failures = 2;
     snapshot.last_bbmd = Some(RESOLVED);
+    // The first attempt to the address is out.
     snapshot.attempts = 1;
+    snapshot.last_outcome = Some(ForeignRegistrationOutcome::Pending);
     report(&mut app, snapshot);
     let text = screen(&mut app, 120, 40);
     assert!(
@@ -112,6 +116,8 @@ fn a_name_that_resolves_shows_its_address_and_the_tables_follow_it() {
     assert!(text.contains("3 name lookups, 2 failed"), "{text}");
     assert!(!text.contains("the name did not resolve"), "{text}");
     assert!(!text.contains("FD waiting for name"), "{text}");
+    // The WAITING banner went with the wait.
+    assert_eq!(app.network.registration_banner(), None);
 
     // The name moves: the tables shown follow it, unless `:bbmd` chose
     // another BBMD's.

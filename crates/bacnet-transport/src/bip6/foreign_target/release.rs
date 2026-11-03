@@ -17,9 +17,11 @@
 //! One release is queued at a time, and one awaits its answer: a move
 //! while one is still queued drops it unsent, and a release sent while an
 //! earlier one waits ends that wait. Either counts as unanswered, as does
-//! one still out when the transport stops. A move back to the BBMD of a
-//! release in flight registers there at once; a success from it then can't
-//! be told from the registration's, and counts as the release's answer.
+//! one still out when the transport stops. A BVLC-Result names no request,
+//! so any success from the old BBMD while the release waits counts as its
+//! answer, as in B/IP's node engine: a late answer to a renewal sent just
+//! before the move, or to the registration after a move back there, can
+//! pass for one.
 
 use std::net::SocketAddrV6;
 use std::time::Duration;
@@ -43,7 +45,9 @@ pub struct Bip6ReleaseCounters {
     /// Releases asked for: one for each move to another BBMD while the
     /// option was on.
     pub releases: u64,
-    /// Of those, the ones the old BBMD answered with success.
+    /// Of those, the ones the old BBMD answered with success. A success
+    /// names no request, so a late answer to a renewal sent to it just
+    /// before the move can be counted here too.
     pub released: u64,
     /// Of those, the ones it refused with a Delete-Foreign-Device-Table-Entry
     /// NAK. Its entry then stays until its time-to-live runs out.

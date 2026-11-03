@@ -146,6 +146,7 @@ impl Bip6ClientBuilder {
     /// lapse (#2338). Off by default; see
     /// [`Bip6Transport::set_release_previous_bbmd`] for why, and
     /// [`Bip6Transport::previous_bbmd_releases`] for the counts it keeps.
+    /// Ignored, with a warning, without [`Self::foreign_device`].
     pub fn release_previous_bbmd(mut self, release: bool) -> Self {
         self.release_previous_bbmd = release;
         self

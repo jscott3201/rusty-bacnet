@@ -1,7 +1,11 @@
 """B/IP modes from Python (#938): bbmd= and foreign_device=, on loopback."""
+import ast
 import asyncio
+import socket
 import unittest
+from pathlib import Path
 
+import rusty_bacnet
 from rusty_bacnet import (
     BACnetClient, BACnetServer, Bbmd, BipEndpoint, ForeignDevice, ObjectIdentifier,
     ObjectType, PropertyIdentifier as P, PropertyValue as V,
@@ -18,6 +22,22 @@ async def eventually(check, seconds=5.0):
         if asyncio.get_running_loop().time() > deadline:
             raise AssertionError("condition not met in time")
         await asyncio.sleep(0.02)
+
+
+def stub_fields(name):
+    """The fields the installed stub's TypedDict ``name`` declares."""
+    stub = Path(rusty_bacnet.__file__).with_suffix(".pyi")
+    tree = ast.parse(stub.read_text(encoding="utf-8"))
+    typed = next(node for node in tree.body
+                 if isinstance(node, ast.ClassDef) and node.name == name)
+    return {node.target.id for node in typed.body if isinstance(node, ast.AnnAssign)}
+
+
+def free_udp_port():
+    """A UDP port on 127.0.0.1 that was free a moment ago."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
 
 
 async def accepted_registration(client):
@@ -225,6 +245,8 @@ class LoopbackTests(unittest.IsolatedAsyncioTestCase):
                     (status["bbmd_lookups"], status["bbmd_lookup_failures"],
                      status["last_bbmd_lookup_failure"], status["waiting_for_bbmd"]),
                     (1, 0, None, False))
+                # Every key the stub declares, and no other.
+                self.assertEqual(set(status), stub_fields("ForeignRegistrationStatus"))
         finally:
             await server.stop()
 
@@ -239,16 +261,22 @@ class LoopbackTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(status["last_outcome"])
             self.assertTrue(status["waiting_for_bbmd"])
 
+    async def test_a_failed_lookup_is_counted_and_named(self):
+        # localhost stands only for the client's own address here, which it
+        # can't register with: the lookup fails at once, with no name
+        # service involved, and the client keeps waiting for its BBMD.
+        port = free_udp_port()
+        foreign = ForeignDevice(f"localhost:{port}", ttl=60)
+        async with BACnetClient(interface="127.0.0.1", port=port,
+                                foreign_device=foreign) as client:
             async def failed():
                 status = await client.foreign_registration()
                 return status if status["bbmd_lookup_failures"] else None
-            # The system resolver says no such name, or, on a host with no
-            # name service, gives up after 10 seconds.
-            status = await eventually(failed, seconds=15)
-            self.assertEqual(status["bbmd_lookups"], 1)
-            self.assertIn(status["last_bbmd_lookup_failure"],
-                          ("not_resolved", "timed_out"))
-            self.assertTrue(status["waiting_for_bbmd"])
+            status = await eventually(failed)
+            self.assertEqual(
+                (status["bbmd_lookups"], status["last_bbmd_lookup_failure"],
+                 status["waiting_for_bbmd"], status["attempts"]),
+                (1, "unusable_address", True, 0))
 
     async def test_a_refused_registration_is_reported(self):
         # A BBMD that takes no foreign devices refuses the registration.
