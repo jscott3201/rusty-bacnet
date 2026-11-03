@@ -261,7 +261,7 @@ impl Connection {
                 b.broadcast.to_string(),
                 b.timeout_ms.to_string(),
                 b.min_interval_ms.to_string(),
-                b.bbmd.map(|v| v.to_string()).unwrap_or_default(),
+                b.bbmd.as_ref().map(ToString::to_string).unwrap_or_default(),
                 b.ttl.to_string(),
                 b.renewal_secs.map(|v| v.to_string()).unwrap_or_default(),
                 b.multicast.map(|v| v.to_string()).unwrap_or_default(),
@@ -332,7 +332,7 @@ impl Connection {
             b.bbmd = if f[6].is_empty() {
                 None
             } else {
-                Some(crate::foreign::parse_bbmd_arg(&f[6])?)
+                Some(crate::foreign::parse_foreign_bbmd_arg(&f[6])?)
             };
             b.ttl = f[7].parse().map_err(|_| "TTL must be 0-65535")?;
             b.renewal_secs = optional(&f[8], "Renewal must be an unsigned number")?;

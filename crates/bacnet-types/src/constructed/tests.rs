@@ -533,3 +533,29 @@ fn access_rule_new_sets_each_specifier_from_its_reference() {
         (None, None, false)
     );
 }
+
+// --- BACnetAddress ---
+
+/// A copied address keeps its network and every MAC length, inline or
+/// spilled, and owns its bytes (#2342: `Clone` is by hand).
+#[test]
+fn copied_addresses_keep_network_and_every_mac_length() {
+    for len in [0, 1, 3, 6, 7, 18, 23, 64] {
+        let all: [u8; 64] = core::array::from_fn(|index| index as u8);
+        let bytes = &all[..len];
+        for network_number in [0, 42, u16::MAX] {
+            let mut original = BACnetAddress {
+                network_number,
+                mac_address: MacAddr::from_slice(bytes),
+            };
+            let copied = original.clone();
+            assert_eq!(copied, original);
+            assert_eq!(copied.network_number, network_number);
+            assert_eq!(copied.mac_address.as_slice(), bytes);
+            assert_eq!(copied.mac_address.spilled(), len > 6);
+            original.mac_address.push(0xff);
+            assert_ne!(original, copied);
+            assert_eq!(copied.mac_address.as_slice(), bytes);
+        }
+    }
+}

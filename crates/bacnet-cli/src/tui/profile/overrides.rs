@@ -3,6 +3,7 @@
 use super::sc::{DeviceUuid, Vmac};
 use super::{Profile, Transport};
 use crate::args::Cli;
+use bacnet_transport::bip::ForeignBbmd;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::PathBuf;
 
@@ -32,7 +33,7 @@ struct BipOverrides {
     interface: Option<Ipv4Addr>,
     port: Option<u16>,
     broadcast: Option<Ipv4Addr>,
-    bbmd: Option<SocketAddrV4>,
+    bbmd: Option<ForeignBbmd>,
     ttl: Option<u16>,
     renewal_secs: Option<u64>,
     nat_global_address: Option<SocketAddrV4>,
@@ -90,7 +91,7 @@ impl Overrides {
                 interface: cli.interface.filter(|_| has("interface")),
                 port: has("port").then_some(cli.port),
                 broadcast: has("broadcast").then_some(cli.broadcast),
-                bbmd: cli.foreign_bbmd.filter(|_| has("foreign_bbmd")),
+                bbmd: cli.foreign_bbmd.clone().filter(|_| has("foreign_bbmd")),
                 ttl: has("ttl").then_some(cli.ttl),
                 renewal_secs: cli.renewal.filter(|_| has("renewal")),
                 nat_global_address: cli.nat_global_address.filter(|_| has("nat_global_address")),
@@ -160,8 +161,8 @@ impl Overrides {
                 set(&mut b.broadcast, o.broadcast);
                 set(&mut b.timeout_ms, self.timeout_ms);
                 set(&mut b.min_interval_ms, self.min_interval_ms);
-                if let Some(v) = o.bbmd {
-                    b.bbmd = Some(v);
+                if let Some(v) = &o.bbmd {
+                    b.bbmd = Some(v.clone());
                 }
                 set(&mut b.ttl, o.ttl);
                 if let Some(v) = o.renewal_secs {

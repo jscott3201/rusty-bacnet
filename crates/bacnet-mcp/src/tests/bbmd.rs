@@ -194,8 +194,7 @@ async fn a_missing_peer_entry_is_reported_and_only_reads_go_out() {
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .mode(BipMode::Foreign(ForeignDeviceConfig {
-            bbmd_ip: *a_at.ip(),
-            bbmd_port: a_at.port(),
+            bbmd: (*a_at.ip(), a_at.port()).into(),
             ttl: 600,
             renewal_interval: Some(Duration::from_secs(300)),
         }))

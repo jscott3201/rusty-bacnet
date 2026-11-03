@@ -22,6 +22,7 @@ pub(crate) mod tests;
 
 use crate::transport::TransportArgs;
 use crate::tui::worker::session::TransportKind;
+use bacnet_transport::bip::ForeignBbmd;
 pub(crate) use mcp::McpSection;
 pub(crate) use mstp::Mstp;
 pub(crate) use overrides::Overrides;
@@ -98,7 +99,10 @@ pub(crate) struct Bip {
     pub(crate) broadcast: Ipv4Addr,
     pub(crate) timeout_ms: u64,
     pub(crate) min_interval_ms: u64,
-    pub(crate) bbmd: Option<SocketAddrV4>,
+    /// `ip:port` or `host:port` (#2308), saved as text as an address
+    /// always was.
+    #[serde(with = "bbmd_text")]
+    pub(crate) bbmd: Option<ForeignBbmd>,
     pub(crate) ttl: u16,
     pub(crate) renewal_secs: Option<u64>,
     /// Our address as the BBMD records it when a NAT router translates the
@@ -315,7 +319,7 @@ impl Profile {
             args.broadcast = b.broadcast;
             args.timeout_ms = b.timeout_ms;
             args.min_interval_ms = b.min_interval_ms;
-            args.foreign_device = crate::foreign::config(b.bbmd, b.ttl, b.renewal_secs);
+            args.foreign_device = crate::foreign::config(b.bbmd.clone(), b.ttl, b.renewal_secs);
             args.nat_global_address = b.nat_global_address;
             args.multicast = b.multicast()?;
         }
@@ -354,14 +358,17 @@ impl Bip {
         if b.min_interval_ms > bacnet_client::client::MAX_MIN_REQUEST_INTERVAL_MS {
             return Err("min_interval_ms must be at most 3600000".into());
         }
-        if let Some(bbmd) = b.bbmd {
-            if bbmd.port() == 0
-                || bbmd.ip().is_unspecified()
-                || bbmd.ip().is_multicast()
-                || bbmd.ip().is_broadcast()
-                || (*bbmd.ip() == b.broadcast
-                    && !bbmd.ip().is_loopback()
-                    && *bbmd.ip() != b.interface)
+        if let Some(named) = &b.bbmd {
+            // A host name's form was checked when it was read; its address
+            // is checked once it resolves.
+            if let Some(bbmd) = named.address()
+                && (bbmd.port() == 0
+                    || bbmd.ip().is_unspecified()
+                    || bbmd.ip().is_multicast()
+                    || bbmd.ip().is_broadcast()
+                    || (*bbmd.ip() == b.broadcast
+                        && !bbmd.ip().is_loopback()
+                        && *bbmd.ip() != b.interface))
             {
                 return Err("BBMD must be a unicast IPv4 endpoint with a nonzero port".into());
             }
@@ -419,5 +426,30 @@ impl Profile {
     }
     pub(crate) fn mstp_mut(&mut self) -> &mut Mstp {
         self.mstp.as_mut().expect("an MS/TP profile")
+    }
+}
+
+/// A BBMD saved as text, `ip:port` or `host:port`, as `SocketAddrV4` saved
+/// one (#2308), so profiles written before host names load unchanged.
+mod bbmd_text {
+    use bacnet_transport::bip::ForeignBbmd;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub(super) fn serialize<S: Serializer>(
+        value: &Option<ForeignBbmd>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        match value {
+            Some(bbmd) => serializer.serialize_some(&bbmd.to_string()),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<ForeignBbmd>, D::Error> {
+        let text = Option::<String>::deserialize(deserializer)?;
+        text.map(|text| text.parse().map_err(serde::de::Error::custom))
+            .transpose()
     }
 }

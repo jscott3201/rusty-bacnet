@@ -18,8 +18,7 @@ use crate::bbmd::{BdtEntry, ForeignDevicePolicy, NatTraversal};
 /// // A foreign device behind NAT: a long lease, renewed every 20 s so the
 /// // NAT mapping the BBMD's replies come back on stays open.
 /// let foreign = BipMode::Foreign(ForeignDeviceConfig {
-///     bbmd_ip: Ipv4Addr::new(192, 0, 2, 10),
-///     bbmd_port: 47808,
+///     bbmd: (Ipv4Addr::new(192, 0, 2, 10), 47808).into(),
 ///     ttl: 600,
 ///     renewal_interval: Some(Duration::from_secs(20)),
 /// });

@@ -259,7 +259,7 @@ fn bip_lines<'a>(profile: &Profile, lines: &mut Vec<Line<'a>>, theme: &Theme) {
         "APDU timeout: {} ms   Pacing: {} ms",
         b.timeout_ms, b.min_interval_ms
     )));
-    if let Some(bbmd) = b.bbmd {
+    if let Some(bbmd) = &b.bbmd {
         lines.push(Line::raw(format!("BBMD: {bbmd}   TTL: {} s", b.ttl)));
         lines.push(Line::raw(format!(
             "Renewal: {}",

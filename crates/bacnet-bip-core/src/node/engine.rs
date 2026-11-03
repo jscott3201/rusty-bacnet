@@ -104,7 +104,8 @@ pub struct Node<const X: usize = 4> {
 
 impl<const X: usize> Node<X> {
     /// A node on `link`, starting at `now`. A foreign device's first
-    /// registration attempt is due at once.
+    /// registration attempt is due at once, or, with no BBMD known yet,
+    /// once a [`retarget`](Node::retarget) names one.
     pub fn new(link: Link, now: Instant) -> Result<Self, ConfigError> {
         const { assert!(X >= 1 && X <= 256, "a node needs 1 to 256 exchange slots") };
         link.validate()?;
@@ -252,7 +253,7 @@ impl<const X: usize> Node<X> {
         if code == Some(BvlcResultCode::DISTRIBUTE_BROADCAST_TO_NETWORK_NAK)
             && let (Mode::Foreign(foreign), Some(lifecycle)) =
                 (&self.link.mode, &mut self.lifecycle)
-            && foreign.bbmd == peer
+            && foreign.bbmd == Some(peer)
             && foreign.retry == Retry::Backoff
         {
             bump(&mut self.counters.renewal_hints);
@@ -328,7 +329,10 @@ impl<const X: usize> Node<X> {
     /// Until the first registration attempt is answered or times out, up to
     /// [`Foreign::hold`](super::Foreign::hold) broadcasts are held, and one
     /// more is refused with [`SendRefusal::HoldFull`]. Then they are all
-    /// sent; the ones sent while no lease is live are counted.
+    /// sent; the ones sent while no lease is live are counted. While the
+    /// BBMD isn't known yet ([`Foreign::bbmd`](super::Foreign::bbmd) is
+    /// `None`), the same holds even with no hold: every broadcast is refused
+    /// then.
     pub fn admit_broadcast(&mut self, now: Instant) -> Result<Admission, SendRefusal> {
         let now = self.advance(now);
         let Some(lifecycle) = &mut self.lifecycle else {
@@ -370,7 +374,7 @@ impl<const X: usize> Node<X> {
         self.advance(now);
         let operation = Operation::of(request.function()).ok_or(ExchangeRefusal::NotARequest)?;
         if let Mode::Foreign(foreign) = &self.link.mode
-            && foreign.bbmd == peer
+            && foreign.bbmd == Some(peer)
             && operation.answered_by_success()
         {
             return Err(ExchangeRefusal::ManagedRegistration);
@@ -591,20 +595,18 @@ impl<const X: usize> Node<X> {
         let Mode::Foreign(foreign) = self.link.mode else {
             return;
         };
+        // A node waiting for its BBMD has no attempt due.
+        let Some(bbmd) = foreign.bbmd else {
+            return;
+        };
         let timeout = foreign.effective_response_timeout();
         let operation = Operation::RegisterForeignDevice;
-        match self.admit(
-            foreign.bbmd,
-            operation,
-            timeout,
-            Owner::Registration,
-            foreign.ttl,
-        ) {
+        match self.admit(bbmd, operation, timeout, Owner::Registration, foreign.ttl) {
             Ok(exchange) => {
                 if let Some(lifecycle) = &mut self.lifecycle {
                     lifecycle.admitted(now);
                 }
-                self.actions.register(exchange, foreign.bbmd, foreign.ttl);
+                self.actions.register(exchange, bbmd, foreign.ttl);
             }
             Err(_) => {
                 if let Some(lifecycle) = &mut self.lifecycle {
@@ -626,10 +628,16 @@ impl<const X: usize> Node<X> {
     /// ([`admit_broadcast`](Node::admit_broadcast)). Manual exchanges carry
     /// on.
     ///
-    /// With [`Foreign::release_previous`] set in `foreign`, a move to
-    /// another BBMD also admits one exchange that asks the BBMD left behind
-    /// to delete this device's entry, once the new BBMD's first attempt is
-    /// admitted, so it never takes that attempt's slot. The next
+    /// A node started, or moved, with no BBMD known
+    /// ([`Foreign::bbmd`] `None`) waits: no attempt is due, and broadcasts
+    /// are held up to [`Foreign::hold`] and refused beyond it. The first
+    /// move to a known BBMD ends the wait, its attempt due at once.
+    ///
+    /// With [`Foreign::release_previous`] set in `foreign`, a move from a
+    /// known BBMD to another, or to none, also admits one exchange that
+    /// asks the BBMD left behind to delete this device's entry; a node
+    /// that was waiting has nothing to release. It is admitted once the new
+    /// BBMD's first attempt is, so it never takes that attempt's slot. The next
     /// [`poll_action`](Node::poll_action) hands it out as
     /// [`Action::ReleasePrevious`], after the registration. It is best
     /// effort: whatever comes of it is counted (`previous_release*` in
@@ -662,13 +670,17 @@ impl<const X: usize> Node<X> {
             self.actions.forget_register(exchange);
             self.record_register(exchange, AttemptOutcome::Cancelled, None);
         }
-        let release = old.bbmd != foreign.bbmd && foreign.release_previous;
+        // The BBMD to release: the known one the device leaves. A node
+        // waiting for its BBMD has none.
+        let left = old
+            .bbmd
+            .filter(|left| foreign.release_previous && foreign.bbmd != Some(*left));
         // A release queued and never polled was never sent: one to the BBMD
         // the device returns to would delete its new entry, and one this
         // move's release displaces would hold its slot for good.
         if let Some(exchange) = self
             .actions
-            .take_release_if(|to| release || to == foreign.bbmd)
+            .take_release_if(|to| left.is_some() || foreign.bbmd == Some(to))
             && let Some(index) = self.exchanges.live(exchange)
         {
             let slot = self.exchanges.retire(index, now);
@@ -681,8 +693,8 @@ impl<const X: usize> Node<X> {
         self.advance(now);
         // After the new BBMD's first attempt, so a release never takes the
         // slot that attempt needs.
-        if release {
-            self.release_previous(old.bbmd, old.effective_response_timeout());
+        if let Some(left) = left {
+            self.release_previous(left, old.effective_response_timeout());
         }
         Ok(())
     }
@@ -702,7 +714,7 @@ impl<const X: usize> Node<X> {
         else {
             return;
         };
-        if foreign.bbmd != bbmd {
+        if foreign.bbmd != Some(bbmd) {
             return;
         }
         if matches!(outcome, AttemptOutcome::Accepted | AttemptOutcome::Refused) {

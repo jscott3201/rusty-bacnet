@@ -3,15 +3,21 @@
 //!
 //! The transport registers at start and renews on its own. A one-shot
 //! command waits for the first registration to be answered before it runs,
-//! and fails when the BBMD refuses it or doesn't answer; the TUI reports
-//! the outcome and carries on.
+//! and fails when the BBMD refuses it or doesn't answer, or when its host
+//! name doesn't resolve (#2308); the TUI reports the outcome and carries
+//! on.
 
-use std::net::{Ipv4Addr, SocketAddrV4};
+#[cfg(feature = "tui")]
+use std::net::Ipv4Addr;
+use std::net::SocketAddrV4;
 use std::time::Duration;
 
 use bacnet_client::client::BACnetClient;
+use bacnet_transport::bbmd_lookup::BbmdLookupFailure;
+#[cfg(feature = "tui")]
+use bacnet_transport::bip::DEFAULT_BACNET_PORT;
 use bacnet_transport::bip::{
-    BipTransport, DEFAULT_BACNET_PORT, ForeignDeviceConfig, ForeignRegistrationOutcome,
+    BipTransport, ForeignBbmd, ForeignDeviceConfig, ForeignRegistrationOutcome,
 };
 
 /// How long a one-shot command waits for the first registration's answer.
@@ -19,7 +25,9 @@ use bacnet_transport::bip::{
 /// is a backstop for an attempt that never resolves.
 const REGISTRATION_WAIT: Duration = Duration::from_secs(5);
 
-/// Parse a `--foreign-bbmd` address: `ip` or `ip:port` (47808 by default).
+/// Parse the TUI's `bbmd` address, the BBMD whose tables it reads: `ip` or
+/// `ip:port` (47808 by default).
+#[cfg(feature = "tui")]
 pub(crate) fn parse_bbmd_arg(value: &str) -> Result<SocketAddrV4, String> {
     let address = match value.parse::<SocketAddrV4>() {
         Ok(address) => address,
@@ -36,6 +44,15 @@ pub(crate) fn parse_bbmd_arg(value: &str) -> Result<SocketAddrV4, String> {
         ));
     }
     Ok(address)
+}
+
+/// Parse a `--foreign-bbmd` BBMD: `ip`, `host` or either with `:port`
+/// (47808 by default). A host name is looked up when the transport starts
+/// (#2308).
+pub(crate) fn parse_foreign_bbmd_arg(value: &str) -> Result<ForeignBbmd, String> {
+    value.parse::<ForeignBbmd>().map_err(|_| {
+        format!("'{value}' is not a BBMD a device can register with: ip, host or either with :port")
+    })
 }
 
 /// Parse a `--nat-global-address` (#1943): the `ip:port` a NAT router
@@ -63,27 +80,36 @@ pub(crate) fn nat_global_address(address: SocketAddrV4) -> Result<SocketAddrV4, 
 
 /// The foreign-device configuration the flags ask for, if any.
 pub(crate) fn config(
-    bbmd: Option<SocketAddrV4>,
+    bbmd: Option<ForeignBbmd>,
     ttl: u16,
     renewal_secs: Option<u64>,
 ) -> Option<ForeignDeviceConfig> {
     bbmd.map(|bbmd| ForeignDeviceConfig {
-        bbmd_ip: *bbmd.ip(),
-        bbmd_port: bbmd.port(),
+        bbmd,
         ttl,
         renewal_interval: renewal_secs.map(Duration::from_secs),
     })
 }
 
 /// Wait until the first registration with `bbmd` is answered: `Ok` once the
-/// BBMD accepts it, an error naming the outcome otherwise.
+/// BBMD accepts it, an error naming the outcome otherwise. A BBMD named by
+/// a host name that doesn't resolve fails at once with the lookup's reason:
+/// the transport tries it again every 30 seconds, after this wait is over.
 pub(crate) async fn await_registration(
     client: &BACnetClient<BipTransport>,
-    bbmd: SocketAddrV4,
+    bbmd: &ForeignBbmd,
 ) -> Result<(), String> {
     let deadline = tokio::time::Instant::now() + REGISTRATION_WAIT;
     loop {
         let registration = client.foreign_registration().map_err(|e| e.to_string())?;
+        if registration.last_outcome.is_none()
+            && let Some(failure) = registration.last_bbmd_lookup_failure
+        {
+            return Err(format!(
+                "BBMD {bbmd} could not be registered with: its host name {}",
+                lookup_failure(failure)
+            ));
+        }
         match registration.last_outcome {
             Some(ForeignRegistrationOutcome::Accepted) => return Ok(()),
             Some(ForeignRegistrationOutcome::Refused) => {
@@ -113,5 +139,104 @@ pub(crate) async fn await_registration(
             ));
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// Why a lookup of the BBMD's host name failed, for a person to read.
+pub(crate) fn lookup_failure(failure: BbmdLookupFailure) -> String {
+    match failure {
+        // The kind is all a snapshot keeps. Only these say something more;
+        // a name service's own failure arrives uncategorized, a kind stable
+        // Rust can't name, so every other kind is left out.
+        BbmdLookupFailure::Error(kind) => {
+            use std::io::ErrorKind::{
+                ConnectionRefused, HostUnreachable, InvalidInput, NetworkDown, NetworkUnreachable,
+                NotFound, PermissionDenied, TimedOut,
+            };
+            match kind {
+                NotFound | PermissionDenied | ConnectionRefused | TimedOut | InvalidInput
+                | HostUnreachable | NetworkUnreachable | NetworkDown => {
+                    format!("did not resolve ({kind})")
+                }
+                _ => "did not resolve".into(),
+            }
+        }
+        BbmdLookupFailure::TimedOut => "had no answer from the resolver within 10 s".into(),
+        BbmdLookupFailure::NoAddress => "has no IPv4 address".into(),
+        BbmdLookupFailure::Unusable(ip) => {
+            format!("resolves only to addresses a device can't register with, such as {ip}")
+        }
+        BbmdLookupFailure::Abandoned => "lookup ended without an answer".into(),
+        other => format!("lookup failed ({other:?})"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+    use std::net::Ipv4Addr;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use bacnet_client::client::BACnetClient;
+    use bacnet_transport::bbmd_lookup::{BbmdLookup, BbmdLookupFailure, BbmdResolver};
+    use bacnet_transport::bip::BipMode;
+
+    use super::{await_registration, config, lookup_failure, parse_foreign_bbmd_arg};
+
+    #[test]
+    fn a_lookup_failure_reads_as_a_reason() {
+        for (failure, text) in [
+            (
+                BbmdLookupFailure::Error(io::ErrorKind::NotFound),
+                "did not resolve (entity not found)",
+            ),
+            (BbmdLookupFailure::TimedOut, "within 10 s"),
+            (BbmdLookupFailure::NoAddress, "no IPv4 address"),
+            (
+                BbmdLookupFailure::Unusable(Ipv4Addr::BROADCAST.into()),
+                "255.255.255.255",
+            ),
+            (BbmdLookupFailure::Abandoned, "without an answer"),
+        ] {
+            assert!(lookup_failure(failure).contains(text), "{failure:?}");
+        }
+        // A kind that says nothing more is left out.
+        let other = BbmdLookupFailure::Error(io::ErrorKind::Other);
+        assert_eq!(lookup_failure(other), "did not resolve");
+    }
+
+    /// A resolver that knows no name.
+    struct NoNames;
+
+    impl BbmdResolver for NoNames {
+        fn resolve(&self, _host: &str) -> BbmdLookup {
+            Box::pin(async { Err(io::Error::from(io::ErrorKind::NotFound)) })
+        }
+    }
+
+    /// A BBMD named by a host name that doesn't resolve still starts the
+    /// client (#2308); waiting for its registration then fails at once,
+    /// naming the BBMD and why its name didn't resolve, rather than waiting
+    /// out a registration that never went.
+    #[tokio::test]
+    async fn a_name_that_does_not_resolve_starts_and_fails_the_wait() {
+        let bbmd = parse_foreign_bbmd_arg("bbmd.invalid").unwrap();
+        let mode = BipMode::Foreign(config(Some(bbmd.clone()), 60, None).unwrap());
+        let mut client = BACnetClient::bip_builder()
+            .interface(Ipv4Addr::LOCALHOST)
+            .port(0)
+            .mode(mode)
+            .bbmd_resolver(Arc::new(NoNames))
+            .build()
+            .await
+            .unwrap();
+        let started = tokio::time::Instant::now();
+        let error = await_registration(&client, &bbmd).await.unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(4), "{error}");
+        assert!(error.contains("bbmd.invalid:47808"), "{error}");
+        assert!(error.contains("host name did not resolve"), "{error}");
+        assert_eq!(client.foreign_registration().unwrap().attempts, 0);
+        client.stop().await.unwrap();
     }
 }

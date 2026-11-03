@@ -23,7 +23,7 @@ mod lookup;
 #[cfg(test)]
 mod name_tests;
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
@@ -33,8 +33,10 @@ use bacnet_types::bip_port::{ForeignDeviceChanges, ForeignRegistration};
 use bacnet_types::constructed::{BACnetHostAddress, BACnetHostNPort};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
+use tokio::task::AbortHandle;
 
 use super::BipTransport;
+use super::ForeignBbmd;
 use super::foreign_device::ForeignDeviceConfig;
 use super::node::NodeHandle;
 use crate::bbmd_lookup::{BbmdName, BbmdResolver, Lookups};
@@ -49,10 +51,16 @@ struct TargetState {
     configured_renewal: Option<Duration>,
     /// The running node, while one runs.
     node: Weak<NodeHandle>,
-    /// FD_BBMD_Address as a host name, when it names one, and its lookups;
-    /// `config` then holds the address in use, the one the name last
-    /// resolved to, or the BBMD before it, until it first does.
+    /// FD_BBMD_Address as a host name, when it names one, configured or
+    /// written, and its lookups; `config` then holds the address in use,
+    /// the one the name last resolved to, or the BBMD before it, until it
+    /// first does. A configured name that hasn't resolved yet leaves
+    /// `config` naming it, and the node waiting for a BBMD (#2308).
     lookups: Lookups,
+    /// The lookup to run 30 seconds after the newest one that failed while
+    /// the node waits for its BBMD ([`ForeignTarget::retry_later`]): each
+    /// failure replaces it, and a start or a stop cancels it.
+    retry: Option<AbortHandle>,
 }
 
 /// One transport's foreign-device registration, shared with the Network
@@ -102,12 +110,14 @@ impl ForeignTarget {
             .foreign_device
             .as_ref()
             .is_some_and(|target| target.release_previous.load(Ordering::Relaxed));
+        let name = config.bbmd.name();
         Arc::new_cyclic(|me| Self {
             state: Mutex::new(TargetState {
                 configured_renewal: config.renewal_interval,
                 config,
                 node: Weak::new(),
-                lookups: Lookups::new(Arc::clone(&transport.bbmd_resolver)),
+                lookups: Lookups::new(Arc::clone(&transport.bbmd_resolver), name),
+                retry: None,
             }),
             broadcast: transport.broadcast_address,
             interface: transport.interface,
@@ -149,7 +159,10 @@ impl ForeignTarget {
     /// Hand the target the node a start built from `used`. A registration
     /// activated while the start ran goes to the node now, so it never runs
     /// on values the object no longer reports. Each automatic registration
-    /// attempt the node sends looks a BBMD host name up again.
+    /// attempt the node sends looks a BBMD host name up again; a node
+    /// waiting for a BBMD whose name hasn't resolved yet sends none, so its
+    /// name is looked up now (#2308), and a retry an earlier run set up is
+    /// cancelled: this lookup's failure sets up the next.
     pub(super) fn attach(
         &self,
         node: &Arc<NodeHandle>,
@@ -161,13 +174,31 @@ impl ForeignTarget {
         }
         state.node = Arc::downgrade(node);
         state.lookups.attached();
+        Self::cancel_retry(&mut state);
         let target = self.me.clone();
         node.on_registration_attempt(Box::new(move || {
             if let Some(target) = target.upgrade() {
                 target.attempting();
             }
         }));
+        let lookup = state
+            .config
+            .bbmd()
+            .is_none()
+            .then(|| state.lookups.lookup(false, &self.name_target()))
+            .flatten();
+        drop(state);
+        if let Some(lookup) = lookup {
+            lookup.start();
+        }
         Ok(())
+    }
+
+    /// The transport stopped: the retry of a name not resolved yet is
+    /// cancelled, and a lookup still running changes and counts nothing
+    /// when it ends, so it sets up no other (#2308).
+    pub(super) fn detach(&self) {
+        Self::cancel_retry(&mut self.lock());
     }
 
     /// The running node: attached, and not stopped.
@@ -190,8 +221,7 @@ impl ForeignTarget {
         if let Some(bbmd) = &changes.bbmd {
             match &bbmd.host {
                 BACnetHostAddress::Ip(IpAddr::V4(ip)) => {
-                    config.bbmd_ip = *ip;
-                    config.bbmd_port = bbmd.port;
+                    config.bbmd = ForeignBbmd::Address(SocketAddrV4::new(*ip, bbmd.port));
                     name = Some(None);
                 }
                 // Until it resolves, the device keeps registering with the
@@ -230,9 +260,14 @@ impl ForeignRegistration for ForeignTarget {
     /// the address otherwise.
     fn bbmd(&self) -> BACnetHostNPort {
         let state = self.lock();
-        match state.lookups.name() {
-            Some(name) => name.value(),
-            None => BACnetHostNPort::from_socket_addr(SocketAddr::V4(state.config.bbmd())),
+        match (state.lookups.name(), state.config.bbmd()) {
+            (Some(name), _) => name.value(),
+            (None, Some(bbmd)) => BACnetHostNPort::from_socket_addr(SocketAddr::V4(bbmd)),
+            // A configured name always has its lookup's; this can't be.
+            (None, None) => BACnetHostNPort {
+                host: BACnetHostAddress::None,
+                port: 0,
+            },
         }
     }
 
@@ -264,6 +299,16 @@ impl ForeignRegistration for ForeignTarget {
             node.retarget(foreign).map_err(|_| out_of_range())?;
         }
         state.config = config;
+        // With no address yet, the registration in effect names the newest
+        // host name, which `foreign_device_config` and a restart then use.
+        if let Some(Some(named)) = &name
+            && state.config.bbmd().is_none()
+        {
+            state.config.bbmd = ForeignBbmd::Name {
+                host: named.host().to_owned(),
+                port: named.port(),
+            };
+        }
         let lookup = name.and_then(|name| self.renamed(&mut state, name));
         drop(state);
         if let Some(lookup) = lookup {
@@ -278,6 +323,14 @@ impl ForeignRegistration for ForeignTarget {
 }
 
 impl BipTransport {
+    /// The transport stops: a configured BBMD name not resolved yet stops
+    /// being retried ([`ForeignTarget::detach`]).
+    pub(super) fn detach_foreign_device(&self) {
+        if let Some(target) = &self.foreign_device {
+            target.detach();
+        }
+    }
+
     /// Configure this transport as a foreign device.
     /// Call before `start()`, which validates, before any I/O, the TTL and
     /// renewal settings and the BBMD's address (not the unspecified address,
@@ -291,13 +344,17 @@ impl BipTransport {
     /// A registered Network Port object can move it to another BBMD or
     /// time-to-live while it runs (FD_BBMD_Address and
     /// FD_Subscription_Lifetime, activated by ReinitializeDevice); a later
-    /// start keeps the values it moved to. FD_BBMD_Address may name the
-    /// BBMD by host name ([`set_bbmd_resolver`](Self::set_bbmd_resolver)).
+    /// start keeps the values it moved to. FD_BBMD_Address, and the
+    /// configured BBMD ([`ForeignBbmd::Name`], #2308), may name the BBMD by
+    /// host name ([`set_bbmd_resolver`](Self::set_bbmd_resolver)); a
+    /// configured name that hasn't resolved yet leaves the transport running
+    /// with registration waiting, as [`ForeignBbmd`] says.
     pub fn register_as_foreign_device(&mut self, config: ForeignDeviceConfig) {
         self.foreign_device = Some(ForeignTarget::new(config, self));
     }
 
-    /// Look up the host name a foreign device's FD_BBMD_Address names with
+    /// Look up the host name a foreign device's FD_BBMD_Address, or its
+    /// configured BBMD ([`ForeignBbmd::Name`], #2308), names with
     /// `resolver`, instead of the system's resolver on Tokio's blocking
     /// pool, the default (#1852). Call it before or after
     /// [`register_as_foreign_device`](Self::register_as_foreign_device).
@@ -331,8 +388,10 @@ impl BipTransport {
     /// The foreign-device registration in effect: the one configured, or
     /// the one a Network Port activation moved it to. While FD_BBMD_Address
     /// names the BBMD by host name, its address is the one the name last
-    /// resolved to, or the BBMD before it until it first does (#1852).
-    /// `None` outside foreign-device mode.
+    /// resolved to, or the BBMD before it until it first does (#1852). A
+    /// configured name reads back as the name until it first resolves, and
+    /// as the address in use from then on (#2308). `None` outside
+    /// foreign-device mode.
     pub fn foreign_device_config(&self) -> Option<ForeignDeviceConfig> {
         self.foreign_device.as_ref().map(|target| target.config())
     }

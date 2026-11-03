@@ -172,7 +172,7 @@ async fn disconnect_cancels_pending_foreign_registration_and_stops_renewals() {
     let bbmd = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let mut p = profile();
     p.bip_mut().bbmd = Some(match bbmd.local_addr().unwrap() {
-        std::net::SocketAddr::V4(a) => a,
+        std::net::SocketAddr::V4(a) => a.into(),
         _ => unreachable!(),
     });
     p.bip_mut().ttl = 2;
@@ -410,7 +410,7 @@ async fn a_refused_first_registration_still_connects_and_retries_in_background()
     let bbmd = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let mut p = profile();
     p.bip_mut().bbmd = Some(match bbmd.local_addr().unwrap() {
-        std::net::SocketAddr::V4(a) => a,
+        std::net::SocketAddr::V4(a) => a.into(),
         _ => unreachable!(),
     });
     p.bip_mut().ttl = 2;

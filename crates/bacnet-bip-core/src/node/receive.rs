@@ -430,7 +430,7 @@ impl Link {
             }
             Mode::Foreign(foreign)
                 if foreign.trust == ForwardedTrust::ConfiguredBbmd
-                    && (sender != foreign.bbmd || arrival != Arrival::Unicast) =>
+                    && (foreign.bbmd != Some(sender) || arrival != Arrival::Unicast) =>
             {
                 Received::Discarded(Discard::ForwardedUntrusted)
             }

@@ -135,7 +135,8 @@ pub struct ForeignRegistrationSnapshot {
     /// transport running.
     pub bbmd_lookups: u64,
     /// Of those, the ones that failed. The device kept registering with the
-    /// address it had.
+    /// address it had, or, for a configured name with no address yet, kept
+    /// waiting for one, trying again 30 seconds later (#2308).
     pub bbmd_lookup_failures: u64,
     /// Why the newest lookup failed; `None` once one succeeds, and cleared
     /// on stop/start.

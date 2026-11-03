@@ -173,12 +173,11 @@ fn raising_the_write_policy_revokes_the_authorization() {
 
 #[test]
 fn deterministic_invalid_network_and_safety_settings_fail_before_transport_args() {
-    for bbmd in [
-        "0.0.0.0:47808",
-        "127.0.0.2:0",
-        "224.0.0.1:47808",
-        "255.255.255.255:47808",
-    ] {
+    // A profile can't hold these at all: the file refuses them as it loads.
+    for bbmd in ["0.0.0.0:47808", "127.0.0.2:0"] {
+        assert!(bbmd.parse::<ForeignBbmd>().is_err(), "{bbmd}");
+    }
+    for bbmd in ["224.0.0.1:47808", "255.255.255.255:47808"] {
         let mut p = foreign();
         p.bip_mut().bbmd = Some(bbmd.parse().unwrap());
         assert!(p.transport_args().is_err(), "{bbmd}");
@@ -483,4 +482,29 @@ fn explicit_broadcast_survives_interface_autoselection_and_picker_choices() {
                 .all(|item| item.broadcast == Ipv4Addr::BROADCAST)
         );
     }
+}
+
+/// A BBMD saved as text loads back, a host name included (#2308), and a
+/// file written before host names loads unchanged.
+#[test]
+fn a_bbmd_host_name_round_trips_through_the_file() {
+    let mut p = foreign();
+    p.bip_mut().bbmd = Some("bbmd.example:47809".parse().unwrap());
+    let text = toml::to_string(&p).unwrap();
+    assert!(text.contains("bbmd = \"bbmd.example:47809\""), "{text}");
+    let again: Profile = toml::from_str(&text).unwrap();
+    assert_eq!(again.bip().bbmd, p.bip().bbmd);
+    let args = again.transport_args().unwrap();
+    let named = ForeignBbmd::Name {
+        host: "bbmd.example".into(),
+        port: 47809,
+    };
+    assert_eq!(args.foreign_device.unwrap().bbmd, named);
+
+    let old = toml::to_string(&foreign()).unwrap();
+    assert!(old.contains("bbmd = \"127.0.0.2:47809\""), "{old}");
+    let loaded: Profile = toml::from_str(&old).unwrap();
+    assert_eq!(loaded.bip().bbmd, foreign().bip().bbmd);
+    let refused = old.replace("127.0.0.2:47809", "0.0.0.0:47809");
+    assert!(toml::from_str::<Profile>(&refused).is_err());
 }

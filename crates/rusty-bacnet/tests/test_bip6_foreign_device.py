@@ -108,8 +108,10 @@ class OptionTests(unittest.TestCase):
         for bbmd in ("[fe80::1%3]:47808", "fe80::1%3", "[::1]:47808x", "::1::2"):
             with self.subTest(bbmd=bbmd), self.assertRaises(ValueError):
                 ForeignDevice(bbmd)
-        with self.assertRaisesRegex(ValueError, "not an IPv4 or IPv6 address"):
-            ForeignDevice("nowhere")
+        # "nowhere" is a host name a B/IP BBMD may have (#2308).
+        with self.assertRaisesRegex(ValueError,
+                                    "not an IPv4 or IPv6 address or a host name"):
+            ForeignDevice("no where")
 
     def test_the_bbmd_family_must_match_the_transport(self):
         ipv4, ipv6 = ForeignDevice("192.0.2.10"), ForeignDevice("::1")
