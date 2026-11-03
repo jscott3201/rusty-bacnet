@@ -1,0 +1,169 @@
+# encode_read_property_request / none: self instructions per iteration
+
+Median slope over the ordinals; the second column is B.
+Calls in counts calls from other functions (a recursion level calling itself isn't one).
+
+## Functions (callgrind_annotate, hash suffixes stripped)
+
+| A | B | B - A | Calls in (A) | Function |
+| --- | --- | --- | --- | --- |
+| 133.0 | 0.0 | -133.0 | 3.00 | `<bytes::bytes_mut::BytesMut as bytes::buf::buf_mut::BufMut>::put_slice` |
+| 76.0 | 128.0 | 52.0 | 4.00 | `__GI_memcpy` |
+| 65.0 | 65.0 | 0.0 | 1.00 | `_int_free` |
+| 54.0 | 54.0 | 0.0 | 1.00 | `malloc` |
+| 47.0 | 47.0 | 0.0 | 1.00 | `free` |
+| 30.0 | 0.0 | -30.0 | 1.00 | `bacnet_encoding::tags::encode_tag` |
+| 27.0 | 0.0 | -27.0 | 1.00 | `bacnet_encoding::primitives::encode_ctx_unsigned` |
+| 26.0 | 26.0 | 0.0 | 1.00 | `<bacnet_counts::CountingAlloc as core::alloc::global::GlobalAlloc>::alloc` |
+| 23.0 | 0.0 | -23.0 | 1.00 | `bacnet_encoding::primitives::encode_ctx_object_id` |
+| 15.0 | 15.0 | 0.0 | 1.00 | `<bytes::bytes_mut::BytesMut as core::ops::drop::Drop>::drop` |
+| 14.0 | 0.0 | -14.0 | 1.00 | `<bacnet_types::primitives::ObjectIdentifier>::encode` |
+| 13.0 | 16.0 | 3.0 | 1.00 | `<bacnet_services::read_property::ReadPropertyRequest>::encode` |
+| 10.0 | 10.0 | 0.0 | 2.00 | `__aarch64_ldadd8_relax` |
+| 6.0 | 6.0 | 0.0 | 1.00 | `<bacnet_counts::CountingAlloc as core::alloc::global::GlobalAlloc>::dealloc` |
+| 5.0 | 5.0 | 0.0 | 1.00 | `__rustc::__rust_dealloc` |
+| 1.0 | 1.0 | 0.0 | 1.00 | `__rustc::__rust_no_alloc_shim_is_unstable_v2` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `<u64 as core::fmt::Display>::fmt` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `bacnet_counts::parse_n` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `core::str::converts::from_utf8` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `<core::fmt::Formatter>::pad_integral` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `_dl_sysdep_parse_arguments` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `write` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `strdup` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `__pthread_mutex_unlock_usercnt` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `_dl_important_hwcaps` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `0x000000000000cbd0` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `<bacnet_counts::AllocSnapshot>::now` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `sysmalloc` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `alloc_perturb` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `0x0000000000000590` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `getauxval` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `strstr` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `_dl_start` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `_dl_add_to_slotinfo` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `__getauxval2` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `_dl_allocate_tls_storage` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `_dl_audit_preinit` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `__minimal_free` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `_dl_map_object_from_fd` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `_dl_sysdep_start` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `access` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `_IO_default_finish` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `__GI___close_nocancel` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `_dl_audit_objopen` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `call_init` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `0x0000000000003758` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `_IO_link_in` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `calloc` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `expand_dynamic_string_token` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `0x0000000000003700` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `0x00000000000005c0` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `_dl_init_paths` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `rtld_mutex_dummy` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `__read_nocancel` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `__libc_start_main@@GLIBC_2.34` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `__GI_strlen` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `__ctype_init` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `<std::sync::once::Once>::call_once::<std::rt::cleanup::{closure#0}>::{closure#0}` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `lookup_malloc_symbol` |
+| 0.0 | 0.0 | 0.0 | 0.00 | `__pthread_attr_extension` |
+
+## Largest function changes, B - A
+
+| A | B | B - A | Function |
+| --- | --- | --- | --- |
+| 0.0 | 156.0 | 156.0 | `<&mut [u8] as bacnet_encoding::sink::EncodeSink>::write` |
+| 133.0 | 0.0 | -133.0 | `<bytes::bytes_mut::BytesMut as bytes::buf::buf_mut::BufMut>::put_slice` |
+| 0.0 | 98.0 | 98.0 | `bacnet_encoding::primitives::scalar::write_tagged::<&mut [u8]>` |
+| 0.0 | 54.0 | 54.0 | `bacnet_services::read_property::encode_reference` |
+| 76.0 | 128.0 | 52.0 | `__GI_memcpy` |
+| 0.0 | 42.0 | 42.0 | `<bytes::bytes_mut::BytesMut as bacnet_encoding::sink::EncodeSink>::write` |
+| 30.0 | 0.0 | -30.0 | `bacnet_encoding::tags::encode_tag` |
+| 27.0 | 0.0 | -27.0 | `bacnet_encoding::primitives::encode_ctx_unsigned` |
+| 0.0 | 24.0 | 24.0 | `bacnet_services::who_is::staged::<bytes::bytes_mut::BytesMut, <bacnet_services::read_property::ReadPropertyRequest>::encode_to_sink<bytes::bytes_mut::BytesMut>:` |
+| 23.0 | 0.0 | -23.0 | `bacnet_encoding::primitives::encode_ctx_object_id` |
+| 14.0 | 0.0 | -14.0 | `<bacnet_types::primitives::ObjectIdentifier>::encode` |
+| 13.0 | 16.0 | 3.0 | `<bacnet_services::read_property::ReadPropertyRequest>::encode` |
+| 0.0 | 0.0 | 0.0 | `<core::fmt::Formatter>::pad_integral` |
+| 0.0 | 0.0 | 0.0 | `_dl_sysdep_parse_arguments` |
+| 0.0 | 0.0 | 0.0 | `write` |
+| 0.0 | 0.0 | 0.0 | `strdup` |
+| 65.0 | 65.0 | 0.0 | `_int_free` |
+| 1.0 | 1.0 | 0.0 | `__rustc::__rust_no_alloc_shim_is_unstable_v2` |
+| 0.0 | 0.0 | 0.0 | `__pthread_mutex_unlock_usercnt` |
+| 0.0 | 0.0 | 0.0 | `_dl_important_hwcaps` |
+| 0.0 | 0.0 | 0.0 | `0x000000000000cbd0` |
+| 0.0 | 0.0 | 0.0 | `<bacnet_counts::AllocSnapshot>::now` |
+| 0.0 | 0.0 | 0.0 | `sysmalloc` |
+| 0.0 | 0.0 | 0.0 | `alloc_perturb` |
+| 0.0 | 0.0 | 0.0 | `0x0000000000000590` |
+| 0.0 | 0.0 | 0.0 | `getauxval` |
+| 6.0 | 6.0 | 0.0 | `<bacnet_counts::CountingAlloc as core::alloc::global::GlobalAlloc>::dealloc` |
+| 0.0 | 0.0 | 0.0 | `strstr` |
+| 0.0 | 0.0 | 0.0 | `_dl_start` |
+| 0.0 | 0.0 | 0.0 | `_dl_add_to_slotinfo` |
+
+## Source lines (line tables; inlined code counts at its own line)
+
+| A | B | B - A | File:line |
+| --- | --- | --- | --- |
+| 60.0 | 96.0 | 36.0 | `library/core/src/ptr/mod.rs:573` |
+| 20.0 | 0.0 | -20.0 | `index.crates.io-1949cf8c6b5b557f/bytes-1.12.1/src/bytes_mut.rs:1323` |
+| 12.0 | 12.0 | 0.0 | `./malloc/./malloc/malloc.c:4518` |
+| 12.0 | 4.0 | -8.0 | `index.crates.io-1949cf8c6b5b557f/bytes-1.12.1/src/bytes_mut.rs:196` |
+| 11.0 | 11.0 | 0.0 | `library/core/src/sync/atomic.rs:4029` |
+| 11.0 | 0.0 | -11.0 | `index.crates.io-1949cf8c6b5b557f/bytes-1.12.1/src/buf/buf_mut.rs:332` |
+| 9.0 | 9.0 | 0.0 | `/wt/benchmarks/counts/src/bin/codec_counts.rs:21` |
+| 9.0 | 9.0 | 0.0 | `library/std/src/sys/alloc/unix.rs:31` |
+| 8.0 | 0.0 | -8.0 | `crates/bacnet-encoding/src/primitives/mod.rs:441` |
+| 8.0 | 0.0 | -8.0 | `crates/bacnet-encoding/src/tags.rs:107` |
+| 8.0 | 8.0 | 0.0 | `library/compiler-builtins/compiler-builtins/./lib/builtins/aarch64/lse.S:250` |
+| 8.0 | 2.0 | -6.0 | `index.crates.io-1949cf8c6b5b557f/bytes-1.12.1/src/bytes_mut.rs:614` |
+| 7.0 | 0.0 | -7.0 | `crates/bacnet-encoding/src/primitives/mod.rs:443` |
+| 6.0 | 6.0 | 0.0 | `./malloc/./malloc/malloc.c:3354` |
+| 6.0 | 0.0 | -6.0 | `crates/bacnet-encoding/src/tags.rs:104` |
+| 6.0 | 6.0 | 0.0 | `./malloc/./malloc/malloc.c:4495` |
+| 6.0 | 6.0 | 0.0 | `./malloc/./malloc/malloc.c:3294` |
+| 6.0 | 6.0 | 0.0 | `./malloc/./malloc/malloc.c:4527` |
+| 6.0 | 6.0 | 0.0 | `./malloc/./malloc/malloc.c:3313` |
+| 5.0 | 5.0 | 0.0 | `./malloc/./malloc/malloc.c:3392` |
+| 5.0 | 0.0 | -5.0 | `crates/bacnet-encoding/src/tags.rs:105` |
+| 5.0 | 0.0 | -5.0 | `crates/bacnet-encoding/src/tags.rs:140` |
+| 5.0 | 0.0 | -5.0 | `crates/bacnet-encoding/src/primitives/mod.rs:403` |
+| 5.0 | 5.0 | 0.0 | `./malloc/./malloc/malloc.c:3402` |
+| 5.0 | 5.0 | 0.0 | `./malloc/./malloc/malloc.c:4658` |
+| 5.0 | 0.0 | -5.0 | `crates/bacnet-services/src/read_property.rs:39` |
+| 5.0 | 5.0 | 0.0 | `library/std/src/sys/alloc/unix.rs:65` |
+| 5.0 | 0.0 | -5.0 | `crates/bacnet-encoding/src/primitives/mod.rs:444` |
+| 5.0 | 5.0 | 0.0 | `./malloc/./malloc/malloc.c:3311` |
+| 5.0 | 5.0 | 0.0 | `./malloc/./malloc/malloc.c:4547` |
+| 5.0 | 5.0 | 0.0 | `./malloc/./malloc/malloc.c:3359` |
+| 4.0 | 4.0 | 0.0 | `./malloc/./malloc/malloc.c:4505` |
+| 4.0 | 4.0 | 0.0 | `./malloc/./malloc/malloc.c:3163` |
+| 4.0 | 7.0 | 3.0 | `./string/../sysdeps/aarch64/multiarch/../memcpy.S:78` |
+| 4.0 | 2.0 | -2.0 | `crates/bacnet-services/src/read_property.rs:40` |
+| 4.0 | 7.0 | 3.0 | `./string/../sysdeps/aarch64/multiarch/../memcpy.S:80` |
+| 4.0 | 7.0 | 3.0 | `./string/../sysdeps/aarch64/multiarch/../memcpy.S:82` |
+| 4.0 | 7.0 | 3.0 | `./string/../sysdeps/aarch64/multiarch/../memcpy.S:95` |
+| 4.0 | 0.0 | -4.0 | `crates/bacnet-encoding/src/primitives/mod.rs:23` |
+| 4.0 | 5.0 | 1.0 | `library/core/src/ptr/mut_ptr.rs:970` |
+| 4.0 | 7.0 | 3.0 | `./string/../sysdeps/aarch64/multiarch/../memcpy.S:104` |
+| 4.0 | 7.0 | 3.0 | `./string/../sysdeps/aarch64/multiarch/../memcpy.S:86` |
+| 4.0 | 4.0 | 0.0 | `./malloc/./malloc/malloc.c:3301` |
+| 4.0 | 7.0 | 3.0 | `./string/../sysdeps/aarch64/multiarch/../memcpy.S:77` |
+| 4.0 | 4.0 | 0.0 | `./malloc/./malloc/malloc.c:3371` |
+| 4.0 | 4.0 | 0.0 | `/wt/benchmarks/counts/src/lib.rs:36` |
+| 4.0 | 7.0 | 3.0 | `./string/../sysdeps/aarch64/multiarch/../memcpy.S:79` |
+| 4.0 | 0.0 | -4.0 | `crates/bacnet-services/src/read_property.rs:41` |
+| 4.0 | 4.0 | 0.0 | `./malloc/./malloc/arena.c:153` |
+| 4.0 | 7.0 | 3.0 | `./string/../sysdeps/aarch64/multiarch/../memcpy.S:81` |
+| 4.0 | 4.0 | 0.0 | `./malloc/./malloc/malloc.c:3316` |
+| 4.0 | 0.0 | -4.0 | `crates/bacnet-encoding/src/tags.rs:108` |
+| 4.0 | 0.0 | -4.0 | `crates/bacnet-encoding/src/primitives/mod.rs:400` |
+| 4.0 | 0.0 | -4.0 | `crates/bacnet-encoding/src/primitives/mod.rs:46` |
+| 4.0 | 7.0 | 3.0 | `./string/../sysdeps/aarch64/multiarch/../memcpy.S:72` |
+| 4.0 | 1.0 | -3.0 | `index.crates.io-1949cf8c6b5b557f/bytes-1.12.1/src/bytes_mut.rs:612` |
+| 4.0 | 4.0 | 0.0 | `./malloc/./malloc/malloc.c:4510` |
+| 4.0 | 4.0 | 0.0 | `./malloc/./malloc/malloc.c:1336` |
+| 4.0 | 0.0 | -4.0 | `crates/bacnet-encoding/src/primitives/mod.rs:50` |
+| 4.0 | 7.0 | 3.0 | `./string/../sysdeps/aarch64/multiarch/../memcpy.S:85` |
