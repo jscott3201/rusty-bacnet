@@ -549,3 +549,36 @@ async fn a_written_name_is_checked_for_its_form() {
         BACnetHostNPort::from_socket_addr(at(A).into())
     );
 }
+
+/// A move away and straight back, before the driver has sent the release
+/// of the first BBMD (#2307): that release would delete the entry the
+/// device is about to make there, and while it lived the registration there
+/// would wait a retry. The move back drops it unsent, counted as
+/// unanswered, so the device registers with its BBMD again at once and
+/// releases only the BBMD it visited. Not about host names, but this file
+/// has the paused-time device with a recording socket.
+#[tokio::test(start_paused = true)]
+async fn a_quick_move_back_drops_the_release_it_would_meet() {
+    let device = Device::new(60).await;
+    device.after(1).await;
+    assert_eq!(registrations(&device.sink.take()), [A]);
+    device.activate(BACnetHostAddress::Ip(B.into())).unwrap();
+    device.activate(BACnetHostAddress::Ip(A.into())).unwrap();
+    device.after(1).await;
+    let sent = device.sink.take();
+    assert_eq!(registrations(&sent), [A], "{sent:?}");
+    let releases: Vec<Ipv4Addr> = sent
+        .iter()
+        .filter(|sent| sent.bytes.get(1) == Some(&0x08))
+        .map(|sent| *sent.to.ip())
+        .collect();
+    assert_eq!(releases, [B]);
+    let snapshot = device.snapshot();
+    assert_eq!(
+        (
+            snapshot.previous_releases,
+            snapshot.previous_release_unanswered
+        ),
+        (2, 1)
+    );
+}

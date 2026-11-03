@@ -45,8 +45,9 @@ pub enum Action {
     /// then report it with
     /// [`Node::exchange_sent`](super::Node::exchange_sent) or
     /// [`Node::exchange_failed`](super::Node::exchange_failed). What comes
-    /// of it is only counted ([`NodeCounters`](super::NodeCounters)'s
-    /// `previous_release*` fields).
+    /// of it is counted ([`NodeCounters`](super::NodeCounters)'s
+    /// `previous_release*` fields) and reported as
+    /// [`RegistrationEvent::PreviousRelease`].
     ReleasePrevious {
         /// The release's exchange.
         exchange: ExchangeId,
@@ -111,6 +112,14 @@ impl<const X: usize> Actions<X> {
         match self.events.iter_mut().find(|slot| slot.is_none()) {
             Some(slot) => *slot = Some(event),
             None => self.events[EVENTS - 1] = Some(event),
+        }
+    }
+
+    /// Queue `event` if the list has room: a release's outcome never takes
+    /// a registration event's place.
+    pub(crate) fn event_if_room(&mut self, event: RegistrationEvent) {
+        if let Some(slot) = self.events.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(event);
         }
     }
 

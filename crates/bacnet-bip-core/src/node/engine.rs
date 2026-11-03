@@ -13,7 +13,7 @@ use super::actions::{Action, Actions};
 use super::config::{ConfigError, Foreign, Link, Mode, Retry};
 use super::counters::{NodeCounters, RegisterAttempt, add, bump};
 use super::exchange::{
-    Early, ExchangeId, ExchangeRefusal, Exchanges, Key, LocalFailure, Operation, Owner, Phase,
+    Early, ExchangeId, ExchangeRefusal, Exchanges, Key, LocalFailure, Operation, Owner, Phase, Slot,
 };
 use super::receive::{Datagram, Delivery, Discard, ForBbmd, Policy, Received, Response};
 use super::registration::{
@@ -279,6 +279,11 @@ impl<const X: usize> Node<X> {
         }
         let Some(code) = code else { return };
         let accepted = code == BvlcResultCode::SUCCESSFUL_COMPLETION;
+        let outcome = if accepted {
+            AttemptOutcome::Accepted
+        } else {
+            AttemptOutcome::Refused
+        };
         if slot.owner == Owner::Release {
             // A success, or the Delete-Foreign-Device-Table-Entry NAK: the
             // only results a release's key fits.
@@ -287,6 +292,7 @@ impl<const X: usize> Node<X> {
             } else {
                 &mut self.counters.previous_release_refused
             });
+            self.release_ended(slot.peer, outcome, now);
             return;
         }
         if slot.operation != Operation::RegisterForeignDevice {
@@ -297,11 +303,6 @@ impl<const X: usize> Node<X> {
         } else {
             bump(&mut self.counters.registrations_refused);
         }
-        let outcome = if accepted {
-            AttemptOutcome::Accepted
-        } else {
-            AttemptOutcome::Refused
-        };
         self.record_register(exchange, outcome, Some(code));
         if slot.owner != Owner::Registration {
             return;
@@ -459,25 +460,27 @@ impl<const X: usize> Node<X> {
             }
             LocalFailure::Cancelled => AttemptOutcome::Cancelled,
         };
-        self.ended_unanswered(exchange, slot.operation, slot.owner, outcome, now);
+        self.ended_unanswered(exchange, &slot, outcome, now);
         self.advance(now);
     }
 
-    /// An exchange ended without an answer.
+    /// The exchange `exchange`, which was `slot`, ended without an answer.
     fn ended_unanswered(
         &mut self,
         exchange: ExchangeId,
-        operation: Operation,
-        owner: Owner,
+        slot: &Slot,
         outcome: AttemptOutcome,
         now: Instant,
     ) {
-        if operation == Operation::RegisterForeignDevice {
+        if slot.operation == Operation::RegisterForeignDevice {
             self.record_register(exchange, outcome, None);
         }
-        match owner {
+        match slot.owner {
             Owner::Manual => {}
-            Owner::Release => bump(&mut self.counters.previous_release_unanswered),
+            Owner::Release => {
+                bump(&mut self.counters.previous_release_unanswered);
+                self.release_ended(slot.peer, outcome, now);
+            }
             Owner::Registration => {
                 if let Some(lifecycle) = &mut self.lifecycle {
                     let verdict = lifecycle.failed(now, Some(outcome));
@@ -580,13 +583,7 @@ impl<const X: usize> Node<X> {
         if slot.owner == Owner::Manual {
             self.actions.ended(exchange);
         }
-        self.ended_unanswered(
-            exchange,
-            slot.operation,
-            slot.owner,
-            AttemptOutcome::TimedOut,
-            now,
-        );
+        self.ended_unanswered(exchange, &slot, AttemptOutcome::TimedOut, now);
     }
 
     /// Admit the automatic registration attempt that is due.
@@ -638,9 +635,11 @@ impl<const X: usize> Node<X> {
     /// effort: whatever comes of it is counted (`previous_release*` in
     /// [`NodeCounters`]) and changes nothing else, and one that can't be
     /// admitted counts as unanswered. A move back to a BBMD whose release
-    /// is still in flight registers there once the release ends, since a
-    /// success couldn't tell the two apart; one still queued, never
-    /// polled, is dropped unsent.
+    /// is still in flight registers there as soon as the release ends,
+    /// answered or not, since a success couldn't tell the two apart; one
+    /// still queued, never polled, is dropped unsent. Each release's end is
+    /// also reported as a [`RegistrationEvent::PreviousRelease`] when the
+    /// event list has room.
     ///
     /// Refused, changing nothing, outside foreign mode
     /// ([`ConfigError::NotForeign`]) or with a registration
@@ -670,8 +669,8 @@ impl<const X: usize> Node<X> {
             .take_release_if(|to| release || to == foreign.bbmd)
             && let Some(index) = self.exchanges.live(exchange)
         {
-            self.exchanges.retire(index, now);
-            bump(&mut self.counters.previous_release_unanswered);
+            let slot = self.exchanges.retire(index, now);
+            self.ended_unanswered(exchange, &slot, AttemptOutcome::Cancelled, now);
         }
         if let Some(lifecycle) = &mut self.lifecycle {
             lifecycle.retarget(&foreign, now, old.bbmd == foreign.bbmd);
@@ -686,6 +685,20 @@ impl<const X: usize> Node<X> {
         Ok(())
     }
 
+    /// A release of `bbmd` ended with `outcome`: report it, and if the device
+    /// has moved back to that BBMD, whose registration attempt the release
+    /// held off (a success couldn't tell the two apart), let the attempt go
+    /// at once.
+    fn release_ended(&mut self, bbmd: SocketAddrV4, outcome: AttemptOutcome, now: Instant) {
+        self.actions
+            .event_if_room(RegistrationEvent::PreviousRelease { bbmd, outcome });
+        if let (Mode::Foreign(foreign), Some(lifecycle)) = (&self.link.mode, &mut self.lifecycle)
+            && foreign.bbmd == bbmd
+        {
+            lifecycle.due_now(now);
+        }
+    }
+
     /// Ask `bbmd`, which this device just left, to delete its entry (Annex
     /// J.2.9, J.5.2.1.2): one exchange, answered within `timeout` of its
     /// send.
@@ -695,7 +708,15 @@ impl<const X: usize> Node<X> {
         let operation = Operation::DeleteFdtEntry;
         match self.admit(bbmd, operation, timeout, Owner::Release, 0) {
             Ok(exchange) => self.actions.release(exchange, bbmd, entry),
-            Err(_) => bump(&mut self.counters.previous_release_unanswered),
+            // Dropped unsent, as one the caller gives up is.
+            Err(_) => {
+                bump(&mut self.counters.previous_release_unanswered);
+                self.actions
+                    .event_if_room(RegistrationEvent::PreviousRelease {
+                        bbmd,
+                        outcome: AttemptOutcome::Cancelled,
+                    });
+            }
         }
     }
 

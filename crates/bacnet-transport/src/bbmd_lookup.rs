@@ -255,10 +255,13 @@ mod tests {
         assert!(BbmdName::new("bbmd.example", 47808).is_some());
     }
 
-    /// The system's resolver hands back IPv6 answers too, which B/IPv6
-    /// takes: `::1` itself needs no name service on any host.
+    /// The system resolver's wrapper keeps IPv6 answers, which B/IPv6
+    /// takes, rather than filtering them out. `::1` is a literal, which
+    /// Tokio parses without asking the host's name service, so this covers
+    /// the wrapper only; the transports' `localhost` tests go through the
+    /// name service (`a_host_name_resolves_through_the_system_resolver`).
     #[tokio::test]
-    async fn the_system_resolver_answers_ipv6_too() {
+    async fn the_system_resolver_wrapper_keeps_ipv6_answers() {
         let answers = SystemResolver.resolve("::1").await.unwrap();
         assert_eq!(answers, [IpAddr::V6(Ipv6Addr::LOCALHOST)]);
     }

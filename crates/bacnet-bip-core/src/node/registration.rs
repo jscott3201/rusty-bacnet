@@ -17,6 +17,8 @@
 //! arrival, so the local view never outlasts the BBMD's entry, on the
 //! assumption [`Lease`] states.
 
+use core::net::SocketAddrV4;
+
 use bacnet_bip_codec::BvlcResultCode;
 use bacnet_time::{Duration, Instant};
 
@@ -100,6 +102,19 @@ pub enum RegistrationEvent {
     Unanswered,
     /// The lease ended with nothing newer proven.
     Lapsed,
+    /// The release of a BBMD a move left
+    /// ([`Foreign::release_previous`](super::Foreign::release_previous))
+    /// ended: `Accepted` when it deleted the entry, `Refused` for its NAK,
+    /// and `TimedOut`, `LocalError` or `Cancelled` (dropped unsent) when
+    /// the device can't tell. Best effort: reported when the event list has
+    /// room, and never in place of a registration event; the counters
+    /// always count it.
+    PreviousRelease {
+        /// The BBMD the device left.
+        bbmd: SocketAddrV4,
+        /// What came of the release.
+        outcome: AttemptOutcome,
+    },
 }
 
 /// A foreign device's registration as the node sees it at one instant.
@@ -413,6 +428,18 @@ impl Lifecycle {
             wait = wait.saturating_mul(2);
         }
         wait.min(self.renewal)
+    }
+
+    /// A release of the BBMD the device registers with ended at `now`: a
+    /// move back to it may have found the release in the way (a success
+    /// can't tell the two apart), so with no attempt in flight and no live
+    /// lease, the next attempt is due at once rather than after a retry's
+    /// wait.
+    pub(crate) fn due_now(&mut self, now: Instant) {
+        let live = self.lease.is_some_and(|lease| lease.is_live_at(now));
+        if self.attempt.is_none() && !live && self.next.is_some_and(|next| next > now) {
+            self.next = Some(now);
+        }
     }
 
     /// The BBMD refused a broadcast as from an unregistered device (Annex

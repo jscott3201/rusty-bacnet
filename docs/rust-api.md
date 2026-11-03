@@ -3125,12 +3125,16 @@ for the node's own address (Annex J.2.9, J.5.2.1.2), once the new BBMD's first
 attempt is admitted, so it never takes that attempt's slot. `poll_action` hands it
 out after the `Register` as `Action::ReleasePrevious { exchange, to, entry }`:
 send `Action::message()` and report it with `exchange_sent` or `exchange_failed`,
-as for a registration (`NodePort` does both). The node only counts what comes of
-it: `NodeCounters::previous_releases`, then `previous_released` (success),
+as for a registration (`NodePort` does both). The node counts what comes of it:
+`NodeCounters::previous_releases`, then `previous_released` (success),
 `previous_release_refused` (its NAK) or `previous_release_unanswered` (no answer
 within the old registration's response timeout, a send that failed or was given
-up, or no free slot). The move never waits for it. It is off by default, for the
-reasons `BipTransport::set_release_previous_bbmd` gives.
+up, or no free slot). It also reports each one's end, with the BBMD, as
+`RegistrationEvent::PreviousRelease { bbmd, outcome }` when the event list has
+room. The move never waits for it. A move back to a BBMD whose release is still
+in flight registers there as soon as the release ends, since a success couldn't
+tell the two apart. It is off by default, for the reasons
+`BipTransport::set_release_previous_bbmd` gives.
 
 `bbmd::GRACE_PERIOD` is a `Duration`. `bbmd::StorageFull` and
 `BdtError::Capacity` carry `needed` and `available`, in entries, as the

@@ -29,8 +29,8 @@ use bacnet_bip_codec::{BvlcFunction, Bvll, BvllError};
 use bacnet_bip_core::Instant as CoreInstant;
 use bacnet_bip_core::LocalSubnet;
 use bacnet_bip_core::node::{
-    Action, Admission, ConfigError, ExchangeId, Foreign, Inbound, Link, LocalFailure, Mode, Node,
-    NodeCounters, Policy, RegistrationEvent, Response, SendRefusal,
+    Action, Admission, AttemptOutcome, ConfigError, ExchangeId, Foreign, Inbound, Link,
+    LocalFailure, Mode, Node, NodeCounters, Policy, RegistrationEvent, Response, SendRefusal,
 };
 use bacnet_time::HostClock;
 use bacnet_types::error::Error;
@@ -196,7 +196,6 @@ impl NodeState {
         }
         let counters = self.node.take_counters();
         if !self.stopped {
-            log_releases(&counters);
             record.absorb(&counters);
         }
     }
@@ -243,6 +242,26 @@ impl NodeState {
             RegistrationEvent::Unanswered => {
                 debug!("Foreign registration attempt did not return a matched result");
             }
+            // The release of a BBMD a move left (#2307), named, since the
+            // device has moved on from it.
+            RegistrationEvent::PreviousRelease { bbmd, outcome } => match outcome {
+                AttemptOutcome::Accepted => {
+                    debug!(%bbmd, "The BBMD this foreign device left deleted its entry");
+                }
+                AttemptOutcome::Refused => info!(
+                    %bbmd,
+                    "The BBMD this foreign device left refused to delete its entry; it lapses on its own"
+                ),
+                AttemptOutcome::Cancelled => debug!(
+                    %bbmd,
+                    "The release of the BBMD this foreign device left was dropped unsent; its entry lapses on its own"
+                ),
+                outcome => info!(
+                    %bbmd,
+                    ?outcome,
+                    "The BBMD this foreign device left did not confirm deleting its entry; it lapses on its own"
+                ),
+            },
             other => debug!(?other, "Foreign registration event"),
         }
     }
@@ -352,13 +371,25 @@ impl NodeHandle {
     /// dropped, and one to the new BBMD goes at once. With
     /// `foreign.release_previous`, a move to another BBMD also has the node
     /// ask the old one to delete this device's entry, which the driver sends
-    /// after that attempt (#2307). Refused, changing nothing, as the node
-    /// refuses it. A stopped node has nothing to move: the next start
-    /// builds a new one.
+    /// after that attempt (#2307). A release the driver hasn't sent yet to
+    /// the BBMD the device moves to is dropped unsent, as the node drops one
+    /// it never handed out: it would delete the entry about to be made, and
+    /// hold off the registration there while it lived. Refused, changing
+    /// nothing, as the node refuses it. A stopped node has nothing to move:
+    /// the next start builds a new one.
     pub(super) fn retarget(&self, foreign: Foreign) -> Result<(), Error> {
         self.with(|state, now| {
             if state.stopped {
                 return Ok(());
+            }
+            self.check_retarget(foreign)?;
+            let (dropped, kept) = std::mem::take(&mut state.releases)
+                .into_iter()
+                .partition::<Vec<_>, _>(|release| release.to == foreign.bbmd);
+            state.releases = kept;
+            for release in dropped {
+                let cancelled = LocalFailure::Cancelled;
+                state.node.exchange_failed(release.exchange, cancelled, now);
             }
             state.node.retarget(foreign, now).map_err(config_error)?;
             // The node cancelled the attempt this would have sent; its
@@ -698,24 +729,6 @@ fn refused(decode: Option<BvllError>, policy: Option<Error>) -> Error {
         (Some(error), _) => bvll_error(error),
         (None, Some(error)) => error,
         (None, None) => Error::Encoding("BVLC response refused".into()),
-    }
-}
-
-/// Log what came of the releases of the BBMDs moves left (#2307), as the
-/// node counted them.
-fn log_releases(counters: &NodeCounters) {
-    if counters.previous_released > 0 {
-        debug!("The BBMD this foreign device left deleted its entry");
-    }
-    if counters.previous_release_refused > 0 {
-        info!(
-            "The BBMD this foreign device left refused to delete its entry; it lapses on its own"
-        );
-    }
-    if counters.previous_release_unanswered > 0 {
-        info!(
-            "The BBMD this foreign device left did not confirm deleting its entry; it lapses on its own"
-        );
     }
 }
 
