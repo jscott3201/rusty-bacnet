@@ -60,6 +60,8 @@ pub(crate) enum Registration {
     },
     /// A lease lapsed and no renewal since was accepted.
     Lapsed,
+    /// The BBMD's host name hasn't resolved yet (#2308): no attempt is due.
+    Waiting,
 }
 
 impl Registration {
@@ -71,6 +73,7 @@ impl Registration {
             Self::Refused => "refused",
             Self::NoAnswer { .. } => "no answer",
             Self::Lapsed => "lapsed",
+            Self::Waiting => "waiting for name",
         }
     }
 }
@@ -141,8 +144,23 @@ impl NetworkState {
     /// The connection registers as a foreign device: start the panel on its
     /// BBMD, whether it accepted the first attempt or is still retrying.
     pub(crate) fn foreign_device(&mut self, foreign: Foreign) {
+        if let Some(bbmd) = foreign.bbmd {
+            self.target.get_or_insert(bbmd);
+        }
         self.foreign = Some(foreign);
-        self.target.get_or_insert(foreign.bbmd);
+    }
+
+    /// The registration's BBMD is at `bbmd` now (#2308): its host name
+    /// resolved, at last or elsewhere. The tables shown follow it, unless
+    /// `:bbmd` picked another BBMD's.
+    pub(crate) fn bbmd_moved(&mut self, bbmd: SocketAddrV4) {
+        let Some(foreign) = &mut self.foreign else {
+            return;
+        };
+        let left = foreign.bbmd.replace(bbmd);
+        if left != Some(bbmd) && (self.target.is_none() || self.target == left) {
+            self.target = Some(bbmd);
+        }
     }
 
     /// Time until the next registration attempt at `now`.
@@ -167,12 +185,18 @@ impl NetworkState {
     /// attempt reads `Pending` while the earlier ones went unanswered.
     pub(crate) fn registration_state(&self) -> Option<Registration> {
         let Some((snapshot, _)) = self.registration.as_ref() else {
-            return self.foreign.map(|_| Registration::Pending);
+            return self.foreign.as_ref().map(|foreign| match foreign.bbmd {
+                Some(_) => Registration::Pending,
+                None => Registration::Waiting,
+            });
         };
         if snapshot.last_outcome == Some(ForeignRegistrationOutcome::Refused) {
             return Some(Registration::Refused);
         }
-        self.foreign?;
+        self.foreign.as_ref()?;
+        if snapshot.waiting_for_bbmd {
+            return Some(Registration::Waiting);
+        }
         if snapshot.registered {
             return Some(Registration::Held);
         }
@@ -229,6 +253,17 @@ impl NetworkState {
                      registration{plural}; broadcasts through it are not delivered."
                 ))
             }
+            Registration::Waiting => {
+                // Only once a lookup has failed: the first is still out at
+                // the start.
+                let failure = snapshot.last_bbmd_lookup_failure?;
+                let name = self.foreign.as_ref()?.configured.to_string();
+                Some(format!(
+                    " WAITING The BBMD's host name {name} {}; the registration waits for it, \
+                     trying again 30 s after each failure, and broadcasts are held, then refused.",
+                    crate::foreign::lookup_failure(failure)
+                ))
+            }
             Registration::Held | Registration::Pending => None,
         }
     }
@@ -236,7 +271,9 @@ impl NetworkState {
     /// Whether the tables shown are from the BBMD we register with, so our
     /// own FDT entry can be judged; false without a registration.
     pub(crate) fn tables_are_ours(&self) -> bool {
-        self.foreign.is_some_and(|f| self.target == Some(f.bbmd))
+        self.foreign
+            .as_ref()
+            .is_some_and(|f| f.bbmd.is_some() && self.target == f.bbmd)
     }
 
     /// Seconds an FDT entry had left at the read, less the time since.
@@ -268,6 +305,7 @@ impl App {
         let state = &mut self.network;
         match event {
             NetworkEvent::Registration(snapshot) => state.registration = Some((snapshot, now)),
+            NetworkEvent::Bbmd(bbmd) => state.bbmd_moved(bbmd),
             NetworkEvent::Tables {
                 bbmd,
                 local,
@@ -280,7 +318,7 @@ impl App {
                     return;
                 }
                 state.reading = false;
-                let global = state.foreign.and_then(|f| f.nat_global);
+                let global = state.foreign.as_ref().and_then(|f| f.nat_global);
                 state.own = fdt
                     .as_ref()
                     .ok()
@@ -348,8 +386,12 @@ impl App {
     /// `:bbmd [ADDRESS]`: that BBMD's tables, or with no address those of
     /// the BBMD the session registers with.
     pub(super) fn show_bbmd(&mut self, bbmd: Option<SocketAddrV4>, out: &mut Vec<Command>) {
-        match bbmd.or(self.network.foreign.map(|f| f.bbmd)) {
+        match bbmd.or(self.network.foreign.as_ref().and_then(|f| f.bbmd)) {
             Some(bbmd) => self.set_bbmd(bbmd, out),
+            None if self.network.foreign.is_some() => self.flash(
+                "The BBMD's host name hasn't resolved yet: type :bbmd ADDRESS.",
+                FLASH_FOR,
+            ),
             None => self.flash(
                 "No foreign-device registration: type :bbmd ADDRESS.",
                 FLASH_FOR,
@@ -360,7 +402,7 @@ impl App {
     /// The registration's BBMD while the screen shows another one's
     /// tables (after `:bbmd OTHER`), so the footer can say how to go back.
     pub(crate) fn away_from_own_bbmd(&self) -> Option<SocketAddrV4> {
-        let own = self.network.foreign?.bbmd;
+        let own = self.network.foreign.as_ref()?.bbmd?;
         (self.network.target.is_some_and(|target| target != own)).then_some(own)
     }
 

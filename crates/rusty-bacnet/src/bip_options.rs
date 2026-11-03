@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use bacnet_transport::bbmd::{BdtEntry, ForeignDevicePolicy, NatTraversal, PrivateRange};
+use bacnet_transport::bbmd_lookup::BbmdLookupFailure;
 use bacnet_transport::bip::{
     BbmdOptions, BipMode, BipMulticast, DEFAULT_BACNET_PORT, ForeignBbmd, ForeignDeviceConfig,
     ForeignRegistrationOutcome, ForeignRegistrationSnapshot,
@@ -568,8 +569,30 @@ pub(crate) fn registration_dict(registration: ForeignRegistrationSnapshot) -> Py
         dict.set_item("refused", registration.refused)?;
         dict.set_item("lapses", registration.lapses)?;
         dict.set_item("renewal_hints", registration.renewal_hints)?;
+        dict.set_item("bbmd_lookups", registration.bbmd_lookups)?;
+        dict.set_item("bbmd_lookup_failures", registration.bbmd_lookup_failures)?;
+        dict.set_item(
+            "last_bbmd_lookup_failure",
+            registration.last_bbmd_lookup_failure.map(lookup_failure),
+        )?;
+        dict.set_item("waiting_for_bbmd", registration.waiting_for_bbmd)?;
         Ok(dict.into_any().unbind())
     })
+}
+
+/// Why a lookup of the BBMD's host name failed (#2308), as the
+/// `last_bbmd_lookup_failure` value names it. The resolver's own error
+/// keeps only its kind, which for the system resolver says nothing more
+/// than that the name did not resolve.
+fn lookup_failure(failure: BbmdLookupFailure) -> &'static str {
+    match failure {
+        BbmdLookupFailure::Error(_) => "not_resolved",
+        BbmdLookupFailure::TimedOut => "timed_out",
+        BbmdLookupFailure::NoAddress => "no_ipv4_address",
+        BbmdLookupFailure::Unusable(_) => "unusable_address",
+        BbmdLookupFailure::Abandoned => "abandoned",
+        _ => "other",
+    }
 }
 
 /// The NAT setting the `nat_global_address` and `nat_private_ranges`
@@ -685,4 +708,39 @@ pub(crate) fn parse_address(text: &str, what: &str) -> PyResult<SocketAddrV4> {
 pub(crate) fn parse_ip(text: &str, what: &str) -> PyResult<Ipv4Addr> {
     text.parse()
         .map_err(|_| PyValueError::new_err(format!("{what}: '{text}' is not an IPv4 address")))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+    use std::io;
+    use std::net::Ipv4Addr;
+
+    use bacnet_transport::bbmd_lookup::BbmdLookupFailure;
+
+    use super::lookup_failure;
+
+    /// The words `last_bbmd_lookup_failure` takes are the closed set the
+    /// stub's `ForeignRegistrationStatus` lists (#2308): one for each
+    /// failure, and `"other"` for one this version doesn't name.
+    #[test]
+    fn lookup_failures_take_the_stubs_words() {
+        let stub = include_str!("../rusty_bacnet.pyi");
+        let field = "last_bbmd_lookup_failure: Optional[Literal[";
+        let rest = &stub[stub.find(field).expect("the stub's field")..];
+        let literal = &rest[..rest.find("]]").expect("the Literal's end")];
+        let listed: BTreeSet<&str> = literal.split('"').skip(1).step_by(2).collect();
+        let mut named: BTreeSet<&str> = [
+            BbmdLookupFailure::Error(io::ErrorKind::NotFound),
+            BbmdLookupFailure::TimedOut,
+            BbmdLookupFailure::NoAddress,
+            BbmdLookupFailure::Unusable(Ipv4Addr::BROADCAST.into()),
+            BbmdLookupFailure::Abandoned,
+        ]
+        .into_iter()
+        .map(lookup_failure)
+        .collect();
+        named.insert("other");
+        assert_eq!(named, listed);
+    }
 }

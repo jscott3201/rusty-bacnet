@@ -24,7 +24,8 @@ pub(super) const LOCAL: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::new(10, 0, 9,
 
 fn foreign() -> Foreign {
     Foreign {
-        bbmd: at_ip(1),
+        configured: at_ip(1).into(),
+        bbmd: Some(at_ip(1)),
         ttl: 60,
         renewal: Duration::from_secs(30),
         nat_global: None,
