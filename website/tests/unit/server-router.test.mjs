@@ -87,7 +87,7 @@ test('every CLI sample on the server page is defined by the CLI', async () => {
 // The limits the server page states come from the source; a changed default
 // fails here until the page says the new value.
 test('the server page states the limits the source defines', async () => {
-  const policy = await readCrate('bacnet-server/src/cov/policy.rs');
+  const policy = await readCrate('bacnet-device-core/src/cov/policy.rs');
   const defaults = policy.slice(policy.indexOf('impl Default for CovPolicy'));
   const field = name => Number(defaults.match(new RegExp(`${name}: (\\d+),`))[1]);
   const create = await readCrate('bacnet-server/src/handlers/object_mgmt.rs');

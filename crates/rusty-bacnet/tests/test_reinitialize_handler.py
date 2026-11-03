@@ -414,6 +414,18 @@ class LocalResetTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await owner.stop()
 
+    async def test_a_local_reset_report_needs_a_running_endpoint(self):
+        # #1837: the endpoints' counterpart. A Python endpoint has no source
+        # Reporter, so a running one records nothing and raises nothing.
+        endpoint = BipEndpoint(4106, interface="127.0.0.1", port=0,
+                               broadcast_address="127.255.255.255")
+        with self.assertRaisesRegex(RuntimeError, "endpoint not started"):
+            await endpoint.report_device_reset_local()
+        async with endpoint:
+            self.assertIsNone(await endpoint.report_device_reset_local())
+        with self.assertRaisesRegex(RuntimeError, "endpoint not started"):
+            await endpoint.report_device_reset_local()
+
 
 class EndpointTests(unittest.IsolatedAsyncioTestCase):
     async def test_an_endpoint_executes_reinitialize_device(self):

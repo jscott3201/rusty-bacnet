@@ -47,7 +47,31 @@ pub(crate) fn provision_profile(
     profile_name: Option<String>,
     set_profile: impl FnOnce(ObjectProfile) -> Result<(), Error>,
 ) -> PyResult<()> {
-    match crate::types::object_profile_from_py(tags, profile_location, profile_name)? {
+    apply_profile(
+        object_profile(tags, profile_location, profile_name)?,
+        set_profile,
+    )
+}
+
+/// The profile the `tags`, `profile_location` and `profile_name` keywords
+/// describe, or `None` when all three are absent. A builder that rebuilds
+/// its objects later, as the endpoints do at each start, keeps this and
+/// hands it to [`apply_profile`] then (#1867).
+pub(crate) fn object_profile(
+    tags: Option<&Bound<'_, PyAny>>,
+    profile_location: Option<String>,
+    profile_name: Option<String>,
+) -> PyResult<Option<ObjectProfile>> {
+    crate::types::object_profile_from_py(tags, profile_location, profile_name)
+}
+
+/// Provision a parsed [`object_profile`] through the object's own
+/// `set_profile`; nothing when it is `None`.
+pub(crate) fn apply_profile(
+    profile: Option<ObjectProfile>,
+    set_profile: impl FnOnce(ObjectProfile) -> Result<(), Error>,
+) -> PyResult<()> {
+    match profile {
         Some(profile) => set_profile(profile).map_err(to_py_err),
         None => Ok(()),
     }
