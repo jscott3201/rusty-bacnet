@@ -101,7 +101,7 @@ impl FileNotificationForwarderPersistence {
                 path.as_ref(),
                 MAGIC,
                 MAX_FILE_BYTES,
-                "Notification Forwarder",
+                "Notification Forwarder file",
             )?,
         })
     }

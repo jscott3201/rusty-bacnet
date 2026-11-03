@@ -86,7 +86,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                         responder = responder.with_reinitialize_audit(Arc::new(
                             move |db, operation, requester| {
                                 if let Some(source) = source.upgrade() {
-                                    source.device_operation(db, operation, requester);
+                                    source.device_operation(db, operation, Some(requester));
                                 }
                             },
                         ));

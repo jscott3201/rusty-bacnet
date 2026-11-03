@@ -141,11 +141,12 @@ class EndpointStubParityTests(unittest.TestCase):
         # Native Future-returning owner methods.
         for cls, methods in (
             (BipEndpoint, ["start", "close", "client", "server", "local_address",
-                           "status", "foreign_registration", "broadcast_i_am"]),
+                           "status", "foreign_registration", "broadcast_i_am",
+                           "report_device_reset_local"]),
             (ScEndpoint, ["start", "close", "client", "server", "local_address",
-                          "status", "broadcast_i_am"]),
+                          "status", "broadcast_i_am", "report_device_reset_local"]),
             (MstpEndpoint, ["start", "close", "client", "server", "local_address",
-                            "status", "broadcast_i_am"]),
+                            "status", "broadcast_i_am", "report_device_reset_local"]),
         ):
             for name in methods:
                 with self.subTest(cls=cls.__name__, method=name):
@@ -171,6 +172,29 @@ class EndpointStubParityTests(unittest.TestCase):
                     self.assertEqual(
                         runtime_arg_kinds(getattr(cls, name)), stub_arg_kinds(method)
                     )
+        # The object builders take the server builders' keywords (#1867),
+        # keyword-only.
+        value_keywords = ["present_value_access", "value_source_tracking", "audit_level",
+                          "auditable_operations", "audit_priority_filter"]
+        profile_keywords = ["tags", "profile_location", "profile_name"]
+        builders = {
+            "add_analog_input": (["instance", "name", "units", "present_value"],
+                                 profile_keywords),
+            "add_analog_value": (["instance", "name", "units"],
+                                 value_keywords + profile_keywords),
+            "add_binary_input": (["instance", "name"], profile_keywords),
+            "add_binary_value": (["instance", "name"], value_keywords + profile_keywords),
+        }
+        positional = inspect.Parameter.POSITIONAL_OR_KEYWORD
+        keyword = inspect.Parameter.KEYWORD_ONLY
+        for cls in (BipEndpoint, ScEndpoint, MstpEndpoint):
+            for name, (leading, keywords) in builders.items():
+                with self.subTest(cls=cls.__name__, builder=name):
+                    expected = ([(arg, positional) for arg in leading]
+                                + [(arg, keyword) for arg in keywords])
+                    self.assertEqual(runtime_arg_kinds(getattr(cls, name)), expected)
+                    method = stub_method(classes[cls.__name__], name)
+                    self.assertEqual(stub_arg_kinds(method), expected)
         # Roles.
         self.assertEqual(
             list(inspect.signature(EndpointClient.read_property).parameters),

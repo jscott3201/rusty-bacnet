@@ -5143,6 +5143,39 @@ framing, through the shared `bacnet-encoding` codecs.
   a non-Device member VALUE_OUT_OF_RANGE, ahead of any refusal of a remote
   device.
 
+### Persisted snapshot formats (#2047)
+
+`bacnet_objects::snapshot` holds the formats the file backends write, with
+`alloc` alone, so storage an application brings (flash, EEPROM, a database
+row) keeps the same octets a hosted build does. Each format's module has
+`encode`, `decode`, its magic tag and its version as constants, and every
+refusal is a `SnapshotError` whose `kind()` names it: `Truncated`,
+`NotThisFormat`, `UnknownVersion`, `UnknownKind`, `OtherObject`, `TooLarge`,
+`Damaged`, or `OutOfRange` for a snapshot refused as it is encoded. It
+carries only static text, so reporting one needs no allocation.
+`is_damage()` says whether a two-slot backend should pass over that copy
+for the other one, and `snapshot::log::newest(object, [slot0, slot1])`
+makes `FileLogPersistence`'s whole choice between two slots. `Error`
+implements `From<SnapshotError>`, the mapping the file backends use.
+
+| Module | Snapshot | Tag and versions | File backend |
+| --- | --- | --- | --- |
+| `snapshot::log` | `LogSnapshot<R>` (Trend Log, Trend Log Multiple, Event Log) | `RBLOGS01`, version 2; version 1 still loads | `FileLogPersistence` (one slot of the two) |
+| `snapshot::write_config` | `WriteConfigSnapshot` (Timer, Channel) | `RBNWCF01`, kinds 2 and 3; kind 1 still loads | `FileWriteConfigPersistence` |
+
+```rust
+use bacnet_objects::snapshot::write_config;
+
+let octets = write_config::encode(channel, &snapshot)?; // store these
+let back = write_config::decode(channel, &octets)?;
+```
+
+The promise covers the octets: a later release keeps loading what an
+earlier one wrote. Formats may gain versions and kinds, and a format version
+stops loading only with a migration note. The Rust snapshot types follow the
+crate's usual API rules, so a new field is a breaking Rust API change. The
+module documentation has a complete custom backend.
+
 ### ObjectDatabase
 
 ```rust
@@ -10912,6 +10945,14 @@ that Reporter as the source-side one; routing these target-side records
 through it, the session's only Reporter, is a local choice. A panic or a returned Reject is answered
 `SERVICES / OTHER` and the session keeps serving. A close that wins while the
 request waits for the database refuses it before the handler runs.
+
+`EndpointSession::report_device_reset_local()` is the session's counterpart of
+`BACnetServer::report_device_reset_local()` (#1837): it records a reset the
+application makes for its own reasons as a DEVICE_RESET from this device, with
+no invoke ID, through the source Reporter and its Audit_Level and
+Auditable_Operations filters. Without a source Reporter it records nothing.
+It fails when the session is not running, and returns once the record is
+admitted, so call it before restarting.
 
 ### Direct endpoint WriteProperty and source WRITE reporting
 

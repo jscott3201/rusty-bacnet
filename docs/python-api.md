@@ -4824,7 +4824,10 @@ server = BACnetServer(1234, reinit_password="secret",
 endpoint's only Audit Reporter is its source Reporter, which Clause 19.6.2
 casts as the operation source's; writing the DEVICE_RESET, DEVICE_BACKUP and
 DEVICE_RESTORE records of requests it carries out through that Reporter is
-this library's local choice.
+this library's local choice. Endpoints take `await endpoint.report_device_reset_local()`
+too (#1837). Python can't configure an endpoint's source Reporter yet, so
+there it records nothing; it raises RuntimeError when the endpoint is not
+running.
 
 ### Runtime Object Access
 
@@ -5446,6 +5449,17 @@ async with endpoint:
     client = await endpoint.client()
     value = await client.read_property("127.0.0.1:47808", oid, pid)
 ```
+
+The endpoint builders `add_analog_input`, `add_analog_value`,
+`add_binary_input` and `add_binary_value` take the same keyword-only options
+as `BACnetServer`'s (#1867), checked by the same code: `tags`,
+`profile_location` and `profile_name` on all four, and `present_value_access`
+and `value_source_tracking` on the two Value builders (see
+[Object profiles and Value_Source](#object-profiles-and-value_source)).
+The endpoint serves those rows to ReadProperty, the one object service its
+server role answers. Peers can't write these objects through an endpoint, so
+there `present_value_access` and `value_source_tracking` only describe the
+object: a tracked object's Value_Source reads null.
 
 `await endpoint.status()` returns a redacted snapshot (`is_running`,
 `device_instance`, `vendor_id`, `max_apdu`, `transport`, `local_address`,
