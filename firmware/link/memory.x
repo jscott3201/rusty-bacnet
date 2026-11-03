@@ -1,7 +1,8 @@
 /* A generic small MCU: 256 KiB of flash and 64 KiB of RAM, at the addresses
    most Cortex-M vendors use. The images only have to link, so no particular
-   chip is meant, and the RISC-V images use the same layout. The runtimes'
-   link.x scripts include this file before their own SECTIONS. */
+   chip is meant, and the riscv32imc images use the same layout;
+   riscv32imac's use memory-riscv32imac.x (#2363). The runtimes' link.x
+   scripts include this file before their own SECTIONS. */
 MEMORY
 {
   FLASH : ORIGIN = 0x08000000, LENGTH = 256K

@@ -100,18 +100,22 @@ impl ActiveCovSubscriptions {
     }
 
     /// Project copied entries while the caller holds the database guard.
+    /// `entries` come in the table's order, as
+    /// [`CovTable::active_cov_entries`] copies them, which is the list's.
     ///
     /// An entry whose monitored object no longer exists has been terminated by
     /// DeleteObject and is omitted, even before table cleanup completes.
     pub fn project(
         db: &ObjectDatabase,
         device: ObjectIdentifier,
-        mut entries: Vec<ActiveCovEntry>,
+        entries: Vec<ActiveCovEntry>,
     ) -> Self {
-        // The order is total, so an unstable sort gives the same list, and
-        // links no 64-bit division on a 32-bit target, as the stable one's
-        // run-length scale does.
-        entries.sort_unstable_by(order);
+        // The table's key order is this list's (#2363), so entries come in
+        // order and nothing sorts them.
+        debug_assert!(
+            entries.is_sorted_by(|a, b| order(a, b).is_le()),
+            "entries in the table's order"
+        );
         let subscriptions: Vec<_> = entries
             .into_iter()
             .filter_map(|entry| {
@@ -489,6 +493,9 @@ mod tests {
                 Some(1.0),
             ),
         ];
+        // In the table's order, as `active_cov_entries` copies them.
+        let mut entries = entries;
+        entries.sort_by(order);
         let projected = ActiveCovSubscriptions::project(&db, device(), entries);
 
         let expected =

@@ -30,15 +30,21 @@ use crate::read::ReadOverlay;
 /// numeric entry names the increment in use, as the server's lists do. The
 /// Device answers for both only while its Property_List names them;
 /// every other object, and every other property, is served as stored.
+///
+/// `MULTIPLE` false leaves Active_COV_Multiple_Subscriptions to the stored
+/// Device, for a host whose table can hold no COV-multiple reference (the
+/// `Reporter`, until #2320): its list from the table would be the Device's
+/// own empty one, and the image then links neither that projection nor its
+/// encoder.
 #[derive(Clone, Copy)]
-pub struct ActiveCovOverlay<'a> {
+pub struct ActiveCovOverlay<'a, const MULTIPLE: bool = true> {
     table: &'a CovTable,
     db: &'a ObjectDatabase,
     device: ObjectIdentifier,
     now: Instant,
 }
 
-impl<'a> ActiveCovOverlay<'a> {
+impl<'a, const MULTIPLE: bool> ActiveCovOverlay<'a, MULTIPLE> {
     /// The lists of `device` in `table`, as of `now`, projected against
     /// `db`.
     pub fn new(
@@ -65,24 +71,26 @@ impl<'a> ActiveCovOverlay<'a> {
                 self.table.active_cov_entries(self.now),
             )
             .resolve(self.device, property),
-            P::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS => ActiveCovMultipleSubscriptions::project(
-                self.db,
-                self.device,
-                self.table.active_cov_multiple_entries(self.now),
-            )
-            .resolve(self.device, property),
+            P::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS if MULTIPLE => {
+                ActiveCovMultipleSubscriptions::project(
+                    self.db,
+                    self.device,
+                    self.table.active_cov_multiple_entries(self.now),
+                )
+                .resolve(self.device, property)
+            }
             _ => None,
         }
     }
 }
 
-impl<'a> ReadOverlay for ActiveCovOverlay<'a> {
+impl<'a, const MULTIPLE: bool> ReadOverlay for ActiveCovOverlay<'a, MULTIPLE> {
     type View<'v>
-        = ActiveCovView<'v>
+        = ActiveCovView<'v, MULTIPLE>
     where
         Self: 'v;
 
-    fn view<'v>(&'v self, stored: &'v dyn BACnetObject) -> Option<ActiveCovView<'v>> {
+    fn view<'v>(&'v self, stored: &'v dyn BACnetObject) -> Option<ActiveCovView<'v, MULTIPLE>> {
         (stored.object_identifier() == self.device).then_some(ActiveCovView {
             stored,
             overlay: *self,
@@ -91,12 +99,12 @@ impl<'a> ReadOverlay for ActiveCovOverlay<'a> {
 }
 
 /// The local Device as an [`ActiveCovOverlay`] serves it.
-pub struct ActiveCovView<'a> {
+pub struct ActiveCovView<'a, const MULTIPLE: bool = true> {
     stored: &'a dyn BACnetObject,
-    overlay: ActiveCovOverlay<'a>,
+    overlay: ActiveCovOverlay<'a, MULTIPLE>,
 }
 
-impl BACnetObject for ActiveCovView<'_> {
+impl<const MULTIPLE: bool> BACnetObject for ActiveCovView<'_, MULTIPLE> {
     fn object_identifier(&self) -> ObjectIdentifier {
         self.stored.object_identifier()
     }
@@ -106,10 +114,8 @@ impl BACnetObject for ActiveCovView<'_> {
     fn read_property(&self, property: P, index: Option<u32>) -> Result<PropertyValue, Error> {
         // A list takes no index; the stored Device refuses one as it does.
         if index.is_none()
-            && matches!(
-                property,
-                P::ACTIVE_COV_SUBSCRIPTIONS | P::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS
-            )
+            && (property == P::ACTIVE_COV_SUBSCRIPTIONS
+                || MULTIPLE && property == P::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS)
             && has_property(&self.stored.property_metadata(), property)
             && let Some(live) = self.overlay.list(property)
         {

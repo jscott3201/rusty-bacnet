@@ -502,7 +502,10 @@ targets, so a crate that needs one builds only with a backend such as
   for the objects and reporting images alone (#2178, #2303). `thumbv7em-none-eabihf`'s images are a
   little smaller than `thumbv7m-none-eabi`'s. They share one generic memory
   layout, `firmware/link/memory.x`: 256 KiB of flash at `0x08000000` and 64
-  KiB of RAM at `0x20000000`. The startup code comes from `cortex-m-rt` and
+  KiB of RAM at `0x20000000`. `riscv32imac-unknown-none-elf` takes
+  `memory-riscv32imac.x` instead, with 512 KiB of flash, sized for an
+  ESP32-C6-class part (RV32IMAC, external flash of 4 MiB or more), so the
+  reporting image has room for event reporting (#2363). The startup code comes from `cortex-m-rt` and
   `riscv-rt`, bare-metal dependencies only; `firmware/link/build.rs` hands
   the linker `memory.x` and `link.x`. `memory.x` also discards `.eh_frame`,
   the unwind tables riscv-rt's script would leave in flash (2.6 KB in the

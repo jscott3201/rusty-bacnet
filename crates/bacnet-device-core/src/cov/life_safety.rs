@@ -1,6 +1,5 @@
 //! Exact readback snapshots for server-owned Life Safety COV mutation paths.
 
-use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 
 use bacnet_objects::database::ObjectDatabase;
@@ -70,7 +69,8 @@ struct ObjectSnapshot {
 #[derive(Debug, Clone, Default)]
 pub struct LifeSafetyCovSnapshots {
     objects: Vec<ObjectSnapshot>,
-    held: BTreeSet<ObjectIdentifier>,
+    /// The objects captured, each once, in order.
+    held: Vec<ObjectIdentifier>,
 }
 
 /// Whether `object_identifier` names a Life Safety Point or Zone.
@@ -88,7 +88,7 @@ fn properties_for(object_identifier: ObjectIdentifier) -> Option<&'static [Prope
 impl LifeSafetyCovSnapshots {
     /// Whether `object_identifier`'s pre-mutation state is held.
     pub fn holds(&self, object_identifier: ObjectIdentifier) -> bool {
-        self.held.contains(&object_identifier)
+        self.held.binary_search(&object_identifier).is_ok()
     }
 
     /// Capture one object's pre-mutation state.
@@ -169,9 +169,10 @@ impl LifeSafetyCovSnapshots {
         let Some(object) = db.get(&object_identifier) else {
             return;
         };
-        if !self.held.insert(object_identifier) {
+        let Err(at) = self.held.binary_search(&object_identifier) else {
             return;
-        }
+        };
+        self.held.insert(at, object_identifier);
         let values = properties
             .iter()
             .filter_map(|property| {

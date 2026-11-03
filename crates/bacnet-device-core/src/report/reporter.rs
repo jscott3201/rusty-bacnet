@@ -138,7 +138,7 @@ impl Reporter {
             self.report_changes(db, &written.objects, &capture.0, now);
             written
         } else {
-            let overlay = ActiveCovOverlay::new(&self.table, db, self.device, now);
+            let overlay = self.overlay(db, now);
             self.responder.read(db, Some(&overlay), request, out).into()
         };
         match handled.outcome {
@@ -359,8 +359,14 @@ impl Reporter {
     }
 
     /// The Device's subscription lists in `db`, live at `now`, for a read
-    /// the host runs itself.
-    pub fn overlay<'a>(&'a self, db: &'a ObjectDatabase, now: Instant) -> ActiveCovOverlay<'a> {
+    /// the host runs itself. Active_COV_Multiple_Subscriptions is the
+    /// Device's own: the reporter runs no SubscribeCOVPropertyMultiple
+    /// (#2320), so its table holds no reference that list would show.
+    pub fn overlay<'a>(
+        &'a self,
+        db: &'a ObjectDatabase,
+        now: Instant,
+    ) -> ActiveCovOverlay<'a, false> {
         ActiveCovOverlay::new(&self.table, db, self.device, now)
     }
 
@@ -455,23 +461,28 @@ impl Reporter {
 
     /// Look again at the live references among `keys`, object by object,
     /// each object under a budget of its own.
-    fn look(&mut self, db: &ObjectDatabase, mut keys: Vec<CovSubscriptionKey>, now: Instant) {
-        keys.sort_unstable();
-        keys.dedup();
-        let mut subs: Vec<_> = keys
-            .iter()
-            .filter_map(|key| self.table.get_subscription(key))
-            .filter(|sub| self.table.is_current(sub, now))
+    fn look(&mut self, db: &ObjectDatabase, keys: Vec<CovSubscriptionKey>, now: Instant) {
+        if keys.is_empty() {
+            return;
+        }
+        // The table's order groups them by object, each once: no sort.
+        let subs: Vec<_> = self
+            .table
+            .entries()
+            .filter(|sub| keys.contains(sub.key()) && self.table.is_current(sub, now))
             .cloned()
             .collect();
-        while let Some(first) = subs.first().map(|sub| sub.monitored_object_identifier) {
-            let (this, rest): (Vec<_>, Vec<_>) = subs
-                .into_iter()
-                .partition(|sub| sub.monitored_object_identifier == first);
-            subs = rest;
-            if let Some(object) = db.get(&first) {
-                self.report(object, &this, false, now);
+        let mut start = 0;
+        while let Some(object) = subs.get(start).map(|sub| sub.monitored_object_identifier) {
+            let end = start
+                + subs[start..]
+                    .iter()
+                    .take_while(|sub| sub.monitored_object_identifier == object)
+                    .count();
+            if let Some(stored) = db.get(&object) {
+                self.report(stored, &subs[start..end], false, now);
             }
+            start = end;
         }
     }
 

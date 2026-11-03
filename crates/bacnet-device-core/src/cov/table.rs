@@ -15,6 +15,7 @@ use bacnet_types::primitives::ObjectIdentifier;
 
 use super::flight::{FlightState, FlightTiming, Token};
 use super::observation_order::Pending;
+use super::vec_map::VecMap;
 use super::{CovSubscription, CovSubscriptionSnapshot};
 
 /// Gives each table its own identity, so a snapshot from one table can't
@@ -133,12 +134,12 @@ pub struct CovTable {
     pub(super) issued: u64,
     /// Flights with an outstanding report or a hold-off; an absent flight
     /// is idle.
-    pub(super) flights: BTreeMap<u64, FlightState>,
+    pub(super) flights: VecMap<u64, FlightState>,
     /// Unconfirmed reports handed to the host whose sends haven't ended.
     pub(super) pending: Vec<Pending>,
     pub(super) next_flight: u64,
-    pub(super) peer_counts: BTreeMap<CovRecipient, usize>,
-    pub(super) peer_indefinite_counts: BTreeMap<CovRecipient, usize>,
+    pub(super) peer_counts: VecMap<CovRecipient, usize>,
+    pub(super) peer_indefinite_counts: VecMap<CovRecipient, usize>,
     pub(super) policy: CovPolicy,
     pub(super) timing: FlightTiming,
     /// Subscription counts since the host last took them.
@@ -165,11 +166,11 @@ impl CovTable {
             subs: Entries::default(),
             generation: 0,
             issued: 0,
-            flights: BTreeMap::new(),
+            flights: VecMap::default(),
             pending: Vec::new(),
             next_flight: 0,
-            peer_counts: BTreeMap::new(),
-            peer_indefinite_counts: BTreeMap::new(),
+            peer_counts: VecMap::default(),
+            peer_indefinite_counts: VecMap::default(),
             policy: policy.sanitized(),
             timing: FlightTiming::default(),
             counts: CovCounters::default(),

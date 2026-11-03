@@ -176,7 +176,7 @@ pub fn run(requests: &[&[u8]; REQUESTS]) -> Summary {
 
 /// [`REQUESTER`] as the command origin a write carries: its address, with
 /// no Device bound to it.
-fn requester() -> CommandOrigin {
+pub(crate) fn requester() -> CommandOrigin {
     CommandOrigin::Remote {
         actual_address: BACnetAddress {
             network_number: 0,

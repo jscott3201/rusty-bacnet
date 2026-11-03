@@ -32,6 +32,7 @@ mod subscribe;
 mod subscription;
 mod table;
 pub mod value_source;
+mod vec_map;
 
 pub use admission::MultipleRefusal;
 pub use budget::EventBudget;
