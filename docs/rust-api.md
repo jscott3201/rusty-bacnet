@@ -3137,6 +3137,17 @@ couldn't tell the two apart; if it goes unanswered, not until one response timeo
 after it ended, so a late answer to it can't pass for the registration's. It is
 off by default, for the reasons `BipTransport::set_release_previous_bbmd` gives.
 
+**A foreign node with no BBMD yet** (#2308). `Foreign::bbmd` is an `Option`:
+`Foreign::new` sets `Some`, and `None` starts, or moves, a node that waits for its
+BBMD, as a device whose BBMD's host name hasn't resolved does. It has no
+registration attempt due, holds broadcasts up to `Foreign::hold` and refuses the
+next with `SendRefusal::HoldFull` (with no hold, every one), trusts no
+Forwarded-NPDU from a configured BBMD, and `Link::broadcast` answers
+`SendRefusal::NoBbmd`. The first `Node::retarget` to a known BBMD ends the wait,
+its attempt due at once and the held broadcasts going out when it resolves; there
+is nothing to release from the wait, while a move from a known BBMD into it
+releases that one as any move does.
+
 `bbmd::GRACE_PERIOD` is a `Duration`. `bbmd::StorageFull` and
 `BdtError::Capacity` carry `needed` and `available`, in entries, as the
 codec's `SinkFull` does in octets. `RegistrationRefusal` and `EntryError`
