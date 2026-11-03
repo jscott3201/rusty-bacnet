@@ -2,9 +2,14 @@
 //! saved snapshot passes before it is written and after it is read (#2183).
 //! These run in the alloc-only build too.
 
+use super::codec::{self, HEADER_LEN, MAX_SNAPSHOT_BYTES, TRAILER_LEN};
 use super::*;
+use bacnet_types::bitstring::LogStatus;
+use bacnet_types::constructed::{BACnetAuditLogDatum, BACnetAuditLogRecord};
 use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::{Date, Time};
+
+use crate::durable::crc32;
 
 fn oid() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::AUDIT_LOG, 1).unwrap()
@@ -46,10 +51,14 @@ fn snapshot() -> AuditLogSnapshot {
     }
 }
 
-/// Decode `data` as a read slot is decoded, after its integrity check.
+/// Decode `data` as a read slot is decoded, with the stack's error.
 fn decode(data: &[u8]) -> Result<AuditLogSnapshot, Error> {
-    verify_snapshot_integrity(data)?;
-    decode_verified_snapshot(data, oid(), SCHEMA_VERSION)
+    Ok(codec::decode(data, oid())?)
+}
+
+/// Today's slot for `snapshot`, with the stack's error.
+fn encode_snapshot(snapshot: &AuditLogSnapshot) -> Result<Vec<u8>, Error> {
+    Ok(codec::encode(snapshot)?)
 }
 
 /// Overwrite `octets` at `offset` and seal the snapshot again, so only the
@@ -100,7 +109,7 @@ fn a_sealed_capacity_past_the_cap_is_refused() {
         HEADER_LEN,
         &(MAX_AUDIT_RECORDS + 1).to_be_bytes(),
     );
-    assert_out_of_range(decode(&data), "persisted capacity");
+    assert_encoding(decode(&data), "persisted capacity");
 }
 
 #[test]
@@ -113,7 +122,9 @@ fn a_sealed_log_enable_that_is_not_boolean_is_refused() {
 fn a_snapshot_past_the_size_cap_is_refused_before_its_header_is_read() {
     // Zeroed, so the allocation stays cheap; the size alone refuses it.
     let data = vec![0; MAX_SNAPSHOT_BYTES + 1];
-    assert_out_of_range(verify_snapshot_integrity(&data), "exceeds");
+    let refused = codec::verify_integrity(&data).unwrap_err();
+    assert!(refused.is_damage());
+    assert_encoding(Err::<(), Error>(refused.into()), "exceeds");
 }
 
 #[test]
@@ -127,7 +138,7 @@ fn a_snapshot_that_cannot_hold_together_is_never_encoded() {
     assert_out_of_range(encode_snapshot(&over_cap), "capacity");
 
     // Schema v1 has no room for receipts.
-    assert_encoding(encode_snapshot_v1(&snapshot()), "completed receipts");
+    assert_out_of_range(encode_snapshot_v1(&snapshot()), "completed receipts");
     // Schema v1 stored log statuses with their bits reversed, so a record
     // of another kind shows the round trip.
     let mut without_receipts = snapshot();
@@ -136,9 +147,6 @@ fn a_snapshot_that_cannot_hold_together_is_never_encoded() {
         result.record.datum = BACnetAuditLogDatum::TimeChange(1.5);
     }
     let v1 = encode_snapshot_v1(&without_receipts).unwrap();
-    verify_snapshot_integrity(&v1).unwrap();
-    assert_eq!(
-        decode_verified_snapshot(&v1, oid(), SCHEMA_VERSION_V1).unwrap(),
-        without_receipts
-    );
+    assert_eq!(v1[8..10], codec::SCHEMA_VERSION_V1.to_be_bytes());
+    assert_eq!(decode(&v1).unwrap(), without_receipts);
 }

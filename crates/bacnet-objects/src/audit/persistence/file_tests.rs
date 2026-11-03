@@ -21,10 +21,17 @@ fn snapshot() -> AuditLogSnapshot {
     }
 }
 
-fn io_failure() -> SlotState {
-    SlotState::Fatal(Error::Transport(std::io::Error::other(
-        "injected slot read failure",
+type SlotRead = Result<Option<Vec<u8>>, SlotReadFailure>;
+
+fn io_failure() -> SlotRead {
+    Err(SlotReadFailure::Fatal(Error::Transport(
+        std::io::Error::other("injected slot read failure"),
     )))
+}
+
+/// A slot read that found `snapshot`.
+fn valid(snapshot: AuditLogSnapshot) -> SlotRead {
+    Ok(Some(audit_log::encode(&snapshot).unwrap()))
 }
 
 /// A fresh, empty directory of this test's own.
@@ -48,11 +55,11 @@ fn overlong_name() -> String {
 #[test]
 fn audit_slot_selection_never_masks_io_failure_with_valid_peer() {
     assert!(matches!(
-        select_newest_slot([io_failure(), SlotState::Valid(snapshot())]),
+        choose_slot([io_failure(), valid(snapshot())], oid()),
         Err(Error::Transport(_))
     ));
     assert!(matches!(
-        select_newest_slot([SlotState::Valid(snapshot()), io_failure()]),
+        choose_slot([valid(snapshot()), io_failure()], oid()),
         Err(Error::Transport(_))
     ));
 }
@@ -60,21 +67,15 @@ fn audit_slot_selection_never_masks_io_failure_with_valid_peer() {
 #[test]
 fn audit_slot_selection_requires_identical_same_generation_snapshots() {
     let expected = snapshot();
-    let selected = select_newest_slot([
-        SlotState::Valid(expected.clone()),
-        SlotState::Valid(expected.clone()),
-    ])
-    .unwrap()
-    .unwrap();
+    let selected = choose_slot([valid(expected.clone()), valid(expected.clone())], oid())
+        .unwrap()
+        .unwrap();
     assert_eq!(selected, expected);
 
     let mut divergent = snapshot();
     divergent.log_enable = false;
     assert!(matches!(
-        select_newest_slot([
-            SlotState::Valid(snapshot()),
-            SlotState::Valid(divergent),
-        ]),
+        choose_slot([valid(snapshot()), valid(divergent)], oid()),
         Err(Error::Encoding(message)) if message.contains("same generation")
     ));
 }
@@ -149,7 +150,7 @@ fn a_slot_past_the_size_cap_is_refused_and_its_valid_peer_still_loads() {
     drop(oversized);
     assert!(matches!(
         storage.load(oid()),
-        Err(Error::OutOfRange(message)) if message.contains("exceeds")
+        Err(Error::Encoding(message)) if message.contains("exceeds")
     ));
 
     // Generation 2 lands in slot 0; slot 1 stays oversized and is passed over.
