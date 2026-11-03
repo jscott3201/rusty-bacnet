@@ -64,6 +64,23 @@ fn audit_slot_selection_never_masks_io_failure_with_valid_peer() {
     ));
 }
 
+/// Slot order decides which refusal a load reports: slot 0 refused as
+/// another object's goes ahead of slot 1's read failure, and slot 0's read
+/// failure ahead of slot 1's refusal.
+#[test]
+fn a_refused_slot_0_is_reported_ahead_of_slot_1s_read_failure() {
+    let mut elsewhere = snapshot();
+    elsewhere.object_identifier = ObjectIdentifier::new(ObjectType::AUDIT_LOG, 2).unwrap();
+    assert!(matches!(
+        choose_slot([valid(elsewhere.clone()), io_failure()], oid()),
+        Err(Error::Encoding(message)) if message.contains("object identity")
+    ));
+    assert!(matches!(
+        choose_slot([io_failure(), valid(elsewhere)], oid()),
+        Err(Error::Transport(_))
+    ));
+}
+
 #[test]
 fn audit_slot_selection_requires_identical_same_generation_snapshots() {
     let expected = snapshot();

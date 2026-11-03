@@ -211,8 +211,10 @@ impl AuditLogPersistence for FileAuditLogPersistence {
 
 /// The snapshot to load from the two slots' reads, by
 /// [`audit_log::newest`]'s rules. A read that failed fails the load, in
-/// slot order, before anything is chosen; a slot found past the size cap
-/// without being read counts as a damaged one.
+/// slot order: slot 0 refused as a snapshot this log must not take is
+/// reported ahead of slot 1's read failure, as each slot's state always
+/// was. A slot found past the size cap without being read counts as
+/// damage, reported only when nothing loads and no read slot was damaged.
 #[cfg(feature = "std")]
 fn choose_slot(
     reads: [Result<Option<Vec<u8>>, SlotReadFailure>; 2],
@@ -223,7 +225,19 @@ fn choose_slot(
     for (slot, read) in reads.into_iter().enumerate() {
         match read {
             Ok(octets) => slots[slot] = octets,
-            Err(SlotReadFailure::Fatal(error)) => return Err(error),
+            Err(SlotReadFailure::Fatal(error)) => {
+                // Slot 0 is chosen from before slot 1 fails: its refusal
+                // comes first.
+                if let Some(Err(refused)) = slots[0]
+                    .as_deref()
+                    .filter(|_| slot == 1)
+                    .map(|octets| audit_log::decode(expected_object, octets))
+                    && !refused.is_damage()
+                {
+                    return Err(refused.into());
+                }
+                return Err(error);
+            }
             Err(SlotReadFailure::Recoverable(error)) => skipped = Some(error),
         }
     }

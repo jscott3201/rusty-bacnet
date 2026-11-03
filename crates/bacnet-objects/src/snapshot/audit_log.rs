@@ -76,8 +76,10 @@ pub struct NewestSlot {
 /// - a slot that is a sound snapshot this log must not take (another
 ///   object's, or an unknown schema version), without falling back to the
 ///   other;
-/// - both slots damaged, or one damaged and the other empty: the damage of
-///   the later slot;
+/// - both slots damaged, or one damaged and the other empty: the error of
+///   the last damaged slot (slot 1's when both are). The file backend never
+///   reads a slot past the size cap, and reports it only when no slot it
+///   read was damaged;
 /// - two slots of one generation that encode, in today's schema, to
 ///   different octets ([`Damaged`](super::SnapshotErrorKind::Damaged)). Two slots
 ///   that differ only in schema version, holding the same state, are one

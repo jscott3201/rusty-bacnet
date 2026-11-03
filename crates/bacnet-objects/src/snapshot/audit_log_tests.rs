@@ -12,7 +12,10 @@ use bacnet_types::primitives::ObjectIdentifier;
 use super::tests::{DATE, at, oid, reseal};
 use super::{SnapshotErrorKind, audit_log};
 use crate::audit::persistence::codec::{SCHEMA_VERSION_V1, SCHEMA_VERSION_V2, encode_for_version};
-use crate::audit::{AuditLogSnapshot, CompletedAuditReceipt, MAX_AUDIT_RECORDS};
+use crate::audit::{
+    AuditLogSnapshot, CompletedAuditReceipt, MAX_AUDIT_RECEIPT_KEY_BYTES, MAX_AUDIT_RECORDS,
+};
+use crate::durable::crc32;
 
 fn object() -> ObjectIdentifier {
     oid(ObjectType::AUDIT_LOG, 2)
@@ -174,6 +177,48 @@ fn one_generation_twice_is_compared_as_version_3() {
     let error = newest([Some(&three), Some(&v3)]).unwrap_err();
     assert_eq!(error.kind(), SnapshotErrorKind::Damaged);
     assert!(error.to_string().contains("same generation"), "{error}");
+}
+
+/// A receipt key at its cap round-trips; a slot whose key runs one octet
+/// past it is damage.
+#[test]
+fn a_receipt_key_at_the_cap_loads_and_one_past_it_does_not() {
+    let mut at_cap = snapshot(3);
+    at_cap.completed_receipts =
+        vec![CompletedAuditReceipt::new(vec![0xAB; MAX_AUDIT_RECEIPT_KEY_BYTES], 1).unwrap()];
+    let octets = audit_log::encode(&at_cap).unwrap();
+    assert_eq!(audit_log::decode(object(), &octets), Ok(at_cap));
+
+    // The key's length field sits before the key and the checksum.
+    let mut past = octets;
+    let at = past.len() - 4 - MAX_AUDIT_RECEIPT_KEY_BYTES - 4;
+    past[at..at + 4].copy_from_slice(&(MAX_AUDIT_RECEIPT_KEY_BYTES as u32 + 1).to_be_bytes());
+    past.insert(past.len() - 4, 0xAB);
+    let payload = (past.len() - 26 - 4) as u32;
+    past[22..26].copy_from_slice(&payload.to_be_bytes());
+    let end = past.len() - 4;
+    let checksum = crc32(&past[..end]);
+    past[end..].copy_from_slice(&checksum.to_be_bytes());
+    let error = audit_log::decode(object(), &past).unwrap_err();
+    assert_eq!(error.kind(), SnapshotErrorKind::Damaged);
+}
+
+/// A tie compares octets, not values: a NaN record matches itself, and
+/// -0.0 differs from +0.0, as the file backend has always decided.
+#[test]
+fn a_tie_compares_octets_not_values() {
+    let newest = |slots| audit_log::newest(object(), slots);
+    let with = |value: f32| {
+        let mut snapshot = snapshot(3);
+        snapshot.records[1].record.datum = BACnetAuditLogDatum::TimeChange(value);
+        audit_log::encode(&snapshot).unwrap()
+    };
+    let nan = with(f32::NAN);
+    let chosen = newest([Some(&nan), Some(&nan)]).unwrap().unwrap();
+    assert_eq!(chosen.slot, 0);
+    let (negative, positive) = (with(-0.0), with(0.0));
+    let error = newest([Some(&negative), Some(&positive)]).unwrap_err();
+    assert_eq!(error.kind(), SnapshotErrorKind::Damaged);
 }
 
 /// The file backend writes what `encode` returns, and loads a slot
