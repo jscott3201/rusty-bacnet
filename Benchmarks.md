@@ -1332,6 +1332,18 @@ baseline with the harness above
   optimization, and adds nothing anywhere. It is kept as a simplification
   of the receive loop.
 
+### 10.7 WriteProperty address copies (#2342)
+
+After S3 (section 10.6), WriteProperty still copied the writer's address
+one byte at a time, four times per request, while the commanded object
+tracked its Value_Source. `BACnetAddress` now copies its MAC at once, and a
+command no longer copies the published source just to compare it
+([benchmarks/results/perf-wp-clones](benchmarks/results/perf-wp-clones/README.md)).
+WriteProperty falls by about 500 instructions per request on both runtimes,
+with every pair lower and allocations unchanged, and its profile has no
+byte-by-byte address copies left. ReadProperty and ReadPropertyMultiple are
+not higher.
+
 ## 11. How to reproduce
 
 Run one suite at a time on an idle machine. Each Criterion suite takes 1 to
