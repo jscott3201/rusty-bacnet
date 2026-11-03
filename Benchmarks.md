@@ -1359,7 +1359,16 @@ Two more request-path changes, each counted against its own baseline
 - **Clock reads.** The server's receive loop read the clock twice per APDU
   to expire segmented requests, even with none open. It now reads it only
   while one is. That saves about 240 to 280 instructions per ReadProperty
-  and WriteProperty request, and changes no timeout.
+  and WriteProperty request, and 270 per ReadPropertyMultiple on the
+  current-thread runtime; on the multi-thread runtime ReadPropertyMultiple
+  moved +65.6, inside its floor of 1,192.4. It changes no timeout.
+
+The manual Perf counts workflow then compared dev with the two changes
+together (GitHub run 41643594249): ReadProperty fell by 1,117.1
+instructions per request on the current-thread runtime and 1,111.0 on the
+multi-thread one, WriteProperty by 1,109.9 and 1,089.4, and
+ReadPropertyMultiple by 921.1 and 1,162.5, with every pair lower and
+allocations unchanged.
 
 ## 11. How to reproduce
 

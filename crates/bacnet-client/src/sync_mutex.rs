@@ -14,7 +14,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
 /// A `std::sync::Mutex` whose lock ignores poisoning. A panic while holding
 /// it leaves the state as the panicking step left it, which is what the
 /// `tokio::sync::Mutex` it replaces did too.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct SyncMutex<T>(Mutex<T>);
 
 impl<T> SyncMutex<T> {

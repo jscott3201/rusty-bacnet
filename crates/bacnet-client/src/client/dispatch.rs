@@ -636,7 +636,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // entry cannot outlive the authoritative phase for delivery.
                 // Both locks are blocking ones, released before any await.
                 let coordinator_apdu = Apdu::SegmentAck(sa.clone());
-                {
+                let outstanding = {
                     let tsm_guard = tsm.lock();
                     match tsm_guard.coordinated_segment_ack_phase(
                         tsm_mac,
@@ -658,16 +658,17 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                             }
                             return;
                         }
-                        SegmentAckPhase::Outstanding => {
-                            debug!(
-                                invoke_id,
-                                "Discarding duplicate SegmentAck for an outstanding transaction"
-                            );
-                            return;
-                        }
+                        SegmentAckPhase::Outstanding => true,
                         SegmentAckPhase::CoordinatorRejected => return,
-                        SegmentAckPhase::Idle => {}
+                        SegmentAckPhase::Idle => false,
                     }
+                };
+                if outstanding {
+                    debug!(
+                        invoke_id,
+                        "Discarding duplicate SegmentAck for an outstanding transaction"
+                    );
+                    return;
                 }
 
                 // IDLE (5.4.4.1) `UnexpectedSegmentInfoReceived`: nothing is

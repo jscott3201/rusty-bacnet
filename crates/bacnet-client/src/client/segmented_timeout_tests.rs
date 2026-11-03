@@ -286,7 +286,10 @@ async fn caller_cancellation_reclaims_reassembly_after_tsm_lock_contention() {
     // hands its cleanup to the dispatch task, which waits for the lock.
     let tsm_lock = client.tsm.lock();
     request.abort();
-    assert!(request.await.unwrap_err().is_cancelled());
+    let cancelled = timeout(Duration::from_secs(2), request)
+        .await
+        .expect("cancelling the request waited for the TSM lock");
+    assert!(cancelled.unwrap_err().is_cancelled());
     drop(tsm_lock);
 
     assert!(

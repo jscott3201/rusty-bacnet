@@ -59,7 +59,7 @@ The two `Drop` impls keep `try_lock`, so a drop never waits.
 | ReadPropertyMultiple | mt | 94,708.0 | 94,213.2 | -494.8 | 762.5 | 5 of 6 | 141.0007 / 141.0006 | PASS |
 
 **Verdict: accepted.** ReadProperty falls by about 845 instructions per
-request: 54.1 floors on the current-thread runtime and 10.5 on the
+request: 54.1 times the floor on the current-thread runtime and 10.5 times on the
 multi-thread one, with all pairs lower. WriteProperty and
 ReadPropertyMultiple fall too. Allocations and requested bytes are
 unchanged. In `item2a/profiles/rp-ct.md`:
@@ -102,7 +102,7 @@ reads stay where they were, so no timeout, deadline or order changes.
 | ReadPropertyMultiple | mt | 93,683.8 | 93,749.4 | +65.6 | 1,192.4 | 4 of 6 | 141.0005 / 141.0005 | PASS |
 
 **Verdict: accepted.** ReadProperty falls by about 280 instructions per
-request: 7.3 floors on the current-thread runtime and 4.7 on the
+request: 7.3 times the floor on the current-thread runtime and 4.7 times on the
 multi-thread one, with all pairs lower. Two clock reads go (17.0 to 15.0
 `clock_gettime` calls), and with them the two expiry futures the loop
 built and dropped each turn (`item6/attribution-rp-ct.md`). The
