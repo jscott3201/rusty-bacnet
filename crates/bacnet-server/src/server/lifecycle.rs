@@ -264,7 +264,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         {
                             continue;
                         }
-                        let source_mac = received.source_mac.clone();
+                        let source_mac = MacAddr::from_slice(&received.source_mac);
                         let source_network = received.source_network.clone();
 
                         // Clause 5.4.5.2 AbortPDU_Received: a peer's Abort
