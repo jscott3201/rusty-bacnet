@@ -18,9 +18,55 @@ pub(super) use recovery_classifier::confirmed_class;
 
 /// Global and logical-peer top-level handler limits with a strict recovery reserve.
 /// Defaults are provisional owner policy, not benchmark-derived values.
+///
+/// # Confirmed requests under load
+///
+/// By default the server runs at most 64 confirmed handlers at once and keeps
+/// 4 of them for DeviceCommunicationControl requests that re-enable
+/// communication, so 60 ordinary confirmed requests run at a time, at most 16
+/// of them from one peer. Nothing waits for a slot: a confirmed request that
+/// finds no room is refused at once with an Abort (OUT_OF_RESOURCES), sent by
+/// one of 8 Abort workers. When all 8 are busy the request is dropped
+/// silently and counted in
+/// [`confirmed_fallback_dropped_total`](RequestAdmissionCounters::confirmed_fallback_dropped_total);
+/// that client waits out one request timeout and its retry is then served.
+///
+/// A handler keeps its slot until its reply has been handed to the transport.
+/// A client can get its reply and send its next request before the handler
+/// that answered it lets go, so refusals can start a little below the limit.
+/// Above the limit, how many requests are refused depends on scheduling, not
+/// on how costly each request is, and varies widely between runs. Silent
+/// drops are a start-up effect: they come while many clients still send in
+/// step and more than 8 refusals arrive together.
+///
+/// To avoid refusals, set [`max_confirmed_in_flight`](Self::max_confirmed_in_flight)
+/// above the most confirmed requests you expect at once, plus the
+/// [`confirmed_recovery_reserve`](Self::confirmed_recovery_reserve), with
+/// headroom. The measured curve of clients against Aborts is in
+/// [`benchmarks/results/perf-s2`](https://github.com/jscott3201/rusty-bacnet/tree/dev/benchmarks/results/perf-s2).
+///
+/// ```
+/// use bacnet_server::server::RequestAdmissionPolicy;
+///
+/// let policy = RequestAdmissionPolicy::default();
+/// assert_eq!(policy.max_confirmed_in_flight, 64);
+/// assert_eq!(policy.confirmed_recovery_reserve, 4);
+/// assert_eq!(policy.max_confirmed_in_flight_per_peer, 16);
+/// assert_eq!(policy.max_unconfirmed_in_flight, 32);
+/// assert_eq!(policy.max_unconfirmed_in_flight_per_peer, 8);
+/// assert_eq!(policy.max_recovery_in_flight_per_peer, 1);
+///
+/// // 100 concurrent confirmed requests, the reserve of 4, and headroom.
+/// let roomy = RequestAdmissionPolicy {
+///     max_confirmed_in_flight: 100 + 4 + 16,
+///     ..RequestAdmissionPolicy::default()
+/// };
+/// assert!(roomy.validate().is_ok());
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RequestAdmissionPolicy {
-    /// Maximum concurrent confirmed handlers (default 64).
+    /// Maximum concurrent confirmed handlers, the recovery reserve included
+    /// (default 64). Requests past it are refused with an Abort.
     pub max_confirmed_in_flight: usize,
     /// Maximum concurrent unconfirmed handlers (default 32).
     pub max_unconfirmed_in_flight: usize,
@@ -392,6 +438,8 @@ impl Admission {
 
 impl<T: super::TransportPort + 'static> super::ServerBuilder<T> {
     /// Set positive global and peer handler limits, validated before startup.
+    /// See [`RequestAdmissionPolicy`] for what happens past them and how to
+    /// size `max_confirmed_in_flight`.
     pub fn request_admission_policy(mut self, policy: RequestAdmissionPolicy) -> Self {
         self.config.request_admission_policy = policy;
         self
@@ -400,6 +448,8 @@ impl<T: super::TransportPort + 'static> super::ServerBuilder<T> {
 
 impl super::BipServerBuilder {
     /// Set positive global and peer handler limits, validated before startup.
+    /// See [`RequestAdmissionPolicy`] for what happens past them and how to
+    /// size `max_confirmed_in_flight`.
     pub fn request_admission_policy(mut self, policy: RequestAdmissionPolicy) -> Self {
         self.config.request_admission_policy = policy;
         self
@@ -409,6 +459,8 @@ impl super::BipServerBuilder {
 #[cfg(feature = "sc-tls")]
 impl super::ScServerBuilder {
     /// Set positive global and peer handler limits, validated before TLS dialing.
+    /// See [`RequestAdmissionPolicy`] for what happens past them and how to
+    /// size `max_confirmed_in_flight`.
     pub fn request_admission_policy(mut self, policy: RequestAdmissionPolicy) -> Self {
         self.config.request_admission_policy = policy;
         self

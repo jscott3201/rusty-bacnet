@@ -115,7 +115,7 @@ async fn mixed_case(initial: bool, confirmed: bool, retain_value: bool) {
     a.issue_confirmed_notifications = confirmed;
     // On tokio's clock, which both callers pause, so the notification reports
     // exactly the 100 s however long the runner stalls (#1556).
-    a.expires_at = Some(runtime_clock::now() + Duration::from_secs(100));
+    a.expires_at = Some(crate::runtime_clock::core_now() + bacnet_time::Duration::from_secs(100));
     let mut b = a.clone();
     b.monitored_object_identifier = second_oid;
     b.monitored_property = Some(PropertyIdentifier::OPERATION_EXPECTED);

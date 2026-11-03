@@ -128,7 +128,7 @@ async fn single_two_routers_renew_one_recipient_and_deliver_via_latest_route() {
     renewal_wire(true).await;
 }
 
-async fn live(wire: &Wire) -> crate::cov::CovSubscriptionSnapshot {
+async fn live(wire: &Wire) -> bacnet_device_core::cov::CovSubscriptionSnapshot {
     wire.server
         .cov_table
         .write()
@@ -136,7 +136,7 @@ async fn live(wire: &Wire) -> crate::cov::CovSubscriptionSnapshot {
         .subscriptions_for(&av(1))[0]
         .clone()
 }
-async fn unchanged(wire: &Wire, before: &crate::cov::CovSubscriptionSnapshot) {
+async fn unchanged(wire: &Wire, before: &bacnet_device_core::cov::CovSubscriptionSnapshot) {
     let table = wire.server.cov_table.read().await;
     let current = table.get_subscription(before.key()).unwrap();
     assert!(table.is_current(before));
@@ -163,7 +163,7 @@ async fn cov_recipient_wire_refusal_mode_lifetime_and_cross_router_cancel() {
             policy: Some(Arc::new(
                 crate::FnPolicy::new().mutation(move |_| gate.load(Ordering::SeqCst)),
             )),
-            cov_policy: crate::cov::CovPolicy {
+            cov_policy: bacnet_device_core::cov::CovPolicy {
                 max_subscriptions_per_peer: 1,
                 ..Default::default()
             },
@@ -275,7 +275,7 @@ async fn cov_recipient_wire_cleanup_expiry_and_delete_follow_current_route() {
         let old = live(&wire).await;
         let mut expired = (*old).clone();
         expired.subscriber_mac = MacAddr::from_slice(&router_b().mac);
-        expired.expires_at = Some(runtime_clock::now());
+        expired.expires_at = Some(crate::runtime_clock::core_now());
         wire.server
             .cov_table
             .write()

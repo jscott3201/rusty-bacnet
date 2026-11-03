@@ -56,8 +56,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             return;
         }
 
-        let mut grouped: HashMap<crate::cov::MultipleContextKey, Vec<CovSubscriptionSnapshot>> =
-            HashMap::new();
+        let mut grouped: HashMap<
+            bacnet_device_core::cov::MultipleContextKey,
+            Vec<CovSubscriptionSnapshot>,
+        > = HashMap::new();
 
         for sub in subscriptions {
             grouped
@@ -168,23 +170,22 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 else {
                     continue;
                 };
-                let Some(completion) = sub.prepare_completion() else {
-                    continue;
-                };
-                candidates.push((sub, Ok((prepared.values, prepared.observation, completion))));
+                candidates.push((sub, Ok((prepared.values, prepared.observation))));
             }
 
-            // Established lock order: DB read -> table read -> timed store. No
-            // object callback runs under the table guard. Each prepared value
-            // owns its own check; a live sibling with a failed read cannot
-            // authorize a stale value.
+            // Established lock order: DB read -> table write -> timed store.
+            // No object callback runs under the table guard. Each prepared
+            // value owns its own check; a live sibling with a failed read
+            // cannot authorize a stale value. Completion tickets are issued
+            // under both guards, so they follow the order of the observations
+            // (#826).
             let context = subscriptions[0]
                 .key()
                 .multiple_context()
                 .expect("Multiple snapshot")
                 .clone();
             let (retained, untimed, subscriber_max_apdu, owners, store, any_timestamped) = {
-                let table = cov_table.read().await;
+                let mut table = cov_table.write().await;
                 // A confirmed context has at most one outstanding report, and
                 // the next one has to batch everything held meanwhile (#896).
                 // That report's Ack, or the first fanout after a hold-off, sends
@@ -209,7 +210,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     );
                     return;
                 }
-                let now = runtime_clock::now();
+                let now = runtime_clock::core_now();
                 let store = table.timed().clone();
                 // An unconfirmed context sends one report at a time, so no later
                 // report overtakes the parts of this one (#986, #1038); a
@@ -248,12 +249,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 for (sub, prepared) in candidates {
                     let Some(remaining) = table
                         .remaining_lifetime(sub, now)
-                        .and_then(crate::cov::CovTimeRemaining::wire_seconds)
+                        .and_then(bacnet_device_core::cov::CovTimeRemaining::wire_seconds)
                     else {
                         continue;
                     };
                     let current = match prepared {
-                        Ok((values, baseline, completion)) => {
+                        Ok((values, baseline)) => {
+                            let Some(completion) = table.prepare_completion(sub) else {
+                                continue;
+                            };
                             claim.add_untimed(
                                 sub.key().clone(),
                                 sub.generation(),
@@ -264,7 +268,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         }
                         Err(current) => current,
                     };
-                    let Some(completion) = sub.prepare_completion() else {
+                    let Some(completion) = table.prepare_completion(sub) else {
                         continue;
                     };
                     // Captured changes carry their own commit times. The current
@@ -318,6 +322,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 // context starts none while a report is outstanding, so this
                 // holds for it too. Captured values need no object read.
                 let mut untimed = HashSet::new();
+                let mut others = Vec::new();
                 for other in table.multiple_context_references(&context) {
                     if !other.timestamped {
                         untimed.insert((
@@ -332,11 +337,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     }
                     let Some(remaining) = table
                         .remaining_lifetime(other, now)
-                        .and_then(crate::cov::CovTimeRemaining::wire_seconds)
+                        .and_then(bacnet_device_core::cov::CovTimeRemaining::wire_seconds)
                     else {
                         continue;
                     };
-                    let Some(completion) = other.prepare_completion() else {
+                    others.push((other.clone(), remaining));
+                }
+                for (other, remaining) in others {
+                    let Some(completion) = table.prepare_completion(&other) else {
                         continue;
                     };
                     let (incarnation, changes) =
@@ -346,7 +354,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         continue;
                     };
                     claim.add(other.key().clone(), incarnation, changes);
-                    retained.push((other.clone(), Vec::new(), last, completion, remaining));
+                    retained.push((other, Vec::new(), last, completion, remaining));
                 }
                 let subscriber_max_apdu = table
                     .multiple_context_references(&context)
@@ -357,13 +365,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 // earlier part (#1008), so every live one is an owner; one
                 // whose latest change the last notification carries times
                 // its field itself.
-                let owners: HashMap<Coordinate, (crate::cov::CovSubscriptionKey, u64)> = table
+                let owners: HashMap<
+                    Coordinate,
+                    (bacnet_device_core::cov::CovSubscriptionKey, u64),
+                > = table
                     .multiple_context_references(&context)
                     .filter(|other| {
                         other.timestamped
                             && table
                                 .remaining_lifetime(other, now)
-                                .and_then(crate::cov::CovTimeRemaining::wire_seconds)
+                                .and_then(bacnet_device_core::cov::CovTimeRemaining::wire_seconds)
                                 .is_some()
                     })
                     .map(|other| {
@@ -583,8 +594,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 /// establishes and the ticket that completes it.
 type Carried = (
     CovSubscriptionSnapshot,
-    crate::cov::CovObservation,
-    crate::cov::PreparedCovCompletion,
+    bacnet_device_core::cov::CovObservation,
+    bacnet_device_core::cov::PreparedCovCompletion,
 );
 
 /// The references `part` completes, each with its observation: those it

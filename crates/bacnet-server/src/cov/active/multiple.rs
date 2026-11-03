@@ -34,15 +34,14 @@ impl CovSubscriptionTable {
     /// notification Time_Remaining uses. Ordinary and Single entries belong to
     /// `Active_COV_Subscriptions` and are skipped.
     pub(crate) fn active_cov_multiple_entries(&self, now: Instant) -> Vec<ActiveCovMultipleEntry> {
-        self.subs
-            .values()
+        self.entries()
             .filter_map(|entry| {
                 let CovSubscriptionKey::Multiple {
                     context,
                     object,
                     property,
                     index,
-                } = &entry.key
+                } = entry.key()
                 else {
                     return None;
                 };
@@ -55,7 +54,7 @@ impl CovSubscriptionTable {
                     time_remaining,
                     // `subscribe_multiple` is the only admission path for a
                     // Multiple reference and always records its delay.
-                    max_notification_delay: entry.max_notification_delay?,
+                    max_notification_delay: entry.max_notification_delay()?,
                     explicit_increment: entry.cov_increment,
                     timestamped: entry.timestamped,
                 })

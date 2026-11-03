@@ -33,9 +33,9 @@ Foundations
   bacnet-objects        BACnetObject, ObjectDatabase, object implementations
                         (no_std + alloc where atomics allow, #1615)
   bacnet-device-core    Sans-IO request core over a borrowed ObjectDatabase: the read
-                        and write paths, discovery and the reply map the server runs
-                        on, and a Responder for firmware (no_std + alloc where atomics
-                        allow, #2178)
+                        and write paths, discovery, the COV subscription table and
+                        the reply map the server runs on, and a Responder for firmware
+                        (no_std + alloc where atomics allow, #2178, #2303)
 
 Runtime and application roles
   bacnet-endpoint-core  Private lifecycle, ingress, egress, coordination
@@ -406,7 +406,7 @@ free functions in `bacnet_objects::property_metadata` (#2197).
 
 The stack runs on a Tokio multi-threaded runtime.
 
-**Lock ordering** (server): always lock `db` (ObjectDatabase) before `cov_table` (COV subscriptions). With target Audit configured, a DeviceCommunicationControl change and its timer's expiry take the DCC timer slot first and `db` second, to report the change under the slot (#1387); nothing takes the slot while holding `db`. Violating either order risks deadlock.
+**Lock ordering** (server): always lock `db` (ObjectDatabase) before `cov_table` (COV subscriptions). The COV fanouts read an object under the database guard and take the table's write guard before releasing it, to issue the observation's completion ticket (#2303); no path holds the table guard and then waits for the database. With target Audit configured, a DeviceCommunicationControl change and its timer's expiry take the DCC timer slot first and `db` second, to report the change under the slot (#1387); nothing takes the slot while holding `db`. Violating either order risks deadlock.
 
 **Resource exhaustion caps**:
 - COV subscriptions: 1,024 max
@@ -427,7 +427,7 @@ The `BACnetServer` spawns several background tasks:
 | Task | Purpose | Interval |
 |------|---------|----------|
 | Dispatch | Receives APDUs, routes to service handlers | Event-driven |
-| COV purge | Removes expired COV subscriptions | 60s |
+| COV purge | Removes expired COV subscriptions, and ends confirmed reports past their deadline whose worker never reported (#2303) | 30s |
 | Fault detection | Evaluates analog objects for over/under-range | 10s |
 | Intrinsic reporting | Advances Time_Delay countdowns and fires confirmed transitions via `tick_intrinsic_reporting` | 1s |
 | Event enrollment | Evaluates Event Enrollment objects against their monitored properties | 10s |

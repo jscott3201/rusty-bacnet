@@ -356,7 +356,7 @@ async fn subscribe_tracking(
     oid: ObjectIdentifier,
     process: u32,
     increment: Option<f32>,
-) -> crate::cov::CovSubscriptionKey {
+) -> bacnet_device_core::cov::CovSubscriptionKey {
     server
         .cov_table
         .write()

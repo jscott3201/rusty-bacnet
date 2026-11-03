@@ -9,7 +9,8 @@ use bacnet_types::primitives::ObjectIdentifier;
 
 use crate::cov::multiple_reads::MultipleReads;
 use crate::cov::timed::TimedChange;
-use crate::cov::{CovSubscriptionKey, CovSubscriptionSnapshot};
+use bacnet_device_core::cov::CovSubscriptionKey;
+use bacnet_device_core::cov::CovSubscriptionSnapshot;
 
 /// Object, property and index of a subscribed coordinate.
 pub(super) type Coordinate = (ObjectIdentifier, Option<PropertyIdentifier>, Option<u32>);

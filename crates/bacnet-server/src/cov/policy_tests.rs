@@ -2,6 +2,7 @@
 use super::*;
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_objects::database::ObjectDatabase;
+use bacnet_types::MacAddr;
 use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::error::Error;
 

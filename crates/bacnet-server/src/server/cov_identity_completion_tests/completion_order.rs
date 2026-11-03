@@ -39,7 +39,10 @@ async fn command(f: &Fixture, value: f32) {
         )
         .unwrap();
 }
-async fn observation(f: &Fixture, sub: &CovSubscriptionSnapshot) -> crate::cov::CovObservation {
+async fn observation(
+    f: &Fixture,
+    sub: &CovSubscriptionSnapshot,
+) -> bacnet_device_core::cov::CovObservation {
     f.table
         .read()
         .await
@@ -79,8 +82,8 @@ async fn delayed_older_success(kind: CovNotificationKind, ordinary: bool, record
         p.monitored_property = None;
     }
     p.last_notified_observation = Some(
-        crate::cov::CovObservation::new(
-            crate::cov::CovSample::new(&PropertyValue::Real(0.0)).unwrap(),
+        bacnet_device_core::cov::CovObservation::new(
+            bacnet_device_core::cov::CovSample::new(&PropertyValue::Real(0.0)).unwrap(),
             Some(&PropertyValue::BitString {
                 unused_bits: 4,
                 data: vec![0],
@@ -355,6 +358,10 @@ async fn cov_order_ordinary_ticket_precedes_earlier_property_send_await() {
     assert_eq!(observation(&f, &ordinary).await, newest);
     f.finish(false).await;
 }
+/// The ticket is issued under the database read guard the capture used,
+/// then the table's (#2303): a database write cannot come between a capture
+/// and its ticket, so tickets follow capture order however the later table
+/// checks and sends interleave.
 #[tokio::test]
 async fn cov_order_single_capture_precedes_final_table_await() {
     for property in [
@@ -372,24 +379,25 @@ async fn cov_order_single_capture_precedes_final_table_await() {
         let mut older = Box::pin(dispatch.send(&f, &subs));
         assert!(futures_util::poll!(older.as_mut()).is_pending());
         assert!(f.sent.lock().unwrap().is_empty());
-        // The older DB read guard has been released; its complete preparation
-        // must already own the earlier ticket while the table check is blocked.
-        command(&f, 20.0).await;
-        let mut newer = Box::pin(dispatch.send(&f, &subs));
-        assert!(futures_util::poll!(newer.as_mut()).is_pending());
+        // The older capture waits for its ticket still holding the database
+        // read guard, so the newer write waits for it.
+        let mut write = Box::pin(command(&f, 20.0));
+        assert!(futures_util::poll!(write.as_mut()).is_pending());
         drop(guard);
-        // Poll each table reader through to its own held send, avoiding a
-        // queued read permit blocking the other completion's write guard.
-        let b = CallGate::new(true, false);
-        f.gates.lock().unwrap().push_back(b.clone());
-        assert!(futures_util::poll!(newer.as_mut()).is_pending());
-        tokio::time::timeout(Duration::from_secs(2), b.entered.notified())
-            .await
-            .unwrap();
         let a = CallGate::new(true, false);
         f.gates.lock().unwrap().push_back(a.clone());
         assert!(futures_util::poll!(older.as_mut()).is_pending());
         tokio::time::timeout(Duration::from_secs(2), a.entered.notified())
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), write)
+            .await
+            .unwrap();
+        let b = CallGate::new(true, false);
+        f.gates.lock().unwrap().push_back(b.clone());
+        let mut newer = Box::pin(dispatch.send(&f, &subs));
+        assert!(futures_util::poll!(newer.as_mut()).is_pending());
+        tokio::time::timeout(Duration::from_secs(2), b.entered.notified())
             .await
             .unwrap();
         b.release.add_permits(1);
@@ -402,7 +410,7 @@ async fn cov_order_single_capture_precedes_final_table_await() {
             .await
             .unwrap();
         assert_eq!(observation(&f, &sub).await, newest);
-        assert_eq!(recorded(&f, CovNotificationKind::Single), [20.0, 10.0]);
+        assert_eq!(recorded(&f, CovNotificationKind::Single), [10.0, 20.0]);
         f.finish(false).await;
     }
 }

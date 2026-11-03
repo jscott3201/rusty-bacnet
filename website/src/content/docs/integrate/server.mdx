@@ -129,8 +129,12 @@ In Rust you can make your own object types creatable, or give a built-in type yo
 | COV subscriptions, all peers | 1,024 | The next subscription is refused |
 | COV subscriptions, one peer | 64 | That peer's next subscription is refused |
 | Objects created by CreateObject | Until the database holds 10,000 objects | CreateObject fails with RESOURCES / NO_SPACE_FOR_OBJECT |
+| Confirmed requests being handled, all peers | 60, plus 4 kept for DeviceCommunicationControl recovery | The next request is refused with an Abort |
+| Confirmed requests being handled, one peer | 16 | That peer's next request is refused with an Abort |
 
-The COV limits are `CovPolicy` fields you can change. The CreateObject limit counts every object in the database but doesn't stop your application from adding more. Requests in flight, in total and per peer, have their own limits: see <a href={`${repository}/blob/v${release}/docs/request-admission.md`}>request admission</a>.
+The COV limits are `CovPolicy` fields you can change. The CreateObject limit counts every object in the database but doesn't stop your application from adding more.
+
+The request limits are `RequestAdmissionPolicy` fields, set with the builder's `request_admission_policy` (Python: `BACnetServer(max_confirmed_in_flight=...)` and its neighbours). Nothing waits for a free slot. A refused request gets an immediate Abort with reason OUT_OF_RESOURCES from one of 8 Abort workers; if all 8 are busy, the request is dropped silently, and that client waits out one request timeout before its retry is served. A request holds its slot until its reply has been handed to the transport, so a client that sends again as soon as it has its reply can briefly hold two, and refusals can start a little below the limit. Past the limit, how many requests are refused depends on scheduling and varies between runs. To avoid refusals, set `max_confirmed_in_flight` above the most confirmed requests you expect at once, plus the reserve of 4, with headroom. See <a href={`${repository}/blob/v${release}/docs/request-admission.md`}>request admission</a> for the unconfirmed limits and the counters.
 
 ## Describe the device in a PICS
 

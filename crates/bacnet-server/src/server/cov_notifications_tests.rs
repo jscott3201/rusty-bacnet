@@ -276,7 +276,9 @@ async fn cov_property_multiple_subscription_uses_multiple_notification_on_change
                     subscriber_process_identifier: 7,
                     monitored_object_identifier: ao_oid,
                     issue_confirmed_notifications: false,
-                    expires_at: Some(runtime_clock::now() + Duration::from_secs(300)),
+                    expires_at: Some(
+                        crate::runtime_clock::core_now() + bacnet_time::Duration::from_secs(300),
+                    ),
                     last_notified_observation: None,
                     monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
                     monitored_property_array_index: None,
@@ -391,7 +393,9 @@ async fn capture_timestamped_cov_multiple(
                     subscriber_process_identifier: 7,
                     monitored_object_identifier: ao_oid,
                     issue_confirmed_notifications: false,
-                    expires_at: Some(runtime_clock::now() + Duration::from_secs(300)),
+                    expires_at: Some(
+                        crate::runtime_clock::core_now() + bacnet_time::Duration::from_secs(300),
+                    ),
                     last_notified_observation: None,
                     monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
                     monitored_property_array_index: None,
@@ -411,7 +415,10 @@ async fn capture_timestamped_cov_multiple(
                         subscriber_process_identifier: 7,
                         monitored_object_identifier: ao_oid,
                         issue_confirmed_notifications: false,
-                        expires_at: Some(runtime_clock::now() + Duration::from_secs(300)),
+                        expires_at: Some(
+                            crate::runtime_clock::core_now()
+                                + bacnet_time::Duration::from_secs(300),
+                        ),
                         last_notified_observation: None,
                         monitored_property: Some(PropertyIdentifier::STATUS_FLAGS),
                         monitored_property_array_index: None,
@@ -528,8 +535,9 @@ async fn confirmed_cov_single_and_multiple_retries_retain_their_leases() {
                         monitored_object_identifier: ao_oid,
                         issue_confirmed_notifications: true,
                         // A Multiple context always has a finite lifetime.
-                        expires_at: (notification_kind == CovNotificationKind::Multiple)
-                            .then(|| runtime_clock::now() + Duration::from_secs(3600)),
+                        expires_at: (notification_kind == CovNotificationKind::Multiple).then(
+                            || runtime_clock::core_now() + bacnet_time::Duration::from_secs(3600),
+                        ),
                         last_notified_observation: None,
                         monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
                         monitored_property_array_index: None,
