@@ -1,19 +1,34 @@
 //! Shared B/IP fixture qualification, setup, measurement and cleanup.
 use super::client_adapter::{make_bip_server_with_db, make_large_db, make_stress_client};
 use super::client_counters::{self, CounterDelta};
-use super::client_measure::{StepReport, drive, stop_clients};
+use super::client_measure::{Load, StepReport, drive, stop_clients};
+use bacnet_server::server::BACnetServer;
+use bacnet_transport::bip::BipTransport;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use std::time::Duration;
 
 pub async fn step(index: usize, object_count: u32, count: u64, duration: Duration) -> StepReport {
+    let server = make_bip_server_with_db(make_large_db(1234, object_count)).await;
+    run_on(server, index, count, Load::Window(duration)).await.0
+}
+
+/// One step against a server the caller built (or failed to build); the
+/// stopped server comes back for counters read after the step.
+pub async fn run_on(
+    server: Result<BACnetServer<BipTransport>, Error>,
+    index: usize,
+    count: u64,
+    load: Load,
+) -> (StepReport, Option<BACnetServer<BipTransport>>) {
     let mut report = StepReport::new(index, count);
-    let mut server = match make_bip_server_with_db(make_large_db(1234, object_count)).await {
+    let mut server = match server {
         Ok(server) => server,
         Err(error) => {
             report.diagnostics.fail("server_setup", None, error);
             report.finish();
-            return report;
+            return (report, None);
         }
     };
     let mac = server.local_mac().to_vec();
@@ -59,7 +74,7 @@ pub async fn step(index: usize, object_count: u32, count: u64, duration: Duratio
         );
     }
     if report.diagnostics.lifecycle_failures.is_empty() {
-        drive(clients, mac, duration, client_counters::bip, &mut report).await;
+        drive(clients, mac, load, client_counters::bip, &mut report).await;
         if let Some(after) = client_counters::server(&server) {
             let counters = CounterDelta::between(before.unwrap(), after);
             if !counters.invalid.is_empty() {
@@ -84,5 +99,5 @@ pub async fn step(index: usize, object_count: u32, count: u64, duration: Duratio
         report.diagnostics.fail("server_stop", None, error);
     }
     report.finish();
-    report
+    (report, Some(server))
 }

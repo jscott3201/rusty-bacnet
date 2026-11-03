@@ -1,0 +1,104 @@
+diff --git a/crates/bacnet-encoding/src/npdu.rs b/crates/bacnet-encoding/src/npdu.rs
+index 7fe0b0f56..9a7725c40 100644
+--- a/crates/bacnet-encoding/src/npdu.rs
++++ b/crates/bacnet-encoding/src/npdu.rs
+@@ -226,6 +226,15 @@ pub fn decode_npdu(data: Bytes) -> Result<Npdu, NpduDecodeError> {
+             "NPDU control byte has reserved bits set (bits 4 or 6)"
+         );
+     }
++    // Scratch variant R for #1979 S1 (never merged): a direct parse of an
++    // accepted frame into the owned result; any fault goes the view's way
++    // so the error contract stays the view's.
++    if let Some((mut npdu, offset)) = decode_direct(&data) {
++        let mut payload = data;
++        bytes::Buf::advance(&mut payload, offset);
++        npdu.payload = payload;
++        return Ok(npdu);
++    }
+     let view = match bacnet_npdu::Npdu::decode(&data) {
+         Ok(view) => view,
+         Err(bacnet_npdu::DecodeError::AddressTooLong {
+@@ -255,6 +264,83 @@ pub fn decode_npdu(data: Bytes) -> Result<Npdu, NpduDecodeError> {
+     Ok(npdu)
+ }
+ 
++/// The owned header of an accepted frame and its payload offset, parsed
++/// straight from the octets; `None` for any frame the view would refuse.
++#[inline]
++fn decode_direct(frame: &[u8]) -> Option<(Npdu, usize)> {
++    let [version, control, ..] = *frame else {
++        return None;
++    };
++    if version != 1 {
++        return None;
++    }
++    let mut at = 2;
++    let mut destination = None;
++    if control & 0x20 != 0 {
++        let &[high, low, length] = frame.get(at..at + 3)? else {
++            return None;
++        };
++        let network = u16::from_be_bytes([high, low]);
++        if network == 0 || usize::from(length) > MAX_MAC_LEN {
++            return None;
++        }
++        at += 3;
++        let mac = frame.get(at..at + usize::from(length))?;
++        at += mac.len();
++        destination = Some(NpduAddress {
++            network,
++            mac_address: MacAddr::from_slice(mac),
++        });
++    }
++    let mut source = None;
++    if control & 0x08 != 0 {
++        let &[high, low, length] = frame.get(at..at + 3)? else {
++            return None;
++        };
++        let network = u16::from_be_bytes([high, low]);
++        if network == 0 || network == 0xFFFF || length == 0 || usize::from(length) > MAX_MAC_LEN {
++            return None;
++        }
++        at += 3;
++        let mac = frame.get(at..at + usize::from(length))?;
++        at += mac.len();
++        source = Some(NpduAddress {
++            network,
++            mac_address: MacAddr::from_slice(mac),
++        });
++    }
++    let mut hop_count = 255;
++    if destination.is_some() {
++        hop_count = *frame.get(at)?;
++        at += 1;
++    }
++    let mut message_type = None;
++    let mut vendor_id = None;
++    if control & 0x80 != 0 {
++        let kind = NetworkMessageType::from_raw(*frame.get(at)?);
++        at += 1;
++        if kind.is_proprietary() {
++            let vendor = frame.get(at..at + 2)?;
++            vendor_id = Some(u16::from_be_bytes([vendor[0], vendor[1]]));
++            at += 2;
++        }
++        message_type = Some(kind);
++    }
++    Some((
++        Npdu {
++            expecting_reply: control & 0x04 != 0,
++            priority: NetworkPriority::from_control(control),
++            destination,
++            source,
++            hop_count,
++            message_type,
++            vendor_id,
++            payload: Bytes::new(),
++        },
++        at,
++    ))
++}
++
+ // ---------------------------------------------------------------------------
+ // Tests
+ // ---------------------------------------------------------------------------

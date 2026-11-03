@@ -5,7 +5,7 @@ use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::cov::SubscribeCOVRequest;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
-use bacnet_types::enums::{AbortReason, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
 
 fn analog_object(instance: u32) -> ObjectIdentifier {
@@ -547,10 +547,7 @@ async fn managed_cov_subscription_records_failure_without_event_receiver() {
     let Some(ManagedCOVSubscriptionEvent::RenewalFailed { error }) = managed.last_event() else {
         panic!("expected durable RenewalFailed event");
     };
-    assert_eq!(
-        error,
-        format!("BACnet abort: reason={}", AbortReason::TSM_TIMEOUT.to_raw())
-    );
+    assert_eq!(error, "BACnet abort: tsm-timeout");
     assert_eq!(client.tsm.lock().await.pending_count(), 0);
 
     managed.stop().await;

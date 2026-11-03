@@ -195,20 +195,29 @@ impl EventLogObject {
     }
 
     /// Set Notification_Class: the number of the Notification Class whose
-    /// recipients get the log's reports (0 by default).
+    /// recipients get the log's reports (0 by default). On a log with
+    /// storage, a value a write set wins (see
+    /// [`clear_written_reporting`](Self::clear_written_reporting)), as it
+    /// does for the next two setters.
     pub fn set_notification_class(&mut self, class: u32) {
-        self.reporting.set_notification_class(class);
+        if !self.kept_over_setter(PropertyIdentifier::NOTIFICATION_CLASS) {
+            self.reporting.set_notification_class(class);
+        }
     }
 
     /// Set Event_Enable; a report goes out only while its TO_NORMAL flag is
     /// set, as it is by default.
     pub fn set_event_enable(&mut self, enable: EventTransitionBits) {
-        self.reporting.set_event_enable(enable);
+        if !self.kept_over_setter(PropertyIdentifier::EVENT_ENABLE) {
+            self.reporting.set_event_enable(enable);
+        }
     }
 
     /// Set Notify_Type, sent with each report (EVENT by default).
     pub fn set_notify_type(&mut self, notify_type: NotifyType) {
-        self.reporting.set_notify_type(notify_type);
+        if !self.kept_over_setter(PropertyIdentifier::NOTIFY_TYPE) {
+            self.reporting.set_notify_type(notify_type);
+        }
     }
 
     fn lifecycle(&mut self) -> LogLifecycle<'_, BACnetEventLogRecord> {
@@ -283,6 +292,12 @@ impl BACnetObject for EventLogObject {
         _priority: Option<u8>,
     ) -> Result<(), Error> {
         crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
+        // A reporting setting a durable log keeps saves first (#1952).
+        if let Some(result) =
+            crate::log_persistence::store::staging::write(self, property, array_index, &value)
+        {
+            return result;
+        }
         if property == PropertyIdentifier::LOG_ENABLE {
             if let PropertyValue::Boolean(v) = value {
                 return self.lifecycle().write_enable(v);
