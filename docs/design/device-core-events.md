@@ -873,6 +873,12 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
     whole, so the deadline only ever frees an aborted worker's coordinate;
     and a report that begins on a coordinate still marked by an unsettled
     one past its deadline fences it (§5.5).
+11. Lead, 2026-11-02: PR 2 splits in two. PR 2a moves the active lists,
+    value preparation and Life Safety snapshots, and puts the server's
+    Single fanout on `cov::evaluate`; PR 2b adds the `report` module, the
+    confirmed table, `Bindings`/`InvokeIds`, `ActiveCovOverlay`, the
+    image through the `Reporter`, the parity corpus and the `cov` feature
+    measurement.
 
 ## 12. Evidence
 
