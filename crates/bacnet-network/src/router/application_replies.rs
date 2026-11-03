@@ -74,7 +74,11 @@ impl Replies {
     }
 
     /// Keep `response`, the plan of the Confirmed-Request `apdu` from
-    /// `network` and `mac`. A repeat of the request replaces its plan.
+    /// `network` and `mac`. An unsegmented request or a segment 0 replaces
+    /// a saved plan for the same transaction, so a requester that retries
+    /// by another path is answered there. A later segment only renews the
+    /// saved plan: a reassembled request is answered along the path its
+    /// first segment took, as the server does for its own replies (#2355).
     pub(super) fn save(&self, network: u16, mac: &[u8], apdu: &[u8], response: RouterResponse) {
         self.keep(network, mac, apdu, Some(response));
     }
@@ -96,6 +100,19 @@ impl Replies {
         }
         let now = Instant::now();
         let mut saved = self.saved();
+        // A segment after the first (SEG set, sequence number not 0).
+        let continuation = first & 0x08 != 0 && apdu.get(3).is_some_and(|&sequence| sequence != 0);
+        if continuation
+            && let Some(entry) = saved.iter_mut().find(|entry| {
+                now.duration_since(entry.saved_at) < LIFETIME
+                    && entry.network == network
+                    && entry.mac.as_slice() == mac
+                    && entry.invoke_id == invoke_id
+            })
+        {
+            entry.saved_at = now;
+            return;
+        }
         saved.retain(|entry| {
             now.duration_since(entry.saved_at) < LIFETIME
                 && !(entry.network == network
