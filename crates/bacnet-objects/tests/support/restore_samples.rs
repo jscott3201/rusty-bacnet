@@ -14,7 +14,7 @@ use bacnet_objects::color::{
     ColorOutputPersistence, ColorOutputSnapshot, ColorOutputValue, FileColorOutputPersistence,
 };
 use bacnet_objects::log_persistence::{
-    FileLogPersistence, LogAcquisitionSettings, LogPersistence, LogSnapshot,
+    FileLogPersistence, LogAcquisitionSettings, LogPersistence, LogReportingSettings, LogSnapshot,
 };
 use bacnet_objects::notification_class::{
     FileNotificationClassPersistence, NotificationClassPersistence, NotificationClassSnapshot,
@@ -32,10 +32,10 @@ use bacnet_types::constructed::{
     BACnetAccessRule, BACnetAuditLogDatum, BACnetAuditLogRecord, BACnetAuditLogRecordResult,
     BACnetDestination, BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference,
     BACnetEventLogRecord, BACnetEventNotificationSubscription, BACnetLogMultipleRecord,
-    BACnetLogRecord, BACnetNameValue, BACnetRecipient, BACnetTimerStateChangeValue, BACnetXyColor,
-    EventLogDatum, LogData, LogDatum, LogValue,
+    BACnetLogRecord, BACnetNameValue, BACnetObjectPropertyReference, BACnetRecipient,
+    BACnetTimerStateChangeValue, BACnetXyColor, EventLogDatum, LogData, LogDatum, LogValue,
 };
-use bacnet_types::enums::{LoggingType, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{LoggingType, NotifyType, ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
 
 use super::oid;
@@ -246,6 +246,26 @@ fn log_snapshot<R>(kind: ObjectType, records: Vec<R>) -> LogSnapshot<R> {
             interval_offset: 20,
         }),
         log_device_object_property: vec![reference(1)],
+        reporting: written_reporting(),
+    }
+}
+
+/// Every reporting setting every log keeps, as writes set them (#1952):
+/// 43 octets in a slot.
+fn written_reporting() -> LogReportingSettings {
+    LogReportingSettings {
+        notification_class: Some(7),
+        event_enable: Some(EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL),
+        notify_type: Some(NotifyType::ALARM),
+        event_detection_enable: Some(false),
+        event_message_texts_config: Some(["off".into(), String::new(), "back".into()]),
+        event_algorithm_inhibit_ref: Some(BACnetObjectPropertyReference::new(
+            oid(ObjectType::BINARY_VALUE),
+            PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        )),
+        event_algorithm_inhibit: Some(true),
+        client_cov_increment: None,
+        cov_resubscription_interval: None,
     }
 }
 
@@ -256,14 +276,18 @@ fn trend_snapshot() -> LogSnapshot<BACnetLogRecord> {
         log_datum,
         status_flags: None,
     };
-    log_snapshot(
+    let mut snapshot = log_snapshot(
         ObjectType::TREND_LOG,
         vec![
             record(1, LogDatum::RealValue(1.5)),
             record(2, LogDatum::LogStatus(LogStatus::LOG_INTERRUPTED)),
             record(3, LogDatum::UnsignedValue(9)),
         ],
-    )
+    );
+    // A Trend Log's two COV settings too: 9 octets more.
+    snapshot.reporting.client_cov_increment = Some(Some(0.5));
+    snapshot.reporting.cov_resubscription_interval = Some(600);
+    snapshot
 }
 
 fn multiple_snapshot() -> LogSnapshot<BACnetLogMultipleRecord> {

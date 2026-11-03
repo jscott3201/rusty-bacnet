@@ -4,15 +4,17 @@ use crate::prelude::*;
 use alloc::sync::Arc;
 
 use bacnet_types::constructed::BACnetLogRecord;
+use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, Time};
 
-use super::TrendLogObject;
+use super::{CovSettings, TrendLogObject};
 use crate::log_buffer::LogRecordBuffer;
 use crate::log_persistence::store::{
-    DurableLog, LogState, LogStore, fit_to_buffer_size, impl_durable_log,
+    DurableLog, LogState, LogStore, fit_to_buffer_size, impl_durable_log, staging,
 };
-use crate::log_persistence::{LogCommitCadence, LogPersistence};
+use crate::log_persistence::{LogCommitCadence, LogPersistence, LogReportingSettings};
+use crate::log_reporting::BufferReadyReporting;
 
 impl TrendLogObject {
     /// Open a Trend Log kept in `persistence`, or start one there when it
@@ -20,10 +22,13 @@ impl TrendLogObject {
     ///
     /// A log storage holds comes back as it was saved: Enable,
     /// Stop_When_Full, its records and Total_Record_Count, its BUFFER_READY
-    /// counting and Notification_Threshold, and the settings a peer can write
+    /// counting and Notification_Threshold, the settings a peer can write
     /// (the window, Logging_Type, Log_Interval, Align_Intervals,
-    /// Interval_Offset and Log_DeviceObjectProperty). `buffer_size` wins
-    /// over the saved Buffer_Size; a smaller one keeps the newest records.
+    /// Interval_Offset and Log_DeviceObjectProperty), and the reporting and
+    /// COV settings a write set, which then win over their setters (#1952;
+    /// see [`clear_written_reporting`](Self::clear_written_reporting)).
+    /// `buffer_size` wins over the saved Buffer_Size; a smaller one keeps
+    /// the newest records.
     /// It then owes a LOG_INTERRUPTED record, appended once it can read a
     /// valid clock, unless it reopens full and stopped. See
     /// [`crate::log_persistence`] for when it commits.
@@ -34,7 +39,8 @@ impl TrendLogObject {
     /// identity, a zero generation, more records than Buffer_Size, records
     /// with a Total_Record_Count of zero, a full buffer while Stop_When_Full
     /// and Enable are both TRUE, a window end that isn't an actual moment, a
-    /// Logging_Type a Trend Log can't take, or more than one reference.
+    /// Logging_Type a Trend Log can't take, more than one reference, or a
+    /// reporting setting no write could leave.
     pub fn with_persistence(
         instance: u32,
         name: impl Into<String>,
@@ -50,6 +56,7 @@ impl TrendLogObject {
                 log.acquisition.restore(acquisition);
             }
             log.log_device_object_property = snapshot.log_device_object_property.pop();
+            staging::restore(&mut log, &snapshot.reporting);
             store.reopened(log.log_state(), resized);
         }
         log.store = Some(store);
@@ -81,6 +88,33 @@ impl TrendLogObject {
     pub fn storage_generation(&self) -> Option<u64> {
         self.store.as_ref().map(LogStore::generation)
     }
+
+    /// The reporting and COV settings storage keeps because a write set
+    /// them, now or before a restart (#1952); all `None` without storage.
+    /// Their setters leave each of these alone.
+    pub fn written_reporting(&self) -> LogReportingSettings {
+        staging::written(self)
+    }
+
+    /// Drop every reporting and COV setting a write saved: storage keeps
+    /// none from then on, so the setters apply again (#1952). The values
+    /// served stay until a setter or a write changes them. Commits before
+    /// it returns; a commit that fails keeps the written settings and
+    /// returns storage's error. Does nothing without storage. Call it
+    /// before the log joins the database, as the setters are, not under the
+    /// database guard: it waits for its commit.
+    pub fn clear_written_reporting(&mut self) -> Result<(), Error> {
+        staging::clear(self)
+    }
+
+    /// Whether a setter of `property` leaves it alone, as a write set it.
+    pub(super) fn kept_over_setter(&self, property: PropertyIdentifier) -> bool {
+        let kept = staging::kept_over_setter(self, property);
+        if kept {
+            log_debug!(log = %self.oid, ?property, "A written reporting setting kept over a setter");
+        }
+        kept
+    }
 }
 
 impl DurableLog for TrendLogObject {
@@ -98,6 +132,19 @@ impl DurableLog for TrendLogObject {
             self.acquisition.settings(),
             self.log_device_object_property.iter().cloned().collect(),
         )
+        .cov(&self.cov)
+    }
+
+    fn store(&self) -> Option<&LogStore<BACnetLogRecord>> {
+        self.store.as_ref()
+    }
+
+    fn reporting(&self) -> (&BufferReadyReporting, Option<&CovSettings>) {
+        (&self.reporting, Some(&self.cov))
+    }
+
+    fn reporting_mut(&mut self) -> (&mut BufferReadyReporting, Option<&mut CovSettings>) {
+        (&mut self.reporting, Some(&mut self.cov))
     }
 
     fn durable_parts(

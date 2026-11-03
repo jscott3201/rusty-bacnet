@@ -509,6 +509,14 @@ where
                     Some(PropertyValue::Unsigned(snapshot.total_record_count.into())),
                     "the reopened log lost its Total_Record_Count"
                 );
+                if let Some(class) = snapshot.reporting.notification_class {
+                    let served = log.read_property(PropertyIdentifier::NOTIFICATION_CLASS, None);
+                    assert_eq!(
+                        served.ok(),
+                        Some(PropertyValue::Unsigned(class.into())),
+                        "the reopened log lost its written Notification_Class"
+                    );
+                }
             }
             return Outcome {
                 loaded: snapshot.is_some(),

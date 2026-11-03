@@ -57,6 +57,7 @@ fn python_add_trend_log_multiple_settings_reach_every_row() {
             align_intervals: Some(true),
             interval_offset: Some(300),
             total_record_count: u32::MAX - 1,
+            clear_written_reporting: false,
         },
     )
     .unwrap();
@@ -321,7 +322,8 @@ fn python_storage_path_keeps_saved_settings_over_the_keywords() {
     };
     let log = trend_log(1, "TL-1", 50, Some(path), second).unwrap();
     assert!(log.reopened());
-    // Saved: the interval and the count. Not saved: the COV increment.
+    // Saved: the interval and the count. Not saved: the COV increment, as
+    // no write set it.
     assert_eq!(
         read_tl(&log, P::LOG_INTERVAL),
         PropertyValue::Unsigned(1_500)
@@ -330,6 +332,28 @@ fn python_storage_path_keeps_saved_settings_over_the_keywords() {
     assert_eq!(
         read_tl(&log, P::CLIENT_COV_INCREMENT),
         PropertyValue::Real(2.5)
+    );
+    // A peer writes NULL: saved, it wins over the keyword at the next start
+    // (#1952), until `clear_written_reporting` drops it.
+    let mut log = log;
+    log.write_property(P::CLIENT_COV_INCREMENT, None, PropertyValue::Null, None)
+        .unwrap();
+    drop(log);
+    let keyword = || TrendLogSettings {
+        client_cov_increment: Some(4.0),
+        ..Default::default()
+    };
+    let log = trend_log(1, "TL-1", 50, Some(path), keyword()).unwrap();
+    assert_eq!(read_tl(&log, P::CLIENT_COV_INCREMENT), PropertyValue::Null);
+    drop(log);
+    let cleared = TrendLogSettings {
+        clear_written_reporting: true,
+        ..keyword()
+    };
+    let log = trend_log(1, "TL-1", 50, Some(path), cleared).unwrap();
+    assert_eq!(
+        read_tl(&log, P::CLIENT_COV_INCREMENT),
+        PropertyValue::Real(4.0)
     );
     drop(log);
     let _ = std::fs::remove_dir_all(&dir);
