@@ -176,9 +176,11 @@ macro_rules! endpoint_builders {
             /// Record a reset the application makes for its own reasons: a
             /// DEVICE_RESET Audit record from this device, with no invoke ID,
             /// through the session's source Reporter when it has one, as
-            /// `BACnetServer.report_device_reset_local` does (#1837). A
-            /// peer's accepted restart is recorded already. RuntimeError
-            /// when the endpoint is not running.
+            /// `BACnetServer.report_device_reset_local` does (#1837). Python
+            /// can't configure an endpoint's source Reporter yet, so from
+            /// Python this records nothing. A peer's accepted restart is
+            /// recorded already. RuntimeError when the endpoint is not
+            /// running.
             fn report_device_reset_local<'py>(
                 &self,
                 py: Python<'py>,

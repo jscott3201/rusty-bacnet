@@ -5438,8 +5438,10 @@ as `BACnetServer`'s (#1867), checked by the same code: `tags`,
 `profile_location` and `profile_name` on all four, and `present_value_access`
 and `value_source_tracking` on the two Value builders (see
 [Object profiles and Value_Source](#object-profiles-and-value_source)).
-The endpoint serves those rows to ReadProperty and ReadPropertyMultiple; its
-server role takes no writes to them.
+The endpoint serves those rows to ReadProperty, the one object service its
+server role answers. Peers can't write these objects through an endpoint, so
+there `present_value_access` and `value_source_tracking` only describe the
+object: a tracked object's Value_Source reads null.
 
 `await endpoint.status()` returns a redacted snapshot (`is_running`,
 `device_instance`, `vendor_id`, `max_apdu`, `transport`, `local_address`,

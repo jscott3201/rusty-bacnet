@@ -1,7 +1,8 @@
 ---
 section: Added
 ---
-- **Python API:** `EndpointSession::report_device_reset_local()` and the
-  Python endpoints' `report_device_reset_local()` record a reset the
-  application makes on its own, as `BACnetServer`'s does, through the
-  session's source Audit Reporter (#1837).
+- **Rust and Python API:** `EndpointSession::report_device_reset_local()`
+  records a reset the application makes itself through the session's
+  source Audit Reporter, as `BACnetServer`'s does; the Python endpoints gain
+  the method, which records nothing until Python can configure that Reporter
+  (#1837).
