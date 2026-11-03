@@ -5547,7 +5547,8 @@ Audit Log does. `bacnet_objects::log_persistence` holds the port:
 | Item | What it is |
 |------|------------|
 | `LogPersistence<R>` | `load(oid)` and `commit(&snapshot)` for one log; `R` is the log's record type (`BACnetLogRecord`, `BACnetEventLogRecord` or `BACnetLogMultipleRecord`) |
-| `LogSnapshot<R>` | identity and generation, Buffer_Size, Enable, Stop_When_Full, Total_Record_Count and the records oldest first, Last_Notify_Record, the Records_Since_Notification base and Notification_Threshold, Start_Time and Stop_Time, and on the trend logs a `LogAcquisitionSettings` (Logging_Type, Log_Interval, Align_Intervals, Interval_Offset) and Log_DeviceObjectProperty |
+| `LogSnapshot<R>` | identity and generation, Buffer_Size, Enable, Stop_When_Full, Total_Record_Count and the records oldest first, Last_Notify_Record, the Records_Since_Notification base and Notification_Threshold, Start_Time and Stop_Time, on the trend logs a `LogAcquisitionSettings` (Logging_Type, Log_Interval, Align_Intervals, Interval_Offset) and Log_DeviceObjectProperty, and `reporting`, the `LogReportingSettings` a write set (#1952) |
+| `LogReportingSettings` | one `Option` per reporting setting a write set: Notification_Class, Event_Enable, Notify_Type, Event_Detection_Enable, Event_Message_Texts_Config, Event_Algorithm_Inhibit_Ref and Event_Algorithm_Inhibit, plus Client_COV_Increment (`Some(None)` for NULL) and COV_Resubscription_Interval on a Trend Log |
 | `FileLogPersistence` | two-slot, versioned, checksummed files `<base>.slot0` and `<base>.slot1`, as `FileAuditLogPersistence` keeps them; implements the port for all three record types |
 | `LogCommitCadence` | `records` and `interval`; the default is 100 records or 60 seconds |
 
@@ -5605,8 +5606,29 @@ persistence)`.
 - **BUFFER_READY** carries on from the saved Last_Notify_Record and
   Notification_Threshold, so a report falls due once that many records have
   been collected since the last report before the restart, the
-  LOG_INTERRUPTED record included. Notification_Class and the other reporting
-  settings aren't saved: the application sets them on every start.
+  LOG_INTERRUPTED record included.
+- **Written reporting settings (#1952).** A write of Notification_Class,
+  Event_Enable, Notify_Type, Event_Detection_Enable,
+  Event_Message_Texts_Config, Event_Algorithm_Inhibit_Ref or
+  Event_Algorithm_Inhibit, and on a Trend Log of Client_COV_Increment or
+  COV_Resubscription_Interval (a Trend Log Multiple has neither, Table
+  12-35), commits a snapshot holding it before the log serves it, and is
+  refused with DEVICE / OPERATIONAL_PROBLEM, the old value kept, when that
+  commit fails. The server stages the commit, so it runs with the database
+  guard dropped, and the cadence's commits wait while it is staged; a write
+  nobody staged commits in place. Only the settings a write set are saved:
+  until then the setters govern each one. Once saved, a setting wins over
+  its setter (`set_notification_class`, `set_event_enable`,
+  `set_notify_type`, `set_client_cov_increment`,
+  `set_cov_resubscription_interval`), which checks its argument without
+  taking it, so an application that configures its logs at every start keeps
+  a peer's write. `written_reporting()` lists what is saved, and
+  `clear_written_reporting()` drops it all, committing before it returns, so
+  the setters apply again; call it before the log joins a database.
+  Snapshots are schema version 2; a version 1 file still loads, with nothing
+  written. Each Event_Message_Texts_Config string a log keeps is at most
+  16 KiB; a durable log refuses a longer one with RESOURCES /
+  NO_SPACE_TO_WRITE_PROPERTY, whatever its storage.
 - **Committing.** The log copies its state and queues it on its own writer
   thread (`bacnet_objects::durable`), so the copy is
   taken under the database guard and the file I/O runs outside it. It commits

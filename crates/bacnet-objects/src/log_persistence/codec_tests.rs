@@ -34,6 +34,7 @@ fn snapshot(generation: u64) -> LogSnapshot<BACnetEventLogRecord> {
         stop_time: (DATE, at(23)),
         acquisition: None,
         log_device_object_property: Vec::new(),
+        reporting: LogReportingSettings::default(),
     }
 }
 
@@ -123,6 +124,7 @@ fn a_record_longer_than_a_slot_element_is_never_written() {
             interval_offset: 0,
         }),
         log_device_object_property: vec![super::tests::reference(1)],
+        reporting: LogReportingSettings::default(),
     };
     match codec::encode(&snapshot) {
         Err(Error::OutOfRange(message)) => {

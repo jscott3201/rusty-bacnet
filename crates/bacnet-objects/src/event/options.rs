@@ -134,6 +134,30 @@ impl ReportingOptions {
         true
     }
 
+    /// Event_Message_Texts_Config, for a durable log to save (#1952).
+    pub(crate) fn message_texts_config(&self) -> &[String; 3] {
+        &self.message_texts_config
+    }
+
+    /// Take back a saved Event_Message_Texts_Config (#1952).
+    pub(crate) fn restore_message_texts_config(&mut self, texts: [String; 3]) {
+        self.message_texts_config = texts;
+    }
+
+    /// Take back a saved Event_Algorithm_Inhibit_Ref (#1952), `None` for
+    /// unset. A reference the database follows refreshes the inhibit.
+    pub(crate) fn restore_inhibit_reference(
+        &mut self,
+        reference: Option<BACnetObjectPropertyReference>,
+    ) {
+        self.inhibit_reference = reference;
+    }
+
+    /// Take back a saved Event_Algorithm_Inhibit (#1952).
+    pub(crate) fn restore_inhibit(&mut self, inhibit: bool) {
+        self.inhibit = inhibit;
+    }
+
     /// The configured Message Text of a transition, if its entry isn't empty.
     pub(crate) fn message_text(&self, coordinate: EventTransition) -> Option<&str> {
         let text = &self.message_texts_config[coordinate.index()];
