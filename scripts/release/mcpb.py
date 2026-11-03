@@ -6,6 +6,7 @@
     mcpb.py check out/bacnet-macos-arm64.mcpb --binary out/bacnet-macos-arm64 --platform macos-arm64 \\
         --version 0.16.0 [--notices THIRD-PARTY-NOTICES]
     mcpb.py signature out/bacnet-macos-arm64.mcpb
+    mcpb.py trailer out/bacnet-macos-arm64.mcpb
     mcpb.py smoke out/bacnet-macos-arm64.mcpb
 
 The format is the MCP Bundle manifest 0.3 (github.com/modelcontextprotocol/mcpb,
@@ -31,7 +32,10 @@ field for the architecture, so the file name says it.
   bundle is checked without its signature block.
 - `signature` says whether a bundle is unsigned, signed or ends with a
   malformed `mcpb sign` block, and gives the sha256 of the bundle without the
-  block, so the release can check that signing only appended it (#2324). The signature itself is
+  block, so the release can check that signing only appended it (#2324).
+- `trailer` checks that a strict zip reader takes the bundle's end: the
+  end-of-central-directory record's comment length must count every byte
+  after it, which `mcpb sign` 2.1.2 doesn't do (mcpb#278). The signature itself is
   checked by `mcpb verify`, not here.
 - `smoke` does what a host does: unzips it (restoring the modes), runs the
   manifest's command with a profile filled in, and checks that a missing or
@@ -287,6 +291,30 @@ def split_signature(data):
     if start + 4 + int.from_bytes(data[start:start + 4], "little") != end:
         return data, "malformed"
     return data[:header], "signed"
+
+
+EOCD = b"PK\x05\x06"
+EOCD_SIZE = 22
+
+
+def trailer_errors(data):
+    """Why a strict zip reader would refuse `data`'s end; [] when it wouldn't.
+
+    The end-of-central-directory record is the zip's last structure: a strict
+    reader takes its comment-length field as the count of every byte after
+    it. `mcpb sign` 2.1.2 appends its block there without declaring it
+    (modelcontextprotocol/mcpb#278), which Claude Desktop refuses ("Invalid
+    comment length"). This only checks; it never rewrites the record.
+    """
+    start = max(0, len(data) - EOCD_SIZE - 0xFFFF - 1024 * 1024)
+    eocd = data.rfind(EOCD, start)
+    if eocd < 0 or eocd + EOCD_SIZE > len(data):
+        return ["has no end-of-central-directory record"]
+    declared = int.from_bytes(data[eocd + 20:eocd + 22], "little")
+    after = len(data) - eocd - EOCD_SIZE
+    if declared != after:
+        return [f"has {after} bytes after its end-of-central-directory record, which declares {declared}"]
+    return []
 
 
 def png_errors(data, size=ICON_SIZE):
@@ -591,6 +619,8 @@ def main(argv=None):
     c.add_argument("--notices", type=Path)
     g = sub.add_parser("signature", help="say whether a bundle is signed, and its unsigned sha256")
     g.add_argument("bundle", type=Path)
+    t = sub.add_parser("trailer", help="check that a strict zip reader takes the bundle's end")
+    t.add_argument("bundle", type=Path)
     s = sub.add_parser("smoke", help="run a bundle as a host does")
     s.add_argument("bundle", type=Path)
     s.add_argument("--timeout", type=float, default=30.0)
@@ -603,6 +633,13 @@ def main(argv=None):
         errors = check_bundle(args.bundle, args.platform, args.version, args.binary, args.notices)
         for err in errors:
             print(f"error: {err}", file=sys.stderr)
+        if not errors:
+            print(f"OK: {args.bundle.name}")
+        return 1 if errors else 0
+    if args.action == "trailer":
+        errors = trailer_errors(args.bundle.read_bytes())
+        for err in errors:
+            print(f"error: {args.bundle.name} {err}", file=sys.stderr)
         if not errors:
             print(f"OK: {args.bundle.name}")
         return 1 if errors else 0

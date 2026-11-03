@@ -2588,15 +2588,32 @@ release:
   signature (SHA-256) over the bundle's bytes with the certificate and any
   intermediates, and the footer `MCPB_SIG_END`. The zip is unchanged, and the
   job checks that: the bundle before the block must have the sha256 it had
-  before signing (`mcpb.py signature`). A bundle whose signing fails, or
-  changes more than that, is put back unsigned with a warning. `mcpb verify`'s
+  before signing (`mcpb.py signature`), and a strict zip reader must take
+  the result (`mcpb.py trailer`: the end-of-central-directory record's
+  comment length counts every byte after it). A bundle whose signing fails,
+  changes more than that, or fails the zip check is put back unsigned with a
+  warning. `mcpb verify`'s
   answer is a notice, never a failure.
 - **Any other failure** of the job's steps (Node.js, the tool install, the
   signing step) leaves the bundles as they were, unsigned.
 
 Dry runs, forks' runs and PR runs never reach the `release` environment.
-Their Publish plan reports each bundle's state and `mcpb verify`'s answer as
-notices, and fails only on a malformed signature block.
+Their Publish plan reports each bundle's state, `mcpb verify`'s answer and the
+zip check's as notices, and fails only on a malformed signature block.
+
+**Signing stays off in practice** until upstream
+(`modelcontextprotocol/mcpb`) fixes two open issues, with 2.1.2:
+
+- **#278, installability.** `mcpb sign` appends its block after the zip's
+  end-of-central-directory record without declaring it in the record's
+  comment length, and strict zip readers refuse the result, Claude Desktop's
+  among them ("Invalid comment length"). The zip check catches this, so the
+  job publishes such a bundle unsigned rather than one that can't be
+  installed; it never rewrites the record itself.
+- **#277 (and #260), verification.** `mcpb verify` succeeds on no platform:
+  node-forge's `PkcsSignedData.verify()` isn't implemented and throws, and
+  the tool reports the throw as "not signed".
+- **Linux** has a third problem, behind #277: the purpose name below.
 
 **What `mcpb` 2.1.2 takes and checks** (`src/node/sign.ts`):
 

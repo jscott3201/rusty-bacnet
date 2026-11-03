@@ -260,6 +260,26 @@ class PackAndCheckTests(unittest.TestCase):
         self.assertEqual(mcpb.signature(path), ("signed", digest))
         self.assertEqual(self.check(path), [])
 
+    def test_a_strict_reader_refuses_an_undeclared_trailing_block(self):
+        unsigned = self.files.pack().read_bytes()
+        self.assertEqual(mcpb.trailer_errors(unsigned), [])
+        blob = b"stand-in"
+        block = b"MCPB_SIG_V1" + len(blob).to_bytes(4, "little") + blob + b"MCPB_SIG_END"
+        # As mcpb sign 2.1.2 appends it (mcpb#278): the record still declares no comment.
+        errors = mcpb.trailer_errors(unsigned + block)
+        self.assertTrue(any(f"has {len(block)} bytes after" in e and "declares 0" in e for e in errors), errors)
+        # Declared in the comment-length field, a strict reader takes it.
+        eocd = unsigned.rfind(b"PK\x05\x06")
+        declared = unsigned[:eocd + 20] + len(block).to_bytes(2, "little") + unsigned[eocd + 22:]
+        self.assertEqual(mcpb.trailer_errors(declared + block), [])
+        self.assertTrue(mcpb.trailer_errors(b"not a zip"))
+        path = self.files.dir / "trailer.mcpb"
+        path.write_bytes(unsigned + block)
+        with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(mcpb.main(["trailer", str(path)]), 1)
+            path.write_bytes(unsigned)
+            self.assertEqual(mcpb.main(["trailer", str(path)]), 0)
+
     def test_a_malformed_signature_block_is_reported(self):
         unsigned = self.files.pack().read_bytes()
         path = self.files.dir / "out" / "bacnet-macos-arm64.mcpb"

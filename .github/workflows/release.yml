@@ -630,12 +630,14 @@ jobs:
             fi
             "$mcpb" info "$bundle"
             if "$mcpb" verify "$bundle"; then verdict=passes; else verdict=fails; fi
-            echo "::notice::${bundle#release/} is $state; mcpb verify $verdict"
+            if python3 -I scripts/release/mcpb.py trailer "$bundle"; then zip=takes; else zip="refuses (mcpb#278)"; fi
+            echo "::notice::${bundle#release/} is $state; mcpb verify $verdict; a strict zip reader $zip it"
           done
 
   # Signs each MCP bundle when the release environment holds a certificate
   # (#2324), which is optional, and never stops a release: without the
-  # secrets, or when a bundle's signing fails, the unsigned bundle is
+  # secrets, or when a bundle's signing fails or leaves a zip a strict reader
+  # refuses (modelcontextprotocol/mcpb#278), the unsigned bundle is
   # published, with a notice or a warning. Signing only appends a block, and
   # the bundle before it must keep the bytes the checks and smoke tests
   # passed. mcpb verify's answer is a notice: it passes only for a chain the
@@ -720,6 +722,15 @@ jobs:
             if [ "$state" != signed ] || [ "$after" != "$before" ]; then
               cp "$keys/unsigned.mcpb" "$bundle"
               echo "::warning::signing $name changed more than its appended block; it is published unsigned"
+              continue
+            fi
+            # A strict zip reader, Claude Desktop's among them, refuses a block
+            # the end-of-central-directory record doesn't declare
+            # (modelcontextprotocol/mcpb#278); never publish one.
+            if ! python3 -I scripts/release/mcpb.py trailer "$bundle"; then
+              cp "$keys/unsigned.mcpb" "$bundle"
+              echo "::warning::signed $name would be refused by strict zip readers such as Claude Desktop"\
+                "(modelcontextprotocol/mcpb#278); it is published unsigned"
               continue
             fi
             "$mcpb" info "$bundle"
