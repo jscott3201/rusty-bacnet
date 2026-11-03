@@ -109,59 +109,20 @@ pub use file::FileWriteConfigPersistence;
 #[cfg(feature = "std")]
 mod file {
     use super::*;
-    use bacnet_encoding::constructed::{
-        decode_device_object_property_reference, decode_timer_state_change_value,
-        encode_device_object_property_reference, encode_timer_state_change_value,
-    };
-    use bacnet_types::enums::ObjectType;
-    use bytes::BytesMut;
-
-    use crate::channel::{MAX_CHANNEL_MEMBERS, MAX_CONTROL_GROUPS};
     use crate::durable::file::ObjectFile;
-    use crate::timer::MAX_TIMER_REFERENCES;
-
-    /// The format's tag. One format serves both object types; the octet
-    /// after the shared header names which one the body is for.
-    const MAGIC: &[u8; 8] = b"RBNWCF01";
-    /// A Timer's body as saved before Default_Timeout was kept (#2243): the
-    /// set alone. Still loaded, with no Default_Timeout written; never
-    /// saved.
-    const KIND_TIMER_SET_ONLY: u8 = 1;
-    /// A Channel's body follows.
-    const KIND_CHANNEL: u8 = 2;
-    /// A Timer's body follows: the set, then Default_Timeout (#2312). A new
-    /// kind rather than a part added to kind 1, so that a kind 1 file cut
-    /// short can't pass for one without the new part, and a reader that
-    /// predates it refuses the file instead of dropping the part.
-    const KIND_TIMER: u8 = 3;
-    /// A full member list, or reference list, of the longest references
-    /// takes about 30 KiB; the cap leaves room for large constructed
-    /// State_Change_Values. Anything larger is not a file this backend
-    /// wrote, and a save that would pass it is refused.
-    const MAX_FILE_BYTES: u64 = 1024 * 1024;
-    /// The shared header: the magic tag and the object identifier.
-    const HEADER_LEN: usize = 8 + 4;
+    use crate::snapshot::write_config::{self as format, MAGIC, MAX_LEN};
 
     /// A file holding one Timer's or Channel's written configuration,
     /// replaced whole on each save the same way as
     /// [`FileNotificationClassPersistence`]: a failed save leaves the
     /// previous file in place, and a completed one survives a power loss.
+    /// It does not coordinate between processes.
     ///
-    /// After the shared header (a magic tag and the object identifier) the
-    /// file holds one octet naming the object type, then each part the
-    /// object keeps behind a presence octet, 0 or 1. Variable parts state
-    /// their count and their length in octets first, and the file must end
-    /// where its last part does, so a file cut short anywhere, or holding a
-    /// part of the wrong size, does not load. A Timer's parts are its set,
-    /// which holds the priority, the seven State_Change_Values and the
-    /// references, then Default_Timeout in eight octets; a file saved before
-    /// Default_Timeout was kept names another kind and ends after the set,
-    /// and still loads. A Channel's parts are the members with their delays, Channel_Number,
-    /// Control_Groups and Allow_Group_Delay_Inhibit, in that order. Values
-    /// and references are in their BACnet encodings, integers big-endian. It
-    /// does not coordinate between processes.
+    /// The file holds what [`snapshot::write_config::encode`] returns; its
+    /// module documents the format.
     ///
     /// [`FileNotificationClassPersistence`]: crate::notification_class::FileNotificationClassPersistence
+    /// [`snapshot::write_config::encode`]: crate::snapshot::write_config::encode
     #[derive(Clone, Debug)]
     pub struct FileWriteConfigPersistence {
         file: ObjectFile,
@@ -172,7 +133,12 @@ mod file {
         /// path.
         pub fn new(path: impl AsRef<Path>) -> Result<Self, Error> {
             Ok(Self {
-                file: ObjectFile::new(path.as_ref(), MAGIC, MAX_FILE_BYTES, "Write configuration")?,
+                file: ObjectFile::new(
+                    path.as_ref(),
+                    &MAGIC,
+                    MAX_LEN as u64,
+                    "Write configuration",
+                )?,
             })
         }
 
@@ -197,32 +163,12 @@ mod file {
 
     impl WriteConfigPersistence for FileWriteConfigPersistence {
         fn load(&self, object: ObjectIdentifier) -> Result<Option<WriteConfigSnapshot>, Error> {
-            let Some(body) = self.file.load(object)? else {
+            let Some(octets) = self.file.read()? else {
                 return Ok(None);
             };
-            let mut reader = Reader {
-                file: &self.file,
-                body: &body,
-                at: 0,
-            };
-            let snapshot = match (reader.u8()?, object.object_type()) {
-                (KIND_TIMER, ObjectType::TIMER) => WriteConfigSnapshot::Timer(reader.timer(true)?),
-                (KIND_TIMER_SET_ONLY, ObjectType::TIMER) => {
-                    WriteConfigSnapshot::Timer(reader.timer(false)?)
-                }
-                (KIND_CHANNEL, ObjectType::CHANNEL) => {
-                    WriteConfigSnapshot::Channel(reader.channel()?)
-                }
-                _ => {
-                    return Err(self
-                        .file
-                        .corrupt("holds another object type's configuration"));
-                }
-            };
-            if reader.at != body.len() {
-                return Err(self.file.corrupt("has octets past its end"));
-            }
-            Ok(Some(snapshot))
+            format::decode(object, &octets)
+                .map(Some)
+                .map_err(|error| self.file.error(error))
         }
 
         fn save(
@@ -230,275 +176,9 @@ mod file {
             object: ObjectIdentifier,
             snapshot: &WriteConfigSnapshot,
         ) -> Result<(), Error> {
-            let mut body = BytesMut::new();
-            match (snapshot, object.object_type()) {
-                (WriteConfigSnapshot::Timer(config), ObjectType::TIMER) => {
-                    body.extend_from_slice(&[KIND_TIMER]);
-                    encode_timer(&mut body, config)?;
-                }
-                (WriteConfigSnapshot::Channel(config), ObjectType::CHANNEL) => {
-                    body.extend_from_slice(&[KIND_CHANNEL]);
-                    encode_channel(&mut body, config)?;
-                }
-                _ => {
-                    return Err(Error::OutOfRange(format!(
-                        "no write configuration of this kind for {object}"
-                    )));
-                }
-            }
-            if (HEADER_LEN + body.len()) as u64 > MAX_FILE_BYTES {
-                return Err(Error::OutOfRange(
-                    "write configuration too large to save".into(),
-                ));
-            }
-            self.file.save(object, &body)
-        }
-    }
-
-    /// Append `count`, as four octets, and then `section` with its length.
-    fn put_section(body: &mut BytesMut, count: usize, section: &[u8]) -> Result<(), Error> {
-        for value in [count, section.len()] {
-            let value = u32::try_from(value)
-                .map_err(|_| Error::OutOfRange("write configuration too large to save".into()))?;
-            body.extend_from_slice(&value.to_be_bytes());
-        }
-        body.extend_from_slice(section);
-        Ok(())
-    }
-
-    fn references_section(references: &[BACnetDeviceObjectPropertyReference]) -> BytesMut {
-        let mut section = BytesMut::new();
-        for reference in references {
-            encode_device_object_property_reference(&mut section, reference);
-        }
-        section
-    }
-
-    fn encode_timer(body: &mut BytesMut, config: &TimerWriteConfig) -> Result<(), Error> {
-        encode_timer_set(body, config.state_change.as_ref())?;
-        match config.default_timeout {
-            None => body.extend_from_slice(&[0]),
-            Some(timeout) => {
-                body.extend_from_slice(&[1]);
-                body.extend_from_slice(&timeout.to_be_bytes());
-            }
-        }
-        Ok(())
-    }
-
-    fn encode_timer_set(body: &mut BytesMut, set: Option<&TimerStateChange>) -> Result<(), Error> {
-        let Some(set) = set else {
-            body.extend_from_slice(&[0]);
-            return Ok(());
-        };
-        // Only what a load takes back is saved.
-        if !(1..=16).contains(&set.priority_for_writing)
-            || set.references.len() > MAX_TIMER_REFERENCES
-        {
-            return Err(Error::OutOfRange("Timer configuration out of range".into()));
-        }
-        body.extend_from_slice(&[1, set.priority_for_writing]);
-        let mut values = BytesMut::new();
-        for value in &set.values {
-            encode_timer_state_change_value(&mut values, value)?;
-        }
-        put_section(body, set.values.len(), &values)?;
-        put_section(
-            body,
-            set.references.len(),
-            &references_section(&set.references),
-        )
-    }
-
-    fn encode_channel(body: &mut BytesMut, config: &ChannelWriteConfig) -> Result<(), Error> {
-        let out_of_range = || Error::OutOfRange("Channel configuration out of range".into());
-        match &config.members {
-            None => body.extend_from_slice(&[0]),
-            Some(members) => {
-                let count = members.references.len();
-                if count > MAX_CHANNEL_MEMBERS || members.execution_delay.len() != count {
-                    return Err(out_of_range());
-                }
-                body.extend_from_slice(&[1]);
-                put_section(body, count, &references_section(&members.references))?;
-                for delay in &members.execution_delay {
-                    body.extend_from_slice(&delay.to_be_bytes());
-                }
-            }
-        }
-        match config.channel_number {
-            None => body.extend_from_slice(&[0]),
-            Some(number) => {
-                body.extend_from_slice(&[1]);
-                body.extend_from_slice(&number.to_be_bytes());
-            }
-        }
-        match &config.control_groups {
-            None => body.extend_from_slice(&[0]),
-            Some(groups) => {
-                let count = u8::try_from(groups.len())
-                    .ok()
-                    .filter(|count| (1..=MAX_CONTROL_GROUPS).contains(&usize::from(*count)))
-                    .ok_or_else(out_of_range)?;
-                body.extend_from_slice(&[1, count]);
-                for group in groups {
-                    body.extend_from_slice(&group.to_be_bytes());
-                }
-            }
-        }
-        match config.allow_group_delay_inhibit {
-            None => body.extend_from_slice(&[0]),
-            Some(allow) => body.extend_from_slice(&[1, u8::from(allow)]),
-        }
-        Ok(())
-    }
-
-    /// The body read front to back. Every read past the end refuses the
-    /// file as cut short.
-    struct Reader<'a> {
-        file: &'a ObjectFile,
-        body: &'a [u8],
-        at: usize,
-    }
-
-    impl<'a> Reader<'a> {
-        fn take(&mut self, len: usize) -> Result<&'a [u8], Error> {
-            let end = self
-                .at
-                .checked_add(len)
-                .filter(|end| *end <= self.body.len())
-                .ok_or_else(|| self.file.corrupt("is cut short"))?;
-            let taken = &self.body[self.at..end];
-            self.at = end;
-            Ok(taken)
-        }
-
-        fn u8(&mut self) -> Result<u8, Error> {
-            Ok(self.take(1)?[0])
-        }
-
-        fn u16(&mut self) -> Result<u16, Error> {
-            Ok(u16::from_be_bytes(self.take(2)?.try_into().expect("two")))
-        }
-
-        fn u32(&mut self) -> Result<u32, Error> {
-            Ok(u32::from_be_bytes(self.take(4)?.try_into().expect("four")))
-        }
-
-        fn u64(&mut self) -> Result<u64, Error> {
-            Ok(u64::from_be_bytes(self.take(8)?.try_into().expect("eight")))
-        }
-
-        /// A presence octet or a BOOLEAN: 0 or 1, nothing else.
-        fn flag(&mut self) -> Result<bool, Error> {
-            match self.u8()? {
-                0 => Ok(false),
-                1 => Ok(true),
-                _ => Err(self.file.corrupt("has a flag that is neither 0 nor 1")),
-            }
-        }
-
-        /// A count of at most `cap` entries.
-        fn count(&mut self, cap: usize) -> Result<usize, Error> {
-            usize::try_from(self.u32()?)
-                .ok()
-                .filter(|count| *count <= cap)
-                .ok_or_else(|| self.file.corrupt("holds more entries than the cap"))
-        }
-
-        /// A section of exactly `count` elements, each decoded by `decode`.
-        fn elements<T>(
-            &mut self,
-            count: usize,
-            decode: impl Fn(&[u8], usize) -> Result<(T, usize), Error>,
-        ) -> Result<Vec<T>, Error> {
-            let len = self.u32()? as usize;
-            let section = self.take(len)?;
-            let elements = self.file.decode_capped(section, count, decode)?;
-            if elements.len() != count {
-                return Err(self.file.corrupt("holds fewer entries than it states"));
-            }
-            Ok(elements)
-        }
-
-        /// A Timer's body; `with_timeout` for one that goes on past its set
-        /// with Default_Timeout.
-        fn timer(&mut self, with_timeout: bool) -> Result<TimerWriteConfig, Error> {
-            let state_change = self.timer_set()?;
-            let default_timeout = if with_timeout && self.flag()? {
-                Some(self.u64()?)
-            } else {
-                None
-            };
-            Ok(TimerWriteConfig {
-                state_change,
-                default_timeout,
-            })
-        }
-
-        fn timer_set(&mut self) -> Result<Option<TimerStateChange>, Error> {
-            if !self.flag()? {
-                return Ok(None);
-            }
-            let priority_for_writing = self.u8()?;
-            if !(1..=16).contains(&priority_for_writing) {
-                return Err(self.file.corrupt("holds a priority outside 1 to 16"));
-            }
-            let count = self.count(7)?;
-            let values = self.elements(count, decode_timer_state_change_value)?;
-            let values = values
-                .try_into()
-                .map_err(|_| self.file.corrupt("holds other than seven values"))?;
-            let count = self.count(MAX_TIMER_REFERENCES)?;
-            let references = self.elements(count, decode_device_object_property_reference)?;
-            Ok(Some(TimerStateChange {
-                values,
-                references,
-                priority_for_writing,
-            }))
-        }
-
-        fn channel(&mut self) -> Result<ChannelWriteConfig, Error> {
-            let members = if self.flag()? {
-                let count = self.count(MAX_CHANNEL_MEMBERS)?;
-                let references = self.elements(count, decode_device_object_property_reference)?;
-                let execution_delay = (0..count)
-                    .map(|_| self.u32())
-                    .collect::<Result<Vec<_>, _>>()?;
-                Some(ChannelMembers {
-                    references,
-                    execution_delay,
-                })
-            } else {
-                None
-            };
-            let channel_number = if self.flag()? {
-                Some(self.u16()?)
-            } else {
-                None
-            };
-            let control_groups = if self.flag()? {
-                let count = usize::from(self.u8()?);
-                if !(1..=MAX_CONTROL_GROUPS).contains(&count) {
-                    return Err(self
-                        .file
-                        .corrupt("holds a Control_Groups size out of range"));
-                }
-                Some((0..count).map(|_| self.u32()).collect::<Result<_, _>>()?)
-            } else {
-                None
-            };
-            let allow_group_delay_inhibit = if self.flag()? {
-                Some(self.flag()?)
-            } else {
-                None
-            };
-            Ok(ChannelWriteConfig {
-                members,
-                channel_number,
-                control_groups,
-                allow_group_delay_inhibit,
-            })
+            let octets =
+                format::encode(object, snapshot).map_err(|error| self.file.error(error))?;
+            self.file.save_octets(octets)
         }
     }
 }

@@ -32,23 +32,26 @@ use super::{LogAcquisitionSettings, LogReportingSettings, LogSnapshot};
 use crate::durable::crc32;
 use crate::log_buffer::ResidentLogRecord;
 use crate::log_window::LogWindow;
+use crate::snapshot::{SnapshotError, SnapshotErrorKind};
 use crate::trend::MAX_LOG_DEVICE_OBJECT_PROPERTIES;
 
 mod reporting;
 
 pub(super) use reporting::MAX_TEXT_OCTETS;
 
-const MAGIC: &[u8; 8] = b"RBLOGS01";
+pub(crate) const MAGIC: &[u8; 8] = b"RBLOGS01";
 /// The schema written: version 2 adds the written reporting settings.
-pub(super) const SCHEMA_VERSION: u16 = 2;
+pub(crate) const SCHEMA_VERSION: u16 = 2;
 /// The schema before them (#1541), still read.
-pub(super) const SCHEMA_VERSION_1: u16 = 1;
+pub(crate) const SCHEMA_VERSION_1: u16 = 1;
 pub(super) const HEADER_LEN: usize = 8 + 2 + 4 + 8 + 4;
 pub(super) const TRAILER_LEN: usize = 4;
 /// The most octets one record or reference may take in a slot.
 const MAX_ELEMENT_BYTES: usize = 1024 * 1024;
 /// The most octets a slot may take.
-pub(super) const MAX_SNAPSHOT_BYTES: usize = 256 * 1024 * 1024;
+pub(crate) const MAX_SNAPSHOT_BYTES: usize = 256 * 1024 * 1024;
+/// What a log snapshot's errors are led by, as the stack's [`Error`].
+pub(crate) const WHAT: &str = "log snapshot";
 
 /// A record family a snapshot can hold: the record of one log object type.
 pub(crate) trait SnapshotRecord:
@@ -120,8 +123,8 @@ pub(crate) fn check_buffer_size<R: SnapshotRecord>(buffer_size: u32) -> Result<(
     Ok(())
 }
 
-fn corrupt(reason: impl core::fmt::Display) -> Error {
-    Error::Encoding(format!("log snapshot {reason}"))
+fn corrupt(reason: &'static str) -> SnapshotError {
+    SnapshotError::damaged(reason)
 }
 
 /// Check what any snapshot of an `R` log must hold, whether it is about to
@@ -129,23 +132,19 @@ fn corrupt(reason: impl core::fmt::Display) -> Error {
 /// count against Buffer_Size and Total_Record_Count (as `restore_log_buffer`
 /// checks them), the window ends, and the settings and references the
 /// object type has.
-pub(crate) fn validate<R: SnapshotRecord>(snapshot: &LogSnapshot<R>) -> Result<(), Error> {
-    let kind = snapshot.object_identifier.object_type();
-    if kind != R::OBJECT_TYPE {
-        return Err(corrupt(format_args!(
-            "for a {kind:?} cannot hold {:?} records",
-            R::OBJECT_TYPE
-        )));
+pub(crate) fn validate<R: SnapshotRecord>(snapshot: &LogSnapshot<R>) -> Result<(), SnapshotError> {
+    if snapshot.object_identifier.object_type() != R::OBJECT_TYPE {
+        return Err(SnapshotError::new(
+            SnapshotErrorKind::OtherObject,
+            "is for an object type that doesn't hold these records",
+        ));
     }
     if snapshot.generation == 0 {
         return Err(corrupt("generation must be nonzero"));
     }
     let held = snapshot.records.len();
     if held > snapshot.buffer_size as usize {
-        return Err(corrupt(format_args!(
-            "holds {held} records, more than Buffer_Size {}",
-            snapshot.buffer_size
-        )));
+        return Err(corrupt("holds more records than Buffer_Size"));
     }
     if snapshot.total_record_count == 0 && held > 0 {
         return Err(corrupt("holds records with a Total_Record_Count of 0"));
@@ -160,8 +159,10 @@ pub(crate) fn validate<R: SnapshotRecord>(snapshot: &LogSnapshot<R>) -> Result<(
         ));
     }
     let mut window = LogWindow::default();
-    window.set(P::START_TIME, snapshot.start_time)?;
-    window.set(P::STOP_TIME, snapshot.stop_time)?;
+    window
+        .set(P::START_TIME, snapshot.start_time)
+        .and_then(|()| window.set(P::STOP_TIME, snapshot.stop_time))
+        .map_err(|_| corrupt("holds a Start_Time or Stop_Time no write takes"))?;
     let references = snapshot.log_device_object_property.len();
     let (acquisition_allowed, max_references) = match R::OBJECT_TYPE {
         ObjectType::TREND_LOG => (
@@ -182,10 +183,7 @@ pub(crate) fn validate<R: SnapshotRecord>(snapshot: &LogSnapshot<R>) -> Result<(
         (None, true) => {}
         (Some(acquisition), false) => {
             if !acquisition_allowed.contains(&acquisition.logging_type) {
-                return Err(corrupt(format_args!(
-                    "holds a Logging_Type of {:?} this log can't take",
-                    acquisition.logging_type
-                )));
+                return Err(corrupt("holds a Logging_Type this log can't take"));
             }
             if acquisition.logging_type != LoggingType::POLLED && acquisition.log_interval != 0 {
                 return Err(corrupt(
@@ -197,18 +195,21 @@ pub(crate) fn validate<R: SnapshotRecord>(snapshot: &LogSnapshot<R>) -> Result<(
         (Some(_), true) => return Err(corrupt("holds acquisition settings an Event Log lacks")),
     }
     if references > max_references {
-        return Err(corrupt(format_args!(
-            "holds {references} Log_DeviceObjectProperty references, more than {max_references}"
-        )));
+        return Err(corrupt(
+            "holds more Log_DeviceObjectProperty references than the log takes",
+        ));
     }
     for reference in &snapshot.log_device_object_property {
-        crate::device_reference::check_device_member(reference.device_identifier)?;
+        crate::device_reference::check_device_member(reference.device_identifier)
+            .map_err(|_| corrupt("holds a reference whose device isn't a Device"))?;
     }
     reporting::validate(R::OBJECT_TYPE, &snapshot.reporting)
 }
 
 /// The slot octets for `snapshot`, after [`validate`].
-pub(crate) fn encode<R: SnapshotRecord>(snapshot: &LogSnapshot<R>) -> Result<Vec<u8>, Error> {
+pub(crate) fn encode<R: SnapshotRecord>(
+    snapshot: &LogSnapshot<R>,
+) -> Result<Vec<u8>, SnapshotError> {
     validate(snapshot)?;
     // The header goes first, its payload length filled in at the end, so
     // the payload is written in place rather than copied in after (#2233).
@@ -254,11 +255,8 @@ pub(crate) fn encode<R: SnapshotRecord>(snapshot: &LogSnapshot<R>) -> Result<Vec
     })?;
     reporting::put(&mut data, &snapshot.reporting, &mut element);
     let payload_len = data.len() - HEADER_LEN;
-    let total_len = data.len() + TRAILER_LEN;
-    if total_len > MAX_SNAPSHOT_BYTES {
-        return Err(Error::OutOfRange(format!(
-            "log snapshot length {total_len} exceeds {MAX_SNAPSHOT_BYTES}"
-        )));
+    if data.len() + TRAILER_LEN > MAX_SNAPSHOT_BYTES {
+        return Err(SnapshotError::out_of_range("length exceeds the slot cap"));
     }
     data[HEADER_LEN - 4..HEADER_LEN].copy_from_slice(&(payload_len as u32).to_be_bytes());
     let checksum = crc32(&data);
@@ -280,72 +278,78 @@ fn put_list<T>(
     items: &[T],
     element: &mut BytesMut,
     encode: impl Fn(&T, &mut BytesMut) -> Result<(), Error>,
-) -> Result<(), Error> {
-    let count = u32::try_from(items.len()).map_err(|_| corrupt("list is too long"))?;
+) -> Result<(), SnapshotError> {
+    let count =
+        u32::try_from(items.len()).map_err(|_| SnapshotError::out_of_range("list is too long"))?;
     data.extend_from_slice(&count.to_be_bytes());
     for item in items {
         element.clear();
-        encode(item, element)?;
+        encode(item, element)
+            .map_err(|_| SnapshotError::out_of_range("holds an element that doesn't encode"))?;
         if element.len() > MAX_ELEMENT_BYTES {
-            return Err(Error::OutOfRange(format!(
-                "log snapshot element length {} exceeds {MAX_ELEMENT_BYTES}",
-                element.len()
-            )));
+            return Err(SnapshotError::out_of_range(
+                "element length exceeds the element cap",
+            ));
         }
         data.extend_from_slice(&(element.len() as u32).to_be_bytes());
         data.extend_from_slice(element);
         if data.len() - HEADER_LEN > MAX_SNAPSHOT_BYTES {
-            return Err(Error::OutOfRange(format!(
-                "log snapshot length exceeds {MAX_SNAPSHOT_BYTES}"
-            )));
+            return Err(SnapshotError::out_of_range("length exceeds the slot cap"));
         }
     }
     Ok(())
 }
 
-/// What one slot's octets turned out to hold.
-pub(super) enum Decoded<R> {
-    /// A valid snapshot.
-    Valid(LogSnapshot<R>),
-    /// Damaged or not a snapshot at all: the other slot may still serve.
-    Corrupt(Error),
-    /// A sound slot this log must not take: another object's, or a schema
-    /// this build can't read. Loading stops with this error rather than
-    /// falling back to an older slot.
-    Refused(Error),
-}
-
 /// Read one slot's octets as a snapshot for `expected`.
-pub(super) fn decode<R: SnapshotRecord>(data: &[u8], expected: ObjectIdentifier) -> Decoded<R> {
-    if let Err(error) = verify_integrity(data) {
-        return Decoded::Corrupt(error);
-    }
+///
+/// A slot that is damaged, or not a snapshot at all, fails with an error
+/// that [is damage](SnapshotError::is_damage): the other slot may still
+/// serve. A sound slot this log must not take (another object's, or a
+/// schema this build can't read) fails with one that isn't, and loading
+/// stops there rather than falling back to an older slot.
+pub(crate) fn decode<R: SnapshotRecord>(
+    data: &[u8],
+    expected: ObjectIdentifier,
+) -> Result<LogSnapshot<R>, SnapshotError> {
+    verify_integrity(data)?;
     let version = u16::from_be_bytes([data[8], data[9]]);
     if version != SCHEMA_VERSION && version != SCHEMA_VERSION_1 {
-        return Decoded::Refused(corrupt(format_args!(
-            "schema version {version} is unsupported"
-        )));
+        return Err(SnapshotError::new(
+            SnapshotErrorKind::UnknownVersion(version),
+            "",
+        ));
     }
     match ObjectIdentifier::decode(&data[10..14]) {
         Ok(oid) if oid == expected => {}
-        Ok(_) => return Decoded::Refused(corrupt("belongs to another object")),
-        Err(error) => return Decoded::Corrupt(error),
+        Ok(_) => {
+            return Err(SnapshotError::new(
+                SnapshotErrorKind::OtherObject,
+                "belongs to another object",
+            ));
+        }
+        Err(_) => return Err(corrupt("holds an object identifier that doesn't decode")),
     }
-    match decode_payload(data, version, expected) {
-        Ok(snapshot) => Decoded::Valid(snapshot),
-        Err(error) => Decoded::Corrupt(error),
-    }
+    decode_payload(data, version, expected)
 }
 
-fn verify_integrity(data: &[u8]) -> Result<(), Error> {
+fn verify_integrity(data: &[u8]) -> Result<(), SnapshotError> {
     if data.len() < HEADER_LEN + TRAILER_LEN {
-        return Err(corrupt("is truncated"));
+        return Err(SnapshotError::truncated("is truncated"));
     }
     if &data[..8] != MAGIC {
-        return Err(corrupt("magic is invalid"));
+        return Err(SnapshotError::new(
+            SnapshotErrorKind::NotThisFormat,
+            "magic is invalid",
+        ));
     }
     let payload_len = u32::from_be_bytes(data[22..26].try_into().unwrap()) as usize;
-    if HEADER_LEN + payload_len + TRAILER_LEN != data.len() {
+    let declared = HEADER_LEN + payload_len + TRAILER_LEN;
+    if declared > data.len() {
+        return Err(SnapshotError::truncated(
+            "declared length does not match its length",
+        ));
+    }
+    if declared != data.len() {
         return Err(corrupt("declared length does not match its length"));
     }
     let checksum_at = data.len() - TRAILER_LEN;
@@ -362,36 +366,37 @@ struct Reader<'a> {
 }
 
 impl<'a> Reader<'a> {
-    fn take(&mut self, length: usize, field: &str) -> Result<&'a [u8], Error> {
+    fn take(&mut self, length: usize, field: &'static str) -> Result<&'a [u8], SnapshotError> {
         let end = self
             .offset
             .checked_add(length)
             .filter(|&end| end <= self.data.len())
-            .ok_or_else(|| corrupt(format_args!("{field} is truncated")))?;
+            .ok_or(SnapshotError::truncated("is truncated").in_field(field))?;
         let value = &self.data[self.offset..end];
         self.offset = end;
         Ok(value)
     }
 
-    fn u8(&mut self, field: &str) -> Result<u8, Error> {
+    fn u8(&mut self, field: &'static str) -> Result<u8, SnapshotError> {
         Ok(self.take(1, field)?[0])
     }
 
-    fn u32(&mut self, field: &str) -> Result<u32, Error> {
+    fn u32(&mut self, field: &'static str) -> Result<u32, SnapshotError> {
         Ok(u32::from_be_bytes(self.take(4, field)?.try_into().unwrap()))
     }
 
-    fn flag(&mut self, field: &str) -> Result<bool, Error> {
+    fn flag(&mut self, field: &'static str) -> Result<bool, SnapshotError> {
         match self.u8(field)? {
             0 => Ok(false),
             1 => Ok(true),
-            _ => Err(corrupt(format_args!("{field} is not a Boolean"))),
+            _ => Err(corrupt("is not a Boolean").in_field(field)),
         }
     }
 
-    fn date_time(&mut self, field: &str) -> Result<(Date, Time), Error> {
-        let date = Date::decode(self.take(4, field)?)?;
-        let time = Time::decode(self.take(4, field)?)?;
+    fn date_time(&mut self, field: &'static str) -> Result<(Date, Time), SnapshotError> {
+        let undecodable = || corrupt("does not decode").in_field(field);
+        let date = Date::decode(self.take(4, field)?).map_err(|_| undecodable())?;
+        let time = Time::decode(self.take(4, field)?).map_err(|_| undecodable())?;
         Ok((date, time))
     }
 
@@ -401,25 +406,26 @@ impl<'a> Reader<'a> {
     /// a crafted count can't reserve more than a valid snapshot needs.
     fn list<T>(
         &mut self,
-        field: &str,
+        field: &'static str,
         cap: usize,
         decode: impl Fn(&[u8], usize) -> Result<(T, usize), Error>,
-    ) -> Result<Vec<T>, Error> {
+    ) -> Result<Vec<T>, SnapshotError> {
         let count = self.u32(field)? as usize;
         if count > cap || count > (self.data.len() - self.offset) / 4 {
-            return Err(corrupt(format_args!("{field} count is too large")));
+            return Err(corrupt("count is too large").in_field(field));
         }
         // Reserve a modest start; a long list grows as its elements decode.
         let mut items = Vec::with_capacity(count.min(4096));
         for _ in 0..count {
             let length = self.u32(field)? as usize;
             if length > MAX_ELEMENT_BYTES {
-                return Err(corrupt(format_args!("{field} element is too long")));
+                return Err(corrupt("element is too long").in_field(field));
             }
             let element = self.take(length, field)?;
-            let (item, end) = decode(element, 0)?;
+            let (item, end) = decode(element, 0)
+                .map_err(|_| corrupt("element does not decode").in_field(field))?;
             if end != element.len() {
-                return Err(corrupt(format_args!("{field} element has trailing octets")));
+                return Err(corrupt("element has trailing octets").in_field(field));
             }
             items.push(item);
         }
@@ -431,7 +437,7 @@ fn decode_payload<R: SnapshotRecord>(
     data: &[u8],
     version: u16,
     object_identifier: ObjectIdentifier,
-) -> Result<LogSnapshot<R>, Error> {
+) -> Result<LogSnapshot<R>, SnapshotError> {
     let generation = u64::from_be_bytes(data[14..22].try_into().unwrap());
     let mut reader = Reader {
         data: &data[HEADER_LEN..data.len() - TRAILER_LEN],
@@ -499,7 +505,9 @@ fn decode_payload<R: SnapshotRecord>(
     let mut scratch = element_buffer(snapshot.records.len());
     for record in &snapshot.records {
         scratch.clear();
-        record.encode(&mut scratch)?;
+        record
+            .encode(&mut scratch)
+            .map_err(|_| corrupt("holds a record that doesn't encode"))?;
     }
     Ok(snapshot)
 }

@@ -9,8 +9,9 @@ use bacnet_types::constructed::{BACnetEventLogRecord, BACnetLogMultipleRecord, B
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 
-use super::codec::{self, Decoded, MAX_SNAPSHOT_BYTES, SnapshotRecord};
+use super::codec::{MAX_SNAPSHOT_BYTES, WHAT};
 use super::{LogPersistence, LogSnapshot};
+use crate::snapshot::log::{self, LogRecord};
 
 /// Two-slot, versioned and checksummed file store for one log's snapshots,
 /// as [`FileAuditLogPersistence`](crate::audit::FileAuditLogPersistence)
@@ -29,6 +30,9 @@ use super::{LogPersistence, LogSnapshot};
 /// another object or uses a schema this build can't read, when reading
 /// either slot fails, and when both slots hold different snapshots of one
 /// generation. It does not coordinate several processes.
+///
+/// Each slot holds what [`snapshot::log::encode`](crate::snapshot::log::encode)
+/// returns; that module documents the format.
 #[derive(Clone, Debug)]
 pub struct FileLogPersistence {
     slot_paths: [PathBuf; 2],
@@ -79,7 +83,7 @@ impl FileLogPersistence {
         self.slot_paths.clone()
     }
 
-    fn load_slots<R: SnapshotRecord>(
+    fn load_slots<R: LogRecord + PartialEq>(
         &self,
         expected: ObjectIdentifier,
     ) -> Result<Option<LogSnapshot<R>>, Error> {
@@ -89,13 +93,14 @@ impl FileLogPersistence {
             let Some(data) = self.read_slot(slot)? else {
                 continue;
             };
-            match codec::decode::<R>(&data, expected) {
-                Decoded::Refused(error) => return Err(error),
-                Decoded::Corrupt(error) => {
+            match log::decode::<R>(&data, expected) {
+                Err(error) if !error.is_damage() => return Err(error.into_error(WHAT)),
+                Err(error) => {
+                    let error = error.into_error(WHAT);
                     log_warn!(slot = %path.display(), %error, "Passing over a damaged log snapshot slot");
                     damage = Some(error);
                 }
-                Decoded::Valid(snapshot) => match &newest {
+                Ok(snapshot) => match &newest {
                     Some(current) if current.generation > snapshot.generation => {}
                     Some(current) if current.generation == snapshot.generation => {
                         if *current != snapshot {
@@ -116,8 +121,8 @@ impl FileLogPersistence {
         }
     }
 
-    fn commit_slot<R: SnapshotRecord>(&self, snapshot: &LogSnapshot<R>) -> Result<(), Error> {
-        let bytes = codec::encode(snapshot)?;
+    fn commit_slot<R: LogRecord>(&self, snapshot: &LogSnapshot<R>) -> Result<(), Error> {
+        let bytes = log::encode(snapshot).map_err(|error| error.into_error(WHAT))?;
         let slot = (snapshot.generation % 2) as usize;
         #[cfg(feature = "test-support")]
         if let Some(memory) = &self.memory {

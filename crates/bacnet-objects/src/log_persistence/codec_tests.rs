@@ -10,7 +10,7 @@ use bacnet_types::enums::ObjectType;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 
-use super::codec::{self, Decoded, HEADER_LEN, TRAILER_LEN};
+use super::codec::{self, HEADER_LEN, TRAILER_LEN};
 #[cfg(feature = "std")]
 use super::tests::TempBase;
 use super::tests::{DATE, at, event_record};
@@ -54,10 +54,9 @@ fn reseal_with_length(data: &mut [u8]) {
 
 fn corrupt_reason(data: &[u8]) -> String {
     match codec::decode::<BACnetEventLogRecord>(data, oid()) {
-        Decoded::Corrupt(Error::Encoding(message)) => message,
-        Decoded::Corrupt(other) => panic!("expected an encoding error, got {other:?}"),
-        Decoded::Valid(_) => panic!("expected a damaged slot, got a valid one"),
-        Decoded::Refused(error) => panic!("expected a damaged slot, got a refusal: {error:?}"),
+        Err(error) if error.is_damage() => error.to_string(),
+        Err(error) => panic!("expected a damaged slot, got a refusal: {error:?}"),
+        Ok(_) => panic!("expected a damaged slot, got a valid one"),
     }
 }
 
@@ -65,7 +64,7 @@ fn corrupt_reason(data: &[u8]) -> String {
 fn the_untouched_slot_decodes() {
     let data = codec::encode(&snapshot(3)).unwrap();
     match codec::decode::<BACnetEventLogRecord>(&data, oid()) {
-        Decoded::Valid(decoded) => assert_eq!(decoded, snapshot(3)),
+        Ok(decoded) => assert_eq!(decoded, snapshot(3)),
         _ => panic!("a fresh slot must decode"),
     }
 }
@@ -126,7 +125,7 @@ fn a_record_longer_than_a_slot_element_is_never_written() {
         log_device_object_property: vec![super::tests::reference(1)],
         reporting: LogReportingSettings::default(),
     };
-    match codec::encode(&snapshot) {
+    match codec::encode(&snapshot).map_err(|error| error.into_error(codec::WHAT)) {
         Err(Error::OutOfRange(message)) => {
             assert!(message.contains("element length"), "{message}")
         }

@@ -15,9 +15,8 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 
 use super::sync_parent_dir;
-
-/// The magic tag and the object identifier.
-const HEADER_LEN: usize = 8 + 4;
+use crate::snapshot::SnapshotError;
+use crate::snapshot::framing;
 
 /// Test support, not a stable API: the octets a file backend keeps in
 /// memory instead of on disk, so a fuzz target restores without the file
@@ -132,6 +131,11 @@ impl ObjectFile {
         Error::Encoding(format!("{} file {reason}", self.kind))
     }
 
+    /// The stack's error for a codec's `error` about this file.
+    pub(crate) fn error(&self, error: SnapshotError) -> Error {
+        error.into_error(&format!("{} file", self.kind))
+    }
+
     /// The body saved for `oid`, after the header, or `None` when there is
     /// no file. Refuses a file past the size cap before decoding any of it,
     /// one without this format's header, and one saved for another object.
@@ -148,28 +152,17 @@ impl ObjectFile {
         let Some(mut bytes) = self.read()? else {
             return Ok(None);
         };
-        if bytes.len() as u64 > self.max_bytes {
-            return Err(self.corrupt("is too large"));
-        }
-        let tag = bytes.get(..self.magic.len());
-        let previous = match tag {
-            Some(tag) if tag == self.magic => false,
-            Some(tag) if self.previous.is_some_and(|previous| tag == previous) => true,
-            _ => return Err(self.corrupt("has no valid header")),
-        };
-        if bytes.len() < HEADER_LEN {
-            return Err(self.corrupt("has no valid header"));
-        }
-        if bytes[self.magic.len()..HEADER_LEN] != oid.encode() {
-            return Err(self.corrupt("belongs to another object"));
-        }
-        bytes.drain(..HEADER_LEN);
+        let max_len = usize::try_from(self.max_bytes).unwrap_or(usize::MAX);
+        let previous = framing::open(&bytes, self.magic, self.previous, max_len, oid)
+            .map_err(|error| self.error(error))?
+            .0;
+        bytes.drain(..framing::HEADER_LEN);
         Ok(Some((previous, bytes)))
     }
 
-    /// The file's octets, up to one past the size cap, or `None` when there
-    /// is no file.
-    fn read(&self) -> Result<Option<Vec<u8>>, Error> {
+    /// The file's octets, header and all, up to one past the size cap, or
+    /// `None` when there is no file.
+    pub(crate) fn read(&self) -> Result<Option<Vec<u8>>, Error> {
         #[cfg(feature = "test-support")]
         if let Some(memory) = &self.memory {
             return Ok(memory.read(0, (self.max_bytes + 1) as usize));
@@ -192,10 +185,11 @@ impl ObjectFile {
     /// loss. Once the rename succeeds the save has landed: a directory sync
     /// that fails is logged, not returned (see [`sync_parent_dir`]).
     pub(crate) fn save(&self, oid: ObjectIdentifier, body: &[u8]) -> Result<(), Error> {
-        let mut bytes = Vec::with_capacity(HEADER_LEN + body.len());
-        bytes.extend_from_slice(self.magic);
-        bytes.extend_from_slice(&oid.encode());
-        bytes.extend_from_slice(body);
+        self.save_octets(framing::seal(self.magic, oid, body))
+    }
+
+    /// [`save`](Self::save) the file's whole `bytes`, header and all.
+    pub(crate) fn save_octets(&self, bytes: Vec<u8>) -> Result<(), Error> {
         #[cfg(feature = "test-support")]
         if let Some(memory) = &self.memory {
             memory.write(0, bytes);
@@ -232,18 +226,7 @@ impl ObjectFile {
         cap: usize,
         decode: impl Fn(&[u8], usize) -> Result<(T, usize), Error>,
     ) -> Result<Vec<T>, Error> {
-        let mut list = Vec::new();
-        let mut offset = 0;
-        while offset < bytes.len() {
-            if list.len() == cap {
-                return Err(self.corrupt("holds more entries than the cap"));
-            }
-            let (element, next) = decode(bytes, offset)
-                .map_err(|_| self.corrupt("holds an entry that does not decode"))?;
-            list.push(element);
-            offset = next;
-        }
-        Ok(list)
+        framing::decode_capped(bytes, cap, decode).map_err(|error| self.error(error))
     }
 
     fn temporary_path(&self) -> PathBuf {

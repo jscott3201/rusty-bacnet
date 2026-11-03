@@ -5114,6 +5114,36 @@ framing, through the shared `bacnet-encoding` codecs.
   a non-Device member VALUE_OUT_OF_RANGE, ahead of any refusal of a remote
   device.
 
+### Persisted snapshot formats (#2047)
+
+`bacnet_objects::snapshot` holds the formats the file backends write, with
+`alloc` alone, so storage an application brings (flash, EEPROM, a database
+row) keeps the same octets a hosted build does. Each format's module has
+`encode`, `decode`, its magic tag and its version as constants, and every
+refusal is a `SnapshotError` whose `kind()` names it: `Truncated`,
+`NotThisFormat`, `UnknownVersion`, `UnknownKind`, `OtherObject`, `TooLarge`,
+`Damaged`, or `OutOfRange` for a snapshot refused as it is encoded. It
+carries only static text, so reporting one needs no allocation.
+`is_damage()` says whether a two-slot backend should pass over that copy
+for the other one.
+
+| Module | Snapshot | Tag and versions | File backend |
+| --- | --- | --- | --- |
+| `snapshot::log` | `LogSnapshot<R>` (Trend Log, Trend Log Multiple, Event Log) | `RBLOGS01`, version 2; version 1 still loads | `FileLogPersistence` (one slot of the two) |
+| `snapshot::write_config` | `WriteConfigSnapshot` (Timer, Channel) | `RBNWCF01`, kinds 2 and 3; kind 1 still loads | `FileWriteConfigPersistence` |
+
+```rust
+use bacnet_objects::snapshot::write_config;
+
+let octets = write_config::encode(channel, &snapshot)?; // store these
+let back = write_config::decode(channel, &octets)?;
+```
+
+The formats are a promise within a major version: a later release of the
+same major version reads what an earlier one wrote. A format may gain
+versions and kinds, and older ones keep loading. The module documentation
+has a complete custom backend.
+
 ### ObjectDatabase
 
 ```rust
