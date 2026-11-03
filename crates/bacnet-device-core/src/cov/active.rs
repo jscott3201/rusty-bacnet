@@ -108,7 +108,10 @@ impl ActiveCovSubscriptions {
         device: ObjectIdentifier,
         mut entries: Vec<ActiveCovEntry>,
     ) -> Self {
-        entries.sort_by(order);
+        // The order is total, so an unstable sort gives the same list, and
+        // links no 64-bit division on a 32-bit target, as the stable one's
+        // run-length scale does.
+        entries.sort_unstable_by(order);
         let subscriptions: Vec<_> = entries
             .into_iter()
             .filter_map(|entry| {
