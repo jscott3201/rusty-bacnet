@@ -68,6 +68,7 @@ pub mod property_metadata;
 pub(crate) mod reference;
 pub(crate) mod reliability_inhibit;
 pub mod schedule;
+pub mod snapshot;
 pub mod staging;
 pub mod subscribed_recipients;
 pub mod timer;

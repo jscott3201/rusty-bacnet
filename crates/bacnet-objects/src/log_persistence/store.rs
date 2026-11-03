@@ -183,7 +183,7 @@ impl<R: SnapshotRecord> LogStore<R> {
                     "log snapshot belongs to another object".into(),
                 ));
             }
-            codec::validate(snapshot)?;
+            codec::validate(snapshot).map_err(|error| Error::from(error.in_format(codec::WHAT)))?;
         }
         let last_failed = Arc::new(AtomicBool::new(false));
         let failed = Arc::clone(&last_failed);

@@ -76,7 +76,12 @@ impl FileTagsPersistence {
     /// Use the explicit `path` for this object's snapshot.
     pub fn new(path: impl AsRef<Path>) -> Result<Self, Error> {
         Ok(Self {
-            file: ObjectFile::new(path.as_ref(), MAGIC, MAX_TAGS_SNAPSHOT_BYTES as u64, "Tags")?,
+            file: ObjectFile::new(
+                path.as_ref(),
+                MAGIC,
+                MAX_TAGS_SNAPSHOT_BYTES as u64,
+                "Tags file",
+            )?,
         })
     }
 
