@@ -196,7 +196,7 @@ async fn a_single_read_shows_the_rules_broken_unless_strict() {
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("ZeroFirstSequenceNumber"), "{stderr}");
+    assert!(stderr.contains("first sequence number 0"), "{stderr}");
     task.abort();
 }
 
@@ -230,10 +230,7 @@ async fn all_prints_what_it_read_and_where_to_resume_before_an_error() {
     assert_eq!(json["pages"], serde_json::json!(1));
     assert_eq!(json["next"], serde_json::json!("--sequence 3"));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("Abort { reason: AbortReason::TSM_TIMEOUT }"),
-        "{stderr}"
-    );
+    assert!(stderr.contains("BACnet abort: tsm-timeout"), "{stderr}");
     task.abort();
 }
 

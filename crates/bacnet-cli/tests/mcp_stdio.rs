@@ -292,3 +292,31 @@ fn the_bundle_smoke_profile_serves_the_manifests_tools() {
     listed.sort_unstable();
     assert_eq!(served, listed);
 }
+
+/// A refusal reads as plain text on stderr, as an agent host's log shows
+/// it: no Debug quotes around the message and no doubled backslashes in a
+/// Windows path, and the exit code is 1 (#2325).
+#[test]
+fn a_refusal_prints_plain_text_and_exits_1() {
+    let config = store(PROFILE);
+    let output = bacnet(Some(config.path()))
+        .args(["mcp", "serve", "--stdio", "--profile", "other"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let lines: Vec<&str> = stderr.lines().collect();
+    assert_eq!(lines.len(), 1, "{stderr}");
+    let line = lines[0].trim_end_matches('\r');
+    assert!(
+        line.starts_with("Error: no profile named other in "),
+        "{line}"
+    );
+    assert!(!line.ends_with('"'), "{line}");
+    assert!(!line.contains("\\\\") && !line.contains("\\\""), "{line}");
+    // The store's path as the OS spells it, separators unescaped.
+    let profiles = config.path().join("profiles");
+    assert!(line.contains(&*profiles.to_string_lossy()), "{line}");
+}

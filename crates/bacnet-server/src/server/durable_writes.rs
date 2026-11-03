@@ -4,9 +4,10 @@
 //! Subscribed_Recipients, a Notification Class a written Recipient_List
 //! (#1315), an Access Rights object a written rule array, Enable (#1392) or
 //! Accompaniment (#1393), an Audit Log a Log_Enable or Buffer_Size change,
-//! a Timer or Channel the configuration a peer writes to it (#2243), and a
-//! Color or Color Temperature a written default (#1956), before serving it,
-//! and refuses the write if the save fails. So
+//! a Timer or Channel the configuration a peer writes to it (#2243), a
+//! Color or Color Temperature a written default (#1956), and a Trend Log,
+//! Trend Log Multiple or Event Log a written reporting setting (#1952),
+//! before serving it, and refuses the write if the save fails. So
 //! that the save never runs while the database guard is held, a request
 //! that makes such a write stages it first ([`DurableWrites`]): under the
 //! guard the object queues the save, the request awaits it with the guard
@@ -87,8 +88,10 @@ enum TargetValue {
 /// (property 133, named `LOG_ENABLE`) and Accompaniment, a Timer its
 /// State_Change_Values and List_Of_Object_Property_References, and a
 /// Channel its members, Execution_Delay, Channel_Number, Control_Groups and
-/// Allow_Group_Delay_Inhibit (#2243), and a colour object its default
-/// (#1956), with Tags as the other objects with a profile do. Under a policy
+/// Allow_Group_Delay_Inhibit (#2243), a colour object its default
+/// (#1956), with Tags as the other objects with a profile do, and the three
+/// logs the reporting settings they keep (#1952), a Trend Log its two COV
+/// settings too. Under a policy
 /// that decides mutations, only these attempts of a WritePropertyMultiple are decided
 /// ahead of the handler (#1321).
 ///
@@ -151,8 +154,31 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
                 | PropertyIdentifier::CONTROL_GROUPS
                 | PropertyIdentifier::ALLOW_GROUP_DELAY_INHIBIT
         ),
+        ObjectType::TREND_LOG => {
+            log_reporting(property)
+                || matches!(
+                    property,
+                    PropertyIdentifier::CLIENT_COV_INCREMENT
+                        | PropertyIdentifier::COV_RESUBSCRIPTION_INTERVAL
+                )
+        }
+        ObjectType::TREND_LOG_MULTIPLE | ObjectType::EVENT_LOG => log_reporting(property),
         _ => false,
     }
+}
+
+/// The reporting settings every log keeps once written (#1952).
+fn log_reporting(property: PropertyIdentifier) -> bool {
+    matches!(
+        property,
+        PropertyIdentifier::NOTIFICATION_CLASS
+            | PropertyIdentifier::EVENT_ENABLE
+            | PropertyIdentifier::NOTIFY_TYPE
+            | PropertyIdentifier::EVENT_DETECTION_ENABLE
+            | PropertyIdentifier::EVENT_MESSAGE_TEXTS_CONFIG
+            | PropertyIdentifier::EVENT_ALGORITHM_INHIBIT_REF
+            | PropertyIdentifier::EVENT_ALGORITHM_INHIBIT
+    )
 }
 
 /// The value type of `property` on a bundled object of `oid`'s type. No

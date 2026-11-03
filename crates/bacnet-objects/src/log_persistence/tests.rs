@@ -203,6 +203,7 @@ fn trend_snapshot(generation: u64) -> LogSnapshot<BACnetLogRecord> {
             interval_offset: 20,
         }),
         log_device_object_property: vec![reference(1)],
+        reporting: LogReportingSettings::default(),
     }
 }
 
@@ -224,6 +225,7 @@ fn event_snapshot(generation: u64) -> LogSnapshot<BACnetEventLogRecord> {
         stop_time: (DATE, at(23)),
         acquisition: None,
         log_device_object_property: Vec::new(),
+        reporting: LogReportingSettings::default(),
     }
 }
 
@@ -251,6 +253,7 @@ fn multiple_snapshot(generation: u64) -> LogSnapshot<BACnetLogMultipleRecord> {
             interval_offset: 0,
         }),
         log_device_object_property: vec![reference(1), reference(2)],
+        reporting: LogReportingSettings::default(),
     }
 }
 

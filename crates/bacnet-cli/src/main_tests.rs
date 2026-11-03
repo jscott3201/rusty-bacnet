@@ -152,3 +152,44 @@ async fn a_bip6_address_target_resolves_to_the_vmac_there() {
     client.stop().await.unwrap();
     server.stop().await.unwrap();
 }
+
+/// An error whose message leaves out its source, as a library's might.
+#[derive(Debug)]
+struct Outer(std::io::Error);
+
+impl std::fmt::Display for Outer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("could not open the store")
+    }
+}
+
+impl std::error::Error for Outer {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
+fn reported(error: &dyn std::error::Error) -> String {
+    let mut out = Vec::new();
+    report(error, &mut out).unwrap();
+    String::from_utf8(out).unwrap()
+}
+
+/// A fatal error prints with Display, not Debug's quotes and escapes
+/// (#2325); a source its message drops follows after `: `, and one it
+/// already holds isn't repeated.
+#[test]
+fn a_fatal_error_reports_with_display_and_its_sources() {
+    let plain: Box<dyn std::error::Error> = r#"no profile in C:\cfg: run "x""#.into();
+    assert_eq!(
+        reported(&*plain),
+        "Error: no profile in C:\\cfg: run \"x\"\n"
+    );
+    let dropped = Outer(std::io::Error::other("denied"));
+    assert_eq!(
+        reported(&dropped),
+        "Error: could not open the store: denied\n"
+    );
+    let held = bacnet_types::error::Error::Transport(std::io::Error::other("denied"));
+    assert_eq!(reported(&held), "Error: transport error: denied\n");
+}

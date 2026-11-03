@@ -148,8 +148,10 @@ struct StagedWrite<S, N> {
     /// The state the object served at its latest storage call, a step it
     /// took included: what storage goes back to if the staged write is
     /// dropped before [`correct`](StagedSaves::correct) can ask for a fresh
-    /// one, as when the object itself is dropped.
-    served: S,
+    /// one, as when the object itself is dropped. `None` for a write staged
+    /// with [`stage_snapshot`](StagedSaves::stage_snapshot), whose object
+    /// puts storage back itself.
+    served: Option<S>,
     /// Set when the staged write is taken or dropped, for a request that
     /// found the object busy.
     released: Arc<Event>,
@@ -170,9 +172,9 @@ pub(crate) struct StagedSaves<S: Send + 'static, N> {
     staged: Option<StagedWrite<S, N>>,
     /// A staged write was dropped whose save did not fail, so storage may
     /// hold a state the object never served: the served state that write
-    /// kept. [`correct`](Self::correct) saves a fresh snapshot instead; a
-    /// drop saves this one.
-    correction: Option<S>,
+    /// kept, if it kept one. [`correct`](Self::correct) saves a fresh
+    /// snapshot instead; a drop saves this one.
+    correction: Option<Option<S>>,
 }
 
 impl<S: Send + 'static, N> StagedSaves<S, N> {
@@ -235,11 +237,40 @@ impl<S: Send + 'static, N> StagedSaves<S, N> {
         for step in &steps {
             apply(&mut snapshot, &step.next);
         }
+        self.stage_saving(steps, base, snapshot, Some(served))
+    }
+
+    /// Stage `steps` as [`stage`](Self::stage) does, saving `snapshot`,
+    /// which the caller built with every step's state in it, and keeping no
+    /// served state beside them. The caller puts storage back itself once a
+    /// dropped staged write leaves a correction due
+    /// ([`take_correction`](Self::take_correction)): a durable log commits
+    /// the state it serves then, records included, rather than have a copy
+    /// of them kept for the whole stage (#1952).
+    pub(crate) fn stage_snapshot(
+        &mut self,
+        steps: Vec<Step<N>>,
+        base: u64,
+        snapshot: S,
+    ) -> StageStep {
+        if steps.is_empty() {
+            return StageStep::Skip;
+        }
+        self.stage_saving(steps, base, snapshot, None)
+    }
+
+    fn stage_saving(
+        &mut self,
+        steps: Vec<Step<N>>,
+        base: u64,
+        snapshot: S,
+        served: Option<S>,
+    ) -> StageStep {
         // A correction still due lands first, should this save fail. Today's
         // callers can't reach this with one due: each stage follows a `busy`
-        // check through `correct`, which queues it. The check stays for a
-        // caller that stages without one.
-        if let Some(correction) = self.correction.take() {
+        // check through `correct`, or the log's own correction, which queues
+        // it. The check stays for a caller that stages without one.
+        if let Some(Some(correction)) = self.correction.take() {
             self.writer.submit_coalescing(correction);
         }
         let ticket = self.writer.submit(snapshot);
@@ -371,7 +402,7 @@ impl<S: Send + 'static, N> StagedSaves<S, N> {
         if self.take_correction() {
             self.writer.submit_coalescing(served());
         } else if let Some(staged) = self.staged.as_mut() {
-            staged.served = served();
+            staged.served = Some(served());
         }
     }
 
@@ -395,6 +426,12 @@ impl<S: Send + 'static, N> StagedSaves<S, N> {
         self.writer.wait_idle();
     }
 
+    /// The owner is going away; see `SaveWriter::closing`.
+    #[cfg(feature = "test-support")]
+    pub(crate) fn closing(&mut self) {
+        self.writer.closing();
+    }
+
     /// The writer, for tests that look at its thread.
     // std: for tests that look at the writer thread.
     #[cfg(all(test, feature = "std"))]
@@ -409,7 +446,7 @@ impl<S: Send + 'static, N> Drop for StagedSaves<S, N> {
     /// it kept before the writer, dropped next, waits for its thread (#1363).
     fn drop(&mut self) {
         self.drop_staged();
-        if let Some(served) = self.correction.take() {
+        if let Some(Some(served)) = self.correction.take() {
             self.writer.put_back(served);
         }
     }
