@@ -92,12 +92,21 @@ test('the server page states the limits the source defines', async () => {
   const field = name => Number(defaults.match(new RegExp(`${name}: (\\d+),`))[1]);
   const create = await readCrate('bacnet-server/src/handlers/object_mgmt.rs');
   const objects = Number(create.match(/const MAX_OBJECTS: usize = ([\d_]+);/)[1].replaceAll('_', ''));
+  const admission = await readCrate('bacnet-server/src/server/request_admission.rs');
+  const admissionDefaults = admission.slice(admission.indexOf('impl Default for RequestAdmissionPolicy'));
+  const limit = name => Number(admissionDefaults.match(new RegExp(`${name}: (\\d+),`))[1]);
+  const reserve = limit('confirmed_recovery_reserve');
+  const abortWorkers = Number(admission.match(/Pool::new\((\d+), \1\),/)[1]);
   const { body } = await page('integrate/server');
   const grouped = n => n.toLocaleString('en-US');
   for (const row of [
     `| COV subscriptions, all peers | ${grouped(field('max_subscriptions_global'))} |`,
     `| COV subscriptions, one peer | ${field('max_subscriptions_per_peer')} |`,
     `| Objects created by CreateObject | Until the database holds ${grouped(objects)} objects |`,
+    `| Confirmed requests being handled, all peers | ${limit('max_confirmed_in_flight') - reserve}, plus ${reserve} kept for DeviceCommunicationControl recovery |`,
+    `| Confirmed requests being handled, one peer | ${limit('max_confirmed_in_flight_per_peer')} |`,
+    `from one of ${abortWorkers} Abort workers; if all ${abortWorkers} are busy`,
+    `plus the reserve of ${reserve}, with headroom`,
   ]) assert.ok(body.includes(row), row);
 });
 
