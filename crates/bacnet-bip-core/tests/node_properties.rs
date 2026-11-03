@@ -143,6 +143,7 @@ impl World {
                 }
                 Action::Registration(_) | Action::ReleaseHeld | Action::DiscardHeld => {}
                 Action::ExchangeEnded { .. } => panic!("no manual exchanges here"),
+                Action::ReleasePrevious { .. } => panic!("no moves here"),
             }
         }
     }

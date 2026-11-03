@@ -7,8 +7,8 @@ use std::time::Duration;
 use bacnet_bip_codec::BvlcResultCode;
 use bacnet_bip_core::node::{AttemptOutcome, ExchangeCounters, NodeCounters, Operation};
 
-use super::BbmdLookupFailure;
 use super::node::NodeHandle;
+use crate::bbmd_lookup::BbmdLookupFailure;
 
 /// One management function's locally observed exchanges, cumulative across
 /// stop/start on the same transport. Counts saturate at `u64::MAX`.
@@ -117,7 +117,9 @@ pub struct ForeignRegistrationSnapshot {
     /// Requests to delete this device's entry from a BBMD it moved away
     /// from, made because
     /// [`set_release_previous_bbmd`](super::BipTransport::set_release_previous_bbmd)
-    /// is on (#1852).
+    /// is on (#1852): the node engine's count
+    /// ([`NodeCounters::previous_releases`], #2307). Each one sent also
+    /// counts in `delete_fdt_entry`.
     pub previous_releases: u64,
     /// Of those, the ones the old BBMD answered with success.
     pub previous_released: u64,
@@ -282,48 +284,6 @@ impl ClientRecord {
         snapshot
     }
 
-    /// A request to delete this device's entry from the BBMD it left was
-    /// made.
-    pub(super) fn release_started(&self) {
-        let mut snapshot = self.lock();
-        let foreign = &mut snapshot.foreign_registration;
-        foreign.previous_releases = foreign.previous_releases.saturating_add(1);
-    }
-
-    /// What came of a request [`release_started`](Self::release_started)
-    /// counted, sent to `bbmd`: counted, and logged.
-    pub(super) fn release_ended(
-        &self,
-        bbmd: SocketAddrV4,
-        result: &Result<(), super::BvlcExchangeError>,
-    ) {
-        let mut snapshot = self.lock();
-        let foreign = &mut snapshot.foreign_registration;
-        let count = match result {
-            Ok(()) => {
-                tracing::debug!(%bbmd, "The BBMD this foreign device left deleted its entry");
-                &mut foreign.previous_released
-            }
-            Err(super::BvlcExchangeError::Nak(code)) => {
-                tracing::info!(
-                    %bbmd,
-                    %code,
-                    "The BBMD this foreign device left refused to delete its entry; it lapses on its own"
-                );
-                &mut foreign.previous_release_refused
-            }
-            Err(error) => {
-                tracing::info!(
-                    %bbmd,
-                    %error,
-                    "The BBMD this foreign device left did not confirm deleting its entry; it lapses on its own"
-                );
-                &mut foreign.previous_release_unanswered
-            }
-        };
-        *count = count.saturating_add(1);
-    }
-
     /// A lookup of the BBMD's host name ended: it failed with `failure`, or
     /// succeeded.
     pub(super) fn bbmd_lookup_ended(&self, failure: Option<BbmdLookupFailure>) {
@@ -376,6 +336,16 @@ impl ClientRecord {
         add(
             &mut foreign.broadcasts_unregistered,
             counters.broadcasts_unregistered,
+        );
+        add(&mut foreign.previous_releases, counters.previous_releases);
+        add(&mut foreign.previous_released, counters.previous_released);
+        add(
+            &mut foreign.previous_release_refused,
+            counters.previous_release_refused,
+        );
+        add(
+            &mut foreign.previous_release_unanswered,
+            counters.previous_release_unanswered,
         );
         add(
             &mut snapshot.unmatched_responses,

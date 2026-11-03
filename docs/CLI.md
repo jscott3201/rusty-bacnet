@@ -55,6 +55,7 @@ macOS and Windows ones don't yet (see [MS/TP](#mstp)).
 | `--foreign-bbmd <ADDR>` | | Run as a foreign device registered with this BBMD (`ip` or `ip:port`), so broadcasts reach its network; BACnet/IP only. See [Foreign-device mode](#foreign-device-mode) |
 | `--ttl <N>` | `300` | Time-to-live in seconds of a foreign-device registration, for `--foreign-bbmd`, `register` and `discover --bbmd` |
 | `--renewal <SECS>` | half the TTL | Seconds between `--foreign-bbmd` registrations, less than `--ttl` |
+| `--nat-global-address <IP:PORT>` | | Our address and port as the `--foreign-bbmd` BBMD records them when a NAT router translates the registration. The TUI's Network screen finds our FDT entry there; nothing sent changes. Needs `--foreign-bbmd` (or a named TUI profile with a BBMD) |
 | `--bip-multicast <GROUP>` | | Join this IPv4 multicast group (class D) as a B/IP-M node: broadcasts go to the group and only the group's are taken. Needs `--interface`; BACnet/IP only, not with `--foreign-bbmd`. See [Multicast mode](#multicast-mode) |
 | `--bip-multicast-ttl <TTL>` | `1` | Multicast TTL for `--bip-multicast`, 1 to 255; raise it for a group that spans IP routers |
 | `--bip-multicast-port <PORT>` | `--port` | UDP port of the `--bip-multicast` group; needed with `--port 0`, and for several stacks on one host at one address |
@@ -384,7 +385,8 @@ accepts the ones shown, and the check runs again just before the dial.
 The preview shows the settings after CLI overrides. Explicit values win even
 when equal to defaults, such as `--port 47808`, `--timeout 6000` or
 `--min-interval-ms 0`. They are not written to the profile by a connection or
-an authorization save. `--renewal` may use a named profile's saved BBMD.
+an authorization save. `--renewal` and `--nat-global-address` may use a named
+profile's saved BBMD.
 
 On first use, `a` explicitly attests that you are authorized to use BACnet on
 the displayed network. Its timestamp must be saved successfully before the
@@ -427,6 +429,7 @@ min_interval_ms = 0
 ttl = 300
 # bbmd = "127.0.0.2:47808"
 # renewal_secs = 30
+# nat_global_address = "203.0.113.7:61000"  # needs bbmd; display only
 
 [safety]
 writes = "session"
@@ -596,9 +599,17 @@ tables. With `--foreign-bbmd` (or a profile with a BBMD) the panel shows the
 BBMD, the TTL, the last BVLC-Result, a countdown to the next registration and
 the lease left; a refused registration raises a red banner on every screen.
 Once the BBMD accepts, the TUI reads its FDT and shows the entry the BBMD
-recorded for us, the address it forwards broadcasts to; when no entry has our
-address, a NAT router may have rewritten it. `:bbmd ADDRESS` reads any other
-BBMD, and `:bbmd` alone goes back to ours, as the footer says meanwhile. Tab
+recorded for us, the address it forwards broadcasts to. Behind a NAT router
+the BBMD records the router's address instead: give it with
+`--nat-global-address IP:PORT` (or `nat_global_address` in the profile), and
+the entry at that address is marked as ours (`us, via NAT` in the FDT, and
+`NAT-translated from` our local address in the panel, or `via NAT` when the
+line is short). It wins over an entry at our local address, which may be
+another site's device on the same private range or a stale entry; without
+the option, or with no entry at it, the local entry is ours. When neither
+address has an entry, the panel names both addresses, or, with no global
+address set, our own and the option. `:bbmd ADDRESS` reads any other BBMD,
+and `:bbmd` alone goes back to ours, as the footer says meanwhile. Tab
 switches between the BDT, with what each entry's mask means for forwarding,
 the FDT, with each entry's seconds left (`!` and `expiring` under 30 s), and
 the consistency matrix; `r` reads again. `m` reads the BDT of every BBMD the
@@ -1808,7 +1819,10 @@ A one-shot command waits for the BBMD to answer the first registration and
 fails if it refuses or doesn't answer. The TUI reports the outcome, keeps
 trying either way, and shows the registration on its Network screen.
 Behind NAT, keep `--renewal` short so the mapping the BBMD's replies come back
-on stays open; the TTL can stay long. While the transport manages the
+on stays open; the TTL can stay long. If you know the address and port the NAT
+router gives the registration, `--nat-global-address IP:PORT` lets the TUI's
+Network screen find our FDT entry there; it is a display hint only, and changes
+neither the registration nor anything else sent. While the transport manages the
 registration, `register` and `unregister` to that BBMD are refused; use
 another BBMD or a normal-mode CLI. With `--foreign-bbmd`, log lines go to
 stderr so they can't corrupt JSON output.
@@ -1989,8 +2003,9 @@ Flag mistakes are usage errors: the CLI exits with status 2 before opening the
 port and prints nothing on stdout, and the message on stderr names the values
 the flag takes. That includes an empty port name and, on either side of the
 subcommand, any B/IP, B/IPv6 or BACnet/SC flag (`-i`, `-p`, `-b`,
-`--foreign-bbmd`, `--ttl`, `--renewal`, `--ipv6*`, `--device-instance`,
-`--sc*`), which MS/TP would otherwise ignore. A port that can't be opened exits with status 1.
+`--foreign-bbmd`, `--ttl`, `--renewal`, `--nat-global-address`, `--ipv6*`,
+`--device-instance`, `--sc*`), which MS/TP would otherwise ignore. A port that
+can't be opened exits with status 1.
 
 The station runs its token handling on a dedicated thread. Its timing defaults
 suit a USB adapter: it waits up to 100 ms for the rest of a frame, and its

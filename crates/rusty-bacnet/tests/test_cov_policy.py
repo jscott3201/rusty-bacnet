@@ -81,7 +81,9 @@ class CovPolicyRuntimeTests(unittest.IsolatedAsyncioTestCase):
             address = await server.local_address()
             async with local_client() as ordinary, local_client(reserved_port) as reserved:
                 no_space = (ErrorClass.RESOURCES, ErrorCode.NO_SPACE_TO_ADD_LIST_ELEMENT)
-                unsupported = (ErrorClass.SERVICES, ErrorCode.OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED)
+                # Indefinite lifetimes are optional; one the device doesn't
+                # take is out of its range (Clause 13.14.1.3.1, #2317).
+                out_of_range = (ErrorClass.SERVICES, ErrorCode.VALUE_OUT_OF_RANGE)
 
                 async def refused(client, process_id, lifetime, error):
                     with self.assertRaises(BacnetProtocolError) as caught:
@@ -97,7 +99,7 @@ class CovPolicyRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 counters = await server.cov_counters()
                 self.assertEqual(counters["subscriptions_rejected_quota"], 1)
                 # Indefinite lifetimes are refused outright, before any quota.
-                await refused(ordinary, 4, None, unsupported)
+                await refused(ordinary, 4, None, out_of_range)
                 counters = await server.cov_counters()
                 self.assertEqual(counters["subscriptions_rejected_indefinite"], 1)
 

@@ -41,7 +41,7 @@ const PUMP_LIMIT: Duration = Duration::from_secs(45);
 
 /// A BBMD on loopback whose own device is `instance`; it takes foreign
 /// devices when `accept` is set.
-async fn bbmd_server(instance: u32, accept: bool) -> BACnetServer<BipTransport> {
+pub(super) async fn bbmd_server(instance: u32, accept: bool) -> BACnetServer<BipTransport> {
     let identity = DeviceIdentity::new(instance, 0).unwrap();
     let mut db = ObjectDatabase::new();
     let device = DeviceObject::new(DeviceConfig {
@@ -65,7 +65,7 @@ async fn bbmd_server(instance: u32, accept: bool) -> BACnetServer<BipTransport> 
         .unwrap()
 }
 
-fn server_address(server: &BACnetServer<BipTransport>) -> SocketAddrV4 {
+pub(super) fn server_address(server: &BACnetServer<BipTransport>) -> SocketAddrV4 {
     address_of(server.local_mac()).unwrap()
 }
 
@@ -189,7 +189,7 @@ impl Net {
     }
 }
 
-fn local(app: &App) -> SocketAddrV4 {
+pub(super) fn local(app: &App) -> SocketAddrV4 {
     let Link::Up { local } = &app.link else {
         panic!("not connected");
     };
@@ -320,6 +320,8 @@ async fn registration_counts_down_renews_in_time_and_finds_our_fdt_entry() {
     net.pump_until("our FDT entry", |app| app.network.own.is_some())
         .await;
     let own = net.app.network.own.unwrap();
+    assert!(!own.translated);
+    let own = own.index;
     let fdt = net
         .app
         .network

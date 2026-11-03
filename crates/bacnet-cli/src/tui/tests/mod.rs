@@ -13,7 +13,8 @@
 //! - `load`: a 1,000 events/s burst, and the render-time budget.
 //! - `event_loop`: the `select!` loop on a `TestBackend` with scripted input.
 //! - `network`: the Network screen against real B/IP transports and BBMDs
-//!   on loopback; `network_frames`: its frames from synthetic events.
+//!   on loopback; `network_frames`: its frames from synthetic events;
+//!   `network_nat`: our FDT entry behind a NAT router.
 //! - `discovery`: the `:find` panel and the Networks tab, from synthetic
 //!   events and against a real BBMD and `BACnetRouter`.
 //! - `sc_profiles`: profiles created through the screen and reloaded, the
@@ -103,6 +104,7 @@ mod names_filter;
 mod names_site;
 mod network;
 mod network_frames;
+mod network_nat;
 mod network_notes;
 mod passive_discovery;
 mod passive_lifecycle;

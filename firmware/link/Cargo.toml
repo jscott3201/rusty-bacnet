@@ -83,6 +83,20 @@ name = "objects"
 path = "tests/objects.rs"
 required-features = ["objects"]
 
+# The objects image's database with bacnet-device-core's COV table on top:
+# subscribe, renew and cancel through its staged functions (#2303).
+[[bin]]
+name = "reporting"
+path = "src/bin/reporting.rs"
+test = false
+bench = false
+required-features = ["reporting"]
+
+[[test]]
+name = "reporting"
+path = "tests/reporting.rs"
+required-features = ["reporting"]
+
 # `alloc`: the apdu image and its scenario, which link bacnet-encoding and
 # bacnet-services with `alloc` (the device image links them without it),
 # and on bare-metal targets
@@ -92,7 +106,7 @@ required-features = ["objects"]
 # (`--no-default-features`): with it, the lib links `alloc`, and an image
 # without a global allocator fails to link.
 [features]
-default = ["alloc", "objects"]
+default = ["alloc", "objects", "reporting"]
 alloc = [
     "bacnet-types/alloc",
     "bacnet-encoding/alloc",
@@ -115,6 +129,14 @@ alloc = [
 # `structured-writes` (#2210) stays off too: the image writes no event
 # parameter, port permission or stage limit, so it drops their decoders.
 objects = ["alloc", "dep:bacnet-objects", "dep:bacnet-device-core"]
+
+# `reporting`: the reporting image and its scenario (#2303), the objects
+# image's database and bacnet-device-core's COV table, which subscribes,
+# renews and cancels through the core's staged functions. Its timeline is
+# bacnet-time's. bacnet-device-core has no `cov` feature: the linker drops
+# the COV code an image doesn't reach, so the objects image is no smaller
+# without it. On by default, as `objects` is, for the host builds.
+reporting = ["objects", "dep:bacnet-time"]
 
 # `emulate`: the emulation build, which scripts/emu/emulate-firmware.sh runs
 # under QEMU by hand, never in CI (docs/ci.md, "Emulation (manual)"). Each
@@ -158,6 +180,7 @@ bacnet-services = { workspace = true }
 bytes = { workspace = true, optional = true }
 bacnet-objects = { workspace = true, optional = true, features = ["alloc"] }
 bacnet-device-core = { workspace = true, optional = true, features = ["alloc"] }
+bacnet-time = { workspace = true, optional = true }
 
 # The host test runs the alloc scenario in the image's allocator, a
 # linked-list first fit, over an arena of the image's size.

@@ -266,6 +266,9 @@ fn bip_lines<'a>(profile: &Profile, lines: &mut Vec<Line<'a>>, theme: &Theme) {
             b.renewal_secs
                 .map_or_else(|| "half TTL".into(), |n| format!("{n} s"))
         )));
+        if let Some(global) = b.nat_global_address {
+            lines.push(Line::raw(format!("NAT global address: {global}")));
+        }
         lines.push(Line::styled(
             "Local connection does not prove BBMD acceptance; see L log.",
             theme.dim(),

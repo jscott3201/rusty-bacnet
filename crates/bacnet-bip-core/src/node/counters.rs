@@ -97,6 +97,19 @@ pub struct NodeCounters {
     pub broadcasts_hold_full: u32,
     /// Broadcasts sent while no lease was live.
     pub broadcasts_unregistered: u32,
+    /// Releases of the BBMD a move left, asked for by
+    /// [`Foreign::release_previous`](super::Foreign::release_previous): one
+    /// per move to another BBMD. Each also counts in
+    /// [`delete_fdt_entry`](Self::delete_fdt_entry) once admitted.
+    pub previous_releases: u32,
+    /// Of those, answered with success: the old BBMD deleted the entry.
+    pub previous_released: u32,
+    /// Of those, answered with the Delete-Foreign-Device-Table-Entry NAK.
+    pub previous_release_refused: u32,
+    /// Of those, unanswered by the response timeout, or never sent: no
+    /// exchange slot was free, the send failed, or the caller gave it up.
+    /// The old entry then lapses on its own.
+    pub previous_release_unanswered: u32,
 }
 
 impl NodeCounters {
