@@ -1312,6 +1312,19 @@ open ([perf-s1](benchmarks/results/perf-s1/README.md),
   until its reply is sent, so a client can briefly hold two, and refusals
   can start just below the limit.
 
+### 10.7 WriteProperty address copies (#2342)
+
+After S3 (section 10.6), WriteProperty still copied the writer's address
+one byte at a time, four times per request, while the commanded object
+tracked its Value_Source. `BACnetAddress` now copies its MAC at once, and a
+command no longer copies the published source just to compare it
+([benchmarks/results/perf-wp-clones](benchmarks/results/perf-wp-clones/README.md)).
+WriteProperty falls by about 500 instructions per request on both runtimes,
+with every pair lower and allocations unchanged; ReadProperty and
+ReadPropertyMultiple are not higher. The current-thread row missed the
+more-than-three-floors test in its matrix (floor 198.7, where recent
+matrices measured about 110).
+
 ## 11. How to reproduce
 
 Run one suite at a time on an idle machine. Each Criterion suite takes 1 to
