@@ -223,6 +223,10 @@ macro_rules! write_sourced_priority {
 pub(crate) use write_sourced_priority;
 
 #[cfg(test)]
+#[path = "tracking_differential_tests.rs"]
+mod differential_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]
