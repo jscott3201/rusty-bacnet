@@ -215,7 +215,7 @@ async fn a_translated_registration_is_found_at_the_global_address() {
     bip.interface = Ipv4Addr::LOCALHOST;
     bip.port = 0;
     bip.broadcast = Ipv4Addr::LOCALHOST;
-    bip.bbmd = Some(front);
+    bip.bbmd = Some(front.into());
     bip.ttl = 60;
     bip.nat_global_address = Some(global);
     let plan = ConnectPlan {

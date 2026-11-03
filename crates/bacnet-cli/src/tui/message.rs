@@ -102,6 +102,10 @@ impl WhoIsSpec {
 }
 
 /// UI to worker.
+// One command per operator action crosses the channel, so a profile's size
+// (two of them in a save, a BBMD host name in each, #2308) costs nothing
+// worth a box.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Command {
     /// Load, save or start a named B/IP profile.

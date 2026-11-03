@@ -16,8 +16,7 @@ async fn bip_builder_foreign_device_starts_without_waiting_for_bbmd_acceptance()
             .interface(Ipv4Addr::LOCALHOST)
             .port(0)
             .mode(BipMode::Foreign(ForeignDeviceConfig {
-                bbmd_ip: Ipv4Addr::LOCALHOST,
-                bbmd_port: peer.local_addr().unwrap().port(),
+                bbmd: (Ipv4Addr::LOCALHOST, peer.local_addr().unwrap().port()).into(),
                 ttl: 60,
                 renewal_interval: Some(Duration::from_secs(20)),
             }))
@@ -48,8 +47,7 @@ async fn bip_builder_foreign_device_validates_settings_before_io() {
             .interface(Ipv4Addr::new(192, 0, 2, 1))
             .port(0)
             .mode(BipMode::Foreign(ForeignDeviceConfig {
-                bbmd_ip: Ipv4Addr::LOCALHOST,
-                bbmd_port: 47808,
+                bbmd: (Ipv4Addr::LOCALHOST, 47808).into(),
                 ttl,
                 renewal_interval: interval,
             }))
@@ -81,8 +79,7 @@ async fn foreign_client_answered_with(
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .mode(BipMode::Foreign(ForeignDeviceConfig {
-            bbmd_ip: Ipv4Addr::LOCALHOST,
-            bbmd_port: bbmd.local_addr().unwrap().port(),
+            bbmd: (Ipv4Addr::LOCALHOST, bbmd.local_addr().unwrap().port()).into(),
             ttl: 60,
             renewal_interval,
         }))
@@ -338,8 +335,7 @@ async fn bip_builder_hands_the_transport_its_resolver_and_release() {
         .interface(Ipv4Addr::LOCALHOST)
         .port(0)
         .mode(BipMode::Foreign(ForeignDeviceConfig {
-            bbmd_ip: Ipv4Addr::LOCALHOST,
-            bbmd_port: old.local_addr().unwrap().port(),
+            bbmd: (Ipv4Addr::LOCALHOST, old.local_addr().unwrap().port()).into(),
             ttl: 60,
             renewal_interval: None,
         }))

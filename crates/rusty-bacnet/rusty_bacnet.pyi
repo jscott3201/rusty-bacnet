@@ -2687,11 +2687,14 @@ class ForeignDevice:
     ``BACnetClient``, ``BACnetServer`` and ``BipEndpoint`` (B/IP), and of
     ``BACnetClient`` and ``BACnetServer`` with ``transport="ipv6"`` (#1941).
 
-    ``bbmd`` names a B/IP BBMD as ``"ip"`` or ``"ip:port"``, or a B/IPv6 one
-    as ``"ip"``, ``"[ip]"`` or ``"[ip]:port"`` (port 47808 by default; an
-    IPv6 port needs the brackets, since ``"2001:db8::10:4780"`` is read as a
-    bare address); the owner's transport must match, else its constructor
-    raises ValueError. A B/IPv6
+    ``bbmd`` names a B/IP BBMD as ``"ip"``, ``"host"`` or either with
+    ``":port"``, or a B/IPv6 one as ``"ip"``, ``"[ip]"`` or ``"[ip]:port"``
+    (port 47808 by default; an IPv6 port needs the brackets, since
+    ``"2001:db8::10:4780"`` is read as a bare address); the owner's
+    transport must match, else its constructor raises ValueError. A host
+    name (B/IP only, #2308) is looked up when the owner starts and again
+    alongside its registrations; one that doesn't resolve still starts the
+    owner, whose registration waits, tried again every 30 seconds. A B/IPv6
     BBMD must be a unicast host: an unspecified, multicast, link-local,
     IPv4-mapped or IPv4-compatible address, a zone index or port 0 raises
     ValueError saying which. ``ttl`` is how many seconds the BBMD keeps the

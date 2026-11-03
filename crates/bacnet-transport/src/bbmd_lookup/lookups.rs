@@ -69,10 +69,11 @@ pub(crate) struct Lookups {
 }
 
 impl Lookups {
-    pub(crate) fn new(resolver: Arc<dyn BbmdResolver>) -> Self {
+    /// Lookups with `resolver`, of `name` if the BBMD is configured by one.
+    pub(crate) fn new(resolver: Arc<dyn BbmdResolver>, name: Option<BbmdName>) -> Self {
         Self {
             resolver,
-            name: None,
+            name,
             generation: 0,
             running: None,
             rerun: false,
@@ -206,17 +207,18 @@ impl Lookups {
 }
 
 /// Where a lookup's `answers`, the ones of the transport's family in the
-/// order given, put the BBMD now at `current`: `None` to stay, while it is
-/// still among them, or else the first one `usable` takes. Failing that,
+/// order given, put the BBMD now at `current` (`None` when it has no
+/// address yet): `None` to stay, while it is still among them, or else the
+/// first one `usable` takes. Failing that,
 /// [`BbmdLookupFailure::Unusable`] with the first of them, or
 /// [`BbmdLookupFailure::NoAddress`] when there are none.
 pub(crate) fn choose<A: Copy + PartialEq>(
     answers: &[A],
-    current: A,
+    current: Option<A>,
     usable: impl Fn(A) -> bool,
     ip: impl Fn(A) -> IpAddr,
 ) -> Result<Option<A>, BbmdLookupFailure> {
-    if answers.contains(&current) {
+    if current.is_some_and(|current| answers.contains(&current)) {
         return Ok(None);
     }
     if let Some(found) = answers.iter().copied().find(|answer| usable(*answer)) {
@@ -322,7 +324,7 @@ mod tests {
         let pick = |answers: &[Ipv4Addr], usable: &[Ipv4Addr]| {
             choose(
                 answers,
-                ip(1),
+                Some(ip(1)),
                 |answer| usable.contains(&answer),
                 IpAddr::V4,
             )
@@ -337,5 +339,8 @@ mod tests {
             Err(BbmdLookupFailure::Unusable(ip(2).into()))
         );
         assert_eq!(pick(&[], &[]), Err(BbmdLookupFailure::NoAddress));
+        // With no address yet, the device never stays.
+        let first = choose(&[ip(1)], None, |_| true, IpAddr::V4);
+        assert_eq!(first, Ok(Some(ip(1))));
     }
 }

@@ -6,8 +6,7 @@ async fn peer_and_transport() -> (UdpSocket, BipTransport) {
     let peer = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     transport.register_as_foreign_device(ForeignDeviceConfig {
-        bbmd_ip: Ipv4Addr::LOCALHOST,
-        bbmd_port: peer.local_addr().unwrap().port(),
+        bbmd: (Ipv4Addr::LOCALHOST, peer.local_addr().unwrap().port()).into(),
         ttl: 2,
         renewal_interval: Some(PERIOD),
     });
@@ -53,8 +52,7 @@ async fn foreign_mode_validation_precedes_interface_or_socket_io() {
         // A nonlocal interface would yield a transport error if validation ran late.
         let mut transport = BipTransport::new(Ipv4Addr::new(192, 0, 2, 1), 0, Ipv4Addr::BROADCAST);
         transport.register_as_foreign_device(ForeignDeviceConfig {
-            bbmd_ip: Ipv4Addr::LOCALHOST,
-            bbmd_port: 47808,
+            bbmd: (Ipv4Addr::LOCALHOST, 47808).into(),
             ttl,
             renewal_interval: interval,
         });
@@ -200,8 +198,7 @@ async fn foreign_mode_refuses_manual_requests_that_could_change_its_registration
 #[tokio::test]
 async fn foreign_mode_refuses_a_bbmd_no_device_could_register_with() {
     let foreign = |bbmd_ip, bbmd_port| ForeignDeviceConfig {
-        bbmd_ip,
-        bbmd_port,
+        bbmd: (bbmd_ip, bbmd_port).into(),
         ttl: 60,
         renewal_interval: None,
     };
@@ -426,8 +423,7 @@ async fn check_tiny_interval_pacing(busy: bool, local_error: bool) {
     let port = socket.local_addr().unwrap().port();
     let socket = Arc::new(BipSocket::recording(socket, sink.clone()));
     let config = ForeignDeviceConfig {
-        bbmd_ip: Ipv4Addr::LOCALHOST,
-        bbmd_port: 47808,
+        bbmd: (Ipv4Addr::LOCALHOST, 47808).into(),
         ttl: 2,
         renewal_interval: Some(Duration::from_nanos(1)),
     };

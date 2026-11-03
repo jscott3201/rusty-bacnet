@@ -902,12 +902,16 @@ async with BACnetClient(port=0, foreign_device=ForeignDevice(
     status = await client.foreign_registration()
 ```
 
-`ForeignDevice(bbmd, ttl=300, renewal=None)` takes the BBMD as `"ip"` or
-`"ip:port"` (port 47808 by default), how many seconds the BBMD keeps the entry (at least
+`ForeignDevice(bbmd, ttl=300, renewal=None)` takes the BBMD as `"ip"`, `"host"` or
+either with `":port"` (port 47808 by default), how many seconds the BBMD keeps the entry (at least
 1), and the seconds between registrations, at least 0.1 and less than
 `ttl`; `None` renews at half the TTL. The owner registers when it starts and renews
 on its own; its first broadcasts wait for the first registration to be
-answered.
+answered. A host name (#2308) is looked up by the system's resolver when the owner
+starts, and again alongside the registrations at most every 30 seconds; the owner
+registers with the first IPv4 address it stands for. One that doesn't resolve still
+starts the owner: registration waits, broadcasts are held and then refused, and the
+name is tried again every 30 seconds.
 
 `foreign_device=` also works with `transport="ipv6"` on `BACnetClient` and
 `BACnetServer` (#1941): give `ForeignDevice` a B/IPv6 BBMD as `"ip"`,

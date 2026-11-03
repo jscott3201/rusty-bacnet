@@ -63,7 +63,9 @@ class OptionTests(unittest.TestCase):
         self.assertEqual(ForeignDevice("192.0.2.10:47809").ttl, 300)
 
     def test_foreign_device_refuses_bad_settings(self):
-        for kwargs in ({"bbmd": "nowhere"}, {"bbmd": "192.0.2.10:0"},
+        for kwargs in ({"bbmd": "no where"}, {"bbmd": "192.0.2.10:0"},
+                       {"bbmd": "bbmd.example:0"}, {"bbmd": "-bbmd"},
+                       {"bbmd": "999.1.1.1"},
                        {"bbmd": "0.0.0.0"}, {"bbmd": "255.255.255.255"},
                        {"bbmd": "224.0.0.1"}, {"bbmd": "192.0.2.10", "ttl": 0},
                        {"bbmd": "192.0.2.10", "ttl": 60, "renewal": 0},
@@ -76,6 +78,15 @@ class OptionTests(unittest.TestCase):
         for ttl in (-1, 65536):
             with self.subTest(ttl=ttl), self.assertRaises(OverflowError):
                 ForeignDevice("192.0.2.10", ttl=ttl)
+
+    def test_a_bbmd_may_be_a_host_name(self):
+        # B/IP only (#2308): looked up when the owner starts.
+        self.assertEqual(ForeignDevice("bbmd.example").bbmd, "bbmd.example:47808")
+        named = ForeignDevice("bbmd.example:47809", ttl=60, renewal=20)
+        self.assertEqual((named.bbmd, named.ttl, named.renewal),
+                         ("bbmd.example:47809", 60, 20))
+        self.assertEqual(repr(ForeignDevice("bbmd", ttl=60)),
+                         "ForeignDevice(bbmd='bbmd:47808', ttl=60, renewal=None)")
 
     def test_bbmd_keeps_its_settings(self):
         bbmd = Bbmd(["10.0.5.2", ("10.0.6.2:47809", "255.255.255.0")],
@@ -190,6 +201,34 @@ class LoopbackTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await server.foreign_registration())["attempts"], 0)
         finally:
             await server.stop()
+
+    async def test_a_bbmd_named_by_host_name_takes_the_registration(self):
+        # localhost stands for 127.0.0.1 on every host; B/IP keeps the IPv4
+        # answers (#2308).
+        server = BACnetServer(3104, interface="127.0.0.1", port=0,
+                              broadcast_address="127.0.0.1",
+                              bbmd=Bbmd(accept_foreign_devices=True))
+        await server.start()
+        try:
+            address = await server.local_address()
+            port = address.rsplit(":", 1)[1]
+            foreign = ForeignDevice(f"localhost:{port}", ttl=60, renewal=10)
+            async with BACnetClient(interface="127.0.0.1", port=0,
+                                    foreign_device=foreign) as client:
+                status = await accepted_registration(client)
+                self.assertEqual(status["last_bbmd"], address)
+        finally:
+            await server.stop()
+
+    async def test_a_host_name_that_does_not_resolve_still_starts(self):
+        # The .invalid domain never resolves (RFC 2606): the client starts,
+        # and registration waits for an address that never comes.
+        foreign = ForeignDevice("bbmd.invalid", ttl=60)
+        async with BACnetClient(interface="127.0.0.1", port=0,
+                                foreign_device=foreign) as client:
+            status = await client.foreign_registration()
+            self.assertEqual((status["attempts"], status["registered"]), (0, False))
+            self.assertIsNone(status["last_outcome"])
 
     async def test_a_refused_registration_is_reported(self):
         # A BBMD that takes no foreign devices refuses the registration.

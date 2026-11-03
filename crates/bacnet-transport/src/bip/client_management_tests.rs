@@ -51,8 +51,7 @@ async fn foreign_ttl_one_renews_before_the_advertised_ttl() {
     let (_, port) = decode_bip_mac(&target).unwrap();
     let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     transport.register_as_foreign_device(ForeignDeviceConfig {
-        bbmd_ip: Ipv4Addr::LOCALHOST,
-        bbmd_port: port,
+        bbmd: (Ipv4Addr::LOCALHOST, port).into(),
         renewal_interval: None,
         ttl: 1,
     });

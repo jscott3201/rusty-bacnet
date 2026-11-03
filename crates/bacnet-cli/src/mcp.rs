@@ -331,8 +331,7 @@ async fn serve(cli: &Cli, profile: Option<&str>, passive: bool) -> crate::CliRes
     // Broadcasts reach the remote network once the BBMD has taken the
     // registration, as for a one-shot command.
     if let Some(config) = &args.foreign_device {
-        let bbmd = std::net::SocketAddrV4::new(config.bbmd_ip, config.bbmd_port);
-        crate::foreign::await_registration(&client, bbmd).await?;
+        crate::foreign::await_registration(&client, &config.bbmd).await?;
     }
     serve_on(client, policy).await
 }

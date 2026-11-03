@@ -12,14 +12,17 @@ use std::sync::Weak;
 
 use tracing::{debug, info};
 
+use super::super::ForeignBbmd;
 use super::super::foreign_device::ForeignDeviceConfig;
 use super::super::node::NodeHandle;
 use super::{ForeignTarget, TargetState};
-use crate::bbmd_lookup::{BbmdLookupFailure, BbmdName, Ended, Failed, Lookup, NameTarget, choose};
+use crate::bbmd_lookup::{
+    ATTEMPT_LOOKUP_INTERVAL, BbmdLookupFailure, BbmdName, Ended, Failed, Lookup, NameTarget, choose,
+};
 
 impl ForeignTarget {
     /// This target, as its lookups report to it.
-    fn name_target(&self) -> Weak<dyn NameTarget> {
+    pub(super) fn name_target(&self) -> Weak<dyn NameTarget> {
         self.me.clone()
     }
 
@@ -62,8 +65,7 @@ impl ForeignTarget {
             .collect();
         let at = |bbmd: SocketAddrV4| {
             let mut config = state.config.clone();
-            config.bbmd_ip = *bbmd.ip();
-            config.bbmd_port = bbmd.port();
+            config.bbmd = ForeignBbmd::Address(bbmd);
             config
         };
         let usable = |bbmd| {
@@ -76,6 +78,44 @@ impl ForeignTarget {
         let ip = |bbmd: SocketAddrV4| IpAddr::V4(*bbmd.ip());
         let chosen = choose(&candidates, state.config.bbmd(), usable, ip)?;
         Ok(chosen.map(at))
+    }
+}
+
+impl ForeignTarget {
+    /// While the BBMD's address isn't known, a lookup that failed is tried
+    /// again once [`ATTEMPT_LOOKUP_INTERVAL`] has passed: with no
+    /// registration attempt to go alongside, nothing else would (#2308).
+    /// One retry waits at a time; with no runtime, the next start retries.
+    fn retry_later(&self, state: &mut TargetState) {
+        if state.retry_pending {
+            return;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        state.retry_pending = true;
+        let target = self.me.clone();
+        runtime.spawn(async move {
+            tokio::time::sleep(ATTEMPT_LOOKUP_INTERVAL).await;
+            if let Some(target) = target.upgrade() {
+                target.retry();
+            }
+        });
+    }
+
+    /// The retry [`retry_later`](Self::retry_later) set up: look the name
+    /// up, if the transport still runs and still waits for an address.
+    fn retry(&self) {
+        let mut state = self.lock();
+        state.retry_pending = false;
+        if Self::running(&state).is_none() || state.config.bbmd().is_some() {
+            return;
+        }
+        let lookup = state.lookups.lookup(false, &self.name_target());
+        drop(state);
+        if let Some(lookup) = lookup {
+            lookup.start();
+        }
     }
 }
 
@@ -112,8 +152,13 @@ impl NameTarget for ForeignTarget {
         let moved_to = match verdict {
             Ok(moved_to) => moved_to,
             Err(failed) => {
-                let bbmd = state.config.bbmd();
+                let bbmd = state.config.bbmd.clone();
                 state.lookups.failed(&name, bbmd, &failed);
+                // With no address yet, no registration attempt comes to
+                // look the name up again alongside (#2308).
+                if state.config.bbmd().is_none() {
+                    self.retry_later(&mut state);
+                }
                 return;
             }
         };
@@ -130,7 +175,7 @@ impl NameTarget for ForeignTarget {
             debug!(%error, "The node refused the address the BBMD's host name resolved to");
             return;
         }
-        info!(host = %name.host(), bbmd = %config.bbmd(), "The BBMD's host name now resolves elsewhere; registering there");
+        info!(host = %name.host(), bbmd = %config.bbmd, "The BBMD's host name resolves to a new address; registering there");
         state.config = config;
     }
 }

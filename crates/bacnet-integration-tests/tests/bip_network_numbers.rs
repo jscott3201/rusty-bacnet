@@ -20,8 +20,7 @@ async fn foreign(gates: Option<std::sync::Arc<Gates>>) -> (Server, SocketAddrV4,
     let bbmd = udp().await;
     let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, BROADCAST);
     transport.register_as_foreign_device(ForeignDeviceConfig {
-        bbmd_ip: Ipv4Addr::LOCALHOST,
-        bbmd_port: address(&bbmd).port(),
+        bbmd: (Ipv4Addr::LOCALHOST, address(&bbmd).port()).into(),
         renewal_interval: None,
         ttl: 60,
     });

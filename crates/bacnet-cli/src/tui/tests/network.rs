@@ -101,7 +101,7 @@ pub(super) fn plan(bbmd: Option<SocketAddrV4>) -> ConnectPlan {
     profile.bip_mut().interface = Ipv4Addr::LOCALHOST;
     profile.bip_mut().port = 0;
     profile.bip_mut().broadcast = Ipv4Addr::LOCALHOST;
-    profile.bip_mut().bbmd = bbmd;
+    profile.bip_mut().bbmd = bbmd.map(Into::into);
     profile.bip_mut().ttl = 60;
     ConnectPlan {
         kind: TransportKind::Bip,

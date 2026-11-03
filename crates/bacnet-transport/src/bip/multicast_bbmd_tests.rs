@@ -209,8 +209,7 @@ async fn a_group_bbmd_joins_members_a_plain_peer_and_a_foreign_device() {
         let loopback_broadcast = Ipv4Addr::new(127, 255, 255, 255);
         let mut foreign = BipTransport::new(Ipv4Addr::LOCALHOST, 0, loopback_broadcast);
         foreign.register_as_foreign_device(ForeignDeviceConfig {
-            bbmd_ip: Ipv4Addr::LOCALHOST,
-            bbmd_port,
+            bbmd: (Ipv4Addr::LOCALHOST, bbmd_port).into(),
             ttl: 60,
             renewal_interval: None,
         });

@@ -45,6 +45,7 @@ mod client_snapshot;
 mod exchange;
 pub use bacnet_bip_core::node::ExchangeRefusal;
 pub use exchange::BvlcExchangeError;
+mod foreign_bbmd;
 mod foreign_device;
 mod foreign_target;
 mod mode;
@@ -59,6 +60,7 @@ pub use client_snapshot::{
     BvlcClientSnapshot, BvlcClientStatus, BvlcRequestCounters, ForeignRegistrationOutcome,
     ForeignRegistrationSnapshot,
 };
+pub use foreign_bbmd::ForeignBbmd;
 pub use foreign_device::ForeignDeviceConfig;
 pub use mode::{BbmdOptions, BipMode};
 mod fanout;

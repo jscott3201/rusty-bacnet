@@ -2794,8 +2794,7 @@ let server = BACnetServer::bip_builder()
 let client = BACnetClient::bip_builder()
     .port(0)
     .mode(BipMode::Foreign(ForeignDeviceConfig {
-        bbmd_ip: Ipv4Addr::new(203, 0, 113, 7),
-        bbmd_port: 47808,
+        bbmd: (Ipv4Addr::new(203, 0, 113, 7), 47808).into(),
         ttl: 600,
         renewal_interval: Some(Duration::from_secs(20)),
     }))
@@ -7897,14 +7896,26 @@ use std::{net::Ipv4Addr, time::Duration};
 let client = BACnetClient::bip_builder()
     .port(0)
     .mode(BipMode::Foreign(ForeignDeviceConfig {
-        bbmd_ip: Ipv4Addr::new(192, 0, 2, 10),
-        bbmd_port: 47808,
+        bbmd: (Ipv4Addr::new(192, 0, 2, 10), 47808).into(),
         ttl: 60,
         renewal_interval: Some(Duration::from_secs(20)),
     }))
     .build().await?;
 let registration = client.foreign_registration()?;
 ```
+
+`ForeignDeviceConfig::bbmd` is a `ForeignBbmd`: an address, or a host name and
+port (#2308), which parses from `ip`, `host` or either with `:port`
+(`"bbmd.example:47808".parse()?`). A host name is looked up as one written to
+FD_BBMD_Address is: when the transport starts, and again alongside the
+registrations at most every 30 seconds, by the system's resolver or the one
+`BipTransport::set_bbmd_resolver` (or the builders' `bbmd_resolver`) gives. A name
+that doesn't resolve still starts the transport: its node waits for a BBMD
+(`bacnet-bip-core`'s waiting state), with no registration sent and broadcasts held
+and then refused, the failure counted in `bbmd_lookups`, `bbmd_lookup_failures` and
+`last_bbmd_lookup_failure`, and the name tried again every 30 seconds. The first
+address it resolves to that a start would accept is registered with at once;
+`foreign_device_config()` then reads that address.
 
 `renewal_interval: None` uses half the advertised TTL, including 500 ms for
 TTL 1; a shorter interval renews more often without changing the TTL the BBMD

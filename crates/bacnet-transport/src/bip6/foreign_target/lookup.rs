@@ -56,7 +56,7 @@ impl ForeignTarget {
         let current = SocketAddrV6::new(config.bbmd_ip, config.bbmd_port, 0, 0);
         let usable = |bbmd| Self::usable(own, &at(bbmd));
         let ip = |bbmd: SocketAddrV6| IpAddr::V6(*bbmd.ip());
-        Ok(choose(&candidates, current, usable, ip)?.map(at))
+        Ok(choose(&candidates, Some(current), usable, ip)?.map(at))
     }
 }
 

@@ -148,8 +148,7 @@ async fn bbmd_reports_its_mode_and_lends_its_live_tables_once_started() {
 async fn foreign_device_reports_its_bbmd_and_lifetime() {
     let mut foreign = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     foreign.register_as_foreign_device(ForeignDeviceConfig {
-        bbmd_ip: Ipv4Addr::new(10, 0, 0, 1),
-        bbmd_port: 47809,
+        bbmd: (Ipv4Addr::new(10, 0, 0, 1), 47809).into(),
         renewal_interval: None,
         ttl: 60,
     });
@@ -172,8 +171,7 @@ fn a_bbmd_that_also_registers_as_a_foreign_device_has_no_single_mode() {
     let mut both = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
     both.enable_bbmd(vec![]);
     both.register_as_foreign_device(ForeignDeviceConfig {
-        bbmd_ip: Ipv4Addr::new(10, 0, 0, 1),
-        bbmd_port: 47808,
+        bbmd: (Ipv4Addr::new(10, 0, 0, 1), 47808).into(),
         renewal_interval: None,
         ttl: 60,
     });
@@ -186,8 +184,7 @@ fn a_bbmd_that_also_registers_as_a_foreign_device_has_no_single_mode() {
 
 fn foreign_config() -> ForeignDeviceConfig {
     ForeignDeviceConfig {
-        bbmd_ip: Ipv4Addr::new(10, 0, 0, 1),
-        bbmd_port: 47808,
+        bbmd: (Ipv4Addr::new(10, 0, 0, 1), 47808).into(),
         renewal_interval: None,
         ttl: 60,
     }

@@ -5,7 +5,7 @@ use bacnet_bip_core::Duration as CoreDuration;
 use bacnet_bip_core::node::{ConfigError, Foreign, ForwardedTrust, Groups, Retry};
 use bacnet_types::error::Error;
 
-use super::BipTransport;
+use super::{BipTransport, ForeignBbmd};
 
 /// How many broadcasts a foreign device holds while the first registration
 /// attempt after each start, or after a move to another BBMD (#1825), is
@@ -19,10 +19,10 @@ pub(super) const HELD_BROADCASTS: u16 = 16;
 /// is sent unchanged; the independent renewal interval controls local attempts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForeignDeviceConfig {
-    /// BBMD IP address to register with.
-    pub bbmd_ip: Ipv4Addr,
-    /// BBMD UDP port.
-    pub bbmd_port: u16,
+    /// The BBMD to register with: its address, or a host name and port,
+    /// looked up at start and again alongside the registrations (#2308).
+    /// See [`ForeignBbmd`] for what happens while a name doesn't resolve.
+    pub bbmd: ForeignBbmd,
     /// Advertised time-to-live in seconds; must be positive for automatic mode.
     /// The one-shot registration helper separately permits zero-TTL requests.
     pub ttl: u16,
@@ -34,9 +34,10 @@ pub struct ForeignDeviceConfig {
 }
 
 impl ForeignDeviceConfig {
-    /// The BBMD's B/IP address.
-    pub(super) fn bbmd(&self) -> SocketAddrV4 {
-        SocketAddrV4::new(self.bbmd_ip, self.bbmd_port)
+    /// The BBMD's B/IP address, unless it is known by a name not looked up
+    /// yet.
+    pub(super) fn bbmd(&self) -> Option<SocketAddrV4> {
+        self.bbmd.address()
     }
 
     /// The renewal interval on the node engine's timeline: the configured
@@ -59,15 +60,28 @@ impl ForeignDeviceConfig {
 
     /// Refuse, before any I/O, a BBMD no device could register with: one
     /// at port 0, at the unspecified address, or at a group address of a
-    /// link whose broadcast IP is `broadcast` on `interface`. One at the
-    /// transport's own address is refused once it is bound, when the node
-    /// starts.
+    /// link whose broadcast IP is `broadcast` on `interface`, or a host name
+    /// not in the RFC 1123 form. One at the transport's own address is
+    /// refused once it is bound, when the node starts; a name's address is
+    /// checked once it resolves.
     pub(super) fn check_bbmd(&self, broadcast: Ipv4Addr, interface: Ipv4Addr) -> Result<(), Error> {
+        let bbmd = match &self.bbmd {
+            ForeignBbmd::Address(bbmd) => *bbmd,
+            ForeignBbmd::Name { host, port } => {
+                return match self.bbmd.name() {
+                    Some(_) => Ok(()),
+                    None if *port == 0 => Err(Error::Encoding(ConfigError::BbmdPort.to_string())),
+                    None => Err(Error::Encoding(format!(
+                        "the BBMD's host name '{host}' isn't in the RFC 1123 form"
+                    ))),
+                };
+            }
+        };
         // Only the IP test is read, so the broadcast's port doesn't matter.
         let groups = Groups::new(SocketAddrV4::new(broadcast, 0), interface);
-        let refusal = if self.bbmd_port == 0 {
+        let refusal = if bbmd.port() == 0 {
             ConfigError::BbmdPort
-        } else if self.bbmd_ip.is_unspecified() || groups.contains_ip(self.bbmd_ip) {
+        } else if bbmd.ip().is_unspecified() || groups.contains_ip(*bbmd.ip()) {
             ConfigError::BbmdAddress
         } else {
             return Ok(());
@@ -86,12 +100,15 @@ impl ForeignDeviceConfig {
     /// resolves, up to [`HELD_BROADCASTS`] broadcasts are held. A
     /// Forwarded-NPDU is taken only from the BBMD by unicast, as a BBMD sends
     /// its foreign devices the network's broadcasts
-    /// ([`ForwardedTrust::ConfiguredBbmd`]).
+    /// ([`ForwardedTrust::ConfiguredBbmd`]). A BBMD known by a name not
+    /// looked up yet leaves the node waiting for it, with no attempt due.
     pub(super) fn engine(&self, interval: CoreDuration) -> Foreign {
         // Three seconds, exactly.
         let response_timeout =
             CoreDuration::saturating_from_core(BipTransport::BVLC_RESPONSE_TIMEOUT);
-        let mut foreign = Foreign::new(self.bbmd(), self.ttl);
+        let unknown = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0);
+        let mut foreign = Foreign::new(unknown, self.ttl);
+        foreign.bbmd = self.bbmd();
         foreign.renewal = interval;
         foreign.response_timeout = interval.min(response_timeout);
         foreign.retry = Retry::Backoff;

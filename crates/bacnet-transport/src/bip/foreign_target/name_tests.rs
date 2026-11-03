@@ -41,12 +41,17 @@ struct Device {
 
 impl Device {
     async fn new(ttl: u16) -> Self {
+        Self::configured((A, PORT).into(), ttl).await
+    }
+
+    /// A device configured with `bbmd`, as a start builds one. A host name
+    /// is looked up on the first await after this returns.
+    async fn configured(bbmd: ForeignBbmd, ttl: u16) -> Self {
         let sink = SendSink::default();
         let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
         let socket = Arc::new(BipSocket::recording(socket, sink.clone()));
         let config = ForeignDeviceConfig {
-            bbmd_ip: A,
-            bbmd_port: PORT,
+            bbmd,
             ttl,
             renewal_interval: None,
         };
@@ -123,7 +128,7 @@ impl Device {
     }
 
     fn bbmd(&self) -> SocketAddrV4 {
-        self.target.config().bbmd()
+        self.target.config().bbmd().expect("a BBMD address")
     }
 
     fn snapshot(&self) -> ForeignRegistrationSnapshot {
@@ -581,4 +586,123 @@ async fn a_quick_move_back_drops_the_release_it_would_meet() {
         ),
         (2, 1)
     );
+}
+
+/// A configured BBMD named by host name (#2308): the start runs with no
+/// BBMD, looks the name up at once, and registers with what it stands for.
+/// The row reads back the name, and the registration in use the address.
+#[tokio::test(start_paused = true)]
+async fn a_configured_name_is_looked_up_at_start_and_registers_there() {
+    let named = ForeignBbmd::Name {
+        host: NAME.into(),
+        port: PORT,
+    };
+    let device = Device::configured(named, 60).await;
+    device.names.answer(NAME, Answer::addresses([B]));
+    device.after(1).await;
+    assert_eq!(registrations(&device.sink.take()), [B]);
+    assert_eq!(device.bbmd(), at(B));
+    assert_eq!(
+        device.view().bbmd(),
+        BACnetHostNPort {
+            host: Device::name(),
+            port: PORT
+        }
+    );
+    let snapshot = device.snapshot();
+    assert_eq!(
+        (snapshot.bbmd_lookups, snapshot.bbmd_lookup_failures),
+        (1, 0)
+    );
+    // Nothing to release: the device had no BBMD before.
+    assert_eq!(snapshot.previous_releases, 0);
+}
+
+/// A configured name that doesn't resolve still runs (#2308): no
+/// registration is sent, broadcasts are held and then refused, the failure
+/// is counted, and the name is looked up again every 30 s, since no
+/// registration attempt comes to look it up alongside. The first answer
+/// registers the device, and the broadcasts held meanwhile go to that BBMD
+/// once the attempt resolves.
+#[tokio::test(start_paused = true)]
+async fn a_configured_name_that_fails_waits_and_is_tried_again_every_30_s() {
+    let named = ForeignBbmd::Name {
+        host: NAME.into(),
+        port: PORT,
+    };
+    let device = Device::configured(named, 60).await;
+    device.after(1).await;
+    let snapshot = device.snapshot();
+    assert_eq!(
+        (
+            snapshot.bbmd_lookups,
+            snapshot.bbmd_lookup_failures,
+            snapshot.last_bbmd_lookup_failure
+        ),
+        (
+            1,
+            1,
+            Some(BbmdLookupFailure::Error(io::ErrorKind::NotFound))
+        )
+    );
+    assert_eq!((snapshot.attempts, snapshot.registered), (0, false));
+    assert_eq!(snapshot.next_attempt_in, None);
+    for _ in 0..16 {
+        device
+            .node
+            .send_broadcast(&[0x01, 0x00], None)
+            .await
+            .unwrap();
+    }
+    assert!(
+        device
+            .node
+            .send_broadcast(&[0x01, 0x00], None)
+            .await
+            .is_err()
+    );
+    device.after(29_000).await;
+    assert_eq!(device.names.calls(), 1);
+    device.after(1_100).await;
+    assert_eq!(device.names.calls(), 2);
+    assert!(device.sink.take().is_empty());
+
+    device.names.answer(NAME, Answer::addresses([A]));
+    device.after(30_100).await;
+    assert_eq!(device.names.calls(), 3);
+    assert_eq!(registrations(&device.sink.take()), [A]);
+    // A never answers: its attempt times out after 3 s, which releases the
+    // broadcasts held, in order, to A.
+    device.after(3_000).await;
+    let held: Vec<_> = device
+        .sink
+        .take()
+        .into_iter()
+        .filter(|sent| sent.bytes.get(1) == Some(&0x09))
+        .map(|sent| sent.to)
+        .collect();
+    assert_eq!(held, [at(A); 16]);
+    let snapshot = device.snapshot();
+    assert_eq!(
+        (snapshot.bbmd_lookups, snapshot.bbmd_lookup_failures),
+        (3, 2)
+    );
+    assert_eq!(snapshot.broadcasts_hold_full, 1);
+}
+
+/// An address written while the device waits for a name ends the wait at
+/// once.
+#[tokio::test(start_paused = true)]
+async fn an_address_written_while_waiting_ends_the_wait() {
+    let named = ForeignBbmd::Name {
+        host: NAME.into(),
+        port: PORT,
+    };
+    let device = Device::configured(named, 60).await;
+    device.after(1).await;
+    assert!(device.sink.take().is_empty());
+    device.activate(BACnetHostAddress::Ip(C.into())).unwrap();
+    device.after(1).await;
+    assert_eq!(registrations(&device.sink.take()), [C]);
+    assert_eq!(device.bbmd(), at(C));
 }

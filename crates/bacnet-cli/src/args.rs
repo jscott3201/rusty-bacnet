@@ -9,6 +9,7 @@ use std::{
     path::PathBuf,
 };
 
+use bacnet_transport::bip::ForeignBbmd;
 use bacnet_types::primitives::BACnetTimeStamp;
 use clap::builder::{OsStringValueParser, TypedValueParser};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -77,12 +78,14 @@ pub(crate) struct Cli {
     )]
     pub(crate) min_interval_ms: u64,
 
-    /// Run as a foreign device registered with this BBMD (IP or IP:port), so
-    /// broadcasts such as discover reach its network. A one-shot command
-    /// waits for the registration first; it is renewed while the CLI runs.
+    /// Run as a foreign device registered with this BBMD (IP, host name, or
+    /// either with :port), so broadcasts such as discover reach its network.
+    /// A host name is looked up at start and again every 30 s or so. A
+    /// one-shot command waits for the registration first, and fails when
+    /// the name doesn't resolve; it is renewed while the CLI runs.
     /// BACnet/IP only.
-    #[arg(long, global = true, value_name = "ADDR", value_parser = crate::foreign::parse_bbmd_arg)]
-    pub(crate) foreign_bbmd: Option<SocketAddrV4>,
+    #[arg(long, global = true, value_name = "ADDR", value_parser = crate::foreign::parse_foreign_bbmd_arg)]
+    pub(crate) foreign_bbmd: Option<ForeignBbmd>,
 
     /// Time-to-live in seconds of a foreign-device registration: with
     /// --foreign-bbmd, register and discover --bbmd.
@@ -708,9 +711,7 @@ pub(crate) fn capture_sources(matches: &clap::ArgMatches) -> Result<Vec<String>,
         .subcommand_matches("tui")
         .is_some_and(|tui| tui.get_one::<String>("profile").is_some());
     if matches.get_one::<u64>("renewal").is_some()
-        && matches
-            .get_one::<std::net::SocketAddrV4>("foreign_bbmd")
-            .is_none()
+        && matches.get_one::<ForeignBbmd>("foreign_bbmd").is_none()
         && !named_profile
     {
         return Err(clap::Error::raw(
@@ -722,9 +723,7 @@ pub(crate) fn capture_sources(matches: &clap::ArgMatches) -> Result<Vec<String>,
     if matches
         .get_one::<std::net::SocketAddrV4>("nat_global_address")
         .is_some()
-        && matches
-            .get_one::<std::net::SocketAddrV4>("foreign_bbmd")
-            .is_none()
+        && matches.get_one::<ForeignBbmd>("foreign_bbmd").is_none()
         && !named_profile
     {
         return Err(clap::Error::raw(
