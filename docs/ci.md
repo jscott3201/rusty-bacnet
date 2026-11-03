@@ -23,7 +23,7 @@ only when every job under it did (see [Merge evidence](#merge-evidence)).
 | Job | PR to `dev` | PR to `main` | Push to `dev` (merge) | Push to `main`, `v*` tag, weekly, manual |
 | --- | --- | --- | --- | --- |
 | Lint: rustfmt, 700-LOC cap, no-secret scan, script regressions, the `named_codes!` copies, changelog fragments, the [tool pins](#tool-pins), the [fuzz crates' lockfiles](#fuzzing) | ✓ | ✓ | ✓ | ✓ |
-| Clippy and rustdoc, warnings denied: every feature, PyO3 crate, `bacnet-cli` without default features, each published crate with default features for Linux, Windows and macOS, the `no_std` crates on bare-metal targets and their `alloc` tests on the host; the every-feature and PyO3 rustdoc runs include private items. The workspace runs include the [samples](#samples). Also the [firmware link test](#firmware-link-test): the MS/TP, B/IP and MS/TP device images built without an allocator, and the APDU and objects images with one, checked against their size budgets | ✓ | ✓ | ✓ | ✓ |
+| Clippy and rustdoc, warnings denied: every feature, PyO3 crate, `bacnet-cli` without default features, each published crate with default features for Linux, Windows and macOS, the `no_std` crates on bare-metal targets and their `alloc` tests on the host; the every-feature and PyO3 rustdoc runs include private items. The workspace runs include the [samples](#samples). Also the [firmware link test](#firmware-link-test): the MS/TP, B/IP and MS/TP device images built without an allocator, and the APDU, objects and reporting images with one, checked against their size budgets | ✓ | ✓ | ✓ | ✓ |
 | Test: Linux, every feature (`LINUX_FEATURES`); also the [`no_std` crates](#no_std-checks)' tests and doctests with `alloc` and without `std`, and their tests without either | ✓ | ✓ | ✓ | ✓ |
 | Python bindings: `maturin develop` (maturin at its [pinned](#tool-pins) version), then `python -m unittest discover -s crates/rusty-bacnet/tests`, the website's sample tests (`python -m unittest discover -s website/tests/python`: the loopback lab, and the CLI samples on the pages run against it with a debug `bacnet-cli` build; the root README's samples too (#2105): its quickstart server runs, its Python programs and CLI lines run against it, its MCP host configuration is parsed, its Rust blocks must match the `readme_*` Cargo examples that clippy compiles, and its dependency table must name published crates at the release; the step sets `BACNET_LAB_EXPECTED_VERSION` to the workspace version, since the lab otherwise expects the site's release and the wheel under test can be ahead of it) and the crate's Rust tests (`cargo nextest run -p rusty-bacnet`) | ✓ | ✓ | ✓ | ✓ |
 | MSRV (`RUST_MSRV` in [`.github/ci-pins.env`](../.github/ci-pins.env)), Linux native (`check-msrv.sh --linux-native`), the `no_std` builds included |  | ✓ |  | ✓ |
@@ -103,7 +103,7 @@ cargo test --doc --workspace --exclude rusty-bacnet --locked --features "$LINUX_
 cargo nextest run -p bacnet-cli --locked --profile ci
 cargo nextest run -p bacnet-cli --no-default-features --locked --profile ci
 cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc,bacnet-objects/event-reporting,bacnet-objects/durable-writes,bacnet-device-core/structured-writes --locked --profile ci
-cargo nextest run -p bacnet-objects -p bacnet-device-core -p firmware-link --no-default-features --features alloc,firmware-link/objects --locked --profile ci
+cargo nextest run -p bacnet-objects -p bacnet-device-core -p firmware-link --no-default-features --features alloc,firmware-link/reporting --locked --profile ci
 cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc,bacnet-objects/event-reporting,bacnet-objects/durable-writes,bacnet-device-core/structured-writes --locked
 cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --locked --profile ci
 cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --locked
@@ -219,7 +219,7 @@ proves all of that; each check covers a part.
 | The `alloc` tests and doctests | Test | The three crates', `bacnet-objects`' and `bacnet-device-core`'s tests and doctests with `alloc` and without `std`: the code a bare-metal build compiles. The tests link `std`; `check-no-std.sh` shows the code needs none. `bacnet-objects`' and `bacnet-device-core`'s tests run twice: with their capability features and `structured-writes` on, then with them all off, as the objects image builds it, in the step "bacnet-objects and bacnet-device-core tests (alloc, capability features and structured-writes off)" (#2215, #2210) |
 | The allocation-free tests | Test | The three crates' tests without `alloc` either, including `bacnet-services/tests/no_alloc_subset.rs`, which runs Who-Is, I-Am and ReadProperty through the APDU header under a counting allocator and finds no allocation, and their doctests, whose examples write to sinks (#1779) |
 | `scripts/ci/check-msrv.sh` | MSRV | The three crates, `bacnet-objects` and `bacnet-device-core` with `alloc` and without `std` build at the MSRV, in a run of their own, since the hosted crates turn `std` back on in the main run |
-| [Firmware link test](#firmware-link-test) | Clippy, `FIRMWARE_TARGETS` | The MS/TP and B/IP stacks, and an MS/TP device with its application layer, link into bare-metal images with no allocator, and `bacnet-encoding` and `bacnet-services` into one with an allocator, and `bacnet-device-core` over `bacnet-objects` into another, each within its size budget |
+| [Firmware link test](#firmware-link-test) | Clippy, `FIRMWARE_TARGETS` | The MS/TP and B/IP stacks, and an MS/TP device with its application layer, link into bare-metal images with no allocator, and `bacnet-encoding` and `bacnet-services` into one with an allocator, and `bacnet-device-core` over `bacnet-objects` into another, with its COV table into a third, each within its size budget |
 
 **ARMv6-M and `bytes`.** `bytes` needs atomic compare-and-swap, which
 `thumbv6m-none-eabi` lacks. With its `extra-platforms` feature it takes that
@@ -260,7 +260,7 @@ rustup target add thumbv6m-none-eabi thumbv7em-none-eabihf riscv32imac-unknown-n
 bash scripts/ci/check-no-std.sh                       # every default target
 bash scripts/ci/check-no-std.sh thumbv6m-none-eabi    # one
 cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc,bacnet-objects/event-reporting,bacnet-objects/durable-writes,bacnet-device-core/structured-writes --locked
-cargo nextest run -p bacnet-objects -p bacnet-device-core -p firmware-link --no-default-features --features alloc,firmware-link/objects --locked
+cargo nextest run -p bacnet-objects -p bacnet-device-core -p firmware-link --no-default-features --features alloc,firmware-link/reporting --locked
 cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc,bacnet-objects/event-reporting,bacnet-objects/durable-writes,bacnet-device-core/structured-writes --locked
 cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --locked
 cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --locked   # examples on sinks, no allocator (#1779)
@@ -270,7 +270,7 @@ cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services --no-defa
 
 `check-no-std.sh` runs clippy on the `no_std` crates, and clippy never links.
 The firmware link test (#1626, #1635, #1664, #1667, #1679, #1771, #2178) does.
-`firmware/link` (the `firmware-link` crate, `publish = false`) builds nine
+`firmware/link` (the `firmware-link` crate, `publish = false`) builds ten
 `#![no_main]` bare-metal images, one per stack, because code can't be
 credited to a crate reliably within one LTO image:
 
@@ -311,9 +311,13 @@ credited to a crate reliably within one LTO image:
   database, with a global allocator over a 16 KiB arena. Both need atomic
   compare-and-swap, so it builds for `thumbv7m-none-eabi`,
   `thumbv7em-none-eabihf` and `riscv32imac-unknown-none-elf` only, the last
-  for this image alone.
+  for this image and the next alone;
+- `reporting` links what `objects` links and `bacnet-device-core`'s COV
+  table, with its SubscribeCOV and SubscribeCOVProperty (#2303), in the same
+  arena and on the same targets. Its size less the objects image's is what
+  COV costs.
 
-A use of `alloc` anywhere in an image but `apdu` and `objects`, the device's application layer included, fails its build with "no
+A use of `alloc` anywhere in an image but `apdu`, `objects` and `reporting`, the device's application layer included, fails its build with "no
 global memory allocator found". In any image, a symbol that only a hosted
 target or the firmware provides fails the link: an atomic library call, or
 a critical section that nothing implements. A compare-and-swap on ARMv6-M or
@@ -435,10 +439,16 @@ targets, so a crate that needs one builds only with a backend such as
     Value's Present_Value and a ReadProperty that reads it back.
     `objects::expected()` holds each outcome and answer, and the object
     the write changed.
+  - `reporting::run` runs `objects::run`, then hands a `CovTable` capped at
+    eight subscriptions twelve SubscribeCOV and SubscribeCOVProperty
+    requests: two subscriptions, a renewal, six more up to the cap, one
+    past it, which is refused, and two cancellations; then an expiry pass
+    removes the rest. `reporting::expected()` holds each reply and how many
+    subscriptions the table held after it.
 
   The host tests in `firmware/link/tests/` (`mstp.rs`, `mstp_extended.rs`,
-  `bip.rs`, `node.rs`, `bbmd.rs`, `router.rs`, `device.rs`, `apdu.rs` and
-  `objects.rs`)
+  `bip.rs`, `node.rs`, `bbmd.rs`, `router.rs`, `device.rs`, `apdu.rs`,
+  `objects.rs` and `reporting.rs`)
   run them and
   compare each
   whole summary, so the behaviour is checked natively, in every
@@ -489,7 +499,7 @@ targets, so a crate that needs one builds only with a backend such as
   class) and `thumbv7em-none-eabihf` (Cortex-M4F and M7F, with the
   hard-float ABI, since #1660), in `FIRMWARE_TARGETS` in `ci.yml`, each
   with budget tables of its own; `riscv32imac-unknown-none-elf` joins them
-  for the objects image alone (#2178). `thumbv7em-none-eabihf`'s images are a
+  for the objects and reporting images alone (#2178, #2303). `thumbv7em-none-eabihf`'s images are a
   little smaller than `thumbv7m-none-eabi`'s. They share one generic memory
   layout, `firmware/link/memory.x`: 256 KiB of flash at `0x08000000` and 64
   KiB of RAM at `0x20000000`. The startup code comes from `cortex-m-rt` and
@@ -1810,7 +1820,7 @@ RUSTDOCFLAGS="-D warnings" cargo doc -p rusty-bacnet --no-deps --locked --docume
 cargo nextest run -p bacnet-cli --locked   # the CLI's feature-off tests
 cargo nextest run -p bacnet-cli --no-default-features --locked   # without the TUI
 cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc,bacnet-objects/event-reporting,bacnet-objects/durable-writes,bacnet-device-core/structured-writes --locked   # no_std code, alloc
-cargo nextest run -p bacnet-objects -p bacnet-device-core -p firmware-link --no-default-features --features alloc,firmware-link/objects --locked   # no_std code, capability features and structured-writes off
+cargo nextest run -p bacnet-objects -p bacnet-device-core -p firmware-link --no-default-features --features alloc,firmware-link/reporting --locked   # no_std code, capability features and structured-writes off
 cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc,bacnet-objects/event-reporting,bacnet-objects/durable-writes,bacnet-device-core/structured-writes --locked
 cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --locked   # no_std code, no allocator
 cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services --no-default-features --locked
