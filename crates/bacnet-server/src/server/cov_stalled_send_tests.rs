@@ -5,7 +5,9 @@
 //! a failure, so its coordinate holds off: no second report starts while the
 //! stalled one could still send, and nothing the stalled send carried lands
 //! after a newer value. A worker that reports nothing at all, as an aborted
-//! one, is fenced by the next report past its deadline. Time is paused.
+//! one, is fenced by the next report past its deadline. An unconfirmed
+//! send stalling ahead of a confirmed report in one fanout leaves the
+//! report its window. Time is paused.
 use super::cov_wire_test_support::*;
 use super::*;
 use bacnet_services::cov::SubscribeCOVRequest;
@@ -153,7 +155,9 @@ async fn the_next_report_past_the_deadline_wakes_a_worker_that_never_reported() 
         let mut table = h.server.cov_table.write().await;
         let sub = table.entries().next().unwrap().clone();
         let report = table.prepare_completion(&sub).unwrap();
-        table.begin_confirmed(report, [&sub]).unwrap()
+        table
+            .begin_confirmed(report, [&sub].map(|sub| (sub, placeholder())))
+            .unwrap()
     };
     // Before the deadline the coordinate is busy: a newer value waits.
     set_quietly(&h, 20.0).await;
@@ -167,5 +171,82 @@ async fn the_next_report_past_the_deadline_wakes_a_worker_that_never_reported() 
         .await
         .expect("the next report fences the abandoned one");
     assert_eq!(received(&h).first(), Some(&20.0));
+    h.server.stop().await.unwrap();
+}
+
+/// An observation for a report these tests never acknowledge.
+fn placeholder() -> bacnet_device_core::cov::CovObservation {
+    bacnet_device_core::cov::CovObservation::new(
+        bacnet_device_core::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(
+            0.0,
+        ))
+        .unwrap(),
+        None,
+    )
+    .unwrap()
+}
+
+/// An unconfirmed send that stalls ahead of a confirmed report in the same
+/// fanout leaves that report its whole answer window (#2303): the report's
+/// worker starts before the stalled send, so the report goes out while the
+/// send waits and is acknowledged in its window, and the stalled send lands
+/// after. A report sent only once the stall ended would have lost the time
+/// its flight had run since evaluation.
+#[tokio::test(start_paused = true)]
+async fn an_unconfirmed_stall_ahead_keeps_a_confirmed_window() {
+    let mut h = Harness::start(ServerConfig {
+        cov_retry_timeout_ms: TIMEOUT_MS,
+        ..ServerConfig::default()
+    })
+    .await;
+    for (process, confirmed) in [(1u32, false), (2u32, true)] {
+        let mut body = BytesMut::new();
+        SubscribeCOVRequest {
+            subscriber_process_identifier: process,
+            monitored_object_identifier: av1(),
+            issue_confirmed_notifications: Some(confirmed),
+            lifetime: Some(300),
+        }
+        .encode(&mut body)
+        .unwrap();
+        h.request(ConfirmedServiceChoice::SUBSCRIBE_COV, body).await;
+        h.cov_notification().await;
+        if confirmed {
+            h.ack().await;
+        }
+        h.settle().await;
+    }
+    // The first COV notification on the link, process 1's unconfirmed one,
+    // is held there.
+    let (entered, release) = h.hold_notification_barrier(true);
+    h.write_pv(10.0, 1).await;
+    tokio::time::timeout(Duration::from_secs(1), entered.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    let confirmed = tokio::time::timeout(Duration::from_millis(20), h.cov_notification())
+        .await
+        .expect("the confirmed report goes out while the send stalls");
+    assert_eq!(confirmed.subscriber_process_identifier, 2);
+    h.ack().await;
+    // The stall outlasts the report's whole retry cycle.
+    tokio::time::sleep(Duration::from_millis(5 * TIMEOUT_MS)).await;
+    release.add_permits(1);
+    let unconfirmed = h.cov_notification().await;
+    assert_eq!(unconfirmed.subscriber_process_identifier, 1);
+    let baseline = {
+        let table = h.server.cov_table.read().await;
+        table
+            .entries()
+            .find(|entry| entry.subscriber_process_identifier == 2)
+            .and_then(|entry| entry.last_notified_observation.clone())
+            .map(|observation| observation.sample().value().clone())
+    };
+    assert_eq!(
+        baseline,
+        Some(PropertyValue::Real(10.0)),
+        "the confirmed report was acknowledged in its window"
+    );
     h.server.stop().await.unwrap();
 }

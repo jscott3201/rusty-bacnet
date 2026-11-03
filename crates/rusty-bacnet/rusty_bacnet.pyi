@@ -2833,7 +2833,16 @@ class ForeignRegistrationStatus(TypedDict):
     refused or timed-out renewal. The totals
     survive it: ``lapses`` counts leases that ran out with no newer success,
     and ``renewal_hints`` the BBMD's Distribute-Broadcast-To-Network NAKs,
-    each of which brings the next attempt forward."""
+    each of which brings the next attempt forward. A BBMD named by host name
+    (#2308) counts its lookups in ``bbmd_lookups``, the failed ones in
+    ``bbmd_lookup_failures``, and names why the newest failed in
+    ``last_bbmd_lookup_failure`` (``"not_resolved"``, ``"timed_out"`` after
+    10 seconds, ``"no_ipv4_address"``, ``"unusable_address"``,
+    ``"abandoned"``, or ``"other"`` for a failure this version doesn't
+    name), None once one succeeds and cleared when the owner
+    stops. ``waiting_for_bbmd`` is true while that name hasn't resolved yet:
+    no attempt is due, and it is tried again 30 seconds after each
+    failure."""
     registered: bool
     lease_remaining: Optional[float]
     next_attempt_in: Optional[float]
@@ -2845,6 +2854,12 @@ class ForeignRegistrationStatus(TypedDict):
     refused: int
     lapses: int
     renewal_hints: int
+    bbmd_lookups: int
+    bbmd_lookup_failures: int
+    last_bbmd_lookup_failure: Optional[Literal[
+        "not_resolved", "timed_out", "no_ipv4_address", "unusable_address", "abandoned",
+        "other"]]
+    waiting_for_bbmd: bool
 
 
 class FdtEntry(TypedDict):

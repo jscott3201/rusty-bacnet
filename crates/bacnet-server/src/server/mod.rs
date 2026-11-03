@@ -41,7 +41,11 @@ use bacnet_objects::notification_class::{
     lookup_notification_recipients, resolve_transition_priority_ack,
 };
 use bacnet_services::alarm_event::EventNotificationRequest;
+// The server's tests name these through `use super::*`; the Single fanout
+// that used them here builds its notifications in bacnet-device-core now.
+#[cfg(test)]
 use bacnet_services::common::BACnetPropertyValue;
+#[cfg(test)]
 use bacnet_services::cov::COVNotificationRequest;
 use bacnet_services::cov_multiple::COVNotificationMultipleRequest;
 use bacnet_services::who_is::{DeviceInstanceRange, IAmRequest, WhoIsRequest};

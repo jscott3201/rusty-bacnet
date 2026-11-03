@@ -312,8 +312,8 @@ async fn registration_counts_down_renews_in_time_and_finds_our_fdt_entry() {
     let bbmd = server_address(&server);
     let mut net = Net::start(plan(Some(bbmd))).await;
     net.press(KeyCode::Char('4')).await;
-    let foreign = net.app.network.foreign.unwrap();
-    assert_eq!((foreign.bbmd, foreign.ttl), (bbmd, 60));
+    let foreign = net.app.network.foreign.clone().unwrap();
+    assert_eq!((foreign.bbmd, foreign.ttl), (Some(bbmd), 60));
     assert_eq!(foreign.renewal, Duration::from_secs(30));
 
     // Accepted: the FDT is read once, and our entry is the one marked.

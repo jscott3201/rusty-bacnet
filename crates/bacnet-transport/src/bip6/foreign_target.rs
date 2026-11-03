@@ -24,6 +24,9 @@
 mod lookup;
 #[cfg(test)]
 mod name_tests;
+mod release;
+
+pub use release::Bip6ReleaseCounters;
 
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
@@ -51,6 +54,15 @@ struct State {
     lookups: Lookups,
     /// What came of those lookups.
     counters: BbmdLookupCounters,
+    /// Release the BBMD a move leaves (#2338, [`release`]).
+    release_previous: bool,
+    /// The BBMD left by the latest move, for the next re-registration pass
+    /// to release.
+    queued: Option<SocketAddrV6>,
+    /// The release sent and not yet answered.
+    awaiting: Option<release::Awaiting>,
+    /// What came of the releases.
+    releases: Bip6ReleaseCounters,
 }
 
 /// One transport's foreign-device registration, shared with the Network
@@ -162,6 +174,10 @@ impl ForeignTarget {
                 own: None,
                 lookups: Lookups::new(resolver, None),
                 counters: BbmdLookupCounters::default(),
+                release_previous: false,
+                queued: None,
+                awaiting: None,
+                releases: Bip6ReleaseCounters::default(),
             }),
             changed: Notify::new(),
             me: me.clone(),
@@ -237,12 +253,14 @@ impl ForeignTarget {
         state.counters.last_failure = None;
     }
 
-    /// The transport stopped: changes are refused until it runs again, and
-    /// a lookup that ends meanwhile counts nothing.
+    /// The transport stopped: changes are refused until it runs again, a
+    /// lookup that ends meanwhile counts nothing, and a release still out
+    /// ends unanswered.
     pub(super) fn detach(&self) {
         let mut state = self.lock();
         state.own = None;
         state.counters.last_failure = None;
+        state.end_releases();
     }
 
     /// Resolve when an activation changed the registration.
@@ -345,7 +363,7 @@ impl ForeignRegistration for ForeignTarget {
         // Every activation registers again at once, unless it only names
         // the BBMD by a host name, which registers once looked up.
         let reregister = !matches!(name, Some(Some(_))) || config != state.config;
-        state.config = config;
+        state.take(config);
         let lookup = name.and_then(|name| state.lookups.renamed(name, &self.name_target()));
         drop(state);
         if reregister {

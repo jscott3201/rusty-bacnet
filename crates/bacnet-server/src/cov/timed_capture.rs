@@ -23,7 +23,9 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use super::multiple_reads::MultipleReads;
 use super::timed::{TimedChange, TimedStore};
 use super::{CovSubscriptionSnapshot, CovSubscriptionTable};
-use crate::life_safety_cov::{LifeSafetyCovChange, LifeSafetyCovSnapshots, is_life_safety_object};
+use bacnet_device_core::cov::life_safety::{
+    LifeSafetyCovChange, LifeSafetyCovSnapshots, is_life_safety_object,
+};
 use bacnet_device_core::cov::{CovNotificationKind, CovSubscriptionKey};
 use bacnet_device_core::write::{WriteCommitObserver, WriteTarget};
 

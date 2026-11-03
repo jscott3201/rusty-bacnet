@@ -1,5 +1,5 @@
 use super::*;
-use crate::life_safety_cov::LifeSafetyCovChange;
+use bacnet_device_core::cov::life_safety::LifeSafetyCovChange;
 use bacnet_types::error::RemoteError;
 
 use bacnet_objects::life_safety::{LifeSafetyPointObject, LifeSafetyZoneObject};
