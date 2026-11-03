@@ -1,6 +1,7 @@
 use super::*;
-use crate::cov::*;
+use bacnet_device_core::cov::prepare::{PreparedCovValue, prepare_value};
 use bacnet_objects::property_metadata::PropertyMetadata;
+use bacnet_objects::traits::BACnetObject;
 use bacnet_objects::{
     accumulator::AccumulatorObject, analog::AnalogValueObject, color::ColorObject,
     database::ObjectDatabase,
@@ -15,10 +16,12 @@ use bacnet_types::constructed::PropertyReference;
 use bacnet_types::enums::EngineeringUnits;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
 use bacnet_types::error::RemoteError;
+use bacnet_types::primitives::PropertyValue;
 use bacnet_types::{
     constructed::{BACnetPrescale, BACnetScale},
     primitives::ObjectIdentifier,
 };
+use bytes::BytesMut;
 use std::{
     borrow::Cow,
     sync::{Arc, Mutex},

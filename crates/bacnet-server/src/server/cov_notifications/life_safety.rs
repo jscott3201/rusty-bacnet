@@ -51,7 +51,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     pub(in crate::server) async fn fire_post_write_cov_notifications(
         ctx: &CovNotifyContext<'_, T>,
         coarse_oids: &[ObjectIdentifier],
-        exact_changes: &[crate::life_safety_cov::LifeSafetyCovChange],
+        exact_changes: &[bacnet_device_core::cov::life_safety::LifeSafetyCovChange],
     ) {
         for oid in coarse_oids {
             Self::fire_cov_notifications(ctx, oid).await;

@@ -25,17 +25,12 @@ use bacnet_device_core::cov::{
 };
 use bacnet_objects::database::ObjectDatabase;
 
-pub(crate) mod active;
 mod confirmed;
 pub(crate) use confirmed::{ConfirmedFlight, CovRevisits};
-pub(crate) mod flags;
 pub(crate) mod multiple_reads;
-pub(crate) mod prepare;
-pub(crate) mod reported;
 pub(crate) mod timed;
 mod timed_capture;
 pub(crate) use timed_capture::TimedWriteCapture;
-pub(crate) mod value_source;
 
 mod policy;
 pub use policy::*;
@@ -44,6 +39,8 @@ pub use policy::*;
 mod identity_tests;
 #[cfg(test)]
 mod policy_tests;
+#[cfg(test)]
+mod prepare_tests;
 #[cfg(test)]
 mod tests;
 
@@ -110,6 +107,25 @@ impl CovSubscriptionTable {
     pub fn with_flight_timing(mut self, timing: FlightTiming) -> Self {
         self.core = self.core.with_flight_timing(timing);
         self
+    }
+
+    /// Copy only the selected Device lists' entries live at `now`; see
+    /// [`CovTable::live_cov_entries`].
+    pub(crate) fn live_cov_entries(
+        &self,
+        selection: bacnet_device_core::read::LiveLists,
+        now: bacnet_time::Instant,
+    ) -> bacnet_device_core::cov::active::LiveCovEntries {
+        #[cfg(test)]
+        self.live_samples
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.core.live_cov_entries(selection, now)
+    }
+
+    /// How many times a read request has sampled the live lists.
+    #[cfg(test)]
+    pub(crate) fn live_samples(&self) -> usize {
+        self.live_samples.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Pending timestamped COV-multiple changes of this table's references.

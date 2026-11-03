@@ -2,7 +2,7 @@
 //! This request-scoped adapter never changes the database or service dispatch.
 #[path = "device_view_identity.rs"]
 mod identity;
-use crate::cov::active::LiveDeviceCov;
+use bacnet_device_core::cov::active::LiveDeviceCov;
 use bacnet_device_core::read::ReadOverlay;
 use bacnet_device_core::write::{identity_property, owned};
 use bacnet_objects::property_metadata::is_array_property;

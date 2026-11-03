@@ -321,13 +321,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             };
 
             // Present_Value leads, except on an Access Point (Access_Event).
-            let lead = crate::cov::reported::lead(oid.object_type());
+            let lead = bacnet_device_core::cov::reported::lead(oid.object_type());
 
             let captured = (|| {
                 let leading = object.read_property(lead.property(), None).ok()?;
                 let sample = bacnet_device_core::cov::CovSample::new(&leading).ok()?;
-                let flags = crate::cov::flags::PreparedFlags::read(object).ok()?;
-                let reported = crate::cov::reported::PreparedReported::read(object).ok()?;
+                let flags = bacnet_device_core::cov::flags::PreparedFlags::read(object).ok()?;
+                let reported =
+                    bacnet_device_core::cov::reported::PreparedReported::read(object).ok()?;
                 let mut buf = BytesMut::new();
                 encode_property_value(&mut buf, sample.value()).ok()?;
                 let mut values = vec![BACnetPropertyValue {
@@ -404,67 +405,70 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let Some(object) = snapshot.or_else(|| db.as_deref()?.get(oid)) else {
                     continue;
                 };
-                let Ok(flags) = crate::cov::flags::PreparedFlags::read(object) else {
+                let Ok(flags) = bacnet_device_core::cov::flags::PreparedFlags::read(object) else {
                     continue;
                 };
-                let (values, observation) = if crate::cov::value_source::applies(object, property) {
-                    if sub.monitored_property_array_index.is_some() {
-                        continue;
-                    }
-                    let Ok(prepared) =
-                        crate::cov::value_source::PreparedValueSource::read(object, &flags)
-                    else {
-                        continue;
-                    };
-                    if !force && !prepared.reports(sub.last_notified_observation.as_ref()) {
-                        continue;
-                    }
-                    (prepared.values(), prepared.observation)
-                } else {
-                    let prepared = if property == PropertyIdentifier::STATUS_FLAGS {
-                        flags.selected(object, sub.monitored_property_array_index)
+                let (values, observation) =
+                    if bacnet_device_core::cov::value_source::applies(object, property) {
+                        if sub.monitored_property_array_index.is_some() {
+                            continue;
+                        }
+                        let Ok(prepared) =
+                            bacnet_device_core::cov::value_source::PreparedValueSource::read(
+                                object, &flags,
+                            )
+                        else {
+                            continue;
+                        };
+                        if !force && !prepared.reports(sub.last_notified_observation.as_ref()) {
+                            continue;
+                        }
+                        (prepared.values(), prepared.observation)
                     } else {
-                        object
-                            .read_property(property, sub.monitored_property_array_index)
-                            .and_then(|value| {
-                                crate::cov::prepare::prepare_value(
-                                    object,
-                                    property,
-                                    sub.monitored_property_array_index,
-                                    sub.cov_increment,
-                                    &value,
-                                )
-                            })
-                    };
-                    let Ok(prepared) = prepared else {
-                        continue;
-                    };
-                    let observation = flags.observation(prepared.sample.clone());
-                    if !force
-                        && !prepared
-                            .reports(sub.last_notified_observation.as_ref().map(|o| o.sample()))
-                        && !observation.flags_changed(sub.last_notified_observation.as_ref())
-                    {
-                        continue;
-                    }
-                    let mut values = vec![BACnetPropertyValue {
-                        property_identifier: property,
-                        property_array_index: sub.monitored_property_array_index,
-                        value: prepared.encoded,
-                        priority: None,
-                    }];
-                    if property != PropertyIdentifier::STATUS_FLAGS
-                        && let Some(encoded) = flags.encoded
-                    {
-                        values.push(BACnetPropertyValue {
-                            property_identifier: PropertyIdentifier::STATUS_FLAGS,
-                            property_array_index: None,
-                            value: encoded,
+                        let prepared = if property == PropertyIdentifier::STATUS_FLAGS {
+                            flags.selected(object, sub.monitored_property_array_index)
+                        } else {
+                            object
+                                .read_property(property, sub.monitored_property_array_index)
+                                .and_then(|value| {
+                                    bacnet_device_core::cov::prepare::prepare_value(
+                                        object,
+                                        property,
+                                        sub.monitored_property_array_index,
+                                        sub.cov_increment,
+                                        &value,
+                                    )
+                                })
+                        };
+                        let Ok(prepared) = prepared else {
+                            continue;
+                        };
+                        let observation = flags.observation(prepared.sample.clone());
+                        if !force
+                            && !prepared
+                                .reports(sub.last_notified_observation.as_ref().map(|o| o.sample()))
+                            && !observation.flags_changed(sub.last_notified_observation.as_ref())
+                        {
+                            continue;
+                        }
+                        let mut values = vec![BACnetPropertyValue {
+                            property_identifier: property,
+                            property_array_index: sub.monitored_property_array_index,
+                            value: prepared.encoded,
                             priority: None,
-                        });
-                    }
-                    (values, observation)
-                };
+                        }];
+                        if property != PropertyIdentifier::STATUS_FLAGS
+                            && let Some(encoded) = flags.encoded
+                        {
+                            values.push(BACnetPropertyValue {
+                                property_identifier: PropertyIdentifier::STATUS_FLAGS,
+                                property_array_index: None,
+                                value: encoded,
+                                priority: None,
+                            });
+                        }
+                        (values, observation)
+                    };
                 // Issued under the database guard the observation was read
                 // under, then the table's (#826).
                 let Some(completion) = cov_table.write().await.prepare_completion(sub) else {
