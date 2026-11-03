@@ -136,13 +136,25 @@ impl Foreign {
     /// or [`DEFAULT_RESPONSE_TIMEOUT`] if shorter, [`Retry::Backoff`], no
     /// broadcasts held, Forwarded-NPDUs taken only from `bbmd`, and no
     /// release of the BBMD a move leaves.
-    /// For a BBMD not known yet, set [`bbmd`](Self::bbmd) to `None`.
+    /// For a BBMD not known yet, see [`Foreign::waiting`].
     #[must_use]
     pub const fn new(bbmd: SocketAddrV4, ttl: u16) -> Self {
+        Self::with_bbmd(Some(bbmd), ttl)
+    }
+
+    /// As [`Foreign::new`], for a BBMD not known yet
+    /// ([`bbmd`](Self::bbmd) `None`): the node waits for a
+    /// [`retarget`](super::Node::retarget) to name it.
+    #[must_use]
+    pub const fn waiting(ttl: u16) -> Self {
+        Self::with_bbmd(None, ttl)
+    }
+
+    const fn with_bbmd(bbmd: Option<SocketAddrV4>, ttl: u16) -> Self {
         // Half the time-to-live, exactly: a whole number of milliseconds.
         let renewal = Duration::from_millis(ttl as u64 * 500).max(MIN_RENEWAL);
         Self {
-            bbmd: Some(bbmd),
+            bbmd,
             ttl,
             renewal,
             response_timeout: renewal.min(DEFAULT_RESPONSE_TIMEOUT),

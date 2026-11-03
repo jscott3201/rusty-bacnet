@@ -1820,11 +1820,12 @@ fails if it refuses or doesn't answer. The TUI reports the outcome, keeps
 trying either way, and shows the registration on its Network screen.
 
 The BBMD may be a host name (`--foreign-bbmd bbmd.example:47808`, #2308), looked
-up when the CLI starts and again about every 30 seconds while it runs. A name
-that doesn't resolve still starts the transport, with nothing registered and
-broadcasts held: a one-shot command then fails at once, saying why the name
-didn't resolve, and the TUI logs that reason and keeps trying the name every 30
-seconds. Its Network screen shows the BBMD when the name resolved as the session
+up when the CLI starts. Until it first resolves it is tried again 30 seconds after
+each failure; from then on it is looked up alongside the registrations, at most
+every 30 seconds. A name that doesn't resolve still starts the transport, with
+nothing registered and broadcasts held: a one-shot command then fails at once,
+saying why the name didn't resolve, and the TUI logs that reason and keeps
+trying the name. Its Network screen shows the BBMD when the name resolved as the session
 started; one that resolves later registers, but the screen doesn't show it.
 Behind NAT, keep `--renewal` short so the mapping the BBMD's replies come back
 on stays open; the TTL can stay long. If you know the address and port the NAT

@@ -80,9 +80,11 @@ pub(crate) struct Cli {
 
     /// Run as a foreign device registered with this BBMD (IP, host name, or
     /// either with :port), so broadcasts such as discover reach its network.
-    /// A host name is looked up at start and again every 30 s or so. A
-    /// one-shot command waits for the registration first, and fails when
-    /// the name doesn't resolve; it is renewed while the CLI runs.
+    /// A host name is looked up at start: until it first resolves, again 30
+    /// s after each failure, and from then on alongside the registrations,
+    /// at most every 30 s. A one-shot command waits for the registration
+    /// first, and fails when the name doesn't resolve; it is renewed while
+    /// the CLI runs.
     /// BACnet/IP only.
     #[arg(long, global = true, value_name = "ADDR", value_parser = crate::foreign::parse_foreign_bbmd_arg)]
     pub(crate) foreign_bbmd: Option<ForeignBbmd>,

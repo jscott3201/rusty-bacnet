@@ -21,8 +21,7 @@ const NPDU: &[u8] = &[0x01, 0x20, 0xFF, 0xFF, 0x00, 0xFF, 0x10, 0x08];
 /// Registration for 60 s with no BBMD known yet, holding `hold`
 /// broadcasts, and releasing the BBMD a move leaves.
 fn waiting(hold: u16) -> Foreign {
-    with(Foreign::new(BBMD, 60), |f| {
-        f.bbmd = None;
+    with(Foreign::waiting(60), |f| {
         f.hold = hold;
         f.release_previous = true;
     })

@@ -106,9 +106,10 @@ impl ForeignDeviceConfig {
         // Three seconds, exactly.
         let response_timeout =
             CoreDuration::saturating_from_core(BipTransport::BVLC_RESPONSE_TIMEOUT);
-        let unknown = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0);
-        let mut foreign = Foreign::new(unknown, self.ttl);
-        foreign.bbmd = self.bbmd();
+        let mut foreign = match self.bbmd() {
+            Some(bbmd) => Foreign::new(bbmd, self.ttl),
+            None => Foreign::waiting(self.ttl),
+        };
         foreign.renewal = interval;
         foreign.response_timeout = interval.min(response_timeout);
         foreign.retry = Retry::Backoff;

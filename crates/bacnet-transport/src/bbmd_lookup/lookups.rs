@@ -91,6 +91,11 @@ impl Lookups {
         self.name.as_ref()
     }
 
+    /// Whether a resolver call runs.
+    pub(crate) fn is_running(&self) -> bool {
+        self.running.is_some()
+    }
+
     /// A node starts: its first registration attempt looks the name up
     /// again, whenever the last lookup was. A call still running carries on
     /// as the only one: every started lookup frees its slot when it ends,
@@ -185,13 +190,22 @@ impl Lookups {
         }
     }
 
-    /// Log a failed lookup of `name`, the device staying at `bbmd`: the
-    /// first of a run at warn, the rest at debug.
-    pub(crate) fn failed(&mut self, name: &BbmdName, bbmd: impl Display, failed: &Failed) {
+    /// Log a failed lookup of `name`, the device staying at `bbmd`, or,
+    /// with no address yet (`None`, a configured name), waiting for one:
+    /// the first of a run at warn, the rest at debug.
+    pub(crate) fn failed<A: Display>(&mut self, name: &BbmdName, bbmd: Option<A>, failed: &Failed) {
         let host = name.host();
         let failure = failed.failure;
         let error = failed.error.as_ref().map(ToString::to_string);
         let repeat = std::mem::replace(&mut self.failing, true);
+        let Some(bbmd) = bbmd else {
+            if repeat {
+                debug!(%host, ?failure, ?error, "The BBMD's host name still doesn't resolve; trying again in 30 s");
+            } else {
+                warn!(%host, ?failure, ?error, "The BBMD's host name doesn't resolve to a usable address; no BBMD to register with yet, trying again in 30 s");
+            }
+            return;
+        };
         if failure == BbmdLookupFailure::Abandoned {
             if repeat {
                 debug!(%host, %bbmd, "A lookup of the BBMD's host name ended without an answer again");

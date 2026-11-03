@@ -83,35 +83,46 @@ impl ForeignTarget {
 
 impl ForeignTarget {
     /// While the BBMD's address isn't known, a lookup that failed is tried
-    /// again once [`ATTEMPT_LOOKUP_INTERVAL`] has passed: with no
-    /// registration attempt to go alongside, nothing else would (#2308).
-    /// One retry waits at a time; with no runtime, the next start retries.
+    /// again once [`ATTEMPT_LOOKUP_INTERVAL`] has passed from the newest
+    /// failure: with no registration attempt to go alongside, nothing else
+    /// would (#2308). Each failure replaces the retry waiting, so a failure
+    /// in its window, after a write or a restart, still leads to the next
+    /// lookup. With no runtime, the next start retries.
     fn retry_later(&self, state: &mut TargetState) {
-        if state.retry_pending {
-            return;
-        }
+        Self::cancel_retry(state);
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             return;
         };
-        state.retry_pending = true;
         let target = self.me.clone();
-        runtime.spawn(async move {
+        let task = runtime.spawn(async move {
             tokio::time::sleep(ATTEMPT_LOOKUP_INTERVAL).await;
             if let Some(target) = target.upgrade() {
                 target.retry();
             }
         });
+        state.retry = Some(task.abort_handle());
+    }
+
+    /// Cancel the retry waiting, if any.
+    pub(super) fn cancel_retry(state: &mut TargetState) {
+        if let Some(retry) = state.retry.take() {
+            retry.abort();
+        }
     }
 
     /// The retry [`retry_later`](Self::retry_later) set up: look the name
-    /// up, if the transport still runs and still waits for an address.
+    /// up, if the transport still runs and still waits for an address. It
+    /// comes a full interval after the newest failure, so it doesn't wait
+    /// for the floor between attempt-driven lookups; one already running
+    /// sets up the next retry if it fails.
     fn retry(&self) {
         let mut state = self.lock();
-        state.retry_pending = false;
-        if Self::running(&state).is_none() || state.config.bbmd().is_some() {
+        state.retry = None;
+        let waiting = state.config.bbmd().is_none();
+        if Self::running(&state).is_none() || !waiting || state.lookups.is_running() {
             return;
         }
-        let lookup = state.lookups.lookup(false, &self.name_target());
+        let lookup = state.lookups.lookup(true, &self.name_target());
         drop(state);
         if let Some(lookup) = lookup {
             lookup.start();
@@ -152,7 +163,7 @@ impl NameTarget for ForeignTarget {
         let moved_to = match verdict {
             Ok(moved_to) => moved_to,
             Err(failed) => {
-                let bbmd = state.config.bbmd.clone();
+                let bbmd = state.config.bbmd();
                 state.lookups.failed(&name, bbmd, &failed);
                 // With no address yet, no registration attempt comes to
                 // look the name up again alongside (#2308).

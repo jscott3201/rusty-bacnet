@@ -145,7 +145,14 @@ pub(crate) async fn await_registration(
 /// Why a lookup of the BBMD's host name failed, for a person to read.
 pub(crate) fn lookup_failure(failure: BbmdLookupFailure) -> String {
     match failure {
-        BbmdLookupFailure::Error(kind) => format!("did not resolve ({kind})"),
+        // The kind is all a snapshot keeps; one that says nothing more, as a
+        // resolver's own failure doesn't, is left out.
+        BbmdLookupFailure::Error(kind) => match kind.to_string() {
+            text if kind == std::io::ErrorKind::Other || text.contains("uncategorized") => {
+                "did not resolve".into()
+            }
+            text => format!("did not resolve ({text})"),
+        },
         BbmdLookupFailure::TimedOut => "had no answer from the resolver within 10 s".into(),
         BbmdLookupFailure::NoAddress => "has no IPv4 address".into(),
         BbmdLookupFailure::Unusable(ip) => {
@@ -174,7 +181,7 @@ mod tests {
         for (failure, text) in [
             (
                 BbmdLookupFailure::Error(io::ErrorKind::NotFound),
-                "did not resolve",
+                "did not resolve (entity not found)",
             ),
             (BbmdLookupFailure::TimedOut, "within 10 s"),
             (BbmdLookupFailure::NoAddress, "no IPv4 address"),
@@ -186,6 +193,9 @@ mod tests {
         ] {
             assert!(lookup_failure(failure).contains(text), "{failure:?}");
         }
+        // A kind that says nothing more is left out.
+        let other = BbmdLookupFailure::Error(io::ErrorKind::Other);
+        assert_eq!(lookup_failure(other), "did not resolve");
     }
 
     /// A resolver that knows no name.

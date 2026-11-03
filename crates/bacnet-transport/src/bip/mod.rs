@@ -446,6 +446,10 @@ impl BipTransport {
         if let Some(node) = self.node.take() {
             node.stop();
         }
+        // A configured BBMD name not resolved yet stops being retried.
+        if let Some(target) = &self.foreign_device {
+            target.detach();
+        }
         #[cfg(test)]
         if let Some(between) = self.between_stops.take() {
             between();

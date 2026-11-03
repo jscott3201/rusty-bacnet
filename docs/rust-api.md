@@ -3137,7 +3137,7 @@ after it ended, so a late answer to it can't pass for the registration's. It is
 off by default, for the reasons `BipTransport::set_release_previous_bbmd` gives.
 
 **A foreign node with no BBMD yet** (#2308). `Foreign::bbmd` is an `Option`:
-`Foreign::new` sets `Some`, and `None` starts, or moves, a node that waits for its
+`Foreign::new` sets `Some`, and `Foreign::waiting(ttl)` (`None`) starts, or moves, a node that waits for its
 BBMD, as a device whose BBMD's host name hasn't resolved does. It has no
 registration attempt due, holds broadcasts up to `Foreign::hold` and refuses the
 next with `SendRefusal::HoldFull` (with no hold, every one), trusts no

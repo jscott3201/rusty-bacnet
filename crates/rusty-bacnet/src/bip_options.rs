@@ -38,8 +38,9 @@ const MIN_RENEWAL_SECS: f64 = 0.1;
 /// address); the owner's transport must match. A host name (B/IP only,
 /// #2308) is looked up at start and again alongside the registrations; one
 /// that doesn't resolve still starts the owner, with registration waiting
-/// and the failure counted in `foreign_registration()`. A B/IPv6 BBMD must be a unicast host: not unspecified,
-/// multicast, link-local, IPv4-mapped or IPv4-compatible. `ttl`, at least
+/// and the name tried again every 30 s. A B/IPv6 BBMD must be a unicast
+/// host: not unspecified, multicast, link-local, IPv4-mapped or
+/// IPv4-compatible. `ttl`, at least
 /// 1, is how many seconds the BBMD keeps the entry. `renewal` (B/IP only)
 /// is the seconds between registrations, at least 0.1 and shorter than
 /// `ttl`; `None` renews at half the TTL, which is what a B/IPv6 foreign
@@ -74,9 +75,11 @@ impl PyForeignDevice {
         if let Some(address) = parse_ipv6_address(bbmd)? {
             return Self::bip6(bbmd, address, ttl, renewal);
         }
+        // An IPv4 address, with or without a port, takes the unicast checks
+        // and messages the other options do; anything else may be a name.
+        let is_address = bbmd.parse::<SocketAddrV4>().is_ok() || bbmd.parse::<Ipv4Addr>().is_ok();
         let address = match bbmd.parse::<ForeignBbmd>() {
-            // An address takes the unicast checks the other options do.
-            Ok(ForeignBbmd::Address(_)) => parse_address(bbmd, "bbmd")?.into(),
+            _ if is_address => parse_address(bbmd, "bbmd")?.into(),
             Ok(named) => named,
             Err(_) => {
                 return Err(PyValueError::new_err(format!(

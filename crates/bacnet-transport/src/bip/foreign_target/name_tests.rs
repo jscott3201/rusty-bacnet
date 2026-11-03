@@ -79,6 +79,7 @@ impl Device {
     /// of the transport does.
     async fn restart(&mut self) {
         self.node.stop();
+        self.target.detach();
         self.driver.abort();
         let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
         let socket = Arc::new(BipSocket::recording(socket, self.sink.clone()));
@@ -705,4 +706,88 @@ async fn an_address_written_while_waiting_ends_the_wait() {
     device.after(1).await;
     assert_eq!(registrations(&device.sink.take()), [C]);
     assert_eq!(device.bbmd(), at(C));
+}
+
+/// The configured name `bbmd.test`, which the table fails until told
+/// otherwise.
+fn configured_name() -> ForeignBbmd {
+    ForeignBbmd::Name {
+        host: NAME.into(),
+        port: PORT,
+    }
+}
+
+/// A name written while the retry of a configured name waits, which fails
+/// too, sets up the next retry 30 s after its own failure: lookups go on
+/// every 30 s, and the device registers once the name resolves (#2308).
+#[tokio::test(start_paused = true)]
+async fn a_name_written_while_its_retry_waits_keeps_the_retries_going() {
+    let device = Device::configured(configured_name(), 60).await;
+    device.after(1).await;
+    assert_eq!(device.names.calls(), 1);
+    device.after(10_000).await;
+    device.activate(Device::name()).unwrap();
+    device.after(1).await;
+    assert_eq!(device.names.calls(), 2);
+    // 30 s after the newest failure, and every 30 s from then on.
+    device.after(30_000).await;
+    assert_eq!(device.names.calls(), 3);
+    device.names.answer(NAME, Answer::addresses([A]));
+    device.after(30_000).await;
+    assert_eq!(device.names.calls(), 4);
+    assert_eq!(registrations(&device.sink.take()), [A]);
+    assert_eq!(device.bbmd(), at(A));
+}
+
+/// A stop and a start while the retry of a configured name waits: the
+/// start looks the name up at once, and when that fails too, the next
+/// retry comes 30 s after it, and so on until the name resolves (#2308).
+#[tokio::test(start_paused = true)]
+async fn a_restart_while_its_retry_waits_keeps_the_retries_going() {
+    let mut device = Device::configured(configured_name(), 60).await;
+    device.after(1).await;
+    assert_eq!(device.names.calls(), 1);
+    device.after(10_000).await;
+    device.restart().await;
+    device.after(1).await;
+    assert_eq!(device.names.calls(), 2);
+    device.after(30_000).await;
+    assert_eq!(device.names.calls(), 3);
+    device.names.answer(NAME, Answer::addresses([A]));
+    device.after(30_000).await;
+    assert_eq!(device.names.calls(), 4);
+    assert_eq!(registrations(&device.sink.take()), [A]);
+    assert_eq!(device.bbmd(), at(A));
+}
+
+/// A stop cancels the retry of a configured name, rather than leaving it
+/// to wake and find nothing to do: no lookup follows.
+#[tokio::test(start_paused = true)]
+async fn a_stop_cancels_the_retry() {
+    let device = Device::configured(configured_name(), 60).await;
+    device.after(1).await;
+    assert!(device.target.lock().retry.is_some());
+    device.node.stop();
+    device.target.detach();
+    assert!(device.target.lock().retry.is_none());
+    device.after(120_000).await;
+    assert_eq!(device.names.calls(), 1);
+}
+
+/// A name written while the device waits for a configured one is the
+/// registration in effect from then on: `foreign_device_config` and the
+/// next start read it back (#2308).
+#[tokio::test(start_paused = true)]
+async fn a_name_written_while_waiting_is_the_registration_in_effect() {
+    let device = Device::configured(configured_name(), 60).await;
+    device.after(1).await;
+    let other = BACnetHostAddress::Name("other.test".into());
+    device.activate(other).unwrap();
+    device.after(1).await;
+    let named = ForeignBbmd::Name {
+        host: "other.test".into(),
+        port: PORT,
+    };
+    assert_eq!(device.target.config().bbmd, named);
+    assert_eq!(device.names.calls(), 2);
 }

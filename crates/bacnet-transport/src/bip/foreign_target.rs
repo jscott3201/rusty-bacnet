@@ -33,6 +33,7 @@ use bacnet_types::bip_port::{ForeignDeviceChanges, ForeignRegistration};
 use bacnet_types::constructed::{BACnetHostAddress, BACnetHostNPort};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
+use tokio::task::AbortHandle;
 
 use super::BipTransport;
 use super::ForeignBbmd;
@@ -56,9 +57,10 @@ struct TargetState {
     /// first does. A configured name that hasn't resolved yet leaves
     /// `config` naming it, and the node waiting for a BBMD (#2308).
     lookups: Lookups,
-    /// A lookup is to run again 30 seconds after one failed while the
-    /// node waits for its BBMD ([`ForeignTarget::retry_later`]).
-    retry_pending: bool,
+    /// The lookup to run 30 seconds after the newest one that failed while
+    /// the node waits for its BBMD ([`ForeignTarget::retry_later`]): each
+    /// failure replaces it, and a start or a stop cancels it.
+    retry: Option<AbortHandle>,
 }
 
 /// One transport's foreign-device registration, shared with the Network
@@ -115,7 +117,7 @@ impl ForeignTarget {
                 config,
                 node: Weak::new(),
                 lookups: Lookups::new(Arc::clone(&transport.bbmd_resolver), name),
-                retry_pending: false,
+                retry: None,
             }),
             broadcast: transport.broadcast_address,
             interface: transport.interface,
@@ -159,7 +161,8 @@ impl ForeignTarget {
     /// on values the object no longer reports. Each automatic registration
     /// attempt the node sends looks a BBMD host name up again; a node
     /// waiting for a BBMD whose name hasn't resolved yet sends none, so its
-    /// name is looked up now (#2308).
+    /// name is looked up now (#2308), and a retry an earlier run set up is
+    /// cancelled: this lookup's failure sets up the next.
     pub(super) fn attach(
         &self,
         node: &Arc<NodeHandle>,
@@ -171,6 +174,7 @@ impl ForeignTarget {
         }
         state.node = Arc::downgrade(node);
         state.lookups.attached();
+        Self::cancel_retry(&mut state);
         let target = self.me.clone();
         node.on_registration_attempt(Box::new(move || {
             if let Some(target) = target.upgrade() {
@@ -188,6 +192,13 @@ impl ForeignTarget {
             lookup.start();
         }
         Ok(())
+    }
+
+    /// The transport stopped: the retry of a name not resolved yet is
+    /// cancelled, and a lookup still running changes and counts nothing
+    /// when it ends, so it sets up no other (#2308).
+    pub(super) fn detach(&self) {
+        Self::cancel_retry(&mut self.lock());
     }
 
     /// The running node: attached, and not stopped.
@@ -288,6 +299,16 @@ impl ForeignRegistration for ForeignTarget {
             node.retarget(foreign).map_err(|_| out_of_range())?;
         }
         state.config = config;
+        // With no address yet, the registration in effect names the newest
+        // host name, which `foreign_device_config` and a restart then use.
+        if let Some(Some(named)) = &name
+            && state.config.bbmd().is_none()
+        {
+            state.config.bbmd = ForeignBbmd::Name {
+                host: named.host().to_owned(),
+                port: named.port(),
+            };
+        }
         let lookup = name.and_then(|name| self.renamed(&mut state, name));
         drop(state);
         if let Some(lookup) = lookup {

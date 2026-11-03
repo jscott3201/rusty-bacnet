@@ -97,7 +97,7 @@ impl NameTarget for ForeignTarget {
             Ok(moved_to) => moved_to,
             Err(failed) => {
                 let bbmd = SocketAddrV6::new(state.config.bbmd_ip, state.config.bbmd_port, 0, 0);
-                state.lookups.failed(&name, bbmd, &failed);
+                state.lookups.failed(&name, Some(bbmd), &failed);
                 return;
             }
         };

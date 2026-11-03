@@ -87,6 +87,9 @@ class OptionTests(unittest.TestCase):
                          ("bbmd.example:47809", 60, 20))
         self.assertEqual(repr(ForeignDevice("bbmd", ttl=60)),
                          "ForeignDevice(bbmd='bbmd:47808', ttl=60, renewal=None)")
+        # An address keeps its own messages.
+        with self.assertRaisesRegex(ValueError, "nonzero port"):
+            ForeignDevice("192.0.2.10:0")
 
     def test_bbmd_keeps_its_settings(self):
         bbmd = Bbmd(["10.0.5.2", ("10.0.6.2:47809", "255.255.255.0")],
