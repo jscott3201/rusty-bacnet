@@ -725,7 +725,7 @@ image would link:
 | `reporting` image (thumbv7m) | `.text` estimate | From |
 |---|---|---|
 | PR 1, measured | 148.4 KB (flash 165.8 KB) | the `objects` image's 127.3 KB, plus the table and the two subscribe services (#2303) |
-| `cov` (after PR 2) | 147-156 KB | ~4,100 linked lines of PR 1 and 2 |
+| PR 2, measured | 191.4 KB (flash 209.7 KB) | the image through the `Reporter` (§8.3) |
 | + `event-reporting` (after PR 3) | 172-181 KB | ~2,200 lines, plus the measured objects and encoder share |
 | + `event-enrollment` (#2319) | 207-221 KB | ~2,700 lines, the Event Enrollment object, `decode_event_parameter` |
 | + the Multiple path (#2320) | +15-25 KB | ~3,300 lines, the COVNotificationMultiple codec |
@@ -768,6 +768,21 @@ with PR 2):
 So the arena stays 16 KiB. Later an entry also holds the observation it
 last reported (shared samples) and, while a confirmed report is out, its
 flight's state.
+
+Measured for PR 2 (2b, 2026-11-03), the scenario through the `Reporter`:
+
+| | Measured |
+|---|---|
+| Outbox entry (token, reference, route, flags, place in the buffer) | 176 octets on a 64-bit host, beside the parameters in the buffer |
+| Confirmed-table entry | 152 octets on a 64-bit host, and its parameters on the heap |
+| The scenario's outbox | 6 entries and 256 octets: one change's six notifications |
+| The `reporting` scenario's peak heap (64-bit host) | 20,760 octets: the arena grows to 24 KiB for the image |
+| The `reporting` image (thumbv7m) | 191,352 `.text`, 209,692 flash, 24,672 RAM |
+
+The image passes §8.2's estimate (147-156 KB) by about 35 KB: it links
+the evaluation of every report form (Value_Source, Life Safety, the Table
+13-1 rows), both list encoders and the overlay, and the sort of each list.
+On riscv32imac it takes 254,166 of the layout's 262,144 octets of flash.
 
 ## 9. Risks
 
@@ -898,6 +913,22 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
     confirmed table, `Bindings`/`InvokeIds`, `ActiveCovOverlay`, the
     image through the `Reporter`, the parity corpus and the `cov` feature
     measurement.
+
+**PR 2b, 2026-11-03 (measured):**
+
+12. No `cov` feature (decision 9, #2215's rule). With the core's `cov` and
+    `report` modules gated off, the `objects` image (thumbv7m, `firmware`
+    profile) has 127,544 octets of `.text`, and 127,360 with them: the
+    linker drops what nothing reaches, so the gate saves nothing an image
+    keeps. The core's `alloc` rlib for thumbv7m (release, opt-level z, one
+    codegen unit, no LTO) holds 97,418 octets of `.text` with them and
+    20,950 without, compiled but never linked by a device that doesn't
+    report.
+13. The `Reporter` asks the host's admission for every report, so the
+    outbox checks room for each; a report it refuses leaves its
+    subscription owed, looked at again once the outbox empties. Its Life
+    Safety writes report from the values each write changed, as the
+    server's do.
 
 ## 12. Evidence
 

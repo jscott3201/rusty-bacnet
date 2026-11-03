@@ -7616,9 +7616,32 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   commits what `begin_confirmed` kept and names the references owed a
   fresh look. The values a notification carries are in `cov::prepare`,
   `flags`, `reported`, `value_source` and `life_safety`, and the Device's
-  two subscription lists in `cov::active`. `bacnet_server::cov` keeps
-  `CovSubscriptionTable` with its API, which runs on it, and the atomics and
-  in-flight tracker; the `Responder` doesn't dispatch the COV services yet.
+  two subscription lists in `cov::active`, with `ActiveCovOverlay`, which
+  answers both from a `CovTable` through any read that takes a
+  `ReadOverlay`. `bacnet_server::cov` keeps `CovSubscriptionTable` with its
+  API, which runs on it, and the atomics and in-flight tracker.
+- `report` (#2303): `Reporter`, the `Responder` with COV reporting, for
+  firmware that owns its database. `handle(db, peer, request, now, out)`
+  answers SubscribeCOV and SubscribeCOVProperty and queues the first
+  notification, hands every other request to the `Responder`, reads the
+  Device's lists through the overlay, and queues what a write changes (a
+  Life Safety object from the values the write changed). `capture` and
+  `changed` do the same for the host's own changes. The outbox is one
+  buffer and one queue allocated at build (`OutboxLimits`: entries and
+  octets); a report it has no room for leaves its subscription owed, looked
+  at again once it empties. `pop(bindings, ids, now, out)` appends the next
+  APDU and returns a `Notification` (token, `Destination`, `NotifyService`,
+  invoke ID, priority); a confirmed one takes an invoke ID from the host's
+  `InvokeIds`, which the device's own requests share. `reply(from, apdu,
+  ids, now)` matches a SimpleACK, Error, Reject or Abort by invoke ID and
+  peer; `next_deadline` and `on_deadline` run lifetimes, abandoned reports,
+  timeouts (resent with the same invoke ID while retries last, then failed)
+  and the looks owed. The host reports each send through `delivered`.
+  `ReportConfig` holds the `CovPolicy`, the outbox and the confirmed
+  timing; `ReporterCounters` what it counted. Build the database with
+  `report::SERVICES`, which adds the two subscribe services to the
+  `Responder`'s. The COV-multiple services stay with `bacnet-server`
+  (#2320).
 - `reply`: `error_apdu`, the one map from an `Error` to its Reject or Error
   PDU (never an Abort: a work or byte limit is the caller's Abort), and the
   refusals a host sends for a service it doesn't run.
