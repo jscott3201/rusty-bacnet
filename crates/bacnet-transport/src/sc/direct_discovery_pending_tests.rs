@@ -217,7 +217,7 @@ async fn stale_request_leaves_newer_waiter_with_same_id() {
 }
 
 /// Answers that don't come from the node asked: a forged one from another
-/// node, and one the hub never relays for a request (no originating VMAC).
+/// node, and an ACK with no originating VMAC, which the hub never relays.
 #[tokio::test(start_paused = true)]
 async fn answer_from_another_node_is_ignored() {
     let forged = [
@@ -228,7 +228,6 @@ async fn answer_from_another_node_is_ignored() {
         ),
         ("ACK without an origin", ack_from, None),
         ("NAK from another node", nak_from, Some(OTHER)),
-        ("NAK without an origin", nak_from, None),
     ];
     for (case, answer, from) in forged {
         let (direct, conn) = fixture();
@@ -285,5 +284,20 @@ async fn nak_from_the_node_asked_completes_empty() {
     direct.fulfill_from_hub_message(&nak_from(hub.sent()[0], Some(TARGET)));
     assert_eq!(discovery.await, Some(Vec::new()));
     assert_eq!(direct.cached_uris(&TARGET).await, Some(Vec::new()));
+    assert_eq!(waiting(&direct), 0);
+}
+
+/// A NAK with no originating VMAC is the hub's own refusal (AB.3.1.2): the
+/// send falls back to the hub at once, and nothing is cached for the node.
+#[tokio::test(start_paused = true)]
+async fn hub_nak_falls_back_at_once_without_caching() {
+    let (direct, conn) = fixture();
+    let hub = Hub::new(Write::Accept);
+    let mut discovery = Box::pin(direct.discover_via_hub(TARGET, &hub, &conn, WAIT_MS));
+    assert!(poll_once(discovery.as_mut()).is_pending());
+    direct.fulfill_from_hub_message(&nak_from(hub.sent()[0], None));
+    // Ready on the next poll, with the clock where it was: no timeout ran.
+    assert_eq!(poll_once(discovery.as_mut()), Poll::Ready(None));
+    assert_eq!(direct.cached_uris(&TARGET).await, None);
     assert_eq!(waiting(&direct), 0);
 }

@@ -252,7 +252,18 @@ struct Waiter {
     seq: u64,
     /// The node asked. Only an answer the hub relays from this node counts.
     dest: Vmac,
-    answer: oneshot::Sender<Vec<String>>,
+    answer: oneshot::Sender<Answer>,
+}
+
+/// How an Address-Resolution request ended.
+#[derive(Debug, PartialEq)]
+enum Answer {
+    /// The node asked answered: its URIs, or none (an empty ACK or its NAK).
+    /// Cached.
+    Uris(Vec<String>),
+    /// The hub itself refused the request. Fall back to hub delivery now
+    /// and cache nothing: the refusal says nothing about the node.
+    HubRefused,
 }
 
 /// Address-Resolution waiters keyed by message ID. Every access is short
@@ -547,12 +558,18 @@ impl<W: WebSocketPort> DirectShared<W> {
     ///
     /// An answer must also come from the node asked. Both the ACK and the
     /// NAK are the destination node's (AB.3.3), and the hub names the node a
-    /// relayed message came from as its originating VMAC (AB.5.3.2). The hub
-    /// drops a request for an unknown VMAC rather than answering it, so an
-    /// answer with no originating VMAC, or another node's, is ignored: IDs
-    /// count up from 1, and any node on the hub could otherwise guess one.
+    /// relayed message came from as its originating VMAC (AB.5.3.2). An ACK
+    /// or NAK naming another node is ignored: IDs count up from 1, and any
+    /// node on the hub could otherwise guess one. An ACK with no originating
+    /// VMAC is ignored too. A NAK with none came from the connection peer,
+    /// the hub itself (AB.3.1.2); no other node can produce one, since the
+    /// hub stamps the origin on everything it relays. It ends the wait at
+    /// once and caches nothing; the caller then takes the hub path. (The
+    /// connection itself treats such a hub NAK as fatal, so that path
+    /// currently meets a closed hub link rather than waiting out the
+    /// connect timeout first.)
     pub(super) fn fulfill_from_hub_message(&self, msg: &ScMessage) {
-        let uris = match msg.function {
+        let answer = match msg.function {
             ScFunction::AddressResolutionAck => {
                 if address_resolution_message_error(msg).is_some() {
                     return;
@@ -560,7 +577,7 @@ impl<W: WebSocketPort> DirectShared<W> {
                 let Some(uris) = parse_ack_uris(&msg.payload) else {
                     return;
                 };
-                uris
+                Answer::Uris(uris)
             }
             ScFunction::Result => {
                 let Ok(ScBvlcResult::Nak { result_for, .. }) = decode_sc_bvlc_result(msg) else {
@@ -569,23 +586,29 @@ impl<W: WebSocketPort> DirectShared<W> {
                 if result_for != ScFunction::AddressResolution {
                     return;
                 }
-                Vec::new()
+                match msg.originating_vmac {
+                    None => Answer::HubRefused,
+                    Some(_) => Answer::Uris(Vec::new()),
+                }
             }
             _ => return,
         };
         let waiter = {
             let mut waiters = lock_waiters(&self.pending);
-            let from_dest = waiters
-                .by_id
-                .get(&msg.message_id)
-                .is_some_and(|waiter| msg.originating_vmac == Some(waiter.dest));
-            if !from_dest {
+            let accepted = waiters.by_id.get(&msg.message_id).is_some_and(|waiter| {
+                match answer {
+                    // Only an origin-less NAK yields this; see above.
+                    Answer::HubRefused => true,
+                    Answer::Uris(_) => msg.originating_vmac == Some(waiter.dest),
+                }
+            });
+            if !accepted {
                 return;
             }
             waiters.by_id.remove(&msg.message_id)
         };
         if let Some(waiter) = waiter {
-            let _ = waiter.answer.send(uris);
+            let _ = waiter.answer.send(answer);
         }
     }
 
@@ -594,8 +617,8 @@ impl<W: WebSocketPort> DirectShared<W> {
     ///
     /// Returns `Some(uris)` on a matched ACK or NAK (empty when the peer
     /// knows no URIs or does not support direct connections). Returns `None`
-    /// on any transport failure or timeout; the caller must fall back to hub
-    /// delivery and must not cache the miss. Successful results are cached
+    /// on any transport failure, timeout or refusal by the hub itself; the
+    /// caller must fall back to hub delivery and must not cache the miss. Successful results are cached
     /// before returning, including empty lists.
     pub(super) async fn discover_via_hub<H: WebSocketPort>(
         &self,
@@ -628,13 +651,14 @@ impl<W: WebSocketPort> DirectShared<W> {
             waiters
                 .by_id
                 .insert(request.message_id, Waiter { seq, dest, answer });
-            // From here on every exit, cancellation included, removes the entry.
+            drop(waiters);
+            // Nothing between the insert and here can panic. From here on
+            // every exit, cancellation included, removes the entry.
             let entry = PendingEntry {
                 waiters: &self.pending,
                 message_id: request.message_id,
                 seq,
             };
-            drop(waiters);
             let mut buf = BytesMut::new();
             encode_sc_message(&mut buf, &request);
             (entry, buf.freeze().to_vec(), receiver)
@@ -643,7 +667,7 @@ impl<W: WebSocketPort> DirectShared<W> {
             return None;
         }
         let wait = Duration::from_millis(connect_timeout_ms.max(1));
-        let Ok(Ok(uris)) = tokio::time::timeout(wait, receiver).await else {
+        let Ok(Ok(Answer::Uris(uris))) = tokio::time::timeout(wait, receiver).await else {
             return None;
         };
         drop(entry);
