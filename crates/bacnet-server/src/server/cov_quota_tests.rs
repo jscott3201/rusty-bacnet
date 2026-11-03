@@ -1,5 +1,4 @@
 use bacnet_types::error::RemoteError;
-use std::time::{Duration, Instant};
 
 use bytes::BytesMut;
 
@@ -20,9 +19,10 @@ use bacnet_types::primitives::ObjectIdentifier;
 
 use super::cov_notifications_tests::recording_transport;
 use super::*;
-use crate::cov::{CovNotificationKind, CovPolicy, CovSubscription};
 use crate::handlers::{handle_subscribe_cov, handle_subscribe_cov_property_multiple_with_initial};
 use crate::server::test_transport::TestTransport;
+use bacnet_device_core::cov::CovSubscription;
+use bacnet_device_core::cov::{CovNotificationKind, CovPolicy};
 
 fn ai(instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::ANALOG_INPUT, instance).unwrap()
@@ -489,14 +489,16 @@ async fn disconnect_and_expiry_cleanup_releases_quota() {
     // Verify routed_b remains active
     {
         let table = server.cov_table.read().await;
-        assert!(table.contains(&crate::cov::CovSubscriptionKey::Object {
-            recipient: crate::cov::CovRecipient::from_endpoint(
-                &MacAddr::from_slice(&router_mac),
-                Some(&routed_b)
-            ),
-            process_id: 1,
-            object: ai(1)
-        }));
+        assert!(
+            table.contains(&bacnet_device_core::cov::CovSubscriptionKey::Object {
+                recipient: bacnet_device_core::cov::CovRecipient::from_endpoint(
+                    &MacAddr::from_slice(&router_mac),
+                    Some(&routed_b)
+                ),
+                process_id: 1,
+                object: ai(1)
+            })
+        );
     }
 
     // Test expiry cleanup via purge_expired
@@ -508,7 +510,9 @@ async fn disconnect_and_expiry_cleanup_releases_quota() {
             subscriber_process_identifier: 1,
             monitored_object_identifier: ai(5),
             issue_confirmed_notifications: false,
-            expires_at: Some(Instant::now() - Duration::from_secs(5)),
+            expires_at: Some(
+                crate::runtime_clock::core_now() - bacnet_time::Duration::from_secs(5),
+            ),
             last_notified_observation: None,
             monitored_property: None,
             monitored_property_array_index: None,
@@ -692,7 +696,10 @@ async fn subscribe_cov_property_multiple_quota_names_the_overflowing_reference()
                         subscriber_process_identifier: 1,
                         monitored_object_identifier: ai(i),
                         issue_confirmed_notifications: false,
-                        expires_at: Some(Instant::now() + Duration::from_secs(3600)),
+                        expires_at: Some(
+                            crate::runtime_clock::core_now()
+                                + bacnet_time::Duration::from_secs(3600),
+                        ),
                         last_notified_observation: None,
                         monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
                         monitored_property_array_index: None,

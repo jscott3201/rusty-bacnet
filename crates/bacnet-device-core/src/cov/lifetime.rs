@@ -1,5 +1,10 @@
-use super::*;
-use std::num::NonZeroU32;
+//! How much of a subscription's lifetime is left, as notifications and the
+//! Device's lists report it.
+use core::num::NonZeroU32;
+
+use bacnet_time::{Duration, Instant};
+
+use super::{CovSubscriptionSnapshot, CovTable};
 
 /// Monotonic remaining lifetime before a new COV notification is admitted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,9 +30,11 @@ impl CovTimeRemaining {
         if remaining.is_zero() {
             return Self::Expired;
         }
+        // Rounded up by adding all but one nanosecond of a second; the
+        // seconds come from bacnet-time's division, not a 64-bit one.
         let seconds = remaining
-            .as_secs()
-            .saturating_add(u64::from(remaining.subsec_nanos() != 0));
+            .saturating_add(Duration::from_nanos(999_999_999))
+            .as_secs();
         Self::Finite(NonZeroU32::new(u32::try_from(seconds).unwrap_or(u32::MAX)).unwrap())
     }
 
@@ -41,7 +48,7 @@ impl CovTimeRemaining {
     }
 }
 
-impl CovSubscriptionTable {
+impl CovTable {
     /// Resolve captured owner/key/generation/route authority against live expiry.
     /// An expiry-only Multiple context refresh does not replace the generation.
     pub fn remaining_lifetime(
@@ -49,24 +56,24 @@ impl CovSubscriptionTable {
         snapshot: &CovSubscriptionSnapshot,
         now: Instant,
     ) -> Option<CovTimeRemaining> {
-        if !Arc::ptr_eq(&self.owner, &snapshot.owner) {
-            return None;
-        }
-        self.subs.get(snapshot.key()).and_then(|entry| {
-            (entry.generation == snapshot.generation && entry.flight.same(&snapshot.flight))
-                .then(|| CovTimeRemaining::at(entry.expires_at, now))
-        })
+        self.live_entry(snapshot)
+            .map(|entry| CovTimeRemaining::at(entry.expires_at, now))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
+    use crate::cov::CovNotificationKind;
+    use crate::cov::CovSubscription;
+    use alloc::vec;
+    use bacnet_types::MacAddr;
+    use bacnet_types::enums::PropertyIdentifier;
+    use bacnet_types::primitives::ObjectIdentifier;
 
     #[test]
     fn cov_lifetime_projection_distinguishes_finite_indefinite_and_expired() {
-        let now = Instant::now();
+        let now = Instant::from_secs(1_000);
         assert_eq!(
             CovTimeRemaining::at(None, now),
             CovTimeRemaining::Indefinite
@@ -99,7 +106,7 @@ mod tests {
 
     #[test]
     fn cov_lifetime_live_query_follows_context_refresh_and_rejects_stale_owners() {
-        let now = Instant::now();
+        let now = Instant::from_secs(1_000);
         let proposal = CovSubscription {
             subscriber_mac: MacAddr::from_slice(&[1]),
             subscriber_network: None,
@@ -118,9 +125,25 @@ mod tests {
             notification_kind: CovNotificationKind::Multiple,
             timestamped: false,
         };
-        let mut table = CovSubscriptionTable::new();
-        let snapshot = table.admit_for_test(proposal.clone(), 0).unwrap();
-        let context = snapshot.key().multiple_context().unwrap().clone();
+        let context = proposal.key().unwrap().multiple_context().unwrap().clone();
+        let admit = |table: &mut CovTable, proposal: &CovSubscription| {
+            let expires = proposal.expires_at.unwrap();
+            let route = proposal.endpoint();
+            table
+                .subscribe_multiple(
+                    &context,
+                    &route,
+                    expires,
+                    0,
+                    None,
+                    vec![proposal.clone()],
+                    now,
+                )
+                .unwrap()
+                .remove(0)
+        };
+        let mut table = CovTable::default();
+        let snapshot = admit(&mut table, &proposal);
         table
             .subscribe_multiple(
                 &context,
@@ -129,6 +152,7 @@ mod tests {
                 0,
                 None,
                 vec![],
+                now,
             )
             .unwrap();
         assert_eq!(
@@ -143,11 +167,9 @@ mod tests {
             Some(CovTimeRemaining::Expired)
         );
         assert_eq!(snapshot.expires_at, proposal.expires_at);
-        let foreign = CovSubscriptionTable::new()
-            .admit_for_test(proposal.clone(), 0)
-            .unwrap();
+        let foreign = admit(&mut CovTable::default(), &proposal);
         assert_eq!(table.remaining_lifetime(&foreign, now), None);
-        table.admit_for_test(proposal, 0).unwrap();
+        admit(&mut table, &proposal);
         assert_eq!(table.remaining_lifetime(&snapshot, now), None);
         table.unsubscribe(snapshot.key());
         assert_eq!(table.remaining_lifetime(&snapshot, now), None);

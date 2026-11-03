@@ -21,7 +21,8 @@ macro_rules! bacnet_enum {
         )*
     ) => {
         $(#[$meta])*
-        #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+        // Ordered by raw value, so a value can key a B-tree map (#2303).
+        #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
         $vis struct $Name($inner);
 
         impl $Name {

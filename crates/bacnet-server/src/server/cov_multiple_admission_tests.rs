@@ -6,7 +6,7 @@
 //! processed. A failure of the request itself keeps and reports nothing.
 use super::cov_wire_test_support::*;
 use super::*;
-use crate::cov::{CovRecipient, MultipleContextKey};
+use bacnet_device_core::cov::{CovRecipient, MultipleContextKey};
 use bacnet_objects::analog::AnalogValueObject;
 use bacnet_services::cov_multiple::COVNotificationMultipleRequest;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
@@ -229,18 +229,20 @@ async fn the_reference_past_the_subscription_cap_is_named_and_the_ones_before_it
         let mut table = h.server.cov_table.write().await;
         for process in 0..1022 {
             table
-                .subscribe(crate::cov::CovSubscription {
+                .subscribe(bacnet_device_core::cov::CovSubscription {
                     subscriber_mac: MacAddr::from_slice(&[10, 0, 0, 9, 0xBA, 0xC0]),
                     subscriber_network: None,
                     subscriber_process_identifier: process,
                     monitored_object_identifier: av(1),
                     issue_confirmed_notifications: false,
-                    expires_at: Some(runtime_clock::now() + Duration::from_secs(3600)),
+                    expires_at: Some(
+                        crate::runtime_clock::core_now() + bacnet_time::Duration::from_secs(3600),
+                    ),
                     last_notified_observation: None,
                     monitored_property: None,
                     monitored_property_array_index: None,
                     cov_increment: None,
-                    notification_kind: crate::cov::CovNotificationKind::Single,
+                    notification_kind: bacnet_device_core::cov::CovNotificationKind::Single,
                     timestamped: false,
                 })
                 .unwrap();

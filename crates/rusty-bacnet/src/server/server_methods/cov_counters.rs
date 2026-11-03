@@ -2,7 +2,7 @@ use super::super::*;
 
 use std::collections::HashMap;
 
-use bacnet_server::cov::CovCounters;
+use bacnet_device_core::cov::CovCounters;
 
 /// Every `CovCounters` field under its Rust name: the dict that
 /// `BACnetServer.cov_counters()` returns.

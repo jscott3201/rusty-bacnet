@@ -842,6 +842,38 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
 7. The indefinite-lifetime refusal's error code (§5.8) is fixed in #2317,
    apart from the move.
 
+**PR 1, 2026-11-02 (measured):**
+
+8. The table keeps its entries in a sorted `Vec`, not a `BTreeMap` (§5.2).
+   Both key on `CovSubscriptionKey`, ordered by monitored object first.
+   - Size: the `objects` image with a probe subscribing, renewing,
+     cancelling and expiring through `CovTable` (thumbv7m, Rust 1.99.0,
+     `firmware` profile; probe reverted) has 148,228 octets of `.text` and
+     165,344 of flash with the `Vec`, 153,004 and 170,120 with the
+     `BTreeMap`: 4,776 octets less. The image without the probe has
+     127,288 and 143,420. Both link no `core::fmt` and two more memmove
+     routines (four in all).
+   - Speed: a release-build probe on an Apple silicon host shared with
+     other work (1,024 subscriptions on 64 objects, best of 20 runs, each
+     variant run three times) admits all of them in 1.56 ms
+     with the `Vec` and 4.1 ms with the `BTreeMap`, and finds one object's
+     subscriptions (the fanout's lookup, with its expiry pass) in 382 ns
+     and 2,609 ns. Removing every subscription one object at a time takes
+     2.07 ms and 0.14 ms; removal follows only a cancellation, a deleted
+     object or an expiry. `stress-test -- cov --steps 64,256,1024
+     --duration 5` delivers the same 10, 39 and 156 notifications a second
+     with either, bound by its change rate; peak resident memory was 18.4
+     and 18.7 MB.
+9. The facade isn't in PR 1, so a `cov` feature would save nothing yet: the
+   `objects` image links none of the table. PR 2 measures it with the
+   `Reporter` (§3.2).
+10. From PR 1's review: a live worker stops half a timeout before its
+    deadline, however long a send stalls, and reports a failure (hold-off).
+    Its retries end the usual way before that, the last answer window
+    whole, so the deadline only ever frees an aborted worker's coordinate;
+    and a report that begins on a coordinate still marked by an unsettled
+    one past its deadline fences it (§5.5).
+
 ## 12. Evidence
 
 Code read at dev `c308eda25`. Sizes (§8): the `objects` image built with

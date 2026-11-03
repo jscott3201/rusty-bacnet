@@ -7549,6 +7549,23 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   (the I-Have, or none), `i_am` and `announcement_device`. Both answers name
   the Device the `DeviceIdentity` names, and neither is sent while the
   database lacks that Device, even if it holds another (#2186).
+- `cov` (#2303): the COV subscription table, `CovTable`, moved from
+  `bacnet-server` with its types (`CovRecipient`, `SubscriberEndpoint`,
+  `CovSubscriptionKey`, `MultipleContextKey`, `CovNotificationKind`,
+  `CovPolicy`, `CovCounters`, `CovSubscription`, `CovSubscriptionSnapshot`,
+  `CovSample`, `CovObservation`, `CovTimeRemaining`, `MultipleRefusal`).
+  `CovTable::subscribe_cov` and `subscribe_cov_property` run the two services
+  against a borrowed database. Every call that can expire something takes
+  `now`, a `bacnet_time::Instant` on one monotonic timeline. A confirmed
+  report's state is plain data: `begin_confirmed` returns a `Token`, the host
+  reports `delivered(token, Delivery)`, and a report no one settles ends at
+  its deadline (`FlightTiming`: the retry cycle plus one timeout). After each
+  change the host takes `take_fenced()`, a `Fenced` naming the tokens whose
+  worker should stop, the references removed or owed a fresh look and the
+  contexts refreshed, and `take_counts()`. The entries sit in one vector
+  sorted with the monitored object first. `bacnet_server::cov` keeps
+  `CovSubscriptionTable` with its API, which runs on it, and the atomics and
+  in-flight tracker; the `Responder` doesn't dispatch the COV services yet.
 - `reply`: `error_apdu`, the one map from an `Error` to its Reject or Error
   PDU (never an Abort: a work or byte limit is the caller's Abort), and the
   refusals a host sends for a service it doesn't run.
@@ -8106,6 +8123,12 @@ client.write_property_multiple(&mac, specs).await?;
 ```
 
 ### COV Subscriptions
+
+The subscription types below live in `bacnet_device_core::cov` since #2303
+([bacnet-device-core](#bacnet-device-core)); `bacnet_server::cov` keeps the
+server's `CovSubscriptionTable`, `AtomicCovCounters` and the in-flight
+tracker, and `bacnet_server::server` no longer re-exports `CovPolicy` or
+`CovCounters`.
 
 Single-property `subscribe_cov_property` and `subscribe_cov_property_to_device`
 require a `std::num::NonZeroU32` lifetime in seconds; 28,800 seconds and the full

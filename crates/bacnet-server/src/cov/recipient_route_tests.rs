@@ -1,4 +1,6 @@
 use super::*;
+use bacnet_device_core::cov::CovNotificationKind;
+use bacnet_types::MacAddr;
 
 fn routed_single(property: Option<PropertyIdentifier>) -> CovSubscription {
     let mut sub = proposal(None, false);
@@ -26,7 +28,8 @@ fn cov_recipient_renewal_retargets_terms_and_uses_existing_generation_fence() {
         sub.subscriber_mac = MacAddr::from_slice(&[2]);
         sub.issue_confirmed_notifications = true;
         sub.cov_increment = Some(2.5);
-        sub.expires_at = property.map(|_| Instant::now() + Duration::from_secs(600));
+        sub.expires_at =
+            property.map(|_| crate::runtime_clock::core_now() + Duration::from_secs(600));
         // Real handler proposals reset ordinary/Single observations on renewal.
         sub.last_notified_observation = None;
         let current = table.subscribe(sub.clone()).unwrap();
@@ -60,10 +63,10 @@ fn cov_recipient_failed_renewal_preserves_current_route_terms_and_observation() 
         let mut table = CovSubscriptionTable::new();
         let mut sub = routed_single(property);
         let old = table.subscribe(sub.clone()).unwrap();
-        table.generation = u64::MAX;
+        table.core.set_generation_for_test(u64::MAX);
         sub.subscriber_mac = MacAddr::from_slice(&[2]);
         sub.issue_confirmed_notifications = true;
-        sub.expires_at = Some(Instant::now() + Duration::from_secs(600));
+        sub.expires_at = Some(crate::runtime_clock::core_now() + Duration::from_secs(600));
         sub.cov_increment = Some(2.5);
         sub.last_notified_observation = None;
         resource_error(table.subscribe(sub).unwrap_err());
@@ -212,7 +215,7 @@ fn cov_recipient_empty_routed_source_is_refused_before_any_table_effect() {
         // even perform the normal valid-request expiry purge.
         let mut expired = routed_single(None);
         expired.subscriber_process_identifier += 1;
-        expired.expires_at = Some(Instant::now());
+        expired.expires_at = Some(crate::runtime_clock::core_now());
         table.subscribe(expired).unwrap();
         let counters = table.counters.snapshot();
         let mut malformed = original.clone();

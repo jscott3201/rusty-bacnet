@@ -1,11 +1,17 @@
 use super::*;
-use crate::cov::{
-    CovNotificationKind, CovObservation, CovSample, CovSubscription, SubscriberEndpoint,
+use crate::cov::CovSubscriptionTable;
+use bacnet_device_core::cov::{
+    BeginRefusal, CovSubscription, CovSubscriptionSnapshot, Delivery, FlightTiming,
+    PreparedCovCompletion,
 };
+use bacnet_device_core::cov::{CovNotificationKind, CovObservation, CovSample, SubscriberEndpoint};
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_types::MacAddr;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use std::collections::HashSet;
+use std::sync::Arc;
+use std::time::Duration;
 
 fn proposal(kind: CovNotificationKind, property: PropertyIdentifier) -> CovSubscription {
     CovSubscription {
@@ -17,7 +23,7 @@ fn proposal(kind: CovNotificationKind, property: PropertyIdentifier) -> CovSubsc
         subscriber_process_identifier: 1,
         monitored_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 1).unwrap(),
         issue_confirmed_notifications: true,
-        expires_at: Some(crate::runtime_clock::now() + Duration::from_secs(60)),
+        expires_at: Some(crate::runtime_clock::core_now() + bacnet_time::Duration::from_secs(60)),
         last_notified_observation: None,
         monitored_property: Some(property),
         monitored_property_array_index: None,
@@ -48,8 +54,25 @@ fn baseline(table: &CovSubscriptionTable, sub: &CovSubscriptionSnapshot) -> Opti
 fn live(table: &CovSubscriptionTable, sub: &CovSubscriptionSnapshot) -> CovSubscriptionSnapshot {
     table.get_subscription(sub.key()).unwrap().clone()
 }
-fn ticket(sub: &CovSubscriptionSnapshot) -> PreparedCovCompletion {
-    sub.prepare_completion().unwrap()
+fn ticket(
+    table: &mut CovSubscriptionTable,
+    sub: &CovSubscriptionSnapshot,
+) -> PreparedCovCompletion {
+    table.prepare_completion(sub).unwrap()
+}
+/// Begin a confirmed report of `carried` under a fresh ticket of `sub`.
+fn begin(
+    table: &mut CovSubscriptionTable,
+    sub: &CovSubscriptionSnapshot,
+    carried: &[&CovSubscriptionSnapshot],
+) -> Result<ConfirmedFlight, BeginRefusal> {
+    let report = ticket(table, sub);
+    table.begin_confirmed(report, carried.iter().copied())
+}
+/// A table whose failed reports hold off for `hold_off`: one attempt.
+fn holding_off(hold_off: std::time::Duration) -> CovSubscriptionTable {
+    let timeout = bacnet_time::Duration::saturating_from_core(hold_off);
+    CovSubscriptionTable::new().with_flight_timing(FlightTiming::new(timeout, 0))
 }
 /// A two-reference confirmed context: Present_Value and Status_Flags.
 fn context(table: &mut CovSubscriptionTable) -> (CovSubscriptionSnapshot, CovSubscriptionSnapshot) {
@@ -71,7 +94,9 @@ fn refresh(
     let expires = listed
         .first()
         .and_then(|sub| sub.expires_at)
-        .unwrap_or_else(|| crate::runtime_clock::now() + Duration::from_secs(120));
+        .unwrap_or_else(|| {
+            crate::runtime_clock::core_now() + bacnet_time::Duration::from_secs(120)
+        });
     table
         .subscribe_multiple(&context, route, expires, 5, None, listed)
         .unwrap();
@@ -81,14 +106,14 @@ fn refresh(
 fn completion_needs_the_outstanding_report() {
     let mut table = CovSubscriptionTable::new();
     let sub = table.subscribe(single()).unwrap();
-    let report = ticket(&sub);
+    let report = ticket(&mut table, &sub);
     assert!(
         !table.complete_observation(&sub, report, value(10.0)),
         "no outstanding report, no completion"
     );
     let flight = table.begin_confirmed(report, [&sub]).unwrap();
     assert!(!table.confirmed_idle(&sub));
-    let later = ticket(&sub);
+    let later = ticket(&mut table, &sub);
     assert_eq!(
         table.begin_confirmed(later, [&sub]).unwrap_err(),
         BeginRefusal::Busy,
@@ -96,7 +121,7 @@ fn completion_needs_the_outstanding_report() {
     );
     assert!(!table.complete_observation(&sub, later, value(20.0)));
     // Shutdown or cancellation: the baseline stays and there is no hold-off.
-    drop(flight);
+    table.delivered(&flight, Delivery::NotSent);
     assert_eq!(baseline(&table, &sub), None);
     assert!(table.confirmed_idle(&sub));
     assert!(!table.complete_observation(&sub, report, value(10.0)));
@@ -104,43 +129,42 @@ fn completion_needs_the_outstanding_report() {
     let flight = table.begin_confirmed(later, [&sub]).unwrap();
     assert!(table.complete_observation(&sub, later, value(20.0)));
     assert!(!table.confirmed_idle(&sub), "the flight ends after the Ack");
-    drop(flight);
+    table.delivered(&flight, Delivery::NotSent);
     assert_eq!(baseline(&table, &sub), Some(value(20.0)));
     assert!(
         !table.confirmed_idle(&sub),
         "a snapshot older than the Ack no longer holds the live baseline"
     );
     assert_eq!(
-        table.begin_confirmed(ticket(&sub), [&sub]).unwrap_err(),
+        begin(&mut table, &sub, &[&sub]).unwrap_err(),
         BeginRefusal::Busy
     );
     let current = live(&table, &sub);
     assert!(table.confirmed_idle(&current));
-    drop(table.begin_confirmed(ticket(&current), [&current]).unwrap());
+    let flight = begin(&mut table, &current, &[&current]).unwrap();
+    table.delivered(&flight, Delivery::NotSent);
 }
 
 #[tokio::test(start_paused = true)]
 async fn a_failed_report_holds_its_subscription_off() {
-    let mut table = CovSubscriptionTable::new();
+    let mut table = holding_off(Duration::from_millis(30));
     let sub = table.subscribe(single()).unwrap();
-    table
-        .begin_confirmed(ticket(&sub), [&sub])
-        .unwrap()
-        .failed(Duration::from_millis(30));
+    let flight = begin(&mut table, &sub, &[&sub]).unwrap();
+    table.delivered(&flight, Delivery::Failed);
     assert_eq!(baseline(&table, &sub), None);
     assert!(!table.confirmed_idle(&sub), "held off after the failure");
     assert_eq!(
-        table.begin_confirmed(ticket(&sub), [&sub]).unwrap_err(),
+        begin(&mut table, &sub, &[&sub]).unwrap_err(),
         BeginRefusal::Busy
     );
     tokio::time::advance(Duration::from_millis(29)).await;
     assert!(!table.confirmed_idle(&sub));
     tokio::time::advance(Duration::from_millis(1)).await;
     assert!(table.confirmed_idle(&sub), "the hold-off has passed");
-    let report = ticket(&sub);
+    let report = ticket(&mut table, &sub);
     let flight = table.begin_confirmed(report, [&sub]).unwrap();
     assert!(table.complete_observation(&sub, report, value(1.0)));
-    drop(flight);
+    table.delivered(&flight, Delivery::NotSent);
     assert!(
         table.confirmed_idle(&live(&table, &sub)),
         "an Ack holds nothing off"
@@ -149,27 +173,27 @@ async fn a_failed_report_holds_its_subscription_off() {
 
 #[test]
 fn a_replaced_subscription_starts_unmarked() {
-    let mut table = CovSubscriptionTable::new();
+    let mut table = holding_off(Duration::from_secs(60));
     let first = table.subscribe(single()).unwrap();
-    let old = ticket(&first);
+    let old = ticket(&mut table, &first);
     let old_flight = table.begin_confirmed(old, [&first]).unwrap();
     let replacement = table.subscribe(single()).unwrap();
     assert!(table.confirmed_idle(&replacement));
     assert_eq!(
-        table.begin_confirmed(ticket(&first), [&first]).unwrap_err(),
+        begin(&mut table, &first, &[&first]).unwrap_err(),
         BeginRefusal::NotCurrent
     );
-    let new = ticket(&replacement);
+    let new = ticket(&mut table, &replacement);
     let new_flight = table.begin_confirmed(new, [&replacement]).unwrap();
     assert!(!table.complete_observation(&first, old, value(10.0)));
-    old_flight.failed(Duration::from_secs(60));
+    table.delivered(&old_flight, Delivery::Failed);
     assert_eq!(baseline(&table, &replacement), None);
     assert!(
         !table.confirmed_idle(&replacement),
         "the stale report left the replacement's mark alone"
     );
     assert!(table.complete_observation(&replacement, new, value(20.0)));
-    drop(new_flight);
+    table.delivered(&new_flight, Delivery::NotSent);
     assert!(
         table.confirmed_idle(&live(&table, &replacement)),
         "nor did it hold the replacement off"
@@ -181,23 +205,23 @@ fn a_multiple_context_shares_one_mark() {
     let mut table = CovSubscriptionTable::new();
     let (a, b) = context(&mut table);
     let context = a.key().multiple_context().unwrap().clone();
-    let solo = table.begin_confirmed(ticket(&a), [&a]).unwrap();
+    let solo = begin(&mut table, &a, &[&a]).unwrap();
     assert!(!table.context_idle(&context, std::slice::from_ref(&b)));
     assert_eq!(
-        table.begin_confirmed(ticket(&b), [&b]).unwrap_err(),
+        begin(&mut table, &b, &[&b]).unwrap_err(),
         BeginRefusal::Busy,
         "a sibling's report holds the whole context"
     );
-    drop(solo);
+    table.delivered(&solo, Delivery::NotSent);
     assert!(table.context_idle(&context, &[a.clone(), b.clone()]));
-    let report = ticket(&b);
+    let report = ticket(&mut table, &b);
     let flight = table.begin_confirmed(report, [&a, &b]).unwrap();
     assert!(table.complete_observation(&a, report, value(1.0)));
     assert!(
         table.complete_observation(&b, report, value(2.0)),
         "every reference of one report completes under its ticket"
     );
-    drop(flight);
+    table.delivered(&flight, Delivery::NotSent);
     assert_eq!(baseline(&table, &a), Some(value(1.0)));
     assert_eq!(baseline(&table, &b), Some(value(2.0)));
     assert!(
@@ -211,7 +235,7 @@ fn a_multiple_context_shares_one_mark() {
 fn a_route_change_fences_the_report_and_revisits_its_references() {
     let mut table = CovSubscriptionTable::new();
     let (a, b) = context(&mut table);
-    let report = ticket(&a);
+    let report = ticket(&mut table, &a);
     let flight = table.begin_confirmed(report, [&a, &b]).unwrap();
     // Same-route expiry refresh keeps the report's authority.
     refresh(&mut table, &a, &a.endpoint(), vec![]);
@@ -235,7 +259,7 @@ fn a_route_change_fences_the_report_and_revisits_its_references() {
         table.confirmed_idle(&moved),
         "the new route starts unmarked"
     );
-    drop(flight);
+    table.delivered(&flight, Delivery::NotSent);
     // The report was still outstanding, so the moved untimestamped references
     // report afresh on the new route (#923).
     assert_eq!(baseline(&table, &a), None);
@@ -253,8 +277,8 @@ fn a_busy_context_resubscription_fences_the_report() {
         &a.endpoint(),
         vec![reference(PropertyIdentifier::PRESENT_VALUE)],
     );
-    assert!(live(&table, &b).flight.same(&b.flight));
-    let report = ticket(&b);
+    assert!(table.is_current(&b), "the context keeps its flight");
+    let report = ticket(&mut table, &b);
     let flight = table.begin_confirmed(report, [&b]).unwrap();
     refresh(
         &mut table,
@@ -275,7 +299,7 @@ fn a_busy_context_resubscription_fences_the_report() {
         "the kept reference, and the relisted one as a first report in case this \
          follow-up beats the initial report"
     );
-    drop(flight);
+    table.delivered(&flight, Delivery::NotSent);
 }
 
 #[test]
@@ -293,7 +317,7 @@ fn a_fence_while_owed_forgets_only_carried_kept_untimestamped_baselines() {
     let relisted = table
         .admit_for_test(reference(PropertyIdentifier::OUT_OF_SERVICE), 0)
         .unwrap();
-    let report = ticket(&kept);
+    let report = ticket(&mut table, &kept);
     let flight = table
         .begin_confirmed(report, [&kept, &uncarried, &stamped, &relisted])
         .unwrap();
@@ -305,7 +329,7 @@ fn a_fence_while_owed_forgets_only_carried_kept_untimestamped_baselines() {
     ] {
         assert!(table.complete_observation(sub, report, value(v)));
     }
-    drop(flight);
+    table.delivered(&flight, Delivery::NotSent);
     let baselines = |table: &CovSubscriptionTable| {
         [&kept, &uncarried, &stamped, &relisted].map(|sub| baseline(table, sub))
     };
@@ -331,7 +355,7 @@ fn a_fence_while_owed_forgets_only_carried_kept_untimestamped_baselines() {
     // Back home, listing one reference, while a report is outstanding. The
     // subscriber may hold what that report carried, ahead of the baselines.
     let moved = live(&table, &kept);
-    let flight = table.begin_confirmed(ticket(&moved), [&moved]).unwrap();
+    let flight = begin(&mut table, &moved, &[&moved]).unwrap();
     let mut relisting = reference(PropertyIdentifier::OUT_OF_SERVICE);
     relisting.last_notified_observation = Some(value(4.0));
     refresh(&mut table, &kept, &home, vec![relisting]);
@@ -343,19 +367,17 @@ fn a_fence_while_owed_forgets_only_carried_kept_untimestamped_baselines() {
          queues its changes, and the relisted one is what its request admitted"
     );
     assert_eq!(table.revisits().queued().len(), 4);
-    drop(flight);
+    table.delivered(&flight, Delivery::NotSent);
 }
 
 #[tokio::test(start_paused = true)]
 async fn a_resubscription_during_a_hold_off_starts_unmarked() {
-    let mut table = CovSubscriptionTable::new();
+    let mut table = holding_off(Duration::from_secs(60));
     let (a, b) = context(&mut table);
     assert!(table.complete_for_test(&b, value(2.0)));
     let acknowledged = live(&table, &b);
-    table
-        .begin_confirmed(ticket(&a), [&a, &acknowledged])
-        .unwrap()
-        .failed(Duration::from_secs(60));
+    let flight = begin(&mut table, &a, &[&a, &acknowledged]).unwrap();
+    table.delivered(&flight, Delivery::Failed);
     let context = a.key().multiple_context().unwrap().clone();
     // An empty renewal keeps the hold-off.
     refresh(&mut table, &a, &a.endpoint(), vec![]);
@@ -397,14 +419,12 @@ async fn revisits_drain_once_and_forget_removed_references() {
 
 #[tokio::test(start_paused = true)]
 async fn a_passed_hold_off_is_owed_once_per_context() {
-    let mut table = CovSubscriptionTable::new();
+    let mut table = holding_off(Duration::from_millis(30));
     let (a, _) = context(&mut table);
     let context = a.key().multiple_context().unwrap().clone();
     assert!(!table.take_owed_context(&context), "nothing failed");
-    table
-        .begin_confirmed(ticket(&a), [&a])
-        .unwrap()
-        .failed(Duration::from_millis(30));
+    let flight = begin(&mut table, &a, &[&a]).unwrap();
+    table.delivered(&flight, Delivery::Failed);
     assert!(!table.take_owed_context(&context), "still holding off");
     tokio::time::advance(Duration::from_millis(30)).await;
     assert!(table.take_owed_context(&context));
@@ -416,7 +436,7 @@ async fn a_passed_hold_off_is_owed_once_per_context() {
 async fn a_replaced_marker_stops_its_flight() {
     let mut table = CovSubscriptionTable::new();
     let sub = table.subscribe(single()).unwrap();
-    let flight = table.begin_confirmed(ticket(&sub), [&sub]).unwrap();
+    let flight = begin(&mut table, &sub, &[&sub]).unwrap();
     assert!(futures_util::poll!(std::pin::pin!(flight.fenced())).is_pending());
     table.subscribe(single()).unwrap();
     tokio::time::timeout(Duration::from_secs(1), flight.fenced())
@@ -424,7 +444,7 @@ async fn a_replaced_marker_stops_its_flight() {
         .expect("a renewal fences the old report");
 
     let (a, b) = context(&mut table);
-    let flight = table.begin_confirmed(ticket(&a), [&a, &b]).unwrap();
+    let flight = begin(&mut table, &a, &[&a, &b]).unwrap();
     // An empty same-route renewal keeps the report going.
     refresh(&mut table, &a, &a.endpoint(), vec![]);
     assert!(futures_util::poll!(std::pin::pin!(flight.fenced())).is_pending());

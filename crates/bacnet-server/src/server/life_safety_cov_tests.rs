@@ -29,7 +29,7 @@ fn subscription(
         issue_confirmed_notifications: false,
         // A Multiple context always has a finite lifetime.
         expires_at: (kind == CovNotificationKind::Multiple)
-            .then(|| Instant::now() + Duration::from_secs(3600)),
+            .then(|| crate::runtime_clock::core_now() + bacnet_time::Duration::from_secs(3600)),
         last_notified_observation: None,
         monitored_property: property,
         monitored_property_array_index: None,

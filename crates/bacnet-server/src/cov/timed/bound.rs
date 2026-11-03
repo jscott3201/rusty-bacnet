@@ -190,9 +190,8 @@ mod tests {
         VALUE_MEMORY, value_len,
     };
     use super::*;
-    use crate::cov::{
-        AtomicCovCounters, CovObservation, CovSample, CovSubscriptionTable, SubscriberEndpoint,
-    };
+    use crate::cov::{AtomicCovCounters, CovSubscriptionTable};
+    use bacnet_device_core::cov::{CovObservation, CovSample, SubscriberEndpoint};
     use std::sync::Arc;
 
     /// The local maximum APDU these tests' devices take: the largest B/IP one.
@@ -475,7 +474,8 @@ mod tests {
         let route = SubscriberEndpoint::new(&[10, 0, 0, 1, 0xBA, 0xC0], None);
         for (lifetime, envelope) in [(120, 25), (300, 26), (70_000, 27)] {
             let mut table = CovSubscriptionTable::new();
-            let expires = std::time::Instant::now() + std::time::Duration::from_secs(lifetime);
+            let expires =
+                crate::runtime_clock::core_now() + bacnet_time::Duration::from_secs(lifetime);
             let reference = timed_reference(1, expires);
             table
                 .subscribe_multiple(&context(1), &route, expires, 10, Some(50), vec![reference])

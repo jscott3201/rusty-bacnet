@@ -1,5 +1,5 @@
 use super::*;
-use crate::cov::{CovRecipient, CovSample};
+use bacnet_device_core::cov::{CovRecipient, CovSample};
 use bacnet_types::MacAddr;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
@@ -556,9 +556,9 @@ async fn the_latest_admitted_delay_applies_until_the_context_goes() {
 
 pub(super) fn timed_reference(
     process_id: u32,
-    expires_at: std::time::Instant,
-) -> crate::cov::CovSubscription {
-    crate::cov::CovSubscription {
+    expires_at: bacnet_time::Instant,
+) -> bacnet_device_core::cov::CovSubscription {
+    bacnet_device_core::cov::CovSubscription {
         subscriber_mac: MacAddr::from_slice(&[10, 0, 0, 1, 0xBA, 0xC0]),
         subscriber_network: None,
         subscriber_process_identifier: process_id,
@@ -569,7 +569,7 @@ pub(super) fn timed_reference(
         monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
         monitored_property_array_index: None,
         cov_increment: None,
-        notification_kind: crate::cov::CovNotificationKind::Multiple,
+        notification_kind: bacnet_device_core::cov::CovNotificationKind::Multiple,
         timestamped: true,
     }
 }
@@ -577,8 +577,8 @@ pub(super) fn timed_reference(
 #[test]
 fn empty_admissions_of_unknown_contexts_leave_no_deadline_state() {
     let mut table = crate::cov::CovSubscriptionTable::new();
-    let route = crate::cov::SubscriberEndpoint::new(&[10, 0, 0, 1, 0xBA, 0xC0], None);
-    let expires = crate::runtime_clock::now() + std::time::Duration::from_secs(300);
+    let route = bacnet_device_core::cov::SubscriberEndpoint::new(&[10, 0, 0, 1, 0xBA, 0xC0], None);
+    let expires = crate::runtime_clock::core_now() + bacnet_time::Duration::from_secs(300);
     // A peer varying process and form across empty-list requests.
     for process_id in 0..64 {
         for confirmed in [false, true] {
@@ -597,7 +597,7 @@ fn empty_admissions_of_unknown_contexts_leave_no_deadline_state() {
 
 #[tokio::test(start_paused = true)]
 async fn cancel_and_expiry_take_a_contexts_deadline_state_along() {
-    let far = crate::runtime_clock::now() + std::time::Duration::from_secs(300);
+    let far = crate::runtime_clock::core_now() + bacnet_time::Duration::from_secs(300);
     for expire in [false, true] {
         let mut table = crate::cov::CovSubscriptionTable::new();
         let sub = table.admit_for_test(timed_reference(1, far), 10).unwrap();
