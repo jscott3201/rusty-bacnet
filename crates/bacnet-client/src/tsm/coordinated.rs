@@ -202,7 +202,7 @@ impl Tsm {
         }
 
         let invoke_id = admission.token().invoke_id();
-        let key = (tsm_mac.clone(), invoke_id);
+        let key = (MacAddr::from_slice(tsm_mac), invoke_id);
         let Some(pending) = self.pending.get(&key) else {
             return CoordinatedCompletion::Rejected;
         };
@@ -291,7 +291,7 @@ impl Tsm {
             return false;
         }
 
-        let key = (tsm_mac.clone(), invoke_id);
+        let key = (MacAddr::from_slice(tsm_mac), invoke_id);
         let Some(pending) = self.pending.get(&key) else {
             return false;
         };

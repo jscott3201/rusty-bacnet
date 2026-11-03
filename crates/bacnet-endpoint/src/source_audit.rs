@@ -421,9 +421,11 @@ impl SourceAudit {
             .map_err(|_| Error::Encoding("endpoint shutdown".into()))?
     }
 
-    /// Report an operation a peer carried out on this device as a whole,
-    /// such as an accepted ReinitializeDevice reset, backup or restore step
-    /// (Clause 19.6, Table 19-5, #1564), with `source` as its requester.
+    /// Report an operation carried out on this device as a whole, such as
+    /// an accepted ReinitializeDevice reset, backup or restore step (Clause
+    /// 19.6, Table 19-5, #1564), with `source` as its requester. With no
+    /// `source`, the operation is the application's own (a local reset,
+    /// #1837): this device is the source and the record has no invoke ID.
     ///
     /// Clause 19.6.2 casts this Reporter as the source-side one; sending
     /// these target-side records through it, the session's only Reporter,
@@ -439,7 +441,7 @@ impl SourceAudit {
         self: &Arc<Self>,
         db: &mut ObjectDatabase,
         operation: AuditOperation,
-        source: &bacnet_objects::device::AuditWriteSource,
+        source: Option<&bacnet_objects::device::AuditWriteSource>,
     ) {
         if self.operations.is_closed() {
             return;
@@ -511,12 +513,14 @@ impl SourceAudit {
         let record = BACnetAuditNotification {
             source_timestamp: None,
             target_timestamp: Some(timestamp),
-            source_device: source.device.clone(),
+            source_device: source.map_or(BACnetRecipient::Device(device), |source| {
+                source.device.clone()
+            }),
             source_object: None,
             operation,
             source_comment: None,
             target_comment: None,
-            invoke_id: Some(source.invoke_id),
+            invoke_id: source.map(|source| source.invoke_id),
             source_user_id: None,
             source_user_role: None,
             target_device: BACnetRecipient::Device(device),

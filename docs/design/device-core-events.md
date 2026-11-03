@@ -449,7 +449,7 @@ Active_COV_Subscriptions) matches, and PR 2 removes the pin.
 | An index on a property that isn't an array | PROPERTY / PROPERTY_IS_NOT_AN_ARRAY | 13.15.1.1.5 | `cov/prepare.rs:60` |
 | A cap reached | RESOURCES / NO_SPACE_TO_ADD_LIST_ELEMENT | 13.14.1.3.1 | `cov/admission.rs:404-413`, `:425-452` |
 | SubscribeCOVProperty with a zero lifetime | SERVICES / VALUE_OUT_OF_RANGE | 13.15.1.1.4, 13.15.1.3.1 | `:180-187` |
-| SubscribeCOV indefinite while the policy refuses it | SERVICES / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED today; the standard's list gives VALUE_OUT_OF_RANGE (#2317 fixes it, not the move) | 13.14.1.1.4, 13.14.1.3.1 | `cov/admission.rs:353-361`, `:395-402` |
+| SubscribeCOV indefinite while the policy refuses it | SERVICES / VALUE_OUT_OF_RANGE (#2317; before it, OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, which the standard's list lacks) | 13.14.1.1.4, 13.14.1.3.1 | `CovTable::check_admission`, in `bacnet-device-core`'s `cov/admission.rs` |
 | A lifetime without the confirmed flag | Reject INCONSISTENT_PARAMETERS | 13.14.1.1.3, 18.9 | `:91-93`, `:189-191` |
 | Parameters don't decode | Reject, the decoder's reason | 18.9, 20.1.8 | `:87`, `:176` |
 
@@ -724,6 +724,7 @@ image would link:
 
 | `reporting` image (thumbv7m) | `.text` estimate | From |
 |---|---|---|
+| PR 1, measured | 148.4 KB (flash 165.8 KB) | the `objects` image's 127.3 KB, plus the table and the two subscribe services (#2303) |
 | `cov` (after PR 2) | 147-156 KB | ~4,100 linked lines of PR 1 and 2 |
 | + `event-reporting` (after PR 3) | 172-181 KB | ~2,200 lines, plus the measured objects and encoder share |
 | + `event-enrollment` (#2319) | 207-221 KB | ~2,700 lines, the Event Enrollment object, `decode_event_parameter` |
@@ -731,7 +732,12 @@ image would link:
 
 Flash runs about 18 KB above `.text`. So COV with intrinsic reporting fits
 a 256 KB part with room; with Event Enrollment it is tight there and easy
-at 512 KB. Each PR replaces its estimate with the measured row.
+at 512 KB. Each PR replaces its estimate with the measured row. The
+`firmware/link` images share one 256 KiB `memory.x`, and riscv32imac's
+`reporting` image is already 198,210 octets of flash after PR 1, so the
+estimates for PR 3 and #2319 would overflow it on that target: before
+PR 3, the layout gives that image a larger flash region, or each image a
+`memory.x` of its own.
 
 ### 8.3 The `reporting` image and its heap
 
@@ -749,6 +755,19 @@ lifetime, flight and ticket, and the last delivered values on the heap);
 PR 1's host test measures it. The scenario caps subscriptions at 8 and
 sizes the outbox buffer; the 16 KiB arena grows only if the host test's
 peak says so.
+
+Measured for PR 1 (`firmware/link`, `tests/reporting.rs`; the outbox comes
+with PR 2):
+
+| | Measured |
+|---|---|
+| Entry, inline in the table's vector | 208 octets on thumbv7m, 288 on a 64-bit host |
+| A table of 8 subscriptions from one subscriber, heap in all (64-bit host) | 2,848 octets, 356 each: the vector at capacity and the per-peer counts |
+| The `reporting` scenario's peak heap (64-bit host) | 13,888 of the 16,384-octet arena (the `objects` scenario alone: 10,512) |
+
+So the arena stays 16 KiB. Later an entry also holds the observation it
+last reported (shared samples) and, while a confirmed report is out, its
+flight's state.
 
 ## 9. Risks
 

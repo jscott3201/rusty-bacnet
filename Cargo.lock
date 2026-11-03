@@ -1558,6 +1558,7 @@ dependencies = [
  "bacnet-objects",
  "bacnet-router-core",
  "bacnet-services",
+ "bacnet-time",
  "bacnet-types",
  "bytes",
  "cortex-m-rt",

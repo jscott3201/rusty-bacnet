@@ -12,6 +12,8 @@ use bacnet_objects::analog::{AnalogInputObject, AnalogValueObject};
 use bacnet_objects::audit::ObjectAuditPolicy;
 use bacnet_objects::binary::{BinaryInputObject, BinaryValueObject};
 use bacnet_objects::database::ObjectDatabase;
+use bacnet_objects::object_profile::ObjectProfile;
+use bacnet_objects::present_value_access::PresentValueAccess;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::ReadAccessSpecification;
 use bacnet_types::enums::{
@@ -22,6 +24,7 @@ use pyo3::{PyErr, PyResult};
 
 use crate::errors::to_py_err;
 use crate::group_members;
+use crate::object_options::apply_profile;
 use crate::types::{PyReadAccessSpec, PySegmentation};
 
 /// Parse an IPv4 string at construction time (ValueError before bind).
@@ -184,10 +187,22 @@ pub(crate) fn build_database(
 // settles. Boxes are built fresh; failed/cancelled attempts restore the params
 // only after releasing the corresponding resources.
 
+/// The Value-object keywords a pending registration keeps for its rebuilds
+/// (#1552, #1867): how Present_Value is written, whether Value_Source is
+/// served, and the optional Audit policy.
+#[derive(Clone, Debug)]
+pub(crate) struct ValueKeywords {
+    pub(crate) access: PresentValueAccess,
+    pub(crate) value_source_tracking: bool,
+    pub(crate) audit_policy: ObjectAuditPolicy,
+}
+
 /// Pending object parameters: one entry per pre-start `add_*` call.
 ///
 /// `Clone` so a failed/cancelled start restores the exact registration set
-/// for retry. Built into boxes at start time (after add-time validation).
+/// for retry. Built into boxes at start time; the `add_*` call builds one
+/// first, so a bad registration fails there. `profile` is the parsed
+/// `tags`/`profile_location`/`profile_name` keywords (#1867).
 #[derive(Clone, Debug)]
 pub(crate) enum PendingObject {
     AnalogInput {
@@ -195,21 +210,25 @@ pub(crate) enum PendingObject {
         name: String,
         units: u32,
         present_value: f32,
+        profile: Option<ObjectProfile>,
     },
     AnalogValue {
-        audit_policy: ObjectAuditPolicy,
         instance: u32,
         name: String,
         units: u32,
+        value: ValueKeywords,
+        profile: Option<ObjectProfile>,
     },
     BinaryInput {
         instance: u32,
         name: String,
+        profile: Option<ObjectProfile>,
     },
     BinaryValue {
-        audit_policy: ObjectAuditPolicy,
         instance: u32,
         name: String,
+        value: ValueKeywords,
+        profile: Option<ObjectProfile>,
     },
     Group {
         instance: u32,
@@ -219,7 +238,7 @@ pub(crate) enum PendingObject {
 }
 
 impl PendingObject {
-    /// Builds the object (same constructors as the add-time validation).
+    /// Builds the object, the same way at registration and at each start.
     pub(crate) fn build(&self) -> PyResult<Box<dyn BACnetObject>> {
         match self {
             Self::AnalogInput {
@@ -227,19 +246,56 @@ impl PendingObject {
                 name,
                 units,
                 present_value,
-            } => make_analog_input(*instance, name, *units, *present_value),
+                profile,
+            } => {
+                let mut object =
+                    AnalogInputObject::new(*instance, name, EngineeringUnits::from_raw(*units))
+                        .map_err(to_py_err)?;
+                object.set_present_value(*present_value);
+                apply_profile(profile.clone(), |p| object.set_profile(p))?;
+                Ok(Box::new(object))
+            }
             Self::AnalogValue {
-                audit_policy,
                 instance,
                 name,
                 units,
-            } => make_analog_value(*instance, name, *units, *audit_policy),
-            Self::BinaryInput { instance, name } => make_binary_input(*instance, name),
+                value,
+                profile,
+            } => {
+                let mut object = AnalogValueObject::with_access(
+                    *instance,
+                    name,
+                    EngineeringUnits::from_raw(*units),
+                    value.access,
+                )
+                .map_err(to_py_err)?;
+                object.set_audit_policy(value.audit_policy);
+                object.set_value_source_tracking(value.value_source_tracking);
+                apply_profile(profile.clone(), |p| object.set_profile(p))?;
+                Ok(Box::new(object))
+            }
+            Self::BinaryInput {
+                instance,
+                name,
+                profile,
+            } => {
+                let mut object = BinaryInputObject::new(*instance, name).map_err(to_py_err)?;
+                apply_profile(profile.clone(), |p| object.set_profile(p))?;
+                Ok(Box::new(object))
+            }
             Self::BinaryValue {
                 instance,
                 name,
-                audit_policy,
-            } => make_binary_value(*instance, name, *audit_policy),
+                value,
+                profile,
+            } => {
+                let mut object = BinaryValueObject::with_access(*instance, name, value.access)
+                    .map_err(to_py_err)?;
+                object.set_audit_policy(value.audit_policy);
+                object.set_value_source_tracking(value.value_source_tracking);
+                apply_profile(profile.clone(), |p| object.set_profile(p))?;
+                Ok(Box::new(object))
+            }
             Self::Group {
                 instance,
                 name,
@@ -292,49 +348,6 @@ pub(crate) fn lifecycle_error(error: super::lifecycle::LifecycleError<PyErr>) ->
             "endpoint lifecycle worker ended unexpectedly",
         ),
     }
-}
-
-/// Create a pending Analog Input object (validation before start).
-pub(crate) fn make_analog_input(
-    instance: u32,
-    name: &str,
-    units: u32,
-    present_value: f32,
-) -> PyResult<Box<dyn BACnetObject>> {
-    let mut object = AnalogInputObject::new(instance, name, EngineeringUnits::from_raw(units))
-        .map_err(to_py_err)?;
-    object.set_present_value(present_value);
-    Ok(Box::new(object))
-}
-
-/// Create a pending Analog Value object.
-pub(crate) fn make_analog_value(
-    instance: u32,
-    name: &str,
-    units: u32,
-    audit_policy: ObjectAuditPolicy,
-) -> PyResult<Box<dyn BACnetObject>> {
-    let mut object = AnalogValueObject::new(instance, name, EngineeringUnits::from_raw(units))
-        .map_err(to_py_err)?;
-    object.set_audit_policy(audit_policy);
-    Ok(Box::new(object))
-}
-
-/// Create a pending Binary Input object.
-pub(crate) fn make_binary_input(instance: u32, name: &str) -> PyResult<Box<dyn BACnetObject>> {
-    let object = BinaryInputObject::new(instance, name).map_err(to_py_err)?;
-    Ok(Box::new(object))
-}
-
-/// Create a pending Binary Value object.
-pub(crate) fn make_binary_value(
-    instance: u32,
-    name: &str,
-    audit_policy: ObjectAuditPolicy,
-) -> PyResult<Box<dyn BACnetObject>> {
-    let mut object = BinaryValueObject::new(instance, name).map_err(to_py_err)?;
-    object.set_audit_policy(audit_policy);
-    Ok(Box::new(object))
 }
 
 /// Validate an `add_group` call and keep its params for the pending set.

@@ -3,7 +3,7 @@
 use super::*;
 use bacnet_server::mutation::DeviceWriteAuthorizer;
 use bacnet_server::server::ReinitializeContext;
-use bacnet_types::enums::ServiceSupported;
+use bacnet_types::enums::{AuditOperation, ServiceSupported};
 
 /// The services the session's server role, its bounded Device responder,
 /// executes on every session, as `BACnetServicesSupported` bits (Clause 21).
@@ -109,6 +109,35 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         self.assert_configurable();
         self.reinit_password = Some(password.into());
         self
+    }
+
+    /// Reports a reset the application carries out for its own reasons, not
+    /// at a peer's ReinitializeDevice request: a DEVICE_RESET Audit record
+    /// from this device, with no invoke ID (Clause 19.6, Table 19-5 covers
+    /// resets for any reason, #1837). The counterpart of
+    /// `BACnetServer::report_device_reset_local`.
+    ///
+    /// An accepted WARMSTART or COLDSTART is recorded already; don't report
+    /// it again. The record goes through the session's source Reporter
+    /// ([`with_source_audit_reporter`](Self::with_source_audit_reporter)),
+    /// filtered by its Audit_Level and Auditable_Operations as a peer's
+    /// reset's is, and nothing is recorded without one. It returns once the
+    /// record is admitted, not delivered, so call it before the restart
+    /// begins and give delivery time before the process exits.
+    ///
+    /// # Errors
+    /// [`Error::Encoding`] when the session is not running.
+    pub async fn report_device_reset_local(&self) -> Result<(), Error> {
+        if !self.is_running() {
+            return Err(Error::Encoding("endpoint session is not running".into()));
+        }
+        let (Some(source), Some(database)) = (&self.source_audit, &self.database) else {
+            return Ok(());
+        };
+        // Synchronous under the guard: no await while it is held.
+        let mut db = database.write().await;
+        source.device_operation(&mut db, AuditOperation::DEVICE_RESET, None);
+        Ok(())
     }
 
     /// The services the responder executes with the capabilities enabled on

@@ -39,6 +39,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             is_group,
             reply_tx,
         } = inbound;
+        // Each arm moves `tsm_mac` into its reassembly key and borrows it
+        // back: cloning a `MacAddr` copies it a byte at a time (#1978).
         let TransactionPeer {
             tsm_mac,
             canonical: canonical_peer,
@@ -58,7 +60,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // reassembly IS this transaction's acknowledgment, so a
                 // second one is not answering it. Checked before the TSM
                 // lock: `abort_reassembly` takes that lock itself (#367).
-                let key = (tsm_mac.clone(), ack.invoke_id, provenance);
+                let key = (tsm_mac, ack.invoke_id, provenance);
+                let tsm_mac = &key.0;
                 let coordinator_apdu = Apdu::SimpleAck(ack.clone());
                 admit_terminal_during_reassembly(
                     tsm,
@@ -76,7 +79,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     Self::abort_reassembly(
                         tsm,
                         network,
-                        state.abort_target(&tsm_mac),
+                        state.abort_target(tsm_mac),
                         ack.invoke_id,
                         bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
                     )
@@ -87,7 +90,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 match complete_terminal_response(
                     tsm,
                     TerminalResponse {
-                        tsm_mac: &tsm_mac,
+                        tsm_mac,
                         invoke_id: ack.invoke_id,
                         peer: &canonical_peer,
                         apdu: &coordinator_apdu,
@@ -139,7 +142,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     // Clause 5.4.4.4
                     // UnexpectedPDU_Received list: the transaction's answer
                     // is the segmented ComplexACK already under reassembly.
-                    let key = (tsm_mac.clone(), ack.invoke_id, provenance);
+                    let key = (tsm_mac, ack.invoke_id, provenance);
+                    let tsm_mac = &key.0;
                     let coordinator_apdu = Apdu::ComplexAck(ack.clone());
                     admit_terminal_during_reassembly(
                         tsm,
@@ -157,7 +161,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         Self::abort_reassembly(
                             tsm,
                             network,
-                            state.abort_target(&tsm_mac),
+                            state.abort_target(tsm_mac),
                             ack.invoke_id,
                             bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
                         )
@@ -168,7 +172,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     match complete_terminal_response(
                         tsm,
                         TerminalResponse {
-                            tsm_mac: &tsm_mac,
+                            tsm_mac,
                             invoke_id: ack.invoke_id,
                             peer: &canonical_peer,
                             apdu: &coordinator_apdu,
@@ -209,7 +213,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // INVALID_APDU_IN_THIS_STATE, not the error content (#367).
                 // Checked before the TSM lock below: `abort_reassembly` takes
                 // that lock itself, and tokio's Mutex is not reentrant.
-                let key = (tsm_mac.clone(), err.invoke_id, provenance);
+                let key = (tsm_mac, err.invoke_id, provenance);
+                let tsm_mac = &key.0;
                 let coordinator_apdu = Apdu::Error(err.clone());
                 admit_terminal_during_reassembly(
                     tsm,
@@ -227,7 +232,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     Self::abort_reassembly(
                         tsm,
                         network,
-                        state.abort_target(&tsm_mac),
+                        state.abort_target(tsm_mac),
                         err.invoke_id,
                         bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
                     )
@@ -245,7 +250,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 match complete_terminal_response(
                     tsm,
                     TerminalResponse {
-                        tsm_mac: &tsm_mac,
+                        tsm_mac,
                         invoke_id: err.invoke_id,
                         peer: &canonical_peer,
                         apdu: &coordinator_apdu,
@@ -273,7 +278,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // Same Clause 5.4.4.4 UnexpectedPDU_Received diversion as the
                 // Error arm above ("BACnet-Reject-PDU" is in the same list),
                 // with the same lock-ordering constraint (#367).
-                let key = (tsm_mac.clone(), rej.invoke_id, provenance);
+                let key = (tsm_mac, rej.invoke_id, provenance);
+                let tsm_mac = &key.0;
                 let coordinator_apdu = Apdu::Reject(rej.clone());
                 admit_terminal_during_reassembly(
                     tsm,
@@ -291,7 +297,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     Self::abort_reassembly(
                         tsm,
                         network,
-                        state.abort_target(&tsm_mac),
+                        state.abort_target(tsm_mac),
                         rej.invoke_id,
                         bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
                     )
@@ -304,7 +310,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 let _ = complete_terminal_response(
                     tsm,
                     TerminalResponse {
-                        tsm_mac: &tsm_mac,
+                        tsm_mac,
                         invoke_id: rej.invoke_id,
                         peer: &canonical_peer,
                         apdu: &coordinator_apdu,
@@ -339,7 +345,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // segment would find no transaction and clear the session
                 // anyway — so no test can pin this line alone; it is kept so
                 // the slot frees at the Abort, not at the peer's next move.
-                let key = (tsm_mac.clone(), abt.invoke_id, provenance);
+                let key = (tsm_mac, abt.invoke_id, provenance);
+                let tsm_mac = &key.0;
                 let reassembly_owner = current_reassembly_owner(tsm, seg_state, &key).await;
                 debug!(invoke_id = abt.invoke_id, "Received Abort PDU");
                 // Carries no service choice (Clause 20.1.9).
@@ -348,7 +355,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 let outcome = complete_terminal_response(
                     tsm,
                     TerminalResponse {
-                        tsm_mac: &tsm_mac,
+                        tsm_mac,
                         invoke_id: abt.invoke_id,
                         peer: &canonical_peer,
                         apdu: &coordinator_apdu,
@@ -593,7 +600,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     return;
                 }
                 let invoke_id = sa.invoke_id;
-                let key = (tsm_mac.clone(), invoke_id, provenance);
+                let key = (tsm_mac, invoke_id, provenance);
+                let tsm_mac = &key.0;
 
                 // SEGMENTED_CONF (5.4.4.4) `UnexpectedPDU_Received` lists
                 // a server-side BACnet-SegmentACK-PDU among the inappropriate
@@ -615,7 +623,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     Self::abort_reassembly(
                         tsm,
                         network,
-                        state.abort_target(&tsm_mac),
+                        state.abort_target(tsm_mac),
                         invoke_id,
                         bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
                     )
@@ -629,7 +637,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 let tsm_guard = tsm.lock().await;
                 let coordinator_apdu = Apdu::SegmentAck(sa.clone());
                 match tsm_guard.coordinated_segment_ack_phase(
-                    &tsm_mac,
+                    tsm_mac,
                     invoke_id,
                     &canonical_peer,
                     &coordinator_apdu,
@@ -638,7 +646,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         // Lock order is TSM then SegmentACK routes. Setup and
                         // cleanup never hold both locks. Compat mode: SegmentACK
                         // delivery stays provenance-agnostic (RB-09 later).
-                        let send_key = (tsm_mac.clone(), invoke_id);
+                        let send_key = (MacAddr::from_slice(tsm_mac), invoke_id);
                         let senders = seg_ack_senders.lock().await;
                         if let Some(route) = senders
                             .get(&send_key)

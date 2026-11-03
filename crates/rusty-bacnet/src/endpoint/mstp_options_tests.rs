@@ -322,6 +322,7 @@ fn an_extended_endpoint_answers_a_long_read_in_an_extended_frame() {
             name: name.clone(),
             units: 62,
             present_value: 0.0,
+            profile: None,
         })
         .unwrap();
     let built = Python::attach(|py| Py::new(py, built).unwrap());

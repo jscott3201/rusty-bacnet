@@ -10902,6 +10902,14 @@ through it, the session's only Reporter, is a local choice. A panic or a returne
 `SERVICES / OTHER` and the session keeps serving. A close that wins while the
 request waits for the database refuses it before the handler runs.
 
+`EndpointSession::report_device_reset_local()` is the session's counterpart of
+`BACnetServer::report_device_reset_local()` (#1837): it records a reset the
+application makes for its own reasons as a DEVICE_RESET from this device, with
+no invoke ID, through the source Reporter and its Audit_Level and
+Auditable_Operations filters. Without a source Reporter it records nothing.
+It fails when the session is not running, and returns once the record is
+admitted, so call it before restarting.
+
 ### Direct endpoint WriteProperty and source WRITE reporting
 
 `ClientRoleHandle::write_property` accepts a direct B/IP IPv4 unicast MAC, a

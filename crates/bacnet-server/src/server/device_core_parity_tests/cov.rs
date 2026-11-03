@@ -542,10 +542,7 @@ async fn caps_match() {
         .await;
     assert_eq!(
         refused(&reply),
-        (
-            ErrorClass::SERVICES,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED
-        )
+        (ErrorClass::SERVICES, ErrorCode::VALUE_OUT_OF_RANGE)
     );
     cov.request(
         "finite",
