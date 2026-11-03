@@ -23,13 +23,15 @@ def native_future_exports(sources):
 
     methods = {}
     for source in sources:
-        for method in re.finditer(r"^    fn (\w+).*?^    }", source, re.M | re.S):
-            methods[method.group(1)] = method.group()
+        # Any indent, so the methods a macro generates (endpoint/builders.rs)
+        # count; the body ends at the closing brace on the fn's own indent.
+        for method in re.finditer(r"^( +)fn (\w+).*?^\1}", source, re.M | re.S):
+            methods[method.group(2)] = method.group()
     native = {name for name, body in methods.items()
               if "crate::py_async::future_into_py" in body}
     forwards = {}
     for name, body in methods.items():
-        target = re.search(r"\n        self\.(\w+)\(py\)\n    }$", body)
+        target = re.search(r"\n +self\.(\w+)\(py\)\n +}$", body)
         if target:
             forwards[name] = target.group(1)
     while resolved := {name for name, target in forwards.items() if target in native} - native:
@@ -153,7 +155,9 @@ class NativeFutureInventoryTests(unittest.TestCase):
             "ScHub": [source / "hub.rs"],
             "EndpointClient": [source / "endpoint/roles.rs"],
             "CovNotificationIterator": [source / "types/cov.rs"],
-            **{name: [source / f"endpoint/{stem}.rs"] for name, stem in (
+            # endpoint/builders.rs holds the methods the three owners share.
+            **{name: [source / f"endpoint/{stem}.rs", source / "endpoint/builders.rs"]
+               for name, stem in (
                 ("BipEndpoint", "bip"), ("ScEndpoint", "sc"), ("MstpEndpoint", "mstp"))},
         }
         classes = installed_classes()

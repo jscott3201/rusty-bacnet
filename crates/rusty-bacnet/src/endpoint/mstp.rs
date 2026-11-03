@@ -14,8 +14,7 @@ use pyo3::types::PyDict;
 
 use crate::endpoint::common::{
     PendingObject, build_database, build_identity, build_pending_boxes, lifecycle_error,
-    make_analog_input, make_analog_value, make_binary_input, make_binary_value, parse_device_uuid,
-    parse_read_work_limit, parse_segmentation, parse_services, pending_group,
+    parse_device_uuid, parse_read_work_limit, parse_segmentation, parse_services, pending_group,
 };
 use crate::endpoint::lifecycle::Lifecycle;
 use crate::endpoint::roles::{PyEndpointClient, PyEndpointServer};
@@ -183,6 +182,8 @@ impl PyMstpEndpoint {
         })
     }
 }
+
+super::builders::endpoint_builders!(PyMstpEndpoint);
 
 #[pymethods]
 impl PyMstpEndpoint {
@@ -379,82 +380,6 @@ impl PyMstpEndpoint {
     #[doc(hidden)]
     fn _pending_registration_count(&self) -> PyResult<usize> {
         Ok(self.lifecycle.pending_count())
-    }
-
-    /// Add an Analog Input object (before start).
-    #[pyo3(signature = (instance, name, units=62, present_value=0.0))]
-    fn add_analog_input(
-        &self,
-        instance: u32,
-        name: &str,
-        units: u32,
-        present_value: f32,
-    ) -> PyResult<()> {
-        make_analog_input(instance, name, units, present_value)?;
-        self.push_pending(PendingObject::AnalogInput {
-            instance,
-            name: name.to_string(),
-            units,
-            present_value,
-        })
-    }
-
-    /// Add an Analog Value object (before start).
-    #[pyo3(signature = (instance, name, units=62, *, audit_level=None, auditable_operations=None, audit_priority_filter=None))]
-    fn add_analog_value(
-        &self,
-        instance: u32,
-        name: &str,
-        units: u32,
-        audit_level: Option<&str>,
-        auditable_operations: Option<&Bound<'_, PyAny>>,
-        audit_priority_filter: Option<&Bound<'_, PyAny>>,
-    ) -> PyResult<()> {
-        let audit_policy = crate::object_audit_policy::parse(
-            audit_level,
-            auditable_operations,
-            audit_priority_filter,
-        )?;
-        make_analog_value(instance, name, units, audit_policy)?;
-        self.push_pending(PendingObject::AnalogValue {
-            instance,
-            audit_policy,
-            name: name.to_string(),
-            units,
-        })
-    }
-
-    /// Add a Binary Input object (before start).
-    #[pyo3(signature = (instance, name))]
-    fn add_binary_input(&self, instance: u32, name: &str) -> PyResult<()> {
-        make_binary_input(instance, name)?;
-        self.push_pending(PendingObject::BinaryInput {
-            instance,
-            name: name.to_string(),
-        })
-    }
-
-    /// Add a Binary Value object (before start).
-    #[pyo3(signature = (instance, name, *, audit_level=None, auditable_operations=None, audit_priority_filter=None))]
-    fn add_binary_value(
-        &self,
-        instance: u32,
-        name: &str,
-        audit_level: Option<&str>,
-        auditable_operations: Option<&Bound<'_, PyAny>>,
-        audit_priority_filter: Option<&Bound<'_, PyAny>>,
-    ) -> PyResult<()> {
-        let audit_policy = crate::object_audit_policy::parse(
-            audit_level,
-            auditable_operations,
-            audit_priority_filter,
-        )?;
-        make_binary_value(instance, name, audit_policy)?;
-        self.push_pending(PendingObject::BinaryValue {
-            instance,
-            audit_policy,
-            name: name.to_string(),
-        })
     }
 
     /// Add a Group object (before start); its Present_Value is rebuilt from
