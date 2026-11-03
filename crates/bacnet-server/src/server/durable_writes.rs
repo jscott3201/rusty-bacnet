@@ -86,7 +86,8 @@ enum TargetValue {
 /// Notification Class its Recipient_List, an Audit Log its Log_Enable and
 /// Buffer_Size, an Access Rights object its two rule arrays, Enable
 /// (property 133, named `LOG_ENABLE`) and Accompaniment, a Timer its
-/// State_Change_Values and List_Of_Object_Property_References, and a
+/// State_Change_Values, List_Of_Object_Property_References and
+/// Default_Timeout (#2312), and a
 /// Channel its members, Execution_Delay, Channel_Number, Control_Groups and
 /// Allow_Group_Delay_Inhibit (#2243), a colour object its default
 /// (#1956), with Tags as the other objects with a profile do, and the three
@@ -145,6 +146,7 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
             property,
             PropertyIdentifier::STATE_CHANGE_VALUES
                 | PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES
+                | PropertyIdentifier::DEFAULT_TIMEOUT
         ),
         ObjectType::CHANNEL => matches!(
             property,

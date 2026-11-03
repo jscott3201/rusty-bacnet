@@ -236,7 +236,7 @@ impl TimerObject {
     /// FALSE expires a running timer and is ignored otherwise.
     pub(super) fn write_timer_running(&mut self, running: bool) {
         if running {
-            self.start(self.default_timeout);
+            self.start(self.config.default_timeout);
         } else if self.timer_state == TimerState::RUNNING {
             self.force_expiry();
         }

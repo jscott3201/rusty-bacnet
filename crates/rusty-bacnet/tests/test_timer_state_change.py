@@ -63,6 +63,8 @@ class TimerStateChangeTests(unittest.IsolatedAsyncioTestCase):
                 "state_change_values",
                 "references",
                 "priority_for_writing",
+                "storage_path",
+                "clear_written_config",
             ],
         )
         for name in ["state_change_values", "references", "priority_for_writing"]:
