@@ -119,7 +119,8 @@ impl Kept {
     /// What `write` leaves on top of this, or the object's refusal of it.
     /// A message text past what storage keeps is refused with RESOURCES /
     /// NO_SPACE_TO_WRITE_PROPERTY, before anything is saved, so every
-    /// backend gives that answer (#1952).
+    /// backend gives that answer (#1952), once the texts are written and
+    /// so kept.
     fn after(&self, write: &PendingWrite) -> Result<Self, Error> {
         let mut next = self.clone();
         let rows = &mut next.rows;
@@ -147,15 +148,17 @@ impl Kept {
                 )
                 .unwrap_or_else(|| Err(common::unknown_property_error()))?,
         }
-        let texts = rows.options.message_texts_config();
-        if texts.iter().any(|text| text.len() > MAX_KEPT_TEXT_OCTETS) {
+        if let Some(flag) = next.written.flag(write.property) {
+            *flag = true;
+        }
+        // Only texts storage will keep count: a long one the object took
+        // before it had storage is no reason to refuse another row.
+        let texts = next.rows.options.message_texts_config();
+        if next.written.texts && texts.iter().any(|text| text.len() > MAX_KEPT_TEXT_OCTETS) {
             return Err(common::protocol_error(
                 ErrorClass::RESOURCES,
                 ErrorCode::NO_SPACE_TO_WRITE_PROPERTY,
             ));
-        }
-        if let Some(flag) = next.written.flag(write.property) {
-            *flag = true;
         }
         Ok(next)
     }

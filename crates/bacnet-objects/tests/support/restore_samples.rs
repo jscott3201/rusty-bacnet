@@ -152,18 +152,19 @@ pub fn channel_write_config(path: &Path) {
 
 /// An Analog Input's written reporting settings, every one set (#2331).
 pub fn reporting_write_config(path: &Path) {
-    let snapshot = WriteConfigSnapshot::Reporting(ReportingWriteConfig {
-        notification_class: Some(7),
-        event_enable: Some(EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL),
-        notify_type: Some(NotifyType::EVENT),
-        event_detection_enable: Some(false),
-        event_message_texts_config: Some(["high".into(), String::new(), "normal".into()]),
-        event_algorithm_inhibit_ref: Some(BACnetObjectPropertyReference::new(
-            oid(ObjectType::BINARY_VALUE),
-            PropertyIdentifier::PRESENT_VALUE.to_raw(),
-        )),
-        event_algorithm_inhibit: Some(true),
-    });
+    let mut settings = ReportingWriteConfig::default();
+    settings.notification_class = Some(7);
+    settings.event_enable =
+        Some(EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL);
+    settings.notify_type = Some(NotifyType::EVENT);
+    settings.event_detection_enable = Some(false);
+    settings.event_message_texts_config = Some(["high".into(), String::new(), "normal".into()]);
+    settings.event_algorithm_inhibit_ref = Some(BACnetObjectPropertyReference::new(
+        oid(ObjectType::BINARY_VALUE),
+        PropertyIdentifier::PRESENT_VALUE.to_raw(),
+    ));
+    settings.event_algorithm_inhibit = Some(true);
+    let snapshot = WriteConfigSnapshot::Reporting(settings);
     save_write_config(path, ObjectType::ANALOG_INPUT, &snapshot);
 }
 

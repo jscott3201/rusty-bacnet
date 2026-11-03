@@ -544,3 +544,36 @@ fn only_kept_rows_stage() {
     assert!(matches!(object.stage_writes(&[indexed]), StageStep::Skip));
     assert_eq!(storage.saves(), 0);
 }
+
+/// A long message text the object took before it had storage isn't kept,
+/// so it refuses no other row's write; a write that sets the texts, and so
+/// would keep it, is refused (#2331).
+#[test]
+fn a_long_text_taken_before_storage_refuses_no_other_row() {
+    let storage = MemoryConfig::new();
+    let mut object = AnalogInputObject::new(1, "AI", EngineeringUnits::DEGREES_CELSIUS).unwrap();
+    let long = PropertyValue::CharacterString("x".repeat(16 * 1024 + 1));
+    object
+        .write_property(P::EVENT_MESSAGE_TEXTS_CONFIG, Some(2), long, None)
+        .unwrap();
+    let mut object = object
+        .with_reporting_persistence(persistence(&storage))
+        .unwrap();
+    object
+        .write_property(
+            P::NOTIFICATION_CLASS,
+            None,
+            PropertyValue::Unsigned(9),
+            None,
+        )
+        .unwrap();
+    assert_eq!(object.written_reporting().event_message_texts_config, None);
+    let short = PropertyValue::CharacterString("back".into());
+    let result = object.write_property(P::EVENT_MESSAGE_TEXTS_CONFIG, Some(3), short, None);
+    assert!(refused_with(
+        &result,
+        ErrorClass::RESOURCES,
+        ErrorCode::NO_SPACE_TO_WRITE_PROPERTY
+    ));
+    assert_eq!(storage.saves(), 1);
+}

@@ -4467,8 +4467,9 @@ above; there is no alternate immediate-commit path. Standalone detector
 
 #### Keeping written reporting settings (#2331)
 
-The analog, binary and multi-state Input, Output and Value objects can keep
-the reporting settings a peer writes across a restart: Notification_Class,
+With the `event-reporting` feature, which `std` turns on, the analog, binary
+and multi-state Input, Output and Value objects can keep the reporting
+settings a peer writes across a restart: Notification_Class,
 Event_Enable, Notify_Type, Event_Detection_Enable,
 Event_Message_Texts_Config, Event_Algorithm_Inhibit_Ref and
 Event_Algorithm_Inhibit. Opt in with the builder call
@@ -4507,6 +4508,13 @@ ai.set_notification_class(5); // a value a peer wrote and saved wins
   stores the same octets; `snapshot::write_config::keeps_reporting` names the
   object types that take it. Storage holding another kind, or a value no
   write leaves, fails `with_reporting_persistence` with an error.
+  `WriteConfigSnapshot` and `ReportingWriteConfig` are `#[non_exhaustive]`:
+  a match takes a wildcard arm, and a `ReportingWriteConfig` is built from
+  `Default` with its fields set.
+- **Feature.** `event-reporting` gates `with_reporting_persistence`, the
+  three setters, `written_reporting`, `clear_written_reporting` and
+  `wait_for_reporting_saves`; without it the objects keep nothing, and an
+  image that reports nothing links none of it.
 
 #### Creation and deletion
 

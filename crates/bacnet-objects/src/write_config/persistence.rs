@@ -24,6 +24,9 @@ use crate::timer::StateChangeValues;
 // once per save, so boxing it would buy nothing but a harder pattern match.
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq)]
+// More object types will keep their configuration here (#2331), so a match
+// outside the crate takes a wildcard arm.
+#[non_exhaustive]
 pub enum WriteConfigSnapshot {
     /// A Timer's.
     Timer(TimerWriteConfig),
@@ -36,7 +39,11 @@ pub enum WriteConfigSnapshot {
 /// The reporting settings every intrinsic reporter shares, as storage keeps
 /// them once a write sets them (#2331). Each is `None` until then: what the
 /// application configures applies at each start until then.
+///
+/// More settings may join it, so outside the crate it is built from
+/// [`Default`] with its fields then set.
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct ReportingWriteConfig {
     /// Notification_Class.
     pub notification_class: Option<u32>,
