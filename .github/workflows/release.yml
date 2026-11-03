@@ -10,8 +10,9 @@ name: Release
 #   v* tag pushed     Validate, the CI gate (the tag's own CI run and Native OK
 #                     on its commit), a check that PyPI trusts this workflow,
 #                     build, check and smoke-test every artifact, then one step
-#                     at a time: stage the GitHub draft, publish to crates.io,
-#                     publish to PyPI, publish the GitHub draft.
+#                     at a time: sign the MCP bundles, stage the GitHub draft,
+#                     publish to crates.io, publish to PyPI, publish the GitHub
+#                     draft.
 #   manual dispatch   dry_run (default true) builds and tests everything,
 #                     plans the publish steps read only and publishes nothing.
 #                     dry_run=false is accepted only on a v* tag, and runs that
@@ -609,24 +610,53 @@ jobs:
         run: python3 scripts/release/release_api.py plan --tag "$TAG" --commit "$COMMIT" --assets release
       - name: crates.io (read only)
         run: bash scripts/release/publish_crates.sh --dry-run
+      # A dry run has no signing key (#2324): mcpb verify runs on every bundle
+      # and must report it unsigned, which is a notice, not a failure. A
+      # bundle carrying a signature block here is an error.
+      - &mcpb-node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - &mcpb-tool
+        name: The MCP Bundle CLI (pinned by its lockfile)
+        run: npm ci --prefix scripts/release/mcpb/tool --ignore-scripts --no-audit --no-fund
+      - name: MCP bundle signatures (unsigned in a dry run)
+        run: |
+          mcpb=scripts/release/mcpb/tool/node_modules/.bin/mcpb
+          for bundle in release/*.mcpb; do
+            read -r state _ < <(python3 -I scripts/release/mcpb.py signature "$bundle")
+            if [ "$state" != unsigned ]; then
+              echo "::error::$bundle carries a signature block, but only a release signs the bundles"
+              exit 1
+            fi
+            "$mcpb" info "$bundle"
+            if "$mcpb" verify "$bundle"; then
+              echo "::error::mcpb verify accepted the unsigned $bundle"
+              exit 1
+            fi
+            echo "::notice::${bundle#release/} is unsigned: a dry run has no signing key, and a release signs it"
+          done
 
-  # Publishing: tag runs only, after Validate, the CI gate, every check and
-  # every smoke test passed, one job at a time, so a failure stops everything
-  # after it. The GitHub draft comes first because it is the only reversible
-  # step: it proves GitHub takes the release before crates.io and PyPI, which
-  # can't be undone, and the draft is published last.
-  github-draft:
-    name: GitHub draft
+  # Signs each MCP bundle with the release certificate (#2324), in the release
+  # environment, the only place its key is, then has mcpb verify check each
+  # one. Missing secrets fail the job, so a release never ships unsigned
+  # bundles. Signing only appends a block: the bundle before it must keep
+  # the bytes the checks and smoke tests passed. The GitHub draft and release
+  # take the signed set. It runs on macOS because mcpb verify checks the
+  # certificate's chain against the OS trust store, and on Linux it asks
+  # OpenSSL for a purpose no OpenSSL knows ("codesigning"; it is "codesign"
+  # from 3.2), so it can't pass there (mcpb 2.1.2). See docs/ci.md,
+  # "Signing the MCP bundles".
+  mcpb-sign:
+    name: Sign the MCP bundles
     needs: [validate, ci-gate, verify, smoke]
     if: needs.validate.outputs.publish == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    runs-on: macos-26
+    timeout-minutes: 15
+    environment:
+      name: release
     permissions:
-      # Creates and fills the draft; GitHub shows drafts only to a token that can write.
-      contents: write # the draft release
-    outputs:
-      release_id: ${{ steps.stage.outputs.release_id }}
-      sums_sha256: ${{ steps.stage.outputs.sums_sha256 }}
+      contents: read
     steps:
       - &release-scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -637,6 +667,83 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-assets
+          path: release
+      - *mcpb-node
+      - *mcpb-tool
+      - name: Sign and verify each bundle
+        env:
+          MCPB_SIGNING_KEY: ${{ secrets.MCPB_SIGNING_KEY }}
+          MCPB_SIGNING_CERT: ${{ secrets.MCPB_SIGNING_CERT }}
+          MCPB_SIGNING_CHAIN: ${{ secrets.MCPB_SIGNING_CHAIN }}
+        run: |
+          if [ -z "$MCPB_SIGNING_KEY" ] || [ -z "$MCPB_SIGNING_CERT" ]; then
+            echo "::error::the release environment has no MCPB_SIGNING_KEY or MCPB_SIGNING_CERT secret, so the MCP"\
+              "bundles would ship unsigned and nothing is published (docs/ci.md, \"Signing the MCP bundles\")"
+            exit 1
+          fi
+          # The key exists only in this temporary directory, readable by this
+          # user alone, and is removed when the step ends; nothing prints it.
+          keys=$(mktemp -d "$RUNNER_TEMP/mcpb-keys.XXXXXX")
+          trap 'rm -rf "$keys"' EXIT
+          (
+            umask 077
+            printf '%s\n' "$MCPB_SIGNING_KEY" >"$keys/key.pem"
+            printf '%s\n' "$MCPB_SIGNING_CERT" >"$keys/cert.pem"
+            # Intermediates, one file each, as mcpb sign --intermediate takes them.
+            printf '%s\n' "$MCPB_SIGNING_CHAIN" | awk -v dir="$keys" \
+              '/-----BEGIN CERTIFICATE-----/ { n++ } n { print > (dir "/chain-" n ".pem") }'
+          )
+          unset MCPB_SIGNING_KEY
+          chain=()
+          for file in "$keys"/chain-*.pem; do
+            if [ -f "$file" ]; then chain+=("$file"); fi
+          done
+          if [ ${#chain[@]} -gt 0 ]; then chain=(--intermediate "${chain[@]}"); fi
+          mcpb=scripts/release/mcpb/tool/node_modules/.bin/mcpb
+          bundles=(release/*.mcpb)
+          [ ${#bundles[@]} = 5 ] || { echo "::error::expected five MCP bundles, found: ${bundles[*]}"; exit 1; }
+          for bundle in "${bundles[@]}"; do
+            read -r state before < <(python3 -I scripts/release/mcpb.py signature "$bundle")
+            [ "$state" = unsigned ] || { echo "::error::$bundle is signed already"; exit 1; }
+            "$mcpb" sign "$bundle" --cert "$keys/cert.pem" --key "$keys/key.pem" "${chain[@]}"
+            read -r state after < <(python3 -I scripts/release/mcpb.py signature "$bundle")
+            if [ "$state" != signed ] || [ "$after" != "$before" ]; then
+              echo "::error::signing $bundle changed more than its appended signature block"
+              exit 1
+            fi
+            "$mcpb" verify "$bundle"
+            "$mcpb" info "$bundle"
+          done
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-assets-signed
+          path: release/
+          if-no-files-found: error
+
+  # Publishing: tag runs only, after Validate, the CI gate, every check and
+  # every smoke test passed, one job at a time, so a failure stops everything
+  # after it. The GitHub draft comes first because it is the only reversible
+  # step: it proves GitHub takes the release before crates.io and PyPI, which
+  # can't be undone, and the draft is published last.
+  github-draft:
+    name: GitHub draft
+    needs: [validate, ci-gate, verify, smoke, mcpb-sign]
+    if: needs.validate.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      # Creates and fills the draft; GitHub shows drafts only to a token that can write.
+      contents: write # the draft release
+    outputs:
+      release_id: ${{ steps.stage.outputs.release_id }}
+      sums_sha256: ${{ steps.stage.outputs.sums_sha256 }}
+    steps:
+      - *release-scripts
+      # The release's files with the MCP bundles signed.
+      - &signed-assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-assets-signed
           path: release
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -755,7 +862,7 @@ jobs:
       contents: write # reads the draft and publishes it
     steps:
       - *release-scripts
-      - *release-assets
+      - *signed-assets
       - name: Publish the staged draft
         env:
           GITHUB_TOKEN: ${{ github.token }}

@@ -5,6 +5,7 @@
         --license LICENSE --notices THIRD-PARTY-NOTICES --out out
     mcpb.py check out/bacnet-macos-arm64.mcpb --binary out/bacnet-macos-arm64 --platform macos-arm64 \\
         --version 0.16.0 [--notices THIRD-PARTY-NOTICES]
+    mcpb.py signature out/bacnet-macos-arm64.mcpb
     mcpb.py smoke out/bacnet-macos-arm64.mcpb
 
 The format is the MCP Bundle manifest 0.3 (github.com/modelcontextprotocol/mcpb,
@@ -12,8 +13,9 @@ MANIFEST.md, "Current version: 0.3"; the schema of @anthropic-ai/mcpb 2.1.2,
 which 0.4 only extends with the `uv` server type). A bundle is a zip holding
 `manifest.json` at its root. Each one here is a `binary` bundle for one
 release platform: the release's own `bacnet` executable, byte for byte, as
-`server/bacnet` (`server/bacnet.exe` on Windows), the license and the
-third-party notices, and a manifest that runs `bacnet mcp serve --stdio
+`server/bacnet` (`server/bacnet.exe` on Windows), the project icon
+(`icon.png`, 512x512, #2324), the license and the third-party notices, and a
+manifest that runs `bacnet mcp serve --stdio
 --profile <profile>` with the profile the user names in the host's settings.
 Its `compatibility.platforms` names the bundle's one OS; the format has no
 field for the architecture, so the file name says it.
@@ -25,7 +27,12 @@ field for the architecture, so the file name says it.
   0.3 schema (`SCHEMA`, a transcription) plus what `mcpb validate` adds (the
   entry point is there and executable, and `mcp_config` uses only the
   variables a host substitutes), its version and platform, and that its
-  executable is the CLI asset itself.
+  executable is the CLI asset itself, and the icon a 512x512 PNG. A signed
+  bundle is checked without its signature block.
+- `signature` says whether a bundle carries an `mcpb sign` signature block
+  and gives the sha256 of the bundle without it, so the release can check
+  that signing only appended the block (#2324). The signature itself is
+  checked by `mcpb verify`, not here.
 - `smoke` does what a host does: unzips it (restoring the modes), runs the
   manifest's command with a profile filled in, and checks that a missing or
   unauthorized profile stops the server at once with a message naming
@@ -35,6 +42,8 @@ field for the architecture, so the file name says it.
 """
 
 import argparse
+import hashlib
+import io
 import json
 import os
 import queue
@@ -51,6 +60,15 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 TEMPLATE = HERE / "mcpb" / "manifest.json"
 SMOKE_PROFILE = HERE / "mcpb" / "smoke-profile.toml"
+ICON_FILE = HERE / "mcpb" / "icon.png"
+ICON = "icon.png"
+ICON_SIZE = (512, 512)
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+# The block `mcpb sign` appends (src/node/sign.ts): the header, a 4-byte
+# little-endian length, the DER PKCS#7 signature over everything before the
+# header, and the footer.
+SIGNATURE_HEADER = b"MCPB_SIG_V1"
+SIGNATURE_FOOTER = b"MCPB_SIG_END"
 MANIFEST_VERSION = "0.3"
 # Release platform (the build matrix's name): the manifest's OS and the
 # executable's suffix.
@@ -228,7 +246,7 @@ def _entry(name, mode, when):
     return info
 
 
-def pack(binary, platform, version, license_file, notices, out_dir, template=TEMPLATE):
+def pack(binary, platform, version, license_file, notices, out_dir, template=TEMPLATE, icon=ICON_FILE):
     """Write the bundle; returns its path."""
     if platform not in PLATFORMS:
         raise ValueError(f"unknown platform {platform}; one of {', '.join(PLATFORMS)}")
@@ -243,6 +261,7 @@ def pack(binary, platform, version, license_file, notices, out_dir, template=TEM
     path.parent.mkdir(parents=True, exist_ok=True)
     entries = [("manifest.json", 0o644, (json.dumps(manifest, indent=2) + "\n").encode()),
                (manifest["server"]["entry_point"], 0o755, Path(binary).read_bytes()),
+               (ICON, 0o644, Path(icon).read_bytes()),
                (LICENSE, 0o644, Path(license_file).read_bytes()),
                (NOTICES, 0o644, Path(notices).read_bytes())]
     with zipfile.ZipFile(path, "w") as bundle:
@@ -252,6 +271,28 @@ def pack(binary, platform, version, license_file, notices, out_dir, template=TEM
 
 
 # --- Check ------------------------------------------------------------------
+
+def split_signature(data):
+    """(the bundle without its signature block, whether it had one). Like
+    `mcpb verify`, it takes the last footer and the last header before it."""
+    footer = data.rfind(SIGNATURE_FOOTER)
+    header = data.rfind(SIGNATURE_HEADER, 0, footer) if footer >= 0 else -1
+    if header < 0:
+        return data, False
+    return data[:header], True
+
+
+def png_errors(data, size=ICON_SIZE):
+    """Why `data` isn't a `size` PNG; [] when it is one."""
+    if not data.startswith(PNG_MAGIC):
+        return ["is not a PNG"]
+    if len(data) < 24 or data[12:16] != b"IHDR":
+        return ["is a PNG without its IHDR header"]
+    found = (int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big"))
+    if found != size:
+        return [f"is {found[0]}x{found[1]}, not {size[0]}x{size[1]}"]
+    return []
+
 
 def _mode(info):
     return (info.external_attr >> 16) & 0o777
@@ -278,14 +319,15 @@ def check_bundle(path, platform, version, binary=None, notices=None):
     when given, are the files it must hold byte for byte."""
     label = Path(path).name
     try:
-        bundle = zipfile.ZipFile(path)
+        content, _ = split_signature(Path(path).read_bytes())
+        bundle = zipfile.ZipFile(io.BytesIO(content))
     except (OSError, zipfile.BadZipFile) as err:
         return [f"{label}: not a zip ({err})"]
     with bundle:
         infos = bundle.infolist()
         names = [i.filename for i in infos]
         entry = entry_point(platform)
-        want = ["manifest.json", entry, LICENSE, NOTICES]
+        want = ["manifest.json", entry, ICON, LICENSE, NOTICES]
         errors = []
         if sorted(names) != sorted(want):
             errors.append(f"{label}: holds {names}, expected {want}")
@@ -314,6 +356,10 @@ def check_bundle(path, platform, version, binary=None, notices=None):
             errors.append(f"{label}: mcp_config.command must run ${{__dirname}}/{entry}")
         if server["mcp_config"].get("args", [])[:3] != ["mcp", "serve", "--stdio"]:
             errors.append(f"{label}: mcp_config.args must start mcp serve --stdio")
+        if manifest.get("icon") != ICON:
+            errors.append(f"{label}: icon must be {ICON!r}")
+        if ICON in names:
+            errors += [f"{label}: {ICON} {e}" for e in png_errors(bundle.read(ICON))]
         if not manifest.get("user_config", {}).get("profile", {}).get("required"):
             errors.append(f"{label}: user_config.profile must be required")
         errors += [f"{label}: {e}" for e in _variables(manifest)]
@@ -335,6 +381,12 @@ def check_bundle(path, platform, version, binary=None, notices=None):
         if LICENSE in names and not bundle.read(LICENSE).strip():
             errors.append(f"{label}: {LICENSE} is empty")
     return errors
+
+
+def signature(path):
+    """(whether the bundle is signed, the sha256 of it without the block)."""
+    content, signed = split_signature(Path(path).read_bytes())
+    return signed, hashlib.sha256(content).hexdigest()
 
 
 # --- Smoke ------------------------------------------------------------------
@@ -528,6 +580,8 @@ def main(argv=None):
     c.add_argument("--version", required=True)
     c.add_argument("--binary", type=Path)
     c.add_argument("--notices", type=Path)
+    g = sub.add_parser("signature", help="say whether a bundle is signed, and its unsigned sha256")
+    g.add_argument("bundle", type=Path)
     s = sub.add_parser("smoke", help="run a bundle as a host does")
     s.add_argument("bundle", type=Path)
     s.add_argument("--timeout", type=float, default=30.0)
@@ -543,6 +597,10 @@ def main(argv=None):
         if not errors:
             print(f"OK: {args.bundle.name}")
         return 1 if errors else 0
+    if args.action == "signature":
+        signed, digest = signature(args.bundle)
+        print(f"{'signed' if signed else 'unsigned'} {digest}")
+        return 0
     try:
         smoke(args.bundle, args.timeout)
     except (SmokeError, ValueError, OSError) as err:

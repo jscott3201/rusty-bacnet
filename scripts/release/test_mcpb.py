@@ -3,6 +3,7 @@
 stand-in executables: python3 -m unittest discover -s scripts/release"""
 
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -160,8 +161,8 @@ class PackAndCheckTests(unittest.TestCase):
         with zipfile.ZipFile(second) as bundle:
             infos = bundle.infolist()
         self.assertEqual([i.filename for i in infos],
-                         ["manifest.json", "server/bacnet", "LICENSE", "THIRD-PARTY-NOTICES"])
-        self.assertEqual([(i.external_attr >> 16) & 0o777 for i in infos], [0o644, 0o755, 0o644, 0o644])
+                         ["manifest.json", "server/bacnet", "icon.png", "LICENSE", "THIRD-PARTY-NOTICES"])
+        self.assertEqual([(i.external_attr >> 16) & 0o777 for i in infos], [0o644, 0o755, 0o644, 0o644, 0o644])
         self.assertEqual(infos[0].date_time, (2026, 11, 2, 0, 0, 0))
         self.assertEqual(self.check(second), [])
 
@@ -217,6 +218,45 @@ class PackAndCheckTests(unittest.TestCase):
         path = self.files.pack()
         path.write_bytes(b"not a zip")
         self.assertTrue(any("not a zip" in e for e in self.check(path)))
+
+    def test_the_icon_is_the_512_png(self):
+        path = self.files.pack()
+        with zipfile.ZipFile(path) as bundle:
+            icon = bundle.read("icon.png")
+            manifest = json.loads(bundle.read("manifest.json"))
+        self.assertEqual(icon, mcpb.ICON_FILE.read_bytes())
+        self.assertEqual(manifest["icon"], "icon.png")
+        self.assertEqual(mcpb.png_errors(icon), [])
+        self.assertEqual(self.check(path), [])
+
+    def test_check_refuses_a_wrong_or_missing_icon(self):
+        good = mcpb.ICON_FILE.read_bytes()
+        # The same PNG declaring another size in its IHDR.
+        small = good[:16] + (256).to_bytes(4, "big") * 2 + good[24:]
+        cases = {
+            "is 256x256, not 512x512": lambda e: [(i, small if i.filename == "icon.png" else d) for i, d in e],
+            "icon.png is not a PNG": lambda e: [(i, b"GIF89a" if i.filename == "icon.png" else d) for i, d in e],
+            "holds": lambda e: [(i, d) for i, d in e if i.filename != "icon.png"],
+        }
+        for want, change in cases.items():
+            with self.subTest(want=want):
+                path = self.files.pack()
+                rewrite(path, change)
+                errors = self.check(path)
+                self.assertTrue(any(want in e for e in errors), errors)
+        path = self.files.pack()
+        edit_manifest(path, lambda m: m.pop("icon"))
+        self.assertTrue(any("icon must be 'icon.png'" in e for e in self.check(path)))
+
+    def test_a_signed_bundle_checks_without_its_block(self):
+        path = self.files.pack()
+        unsigned = path.read_bytes()
+        self.assertEqual(mcpb.signature(path), (False, hashlib.sha256(unsigned).hexdigest()))
+        # What `mcpb sign` appends: header, little-endian length, signature, footer.
+        blob = b"\x30\x82 stand-in PKCS#7"
+        path.write_bytes(unsigned + b"MCPB_SIG_V1" + len(blob).to_bytes(4, "little") + blob + b"MCPB_SIG_END")
+        self.assertEqual(mcpb.signature(path), (True, hashlib.sha256(unsigned).hexdigest()))
+        self.assertEqual(self.check(path), [])
 
     def test_extract_refuses_a_path_out_of_the_bundle(self):
         path = self.files.pack()
