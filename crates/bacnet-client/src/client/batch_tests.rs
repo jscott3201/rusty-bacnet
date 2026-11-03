@@ -88,7 +88,7 @@ async fn batch_empty_default_and_positive_complete() {
                 .unwrap();
         }
     }
-    assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
+    assert_eq!(client.tsm.lock().coordinated_active_count(), 0);
     client.stop().await.unwrap();
 }
 
@@ -115,7 +115,7 @@ async fn batch_limit_and_drop_release_all_active_leases() {
                     item = timeout(Duration::from_secs(1), received.recv()) => { item.unwrap().unwrap(); }
                 }
             }
-            assert_eq!(client.tsm.lock().await.coordinated_active_count(), active);
+            assert_eq!(client.tsm.lock().coordinated_active_count(), active);
             tokio::select! {
                 _ = &mut pending => panic!("batch completed without replies"),
                 item = received.recv() => panic!("limit exceeded: {item:?}"),
@@ -123,13 +123,13 @@ async fn batch_limit_and_drop_release_all_active_leases() {
             }
             drop(pending);
             timeout(Duration::from_secs(1), async {
-                while client.tsm.lock().await.coordinated_active_count() != 0 {
+                while client.tsm.lock().coordinated_active_count() != 0 {
                     tokio::task::yield_now().await;
                 }
             })
             .await
             .unwrap();
-            assert_eq!(client.tsm.lock().await.pending_count(), 0);
+            assert_eq!(client.tsm.lock().pending_count(), 0);
             assert!(received.try_recv().is_err());
         }
     }

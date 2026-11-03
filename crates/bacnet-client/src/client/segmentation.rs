@@ -45,7 +45,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Handle a segmented ComplexAck: accumulate segments, send SegmentAcks,
     /// and reassemble when all segments are received.
     pub(super) async fn handle_segmented_complex_ack(
-        tsm: &Arc<Mutex<Tsm>>,
+        tsm: &Arc<SyncMutex<Tsm>>,
         network: &Arc<NetworkLayer<T>>,
         seg_state: &mut HashMap<SegKey, SegmentedReceiveState>,
         source: InboundSegmentSource<'_>,
@@ -99,7 +99,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let mut deferred_owner = None;
         let owner = loop {
             let admission = {
-                let mut tsm = tsm.lock().await;
+                let mut tsm = tsm.lock();
                 if let Some(owner) = deferred_owner.as_ref() {
                     tsm.coordinated_admit_segmented_complex_ack_for_owner(
                         SegmentedAckArrival {
@@ -223,7 +223,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         if state.accepted_segments > 0
             && tsm
                 .lock()
-                .await
                 .record_segmented_response_activity(&tsm_mac, ack.invoke_id, &state.owner)
                 .is_none()
         {
@@ -331,60 +330,66 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         // TSM lock used by RequestTimer expiry. This makes acceptance itself
         // the serialized transition: timeout cannot slip between the save and
         // the phase change to retransmit or cancel the request.
-        let mut admission_tsm = if first_accepted_segment {
-            Some(tsm.lock().await)
-        } else {
-            None
+        let accepted = {
+            let mut admission_tsm = first_accepted_segment.then(|| tsm.lock());
+            if admission_tsm
+                .as_ref()
+                .is_some_and(|tsm| !tsm.owner_is_current(&tsm_mac, ack.invoke_id, &state.owner))
+            {
+                Err(None)
+            } else if let Err(e) = state.receiver.receive(seq, ack.service_ack) {
+                Err(Some(e))
+            } else {
+                if let Some(tsm) = admission_tsm.as_mut() {
+                    let generation =
+                        tsm.begin_segmented_response(&tsm_mac, ack.invoke_id, &state.owner);
+                    debug_assert!(
+                        generation.is_some(),
+                        "pending transaction disappeared while its TSM lock was held"
+                    );
+                }
+                Ok(())
+            }
         };
-        if admission_tsm
-            .as_ref()
-            .is_some_and(|tsm| !tsm.owner_is_current(&tsm_mac, ack.invoke_id, &state.owner))
-        {
-            drop(admission_tsm);
-            seg_state.remove(&key);
-            Self::send_client_abort(
-                network,
-                source_mac,
-                source_network,
-                ack.invoke_id,
-                bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
-            )
-            .await;
-            return;
+        match accepted {
+            Ok(()) => {}
+            Err(None) => {
+                seg_state.remove(&key);
+                Self::send_client_abort(
+                    network,
+                    source_mac,
+                    source_network,
+                    ack.invoke_id,
+                    bacnet_types::enums::AbortReason::INVALID_APDU_IN_THIS_STATE,
+                )
+                .await;
+                return;
+            }
+            Err(Some(e)) => {
+                // This is another local failure to retain the segment, so
+                // Clause 5.4.4.4 wants the same Abort rather than leaving the
+                // caller to time out on a session that can no longer complete.
+                warn_throttled!(warning, error = %e, "Rejecting oversized segment");
+                let reply_mac = state.reply_mac.clone();
+                let reply_network = state.reply_network.clone();
+                let owner = state.owner.clone();
+                seg_state.remove(&key);
+                Self::abort_reassembly(
+                    tsm,
+                    network,
+                    ReassemblyAbortTarget {
+                        tsm_mac: &tsm_mac,
+                        owner: &owner,
+                        reply_mac: &reply_mac,
+                        reply_network: &reply_network,
+                    },
+                    ack.invoke_id,
+                    bacnet_types::enums::AbortReason::BUFFER_OVERFLOW,
+                )
+                .await;
+                return;
+            }
         }
-        if let Err(e) = state.receiver.receive(seq, ack.service_ack) {
-            // This is another local failure to retain the segment, so
-            // Clause 5.4.4.4 wants the same Abort rather than leaving the
-            // caller to time out on a session that can no longer complete.
-            warn_throttled!(warning, error = %e, "Rejecting oversized segment");
-            let reply_mac = state.reply_mac.clone();
-            let reply_network = state.reply_network.clone();
-            let owner = state.owner.clone();
-            drop(admission_tsm);
-            seg_state.remove(&key);
-            Self::abort_reassembly(
-                tsm,
-                network,
-                ReassemblyAbortTarget {
-                    tsm_mac: &tsm_mac,
-                    owner: &owner,
-                    reply_mac: &reply_mac,
-                    reply_network: &reply_network,
-                },
-                ack.invoke_id,
-                bacnet_types::enums::AbortReason::BUFFER_OVERFLOW,
-            )
-            .await;
-            return;
-        }
-        if let Some(tsm) = admission_tsm.as_mut() {
-            let generation = tsm.begin_segmented_response(&tsm_mac, ack.invoke_id, &state.owner);
-            debug_assert!(
-                generation.is_some(),
-                "pending transaction disappeared while its TSM lock was held"
-            );
-        }
-        drop(admission_tsm);
         state.accepted_segments += 1;
         state.expected_next_seq = seq.wrapping_add(1);
         state.last_sequence_number = seq;
@@ -425,7 +430,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         bytes = service_data.len(),
                         "Reassembled segmented ComplexAck"
                     );
-                    let mut tsm = tsm.lock().await;
+                    let mut tsm = tsm.lock();
                     let outcome = tsm.complete_admitted_transaction_for_owner(
                         &tsm_mac,
                         ack.invoke_id,
@@ -448,11 +453,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     }
                 }
                 Err(e) => {
-                    tsm.lock().await.reset_segmented_response(
-                        &tsm_mac,
-                        ack.invoke_id,
-                        &state.owner,
-                    );
+                    tsm.lock()
+                        .reset_segmented_response(&tsm_mac, ack.invoke_id, &state.owner);
                     warn_throttled!(
                         warning,
                         error = %e,
@@ -503,7 +505,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
         let (seg_ack_tx, mut seg_ack_rx) = mpsc::channel(16);
         let (invoke_id, registration) = {
-            let mut tsm = self.tsm.lock().await;
+            let mut tsm = self.tsm.lock();
             tsm.register_coordinated_transaction_with_progress(
                 tsm_mac.clone(),
                 transaction_peer.canonical,
@@ -534,7 +536,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         );
         {
             let key = (tsm_mac.clone(), invoke_id);
-            self.seg_ack_senders.lock().await.insert(
+            self.seg_ack_senders.lock().insert(
                 key,
                 SegmentAckRoute {
                     owner: owner.clone(),
@@ -756,7 +758,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             if !segmented_response_started {
                 self.tsm
                     .lock()
-                    .await
                     .finish_segmented_request(&tsm_mac, invoke_id, &owner);
             }
             // Once entered, the phase-aware waiter owns terminal TSM removal.
@@ -782,7 +783,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
         {
             let key = (tsm_mac.clone(), invoke_id);
-            let mut senders = self.seg_ack_senders.lock().await;
+            let mut senders = self.seg_ack_senders.lock();
             if senders.get(&key).is_some_and(|route| {
                 route.owner.same_as(&owner) && route.sender.same_channel(&seg_ack_tx)
             }) {
@@ -794,7 +795,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             Ok(response) => response,
             Err(e) => {
                 if owns_tsm_cleanup {
-                    let mut tsm = self.tsm.lock().await;
+                    let mut tsm = self.tsm.lock();
                     tsm.cancel_transaction_for_owner(&tsm_mac, invoke_id, &owner);
                     drop(tsm);
                     self.enqueue_transaction_cleanup(

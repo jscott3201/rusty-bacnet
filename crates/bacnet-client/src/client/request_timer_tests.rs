@@ -186,8 +186,8 @@ async fn retry_send_failure_precedes_final_timeout_indication() {
         other => panic!("expected retry transport failure, got {other:?}"),
     }
     assert_eq!(send_count.load(Ordering::SeqCst), 2);
-    assert_eq!(client.tsm.lock().await.pending_count(), 0);
-    assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
+    assert_eq!(client.tsm.lock().pending_count(), 0);
+    assert_eq!(client.tsm.lock().coordinated_active_count(), 0);
 
     client.stop().await.unwrap();
 }

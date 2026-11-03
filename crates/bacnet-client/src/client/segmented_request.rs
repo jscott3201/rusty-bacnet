@@ -61,7 +61,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         tokio::pin!(send);
 
         if first_final_issue {
-            let Some(mut token) = self.tsm.lock().await.begin_final_segment_send(
+            let Some(mut token) = self.tsm.lock().begin_final_segment_send(
                 context.tsm_mac,
                 context.invoke_id,
                 context.owner,
@@ -83,7 +83,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 }
                 Poll::Pending => false,
             };
-            if !self.tsm.lock().await.mark_final_segment_issued(
+            if !self.tsm.lock().mark_final_segment_issued(
                 context.tsm_mac,
                 context.invoke_id,
                 context.owner,

@@ -180,7 +180,7 @@ async fn authoritative_local_no_segmentation_refuses_segmented_request() {
         .unwrap();
 
     // Explicit upsert is authoritative configuration (Clause 12.11 values).
-    client.device_table.lock().await.upsert(local_peer(
+    client.device_table.lock().upsert(local_peer(
         1234,
         &peer_mac,
         PEER_MAX_APDU,
@@ -224,7 +224,7 @@ async fn authoritative_local_transmit_only_refuses_segmented_request() {
         .await
         .unwrap();
 
-    client.device_table.lock().await.upsert(local_peer(
+    client.device_table.lock().upsert(local_peer(
         1234,
         &peer_mac,
         PEER_MAX_APDU,
@@ -328,7 +328,7 @@ async fn authoritative_receive_peer_still_segments_successfully() {
         .await
         .unwrap();
 
-    client.device_table.lock().await.upsert(local_peer(
+    client.device_table.lock().upsert(local_peer(
         1234,
         &peer_mac,
         PEER_MAX_APDU,
@@ -383,7 +383,7 @@ async fn fitting_request_to_no_segmentation_peer_still_sends() {
         .await
         .unwrap();
 
-    client.device_table.lock().await.upsert(local_peer(
+    client.device_table.lock().upsert(local_peer(
         1234,
         &peer_mac,
         PEER_MAX_APDU,
@@ -516,7 +516,7 @@ async fn explicit_upsert_refresh_makes_placeholder_authoritative() {
 
     // Authoritative replacement of the same instance: now NONE at a small
     // Max APDU is real configuration, not a placeholder.
-    client.device_table.lock().await.upsert(local_peer(
+    client.device_table.lock().upsert(local_peer(
         1234,
         &peer_mac,
         PEER_MAX_APDU,
@@ -564,7 +564,7 @@ async fn unknown_raw_capability_is_not_treated_as_no_segmentation() {
         .await
         .unwrap();
 
-    client.device_table.lock().await.upsert(local_peer(
+    client.device_table.lock().upsert(local_peer(
         1234,
         &peer_mac,
         PEER_MAX_APDU,

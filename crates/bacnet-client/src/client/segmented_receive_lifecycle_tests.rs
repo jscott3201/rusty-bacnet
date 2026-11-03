@@ -580,7 +580,7 @@ async fn segmented_request_timeout_cleanup_preserves_replacement_sender() {
         Err(Error::Remote(RemoteError::Abort { reason })) if reason == AbortReason::TSM_TIMEOUT
     ));
     assert_eq!(
-        client.tsm.lock().await.pending_count(),
+        client.tsm.lock().pending_count(),
         1,
         "stale cleanup cancelled the replacement request"
     );

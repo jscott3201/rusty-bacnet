@@ -374,7 +374,7 @@ async fn device_mgmt_unknown_device_and_invalid_time_routes_send_nothing() {
                 .local_network_number()
                 .publish(bacnet_types::network_number::NetworkNumber::configured(NETWORK).unwrap());
         }
-        client.device_table.lock().await.upsert(DiscoveredDevice {
+        client.device_table.lock().upsert(DiscoveredDevice {
             object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, INSTANCE + 1).unwrap(),
             mac_address: MacAddr::from_slice(ROUTER),
             max_apdu_length: 1476,

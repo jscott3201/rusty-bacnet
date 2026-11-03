@@ -167,6 +167,6 @@ async fn ready_terminal_before_final_send_aborts_without_polling_final_send() {
         !final_segment_polled.load(Ordering::Acquire),
         "the final send future was polled after the premature response completed the transaction"
     );
-    assert_eq!(client.tsm.lock().await.pending_count(), 0);
+    assert_eq!(client.tsm.lock().pending_count(), 0);
     client.stop().await.unwrap();
 }

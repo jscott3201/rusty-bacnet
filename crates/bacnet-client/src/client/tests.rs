@@ -216,7 +216,7 @@ async fn device_table_purge_runs_without_inbound_apdu() {
     tokio::task::yield_now().await;
     tokio::task::yield_now().await;
 
-    client.device_table.lock().await.upsert(DiscoveredDevice {
+    client.device_table.lock().upsert(DiscoveredDevice {
         object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 2001).unwrap(),
         mac_address: MacAddr::from_slice(&[192, 168, 1, 42, 0xBA, 0xC0]),
         max_apdu_length: 1476,
@@ -312,7 +312,7 @@ async fn confirmed_request_does_not_wrap_discovered_max_apdu_length() {
         .await
         .unwrap();
 
-    client.device_table.lock().await.upsert(DiscoveredDevice {
+    client.device_table.lock().upsert(DiscoveredDevice {
         object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 2002).unwrap(),
         mac_address: MacAddr::from_slice(&remote_mac),
         max_apdu_length: u32::from(u16::MAX) + 1,
@@ -411,7 +411,7 @@ async fn confirmed_request_timeout() {
         .confirmed_request(&fake_mac, ConfirmedServiceChoice::READ_PROPERTY, &[0x01])
         .await;
     assert!(result.is_err());
-    assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
+    assert_eq!(client.tsm.lock().coordinated_active_count(), 0);
     client.stop().await.unwrap();
 }
 
