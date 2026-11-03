@@ -61,6 +61,7 @@ macro_rules! without_interface_list {
 
 pub mod any;
 pub mod bbmd;
+pub mod bbmd_lookup;
 pub mod bip;
 #[cfg(feature = "ipv6")]
 #[cfg_attr(docsrs, doc(cfg(feature = "ipv6")))]

@@ -287,10 +287,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         }
 
         let advertised_max_apdu = self.advertised_max_apdu_length_for_target(target)?;
+        // The TSM keys below copy `tsm_mac` with `from_slice`, which copies
+        // it at once; `clone` copies a `MacAddr` a byte at a time (#1978).
         let (invoke_id, registration) = {
             let mut tsm = self.tsm.lock().await;
             tsm.register_coordinated_transaction_with_progress(
-                tsm_mac.clone(),
+                MacAddr::from_slice(&tsm_mac),
                 transaction_peer.canonical,
                 service_choice,
                 false,
@@ -302,7 +304,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let mut guard = TransactionGuard::new(
             Arc::clone(&self.tsm),
             self.cleanup_tx.clone(),
-            tsm_mac.clone(),
+            MacAddr::from_slice(&tsm_mac),
             invoke_id,
             owner.clone(),
             None,
@@ -327,7 +329,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         if let Some(forwarded_npci_len) = routed_forwarded_npci_len {
             self.routed_path_limits.install_active(
                 target,
-                tsm_mac.clone(),
+                MacAddr::from_slice(&tsm_mac),
                 invoke_id,
                 owner.clone(),
                 forwarded_npci_len,

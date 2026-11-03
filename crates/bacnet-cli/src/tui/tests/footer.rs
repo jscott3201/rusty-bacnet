@@ -50,6 +50,7 @@ fn foreign_app() -> App {
             bbmd: bbmd(),
             ttl: 60,
             renewal: Duration::from_secs(30),
+            nat_global: None,
         }),
     );
     press(&mut app, KeyCode::Char('4'));

@@ -11,6 +11,12 @@ impl BipClientBuilder {
         );
         transport.set_share_port_by_address(self.config.share_port_by_address);
         transport.set_mode(self.mode);
+        if self.release_previous_bbmd {
+            transport.set_release_previous_bbmd(true);
+        }
+        if let Some(resolver) = self.bbmd_resolver {
+            transport.set_bbmd_resolver(resolver);
+        }
         transport.set_multicast(self.multicast)?;
         Ok((self.config, transport, self.options))
     }

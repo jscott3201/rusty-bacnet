@@ -91,6 +91,11 @@ cargo_for doc -p bacnet-objects --features test-support --no-deps --locked --doc
 echo "==> bacnet-device-core (no_std with alloc, structured-writes off$label)"
 cargo_for clippy -p bacnet-device-core --all-targets --no-default-features --features alloc --locked -- -D warnings
 cargo_for doc -p bacnet-device-core --no-default-features --features alloc --no-deps --locked --document-private-items
+# Its hidden test-support hooks (#2303) alone with alloc, which only
+# bacnet-server's tests turn on, through a dev-dependency.
+echo "==> bacnet-device-core (no_std with alloc and test-support$label)"
+cargo_for clippy -p bacnet-device-core --all-targets --no-default-features --features alloc,test-support --locked -- -D warnings
+cargo_for doc -p bacnet-device-core --no-default-features --features alloc,test-support --no-deps --locked --document-private-items
 
 # The rustdoc of the MS/TP and B/IP crates with each storage feature alone,
 # and of the router core with each glue feature alone. Their defaults have

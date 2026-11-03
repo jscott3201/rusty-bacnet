@@ -60,6 +60,7 @@ pub(super) fn validate(matches: &ArgMatches) -> Result<(), clap::Error> {
         ("bip_multicast_port", "--bip-multicast-port"),
         ("ttl", "--ttl"),
         ("renewal", "--renewal"),
+        ("nat_global_address", "--nat-global-address"),
         ("ipv6", "--ipv6"),
         ("ipv6_interface", "--ipv6-interface"),
         ("device_instance", "--device-instance"),

@@ -101,6 +101,7 @@ pub(crate) fn timer_sample() -> WriteConfigSnapshot {
             references: vec![reference(1, None), reference(2, Some(77))],
             priority_for_writing: 9,
         }),
+        default_timeout: Some(45_000),
     })
 }
 
@@ -125,6 +126,13 @@ fn each_object_types_configuration_round_trips() {
         (
             timer(),
             WriteConfigSnapshot::Timer(TimerWriteConfig::default()),
+        ),
+        (
+            timer(),
+            WriteConfigSnapshot::Timer(TimerWriteConfig {
+                default_timeout: Some(u64::MAX),
+                ..TimerWriteConfig::default()
+            }),
         ),
         (
             channel(),
@@ -185,9 +193,20 @@ fn damaged_parts_are_refused() {
         case.put(&damaged);
         store.load(timer())
     };
-    // A Channel's kind octet, an unknown one, a presence octet of 2, and
-    // priorities 0 and 17.
-    for (at, octet) in [(12, 2), (12, 9), (13, 2), (14, 0), (14, 17)] {
+    // A Channel's kind octet, an unknown one, the kind saved before
+    // Default_Timeout was kept (whose body ends before the Default_Timeout
+    // part), a presence octet of 2, priorities 0 and 17, and a
+    // Default_Timeout presence octet of 2 (the ninth octet from the end).
+    let timeout_presence = whole.len() - 9;
+    for (at, octet) in [
+        (12, 2),
+        (12, 9),
+        (12, 1),
+        (13, 2),
+        (14, 0),
+        (14, 17),
+        (timeout_presence, 2),
+    ] {
         assert!(with(at, octet).is_err(), "octet {at} = {octet} loaded");
     }
     // Priority 16 is fine.
@@ -248,4 +267,35 @@ fn another_objects_file_is_refused() {
     store.save(timer(), &timer_sample()).unwrap();
     let other = ObjectIdentifier::new(ObjectType::TIMER, 4).unwrap();
     assert!(store.load(other).is_err());
+}
+
+/// A Timer's file saved before Default_Timeout was kept (#2312): kind 1,
+/// its body ending after the set. It still loads, with no Default_Timeout
+/// written, and saves back in the current kind.
+#[test]
+fn a_timer_file_from_before_default_timeout_still_loads() {
+    let case = FileCase::new();
+    let store = case.store();
+    let WriteConfigSnapshot::Timer(mut config) = timer_sample() else {
+        unreachable!()
+    };
+    config.default_timeout = None;
+    let without = WriteConfigSnapshot::Timer(config);
+    store.save(timer(), &without).unwrap();
+    let mut old = case.octets();
+    assert_eq!((old[12], old.last()), (3, Some(&0)));
+    // The kind octet, and no Default_Timeout part.
+    old[12] = 1;
+    old.pop();
+    case.put(&old);
+    assert_eq!(store.load(timer()).unwrap(), Some(without.clone()));
+    // Every truncation of the old layout is refused too.
+    for length in 0..old.len() {
+        case.put(&old[..length]);
+        assert!(store.load(timer()).is_err(), "cut to {length} loaded");
+    }
+    case.put(&old);
+    store.save(timer(), &without).unwrap();
+    assert_eq!(case.octets()[12], 3);
+    assert_eq!(store.load(timer()).unwrap(), Some(without));
 }

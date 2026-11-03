@@ -108,13 +108,23 @@ pub struct Foreign {
     pub hold: u16,
     /// Which Forwarded-NPDUs are taken.
     pub trust: ForwardedTrust,
+    /// On a move to this registration from another BBMD
+    /// ([`Node::retarget`](super::Node::retarget)), ask the BBMD left
+    /// behind to delete this device's entry with one
+    /// Delete-Foreign-Device-Table-Entry (Annex J.2.9, J.5.2.1.2), rather
+    /// than let it run out its time-to-live and grace period (J.5.2.3).
+    /// Best effort: the move never waits for it. Off by default: the entry
+    /// lapses anyway, a BBMD may refuse deletions from senders it doesn't
+    /// trust, and behind NAT the BBMD knows the device by another address.
+    pub release_previous: bool,
 }
 
 impl Foreign {
     /// Registration with `bbmd` for `ttl` seconds: renewed every half
     /// time-to-live (at least [`MIN_RENEWAL`]), a response timeout of that
     /// or [`DEFAULT_RESPONSE_TIMEOUT`] if shorter, [`Retry::Backoff`], no
-    /// broadcasts held, and Forwarded-NPDUs taken only from `bbmd`.
+    /// broadcasts held, Forwarded-NPDUs taken only from `bbmd`, and no
+    /// release of the BBMD a move leaves.
     #[must_use]
     pub const fn new(bbmd: SocketAddrV4, ttl: u16) -> Self {
         // Half the time-to-live, exactly: a whole number of milliseconds.
@@ -127,6 +137,7 @@ impl Foreign {
             retry: Retry::Backoff,
             hold: 0,
             trust: ForwardedTrust::ConfiguredBbmd,
+            release_previous: false,
         }
     }
 

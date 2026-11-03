@@ -89,6 +89,16 @@ fn color_version_1(file: &[u8]) -> Vec<u8> {
     octets
 }
 
+/// A Timer's write configuration as saved before Default_Timeout was kept
+/// (#2312): kind octet 1, and the body ending after the set, without the
+/// Default_Timeout part (a presence octet and eight octets) the sample's
+/// file ends with.
+fn timer_kind_1(file: &[u8]) -> Vec<u8> {
+    let mut octets = file[..file.len() - 9].to_vec();
+    octets[12] = 1;
+    octets
+}
+
 /// The octets the log samples' written reporting settings take at the end
 /// of a schema version 2 slot (#1952): 52 in the Trend Log's, which keeps
 /// its two COV settings too, and 43 in the other two logs'.
@@ -132,6 +142,11 @@ fn generated() -> Vec<Seed> {
                 if format.name.starts_with("color") {
                     let mut octets = vec![selector];
                     octets.extend_from_slice(&color_version_1(file));
+                    seed("-v1", octets);
+                }
+                if format.name == "timer_write_config" {
+                    let mut octets = vec![selector];
+                    octets.extend_from_slice(&timer_kind_1(file));
                     seed("-v1", octets);
                 }
                 continue;

@@ -359,6 +359,21 @@
 # 1,036 / 756 on thumbv7m / thumbv6m / riscv32imc / thumbv7em; RAM is
 # unchanged. Every image stays within its budget; no budget changed.
 #
+# 2026-11-02 (#2307): the move in the node scenario now releases the BBMD
+# it leaves (Foreign::release_previous): bacnet-bip-core admits one
+# Delete-Foreign-Device-Table-Entry exchange, the port sends it, and the
+# node counts its answer. Measured with Rust 1.99.0 against dev at
+# a1d54afb8, node .text grew from 13968 / 15604 / 16280 / 13936 to
+# 14720 / 16476 / 17132 / 14660 octets (+752 / +872 / +852 / +724) on
+# thumbv7m / thumbv6m / riscv32imc / thumbv7em, flash by the same less 32
+# octets of .rodata on riscv32imc, and RAM is unchanged. 220 to 420
+# octets of that is bacnet-bip-core's own code (the action, the counters
+# and the move's admission), the rest the port's send and the scenario's
+# extra steps, inlined into the image. thumbv6m and riscv32imc reached or passed their
+# .text budgets, so the node rows' text and flash budgets are the new
+# sizes plus 12%; the other budgets are unchanged, and the bbmd image grew
+# by at most 4 octets.
+#
 # The objects rows are from when that image joined, on 2026-10-30, same
 # toolchain (#2178), as flash / ram:
 #
@@ -508,6 +523,28 @@
 # 41756 to 20534 / 20542 / 24632 octets; decode_event_parameter alone was
 # 11424 on thumbv7m. The text, rodata and flash budgets tighten to the new
 # sizes plus 12%.
+#
+# The reporting rows are from when that image joined, on 2026-11-02, Rust
+# 1.99.0 against dev at b0269c402 (#2303). It runs the objects image's
+# scenario, then subscribes, renews and cancels through
+# bacnet-device-core's COV table (CovTable::subscribe_cov and
+# subscribe_cov_property, capped at 8 subscriptions), in the same 16 KiB
+# arena. As text / rodata / flash, the objects image, then this one:
+#
+#   thumbv7m             127328 / 15108 / 143460
+#                        148368 / 16420 / 165812
+#   thumbv7em            127104 / 15108 / 143236
+#                        148156 / 16424 / 165604
+#   riscv32imac          153324 / 18636 / 171982
+#                        178092 / 20096 / 198210
+#
+# RAM unchanged at 16480. So the COV table and its two services cost about
+# 21-25 KB of .text and 22-26 KB of flash. On Arm they link two memmove
+# routines more (four), which the counts allow with no headroom.
+# bacnet-device-core has no `cov` feature: built without its COV module,
+# the objects image measured 127536 octets of thumbv7m .text, the same as
+# with it within the layout's few hundred octets, since the linker drops
+# what nothing reaches. The budgets are --suggest's (size plus 12%).
 
 [thumbv7m-none-eabi.mstp]
 text = 18320
@@ -554,11 +591,11 @@ div64_functions = 0
 memmove_functions = 0
 
 [thumbv7m-none-eabi.node]
-text = 15088
+text = 16496
 rodata = 352
 data = 64
 bss = 272
-flash = 16576
+flash = 18000
 ram = 272
 fmt_functions = 0
 div64_functions = 0
@@ -608,6 +645,17 @@ fmt_functions = 0
 div64_functions = 0
 memmove_functions = 2
 
+[thumbv7m-none-eabi.reporting]
+text = 166176
+rodata = 18400
+data = 64
+bss = 18464
+flash = 185712
+ram = 18464
+fmt_functions = 0
+div64_functions = 0
+memmove_functions = 4
+
 [thumbv6m-none-eabi.mstp]
 text = 19696
 rodata = 1184
@@ -653,11 +701,11 @@ div64_functions = 0
 memmove_functions = 0
 
 [thumbv6m-none-eabi.node]
-text = 16480
+text = 18464
 rodata = 368
 data = 64
 bss = 272
-flash = 17056
+flash = 19088
 ram = 272
 fmt_functions = 0
 div64_functions = 0
@@ -741,11 +789,11 @@ div64_functions = 0
 memmove_functions = 0
 
 [riscv32imc-unknown-none-elf.node]
-text = 17088
+text = 19200
 rodata = 864
 data = 64
 bss = 272
-flash = 17968
+flash = 20096
 ram = 272
 fmt_functions = 0
 div64_functions = 0
@@ -829,11 +877,11 @@ div64_functions = 0
 memmove_functions = 0
 
 [thumbv7em-none-eabihf.node]
-text = 15024
+text = 16432
 rodata = 352
 data = 64
 bss = 272
-flash = 16512
+flash = 17936
 ram = 272
 fmt_functions = 0
 div64_functions = 0
@@ -883,12 +931,34 @@ fmt_functions = 0
 div64_functions = 0
 memmove_functions = 2
 
+[thumbv7em-none-eabihf.reporting]
+text = 165936
+rodata = 18400
+data = 64
+bss = 18464
+flash = 185488
+ram = 18464
+fmt_functions = 0
+div64_functions = 0
+memmove_functions = 4
+
 [riscv32imac-unknown-none-elf.objects]
 text = 172336
 rodata = 20880
 data = 64
 bss = 18464
 flash = 193232
+ram = 18464
+fmt_functions = 0
+div64_functions = 0
+memmove_functions = 2
+
+[riscv32imac-unknown-none-elf.reporting]
+text = 199472
+rodata = 22512
+data = 64
+bss = 18464
+flash = 222000
 ram = 18464
 fmt_functions = 0
 div64_functions = 0

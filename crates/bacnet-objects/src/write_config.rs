@@ -2,7 +2,8 @@
 //! restart (#2243).
 //!
 //! A head end sets up a Timer's writes by writing State_Change_Values and
-//! List_Of_Object_Property_References (Clauses 12.57.20 and 12.57.21), and a
+//! List_Of_Object_Property_References (Clauses 12.57.20 and 12.57.21), its
+//! Default_Timeout (Clause 12.57.16, #2312), and a
 //! Channel's by writing its members, Execution_Delay, Channel_Number,
 //! Control_Groups and Allow_Group_Delay_Inhibit (Clauses 12.53.11 to
 //! 12.53.15). Clause 12 says nothing about restarts, so keeping them is
@@ -27,7 +28,9 @@
 //! checks its argument without taking it, as a Notification Class's
 //! `add_destination` does. A Timer's three properties come as a set (Table
 //! 12-75, footnote 5), so a write to either of the two peers can write
-//! keeps the set whole, Priority_For_Writing included.
+//! keeps the set whole, Priority_For_Writing included. A saved
+//! Default_Timeout that no longer lies in the range the application gives
+//! the Timer is dropped for the application's value, with a warning.
 //!
 //! A Command has nothing here: its Action is read-only over the network
 //! (Table 12-12 codes it R, and this stack takes no write to it), so only

@@ -13,7 +13,7 @@ use super::actions::{Action, Actions};
 use super::config::{ConfigError, Foreign, Link, Mode, Retry};
 use super::counters::{NodeCounters, RegisterAttempt, add, bump};
 use super::exchange::{
-    Early, ExchangeId, ExchangeRefusal, Exchanges, Key, LocalFailure, Operation, Phase,
+    Early, ExchangeId, ExchangeRefusal, Exchanges, Key, LocalFailure, Operation, Owner, Phase, Slot,
 };
 use super::receive::{Datagram, Delivery, Discard, ForBbmd, Policy, Received, Response};
 use super::registration::{
@@ -278,22 +278,33 @@ impl<const X: usize> Node<X> {
             None => bump(&mut counters.acknowledgements),
         }
         let Some(code) = code else { return };
-        if slot.operation != Operation::RegisterForeignDevice {
-            return;
-        }
         let accepted = code == BvlcResultCode::SUCCESSFUL_COMPLETION;
-        if accepted {
-            bump(&mut self.counters.registrations_accepted);
-        } else {
-            bump(&mut self.counters.registrations_refused);
-        }
         let outcome = if accepted {
             AttemptOutcome::Accepted
         } else {
             AttemptOutcome::Refused
         };
+        if slot.owner == Owner::Release {
+            // A success, or the Delete-Foreign-Device-Table-Entry NAK: the
+            // only results a release's key fits.
+            bump(if accepted {
+                &mut self.counters.previous_released
+            } else {
+                &mut self.counters.previous_release_refused
+            });
+            self.release_ended(&slot, outcome, now);
+            return;
+        }
+        if slot.operation != Operation::RegisterForeignDevice {
+            return;
+        }
+        if accepted {
+            bump(&mut self.counters.registrations_accepted);
+        } else {
+            bump(&mut self.counters.registrations_refused);
+        }
         self.record_register(exchange, outcome, Some(code));
-        if !slot.automatic {
+        if slot.owner != Owner::Registration {
             return;
         }
         let Some(lifecycle) = &mut self.lifecycle else {
@@ -368,7 +379,7 @@ impl<const X: usize> Node<X> {
             Bvll::RegisterForeignDevice { ttl } => ttl,
             _ => 0,
         };
-        let exchange = self.admit(peer, operation, timeout, false, ttl)?;
+        let exchange = self.admit(peer, operation, timeout, Owner::Manual, ttl)?;
         Ok((
             exchange,
             Outgoing {
@@ -383,12 +394,12 @@ impl<const X: usize> Node<X> {
         peer: SocketAddrV4,
         operation: Operation,
         timeout: Duration,
-        automatic: bool,
+        owner: Owner,
         ttl: u16,
     ) -> Result<ExchangeId, ExchangeRefusal> {
         let exchange = self
             .exchanges
-            .admit(peer, operation, timeout, automatic, ttl)
+            .admit(peer, operation, timeout, owner, ttl)
             .inspect_err(|_| bump(&mut self.counters.exchange_mut(operation).busy))?;
         if operation == Operation::RegisterForeignDevice {
             bump(&mut self.counters.registration_attempts);
@@ -419,9 +430,11 @@ impl<const X: usize> Node<X> {
         slot.phase = Phase::Sent {
             deadline: now + slot.timeout,
         };
-        let (operation, automatic, early) = (slot.operation, slot.automatic, slot.early.take());
+        let (operation, owner, early) = (slot.operation, slot.owner, slot.early.take());
         bump(&mut self.counters.exchange_mut(operation).sent);
-        if automatic && let Some(lifecycle) = &mut self.lifecycle {
+        if owner == Owner::Registration
+            && let Some(lifecycle) = &mut self.lifecycle
+        {
             lifecycle.sent();
         }
         let settled = early.is_some();
@@ -447,29 +460,34 @@ impl<const X: usize> Node<X> {
             }
             LocalFailure::Cancelled => AttemptOutcome::Cancelled,
         };
-        self.ended_unanswered(exchange, slot.operation, slot.automatic, outcome, now);
+        self.ended_unanswered(exchange, &slot, outcome, now);
         self.advance(now);
     }
 
-    /// An exchange ended without an answer.
+    /// The exchange `exchange`, which was `slot`, ended without an answer.
     fn ended_unanswered(
         &mut self,
         exchange: ExchangeId,
-        operation: Operation,
-        automatic: bool,
+        slot: &Slot,
         outcome: AttemptOutcome,
         now: Instant,
     ) {
-        if operation == Operation::RegisterForeignDevice {
+        if slot.operation == Operation::RegisterForeignDevice {
             self.record_register(exchange, outcome, None);
         }
-        if !automatic {
-            return;
-        }
-        if let Some(lifecycle) = &mut self.lifecycle {
-            let verdict = lifecycle.failed(now, Some(outcome));
-            self.actions.event(RegistrationEvent::Unanswered);
-            self.held_verdict(verdict);
+        match slot.owner {
+            Owner::Manual => {}
+            Owner::Release => {
+                bump(&mut self.counters.previous_release_unanswered);
+                self.release_ended(slot, outcome, now);
+            }
+            Owner::Registration => {
+                if let Some(lifecycle) = &mut self.lifecycle {
+                    let verdict = lifecycle.failed(now, Some(outcome));
+                    self.actions.event(RegistrationEvent::Unanswered);
+                    self.held_verdict(verdict);
+                }
+            }
         }
     }
 
@@ -562,16 +580,10 @@ impl<const X: usize> Node<X> {
         let exchange = self.exchanges.id(index);
         let slot = self.exchanges.retire(index, now);
         bump(&mut self.counters.exchange_mut(slot.operation).timeouts);
-        if !slot.automatic {
+        if slot.owner == Owner::Manual {
             self.actions.ended(exchange);
         }
-        self.ended_unanswered(
-            exchange,
-            slot.operation,
-            slot.automatic,
-            AttemptOutcome::TimedOut,
-            now,
-        );
+        self.ended_unanswered(exchange, &slot, AttemptOutcome::TimedOut, now);
     }
 
     /// Admit the automatic registration attempt that is due.
@@ -581,7 +593,13 @@ impl<const X: usize> Node<X> {
         };
         let timeout = foreign.effective_response_timeout();
         let operation = Operation::RegisterForeignDevice;
-        match self.admit(foreign.bbmd, operation, timeout, true, foreign.ttl) {
+        match self.admit(
+            foreign.bbmd,
+            operation,
+            timeout,
+            Owner::Registration,
+            foreign.ttl,
+        ) {
             Ok(exchange) => {
                 if let Some(lifecycle) = &mut self.lifecycle {
                     lifecycle.admitted(now);
@@ -608,6 +626,23 @@ impl<const X: usize> Node<X> {
     /// ([`admit_broadcast`](Node::admit_broadcast)). Manual exchanges carry
     /// on.
     ///
+    /// With [`Foreign::release_previous`] set in `foreign`, a move to
+    /// another BBMD also admits one exchange that asks the BBMD left behind
+    /// to delete this device's entry, once the new BBMD's first attempt is
+    /// admitted, so it never takes that attempt's slot. The next
+    /// [`poll_action`](Node::poll_action) hands it out as
+    /// [`Action::ReleasePrevious`], after the registration. It is best
+    /// effort: whatever comes of it is counted (`previous_release*` in
+    /// [`NodeCounters`]) and changes nothing else, and one that can't be
+    /// admitted counts as unanswered. A move back to a BBMD whose release
+    /// is still in flight registers there as soon as the release is
+    /// answered, since a success couldn't tell the two apart; if it goes
+    /// unanswered, not until one response timeout after it ended, so a late
+    /// answer to it can't pass for the registration's. One still queued,
+    /// never polled, is dropped unsent. Each release's end is
+    /// also reported as a [`RegistrationEvent::PreviousRelease`] when the
+    /// event list has room.
+    ///
     /// Refused, changing nothing, outside foreign mode
     /// ([`ConfigError::NotForeign`]) or with a registration
     /// [`Link::validate`] refuses.
@@ -621,18 +656,81 @@ impl<const X: usize> Node<X> {
         // Timeouts and a lapse due by now happen on the old registration; an
         // attempt due by now is not started for it.
         let now = self.catch_up(now, false);
-        if let Some(index) = self.exchanges.automatic() {
+        if let Some(index) = self.exchanges.registration() {
             let exchange = self.exchanges.id(index);
             self.exchanges.retire(index, now);
             self.actions.forget_register(exchange);
             self.record_register(exchange, AttemptOutcome::Cancelled, None);
+        }
+        let release = old.bbmd != foreign.bbmd && foreign.release_previous;
+        // A release queued and never polled was never sent: one to the BBMD
+        // the device returns to would delete its new entry, and one this
+        // move's release displaces would hold its slot for good.
+        if let Some(exchange) = self
+            .actions
+            .take_release_if(|to| release || to == foreign.bbmd)
+            && let Some(index) = self.exchanges.live(exchange)
+        {
+            let slot = self.exchanges.retire(index, now);
+            self.ended_unanswered(exchange, &slot, AttemptOutcome::Cancelled, now);
         }
         if let Some(lifecycle) = &mut self.lifecycle {
             lifecycle.retarget(&foreign, now, old.bbmd == foreign.bbmd);
         }
         self.link = link;
         self.advance(now);
+        // After the new BBMD's first attempt, so a release never takes the
+        // slot that attempt needs.
+        if release {
+            self.release_previous(old.bbmd, old.effective_response_timeout());
+        }
         Ok(())
+    }
+
+    /// The release `slot` held ended with `outcome`: report it. If the
+    /// device has moved back to that BBMD, whose registration attempt the
+    /// release held off (a success couldn't tell the two apart), an answer
+    /// lets the attempt go at once. A release sent and left unanswered may
+    /// still be answered, until one response timeout after it ended, and a
+    /// late success would be taken for the attempt's: the attempt waits
+    /// that long, or its retry's wait if longer.
+    fn release_ended(&mut self, slot: &Slot, outcome: AttemptOutcome, now: Instant) {
+        let bbmd = slot.peer;
+        self.actions
+            .event_if_room(RegistrationEvent::PreviousRelease { bbmd, outcome });
+        let (Mode::Foreign(foreign), Some(lifecycle)) = (&self.link.mode, &mut self.lifecycle)
+        else {
+            return;
+        };
+        if foreign.bbmd != bbmd {
+            return;
+        }
+        if matches!(outcome, AttemptOutcome::Accepted | AttemptOutcome::Refused) {
+            lifecycle.due_now(now);
+        } else if matches!(slot.phase, Phase::Sent { .. }) {
+            lifecycle.not_before(now + slot.timeout);
+        }
+    }
+
+    /// Ask `bbmd`, which this device just left, to delete its entry (Annex
+    /// J.2.9, J.5.2.1.2): one exchange, answered within `timeout` of its
+    /// send.
+    fn release_previous(&mut self, bbmd: SocketAddrV4, timeout: Duration) {
+        bump(&mut self.counters.previous_releases);
+        let entry = self.link.address;
+        let operation = Operation::DeleteFdtEntry;
+        match self.admit(bbmd, operation, timeout, Owner::Release, 0) {
+            Ok(exchange) => self.actions.release(exchange, bbmd, entry),
+            // Dropped unsent, as one the caller gives up is.
+            Err(_) => {
+                bump(&mut self.counters.previous_release_unanswered);
+                self.actions
+                    .event_if_room(RegistrationEvent::PreviousRelease {
+                        bbmd,
+                        outcome: AttemptOutcome::Cancelled,
+                    });
+            }
+        }
     }
 
     /// Move the node to another [`LocalSubnet`]: where its broadcasts go

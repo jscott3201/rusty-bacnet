@@ -201,6 +201,18 @@ pub(crate) struct Early {
     pub(crate) valid: bool,
 }
 
+/// Who runs an exchange, and so what its end means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Owner {
+    /// The caller, through [`Node::begin_exchange`](super::Node::begin_exchange).
+    Manual,
+    /// A foreign device's automatic registration attempt, which the
+    /// lifecycle owns.
+    Registration,
+    /// The release of the BBMD a move left ([`Foreign::release_previous`](super::Foreign::release_previous)).
+    Release,
+}
+
 /// Where an exchange is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Phase {
@@ -221,8 +233,7 @@ pub(crate) struct Slot {
     pub(crate) operation: Operation,
     pub(crate) generation: u32,
     pub(crate) timeout: Duration,
-    /// An automatic registration attempt, which the lifecycle owns.
-    pub(crate) automatic: bool,
+    pub(crate) owner: Owner,
     /// The time-to-live a Register-Foreign-Device asked for.
     pub(crate) ttl: u16,
     pub(crate) early: Option<Early>,
@@ -238,7 +249,7 @@ impl Slot {
         operation: Operation::ReadBdt,
         generation: 0,
         timeout: Duration::ZERO,
-        automatic: false,
+        owner: Owner::Manual,
         ttl: 0,
         early: None,
         late_until: None,
@@ -303,7 +314,7 @@ impl<const X: usize> Exchanges<X> {
         peer: SocketAddrV4,
         operation: Operation,
         timeout: Duration,
-        automatic: bool,
+        owner: Owner,
         ttl: u16,
     ) -> Result<ExchangeId, ExchangeRefusal> {
         for slot in self
@@ -330,7 +341,7 @@ impl<const X: usize> Exchanges<X> {
             operation,
             generation: self.generation,
             timeout,
-            automatic,
+            owner,
             ttl,
             early: None,
             late_until: None,
@@ -398,10 +409,10 @@ impl<const X: usize> Exchanges<X> {
     }
 
     /// The live automatic registration attempt, if one is in flight.
-    pub(crate) fn automatic(&self) -> Option<usize> {
+    pub(crate) fn registration(&self) -> Option<usize> {
         self.slots
             .iter()
-            .position(|slot| slot.is_live() && slot.automatic)
+            .position(|slot| slot.is_live() && slot.owner == Owner::Registration)
     }
 
     /// The sent exchange whose deadline comes first, and that deadline.

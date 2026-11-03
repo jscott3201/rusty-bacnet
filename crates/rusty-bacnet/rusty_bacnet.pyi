@@ -5358,6 +5358,8 @@ class BACnetServer:
             ]
         ] = None,
         priority_for_writing: Optional[int] = None,
+        storage_path: Optional[str] = None,
+        clear_written_config: bool = False,
     ) -> None:
         """Add a Timer object.
 
@@ -5372,6 +5374,14 @@ class BACnetServer:
         the other two, raises ValueError, a non-primitive entry TypeError,
         and a priority outside 1..=16 BacnetProtocolError with
         VALUE_OUT_OF_RANGE.
+
+        With ``storage_path`` the Timer keeps in that file what a peer writes
+        to State_Change_Values, List_Of_Object_Property_References (with
+        Priority_For_Writing) and Default_Timeout, and a saved write wins over
+        the keywords at the next start; such a write is refused when it can't
+        be saved. ``clear_written_config=True`` drops what was saved first,
+        so the keywords apply again. A file that doesn't load raises
+        BacnetError.
         """
         ...
     def add_load_control(self, instance: int, name: str) -> None: ...
@@ -5523,6 +5533,8 @@ class BACnetServer:
         control_groups: Optional[list[int]] = None,
         *,
         allow_group_delay_inhibit: bool = False,
+        storage_path: Optional[str] = None,
+        clear_written_config: bool = False,
     ) -> None:
         """Add a Channel; a write of its Present_Value is passed on to ``members``.
 
@@ -5547,6 +5559,14 @@ class BACnetServer:
         raises BacnetProtocolError with VALUE_OUT_OF_RANGE; more than
         1024 members or 64 groups, NO_SPACE_TO_WRITE_PROPERTY. Nothing is
         registered after any of them.
+
+        With ``storage_path`` the Channel keeps in that file what a peer
+        writes to its members, Execution_Delay, Channel_Number,
+        Control_Groups and Allow_Group_Delay_Inhibit, and each saved write
+        wins over its argument at the next start; such a write is refused
+        when it can't be saved. ``clear_written_config=True`` drops what was
+        saved first, so the arguments apply again. A file that doesn't load
+        raises BacnetError.
         """
         ...
 

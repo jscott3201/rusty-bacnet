@@ -74,7 +74,7 @@ const WITH_STATE_CHANGE: &[PropertyMetadata] = timer_rows!(
 );
 
 pub(super) fn for_object(object: &TimerObject) -> Cow<'_, [PropertyMetadata]> {
-    Cow::Borrowed(match object.state_change {
+    Cow::Borrowed(match object.config.set {
         Some(_) => WITH_STATE_CHANGE,
         None => BASE,
     })
