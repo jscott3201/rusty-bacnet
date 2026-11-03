@@ -5,8 +5,8 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
+use bacnet_device_core::cov::{CovPolicy, CovRecipient};
 use bacnet_encoding::npdu::NpduAddress;
-use bacnet_server::cov::{CovPolicy, CovRecipient};
 use bacnet_types::MacAddr;
 
 use super::policy_dict::{entries, unexpected_key};

@@ -43,8 +43,11 @@ async fn subscribe_cov_property_invalid_resubscription_keeps_state_and_emits_onl
             .cov_table
             .read()
             .await
-            .get_subscription(&crate::cov::CovSubscriptionKey::Property {
-                recipient: crate::cov::CovRecipient::from_endpoint(&fixture.source_mac, None),
+            .get_subscription(&bacnet_device_core::cov::CovSubscriptionKey::Property {
+                recipient: bacnet_device_core::cov::CovRecipient::from_endpoint(
+                    &fixture.source_mac,
+                    None,
+                ),
                 process_id: 12,
                 object: point_oid(),
                 property: PropertyIdentifier::SILENCED,
@@ -76,8 +79,11 @@ async fn subscribe_cov_property_invalid_resubscription_keeps_state_and_emits_onl
         let table = fixture.cov_table.read().await;
         assert_eq!(table.len(), 1);
         let after = table
-            .get_subscription(&crate::cov::CovSubscriptionKey::Property {
-                recipient: crate::cov::CovRecipient::from_endpoint(&fixture.source_mac, None),
+            .get_subscription(&bacnet_device_core::cov::CovSubscriptionKey::Property {
+                recipient: bacnet_device_core::cov::CovRecipient::from_endpoint(
+                    &fixture.source_mac,
+                    None,
+                ),
                 process_id: 12,
                 object: point_oid(),
                 property: PropertyIdentifier::SILENCED,

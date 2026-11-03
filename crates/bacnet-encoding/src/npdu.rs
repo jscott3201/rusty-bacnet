@@ -34,7 +34,9 @@ pub use bacnet_npdu as view;
 /// Used for source/destination fields in routed NPDUs. The MAC holds at most
 /// [`MAX_MAC_LEN`] octets on the wire: the decoder refuses a longer one and
 /// the encoder refuses to write it.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+///
+/// Addresses order by network, then MAC, so one can key a B-tree map.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NpduAddress {
     /// Network number (1-65534, or 0xFFFF for global broadcast destination).
     pub network: u16,

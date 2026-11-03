@@ -379,6 +379,7 @@ dependencies = [
  "bacnet-encoding",
  "bacnet-objects",
  "bacnet-services",
+ "bacnet-time",
  "bacnet-types",
  "bytes",
 ]
@@ -606,6 +607,7 @@ dependencies = [
  "bacnet-npdu",
  "bacnet-objects",
  "bacnet-services",
+ "bacnet-time",
  "bacnet-transport",
  "bacnet-types",
  "bytes",

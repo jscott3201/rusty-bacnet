@@ -105,7 +105,9 @@ async fn multiple_two_routers_share_one_live_recipient_context() {
     wire.server.stop().await.unwrap();
 }
 
-async fn observations(wire: &Wire) -> Vec<(u32, u32, Option<crate::cov::CovObservation>)> {
+async fn observations(
+    wire: &Wire,
+) -> Vec<(u32, u32, Option<bacnet_device_core::cov::CovObservation>)> {
     let mut table = wire.server.cov_table.write().await;
     let mut result = Vec::new();
     for object in [av(1), av(2)] {
@@ -285,7 +287,10 @@ async fn multiple_route_rejected_wire_renewals_preserve_live_context() {
     wire.server.stop().await.unwrap();
 }
 
-async fn assert_live_unchanged(wire: &Wire, before: &crate::cov::CovSubscriptionSnapshot) {
+async fn assert_live_unchanged(
+    wire: &Wire,
+    before: &bacnet_device_core::cov::CovSubscriptionSnapshot,
+) {
     let table = wire.server.cov_table.read().await;
     assert!(table.is_current(before));
     assert_eq!(table.len(), 1);
@@ -372,8 +377,11 @@ async fn multiple_route_wire_delete_expiry_and_current_peer_cleanup_remove_migra
         table
             .subscribe_multiple(
                 old.key().multiple_context().unwrap(),
-                &crate::cov::SubscriberEndpoint::new(&router_b().mac, router_b().network.as_ref()),
-                runtime_clock::now(),
+                &bacnet_device_core::cov::SubscriberEndpoint::new(
+                    &router_b().mac,
+                    router_b().network.as_ref(),
+                ),
+                crate::runtime_clock::core_now(),
                 0,
                 None,
                 vec![],

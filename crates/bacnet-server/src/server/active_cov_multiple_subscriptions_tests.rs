@@ -247,15 +247,15 @@ async fn active_cov_multiple_wire_renewal_cancellation_expiry_and_cleanup_are_ex
     }
 
     // A sub-second context lifetime is table-only; the wire minimum is one second.
-    let short = crate::cov::MultipleContextKey {
-        recipient: crate::cov::CovRecipient::from_endpoint(
+    let short = bacnet_device_core::cov::MultipleContextKey {
+        recipient: bacnet_device_core::cov::CovRecipient::from_endpoint(
             &routed().mac,
             routed().network.as_ref(),
         ),
         process_id: 83,
         confirmed: false,
     };
-    let expires_at = runtime_clock::now() + Duration::from_millis(300);
+    let expires_at = runtime_clock::core_now() + bacnet_time::Duration::from_millis(300);
     let proposal = CovSubscription {
         subscriber_mac: MacAddr::from_slice(&routed().mac),
         subscriber_network: routed().network,

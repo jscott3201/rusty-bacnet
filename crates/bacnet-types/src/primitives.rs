@@ -26,7 +26,10 @@ use crate::error::{DecodeError, DecodingKind, Error, RangeError};
 /// when preserving wire-level values. Use [`ObjectIdentifier::new_addressable`]
 /// when constructing identifiers for concrete objects that can be stored,
 /// addressed, or compared as actual object instances.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// Identifiers order by object type, then instance, so one can key a B-tree
+/// map.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ObjectIdentifier {
     object_type: ObjectType,
     instance_number: u32,

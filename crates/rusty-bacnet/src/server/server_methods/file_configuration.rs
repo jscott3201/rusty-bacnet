@@ -232,7 +232,7 @@ mod tests {
             atomic_write_file_budget: server::AtomicWriteFileBudget::default(),
             read_range_budget: server::ReadRangeBudget::default(),
             get_event_information_budget: server::GetEventInformationBudget::default(),
-            cov_policy: server::CovPolicy::default(),
+            cov_policy: bacnet_device_core::cov::CovPolicy::default(),
             time_sync_policy: server::TimeSyncPolicy::default(),
             audit_notification_sink: None,
             audit_reporters: None,

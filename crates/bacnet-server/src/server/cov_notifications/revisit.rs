@@ -9,7 +9,7 @@
 //! change or re-subscription come through here too.
 use super::super::cov_notify_context::{CovFanoutHandles, CovNotifyContext};
 use super::*;
-use crate::cov::CovSubscriptionKey;
+use bacnet_device_core::cov::CovSubscriptionKey;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Evaluate the live references among `keys` against their baselines and
@@ -46,7 +46,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let mut single_by_object: HashMap<ObjectIdentifier, Vec<CovSubscriptionSnapshot>> =
             HashMap::new();
         let mut multiple_by_context: HashMap<
-            crate::cov::MultipleContextKey,
+            bacnet_device_core::cov::MultipleContextKey,
             Vec<CovSubscriptionSnapshot>,
         > = HashMap::new();
         for sub in subs {
