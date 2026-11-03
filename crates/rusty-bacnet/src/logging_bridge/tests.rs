@@ -405,24 +405,33 @@ fn records_dropped_on_a_full_queue_are_reported() {
         py,
         Duration::from_secs(30)
     )));
-    let report = held(&package)
-        .into_iter()
-        .find(|record| attr::<String>(record, "msg").contains("were dropped"))
-        .expect("a drop report");
-    let dropped: u64 = Python::attach(|py| {
-        report
-            .bind(py)
-            .getattr("args")
-            .unwrap()
-            .get_item(0)
-            .unwrap()
-            .extract()
-            .unwrap()
+    // Every drop is reported, but not always in one report: a forwarder
+    // that only runs once the queue is full takes its batch and the count
+    // so far, then blocks on the GIL while the flood drops more, which the
+    // next report carries (#2358). So the reports add up.
+    let reports: Vec<u64> = Python::attach(|py| {
+        held(&package)
+            .into_iter()
+            .filter(|record| attr::<String>(record, "msg").contains("were dropped"))
+            .map(|report| {
+                report
+                    .bind(py)
+                    .getattr("args")
+                    .unwrap()
+                    .get_item(0)
+                    .unwrap()
+                    .extract()
+                    .unwrap()
+            })
+            .collect()
     });
-    // The forwarder may have taken a batch before it blocked.
+    assert!(!reports.is_empty(), "a drop report");
+    let dropped: u64 = reports.iter().sum();
+    // The forwarder may have taken one batch before it blocked, which freed
+    // room for as many records.
     assert!(
         (1_000 - BATCH as u64..=1_000).contains(&dropped),
-        "{dropped}"
+        "{reports:?}"
     );
 }
 
