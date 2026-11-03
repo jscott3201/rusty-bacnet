@@ -47,7 +47,6 @@ pub use bacnet_bip_core::node::ExchangeRefusal;
 pub use exchange::BvlcExchangeError;
 mod foreign_device;
 mod foreign_target;
-pub use foreign_target::{BbmdLookup, BbmdLookupFailure, BbmdResolver};
 mod mode;
 mod node;
 mod send;
@@ -137,7 +136,7 @@ pub struct BipTransport {
     /// shared with the Network Port object that can change it.
     foreign_device: Option<Arc<foreign_target::ForeignTarget>>,
     /// Looks up FD_BBMD_Address host names (#1852).
-    bbmd_resolver: Arc<dyn BbmdResolver>,
+    bbmd_resolver: Arc<dyn crate::bbmd_lookup::BbmdResolver>,
     /// The node engine of the running transport: its link, its own
     /// management exchanges and a foreign device's registration.
     node: Option<Arc<NodeHandle>>,
@@ -220,7 +219,7 @@ impl BipTransport {
             bbmd: None,
             bbmd_fdt_purge_task: None,
             foreign_device: None,
-            bbmd_resolver: Arc::new(foreign_target::SystemResolver),
+            bbmd_resolver: Arc::new(crate::bbmd_lookup::SystemResolver),
             node: None,
             node_task: None,
             client_record: Arc::default(),

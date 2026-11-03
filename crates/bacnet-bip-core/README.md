@@ -33,8 +33,9 @@ mode:
 - `Node` keeps the rest: its own management exchanges, matched by peer and
   operation; a foreign device's registration, with backoff after a loss and
   a lease that never counts on the BBMD's grace period; broadcasts held
-  until the first registration resolves; and the timers. You poll its
-  actions after every call.
+  until the first registration resolves; a move to another BBMD, which can
+  ask the old one to delete the device's entry; and the timers. You poll
+  its actions after every call.
 - A node can be a B/IP-M member (Annex J.8): `LocalSubnet::member` puts its
   broadcasts on a multicast group in place of the subnet's broadcast
   address, and it takes broadcast functions from that group.
