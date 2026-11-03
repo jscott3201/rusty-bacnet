@@ -5545,7 +5545,9 @@ endpoint.add_audit_reporter(1, "Source", audit_level="audit_all",
   doesn't select starts and records nothing.
 - `audit_recipient` (an `AuditRecipientInput`) provisions the local Device's
   Audit recipient, and `audit_device_bindings` lists `(Device identifier,
-  "ipv4:port")` routes to recipient Devices. A Device recipient with no
+  "ipv4:port")` routes to recipient Devices. Each binding follows the
+  recipient's address rule: a direct unicast address with a nonzero port,
+  never the link's broadcast address at any port. A Device recipient with no
   binding starts, records nothing, and the Reporter's Reliability reads
   CONFIGURATION_ERROR.
 - The Reporter needs `device_write_policy` and `audit_recipient`. With both
@@ -5557,7 +5559,8 @@ endpoint.add_audit_reporter(1, "Source", audit_level="audit_all",
   it can check: an identifier that isn't a concrete Audit Reporter, a
   recipient or binding without a Reporter, a recipient
   `configure_audit_recipient` would refuse (this device, or an address that
-  isn't a direct unicast B/IP one), and a malformed or repeated binding. Whether the Reporter was added is known
+  isn't a direct unicast B/IP one), and a malformed, repeated or
+  non-unicast binding, each naming its keyword. Whether the Reporter was added is known
   only at start, which raises BacnetError for a missing one.
 - **B/IP only:** the Rust session reports source records on IPv4 B/IP only,
   so `ScEndpoint` and `MstpEndpoint` don't take these keywords yet; #2357

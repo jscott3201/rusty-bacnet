@@ -158,7 +158,13 @@ class EndpointSourceAuditTests(unittest.IsolatedAsyncioTestCase):
               for network, mac in ((65535, bytes.fromhex("7f000001bac0")),
                                    (0, bytes.fromhex("ffffffffbac0")),
                                    (0, bytes.fromhex("7f0000010000")),
-                                   (0, bytes.fromhex("bac0")))),
+                                   (0, bytes.fromhex("bac0")),
+                                   # This endpoint's own subnet broadcast.
+                                   (0, bytes.fromhex("7fffffffbac0")))),
+            # Bindings take the recipient's address rule.
+            *({"audit_device_bindings": [(device, address)]}
+              for address in ("255.255.255.255:47808", "239.1.2.3:47808", "127.0.0.1:0",
+                              "0.0.0.0:47808", "127.255.255.255:47809")),
             {"audit_device_bindings": [(rb.ObjectIdentifier(O.ANALOG_VALUE, 1), destination)]},
             {"audit_device_bindings": [(device, destination), (device, destination)]},
             {"source_audit_reporter": None},
@@ -169,6 +175,9 @@ class EndpointSourceAuditTests(unittest.IsolatedAsyncioTestCase):
                     endpoint(destination, **overrides)
                 if overrides.get("audit_recipient"):
                     self.assertIn("audit_recipient", str(raised.exception))
+                bindings = overrides.get("audit_device_bindings") or []
+                if len(bindings) == 1:
+                    self.assertIn("audit_device_bindings[0]", str(raised.exception))
         # Whether the Reporter is in the database is known at start.
         owner = endpoint(destination)
         owner.add_analog_value(1, "Not a Reporter")

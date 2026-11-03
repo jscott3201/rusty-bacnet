@@ -92,6 +92,19 @@ impl SourceAuditKeywords {
                     "audit_device_bindings[{index}] address must be 'ipv4:port'"
                 ))
             })?;
+            // The recipient's address rule, which the session applies to
+            // its routes at start (#2348).
+            let mut mac = address.ip().octets().to_vec();
+            mac.extend_from_slice(&address.port().to_be_bytes());
+            crate::server::validate_audit_recipient(
+                &BACnetRecipient::Address(bacnet_types::constructed::BACnetAddress {
+                    network_number: 0,
+                    mac_address: mac.as_slice().into(),
+                }),
+                device_instance,
+                Some(broadcast),
+                &format!("audit_device_bindings[{index}]"),
+            )?;
             if parsed.iter().any(|(known, _)| *known == device) {
                 return Err(PyValueError::new_err(format!(
                     "audit_device_bindings[{index}] repeats a Device"
