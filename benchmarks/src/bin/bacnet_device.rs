@@ -198,8 +198,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 let mut transport = BipTransport::new(interface, args.port, broadcast);
                 transport.register_as_foreign_device(ForeignDeviceConfig {
-                    bbmd_ip,
-                    bbmd_port,
+                    bbmd: (bbmd_ip, bbmd_port).into(),
                     renewal_interval: None,
                     ttl: args.foreign_ttl,
                 });

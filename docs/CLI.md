@@ -52,7 +52,7 @@ macOS and Windows ones don't yet (see [MS/TP](#mstp)).
 | `-b, --broadcast <IP>` | `255.255.255.255` | Broadcast address for WhoIs |
 | `-t, --timeout <MS>` | `6000` | APDU timeout in milliseconds |
 | `--min-interval-ms <MS>` | `0` | Least time from the latest confirmed request to a device finishing (or being sent, while it is still outstanding) to the next, at most 3600000, so paging or polling leaves a slow device room for others |
-| `--foreign-bbmd <ADDR>` | | Run as a foreign device registered with this BBMD (`ip` or `ip:port`), so broadcasts reach its network; BACnet/IP only. See [Foreign-device mode](#foreign-device-mode) |
+| `--foreign-bbmd <ADDR>` | | Run as a foreign device registered with this BBMD (`ip`, `host`, or either with `:port`), so broadcasts reach its network; BACnet/IP only. See [Foreign-device mode](#foreign-device-mode) |
 | `--ttl <N>` | `300` | Time-to-live in seconds of a foreign-device registration, for `--foreign-bbmd`, `register` and `discover --bbmd` |
 | `--renewal <SECS>` | half the TTL | Seconds between `--foreign-bbmd` registrations, less than `--ttl` |
 | `--nat-global-address <IP:PORT>` | | Our address and port as the `--foreign-bbmd` BBMD records them when a NAT router translates the registration. The TUI's Network screen finds our FDT entry there; nothing sent changes. Needs `--foreign-bbmd` (or a named TUI profile with a BBMD) |
@@ -1818,6 +1818,15 @@ bacnet --foreign-bbmd 203.0.113.7:47808 --ttl 600 --renewal 20 discover 1000-200
 A one-shot command waits for the BBMD to answer the first registration and
 fails if it refuses or doesn't answer. The TUI reports the outcome, keeps
 trying either way, and shows the registration on its Network screen.
+
+The BBMD may be a host name (`--foreign-bbmd bbmd.example:47808`, #2308), looked
+up when the CLI starts. Until it first resolves it is tried again 30 seconds after
+each failure; from then on it is looked up alongside the registrations, at most
+every 30 seconds. A name that doesn't resolve still starts the transport, with
+nothing registered and broadcasts held: a one-shot command then fails at once,
+saying why the name didn't resolve, and the TUI logs that reason and keeps
+trying the name. Its Network screen shows the BBMD when the name resolved as the session
+started; one that resolves later registers, but the screen doesn't show it.
 Behind NAT, keep `--renewal` short so the mapping the BBMD's replies come back
 on stays open; the TTL can stay long. If you know the address and port the NAT
 router gives the registration, `--nat-global-address IP:PORT` lets the TUI's

@@ -49,8 +49,7 @@ fn router_port(network_number: u16) -> RouterPort<BipTransport> {
 fn foreign_device_of(bbmd: &[u8]) -> Result<BipMode, Error> {
     let (ip, port) = decode_bip_mac(bbmd)?;
     Ok(BipMode::Foreign(ForeignDeviceConfig {
-        bbmd_ip: Ipv4Addr::from(ip),
-        bbmd_port: port,
+        bbmd: (Ipv4Addr::from(ip), port).into(),
         ttl: 60,
         renewal_interval: None,
     }))

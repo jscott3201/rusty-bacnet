@@ -20,8 +20,7 @@ async fn foreign() -> (Endpoint, SocketAddrV4, UdpSocket) {
         builder()
             .role(SessionRole::ClientOnly)
             .mode(BipMode::Foreign(ForeignDeviceConfig {
-                bbmd_ip: Ipv4Addr::LOCALHOST,
-                bbmd_port: address(&bbmd).port(),
+                bbmd: (Ipv4Addr::LOCALHOST, address(&bbmd).port()).into(),
                 renewal_interval: None,
                 ttl: 60,
             })),

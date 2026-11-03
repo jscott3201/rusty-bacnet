@@ -118,8 +118,7 @@ async fn a_member_cant_be_a_foreign_device_or_share_its_port_by_address() {
     let mut foreign = BipTransport::new(Ipv4Addr::LOCALHOST, 47809, Ipv4Addr::LOCALHOST);
     foreign.set_multicast(Some(multicast)).unwrap();
     foreign.register_as_foreign_device(ForeignDeviceConfig {
-        bbmd_ip: Ipv4Addr::new(192, 0, 2, 1),
-        bbmd_port: 47808,
+        bbmd: (Ipv4Addr::new(192, 0, 2, 1), 47808).into(),
         ttl: 60,
         renewal_interval: None,
     });
@@ -402,8 +401,7 @@ fn a_node_with_an_interface_lends_its_group_unless_foreign() {
     assert!(!lent(&shared));
     let mut foreign = BipTransport::new(Ipv4Addr::LOCALHOST, 47808, Ipv4Addr::LOCALHOST);
     foreign.register_as_foreign_device(ForeignDeviceConfig {
-        bbmd_ip: Ipv4Addr::new(192, 0, 2, 1),
-        bbmd_port: 47808,
+        bbmd: (Ipv4Addr::new(192, 0, 2, 1), 47808).into(),
         ttl: 60,
         renewal_interval: None,
     });

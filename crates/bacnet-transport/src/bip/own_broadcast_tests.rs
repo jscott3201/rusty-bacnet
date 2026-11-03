@@ -355,8 +355,7 @@ async fn plain_and_foreign_device_modes_do_not_forward_own_broadcasts() {
     let bbmd = udp().await;
     let mut foreign = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOST);
     foreign.register_as_foreign_device(ForeignDeviceConfig {
-        bbmd_ip: Ipv4Addr::LOCALHOST,
-        bbmd_port: port_of(&bbmd),
+        bbmd: (Ipv4Addr::LOCALHOST, port_of(&bbmd)).into(),
         renewal_interval: None,
         ttl: 60,
     });

@@ -38,8 +38,8 @@ fn the_foreign_device_flags_reach_the_transport() {
             .unwrap();
     let foreign = args.foreign_device.unwrap();
     assert_eq!(
-        (foreign.bbmd_ip, foreign.bbmd_port, foreign.ttl),
-        (Ipv4Addr::new(192, 0, 2, 10), 0xBAC0, 60)
+        (foreign.bbmd, foreign.ttl),
+        ((Ipv4Addr::new(192, 0, 2, 10), 0xBAC0).into(), 60)
     );
     assert_eq!(
         foreign.renewal_interval,
@@ -47,13 +47,41 @@ fn the_foreign_device_flags_reach_the_transport() {
     );
 
     let cli = parse(["bacnet", "register", "192.0.2.10"]).unwrap();
-    assert_eq!((cli.ttl, cli.foreign_bbmd), (300, None));
+    assert_eq!((cli.ttl, &cli.foreign_bbmd), (300, &None));
     let args =
         crate::transport::TransportArgs::from_cli(&cli, Ipv4Addr::UNSPECIFIED, Ipv4Addr::BROADCAST)
             .unwrap();
     assert!(args.foreign_device.is_none());
     let cli = parse(["bacnet", "register", "192.0.2.10", "--ttl", "45"]).unwrap();
     assert_eq!(cli.ttl, 45);
+}
+
+/// `--foreign-bbmd` takes a host name, with or without a port (#2308); a
+/// value in neither form is refused before anything starts.
+#[test]
+fn the_foreign_bbmd_may_be_a_host_name() {
+    let named = |host: &str, port| ForeignBbmd::Name {
+        host: host.into(),
+        port,
+    };
+    for (value, bbmd) in [
+        ("bbmd.example", named("bbmd.example", 0xBAC0)),
+        ("bbmd.example:47809", named("bbmd.example", 47809)),
+    ] {
+        let cli = parse(["bacnet", "--foreign-bbmd", value, "discover"]).unwrap();
+        assert_eq!(cli.foreign_bbmd, Some(bbmd.clone()));
+        let args = crate::transport::TransportArgs::from_cli(
+            &cli,
+            Ipv4Addr::UNSPECIFIED,
+            Ipv4Addr::BROADCAST,
+        )
+        .unwrap();
+        assert_eq!(args.foreign_device.unwrap().bbmd, bbmd);
+    }
+    for value in ["bb md", "bbmd:0", "0.0.0.0", "999.1.1.1"] {
+        let error = parse(["bacnet", "--foreign-bbmd", value, "discover"]).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::ValueValidation, "{value}");
+    }
 }
 
 /// `--nat-global-address` (#1943) reaches the TUI's transport arguments
@@ -78,10 +106,7 @@ fn the_nat_global_address_is_checked_and_reaches_the_args() {
         Some(SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 7), 61000))
     );
     let foreign = args.foreign_device.unwrap();
-    assert_eq!(
-        (foreign.bbmd_ip, foreign.bbmd_port),
-        (Ipv4Addr::new(192, 0, 2, 10), 0xBAC0)
-    );
+    assert_eq!(foreign.bbmd, (Ipv4Addr::new(192, 0, 2, 10), 0xBAC0).into());
 
     let error = parse([
         "bacnet",
