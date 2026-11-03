@@ -34,12 +34,10 @@
 //!
 //! The one-file formats share a header: the eight-octet tag, which names the
 //! format and its version, then the four-octet identifier of the object the
-//! file belongs to. Their `encode` and `decode` take that object first.
-//!
-//! An `encode` writes the lists it is given, as the file backends always
-//! have, while `decode` refuses a list longer than the object keeps; the
-//! objects never hold such a list, so only a snapshot built by hand can
-//! save one that won't load.
+//! file belongs to. Their `encode` and `decode` take that object first. A
+//! newer version of a format's tag, or a kind this build doesn't know, is
+//! [`UnknownVersion`](SnapshotErrorKind::UnknownVersion) or
+//! [`UnknownKind`](SnapshotErrorKind::UnknownKind), never damage.
 //!
 //! # Stability
 //!
