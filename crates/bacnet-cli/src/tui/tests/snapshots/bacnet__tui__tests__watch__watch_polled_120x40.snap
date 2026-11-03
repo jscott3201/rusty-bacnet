@@ -39,6 +39,6 @@ expression: text
 "│                                                                                                                      │"
 "│                                                                                                                      │"
 "│                                                                                                                      │"
-"│ polled: COV refused: BACnet reject: reason=9 · analog-value 1, Point 1                                               │"
+"│ polled: COV refused: BACnet reject: unrecognized-service · analog-value 1, Point 1                                   │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘"
 " x remove  :watch DEV OBJ  Esc back  ? help  q quit                                                                     "

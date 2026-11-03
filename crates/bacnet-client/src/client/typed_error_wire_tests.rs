@@ -126,10 +126,10 @@ fn every_reject_and_abort_reason_round_trips_through_the_wire() {
 }
 
 #[test]
-fn display_keeps_the_numeric_reasons() {
+fn display_names_reasons_and_numbers_unnamed_ones() {
     assert_eq!(
         Error::reject(RejectReason::UNDEFINED_ENUMERATION).to_string(),
-        "BACnet reject: reason=8"
+        "BACnet reject: undefined-enumeration"
     );
     assert_eq!(
         Error::abort(AbortReason::from_raw(200)).to_string(),
