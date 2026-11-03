@@ -6069,9 +6069,18 @@ OPERATIONAL_PROBLEM, leaving the set as it was, when the save fails. A Timer
 rebuilt on the same storage serves the saved set, and `set_state_change`
 then checks its arguments without taking them (`state_change_saved` says
 so), so an application that sets its configuration at each start keeps a
-peer's write. `clear_written_state_change` drops the saved set (saving
-that, and returning storage's error if the save fails) so the setter
-applies again. The state machine is not kept: the Timer still starts IDLE. Storage is
+peer's write. A written Default_Timeout is kept the same way (#2312):
+`set_default_timeout` then checks and remembers its argument without serving
+it (`default_timeout_saved` says so). If the application later narrows the
+range with `set_pres_value_range` past a saved Default_Timeout, the saved
+value is dropped with a warning, the application's value applies, and storage
+is saved without it; the rest of what was saved still applies. A saved value
+past the range a new Timer takes (above `u32::MAX` milliseconds) is held aside
+at the build, unserved but still saved, until `set_pres_value_range` serves it
+or drops it; zero, which no range holds, is dropped at once.
+`clear_written_config` drops everything saved (saving that, and returning
+storage's error if the save fails) so the setters apply again. The state
+machine is not kept: the Timer still starts IDLE. Storage is
 an `Arc<dyn WriteConfigPersistence>` (`bacnet_objects::write_config`), which a
 Channel uses too; `FileWriteConfigPersistence::new(path)` is the bundled
 backend, one file per object, replaced whole through a synchronized temporary

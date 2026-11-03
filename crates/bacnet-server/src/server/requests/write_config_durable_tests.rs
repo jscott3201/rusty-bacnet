@@ -1,8 +1,8 @@
 //! The configuration a peer writes to a Timer or a Channel saves through the
-//! server (#2243): each covered WriteProperty stages its save, the write
-//! takes it, and a server rebuilt on the same storage serves what was
-//! written. A write that cannot be saved is refused on the wire with the old
-//! value kept.
+//! server (#2243; a Timer's Default_Timeout too, #2312): each covered
+//! WriteProperty stages its save, the write takes it, and a server rebuilt
+//! on the same storage serves what was written. A write that cannot be
+//! saved is refused on the wire with the old value kept.
 //!
 //! DEVICE 0; OPERATIONAL_PROBLEM 25.
 
@@ -41,6 +41,7 @@ impl WriteConfigPersistence for ConfigStorage {
 const TIMER: ObjectType = ObjectType::TIMER;
 const CHANNEL: ObjectType = ObjectType::CHANNEL;
 const VALUES: PropertyIdentifier = PropertyIdentifier::STATE_CHANGE_VALUES;
+const TIMEOUT: PropertyIdentifier = PropertyIdentifier::DEFAULT_TIMEOUT;
 const REFERENCES: PropertyIdentifier = PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES;
 const DELAYS: PropertyIdentifier = PropertyIdentifier::EXECUTION_DELAY;
 const NUMBER: PropertyIdentifier = PropertyIdentifier::CHANNEL_NUMBER;
@@ -81,6 +82,7 @@ fn object(kind: ObjectType, storage: &Arc<ConfigStorage>) -> Box<dyn BACnetObjec
         timer
             .set_state_change(state_change_values(1.0), configured, 9)
             .unwrap();
+        timer.set_default_timeout(30_000).unwrap();
         return Box::new(timer);
     }
     let mut channel = ChannelObject::with_persistence(1, "CH", 4, persistence).unwrap();
@@ -101,7 +103,12 @@ async fn served_by(kind: ObjectType, storage: &Arc<ConfigStorage>) -> Arc<Fixtur
 /// What the object serves of the properties a write could change.
 async fn configuration(fixture: &Fixture, kind: ObjectType) -> Vec<PropertyValue> {
     let properties: &[PropertyIdentifier] = if kind == TIMER {
-        &[VALUES, REFERENCES, PropertyIdentifier::PRIORITY_FOR_WRITING]
+        &[
+            VALUES,
+            REFERENCES,
+            PropertyIdentifier::PRIORITY_FOR_WRITING,
+            TIMEOUT,
+        ]
     } else {
         &[REFERENCES, DELAYS, NUMBER, GROUPS, INHIBIT]
     };
@@ -147,6 +154,7 @@ fn covered() -> Vec<(ObjectType, PropertyIdentifier, Option<u32>, Vec<u8>)> {
         (TIMER, VALUES, None, whole_values.to_vec()),
         (TIMER, VALUES, Some(2), value(PropertyValue::Real(42.0))),
         (TIMER, REFERENCES, None, references(&two)),
+        (TIMER, TIMEOUT, None, value(PropertyValue::Unsigned(5_000))),
         (CHANNEL, REFERENCES, None, references(&two)),
         (CHANNEL, REFERENCES, Some(1), references(&two[1..])),
         (
@@ -250,20 +258,29 @@ async fn a_write_property_multiple_saves_a_channels_writes_once() {
 }
 
 /// The save runs with the database guard dropped: the database answers a
-/// reader and a writer while it is held.
+/// reader and a writer while it is held, for a set write and a
+/// Default_Timeout write (#2312) alike.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_timer_save_runs_while_the_database_stays_available() {
-    let storage = Arc::new(ConfigStorage::default());
-    let fixture = served_by(TIMER, &storage).await;
-    let request = write_property(TIMER, VALUES, Some(3), value(PropertyValue::Real(5.0)));
-    let (response, available) = while_saving(
-        &fixture,
-        &storage,
-        ConfirmedServiceChoice::WRITE_PROPERTY,
-        request,
-        WAIT,
-    )
-    .await;
-    assert_eq!(response, SIMPLE_ACK_WRITE);
-    assert!(available, "the database was held while the Timer saved");
+    for (property, index, written) in [
+        (VALUES, Some(3), PropertyValue::Real(5.0)),
+        (TIMEOUT, None, PropertyValue::Unsigned(5_000)),
+    ] {
+        let storage = Arc::new(ConfigStorage::default());
+        let fixture = served_by(TIMER, &storage).await;
+        let request = write_property(TIMER, property, index, value(written));
+        let (response, available) = while_saving(
+            &fixture,
+            &storage,
+            ConfirmedServiceChoice::WRITE_PROPERTY,
+            request,
+            WAIT,
+        )
+        .await;
+        assert_eq!(response, SIMPLE_ACK_WRITE, "{property:?}");
+        assert!(
+            available,
+            "the database was held while the Timer saved {property:?}"
+        );
+    }
 }
