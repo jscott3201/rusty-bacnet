@@ -568,7 +568,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                     }
 
                                     if let Some(direct) = &direct {
-                                        direct.fulfill_from_hub_message(&msg).await;
+                                        direct.fulfill_from_hub_message(&msg);
                                     }
 
                                     if let Some((npdu, source_vmac)) = npdu_result {
