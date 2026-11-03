@@ -351,9 +351,10 @@ impl CovTable {
         self.check_caps(peer, new_count, new_indefinite, now)
     }
 
-    /// Check the indefinite policy and the subscription caps for one
+    /// Check the per-peer indefinite cap and the subscription caps for one
     /// admission adding `new_count` subscriptions, `new_indefinite` of them
-    /// indefinite.
+    /// indefinite. [`check_admission`](Self::check_admission), its only
+    /// caller, has refused an indefinite one the policy disallows.
     fn check_caps(
         &mut self,
         peer: &CovRecipient,
@@ -364,13 +365,7 @@ impl CovTable {
         self.expire(now);
 
         if new_indefinite > 0 {
-            if !self.policy.allow_indefinite_subscriptions {
-                self.counts.subscriptions_rejected_indefinite += 1;
-                return Err(Error::protocol(
-                    ErrorClass::SERVICES,
-                    ErrorCode::VALUE_OUT_OF_RANGE,
-                ));
-            }
+            debug_assert!(self.policy.allow_indefinite_subscriptions);
             let current_indefinite = self.peer_indefinite_counts.get(peer).copied().unwrap_or(0);
             if current_indefinite + new_indefinite > self.policy.max_indefinite_per_peer {
                 self.counts.subscriptions_rejected_indefinite += 1;
@@ -428,3 +423,6 @@ impl CovTable {
         )
     }
 }
+
+#[cfg(test)]
+mod tests;
