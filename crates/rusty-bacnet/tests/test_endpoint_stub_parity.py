@@ -98,7 +98,8 @@ class EndpointStubParityTests(unittest.TestCase):
                            "read_work_limit", "share_port_by_address",
                            "min_request_interval_ms", "bbmd", "foreign_device", "multicast",
                            "on_reinitialize", "after_reinitialize", "reinit_password",
-                           "device_write_policy"]),
+                           "device_write_policy", "source_audit_reporter",
+                           "audit_recipient", "audit_device_bindings"]),
             (ScEndpoint, ["device_instance", "sc_hub", "sc_vmac", "sc_ca_cert",
                           "sc_client_cert", "sc_client_key", "sc_device_uuid",
                           "device_name", "vendor_id", "sc_heartbeat_interval_ms",
@@ -195,6 +196,18 @@ class EndpointStubParityTests(unittest.TestCase):
                     self.assertEqual(runtime_arg_kinds(getattr(cls, name)), expected)
                     method = stub_method(classes[cls.__name__], name)
                     self.assertEqual(stub_arg_kinds(method), expected)
+        # Only B/IP selects a source Audit Reporter (#2348): the Rust
+        # session reports source records on IPv4 B/IP only.
+        expected = [("instance", positional), ("name", positional),
+                    ("audit_level", keyword), ("auditable_operations", keyword),
+                    ("issue_confirmed_notifications", keyword)]
+        self.assertEqual(runtime_arg_kinds(BipEndpoint.add_audit_reporter), expected)
+        self.assertEqual(
+            stub_arg_kinds(stub_method(classes["BipEndpoint"], "add_audit_reporter")), expected)
+        for cls in (ScEndpoint, MstpEndpoint):
+            with self.subTest(cls=cls.__name__):
+                self.assertFalse(hasattr(cls, "add_audit_reporter"))
+                self.assertNotIn("source_audit_reporter", inspect.signature(cls).parameters)
         # Roles.
         self.assertEqual(
             list(inspect.signature(EndpointClient.read_property).parameters),

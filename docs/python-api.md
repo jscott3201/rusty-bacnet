@@ -4821,9 +4821,9 @@ endpoint's only Audit Reporter is its source Reporter, which Clause 19.6.2
 casts as the operation source's; writing the DEVICE_RESET, DEVICE_BACKUP and
 DEVICE_RESTORE records of requests it carries out through that Reporter is
 this library's local choice. Endpoints take `await endpoint.report_device_reset_local()`
-too (#1837). Python can't configure an endpoint's source Reporter yet, so
-there it records nothing; it raises RuntimeError when the endpoint is not
-running.
+too (#1837), recorded through that Reporter when one is selected (see
+[Endpoint source Audit Reporter](#endpoint-source-audit-reporter)) and a
+no-op otherwise; it raises RuntimeError when the endpoint is not running.
 
 ### Runtime Object Access
 
@@ -5507,6 +5507,47 @@ cannot claim unsupported execution; incompatible server-role profiles fail
 startup before ingress.
 ClientOnly has no responder and keeps its service list as a local declaration.
 
+### Endpoint source Audit Reporter
+
+A `BipEndpoint` can name a source Audit Reporter (#2348), the Python side of
+the Rust session's `with_source_audit_reporter`. Through it the session
+reports the ReinitializeDevice resets, backup steps and restore steps it
+carries out for peers, each `report_device_reset_local()` call, and the
+client role's reads, each filtered by the Reporter's Audit_Level and
+Auditable_Operations, and sends the records to the Device's Audit recipient.
+
+```python
+reporter = ObjectIdentifier(ObjectType.AUDIT_REPORTER, 1)
+logger = ObjectIdentifier(ObjectType.DEVICE, 999)
+endpoint = BipEndpoint(
+    1001, interface="192.168.1.10", port=47808,
+    on_reinitialize=lambda request: None,
+    device_write_policy=lambda context: True,
+    source_audit_reporter=reporter,
+    audit_recipient={"kind": "device", "object_identifier": logger},
+    audit_device_bindings=[(logger, "192.168.1.20:47808")],
+)
+endpoint.add_audit_reporter(1, "Source", audit_level="audit_all",
+                            auditable_operations=1 << AuditOperation.DEVICE_RESET.to_raw())
+```
+
+- `source_audit_reporter` is the `ObjectIdentifier` of a Reporter added with
+  `add_audit_reporter(instance, name, *, audit_level="none",
+  auditable_operations=None, issue_confirmed_notifications=False)`. The
+  defaults report nothing, and peers can't change the Reporter through an
+  endpoint.
+- `audit_recipient` (an `AuditRecipientInput`) provisions the local Device's
+  Audit recipient, and `audit_device_bindings` lists `(Device identifier,
+  "ipv4:port")` routes to recipient Devices.
+- The Reporter needs `device_write_policy` and `audit_recipient`.
+- **When keywords are refused:** construction raises ValueError for anything
+  it can check: an identifier that isn't a concrete Audit Reporter, a
+  recipient or binding without a Reporter, this device as the recipient, and
+  a malformed or repeated binding. Whether the Reporter was added is known
+  only at start, which raises BacnetError for a missing one.
+- **B/IP only:** the Rust session reports source records on IPv4 B/IP only,
+  so `ScEndpoint` and `MstpEndpoint` don't take these keywords.
+
 ### Endpoint lifecycle and cancellation
 
 For B/IP, SC and MS/TP, `start()`, `close()` and context exit return native
@@ -5600,8 +5641,9 @@ indexes outside native unsigned32 raise `OverflowError` during conversion.
 Requests and raw ACKs must fit the configured unsegmented max APDU. Protocol,
 size, malformed/mismatched ACK and closed-owner failures raise `BacnetError`.
 Standalone RPM retains its broader selector profile but now rejects empty lists
-through the shared fallible encoder. Endpoint source Reporter configuration is
-still Rust-only; this method does not expose it in Python.
+through the shared fallible encoder. A `BipEndpoint` with a source Audit
+Reporter reports these reads through it, filtered by its operations (see
+[Endpoint source Audit Reporter](#endpoint-source-audit-reporter)).
 
 ### Migration: separately-constructed client/server to endpoint
 

@@ -375,6 +375,36 @@ impl BACnetServer {
     }
 }
 
+/// A Reporter's `audit_level` keyword: "none", "audit_config" or
+/// "audit_all". Shared with the B/IP endpoint's `add_audit_reporter`.
+pub(crate) fn reporter_audit_level(value: &str) -> PyResult<AuditLevel> {
+    match value {
+        "none" => Ok(AuditLevel::NONE),
+        "audit_config" => Ok(AuditLevel::AUDIT_CONFIG),
+        "audit_all" => Ok(AuditLevel::AUDIT_ALL),
+        _ => Err(PyValueError::new_err(
+            "audit_level must be 'none', 'audit_config', or 'audit_all'",
+        )),
+    }
+}
+
+/// A Reporter's `auditable_operations` keyword: an unsigned64 bit mask, bit
+/// n for AuditOperation n. Shared with the B/IP endpoint's
+/// `add_audit_reporter`.
+pub(crate) fn reporter_auditable_operations(
+    operations: &Bound<'_, PyAny>,
+) -> PyResult<AuditOperationFlags> {
+    if operations.is_instance_of::<PyBool>() || !operations.is_instance_of::<PyInt>() {
+        return Err(PyTypeError::new_err(
+            "auditable_operations must be an integer (not bool)",
+        ));
+    }
+    let bits = operations.extract::<u64>().map_err(|_| {
+        PyOverflowError::new_err("auditable_operations must be in 0..=18446744073709551615")
+    })?;
+    AuditOperationFlags::from_bits(bits).map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
 struct ReporterConfiguration {
     identifier: ObjectIdentifier,
     level: AuditLevel,
@@ -430,27 +460,8 @@ fn parse_reporters(value: &Bound<'_, PyAny>) -> PyResult<Vec<ReporterConfigurati
                 "Reporter instance must be concrete (0..=4194302)",
             ));
         }
-        let level = match required("audit_level")?.extract::<&str>()? {
-            "none" => AuditLevel::NONE,
-            "audit_config" => AuditLevel::AUDIT_CONFIG,
-            "audit_all" => AuditLevel::AUDIT_ALL,
-            _ => {
-                return Err(PyValueError::new_err(
-                    "audit_level must be 'none', 'audit_config', or 'audit_all'",
-                ));
-            }
-        };
-        let operations = required("auditable_operations")?;
-        if operations.is_instance_of::<PyBool>() || !operations.is_instance_of::<PyInt>() {
-            return Err(PyTypeError::new_err(
-                "auditable_operations must be an integer (not bool)",
-            ));
-        }
-        let bits = operations.extract::<u64>().map_err(|_| {
-            PyOverflowError::new_err("auditable_operations must be in 0..=18446744073709551615")
-        })?;
-        let operations = AuditOperationFlags::from_bits(bits)
-            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        let level = reporter_audit_level(required("audit_level")?.extract::<&str>()?)?;
+        let operations = reporter_auditable_operations(&required("auditable_operations")?)?;
         let confirmed = required("issue_confirmed_notifications")?;
         if !confirmed.is_instance_of::<PyBool>() {
             return Err(PyTypeError::new_err(
