@@ -25,7 +25,7 @@
 //!
 //! | Target | Formats |
 //! | --- | --- |
-//! | `log_restore`, `log_restore_file` | the Trend Log, Trend Log Multiple and Event Log snapshots (`log_persistence/codec.rs`) |
+//! | `log_restore`, `log_restore_file` | the Trend Log, Trend Log Multiple and Event Log snapshots, schema versions 1 and 2 (`log_persistence/codec.rs`) |
 //! | `audit_restore`, `audit_restore_file` | the Audit Log snapshot, schema versions 1 to 3 |
 //! | `object_file_restore`, `object_file_restore_file` | the one-file formats: Notification Forwarder, Notification Class, Tags, the two colour objects' output, Access Rights, and the Timer's and Channel's write configuration |
 //!

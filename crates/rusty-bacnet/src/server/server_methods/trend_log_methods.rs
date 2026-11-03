@@ -29,8 +29,12 @@ impl BACnetServer {
     /// ValueError: the Clause 12.25.9 switch would make that a COV log.
     /// `log_interval=0` alone leaves the new log polled and idle.
     /// `storage_path` (a `str`) keeps the log in `<storage_path>.slot0` and
-    /// `.slot1`, as on `add_trend_log_multiple`; `client_cov_increment` and
-    /// `cov_resubscription_interval` aren't saved and apply on every start.
+    /// `.slot1`, as on `add_trend_log_multiple`. A Client_COV_Increment or
+    /// COV_Resubscription_Interval written over the network is saved too
+    /// (#1952), refused if it can't be, and wins over `client_cov_increment`
+    /// and `cov_resubscription_interval` at the next start;
+    /// `clear_written_reporting` drops the saved writes first, so the
+    /// keywords apply. Unwritten, they apply on every start.
     #[pyo3(signature = (
         instance,
         name,
@@ -46,6 +50,7 @@ impl BACnetServer {
         align_intervals=None,
         interval_offset=None,
         storage_path=None,
+        clear_written_reporting=false,
         total_record_count=0
     ))]
     fn add_trend_log(
@@ -63,6 +68,7 @@ impl BACnetServer {
         align_intervals: Option<bool>,
         interval_offset: Option<u32>,
         storage_path: Option<&str>,
+        clear_written_reporting: bool,
         total_record_count: u32,
     ) -> PyResult<()> {
         if logging_type == Some("polled") && log_interval == Some(0) {
@@ -99,6 +105,7 @@ impl BACnetServer {
             align_intervals,
             interval_offset,
             total_record_count,
+            clear_written_reporting,
         };
         let obj =
             trend_log(instance, name, buffer_size, storage_path, settings).map_err(to_py_err)?;
@@ -131,7 +138,10 @@ impl BACnetServer {
     /// once a minute, and once more at `stop()`. A log reopened from those
     /// files keeps its saved records, Total_Record_Count, BUFFER_READY
     /// counts, Notification_Threshold and the settings a peer can write,
-    /// ignoring the keyword arguments, and appends a LOG_INTERRUPTED record.
+    /// the reporting settings a write set among them (#1952), ignoring the
+    /// keyword arguments, and appends a LOG_INTERRUPTED record.
+    /// `clear_written_reporting` drops those reporting settings first, as
+    /// on `add_trend_log`.
     /// `buffer_size` wins over the saved Buffer_Size; a smaller one keeps the
     /// newest records. A file that can't be read, or a `buffer_size` past
     /// what a slot holds, raises BacnetError.
@@ -148,6 +158,7 @@ impl BACnetServer {
         align_intervals=None,
         interval_offset=None,
         storage_path=None,
+        clear_written_reporting=false,
         total_record_count=0
     ))]
     fn add_trend_log_multiple(
@@ -163,6 +174,7 @@ impl BACnetServer {
         align_intervals: Option<bool>,
         interval_offset: Option<u32>,
         storage_path: Option<&str>,
+        clear_written_reporting: bool,
         total_record_count: u32,
     ) -> PyResult<()> {
         let settings = TrendLogMultipleSettings {
@@ -181,6 +193,7 @@ impl BACnetServer {
             align_intervals,
             interval_offset,
             total_record_count,
+            clear_written_reporting,
         };
         let obj = trend_log_multiple(instance, name, buffer_size, storage_path, settings)
             .map_err(to_py_err)?;
@@ -214,6 +227,8 @@ struct TrendLogMultipleSettings {
     interval_offset: Option<u32>,
     /// Total_Record_Count to seed the empty log at.
     total_record_count: u32,
+    /// Drop the reporting settings a write saved.
+    clear_written_reporting: bool,
 }
 
 /// Build the log through the Rust setters, so Python gets their checks.
@@ -236,6 +251,9 @@ fn trend_log_multiple(
         )?,
         None => TrendLogMultipleObject::new(instance, name, buffer_size)?,
     };
+    if settings.clear_written_reporting {
+        log.clear_written_reporting()?;
+    }
     if log.reopened() {
         return Ok(log);
     }
@@ -279,13 +297,15 @@ struct TrendLogSettings {
     interval_offset: Option<u32>,
     /// Total_Record_Count to seed the empty log at.
     total_record_count: u32,
+    /// Drop the reporting settings a write saved before applying these.
+    clear_written_reporting: bool,
 }
 
 /// Build the log through the Rust setters, so Python gets their checks.
 /// Logging_Type goes before Log_Interval, which it may set or lock, and
 /// which may then switch POLLED and COV (Clause 12.25.9). A log reopened
-/// from `storage_path` keeps what it saved: only the two COV settings, which
-/// it doesn't save, apply then.
+/// from `storage_path` keeps what it saved: only the two COV settings apply
+/// then, each unless a saved write of it wins (#1952).
 fn trend_log(
     instance: u32,
     name: &str,
@@ -302,6 +322,9 @@ fn trend_log(
         )?,
         None => TrendLogObject::new(instance, name, buffer_size)?,
     };
+    if settings.clear_written_reporting {
+        log.clear_written_reporting()?;
+    }
     log.set_client_cov_increment(settings.client_cov_increment)?;
     if let Some(seconds) = settings.cov_resubscription_interval {
         log.set_cov_resubscription_interval(seconds)?;
