@@ -282,7 +282,7 @@ fn an_error_names_its_field_and_reason() {
 /// they decode, octet for octet.
 // std: the file backends.
 #[cfg(feature = "std")]
-mod file_backends {
+pub(super) mod file_backends {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -291,10 +291,10 @@ mod file_backends {
     use crate::write_config::{FileWriteConfigPersistence, WriteConfigPersistence};
 
     /// A directory of its own, removed on drop.
-    struct Scratch(PathBuf);
+    pub(in crate::snapshot) struct Scratch(PathBuf);
 
     impl Scratch {
-        fn new() -> Self {
+        pub(in crate::snapshot) fn new() -> Self {
             static NEXT: AtomicU64 = AtomicU64::new(0);
             let directory = std::env::temp_dir().join(format!(
                 "rusty-bacnet-snapshot-{}-{}",
@@ -305,7 +305,7 @@ mod file_backends {
             Self(directory)
         }
 
-        fn path(&self, name: &str) -> PathBuf {
+        pub(in crate::snapshot) fn path(&self, name: &str) -> PathBuf {
             self.0.join(name)
         }
     }

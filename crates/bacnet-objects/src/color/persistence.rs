@@ -39,6 +39,8 @@ use bacnet_types::primitives::ObjectIdentifier;
 use super::command;
 #[cfg(feature = "std")]
 use crate::durable::file::ObjectFile;
+#[cfg(feature = "std")]
+use crate::snapshot::color as format;
 
 /// A colour output's Present_Value, as storage keeps it.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -95,40 +97,19 @@ pub trait ColorOutputPersistence: Send + Sync {
     fn save(&self, object: ObjectIdentifier, snapshot: &ColorOutputSnapshot) -> Result<(), Error>;
 }
 
-/// The format's tag. Version 2 keeps a written default too (#1956).
-#[cfg(feature = "std")]
-const MAGIC: &[u8; 8] = b"RBNCLR02";
-/// Version 1's tag, which still loads: a kind octet and Present_Value.
-#[cfg(feature = "std")]
-const MAGIC_V1: &[u8; 8] = b"RBNCLR01";
-/// The body is at most a kind octet and two values of two REALs each, with
-/// their presence octets; anything much larger is not a file this backend
-/// wrote.
-#[cfg(feature = "std")]
-const MAX_FILE_BYTES: u64 = 64;
-/// The kind octet of an xy colour, followed by x and y as big-endian IEEE
-/// 754 single-precision values.
-#[cfg(feature = "std")]
-const KIND_XY: u8 = 1;
-/// The kind octet of a colour temperature, followed by the kelvin as a
-/// big-endian 32-bit unsigned value.
-#[cfg(feature = "std")]
-const KIND_KELVIN: u8 = 2;
-
 /// A file holding one colour object's Present_Value and written default,
 /// replaced whole on each save the same way as
 /// [`FileNotificationClassPersistence`]: a failed save leaves the previous
-/// file in place, and a completed one survives a power loss.
-///
-/// The file holds a magic tag, the object's identifier, one octet naming the
-/// kind of value, then Present_Value and the default, each behind a presence
-/// octet (0 or 1): two big-endian REALs for an xy colour, a big-endian 32-bit
-/// kelvin for a temperature. A file of the wrong size, or with a value outside
-/// the object's range, does not load. A file of the previous version, a kind
-/// octet and Present_Value alone, loads with no default. It does not
+/// file in place, and a completed one survives a power loss. A file of the
+/// previous version (`RBNCLR01`) loads with no default. It does not
 /// coordinate between processes.
 ///
 /// [`FileNotificationClassPersistence`]: crate::notification_class::FileNotificationClassPersistence
+///
+/// The file holds what [`snapshot::color::encode`] returns; that module
+/// documents the format.
+///
+/// [`snapshot::color::encode`]: crate::snapshot::color::encode
 #[derive(Clone, Debug)]
 #[cfg(feature = "std")]
 pub struct FileColorOutputPersistence {
@@ -137,11 +118,10 @@ pub struct FileColorOutputPersistence {
 
 #[cfg(feature = "std")]
 impl FileColorOutputPersistence {
-    /// Keep the Present_Value in the file at `path`. Refuses an empty path.
+    /// Keep the value in the file at `path`.
     pub fn new(path: impl AsRef<Path>) -> Result<Self, Error> {
         Ok(Self {
-            file: ObjectFile::new(path.as_ref(), MAGIC, MAX_FILE_BYTES, "Color output file")?
-                .with_previous(MAGIC_V1),
+            file: ObjectFile::new(path.as_ref(), format::MAX_LEN as u64, "Color output file")?,
         })
     }
 
@@ -158,7 +138,7 @@ impl FileColorOutputPersistence {
         store
     }
 
-    /// The file the Present_Value and default are kept in.
+    /// The file the value is kept in.
     pub fn path(&self) -> &Path {
         self.file.path()
     }
@@ -167,99 +147,13 @@ impl FileColorOutputPersistence {
 #[cfg(feature = "std")]
 impl ColorOutputPersistence for FileColorOutputPersistence {
     fn load(&self, object: ObjectIdentifier) -> Result<Option<ColorOutputSnapshot>, Error> {
-        let Some((previous, body)) = self.file.load_versioned(object)? else {
+        let Some(octets) = self.file.read()? else {
             return Ok(None);
         };
-        let Some((&kind, rest)) = body.split_first() else {
-            return Err(self.file.corrupt("holds no valid value"));
-        };
-        let width = match kind {
-            KIND_XY => 8,
-            KIND_KELVIN => 4,
-            _ => return Err(self.file.corrupt("holds no valid value")),
-        };
-        let value = |octets: &[u8]| match kind {
-            KIND_XY => ColorOutputValue::Xy(BACnetXyColor::new(
-                f32::from_be_bytes(octets[..4].try_into().expect("four")),
-                f32::from_be_bytes(octets[4..].try_into().expect("four")),
-            )),
-            _ => ColorOutputValue::Kelvin(u32::from_be_bytes(octets.try_into().expect("four"))),
-        };
-        let snapshot = if previous {
-            if rest.len() != width {
-                return Err(self.file.corrupt("holds no valid value"));
-            }
-            ColorOutputSnapshot {
-                present_value: Some(value(rest)),
-                default: None,
-            }
-        } else {
-            // Each value behind its presence octet, and nothing after them.
-            let mut rest = rest;
-            let mut next = || match rest.split_first() {
-                Some((0, after)) => {
-                    rest = after;
-                    Ok(None)
-                }
-                Some((1, after)) if after.len() >= width => {
-                    let (octets, after) = after.split_at(width);
-                    rest = after;
-                    Ok(Some(value(octets)))
-                }
-                _ => Err(self.file.corrupt("holds no valid value")),
-            };
-            let present_value = next()?;
-            let default = next()?;
-            if !rest.is_empty() {
-                return Err(self.file.corrupt("holds no valid value"));
-            }
-            ColorOutputSnapshot {
-                present_value,
-                default,
-            }
-        };
-        if snapshot
-            .present_value
-            .is_some_and(|value| !value.is_valid())
-            || snapshot
-                .default
-                .is_some_and(|value| !value.is_valid_default())
-        {
-            return Err(self.file.corrupt("holds a value out of range"));
-        }
-        Ok(Some(snapshot))
+        Ok(Some(format::decode(object, &octets)?))
     }
 
     fn save(&self, object: ObjectIdentifier, snapshot: &ColorOutputSnapshot) -> Result<(), Error> {
-        use bacnet_types::enums::ObjectType;
-        // The kind follows the values; with neither, the object type.
-        let kind = match snapshot.present_value.or(snapshot.default) {
-            Some(ColorOutputValue::Xy(_)) => KIND_XY,
-            Some(ColorOutputValue::Kelvin(_)) => KIND_KELVIN,
-            None if object.object_type() == ObjectType::COLOR_TEMPERATURE => KIND_KELVIN,
-            None => KIND_XY,
-        };
-        let mut body = Vec::with_capacity(19);
-        body.push(kind);
-        for value in [snapshot.present_value, snapshot.default] {
-            match value {
-                None => body.push(0),
-                Some(ColorOutputValue::Xy(color)) if kind == KIND_XY => {
-                    body.push(1);
-                    body.extend_from_slice(&color.x.to_be_bytes());
-                    body.extend_from_slice(&color.y.to_be_bytes());
-                }
-                Some(ColorOutputValue::Kelvin(kelvin)) if kind == KIND_KELVIN => {
-                    body.push(1);
-                    body.extend_from_slice(&kelvin.to_be_bytes());
-                }
-                Some(_) => {
-                    return Err(Error::OutOfRange(
-                        "a colour and a temperature in one snapshot".into(),
-                    ));
-                }
-            }
-        }
-        self.file.save(object, &body)
+        self.file.save_octets(format::encode(object, snapshot)?)
     }
 }
