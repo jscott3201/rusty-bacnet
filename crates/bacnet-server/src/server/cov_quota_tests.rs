@@ -278,10 +278,10 @@ async fn indefinite_subscription_policy() {
         match err {
             Error::Remote(RemoteError::Error { class, code }) => {
                 assert_eq!(class, ErrorClass::SERVICES);
-                assert_eq!(code, ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED);
+                assert_eq!(code, ErrorCode::VALUE_OUT_OF_RANGE);
             }
             other => {
-                panic!("expected SERVICES / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, got {other:?}")
+                panic!("expected SERVICES / VALUE_OUT_OF_RANGE, got {other:?}")
             }
         }
     }

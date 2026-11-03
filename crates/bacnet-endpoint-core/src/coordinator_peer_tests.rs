@@ -137,3 +137,37 @@ fn a_relayed_answer_matches_the_direct_station_or_the_routed_form_it_was_sent_to
         assert_eq!(admission.metadata().peer(), &keyed, "the peer that matched");
     }
 }
+
+/// A copied peer keeps the variant, the network and every address length,
+/// inline or spilled, and owns its bytes (#1978: `Clone` is by hand).
+#[test]
+fn copied_peers_preserve_arbitrary_address_identity_and_ownership() {
+    let mut identities = std::collections::HashMap::new();
+    for len in [0, 1, 3, 6, 7, 18, 23, 64] {
+        let bytes: Vec<u8> = (0..len).map(|index| index as u8).collect();
+        for mut original in [
+            CanonicalPeer::direct(&bytes),
+            CanonicalPeer::routed(42, &bytes),
+            CanonicalPeer::routed(43, &bytes),
+        ] {
+            let copied = original.clone();
+            assert_eq!(copied, original);
+            assert!(identities.insert(copied.clone(), len).is_none());
+            let (original_mac, copied_mac) = match (&mut original, &copied) {
+                (CanonicalPeer::Direct(a), CanonicalPeer::Direct(b)) => (a, b),
+                (
+                    CanonicalPeer::Routed { address: a, .. },
+                    CanonicalPeer::Routed { address: b, .. },
+                ) => (a, b),
+                _ => unreachable!(),
+            };
+            assert_eq!(copied_mac.as_slice(), bytes);
+            assert_eq!(copied_mac.spilled(), len > 6);
+            original_mac.push(0xff);
+            assert_ne!(original, copied);
+            assert_eq!(identities.get(&copied), Some(&len));
+            assert!(!identities.contains_key(&original));
+        }
+    }
+    assert_eq!(identities.len(), 24);
+}

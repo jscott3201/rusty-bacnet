@@ -74,6 +74,8 @@ pub mod mstp_extended;
 pub mod node;
 #[cfg(feature = "objects")]
 pub mod objects;
+#[cfg(feature = "reporting")]
+pub mod reporting;
 pub mod router;
 mod tally;
 

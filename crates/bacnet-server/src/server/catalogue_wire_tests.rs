@@ -19,6 +19,7 @@
 use super::*;
 use crate::server::test_transport::TestTransport;
 use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
+use bacnet_objects::clock::{ClockFrame, ClockReader};
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::property_metadata::{PropertyMetadata, PropertyWriteCapability};
 use bacnet_services::object_mgmt::{
@@ -30,6 +31,7 @@ use bacnet_services::rpm::{
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
+use bacnet_types::primitives::{Date, Time};
 
 #[path = "catalogue_wire_values.rs"]
 mod values;
@@ -49,6 +51,31 @@ const REFUSED_ROWS: usize = 690;
 const CREATED_TYPES: usize = 27;
 /// Types DeleteObject removes: all but Device and Network Port.
 const DELETED_TYPES: usize = 62;
+
+/// A Device clock that always reads the same instant, so every value read
+/// from it is the same on the wire and in the object's own read.
+struct FixedClock;
+
+impl ClockReader for FixedClock {
+    fn read_clock(&self) -> Option<ClockFrame> {
+        Some(ClockFrame {
+            local_date: Date {
+                year: 126,
+                month: 11,
+                day: 2,
+                day_of_week: 1,
+            },
+            local_time: Time {
+                hour: 10,
+                minute: 30,
+                second: 15,
+                hundredths: 31,
+            },
+            utc_offset: 0,
+            daylight_savings_status: false,
+        })
+    }
+}
 
 struct Wire {
     server: BACnetServer<TestTransport>,
@@ -99,6 +126,12 @@ impl Wire {
         let server = BACnetServer::start(config, catalogue_database(), transport)
             .await
             .unwrap();
+        // Start installs the system clock; replace it with the fixed one.
+        server
+            .database()
+            .write()
+            .await
+            .set_clock_reader(Some(Arc::new(FixedClock)));
         Self {
             server,
             tx,

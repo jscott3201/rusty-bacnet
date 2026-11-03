@@ -189,7 +189,7 @@ fn requester() -> CommandOrigin {
 /// The device's identity, declaring the services the responder runs, and
 /// its database: the Device, AI-1 and AI-2 with [`ANALOG_VALUES`], BV-1
 /// inactive and BV-2 active, both with commandable Present_Values.
-fn device() -> Result<(DeviceIdentity, ObjectDatabase), Error> {
+pub(crate) fn device() -> Result<(DeviceIdentity, ObjectDatabase), Error> {
     let identity = DeviceIdentity::new(DEVICE, VENDOR)?.with_services(SERVICES);
     let mut extra: Vec<Box<dyn BACnetObject>> = Vec::new();
     for (instance, value) in (1..).zip(ANALOG_VALUES) {
