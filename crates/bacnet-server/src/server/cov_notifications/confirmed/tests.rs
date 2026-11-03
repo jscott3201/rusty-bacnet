@@ -185,7 +185,9 @@ async fn a_busy_coordinate_refuses_a_report_and_leaves_the_follow_up_to_it() {
         let mut table = f.table.write().await;
         [&single, &a].map(|sub| {
             let report = table.prepare_completion(sub).unwrap();
-            table.begin_confirmed(report, [sub]).unwrap()
+            table
+                .begin_confirmed(report, [sub].map(|sub| (sub, placeholder())))
+                .unwrap()
         })
     };
     for sub in [&single, &b] {
@@ -302,7 +304,9 @@ async fn a_fence_follow_up_that_beats_the_initial_report_carries_it() {
     let outstanding = {
         let mut table = f.table.write().await;
         let report = table.prepare_completion(&a).unwrap();
-        table.begin_confirmed(report, [&a, &b]).unwrap()
+        table
+            .begin_confirmed(report, [&a, &b].map(|sub| (sub, placeholder())))
+            .unwrap()
     };
     // Re-subscribing to Present_Value alone while the context is busy fences
     // its report and queues the whole context.
@@ -495,4 +499,16 @@ async fn a_report_dcc_withdraws_before_its_first_attempt_is_not_counted() {
     );
     assert!(f.table.read().await.confirmed_idle(&sub), "no hold-off");
     f.finish().await;
+}
+
+/// An observation for a report these tests never acknowledge.
+fn placeholder() -> bacnet_device_core::cov::CovObservation {
+    bacnet_device_core::cov::CovObservation::new(
+        bacnet_device_core::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(
+            0.0,
+        ))
+        .unwrap(),
+        None,
+    )
+    .unwrap()
 }

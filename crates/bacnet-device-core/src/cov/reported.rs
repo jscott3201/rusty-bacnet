@@ -1,5 +1,8 @@
 //! Table 13-1 values an ordinary (SubscribeCOV) notification reports after
 //! its leading value and Status_Flags, captured under the same object borrow.
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+
 use super::CovSample;
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_objects::property_metadata::has_property;
@@ -19,7 +22,7 @@ mod tests;
 /// for every type but Access Point: its Table 13-1 row starts with
 /// Access_Event, and footnote 1 has the subscription list name it, but only
 /// Access_Event_Time and Status_Flags changes send its notification.
-pub(crate) fn lead(object_type: ObjectType) -> CovReportedProperty {
+pub fn lead(object_type: ObjectType) -> CovReportedProperty {
     if object_type == ObjectType::ACCESS_POINT {
         CovReportedProperty::Value(PropertyIdentifier::ACCESS_EVENT)
     } else {
@@ -31,11 +34,14 @@ pub(crate) fn lead(object_type: ObjectType) -> CovReportedProperty {
 /// whose changes trigger a notification. A declared property the object's
 /// Property_List lacks is left out; a listed one that fails to read fails the
 /// whole capture, as an unreadable leading value does.
-pub(crate) struct PreparedReported {
+pub struct PreparedReported {
+    /// The values a notification carries after the leading value and flags.
     pub values: Vec<BACnetPropertyValue>,
+    /// The bounded samples of the values whose changes send a notification.
     pub triggers: Box<[CovSample]>,
 }
 impl PreparedReported {
+    /// Capture `object`'s Table 13-1 extras.
     pub fn read(object: &dyn BACnetObject) -> Result<Self, Error> {
         // An object that names no list reports its type's Table 13-1 row.
         let declared = match object.cov() {

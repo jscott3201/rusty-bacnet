@@ -7636,7 +7636,18 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   change the host takes `take_fenced()`, a `Fenced` naming the tokens whose
   worker should stop, the references removed or owed a fresh look and the
   contexts refreshed, and `take_counts()`. The entries sit in one vector
-  sorted with the monitored object first. `bacnet_server::cov` keeps
+  sorted with the monitored object first. `evaluate` decides what a change
+  of one object reports to its ordinary and Single subscriptions: it
+  compares each with the observation its last delivered notification
+  established, skips a confirmed one whose report is out, encodes each
+  notification's parameters and spends the input's `EventBudget`. A
+  confirmed report takes the host's lease (an invoke ID, an in-flight
+  slot) and begins its flight; every report comes back through
+  `delivered`, where `Delivery::Sent` commits an unconfirmed one and an Ack
+  commits what `begin_confirmed` kept and names the references owed a
+  fresh look. The values a notification carries are in `cov::prepare`,
+  `flags`, `reported`, `value_source` and `life_safety`, and the Device's
+  two subscription lists in `cov::active`. `bacnet_server::cov` keeps
   `CovSubscriptionTable` with its API, which runs on it, and the atomics and
   in-flight tracker; the `Responder` doesn't dispatch the COV services yet.
 - `reply`: `error_apdu`, the one map from an `Error` to its Reject or Error

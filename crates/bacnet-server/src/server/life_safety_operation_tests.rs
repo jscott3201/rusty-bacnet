@@ -229,7 +229,7 @@ async fn local_rearm_api_supports_two_operation_cycles() {
                 .unwrap();
         assert_eq!(
             changed,
-            vec![crate::life_safety_cov::LifeSafetyCovChange {
+            vec![bacnet_device_core::cov::life_safety::LifeSafetyCovChange {
                 object_identifier: oid,
                 changed_properties: vec![PropertyIdentifier::OPERATION_EXPECTED],
             }]

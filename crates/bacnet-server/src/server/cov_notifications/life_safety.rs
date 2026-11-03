@@ -16,20 +16,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         if ctx.comm_state.initiation_restricted() || changed_properties.is_empty() {
             return;
         }
-        let status_changed = changed_properties.contains(&PropertyIdentifier::STATUS_FLAGS);
+        let change = bacnet_device_core::cov::life_safety::LifeSafetyCovChange {
+            object_identifier: *oid,
+            changed_properties: changed_properties.to_vec(),
+        };
         let (subs, counters, in_flight_tracker, dispatch_turn) = {
             let mut table = ctx.cov_table.write().await;
             (
                 table
                     .subscriptions_for(oid)
                     .into_iter()
-                    .filter(|sub| match sub.monitored_property {
-                        Some(property) => status_changed || changed_properties.contains(&property),
-                        None => {
-                            status_changed
-                                || changed_properties.contains(&PropertyIdentifier::PRESENT_VALUE)
-                        }
-                    })
+                    .filter(|sub| change.notifies(sub))
                     .cloned()
                     .collect::<Vec<_>>(),
                 Arc::clone(table.counters()),
@@ -45,13 +42,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             in_flight_tracker: &in_flight_tracker,
             counters: &counters,
         };
-        Self::fire_cov_by_kind(&handles, dispatch_turn, oid, subs, None, status_changed).await;
+        let force = change.status_changed();
+        Self::fire_cov_by_kind(&handles, dispatch_turn, oid, subs, None, force).await;
     }
 
     pub(in crate::server) async fn fire_post_write_cov_notifications(
         ctx: &CovNotifyContext<'_, T>,
         coarse_oids: &[ObjectIdentifier],
-        exact_changes: &[crate::life_safety_cov::LifeSafetyCovChange],
+        exact_changes: &[bacnet_device_core::cov::life_safety::LifeSafetyCovChange],
     ) {
         for oid in coarse_oids {
             Self::fire_cov_notifications(ctx, oid).await;
