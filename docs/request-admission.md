@@ -56,6 +56,32 @@ the constructor, before any transport startup, including synchronous MS/TP
 serial opening. Only the reserve accepts zero, disabling protection rather than
 disabling admission or granting unlimited capacity.
 
+## Under load
+
+With one confirmed request outstanding per client, the default policy serves
+up to about 60 clients without refusals; past that, the server answers the
+excess at once with an Abort (OUT_OF_RESOURCES), or drops it silently when all
+eight Abort workers are busy. A dropped request costs its client one request
+timeout, and the retry is then served. Silent drops are a start-up effect:
+they come while many clients still send in step and more than eight refusals
+arrive together.
+
+A handler keeps its slot until its reply has been handed to the transport. A
+client can receive its reply and send its next request before the handler
+that answered has released its slot, so for a moment it holds two, and
+refusals can start a little below the limit. Above the limit, how many
+requests are refused depends on scheduling rather than on the cost of each
+request, so the rate varies widely between runs.
+
+To avoid refusals, set `max_confirmed_in_flight` above the most confirmed
+requests you expect at once, plus `confirmed_recovery_reserve`, with headroom.
+The measured curve of clients against Aborts per 100,000 requests, and the
+commands that reproduce it, are in
+[benchmarks/results/perf-s2](../benchmarks/results/perf-s2/README.md); the
+test `default_policy_answers_60_and_aborts_the_61st_confirmed_request` in
+[`default_admission_tests.rs`](../crates/bacnet-server/src/server/default_admission_tests.rs)
+pins the edge: 60 requests answered and the 61st refused.
+
 ## Recovery eligibility and strict partitioning
 
 Only requests accepted by the existing DCC decoder with mode ENABLE are eligible.

@@ -59,7 +59,7 @@ pub(in crate::server) async fn active_cov_snapshot(
     let live = if selection.reads_cov() {
         let entries = {
             let table = tables.cov.read().await;
-            table.live_cov_entries(selection, runtime_clock::now())
+            table.live_cov_entries(selection, runtime_clock::core_now())
         };
         LiveDeviceCov::project(db, selection, entries)
     } else {

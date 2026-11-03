@@ -60,7 +60,7 @@ async fn cov_lifetime_held_initial_and_fanout_expiry_admit_nothing() {
                 let fixture = Fixture::new(false);
                 let mut sub = proposal(kind, confirmed, PropertyIdentifier::PRESENT_VALUE);
                 let expiry = runtime_clock::now() + Duration::from_millis(100);
-                sub.expires_at = Some(expiry);
+                sub.expires_at = Some(runtime_clock::core_clock().instant(expiry));
                 let snapshots = vec![fixture.table.write().await.admit_for_test(sub, 0).unwrap()];
                 let db_guard = fixture.db.write().await;
                 let mut work = Box::pin(fixture.fire(initial, &snapshots));
@@ -82,8 +82,8 @@ async fn cov_lifetime_held_initial_and_fanout_expiry_admit_nothing() {
                         .unwrap()
                         .last_notified_observation,
                     Some(
-                        crate::cov::CovObservation::new(
-                            crate::cov::CovSample::new(
+                        bacnet_device_core::cov::CovObservation::new(
+                            bacnet_device_core::cov::CovSample::new(
                                 &bacnet_types::primitives::PropertyValue::Real(1.0)
                             )
                             .unwrap(),
@@ -109,7 +109,8 @@ async fn cov_lifetime_context_refresh_uses_live_expiry_without_replacing_snapsho
                 confirmed,
                 PropertyIdentifier::PRESENT_VALUE,
             );
-            sub.expires_at = Some(runtime_clock::now() + Duration::from_secs(1));
+            sub.expires_at =
+                Some(crate::runtime_clock::core_now() + bacnet_time::Duration::from_secs(1));
             let snapshots = vec![fixture.table.write().await.admit_for_test(sub, 0).unwrap()];
             let old_expiry = snapshots[0].expires_at;
             let db_guard = fixture.db.write().await;
@@ -121,7 +122,7 @@ async fn cov_lifetime_context_refresh_uses_live_expiry_without_replacing_snapsho
                     .subscribe_multiple(
                         snapshots[0].key().multiple_context().unwrap(),
                         &snapshots[0].endpoint(),
-                        runtime_clock::now() + Duration::from_secs(1000),
+                        crate::runtime_clock::core_now() + bacnet_time::Duration::from_secs(1000),
                         0,
                         None,
                         vec![],
@@ -164,7 +165,7 @@ async fn cov_lifetime_admitted_confirmed_retry_survives_expiry_and_ack_drains() 
         Arc::make_mut(&mut fixture.config).cov_retry_timeout_ms = 200;
         let mut sub = proposal(kind, true, PropertyIdentifier::PRESENT_VALUE);
         let expiry = runtime_clock::now() + Duration::from_millis(100);
-        sub.expires_at = Some(expiry);
+        sub.expires_at = Some(runtime_clock::core_clock().instant(expiry));
         let snapshots = vec![
             fixture
                 .table
@@ -199,11 +200,13 @@ async fn cov_lifetime_admitted_confirmed_retry_survives_expiry_and_ack_drains() 
         }
         // A Multiple context always has a finite lifetime.
         sub.expires_at = (kind == CovNotificationKind::Multiple)
-            .then(|| runtime_clock::now() + Duration::from_secs(300));
+            .then(|| runtime_clock::core_now() + bacnet_time::Duration::from_secs(300));
         sub.last_notified_observation = Some(
-            crate::cov::CovObservation::new(
-                crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(99.0))
-                    .unwrap(),
+            bacnet_device_core::cov::CovObservation::new(
+                bacnet_device_core::cov::CovSample::new(
+                    &bacnet_types::primitives::PropertyValue::Real(99.0),
+                )
+                .unwrap(),
                 None,
             )
             .unwrap(),
@@ -220,10 +223,10 @@ async fn cov_lifetime_admitted_confirmed_retry_survives_expiry_and_ack_drains() 
                 .unwrap()
                 .last_notified_observation,
             Some(
-                crate::cov::CovObservation::new(
-                    crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(
-                        99.0
-                    ))
+                bacnet_device_core::cov::CovObservation::new(
+                    bacnet_device_core::cov::CovSample::new(
+                        &bacnet_types::primitives::PropertyValue::Real(99.0)
+                    )
                     .unwrap(),
                     None
                 )

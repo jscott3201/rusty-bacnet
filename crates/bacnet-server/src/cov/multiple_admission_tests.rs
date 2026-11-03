@@ -1,6 +1,7 @@
 //! `subscribe_multiple` admits proposals in request order and stops at the
 //! first one past a subscription cap (Clause 13.16.2; #1058, #1059).
 use super::*;
+use bacnet_time::Instant;
 
 /// A Priority_Array element proposal of the usual context.
 fn element(index: u32, increment: f32, expiry: Instant) -> CovSubscription {
@@ -19,11 +20,11 @@ fn cov_multiple_admission_stops_at_the_first_proposal_past_the_quota() {
         },
         Arc::new(AtomicCovCounters::default()),
     );
-    let soon = Instant::now() + Duration::from_secs(60);
+    let soon = crate::runtime_clock::core_now() + Duration::from_secs(60);
     let first = table.admit_for_test(element(0, 0.5, soon), 1).unwrap();
     let context = first.key().multiple_context().unwrap().clone();
     let route = first.endpoint();
-    let expiry = Instant::now() + Duration::from_secs(600);
+    let expiry = crate::runtime_clock::core_now() + Duration::from_secs(600);
 
     // Renewing element 0 and repeating element 1 add no subscription, so
     // element 3 is the fourth of a three-per-peer quota.
@@ -76,7 +77,7 @@ fn cov_multiple_admission_stops_at_the_first_proposal_past_the_quota() {
 
     // Refused at its first proposal, a request changes nothing: the renewal
     // after it is not processed and the context keeps its terms.
-    let later = Instant::now() + Duration::from_secs(900);
+    let later = crate::runtime_clock::core_now() + Duration::from_secs(900);
     let refusal = table
         .subscribe_multiple(
             &context,

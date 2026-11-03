@@ -167,8 +167,9 @@ async fn fire_cov(server: &BACnetServer<TestTransport>, kind: CovNotificationKin
                 monitored_object_identifier: oid,
                 issue_confirmed_notifications: true,
                 // A Multiple context always has a finite lifetime.
-                expires_at: (kind == CovNotificationKind::Multiple)
-                    .then(|| std::time::Instant::now() + std::time::Duration::from_secs(3600)),
+                expires_at: (kind == CovNotificationKind::Multiple).then(|| {
+                    crate::runtime_clock::core_now() + bacnet_time::Duration::from_secs(3600)
+                }),
                 last_notified_observation: None,
                 monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
                 monitored_property_array_index: None,
@@ -232,13 +233,23 @@ async fn stop_cov(kind: CovNotificationKind, service: ConfirmedServiceChoice) {
             .active_peer_count(),
         0
     );
-    // Stop ends the outstanding report without a hold-off, and the baseline
-    // still waits for an Ack (#896).
+    // Stop aborts the worker, which reports no outcome: the outstanding
+    // report ends itself at its deadline (#2303), and the baseline still
+    // waits for an Ack (#896).
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap();
     let mut table = server.cov_table.write().await;
     let entry = table.subscriptions_for(&oid)[0].clone();
-    assert!(table.confirmed_idle(&entry), "{kind:?}");
+    assert!(!table.confirmed_idle(&entry), "{kind:?}");
     assert_eq!(entry.last_notified_observation, None, "{kind:?}");
+    // By its deadline, the retry cycle plus one timeout after the report
+    // began, the coordinate is free again, with no hold-off. The report
+    // began before the clock paused, so a full deadline from now is past it.
+    tokio::time::pause();
+    let timeout = Duration::from_millis(server.config.cov_retry_timeout_ms);
+    tokio::time::advance(timeout * (u32::from(DEFAULT_APDU_RETRIES) + 2)).await;
+    assert!(table.confirmed_idle(&entry), "{kind:?}: past its deadline");
+    assert_eq!(table.purge_expired(), 0);
+    assert!(table.confirmed_idle(&entry), "{kind:?}");
 }
 
 #[tokio::test]

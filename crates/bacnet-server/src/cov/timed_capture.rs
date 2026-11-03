@@ -22,10 +22,9 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::multiple_reads::MultipleReads;
 use super::timed::{TimedChange, TimedStore};
-use super::{
-    CovNotificationKind, CovSubscriptionKey, CovSubscriptionSnapshot, CovSubscriptionTable,
-};
+use super::{CovSubscriptionSnapshot, CovSubscriptionTable};
 use crate::life_safety_cov::{LifeSafetyCovChange, LifeSafetyCovSnapshots, is_life_safety_object};
+use bacnet_device_core::cov::{CovNotificationKind, CovSubscriptionKey};
 use bacnet_device_core::write::{WriteCommitObserver, WriteTarget};
 
 /// Live timestamped references whose changes a producer must capture.
@@ -52,10 +51,9 @@ fn exact_selects(sub: &CovSubscriptionSnapshot, change: &LifeSafetyCovChange) ->
 impl CovSubscriptionTable {
     fn timed_refs(&self, select: impl Fn(&CovSubscriptionSnapshot) -> bool) -> TimedCapture {
         TimedCapture {
-            store: self.timed.clone(),
+            store: self.timed().clone(),
             refs: self
-                .subs
-                .values()
+                .entries()
                 .filter(|sub| {
                     sub.timestamped
                         && sub.notification_kind == CovNotificationKind::Multiple
@@ -98,7 +96,7 @@ impl CovSubscriptionTable {
         frame: ClockFrame,
     ) -> TimedCapture {
         TimedCapture {
-            store: self.timed.clone(),
+            store: self.timed().clone(),
             refs: snapshots
                 .iter()
                 .filter(|sub| sub.timestamped && self.is_current(sub))

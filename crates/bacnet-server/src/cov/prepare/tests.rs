@@ -13,6 +13,7 @@ use bacnet_services::{
 };
 use bacnet_types::constructed::PropertyReference;
 use bacnet_types::enums::EngineeringUnits;
+use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
 use bacnet_types::error::RemoteError;
 use bacnet_types::{
     constructed::{BACnetPrescale, BACnetScale},
@@ -220,6 +221,9 @@ fn cov_sample_structured_color_and_accumulator_ignore_increment() {
         )
         .reports(Some(&first.sample))
     );
+}
+fn property_error(code: ErrorCode) -> Error {
+    Error::protocol(ErrorClass::PROPERTY, code)
 }
 const CUSTOM: PropertyIdentifier = PropertyIdentifier::from_raw(650);
 const VARIABLE: PropertyIdentifier = PropertyIdentifier::from_raw(651);

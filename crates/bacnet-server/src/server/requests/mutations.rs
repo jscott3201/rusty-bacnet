@@ -34,7 +34,7 @@ pub(super) struct MutationEffects {
     pub(super) command_runs: TakenRuns,
     /// Timestamped references to evaluate again after the post-write fanout,
     /// which may not have selected them (#856).
-    pub(super) timed_revisits: Vec<crate::cov::CovSubscriptionKey>,
+    pub(super) timed_revisits: Vec<bacnet_device_core::cov::CovSubscriptionKey>,
 }
 
 /// Borrowed dispatch inputs; constructed only after the DCC precheck.

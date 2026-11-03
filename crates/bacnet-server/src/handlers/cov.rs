@@ -1,10 +1,6 @@
 use super::*;
-use crate::cov::MultipleRefusal;
 use crate::runtime_clock;
-
-fn cov_property_error(code: ErrorCode) -> Error {
-    Error::protocol(ErrorClass::PROPERTY, code)
-}
+use bacnet_device_core::cov::{MultipleRefusal, validate_cov_property};
 
 /// A refusal of one COV reference of a SubscribeCOVPropertyMultiple request,
 /// which names the monitored object and the reference's property and array
@@ -29,30 +25,6 @@ fn subscription_error(
         ),
         other => other,
     }
-}
-
-fn validate_cov_property(
-    object: &dyn bacnet_objects::traits::BACnetObject,
-    property: PropertyIdentifier,
-    array_index: Option<u32>,
-) -> Result<(), Error> {
-    // An index on a scalar is judged by `validate_sample` below, as
-    // PROPERTY_IS_NOT_AN_ARRAY; the read here only proves the property is
-    // there, so it drops that index rather than take the object's refusal
-    // of it as UNKNOWN_PROPERTY (#2274).
-    let read_index = array_index
-        .filter(|_| bacnet_objects::property_metadata::is_array_property(object, property));
-    let value = object
-        .read_property(property, read_index)
-        .map_err(|_| cov_property_error(ErrorCode::UNKNOWN_PROPERTY))?;
-    if !object
-        .cov()
-        .is_some_and(|cov| cov.supports_cov_property(property))
-    {
-        return Err(cov_property_error(ErrorCode::NOT_COV_PROPERTY));
-    }
-    crate::cov::prepare::validate_sample(object, property, array_index, &value)?;
-    Ok(())
 }
 
 /// Handle a SubscribeCOV request.
@@ -84,62 +56,11 @@ pub(crate) fn handle_subscribe_cov_with_initial_endpoint(
     source_network: Option<&NpduAddress>,
     service_data: &[u8],
 ) -> Result<Vec<CovSubscriptionSnapshot>, Error> {
-    let request = SubscribeCOVRequest::decode(service_data).map_err(Error::into_request_reject)?;
-
-    // Service consistency is distinct from structural parsing. Validate before
-    // lookup, expiry purge or subscription replacement/initial notification.
-    if request.lifetime.is_some() && request.issue_confirmed_notifications.is_none() {
-        return Err(Error::reject(RejectReason::INCONSISTENT_PARAMETERS));
-    }
-
-    if request.is_cancellation() {
-        table.unsubscribe(&CovSubscriptionKey::Object {
-            recipient: crate::cov::CovRecipient::from_endpoint(source_mac, source_network),
-            process_id: request.subscriber_process_identifier,
-            object: request.monitored_object_identifier,
-        });
-        return Ok(Vec::new());
-    }
-
-    match db.get(&request.monitored_object_identifier) {
-        None => {
-            return Err(Error::protocol(
-                ErrorClass::OBJECT,
-                ErrorCode::UNKNOWN_OBJECT,
-            ));
-        }
-        Some(obj) if !obj.cov().is_some_and(|cov| cov.supports_subscribe_cov()) => {
-            return Err(Error::protocol(
-                ErrorClass::OBJECT,
-                ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-            ));
-        }
-        _ => {}
-    }
-
-    let expires_at = request.lifetime.and_then(|secs| {
-        if secs == 0 {
-            None
-        } else {
-            Some(runtime_clock::now() + Duration::from_secs(secs as u64))
-        }
-    });
-
-    let subscription = CovSubscription {
-        subscriber_mac: MacAddr::from_slice(source_mac),
-        subscriber_network: source_network.cloned(),
-        subscriber_process_identifier: request.subscriber_process_identifier,
-        monitored_object_identifier: request.monitored_object_identifier,
-        issue_confirmed_notifications: request.issue_confirmed_notifications.unwrap_or(false),
-        expires_at,
-        last_notified_observation: None,
-        monitored_property: None,
-        monitored_property_array_index: None,
-        cov_increment: None,
-        notification_kind: CovNotificationKind::Single,
-        timestamped: false,
-    };
-    Ok(vec![table.subscribe(subscription)?])
+    let peer = SubscriberEndpoint::new(source_mac, source_network);
+    Ok(table
+        .subscribe_cov(db, &peer, service_data)?
+        .into_iter()
+        .collect())
 }
 
 /// Handle a SubscribeCOVProperty request.
@@ -170,78 +91,11 @@ pub(crate) fn handle_subscribe_cov_property_with_initial_endpoint(
     source_network: Option<&NpduAddress>,
     service_data: &[u8],
 ) -> Result<Vec<CovSubscriptionSnapshot>, Error> {
-    use bacnet_services::cov::SubscribeCOVPropertyRequest;
-
-    let request =
-        SubscribeCOVPropertyRequest::decode(service_data).map_err(Error::into_request_reject)?;
-
-    // Keep service validity separate from structural decoding so malformed
-    // pairing and zero lifetime retain their distinct formal responses.
-    let lifetime = match (request.issue_confirmed_notifications, request.lifetime) {
-        (None, None) => None,
-        (Some(_), Some(0)) => {
-            return Err(Error::protocol(
-                ErrorClass::SERVICES,
-                ErrorCode::VALUE_OUT_OF_RANGE,
-            ));
-        }
-        (Some(_), Some(lifetime)) => Some(lifetime),
-        _ => {
-            return Err(Error::reject(RejectReason::INCONSISTENT_PARAMETERS));
-        }
-    };
-
-    if request.is_cancellation() {
-        table.unsubscribe(&CovSubscriptionKey::Property {
-            recipient: crate::cov::CovRecipient::from_endpoint(source_mac, source_network),
-            process_id: request.subscriber_process_identifier,
-            object: request.monitored_object_identifier,
-            property: request.monitored_property_identifier,
-            index: request.monitored_property_array_index,
-        });
-        return Ok(Vec::new());
-    }
-
-    let object = db
-        .get(&request.monitored_object_identifier)
-        .ok_or(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::UNKNOWN_OBJECT,
-        ))?;
-
-    // An object can take property subscriptions without supporting
-    // SubscribeCOV (Averaging, which Table 13-1 doesn't list).
-    if object.cov().is_none() {
-        return Err(Error::protocol(
-            ErrorClass::OBJECT,
-            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
-        ));
-    }
-
-    validate_cov_property(
-        object,
-        request.monitored_property_identifier,
-        request.monitored_property_array_index,
-    )?;
-
-    let expires_at =
-        lifetime.map(|secs| runtime_clock::now() + Duration::from_secs(u64::from(secs)));
-
-    let subscription = CovSubscription {
-        subscriber_mac: MacAddr::from_slice(source_mac),
-        subscriber_network: source_network.cloned(),
-        subscriber_process_identifier: request.subscriber_process_identifier,
-        monitored_object_identifier: request.monitored_object_identifier,
-        issue_confirmed_notifications: request.issue_confirmed_notifications.unwrap_or(false),
-        expires_at,
-        last_notified_observation: None,
-        monitored_property: Some(request.monitored_property_identifier),
-        monitored_property_array_index: request.monitored_property_array_index,
-        cov_increment: request.cov_increment,
-        notification_kind: CovNotificationKind::Single,
-        timestamped: false,
-    };
-    Ok(vec![table.subscribe(subscription)?])
+    let peer = SubscriberEndpoint::new(source_mac, source_network);
+    Ok(table
+        .subscribe_cov_property(db, &peer, service_data)?
+        .into_iter()
+        .collect())
 }
 /// Handle a SubscribeCOVPropertyMultiple request.
 ///
@@ -317,7 +171,7 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
     let confirmed = request.issue_confirmed_notifications;
     let route = SubscriberEndpoint::new(source_mac, source_network);
     let context = MultipleContextKey {
-        recipient: crate::cov::CovRecipient::from_endpoint(source_mac, source_network),
+        recipient: bacnet_device_core::cov::CovRecipient::from_endpoint(source_mac, source_network),
         process_id: request.subscriber_process_identifier,
         confirmed,
     };
@@ -369,7 +223,8 @@ pub(crate) fn handle_subscribe_cov_property_multiple_request_endpoint(
     {
         return Err(Error::protocol(ErrorClass::SERVICES, ErrorCode::VALUE_OUT_OF_RANGE).into());
     }
-    let expires_at = runtime_clock::now() + Duration::from_secs(u64::from(lifetime));
+    let expires_at =
+        runtime_clock::core_now() + bacnet_time::Duration::from_secs(u64::from(lifetime));
     let subscriber_mac = MacAddr::from_slice(source_mac);
     // The references that pass validation, in request order, up to the first
     // that fails; `names` holds each one's object and property reference.

@@ -172,7 +172,7 @@ fn validate(object: O, property: P, value: &V) -> Result<(), Error> {
             matches!(value, V::ApplicationData(bytes) if decode_timestamp_choice(bytes, 0).is_ok_and(|(_, end)| end == bytes.len()))
         }
         P::CURRENT_COMMAND_PRIORITY => matches!(value, V::Null | V::Unsigned(1..=16)),
-        P::STATUS_FLAGS => super::observation::validate_flags(value).is_ok(),
+        P::STATUS_FLAGS => bacnet_device_core::cov::validate_flags(value).is_ok(),
         _ => false,
     };
     if valid { Ok(()) } else { Err(invalid()) }

@@ -91,7 +91,7 @@ fn subscribe_cov_property_multiple_capacity_names_the_overflowing_reference() {
 
     let db = make_db_with_ai();
     let mut table = CovSubscriptionTable::with_policy(
-        crate::cov::CovPolicy {
+        bacnet_device_core::cov::CovPolicy {
             max_subscriptions_per_peer: 1024,
             max_indefinite_per_peer: 1024,
             reserved_capacity: 0,

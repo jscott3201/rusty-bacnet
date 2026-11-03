@@ -12,8 +12,8 @@
 //! from its view, and the `Responder`, with no overlay, from the Device
 //! object, so those rows may differ: [`DIFFER`] pins exactly which do, and
 //! [`DIFFER_EXCHANGES`] the other exchanges that differ by design. The
-//! WriteProperty rows are in `write`, the ReadPropertyMultiple rows in `rpm`
-//! and the WritePropertyMultiple rows in `wpm`.
+//! WriteProperty rows are in `write`, the ReadPropertyMultiple rows in `rpm`,
+//! the WritePropertyMultiple rows in `wpm` and the COV subscriptions in `cov`.
 use super::*;
 use crate::server::test_transport::{self, SendLog, TestTransport};
 use bacnet_device_core::read::ReadPropertyMultipleBudget;
@@ -45,8 +45,7 @@ const DEVICE: u32 = 4321;
 /// The server answers Active_COV_Subscriptions from its subscription table,
 /// which holds the one subscription the test makes; the Device object knows
 /// of none. Every other Device row agrees, the identity and services
-/// included: both databases declare the executed services from one
-/// identity.
+/// included: both databases declare the executed services from one identity.
 const DIFFER: &[(ObjectType, P, Option<u32>)] =
     &[(ObjectType::DEVICE, P::ACTIVE_COV_SUBSCRIPTIONS, None)];
 
@@ -694,6 +693,7 @@ async fn edge_rows_match_and_the_segmented_reply_differs() {
     parity.server.stop().await.unwrap();
 }
 
+mod cov;
 mod discovery;
 mod rpm;
 mod wpm;

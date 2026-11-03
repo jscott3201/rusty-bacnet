@@ -4,7 +4,8 @@
 use super::super::cov_notify_context::CovFanoutHandles;
 use super::*;
 use crate::cov::timed::TimedClaim;
-use crate::cov::{BeginRefusal, CovObservation, CovSubscriptionKey, PreparedCovCompletion};
+use bacnet_device_core::cov::{BeginRefusal, Delivery, PreparedCovCompletion};
+use bacnet_device_core::cov::{CovObservation, CovSubscriptionKey};
 
 /// A confirmed notification ready for admission.
 pub(in crate::server) struct ConfirmedReport {
@@ -107,6 +108,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             );
             (flight, Arc::clone(table.revisits()))
         };
+        // The instant the table began the report, near enough: its deadline
+        // runs from it, and the worker's cutoff below too.
+        let begun = tokio::time::Instant::now();
         let flight = match flight {
             Ok(flight) => {
                 // The coordinate is marked busy: the later parts can queue,
@@ -187,16 +191,31 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     }
                 },
             );
+            // However long a send stalls (a BACnet/SC send can wait on a hub
+            // or a direct dial), the report ends half a timeout before the
+            // table's deadline, as one whose retries ran out. Slow but working
+            // sends still end the usual way, by their retries, with the last
+            // answer window whole; the deadline itself is for a worker that
+            // can't report. Past it a stale retry could follow the
+            // coordinate's next report (#2303). The cutoff takes no lock, and
+            // cancels the transaction as a fence does.
+            let cutoff = begun + hold_off + apdu_timeout / 2;
+            let delivery = tokio::time::timeout_at(cutoff, delivery);
             // A renewal or route change replaced this report's incarnation: its
             // retries would only land after the replacement's own report, and
             // its Ack could complete nothing. Dropping the delivery cancels the
             // transaction; there is no hold-off on the orphaned marker.
+            // A fence already ended the report in the table; nothing is
+            // owed back.
             let result = tokio::select! {
-                result = delivery => result,
+                // Logged once, below, as a report whose retries ran out.
+                result = delivery => result.unwrap_or_else(|_| {
+                    debug!(invoke_id = id, "{label} cut off before its deadline");
+                    Ok(NotificationWorkerResult::Exhausted)
+                }),
                 () = flight.fenced() => {
                     debug!(invoke_id = id, "{label} superseded by a new incarnation");
                     drop(claim);
-                    drop(flight);
                     drop(guard);
                     return;
                 }
@@ -215,7 +234,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         })
                         .map(|(sub, _)| sub.key().clone())
                         .collect();
-                    drop(flight);
+                    table.delivered(&flight, Delivery::Acknowledged);
                     // Changes to any reference of a context were held while the
                     // report was outstanding, not only to those it carried, and
                     // they still are if every carried reference has gone since.
@@ -239,17 +258,21 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     // Return unacknowledged history before the mark clears, so
                     // the next report conveys it again in capture order.
                     drop(claim);
-                    flight.failed(hold_off);
+                    let mut table = cov_table.write().await;
+                    table.delivered(&flight, Delivery::Failed);
                     // Its timestamped history goes out once the hold-off ends.
                     if let Some(context) = route.key().multiple_context() {
                         let until = tokio::time::Instant::now() + hold_off;
-                        cov_table.read().await.timed().hold_until(context, until);
+                        table.timed().hold_until(context, until);
                     }
                     Vec::new()
                 }
                 Ok(NotificationWorkerResult::Closed) => {
                     drop(claim);
-                    drop(flight);
+                    cov_table
+                        .write()
+                        .await
+                        .delivered(&flight, Delivery::NotSent);
                     Vec::new()
                 }
                 // DCC ended the report at an attempt. The subscriber did not
@@ -277,7 +300,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             .fetch_sub(buf_len, Ordering::Relaxed);
                     }
                     drop(claim);
-                    drop(flight);
+                    cov_table
+                        .write()
+                        .await
+                        .delivered(&flight, Delivery::NotSent);
                     Vec::new()
                 }
             };
