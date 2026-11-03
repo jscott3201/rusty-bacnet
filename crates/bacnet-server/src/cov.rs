@@ -18,10 +18,10 @@ use tokio::sync::Notify;
 
 use crate::runtime_clock;
 use bacnet_device_core::cov::{
-    BeginRefusal, CovObservation, CovPolicy, CovRecipient, CovSample, CovSubscription,
-    CovSubscriptionKey, CovSubscriptionSnapshot, CovTable, CovTimeRemaining, Delivery,
-    FlightTiming, MultipleContextKey, MultipleRefusal, PreparedCovCompletion, SubscriberEndpoint,
-    Token,
+    BeginRefusal, CovObservation, CovPolicy, CovRecipient, CovReport, CovSample, CovSubscription,
+    CovSubscriptionKey, CovSubscriptionSnapshot, CovTable, CovTimeRemaining, Delivery, Evaluation,
+    EventBudget, FlightTiming, MultipleContextKey, MultipleRefusal, PreparedCovCompletion,
+    SubscriberEndpoint, Token,
 };
 use bacnet_objects::database::ObjectDatabase;
 
@@ -418,8 +418,54 @@ impl CovSubscriptionTable {
             .delivered(flight.token(), outcome, runtime_clock::core_now())
     }
 
+    /// Decide what a change of `object` reports to its ordinary and Single
+    /// subscriptions `subscriptions`, now; see
+    /// [`evaluate`](bacnet_device_core::cov::evaluate). Each confirmed report
+    /// comes with its begun flight, whose worker's wake-up is registered
+    /// for a fence.
+    pub(crate) fn evaluate<L>(
+        &mut self,
+        object: &dyn bacnet_objects::traits::BACnetObject,
+        subscriptions: &[CovSubscriptionSnapshot],
+        evaluation: Evaluation,
+        budget: &mut EventBudget,
+        admit: impl FnMut(&CovSubscriptionSnapshot) -> Option<L>,
+    ) -> Vec<(CovReport<L>, Option<ConfirmedFlight>)> {
+        let reports = bacnet_device_core::cov::evaluate(
+            &mut self.core,
+            object,
+            subscriptions,
+            evaluation,
+            budget,
+            runtime_clock::core_now(),
+            admit,
+        );
+        // Budget refusals counted, and a report a new one replaced past its
+        // deadline fenced, before the new reports' wake-ups exist.
+        self.sync(&[]);
+        reports
+            .into_iter()
+            .map(|report| {
+                let flight = report.lease.is_some().then(|| {
+                    let wake = Arc::new(Notify::new());
+                    self.wakes.insert(report.token, Arc::clone(&wake));
+                    ConfirmedFlight::new(report.token, wake)
+                });
+                (report, flight)
+            })
+            .collect()
+    }
+
+    /// End an unconfirmed report `evaluate` handed out: a sent one commits
+    /// its observation.
+    pub(crate) fn delivered_unconfirmed(&mut self, token: Token, outcome: Delivery) {
+        self.core
+            .delivered(token, outcome, runtime_clock::core_now());
+    }
+
     /// Whether a fanout may report this ordinary or Single subscription now;
     /// see [`CovTable::confirmed_idle`].
+    #[cfg(test)]
     pub(crate) fn confirmed_idle(&self, snapshot: &CovSubscriptionSnapshot) -> bool {
         self.core
             .confirmed_idle(snapshot, runtime_clock::core_now())
@@ -572,7 +618,8 @@ impl CovSubscriptionTable {
 /// cancelled, purged or refused. The live count changes only with one of
 /// those.
 fn counted(counts: &bacnet_device_core::cov::CovCounters) -> bool {
-    counts.subscriptions_created != 0
+    counts.notifications_throttled_fanout != 0
+        || counts.subscriptions_created != 0
         || counts.subscriptions_cancelled != 0
         || counts.subscriptions_purged != 0
         || counts.subscriptions_rejected_quota != 0

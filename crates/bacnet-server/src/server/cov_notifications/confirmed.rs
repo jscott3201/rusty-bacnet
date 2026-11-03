@@ -40,7 +40,90 @@ impl ConfirmedReport {
     }
 }
 
+/// What a confirmed report holds once admitted: its peer's in-flight slot
+/// and the transaction of its invoke ID.
+pub(in crate::server) struct ConfirmedLease {
+    guard: crate::cov::CovInFlightGuard,
+    operation: crate::server::notification_transactions::NotificationOperation,
+    result_rx: tokio::sync::oneshot::Receiver<CovAckResult>,
+}
+
+impl ConfirmedLease {
+    /// The invoke ID the report goes out under.
+    pub(in crate::server) fn invoke_id(&self) -> u8 {
+        self.operation.invoke_id()
+    }
+}
+
+/// A begun confirmed report, ready for its worker.
+pub(in crate::server) struct ConfirmedSend {
+    pub(in crate::server) lease: ConfirmedLease,
+    pub(in crate::server) flight: crate::cov::ConfirmedFlight,
+    /// The encoded APDU.
+    pub(in crate::server) buf: BytesMut,
+    /// Reference whose recipient and current route receive the notification.
+    pub(in crate::server) route: CovSubscriptionSnapshot,
+    pub(in crate::server) claim: Option<TimedClaim>,
+    pub(in crate::server) label: &'static str,
+    pub(in crate::server) revisits: Arc<crate::cov::CovRevisits>,
+    /// When the table began the report: its deadline, and the worker's
+    /// cutoff, run from it.
+    pub(in crate::server) begun: tokio::time::Instant,
+}
+
 impl<T: TransportPort + 'static> BACnetServer<T> {
+    /// Admit a confirmed report to `route` against the peer and global
+    /// in-flight limits and an invoke ID. A refusal is counted or logged,
+    /// and the report isn't sent. Synchronous: it takes leaf mutexes only,
+    /// so the Single fanout calls it under its database and table guards.
+    pub(in crate::server) fn admit_confirmed(
+        handles: &CovFanoutHandles<'_, '_, T>,
+        route: &CovSubscriptionSnapshot,
+        service: ConfirmedServiceChoice,
+        label: &'static str,
+    ) -> Option<ConfirmedLease> {
+        let &CovFanoutHandles {
+            ctx,
+            in_flight_tracker,
+            counters,
+        } = handles;
+        let guard = match in_flight_tracker.try_acquire(
+            route.recipient(),
+            ctx.config.cov_policy.max_confirmed_in_flight_per_peer,
+            ctx.cov_in_flight,
+        ) {
+            Ok(guard) => guard,
+            Err(InFlightAcquireError::PeerLimitExceeded) => {
+                counters
+                    .notifications_throttled_peer
+                    .fetch_add(1, Ordering::Relaxed);
+                return None;
+            }
+            Err(InFlightAcquireError::GlobalPoolExhausted) => {
+                warn!(
+                    object = ?route.monitored_object_identifier,
+                    "255 confirmed COV notifications in-flight, skipping {label}"
+                );
+                return None;
+            }
+        };
+        let (operation, result_rx) = match ctx
+            .notification_transactions
+            .reserve(Self::canonical_cov_peer(route), service)
+        {
+            Ok(reservation) => reservation,
+            Err(error) => {
+                warn!(%error, "No free invoke ID for confirmed {label}");
+                return None;
+            }
+        };
+        Some(ConfirmedLease {
+            guard,
+            operation,
+            result_rx,
+        })
+    }
+
     /// Admit `report` against the peer and global in-flight limits, an invoke
     /// ID, the event budget and its coordinate's outstanding-report mark, then
     /// deliver it with the usual retries. `encode` builds the APDU for the
@@ -51,43 +134,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         mut report: ConfirmedReport,
         encode: impl FnOnce(u8) -> Result<BytesMut, Error>,
     ) {
-        let &CovFanoutHandles {
-            ctx,
-            in_flight_tracker,
-            counters,
-        } = handles;
+        let counters = handles.counters;
         let label = report.label();
-        let guard = match in_flight_tracker.try_acquire(
-            report.route.recipient(),
-            ctx.config.cov_policy.max_confirmed_in_flight_per_peer,
-            ctx.cov_in_flight,
-        ) {
-            Ok(guard) => guard,
-            Err(InFlightAcquireError::PeerLimitExceeded) => {
-                counters
-                    .notifications_throttled_peer
-                    .fetch_add(1, Ordering::Relaxed);
-                return;
-            }
-            Err(InFlightAcquireError::GlobalPoolExhausted) => {
-                warn!(
-                    object = ?report.route.monitored_object_identifier,
-                    "255 confirmed COV notifications in-flight, skipping {label}"
-                );
-                return;
-            }
+        let Some(lease) = Self::admit_confirmed(handles, &report.route, report.service, label)
+        else {
+            return;
         };
-        let (operation, result_rx) = match ctx
-            .notification_transactions
-            .reserve(Self::canonical_cov_peer(&report.route), report.service)
-        {
-            Ok(reservation) => reservation,
-            Err(error) => {
-                warn!(%error, "No free invoke ID for confirmed {label}");
-                return;
-            }
-        };
-        let buf = match encode(operation.invoke_id()) {
+        let buf = match encode(lease.invoke_id()) {
             Ok(buf) => buf,
             Err(error) => {
                 warn!(%error, "Failed to encode confirmed {label}");
@@ -101,7 +154,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             return;
         }
         let (flight, revisits) = {
-            let mut table = ctx.cov_table.write().await;
+            let mut table = handles.ctx.cov_table.write().await;
             let flight = table.begin_confirmed(
                 report.completion,
                 report
@@ -112,7 +165,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             (flight, Arc::clone(table.revisits()))
         };
         // The instant the table began the report, near enough: its deadline
-        // runs from it, and the worker's cutoff below too.
+        // runs from it, and the worker's cutoff too.
         let begun = tokio::time::Instant::now();
         let flight = match flight {
             Ok(flight) => {
@@ -143,7 +196,43 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 return;
             }
         };
+        Self::spawn_confirmed(
+            handles,
+            ConfirmedSend {
+                lease,
+                flight,
+                buf,
+                route: report.route,
+                claim: report.claim,
+                label,
+                revisits,
+                begun,
+            },
+        );
+    }
 
+    /// Count a begun confirmed report as sent and deliver it with the usual
+    /// retries on a worker of its own, which ends it in the table.
+    pub(in crate::server) fn spawn_confirmed(
+        handles: &CovFanoutHandles<'_, '_, T>,
+        send: ConfirmedSend,
+    ) {
+        let &CovFanoutHandles { ctx, counters, .. } = handles;
+        let ConfirmedSend {
+            lease:
+                ConfirmedLease {
+                    guard,
+                    operation,
+                    result_rx,
+                },
+            flight,
+            buf,
+            route,
+            claim,
+            label,
+            revisits,
+            begun,
+        } = send;
         counters.notifications_sent.fetch_add(1, Ordering::Relaxed);
         counters
             .notifications_confirmed
@@ -164,7 +253,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // dead or refusing subscriber to half the in-flight time at most.
         let hold_off = apdu_timeout * (u32::from(apdu_retries) + 1);
         ctx.notification_transactions.spawn(async move {
-            let ConfirmedReport { route, claim, .. } = report;
             // Whether an attempt got past the DCC check, so went to the link.
             let attempted = std::sync::atomic::AtomicBool::new(false);
             let delivery = run_notification_under_dcc(
