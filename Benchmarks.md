@@ -1265,6 +1265,37 @@ instruction slopes under `profiles/`, and the #1978 items' share in
 current ones, built like the release with the fixed allocator settings, in
 [benchmarks/results/perf-s0b](benchmarks/results/perf-s0b/README.md).
 
+### 10.5 The #1979 shifts, explained by counts
+
+The counting harness settled the questions sections 10.1 and 10.2 left
+open ([perf-s1](benchmarks/results/perf-s1/README.md),
+[perf-s2](benchmarks/results/perf-s2/README.md)).
+
+- **Built like the release, dev's codecs run fewer instructions than
+  v0.13.0's.** A whole ReadProperty request costs 1,412 instructions
+  instead of 1,838, and decoding a 100-byte NPDU 172 instead of 219.
+- **The timed encode rise is a build-profile effect.** The Criterion suite
+  builds without link-time optimization. Built that way, the whole request
+  costs 222 more instructions on dev, 257 of them from #1780's encoders:
+  without link-time optimization, their writes through a stack buffer are
+  separate function calls.
+- **Instruction counts don't explain the timed decode rise.** Built as the
+  suite times it, dev's NPDU decode runs 3 fewer instructions: #1788's
+  decoding through the borrowed view added 51 and #1821's removal of a
+  buffer clone took 55. Why the same count runs slower is not established:
+  no cache or branch simulation ran, #1997's explanation (copies of the
+  decoded header through the stack) is untested here, and the two atomic
+  operations #1821 removed would on their own predict a faster decode.
+- **Each change is tied to a merge.** Counts at each merge between the two
+  releases add up to both differences, as any such sweep must; the larger
+  steps are also traced to the functions they changed.
+- **The 100-client Aborts are the admission policy.** The server runs at
+  most 60 ordinary confirmed requests at once (64 less a reserve of 4) and
+  refuses the rest with an Abort, so refusals start at about 60 clients.
+  With room for 100, almost none were refused. A request keeps its slot
+  until its reply is sent, so a client can briefly hold two, and refusals
+  can start just below the limit.
+
 ## 11. How to reproduce
 
 Run one suite at a time on an idle machine. Each Criterion suite takes 1 to

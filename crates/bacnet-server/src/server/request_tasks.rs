@@ -152,6 +152,10 @@ impl RequestTasks {
         self.1.snapshot()
     }
 
+    pub(super) fn confirmed_peak_active(&self) -> usize {
+        self.1.confirmed_peak_active()
+    }
+
     /// Acquire and register synchronously with close; construct the future only
     /// on success. The guard lives in that future, including before its first poll.
     ///

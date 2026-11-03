@@ -4,7 +4,7 @@
 
 use clap::{Parser, Subcommand};
 
-use bacnet_benchmarks::stress::clients::ClientTransport;
+use bacnet_benchmarks::stress::clients::{ClientTransport, ClientsOptions};
 use bacnet_benchmarks::stress::harness::current_rss_kb;
 use bacnet_benchmarks::stress::mstp::Reply;
 use bacnet_benchmarks::stress::output::{StressMetrics, StressResult, print_results};
@@ -35,6 +35,14 @@ enum Command {
         duration: u64,
         #[arg(long, value_delimiter = ',', default_value = "1,5,10,25,50,100")]
         steps: Vec<u64>,
+        /// Requests per client, in place of the `--duration` window: the
+        /// step then counts refusals for a fixed amount of work
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+        requests: Option<u64>,
+        /// The server's confirmed handler limit (default 64, of which 4 are
+        /// held back for recovery); `bip` only
+        #[arg(long, value_parser = clap::value_parser!(u64).range(5..=65_536))]
+        max_confirmed_in_flight: Option<u64>,
     },
     /// Scale object count on a single server
     Objects {
@@ -151,20 +159,38 @@ fn main() {
                 objects,
                 duration,
                 steps,
+                requests,
+                max_confirmed_in_flight,
             } => {
                 let Some(kind) = ClientTransport::parse(&transport) else {
                     eprintln!("Error: --transport must be bip, bip6 or sc");
                     std::process::exit(2);
                 };
-                let run =
-                    bacnet_benchmarks::stress::clients::run(kind, objects, duration, &steps).await;
+                if max_confirmed_in_flight.is_some() && kind != ClientTransport::Bip {
+                    eprintln!("Error: --max-confirmed-in-flight needs --transport bip");
+                    std::process::exit(2);
+                }
+                let options = ClientsOptions {
+                    requests_per_client: requests,
+                    max_confirmed_in_flight: max_confirmed_in_flight.map(|n| n as usize),
+                };
+                let run = bacnet_benchmarks::stress::clients::run(
+                    kind, objects, duration, &steps, options,
+                )
+                .await;
                 clients_diagnostics = Some(run.diagnostics);
                 let curve = run.curve;
-                let params = serde_json::json!({
+                let mut params = serde_json::json!({
                     "objects": objects,
                     "duration_secs": duration,
                     "steps": steps,
                 });
+                if let Some(requests) = requests {
+                    params["requests_per_client"] = requests.into();
+                }
+                if let Some(limit) = max_confirmed_in_flight {
+                    params["max_confirmed_in_flight"] = limit.into();
+                }
                 ("max_clients".into(), transport, params, curve)
             }
             Command::Objects {

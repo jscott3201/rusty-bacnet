@@ -154,7 +154,7 @@ pub(super) async fn object_lifecycle<T: TransportPort + 'static>(
             source_port,
         )
         .await,
-        "OBJECT_IDENTIFIER_ALREADY_EXISTS",
+        "object-identifier-already-exists",
     );
     assert_eq!(object_values(&*server.database().read().await), expected);
     assert_eq!(server.database().read().await.len(), before + 1);
@@ -167,7 +167,7 @@ pub(super) async fn object_lifecycle<T: TransportPort + 'static>(
             source_port,
         )
         .await,
-        "OBJECT_DELETION_NOT_PERMITTED",
+        "object-deletion-not-permitted",
     );
     assert_eq!(object_values(&*server.database().read().await), expected);
     assert_eq!(server.database().read().await.len(), before + 1);
@@ -192,7 +192,7 @@ pub(super) async fn object_lifecycle<T: TransportPort + 'static>(
             source_port,
         )
         .await,
-        "UNKNOWN_OBJECT",
+        "unknown-object",
     );
     assert_eq!(server.database().read().await.len(), before);
     assert!(
@@ -239,8 +239,8 @@ async fn acknowledge<T: TransportPort + 'static>(
         EventTransitionBits::TO_FAULT | EventTransitionBits::TO_NORMAL
     );
     for (state, timestamp, error) in [
-        ("4", "sequence:42", "INVALID_EVENT_STATE"),
-        ("3", "sequence:41", "INVALID_TIME_STAMP"),
+        ("4", "sequence:42", "invalid-event-state"),
+        ("3", "sequence:41", "invalid-time-stamp"),
     ] {
         failure(
             &invoke(

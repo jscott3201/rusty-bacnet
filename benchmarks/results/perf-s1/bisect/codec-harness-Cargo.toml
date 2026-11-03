@@ -1,0 +1,26 @@
+# Scratch, #1979 S1: codec-counts alone, so it builds at every commit
+# between v0.13.0 and dev without the round-trip setup.
+[package]
+name = "bacnet-counts"
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[workspace]
+members = []
+
+[dependencies]
+bacnet-encoding = { path = "../../crates/bacnet-encoding" }
+bacnet-services = { path = "../../crates/bacnet-services" }
+bacnet-types = { path = "../../crates/bacnet-types" }
+bytes = "1"
+
+[[bin]]
+name = "codec-counts"
+path = "src/bin/codec_counts.rs"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+debug = "line-tables-only"
