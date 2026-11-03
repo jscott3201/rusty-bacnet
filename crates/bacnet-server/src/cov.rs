@@ -220,8 +220,15 @@ impl CovSubscriptionTable {
 
     /// Get all active (non-expired) subscriptions for a given object.
     pub fn subscriptions_for(&mut self, oid: &ObjectIdentifier) -> Vec<&CovSubscriptionSnapshot> {
-        self.core.expire(runtime_clock::core_now());
-        self.sync(&[]);
+        // Every committed write comes here: read the clock, and run the
+        // expiry pass, only once something can be due (#2303).
+        if let Some(due) = self.core.next_expiry() {
+            let now = runtime_clock::core_now();
+            if now >= due {
+                self.core.expire(now);
+                self.sync(&[]);
+            }
+        }
         self.core.object_entries(*oid).collect()
     }
 
@@ -439,8 +446,13 @@ impl CovSubscriptionTable {
     /// owed revisits. Under the table's write guard, so in the order the
     /// table made the changes.
     fn sync(&mut self, published: &[CovSubscriptionSnapshot]) {
-        self.counters.add(&self.core.take_counts());
+        let counts = self.core.take_counts();
         let fenced = self.core.take_fenced();
+        // Nothing changed: no counter, history or wake-up to touch.
+        if published.is_empty() && fenced.is_empty() && !counted(&counts) {
+            return;
+        }
+        self.counters.add(&counts);
         {
             let mut timed = self.timed.lock();
             for key in &fenced.removed {
@@ -531,4 +543,16 @@ impl CovSubscriptionTable {
         self.delivered(&flight, Delivery::NotSent);
         completed
     }
+}
+
+/// Whether a table mutation counted anything: a subscription created,
+/// cancelled, purged or refused. The live count changes only with one of
+/// those.
+fn counted(counts: &bacnet_device_core::cov::CovCounters) -> bool {
+    counts.subscriptions_created != 0
+        || counts.subscriptions_cancelled != 0
+        || counts.subscriptions_purged != 0
+        || counts.subscriptions_rejected_quota != 0
+        || counts.subscriptions_rejected_capacity != 0
+        || counts.subscriptions_rejected_indefinite != 0
 }

@@ -162,6 +162,8 @@ impl CovTable {
                 .next()
                 .and_then(|entry| entry.subscriber_max_apdu)
         });
+        // The context's references, renewed or published below, expire then.
+        self.due_by(Some(expires_at));
         let mut previously_indefinite = 0;
         for entry in self.subs.values_mut() {
             if entry.key.multiple_context() == Some(context) {
@@ -278,6 +280,7 @@ impl CovTable {
         };
         let peer = sub.recipient();
         let new_indefinite = sub.expires_at.is_none();
+        self.due_by(sub.expires_at);
         match self.subs.insert(snapshot.clone()) {
             Some(old) => {
                 if old.flight != snapshot.flight {

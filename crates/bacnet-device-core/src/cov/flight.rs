@@ -170,6 +170,11 @@ impl FlightState {
         self.ticket != 0 && self.deadline.is_none_or(|deadline| now < deadline)
     }
 
+    /// The deadline of a report still marked outstanding, if any.
+    pub(super) fn outstanding_deadline(&self) -> Option<Instant> {
+        self.deadline.filter(|_| self.ticket != 0)
+    }
+
     /// No outstanding report and no hold-off in force at `now`.
     fn idle(&self, now: Instant) -> bool {
         !self.outstanding(now) && self.hold_until.is_none_or(|until| now >= until)
@@ -406,6 +411,7 @@ impl CovTable {
         state.ticket = ticket.get();
         state.deadline = Some(deadline);
         state.carried = carried;
+        self.due_by(Some(deadline));
         Ok(Token {
             flight,
             ticket: ticket.get(),

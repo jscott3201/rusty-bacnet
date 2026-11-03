@@ -9,7 +9,7 @@ use crate::cov::{
     SubscriberEndpoint,
 };
 use bacnet_encoding::npdu::NpduAddress;
-use bacnet_time::Instant;
+use bacnet_time::{Instant, earliest};
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::ObjectIdentifier;
 
@@ -37,6 +37,16 @@ pub struct Fenced {
     /// Multiple contexts an admission refreshed: their lifetime, maximum
     /// notification delay and subscriber APDU size may have changed.
     pub contexts: Vec<MultipleContextKey>,
+}
+
+impl Fenced {
+    /// Whether it names nothing to act on.
+    pub fn is_empty(&self) -> bool {
+        self.tokens.is_empty()
+            && self.removed.is_empty()
+            && self.revisit.is_empty()
+            && self.contexts.is_empty()
+    }
 }
 
 /// The entries in one vector sorted by their key, which puts the monitored
@@ -131,6 +141,11 @@ pub struct CovTable {
     /// Subscription counts since the host last took them.
     pub(super) counts: CovCounters,
     pub(super) fenced: Fenced,
+    /// No subscription expires, and no outstanding report reaches its
+    /// deadline, before this instant; `None` when nothing can. Lowered as
+    /// each lifetime or deadline is set, left as it is by a removal (so it
+    /// may be early, never late), and recomputed by each full expiry pass.
+    pub(super) next_due: Option<Instant>,
 }
 
 impl Default for CovTable {
@@ -155,6 +170,7 @@ impl CovTable {
             timing: FlightTiming::default(),
             counts: CovCounters::default(),
             fenced: Fenced::default(),
+            next_due: None,
         }
     }
 
@@ -321,19 +337,45 @@ impl CovTable {
     /// coordinate's references are owed a fresh look). Returns the number of
     /// subscriptions removed.
     pub fn expire(&mut self, now: Instant) -> usize {
+        // Nothing can be due yet: the pass would find nothing.
+        if self.next_due.is_none_or(|due| now < due) {
+            return 0;
+        }
         self.end_abandoned(now);
-        let to_remove: Vec<_> = self
-            .subs
-            .values()
-            .filter(|sub| sub.expires_at.is_some_and(|exp| exp <= now))
-            .map(|sub| sub.key.clone())
-            .collect();
+        let mut next_due = None;
+        let mut to_remove = Vec::new();
+        for sub in self.subs.values() {
+            match sub.expires_at {
+                Some(expires) if expires <= now => to_remove.push(sub.key.clone()),
+                expires => next_due = earliest([next_due, expires]),
+            }
+        }
         let mut purged = 0;
         for key in to_remove {
             purged += usize::from(self.remove_internal(&key, false));
         }
         self.counts.subscriptions_purged += purged as u64;
+        // Outstanding reports here are all before their deadlines.
+        for state in self.flights.values() {
+            next_due = earliest([next_due, state.outstanding_deadline()]);
+        }
+        self.next_due = next_due;
         purged
+    }
+
+    /// The earliest instant [`expire`](Self::expire) can find something to
+    /// remove or end: a subscription's expiry or an outstanding report's
+    /// deadline. `None` when nothing can expire. It may be earlier than
+    /// needed after a removal, never later, so a host may skip both its
+    /// clock and the pass until then.
+    pub fn next_expiry(&self) -> Option<Instant> {
+        self.next_due
+    }
+
+    /// Note a lifetime or deadline just set: nothing can be due before
+    /// the earliest of them.
+    pub(super) fn due_by(&mut self, at: Option<Instant>) {
+        self.next_due = earliest([self.next_due, at]);
     }
 
     /// End every subscription's lifetime at `now`, so the next lookup or
@@ -343,6 +385,9 @@ impl CovTable {
     pub fn expire_all(&mut self, now: Instant) {
         for entry in self.subs.values_mut() {
             entry.subscription.expires_at = Some(now);
+        }
+        if self.subs.len() > 0 {
+            self.due_by(Some(now));
         }
     }
 
@@ -449,5 +494,7 @@ impl CovTable {
     }
 }
 
+#[cfg(test)]
+mod due_tests;
 #[cfg(test)]
 mod tests;

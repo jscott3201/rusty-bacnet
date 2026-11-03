@@ -60,6 +60,11 @@ impl CovRevisits {
 
     /// Queue references for evaluation and wake the drain.
     pub(crate) fn request(&self, keys: impl IntoIterator<Item = CovSubscriptionKey>) {
+        let mut keys = keys.into_iter().peekable();
+        // Nothing to queue: neither the lock nor the drain's wake-up.
+        if keys.peek().is_none() {
+            return;
+        }
         let mut pending = self.pending();
         let before = pending.len();
         pending.extend(keys);
