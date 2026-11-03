@@ -95,6 +95,13 @@ pub(crate) struct Cli {
     #[arg(long, global = true, value_name = "SECS")]
     pub(crate) renewal: Option<u64>,
 
+    /// Our address and port as the --foreign-bbmd BBMD sees them, when a
+    /// NAT router translates the registration (IPv4 ip:port). The TUI's
+    /// Network screen uses it to find our FDT entry; it changes nothing
+    /// sent.
+    #[arg(long, global = true, value_name = "IP:PORT", value_parser = crate::foreign::parse_nat_global_arg)]
+    pub(crate) nat_global_address: Option<SocketAddrV4>,
+
     /// Join this IPv4 multicast group (class D) as a B/IP-M node (Annex
     /// J.8): broadcasts such as discover go to the group, and only the
     /// group's broadcasts are taken. Needs --interface. BACnet/IP only.
@@ -709,6 +716,19 @@ pub(crate) fn capture_sources(matches: &clap::ArgMatches) -> Result<Vec<String>,
         return Err(clap::Error::raw(
             clap::error::ErrorKind::MissingRequiredArgument,
             "--renewal requires --foreign-bbmd (or a named TUI profile containing a BBMD)",
+        ));
+    }
+    if matches
+        .get_one::<std::net::SocketAddrV4>("nat_global_address")
+        .is_some()
+        && matches
+            .get_one::<std::net::SocketAddrV4>("foreign_bbmd")
+            .is_none()
+        && !named_profile
+    {
+        return Err(clap::Error::raw(
+            clap::error::ErrorKind::MissingRequiredArgument,
+            "--nat-global-address requires --foreign-bbmd (or a named TUI profile containing a BBMD)",
         ));
     }
     crate::mstp::check_matches(matches)?;

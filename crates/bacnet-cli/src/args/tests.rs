@@ -56,6 +56,78 @@ fn the_foreign_device_flags_reach_the_transport() {
     assert_eq!(cli.ttl, 45);
 }
 
+/// `--nat-global-address` (#1943) reaches the TUI's transport arguments
+/// and leaves the registration alone; it needs `--foreign-bbmd`, a port
+/// and a unicast address.
+#[test]
+fn the_nat_global_address_is_checked_and_reaches_the_args() {
+    let cli = parse([
+        "bacnet",
+        "--foreign-bbmd",
+        "192.0.2.10",
+        "--nat-global-address",
+        "203.0.113.7:61000",
+        "discover",
+    ])
+    .unwrap();
+    let args =
+        crate::transport::TransportArgs::from_cli(&cli, Ipv4Addr::UNSPECIFIED, Ipv4Addr::BROADCAST)
+            .unwrap();
+    assert_eq!(
+        args.nat_global_address,
+        Some(SocketAddrV4::new(Ipv4Addr::new(203, 0, 113, 7), 61000))
+    );
+    let foreign = args.foreign_device.unwrap();
+    assert_eq!(
+        (foreign.bbmd_ip, foreign.bbmd_port),
+        (Ipv4Addr::new(192, 0, 2, 10), 0xBAC0)
+    );
+
+    let error = parse([
+        "bacnet",
+        "--nat-global-address",
+        "203.0.113.7:61000",
+        "discover",
+    ])
+    .unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+    assert!(
+        error.to_string().contains("requires --foreign-bbmd"),
+        "{error}"
+    );
+    // A named profile may hold the BBMD.
+    parse([
+        "bacnet",
+        "--nat-global-address",
+        "203.0.113.7:61000",
+        "tui",
+        "--profile",
+        "site",
+    ])
+    .unwrap();
+
+    for (value, why) in [
+        ("203.0.113.7", "is not an IPv4 ip:port"),
+        ("[2001:db8::1]:61000", "is not an IPv4 ip:port"),
+        ("203.0.113.7:0", "needs a nonzero port"),
+        ("0.0.0.0:61000", "is not a unicast address"),
+        ("224.0.0.1:61000", "is not a unicast address"),
+        ("255.255.255.255:61000", "is not a unicast address"),
+    ] {
+        let error = parse([
+            "bacnet",
+            "--foreign-bbmd",
+            "192.0.2.10",
+            "--nat-global-address",
+            value,
+            "discover",
+        ])
+        .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::ValueValidation, "{value}");
+        assert!(error.to_string().contains(why), "{value}: {error}");
+    }
+}
+
 /// The SC reconnect flags (#1831): `--sc-failover-url` brings the
 /// default reconnect policy, as `--sc-reconnect` does alone; neither
 /// leaves reconnect off; the connect timeout is checked at parse time.

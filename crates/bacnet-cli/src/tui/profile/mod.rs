@@ -8,6 +8,8 @@ pub(crate) mod mstp;
 mod mstp_tests;
 #[cfg(test)]
 mod multicast_tests;
+#[cfg(test)]
+mod nat_tests;
 pub(crate) mod overrides;
 pub(crate) mod sc;
 #[cfg(test)]
@@ -99,6 +101,11 @@ pub(crate) struct Bip {
     pub(crate) bbmd: Option<SocketAddrV4>,
     pub(crate) ttl: u16,
     pub(crate) renewal_secs: Option<u64>,
+    /// Our address as the BBMD records it when a NAT router translates the
+    /// registration (#1943): a display hint for the Network screen, which
+    /// changes nothing sent. Needs a BBMD.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) nat_global_address: Option<SocketAddrV4>,
     /// A B/IP-M group to join (Annex J.8, #941); needs an explicit
     /// interface and no BBMD.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -125,6 +132,7 @@ impl Default for Bip {
             bbmd: None,
             ttl: 300,
             renewal_secs: None,
+            nat_global_address: None,
             multicast: None,
             multicast_ttl: 1,
             multicast_port: None,
@@ -284,6 +292,7 @@ impl Profile {
             timeout_ms: 0,
             min_interval_ms: 0,
             foreign_device: None,
+            nat_global_address: None,
             multicast: None,
             mstp: None,
             sc: false,
@@ -307,6 +316,7 @@ impl Profile {
             args.timeout_ms = b.timeout_ms;
             args.min_interval_ms = b.min_interval_ms;
             args.foreign_device = crate::foreign::config(b.bbmd, b.ttl, b.renewal_secs);
+            args.nat_global_address = b.nat_global_address;
             args.multicast = b.multicast()?;
         }
         if let Some(sc) = &self.sc {
@@ -363,6 +373,12 @@ impl Bip {
             }
         } else if b.renewal_secs.is_some() {
             return Err("renewal requires a BBMD (clear renewal for Normal mode)".into());
+        } else if b.nat_global_address.is_some() {
+            return Err("nat_global_address requires a BBMD".into());
+        }
+        if let Some(global) = b.nat_global_address {
+            crate::foreign::nat_global_address(global)
+                .map_err(|why| format!("nat_global_address {global} {why}"))?;
         }
         self.multicast().map(drop)
     }

@@ -37,6 +37,9 @@ pub struct TransportArgs {
     pub device_instance: Option<u32>,
     /// `--foreign-bbmd`, with `--ttl` and `--renewal` (#938).
     pub foreign_device: Option<ForeignDeviceConfig>,
+    /// `--nat-global-address` (#1943): our address as the BBMD records it
+    /// behind a NAT router. Only the TUI's Network screen reads it.
+    pub nat_global_address: Option<std::net::SocketAddrV4>,
     /// `--bip-multicast` and `--bip-multicast-ttl` (#941).
     pub multicast: Option<BipMulticast>,
     /// `--mstp` and its settings (#969).
@@ -93,6 +96,7 @@ impl TransportArgs {
             ipv6_interface,
             device_instance: cli.device_instance,
             foreign_device: crate::foreign::config(cli.foreign_bbmd, cli.ttl, cli.renewal),
+            nat_global_address: cli.nat_global_address,
             multicast,
             mstp: crate::mstp::MstpArgs::from_cli(cli)?,
         })
@@ -381,6 +385,7 @@ mod tests {
             ipv6_interface: None,
             device_instance: None,
             foreign_device: None,
+            nat_global_address: None,
             multicast: None,
             mstp: None,
         }

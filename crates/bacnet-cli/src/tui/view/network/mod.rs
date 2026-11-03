@@ -312,30 +312,46 @@ fn own_line<'a>(state: &NetworkState, app: &App, theme: &Theme, width: u16) -> L
     else {
         return Line::from(vec![label, Span::styled("FDT not read yet", theme.dim())]);
     };
-    match state.own.and_then(|i| entries.get(i)) {
-        Some(entry) => Line::from(vec![
-            label,
-            Span::styled(entry.address.to_string(), theme.selected()),
-            Span::styled(
-                // The BBMD keeps an FDT entry 30 s past its TTL (Annex J).
-                format!(
-                    "  TTL {} s + 30 s grace, {} s left",
-                    entry.ttl,
-                    state.remaining(entry, app.now)
+    let local = state.local.map_or_else(String::new, |l| l.to_string());
+    let own = state
+        .own
+        .and_then(|own| Some((own, entries.get(own.index)?)));
+    match own {
+        Some((own, entry)) => {
+            // Found at the NAT global address (#1943): say from where.
+            let translated = if own.translated {
+                format!("  NAT-translated from {local}")
+            } else {
+                String::new()
+            };
+            Line::from(vec![
+                label,
+                Span::styled(entry.address.to_string(), theme.selected()),
+                Span::styled(
+                    // The BBMD keeps an FDT entry 30 s past its TTL (Annex J).
+                    format!(
+                        "{translated}  TTL {} s + 30 s grace, {} s left",
+                        entry.ttl,
+                        state.remaining(entry, app.now)
+                    ),
+                    theme.dim(),
                 ),
-                theme.dim(),
-            ),
-        ]),
-        None => Line::from(vec![
-            label,
-            Span::styled(
-                format!(
-                    "no FDT entry has our address {}; a NAT router may have rewritten it",
-                    state.local.map_or_else(String::new, |l| l.to_string())
+            ])
+        }
+        None => {
+            let text = match state.foreign.and_then(|f| f.nat_global) {
+                Some(global) => {
+                    format!(
+                        "no FDT entry has our address {local} or the NAT global address {global}"
+                    )
+                }
+                None => format!(
+                    "no FDT entry has our address {local}; a NAT router may have rewritten it \
+                     (name it with --nat-global-address)"
                 ),
-                theme.warn(),
-            ),
-        ]),
+            };
+            Line::from(vec![label, Span::styled(text, theme.warn())])
+        }
     }
 }
 
@@ -447,19 +463,26 @@ fn fdt(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         .iter()
         .enumerate()
         .map(|(i, entry)| {
-            let ours = state.own == Some(i);
+            let own = state.own.filter(|own| own.index == i);
+            let ours = own.is_some();
+            // A translated entry says so, within the column's 11 cells.
+            let us = if own.is_some_and(|own| own.translated) {
+                "us, via NAT"
+            } else {
+                "this client"
+            };
             let left = state.remaining(entry, app.now);
             // Near expiry (#2130): `!` before the seconds left, and the
             // word in the marker column unless it already names us, so the
             // warning never rests on colour alone.
             let (left, mark) = if state.expiring(entry, app.now) {
-                let mark = if ours { "this client" } else { "expiring" };
+                let mark = if ours { us } else { "expiring" };
                 (
                     Span::styled(format!("! {left} s"), theme.warn()),
                     Span::styled(mark, if ours { Style::new() } else { theme.warn() }),
                 )
             } else {
-                let mark = if ours { "this client" } else { "" };
+                let mark = if ours { us } else { "" };
                 (Span::raw(format!("{left} s")), Span::raw(mark))
             };
             let row = Row::new([

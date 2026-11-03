@@ -27,6 +27,7 @@ fn foreign() -> Foreign {
         bbmd: at_ip(1),
         ttl: 60,
         renewal: Duration::from_secs(30),
+        nat_global: None,
     }
 }
 
@@ -96,7 +97,7 @@ pub(super) fn registered() -> App {
 #[test]
 fn foreign_device_panel_and_bdt_120x40() {
     let mut app = registered();
-    assert_eq!(app.network.own, Some(1));
+    assert_eq!(app.network.own.map(|own| own.index), Some(1));
     // 18 s at 10 s, so 13 s at 15 s.
     assert_eq!(
         app.network.next_attempt(app.now),

@@ -184,6 +184,7 @@ async fn connect(
                         bbmd,
                         ttl: foreign.ttl,
                         renewal,
+                        nat_global: args.nat_global_address,
                     };
                     sink.deliver(WorkerEvent::ForeignDevice(foreign)).await;
                 }
