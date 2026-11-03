@@ -1340,10 +1340,9 @@ tracked its Value_Source. `BACnetAddress` now copies its MAC at once, and a
 command no longer copies the published source just to compare it
 ([benchmarks/results/perf-wp-clones](benchmarks/results/perf-wp-clones/README.md)).
 WriteProperty falls by about 500 instructions per request on both runtimes,
-with every pair lower and allocations unchanged; ReadProperty and
-ReadPropertyMultiple are not higher. The current-thread row missed the
-more-than-three-floors test in its matrix (floor 198.7, where recent
-matrices measured about 110).
+with every pair lower and allocations unchanged, and its profile has no
+byte-by-byte address copies left. ReadProperty and ReadPropertyMultiple are
+not higher.
 
 ## 11. How to reproduce
 
