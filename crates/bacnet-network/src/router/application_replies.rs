@@ -74,7 +74,16 @@ impl Replies {
     }
 
     /// Keep `response`, the plan of the Confirmed-Request `apdu` from
-    /// `network` and `mac`. A repeat of the request replaces its plan.
+    /// `network` and `mac`. An unsegmented request or a segment 0 replaces
+    /// a saved plan for the same transaction, so a requester that retries
+    /// by another path is answered there. A later segment only renews the
+    /// saved plan: a reassembled request is answered along the path its
+    /// first segment took, as the server does for its own replies (#2355).
+    /// A renewed plan moves to the back of the queue, so capacity evicts
+    /// the transfer least recently heard from. Sequence numbers wrap modulo
+    /// 256, so segment 256 arrives as another segment 0 and moves the plan;
+    /// the server matches it to its live session first, and every segment
+    /// used to move the plan anyway.
     pub(super) fn save(&self, network: u16, mac: &[u8], apdu: &[u8], response: RouterResponse) {
         self.keep(network, mac, apdu, Some(response));
     }
@@ -96,6 +105,21 @@ impl Replies {
         }
         let now = Instant::now();
         let mut saved = self.saved();
+        // A segment after the first (SEG set, sequence number not 0).
+        let continuation = first & 0x08 != 0 && apdu.get(3).is_some_and(|&sequence| sequence != 0);
+        if continuation
+            && let Some(index) = saved.iter().position(|entry| {
+                now.duration_since(entry.saved_at) < LIFETIME
+                    && entry.network == network
+                    && entry.mac.as_slice() == mac
+                    && entry.invoke_id == invoke_id
+            })
+            && let Some(mut entry) = saved.remove(index)
+        {
+            entry.saved_at = now;
+            saved.push_back(entry);
+            return;
+        }
         saved.retain(|entry| {
             now.duration_since(entry.saved_at) < LIFETIME
                 && !(entry.network == network
@@ -118,7 +142,8 @@ impl Replies {
     /// from `destination`: a SimpleAck, ComplexAck, Error or Reject, or a
     /// Segment-ACK or Abort sent as the server. An answer that ends the
     /// transaction takes the plan with it; a Segment-ACK or a segment with
-    /// more to follow leaves it for the rest.
+    /// more to follow leaves it for the rest, renewed and at the back of the
+    /// queue.
     pub(super) fn plan_for(&self, destination: Address<'_>, apdu: &[u8]) -> Option<Plan> {
         let (&first, &invoke_id) = (apdu.first()?, apdu.get(1)?);
         let as_server = first & 0x01 != 0;
@@ -137,14 +162,17 @@ impl Replies {
                 && entry.mac.as_slice() == destination.mac
                 && entry.invoke_id == invoke_id
         })?;
+        let mut entry = saved.remove(index)?;
         let response = if ends {
-            saved.remove(index)?.response
+            entry.response
         } else {
-            // Still going: its lifetime counts from this answer, so a long
-            // segmented exchange keeps its plan.
-            let entry = &mut saved[index];
+            // Still going: its lifetime counts from this answer, and it goes
+            // to the back of the queue, so a long segmented exchange keeps
+            // its plan.
             entry.saved_at = now;
-            entry.response.clone()
+            let response = entry.response.clone();
+            saved.push_back(entry);
+            response
         };
         Some(response.map_or(Plan::Silenced, Plan::Send))
     }

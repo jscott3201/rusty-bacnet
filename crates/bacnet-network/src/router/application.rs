@@ -499,3 +499,7 @@ impl OriginateFailure {
 #[cfg(test)]
 #[path = "application_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "application_reassembly_tests.rs"]
+mod reassembly_tests;
