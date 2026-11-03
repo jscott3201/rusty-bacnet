@@ -7,14 +7,14 @@ use std::str::FromStr;
 
 use bacnet_types::error::Error;
 
-use super::DEFAULT_BACNET_PORT;
+use super::super::DEFAULT_BACNET_PORT;
 use crate::bbmd_lookup::BbmdName;
 
 /// The BBMD a foreign device registers with
 /// (the `bbmd` of a [`ForeignDeviceConfig`](super::ForeignDeviceConfig)).
 ///
 /// A host name is looked up as one written to FD_BBMD_Address is
-/// ([`BipTransport::set_bbmd_resolver`](super::BipTransport::set_bbmd_resolver),
+/// ([`BipTransport::set_bbmd_resolver`](crate::bip::BipTransport::set_bbmd_resolver),
 /// #1852): at start, then alongside the registration attempts at most once
 /// every 30 seconds. Until its first lookup succeeds the transport runs
 /// with no BBMD: foreign registration waits, broadcasts are held and then
@@ -58,7 +58,7 @@ impl ForeignBbmd {
 
     /// The host name as a lookup takes it, when it is one in the RFC 1123
     /// form with a nonzero port.
-    pub(super) fn name(&self) -> Option<BbmdName> {
+    pub(in crate::bip) fn name(&self) -> Option<BbmdName> {
         match self {
             Self::Address(_) => None,
             Self::Name { host, port } => BbmdName::new(host, *port),

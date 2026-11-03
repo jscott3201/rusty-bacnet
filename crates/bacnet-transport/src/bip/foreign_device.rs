@@ -5,7 +5,10 @@ use bacnet_bip_core::Duration as CoreDuration;
 use bacnet_bip_core::node::{ConfigError, Foreign, ForwardedTrust, Groups, Retry};
 use bacnet_types::error::Error;
 
-use super::{BipTransport, ForeignBbmd};
+use super::BipTransport;
+
+mod foreign_bbmd;
+pub use foreign_bbmd::ForeignBbmd;
 
 /// How many broadcasts a foreign device holds while the first registration
 /// attempt after each start, or after a move to another BBMD (#1825), is

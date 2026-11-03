@@ -323,6 +323,14 @@ impl ForeignRegistration for ForeignTarget {
 }
 
 impl BipTransport {
+    /// The transport stops: a configured BBMD name not resolved yet stops
+    /// being retried ([`ForeignTarget::detach`]).
+    pub(super) fn detach_foreign_device(&self) {
+        if let Some(target) = &self.foreign_device {
+            target.detach();
+        }
+    }
+
     /// Configure this transport as a foreign device.
     /// Call before `start()`, which validates, before any I/O, the TTL and
     /// renewal settings and the BBMD's address (not the unspecified address,

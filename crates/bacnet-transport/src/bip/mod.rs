@@ -45,7 +45,6 @@ mod client_snapshot;
 mod exchange;
 pub use bacnet_bip_core::node::ExchangeRefusal;
 pub use exchange::BvlcExchangeError;
-mod foreign_bbmd;
 mod foreign_device;
 mod foreign_target;
 mod mode;
@@ -60,8 +59,7 @@ pub use client_snapshot::{
     BvlcClientSnapshot, BvlcClientStatus, BvlcRequestCounters, ForeignRegistrationOutcome,
     ForeignRegistrationSnapshot,
 };
-pub use foreign_bbmd::ForeignBbmd;
-pub use foreign_device::ForeignDeviceConfig;
+pub use foreign_device::{ForeignBbmd, ForeignDeviceConfig};
 pub use mode::{BbmdOptions, BipMode};
 mod fanout;
 mod groups;
@@ -446,10 +444,7 @@ impl BipTransport {
         if let Some(node) = self.node.take() {
             node.stop();
         }
-        // A configured BBMD name not resolved yet stops being retried.
-        if let Some(target) = &self.foreign_device {
-            target.detach();
-        }
+        self.detach_foreign_device();
         #[cfg(test)]
         if let Some(between) = self.between_stops.take() {
             between();
