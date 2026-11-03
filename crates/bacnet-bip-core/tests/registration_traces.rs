@@ -117,7 +117,10 @@ impl Trace {
                 Action::Registration(event) => self.note(now, Event(event)),
                 Action::ReleaseHeld => self.note(now, Held { released: true }),
                 Action::DiscardHeld => self.note(now, Held { released: false }),
-                Action::ExchangeEnded { .. } | Action::Idle => unreachable!(),
+                // No manual exchanges, and no moves.
+                Action::ExchangeEnded { .. } | Action::ReleasePrevious { .. } | Action::Idle => {
+                    unreachable!()
+                }
             }
         }
     }

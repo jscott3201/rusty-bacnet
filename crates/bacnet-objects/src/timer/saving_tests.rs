@@ -213,6 +213,7 @@ fn a_saved_set_the_timer_would_refuse_fails_the_build() {
                 references: vec![reference(1)],
                 priority_for_writing,
             }),
+            default_timeout: None,
         })
     };
     let build = |storage: Arc<MemoryConfig>| {
@@ -241,10 +242,10 @@ fn clearing_the_written_set_lets_the_configured_one_apply() {
     let mut rebuilt = timer(&storage, 3.0);
     assert!(rebuilt.state_change_saved());
     storage.fail(true);
-    assert!(rebuilt.clear_written_state_change().is_err());
+    assert!(rebuilt.clear_written_config().is_err());
     assert!(rebuilt.state_change_saved());
     storage.fail(false);
-    rebuilt.clear_written_state_change().unwrap();
+    rebuilt.clear_written_config().unwrap();
     assert!(!rebuilt.state_change_saved());
     assert_eq!(
         storage.saved(),

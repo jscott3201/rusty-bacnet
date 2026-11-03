@@ -132,6 +132,7 @@ pub fn timer_write_config(path: &Path) {
             references: vec![member(1, None), member(2, Some(9))],
             priority_for_writing: 8,
         }),
+        default_timeout: Some(90_000),
     });
     save_write_config(path, ObjectType::TIMER, &snapshot);
 }

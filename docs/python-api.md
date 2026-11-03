@@ -924,8 +924,10 @@ Distribute-Broadcast-To-Network. A registered Network Port
 (`add_bip6_network_port`) reads BACnet_IPv6_Mode FOREIGN (1) with the
 FD_BBMD_Address and FD_Subscription_Lifetime rows; with `on_reinitialize`, a
 written lifetime or BBMD takes effect at ReinitializeDevice ACTIVATE_CHANGES,
-and the next registration, sent at once, carries it. `foreign_registration()`
-is B/IP only.
+and the next registration, sent at once, carries it. The BBMD may also be
+written as a host name, looked up by the system's resolver as on B/IP: the
+device moves to the first IPv6 address it stands for (#2308).
+`foreign_registration()` is B/IP only.
 
 ```python
 from rusty_bacnet import BACnetClient, ForeignDevice
@@ -3767,6 +3769,7 @@ server.add_timer(
                          None, PropertyValue.enumerated(1)],
     references=[(ObjectIdentifier(ObjectType.BINARY_OUTPUT, 1), PropertyIdentifier.PRESENT_VALUE)],
     priority_for_writing=8,
+    storage_path="/application/state/timer-1",  # optional; see below
 )
 server.add_load_control(instance=1, name="Load Control")
 server.add_program(instance=1, name="Program")
@@ -3790,6 +3793,14 @@ server.add_staging(
     stage_names=["Off", "On"],
 )
 ```
+
+`add_timer`'s `storage_path` keeps in that file what a peer writes to
+State_Change_Values, List_Of_Object_Property_References (with
+Priority_For_Writing) and Default_Timeout (#2312). Each write is saved before
+it is answered, and refused with DEVICE / OPERATIONAL_PROBLEM when the save
+fails. At the next start a saved write wins over the keywords;
+`clear_written_config=True` drops what was saved, so they apply again.
+`add_channel` takes the same two keywords (see [Channels](#channels)).
 
 Program_State is read-only on the network, and `write_property_local` refuses
 it with WRITE_ACCESS_DENIED too. A running server's application reports it with
@@ -4096,8 +4107,8 @@ server.add_channel(
 ```
 
 `add_channel(instance, name, channel_number, members=None,
-execution_delay=None, control_groups=None, *, allow_group_delay_inhibit=False)`
-registers a Channel. A member is an `(object, property)` or
+execution_delay=None, control_groups=None, *, allow_group_delay_inhibit=False,
+storage_path=None, clear_written_config=False)` registers a Channel. A member is an `(object, property)` or
 `(object, property, array_index)` tuple for a property in this device, or a
 `DeviceObjectPropertyReference` mapping, the shape an access rule's
 `time_range` takes: `object_identifier`, `property_identifier`, and optionally
@@ -4115,7 +4126,10 @@ under [Lighting & Color](rust-api.md#lighting--color-5)).
 `execution_delay` holds one delay in milliseconds per member (zeros when
 omitted), `control_groups` the groups whose WriteGroup the Channel takes, and
 `allow_group_delay_inhibit` whether a WriteGroup that asks for no delays skips
-them. Peers can write all of these, and Channel_Number, over the network.
+them. Peers can write all of these, and Channel_Number, over the network. With
+`storage_path` the Channel keeps those writes in that file, and each saved one
+wins over its argument at the next start, Channel_Number over `channel_number`
+included, until `clear_written_config=True` drops them (#2312).
 
 Once the server runs, a value written to the Channel's Present_Value, over the
 network or with `write_property_local`, goes on to each member at the write's

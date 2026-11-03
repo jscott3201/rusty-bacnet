@@ -476,6 +476,22 @@ in [section 10.1](#101-repeated-comparison-for-1979) replace the earlier causal
 claim; B/IPv6 and BACnet/SC failure categories were not remeasured. Peak resident
 memory in this historical B/IP run was 49 megabytes.
 
+Those failures are the server's admission policy at work, not a fault. By
+default the server handles at most 60 ordinary confirmed requests at once
+and refuses the rest at once with an Abort, so with one request outstanding
+per client, refusals start at about 60 clients, a little below it at times
+because a request keeps its slot until its reply has been sent. Above the
+limit, how many are refused depends on scheduling and varies widely between
+runs; with the limit raised to leave room for 100 clients, almost none
+were. A few refusals at start-up find all 8 Abort workers busy and are
+dropped silently, which costs each such client one 5-second request timeout
+before its retry succeeds.
+[Section 10.5](#105-the-1979-shifts-explained-by-counts) sums this up,
+[perf-s2](benchmarks/results/perf-s2/README.md) has the counts of Aborts
+per 100,000 requests from 50 to 100 clients, and
+[request admission](docs/request-admission.md#under-load) says how to size
+the limit.
+
 ### 6.2 Object database size
 
 `stress-test objects`: one client, 5 seconds of ReadProperty of random

@@ -38,6 +38,29 @@ pub(crate) fn parse_bbmd_arg(value: &str) -> Result<SocketAddrV4, String> {
     Ok(address)
 }
 
+/// Parse a `--nat-global-address` (#1943): the `ip:port` a NAT router
+/// gives our registration, as the BBMD records it. The port is required,
+/// since a NAT router seldom keeps ours.
+pub(crate) fn parse_nat_global_arg(value: &str) -> Result<SocketAddrV4, String> {
+    let address = value
+        .parse::<SocketAddrV4>()
+        .map_err(|_| "not an IPv4 ip:port".to_string())?;
+    nat_global_address(address).map_err(|why| format!("it {why}"))
+}
+
+/// Check a NAT global address: an IPv4 unicast endpoint with a nonzero
+/// port, the only kind an FDT entry can hold. `Err` says why not.
+pub(crate) fn nat_global_address(address: SocketAddrV4) -> Result<SocketAddrV4, &'static str> {
+    let ip = address.ip();
+    if address.port() == 0 {
+        Err("needs a nonzero port")
+    } else if ip.is_unspecified() || ip.is_multicast() || ip.is_broadcast() {
+        Err("is not a unicast address a BBMD could record")
+    } else {
+        Ok(address)
+    }
+}
+
 /// The foreign-device configuration the flags ask for, if any.
 pub(crate) fn config(
     bbmd: Option<SocketAddrV4>,
