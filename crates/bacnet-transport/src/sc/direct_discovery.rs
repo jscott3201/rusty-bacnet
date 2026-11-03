@@ -245,13 +245,59 @@ impl DirectUriCache {
 
 pub(crate) use super::direct_socket::DirectDialer;
 
+/// One Address-Resolution request waiting for its answer.
+struct Waiter {
+    /// Per-request tag: after a u16 wrap a newer request may reuse the same
+    /// message ID, and only the request that inserted an entry removes it.
+    seq: u64,
+    answer: oneshot::Sender<Vec<String>>,
+}
+
+/// Address-Resolution waiters keyed by message ID. Every access is short
+/// and synchronous, so the lock is never held across an await.
+#[derive(Default)]
+struct Waiters {
+    next_seq: u64,
+    by_id: HashMap<u16, Waiter>,
+}
+
+/// Owns one [`Waiters`] entry for the life of a `discover_via_hub` call.
+///
+/// Dropping it removes the entry if it is still this request's, so an
+/// answer, a send error, a timeout and a cancelled caller all clean up the
+/// same way. An entry the answer already took, or a newer request's entry
+/// under the same message ID, is left alone.
+struct PendingEntry<'a> {
+    waiters: &'a StdMutex<Waiters>,
+    message_id: u16,
+    seq: u64,
+}
+
+impl Drop for PendingEntry<'_> {
+    fn drop(&mut self) {
+        // Poison can't leave the map inconsistent: every critical section
+        // is a single map operation. Don't panic inside a drop.
+        let mut waiters = self
+            .waiters
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if waiters
+            .by_id
+            .get(&self.message_id)
+            .is_some_and(|waiter| waiter.seq == self.seq)
+        {
+            waiters.by_id.remove(&self.message_id);
+        }
+    }
+}
+
 /// Shared opt-in direct discovery state.
 ///
 /// This optional owner does not own accepted membership. Without a dialer,
 /// discovery cannot establish a new outbound route; existing routes still work.
 pub(crate) struct DirectShared<W: WebSocketPort> {
     cache: Mutex<DirectUriCache>,
-    pending: Mutex<HashMap<u16, oneshot::Sender<Vec<String>>>>,
+    pending: StdMutex<Waiters>,
     dialer: Mutex<Option<DirectDialer<W>>>,
     backoff: Mutex<RedialBackoff>,
     pool: StdMutex<DirectPool>,
@@ -268,7 +314,7 @@ impl<W: WebSocketPort> DirectShared<W> {
     pub(crate) fn new(membership: Arc<DirectMembership>) -> Self {
         Self {
             cache: Mutex::new(DirectUriCache::new()),
-            pending: Mutex::new(HashMap::new()),
+            pending: StdMutex::new(Waiters::default()),
             dialer: Mutex::new(None),
             backoff: Mutex::new(RedialBackoff::new()),
             pool: StdMutex::new(DirectPool::new()),
@@ -488,8 +534,8 @@ impl<W: WebSocketPort> DirectShared<W> {
     /// falls back to hub delivery (and caches the empty result). Malformed
     /// ACKs, unmatched IDs, and unrelated functions stay silent and keep
     /// waiting until the sender's timeout. Never changes connection state.
-    pub(super) async fn fulfill_from_hub_message(&self, msg: &ScMessage) {
-        match msg.function {
+    pub(super) fn fulfill_from_hub_message(&self, msg: &ScMessage) {
+        let uris = match msg.function {
             ScFunction::AddressResolutionAck => {
                 if address_resolution_message_error(msg).is_some() {
                     return;
@@ -497,10 +543,7 @@ impl<W: WebSocketPort> DirectShared<W> {
                 let Some(uris) = parse_ack_uris(&msg.payload) else {
                     return;
                 };
-                let sender = self.pending.lock().await.remove(&msg.message_id);
-                if let Some(sender) = sender {
-                    let _ = sender.send(uris);
-                }
+                uris
             }
             ScFunction::Result => {
                 let Ok(ScBvlcResult::Nak { result_for, .. }) = decode_sc_bvlc_result(msg) else {
@@ -509,12 +552,13 @@ impl<W: WebSocketPort> DirectShared<W> {
                 if result_for != ScFunction::AddressResolution {
                     return;
                 }
-                let sender = self.pending.lock().await.remove(&msg.message_id);
-                if let Some(sender) = sender {
-                    let _ = sender.send(Vec::new());
-                }
+                Vec::new()
             }
-            _ => {}
+            _ => return,
+        };
+        let waiter = self.pending.lock().unwrap().by_id.remove(&msg.message_id);
+        if let Some(waiter) = waiter {
+            let _ = waiter.answer.send(uris);
         }
     }
 
@@ -533,52 +577,49 @@ impl<W: WebSocketPort> DirectShared<W> {
         conn: &Arc<Mutex<ScConnection>>,
         connect_timeout_ms: u64,
     ) -> Option<Vec<String>> {
-        let (message_id, request_bytes) = {
+        let (entry, request_bytes, receiver) = {
             let mut c = conn.lock().await;
             if c.state != ScConnectionState::Connected {
                 return None;
             }
             // Allocate an ID unused by other pending discoveries so an ACK
-            // cannot complete the wrong waiter after u16 wrap.
+            // cannot complete the wrong waiter after u16 wrap, and insert
+            // under the same lock so no other request can claim it between.
             let mut request = c.build_address_resolution_request(dest);
-            let guard = self.pending.lock().await;
+            let mut waiters = self.pending.lock().unwrap();
             let mut attempts = 0;
-            while guard.contains_key(&request.message_id) && attempts < u16::MAX as usize {
+            while waiters.by_id.contains_key(&request.message_id) && attempts < u16::MAX as usize {
                 request = c.build_address_resolution_request(dest);
                 attempts += 1;
             }
-            if guard.contains_key(&request.message_id) {
+            if waiters.by_id.contains_key(&request.message_id) {
                 return None;
             }
-            let message_id = request.message_id;
+            let (answer, receiver) = oneshot::channel();
+            let seq = waiters.next_seq;
+            waiters.next_seq = seq.wrapping_add(1);
+            waiters
+                .by_id
+                .insert(request.message_id, Waiter { seq, answer });
+            drop(waiters);
+            // From here on every exit, cancellation included, removes the entry.
+            let entry = PendingEntry {
+                waiters: &self.pending,
+                message_id: request.message_id,
+                seq,
+            };
             let mut buf = BytesMut::new();
             encode_sc_message(&mut buf, &request);
-            (message_id, buf.freeze().to_vec())
+            (entry, buf.freeze().to_vec(), receiver)
         };
-        let (sender, receiver) = oneshot::channel();
-        {
-            let mut guard = self.pending.lock().await;
-            // A concurrent waiter cannot hold our ID: we reserved it above
-            // under the same pending lock ordering (connection then pending).
-            // If insertion still collides, fall back to hub delivery.
-            if guard.contains_key(&message_id) {
-                return None;
-            }
-            guard.insert(message_id, sender);
-        }
-        let send_result = ws.send(&request_bytes).await;
-        if send_result.is_err() {
-            self.pending.lock().await.remove(&message_id);
+        if ws.send(&request_bytes).await.is_err() {
             return None;
         }
         let wait = Duration::from_millis(connect_timeout_ms.max(1));
-        let uris = match tokio::time::timeout(wait, receiver).await {
-            Ok(Ok(uris)) => uris,
-            _ => {
-                self.pending.lock().await.remove(&message_id);
-                return None;
-            }
+        let Ok(Ok(uris)) = tokio::time::timeout(wait, receiver).await else {
+            return None;
         };
+        drop(entry);
         self.cache_insert(dest, uris.clone()).await;
         Some(uris)
     }
@@ -721,3 +762,7 @@ impl<W: WebSocketPort> Drop for DirectShared<W> {
 #[cfg(all(test, feature = "sc-tls"))]
 #[path = "direct_membership_tls_tests.rs"]
 mod direct_membership_tls_tests;
+
+#[cfg(test)]
+#[path = "direct_discovery_pending_tests.rs"]
+mod direct_discovery_pending_tests;
