@@ -221,7 +221,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     }
 
     /// Report a change of `oid` to its ordinary and Single subscriptions
-    /// `subs`, as [`evaluate`](bacnet_device_core::cov::evaluate) decides
+    /// `subs`, as [`evaluate`](bacnet_device_core::cov::evaluate()) decides
     /// under the database and table guards, then send each report with
     /// both dropped.
     pub(super) async fn fire_cov_notifications_for_subscriptions(

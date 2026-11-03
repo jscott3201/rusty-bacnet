@@ -196,7 +196,7 @@ impl CovTable {
     }
 
     /// Counts since the last call: subscriptions created, cancelled, purged
-    /// and refused, and notifications [`evaluate`](super::evaluate) cut
+    /// and refused, and notifications [`evaluate`](super::evaluate()) cut
     /// off at their input's budget. `subscriptions_active` is the live
     /// count; the other notification fields stay zero.
     pub fn take_counts(&mut self) -> CovCounters {

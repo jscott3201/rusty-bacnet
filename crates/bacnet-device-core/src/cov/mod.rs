@@ -4,7 +4,7 @@
 //! monitors, the subscription policy, the bounded values a subscription
 //! keeps of what it last reported, the values a notification carries
 //! ([`prepare`], [`flags`], [`reported`], [`value_source`], [`life_safety`]),
-//! what a change of an object reports ([`evaluate`], within an
+//! what a change of an object reports ([`evaluate()`], within an
 //! [`EventBudget`]) and the Device's two subscription lists ([`active`]).
 //!
 //! Plain state on `bacnet-time`: no lock, clock or async. A host keeps the

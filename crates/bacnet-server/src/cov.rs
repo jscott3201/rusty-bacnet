@@ -420,7 +420,7 @@ impl CovSubscriptionTable {
 
     /// Decide what a change of `object` reports to its ordinary and Single
     /// subscriptions `subscriptions`, now; see
-    /// [`evaluate`](bacnet_device_core::cov::evaluate). Each confirmed report
+    /// [`evaluate`](bacnet_device_core::cov::evaluate()). Each confirmed report
     /// comes with its begun flight, whose worker's wake-up is registered
     /// for a fence.
     pub(crate) fn evaluate<L>(

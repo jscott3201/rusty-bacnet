@@ -6,7 +6,8 @@
 //! guard, releases that guard, then projects the copy against the caller's
 //! database guard. Ordinary and Single entries form
 //! `Active_COV_Subscriptions`; Multiple references are never listed there and
-//! form `Active_COV_Multiple_Subscriptions` (see [`multiple`]).
+//! form `Active_COV_Multiple_Subscriptions` (see
+//! [`ActiveCovMultipleSubscriptions`]).
 use super::reported::lead;
 use super::*;
 use crate::read::LiveLists;
