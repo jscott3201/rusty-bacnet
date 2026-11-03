@@ -10,6 +10,7 @@
 use std::net::{IpAddr, SocketAddrV4};
 use std::sync::Weak;
 
+use tokio::task::AbortHandle;
 use tracing::{debug, info};
 
 use super::super::ForeignBbmd;
@@ -115,8 +116,16 @@ impl ForeignTarget {
     /// comes a full interval after the newest failure, so it doesn't wait
     /// for the floor between attempt-driven lookups; one already running
     /// sets up the next retry if it fails.
+    ///
+    /// On a multi-thread runtime this retry may wake while a newer failure
+    /// replaces it, and wait here for the lock: its abort then comes too
+    /// late. Only the retry the state holds acts, so a replaced one leaves
+    /// the newer one, which a stop can still cancel, in place.
     fn retry(&self) {
         let mut state = self.lock();
+        if !is_current(state.retry.as_ref(), tokio::task::try_id()) {
+            return;
+        }
         state.retry = None;
         let waiting = state.config.bbmd().is_none();
         if Self::running(&state).is_none() || !waiting || state.lookups.is_running() {
@@ -128,6 +137,11 @@ impl ForeignTarget {
             lookup.start();
         }
     }
+}
+
+/// Whether `task` is the retry `held`, the one the state holds.
+fn is_current(held: Option<&AbortHandle>, task: Option<tokio::task::Id>) -> bool {
+    matches!((held, task), (Some(held), Some(task)) if held.id() == task)
 }
 
 impl NameTarget for ForeignTarget {
@@ -188,5 +202,25 @@ impl NameTarget for ForeignTarget {
         }
         info!(host = %name.host(), bbmd = %config.bbmd, "The BBMD's host name resolves to a new address; registering there");
         state.config = config;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_current;
+
+    /// A retry acts only while the state still holds it: one replaced by a
+    /// newer failure, or cancelled, leaves the state alone.
+    #[tokio::test]
+    async fn only_the_retry_held_acts() {
+        let older = tokio::spawn(std::future::pending::<()>());
+        let newer = tokio::spawn(std::future::pending::<()>());
+        let held = newer.abort_handle();
+        assert!(is_current(Some(&held), Some(newer.id())));
+        assert!(!is_current(Some(&held), Some(older.id())));
+        assert!(!is_current(None, Some(older.id())));
+        assert!(!is_current(Some(&held), None));
+        older.abort();
+        newer.abort();
     }
 }

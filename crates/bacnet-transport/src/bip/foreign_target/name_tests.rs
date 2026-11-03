@@ -760,18 +760,27 @@ async fn a_restart_while_its_retry_waits_keeps_the_retries_going() {
     assert_eq!(device.bbmd(), at(A));
 }
 
-/// A stop cancels the retry of a configured name, rather than leaving it
-/// to wake and find nothing to do: no lookup follows.
+/// The transport's stop cancels the retry of a configured name, rather
+/// than leaving it to wake and find nothing to do: no lookup follows.
 #[tokio::test(start_paused = true)]
 async fn a_stop_cancels_the_retry() {
-    let device = Device::configured(configured_name(), 60).await;
-    device.after(1).await;
-    assert!(device.target.lock().retry.is_some());
-    device.node.stop();
-    device.target.detach();
-    assert!(device.target.lock().retry.is_none());
-    device.after(120_000).await;
-    assert_eq!(device.names.calls(), 1);
+    let names = Arc::new(Names::default());
+    let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+    transport.register_as_foreign_device(ForeignDeviceConfig {
+        bbmd: configured_name(),
+        ttl: 60,
+        renewal_interval: None,
+    });
+    transport.set_bbmd_resolver(Arc::clone(&names) as Arc<dyn BbmdResolver>);
+    let _rx = transport.start().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    assert_eq!(names.calls(), 1);
+    let target = Arc::clone(transport.foreign_device.as_ref().unwrap());
+    assert!(target.lock().retry.is_some());
+    transport.stop().await.unwrap();
+    assert!(target.lock().retry.is_none());
+    tokio::time::sleep(Duration::from_secs(120)).await;
+    assert_eq!(names.calls(), 1);
 }
 
 /// A name written while the device waits for a configured one is the

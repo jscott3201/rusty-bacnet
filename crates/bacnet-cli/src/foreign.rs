@@ -145,14 +145,22 @@ pub(crate) async fn await_registration(
 /// Why a lookup of the BBMD's host name failed, for a person to read.
 pub(crate) fn lookup_failure(failure: BbmdLookupFailure) -> String {
     match failure {
-        // The kind is all a snapshot keeps; one that says nothing more, as a
-        // resolver's own failure doesn't, is left out.
-        BbmdLookupFailure::Error(kind) => match kind.to_string() {
-            text if kind == std::io::ErrorKind::Other || text.contains("uncategorized") => {
-                "did not resolve".into()
+        // The kind is all a snapshot keeps. Only these say something more;
+        // a name service's own failure arrives uncategorized, a kind stable
+        // Rust can't name, so every other kind is left out.
+        BbmdLookupFailure::Error(kind) => {
+            use std::io::ErrorKind::{
+                ConnectionRefused, HostUnreachable, InvalidInput, NetworkDown, NetworkUnreachable,
+                NotFound, PermissionDenied, TimedOut,
+            };
+            match kind {
+                NotFound | PermissionDenied | ConnectionRefused | TimedOut | InvalidInput
+                | HostUnreachable | NetworkUnreachable | NetworkDown => {
+                    format!("did not resolve ({kind})")
+                }
+                _ => "did not resolve".into(),
             }
-            text => format!("did not resolve ({text})"),
-        },
+        }
         BbmdLookupFailure::TimedOut => "had no answer from the resolver within 10 s".into(),
         BbmdLookupFailure::NoAddress => "has no IPv4 address".into(),
         BbmdLookupFailure::Unusable(ip) => {
