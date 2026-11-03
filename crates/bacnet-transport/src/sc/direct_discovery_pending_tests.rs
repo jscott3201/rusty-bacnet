@@ -1,14 +1,18 @@
-//! Address-Resolution waiters leave `pending` on every exit (#2328).
+//! Address-Resolution waiters leave `pending` on every exit (#2328), and
+//! only the node asked can answer them (#2332).
 //!
 //! The discovery future is polled by hand so a test can stop it at a chosen
 //! await (the hub write or the answer wait) and then drop it, as a caller's
 //! deadline would. The clock is paused; nothing sleeps in real time.
 
 use super::*;
+use bacnet_types::enums::{ErrorClass, ErrorCode};
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::AtomicUsize;
 use std::task::{Context, Poll, Waker};
 
 const TARGET: Vmac = [0x22; 6];
+const OTHER: Vmac = [0x33; 6];
 const URI: &str = "wss://peer.example/sc";
 const WAIT_MS: u64 = 1_000;
 
@@ -24,6 +28,7 @@ enum Write {
 struct Hub {
     write: Write,
     sent: StdMutex<Vec<u16>>,
+    finished: AtomicUsize,
 }
 
 impl Hub {
@@ -31,7 +36,12 @@ impl Hub {
         Arc::new(Self {
             write,
             sent: StdMutex::new(Vec::new()),
+            finished: AtomicUsize::new(0),
         })
+    }
+
+    fn finished(&self) -> usize {
+        self.finished.load(Ordering::SeqCst)
     }
 
     fn sent(&self) -> Vec<u16> {
@@ -44,11 +54,13 @@ impl WebSocketPort for Hub {
         let request = crate::sc_frame::decode_sc_message(data).unwrap();
         assert_eq!(request.function, ScFunction::AddressResolution);
         self.sent.lock().unwrap().push(request.message_id);
-        match self.write {
+        let result = match self.write {
             Write::Accept => Ok(()),
             Write::Fail => Err(Error::Encoding("hub write failed".into())),
             Write::Stall => std::future::pending().await,
-        }
+        };
+        self.finished.fetch_add(1, Ordering::SeqCst);
+        result
     }
 
     async fn recv(&self) -> Result<Vec<u8>, Error> {
@@ -64,19 +76,38 @@ fn fixture() -> (DirectShared<Hub>, Arc<Mutex<ScConnection>>) {
 }
 
 fn waiting(direct: &DirectShared<Hub>) -> usize {
-    direct.pending.lock().unwrap().by_id.len()
+    lock_waiters(&direct.pending).by_id.len()
 }
 
-fn ack(message_id: u16) -> ScMessage {
+/// An Address-Resolution-ACK as the hub relays it from `from`.
+fn ack_from(message_id: u16, from: Option<Vmac>) -> ScMessage {
     ScMessage {
         function: ScFunction::AddressResolutionAck,
         message_id,
-        originating_vmac: Some(TARGET),
+        originating_vmac: from,
         destination_vmac: None,
         dest_options: Vec::new(),
         data_options: Vec::new(),
         payload: bytes::Bytes::from_static(URI.as_bytes()),
     }
+}
+
+fn ack(message_id: u16) -> ScMessage {
+    ack_from(message_id, Some(TARGET))
+}
+
+/// The NAK a node that accepts no direct connections returns, relayed from `from`.
+fn nak_from(message_id: u16, from: Option<Vmac>) -> ScMessage {
+    let mut nak = super::super::data_attributes::build_bvlc_result_nak(
+        message_id,
+        ScFunction::AddressResolution,
+        0,
+        None,
+        ErrorClass::COMMUNICATION,
+        ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+    );
+    nak.originating_vmac = from;
+    nak
 }
 
 fn poll_once<F: Future>(future: Pin<&mut F>) -> Poll<F::Output> {
@@ -85,18 +116,36 @@ fn poll_once<F: Future>(future: Pin<&mut F>) -> Poll<F::Output> {
 
 #[tokio::test(start_paused = true)]
 async fn cancelled_discovery_leaves_no_waiter() {
-    for (stage, write) in [("hub write", Write::Stall), ("answer wait", Write::Accept)] {
+    let mut failures = Vec::new();
+    // Each stage names the await it stops at by the writes finished there.
+    for (stage, write, finished) in [
+        ("hub write", Write::Stall, 0),
+        ("answer wait", Write::Accept, 1),
+    ] {
         let (direct, conn) = fixture();
         let hub = Hub::new(write);
         let mut discovery = Box::pin(direct.discover_via_hub(TARGET, &hub, &conn, WAIT_MS));
-        assert!(poll_once(discovery.as_mut()).is_pending(), "{stage}");
-        assert_eq!(waiting(&direct), 1, "{stage}: no waiter after the insert");
+        if poll_once(discovery.as_mut()).is_ready() {
+            failures.push(format!("{stage}: finished instead of waiting"));
+            continue;
+        }
+        let stopped_at = (hub.sent().len(), hub.finished(), waiting(&direct));
+        if stopped_at != (1, finished, 1) {
+            failures.push(format!(
+                "{stage}: (sent, finished, waiting) = {stopped_at:?}, expected (1, {finished}, 1)"
+            ));
+        }
         drop(discovery);
-        assert_eq!(waiting(&direct), 0, "{stage}: cancelled request leaked");
+        if waiting(&direct) != 0 {
+            failures.push(format!("{stage}: the cancelled request leaked its waiter"));
+        }
         // A late answer for the cancelled request finds nothing to wake.
         direct.fulfill_from_hub_message(&ack(hub.sent()[0]));
-        assert_eq!(waiting(&direct), 0, "{stage}");
+        if waiting(&direct) != 0 || direct.cached_uris(&TARGET).await.is_some() {
+            failures.push(format!("{stage}: a late answer found a waiter"));
+        }
     }
+    assert!(failures.is_empty(), "{failures:#?}");
 }
 
 #[tokio::test(start_paused = true)]
@@ -165,4 +214,76 @@ async fn stale_request_leaves_newer_waiter_with_same_id() {
         assert_eq!(second.await, Some(vec![URI.to_owned()]));
         assert_eq!(waiting(&direct), 0);
     }
+}
+
+/// Answers that don't come from the node asked: a forged one from another
+/// node, and one the hub never relays for a request (no originating VMAC).
+#[tokio::test(start_paused = true)]
+async fn answer_from_another_node_is_ignored() {
+    let forged = [
+        (
+            "ACK from another node",
+            ack_from as fn(u16, Option<Vmac>) -> ScMessage,
+            Some(OTHER),
+        ),
+        ("ACK without an origin", ack_from, None),
+        ("NAK from another node", nak_from, Some(OTHER)),
+        ("NAK without an origin", nak_from, None),
+    ];
+    for (case, answer, from) in forged {
+        let (direct, conn) = fixture();
+        let hub = Hub::new(Write::Accept);
+        let mut discovery = Box::pin(direct.discover_via_hub(TARGET, &hub, &conn, WAIT_MS));
+        assert!(poll_once(discovery.as_mut()).is_pending(), "{case}");
+        let id = hub.sent()[0];
+        direct.fulfill_from_hub_message(&answer(id, from));
+        assert!(
+            poll_once(discovery.as_mut()).is_pending(),
+            "{case}: completed"
+        );
+        assert_eq!(waiting(&direct), 1, "{case}: the waiter was taken");
+        assert_eq!(direct.cached_uris(&TARGET).await, None, "{case}: cached");
+        direct.fulfill_from_hub_message(&ack(id));
+        assert_eq!(discovery.await, Some(vec![URI.to_owned()]), "{case}");
+    }
+}
+
+/// A late ACK for a timed-out request must not answer a newer request
+/// that reused its message ID for another node.
+#[tokio::test(start_paused = true)]
+async fn late_answer_leaves_reused_id_waiter_pending() {
+    let (direct, conn) = fixture();
+    let hub = Hub::new(Write::Accept);
+    assert_eq!(
+        direct.discover_via_hub(OTHER, &hub, &conn, WAIT_MS).await,
+        None
+    );
+    let id = hub.sent()[0];
+
+    conn.lock().await.next_message_id = id;
+    let mut discovery = Box::pin(direct.discover_via_hub(TARGET, &hub, &conn, WAIT_MS));
+    assert!(poll_once(discovery.as_mut()).is_pending());
+    assert_eq!(hub.sent(), [id, id]);
+    direct.fulfill_from_hub_message(&ack_from(id, Some(OTHER)));
+    assert!(
+        poll_once(discovery.as_mut()).is_pending(),
+        "the late ACK answered"
+    );
+    assert_eq!(waiting(&direct), 1);
+    assert_eq!(direct.cached_uris(&TARGET).await, None);
+    assert_eq!(direct.cached_uris(&OTHER).await, None);
+    direct.fulfill_from_hub_message(&ack(id));
+    assert_eq!(discovery.await, Some(vec![URI.to_owned()]));
+}
+
+#[tokio::test(start_paused = true)]
+async fn nak_from_the_node_asked_completes_empty() {
+    let (direct, conn) = fixture();
+    let hub = Hub::new(Write::Accept);
+    let mut discovery = Box::pin(direct.discover_via_hub(TARGET, &hub, &conn, WAIT_MS));
+    assert!(poll_once(discovery.as_mut()).is_pending());
+    direct.fulfill_from_hub_message(&nak_from(hub.sent()[0], Some(TARGET)));
+    assert_eq!(discovery.await, Some(Vec::new()));
+    assert_eq!(direct.cached_uris(&TARGET).await, Some(Vec::new()));
+    assert_eq!(waiting(&direct), 0);
 }

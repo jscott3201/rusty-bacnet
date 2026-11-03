@@ -250,6 +250,8 @@ struct Waiter {
     /// Per-request tag: after a u16 wrap a newer request may reuse the same
     /// message ID, and only the request that inserted an entry removes it.
     seq: u64,
+    /// The node asked. Only an answer the hub relays from this node counts.
+    dest: Vmac,
     answer: oneshot::Sender<Vec<String>>,
 }
 
@@ -259,6 +261,19 @@ struct Waiter {
 struct Waiters {
     next_seq: u64,
     by_id: HashMap<u16, Waiter>,
+}
+
+/// Lock `waiters` the same way everywhere, poisoned or not.
+///
+/// No critical section can panic part-way through a map update: the
+/// allocator only builds requests and probes the map before its one
+/// insert, and the rest are single map operations. A poisoned lock still
+/// holds a consistent map, so take it rather than panic, in a Drop least
+/// of all.
+fn lock_waiters(waiters: &StdMutex<Waiters>) -> std::sync::MutexGuard<'_, Waiters> {
+    waiters
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Owns one [`Waiters`] entry for the life of a `discover_via_hub` call.
@@ -275,12 +290,7 @@ struct PendingEntry<'a> {
 
 impl Drop for PendingEntry<'_> {
     fn drop(&mut self) {
-        // Poison can't leave the map inconsistent: every critical section
-        // is a single map operation. Don't panic inside a drop.
-        let mut waiters = self
-            .waiters
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut waiters = lock_waiters(self.waiters);
         if waiters
             .by_id
             .get(&self.message_id)
@@ -534,6 +544,13 @@ impl<W: WebSocketPort> DirectShared<W> {
     /// falls back to hub delivery (and caches the empty result). Malformed
     /// ACKs, unmatched IDs, and unrelated functions stay silent and keep
     /// waiting until the sender's timeout. Never changes connection state.
+    ///
+    /// An answer must also come from the node asked. Both the ACK and the
+    /// NAK are the destination node's (AB.3.3), and the hub names the node a
+    /// relayed message came from as its originating VMAC (AB.5.3.2). The hub
+    /// drops a request for an unknown VMAC rather than answering it, so an
+    /// answer with no originating VMAC, or another node's, is ignored: IDs
+    /// count up from 1, and any node on the hub could otherwise guess one.
     pub(super) fn fulfill_from_hub_message(&self, msg: &ScMessage) {
         let uris = match msg.function {
             ScFunction::AddressResolutionAck => {
@@ -556,7 +573,17 @@ impl<W: WebSocketPort> DirectShared<W> {
             }
             _ => return,
         };
-        let waiter = self.pending.lock().unwrap().by_id.remove(&msg.message_id);
+        let waiter = {
+            let mut waiters = lock_waiters(&self.pending);
+            let from_dest = waiters
+                .by_id
+                .get(&msg.message_id)
+                .is_some_and(|waiter| msg.originating_vmac == Some(waiter.dest));
+            if !from_dest {
+                return;
+            }
+            waiters.by_id.remove(&msg.message_id)
+        };
         if let Some(waiter) = waiter {
             let _ = waiter.answer.send(uris);
         }
@@ -586,7 +613,7 @@ impl<W: WebSocketPort> DirectShared<W> {
             // cannot complete the wrong waiter after u16 wrap, and insert
             // under the same lock so no other request can claim it between.
             let mut request = c.build_address_resolution_request(dest);
-            let mut waiters = self.pending.lock().unwrap();
+            let mut waiters = lock_waiters(&self.pending);
             let mut attempts = 0;
             while waiters.by_id.contains_key(&request.message_id) && attempts < u16::MAX as usize {
                 request = c.build_address_resolution_request(dest);
@@ -600,14 +627,14 @@ impl<W: WebSocketPort> DirectShared<W> {
             waiters.next_seq = seq.wrapping_add(1);
             waiters
                 .by_id
-                .insert(request.message_id, Waiter { seq, answer });
-            drop(waiters);
+                .insert(request.message_id, Waiter { seq, dest, answer });
             // From here on every exit, cancellation included, removes the entry.
             let entry = PendingEntry {
                 waiters: &self.pending,
                 message_id: request.message_id,
                 seq,
             };
+            drop(waiters);
             let mut buf = BytesMut::new();
             encode_sc_message(&mut buf, &request);
             (entry, buf.freeze().to_vec(), receiver)
