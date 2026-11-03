@@ -7,7 +7,7 @@ use bacnet_encoding::primitives::encode_property_value;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::property_metadata::{check_read_array_index, is_array_property};
 use bacnet_objects::traits::BACnetObject;
-use bacnet_services::read_property::{ReadPropertyACK, ReadPropertyRequest};
+use bacnet_services::read_property::{ReadPropertyAckRef, ReadPropertyRequest};
 use bacnet_types::constructed::PropertyReference;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
@@ -155,18 +155,34 @@ fn read_property_decoded<O: ReadOverlay>(
 ) -> Result<(), Error> {
     let lookup_oid = plan.lookup_oid;
     let value = read_value(db, overlay, plan)?;
+    encode_ack(buf, lookup_oid, request, &value)
+}
 
-    let mut value_buf = BytesMut::new();
-    encode_property_value(&mut value_buf, &value)?;
-
-    let ack = ReadPropertyACK {
+/// Append the ReadProperty-ACK for `value`, read from `lookup_oid`, to `buf`.
+fn encode_ack(
+    buf: &mut BytesMut,
+    lookup_oid: ObjectIdentifier,
+    request: &ReadPropertyRequest,
+    value: &PropertyValue,
+) -> Result<(), Error> {
+    // The value is encoded in place, between the members the ACK encoder
+    // writes around it: given an empty value, it writes the members before
+    // it and then the one-octet `[3]` closing tag. A copy of the value used
+    // to cost two allocations per ReadProperty (#1978 item 3).
+    let frame = ReadPropertyAckRef {
         object_identifier: lookup_oid,
         property_identifier: request.property_identifier,
         property_array_index: request.property_array_index,
-        property_value: value_buf.to_vec(),
+        property_value: &[],
     };
-
-    ack.encode(buf);
+    let mut around = [0; 18];
+    let len = frame
+        .encode_to_sink(&mut &mut around[..])
+        .expect("eighteen octets hold the members around the value");
+    let (head, close) = around[..len].split_at(len - 1);
+    buf.extend_from_slice(head);
+    encode_property_value(buf, value)?;
+    buf.extend_from_slice(close);
     Ok(())
 }
 
@@ -226,3 +242,7 @@ pub(crate) fn rpm_response_index(
         .any(|row| row.property_identifier == property);
     (present && is_array_property(object, property)).then_some(index)
 }
+
+#[cfg(test)]
+#[path = "property_ack_tests.rs"]
+mod ack_tests;
