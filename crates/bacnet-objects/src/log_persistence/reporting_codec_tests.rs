@@ -119,7 +119,7 @@ fn decoded<R: codec::SnapshotRecord + core::fmt::Debug>(
 ) -> Result<LogSnapshot<R>, Error> {
     match codec::decode::<R>(data, expected) {
         Ok(snapshot) => Ok(snapshot),
-        Err(error) if error.is_damage() => Err(error.into_error(codec::WHAT)),
+        Err(error) if error.is_damage() => Err(error.into()),
         Err(error) => panic!("a sound slot refused: {error:?}"),
     }
 }

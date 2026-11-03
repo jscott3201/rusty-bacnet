@@ -17,6 +17,10 @@
 //! no save writes, treated as damage. `decode` checks everything `encode`
 //! does, so whatever loads saves again.
 //!
+//! A backend that keeps two copies, as the log file backend keeps two
+//! slots, gets the file backend's choice between them from
+//! [`log::newest`].
+//!
 //! | Module | Snapshot | Tag | Versions read (written) | File backend |
 //! | --- | --- | --- | --- | --- |
 //! | [`log`] | [`LogSnapshot`] | `RBLOGS01` | 1, 2 (2) | `FileLogPersistence`, one slot of two |
@@ -24,14 +28,19 @@
 //!
 //! # Stability
 //!
-//! The formats are a promise within a major version: what one release
-//! writes, every later release of the same major version reads. A format
-//! may gain versions and kinds; the old ones keep loading, and a backend
-//! that stores the octets as they are needs no change. A snapshot that an
-//! older release can't read (a newer version or kind) is refused with
+//! The promise covers the octets: a later release keeps loading what an
+//! earlier release wrote. A format may gain versions and kinds, and a
+//! backend that stores the octets as they are needs no change for that. A
+//! format version stops loading only in a release whose changelog carries a
+//! migration note saying so. A snapshot an older release can't read (a
+//! newer version or kind) is refused with
 //! [`UnknownVersion`](SnapshotErrorKind::UnknownVersion) or
 //! [`UnknownKind`](SnapshotErrorKind::UnknownKind) rather than loaded in
 //! part.
+//!
+//! The Rust snapshot types are ordinary API and follow the crate's usual
+//! rules: a field added to one is a breaking change to the Rust API, even
+//! when the octets stay readable.
 //!
 //! # A backend of your own
 //!
@@ -97,5 +106,7 @@ pub mod write_config;
 
 pub use error::{SnapshotError, SnapshotErrorKind};
 
+#[cfg(test)]
+mod slot_tests;
 #[cfg(test)]
 mod tests;

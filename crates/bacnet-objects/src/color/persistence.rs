@@ -140,7 +140,7 @@ impl FileColorOutputPersistence {
     /// Keep the Present_Value in the file at `path`. Refuses an empty path.
     pub fn new(path: impl AsRef<Path>) -> Result<Self, Error> {
         Ok(Self {
-            file: ObjectFile::new(path.as_ref(), MAGIC, MAX_FILE_BYTES, "Color output")?
+            file: ObjectFile::new(path.as_ref(), MAGIC, MAX_FILE_BYTES, "Color output file")?
                 .with_previous(MAGIC_V1),
         })
     }

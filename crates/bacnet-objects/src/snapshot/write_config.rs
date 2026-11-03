@@ -70,6 +70,25 @@ pub fn encode(
     object: ObjectIdentifier,
     snapshot: &WriteConfigSnapshot,
 ) -> Result<Vec<u8>, SnapshotError> {
+    encode_file(object, snapshot).map_err(|error| error.in_format("write configuration"))
+}
+
+/// The snapshot a file's `octets` hold for `object`.
+///
+/// Refuses octets past [`MAX_LEN`], without this format's tag, saved for
+/// another object, of a kind that is unknown or for another object type,
+/// cut short, or holding a value [`encode`] never writes.
+pub fn decode(
+    object: ObjectIdentifier,
+    octets: &[u8],
+) -> Result<WriteConfigSnapshot, SnapshotError> {
+    decode_file(object, octets).map_err(|error| error.in_format("Write configuration file"))
+}
+
+fn encode_file(
+    object: ObjectIdentifier,
+    snapshot: &WriteConfigSnapshot,
+) -> Result<Vec<u8>, SnapshotError> {
     let mut body = BytesMut::new();
     match (snapshot, object.object_type()) {
         (WriteConfigSnapshot::Timer(config), ObjectType::TIMER) => {
@@ -82,7 +101,7 @@ pub fn encode(
         }
         _ => {
             return Err(SnapshotError::out_of_range(
-                "is for another object type than its object",
+                "for another object type can't be saved for this object",
             ));
         }
     }
@@ -92,12 +111,7 @@ pub fn encode(
     Ok(framing::seal(&MAGIC, object, &body))
 }
 
-/// The snapshot a file's `octets` hold for `object`.
-///
-/// Refuses octets past [`MAX_LEN`], without this format's tag, saved for
-/// another object, of a kind that is unknown or for another object type,
-/// cut short, or holding a value [`encode`] never writes.
-pub fn decode(
+fn decode_file(
     object: ObjectIdentifier,
     octets: &[u8],
 ) -> Result<WriteConfigSnapshot, SnapshotError> {
@@ -170,7 +184,7 @@ fn encode_timer_set(
         body.extend_from_slice(&[0]);
         return Ok(());
     };
-    let out_of_range = SnapshotError::out_of_range("holds a Timer configuration out of range");
+    let out_of_range = SnapshotError::out_of_range("holds a Timer setting out of range");
     // Only what a load takes back is saved.
     if !(1..=16).contains(&set.priority_for_writing) || set.references.len() > MAX_TIMER_REFERENCES
     {
@@ -190,7 +204,7 @@ fn encode_timer_set(
 }
 
 fn encode_channel(body: &mut BytesMut, config: &ChannelWriteConfig) -> Result<(), SnapshotError> {
-    let out_of_range = SnapshotError::out_of_range("holds a Channel configuration out of range");
+    let out_of_range = SnapshotError::out_of_range("holds a Channel setting out of range");
     match &config.members {
         None => body.extend_from_slice(&[0]),
         Some(members) => {

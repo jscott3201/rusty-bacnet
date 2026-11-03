@@ -5125,7 +5125,9 @@ refusal is a `SnapshotError` whose `kind()` names it: `Truncated`,
 `Damaged`, or `OutOfRange` for a snapshot refused as it is encoded. It
 carries only static text, so reporting one needs no allocation.
 `is_damage()` says whether a two-slot backend should pass over that copy
-for the other one.
+for the other one, and `snapshot::log::newest(object, [slot0, slot1])`
+makes `FileLogPersistence`'s whole choice between two slots. `Error`
+implements `From<SnapshotError>`, the mapping the file backends use.
 
 | Module | Snapshot | Tag and versions | File backend |
 | --- | --- | --- | --- |
@@ -5139,10 +5141,11 @@ let octets = write_config::encode(channel, &snapshot)?; // store these
 let back = write_config::decode(channel, &octets)?;
 ```
 
-The formats are a promise within a major version: a later release of the
-same major version reads what an earlier one wrote. A format may gain
-versions and kinds, and older ones keep loading. The module documentation
-has a complete custom backend.
+The promise covers the octets: a later release keeps loading what an
+earlier one wrote. Formats may gain versions and kinds, and a format version
+stops loading only with a migration note. The Rust snapshot types follow the
+crate's usual API rules, so a new field is a breaking Rust API change. The
+module documentation has a complete custom backend.
 
 ### ObjectDatabase
 

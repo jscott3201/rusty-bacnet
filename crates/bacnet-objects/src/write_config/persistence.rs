@@ -137,7 +137,7 @@ mod file {
                     path.as_ref(),
                     &MAGIC,
                     MAX_LEN as u64,
-                    "Write configuration",
+                    "Write configuration file",
                 )?,
             })
         }
@@ -166,9 +166,7 @@ mod file {
             let Some(octets) = self.file.read()? else {
                 return Ok(None);
             };
-            format::decode(object, &octets)
-                .map(Some)
-                .map_err(|error| self.file.error(error))
+            Ok(Some(format::decode(object, &octets)?))
         }
 
         fn save(
@@ -176,9 +174,7 @@ mod file {
             object: ObjectIdentifier,
             snapshot: &WriteConfigSnapshot,
         ) -> Result<(), Error> {
-            let octets =
-                format::encode(object, snapshot).map_err(|error| self.file.error(error))?;
-            self.file.save_octets(octets)
+            self.file.save_octets(format::encode(object, snapshot)?)
         }
     }
 }

@@ -17,14 +17,14 @@ use crate::write_config::{
     ChannelMembers, ChannelWriteConfig, TimerWriteConfig, WriteConfigSnapshot,
 };
 
-const DATE: Date = Date {
+pub(super) const DATE: Date = Date {
     year: 126,
     month: 11,
     day: 2,
     day_of_week: 1,
 };
 
-fn at(hour: u8) -> Time {
+pub(super) fn at(hour: u8) -> Time {
     Time {
         hour,
         minute: 5,
@@ -33,7 +33,7 @@ fn at(hour: u8) -> Time {
     }
 }
 
-fn oid(kind: ObjectType, instance: u32) -> ObjectIdentifier {
+pub(super) fn oid(kind: ObjectType, instance: u32) -> ObjectIdentifier {
     ObjectIdentifier::new(kind, instance).unwrap()
 }
 
@@ -83,7 +83,7 @@ fn log_snapshot<R>(kind: ObjectType, records: Vec<R>) -> LogSnapshot<R> {
     }
 }
 
-fn trend() -> LogSnapshot<BACnetLogRecord> {
+pub(super) fn trend() -> LogSnapshot<BACnetLogRecord> {
     let record = |hour| BACnetLogRecord {
         date: DATE,
         time: at(hour),
@@ -93,7 +93,7 @@ fn trend() -> LogSnapshot<BACnetLogRecord> {
     log_snapshot(ObjectType::TREND_LOG, vec![record(1), record(2)])
 }
 
-fn event() -> LogSnapshot<BACnetEventLogRecord> {
+pub(super) fn event() -> LogSnapshot<BACnetEventLogRecord> {
     let record = |hour| BACnetEventLogRecord {
         date: DATE,
         time: at(hour),
@@ -139,7 +139,7 @@ fn channel_config() -> WriteConfigSnapshot {
 }
 
 /// Rewrite a slot's checksum after an edit, so only the edit is wrong.
-fn reseal(slot: &mut [u8]) {
+pub(super) fn reseal(slot: &mut [u8]) {
     let at = slot.len() - 4;
     let checksum = crc32(&slot[..at]);
     slot[at..].copy_from_slice(&checksum.to_be_bytes());
@@ -150,12 +150,12 @@ fn each_log_family_round_trips() {
     let octets = log::encode(&trend()).unwrap();
     assert_eq!(octets[..8], log::MAGIC);
     assert_eq!(octets[8..10], log::VERSION.to_be_bytes());
-    assert_eq!(log::decode(&octets, trend().object_identifier), Ok(trend()));
+    assert_eq!(log::decode(trend().object_identifier, &octets), Ok(trend()));
     let octets = log::encode(&event()).unwrap();
-    assert_eq!(log::decode(&octets, event().object_identifier), Ok(event()));
+    assert_eq!(log::decode(event().object_identifier, &octets), Ok(event()));
     let octets = log::encode(&multiple()).unwrap();
     let object = multiple().object_identifier;
-    assert_eq!(log::decode(&octets, object), Ok(multiple()));
+    assert_eq!(log::decode(object, &octets), Ok(multiple()));
 }
 
 #[test]
@@ -163,7 +163,7 @@ fn a_log_slot_refuses_with_the_kind_it_names() {
     let object = trend().object_identifier;
     let slot = log::encode(&trend()).unwrap();
     let kind = |octets: &[u8], object| {
-        let error = log::decode::<BACnetLogRecord>(octets, object).unwrap_err();
+        let error = log::decode::<BACnetLogRecord>(object, octets).unwrap_err();
         (error.kind(), error.is_damage())
     };
     assert_eq!(
@@ -198,13 +198,18 @@ fn a_log_slot_refuses_with_the_kind_it_names() {
 fn a_log_snapshot_that_does_not_hold_together_never_encodes() {
     let mut zero = trend();
     zero.generation = 0;
-    assert_eq!(
-        log::encode(&zero).unwrap_err().kind(),
-        SnapshotErrorKind::Damaged
-    );
+    let error = log::encode(&zero).unwrap_err();
+    assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange);
+    assert!(!error.is_damage());
     let mut cov = event();
     cov.reporting.cov_resubscription_interval = Some(60);
-    assert!(log::encode(&cov).is_err());
+    let error = log::encode(&cov).unwrap_err();
+    assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange);
+    // A snapshot of one log type passed as another's never encodes either.
+    let mut retyped = trend();
+    retyped.object_identifier = oid(ObjectType::TREND_LOG_MULTIPLE, 4);
+    let error = log::encode(&retyped).unwrap_err();
+    assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange);
 }
 
 #[test]
@@ -326,7 +331,7 @@ mod file_backends {
         let written = std::fs::read(&slot).unwrap();
         assert_eq!(written, log::encode(&snapshot).unwrap());
         let object = snapshot.object_identifier;
-        assert_eq!(log::decode::<R>(&written, object).as_ref(), Ok(&snapshot));
+        assert_eq!(log::decode::<R>(object, &written).as_ref(), Ok(&snapshot));
 
         let mut next = snapshot;
         next.generation += 1;

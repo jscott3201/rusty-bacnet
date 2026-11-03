@@ -50,7 +50,7 @@ pub(super) const TRAILER_LEN: usize = 4;
 const MAX_ELEMENT_BYTES: usize = 1024 * 1024;
 /// The most octets a slot may take.
 pub(crate) const MAX_SNAPSHOT_BYTES: usize = 256 * 1024 * 1024;
-/// What a log snapshot's errors are led by, as the stack's [`Error`].
+/// What a log snapshot's error text is led by.
 pub(crate) const WHAT: &str = "log snapshot";
 
 /// A record family a snapshot can hold: the record of one log object type.
@@ -206,11 +206,17 @@ pub(crate) fn validate<R: SnapshotRecord>(snapshot: &LogSnapshot<R>) -> Result<(
     reporting::validate(R::OBJECT_TYPE, &snapshot.reporting)
 }
 
-/// The slot octets for `snapshot`, after [`validate`].
+/// The slot octets for `snapshot`, after [`validate`]. Every refusal is
+/// [`OutOfRange`](SnapshotErrorKind::OutOfRange): nothing was stored, so
+/// nothing is damaged.
 pub(crate) fn encode<R: SnapshotRecord>(
     snapshot: &LogSnapshot<R>,
 ) -> Result<Vec<u8>, SnapshotError> {
-    validate(snapshot)?;
+    encode_slot(snapshot).map_err(|error| error.in_format(WHAT))
+}
+
+fn encode_slot<R: SnapshotRecord>(snapshot: &LogSnapshot<R>) -> Result<Vec<u8>, SnapshotError> {
+    validate(snapshot).map_err(SnapshotError::refusing)?;
     // The header goes first, its payload length filled in at the end, so
     // the payload is written in place rather than copied in after (#2233).
     let mut data = Vec::new();
@@ -311,6 +317,13 @@ pub(crate) fn decode<R: SnapshotRecord>(
     data: &[u8],
     expected: ObjectIdentifier,
 ) -> Result<LogSnapshot<R>, SnapshotError> {
+    decode_slot(data, expected).map_err(|error| error.in_format(WHAT))
+}
+
+fn decode_slot<R: SnapshotRecord>(
+    data: &[u8],
+    expected: ObjectIdentifier,
+) -> Result<LogSnapshot<R>, SnapshotError> {
     verify_integrity(data)?;
     let version = u16::from_be_bytes([data[8], data[9]]);
     if version != SCHEMA_VERSION && version != SCHEMA_VERSION_1 {
@@ -333,6 +346,12 @@ pub(crate) fn decode<R: SnapshotRecord>(
 }
 
 fn verify_integrity(data: &[u8]) -> Result<(), SnapshotError> {
+    if data.len() > MAX_SNAPSHOT_BYTES {
+        return Err(SnapshotError::new(
+            SnapshotErrorKind::TooLarge,
+            "is longer than a slot may be",
+        ));
+    }
     if data.len() < HEADER_LEN + TRAILER_LEN {
         return Err(SnapshotError::truncated("is truncated"));
     }
@@ -342,14 +361,16 @@ fn verify_integrity(data: &[u8]) -> Result<(), SnapshotError> {
             "magic is invalid",
         ));
     }
-    let payload_len = u32::from_be_bytes(data[22..26].try_into().unwrap()) as usize;
-    let declared = HEADER_LEN + payload_len + TRAILER_LEN;
-    if declared > data.len() {
+    // In 64 bits: an erased length field (all ones) would overflow a 32-bit
+    // usize.
+    let payload_len = u64::from(u32::from_be_bytes(data[22..26].try_into().unwrap()));
+    let declared = (HEADER_LEN + TRAILER_LEN) as u64 + payload_len;
+    if declared > data.len() as u64 {
         return Err(SnapshotError::truncated(
             "declared length does not match its length",
         ));
     }
-    if declared != data.len() {
+    if declared != data.len() as u64 {
         return Err(corrupt("declared length does not match its length"));
     }
     let checksum_at = data.len() - TRAILER_LEN;
@@ -414,8 +435,10 @@ impl<'a> Reader<'a> {
         if count > cap || count > (self.data.len() - self.offset) / 4 {
             return Err(corrupt("count is too large").in_field(field));
         }
-        // Reserve a modest start; a long list grows as its elements decode.
-        let mut items = Vec::with_capacity(count.min(4096));
+        // Reserve a modest start, and never more than the octets left could
+        // fill; a long list grows as its elements decode.
+        let room = (self.data.len() - self.offset) / core::mem::size_of::<T>().max(1);
+        let mut items = Vec::with_capacity(count.min(4096).min(room));
         for _ in 0..count {
             let length = self.u32(field)? as usize;
             if length > MAX_ELEMENT_BYTES {

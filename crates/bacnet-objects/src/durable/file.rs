@@ -75,23 +75,25 @@ pub(crate) struct ObjectFile {
     /// The tag of the format's previous version, which still loads.
     previous: Option<&'static [u8; 8]>,
     max_bytes: u64,
-    /// The object type the file belongs to, for errors.
-    kind: &'static str,
+    /// What the file is, for errors: an object type, then "file".
+    what: &'static str,
     /// Test support: keep the file here instead of at `path`.
     #[cfg(feature = "test-support")]
     memory: Option<MemoryFiles>,
 }
 
 impl ObjectFile {
-    /// A file at `path` holding `magic`-tagged state of a `kind` object, at
-    /// most `max_bytes` long. Refuses an empty path.
+    /// A file at `path` holding `magic`-tagged state, at most `max_bytes`
+    /// long, that errors call `what` (an object type, then "file"). Refuses
+    /// an empty path.
     pub(crate) fn new(
         path: &Path,
         magic: &'static [u8; 8],
         max_bytes: u64,
-        kind: &'static str,
+        what: &'static str,
     ) -> Result<Self, Error> {
         if path.as_os_str().is_empty() {
+            let kind = what.strip_suffix(" file").unwrap_or(what);
             return Err(Error::OutOfRange(format!(
                 "{kind} persistence path must not be empty"
             )));
@@ -101,7 +103,7 @@ impl ObjectFile {
             magic,
             previous: None,
             max_bytes,
-            kind,
+            what,
             #[cfg(feature = "test-support")]
             memory: None,
         })
@@ -128,12 +130,12 @@ impl ObjectFile {
 
     /// The error for a file that holds something this format cannot load.
     pub(crate) fn corrupt(&self, reason: &str) -> Error {
-        Error::Encoding(format!("{} file {reason}", self.kind))
+        Error::Encoding(format!("{} {reason}", self.what))
     }
 
     /// The stack's error for a codec's `error` about this file.
     pub(crate) fn error(&self, error: SnapshotError) -> Error {
-        error.into_error(&format!("{} file", self.kind))
+        error.in_format(self.what).into()
     }
 
     /// The body saved for `oid`, after the header, or `None` when there is

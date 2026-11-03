@@ -32,10 +32,12 @@ pub enum SnapshotErrorKind {
 ///
 /// It carries only static text, so a firmware image reports it without
 /// allocating; formatting it ([`Display`](fmt::Display)) is the only cost,
-/// and only when the application asks.
+/// and only when the application asks. The text names the format, then the
+/// field at fault when there is one, then the reason.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SnapshotError {
     kind: SnapshotErrorKind,
+    format: &'static str,
     field: Option<&'static str>,
     detail: &'static str,
 }
@@ -45,6 +47,7 @@ impl SnapshotError {
     pub(crate) const fn new(kind: SnapshotErrorKind, detail: &'static str) -> Self {
         Self {
             kind,
+            format: "",
             field: None,
             detail,
         }
@@ -71,6 +74,20 @@ impl SnapshotError {
         self
     }
 
+    /// The same error, its text led by `format` (such as "log snapshot").
+    pub(crate) const fn in_format(mut self, format: &'static str) -> Self {
+        self.format = format;
+        self
+    }
+
+    /// The same check failing as a snapshot is encoded: a refusal
+    /// ([`OutOfRange`](SnapshotErrorKind::OutOfRange)), never damage, since
+    /// nothing was stored.
+    pub(crate) const fn refusing(mut self) -> Self {
+        self.kind = SnapshotErrorKind::OutOfRange;
+        self
+    }
+
     /// What kind of trouble this is.
     pub const fn kind(&self) -> SnapshotErrorKind {
         self.kind
@@ -87,8 +104,8 @@ impl SnapshotError {
     /// must not take ([`UnknownVersion`](SnapshotErrorKind::UnknownVersion),
     /// [`UnknownKind`](SnapshotErrorKind::UnknownKind),
     /// [`OtherObject`](SnapshotErrorKind::OtherObject)), where loading
-    /// should stop rather than fall back to an older copy, and for an
-    /// encode refusal.
+    /// should stop rather than fall back to an older copy, and for every
+    /// encode refusal ([`OutOfRange`](SnapshotErrorKind::OutOfRange)).
     pub const fn is_damage(&self) -> bool {
         matches!(
             self.kind,
@@ -98,13 +115,15 @@ impl SnapshotError {
                 | SnapshotErrorKind::Damaged
         )
     }
+}
 
-    /// The stack's error for this one, its message led by `format` (such as
-    /// "log snapshot"): [`Error::OutOfRange`] for an encode refusal,
-    /// [`Error::Encoding`] for anything found in stored octets.
-    pub(crate) fn into_error(self, format: &str) -> Error {
-        let message = format!("{format} {self}");
-        match self.kind {
+/// The stack's error, as the file backends return it:
+/// [`Error::OutOfRange`] for an encode refusal, [`Error::Encoding`] for
+/// anything found in stored octets, with the error's text.
+impl From<SnapshotError> for Error {
+    fn from(error: SnapshotError) -> Self {
+        let message = alloc::string::ToString::to_string(&error);
+        match error.kind {
             SnapshotErrorKind::OutOfRange => Error::OutOfRange(message),
             _ => Error::Encoding(message),
         }
@@ -113,6 +132,9 @@ impl SnapshotError {
 
 impl fmt::Display for SnapshotError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if !self.format.is_empty() {
+            write!(f, "{} ", self.format)?;
+        }
         if let Some(field) = self.field {
             write!(f, "{field} ")?;
         }

@@ -125,7 +125,7 @@ fn a_record_longer_than_a_slot_element_is_never_written() {
         log_device_object_property: vec![super::tests::reference(1)],
         reporting: LogReportingSettings::default(),
     };
-    match codec::encode(&snapshot).map_err(|error| error.into_error(codec::WHAT)) {
+    match codec::encode(&snapshot).map_err(Error::from) {
         Err(Error::OutOfRange(message)) => {
             assert!(message.contains("element length"), "{message}")
         }

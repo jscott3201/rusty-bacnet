@@ -10,10 +10,9 @@
 //!
 //! The file backend keeps two slots and writes the one the generation's
 //! parity names, so a commit cut off part way leaves the other to load. A
-//! backend of its own can do the same: on load, take the newer slot that
-//! decodes, pass over one whose error [is
-//! damage](super::SnapshotError::is_damage), and stop at one whose error
-//! isn't.
+//! backend of its own can do the same: hand both slots' octets to
+//! [`newest`], which makes the file backend's choice, and write the next
+//! commit to the slot the new generation's parity names.
 
 use crate::prelude::*;
 use bacnet_types::constructed::{BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord};
@@ -35,7 +34,7 @@ pub const MAX_LEN: usize = codec::MAX_SNAPSHOT_BYTES;
 /// A log record family a slot can hold: [`BACnetLogRecord`] for a Trend Log,
 /// [`BACnetLogMultipleRecord`] for a Trend Log Multiple and
 /// [`BACnetEventLogRecord`] for an Event Log. Sealed: these three are all.
-pub trait LogRecord: sealed::Sealed {}
+pub trait LogRecord: sealed::Sealed + PartialEq {}
 
 mod sealed {
     use super::*;
@@ -87,12 +86,88 @@ pub fn encode<R: LogRecord>(snapshot: &LogSnapshot<R>) -> Result<Vec<u8>, Snapsh
 
 /// The snapshot one slot's `octets` hold for `object`.
 ///
-/// Refuses damage (a slot cut short, a bad magic tag, length or checksum,
-/// or contents that don't decode or don't hold together), and a sound slot
-/// of another object or of a schema version past [`VERSION`].
+/// Refuses damage (a slot cut short or past [`MAX_LEN`], a bad magic tag,
+/// length or checksum, or contents that don't decode or don't hold
+/// together), and a sound slot of another object or of a schema version
+/// this build doesn't read (any but [`OLDEST_VERSION`] to [`VERSION`]).
 pub fn decode<R: LogRecord>(
-    octets: &[u8],
     object: ObjectIdentifier,
+    octets: &[u8],
 ) -> Result<LogSnapshot<R>, SnapshotError> {
     R::decode(octets, object)
+}
+
+/// The slot to load, as [`newest`] picks it.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct NewestSlot<R> {
+    /// The slot it came from, 0 or 1.
+    pub slot: usize,
+    /// Its generation: the next commit is one past it, to the other slot.
+    pub generation: u64,
+    /// The snapshot.
+    pub snapshot: LogSnapshot<R>,
+    /// Each damaged slot passed over, by slot, for the backend to report.
+    pub passed_over: [Option<SnapshotError>; 2],
+}
+
+/// Pick the snapshot to load for `object` from a two-slot store's slots,
+/// `None` for a slot that holds nothing, as `FileLogPersistence` picks it.
+///
+/// The slot of the higher generation that decodes wins, and a damaged slot
+/// is passed over for the other. `Ok(None)` when neither slot holds
+/// anything. Refused:
+///
+/// - a slot that decodes to a sound snapshot this log must not take
+///   (another object's, or an unknown schema version), without falling
+///   back to the other;
+/// - both slots damaged, or one damaged and the other empty: the damage;
+/// - two slots of one generation that hold different snapshots
+///   ([`Damaged`](super::SnapshotErrorKind::Damaged)).
+pub fn newest<R: LogRecord>(
+    object: ObjectIdentifier,
+    slots: [Option<&[u8]>; 2],
+) -> Result<Option<NewestSlot<R>>, SnapshotError> {
+    let mut newest: Option<NewestSlot<R>> = None;
+    let mut passed_over = [None, None];
+    let mut damage = None;
+    for (slot, octets) in slots.into_iter().enumerate() {
+        let Some(octets) = octets else {
+            continue;
+        };
+        match decode::<R>(object, octets) {
+            Err(error) if !error.is_damage() => return Err(error),
+            Err(error) => {
+                passed_over[slot] = Some(error);
+                damage = Some(error);
+            }
+            Ok(snapshot) => match &newest {
+                Some(current) if current.generation > snapshot.generation => {}
+                Some(current) if current.generation == snapshot.generation => {
+                    if current.snapshot != snapshot {
+                        return Err(SnapshotError::damaged(
+                            "slots hold different snapshots of one generation",
+                        )
+                        .in_format(codec::WHAT));
+                    }
+                }
+                _ => {
+                    newest = Some(NewestSlot {
+                        slot,
+                        generation: snapshot.generation,
+                        snapshot,
+                        passed_over: [None, None],
+                    });
+                }
+            },
+        }
+    }
+    match (newest, damage) {
+        (Some(mut newest), _) => {
+            newest.passed_over = passed_over;
+            Ok(Some(newest))
+        }
+        (None, Some(error)) => Err(error),
+        (None, None) => Ok(None),
+    }
 }

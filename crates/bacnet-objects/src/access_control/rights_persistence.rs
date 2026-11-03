@@ -131,7 +131,7 @@ impl FileAccessRightsPersistence {
     /// Keep the rule arrays, Enable and Accompaniment in the file at `path`.
     pub fn new(path: impl AsRef<Path>) -> Result<Self, Error> {
         Ok(Self {
-            file: ObjectFile::new(path.as_ref(), MAGIC, MAX_FILE_BYTES, "Access Rights")?,
+            file: ObjectFile::new(path.as_ref(), MAGIC, MAX_FILE_BYTES, "Access Rights file")?,
         })
     }
 
