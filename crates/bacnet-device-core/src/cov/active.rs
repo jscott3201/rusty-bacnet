@@ -26,7 +26,9 @@ use bytes::BytesMut;
 use core::cmp::Ordering as CmpOrdering;
 
 mod multiple;
+mod overlay;
 pub use multiple::{ActiveCovMultipleEntry, ActiveCovMultipleSubscriptions};
+pub use overlay::{ActiveCovOverlay, ActiveCovView};
 
 /// One ordinary or Single entry copied from the table at a sampled instant.
 #[derive(Debug, Clone, PartialEq)]

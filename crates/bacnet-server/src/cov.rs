@@ -429,7 +429,7 @@ impl CovSubscriptionTable {
         subscriptions: &[CovSubscriptionSnapshot],
         evaluation: Evaluation,
         budget: &mut EventBudget,
-        admit: impl FnMut(&CovSubscriptionSnapshot) -> Option<L>,
+        admit: impl FnMut(&CovSubscriptionSnapshot, usize) -> Option<L>,
     ) -> Vec<(CovReport<L>, Option<ConfirmedFlight>)> {
         let reports = bacnet_device_core::cov::evaluate(
             &mut self.core,
@@ -446,7 +446,8 @@ impl CovSubscriptionTable {
         reports
             .into_iter()
             .map(|report| {
-                let flight = report.lease.is_some().then(|| {
+                let confirmed = subscriptions[report.index].issue_confirmed_notifications;
+                let flight = confirmed.then(|| {
                     let wake = Arc::new(Notify::new());
                     self.wakes.insert(report.token, Arc::clone(&wake));
                     ConfirmedFlight::new(report.token, wake)

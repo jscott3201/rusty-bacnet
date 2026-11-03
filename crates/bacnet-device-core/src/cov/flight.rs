@@ -122,6 +122,14 @@ pub struct Token {
     pub(super) ticket: u64,
 }
 
+#[cfg(test)]
+impl Token {
+    /// A token for tests that need one without a table.
+    pub(crate) fn for_test(ticket: u64) -> Self {
+        Self { flight: 0, ticket }
+    }
+}
+
 /// How a report ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Delivery {
