@@ -35,7 +35,7 @@ Releases after 0.15.0 attach an MCP bundle (`.mcpb`) for each platform beside th
 
 On Linux, use a bundle only with a host that installs MCP bundles there; otherwise set the host up as under [Other agent hosts](#other-agent-hosts).
 
-1. Download the bundle from the [GitHub release](https://github.com/jscott3201/rusty-bacnet/releases) and check it against the release's `SHA256SUMS`, as the [installation page](/rusty-bacnet/start/installation/) shows for the executables. Releases after 0.15 sign each bundle; `npx @anthropic-ai/mcpb info FILE` shows the signer. The 0.15 bundles aren't signed.
+1. Download the bundle from the [GitHub release](https://github.com/jscott3201/rusty-bacnet/releases) and check it against the release's `SHA256SUMS`, as the [installation page](/rusty-bacnet/start/installation/) shows for the executables. The bundles aren't signed.
 2. Open the file with Claude Desktop, for example by double-clicking it, and install the extension it shows.
 3. Enter the name of the profile you authorized, such as `plant-a`, in the extension's **Profile** setting. That is its only setting: the profile holds the transport, the reach and the write policy.
 

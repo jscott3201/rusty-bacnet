@@ -29,9 +29,9 @@ field for the architecture, so the file name says it.
   variables a host substitutes), its version and platform, and that its
   executable is the CLI asset itself, and the icon a 512x512 PNG. A signed
   bundle is checked without its signature block.
-- `signature` says whether a bundle carries an `mcpb sign` signature block
-  and gives the sha256 of the bundle without it, so the release can check
-  that signing only appended the block (#2324). The signature itself is
+- `signature` says whether a bundle is unsigned, signed or ends with a
+  malformed `mcpb sign` block, and gives the sha256 of the bundle without the
+  block, so the release can check that signing only appended it (#2324). The signature itself is
   checked by `mcpb verify`, not here.
 - `smoke` does what a host does: unzips it (restoring the modes), runs the
   manifest's command with a profile filled in, and checks that a missing or
@@ -273,13 +273,20 @@ def pack(binary, platform, version, license_file, notices, out_dir, template=TEM
 # --- Check ------------------------------------------------------------------
 
 def split_signature(data):
-    """(the bundle without its signature block, whether it had one). Like
-    `mcpb verify`, it takes the last footer and the last header before it."""
-    footer = data.rfind(SIGNATURE_FOOTER)
-    header = data.rfind(SIGNATURE_HEADER, 0, footer) if footer >= 0 else -1
-    if header < 0:
-        return data, False
-    return data[:header], True
+    """(the bundle without its signature block, its state): "unsigned" when
+    it doesn't end with the footer, "signed" when it ends with one whole
+    block, and "malformed" when it ends with the footer but the last header
+    before it, or the length that follows, doesn't make one block."""
+    if not data.endswith(SIGNATURE_FOOTER):
+        return data, "unsigned"
+    end = len(data) - len(SIGNATURE_FOOTER)
+    header = data.rfind(SIGNATURE_HEADER, 0, end)
+    start = header + len(SIGNATURE_HEADER)
+    if header < 0 or start + 4 > end:
+        return data, "malformed"
+    if start + 4 + int.from_bytes(data[start:start + 4], "little") != end:
+        return data, "malformed"
+    return data[:header], "signed"
 
 
 def png_errors(data, size=ICON_SIZE):
@@ -319,7 +326,9 @@ def check_bundle(path, platform, version, binary=None, notices=None):
     when given, are the files it must hold byte for byte."""
     label = Path(path).name
     try:
-        content, _ = split_signature(Path(path).read_bytes())
+        content, state = split_signature(Path(path).read_bytes())
+        if state == "malformed":
+            return [f"{label}: ends with a malformed signature block"]
         bundle = zipfile.ZipFile(io.BytesIO(content))
     except (OSError, zipfile.BadZipFile) as err:
         return [f"{label}: not a zip ({err})"]
@@ -384,9 +393,9 @@ def check_bundle(path, platform, version, binary=None, notices=None):
 
 
 def signature(path):
-    """(whether the bundle is signed, the sha256 of it without the block)."""
-    content, signed = split_signature(Path(path).read_bytes())
-    return signed, hashlib.sha256(content).hexdigest()
+    """(its signature state, the sha256 of the bundle without the block)."""
+    content, state = split_signature(Path(path).read_bytes())
+    return state, hashlib.sha256(content).hexdigest()
 
 
 # --- Smoke ------------------------------------------------------------------
@@ -598,8 +607,8 @@ def main(argv=None):
             print(f"OK: {args.bundle.name}")
         return 1 if errors else 0
     if args.action == "signature":
-        signed, digest = signature(args.bundle)
-        print(f"{'signed' if signed else 'unsigned'} {digest}")
+        state, digest = signature(args.bundle)
+        print(f"{state} {digest}")
         return 0
     try:
         smoke(args.bundle, args.timeout)

@@ -251,12 +251,29 @@ class PackAndCheckTests(unittest.TestCase):
     def test_a_signed_bundle_checks_without_its_block(self):
         path = self.files.pack()
         unsigned = path.read_bytes()
-        self.assertEqual(mcpb.signature(path), (False, hashlib.sha256(unsigned).hexdigest()))
+        digest = hashlib.sha256(unsigned).hexdigest()
+        self.assertEqual(mcpb.signature(path), ("unsigned", digest))
         # What `mcpb sign` appends: header, little-endian length, signature, footer.
         blob = b"\x30\x82 stand-in PKCS#7"
-        path.write_bytes(unsigned + b"MCPB_SIG_V1" + len(blob).to_bytes(4, "little") + blob + b"MCPB_SIG_END")
-        self.assertEqual(mcpb.signature(path), (True, hashlib.sha256(unsigned).hexdigest()))
+        block = b"MCPB_SIG_V1" + len(blob).to_bytes(4, "little") + blob + b"MCPB_SIG_END"
+        path.write_bytes(unsigned + block)
+        self.assertEqual(mcpb.signature(path), ("signed", digest))
         self.assertEqual(self.check(path), [])
+
+    def test_a_malformed_signature_block_is_reported(self):
+        unsigned = self.files.pack().read_bytes()
+        path = self.files.dir / "out" / "bacnet-macos-arm64.mcpb"
+        blob = b"stand-in"
+        for tail in (b"MCPB_SIG_END",  # a footer with no header
+                     b"MCPB_SIG_V1" + (len(blob) + 1).to_bytes(4, "little") + blob + b"MCPB_SIG_END",
+                     b"MCPB_SIG_V1\x01MCPB_SIG_END"):  # no room for the length
+            with self.subTest(tail=tail):
+                path.write_bytes(unsigned + tail)
+                self.assertEqual(mcpb.signature(path)[0], "malformed")
+                self.assertTrue(any("malformed signature block" in e for e in self.check(path)))
+        # Markers inside the bundle, not at its end, are no signature.
+        path.write_bytes(unsigned + b"MCPB_SIG_V1 trailing")
+        self.assertEqual(mcpb.signature(path)[0], "unsigned")
 
     def test_extract_refuses_a_path_out_of_the_bundle(self):
         path = self.files.pack()
