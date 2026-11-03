@@ -4,27 +4,22 @@ use crate::prelude::*;
 #[cfg(feature = "std")]
 use std::path::Path;
 
-#[cfg(feature = "std")]
-use bacnet_encoding::constructed::decode_name_value;
-use bacnet_encoding::constructed::encode_name_value;
 use bacnet_types::constructed::BACnetNameValue;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
-use bytes::BytesMut;
 
 #[cfg(feature = "std")]
-use super::MAX_TAGS;
-use super::{check_tags, no_space_error};
-#[cfg(feature = "std")]
 use crate::durable::file::ObjectFile;
+#[cfg(feature = "std")]
+use crate::snapshot::tags as format;
+
+/// The body after the header, checked as a write is ([`crate::snapshot::tags`]).
+pub(super) use crate::snapshot::tags::encode_body as encode_snapshot;
 
 /// Maximum complete persisted Tags representation, including its 12-byte
 /// identity/version header and presence octet: 1 MiB. This opt-in storage
 /// bound does not apply to memory-only objects and is not a BACnet limit.
 pub const MAX_TAGS_SNAPSHOT_BYTES: usize = 1024 * 1024;
-const HEADER_BYTES: usize = 12;
-#[cfg(feature = "std")]
-const MAGIC: &[u8; 8] = b"RBNTAG01";
 
 /// The last successfully written Tags array, independent of whether the
 /// application currently provisions the row.
@@ -61,10 +56,14 @@ pub trait TagsPersistence: Send + Sync {
 /// a failure is logged, not returned after the replacement has happened.
 /// A successful call or a local round trip is not power-loss qualification.
 /// This backend does not coordinate multiple owners or processes at one path.
+/// Both reads and writes enforce [`MAX_TAGS_SNAPSHOT_BYTES`] and
+/// [`MAX_TAGS`](super::MAX_TAGS); a save that a write would refuse fails
+/// with the error the write gets.
 ///
-/// The format holds a version tag, object identifier, presence octet and
-/// concatenated BACnetNameValue elements. Both reads and writes enforce
-/// [`MAX_TAGS_SNAPSHOT_BYTES`] and [`MAX_TAGS`].
+/// The file holds what [`snapshot::tags::encode`] returns; that module
+/// documents the format.
+///
+/// [`snapshot::tags::encode`]: crate::snapshot::tags::encode
 #[derive(Clone, Debug)]
 #[cfg(feature = "std")]
 pub struct FileTagsPersistence {
@@ -76,12 +75,7 @@ impl FileTagsPersistence {
     /// Use the explicit `path` for this object's snapshot.
     pub fn new(path: impl AsRef<Path>) -> Result<Self, Error> {
         Ok(Self {
-            file: ObjectFile::new(
-                path.as_ref(),
-                MAGIC,
-                MAX_TAGS_SNAPSHOT_BYTES as u64,
-                "Tags file",
-            )?,
+            file: ObjectFile::new(path.as_ref(), MAX_TAGS_SNAPSHOT_BYTES as u64, "Tags file")?,
         })
     }
 
@@ -104,45 +98,17 @@ impl FileTagsPersistence {
     }
 }
 
-/// Validate custom snapshots and prospective writes with exactly the same
-/// semantic and serialized-size bounds as the file backend.
-pub(super) fn encode_snapshot(snapshot: &TagsSnapshot) -> Result<BytesMut, Error> {
-    let mut body = BytesMut::new();
-    body.extend_from_slice(&[u8::from(snapshot.tags.is_some())]);
-    if let Some(tags) = &snapshot.tags {
-        check_tags(tags)?;
-        for tag in tags {
-            encode_name_value(&mut body, tag)?;
-            if body.len() > MAX_TAGS_SNAPSHOT_BYTES - HEADER_BYTES {
-                return Err(no_space_error());
-            }
-        }
-    }
-    Ok(body)
-}
-
 #[cfg(feature = "std")]
 impl TagsPersistence for FileTagsPersistence {
     fn load(&self, object: ObjectIdentifier) -> Result<Option<TagsSnapshot>, Error> {
-        let Some(body) = self.file.load(object)? else {
+        let Some(octets) = self.file.read()? else {
             return Ok(None);
         };
-        let tags = match body.split_first() {
-            Some((0, [])) => None,
-            Some((1, bytes)) => Some(self.file.decode_capped(
-                bytes,
-                MAX_TAGS,
-                decode_name_value,
-            )?),
-            _ => return Err(self.file.corrupt("has no valid presence marker")),
-        };
-        let snapshot = TagsSnapshot { tags };
-        encode_snapshot(&snapshot)?;
-        Ok(Some(snapshot))
+        Ok(Some(format::decode(object, &octets)?))
     }
 
     fn save(&self, object: ObjectIdentifier, snapshot: &TagsSnapshot) -> Result<(), Error> {
-        let body = encode_snapshot(snapshot)?;
-        self.file.save(object, &body)
+        self.file
+            .save_octets(format::encode_checked(object, snapshot)?)
     }
 }

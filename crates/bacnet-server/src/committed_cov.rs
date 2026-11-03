@@ -9,7 +9,9 @@
 
 use crate::command_lists::TakenRuns;
 use crate::cov::CovSubscriptionTable;
-use crate::life_safety_cov::{LifeSafetyCovChange, LifeSafetyCovSnapshots, is_life_safety_object};
+use bacnet_device_core::cov::life_safety::{
+    LifeSafetyCovChange, LifeSafetyCovSnapshots, is_life_safety_object,
+};
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::ObjectIdentifier;

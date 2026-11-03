@@ -17,14 +17,27 @@
 //! no save writes, treated as damage. `decode` checks everything `encode`
 //! does, so whatever loads saves again.
 //!
-//! A backend that keeps two copies, as the log file backend keeps two
-//! slots, gets the file backend's choice between them from
-//! [`log::newest`].
+//! A backend that keeps two copies, as the log and Audit Log file backends
+//! keep two slots, gets the file backend's choice between them from
+//! [`log::newest`] and [`audit_log::newest`].
 //!
 //! | Module | Snapshot | Tag | Versions read (written) | File backend |
 //! | --- | --- | --- | --- | --- |
 //! | [`log`] | [`LogSnapshot`] | `RBLOGS01` | 1, 2 (2) | `FileLogPersistence`, one slot of two |
+//! | [`audit_log`] | [`AuditLogSnapshot`] | `RBALOG01` | 1, 2, 3 (3) | `FileAuditLogPersistence`, one slot of two |
 //! | [`write_config`] | [`WriteConfigSnapshot`] | `RBNWCF01` | kinds 1, 2, 3 (2, 3) | `FileWriteConfigPersistence` |
+//! | [`notification_class`] | [`NotificationClassSnapshot`] | `RBNNCL01` | 1 (1) | `FileNotificationClassPersistence` |
+//! | [`notification_forwarder`] | [`ForwarderSnapshot`] | `RBNFWD01` | 1 (1) | `FileNotificationForwarderPersistence` |
+//! | [`tags`] | [`TagsSnapshot`] | `RBNTAG01` | 1 (1) | `FileTagsPersistence` |
+//! | [`color`] | [`ColorOutputSnapshot`] | `RBNCLR02` | 1 (`RBNCLR01`), 2 (2) | `FileColorOutputPersistence` |
+//! | [`access_rights`] | [`AccessRightsSnapshot`] | `RBNACR01` | 1 (1) | `FileAccessRightsPersistence` |
+//!
+//! The one-file formats share a header: the eight-octet tag, which names the
+//! format and its version, then the four-octet identifier of the object the
+//! file belongs to. Their `encode` and `decode` take that object first. A
+//! newer version of a format's tag, or a kind this build doesn't know, is
+//! [`UnknownVersion`](SnapshotErrorKind::UnknownVersion) or
+//! [`UnknownKind`](SnapshotErrorKind::UnknownKind), never damage.
 //!
 //! # Stability
 //!
@@ -96,16 +109,32 @@
 //!
 //! [`LogPersistence`]: crate::log_persistence::LogPersistence
 //! [`LogSnapshot`]: crate::log_persistence::LogSnapshot
+//! [`AuditLogSnapshot`]: crate::audit::AuditLogSnapshot
 //! [`WriteConfigPersistence`]: crate::write_config::WriteConfigPersistence
 //! [`WriteConfigSnapshot`]: crate::write_config::WriteConfigSnapshot
+//! [`NotificationClassSnapshot`]: crate::notification_class::NotificationClassSnapshot
+//! [`ForwarderSnapshot`]: crate::notification_forwarder::ForwarderSnapshot
+//! [`TagsSnapshot`]: crate::object_profile::TagsSnapshot
+//! [`ColorOutputSnapshot`]: crate::color::ColorOutputSnapshot
+//! [`AccessRightsSnapshot`]: crate::access_control::AccessRightsSnapshot
 
+pub mod access_rights;
+pub mod audit_log;
+pub mod color;
 mod error;
 pub(crate) mod framing;
 pub mod log;
+pub mod notification_class;
+pub mod notification_forwarder;
+pub mod tags;
 pub mod write_config;
 
 pub use error::{SnapshotError, SnapshotErrorKind};
 
+#[cfg(test)]
+mod audit_log_tests;
+#[cfg(test)]
+mod one_file_tests;
 #[cfg(test)]
 mod slot_tests;
 #[cfg(test)]

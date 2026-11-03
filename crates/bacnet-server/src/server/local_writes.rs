@@ -120,7 +120,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .set_life_safety_operation_expected(operation)?;
         // Only a Life Safety Point or Zone reports the change. Another object
         // whose setter takes the operation owes no COV, as before (#1520).
-        if crate::life_safety_cov::is_life_safety_object(*oid) {
+        if bacnet_device_core::cov::life_safety::is_life_safety_object(*oid) {
             commit.changed(*oid);
         }
         let fanout =
@@ -645,7 +645,7 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
             write,
             LocalWrite::Property { property, .. } if property == PropertyIdentifier::INPUT_REFERENCE
         );
-        let life_safety = crate::life_safety_cov::is_life_safety_object(*oid);
+        let life_safety = bacnet_device_core::cov::life_safety::is_life_safety_object(*oid);
         // A write the object saves first saves here, without the guard.
         let durable = match write {
             LocalWrite::Property {
@@ -664,7 +664,10 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                 staged.release(&mut db);
                 return Err(crate::command_lists::stale_run());
             }
-            let snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::capture_oid(&db, *oid);
+            let snapshots =
+                bacnet_device_core::cov::life_safety::LifeSafetyCovSnapshots::capture_oid(
+                    &db, *oid,
+                );
             if let Err(error) = precheck(&db, oid, write, &value) {
                 // Nothing reached the object: what was staged goes back.
                 staged.release(&mut db);

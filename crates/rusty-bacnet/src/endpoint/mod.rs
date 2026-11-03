@@ -17,6 +17,7 @@ mod lifecycle;
 mod mstp;
 mod roles;
 mod sc;
+mod source_audit;
 
 pub(crate) use bip::PyBipEndpoint;
 pub(crate) use mstp::PyMstpEndpoint;

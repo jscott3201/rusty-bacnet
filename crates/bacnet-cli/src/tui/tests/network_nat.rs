@@ -225,7 +225,10 @@ async fn a_translated_registration_is_found_at_the_global_address() {
     };
     let mut net = Net::start(plan).await;
     net.press(KeyCode::Char('4')).await;
-    assert_eq!(net.app.network.foreign.unwrap().nat_global, Some(global));
+    assert_eq!(
+        net.app.network.foreign.as_ref().unwrap().nat_global,
+        Some(global)
+    );
     net.pump_until("our FDT entry", |app| app.network.own.is_some())
         .await;
     let own = net.app.network.own.unwrap();

@@ -18,6 +18,7 @@ use bacnet_transport::bbmd_lookup::BbmdLookupFailure;
 use bacnet_transport::bip::DEFAULT_BACNET_PORT;
 use bacnet_transport::bip::{
     BipTransport, ForeignBbmd, ForeignDeviceConfig, ForeignRegistrationOutcome,
+    ForeignRegistrationSnapshot,
 };
 
 /// How long a one-shot command waits for the first registration's answer.
@@ -91,55 +92,86 @@ pub(crate) fn config(
     })
 }
 
-/// Wait until the first registration with `bbmd` is answered: `Ok` once the
-/// BBMD accepts it, an error naming the outcome otherwise. A BBMD named by
-/// a host name that doesn't resolve fails at once with the lookup's reason:
-/// the transport tries it again every 30 seconds, after this wait is over.
+/// Wait until the first registration with `bbmd` is answered: `Ok`, naming
+/// the BBMD, once it accepts it, an error naming the BBMD and the outcome
+/// otherwise. A BBMD named by a host name is named with the address it
+/// stands for and its lookups (#2308); one whose name doesn't resolve
+/// fails at once with the lookup's reason: the transport tries it again
+/// every 30 seconds, after this wait is over.
 pub(crate) async fn await_registration(
     client: &BACnetClient<BipTransport>,
     bbmd: &ForeignBbmd,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let deadline = tokio::time::Instant::now() + REGISTRATION_WAIT;
     loop {
         let registration = client.foreign_registration().map_err(|e| e.to_string())?;
         if registration.last_outcome.is_none()
             && let Some(failure) = registration.last_bbmd_lookup_failure
         {
+            let tally = lookups(&registration).map_or_else(String::new, |n| format!(" ({n})"));
             return Err(format!(
-                "BBMD {bbmd} could not be registered with: its host name {}",
+                "BBMD {bbmd} could not be registered with: its host name {}{tally}",
                 lookup_failure(failure)
             ));
         }
-        match registration.last_outcome {
-            Some(ForeignRegistrationOutcome::Accepted) => return Ok(()),
+        let outcome = registration.last_outcome;
+        let pending = matches!(outcome, Some(ForeignRegistrationOutcome::Pending) | None);
+        if pending && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            continue;
+        }
+        let bbmd = label(bbmd, &registration);
+        return match outcome {
+            Some(ForeignRegistrationOutcome::Accepted) => Ok(bbmd),
             Some(ForeignRegistrationOutcome::Refused) => {
                 let result = registration
                     .last_result
                     .map_or_else(String::new, |result| format!(" ({result})"));
-                return Err(format!(
+                Err(format!(
                     "BBMD {bbmd} refused the foreign-device registration{result}"
-                ));
+                ))
             }
-            Some(ForeignRegistrationOutcome::LocalError) => {
-                return Err(format!(
-                    "could not send the foreign-device registration to BBMD {bbmd}"
-                ));
-            }
+            Some(ForeignRegistrationOutcome::LocalError) => Err(format!(
+                "could not send the foreign-device registration to BBMD {bbmd}"
+            )),
             Some(ForeignRegistrationOutcome::TimedOut | ForeignRegistrationOutcome::Cancelled) => {
-                return Err(format!(
+                Err(format!(
                     "BBMD {bbmd} did not answer the foreign-device registration"
-                ));
+                ))
             }
-            Some(ForeignRegistrationOutcome::Pending) | None => {}
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return Err(format!(
+            Some(ForeignRegistrationOutcome::Pending) | None => Err(format!(
                 "the foreign-device registration with BBMD {bbmd} had no outcome after {} s",
                 REGISTRATION_WAIT.as_secs()
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
+            )),
+        };
     }
+}
+
+/// `bbmd` as the messages name it: a host name together with the address
+/// it stands for, once an attempt went there, and its lookups (#2308).
+fn label(bbmd: &ForeignBbmd, registration: &ForeignRegistrationSnapshot) -> String {
+    if bbmd.address().is_some() {
+        return bbmd.to_string();
+    }
+    let at = registration.last_bbmd.map(|at| format!("at {at}"));
+    let parts: Vec<String> = at.into_iter().chain(lookups(registration)).collect();
+    if parts.is_empty() {
+        return bbmd.to_string();
+    }
+    format!("{bbmd} ({})", parts.join("; "))
+}
+
+/// How many lookups of the BBMD's host name ended, and how many of them
+/// failed (#2308), for a person to read; `None` before the first ends.
+pub(crate) fn lookups(registration: &ForeignRegistrationSnapshot) -> Option<String> {
+    let ended = registration.bbmd_lookups;
+    let plural = if ended == 1 { "" } else { "s" };
+    (ended > 0).then(|| {
+        format!(
+            "{ended} name lookup{plural}, {} failed",
+            registration.bbmd_lookup_failures
+        )
+    })
 }
 
 /// Why a lookup of the BBMD's host name failed, for a person to read.
@@ -236,7 +268,45 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(4), "{error}");
         assert!(error.contains("bbmd.invalid:47808"), "{error}");
         assert!(error.contains("host name did not resolve"), "{error}");
+        assert!(error.ends_with("(1 name lookup, 1 failed)"), "{error}");
         assert_eq!(client.foreign_registration().unwrap().attempts, 0);
+        client.stop().await.unwrap();
+    }
+
+    /// A resolver that stands every name for 127.0.0.1.
+    struct Loopback;
+
+    impl BbmdResolver for Loopback {
+        fn resolve(&self, _host: &str) -> BbmdLookup {
+            Box::pin(async { Ok(vec![Ipv4Addr::LOCALHOST.into()]) })
+        }
+    }
+
+    /// A name that resolves to a BBMD that never answers: the error names
+    /// the BBMD by its name, the address it stood for and its lookups
+    /// (#2308).
+    #[tokio::test(start_paused = true)]
+    async fn a_resolved_name_is_reported_with_its_address_and_lookups() {
+        let silent = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let port = silent.local_addr().unwrap().port();
+        let bbmd = parse_foreign_bbmd_arg(&format!("bbmd.example:{port}")).unwrap();
+        let mode = BipMode::Foreign(config(Some(bbmd.clone()), 60, None).unwrap());
+        let mut client = BACnetClient::bip_builder()
+            .interface(Ipv4Addr::LOCALHOST)
+            .port(0)
+            .mode(mode)
+            .bbmd_resolver(Arc::new(Loopback))
+            .build()
+            .await
+            .unwrap();
+        let error = await_registration(&client, &bbmd).await.unwrap_err();
+        assert_eq!(
+            error,
+            format!(
+                "BBMD bbmd.example:{port} (at 127.0.0.1:{port}; 1 name lookup, 0 failed) \
+                 did not answer the foreign-device registration"
+            )
+        );
         client.stop().await.unwrap();
     }
 }

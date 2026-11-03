@@ -335,44 +335,88 @@ impl BACnetServer {
         &self,
         recipient: &bacnet_types::constructed::BACnetRecipient,
     ) -> PyResult<()> {
-        use bacnet_types::constructed::BACnetRecipient;
-        match recipient {
-            BACnetRecipient::Device(device)
-                if device.object_type() == ObjectType::DEVICE
-                    && device.instance_number() < ObjectIdentifier::MAX_INSTANCE
-                    && device.instance_number() != self.device_instance =>
-            {
-                Ok(())
-            }
-            // Network zero, or a network numbered 1 to 65534: the server
-            // takes an address on its own network's number as local once it
-            // knows that number, and one it does not name yet starts
-            // unresolved (#1460).
-            BACnetRecipient::Address(address)
-                if self.transport_type == "bip"
-                    && address.network_number != u16::MAX
-                    && server::valid_bip_audit_address(
-                        &bacnet_types::constructed::BACnetAddress {
-                            network_number: 0,
-                            mac_address: address.mac_address.clone(),
-                        },
-                    )
-                    && address.mac_address.as_slice()[..4]
-                        != self
-                            .broadcast_address
-                            .parse::<std::net::Ipv4Addr>()
-                            .map_err(|_| {
-                                PyValueError::new_err("invalid configured broadcast address")
-                            })?
-                            .octets() =>
-            {
-                Ok(())
-            }
-            _ => Err(PyValueError::new_err(
-                "recipient must be a concrete remote Device or a supported direct unicast B/IP address",
-            )),
-        }
+        let broadcast = if self.transport_type == "bip" {
+            Some(
+                self.broadcast_address
+                    .parse::<std::net::Ipv4Addr>()
+                    .map_err(|_| PyValueError::new_err("invalid configured broadcast address"))?,
+            )
+        } else {
+            None
+        };
+        validate_audit_recipient(recipient, self.device_instance, broadcast, "recipient")
     }
+}
+
+/// Check a Device's Audit recipient before start: a concrete remote Device,
+/// or, on B/IP (`bip_broadcast` is the link's broadcast address), a direct
+/// unicast IPv4 address. Shared by the server and the B/IP endpoint (#2348);
+/// `name` is the keyword the ValueError names.
+pub(crate) fn validate_audit_recipient(
+    recipient: &bacnet_types::constructed::BACnetRecipient,
+    device_instance: u32,
+    bip_broadcast: Option<std::net::Ipv4Addr>,
+    name: &str,
+) -> PyResult<()> {
+    use bacnet_types::constructed::BACnetRecipient;
+    match recipient {
+        BACnetRecipient::Device(device)
+            if device.object_type() == ObjectType::DEVICE
+                && device.instance_number() < ObjectIdentifier::MAX_INSTANCE
+                && device.instance_number() != device_instance =>
+        {
+            Ok(())
+        }
+        // Network zero, or a network numbered 1 to 65534: the server
+        // takes an address on its own network's number as local once it
+        // knows that number, and one it does not name yet starts
+        // unresolved (#1460).
+        BACnetRecipient::Address(address)
+            if bip_broadcast.is_some_and(|broadcast| {
+                address.network_number != u16::MAX
+                    && server::valid_bip_audit_address(&bacnet_types::constructed::BACnetAddress {
+                        network_number: 0,
+                        mac_address: address.mac_address.clone(),
+                    })
+                    && address.mac_address.as_slice()[..4] != broadcast.octets()
+            }) =>
+        {
+            Ok(())
+        }
+        _ => Err(PyValueError::new_err(format!(
+            "{name} must be a concrete remote Device or a supported direct unicast B/IP address"
+        ))),
+    }
+}
+
+/// A Reporter's `audit_level` keyword: "none", "audit_config" or
+/// "audit_all". Shared with the B/IP endpoint's `add_audit_reporter`.
+pub(crate) fn reporter_audit_level(value: &str) -> PyResult<AuditLevel> {
+    match value {
+        "none" => Ok(AuditLevel::NONE),
+        "audit_config" => Ok(AuditLevel::AUDIT_CONFIG),
+        "audit_all" => Ok(AuditLevel::AUDIT_ALL),
+        _ => Err(PyValueError::new_err(
+            "audit_level must be 'none', 'audit_config', or 'audit_all'",
+        )),
+    }
+}
+
+/// A Reporter's `auditable_operations` keyword: an unsigned64 bit mask, bit
+/// n for AuditOperation n. Shared with the B/IP endpoint's
+/// `add_audit_reporter`.
+pub(crate) fn reporter_auditable_operations(
+    operations: &Bound<'_, PyAny>,
+) -> PyResult<AuditOperationFlags> {
+    if operations.is_instance_of::<PyBool>() || !operations.is_instance_of::<PyInt>() {
+        return Err(PyTypeError::new_err(
+            "auditable_operations must be an integer (not bool)",
+        ));
+    }
+    let bits = operations.extract::<u64>().map_err(|_| {
+        PyOverflowError::new_err("auditable_operations must be in 0..=18446744073709551615")
+    })?;
+    AuditOperationFlags::from_bits(bits).map_err(|error| PyValueError::new_err(error.to_string()))
 }
 
 struct ReporterConfiguration {
@@ -430,27 +474,8 @@ fn parse_reporters(value: &Bound<'_, PyAny>) -> PyResult<Vec<ReporterConfigurati
                 "Reporter instance must be concrete (0..=4194302)",
             ));
         }
-        let level = match required("audit_level")?.extract::<&str>()? {
-            "none" => AuditLevel::NONE,
-            "audit_config" => AuditLevel::AUDIT_CONFIG,
-            "audit_all" => AuditLevel::AUDIT_ALL,
-            _ => {
-                return Err(PyValueError::new_err(
-                    "audit_level must be 'none', 'audit_config', or 'audit_all'",
-                ));
-            }
-        };
-        let operations = required("auditable_operations")?;
-        if operations.is_instance_of::<PyBool>() || !operations.is_instance_of::<PyInt>() {
-            return Err(PyTypeError::new_err(
-                "auditable_operations must be an integer (not bool)",
-            ));
-        }
-        let bits = operations.extract::<u64>().map_err(|_| {
-            PyOverflowError::new_err("auditable_operations must be in 0..=18446744073709551615")
-        })?;
-        let operations = AuditOperationFlags::from_bits(bits)
-            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        let level = reporter_audit_level(required("audit_level")?.extract::<&str>()?)?;
+        let operations = reporter_auditable_operations(&required("auditable_operations")?)?;
         let confirmed = required("issue_confirmed_notifications")?;
         if !confirmed.is_instance_of::<PyBool>() {
             return Err(PyTypeError::new_err(

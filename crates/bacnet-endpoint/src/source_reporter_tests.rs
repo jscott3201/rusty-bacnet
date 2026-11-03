@@ -28,14 +28,14 @@ struct ObservedTransport {
 impl TransportPort for ObservedTransport {
     fn bip_broadcast_endpoint(&self) -> Option<std::net::SocketAddrV4> {
         self.observed.bip_reads.fetch_add(1, Ordering::SeqCst);
-        Some(std::net::SocketAddrV4::new(
-            [192, 168, 1, 255].into(),
-            if self.observed.starts.load(Ordering::SeqCst) == 0 {
-                0
-            } else {
-                47808
-            },
-        ))
+        // Before start, an unrelated placeholder: the started link's
+        // broadcast endpoint is a fact learned post-start, which the source
+        // routes then recheck.
+        Some(if self.observed.starts.load(Ordering::SeqCst) == 0 {
+            std::net::SocketAddrV4::new([198, 51, 100, 255].into(), 0)
+        } else {
+            std::net::SocketAddrV4::new([192, 168, 1, 255].into(), 47808)
+        })
     }
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
         self.observed.starts.fetch_add(1, Ordering::SeqCst);

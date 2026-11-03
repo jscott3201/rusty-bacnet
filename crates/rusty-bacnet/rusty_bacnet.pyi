@@ -2833,7 +2833,16 @@ class ForeignRegistrationStatus(TypedDict):
     refused or timed-out renewal. The totals
     survive it: ``lapses`` counts leases that ran out with no newer success,
     and ``renewal_hints`` the BBMD's Distribute-Broadcast-To-Network NAKs,
-    each of which brings the next attempt forward."""
+    each of which brings the next attempt forward. A BBMD named by host name
+    (#2308) counts its lookups in ``bbmd_lookups``, the failed ones in
+    ``bbmd_lookup_failures``, and names why the newest failed in
+    ``last_bbmd_lookup_failure`` (``"not_resolved"``, ``"timed_out"`` after
+    10 seconds, ``"no_ipv4_address"``, ``"unusable_address"``,
+    ``"abandoned"``, or ``"other"`` for a failure this version doesn't
+    name), None once one succeeds and cleared when the owner
+    stops. ``waiting_for_bbmd`` is true while that name hasn't resolved yet:
+    no attempt is due, and it is tried again 30 seconds after each
+    failure."""
     registered: bool
     lease_remaining: Optional[float]
     next_attempt_in: Optional[float]
@@ -2845,6 +2854,12 @@ class ForeignRegistrationStatus(TypedDict):
     refused: int
     lapses: int
     renewal_hints: int
+    bbmd_lookups: int
+    bbmd_lookup_failures: int
+    last_bbmd_lookup_failure: Optional[Literal[
+        "not_resolved", "timed_out", "no_ipv4_address", "unusable_address", "abandoned",
+        "other"]]
+    waiting_for_bbmd: bool
 
 
 class FdtEntry(TypedDict):
@@ -6987,8 +7002,24 @@ class BipEndpoint:
         after_reinitialize: Optional[AfterReinitialize] = None,
         reinit_password: Optional[str] = None,
         device_write_policy: Optional[MutationHandler] = None,
+        source_audit_reporter: Optional[ObjectIdentifier] = None,
+        audit_recipient: Optional[AuditRecipientInput] = None,
+        audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str]]] = None,
     ) -> None:
-        """``on_reinitialize`` / ``after_reinitialize``: execute
+        """``source_audit_reporter`` / ``audit_recipient`` /
+        ``audit_device_bindings`` (#2348): the Audit Reporter, added with
+        ``add_audit_reporter``, through which the session reports the
+        ReinitializeDevice resets, backups and restores it carries out,
+        ``report_device_reset_local()`` calls and the client role's reads,
+        each filtered by the Reporter's level and operations. It needs
+        ``device_write_policy`` and ``audit_recipient`` (the Device's Audit
+        recipient); the bindings are ``(Device identifier, "ipv4:port")``
+        routes to recipient Devices. A Reporter identifier of another type and
+        the other shapes construction can check raise ValueError; a Reporter
+        that wasn't added raises BacnetError at start. Only B/IP endpoints
+        take these: the Rust session reports source records on IPv4 B/IP
+        only.
+        ``on_reinitialize`` / ``after_reinitialize``: execute
         ReinitializeDevice, as ``BACnetServer``'s keywords do (#1566);
         ``reinit_password`` (needs ``on_reinitialize``, else ValueError; 1 to
         20 characters, else ValueError) is the password a request must
@@ -7035,6 +7066,15 @@ class BipEndpoint:
     def add_binary_value(self, instance: int, name: str, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
         """Optional BV Audit rows: None is absent; priority 'inherit' is present NULL.
         Access, Value_Source and profile keywords as on ``add_analog_value``."""
+        ...
+    def add_audit_reporter(self, instance: int, name: str, *, audit_level: Literal["none", "audit_config", "audit_all"], auditable_operations: int, issue_confirmed_notifications: bool = False) -> None:
+        """Add an Audit Reporter for ``source_audit_reporter`` to select
+        (#2348). ``audit_level`` and ``auditable_operations`` (bit n for
+        AuditOperation n) are required, as on
+        ``BACnetServer.configure_audit_reporters``, and filter what the
+        session reports. Peers can't change them through an endpoint. A
+        Reporter that ``source_audit_reporter`` doesn't select records
+        nothing."""
         ...
     def add_group(
         self,
@@ -7099,9 +7139,10 @@ class BipEndpoint:
         """Record a reset the application makes for its own reasons: a
         DEVICE_RESET Audit record from this device, with no invoke ID, through
         the session's source Reporter when it has one, as
-        ``BACnetServer.report_device_reset_local`` does (#1837). Python can't
-        configure an endpoint's source Reporter yet, so from Python this
-        records nothing. A peer's accepted restart is recorded already.
+        ``BACnetServer.report_device_reset_local`` does (#1837): with
+        ``source_audit_reporter`` set, a DEVICE_RESET naming this device as
+        source and target, filtered by that Reporter's level and operations;
+        without one, nothing. A peer's accepted restart is recorded already.
         RuntimeError when the endpoint is not running."""
         ...
 
@@ -7226,10 +7267,11 @@ class ScEndpoint:
         """Record a reset the application makes for its own reasons: a
         DEVICE_RESET Audit record from this device, with no invoke ID, through
         the session's source Reporter when it has one, as
-        ``BACnetServer.report_device_reset_local`` does (#1837). Python can't
-        configure an endpoint's source Reporter yet, so from Python this
-        records nothing. A peer's accepted restart is recorded already.
-        RuntimeError when the endpoint is not running."""
+        ``BACnetServer.report_device_reset_local`` does (#1837). Only a B/IP
+        endpoint can select a source Reporter (the Rust session reports
+        source records on IPv4 B/IP only), so this one records nothing. A
+        peer's accepted restart is recorded already. RuntimeError when the
+        endpoint is not running."""
         ...
 
     @property
@@ -7377,10 +7419,11 @@ class MstpEndpoint:
         """Record a reset the application makes for its own reasons: a
         DEVICE_RESET Audit record from this device, with no invoke ID, through
         the session's source Reporter when it has one, as
-        ``BACnetServer.report_device_reset_local`` does (#1837). Python can't
-        configure an endpoint's source Reporter yet, so from Python this
-        records nothing. A peer's accepted restart is recorded already.
-        RuntimeError when the endpoint is not running."""
+        ``BACnetServer.report_device_reset_local`` does (#1837). Only a B/IP
+        endpoint can select a source Reporter (the Rust session reports
+        source records on IPv4 B/IP only), so this one records nothing. A
+        peer's accepted restart is recorded already. RuntimeError when the
+        endpoint is not running."""
         ...
 
     @property

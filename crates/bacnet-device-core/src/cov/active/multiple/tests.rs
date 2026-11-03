@@ -1,10 +1,12 @@
 use super::*;
-use bacnet_device_core::cov::CovNotificationKind;
+use crate::cov::CovNotificationKind;
+use bacnet_encoding::npdu::NpduAddress;
 use bacnet_objects::analog::AnalogValueObject;
 use bacnet_objects::binary::BinaryValueObject;
 use bacnet_time::Duration;
 use bacnet_types::MacAddr;
 use bacnet_types::enums::{EngineeringUnits, ObjectType};
+use bacnet_types::error::Error;
 
 const MULTIPLE: PropertyIdentifier = PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS;
 const PV: PropertyIdentifier = PropertyIdentifier::PRESENT_VALUE;
@@ -64,10 +66,10 @@ fn reference(
 
 #[test]
 fn active_cov_multiple_entries_follow_context_refresh_without_purging_or_single() {
-    let now = crate::runtime_clock::core_now();
+    let now = Instant::from_secs(1_000);
     let unconfirmed = context(direct(), 2, false);
     let confirmed = context(direct(), 2, true);
-    let mut table = CovSubscriptionTable::new();
+    let mut table = CovTable::default();
     let single = reference(
         &unconfirmed,
         &direct(),
@@ -75,12 +77,15 @@ fn active_cov_multiple_entries_follow_context_refresh_without_purging_or_single(
         None,
         CovNotificationKind::Single,
     );
-    table.subscribe(single.clone()).unwrap();
+    table.subscribe(single.clone(), now).unwrap();
     // Generic admission cannot bypass the context owner.
     let mut bypass = single;
     bypass.notification_kind = CovNotificationKind::Multiple;
     bypass.expires_at = Some(now + Duration::from_secs(60));
-    assert!(matches!(table.subscribe(bypass), Err(Error::Encoding(_))));
+    assert!(matches!(
+        table.subscribe(bypass, now),
+        Err(Error::Encoding(_))
+    ));
     assert_eq!(table.len(), 1);
 
     let first = now + Duration::from_millis(1_500);
@@ -107,6 +112,7 @@ fn active_cov_multiple_entries_follow_context_refresh_without_purging_or_single(
             5,
             None,
             vec![present, status],
+            now,
         )
         .unwrap();
     let later = now + Duration::from_secs(60);
@@ -118,10 +124,10 @@ fn active_cov_multiple_entries_follow_context_refresh_without_purging_or_single(
         CovNotificationKind::Multiple,
     );
     table
-        .subscribe_multiple(&confirmed, &direct(), later, 7, None, vec![other_form])
+        .subscribe_multiple(&confirmed, &direct(), later, 7, None, vec![other_form], now)
         .unwrap();
 
-    let rows = |table: &CovSubscriptionTable, at| {
+    let rows = |table: &CovTable, at| {
         let mut rows: Vec<_> = table
             .active_cov_multiple_entries(at)
             .into_iter()
@@ -155,6 +161,7 @@ fn active_cov_multiple_entries_follow_context_refresh_without_purging_or_single(
             9,
             None,
             vec![],
+            now,
         )
         .unwrap();
     assert_eq!(
@@ -293,7 +300,7 @@ fn active_cov_multiple_projection_groups_contexts_and_omits_deleted_objects() {
 #[test]
 fn live_device_cov_resolves_only_selected_lists() {
     let db = ObjectDatabase::new();
-    let table = CovSubscriptionTable::new();
+    let table = CovTable::default();
     let empty = Some(PropertyValue::ApplicationData(Vec::new()));
     let active = PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS;
     for (selected_active, selected_multiple) in [(true, false), (false, true), (true, true)] {
@@ -303,7 +310,7 @@ fn live_device_cov_resolves_only_selected_lists() {
             active_cov_multiple: selected_multiple,
             address_bindings: false,
         };
-        let entries = table.live_cov_entries(selection, crate::runtime_clock::core_now());
+        let entries = table.live_cov_entries(selection, Instant::from_secs(1_000));
         for live in [
             LiveDeviceCov::project(&db, selection, entries),
             LiveDeviceCov::stopped(selection),
