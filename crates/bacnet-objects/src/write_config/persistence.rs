@@ -110,7 +110,7 @@ pub use file::FileWriteConfigPersistence;
 mod file {
     use super::*;
     use crate::durable::file::ObjectFile;
-    use crate::snapshot::write_config::{self as format, MAGIC, MAX_LEN};
+    use crate::snapshot::write_config::{self as format, MAX_LEN};
 
     /// A file holding one Timer's or Channel's written configuration,
     /// replaced whole on each save the same way as
@@ -133,12 +133,7 @@ mod file {
         /// path.
         pub fn new(path: impl AsRef<Path>) -> Result<Self, Error> {
             Ok(Self {
-                file: ObjectFile::new(
-                    path.as_ref(),
-                    &MAGIC,
-                    MAX_LEN as u64,
-                    "Write configuration file",
-                )?,
+                file: ObjectFile::new(path.as_ref(), MAX_LEN as u64, "Write configuration file")?,
             })
         }
 

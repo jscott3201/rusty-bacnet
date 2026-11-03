@@ -53,12 +53,13 @@ impl SourceRoutes {
         self.broadcast = broadcast;
         self.local_network = local_network;
     }
+    /// A direct unicast B/IP MAC. The link's broadcast address is refused
+    /// at any port, as the server's Device bindings refuse it (#2348).
     fn valid_address(&self, mac: &[u8]) -> bool {
         bacnet_server::server::valid_bip_audit_address(&BACnetAddress {
             network_number: 0,
             mac_address: MacAddr::from_slice(mac),
-        }) && !(mac[..4] == self.broadcast.ip().octets()
-            && mac[4..] == self.broadcast.port().to_be_bytes())
+        }) && mac[..4] != self.broadcast.ip().octets()
     }
     /// The direct B/IP MAC a recipient is sent to, if it has one. An address
     /// naming this network by its number, once the number is known, is a
