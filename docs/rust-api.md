@@ -1285,7 +1285,21 @@ multicast, link-local, IPv4-mapped or IPv4-compatible) and the TTL nonzero;
 it returns the `Bip6ForeignDeviceRefusal` otherwise. `start()` fails with
 `InvalidInput` for such a registration, and a Network Port activation refuses
 one. The B/IPv6 client builder takes a registration with
-`.foreign_device(config)` alongside `.device_instance(..)` (#1941).
+`.foreign_device(config)` alongside `.device_instance(..)` (#1941), and, as the B/IP
+one does, `.bbmd_resolver(..)` for a host name written to FD_BBMD_Address and
+`.release_previous_bbmd(true)` (#2338).
+
+`Bip6Transport::set_release_previous_bbmd(true)` (off by default) gives B/IPv6 B/IP's
+release of the BBMD a move leaves: after a Network Port activation, or a host name
+that now resolves elsewhere, the old BBMD gets one Delete-Foreign-Device-Table-Entry
+naming the device's own bound B/IPv6 address, sent after the first registration with
+the new BBMD (Annex U.4.5.4). A success, the deletion NAK, or no answer within 3
+seconds is counted in `previous_bbmd_releases()` (`Bip6ReleaseCounters`); none of
+them holds up or fails the move. B/IPv6 registration doesn't run on
+`bacnet-bip-core`'s node, so the transport's re-registration task sends the
+release. One waits for its answer at a time: a newer release ends that wait, a
+move before the task sent one drops it, and a stop ends one still out, each counted
+as unanswered.
 
 A Forwarded-NPDU whose original source address is an IPv6 multicast group, a
 group destination at any port, is malformed for the same reason as on B/IP:

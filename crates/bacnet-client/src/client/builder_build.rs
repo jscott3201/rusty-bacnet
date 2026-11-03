@@ -77,6 +77,10 @@ impl Bip6ClientBuilder {
         if let Some(foreign) = self.foreign_device {
             transport.register_as_foreign_device(foreign);
         }
+        transport.set_release_previous_bbmd(self.release_previous_bbmd);
+        if let Some(resolver) = self.bbmd_resolver {
+            transport.set_bbmd_resolver(resolver);
+        }
         (self.config, transport, self.options)
     }
 
