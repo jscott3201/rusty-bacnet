@@ -142,7 +142,7 @@ impl TimerObject {
     pub(super) fn drop_saved_timeout(&mut self, saved: u64) {
         log_warn!(
             object = %self.oid,
-            saved,
+            saved = saved,
             min = self.config.min_pres_value,
             max = self.config.max_pres_value,
             "Saved Default_Timeout lies outside Min_Pres_Value..=Max_Pres_Value; the application's value applies"
