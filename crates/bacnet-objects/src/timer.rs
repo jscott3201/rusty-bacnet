@@ -125,6 +125,10 @@ pub(crate) struct TimerConfig {
     /// A write set Default_Timeout, now or before a restart: with storage,
     /// it is kept.
     timeout_written: bool,
+    /// A saved, written Default_Timeout the range a new Timer takes doesn't
+    /// hold, kept aside unserved until the application's range decides it
+    /// (`set_pres_value_range`). Storage keeps it meanwhile.
+    held_timeout: Option<u64>,
     min_pres_value: u64,
     max_pres_value: u64,
 }
@@ -152,6 +156,7 @@ impl TimerObject {
                 set: None,
                 default_timeout: DEFAULT_TIMEOUT,
                 timeout_written: false,
+                held_timeout: None,
                 min_pres_value: DEFAULT_MIN_PRES_VALUE,
                 max_pres_value: DEFAULT_MAX_PRES_VALUE,
             },
@@ -193,6 +198,12 @@ impl TimerObject {
     /// narrowed the range since the write: the saved value is dropped with a
     /// warning, the application's value applies, and storage is saved
     /// without it (#2312).
+    ///
+    /// A saved value [`with_persistence`](Self::with_persistence) held aside,
+    /// one past the range a new Timer takes, is decided here too: served,
+    /// and kept, if the new range holds it, dropped as above if not. Until a
+    /// range is set it stays held: storage keeps it, and the application's
+    /// value is served.
     pub fn set_pres_value_range(&mut self, min: u64, max: u64) -> Result<(), Error> {
         let saved = self.default_timeout_saved();
         let kept = if saved {
@@ -207,8 +218,16 @@ impl TimerObject {
         self.config.max_pres_value = max;
         // A staged write worked out under the old range gives way.
         self.config_changed();
-        if saved && !self.config.in_range(self.config.default_timeout) {
-            self.drop_saved_timeout();
+        if let Some(held) = self.config.held_timeout {
+            if self.config.in_range(held) {
+                self.config.default_timeout = held;
+                self.config.timeout_written = true;
+                self.config.held_timeout = None;
+            } else {
+                self.drop_saved_timeout(held);
+            }
+        } else if saved && !self.config.in_range(self.config.default_timeout) {
+            self.drop_saved_timeout(self.config.default_timeout);
         }
         Ok(())
     }

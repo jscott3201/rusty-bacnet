@@ -43,9 +43,11 @@ impl TimerObject {
     ///
     /// Fails when what storage holds can't be loaded, belongs to another
     /// object type, or holds a set `set_state_change` would refuse. A saved
-    /// Default_Timeout outside the range a new Timer takes is dropped with a
-    /// warning instead, as a narrowed range drops one
-    /// ([`set_pres_value_range`](Self::set_pres_value_range)).
+    /// Default_Timeout of zero, which no range holds, is dropped with a
+    /// warning. One past the range a new Timer takes is held aside, unserved
+    /// and still kept in storage, until
+    /// [`set_pres_value_range`](Self::set_pres_value_range) gives the range
+    /// that decides it; without that call it stays held.
     pub fn with_persistence(
         instance: u32,
         name: impl Into<String>,
@@ -72,11 +74,18 @@ impl TimerObject {
             });
         }
         timer.config_storage = Some(StagedSaves::new(saving::writer(oid, persistence)));
-        if let Some(timeout) = saved.default_timeout {
-            timer.config.default_timeout = timeout;
-            timer.config.timeout_written = true;
-            if !timer.in_range(timeout) {
-                timer.drop_saved_timeout();
+        match saved.default_timeout {
+            None => {}
+            Some(timeout) if timer.in_range(timeout) => {
+                timer.config.default_timeout = timeout;
+                timer.config.timeout_written = true;
+            }
+            // No Timer takes zero: the minimum is at least 1.
+            Some(0) => timer.drop_saved_timeout(0),
+            // An application range may reach it.
+            Some(timeout) => {
+                log_debug!(timer = %oid, timeout, "Saved Default_Timeout held until the range is set");
+                timer.config.held_timeout = Some(timeout);
             }
         }
         Ok(timer)
@@ -89,9 +98,12 @@ impl TimerObject {
         self.config_storage.is_some() && self.config.set.as_ref().is_some_and(|set| set.written)
     }
 
-    /// Whether storage holds a Default_Timeout a write made, now or before a
-    /// restart. [`set_default_timeout`](Self::set_default_timeout) then
-    /// leaves the served value alone. Always false without persistence.
+    /// Whether the Timer serves a Default_Timeout a write made and storage
+    /// holds, now or before a restart.
+    /// [`set_default_timeout`](Self::set_default_timeout) then leaves the
+    /// served value alone. False for a saved value held aside (see
+    /// [`with_persistence`](Self::with_persistence)) until the range serves
+    /// it, and always without persistence.
     pub fn default_timeout_saved(&self) -> bool {
         self.config_storage.is_some() && self.config.timeout_written
     }
@@ -123,20 +135,21 @@ impl TimerObject {
         self.config_writes = self.config_writes.wrapping_add(1);
     }
 
-    /// The saved Default_Timeout lies outside the range, where Clause
-    /// 12.57.16 doesn't let the Timer serve it: serve the application's value
-    /// instead, and save without the written one, so it doesn't come back
-    /// (#2312).
-    pub(super) fn drop_saved_timeout(&mut self) {
+    /// The saved Default_Timeout, `saved`, lies outside the range, where
+    /// Clause 12.57.16 doesn't let the Timer serve it: serve the
+    /// application's value instead, and save without the written one, so it
+    /// doesn't come back (#2312).
+    pub(super) fn drop_saved_timeout(&mut self, saved: u64) {
         log_warn!(
             object = %self.oid,
-            saved = self.config.default_timeout,
+            saved,
             min = self.config.min_pres_value,
             max = self.config.max_pres_value,
             "Saved Default_Timeout lies outside Min_Pres_Value..=Max_Pres_Value; the application's value applies"
         );
         self.config.default_timeout = self.configured_timeout;
         self.config.timeout_written = false;
+        self.config.held_timeout = None;
         let snapshot = Self::snapshot(Some(&self.config));
         if let Some(storage) = &mut self.config_storage {
             storage.submit_coalescing(snapshot);
@@ -180,7 +193,12 @@ impl ConfigWrites for TimerObject {
                     priority_for_writing: set.priority,
                 }
             }),
-            default_timeout: config.timeout_written.then_some(config.default_timeout),
+            // A held value is kept in storage, unserved.
+            default_timeout: if config.timeout_written {
+                Some(config.default_timeout)
+            } else {
+                config.held_timeout
+            },
         })
     }
 
@@ -211,6 +229,7 @@ impl ConfigWrites for TimerObject {
         Ok(TimerConfig {
             default_timeout: timeout,
             timeout_written: true,
+            held_timeout: None,
             ..config.clone()
         })
     }
@@ -220,6 +239,7 @@ impl ConfigWrites for TimerObject {
             set.written = false;
         }
         config.timeout_written = false;
+        config.held_timeout = None;
     }
 }
 
@@ -230,6 +250,7 @@ impl TimerConfig {
             set: None,
             default_timeout: self.default_timeout,
             timeout_written: self.timeout_written,
+            held_timeout: self.held_timeout,
             min_pres_value: self.min_pres_value,
             max_pres_value: self.max_pres_value,
         }

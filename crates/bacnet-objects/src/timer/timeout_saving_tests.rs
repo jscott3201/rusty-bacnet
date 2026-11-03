@@ -245,3 +245,112 @@ fn a_saved_default_timeout_no_timer_takes_is_dropped_at_the_build() {
     timer.wait_for_saves();
     assert_eq!(saved(&storage), TimerWriteConfig::default());
 }
+
+/// Past the range a new Timer takes (#2312 review): what the application's
+/// range allows.
+const WIDE: u64 = 20_000_000_000;
+const LONG: u64 = 10_000_000_000;
+
+/// Storage holding LONG, written under a range up to WIDE.
+fn holding_long() -> Arc<MemoryConfig> {
+    let storage = MemoryConfig::new();
+    let mut first = timer(&storage, 30_000);
+    first.set_pres_value_range(1, WIDE).unwrap();
+    first
+        .write_property(TIMEOUT, None, PropertyValue::Unsigned(LONG), None)
+        .unwrap();
+    drop(first);
+    assert_eq!(saved(&storage).default_timeout, Some(LONG));
+    storage
+}
+
+/// A saved value past the range a new Timer takes is held at the build,
+/// and served once the application's range holds it.
+#[test]
+fn a_saved_default_timeout_past_the_new_timer_range_comes_back_with_the_wide_range() {
+    let storage = holding_long();
+    let mut rebuilt = timer(&storage, 30_000);
+    // Held: not served, still saved.
+    assert_eq!(timeout(&rebuilt), PropertyValue::Unsigned(30_000));
+    assert!(!rebuilt.default_timeout_saved());
+    rebuilt.wait_for_saves();
+    assert_eq!(saved(&storage).default_timeout, Some(LONG));
+    rebuilt.set_pres_value_range(1, WIDE).unwrap();
+    assert_eq!(timeout(&rebuilt), PropertyValue::Unsigned(LONG));
+    assert!(rebuilt.default_timeout_saved());
+    rebuilt.wait_for_saves();
+    assert_eq!(saved(&storage).default_timeout, Some(LONG));
+}
+
+/// A save made while the value is held keeps it; a Timer whose range is
+/// never set serves the application's value and keeps the held one saved.
+#[test]
+fn a_held_default_timeout_survives_saves_and_stays_unserved_without_a_range() {
+    let storage = holding_long();
+    let mut rebuilt = timer(&storage, 30_000);
+    rebuilt
+        .write_property(VALUES, Some(1), PropertyValue::Real(42.0), None)
+        .unwrap();
+    rebuilt.wait_for_saves();
+    let kept = saved(&storage);
+    assert_eq!(kept.default_timeout, Some(LONG));
+    assert!(kept.state_change.is_some());
+    drop(rebuilt);
+    let unresolved = timer(&storage, 30_000);
+    assert_eq!(timeout(&unresolved), PropertyValue::Unsigned(30_000));
+    drop(unresolved);
+    assert_eq!(saved(&storage).default_timeout, Some(LONG));
+}
+
+/// A held value the range set doesn't hold is dropped and saved without;
+/// a peer's write replaces one, and the clear drops one.
+#[test]
+fn a_held_default_timeout_gives_way_to_a_range_a_write_or_a_clear() {
+    let storage = holding_long();
+    let mut narrowed = timer(&storage, 30_000);
+    narrowed.set_pres_value_range(1, LONG - 1).unwrap();
+    assert_eq!(timeout(&narrowed), PropertyValue::Unsigned(30_000));
+    narrowed.wait_for_saves();
+    assert_eq!(saved(&storage).default_timeout, None);
+
+    let storage = holding_long();
+    let mut written = timer(&storage, 30_000);
+    written
+        .write_property(TIMEOUT, None, PropertyValue::Unsigned(7_000), None)
+        .unwrap();
+    written.set_pres_value_range(1, WIDE).unwrap();
+    assert_eq!(timeout(&written), PropertyValue::Unsigned(7_000));
+    assert_eq!(saved(&storage).default_timeout, Some(7_000));
+
+    let storage = holding_long();
+    let mut cleared = timer(&storage, 30_000);
+    cleared.clear_written_config().unwrap();
+    assert_eq!(saved(&storage), TimerWriteConfig::default());
+    cleared.set_pres_value_range(1, WIDE).unwrap();
+    assert_eq!(timeout(&cleared), PropertyValue::Unsigned(30_000));
+}
+
+/// A saved value exactly at a narrowed bound stays; one past it goes.
+#[test]
+fn a_saved_default_timeout_at_a_narrowed_bound_stays_and_one_past_it_goes() {
+    for (saved_value, kept) in [
+        (100_000, true),
+        (100_001, false),
+        (10_000, true),
+        (9_999, false),
+    ] {
+        let storage = MemoryConfig::new();
+        timer(&storage, 30_000)
+            .write_property(TIMEOUT, None, PropertyValue::Unsigned(saved_value), None)
+            .unwrap();
+        let mut rebuilt = timer(&storage, 30_000);
+        rebuilt.set_pres_value_range(10_000, 100_000).unwrap();
+        let expected = if kept { saved_value } else { 30_000 };
+        assert_eq!(
+            timeout(&rebuilt),
+            PropertyValue::Unsigned(expected),
+            "{saved_value}"
+        );
+        assert_eq!(rebuilt.default_timeout_saved(), kept, "{saved_value}");
+    }
+}

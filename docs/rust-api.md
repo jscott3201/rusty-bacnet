@@ -6074,7 +6074,10 @@ peer's write. A written Default_Timeout is kept the same way (#2312):
 it (`default_timeout_saved` says so). If the application later narrows the
 range with `set_pres_value_range` past a saved Default_Timeout, the saved
 value is dropped with a warning, the application's value applies, and storage
-is saved without it; the rest of what was saved still applies.
+is saved without it; the rest of what was saved still applies. A saved value
+past the range a new Timer takes (above `u32::MAX` milliseconds) is held aside
+at the build, unserved but still saved, until `set_pres_value_range` serves it
+or drops it; zero, which no range holds, is dropped at once.
 `clear_written_config` drops everything saved (saving that, and returning
 storage's error if the save fails) so the setters apply again. The state
 machine is not kept: the Timer still starts IDLE. Storage is
