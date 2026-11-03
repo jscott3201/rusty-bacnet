@@ -88,6 +88,14 @@ impl SnapshotError {
         self
     }
 
+    /// The same check failing on stored octets: damage
+    /// ([`Damaged`](SnapshotErrorKind::Damaged)), whatever an encode of the
+    /// same snapshot would have called it.
+    pub(crate) const fn damaging(mut self) -> Self {
+        self.kind = SnapshotErrorKind::Damaged;
+        self
+    }
+
     /// What kind of trouble this is.
     pub const fn kind(&self) -> SnapshotErrorKind {
         self.kind
