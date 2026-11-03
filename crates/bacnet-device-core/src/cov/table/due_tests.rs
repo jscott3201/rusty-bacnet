@@ -127,3 +127,23 @@ fn a_context_renewal_and_expire_all_lower_it() {
     assert_eq!(table.expire(secs(4)), 1);
     assert_eq!(table.next_expiry(), None);
 }
+
+/// A full pass that removes an expired subscription keeps the deadline of a
+/// report still outstanding on another, so the next pass ends that report.
+#[test]
+fn a_full_pass_keeps_an_outstanding_deadline() {
+    let mut table = CovTable::default().with_flight_timing(TIMING);
+    table.subscribe(proposal(1, Some(1)), T0).unwrap();
+    let forever = table.subscribe(proposal(2, None), T0).unwrap();
+    let token = begin(&mut table, &forever, T0);
+    table.take_fenced();
+    assert_eq!(table.expire(secs(1)), 1);
+    assert_not_late(&table);
+    table.take_fenced();
+    table.expire(secs(2));
+    assert_eq!(
+        table.take_fenced().tokens,
+        vec![token],
+        "ended at its deadline"
+    );
+}
