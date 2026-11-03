@@ -14,7 +14,7 @@ transport, a server executor or event/COV delivery.
 | Profile | Features | What it has |
 | --- | --- | --- |
 | Hosted | `std` (default) | Everything, including the file persistence backends (`FileAuditLogPersistence`, `FileLogPersistence` and the others), a writer thread per saving object, and tracing. |
-| `no_std` with a heap | `alloc` (without `std`) | Every object type, the database and the persistence traits, for a target with a global allocator and atomic compare-and-swap (#1615). A save runs on the caller's thread, and the application supplies the storage. |
+| `no_std` with a heap | `alloc` (without `std`) | Every object type, the database and the persistence traits, for a target with a global allocator and atomic compare-and-swap (#1615). A save runs on the caller's thread, and the application supplies the storage; `snapshot` gives it the octets the file backends write (#2047). |
 
 Two capability features (#2215) let a firmware image drop code it never
 uses. `std` turns both on, so a hosted build has them; a `no_std` build with

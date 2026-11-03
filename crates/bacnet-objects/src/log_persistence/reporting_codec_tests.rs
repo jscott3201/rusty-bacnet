@@ -10,7 +10,7 @@ use bacnet_types::enums::{LoggingType, NotifyType, ObjectType, PropertyIdentifie
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 
-use super::codec::{self, Decoded, HEADER_LEN, SCHEMA_VERSION_1, TRAILER_LEN};
+use super::codec::{self, HEADER_LEN, SCHEMA_VERSION_1, TRAILER_LEN};
 use super::tests::{event_record, reference, trend_record};
 use super::*;
 use crate::clock::UNSPECIFIED_DATETIME;
@@ -118,9 +118,9 @@ fn decoded<R: codec::SnapshotRecord + core::fmt::Debug>(
     expected: ObjectIdentifier,
 ) -> Result<LogSnapshot<R>, Error> {
     match codec::decode::<R>(data, expected) {
-        Decoded::Valid(snapshot) => Ok(snapshot),
-        Decoded::Corrupt(error) => Err(error),
-        Decoded::Refused(error) => panic!("a sound slot refused: {error:?}"),
+        Ok(snapshot) => Ok(snapshot),
+        Err(error) if error.is_damage() => Err(error.into()),
+        Err(error) => panic!("a sound slot refused: {error:?}"),
     }
 }
 

@@ -109,9 +109,8 @@ use bacnet_types::enums::{LoggingType, NotifyType};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 
-// The snapshot format: only the file backend reads and writes it whole.
-#[cfg_attr(not(feature = "std"), allow(dead_code))]
-mod codec;
+// The snapshot format, public as `crate::snapshot::log`.
+pub(crate) mod codec;
 #[cfg(feature = "std")]
 mod file;
 pub(crate) mod store;

@@ -26,11 +26,11 @@ use bacnet_encoding::constructed::{
 };
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{NotifyType, ObjectType};
-use bacnet_types::error::Error;
 use bytes::BytesMut;
 
 use super::{MAX_ELEMENT_BYTES, Reader, corrupt};
 use crate::log_persistence::LogReportingSettings;
+use crate::snapshot::SnapshotError;
 
 /// The most octets one Event_Message_Texts_Config string may take in a
 /// slot, so the three fit the room [`super::FIXED_ALLOWANCE`] keeps beside
@@ -54,11 +54,14 @@ const KNOWN: u16 = (1 << 9) - 1;
 /// increment that is negative or not finite, a zero resubscription
 /// interval, a message text past [`MAX_TEXT_OCTETS`], or an inhibit
 /// reference in the unset form, which is kept as none.
-pub(super) fn validate(kind: ObjectType, settings: &LogReportingSettings) -> Result<(), Error> {
+pub(super) fn validate(
+    kind: ObjectType,
+    settings: &LogReportingSettings,
+) -> Result<(), SnapshotError> {
     let cov =
         settings.client_cov_increment.is_some() || settings.cov_resubscription_interval.is_some();
     if cov && kind != ObjectType::TREND_LOG {
-        return Err(corrupt(format_args!("holds COV settings a {kind:?} lacks")));
+        return Err(corrupt("holds COV settings only a Trend Log has"));
     }
     if let Some(enable) = settings.event_enable
         && EventTransitionBits::from_bits(enable.bits()).is_none()
@@ -83,9 +86,9 @@ pub(super) fn validate(kind: ObjectType, settings: &LogReportingSettings) -> Res
     if let Some(texts) = &settings.event_message_texts_config
         && texts.iter().any(|text| text.len() > MAX_TEXT_OCTETS)
     {
-        return Err(Error::OutOfRange(format!(
-            "an Event_Message_Texts_Config string a log keeps is at most {MAX_TEXT_OCTETS} octets"
-        )));
+        return Err(SnapshotError::out_of_range(
+            "holds an Event_Message_Texts_Config string past the 16 KiB a log keeps",
+        ));
     }
     if settings
         .event_algorithm_inhibit_ref
@@ -164,7 +167,7 @@ fn put_octets(data: &mut Vec<u8>, octets: &[u8]) {
 }
 
 /// Read the settings [`put`] wrote; the caller validates the snapshot whole.
-pub(super) fn read(reader: &mut Reader<'_>) -> Result<LogReportingSettings, Error> {
+pub(super) fn read(reader: &mut Reader<'_>) -> Result<LogReportingSettings, SnapshotError> {
     let mask = u16::from_be_bytes(
         reader
             .take(2, "reporting presence")?
@@ -202,7 +205,10 @@ pub(super) fn read(reader: &mut Reader<'_>) -> Result<LogReportingSettings, Erro
     }
     if has(INHIBIT_REF) {
         let octets = octets(reader, "Event_Algorithm_Inhibit_Ref", MAX_ELEMENT_BYTES)?;
-        settings.event_algorithm_inhibit_ref = Some(decode_object_property_reference(octets)?);
+        settings.event_algorithm_inhibit_ref = Some(
+            decode_object_property_reference(octets)
+                .map_err(|_| corrupt("does not decode").in_field("Event_Algorithm_Inhibit_Ref"))?,
+        );
     }
     if has(INHIBIT) {
         settings.event_algorithm_inhibit = Some(reader.flag("Event_Algorithm_Inhibit")?);
@@ -221,10 +227,14 @@ pub(super) fn read(reader: &mut Reader<'_>) -> Result<LogReportingSettings, Erro
 }
 
 /// A length of at most `cap`, then that many octets.
-fn octets<'a>(reader: &mut Reader<'a>, field: &str, cap: usize) -> Result<&'a [u8], Error> {
+fn octets<'a>(
+    reader: &mut Reader<'a>,
+    field: &'static str,
+    cap: usize,
+) -> Result<&'a [u8], SnapshotError> {
     let length = reader.u32(field)? as usize;
     if length > cap {
-        return Err(corrupt(format_args!("{field} is too long")));
+        return Err(corrupt("is too long").in_field(field));
     }
     reader.take(length, field)
 }
