@@ -120,6 +120,26 @@ class EndpointSourceAuditTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.3)
             self.assertEqual(await self.records(), [])
 
+    async def test_an_unbound_device_recipient_reads_configuration_error(self):
+        owner = endpoint(self.destination, audit_device_bindings=None)
+        owner.add_audit_reporter(1, "Source", audit_level="audit_all",
+                                 auditable_operations=RESET)
+        async with owner:
+            await owner.report_device_reset_local()
+            address = await owner.local_address()
+            reliability = await self.client.read_property(
+                address, REPORTER, rb.PropertyIdentifier.RELIABILITY)
+            self.assertEqual(reliability.value, 10)  # CONFIGURATION_ERROR
+            self.assertEqual(await self.records(), [])
+        # A Reporter nothing selects starts and records nothing.
+        plain = rb.BipEndpoint(ENDPOINT, interface="127.0.0.1", port=0,
+                               broadcast_address="127.255.255.255")
+        plain.add_audit_reporter(1, "Unselected", audit_level="audit_all",
+                                 auditable_operations=RESET)
+        async with plain:
+            await plain.report_device_reset_local()
+            self.assertEqual(await self.records(), [])
+
     async def test_bad_keywords_are_refused(self):
         destination = self.destination
         device = rb.ObjectIdentifier(O.DEVICE, 7)
@@ -131,13 +151,24 @@ class EndpointSourceAuditTests(unittest.IsolatedAsyncioTestCase):
             {"audit_recipient": {"kind": "device",
                                  "object_identifier": rb.ObjectIdentifier(O.DEVICE, ENDPOINT)}},
             {"audit_device_bindings": [(device, "not an address")]},
+            # Addresses the server refuses too: a broadcast network, the
+            # limited broadcast, port 0 and a MAC that isn't B/IP's six octets.
+            *({"audit_recipient": {"kind": "address", "network_number": network,
+                                   "mac_address": mac}}
+              for network, mac in ((65535, bytes.fromhex("7f000001bac0")),
+                                   (0, bytes.fromhex("ffffffffbac0")),
+                                   (0, bytes.fromhex("7f0000010000")),
+                                   (0, bytes.fromhex("bac0")))),
             {"audit_device_bindings": [(rb.ObjectIdentifier(O.ANALOG_VALUE, 1), destination)]},
             {"audit_device_bindings": [(device, destination), (device, destination)]},
             {"source_audit_reporter": None},
         ]
         for overrides in refused_at_construction:
-            with self.subTest(overrides=overrides), self.assertRaises(ValueError):
-                endpoint(destination, **overrides)
+            with self.subTest(overrides=overrides):
+                with self.assertRaises(ValueError) as raised:
+                    endpoint(destination, **overrides)
+                if overrides.get("audit_recipient"):
+                    self.assertIn("audit_recipient", str(raised.exception))
         # Whether the Reporter is in the database is known at start.
         owner = endpoint(destination)
         owner.add_analog_value(1, "Not a Reporter")
@@ -152,11 +183,19 @@ class EndpointSourceAuditTests(unittest.IsolatedAsyncioTestCase):
     def test_add_audit_reporter_checks_its_keywords(self):
         owner = endpoint(self.destination)
         with self.assertRaises(ValueError):
-            owner.add_audit_reporter(1, "Source", audit_level="sometimes")
+            owner.add_audit_reporter(1, "Source", audit_level="sometimes",
+                                     auditable_operations=RESET)
         with self.assertRaises(TypeError):
-            owner.add_audit_reporter(1, "Source", auditable_operations=True)
+            owner.add_audit_reporter(1, "Source", audit_level="audit_all",
+                                     auditable_operations=True)
         with self.assertRaises(OverflowError):
-            owner.add_audit_reporter(1, "Source", auditable_operations=-1)
+            owner.add_audit_reporter(1, "Source", audit_level="audit_all",
+                                     auditable_operations=-1)
+        # No silent defaults: both are required.
+        with self.assertRaises(TypeError):
+            owner.add_audit_reporter(1, "Source")
+        with self.assertRaises(TypeError):
+            owner.add_audit_reporter(1, "Source", audit_level="audit_all")
         self.assertEqual(owner._pending_registration_count(), 0)
 
 

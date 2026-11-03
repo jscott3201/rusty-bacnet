@@ -60,8 +60,11 @@ use bacnet_types::primitives::PropertyValue;
 use crate::errors::to_py_err;
 use crate::types::{PyEventType, PyObjectIdentifier, PyPropertyIdentifier, PyPropertyValue};
 
-pub(crate) mod audit_configuration;
+mod audit_configuration;
 use audit_configuration::AuditNotificationSink;
+pub(crate) use audit_configuration::{
+    reporter_audit_level, reporter_auditable_operations, validate_audit_recipient,
+};
 
 /// Async BACnet server that hosts objects and responds to requests.
 ///

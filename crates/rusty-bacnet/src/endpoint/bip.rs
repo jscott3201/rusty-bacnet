@@ -293,13 +293,6 @@ impl PyBipEndpoint {
             reinit_password,
         )?;
         let device_writes = crate::mutation_policy::DeviceWritePolicy::parse(device_write_policy)?;
-        let source_audit = super::source_audit::SourceAuditKeywords::parse(
-            source_audit_reporter,
-            audit_recipient,
-            audit_device_bindings,
-            device_instance,
-            device_writes.enabled(),
-        )?;
         let mode = crate::bip_options::bip_mode("bip", bbmd, foreign_device)?;
         let multicast = crate::bip_options::bip_multicast(
             "bip",
@@ -319,6 +312,14 @@ impl PyBipEndpoint {
             crate::client::parse_min_request_interval_ms(min_request_interval_ms)?;
         let interface_ip = parse_ipv4(interface, "interface")?;
         let broadcast = parse_ipv4(broadcast_address, "broadcast_address")?;
+        let source_audit = super::source_audit::SourceAuditKeywords::parse(
+            source_audit_reporter,
+            audit_recipient,
+            audit_device_bindings,
+            device_instance,
+            broadcast,
+            device_writes.enabled(),
+        )?;
         if let Some(selected) = registered_network_port
             && (!(1..=255).contains(&selected)
                 || selected != network_port_instance
@@ -386,32 +387,28 @@ impl PyBipEndpoint {
     /// `source_audit_reporter` to select (#2348).
     ///
     /// `audit_level` ("none", "audit_config" or "audit_all") and
-    /// `auditable_operations` (bit n for AuditOperation n) filter what the
-    /// session reports, as on `BACnetServer.configure_audit_reporters`; the
-    /// defaults report nothing. Peers can't change them through an endpoint.
+    /// `auditable_operations` (bit n for AuditOperation n) are required, as
+    /// on `BACnetServer.configure_audit_reporters`, and filter what the
+    /// session reports. Peers can't change them through an endpoint. A
+    /// Reporter that `source_audit_reporter` doesn't select records nothing.
     #[pyo3(signature = (
         instance, name, *,
-        audit_level="none", auditable_operations=None, issue_confirmed_notifications=false
+        audit_level, auditable_operations, issue_confirmed_notifications=false
     ))]
     fn add_audit_reporter(
         &self,
         instance: u32,
         name: &str,
         audit_level: &str,
-        auditable_operations: Option<&Bound<'_, PyAny>>,
+        auditable_operations: &Bound<'_, PyAny>,
         issue_confirmed_notifications: bool,
     ) -> PyResult<()> {
-        use crate::server::audit_configuration::{
-            reporter_audit_level, reporter_auditable_operations,
-        };
+        use crate::server::{reporter_audit_level, reporter_auditable_operations};
         let pending = PendingObject::AuditReporter {
             instance,
             name: name.to_string(),
             level: reporter_audit_level(audit_level)?,
-            operations: auditable_operations
-                .map(reporter_auditable_operations)
-                .transpose()?
-                .unwrap_or_else(bacnet_types::bitstring::AuditOperationFlags::empty),
+            operations: reporter_auditable_operations(auditable_operations)?,
             confirmed: issue_confirmed_notifications,
         };
         pending.build()?;

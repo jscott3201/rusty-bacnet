@@ -5522,7 +5522,9 @@ logger = ObjectIdentifier(ObjectType.DEVICE, 999)
 endpoint = BipEndpoint(
     1001, interface="192.168.1.10", port=47808,
     on_reinitialize=lambda request: None,
-    device_write_policy=lambda context: True,
+    # Only the trusted workstation (192.168.1.5:47808, as a B/IP MAC) may
+    # change the Device's Audit recipient.
+    device_write_policy=lambda context: context.source_mac == bytes([192, 168, 1, 5, 0xBA, 0xC0]),
     source_audit_reporter=reporter,
     audit_recipient={"kind": "device", "object_identifier": logger},
     audit_device_bindings=[(logger, "192.168.1.20:47808")],
@@ -5532,21 +5534,30 @@ endpoint.add_audit_reporter(1, "Source", audit_level="audit_all",
 ```
 
 - `source_audit_reporter` is the `ObjectIdentifier` of a Reporter added with
-  `add_audit_reporter(instance, name, *, audit_level="none",
-  auditable_operations=None, issue_confirmed_notifications=False)`. The
-  defaults report nothing, and peers can't change the Reporter through an
-  endpoint.
+  `add_audit_reporter(instance, name, *, audit_level, auditable_operations,
+  issue_confirmed_notifications=False)`. The level and operations are
+  required, as on `configure_audit_reporters`, and peers can't change the
+  Reporter through an endpoint. A Reporter that `source_audit_reporter`
+  doesn't select starts and records nothing.
 - `audit_recipient` (an `AuditRecipientInput`) provisions the local Device's
   Audit recipient, and `audit_device_bindings` lists `(Device identifier,
-  "ipv4:port")` routes to recipient Devices.
-- The Reporter needs `device_write_policy` and `audit_recipient`.
+  "ipv4:port")` routes to recipient Devices. A Device recipient with no
+  binding starts, records nothing, and the Reporter's Reliability reads
+  CONFIGURATION_ERROR.
+- The Reporter needs `device_write_policy` and `audit_recipient`. With both
+  roles running, the Rust session requires a Device-write authorizer,
+  because the Device's Audit recipient is writable: a policy that allows
+  every peer lets any of them redirect the audit trail, so allow only the
+  sources you trust.
 - **When keywords are refused:** construction raises ValueError for anything
   it can check: an identifier that isn't a concrete Audit Reporter, a
-  recipient or binding without a Reporter, this device as the recipient, and
-  a malformed or repeated binding. Whether the Reporter was added is known
+  recipient or binding without a Reporter, a recipient
+  `configure_audit_recipient` would refuse (this device, or an address that
+  isn't a direct unicast B/IP one), and a malformed or repeated binding. Whether the Reporter was added is known
   only at start, which raises BacnetError for a missing one.
 - **B/IP only:** the Rust session reports source records on IPv4 B/IP only,
-  so `ScEndpoint` and `MstpEndpoint` don't take these keywords.
+  so `ScEndpoint` and `MstpEndpoint` don't take these keywords yet; #2357
+  tracks link-generic routes and bindings and their keywords.
 
 ### Endpoint lifecycle and cancellation
 

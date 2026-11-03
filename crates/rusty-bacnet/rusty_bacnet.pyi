@@ -7049,12 +7049,14 @@ class BipEndpoint:
         """Optional BV Audit rows: None is absent; priority 'inherit' is present NULL.
         Access, Value_Source and profile keywords as on ``add_analog_value``."""
         ...
-    def add_audit_reporter(self, instance: int, name: str, *, audit_level: Literal["none", "audit_config", "audit_all"] = "none", auditable_operations: int | None = None, issue_confirmed_notifications: bool = False) -> None:
+    def add_audit_reporter(self, instance: int, name: str, *, audit_level: Literal["none", "audit_config", "audit_all"], auditable_operations: int, issue_confirmed_notifications: bool = False) -> None:
         """Add an Audit Reporter for ``source_audit_reporter`` to select
         (#2348). ``audit_level`` and ``auditable_operations`` (bit n for
-        AuditOperation n) filter what the session reports, as on
-        ``BACnetServer.configure_audit_reporters``; the defaults report
-        nothing. Peers can't change them through an endpoint."""
+        AuditOperation n) are required, as on
+        ``BACnetServer.configure_audit_reporters``, and filter what the
+        session reports. Peers can't change them through an endpoint. A
+        Reporter that ``source_audit_reporter`` doesn't select records
+        nothing."""
         ...
     def add_group(
         self,

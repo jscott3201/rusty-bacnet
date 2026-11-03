@@ -5,7 +5,7 @@
 //! construction and kept for the rebuild at each start, as the object
 //! keywords are (#1867).
 
-use std::net::SocketAddrV4;
+use std::net::{Ipv4Addr, SocketAddrV4};
 
 use bacnet_endpoint::bip::BipEndpointBuilder;
 use bacnet_endpoint::identity::DeviceIdentity;
@@ -33,8 +33,10 @@ impl SourceAuditKeywords {
     /// `audit_device_bindings`. What construction can check is refused here
     /// with ValueError or TypeError: a Reporter identifier that names no
     /// concrete Audit Reporter, a recipient or binding without a Reporter, a
-    /// Reporter without a recipient or without `device_write_policy`, this
-    /// device as the recipient, and bad or duplicate bindings. Whether the
+    /// Reporter without a recipient or without `device_write_policy`, a
+    /// recipient the server would refuse (this device, or an address that
+    /// isn't a direct unicast one off `broadcast`), and bad or duplicate
+    /// bindings. Whether the
     /// Reporter is in the database is checked at start, once the `add_*`
     /// calls are in.
     pub(super) fn parse(
@@ -42,6 +44,7 @@ impl SourceAuditKeywords {
         recipient: Option<&Bound<'_, PyAny>>,
         bindings: Option<Vec<(PyObjectIdentifier, String)>>,
         device_instance: u32,
+        broadcast: Ipv4Addr,
         device_writes: bool,
     ) -> PyResult<Option<Self>> {
         let Some(reporter) = reporter.map(|oid| oid.to_rust()) else {
@@ -68,15 +71,12 @@ impl SourceAuditKeywords {
         let recipient = recipient
             .ok_or_else(|| PyValueError::new_err("source_audit_reporter needs audit_recipient"))?;
         let recipient = crate::types::audit_recipient_from_py(recipient, "audit_recipient")?;
-        if let BACnetRecipient::Device(device) = &recipient
-            && (device.object_type() != ObjectType::DEVICE
-                || device.instance_number() == ObjectIdentifier::MAX_INSTANCE
-                || device.instance_number() == device_instance)
-        {
-            return Err(PyValueError::new_err(
-                "audit_recipient must be a concrete remote Device or a B/IP address",
-            ));
-        }
+        crate::server::validate_audit_recipient(
+            &recipient,
+            device_instance,
+            Some(broadcast),
+            "audit_recipient",
+        )?;
         let mut parsed: Vec<(ObjectIdentifier, SocketAddrV4)> = Vec::new();
         for (index, (device, address)) in bindings.into_iter().flatten().enumerate() {
             let device = device.to_rust();

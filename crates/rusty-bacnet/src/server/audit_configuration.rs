@@ -335,43 +335,57 @@ impl BACnetServer {
         &self,
         recipient: &bacnet_types::constructed::BACnetRecipient,
     ) -> PyResult<()> {
-        use bacnet_types::constructed::BACnetRecipient;
-        match recipient {
-            BACnetRecipient::Device(device)
-                if device.object_type() == ObjectType::DEVICE
-                    && device.instance_number() < ObjectIdentifier::MAX_INSTANCE
-                    && device.instance_number() != self.device_instance =>
-            {
-                Ok(())
-            }
-            // Network zero, or a network numbered 1 to 65534: the server
-            // takes an address on its own network's number as local once it
-            // knows that number, and one it does not name yet starts
-            // unresolved (#1460).
-            BACnetRecipient::Address(address)
-                if self.transport_type == "bip"
-                    && address.network_number != u16::MAX
-                    && server::valid_bip_audit_address(
-                        &bacnet_types::constructed::BACnetAddress {
-                            network_number: 0,
-                            mac_address: address.mac_address.clone(),
-                        },
-                    )
-                    && address.mac_address.as_slice()[..4]
-                        != self
-                            .broadcast_address
-                            .parse::<std::net::Ipv4Addr>()
-                            .map_err(|_| {
-                                PyValueError::new_err("invalid configured broadcast address")
-                            })?
-                            .octets() =>
-            {
-                Ok(())
-            }
-            _ => Err(PyValueError::new_err(
-                "recipient must be a concrete remote Device or a supported direct unicast B/IP address",
-            )),
+        let broadcast = if self.transport_type == "bip" {
+            Some(
+                self.broadcast_address
+                    .parse::<std::net::Ipv4Addr>()
+                    .map_err(|_| PyValueError::new_err("invalid configured broadcast address"))?,
+            )
+        } else {
+            None
+        };
+        validate_audit_recipient(recipient, self.device_instance, broadcast, "recipient")
+    }
+}
+
+/// Check a Device's Audit recipient before start: a concrete remote Device,
+/// or, on B/IP (`bip_broadcast` is the link's broadcast address), a direct
+/// unicast IPv4 address. Shared by the server and the B/IP endpoint (#2348);
+/// `name` is the keyword the ValueError names.
+pub(crate) fn validate_audit_recipient(
+    recipient: &bacnet_types::constructed::BACnetRecipient,
+    device_instance: u32,
+    bip_broadcast: Option<std::net::Ipv4Addr>,
+    name: &str,
+) -> PyResult<()> {
+    use bacnet_types::constructed::BACnetRecipient;
+    match recipient {
+        BACnetRecipient::Device(device)
+            if device.object_type() == ObjectType::DEVICE
+                && device.instance_number() < ObjectIdentifier::MAX_INSTANCE
+                && device.instance_number() != device_instance =>
+        {
+            Ok(())
         }
+        // Network zero, or a network numbered 1 to 65534: the server
+        // takes an address on its own network's number as local once it
+        // knows that number, and one it does not name yet starts
+        // unresolved (#1460).
+        BACnetRecipient::Address(address)
+            if bip_broadcast.is_some_and(|broadcast| {
+                address.network_number != u16::MAX
+                    && server::valid_bip_audit_address(&bacnet_types::constructed::BACnetAddress {
+                        network_number: 0,
+                        mac_address: address.mac_address.clone(),
+                    })
+                    && address.mac_address.as_slice()[..4] != broadcast.octets()
+            }) =>
+        {
+            Ok(())
+        }
+        _ => Err(PyValueError::new_err(format!(
+            "{name} must be a concrete remote Device or a supported direct unicast B/IP address"
+        ))),
     }
 }
 

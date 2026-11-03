@@ -202,8 +202,18 @@ class EndpointStubParityTests(unittest.TestCase):
                     ("audit_level", keyword), ("auditable_operations", keyword),
                     ("issue_confirmed_notifications", keyword)]
         self.assertEqual(runtime_arg_kinds(BipEndpoint.add_audit_reporter), expected)
-        self.assertEqual(
-            stub_arg_kinds(stub_method(classes["BipEndpoint"], "add_audit_reporter")), expected)
+        reporter_stub = stub_method(classes["BipEndpoint"], "add_audit_reporter")
+        self.assertEqual(stub_arg_kinds(reporter_stub), expected)
+        # The level and operations are required, as on the server's
+        # configure_audit_reporters: a default would silently record nothing.
+        parameters = inspect.signature(BipEndpoint.add_audit_reporter).parameters
+        for name in ("audit_level", "auditable_operations"):
+            self.assertIs(parameters[name].default, inspect.Parameter.empty, name)
+        stub_defaults = dict(zip((arg.arg for arg in reporter_stub.args.kwonlyargs),
+                                 reporter_stub.args.kw_defaults))
+        self.assertIsNone(stub_defaults["audit_level"])
+        self.assertIsNone(stub_defaults["auditable_operations"])
+        self.assertIsNotNone(stub_defaults["issue_confirmed_notifications"])
         for cls in (ScEndpoint, MstpEndpoint):
             with self.subTest(cls=cls.__name__):
                 self.assertFalse(hasattr(cls, "add_audit_reporter"))
