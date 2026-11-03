@@ -3,10 +3,8 @@
 //! and the last good address kept. A foreign device on a recording socket,
 //! under paused time, with a table for a resolver.
 
-use std::collections::HashMap;
 use std::io;
-use std::sync::Mutex as StdMutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::net::{IpAddr, Ipv6Addr};
 
 use bacnet_bip_core::node::Mode;
 use bacnet_types::bip_port::ForeignDeviceChanges;
@@ -19,6 +17,8 @@ use tokio::task::JoinHandle;
 use super::super::send_sink::{SendSink, Sent};
 use super::super::*;
 use super::ForeignTarget;
+use crate::bbmd_lookup::table::{Answer, Names};
+use crate::bbmd_lookup::{BbmdLookupFailure, BbmdResolver};
 
 const OWN: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), PORT);
 const BROADCAST: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 255), PORT);
@@ -27,73 +27,6 @@ const A: Ipv4Addr = Ipv4Addr::new(198, 51, 100, 1);
 const B: Ipv4Addr = Ipv4Addr::new(198, 51, 100, 2);
 const C: Ipv4Addr = Ipv4Addr::new(203, 0, 113, 1);
 const NAME: &str = "bbmd.test";
-
-/// What the table answers for a name.
-#[derive(Clone)]
-enum Answer {
-    Addresses(Vec<Ipv4Addr>),
-    Fails(io::ErrorKind),
-    Hangs,
-    /// These addresses, once the gate opens.
-    Gated(Arc<Notify>, Vec<Ipv4Addr>),
-    Panics,
-}
-
-/// A resolver that answers from a table, and counts its calls and the most
-/// that ran at once.
-#[derive(Default)]
-struct Names {
-    answers: StdMutex<HashMap<String, Answer>>,
-    calls: AtomicUsize,
-    running: Arc<AtomicUsize>,
-    most_running: Arc<AtomicUsize>,
-}
-
-/// One call running, until dropped.
-struct Running(Arc<AtomicUsize>);
-
-impl Drop for Running {
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
-    }
-}
-
-impl Names {
-    fn answer(&self, host: &str, answer: Answer) {
-        self.answers.lock().unwrap().insert(host.into(), answer);
-    }
-
-    fn calls(&self) -> usize {
-        self.calls.load(Ordering::SeqCst)
-    }
-
-    fn most_running(&self) -> usize {
-        self.most_running.load(Ordering::SeqCst)
-    }
-}
-
-impl BbmdResolver for Names {
-    fn resolve(&self, host: &str) -> BbmdLookup {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        let answer = self.answers.lock().unwrap().get(host).cloned();
-        let (running, most) = (Arc::clone(&self.running), Arc::clone(&self.most_running));
-        Box::pin(async move {
-            let now = running.fetch_add(1, Ordering::SeqCst) + 1;
-            most.fetch_max(now, Ordering::SeqCst);
-            let _running = Running(running);
-            match answer.unwrap_or(Answer::Fails(io::ErrorKind::NotFound)) {
-                Answer::Addresses(addresses) => Ok(addresses),
-                Answer::Fails(kind) => Err(io::Error::from(kind)),
-                Answer::Hangs => std::future::pending().await,
-                Answer::Gated(gate, addresses) => {
-                    gate.notified().await;
-                    Ok(addresses)
-                }
-                Answer::Panics => panic!("the test resolver panics"),
-            }
-        })
-    }
-}
 
 /// A foreign device at [`OWN`] registering with [`A`], never answered, so
 /// it retries: each attempt times out after 3 s, and the next comes by the
@@ -223,7 +156,9 @@ async fn a_name_is_looked_up_at_activation_and_the_device_moves_there() {
     let device = Device::new(60).await;
     device.after(1).await;
     assert_eq!(registrations(&device.sink.take()), [A]);
-    device.names.answer(NAME, Answer::Addresses(vec![B]));
+    // An IPv6 answer is no B/IP address: the first IPv4 one counts.
+    let answers = [IpAddr::V6(Ipv6Addr::LOCALHOST), IpAddr::V4(B)];
+    device.names.answer(NAME, Answer::addresses(answers));
     device.activate(Device::name()).unwrap();
     assert_eq!(
         device.view().bbmd(),
@@ -266,7 +201,7 @@ async fn attempts_look_the_name_up_again_and_move_the_device() {
     let device = Device::new(10).await;
     device.after(1).await;
     device.sink.take();
-    device.names.answer(NAME, Answer::Addresses(vec![C, A]));
+    device.names.answer(NAME, Answer::addresses([C, A]));
     device.activate(Device::name()).unwrap();
     device.after(1).await;
     assert!(registrations(&device.sink.take()).is_empty());
@@ -279,7 +214,7 @@ async fn attempts_look_the_name_up_again_and_move_the_device() {
 
     // The one at 65 s finds only C: that attempt went to A, then the device
     // moves and registers with C at once.
-    device.names.answer(NAME, Answer::Addresses(vec![C]));
+    device.names.answer(NAME, Answer::addresses([C]));
     device.after(30_000).await;
     let sent = registrations(&device.sink.take());
     let moved = sent
@@ -305,7 +240,7 @@ async fn attempts_look_the_name_up_again_and_move_the_device() {
 async fn attempts_look_the_name_up_at_most_once_per_30_s() {
     let device = Device::new(10).await;
     device.after(1).await;
-    device.names.answer(NAME, Answer::Addresses(vec![A]));
+    device.names.answer(NAME, Answer::addresses([A]));
     device.activate(Device::name()).unwrap();
     device.after(1).await;
     assert_eq!(device.names.calls(), 1);
@@ -338,16 +273,20 @@ async fn a_failed_lookup_is_counted_and_the_device_stays_where_it_was() {
             Answer::Fails(io::ErrorKind::NotFound),
             BbmdLookupFailure::Error(io::ErrorKind::NotFound),
         ),
-        (Answer::Addresses(vec![]), BbmdLookupFailure::NoIpv4Address),
+        (Answer::Addresses(vec![]), BbmdLookupFailure::NoAddress),
+        (
+            Answer::addresses([Ipv6Addr::LOCALHOST]),
+            BbmdLookupFailure::NoAddress,
+        ),
         // Its own address, then a broadcast and the unspecified address,
         // as a start would refuse them.
         (
-            Answer::Addresses(vec![*OWN.ip()]),
-            BbmdLookupFailure::Unusable(*OWN.ip()),
+            Answer::addresses([*OWN.ip()]),
+            BbmdLookupFailure::Unusable((*OWN.ip()).into()),
         ),
         (
-            Answer::Addresses(vec![*BROADCAST.ip(), Ipv4Addr::UNSPECIFIED]),
-            BbmdLookupFailure::Unusable(*BROADCAST.ip()),
+            Answer::addresses([*BROADCAST.ip(), Ipv4Addr::UNSPECIFIED]),
+            BbmdLookupFailure::Unusable((*BROADCAST.ip()).into()),
         ),
     ];
     let count = cases.len() as u64;
@@ -382,7 +321,7 @@ async fn a_failed_lookup_is_counted_and_the_device_stays_where_it_was() {
     );
     assert_eq!(snapshot.bbmd_lookup_failures, count + 1);
 
-    device.names.answer(NAME, Answer::Addresses(vec![B]));
+    device.names.answer(NAME, Answer::addresses([B]));
     // The attempts within 30 s of the hung lookup's start keep A.
     let mut seen = Vec::new();
     for _ in 0..8 {
@@ -407,9 +346,7 @@ async fn a_lookup_for_a_replaced_name_changes_nothing() {
     device.after(1).await;
     device.sink.take();
     let gate = Arc::new(Notify::new());
-    device
-        .names
-        .answer(NAME, Answer::Gated(Arc::clone(&gate), vec![B]));
+    device.names.answer(NAME, Answer::gated(&gate, [B]));
     device.activate(Device::name()).unwrap();
     device.after(1).await;
     device.activate(BACnetHostAddress::Ip(C.into())).unwrap();
@@ -435,15 +372,9 @@ async fn one_resolver_call_runs_at_a_time_and_the_newest_name_follows() {
     device.after(1).await;
     device.sink.take();
     let gate = Arc::new(Notify::new());
-    device
-        .names
-        .answer(NAME, Answer::Gated(Arc::clone(&gate), vec![B]));
-    device
-        .names
-        .answer("other.test", Answer::Addresses(vec![B]));
-    device
-        .names
-        .answer("newest.test", Answer::Addresses(vec![C]));
+    device.names.answer(NAME, Answer::gated(&gate, [B]));
+    device.names.answer("other.test", Answer::addresses([B]));
+    device.names.answer("newest.test", Answer::addresses([C]));
     device.activate(Device::name()).unwrap();
     device.after(1).await;
     for host in ["other.test", "newest.test"] {
@@ -485,7 +416,7 @@ async fn a_panicking_resolver_frees_the_slot() {
         Some(BbmdLookupFailure::Abandoned)
     );
     assert_eq!((device.names.calls(), device.bbmd()), (1, at(A)));
-    device.names.answer(NAME, Answer::Addresses(vec![B]));
+    device.names.answer(NAME, Answer::addresses([B]));
     device.after(40_000).await;
     assert_eq!((device.names.calls(), device.bbmd()), (2, at(B)));
     let snapshot = device.snapshot();
@@ -525,7 +456,7 @@ fn a_lookup_dropped_with_its_runtime_frees_the_slot() {
         Some(BbmdLookupFailure::Abandoned)
     );
     paused().block_on(async {
-        device.names.answer(NAME, Answer::Addresses(vec![B]));
+        device.names.answer(NAME, Answer::addresses([B]));
         device.activate(Device::name()).unwrap();
         device.after(1).await;
     });
@@ -538,11 +469,11 @@ fn a_lookup_dropped_with_its_runtime_frees_the_slot() {
 async fn a_restart_looks_the_name_up_at_its_first_attempt() {
     let mut device = Device::new(60).await;
     device.after(1).await;
-    device.names.answer(NAME, Answer::Addresses(vec![A]));
+    device.names.answer(NAME, Answer::addresses([A]));
     device.activate(Device::name()).unwrap();
     device.after(1).await;
     assert_eq!(device.names.calls(), 1);
-    device.names.answer(NAME, Answer::Addresses(vec![B]));
+    device.names.answer(NAME, Answer::addresses([B]));
     device.restart().await;
     device.after(1).await;
     assert_eq!((device.names.calls(), device.bbmd()), (2, at(B)));
@@ -555,9 +486,7 @@ async fn a_lookup_ending_after_a_stop_counts_nothing() {
     let device = Device::new(60).await;
     device.after(1).await;
     let gate = Arc::new(Notify::new());
-    device
-        .names
-        .answer(NAME, Answer::Gated(Arc::clone(&gate), vec![B]));
+    device.names.answer(NAME, Answer::gated(&gate, [B]));
     device.activate(Device::name()).unwrap();
     device.after(1).await;
     device.node.stop();
@@ -575,9 +504,7 @@ async fn no_lookup_follows_a_stop() {
     let device = Device::new(60).await;
     device.after(1).await;
     let gate = Arc::new(Notify::new());
-    device
-        .names
-        .answer(NAME, Answer::Gated(Arc::clone(&gate), vec![B]));
+    device.names.answer(NAME, Answer::gated(&gate, [B]));
     device.activate(Device::name()).unwrap();
     device.after(1).await;
     device

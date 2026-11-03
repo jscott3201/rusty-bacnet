@@ -924,8 +924,10 @@ Distribute-Broadcast-To-Network. A registered Network Port
 (`add_bip6_network_port`) reads BACnet_IPv6_Mode FOREIGN (1) with the
 FD_BBMD_Address and FD_Subscription_Lifetime rows; with `on_reinitialize`, a
 written lifetime or BBMD takes effect at ReinitializeDevice ACTIVATE_CHANGES,
-and the next registration, sent at once, carries it. `foreign_registration()`
-is B/IP only.
+and the next registration, sent at once, carries it. The BBMD may also be
+written as a host name, looked up by the system's resolver as on B/IP: the
+device moves to the first IPv6 address it stands for (#2308).
+`foreign_registration()` is B/IP only.
 
 ```python
 from rusty_bacnet import BACnetClient, ForeignDevice

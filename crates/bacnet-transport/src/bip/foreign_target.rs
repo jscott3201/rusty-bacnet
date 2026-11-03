@@ -13,7 +13,8 @@
 //! FD_BBMD_Address may name the BBMD by host name (#1852): the node then
 //! registers with the address the name last resolved to, and [`lookup`]
 //! looks it up again at each activation and alongside the registration
-//! attempts, at most once per 30 seconds.
+//! attempts, at most once per 30 seconds, on the policy
+//! [`crate::bbmd_lookup`] shares with B/IPv6.
 //!
 //! Lock order: the object database (held by the caller), then this
 //! target's lock, then the node's. No lock here is held across an await.
@@ -35,9 +36,7 @@ use bacnet_types::error::Error;
 use super::BipTransport;
 use super::foreign_device::ForeignDeviceConfig;
 use super::node::NodeHandle;
-pub(super) use lookup::SystemResolver;
-pub use lookup::{BbmdLookup, BbmdLookupFailure, BbmdResolver};
-use lookup::{BbmdName, Lookups};
+use crate::bbmd_lookup::{BbmdName, BbmdResolver, Lookups};
 
 /// What the target's lock guards.
 struct TargetState {
@@ -49,10 +48,9 @@ struct TargetState {
     configured_renewal: Option<Duration>,
     /// The running node, while one runs.
     node: Weak<NodeHandle>,
-    /// FD_BBMD_Address as a host name, when it names one; `config` then
-    /// holds the address in use, the one the name last resolved to, or the
-    /// BBMD before it, until it first does.
-    name: Option<BbmdName>,
+    /// FD_BBMD_Address as a host name, when it names one, and its lookups;
+    /// `config` then holds the address in use, the one the name last
+    /// resolved to, or the BBMD before it, until it first does.
     lookups: Lookups,
 }
 
@@ -107,7 +105,6 @@ impl ForeignTarget {
                 configured_renewal: config.renewal_interval,
                 config,
                 node: Weak::new(),
-                name: None,
                 lookups: Lookups::new(Arc::clone(&transport.bbmd_resolver)),
             }),
             broadcast: transport.broadcast_address,
@@ -224,7 +221,7 @@ impl ForeignRegistration for ForeignTarget {
     /// the address otherwise.
     fn bbmd(&self) -> BACnetHostNPort {
         let state = self.lock();
-        match &state.name {
+        match state.lookups.name() {
             Some(name) => name.value(),
             None => BACnetHostNPort::from_socket_addr(SocketAddr::V4(state.config.bbmd())),
         }

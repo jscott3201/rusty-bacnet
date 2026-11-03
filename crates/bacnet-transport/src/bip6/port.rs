@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
+use crate::bbmd_lookup::{BbmdLookupCounters, BbmdResolver, SystemResolver};
 use crate::port::{Bip6Port, ReceivedNpdu, TransportPort};
 
 use super::collision_probe::Probe;
@@ -76,6 +77,8 @@ pub struct Bip6Transport {
     /// The foreign-device registration, shared with the Network Port
     /// object, which can move it ([`ForeignTarget`]).
     foreign_device: Option<Arc<ForeignTarget>>,
+    /// Looks up FD_BBMD_Address host names (#2308).
+    bbmd_resolver: Arc<dyn BbmdResolver>,
     /// Foreign device re-registration task handle.
     registration_task: Option<JoinHandle<()>>,
     /// The registered Network Port's lease, handed to the socket at start
@@ -151,6 +154,7 @@ impl Bip6Transport {
             unresolved: UnresolvedSend::default(),
             broadcast_scope: Bip6BroadcastScope::SiteLocal,
             foreign_device: None,
+            bbmd_resolver: Arc::new(SystemResolver),
             registration_task: None,
             network_port_lease: None,
             registration_closed: false,
@@ -182,8 +186,45 @@ impl Bip6Transport {
     /// ReinitializeDevice ACTIVATE_CHANGES or WARMSTART): the transport
     /// then registers with the new BBMD at once, sends its broadcasts and
     /// resolutions there, and trusts its Forwarded-NPDUs only.
+    /// FD_BBMD_Address may name the BBMD by host name
+    /// ([`set_bbmd_resolver`](Self::set_bbmd_resolver)).
     pub fn register_as_foreign_device(&mut self, config: Bip6ForeignDeviceConfig) {
-        self.foreign_device = Some(Arc::new(ForeignTarget::new(config)));
+        let resolver = Arc::clone(&self.bbmd_resolver);
+        self.foreign_device = Some(ForeignTarget::new(config, resolver));
+    }
+
+    /// Look up the host name a foreign device's FD_BBMD_Address names with
+    /// `resolver`, instead of the system's resolver on Tokio's blocking
+    /// pool, the default (#2308). Call it before or after
+    /// [`register_as_foreign_device`](Self::register_as_foreign_device).
+    ///
+    /// A host name written to FD_BBMD_Address is checked for its form, and
+    /// looked up whenever ReinitializeDevice activates it, on the side,
+    /// and again alongside the re-registrations (the first after a start
+    /// included), at most once every 30 seconds; the device moves to the
+    /// first IPv6 address among the answers it could register with, as an
+    /// activated address would move it, and re-registers there at once.
+    /// The policy is B/IP's
+    /// ([`BipTransport::set_bbmd_resolver`](crate::bip::BipTransport::set_bbmd_resolver)):
+    /// one resolver call at a time, given up after 10 seconds; the device
+    /// stays put while the address in use is among the answers; and a
+    /// failed lookup keeps the address it had, and is logged and counted
+    /// in [`bbmd_lookup_counters`](Self::bbmd_lookup_counters).
+    pub fn set_bbmd_resolver(&mut self, resolver: Arc<dyn BbmdResolver>) {
+        if let Some(target) = &self.foreign_device {
+            target.set_resolver(Arc::clone(&resolver));
+        }
+        self.bbmd_resolver = resolver;
+    }
+
+    /// What came of the lookups of a BBMD host name that FD_BBMD_Address
+    /// names (#2308): all zero outside foreign-device mode, or while it
+    /// holds an address.
+    pub fn bbmd_lookup_counters(&self) -> BbmdLookupCounters {
+        self.foreign_device
+            .as_ref()
+            .map(|target| target.lookup_counters())
+            .unwrap_or_default()
     }
 
     /// The foreign-device registration in effect: the one configured, or
@@ -468,19 +509,26 @@ impl TransportPort for Bip6Transport {
         // Start foreign device registration if configured
         if let Some(fd) = &self.foreign_device {
             fd.attach(local_address);
+            // A BBMD named by host name is looked up alongside the
+            // registration this start sent.
+            fd.attempting();
             let target = Arc::clone(fd);
             let sock = Arc::clone(&socket);
             let source_vmac = self.source_vmac;
 
             // Re-register every half time-to-live, and at once with the new
-            // values when an activation moves the registration. Each pass
-            // reads the target afresh; no lock is held across an await.
+            // values when an activation, or a lookup of the BBMD's host
+            // name, moves the registration. Each pass reads the target
+            // afresh; no lock is held across an await.
             let reg_task = tokio::spawn(async move {
                 loop {
                     tokio::select! {
                         () = tokio::time::sleep(target.renewal_interval()) => {}
                         () = target.changed() => {}
                     }
+                    // The name, if the BBMD has one, is looked up alongside
+                    // at most every 30 s; the attempt goes where it was.
+                    target.attempting();
                     let config = target.config();
                     #[cfg(test)]
                     target.in_flight().await;

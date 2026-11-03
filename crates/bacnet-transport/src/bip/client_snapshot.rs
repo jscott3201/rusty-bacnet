@@ -7,8 +7,8 @@ use std::time::Duration;
 use bacnet_bip_codec::BvlcResultCode;
 use bacnet_bip_core::node::{AttemptOutcome, ExchangeCounters, NodeCounters, Operation};
 
-use super::BbmdLookupFailure;
 use super::node::NodeHandle;
+use crate::bbmd_lookup::BbmdLookupFailure;
 
 /// One management function's locally observed exchanges, cumulative across
 /// stop/start on the same transport. Counts saturate at `u64::MAX`.
