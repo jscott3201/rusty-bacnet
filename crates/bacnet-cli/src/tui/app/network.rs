@@ -23,7 +23,9 @@ use super::watch::Screen;
 use super::{App, FLASH_FOR, Link};
 use crate::tui::message::Command;
 use crate::tui::network::routers::RouterMap;
-use crate::tui::network::{BdtRow, FdtRow, Foreign, NetworkCommand, NetworkEvent, own_entry};
+use crate::tui::network::{
+    BdtRow, FdtRow, Foreign, NetworkCommand, NetworkEvent, OwnEntry, own_entry,
+};
 use bacnet_ops::bbmd::{Matrix, Unfollowed};
 
 /// The table below the foreign-device panel.
@@ -111,8 +113,9 @@ pub(crate) struct NetworkState {
     pub(crate) bdt: Option<Fetched<Vec<BdtRow>>>,
     /// The target's FDT.
     pub(crate) fdt: Option<Fetched<Vec<FdtRow>>>,
-    /// Our own entry in `fdt`, if one has our address.
-    pub(crate) own: Option<usize>,
+    /// Our own entry in `fdt`, if one has our address or the NAT global
+    /// address.
+    pub(crate) own: Option<OwnEntry>,
     /// Our own address, as the FDT read reported it.
     pub(crate) local: Option<SocketAddrV4>,
     /// The last survey and when it finished.
@@ -277,7 +280,11 @@ impl App {
                     return;
                 }
                 state.reading = false;
-                state.own = fdt.as_ref().ok().and_then(|fdt| own_entry(fdt, local));
+                let global = state.foreign.and_then(|f| f.nat_global);
+                state.own = fdt
+                    .as_ref()
+                    .ok()
+                    .and_then(|fdt| own_entry(fdt, local, global));
                 state.local = Some(local);
                 state.bdt = Some(Fetched {
                     bbmd,
