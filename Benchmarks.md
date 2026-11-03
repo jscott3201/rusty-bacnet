@@ -1344,6 +1344,23 @@ with every pair lower and allocations unchanged, and its profile has no
 byte-by-byte address copies left. ReadProperty and ReadPropertyMultiple are
 not higher.
 
+### 10.8 Locks and clocks (#1978 items 2a and 6)
+
+Two more request-path changes, each counted against its own baseline
+([benchmarks/results/perf-s4](benchmarks/results/perf-s4/README.md)):
+
+- **Client locks.** The client's transaction, device and SegmentACK route
+  tables were Tokio mutexes, four semaphore acquires and releases per
+  ReadProperty round trip. No lock of theirs is held across an await, so
+  they are now blocking mutexes. That saves about 845 instructions per
+  ReadProperty and WriteProperty request and 495 to 660 per
+  ReadPropertyMultiple, on both runtimes, with every ReadProperty pair
+  lower and allocations unchanged.
+- **Clock reads.** The server's receive loop read the clock twice per APDU
+  to expire segmented requests, even with none open. It now reads it only
+  while one is. That saves about 240 to 280 instructions per ReadProperty
+  and WriteProperty request, and changes no timeout.
+
 ## 11. How to reproduce
 
 Run one suite at a time on an idle machine. Each Criterion suite takes 1 to
