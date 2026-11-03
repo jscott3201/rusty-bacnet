@@ -202,7 +202,7 @@ async fn routed_file_write_preserves_json_and_remote_bytes_and_refusal() {
             &["13", input.to_str().unwrap(), "--allow-write"],
         )
         .await;
-        failure(&output, "FILE_ACCESS_DENIED");
+        failure(&output, "file-access-denied");
         assert_eq!(
             server
                 .database()
@@ -245,7 +245,7 @@ async fn routed_later_file_window_failure_removes_partial_stream_and_record_outp
                 ],
             )
             .await;
-            failure(&output, "FILE_ACCESS_DENIED");
+            failure(&output, "file-access-denied");
             assert!(!path.exists());
             assert_eq!(
                 std::fs::read_dir(&files.0).unwrap().count(),

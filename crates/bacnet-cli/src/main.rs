@@ -487,7 +487,10 @@ type CliResult = Result<(), Box<dyn std::error::Error>>;
 // subcommand's arguments inline). So the command line is parsed on a thread of
 // its own (#953). A read or a discover then needs about 240 KiB of the main
 // thread's stack in a debug build, where it needed 860 KiB before.
-fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
+//
+// A fatal error is printed here, with Display (`report`), and exits 1 as an
+// `Err` from `main` would; std's own report would use Debug (#2325).
+fn main() -> std::process::ExitCode {
     let cli = parse_on_large_stack(|| {
         let mut matches = Cli::command().get_matches();
         // Capture provenance before FromArgMatches removes argument values.
@@ -504,13 +507,34 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         }
         cli
     });
-    dispatch(cli, &mut guard::Stdin, |cli| {
+    let result = dispatch(cli, &mut guard::Stdin, |cli| {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .expect("Failed building the Runtime")
             .block_on(boxed_cli_main(cli))
+    });
+    result.unwrap_or_else(|error| {
+        let _ = report(&*error, &mut std::io::stderr().lock());
+        std::process::ExitCode::FAILURE
     })
+}
+
+/// Write a fatal error as `Error: ` and its Display text, then each source
+/// whose text the line doesn't already hold, after `: `. Most errors here
+/// put their source in their own message, and that isn't repeated.
+fn report(error: &dyn std::error::Error, out: &mut dyn std::io::Write) -> std::io::Result<()> {
+    let mut line = format!("Error: {error}");
+    let mut source = error.source();
+    while let Some(cause) = source {
+        let text = cause.to_string();
+        if !line.contains(&text) {
+            line.push_str(": ");
+            line.push_str(&text);
+        }
+        source = cause.source();
+    }
+    writeln!(out, "{line}")
 }
 
 /// The network path owns runtime/tracing/transport initialization. Keeping it

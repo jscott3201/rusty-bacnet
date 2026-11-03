@@ -103,7 +103,7 @@ async fn routed_control_and_reinit_reach_password_protected_handlers() {
             ],
         )
         .await;
-        failure(&bad, "PASSWORD_FAILURE");
+        failure(&bad, "password-failure");
         assert_eq!(server.comm_state(), DccState::Enable);
         let before = observed.lock().unwrap().len();
         let bad = invoke(
@@ -113,7 +113,7 @@ async fn routed_control_and_reinit_reach_password_protected_handlers() {
             &["warmstart", "--password", "wrong", "--allow-write", "--yes"],
         )
         .await;
-        failure(&bad, "PASSWORD_FAILURE");
+        failure(&bad, "password-failure");
         assert_eq!(observed.lock().unwrap().len(), before);
         success(
             &invoke(
