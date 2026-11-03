@@ -195,7 +195,7 @@ fn starts_name_value(tag: &Tag) -> bool {
     tag.is_context(0)
 }
 
-fn no_space_error() -> Error {
+pub(crate) fn no_space_error() -> Error {
     common::protocol_error(ErrorClass::RESOURCES, ErrorCode::NO_SPACE_TO_WRITE_PROPERTY)
 }
 
@@ -233,7 +233,7 @@ fn write_tags(
     Ok(())
 }
 
-fn check_tags(tags: &[BACnetNameValue]) -> Result<(), Error> {
+pub(crate) fn check_tags(tags: &[BACnetNameValue]) -> Result<(), Error> {
     if tags.len() > MAX_TAGS {
         return Err(no_space_error());
     }

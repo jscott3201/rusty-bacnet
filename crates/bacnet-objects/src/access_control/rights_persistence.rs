@@ -17,27 +17,14 @@ use crate::prelude::*;
 #[cfg(feature = "std")]
 use std::path::Path;
 
-#[cfg(feature = "std")]
-use bacnet_encoding::constructed::tagged::{
-    decode_ctx_boolean, expect_closing, expect_opening, next_is_context, next_is_opening,
-};
-#[cfg(feature = "std")]
-use bacnet_encoding::constructed::{
-    decode_access_rule, decode_device_object_reference, encode_access_rule,
-    encode_device_object_reference,
-};
-#[cfg(feature = "std")]
-use bacnet_encoding::{primitives, tags};
 use bacnet_types::constructed::{BACnetAccessRule, BACnetDeviceObjectReference};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
-#[cfg(feature = "std")]
-use bytes::BytesMut;
 
 #[cfg(feature = "std")]
-use super::MAX_ACCESS_RULES;
-#[cfg(feature = "std")]
 use crate::durable::file::ObjectFile;
+#[cfg(feature = "std")]
+use crate::snapshot::access_rights as format;
 
 /// What an Access Rights object keeps across a restart. Each member is
 /// `None` until a write sets it: what the application configures applies at
@@ -72,54 +59,24 @@ pub trait AccessRightsPersistence: Send + Sync {
     fn save(&self, rights: ObjectIdentifier, snapshot: &AccessRightsSnapshot) -> Result<(), Error>;
 }
 
-/// The format's tag. A Notification Class's `RBNNCL01` and a forwarder's
-/// `RBNFWD01` files are siblings with the same header; a new layout gets a
-/// new tag. Accompaniment (#1393) is an optional member after the others,
-/// so a file written before it existed is one with that member absent.
+/// The most octets a file may take ([`snapshot::access_rights::MAX_LEN`]).
+///
+/// [`snapshot::access_rights::MAX_LEN`]: crate::snapshot::access_rights::MAX_LEN
 #[cfg(feature = "std")]
-const MAGIC: &[u8; 8] = b"RBNACR01";
-/// A rule this object accepts encodes in at most 40 octets, so two full
-/// arrays of [`MAX_ACCESS_RULES`] take about 80 KiB, and Accompaniment at
-/// most 12 octets more. Anything much larger is not a file this backend
-/// wrote.
-#[cfg(feature = "std")]
-pub(super) const MAX_FILE_BYTES: u64 = 128 * 1024;
-/// The context tags of the four members, in file order.
-#[cfg(feature = "std")]
-const POSITIVE_TAG: u8 = 0;
-#[cfg(feature = "std")]
-const NEGATIVE_TAG: u8 = 1;
-#[cfg(feature = "std")]
-const ENABLE_TAG: u8 = 2;
-#[cfg(feature = "std")]
-const ACCOMPANIMENT_TAG: u8 = 3;
-/// The label decoding errors carry.
-#[cfg(feature = "std")]
-const WHAT: &str = "Access Rights file";
+pub(super) const MAX_FILE_BYTES: u64 = format::MAX_LEN as u64;
 
 /// A file holding one Access Rights object's written rule arrays, Enable and
 /// Accompaniment, replaced whole on each save, the same way as
 /// [`FileNotificationClassPersistence`]: a failed save leaves the previous
-/// state in place, and a completed one survives a power loss.
-///
-/// After the magic tag `RBNACR01` and the object's identifier, the file
-/// holds BACnet encodings of up to four members, in this order, each only
-/// once a write has set it:
-///
-/// - context tag 0, opening, then each Positive_Access_Rules rule in its
-///   Clause 21 `BACnetAccessRule` encoding, then context tag 0, closing;
-/// - the same for Negative_Access_Rules under context tag 1;
-/// - Enable as a context-tagged BOOLEAN with tag 2;
-/// - context tag 3, opening, then Accompaniment in its Clause 21
-///   `BACnetDeviceObjectReference` encoding, then context tag 3, closing.
-///
-/// Loading refuses a file past 128 KiB, an array of more than
-/// [`MAX_ACCESS_RULES`] rules, members out of order or repeated, a rule or
-/// reference that does not decode, and octets after the last member. It
-/// does not check the rules or the reference themselves; the object does,
-/// as it loads them. It does not coordinate between processes.
+/// state in place, and a completed one survives a power loss. It does not
+/// coordinate between processes.
 ///
 /// [`FileNotificationClassPersistence`]: crate::notification_class::FileNotificationClassPersistence
+///
+/// The file holds what [`snapshot::access_rights::encode`] returns; that module
+/// documents the format.
+///
+/// [`snapshot::access_rights::encode`]: crate::snapshot::access_rights::encode
 #[derive(Clone, Debug)]
 #[cfg(feature = "std")]
 pub struct FileAccessRightsPersistence {
@@ -131,7 +88,7 @@ impl FileAccessRightsPersistence {
     /// Keep the rule arrays, Enable and Accompaniment in the file at `path`.
     pub fn new(path: impl AsRef<Path>) -> Result<Self, Error> {
         Ok(Self {
-            file: ObjectFile::new(path.as_ref(), MAGIC, MAX_FILE_BYTES, "Access Rights file")?,
+            file: ObjectFile::new(path.as_ref(), MAX_FILE_BYTES, "Access Rights file")?,
         })
     }
 
@@ -152,112 +109,18 @@ impl FileAccessRightsPersistence {
     pub fn path(&self) -> &Path {
         self.file.path()
     }
-
-    fn undecodable(&self) -> Error {
-        self.file.corrupt("holds an entry that does not decode")
-    }
-
-    /// The rule array framed by context tag `tag` at `*pos`, if one is there,
-    /// moving `*pos` past it.
-    fn decode_array(
-        &self,
-        body: &[u8],
-        pos: &mut usize,
-        tag: u8,
-    ) -> Result<Option<Vec<BACnetAccessRule>>, Error> {
-        if !next_is_opening(body, *pos, tag).map_err(|_| self.undecodable())? {
-            return Ok(None);
-        }
-        let mut at = expect_opening(body, *pos, tag, WHAT).map_err(|_| self.undecodable())?;
-        let mut rules = Vec::new();
-        loop {
-            // Running out of octets here means the frame never closed.
-            let (next, after) = tags::decode_tag(body, at).map_err(|_| self.undecodable())?;
-            if next.is_closing_tag(tag) {
-                *pos = after;
-                return Ok(Some(rules));
-            }
-            if rules.len() == MAX_ACCESS_RULES {
-                return Err(self.file.corrupt("holds more entries than the cap"));
-            }
-            let (rule, end) = decode_access_rule(body, at).map_err(|_| self.undecodable())?;
-            rules.push(rule);
-            at = end;
-        }
-    }
-
-    /// The Accompaniment framed by context tag 3 at `*pos`, if one is there,
-    /// moving `*pos` past it.
-    fn decode_accompaniment(
-        &self,
-        body: &[u8],
-        pos: &mut usize,
-    ) -> Result<Option<BACnetDeviceObjectReference>, Error> {
-        if !next_is_opening(body, *pos, ACCOMPANIMENT_TAG).map_err(|_| self.undecodable())? {
-            return Ok(None);
-        }
-        let decoded = expect_opening(body, *pos, ACCOMPANIMENT_TAG, WHAT)
-            .and_then(|at| decode_device_object_reference(body, at))
-            .and_then(|(reference, at)| {
-                expect_closing(body, at, ACCOMPANIMENT_TAG, WHAT).map(|end| (reference, end))
-            });
-        let (reference, end) = decoded.map_err(|_| self.undecodable())?;
-        *pos = end;
-        Ok(Some(reference))
-    }
 }
 
 #[cfg(feature = "std")]
 impl AccessRightsPersistence for FileAccessRightsPersistence {
     fn load(&self, rights: ObjectIdentifier) -> Result<Option<AccessRightsSnapshot>, Error> {
-        let Some(body) = self.file.load(rights)? else {
+        let Some(octets) = self.file.read()? else {
             return Ok(None);
         };
-        let mut pos = 0;
-        let positive_access_rules = self.decode_array(&body, &mut pos, POSITIVE_TAG)?;
-        let negative_access_rules = self.decode_array(&body, &mut pos, NEGATIVE_TAG)?;
-        let enable = if next_is_context(&body, pos, ENABLE_TAG).map_err(|_| self.undecodable())? {
-            let (enable, end) =
-                decode_ctx_boolean(&body, pos, ENABLE_TAG, WHAT).map_err(|_| self.undecodable())?;
-            pos = end;
-            Some(enable)
-        } else {
-            None
-        };
-        let accompaniment = self.decode_accompaniment(&body, &mut pos)?;
-        if pos != body.len() {
-            return Err(self.undecodable());
-        }
-        Ok(Some(AccessRightsSnapshot {
-            positive_access_rules,
-            negative_access_rules,
-            enable,
-            accompaniment,
-        }))
+        Ok(Some(format::decode(rights, &octets)?))
     }
 
     fn save(&self, rights: ObjectIdentifier, snapshot: &AccessRightsSnapshot) -> Result<(), Error> {
-        let mut body = BytesMut::new();
-        for (tag, rules) in [
-            (POSITIVE_TAG, &snapshot.positive_access_rules),
-            (NEGATIVE_TAG, &snapshot.negative_access_rules),
-        ] {
-            if let Some(rules) = rules {
-                tags::encode_opening_tag(&mut body, tag);
-                for rule in rules {
-                    encode_access_rule(&mut body, rule);
-                }
-                tags::encode_closing_tag(&mut body, tag);
-            }
-        }
-        if let Some(enable) = snapshot.enable {
-            primitives::encode_ctx_boolean(&mut body, ENABLE_TAG, enable);
-        }
-        if let Some(reference) = &snapshot.accompaniment {
-            tags::encode_opening_tag(&mut body, ACCOMPANIMENT_TAG);
-            encode_device_object_reference(&mut body, reference);
-            tags::encode_closing_tag(&mut body, ACCOMPANIMENT_TAG);
-        }
-        self.file.save(rights, &body)
+        self.file.save_octets(format::encode(rights, snapshot)?)
     }
 }

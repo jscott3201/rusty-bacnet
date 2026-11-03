@@ -374,8 +374,8 @@ fn file_persistence_refuses_a_file_past_its_size_or_entry_caps() {
     storage.save(forwarder, &full).unwrap();
     assert_eq!(storage.load(forwarder).unwrap().unwrap(), full);
 
-    // One entry past either cap is refused. The backend saves what it is
-    // given, so a file like this can only come from elsewhere.
+    // One entry past either cap is refused, and never saved: a file like
+    // this, written here by hand, can only come from elsewhere.
     let mut too_many = destinations;
     too_many.push(destination(device(999), 1, false));
     let past_recipient_cap = ForwarderSnapshot {
@@ -389,7 +389,11 @@ fn file_persistence_refuses_a_file_past_its_size_or_entry_caps() {
         ..full.clone()
     };
     for past_cap in [past_recipient_cap, past_subscription_cap] {
-        storage.save(forwarder, &past_cap).unwrap();
+        assert!(matches!(
+            storage.save(forwarder, &past_cap),
+            Err(Error::OutOfRange(_))
+        ));
+        std::fs::write(&path, raw_file(forwarder, &past_cap)).unwrap();
         assert!(refusal(&storage).contains("more entries than the cap"));
     }
 
@@ -405,4 +409,27 @@ fn file_persistence_refuses_a_file_past_its_size_or_entry_caps() {
     let at_cap = refusal(&storage);
     assert!(!at_cap.contains("too large"), "{at_cap}");
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+/// The file the backend would write for `snapshot` if it took any list,
+/// built by hand: what another writer could leave.
+// std: only the file backend's test writes one.
+#[cfg(feature = "std")]
+fn raw_file(forwarder: ObjectIdentifier, snapshot: &ForwarderSnapshot) -> Vec<u8> {
+    use bacnet_encoding::constructed::{
+        encode_destination_list, encode_event_notification_subscription_list,
+    };
+    let mut list = bytes::BytesMut::new();
+    encode_destination_list(&mut list, snapshot.recipient_list.as_deref().unwrap()).unwrap();
+    let mut body = bytes::BytesMut::new();
+    body.extend_from_slice(&[1]);
+    body.extend_from_slice(&(list.len() as u32).to_be_bytes());
+    body.extend_from_slice(&list);
+    encode_event_notification_subscription_list(&mut body, &snapshot.subscribed_recipients)
+        .unwrap();
+    crate::snapshot::framing::seal(
+        &crate::snapshot::notification_forwarder::MAGIC,
+        forwarder,
+        &body,
+    )
 }

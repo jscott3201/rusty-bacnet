@@ -5162,6 +5162,11 @@ implements `From<SnapshotError>`, the mapping the file backends use.
 | --- | --- | --- | --- |
 | `snapshot::log` | `LogSnapshot<R>` (Trend Log, Trend Log Multiple, Event Log) | `RBLOGS01`, version 2; version 1 still loads | `FileLogPersistence` (one slot of the two) |
 | `snapshot::write_config` | `WriteConfigSnapshot` (Timer, Channel) | `RBNWCF01`, kinds 2 and 3; kind 1 still loads | `FileWriteConfigPersistence` |
+| `snapshot::notification_class` | `NotificationClassSnapshot` | `RBNNCL01` | `FileNotificationClassPersistence` |
+| `snapshot::notification_forwarder` | `ForwarderSnapshot` | `RBNFWD01` | `FileNotificationForwarderPersistence` |
+| `snapshot::tags` | `TagsSnapshot` | `RBNTAG01` | `FileTagsPersistence` |
+| `snapshot::color` | `ColorOutputSnapshot` (Color, Color Temperature) | `RBNCLR02`; `RBNCLR01` still loads | `FileColorOutputPersistence` |
+| `snapshot::access_rights` | `AccessRightsSnapshot` | `RBNACR01` | `FileAccessRightsPersistence` |
 
 ```rust
 use bacnet_objects::snapshot::write_config;
