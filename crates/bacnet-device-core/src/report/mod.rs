@@ -149,9 +149,10 @@ pub struct ReporterCounters {
     pub cov: CovCounters,
     /// Subscriptions left owed a later look by a report refused for want
     /// of room in the outbox, or of an invoke ID for a confirmed one: one
-    /// count until a look reaches it, however often it is refused
-    /// meanwhile. A report that couldn't fit even an empty outbox counts
-    /// each time, and leaves nothing owed.
+    /// count until any evaluation, a look's or a change's, reports it or
+    /// finds nothing to report, however often it is refused or dropped by
+    /// the budget meanwhile. A report that couldn't fit even an empty
+    /// outbox counts each time, and leaves nothing owed.
     pub owed: u64,
     /// Confirmed notifications sent again after a timeout.
     pub resent: u64,

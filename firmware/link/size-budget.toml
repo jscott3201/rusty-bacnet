@@ -591,6 +591,18 @@
 # 396 / 384 / 308 octets of .text more; .rodata and RAM are unchanged, as
 # the owed list already keeps the order references became owed in. The
 # merge moved no row. The reporting budgets are --suggest's again.
+#
+# Later on 2026-11-04 (#2363's review round, dev at f423d3804 merged), a
+# look drops an owed reference whose object or subscription is gone, hands
+# a still-free entry to the next owed one, and keeps one the budget
+# dropped. As text / rodata / flash, then RAM:
+#
+#   thumbv7m             171756 / 17280 / 190060    24680
+#   thumbv7em            172040 / 17284 / 190348    24680
+#   riscv32imac          206580 / 20948 / 227550    24680
+#
+# 600 / 456 / 608 octets of .text more; the objects rows didn't move. The
+# reporting budgets are --suggest's again.
 
 [thumbv7m-none-eabi.mstp]
 text = 18320
@@ -692,11 +704,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [thumbv7m-none-eabi.reporting]
-text = 191696
+text = 192368
 rodata = 19360
 data = 64
 bss = 27648
-flash = 212192
+flash = 212880
 ram = 27648
 fmt_functions = 0
 div64_functions = 0
@@ -978,11 +990,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [thumbv7em-none-eabihf.reporting]
-text = 192176
+text = 192688
 rodata = 19360
 data = 64
 bss = 27648
-flash = 212688
+flash = 213200
 ram = 27648
 fmt_functions = 0
 div64_functions = 0
@@ -1000,11 +1012,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [riscv32imac-unknown-none-elf.reporting]
-text = 230688
+text = 231376
 rodata = 23472
 data = 64
 bss = 27648
-flash = 254176
+flash = 254864
 ram = 27648
 fmt_functions = 0
 div64_functions = 0

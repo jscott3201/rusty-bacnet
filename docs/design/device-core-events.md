@@ -729,7 +729,7 @@ image would link:
 | `reporting` image (thumbv7m) | `.text` estimate | From |
 |---|---|---|
 | PR 1, measured | 148.4 KB (flash 165.8 KB) | the `objects` image's 127.3 KB, plus the table and the two subscribe services (#2303) |
-| PR 2, measured | 171.2 KB (flash 189.5 KB) | the image through the `Reporter`, trimmed by #2363 (§8.3) |
+| PR 2, measured | 171.8 KB (flash 190.1 KB) | the image through the `Reporter`, trimmed by #2363 (§8.3) |
 | + `event-reporting` (after PR 3) | 172-181 KB | ~2,200 lines, plus the measured objects and encoder share |
 | + `event-enrollment` (#2319) | 207-221 KB | ~2,700 lines, the Event Enrollment object, `decode_event_parameter` |
 | + the Multiple path (#2320) | +15-25 KB | ~3,300 lines, the COVNotificationMultiple codec |
@@ -740,7 +740,7 @@ at 512 KB. Each PR replaces its estimate with the measured row; PR 2's
 came in about 15 KB over the estimate's top even after #2363's trims,
 so PR 3's and #2319's rows should expect as much. The `firmware/link`
 images share one 256 KiB `memory.x`, but riscv32imac's, the largest
-(226,938 octets of flash after PR 2), have their own since #2363,
+(227,550 octets of flash after PR 2), have their own since #2363,
 `memory-riscv32imac.x`: 512 KiB of flash, sized for an ESP32-C6-class
 part, an RV32IMAC running in place from 4 MiB or more of external flash.
 
@@ -781,10 +781,10 @@ Measured for PR 2 (2b, 2026-11-03), the scenario through the `Reporter`:
 | Outbox entry (token, reference, route, flags, the begin instant, place in the buffer) | 184 octets on a 64-bit host, beside the parameters in the buffer |
 | Confirmed-table entry | 152 octets on a 64-bit host, and its parameters on the heap |
 | The scenario's outbox | 6 entries and 256 octets: one change's six notifications |
-| The `reporting` scenario's peak heap (64-bit host) | 20,840 octets: the arena grows to 24 KiB for the image |
-| The `reporting` image (thumbv7m), as PR 2 left it | 192,856 `.text`, 211,196 flash, 24,672 RAM |
+| The `reporting` scenario's peak heap (64-bit host) | 19,800 octets with the image's features, 19,952 with the workspace's (20,840 when 2b landed): the arena grows to 24 KiB for the image |
+| The `reporting` image (thumbv7m), as PR 2 left it | 192,856 `.text`, 211,200 flash, 24,672 RAM |
 | The same after #2363's trims | 170,760 `.text`, 189,060 flash, 24,680 RAM |
-| And after its owed-look fixes (decision 13) | 171,156 `.text`, 189,456 flash, 24,680 RAM |
+| And after its owed-look fixes (decision 13) | 171,756 `.text`, 190,060 flash, 24,680 RAM |
 
 #2363 attributed the 65.6 KB of `.text` the image added over `objects`
 (thumbv7m, symbol sizes with LTO, so callers hold what they inline): the
@@ -962,8 +962,11 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
 13. The `Reporter` asks the host's admission for every report, so the
     outbox checks room for each; a report it refuses leaves its
     subscription owed, looked at again as room frees: oldest first, as
-    many as there are free entries, and one refused again keeps its place
-    and is counted once. A subscription holds
+    many as there are free entries. One refused again, or whose report
+    the budget dropped, keeps its place and is counted once; an
+    evaluation that reports it or finds nothing to report ends the debt,
+    and a look drops one whose object or subscription is gone and hands a
+    still-free entry to the next. A subscription holds
     one unconfirmed entry: a newer report replaces it and keeps its turn,
     so a subscription changing faster than the link sends neither crowds
     out the others nor loses its place to every change. A confirmed

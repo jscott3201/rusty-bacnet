@@ -17,6 +17,9 @@ use bacnet_time::Duration;
 use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier as P};
 use bacnet_types::primitives::PropertyValue;
 
+#[path = "reporter_owed_tests.rs"]
+mod owed;
+
 const T0: Instant = Instant::from_secs(1_000);
 
 fn ai() -> ObjectIdentifier {
@@ -76,6 +79,10 @@ struct Device {
 
 impl Device {
     fn new(outbox: OutboxLimits) -> Self {
+        Self::with_policy(outbox, crate::cov::CovPolicy::default())
+    }
+
+    fn with_policy(outbox: OutboxLimits, policy: crate::cov::CovPolicy) -> Self {
         let identity = DeviceIdentity::new(9, 0x105)
             .unwrap()
             .with_services(SERVICES);
@@ -86,7 +93,7 @@ impl Device {
             vec![Box::new(sensor), Box::new(second)];
         let db = build_database_with_extra(&identity, sensors).unwrap();
         let responder = Responder::new(identity, crate::responder::Limits::default()).unwrap();
-        let config = ReportConfig::default()
+        let config = ReportConfig::new(policy)
             .with_outbox(outbox)
             .with_confirmed(FlightTiming::new(Duration::from_secs(3), 1));
         Self {
@@ -351,6 +358,48 @@ fn reads_answer_the_device_list_from_the_table() {
     let empty = read(&mut device);
     device.subscribe(1, false, T0);
     assert!(read(&mut device) > empty, "the subscription is listed");
+}
+
+/// The Reporter runs no SubscribeCOVPropertyMultiple (#2320): it rejects
+/// the request as an unrecognized service, and subscribes nothing.
+#[test]
+fn subscribe_cov_property_multiple_is_rejected() {
+    use bacnet_services::cov_multiple::{
+        COVReference, COVSubscriptionSpecification, SubscribeCOVPropertyMultipleRequest,
+    };
+    use bacnet_types::constructed::PropertyReference;
+    use bacnet_types::enums::RejectReason;
+
+    let mut device = Device::new(OutboxLimits::default());
+    let mut body = BytesMut::new();
+    SubscribeCOVPropertyMultipleRequest {
+        subscriber_process_identifier: 1,
+        issue_confirmed_notifications: false,
+        lifetime: Some(300),
+        max_notification_delay: Some(10),
+        list_of_cov_subscription_specifications: vec![COVSubscriptionSpecification {
+            monitored_object_identifier: ai(),
+            list_of_cov_references: vec![COVReference {
+                monitored_property: PropertyReference {
+                    property_identifier: P::PRESENT_VALUE,
+                    property_array_index: None,
+                },
+                cov_increment: None,
+                timestamped: false,
+            }],
+        }],
+    }
+    .encode(&mut body)
+    .unwrap();
+    let service = ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE;
+    match device.request(service, &body, T0) {
+        Apdu::Reject(reject) => {
+            assert_eq!(reject.reject_reason, RejectReason::UNRECOGNIZED_SERVICE);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(device.reporter.table().is_empty());
+    assert!(device.pop(T0).is_none());
 }
 
 const fn at(millis: u64) -> Instant {

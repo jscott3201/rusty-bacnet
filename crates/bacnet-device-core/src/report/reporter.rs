@@ -25,8 +25,8 @@ use super::{
 use crate::cov::active::ActiveCovOverlay;
 use crate::cov::life_safety::{LifeSafetyCovSnapshots, is_life_safety_object};
 use crate::cov::{
-    CovCounters, CovNotificationKind, CovSubscriptionKey, CovSubscriptionSnapshot, CovTable,
-    Delivery, Evaluation, EventBudget, FlightTiming, SubscriberEndpoint, Token, evaluate,
+    CovCounters, CovNotificationKind, CovReport, CovSubscriptionKey, CovSubscriptionSnapshot,
+    CovTable, Delivery, Evaluation, EventBudget, FlightTiming, SubscriberEndpoint, Token, evaluate,
 };
 use crate::reply::{self, SEGMENTED, emit};
 use crate::responder::{Access, Inbound, Outcome, Responder, Written};
@@ -230,14 +230,23 @@ impl Reporter {
             self.end_confirmed(out.token, Delivery::Failed, now);
         }
         let mut keys = core::mem::take(&mut self.looks);
+        let mut owed = 0;
         if core::mem::take(&mut self.room_freed) {
             // The oldest owed references, as many as there are free
             // entries: more would only be refused again. They stay owed
             // until a look reaches them.
-            let free = self.outbox.room().entries_free().min(self.owed.len());
-            keys.extend_from_slice(&self.owed[..free]);
+            owed = self.outbox.room().entries_free().min(self.owed.len());
+            keys.extend_from_slice(&self.owed[..owed]);
         }
         self.look(db, &keys, now);
+        // A look that settled an owed reference, with an entry still free,
+        // gives the next ones their turn now rather than at the next pop.
+        // One that settled none waits for a pop, so it can't spin.
+        let settled = keys[keys.len() - owed..]
+            .iter()
+            .any(|key| !self.owed.contains(key));
+        self.room_freed |=
+            settled && !self.owed.is_empty() && self.outbox.room().entries_free() > 0;
     }
 
     /// The next notification to send, its APDU appended to `out`: a
@@ -471,6 +480,8 @@ impl Reporter {
     /// Look again at the live references `keys` names, in its order, object
     /// by object, each object under a budget of its own: an object comes
     /// up with the first reference to it, and its later ones come along.
+    /// A reference whose subscription or object is gone can't be looked
+    /// at, so it is owed nothing more.
     fn look(&mut self, db: &ObjectDatabase, keys: &[CovSubscriptionKey], now: Instant) {
         for (at, key) in keys.iter().enumerate() {
             let object = key.object();
@@ -483,14 +494,19 @@ impl Reporter {
                     continue;
                 }
                 let sub = self.table.get_subscription(key);
-                subs.extend(sub.filter(|sub| self.table.is_current(sub, now)).cloned());
+                match sub.filter(|sub| self.table.is_current(sub, now)) {
+                    Some(sub) => subs.push(sub.clone()),
+                    None => self.owed.retain(|owed| owed != key),
+                }
             }
             #[cfg(test)]
             {
                 self.looked += subs.len();
             }
-            if let Some(stored) = db.get(&object).filter(|_| !subs.is_empty()) {
-                self.report(stored, &subs, false, now);
+            match db.get(&object) {
+                Some(stored) if !subs.is_empty() => self.report(stored, &subs, false, now),
+                Some(_) => {}
+                None => self.owed.retain(|owed| owed.object() != object),
             }
         }
     }
@@ -511,6 +527,9 @@ impl Reporter {
         let limits = self.outbox.limits();
         let outbox = &self.outbox;
         let mut refused = Vec::new();
+        // Owed references admitted: the budget may still drop their reports.
+        let owed = &self.owed;
+        let mut admitted = Vec::new();
         let evaluation = Evaluation {
             device: self.device,
             force,
@@ -524,6 +543,9 @@ impl Reporter {
             now,
             |sub, octets| {
                 if room.take(octets, outbox.queued(sub.key())) {
+                    if owed.contains(sub.key()) {
+                        admitted.push(sub.key().clone());
+                    }
                     return Some(());
                 }
                 // Too large for the whole outbox: owing it would only find
@@ -534,15 +556,8 @@ impl Reporter {
             },
         );
         self.settle();
-        // An owed reference this evaluation reached is owed no more, unless
-        // it was refused again: then it keeps its place.
         if !self.owed.is_empty() {
-            self.owed.retain(|key| {
-                refused
-                    .iter()
-                    .any(|(again, hopeless)| again == key && !hopeless)
-                    || !subs.iter().any(|sub| sub.key() == key)
-            });
+            self.keep_owed(subs, &reports, &refused, &admitted, &budget);
         }
         for report in reports {
             let sub = &subs[report.index];
@@ -573,8 +588,39 @@ impl Reporter {
         }
     }
 
+    /// After an evaluation of `subs`: an owed reference it reported, or
+    /// found nothing to report for, is owed no more. One refused again, or
+    /// whose report the budget dropped, keeps its place.
+    fn keep_owed(
+        &mut self,
+        subs: &[CovSubscriptionSnapshot],
+        reports: &[CovReport<()>],
+        refused: &[(CovSubscriptionKey, bool)],
+        admitted: &[CovSubscriptionKey],
+        budget: &EventBudget,
+    ) {
+        // The budget runs out at a report, and past it evaluate drops a
+        // report before asking admission: a reference there may have had one.
+        let spent = budget
+            .is_exhausted()
+            .then(|| reports.last().map_or(0, |report| report.index + 1));
+        self.owed.retain(|key| {
+            let Some(at) = subs.iter().position(|sub| sub.key() == key) else {
+                return true;
+            };
+            if reports.iter().any(|report| report.index == at) {
+                return false;
+            }
+            if let Some((_, hopeless)) = refused.iter().find(|(again, _)| again == key) {
+                return !hopeless;
+            }
+            admitted.contains(key) || spent.is_some_and(|from| at >= from)
+        });
+    }
+
     /// Owe `key` a later look, after those owed already; counted once,
-    /// however often it is refused until a look reaches it.
+    /// however often it is refused until an evaluation reports it or finds
+    /// nothing to report.
     fn owe(&mut self, key: CovSubscriptionKey) {
         if !self.owed.contains(&key) {
             self.counters.owed += 1;

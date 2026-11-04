@@ -3,9 +3,17 @@
 //!
 //! It answers as the `BTreeMap` it replaced did, in key order, with the
 //! entries' lookups a binary search. A `BTreeMap` links its node code once
-//! for each key and value type; these maps hold a few dozen entries at
-//! most on a device (one per subscription or peer), and the vector's code
-//! is a fraction of that in a firmware image (#2363).
+//! for each key and value type; the vector's code is a fraction of that in
+//! a firmware image (#2363).
+//!
+//! An insert or a removal moves the entries after it. A device holds a few
+//! entries (one per subscription or peer); the server, up to one per
+//! subscription, 1,024 at its default cap. Measured with 1,024 flights (a
+//! release build on a desktop host, 96-octet entries), an insert or a
+//! removal in the middle takes about 250 ns against the `BTreeMap`'s 21
+//! to 25, at the front about 450, and at the end about 10. A flight's
+//! entry goes in when a confirmed report begins and out when it ends, so
+//! that is under half a microsecond twice per confirmed notification.
 
 use alloc::vec::Vec;
 
