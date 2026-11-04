@@ -290,16 +290,20 @@ impl ForeignTarget {
 
     /// The transport runs, bound to `own`: changes are taken from now on,
     /// and the next registration attempt looks a BBMD host name up again,
-    /// whenever the last lookup was. A start on `::` that looked its BBMD's
-    /// configured name up registers where it was `found` from now on.
-    pub(super) fn attach(&self, own: SocketAddrV6, found: Option<SocketAddrV6>) {
+    /// whenever the last lookup was.
+    pub(super) fn attach(&self, own: SocketAddrV6) {
         let mut state = self.lock();
         state.own = Some(own);
         state.lookups.attached();
         state.counters.last_failure = None;
-        if let Some(found) = found
-            && state.config.bbmd.address().is_none()
-        {
+    }
+
+    /// A start on `::` that looked its BBMD's configured name up registers
+    /// where it was `found` from now on: called once nothing can fail the
+    /// start, before its receive loop and driver run (#2365).
+    pub(super) fn take_found(&self, found: SocketAddrV6) {
+        let mut state = self.lock();
+        if state.config.bbmd.address().is_none() {
             let mut config = state.config.clone();
             config.bbmd = found.into();
             state.take(config);

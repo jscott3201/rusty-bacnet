@@ -129,8 +129,10 @@ pub struct BbmdLookupCounters {
     /// activation of a name, one alongside a registration attempt at most
     /// every 30 seconds, and, while the device waits for a configured name,
     /// one 30 seconds after each failure (#2365). A B/IPv6 start on `::`
-    /// counts the lookup it makes before binding, whether or not the start
-    /// succeeds.
+    /// counts the lookup it makes before binding once that lookup answers,
+    /// whether or not the start then succeeds. A start cancelled before the
+    /// answer counts none, as a lookup ending with the transport stopped
+    /// doesn't.
     pub lookups: u64,
     /// Of those, the ones that failed. The device kept registering with
     /// the address it had, or, with none yet, kept waiting for the name.

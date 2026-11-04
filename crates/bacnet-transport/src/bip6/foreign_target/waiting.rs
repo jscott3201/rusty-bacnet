@@ -130,7 +130,7 @@ impl ForeignTarget {
     /// place, in the lookups' one slot, counted as any lookup is, and the
     /// start fails unless it stands for an IPv6 address the device could
     /// register with. The address found becomes the registration's only
-    /// once the start succeeds ([`attach`](Self::attach)): a start that
+    /// once nothing can fail the start ([`take_found`](Self::take_found)): a start that
     /// fails later keeps the name, which the next start looks up again.
     pub(in crate::bip6) async fn start_bbmd(
         &self,

@@ -1299,7 +1299,8 @@ queue. The name is tried again 30 seconds after the newest failure, and the firs
 usable answer registers at once. A stop ends the retry; a restart looks the name up
 at once.
 `Bip6Transport::foreign_status()` returns a `Bip6ForeignStatus`: the BBMD's address in
-use, `waiting_for_bbmd`, the lookup and release counters and `broadcasts_refused`.
+use, `bbmd_name` (the host name it is known by, if any), `waiting_for_bbmd`, the
+lookup and release counters, `broadcasts_refused` and `registrations_sent`.
 `foreign_device_config()` reads back the name until it first resolves. The B/IPv6
 client builder takes a registration with
 `.foreign_device(config)` alongside `.device_instance(..)` (#1941), and, as the B/IP

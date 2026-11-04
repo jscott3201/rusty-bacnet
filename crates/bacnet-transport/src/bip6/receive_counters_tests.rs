@@ -55,7 +55,7 @@ pub(super) fn peer() -> SocketAddrV6 {
 }
 
 /// The BBMD a foreign-device node registers with.
-fn bbmd() -> SocketAddrV6 {
+pub(super) fn bbmd() -> SocketAddrV6 {
     SocketAddrV6::new(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1), 0xBAC0, 0, 0)
 }
 

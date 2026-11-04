@@ -609,6 +609,16 @@ impl TransportPort for Bip6Transport {
         {
             fd.registration_sent();
         }
+        // The address a start on `::` found is the registration's from here,
+        // before the receive loop and the driver read it: nothing after
+        // this can fail the start, which keeps the name until now.
+        let found = start_bbmd
+            .as_ref()
+            .filter(|start| start.looked_up)
+            .and_then(|start| start.bbmd);
+        if let (Some(fd), Some(found)) = (&self.foreign_device, found) {
+            fd.take_found(found);
+        }
 
         /// NPDU receive channel capacity for high-throughput UDP transports.
         const NPDU_CHANNEL_CAPACITY: usize = 256;
@@ -653,12 +663,7 @@ impl TransportPort for Bip6Transport {
 
         // Start foreign device registration if configured
         if let Some(fd) = &self.foreign_device {
-            // The address a start on `::` found is the registration's now.
-            let found = start_bbmd
-                .as_ref()
-                .filter(|start| start.looked_up)
-                .and_then(|start| start.bbmd);
-            fd.attach(local_address, found);
+            fd.attach(local_address);
             // A BBMD named by host name is looked up alongside the
             // registration this start sent, or, waiting, for the first
             // time, unless the start looked it up already.

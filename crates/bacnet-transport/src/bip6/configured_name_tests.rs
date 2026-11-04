@@ -300,7 +300,7 @@ async fn only_the_armed_retry_acts() {
         ttl: 60,
     };
     let target = foreign_target::ForeignTarget::new(config, names.clone());
-    target.attach("[::1]:47809".parse().unwrap(), None);
+    target.attach("[::1]:47809".parse().unwrap());
     target.attempting();
     after(1).await;
     assert_eq!(names.calls(), 1);

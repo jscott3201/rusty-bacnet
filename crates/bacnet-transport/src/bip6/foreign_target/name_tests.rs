@@ -46,7 +46,7 @@ impl Device {
         };
         let resolver = Arc::clone(&names) as Arc<dyn BbmdResolver>;
         let target = ForeignTarget::new(config, resolver);
-        target.attach(at(OWN), None);
+        target.attach(at(OWN));
         Self { target, names }
     }
 
@@ -141,7 +141,7 @@ async fn attempts_look_the_name_up_again_at_most_once_per_30_s() {
     device.after(1).await;
     assert_eq!((device.names.calls(), device.bbmd()), (3, at(B)));
     device.target.detach();
-    device.target.attach(at(OWN), None);
+    device.target.attach(at(OWN));
     device.target.attempting();
     device.after(1).await;
     assert_eq!(device.names.calls(), 4);
