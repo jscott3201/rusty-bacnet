@@ -23,9 +23,13 @@ with dev `32c21b87d` (after S4, #2374) before these counts, so the counts
 are of the code the pull request merges:
 - item 3 is dev `32c21b87d` against `3b243714c`, which is that dev with
   item 3's commit (`d20713a80`) cherry-picked (a local commit, not pushed);
-- item 5 is `3b243714c` against the branch head `652f94c09`, the merge of
-  item 5 (`6620adebc`) and dev. Its tree is `3b243714c` plus item 5 and
-  nothing else.
+- item 5 is `3b243714c` against `652f94c09`, the merge of item 5
+  (`6620adebc`) and dev. Its tree is `3b243714c` plus item 5 and nothing
+  else.
+
+The branch head after these counts adds this directory, a merge with dev
+`059fe5b99` (#2376's check of legacy Event_Parameters values, which the
+in-place ACK now runs on the encoded value) and the review's fixes.
 
 ## Item 3: the ReadProperty value encoded in place
 
@@ -94,8 +98,11 @@ frames.
 
 **Verdict: accepted.** ReadProperty falls by about 420 instructions per
 request: 44.3 times the floor on the current-thread runtime and 16.7 times
-on the multi-thread one, with all pairs lower. WriteProperty and
-ReadPropertyMultiple fall by 420 to 610. Every round trip makes two fewer
+on the multi-thread one, with all pairs lower. WriteProperty falls by
+421.5 and 478.6 (4.2 and 4.4 times its floors), with all pairs lower, and
+ReadPropertyMultiple by 444.0 on the current-thread runtime. Its
+multi-thread figure, 611.3, is only 1.2 times its floor of 530.0, with 5
+of 6 pairs lower, so it is no measured saving. Every round trip makes two fewer
 allocator calls (one per send, request and reply); the bytes requested
 fall by the two frames' size. In `item5/profiles/rp-ct.md`:
 - `encode_bvll` goes from the unicast path (192 instructions per request);
@@ -107,7 +114,7 @@ Callgrind counts only user-space instructions, so a vectored send's cost
 in the kernel against a plain one is not in these figures. The wall-clock
 check after S5 (the plan's S6) covers it.
 
-`check-no-std.sh` and `check-firmware-link.sh` pass on the branch head.
+`check-no-std.sh` and `check-firmware-link.sh` pass on `9b9fa96b9`.
 The change is in the Tokio transport, which no firmware image links; the
 B/IP node, BBMD and router images, in bytes used against the budget:
 
@@ -169,10 +176,33 @@ ReadProperty did not rise this time (it fell by 56 and 66), unlike the
 is real but about 300 instructions, below what the multi-thread runtime's
 WriteProperty spread can confirm.
 
+## Both items together: the official count
+
+The manual Perf counts workflow compared dev `32c21b87d` with `9b9fa96b9`
+(this directory's commit) on GitHub's arm64 runner (run 41890882196,
+`official/`). Its candidate binary is byte-identical to the local item 5
+candidate's (`e3c55dbd2c77f605`).
+
+| Workload | Runtime | A | B | B - A | Floor | Pairs lower | Calls A / B | Bytes A / B | Verdict |
+| --- | --- | ---: | ---: | ---: | ---: | --- | --- | --- | --- |
+| ReadProperty | ct | 32,145.0 | 31,261.5 | -883.5 | 12.0 | 6 of 6 | 22.0005 / 18.0005 | 2,196.05 / 2,127.05 | PASS |
+| ReadProperty | mt | 33,539.8 | 32,632.7 | -907.2 | 46.6 | 6 of 6 | 22.0008 / 18.0007 | 2,196.08 / 2,127.07 | PASS |
+| WriteProperty | ct | 40,323.2 | 39,902.4 | -420.8 | 111.5 | 6 of 6 | 27.0006 / 25.0006 | 7,995.06 / 7,944.06 | PASS |
+| WriteProperty | mt | 41,581.6 | 41,128.8 | -452.8 | 146.3 | 6 of 6 | 27.0009 / 25.0009 | 7,995.09 / 7,944.09 | PASS |
+| ReadPropertyMultiple | ct | 91,289.5 | 91,015.2 | -274.2 | 873.0 | 4 of 6 | 141.0011 / 139.0011 | 18,781.11 / 18,496.11 | PASS |
+| ReadPropertyMultiple | mt | 94,540.0 | 94,040.8 | -499.2 | 350.6 | 6 of 6 | 141.0014 / 139.0014 | 18,781.15 / 18,496.15 | PASS |
+
+ReadProperty falls by 883.5 and 907.2 instructions per request (73.4 and
+19.5 times its floors), close to the two local comparisons added up
+(880.3 and 900.3), with four allocator calls fewer. The later merge with
+#2376 adds a property comparison and two length reads per ReadProperty
+and was not counted.
+
 ## Files
 
-- `summary.json`: the three comparisons' rows (medians, deltas, floors,
+- `summary.json`: the four comparisons' rows (medians, deltas, floors,
   pairs, allocation calls and bytes, verdicts) and commits.
+- `official/`: the workflow run's `summary.md` and `summary.json`.
 - `item3/`, `item5/`, `item4/`: each comparison's `summary.md` and
   `summary.json` from `perf_counts.py`, the #1978 item shares
   (`items.md`) and per-function and per-line slopes (`profiles/`).

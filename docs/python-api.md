@@ -2944,6 +2944,30 @@ server.add_multistate_output(instance=1, name="Speed", number_of_states=3)
 server.add_multistate_value(instance=1, name="Season", number_of_states=4)
 ```
 
+#### Keeping written reporting settings
+
+The analog, binary and multi-state builders take keyword-only `storage_path`
+(a `str`) and `clear_written_reporting` (#2331):
+
+```python
+server.add_analog_input(
+    instance=1,
+    name="Zone Temp",
+    units=64,
+    storage_path="/application/state/ai-1",  # optional
+)
+```
+
+With `storage_path`, the reporting settings a peer writes
+(Notification_Class, Event_Enable, Notify_Type, Event_Detection_Enable,
+Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair) are kept in
+that file. Each write is saved before it is answered, and refused with DEVICE
+/ OPERATIONAL_PROBLEM when the save fails; an Event_Message_Texts_Config
+string past 16 KiB is refused with RESOURCES / NO_SPACE_TO_WRITE_PROPERTY. A
+server started on the same file serves the saved settings.
+`clear_written_reporting=True` drops what was saved first, so the object
+starts from its defaults. A file that doesn't load raises `BacnetError`.
+
 #### Object profiles and Value_Source
 
 The analog, binary and multi-state builders, `add_color`,
@@ -3242,10 +3266,17 @@ server.add_trend_log_multiple(
   trend logs Logging_Type, Log_Interval, Align_Intervals, Interval_Offset and
   Log_DeviceObjectProperty, as peers last wrote them: the saved state wins
   over `total_record_count` and the configuration keywords.
-  `add_trend_log`'s `client_cov_increment` and `cov_resubscription_interval`,
-  `add_event_log`'s `log_received_notifications`, and the reporting settings
-  other than Notification_Threshold aren't saved, so they apply on every
-  start.
+- It keeps the reporting settings a peer writes too (#1952):
+  Notification_Class, Event_Enable, Notify_Type, Event_Detection_Enable,
+  Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair, and on a
+  Trend Log Client_COV_Increment and COV_Resubscription_Interval. Each is
+  saved before the write is answered, and once saved wins over
+  `add_trend_log`'s `client_cov_increment` and `cov_resubscription_interval`.
+  All three take keyword-only `clear_written_reporting`: `True` drops the
+  saved settings, so `add_trend_log`'s keywords apply again; the others
+  keep their values until the next start.
+  `add_event_log`'s `log_received_notifications` isn't saved and applies on
+  every start.
 - `buffer_size` is the application's, so it wins over the saved Buffer_Size:
   a larger one keeps every record, and a smaller one keeps the newest
   records that fit and logs a warning. A durable log holds at most 828,302
@@ -5519,8 +5550,9 @@ ClientOnly has no responder and keeps its service list as a local declaration.
 
 ### Endpoint source Audit Reporter
 
-A `BipEndpoint` can name a source Audit Reporter (#2348), the Python side of
-the Rust session's `with_source_audit_reporter`. Through it the session
+`BipEndpoint`, `ScEndpoint` and `MstpEndpoint` can name a source Audit
+Reporter (#2348, #2357), the Python side of the Rust session's
+`with_source_audit_reporter`. Through it the session
 reports the ReinitializeDevice resets, backup steps and restore steps it
 carries out for peers, each `report_device_reset_local()` call, and the
 client role's reads, each filtered by the Reporter's Audit_Level and
@@ -5563,14 +5595,36 @@ endpoint.add_audit_reporter(1, "Source", audit_level="audit_all",
   sources you trust.
 - **When keywords are refused:** construction raises ValueError for anything
   it can check: an identifier that isn't a concrete Audit Reporter, a
-  recipient or binding without a Reporter, a recipient
-  `configure_audit_recipient` would refuse (this device, or an address that
-  isn't a direct unicast B/IP one), and a malformed, repeated or
-  non-unicast binding, each naming its keyword. Whether the Reporter was added is known
+  recipient or binding without a Reporter, a recipient the session could
+  never deliver to (this device, network 65535, or an address that isn't
+  another node's unicast address on the endpoint's link, by the rules
+  below), and a malformed, repeated or non-unicast binding, each naming its
+  keyword. Whether the Reporter was added is known
   only at start, which raises BacnetError for a missing one.
-- **B/IP only:** the Rust session reports source records on IPv4 B/IP only,
-  so `ScEndpoint` and `MstpEndpoint` don't take these keywords yet; #2357
-  tracks link-generic routes and bindings and their keywords.
+- **Each link's bindings** (#2357) take the address format of that link's
+  `local_address()`:
+  - `BipEndpoint`: `"ipv4:port"`, by the rule above.
+  - `ScEndpoint`: a VMAC, `"xx:xx:xx:xx:xx:xx"` or the same twelve hex
+    digits with no separators; never the broadcast or all-zero VMAC or the
+    endpoint's own.
+  - `MstpEndpoint`: a station in decimal digits, `"0"` to `"254"`; never 255
+    or the endpoint's own `mstp_mac`.
+
+  An address `audit_recipient` follows the same rule on each link, so an SC
+  or MS/TP endpoint takes one too, unlike `BACnetServer`, whose address
+  recipients are B/IP only: its `mac_address` is another node's VMAC or
+  station, on network 0 or one the endpoint's network number may name.
+
+```python
+endpoint = MstpEndpoint(
+    1001, "/dev/ttyUSB0", mstp_mac=3,
+    on_reinitialize=lambda request: None,
+    device_write_policy=lambda context: context.source_mac == bytes([7]),
+    source_audit_reporter=reporter,
+    audit_recipient={"kind": "device", "object_identifier": logger},
+    audit_device_bindings=[(logger, "7")],
+)
+```
 
 ### Endpoint lifecycle and cancellation
 

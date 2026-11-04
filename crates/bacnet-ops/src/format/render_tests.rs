@@ -284,7 +284,7 @@ fn group_members_and_results() {
             },
         ],
     };
-    let present = bytes(|buf| result.encode(buf));
+    let present = bytes(|buf| result.encode(buf).unwrap());
     assert_eq!(
         text(O::GROUP, P::PRESENT_VALUE, &present),
         "[analog-input 1: event-state = offnormal, units = error property:unknown-property]"

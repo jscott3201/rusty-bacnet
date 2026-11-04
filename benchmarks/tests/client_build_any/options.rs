@@ -100,7 +100,8 @@ async fn options<T: TransportPort + 'static, P: TransportPort>(
                 priority: None,
             }],
         }
-        .encode(&mut payload);
+        .encode(&mut payload)
+        .unwrap();
         send(
             peer,
             client.local_mac(),

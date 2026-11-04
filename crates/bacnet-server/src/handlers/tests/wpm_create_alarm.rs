@@ -166,7 +166,7 @@ fn create_object_by_type_assigns_next_instance() {
         list_of_initial_values: vec![],
     };
     let mut buf = BytesMut::new();
-    req.encode(&mut buf);
+    req.encode(&mut buf).unwrap();
 
     let mut ack_buf = BytesMut::new();
     let result = handle_create_object(&mut db, &buf, &mut ack_buf);
@@ -187,7 +187,7 @@ fn create_object_by_identifier() {
         list_of_initial_values: vec![],
     };
     let mut buf = BytesMut::new();
-    req.encode(&mut buf);
+    req.encode(&mut buf).unwrap();
 
     let mut ack_buf = BytesMut::new();
     let result = handle_create_object(&mut db, &buf, &mut ack_buf);
@@ -204,7 +204,7 @@ fn create_object_duplicate_fails() {
         list_of_initial_values: vec![],
     };
     let mut buf = BytesMut::new();
-    req.encode(&mut buf);
+    req.encode(&mut buf).unwrap();
 
     let mut ack_buf = BytesMut::new();
     let result = handle_create_object(&mut db, &buf, &mut ack_buf);
@@ -219,7 +219,7 @@ fn create_unsupported_type_fails() {
         list_of_initial_values: vec![],
     };
     let mut buf = BytesMut::new();
-    req.encode(&mut buf);
+    req.encode(&mut buf).unwrap();
 
     let mut ack_buf = BytesMut::new();
     let result = handle_create_object(&mut db, &buf, &mut ack_buf);
@@ -242,7 +242,7 @@ fn create_object_with_initial_values() {
         }],
     };
     let mut buf = BytesMut::new();
-    req.encode(&mut buf);
+    req.encode(&mut buf).unwrap();
 
     let mut ack_buf = BytesMut::new();
     handle_create_object(&mut db, &buf, &mut ack_buf).unwrap();
@@ -281,7 +281,7 @@ fn create_object_bad_initial_value_rolls_back() {
         }],
     };
     let mut buf = BytesMut::new();
-    req.encode(&mut buf);
+    req.encode(&mut buf).unwrap();
 
     // The refusal names the initial value, the first (#1047).
     assert_eq!(

@@ -39,7 +39,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             list_of_initial_values: initial_values,
         };
         let mut buf = BytesMut::new();
-        request.encode(&mut buf);
+        request.encode(&mut buf)?;
 
         let ack = self
             .confirmed_request(destination_mac, ConfirmedServiceChoice::CREATE_OBJECT, &buf)
@@ -91,7 +91,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 list_of_initial_values: initial_values,
             };
             let mut buf = BytesMut::new();
-            request.encode(&mut buf);
+            request.encode(&mut buf)?;
             let ack = self
                 .confirmed_request_routed(
                     &mac,

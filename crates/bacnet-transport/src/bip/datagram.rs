@@ -34,8 +34,9 @@ impl<'a> OutgoingDatagram<'a> {
     }
 
     /// `message` as its header and `npdu`, the NPDU it carries, when the
-    /// encoder writes `npdu` last and in one piece. `None` otherwise: the
-    /// caller encodes the message whole.
+    /// encoder writes `npdu` last and in one piece. `None` otherwise, which
+    /// the unicast send reports as an encoding error: an
+    /// Original-Unicast-NPDU always splits.
     pub(super) fn split(message: &Bvll<'_>, npdu: &'a [u8]) -> Option<Self> {
         let head_len = message.encoded_len().ok()?.checked_sub(npdu.len())?;
         if head_len > HEAD_ROOM {

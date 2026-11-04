@@ -4479,6 +4479,57 @@ exported `impl_intrinsic_reporting!` macro. Migrate custom objects to the hooks
 above; there is no alternate immediate-commit path. Standalone detector
 `probe`/`tick` methods retain their own detector-local behavior.
 
+#### Keeping written reporting settings (#2331)
+
+With the `event-reporting` feature, which `std` turns on, the analog, binary
+and multi-state Input, Output and Value objects can keep the reporting
+settings a peer writes across a restart: Notification_Class,
+Event_Enable, Notify_Type, Event_Detection_Enable,
+Event_Message_Texts_Config, Event_Algorithm_Inhibit_Ref and
+Event_Algorithm_Inhibit. Opt in with the builder call
+`with_reporting_persistence(storage)` on a built object, where `storage` is
+an `Arc<dyn WriteConfigPersistence>`, the store Timers and Channels use;
+`FileWriteConfigPersistence::new(path)` keeps one file per object.
+
+```rust
+use std::sync::Arc;
+use bacnet_objects::analog::AnalogInputObject;
+use bacnet_objects::write_config::FileWriteConfigPersistence;
+use bacnet_types::enums::EngineeringUnits;
+
+let storage = Arc::new(FileWriteConfigPersistence::new("/var/lib/app/ai-1")?);
+let mut ai = AnalogInputObject::new(1, "Zone temp", EngineeringUnits::DEGREES_CELSIUS)?
+    .with_reporting_persistence(storage)?;
+ai.set_notification_class(5); // a value a peer wrote and saved wins
+```
+
+- **Saved before answered.** A write of one of these properties is saved
+  before the object serves it, and refused with DEVICE /
+  OPERATIONAL_PROBLEM, the old value kept, when the save fails. The server
+  stages the save so it runs off the database guard; a request writing Tags
+  too stages both. A write nobody staged saves where it is. An
+  Event_Message_Texts_Config string past 16 KiB is refused with RESOURCES /
+  NO_SPACE_TO_WRITE_PROPERTY, whatever the storage.
+- **Saved wins.** Only the settings a write set are kept. Once one is saved,
+  its setter (`set_notification_class`, `set_event_enable`,
+  `set_notify_type`) leaves it alone, so an application that configures the
+  object at each start keeps a peer's write. `written_reporting()` lists what
+  is saved, and `clear_written_reporting()` drops it all, saving before it
+  returns, so the setters apply again; the values served stay until a setter
+  or a write changes them.
+- **Format.** Storage holds a `WriteConfigSnapshot::Reporting`, kind 4 of
+  `RBNWCF01` (`snapshot::write_config::KIND_REPORTING`), so a custom backend
+  stores the same octets; `snapshot::write_config::keeps_reporting` names the
+  object types that take it. Storage holding another kind, or a value no
+  write leaves, fails `with_reporting_persistence` with an error.
+  `WriteConfigSnapshot` and `ReportingWriteConfig` are `#[non_exhaustive]`:
+  a match takes a wildcard arm, and a `ReportingWriteConfig` is built from
+  `Default` with its fields set.
+- **Feature.** `event-reporting` gates `with_reporting_persistence`, the
+  three setters, `written_reporting`, `clear_written_reporting` and
+  `wait_for_reporting_saves`; without it the objects keep nothing, and an
+  image that reports nothing links none of it.
+
 #### Creation and deletion
 
 Createability, the properties a type takes only at creation, and
@@ -5177,7 +5228,7 @@ implements `From<SnapshotError>`, the mapping the file backends use.
 | --- | --- | --- | --- |
 | `snapshot::log` | `LogSnapshot<R>` (Trend Log, Trend Log Multiple, Event Log) | `RBLOGS01`, version 2; version 1 still loads | `FileLogPersistence` (one slot of the two) |
 | `snapshot::audit_log` | `AuditLogSnapshot` | `RBALOG01`, version 3; versions 1 and 2 still load | `FileAuditLogPersistence` (one slot of the two) |
-| `snapshot::write_config` | `WriteConfigSnapshot` (Timer, Channel) | `RBNWCF01`, kinds 2 and 3; kind 1 still loads | `FileWriteConfigPersistence` |
+| `snapshot::write_config` | `WriteConfigSnapshot` (Timer, Channel, an intrinsic reporter's reporting settings) | `RBNWCF01`, kinds 2, 3 and 4; kind 1 still loads | `FileWriteConfigPersistence` |
 | `snapshot::notification_class` | `NotificationClassSnapshot` | `RBNNCL01` | `FileNotificationClassPersistence` |
 | `snapshot::notification_forwarder` | `ForwarderSnapshot` | `RBNFWD01` | `FileNotificationForwarderPersistence` |
 | `snapshot::tags` | `TagsSnapshot` | `RBNTAG01` | `FileTagsPersistence` |
@@ -5820,7 +5871,12 @@ request. `EventLogObject::add_record` takes one. The request, its
 are functions in `bacnet_encoding::constructed`: `encode_event_notification` /
 `decode_event_notification`, `encode_notification_parameters` /
 `decode_notification_parameters`, and `encode_bacnet_property_value` /
-`decode_bacnet_property_value`. `decode_event_notification_tolerant` reads a
+`decode_bacnet_property_value`. Every encoder that writes a property value
+(`encode_bacnet_property_value` and the ReadProperty-ACK, WriteProperty,
+ReadPropertyMultiple-ACK, WritePropertyMultiple, CreateObject and COV
+notification encoders) returns a `Result` and refuses a
+legacy-form Event_Parameters value that wouldn't decode back as itself
+(`check_property_value`, #2376). `decode_event_notification_tolerant` reads a
 request whose message text doesn't decode (a character set the stack doesn't
 support, for one) with no message text; the client uses it for received
 notifications and `decode_event_log_record` for a record's notification, which
@@ -11097,8 +11153,7 @@ After a complete validated RPM ACK, one distinct concrete Device object with at
 least one successful property establishes Target_Device for all records in that
 operation. Error-only Device results establish none; conflicting successful
 Device IDs retain Address attribution without rejecting the otherwise valid ACK.
-This is operation-local knowledge, with no discovery cache. Direct B/IP source
-limits and the absence of Python source Reporter configuration remain unchanged.
+This is operation-local knowledge, with no discovery cache.
 
 The initiating role supports `read_property`, `read_range`, `read_property_multiple`
 and direct B/IP `write_property`, plus explicit
@@ -11128,6 +11183,24 @@ selected Audit Reporter. Configure the Reporter's READ bit
 and audit level before startup; both `ClientOnly` and `Both` sessions support
 confirmed and unconfirmed notifications. `Both` additionally requires an explicit
 Device write authorizer. Startup itself emits nothing.
+
+Other links work the same way (#2357): B/IPv6, BACnet/SC, MS/TP and any other
+transport take Device bindings to a MAC on their own link, in its format, with
+`EndpointSession::with_source_audit_device_binding(device, mac)`, or the
+builders' `ScEndpointBuilder::source_audit_device_binding(device, vmac)` and
+`MstpEndpointBuilder::source_audit_device_binding(device, station)` (there is no
+B/IPv6 endpoint builder). A binding there must be a direct unicast MAC: as long
+as the node's own and not the node's own, not a group destination by the
+transport's rule, and not MS/TP's station 255, a six-octet all-ones broadcast
+(SC's broadcast VMAC) or a six-octet all-zero MAC (SC's reserved VMAC, no
+Ethernet station). `start` refuses another with SERVICES /
+SERVICE_REQUEST_DENIED, and B/IP bindings on another link, or these on B/IP, with
+an error. The node's own MAC is checked again once the link has started; B/IPv6,
+which learns its VMAC at start, checks it only then, so a binding to it starts
+and the Reporter reads CONFIGURATION_ERROR. An
+audited client operation on such a link must go to a direct unicast MAC by the
+same rule. Device bindings name a station on the session's own link; a routed
+binding, to a station on another network beyond a router, is not supported.
 
 ```rust
 use std::net::{Ipv4Addr, SocketAddrV4};

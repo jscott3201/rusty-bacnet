@@ -730,6 +730,8 @@ mod event_notifications_tests;
 #[cfg(test)]
 mod event_recipient_routing_tests;
 #[cfg(test)]
+mod legacy_event_parameters_wire_tests;
+#[cfg(test)]
 mod life_safety_application_tests;
 #[cfg(test)]
 mod life_safety_cov_tests;

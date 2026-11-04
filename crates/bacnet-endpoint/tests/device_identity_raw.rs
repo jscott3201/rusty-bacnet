@@ -68,7 +68,8 @@ async fn raw_identity_1474_floors_only_the_endpoint_request_header() {
             property_array_index: None,
             property_value: value.to_vec(),
         }
-        .encode(&mut service);
+        .encode(&mut service)
+        .unwrap();
         let mut apdu = BytesMut::new();
         encode_apdu(
             &mut apdu,

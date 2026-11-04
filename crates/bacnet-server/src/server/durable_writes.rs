@@ -90,9 +90,11 @@ enum TargetValue {
 /// Default_Timeout (#2312), and a
 /// Channel its members, Execution_Delay, Channel_Number, Control_Groups and
 /// Allow_Group_Delay_Inhibit (#2243), a colour object its default
-/// (#1956), with Tags as the other objects with a profile do, and the three
+/// (#1956), with Tags as the other objects with a profile do, the three
 /// logs the reporting settings they keep (#1952), a Trend Log its two COV
-/// settings too. Under a policy
+/// settings too, and the nine analog, binary and multi-state object types
+/// those reporting settings beside their Tags (#2331).
+/// Under a policy
 /// that decides mutations, only these attempts of a WritePropertyMultiple are decided
 /// ahead of the handler (#1321).
 ///
@@ -123,9 +125,7 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
             property,
             PropertyIdentifier::TAGS | PropertyIdentifier::DEFAULT_COLOR_TEMPERATURE
         ),
-        ObjectType::LIGHTING_OUTPUT
-        | ObjectType::BINARY_LIGHTING_OUTPUT
-        | ObjectType::ANALOG_VALUE
+        ObjectType::ANALOG_VALUE
         | ObjectType::BINARY_VALUE
         | ObjectType::MULTI_STATE_VALUE
         | ObjectType::ANALOG_INPUT
@@ -133,8 +133,12 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
         | ObjectType::MULTI_STATE_INPUT
         | ObjectType::ANALOG_OUTPUT
         | ObjectType::BINARY_OUTPUT
-        | ObjectType::MULTI_STATE_OUTPUT
-        | ObjectType::DEVICE => property == PropertyIdentifier::TAGS,
+        | ObjectType::MULTI_STATE_OUTPUT => {
+            property == PropertyIdentifier::TAGS || reporting_row(property)
+        }
+        ObjectType::LIGHTING_OUTPUT | ObjectType::BINARY_LIGHTING_OUTPUT | ObjectType::DEVICE => {
+            property == PropertyIdentifier::TAGS
+        }
         ObjectType::ACCESS_RIGHTS => matches!(
             property,
             PropertyIdentifier::POSITIVE_ACCESS_RULES
@@ -157,20 +161,21 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
                 | PropertyIdentifier::ALLOW_GROUP_DELAY_INHIBIT
         ),
         ObjectType::TREND_LOG => {
-            log_reporting(property)
+            reporting_row(property)
                 || matches!(
                     property,
                     PropertyIdentifier::CLIENT_COV_INCREMENT
                         | PropertyIdentifier::COV_RESUBSCRIPTION_INTERVAL
                 )
         }
-        ObjectType::TREND_LOG_MULTIPLE | ObjectType::EVENT_LOG => log_reporting(property),
+        ObjectType::TREND_LOG_MULTIPLE | ObjectType::EVENT_LOG => reporting_row(property),
         _ => false,
     }
 }
 
-/// The reporting settings every log keeps once written (#1952).
-fn log_reporting(property: PropertyIdentifier) -> bool {
+/// The reporting settings every intrinsic reporter keeps once written: the
+/// logs (#1952) and the objects with a reporting store (#2331).
+fn reporting_row(property: PropertyIdentifier) -> bool {
     matches!(
         property,
         PropertyIdentifier::NOTIFICATION_CLASS

@@ -42,6 +42,8 @@ struct ScEndpointConfig {
     reinitialize: crate::reinitialize::EndpointReinitialize,
     /// The `device_write_policy` callable, if any (#2033).
     device_writes: crate::mutation_policy::DeviceWritePolicy,
+    /// The source Audit Reporter keywords, if any (#2357).
+    source_audit: Option<super::source_audit::SourceAuditKeywords>,
 }
 
 impl ScEndpointConfig {
@@ -57,7 +59,10 @@ impl ScEndpointConfig {
             .await
             .map_err(to_py_err)?;
         let boxes = build_pending_boxes(&objects)?;
-        let db = build_database(&config.identity, boxes)?;
+        let mut db = build_database(&config.identity, boxes)?;
+        if let Some(source) = &config.source_audit {
+            source.provision(&config.identity, &mut db)?;
+        }
         let session = ScEndpointBuilder::new(config.vmac, config.device_uuid)
             .role(SessionRole::Both)
             .queue_capacity(config.queue_capacity)
@@ -68,6 +73,10 @@ impl ScEndpointConfig {
             .device(config.identity.clone())
             .build_hub_session(ws)
             .map_err(to_py_err)?;
+        let session = match &config.source_audit {
+            Some(source) => source.select(session),
+            None => session,
+        };
         let session = config.device_writes.install(session);
         Ok(config.reinitialize.install(session))
     }
@@ -147,6 +156,12 @@ impl PyScEndpoint {
     ///         `MutationContext` and returns a bool, with the fail-closed
     ///         rules of `BACnetServer`'s `mutation_policy` callable. Without
     ///         it the endpoint executes no WriteProperty.
+    ///     source_audit_reporter / audit_recipient / audit_device_bindings:
+    ///         Keyword-only, as on `BipEndpoint` (#2348, #2357), each binding
+    ///         address a VMAC as `local_address()` gives it
+    ///         (`"xx:xx:xx:xx:xx:xx"`) or as twelve hex digits. An address
+    ///         `audit_recipient` takes another node's VMAC: never the
+    ///         broadcast or all-zero VMAC or this endpoint's own.
     #[new]
     #[pyo3(signature = (
         device_instance,
@@ -172,7 +187,10 @@ impl PyScEndpoint {
         on_reinitialize=None,
         after_reinitialize=None,
         reinit_password=None,
-        device_write_policy=None
+        device_write_policy=None,
+        source_audit_reporter=None,
+        audit_recipient=None,
+        audit_device_bindings=None
     ))]
     fn new(
         device_instance: u32,
@@ -198,6 +216,9 @@ impl PyScEndpoint {
         after_reinitialize: Option<&Bound<'_, PyAny>>,
         reinit_password: Option<String>,
         device_write_policy: Option<&Bound<'_, PyAny>>,
+        source_audit_reporter: Option<crate::types::PyObjectIdentifier>,
+        audit_recipient: Option<&Bound<'_, PyAny>>,
+        audit_device_bindings: Option<Vec<(crate::types::PyObjectIdentifier, String)>>,
     ) -> PyResult<Self> {
         let reinitialize = crate::reinitialize::EndpointReinitialize::parse(
             on_reinitialize,
@@ -261,6 +282,14 @@ impl PyScEndpoint {
         )
         .map_err(|error| PyValueError::new_err(error.to_string()))?;
         let identity = with_sc_port(identity, network_port_instance, network_number, vmac)?;
+        let source_audit = super::source_audit::SourceAuditKeywords::parse(
+            source_audit_reporter,
+            audit_recipient,
+            audit_device_bindings,
+            device_instance,
+            super::source_audit::AuditLink::Sc(vmac),
+            device_writes.enabled(),
+        )?;
         Ok(Self {
             lifecycle: Lifecycle::new(),
             config: ScEndpointConfig {
@@ -278,6 +307,7 @@ impl PyScEndpoint {
                 min_request_interval_ms,
                 reinitialize,
                 device_writes,
+                source_audit,
             },
         })
     }

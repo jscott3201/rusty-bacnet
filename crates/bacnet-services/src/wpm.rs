@@ -105,11 +105,15 @@ impl WritePropertyMultipleRequest {
     /// remains separate and may preserve external empty-list/no-op requests.
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
         self.validate()?;
+        let start = buf.len();
         for spec in &self.list_of_write_access_specs {
             primitives::encode_ctx_object_id(buf, 0, &spec.object_identifier);
             tags::encode_opening_tag(buf, 1);
             for prop_val in &spec.list_of_properties {
-                encode_bacnet_property_value(prop_val, buf);
+                if let Err(refused) = encode_bacnet_property_value(prop_val, buf) {
+                    buf.truncate(start);
+                    return Err(refused);
+                }
             }
             tags::encode_closing_tag(buf, 1);
         }
@@ -238,32 +242,40 @@ mod tests {
                 ],
             }],
         };
-        let mut buf = BytesMut::new();
-        req.encode(&mut buf).unwrap();
+        // The inner `ff ff 2f` could end the value, so the encoder refuses it
+        // (#2376) and leaves the buffer as it was.
+        let mut buf = BytesMut::from(&[0xaa][..]);
+        assert!(req.encode(&mut buf).is_err());
+        assert_eq!(buf.as_ref(), [0xaa]);
 
-        assert_eq!(WritePropertyMultipleRequest::decode(&buf).unwrap(), req);
+        // From an older peer it still decodes: `02` after that pair is no
+        // valid next field.
+        let wire = [
+            0x0c, 0x02, 0x40, 0x00, 0x01, 0x1e, 0x09, 0x53, 0x2e, 0xfe, 0xff, 1, 0xff, 0xff, 0x2f,
+            2, 0xff, 0xff, 0x2f, 0x09, 0x11, 0x2e, 0x21, 8, 0x2f, 0x1f,
+        ];
+        assert_eq!(WritePropertyMultipleRequest::decode(&wire).unwrap(), req);
     }
 
     #[test]
-    fn ambiguous_legacy_event_parameters_are_rejected() {
-        let req = WritePropertyMultipleRequest {
-            list_of_write_access_specs: vec![WriteAccessSpecification {
-                object_identifier: ObjectIdentifier::new(ObjectType::EVENT_ENROLLMENT, 1).unwrap(),
-                list_of_properties: vec![BACnetPropertyValue {
-                    property_identifier: PropertyIdentifier::EVENT_PARAMETERS,
-                    property_array_index: None,
-                    value: vec![
-                        0xfe, 0xff, 0xaa, 0xff, 0xff, 0x2f, 0x09, 0x53, 0x2e, 0xfe, 0xff, 0xbb,
-                        0xff, 0xff,
-                    ],
-                    priority: None,
-                }],
-            }],
+    fn an_older_peers_legacy_value_with_two_possible_ends_is_read_to_the_first() {
+        // An older peer's value holding `ff ff 2f` and then what looks like a
+        // next property value: either pair could end it, and the first does.
+        let wire = [
+            0x0c, 0x02, 0x40, 0x00, 0x01, 0x1e, 0x09, 0x53, 0x2e, 0xfe, 0xff, 0xaa, 0xff, 0xff,
+            0x2f, 0x09, 0x53, 0x2e, 0xfe, 0xff, 0xbb, 0xff, 0xff, 0x2f, 0x1f,
+        ];
+        let legacy = |marker| BACnetPropertyValue {
+            property_identifier: PropertyIdentifier::EVENT_PARAMETERS,
+            property_array_index: None,
+            value: vec![0xfe, 0xff, marker, 0xff, 0xff],
+            priority: None,
         };
-        let mut buf = BytesMut::new();
-        req.encode(&mut buf).unwrap();
-
-        assert!(WritePropertyMultipleRequest::decode(&buf).is_err());
+        let req = WritePropertyMultipleRequest::decode(&wire).unwrap();
+        assert_eq!(
+            req.list_of_write_access_specs[0].list_of_properties,
+            [legacy(0xaa), legacy(0xbb)]
+        );
     }
 
     // -----------------------------------------------------------------------

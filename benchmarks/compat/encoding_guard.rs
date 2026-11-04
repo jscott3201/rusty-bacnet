@@ -97,6 +97,8 @@ fn independent_ack_service_and_real_value_are_preserved() {
     assert_eq!(ack.property_value, [0x44, 0x41, 0xa0, 0xcc, 0xcd]);
     assert_eq!((20.0_f32 + 0.1_f32).to_bits(), 0x41a0cccd);
     let mut encoded = BytesMut::new();
-    ack.encode(&mut encoded);
+    // Unit before #2376, a Result after it: a refusal writes nothing, which
+    // the comparison below catches.
+    let _ = ack.encode(&mut encoded);
     assert_eq!(encoded.as_ref(), expected);
 }

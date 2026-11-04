@@ -91,6 +91,8 @@ struct MstpEndpointConfig {
     reinitialize: crate::reinitialize::EndpointReinitialize,
     /// The `device_write_policy` callable, if any (#2033).
     device_writes: crate::mutation_policy::DeviceWritePolicy,
+    /// The source Audit Reporter keywords, if any (#2357).
+    source_audit: Option<super::source_audit::SourceAuditKeywords>,
 }
 
 #[cfg(test)]
@@ -144,7 +146,10 @@ impl MstpEndpointConfig {
         let config = self;
         let serial = config.open_serial()?;
         let boxes = build_pending_boxes(&objects)?;
-        let db = build_database(&config.identity, boxes)?;
+        let mut db = build_database(&config.identity, boxes)?;
+        if let Some(source) = &config.source_audit {
+            source.provision(&config.identity, &mut db)?;
+        }
         let session = link_builder(serial, &config.link())
             .role(SessionRole::Both)
             .queue_capacity(config.queue_capacity)
@@ -155,6 +160,10 @@ impl MstpEndpointConfig {
             .device(config.identity.clone())
             .build_session()
             .map_err(to_py_err)?;
+        let session = match &config.source_audit {
+            Some(source) => source.select(session),
+            None => session,
+        };
         let session = config.device_writes.install(session);
         Ok(config.reinitialize.install(session))
     }
@@ -231,6 +240,11 @@ impl PyMstpEndpoint {
     ///         `MutationContext` and returns a bool, with the fail-closed
     ///         rules of `BACnetServer`'s `mutation_policy` callable. Without
     ///         it the endpoint executes no WriteProperty.
+    ///     source_audit_reporter / audit_recipient / audit_device_bindings:
+    ///         Keyword-only, as on `BipEndpoint` (#2348, #2357), each binding
+    ///         address a station in decimal digits (`"2"`), as
+    ///         `local_address()` gives it. An address `audit_recipient` takes
+    ///         another station: never 255 or this endpoint's own.
     #[new]
     #[pyo3(signature = (
         device_instance,
@@ -260,7 +274,10 @@ impl PyMstpEndpoint {
         on_reinitialize=None,
         after_reinitialize=None,
         reinit_password=None,
-        device_write_policy=None
+        device_write_policy=None,
+        source_audit_reporter=None,
+        audit_recipient=None,
+        audit_device_bindings=None
     ))]
     fn new(
         device_instance: u32,
@@ -290,6 +307,9 @@ impl PyMstpEndpoint {
         after_reinitialize: Option<&Bound<'_, PyAny>>,
         reinit_password: Option<String>,
         device_write_policy: Option<&Bound<'_, PyAny>>,
+        source_audit_reporter: Option<crate::types::PyObjectIdentifier>,
+        audit_recipient: Option<&Bound<'_, PyAny>>,
+        audit_device_bindings: Option<Vec<(crate::types::PyObjectIdentifier, String)>>,
     ) -> PyResult<Self> {
         let reinitialize = crate::reinitialize::EndpointReinitialize::parse(
             on_reinitialize,
@@ -350,6 +370,14 @@ impl PyMstpEndpoint {
             &service_list,
             uuid,
         )?;
+        let source_audit = super::source_audit::SourceAuditKeywords::parse(
+            source_audit_reporter,
+            audit_recipient,
+            audit_device_bindings,
+            device_instance,
+            super::source_audit::AuditLink::Mstp(mstp_mac),
+            device_writes.enabled(),
+        )?;
         Ok(Self {
             lifecycle: Lifecycle::new(),
             config: MstpEndpointConfig {
@@ -371,6 +399,7 @@ impl PyMstpEndpoint {
                 min_request_interval_ms,
                 reinitialize,
                 device_writes,
+                source_audit,
             },
         })
     }

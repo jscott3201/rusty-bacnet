@@ -4910,7 +4910,7 @@ class BACnetServer:
         ...
 
     # --- Analog objects ---
-    def add_analog_input(self, instance: int, name: str, units: EngineeringUnits | int = 62, present_value: float = 0.0, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
+    def add_analog_input(self, instance: int, name: str, units: EngineeringUnits | int = 62, present_value: float = 0.0, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
         """``tags``, ``profile_location`` and ``profile_name`` provision the
         optional Tags, Profile_Location and Profile_Name rows; each is served
         only when given. Tags takes writes over the network, the other two
@@ -4918,12 +4918,22 @@ class BACnetServer:
         primitive, a location whose URI scheme isn't http, https or bacnet,
         or a profile name without its vendor-number prefix (``"555-room"``)
         raises BacnetProtocolError, and wrong shapes TypeError or
-        ValueError."""
+        ValueError.
+
+        ``storage_path`` (a ``str``) keeps the reporting settings a peer
+        writes (Notification_Class, Event_Enable, Notify_Type,
+        Event_Detection_Enable, Event_Message_Texts_Config and the
+        Event_Algorithm_Inhibit pair) in that file: such a write is saved
+        before it is answered, refused when it can't be, and served again
+        after a restart. ``clear_written_reporting=True`` drops what was
+        saved first, so the object starts from its defaults. A file that
+        doesn't load raises BacnetError. Every analog, binary and multi-state
+        builder takes both."""
         ...
-    def add_analog_output(self, instance: int, name: str, units: EngineeringUnits | int = 62, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
+    def add_analog_output(self, instance: int, name: str, units: EngineeringUnits | int = 62, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
         """Profile keywords as on ``add_analog_input``."""
         ...
-    def add_analog_value(self, instance: int, name: str, units: EngineeringUnits | int = 62, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
+    def add_analog_value(self, instance: int, name: str, units: EngineeringUnits | int = 62, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
         """Optional AV Audit rows: None is absent; priority 'inherit' is present NULL.
 
         ``present_value_access`` is ``"commandable"`` (writes go through
@@ -4937,25 +4947,25 @@ class BACnetServer:
         ...
 
     # --- Binary objects ---
-    def add_binary_input(self, instance: int, name: str, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
+    def add_binary_input(self, instance: int, name: str, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
         """Profile keywords as on ``add_analog_input``."""
         ...
-    def add_binary_output(self, instance: int, name: str, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
+    def add_binary_output(self, instance: int, name: str, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
         """Profile keywords as on ``add_analog_input``."""
         ...
-    def add_binary_value(self, instance: int, name: str, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
+    def add_binary_value(self, instance: int, name: str, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
         """Optional BV Audit rows: None is absent; priority 'inherit' is present NULL.
         Access, Value_Source and profile keywords as on ``add_analog_value``."""
         ...
 
     # --- Multi-state objects ---
-    def add_multistate_input(self, instance: int, name: str, number_of_states: int, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
+    def add_multistate_input(self, instance: int, name: str, number_of_states: int, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
         """Profile keywords as on ``add_analog_input``."""
         ...
-    def add_multistate_output(self, instance: int, name: str, number_of_states: int, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
+    def add_multistate_output(self, instance: int, name: str, number_of_states: int, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
         """Profile keywords as on ``add_analog_input``."""
         ...
-    def add_multistate_value(self, instance: int, name: str, number_of_states: int, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
+    def add_multistate_value(self, instance: int, name: str, number_of_states: int, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
         """Access, Value_Source and profile keywords as on ``add_analog_value``."""
         ...
 
@@ -7016,9 +7026,9 @@ class BipEndpoint:
         recipient); the bindings are ``(Device identifier, "ipv4:port")``
         routes to recipient Devices. A Reporter identifier of another type and
         the other shapes construction can check raise ValueError; a Reporter
-        that wasn't added raises BacnetError at start. Only B/IP endpoints
-        take these: the Rust session reports source records on IPv4 B/IP
-        only.
+        that wasn't added raises BacnetError at start. ``ScEndpoint`` and
+        ``MstpEndpoint`` take them too, each binding address in its link's
+        format (#2357).
         ``on_reinitialize`` / ``after_reinitialize``: execute
         ReinitializeDevice, as ``BACnetServer``'s keywords do (#1566);
         ``reinit_password`` (needs ``on_reinitialize``, else ValueError; 1 to
@@ -7186,10 +7196,20 @@ class ScEndpoint:
         after_reinitialize: Optional[AfterReinitialize] = None,
         reinit_password: Optional[str] = None,
         device_write_policy: Optional[MutationHandler] = None,
+        source_audit_reporter: Optional[ObjectIdentifier] = None,
+        audit_recipient: Optional[AuditRecipientInput] = None,
+        audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str]]] = None,
     ) -> None:
         """``read_work_limit``, ``min_request_interval_ms``,
         ``on_reinitialize``, ``after_reinitialize``, ``reinit_password`` and
-        ``device_write_policy`` are as for ``BipEndpoint``."""
+        ``device_write_policy`` are as for ``BipEndpoint``.
+
+        ``source_audit_reporter`` / ``audit_recipient`` /
+        ``audit_device_bindings``: as on ``BipEndpoint`` (#2357), each
+        binding address a VMAC as ``local_address()`` gives it
+        (``"xx:xx:xx:xx:xx:xx"``) or as twelve hex digits. An address
+        ``audit_recipient`` takes another node's VMAC: never the broadcast
+        or all-zero VMAC or this endpoint's own."""
         ...
 
     def add_analog_input(self, instance: int, name: str, units: EngineeringUnits | int = 62, present_value: float = 0.0, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
@@ -7208,6 +7228,15 @@ class ScEndpoint:
     def add_binary_value(self, instance: int, name: str, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
         """Optional BV Audit rows: None is absent; priority 'inherit' is present NULL.
         Access, Value_Source and profile keywords as on ``add_analog_value``."""
+        ...
+    def add_audit_reporter(self, instance: int, name: str, *, audit_level: Literal["none", "audit_config", "audit_all"], auditable_operations: int, issue_confirmed_notifications: bool = False) -> None:
+        """Add an Audit Reporter for ``source_audit_reporter`` to select
+        (#2348). ``audit_level`` and ``auditable_operations`` (bit n for
+        AuditOperation n) are required, as on
+        ``BACnetServer.configure_audit_reporters``, and filter what the
+        session reports. Peers can't change them through an endpoint. A
+        Reporter that ``source_audit_reporter`` doesn't select records
+        nothing."""
         ...
     def add_group(
         self,
@@ -7267,11 +7296,11 @@ class ScEndpoint:
         """Record a reset the application makes for its own reasons: a
         DEVICE_RESET Audit record from this device, with no invoke ID, through
         the session's source Reporter when it has one, as
-        ``BACnetServer.report_device_reset_local`` does (#1837). Only a B/IP
-        endpoint can select a source Reporter (the Rust session reports
-        source records on IPv4 B/IP only), so this one records nothing. A
-        peer's accepted restart is recorded already. RuntimeError when the
-        endpoint is not running."""
+        ``BACnetServer.report_device_reset_local`` does (#1837): with
+        ``source_audit_reporter`` set (#2357), a DEVICE_RESET naming this
+        device as source and target, filtered by that Reporter's level and
+        operations; without one, nothing. A peer's accepted restart is
+        recorded already. RuntimeError when the endpoint is not running."""
         ...
 
     @property
@@ -7318,6 +7347,9 @@ class MstpEndpoint:
         after_reinitialize: Optional[AfterReinitialize] = None,
         reinit_password: Optional[str] = None,
         device_write_policy: Optional[MutationHandler] = None,
+        source_audit_reporter: Optional[ObjectIdentifier] = None,
+        audit_recipient: Optional[AuditRecipientInput] = None,
+        audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str]]] = None,
     ) -> None:
         """``read_work_limit``, ``min_request_interval_ms``,
         ``on_reinitialize``, ``after_reinitialize``, ``reinit_password`` and
@@ -7341,7 +7373,12 @@ class MstpEndpoint:
         ``mstp_transmit_latency_pad_ms``, ``mstp_usage_timeout_ms`` and
         ``mstp_reply_timeout_ms`` are as for ``BACnetClient``, but a value
         out of range raises ValueError here.
-        """
+
+        ``source_audit_reporter`` / ``audit_recipient`` /
+        ``audit_device_bindings``: as on ``BipEndpoint`` (#2357), each
+        binding address a station in decimal digits, as ``local_address()``
+        gives it (``"2"``). An address ``audit_recipient`` takes another
+        station: never 255 or this endpoint's own."""
         ...
 
     def add_analog_input(self, instance: int, name: str, units: EngineeringUnits | int = 62, present_value: float = 0.0, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
@@ -7360,6 +7397,15 @@ class MstpEndpoint:
     def add_binary_value(self, instance: int, name: str, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
         """Optional BV Audit rows: None is absent; priority 'inherit' is present NULL.
         Access, Value_Source and profile keywords as on ``add_analog_value``."""
+        ...
+    def add_audit_reporter(self, instance: int, name: str, *, audit_level: Literal["none", "audit_config", "audit_all"], auditable_operations: int, issue_confirmed_notifications: bool = False) -> None:
+        """Add an Audit Reporter for ``source_audit_reporter`` to select
+        (#2348). ``audit_level`` and ``auditable_operations`` (bit n for
+        AuditOperation n) are required, as on
+        ``BACnetServer.configure_audit_reporters``, and filter what the
+        session reports. Peers can't change them through an endpoint. A
+        Reporter that ``source_audit_reporter`` doesn't select records
+        nothing."""
         ...
     def add_group(
         self,
@@ -7419,11 +7465,11 @@ class MstpEndpoint:
         """Record a reset the application makes for its own reasons: a
         DEVICE_RESET Audit record from this device, with no invoke ID, through
         the session's source Reporter when it has one, as
-        ``BACnetServer.report_device_reset_local`` does (#1837). Only a B/IP
-        endpoint can select a source Reporter (the Rust session reports
-        source records on IPv4 B/IP only), so this one records nothing. A
-        peer's accepted restart is recorded already. RuntimeError when the
-        endpoint is not running."""
+        ``BACnetServer.report_device_reset_local`` does (#1837): with
+        ``source_audit_reporter`` set (#2357), a DEVICE_RESET naming this
+        device as source and target, filtered by that Reporter's level and
+        operations; without one, nothing. A peer's accepted restart is
+        recorded already. RuntimeError when the endpoint is not running."""
         ...
 
     @property

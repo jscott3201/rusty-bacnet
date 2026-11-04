@@ -3,7 +3,9 @@
 use super::group::{self, GroupMembers};
 use super::rpm::{self, PlannedRow};
 use super::{LiveLists, ReadFailure, ReadOverlay, ReadScope};
+use bacnet_encoding::constructed::check_property_value;
 use bacnet_encoding::primitives::encode_property_value;
+use bacnet_encoding::sink::SinkEncodeError;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::property_metadata::{check_read_array_index, is_array_property};
 use bacnet_objects::traits::BACnetObject;
@@ -176,12 +178,33 @@ fn encode_ack(
         property_value: &[],
     };
     let mut around = [0; 18];
-    let len = frame
-        .encode_to_sink(&mut &mut around[..])
-        .expect("eighteen octets hold the members around the value");
+    let len = match frame.encode_to_sink(&mut &mut around[..]) {
+        Ok(len) => len,
+        // The encoder refuses only a legacy-form value, and this one is
+        // empty; the encoded value is checked below.
+        Err(SinkEncodeError::Refused(refused)) => return Err(refused.into()),
+        // The members around the value take at most 17 octets: up to 5
+        // each (a tag and four octets) for the object, the property and
+        // the index, and one each for the `[3]` opening and closing tags.
+        Err(SinkEncodeError::Full(_)) => {
+            unreachable!("eighteen octets hold the members around the value")
+        }
+    };
     let (head, close) = around[..len].split_at(len - 1);
+    // Every failure leaves `buf` as it was.
+    let start = buf.len();
     buf.extend_from_slice(head);
-    encode_property_value(buf, value)?;
+    let value_at = buf.len();
+    let encoded = encode_property_value(buf, value).and_then(|()| {
+        // The check the ACK encoder runs on a value it is given (#2376): a
+        // legacy Event_Parameters value that wouldn't decode back is refused.
+        check_property_value(request.property_identifier, &buf[value_at..], 3)
+            .map_err(|refused| refused.within("ReadPropertyACK").into())
+    });
+    if let Err(error) = encoded {
+        buf.truncate(start);
+        return Err(error);
+    }
     buf.extend_from_slice(close);
     Ok(())
 }

@@ -52,7 +52,7 @@ fn cases() -> Vec<(NotificationParameters, &'static str)> {
     use NotificationParameters as N;
     let alarm = StatusFlags::IN_ALARM;
     let mut values = BytesMut::new();
-    encode_bacnet_property_value(&present_value(), &mut values);
+    encode_bacnet_property_value(&present_value(), &mut values).unwrap();
     vec![
         (
             N::ChangeOfBitstring {

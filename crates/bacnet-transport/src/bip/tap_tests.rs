@@ -1,7 +1,8 @@
 //! What a B/IP transport's frame tap sees on the receive side (#957): a
 //! broadcast listener's datagram only when the node keeps it, by the same
-//! verdict as the node's own listener check; and a transport's receiver
-//! ends once the transport is dropped.
+//! verdict as the node's own listener check; a unicast sent as its header
+//! and the NPDU is tapped whole; and a transport's receiver ends once the
+//! transport is dropped.
 
 use super::*;
 use crate::tap::{FrameTap, TapDirection, TapPeer};
@@ -122,6 +123,51 @@ async fn a_broadcast_listener_taps_only_what_the_node_keeps() {
             .count();
         assert_eq!(primary, 0, "case {index}");
     }
+}
+
+/// A unicast goes out as its BVLL header and the NPDU, uncopied (#1978
+/// item 5); the tap still sees the whole datagram, as the peer receives it.
+#[tokio::test]
+async fn a_unicast_sent_in_parts_is_tapped_whole() {
+    let peer = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let SocketAddr::V4(peer_address) = peer.local_addr().unwrap() else {
+        unreachable!("bound to an IPv4 address")
+    };
+    let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::LOCALHOST);
+    let mut frames = transport.frame_tap().subscribe();
+    let _npdus = transport.start().await.unwrap();
+    let npdu: Vec<u8> = (0..=200).collect();
+    transport
+        .send_unicast(
+            &npdu,
+            &encode_bip_mac(peer_address.ip().octets(), peer_address.port()),
+        )
+        .await
+        .unwrap();
+
+    let mut received = [0; 512];
+    let (len, _) = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        peer.recv_from(&mut received),
+    )
+    .await
+    .expect("the peer receives the unicast")
+    .unwrap();
+    let wire = &received[..len];
+    assert_eq!(
+        wire,
+        &raw_frame(BvlcFunction::ORIGINAL_UNICAST_NPDU, &npdu)[..]
+    );
+
+    let tapped: Vec<_> = std::iter::from_fn(|| frames.try_recv())
+        .filter(|frame| frame.direction == TapDirection::Outbound)
+        .collect();
+    assert_eq!(tapped.len(), 1, "{tapped:?}");
+    assert_eq!(&tapped[0].bytes[..], wire);
+    assert_eq!(tapped[0].peer, TapPeer::Udp(SocketAddr::V4(peer_address)));
+    transport.stop().await.unwrap();
 }
 
 /// Stopped, a transport's receiver waits on; dropped, it ends.

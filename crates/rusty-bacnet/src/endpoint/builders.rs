@@ -173,12 +173,44 @@ macro_rules! endpoint_builders {
                 self.push_pending(pending)
             }
 
+            /// Add an Audit Reporter object (before start), for
+            /// `source_audit_reporter` to select (#2348, #2357).
+            ///
+            /// `audit_level` ("none", "audit_config" or "audit_all") and
+            /// `auditable_operations` (bit n for AuditOperation n) are required, as
+            /// on `BACnetServer.configure_audit_reporters`, and filter what the
+            /// session reports. Peers can't change them through an endpoint. A
+            /// Reporter that `source_audit_reporter` doesn't select records nothing.
+            #[pyo3(signature = (
+                instance, name, *,
+                audit_level, auditable_operations, issue_confirmed_notifications=false
+            ))]
+            fn add_audit_reporter(
+                &self,
+                instance: u32,
+                name: &str,
+                audit_level: &str,
+                auditable_operations: &Bound<'_, PyAny>,
+                issue_confirmed_notifications: bool,
+            ) -> PyResult<()> {
+                use $crate::server::{reporter_audit_level, reporter_auditable_operations};
+                let pending = $crate::endpoint::common::PendingObject::AuditReporter {
+                    instance,
+                    name: name.to_string(),
+                    level: reporter_audit_level(audit_level)?,
+                    operations: reporter_auditable_operations(auditable_operations)?,
+                    confirmed: issue_confirmed_notifications,
+                };
+                pending.build()?;
+                self.push_pending(pending)
+            }
+
             /// Record a reset the application makes for its own reasons: a
             /// DEVICE_RESET Audit record from this device, with no invoke ID,
             /// through the session's source Reporter when it has one, as
-            /// `BACnetServer.report_device_reset_local` does (#1837). Only a
-            /// `BipEndpoint` selects one, with `source_audit_reporter`
-            /// (#2348), and its level and operations filter the record;
+            /// `BACnetServer.report_device_reset_local` does (#1837). Each
+            /// endpoint selects one with `source_audit_reporter` (#2348,
+            /// #2357), and its level and operations filter the record;
             /// without one this records nothing. A peer's accepted restart
             /// is recorded already. RuntimeError when the endpoint is not
             /// running.

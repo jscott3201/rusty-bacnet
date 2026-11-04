@@ -120,7 +120,8 @@ async fn create_object_retries_the_refusal_before_its_answer() {
         object_specifier: ObjectSpecifier::Identifier(msv(9)),
         list_of_initial_values: Vec::new(),
     }
-    .encode(&mut body);
+    .encode(&mut body)
+    .unwrap();
     h.request(ConfirmedServiceChoice::CREATE_OBJECT, body).await;
     settle().await;
     assert_eq!(read_from(&db, msv(9), PV).await, PropertyValue::Unsigned(2));
