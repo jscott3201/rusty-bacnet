@@ -7,6 +7,7 @@ use bacnet_bip_core::node::{Mode, SendRefusal};
 use bacnet_types::error::Error;
 use bytes::BytesMut;
 
+use super::datagram::OutgoingDatagram;
 use super::node::NodeHandle;
 use super::own_broadcast::OwnBroadcastForwarder;
 use crate::bvll::{bvll_error, encode_bvll};
@@ -17,20 +18,23 @@ impl NodeHandle {
     /// (#1677).
     pub(super) async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
         // In a block, so only the datagram and its address are held across
-        // the send (#1713).
-        let (buf, to) = {
+        // the send (#1713). The datagram is the BVLL header and `npdu`,
+        // sent as one without copying `npdu` into a buffer (#1978 item 5).
+        let (datagram, to) = {
             let dest = codec::address_from_slice(mac).map_err(bvll_error)?;
             let outgoing = self
                 .link()
                 .unicast(dest, npdu)
                 .map_err(|refusal| self.refuse_send(refusal))?;
-            let mut buf = BytesMut::with_capacity(4 + npdu.len());
-            encode_bvll(&mut buf, &outgoing.message)?;
-            (buf, outgoing.to)
+            // An Original-Unicast-NPDU is a four-octet header and `npdu`.
+            let datagram = OutgoingDatagram::split(&outgoing.message, npdu).ok_or_else(|| {
+                Error::Encoding("a unicast BVLL message is not a header and its NPDU".into())
+            })?;
+            (datagram, outgoing.to)
         };
 
         self.socket()
-            .send_to(&buf, to)
+            .send_datagram(datagram, to)
             .await
             .map_err(Error::Transport)?;
         Ok(())
