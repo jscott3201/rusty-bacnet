@@ -37,8 +37,8 @@ async fn subscribe_cov_invalid_typed_requests_do_not_admit_or_send() {
             .unwrap()
             .unwrap_err();
             assert!(matches!(error, Error::Encode(_)));
-            assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
-            assert_eq!(client.tsm.lock().await.pending_count(), 0);
+            assert_eq!(client.tsm.lock().coordinated_active_count(), 0);
+            assert_eq!(client.tsm.lock().pending_count(), 0);
             assert!(received.try_recv().is_err());
         }
     }

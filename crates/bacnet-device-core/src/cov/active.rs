@@ -1,15 +1,17 @@
 //! Live Device `Active_COV_Subscriptions` and
 //! `Active_COV_Multiple_Subscriptions` projections (Clause 12.11).
 //!
-//! The server-owned [`CovSubscriptionTable`] is the sole live authority for
-//! both lists. A read copies the entries live at one sampled instant under the
-//! table read guard, releases that guard, then projects the copy against the
-//! caller's database guard. Ordinary and Single entries form
+//! The [`CovTable`] is the sole live authority for both lists. A read
+//! copies the entries live at one sampled instant under the host's table
+//! guard, releases that guard, then projects the copy against the caller's
+//! database guard. Ordinary and Single entries form
 //! `Active_COV_Subscriptions`; Multiple references are never listed there and
-//! form `Active_COV_Multiple_Subscriptions` (see [`multiple`]).
+//! form `Active_COV_Multiple_Subscriptions` (see
+//! [`ActiveCovMultipleSubscriptions`]).
 use super::reported::lead;
 use super::*;
-use bacnet_device_core::read::LiveLists;
+use crate::read::LiveLists;
+use alloc::vec::Vec;
 use bacnet_encoding::constructed::encode_cov_subscription_list;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::traits::BACnetObject;
@@ -18,16 +20,19 @@ use bacnet_types::constructed::{
     BACnetAddress, BACnetCOVSubscription, BACnetObjectPropertyReference, BACnetRecipient,
     BACnetRecipientProcess,
 };
-use bacnet_types::primitives::PropertyValue;
+use bacnet_types::enums::PropertyIdentifier;
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use bytes::BytesMut;
-use std::cmp::Ordering as CmpOrdering;
+use core::cmp::Ordering as CmpOrdering;
 
 mod multiple;
-pub(crate) use multiple::{ActiveCovMultipleEntry, ActiveCovMultipleSubscriptions};
+mod overlay;
+pub use multiple::{ActiveCovMultipleEntry, ActiveCovMultipleSubscriptions};
+pub use overlay::{ActiveCovOverlay, ActiveCovView};
 
 /// One ordinary or Single entry copied from the table at a sampled instant.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ActiveCovEntry {
+pub struct ActiveCovEntry {
     endpoint: SubscriberEndpoint,
     process_id: u32,
     object: ObjectIdentifier,
@@ -38,13 +43,13 @@ pub(crate) struct ActiveCovEntry {
     explicit_increment: Option<f32>,
 }
 
-impl CovSubscriptionTable {
+impl CovTable {
     /// Copy the ordinary and Single entries live at `now`.
     ///
     /// Read-only: an entry whose deadline has been reached is omitted without
     /// purging, so admission and the periodic purge remain the only mutators.
     /// Indefinite entries report zero; finite entries report rounded-up seconds.
-    pub(crate) fn active_cov_entries(&self, now: Instant) -> Vec<ActiveCovEntry> {
+    pub fn active_cov_entries(&self, now: Instant) -> Vec<ActiveCovEntry> {
         self.entries()
             .filter_map(|entry| {
                 let (process_id, object, property) = match entry.key() {
@@ -80,14 +85,14 @@ impl CovSubscriptionTable {
 /// Built once per request and reused by every reference to the property in
 /// that request, including ReadPropertyMultiple `ALL`/`OPTIONAL` expansion.
 #[derive(Debug, Clone)]
-pub(crate) struct ActiveCovSubscriptions {
+pub struct ActiveCovSubscriptions {
     device: ObjectIdentifier,
     encoded: Vec<u8>,
 }
 
 impl ActiveCovSubscriptions {
     /// A stopped server services no subscription, so it reports none.
-    pub(crate) fn stopped(device: ObjectIdentifier) -> Self {
+    pub fn stopped(device: ObjectIdentifier) -> Self {
         Self {
             device,
             encoded: Vec::new(),
@@ -98,12 +103,15 @@ impl ActiveCovSubscriptions {
     ///
     /// An entry whose monitored object no longer exists has been terminated by
     /// DeleteObject and is omitted, even before table cleanup completes.
-    pub(crate) fn project(
+    pub fn project(
         db: &ObjectDatabase,
         device: ObjectIdentifier,
         mut entries: Vec<ActiveCovEntry>,
     ) -> Self {
-        entries.sort_by(order);
+        // The order is total, so an unstable sort gives the same list, and
+        // links no 64-bit division on a 32-bit target, as the stable one's
+        // run-length scale does.
+        entries.sort_unstable_by(order);
         let subscriptions: Vec<_> = entries
             .into_iter()
             .filter_map(|entry| {
@@ -145,7 +153,7 @@ impl ActiveCovSubscriptions {
 
     /// The live value for exactly the local Device and this property.
     /// `None` leaves every other read to the object.
-    pub(crate) fn resolve(
+    pub fn resolve(
         &self,
         oid: ObjectIdentifier,
         property: PropertyIdentifier,
@@ -157,17 +165,14 @@ impl ActiveCovSubscriptions {
 
 /// Selected entries copied under one table read guard at one sampled instant.
 #[derive(Debug)]
-pub(crate) struct LiveCovEntries {
+pub struct LiveCovEntries {
     active: Option<Vec<ActiveCovEntry>>,
     multiple: Option<Vec<ActiveCovMultipleEntry>>,
 }
 
-impl CovSubscriptionTable {
+impl CovTable {
     /// Copy only the selected lists' entries live at the one instant `now`.
-    pub(crate) fn live_cov_entries(&self, selection: LiveLists, now: Instant) -> LiveCovEntries {
-        #[cfg(test)]
-        self.live_samples
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    pub fn live_cov_entries(&self, selection: LiveLists, now: Instant) -> LiveCovEntries {
         LiveCovEntries {
             active: selection.active_cov.then(|| self.active_cov_entries(now)),
             multiple: selection
@@ -177,21 +182,13 @@ impl CovSubscriptionTable {
     }
 }
 
-#[cfg(test)]
-impl CovSubscriptionTable {
-    /// How many times a read request has sampled the live lists.
-    pub(crate) fn live_samples(&self) -> usize {
-        self.live_samples.load(std::sync::atomic::Ordering::Relaxed)
-    }
-}
-
 /// Request-local values of the local Device's server-owned lists: the COV
 /// lists and, when the request reads it, Device_Address_Binding.
 ///
 /// Built once per request and reused by every reference to any of them in
 /// that request, including ReadPropertyMultiple `ALL`/`OPTIONAL` expansion.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct LiveDeviceCov {
+pub struct LiveDeviceCov {
     active: Option<ActiveCovSubscriptions>,
     multiple: Option<ActiveCovMultipleSubscriptions>,
     /// The local Device's Device_Address_Binding, as the request sampled
@@ -201,7 +198,7 @@ pub(crate) struct LiveDeviceCov {
 
 impl LiveDeviceCov {
     /// A stopped server services no subscription: every selected list is empty.
-    pub(crate) fn stopped(selection: LiveLists) -> Self {
+    pub fn stopped(selection: LiveLists) -> Self {
         Self {
             active: selection
                 .active_cov
@@ -214,11 +211,7 @@ impl LiveDeviceCov {
     }
 
     /// Project copied entries while the caller holds the database guard.
-    pub(crate) fn project(
-        db: &ObjectDatabase,
-        selection: LiveLists,
-        entries: LiveCovEntries,
-    ) -> Self {
+    pub fn project(db: &ObjectDatabase, selection: LiveLists, entries: LiveCovEntries) -> Self {
         Self {
             active: entries
                 .active
@@ -232,7 +225,7 @@ impl LiveDeviceCov {
 
     /// These lists, with `bindings`, sampled from the binding table, as the
     /// local Device's Device_Address_Binding.
-    pub(crate) fn with_address_bindings(
+    pub fn with_address_bindings(
         mut self,
         selection: LiveLists,
         bindings: Option<PropertyValue>,
@@ -243,7 +236,7 @@ impl LiveDeviceCov {
 
     /// The live value for exactly the local Device and a selected list.
     /// `None` leaves every other read to the object.
-    pub(crate) fn resolve(
+    pub fn resolve(
         &self,
         oid: ObjectIdentifier,
         property: PropertyIdentifier,
@@ -324,8 +317,7 @@ fn increment_in_use(
 ) -> Option<f32> {
     let increment = prepare::effective_increment(object, property, true, explicit)?;
     let value = object.read_property(property, index).ok()?;
-    let (_, numeric) =
-        bacnet_device_core::cov::validate_sample(object, property, index, &value).ok()?;
+    let (_, numeric) = validate_sample(object, property, index, &value).ok()?;
     // The subscription list reports the increment as a REAL, so a wider
     // object increment (a Large Analog Value's Double) is narrowed here.
     numeric.then_some(increment as f32)
@@ -334,13 +326,15 @@ fn increment_in_use(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bacnet_device_core::cov::CovNotificationKind;
+    use crate::cov::CovNotificationKind;
+    use bacnet_encoding::npdu::NpduAddress;
     use bacnet_objects::analog::AnalogValueObject;
     use bacnet_objects::binary::BinaryValueObject;
     use bacnet_time::Duration;
     use bacnet_types::MacAddr;
     use bacnet_types::enums::EngineeringUnits;
     use bacnet_types::enums::ObjectType;
+    use bacnet_types::error::Error;
 
     fn av(instance: u32) -> ObjectIdentifier {
         ObjectIdentifier::new(ObjectType::ANALOG_VALUE, instance).unwrap()
@@ -374,24 +368,27 @@ mod tests {
 
     #[test]
     fn active_cov_entries_read_one_instant_without_purging_or_multiple() {
-        let now = crate::runtime_clock::core_now();
-        let mut table = CovSubscriptionTable::new();
+        let now = Instant::from_secs(1_000);
+        let mut table = CovTable::default();
         table
-            .subscribe(proposal(
-                1,
-                av(1),
-                None,
-                Some(now + Duration::from_millis(1_500)),
-            ))
+            .subscribe(
+                proposal(1, av(1), None, Some(now + Duration::from_millis(1_500))),
+                now,
+            )
             .unwrap();
-        table.subscribe(proposal(2, av(1), None, None)).unwrap();
         table
-            .subscribe(proposal(
-                3,
-                av(1),
-                Some((PropertyIdentifier::PRESENT_VALUE, None)),
-                Some(now + Duration::from_secs(1)),
-            ))
+            .subscribe(proposal(2, av(1), None, None), now)
+            .unwrap();
+        table
+            .subscribe(
+                proposal(
+                    3,
+                    av(1),
+                    Some((PropertyIdentifier::PRESENT_VALUE, None)),
+                    Some(now + Duration::from_secs(1)),
+                ),
+                now,
+            )
             .unwrap();
         let mut multiple = proposal(
             4,
@@ -400,7 +397,19 @@ mod tests {
             Some(now + Duration::from_secs(60)),
         );
         multiple.notification_kind = CovNotificationKind::Multiple;
-        table.admit_for_test(multiple, 0).unwrap();
+        let context = multiple.key().unwrap().multiple_context().unwrap().clone();
+        let expires_at = multiple.expires_at.unwrap();
+        table
+            .subscribe_multiple(
+                &context,
+                &multiple.endpoint(),
+                expires_at,
+                0,
+                None,
+                vec![multiple],
+                now,
+            )
+            .unwrap();
 
         let mut listed = table.active_cov_entries(now);
         listed.sort_by_key(|entry| entry.process_id);
@@ -575,20 +584,24 @@ mod tests {
             network: 7,
             mac_address: MacAddr::from_slice(&vec![0xA5; longest]),
         });
-        let mut table = CovSubscriptionTable::new();
-        table.subscribe(direct.clone()).unwrap();
-        table.subscribe(routed.clone()).unwrap();
+        let now = Instant::from_secs(1_000);
+        let mut table = CovTable::default();
+        table.subscribe(direct.clone(), now).unwrap();
+        table.subscribe(routed.clone(), now).unwrap();
         for mut too_long in [direct, routed] {
             too_long.subscriber_process_identifier += 10;
             match &mut too_long.subscriber_network {
                 Some(source) => source.mac_address.push(0xA5),
                 None => too_long.subscriber_mac.push(0xA5),
             }
-            assert!(matches!(table.subscribe(too_long), Err(Error::Encoding(_))));
+            assert!(matches!(
+                table.subscribe(too_long, now),
+                Err(Error::Encoding(_))
+            ));
         }
         assert_eq!(table.len(), 2);
 
-        let entries = table.active_cov_entries(crate::runtime_clock::core_now());
+        let entries = table.active_cov_entries(now);
         let projected = ActiveCovSubscriptions::project(&db, device(), entries);
         let Some(PropertyValue::ApplicationData(list)) =
             projected.resolve(device(), PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS)

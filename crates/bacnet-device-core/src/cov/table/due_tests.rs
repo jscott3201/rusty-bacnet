@@ -49,7 +49,14 @@ fn assert_not_late(table: &CovTable) {
 fn begin(table: &mut CovTable, sub: &CovSubscriptionSnapshot, now: Instant) -> Token {
     let live = table.get_subscription(sub.key()).unwrap().clone();
     let report = table.prepare_completion(&live).unwrap();
-    table.begin_confirmed(report, [&live], now).unwrap()
+    let observation = crate::cov::CovObservation::new(
+        crate::cov::CovSample::new(&bacnet_types::primitives::PropertyValue::Real(0.0)).unwrap(),
+        None,
+    )
+    .unwrap();
+    table
+        .begin_confirmed(report, [(&live, observation)], now)
+        .unwrap()
 }
 
 #[test]

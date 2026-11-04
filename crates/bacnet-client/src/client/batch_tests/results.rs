@@ -135,7 +135,7 @@ async fn reversed(service: u8, reject: bool) {
     timeout(Duration::from_secs(2), async {
         loop {
             assert!(futures_util::poll!(pending.as_mut()).is_pending());
-            if client.tsm.lock().await.coordinated_active_count() == 1 {
+            if client.tsm.lock().coordinated_active_count() == 1 {
                 break;
             }
             tokio::task::yield_now().await;
@@ -183,8 +183,8 @@ async fn reversed(service: u8, reject: bool) {
         ));
     }
     assert!(result[1].2.is_ok());
-    assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
-    assert_eq!(client.tsm.lock().await.pending_count(), 0);
+    assert_eq!(client.tsm.lock().coordinated_active_count(), 0);
+    assert_eq!(client.tsm.lock().pending_count(), 0);
     client.stop().await.unwrap();
     peer.stop().await.unwrap();
 }

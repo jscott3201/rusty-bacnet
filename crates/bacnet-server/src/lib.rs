@@ -12,7 +12,6 @@ pub mod event_enrollment;
 pub mod fault_detection;
 pub mod handlers;
 pub mod life_safety;
-mod life_safety_cov;
 mod local_device;
 mod membership;
 pub mod mutation;

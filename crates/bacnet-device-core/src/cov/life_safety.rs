@@ -1,9 +1,14 @@
 //! Exact readback snapshots for server-owned Life Safety COV mutation paths.
 
+use alloc::collections::BTreeSet;
+use alloc::vec::Vec;
+
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+
+use super::CovSubscription;
 
 /// The COV surface a Point and a Zone share, Tracking_Value included.
 const PROPERTIES: [PropertyIdentifier; 5] = [
@@ -14,14 +19,37 @@ const PROPERTIES: [PropertyIdentifier; 5] = [
     PropertyIdentifier::STATUS_FLAGS,
 ];
 
+/// The COV properties of one Life Safety object a mutation changed.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LifeSafetyCovChange {
-    pub(crate) object_identifier: ObjectIdentifier,
-    pub(crate) changed_properties: Vec<PropertyIdentifier>,
+pub struct LifeSafetyCovChange {
+    /// The Point or Zone.
+    pub object_identifier: ObjectIdentifier,
+    /// Its COV properties whose readback differs from before the mutation.
+    pub changed_properties: Vec<PropertyIdentifier>,
 }
 
 impl LifeSafetyCovChange {
-    pub(crate) fn new(
+    /// Whether Status_Flags changed: every subscription to the object then
+    /// reports, whatever its baseline.
+    pub fn status_changed(&self) -> bool {
+        self.changed_properties
+            .contains(&PropertyIdentifier::STATUS_FLAGS)
+    }
+
+    /// Whether this change notifies `subscription` to the object: a
+    /// whole-object one on a Present_Value change, a property one on a
+    /// change of its property, and either on a Status_Flags change.
+    pub fn notifies(&self, subscription: &CovSubscription) -> bool {
+        self.status_changed()
+            || self.changed_properties.contains(
+                &subscription
+                    .monitored_property
+                    .unwrap_or(PropertyIdentifier::PRESENT_VALUE),
+            )
+    }
+
+    /// A change of `changed_properties`, or `None` when there are none.
+    pub fn new(
         object_identifier: ObjectIdentifier,
         changed_properties: Vec<PropertyIdentifier>,
     ) -> Option<Self> {
@@ -40,12 +68,13 @@ struct ObjectSnapshot {
 
 /// Pre-mutation readback for the exact Life Safety COV surface.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct LifeSafetyCovSnapshots {
+pub struct LifeSafetyCovSnapshots {
     objects: Vec<ObjectSnapshot>,
-    held: std::collections::HashSet<ObjectIdentifier>,
+    held: BTreeSet<ObjectIdentifier>,
 }
 
-pub(crate) fn is_life_safety_object(object_identifier: ObjectIdentifier) -> bool {
+/// Whether `object_identifier` names a Life Safety Point or Zone.
+pub fn is_life_safety_object(object_identifier: ObjectIdentifier) -> bool {
     matches!(
         object_identifier.object_type(),
         ObjectType::LIFE_SAFETY_POINT | ObjectType::LIFE_SAFETY_ZONE
@@ -57,18 +86,25 @@ fn properties_for(object_identifier: ObjectIdentifier) -> Option<&'static [Prope
 }
 
 impl LifeSafetyCovSnapshots {
-    pub(crate) fn capture_oid(db: &ObjectDatabase, object_identifier: ObjectIdentifier) -> Self {
+    /// Whether `object_identifier`'s pre-mutation state is held.
+    pub fn holds(&self, object_identifier: ObjectIdentifier) -> bool {
+        self.held.contains(&object_identifier)
+    }
+
+    /// Capture one object's pre-mutation state.
+    pub fn capture_oid(db: &ObjectDatabase, object_identifier: ObjectIdentifier) -> Self {
         Self::capture_oids(db, [object_identifier])
     }
 
-    pub(crate) fn capture_write_property(db: &ObjectDatabase, service_data: &[u8]) -> Self {
+    /// Capture the object a WriteProperty request names, if it decodes.
+    pub fn capture_write_property(db: &ObjectDatabase, service_data: &[u8]) -> Self {
         WritePropertyRequest::decode(service_data)
             .map(|request| Self::capture_oid(db, request.object_identifier))
             .unwrap_or_default()
     }
 
     /// Capture a Life Safety object immediately before its first WPM attempt.
-    pub(crate) fn capture_before_write(
+    pub fn capture_before_write(
         &mut self,
         db: &ObjectDatabase,
         object_identifier: ObjectIdentifier,
@@ -85,7 +121,9 @@ impl LifeSafetyCovSnapshots {
         }
     }
 
-    pub(crate) fn changes(
+    /// The changes of the held objects among `affected_oids`, read back
+    /// from `db` after the mutation.
+    pub fn changes(
         &self,
         db: &ObjectDatabase,
         affected_oids: &[ObjectIdentifier],
@@ -110,7 +148,8 @@ impl LifeSafetyCovSnapshots {
             .collect()
     }
 
-    pub(crate) fn capture_oids(
+    /// Capture each object's pre-mutation state.
+    pub fn capture_oids(
         db: &ObjectDatabase,
         object_identifiers: impl IntoIterator<Item = ObjectIdentifier>,
     ) -> Self {
@@ -123,7 +162,7 @@ impl LifeSafetyCovSnapshots {
 
     /// Add one object's pre-mutation state unless it is already held or is not
     /// a Life Safety object.
-    pub(crate) fn capture(&mut self, db: &ObjectDatabase, object_identifier: ObjectIdentifier) {
+    pub fn capture(&mut self, db: &ObjectDatabase, object_identifier: ObjectIdentifier) {
         let Some(properties) = properties_for(object_identifier) else {
             return;
         };

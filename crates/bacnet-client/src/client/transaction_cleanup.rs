@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
+use crate::sync_mutex::SyncMutex;
 use bacnet_encoding::apdu::SegmentAck as SegmentAckPdu;
 use bacnet_types::MacAddr;
 #[cfg(test)]
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(test)]
 use tokio::sync::Notify;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::mpsc;
 
 use crate::tsm::{TransactionOwner, Tsm};
 
@@ -19,14 +20,14 @@ pub(super) struct TransactionCleanup {
 }
 
 pub(super) struct TransactionGuard {
-    tsm: Arc<Mutex<Tsm>>,
+    tsm: Arc<SyncMutex<Tsm>>,
     cleanup_tx: mpsc::UnboundedSender<TransactionCleanup>,
     cleanup: Option<TransactionCleanup>,
 }
 
 impl TransactionGuard {
     pub(super) fn new(
-        tsm: Arc<Mutex<Tsm>>,
+        tsm: Arc<SyncMutex<Tsm>>,
         cleanup_tx: mpsc::UnboundedSender<TransactionCleanup>,
         mac: MacAddr,
         invoke_id: u8,
@@ -58,7 +59,7 @@ impl Drop for TransactionGuard {
         };
         if let Err(error) = self.cleanup_tx.send(cleanup) {
             let cleanup = error.0;
-            if let Ok(mut tsm) = self.tsm.try_lock() {
+            if let Some(mut tsm) = self.tsm.try_lock() {
                 tsm.cancel_transaction_for_owner(&cleanup.mac, cleanup.invoke_id, &cleanup.owner);
             }
         }

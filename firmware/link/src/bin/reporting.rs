@@ -1,14 +1,15 @@
 //! The firmware link test's reporting image (#2303).
 //!
 //! The objects image (`src/bin/objects.rs`) with `bacnet-device-core`'s COV
-//! table on top: on a bare-metal target, a `no_main` image whose reset entry
+//! `Reporter` on top: on a bare-metal target, a `no_main` image whose reset entry
 //! hands its allocator an arena of
-//! [`ARENA`](firmware_link::objects::ARENA) octets, then runs
+//! [`ARENA`](firmware_link::reporting::ARENA) octets, then runs
 //! [`firmware_link::reporting::run`] once on the hand-written requests,
-//! which subscribe, renew and cancel through the core's staged functions.
+//! which subscribe, renew and cancel through the `Reporter`, and report and
+//! read what they subscribed to.
 //! The requests and the summary pass through [`core::hint::black_box`], so
 //! none of the work can be optimized away, and then it loops. CI never runs
-//! it: building it proves that the COV table links `no_std` with `alloc`,
+//! it: building it proves that COV reporting links `no_std` with `alloc`,
 //! and `scripts/ci/check-firmware-link.sh` checks its sizes. On a host the
 //! binary is a stub; `tests/reporting.rs` runs the scenario there.
 //!
@@ -27,7 +28,7 @@ mod heap {
     static HEAP: LlffHeap = LlffHeap::empty();
 
     /// Hand the allocator its arena: a static of
-    /// [`ARENA`](firmware_link::objects::ARENA) octets that `init!` declares.
+    /// [`ARENA`](firmware_link::reporting::ARENA) octets that `init!` declares.
     /// Call it once, before anything allocates.
     pub fn init() {
         // SAFETY: `init!` declares the arena as a static that nothing else
@@ -38,7 +39,7 @@ mod heap {
         // never returns.
         #[allow(unsafe_code)]
         unsafe {
-            embedded_alloc::init!(HEAP, firmware_link::objects::ARENA);
+            embedded_alloc::init!(HEAP, firmware_link::reporting::ARENA);
         }
     }
 }

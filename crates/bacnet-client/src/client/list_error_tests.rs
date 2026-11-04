@@ -172,7 +172,7 @@ async fn list_services_surface_the_first_failed_element_number() {
             element_error(&result, error_class, error_code, element,),
             "expected a ChangeList-Error, got {result:?}"
         );
-        assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
+        assert_eq!(client.tsm.lock().coordinated_active_count(), 0);
     }
     client.stop().await.unwrap();
     peer.stop().await.unwrap();

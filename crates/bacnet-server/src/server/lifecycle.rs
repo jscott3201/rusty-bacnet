@@ -189,13 +189,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             loop {
                 requests.reap_finished();
                 // Drain all selected ownership before the first asynchronous Abort.
-                Self::reap_expired_requests(
-                    &network_dispatch,
-                    &mut seg_receivers,
-                    runtime_clock::now(),
-                    receive_timeout,
-                )
-                .await;
+                // With no reassembly open nothing can expire, so the clock
+                // isn't read (#1978 item 6).
+                if !seg_receivers.is_empty() {
+                    Self::reap_expired_requests(
+                        &network_dispatch,
+                        &mut seg_receivers,
+                        runtime_clock::now(),
+                        receive_timeout,
+                    )
+                    .await;
+                }
                 let mut received = tokio::select! {
                     () = super::segmented_receive::wait_receive_deadline(&seg_receivers, receive_timeout), if !seg_receivers.is_empty() => continue,
                     result = notification_transactions_dispatch.join_next(), if notifications_open => {
@@ -222,13 +226,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 };
                 // Input and the timer can become ready together. Apply expiry
                 // before interpreting this segment in either scheduling order.
-                Self::reap_expired_requests(
-                    &network_dispatch,
-                    &mut seg_receivers,
-                    runtime_clock::now(),
-                    receive_timeout,
-                )
-                .await;
+                if !seg_receivers.is_empty() {
+                    Self::reap_expired_requests(
+                        &network_dispatch,
+                        &mut seg_receivers,
+                        runtime_clock::now(),
+                        receive_timeout,
+                    )
+                    .await;
+                }
 
                 match apdu::decode_apdu(received.apdu.clone()) {
                     Ok(decoded) => {

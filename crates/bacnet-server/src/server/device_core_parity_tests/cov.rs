@@ -1,29 +1,31 @@
-//! SubscribeCOV and SubscribeCOVProperty (#2303, PR 1): the server and
-//! bacnet-device-core's [`CovTable`], given the same requests from the same
+//! SubscribeCOV and SubscribeCOVProperty (#2303): the server and
+//! bacnet-device-core's `Reporter`, given the same requests from the same
 //! subscribers over the same fixture, send the same reply octets and hold
-//! the same subscriptions.
+//! the same subscriptions. The notifications both send are compared in
+//! `notify`.
 //!
-//! The server serves one database on the shared `TestTransport`; the core
-//! side runs `CovTable::subscribe_cov` and `subscribe_cov_property` on the
-//! other at the instant the request reached the server, and encodes the
-//! reply as a host does. After each request the two tables must hold the
-//! same entries (identity, route, form, lifetime and increment) and have
-//! counted the same. The core sends no notifications yet, so the server's
-//! initial notification is pinned: it follows every accepted subscription.
+//! The server serves one database on the shared `TestTransport`; the
+//! `Reporter` serves the other, at the instant the request reached the
+//! server. After each request the two tables must hold the same entries
+//! (identity, route, form, lifetime and increment) and have counted the
+//! same; the server's first notification follows every accepted
+//! subscription.
 use super::*;
 use crate::runtime_clock;
-use bacnet_device_core::cov::{CovCounters, CovPolicy, CovTable, SubscriberEndpoint};
-use bacnet_device_core::reply::error_apdu;
-use bacnet_encoding::apdu::SimpleAck;
+use bacnet_device_core::cov::{CovCounters, CovPolicy};
 use bacnet_encoding::npdu::NpduAddress;
+use bacnet_objects::command_source::{CommandDeviceBinding, CommandOrigin};
+
+mod notify;
 
 /// Both sides of one fixture under one COV policy.
 struct CovParity {
     parity: Parity,
-    table: CovTable,
-    /// The core table's counts, summed.
-    counts: CovCounters,
     invoke_id: u8,
+    /// The core side's invoke IDs.
+    ids: notify::Ids,
+    /// Confirmed notifications both sides sent and nobody answered yet.
+    outstanding: Vec<notify::Outstanding>,
 }
 
 impl CovParity {
@@ -36,7 +38,6 @@ impl CovParity {
             cov_policy: policy.clone(),
             ..ServerConfig::default()
         };
-        let timing = config.cov_flight_timing();
         let server = BACnetServer::start(config, fixture(&identity), transport)
             .await
             .unwrap();
@@ -47,18 +48,19 @@ impl CovParity {
             Limits::new(ReadPropertyMultipleBudget::default().max_result_elements),
         )
         .unwrap();
+        let reporter = reporter(responder, &server.config);
         Self {
             parity: Parity {
                 server,
                 tx,
                 sent,
-                responder,
+                reporter,
                 db: fixture(&identity),
                 requests: 0,
             },
-            table: CovTable::new(policy).with_flight_timing(timing),
-            counts: CovCounters::default(),
             invoke_id: 0,
+            ids: notify::Ids::default(),
+            outstanding: Vec::new(),
         }
     }
 
@@ -71,37 +73,57 @@ impl CovParity {
         service: ConfirmedServiceChoice,
         body: &[u8],
     ) -> Apdu {
-        self.invoke_id = self.invoke_id.wrapping_add(1);
-        let apdu = confirmed(self.invoke_id, service, body, 1476);
+        let (reply, _) = self.exchange(what, peer, service, body).await;
+        self.same_tables(what).await;
+        reply
+    }
+
+    /// Send `service` with `body` from `peer` to both: the reply, which
+    /// must match, and how many notifications followed it, which must
+    /// match too.
+    async fn exchange(
+        &mut self,
+        what: &str,
+        peer: &SubscriberEndpoint,
+        service: ConfirmedServiceChoice,
+        body: &[u8],
+    ) -> (Apdu, usize) {
         let now = runtime_clock::core_now();
-        let frames = self.deliver(&apdu, peer).await;
+        let (frames, core) = self.both(peer, service, body).await;
         let server = frames
             .first()
             .unwrap_or_else(|| panic!("{what}: the server sent nothing"))
             .decode_npdu()
             .payload;
-        let db = &self.parity.db;
-        let accepted = if service == ConfirmedServiceChoice::SUBSCRIBE_COV {
-            self.table.subscribe_cov(db, peer, body, now)
-        } else {
-            self.table.subscribe_cov_property(db, peer, body, now)
+        assert_eq!(server, core, "{what}: server, then core");
+        let reply = bacnet_encoding::apdu::decode_apdu(core).unwrap();
+        let notifications = self.same_notifications(what, &frames[1..], now);
+        (reply, notifications)
+    }
+
+    /// Send `service` with `body` from `peer` to both: what the server
+    /// sent, and the core's reply.
+    async fn both(
+        &mut self,
+        peer: &SubscriberEndpoint,
+        service: ConfirmedServiceChoice,
+        body: &[u8],
+    ) -> (Vec<test_transport::SentFrame>, Bytes) {
+        self.invoke_id = self.invoke_id.wrapping_add(1);
+        let apdu = confirmed(self.invoke_id, service, body, 1476);
+        let now = runtime_clock::core_now();
+        let frames = self.deliver(&apdu, peer).await;
+        let origin = CommandOrigin::Remote {
+            actual_address: bacnet_device_core::report::peer_address(peer),
+            binding: CommandDeviceBinding::Unknown,
         };
-        let reply = match &accepted {
-            Ok(_) => Apdu::SimpleAck(SimpleAck {
-                invoke_id: self.invoke_id,
-                service_choice: service,
-            }),
-            Err(error) => error_apdu(self.invoke_id, service, error),
-        };
-        let mut core = BytesMut::new();
-        encode_apdu(&mut core, &reply).unwrap();
-        assert_eq!(server, core.freeze(), "{what}: server, then core");
-        // The server reports what it accepted at once; the core hands it
-        // back, owed its first notification.
-        let owed = matches!(accepted, Ok(Some(_)));
-        assert_eq!(frames.len(), 1 + usize::from(owed), "{what}: {frames:?}");
-        self.same_tables(what).await;
-        reply
+        let request = Inbound::new(apdu, 1476).with_source(origin);
+        let mut out = BytesMut::new();
+        let parity = &mut self.parity;
+        parity
+            .reporter
+            .handle(&mut parity.db, peer, request, now, &mut out);
+        (frames, out.freeze())
     }
 
     /// Deliver `apdu` to the server from `peer`, routed when it has a
@@ -115,7 +137,7 @@ impl CovParity {
         encode_npdu(
             &mut npdu,
             &Npdu {
-                expecting_reply: true,
+                expecting_reply: apdu[0] >> 4 == 0,
                 source: peer.network.clone(),
                 payload: apdu.clone(),
                 ..Npdu::default()
@@ -152,17 +174,9 @@ impl CovParity {
         };
         let table = self.parity.server.cov_table.read().await;
         let server: Vec<_> = table.entries().map(shape).collect();
-        let core: Vec<_> = self.table.entries().map(shape).collect();
+        let core: Vec<_> = self.parity.reporter.table().entries().map(shape).collect();
         assert_eq!(server, core, "{what}: the subscriptions, server then core");
-        let counts = self.table.take_counts();
-        let total = &mut self.counts;
-        total.subscriptions_created += counts.subscriptions_created;
-        total.subscriptions_cancelled += counts.subscriptions_cancelled;
-        total.subscriptions_purged += counts.subscriptions_purged;
-        total.subscriptions_rejected_quota += counts.subscriptions_rejected_quota;
-        total.subscriptions_rejected_capacity += counts.subscriptions_rejected_capacity;
-        total.subscriptions_rejected_indefinite += counts.subscriptions_rejected_indefinite;
-        total.subscriptions_active = counts.subscriptions_active;
+        let total = &self.parity.reporter.counters().cov;
         let server = table.counters().snapshot();
         let subscription_counts = |c: &CovCounters| {
             [
@@ -188,12 +202,20 @@ impl CovParity {
 }
 
 /// The parity fixture, a Life Safety Point, whose Mode is readable but not
-/// reported, and an Averaging object, which takes property subscriptions
-/// but refuses SubscribeCOV.
+/// reported, an Averaging object, which takes property subscriptions but
+/// refuses SubscribeCOV, and an object with a Table 13-1 row of its own
+/// ([`notify::Staged`]).
 fn fixture(identity: &bacnet_objects::DeviceIdentity) -> ObjectDatabase {
     let point = bacnet_objects::life_safety::LifeSafetyPointObject::new(1, "LSP-1").unwrap();
     let averaging = bacnet_objects::averaging::AveragingObject::new(1, "AVG-1").unwrap();
-    database_with(identity, vec![Box::new(point), Box::new(averaging)])
+    database_with(
+        identity,
+        vec![
+            Box::new(point),
+            Box::new(averaging),
+            Box::new(notify::Staged::new()),
+        ],
+    )
 }
 
 fn averaging() -> ObjectIdentifier {
@@ -595,11 +617,8 @@ async fn a_renewal_through_another_router_moves_the_route() {
         .await;
     cov.request("a property, router 2", &routed(2), PROPERTY, &body)
         .await;
-    assert_eq!(cov.table.len(), 2);
-    assert!(
-        cov.table
-            .entries()
-            .all(|entry| entry.endpoint() == routed(2))
-    );
+    let table = cov.parity.reporter.table();
+    assert_eq!(table.len(), 2);
+    assert!(table.entries().all(|entry| entry.endpoint() == routed(2)));
     cov.stop().await;
 }

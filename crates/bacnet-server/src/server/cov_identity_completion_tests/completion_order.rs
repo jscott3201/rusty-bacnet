@@ -292,7 +292,7 @@ impl Dispatch {
         }
     }
     async fn send(&self, f: &Fixture, subs: &[CovSubscriptionSnapshot]) {
-        let mut budget = super::super::cov_notifications::EventBudget::new(&f.config.cov_policy);
+        let mut budget = bacnet_device_core::cov::EventBudget::new(&f.config.cov_policy);
         BACnetServer::<TestTransport>::fire_cov_notifications_for_subscriptions(
             &crate::server::cov_notify_context::CovFanoutHandles {
                 ctx: &crate::server::cov_notify_context::CovNotifyContext {

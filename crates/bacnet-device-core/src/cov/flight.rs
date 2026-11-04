@@ -2,9 +2,10 @@
 //! failure (#896), as plain state in the table.
 //!
 //! A confirmed COV notification completes its references' baselines only when
-//! the subscriber acknowledges it ([`CovTable::complete_observation`]). Until
-//! then its coordinate has one outstanding report, marked with that report's
-//! ticket. The coordinate is an ordinary or Single subscription, or a whole
+//! the subscriber acknowledges it: [`CovTable::begin_confirmed`] keeps the
+//! observation each reference carried, and [`CovTable::delivered`] commits
+//! them on the Ack. Until then its coordinate has one outstanding report,
+//! marked with that report's ticket. The coordinate is an ordinary or Single subscription, or a whole
 //! COV-multiple context: every notification to a context has to carry all the
 //! timestamped changes queued for it (Clauses 13.1, 13.16.3.1.2.3 and
 //! 13.17.1.1.5), so one reference's report cannot be outstanding while a
@@ -69,11 +70,12 @@
 
 use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
+use core::borrow::Borrow;
 
-use crate::cov::{CovSubscriptionKey, MultipleContextKey, SubscriberEndpoint};
+use crate::cov::{CovObservation, CovSubscriptionKey, MultipleContextKey, SubscriberEndpoint};
 use bacnet_time::{Duration, Instant};
 
-use super::observation_order::PreparedCovCompletion;
+use super::observation_order::{Completion, PreparedCovCompletion};
 use super::{CovSubscriptionSnapshot, CovTable};
 
 /// How long a confirmed report may take: the APDU timeout and the retries
@@ -110,28 +112,49 @@ impl FlightTiming {
     pub fn deadline(self) -> Duration {
         self.timeout.saturating_mul(u32::from(self.retries) + 2)
     }
+
+    /// How long after it begins a live sender stops waiting for an answer
+    /// and reports a failure: the retry cycle and half a timeout, half a
+    /// timeout before the [deadline](Self::deadline), however late its
+    /// first attempt went out.
+    pub fn cutoff(self) -> Duration {
+        let half = Duration::from_nanos(self.timeout.as_nanos() >> 1);
+        self.hold_off().saturating_add(half)
+    }
 }
 
-/// One outstanding confirmed report: the token its outcome comes back with
-/// through [`CovTable::delivered`].
+/// One report: the token its outcome comes back with through
+/// [`CovTable::delivered`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Token {
-    flight: u64,
-    ticket: u64,
+    pub(super) flight: u64,
+    pub(super) ticket: u64,
 }
 
-/// How a confirmed report ended.
+#[cfg(test)]
+impl Token {
+    /// A token for tests that need one without a table.
+    pub(crate) fn for_test(ticket: u64) -> Self {
+        Self { flight: 0, ticket }
+    }
+}
+
+/// How a report ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Delivery {
+    /// An unconfirmed report went to the link: its observation completes.
+    /// A confirmed report ends only by its answer, so this changes nothing
+    /// for one.
+    Sent,
     /// The subscriber acknowledged it.
     Acknowledged,
     /// Its retries ran out, or the subscriber answered with an Error: its
     /// coordinate holds off for one retry cycle.
     Failed,
-    /// No attempt counts: DeviceCommunicationControl withdrew it, or its
-    /// transaction closed. The mark clears at once. A worker aborted at
-    /// shutdown reports nothing; its report keeps the mark until its
-    /// deadline.
+    /// No attempt counts: DeviceCommunicationControl withdrew it, its
+    /// transaction closed, or, unconfirmed, its send failed. A confirmed
+    /// report's mark clears at once. A worker aborted at shutdown reports
+    /// nothing; its report keeps the mark until its deadline.
     NotSent,
 }
 
@@ -162,6 +185,9 @@ pub(super) struct FlightState {
     /// holding off or owed, and cleared once it is acknowledged or its owed
     /// follow-up is taken.
     carried: BTreeSet<CovSubscriptionKey>,
+    /// The observation each reference of the outstanding report carried:
+    /// its Ack commits them.
+    completes: Vec<Completion>,
 }
 
 impl FlightState {
@@ -252,6 +278,7 @@ impl CovTable {
                 state.ticket = 0;
                 state.deadline = None;
                 state.carried.clear();
+                state.completes.clear();
             }
             self.tidy_flight(token.flight);
             let keys: Vec<_> = self
@@ -364,13 +391,14 @@ impl CovTable {
     }
 
     /// Mark the coordinate of one confirmed notification's references
-    /// outstanding at `now`, under the report's single ticket. The report
-    /// ends itself at `now` plus the [deadline](FlightTiming::deadline) if
-    /// no outcome arrives through [`delivered`](Self::delivered).
-    pub fn begin_confirmed<'a>(
+    /// outstanding at `now`, under the report's single ticket, and keep the
+    /// observation each one carries for the Ack to commit. The report ends
+    /// itself at `now` plus the [deadline](FlightTiming::deadline) if no
+    /// outcome arrives through [`delivered`](Self::delivered).
+    pub fn begin_confirmed<S: Borrow<CovSubscriptionSnapshot>>(
         &mut self,
         completion: PreparedCovCompletion,
-        snapshots: impl IntoIterator<Item = &'a CovSubscriptionSnapshot>,
+        references: impl IntoIterator<Item = (S, CovObservation)>,
         now: Instant,
     ) -> Result<Token, BeginRefusal> {
         let PreparedCovCompletion::Confirmed(ticket) = completion else {
@@ -379,7 +407,9 @@ impl CovTable {
         };
         let mut flight: Option<u64> = None;
         let mut carried = BTreeSet::new();
-        for snapshot in snapshots {
+        let mut completes = Vec::new();
+        for (snapshot, observation) in references {
+            let snapshot = snapshot.borrow();
             if !self.is_current(snapshot, now) {
                 return Err(BeginRefusal::NotCurrent);
             }
@@ -392,6 +422,7 @@ impl CovTable {
             debug_assert!(flight.is_none_or(|known| known == current));
             flight.get_or_insert(current);
             carried.insert(snapshot.key().clone());
+            completes.push(Completion::new(snapshot, observation));
         }
         let Some(flight) = flight else {
             return Err(BeginRefusal::NotCurrent);
@@ -411,6 +442,7 @@ impl CovTable {
         state.ticket = ticket.get();
         state.deadline = Some(deadline);
         state.carried = carried;
+        state.completes = completes;
         self.due_by(Some(deadline));
         Ok(Token {
             flight,
@@ -421,24 +453,62 @@ impl CovTable {
     /// End the report `token` names, as `outcome` says, at `now`. A report
     /// that was fenced, removed with its coordinate, or that passed its
     /// deadline is no longer known, and its outcome changes nothing.
-    pub fn delivered(&mut self, token: Token, outcome: Delivery, now: Instant) {
+    ///
+    /// An unconfirmed report that was [`Sent`](Delivery::Sent) commits its
+    /// observation, unless a later report of its subscription completed
+    /// first. An [`Acknowledged`](Delivery::Acknowledged) confirmed report
+    /// commits the observations it carried, and returns the references owed
+    /// a fresh look: changes to them were held while it was outstanding.
+    /// They are those it completed or, for a COV-multiple context, every
+    /// reference of the context. Every other outcome returns none.
+    pub fn delivered(
+        &mut self,
+        token: Token,
+        outcome: Delivery,
+        now: Instant,
+    ) -> Vec<CovSubscriptionKey> {
+        if self.deliver_unconfirmed(token, outcome, now) {
+            return Vec::new();
+        }
         let hold_off = self.timing.hold_off();
         let Some(state) = self.flights.get_mut(&token.flight) else {
-            return;
+            return Vec::new();
         };
-        if state.ticket != token.ticket || !state.outstanding(now) {
-            return;
+        if state.ticket != token.ticket || !state.outstanding(now) || outcome == Delivery::Sent {
+            return Vec::new();
         }
+        let completes = core::mem::take(&mut state.completes);
+        let mut owed = Vec::new();
+        if outcome == Delivery::Acknowledged {
+            // Committed while the report still holds the coordinate.
+            let context = completes
+                .first()
+                .and_then(|completion| completion.key().multiple_context().cloned());
+            for completion in completes {
+                let key = completion.key().clone();
+                if self.complete(token, true, completion, now) {
+                    owed.push(key);
+                }
+            }
+            if let Some(context) = context {
+                owed = self
+                    .multiple_context_references(&context)
+                    .map(|entry| entry.key().clone())
+                    .collect();
+            }
+        }
+        let state = self.flights.get_mut(&token.flight).expect("checked above");
         state.ticket = 0;
         state.deadline = None;
         match outcome {
             Delivery::Failed => state.hold_until = Some(now.saturating_add(hold_off)),
-            Delivery::Acknowledged | Delivery::NotSent => {
+            Delivery::Acknowledged | Delivery::NotSent | Delivery::Sent => {
                 state.hold_until = None;
                 state.carried.clear();
             }
         }
         self.tidy_flight(token.flight);
+        owed
     }
 
     /// Choose the flight a Multiple context keeps after this admission. A

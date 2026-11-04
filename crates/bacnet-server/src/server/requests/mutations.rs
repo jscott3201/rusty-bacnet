@@ -1,10 +1,10 @@
 use super::*;
 use crate::command_lists::TakenRuns;
-use crate::life_safety_cov::LifeSafetyCovChange;
 use crate::mutation::{
     MutationAuthorizationContext, MutationDecision, MutationDecisions, MutationPolicy,
     MutationTarget, MutationTrust,
 };
+use bacnet_device_core::cov::life_safety::LifeSafetyCovChange;
 use bacnet_device_core::write::{self, WpmOutcome};
 use bacnet_objects::staging::StagingWritePlan;
 use bacnet_services::cov::{SubscribeCOVPropertyRequest, SubscribeCOVRequest};
@@ -217,7 +217,7 @@ impl Request<'_> {
         let database = db;
         let (result, exact_changes, plans, schedule_cov) = {
             let mut db = db.write().await;
-            let snapshots = crate::life_safety_cov::LifeSafetyCovSnapshots::capture_write_property(
+            let snapshots = bacnet_device_core::cov::life_safety::LifeSafetyCovSnapshots::capture_write_property(
                 &db,
                 &self.req.service_request,
             );
@@ -250,7 +250,7 @@ impl Request<'_> {
                 ));
                 let capture = {
                     let table = cov_table.read().await;
-                    if crate::life_safety_cov::is_life_safety_object(oid) {
+                    if bacnet_device_core::cov::life_safety::is_life_safety_object(oid) {
                         table.timed_capture_exact(&changes)
                     } else {
                         table.timed_capture(oid)
@@ -276,7 +276,7 @@ impl Request<'_> {
         let response = match result {
             Ok(Some(oid)) => {
                 written_oids.push(oid);
-                if crate::life_safety_cov::is_life_safety_object(oid) {
+                if bacnet_device_core::cov::life_safety::is_life_safety_object(oid) {
                     *life_safety_cov_changes = exact_changes;
                 } else {
                     coarse_cov_oids.push(oid);
@@ -384,7 +384,7 @@ impl Request<'_> {
             written_oids
                 .iter()
                 .copied()
-                .filter(|oid| !crate::life_safety_cov::is_life_safety_object(*oid)),
+                .filter(|oid| !bacnet_device_core::cov::life_safety::is_life_safety_object(*oid)),
         );
         *life_safety_cov_changes = exact_changes;
         // Targets a written Schedule commanded on re-evaluation.
@@ -558,9 +558,10 @@ impl Request<'_> {
         // The edited object first, then a Schedule's targets, which the merge
         // adds only when not already there, as after a WriteProperty.
         effects.written_oids.extend(written);
-        effects
-            .coarse_cov_oids
-            .extend(written.filter(|oid| !crate::life_safety_cov::is_life_safety_object(*oid)));
+        effects.coarse_cov_oids.extend(
+            written
+                .filter(|oid| !bacnet_device_core::cov::life_safety::is_life_safety_object(*oid)),
+        );
         schedule_cov.merge_into(
             &mut effects.coarse_cov_oids,
             &mut effects.life_safety_cov_changes,

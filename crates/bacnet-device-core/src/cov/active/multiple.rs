@@ -8,6 +8,7 @@
 //! `subscribe_multiple` refreshes the route, expiry and delay of every reference
 //! in a context together. The route is delivery state, not projected identity.
 use super::*;
+use alloc::vec;
 use bacnet_encoding::constructed::encode_cov_multiple_subscription_list;
 use bacnet_types::constructed::{
     BACnetCOVMultipleSubscription, BACnetCOVReference, BACnetCOVSubscriptionSpecification,
@@ -15,7 +16,7 @@ use bacnet_types::constructed::{
 
 /// One Multiple reference copied from the table at a sampled instant.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ActiveCovMultipleEntry {
+pub struct ActiveCovMultipleEntry {
     context: MultipleContextKey,
     object: ObjectIdentifier,
     property: PropertyIdentifier,
@@ -26,14 +27,14 @@ pub(crate) struct ActiveCovMultipleEntry {
     timestamped: bool,
 }
 
-impl CovSubscriptionTable {
+impl CovTable {
     /// Copy the Multiple references live at `now`.
     ///
     /// Read-only: a reference whose context deadline has been reached is
     /// omitted without purging. Remaining lifetime is the same projection the
     /// notification Time_Remaining uses. Ordinary and Single entries belong to
     /// `Active_COV_Subscriptions` and are skipped.
-    pub(crate) fn active_cov_multiple_entries(&self, now: Instant) -> Vec<ActiveCovMultipleEntry> {
+    pub fn active_cov_multiple_entries(&self, now: Instant) -> Vec<ActiveCovMultipleEntry> {
         self.entries()
             .filter_map(|entry| {
                 let CovSubscriptionKey::Multiple {
@@ -66,14 +67,14 @@ impl CovSubscriptionTable {
 /// Request-local value of the selected Device's
 /// `Active_COV_Multiple_Subscriptions`.
 #[derive(Debug, Clone)]
-pub(crate) struct ActiveCovMultipleSubscriptions {
+pub struct ActiveCovMultipleSubscriptions {
     device: ObjectIdentifier,
     encoded: Vec<u8>,
 }
 
 impl ActiveCovMultipleSubscriptions {
     /// A stopped server services no context, so it reports none.
-    pub(crate) fn stopped(device: ObjectIdentifier) -> Self {
+    pub fn stopped(device: ObjectIdentifier) -> Self {
         Self {
             device,
             encoded: Vec::new(),
@@ -87,12 +88,15 @@ impl ActiveCovMultipleSubscriptions {
     /// terminated by DeleteObject and is omitted; a context left without any
     /// reference is removed entirely, as is an accepted request that
     /// established no reference.
-    pub(crate) fn project(
+    pub fn project(
         db: &ObjectDatabase,
         device: ObjectIdentifier,
         mut entries: Vec<ActiveCovMultipleEntry>,
     ) -> Self {
-        entries.sort_by(order);
+        // The order is total, so an unstable sort gives the same list, and
+        // links no 64-bit division on a 32-bit target, as the stable one's
+        // run-length scale does.
+        entries.sort_unstable_by(order);
         let mut contexts: Vec<BACnetCOVMultipleSubscription> = Vec::new();
         let mut current: Option<&MultipleContextKey> = None;
         for entry in &entries {
@@ -154,7 +158,7 @@ impl ActiveCovMultipleSubscriptions {
     }
 
     /// The live value for exactly the selected Device and this property.
-    pub(crate) fn resolve(
+    pub fn resolve(
         &self,
         oid: ObjectIdentifier,
         property: PropertyIdentifier,

@@ -72,7 +72,9 @@ fn cov_order_counter_checked_exhaustion_covers_both_modes() {
             .last_notified_observation,
         Some(value(10.0))
     );
-    let flight = table.begin_confirmed(first, [&confirmed], NOW).unwrap();
+    let flight = table
+        .begin_confirmed(first, [(&confirmed, value(0.0))], NOW)
+        .unwrap();
     assert!(
         !table.complete_observation(&confirmed, final_ticket, value(30.0), NOW),
         "mode mismatch fails closed"

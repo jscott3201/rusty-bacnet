@@ -19,7 +19,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::*;
-use crate::life_safety_cov::LifeSafetyCovChange;
+use bacnet_device_core::cov::life_safety::LifeSafetyCovChange;
 
 fn request(
     operation: LifeSafetyOperation,

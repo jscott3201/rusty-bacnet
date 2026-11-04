@@ -340,8 +340,8 @@ async fn subminimum_path_cap_fails_before_registration_or_emission() {
         Err(Error::RoutedPathTooLong { dnet: DNET })
     ));
     assert!(outbound.try_recv().is_err());
-    assert_eq!(client.tsm.lock().await.pending_count(), 0);
-    assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
+    assert_eq!(client.tsm.lock().pending_count(), 0);
+    assert_eq!(client.tsm.lock().coordinated_active_count(), 0);
     client.stop().await.unwrap();
 }
 
@@ -378,8 +378,8 @@ async fn configured_capacity_exhaustion_fails_before_registration_or_emission() 
         })
     ));
     assert!(outbound.try_recv().is_err());
-    assert_eq!(client.tsm.lock().await.pending_count(), 0);
-    assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
+    assert_eq!(client.tsm.lock().pending_count(), 0);
+    assert_eq!(client.tsm.lock().coordinated_active_count(), 0);
     client.stop().await.unwrap();
 }
 
@@ -719,7 +719,7 @@ async fn cancelled_generation_quarantines_delayed_reason_4_before_next_send() {
     inject_simple_ack(&inbound, &router, DNET, &dadr, proof_request.invoke_id).await;
     assert!(proof.await.unwrap().unwrap().is_empty());
 
-    assert_eq!(client.tsm.lock().await.pending_count(), 0);
+    assert_eq!(client.tsm.lock().pending_count(), 0);
     let mut client = Arc::try_unwrap(client).ok().unwrap();
     client.stop().await.unwrap();
 }
