@@ -118,7 +118,8 @@ async fn create_object_and_delete_object_report_the_fault_they_move() {
         object_specifier: ObjectSpecifier::Identifier(msv5()),
         list_of_initial_values: Vec::new(),
     }
-    .encode(&mut body);
+    .encode(&mut body)
+    .unwrap();
     h.request(ConfirmedServiceChoice::CREATE_OBJECT, body).await;
     assert_eq!(flags(&h.cov_notification().await), 0);
     assert_eq!(reliability(&h).await, no_fault());

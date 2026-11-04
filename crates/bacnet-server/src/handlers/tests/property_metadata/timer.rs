@@ -112,7 +112,8 @@ fn rpm_timer_metadata_does_not_enable_create_object() {
             object_specifier,
             list_of_initial_values: vec![],
         }
-        .encode(&mut request);
+        .encode(&mut request)
+        .unwrap();
         let mut response = BytesMut::new();
         let result = handle_create_object(&mut db, &request, &mut response);
         assert!(

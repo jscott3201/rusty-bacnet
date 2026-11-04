@@ -66,7 +66,8 @@ fn wpm(
                 priority,
             },
             &mut bytes,
-        );
+        )
+        .unwrap();
     }
     bacnet_encoding::tags::encode_closing_tag(&mut bytes, 1);
     sourced_wpm(db, &bytes).map(|_| ())

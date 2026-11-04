@@ -51,6 +51,8 @@ alloc_only! {
 }
 
 #[cfg(all(test, feature = "alloc"))]
+mod legacy_event_parameters_tests;
+#[cfg(all(test, feature = "alloc"))]
 mod malformed_member_tests;
 #[cfg(all(test, feature = "alloc"))]
 mod reject_reason_tests;

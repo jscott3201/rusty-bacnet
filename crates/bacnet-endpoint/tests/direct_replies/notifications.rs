@@ -22,7 +22,8 @@ pub(super) fn cov(process: u32) -> Apdu {
             priority: None,
         }],
     }
-    .encode(&mut payload);
+    .encode(&mut payload)
+    .unwrap();
     confirmed(
         ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION,
         process as u8,

@@ -44,7 +44,7 @@ mod property_value;
 pub mod tagged;
 
 pub use property_element::{ConstructedElement, ElementShape, property_element};
-pub use property_value::{PropertyValueBoundary, extract_property_value};
+pub use property_value::{PropertyValueBoundary, check_property_value, extract_property_value};
 
 alloc_only! {
     pub mod access_credential;

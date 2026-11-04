@@ -157,7 +157,7 @@ fn group_present_value(db: &ObjectDatabase, group: ObjectIdentifier) -> Vec<Vec<
         .iter()
         .map(|result| {
             let mut encoded = BytesMut::new();
-            result.encode(&mut encoded);
+            result.encode(&mut encoded).unwrap();
             encoded.to_vec()
         })
         .collect()

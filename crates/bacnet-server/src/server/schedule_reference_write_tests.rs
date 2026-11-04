@@ -314,7 +314,8 @@ async fn a_target_created_later_takes_the_value_as_it_is_created() {
         object_specifier: ObjectSpecifier::Identifier(ao9),
         list_of_initial_values: Vec::new(),
     }
-    .encode(&mut body);
+    .encode(&mut body)
+    .unwrap();
     h.request(ConfirmedServiceChoice::CREATE_OBJECT, body).await;
     tokio::time::timeout(Duration::from_secs(1), async {
         while h.server.database().read().await.get(&ao9).is_none() {

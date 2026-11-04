@@ -167,13 +167,23 @@ fn legacy_event_parameters_wire_write_is_canonicalized() {
     let mut historical = vec![0xfe, 0xff];
     historical.extend_from_slice(&payload);
     historical.extend_from_slice(&[0xff, 0xff]);
-    write_framed(
-        &mut db,
-        oid,
-        PropertyIdentifier::EVENT_PARAMETERS,
-        historical,
-    )
-    .unwrap();
+    // The inner `ff ff 3f` could end the value, so our encoder refuses it
+    // (#2376); an older peer's request carries it as is.
+    let request = WritePropertyRequest {
+        object_identifier: oid,
+        property_identifier: PropertyIdentifier::EVENT_PARAMETERS,
+        property_array_index: None,
+        property_value: historical.clone(),
+        priority: None,
+    };
+    assert!(request.encode(&mut BytesMut::new()).is_err());
+    let mut wire = BytesMut::new();
+    bacnet_encoding::primitives::encode_ctx_object_id(&mut wire, 0, &oid);
+    bacnet_encoding::primitives::encode_ctx_unsigned(&mut wire, 1, 83);
+    bacnet_encoding::tags::encode_opening_tag(&mut wire, 3);
+    wire.extend_from_slice(&historical);
+    bacnet_encoding::tags::encode_closing_tag(&mut wire, 3);
+    handle_write_property(&mut db, &wire).unwrap();
 
     let mut canonical = BytesMut::new();
     bacnet_encoding::primitives::encode_app_octet_string(&mut canonical, &payload);

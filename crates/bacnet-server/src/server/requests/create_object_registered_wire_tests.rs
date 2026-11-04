@@ -28,7 +28,8 @@ fn request(specifier: ObjectSpecifier, values: Vec<(PropertyIdentifier, Property
             })
             .collect(),
     }
-    .encode(&mut bytes);
+    .encode(&mut bytes)
+    .unwrap();
     bytes.freeze()
 }
 

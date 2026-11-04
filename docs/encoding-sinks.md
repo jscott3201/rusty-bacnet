@@ -214,7 +214,10 @@ In `bacnet-services`, `WhoIsRequest`, `IAmRequest` and `ReadPropertyRequest`
 stage their members, at most ten, fifteen and fifteen octets, and make one
 write. `ReadPropertyAckRef` stages its members and the `[3]` opening tag, at
 most sixteen octets, and appends them, the borrowed value and the closing tag
-through `write_parts`. Their `BytesMut` encoders delegate to these and keep
+through `write_parts`. It checks the value first (#2376): a legacy-form
+Event_Parameters value that wouldn't decode back is refused with
+`SinkEncodeError::Refused` and nothing written, and a full sink gives
+`SinkEncodeError::Full`. Their `BytesMut` encoders delegate to these and keep
 their bytes; tests compare them with the member-by-member `BytesMut` encoding
 they replaced.
 

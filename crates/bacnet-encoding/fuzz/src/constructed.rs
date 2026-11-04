@@ -100,10 +100,8 @@ codecs! {
     "ReadAccessSpecification": at(decode_read_access_specification)
         => infallible!(encode_read_access_specification);
     "BACnetEventParameter": at(decode_event_parameter) => buf_first!(encode_event_parameter);
-    "BACnetPropertyValue": at(decode_bacnet_property_value) => |value, buf: &mut bytes::BytesMut| {
-        encode_bacnet_property_value(value, buf);
-        Ok(())
-    };
+    "BACnetPropertyValue": at(decode_bacnet_property_value)
+        => value_first!(encode_bacnet_property_value);
     "BACnetNotificationParameters": |data: &[u8]| {
         decode_notification_parameters(data, 0).map(|value| (value, data.len()))
     } => value_first!(encode_notification_parameters);

@@ -5820,7 +5820,12 @@ request. `EventLogObject::add_record` takes one. The request, its
 are functions in `bacnet_encoding::constructed`: `encode_event_notification` /
 `decode_event_notification`, `encode_notification_parameters` /
 `decode_notification_parameters`, and `encode_bacnet_property_value` /
-`decode_bacnet_property_value`. `decode_event_notification_tolerant` reads a
+`decode_bacnet_property_value`. Every encoder that writes a property value
+(`encode_bacnet_property_value` and the ReadProperty-ACK, WriteProperty,
+ReadPropertyMultiple-ACK, WritePropertyMultiple, CreateObject and COV
+notification encoders) returns a `Result` and refuses a
+legacy-form Event_Parameters value that wouldn't decode back as itself
+(`check_property_value`, #2376). `decode_event_notification_tolerant` reads a
 request whose message text doesn't decode (a character set the stack doesn't
 support, for one) with no message text; the client uses it for received
 notifications and `decode_event_log_record` for a record's notification, which

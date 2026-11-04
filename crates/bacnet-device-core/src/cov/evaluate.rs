@@ -146,14 +146,18 @@ pub fn evaluate<L>(
             continue;
         }
         let mut params = BytesMut::new();
-        COVNotificationRequest {
+        let notification = COVNotificationRequest {
             subscriber_process_identifier: sub.subscriber_process_identifier,
             initiating_device_identifier: evaluation.device,
             monitored_object_identifier: sub.monitored_object_identifier,
             time_remaining,
             list_of_values: values,
+        };
+        // A value the encoder refuses (a legacy-form Event_Parameters value
+        // that wouldn't decode back, #2376) can't be reported.
+        if notification.encode(&mut params).is_err() {
+            continue;
         }
-        .encode(&mut params);
         let octets = params.len()
             + if sub.issue_confirmed_notifications {
                 CONFIRMED_HEADER

@@ -191,7 +191,7 @@ impl RpmPlan {
                 let requested_index = row.reference.property_array_index;
                 let result = read_row(db, overlay, object, row);
                 let mut encoded = BytesMut::new();
-                result.encode(&mut encoded);
+                result.encode(&mut encoded).map_err(ReadFailure::Service)?;
                 scratch.append(&encoded, footer.len())?;
                 completed(
                     spec.lookup_oid,

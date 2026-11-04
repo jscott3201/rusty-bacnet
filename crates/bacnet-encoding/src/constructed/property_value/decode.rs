@@ -89,7 +89,8 @@ fn error_offset(error: &Error, fallback: usize) -> usize {
 /// Decode a property value at `offset` in `data`; returns it and the offset just past it.
 ///
 /// The value may be followed by the end of the input, the next value's
-/// context `[0]`, or a context `[3]` that runs to the end.
+/// context `[0]`, or its priority, a context `[3]`, which the next value may
+/// follow too (#2376).
 pub fn decode_bacnet_property_value(
     data: &[u8],
     offset: usize,
@@ -100,7 +101,7 @@ pub fn decode_bacnet_property_value(
         &[
             PropertyValueBoundary::End,
             PropertyValueBoundary::Context(0),
-            PropertyValueBoundary::ContextToEnd(3),
+            PropertyValueBoundary::Context(3),
         ],
     )
 }

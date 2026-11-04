@@ -48,7 +48,7 @@ async fn remote_property_error_and_malformed_value_exit_unsuccessfully() {
                 property_value: vec![0x44, 0x42],
             };
             let mut service = BytesMut::new();
-            ack.encode(&mut service);
+            ack.encode(&mut service).unwrap();
             Apdu::ComplexAck(ComplexAck {
                 segmented: false,
                 more_follows: false,
