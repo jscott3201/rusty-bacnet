@@ -145,6 +145,25 @@ fn what_kind_5_refuses() {
         SnapshotErrorKind::OtherObject
     );
     assert_eq!(patched(wrapped, 9), SnapshotErrorKind::UnknownKind(9));
+
+    // A whole kind 1 body (the set alone) wrapped, sealed afresh: only the
+    // guard refuses it, since kind 1 on its own still decodes.
+    let mut body = octets[super::framing::HEADER_LEN..].to_vec();
+    body[wrapped - super::framing::HEADER_LEN] = write_config::KIND_TIMER_SET_ONLY;
+    // Drop Default_Timeout: its presence octet and its eight-octet value.
+    body.truncate(body.len() - 9);
+    let set_only = super::framing::seal(&write_config::MAGIC, object, &body);
+    assert_eq!(
+        write_config::decode(object, &set_only).unwrap_err().kind(),
+        SnapshotErrorKind::Damaged
+    );
+    // The same body unwrapped is a kind 1 file that still loads.
+    let plain = super::framing::seal(
+        &write_config::MAGIC,
+        object,
+        &body[wrapped - super::framing::HEADER_LEN..],
+    );
+    assert!(write_config::decode(object, &plain).is_ok());
 }
 
 /// A kind 5 file cut anywhere is refused, and so is one with octets past

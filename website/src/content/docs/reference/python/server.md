@@ -977,9 +977,10 @@ With `storage_path` the Timer keeps in that file what a peer writes
 to State\_Change\_Values, List\_Of\_Object\_Property\_References (with
 Priority\_For\_Writing), Default\_Timeout and Description, and a saved
 write wins over the keywords at the next start; such a write is refused when it can't
-be saved. `clear_written_config=True` drops what was saved first,
-so the keywords apply again. A file that doesn't load raises
-BacnetError.
+be saved, and a Description past 16 KiB is refused with RESOURCES /
+NO\_SPACE\_TO\_WRITE\_PROPERTY. `clear_written_config=True` drops what
+was saved first, so the keywords apply again. A file that doesn't
+load raises BacnetError.
 
 ### BACnetServer.add_load_control
 
@@ -1185,9 +1186,10 @@ With `storage_path` the Channel keeps in that file what a peer
 writes to its members, Execution\_Delay, Channel\_Number,
 Control\_Groups, Allow\_Group\_Delay\_Inhibit and Description, and each
 saved write wins over its argument at the next start; such a write is refused
-when it can't be saved. `clear_written_config=True` drops what was
-saved first, so the arguments apply again. A file that doesn't load
-raises BacnetError.
+when it can't be saved, and a Description past 16 KiB is refused with
+RESOURCES / NO\_SPACE\_TO\_WRITE\_PROPERTY. `clear_written_config=True`
+drops what was saved first, so the arguments apply again. A file
+that doesn't load raises BacnetError.
 
 ### BACnetServer.add_life_safety_point
 

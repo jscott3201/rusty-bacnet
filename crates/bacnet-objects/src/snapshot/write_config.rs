@@ -36,6 +36,8 @@
 //!   reads it; one holding a Description is refused there as an unknown
 //!   kind.
 //!
+//! Every length and count above is four octets, big-endian.
+//!
 //! A kind must match the object's type, and an unknown kind is refused, so
 //! a later kind can be added without a new magic tag.
 

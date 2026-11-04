@@ -13,6 +13,7 @@ use super::write_config_durable_tests::{self as config, ConfigStorage};
 use super::*;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::WriteAccessSpecification;
+use bacnet_services::write_property::WritePropertyRequest;
 use std::sync::atomic::Ordering;
 
 use PropertyIdentifier as P;
@@ -100,13 +101,28 @@ async fn a_write_property_multiple_with_description_saves_once_on_each_type() {
     }
 }
 
-/// A NULL to Description succeeds, changes nothing and saves nothing.
+/// A NULL to Description succeeds, changes nothing and saves nothing, on
+/// every type that keeps Description.
 #[tokio::test(start_paused = true)]
 async fn a_null_description_saves_nothing() {
-    for kind in [ObjectType::ANALOG_VALUE, ObjectType::ALERT_ENROLLMENT] {
+    for (kind, instance, _, _) in objects() {
         let storage = Arc::new(ConfigStorage::default());
         let fixture = served_by(kind, &storage).await;
-        let request = write_property(kind, P::DESCRIPTION, None, value(PropertyValue::Null));
+        let request = if instance == INSTANCE {
+            write_property(kind, P::DESCRIPTION, None, value(PropertyValue::Null))
+        } else {
+            let mut request = BytesMut::new();
+            WritePropertyRequest {
+                object_identifier: oid(kind, instance),
+                property_identifier: P::DESCRIPTION,
+                property_array_index: None,
+                property_value: value(PropertyValue::Null),
+                priority: None,
+            }
+            .encode(&mut request)
+            .unwrap();
+            request.freeze()
+        };
         let response = wire(&fixture, ConfirmedServiceChoice::WRITE_PROPERTY, request).await;
         assert_eq!(response, SIMPLE_ACK_WRITE, "{kind:?}");
         assert_eq!(storage.saves.load(Ordering::SeqCst), 0, "{kind:?}");

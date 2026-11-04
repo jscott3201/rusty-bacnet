@@ -5451,9 +5451,10 @@ class BACnetServer:
         to State_Change_Values, List_Of_Object_Property_References (with
         Priority_For_Writing), Default_Timeout and Description, and a saved
         write wins over the keywords at the next start; such a write is refused when it can't
-        be saved. ``clear_written_config=True`` drops what was saved first,
-        so the keywords apply again. A file that doesn't load raises
-        BacnetError.
+        be saved, and a Description past 16 KiB is refused with RESOURCES /
+        NO_SPACE_TO_WRITE_PROPERTY. ``clear_written_config=True`` drops what
+        was saved first, so the keywords apply again. A file that doesn't
+        load raises BacnetError.
         """
         ...
     def add_load_control(self, instance: int, name: str) -> None: ...
@@ -5636,9 +5637,10 @@ class BACnetServer:
         writes to its members, Execution_Delay, Channel_Number,
         Control_Groups, Allow_Group_Delay_Inhibit and Description, and each
         saved write wins over its argument at the next start; such a write is refused
-        when it can't be saved. ``clear_written_config=True`` drops what was
-        saved first, so the arguments apply again. A file that doesn't load
-        raises BacnetError.
+        when it can't be saved, and a Description past 16 KiB is refused with
+        RESOURCES / NO_SPACE_TO_WRITE_PROPERTY. ``clear_written_config=True``
+        drops what was saved first, so the arguments apply again. A file
+        that doesn't load raises BacnetError.
         """
         ...
 

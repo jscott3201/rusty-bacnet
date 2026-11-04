@@ -3862,7 +3862,8 @@ server.add_staging(
 State_Change_Values, List_Of_Object_Property_References (with
 Priority_For_Writing), Default_Timeout (#2312) and Description (#2364). Each write is saved before
 it is answered, and refused with DEVICE / OPERATIONAL_PROBLEM when the save
-fails. At the next start a saved write wins over the keywords;
+fails; a Description past 16 KiB is refused with RESOURCES /
+NO_SPACE_TO_WRITE_PROPERTY. At the next start a saved write wins over the keywords;
 `clear_written_config=True` drops what was saved, so they apply again.
 `add_channel` takes the same two keywords (see [Channels](#channels)).
 
