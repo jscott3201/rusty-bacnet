@@ -15,6 +15,7 @@
   "homepage": "https://jscott3201.github.io/rusty-bacnet/",
   "documentation": "https://jscott3201.github.io/rusty-bacnet/guides/mcp-hosts/",
   "support": "https://github.com/jscott3201/rusty-bacnet/issues",
+  "icon": "icon.png",
   "server": {
     "type": "binary",
     "mcp_config": {

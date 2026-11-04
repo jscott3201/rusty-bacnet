@@ -1,10 +1,15 @@
 //! Complete source profile preflight, before mutation or ingress ownership.
 use super::*;
 use bacnet_objects::property_metadata::has_property;
-/// Check a builder's link bindings against the node's own `local` MAC
-/// before any I/O, as [`EndpointSession::start`] will (#2357).
+/// A builder's routed source Audit bindings: Device, network, MAC there.
+pub(crate) type RoutedBindings = Vec<(ObjectIdentifier, u16, bacnet_types::MacAddr)>;
+
+/// Check a builder's link bindings against the node's own `local` MAC, and
+/// its routed ones, before any I/O, as [`EndpointSession::start`] will
+/// (#2357, #2371).
 pub(crate) fn check_link_bindings(
     bindings: &[(ObjectIdentifier, bacnet_types::MacAddr)],
+    routed: &[(ObjectIdentifier, u16, bacnet_types::MacAddr)],
     local: &[u8],
 ) -> Result<(), Error> {
     crate::source_audit::recipient::SourceRoutes::for_link(
@@ -13,7 +18,8 @@ pub(crate) fn check_link_bindings(
             local: bacnet_types::MacAddr::from_slice(local),
             groups: bacnet_transport::port::GroupDestinations::unknown(),
         },
-    )
+    )?
+    .bind_routed(routed)
     .map(drop)
 }
 
@@ -85,13 +91,56 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         self
     }
 
-    /// Hand a builder's link bindings to the session.
+    /// Bind a Device behind a router, on `network` at `mac` there, for
+    /// source Audit delivery to that Device (#2371), on any link, IPv4 B/IP
+    /// included. Its records go with DNET/DADR through the router that
+    /// reaches `network`, which the session learns from traffic back from
+    /// that network (an answer it admits, or a request from a station
+    /// there) or from an I-Am-Router-To-Network listing it; until then, and
+    /// after a delivery through the learned router is lost (no answer in
+    /// time, or a failed send), they go with the link's broadcast MAC
+    /// (Clause 6.5.3). A confirmed record's answer comes back through the
+    /// router, naming `network` and `mac` as its source. A failed delivery
+    /// counts and sets the Reporter's Reliability as a direct one does. Once the session's
+    /// own network number is `network`, the binding is a direct one to
+    /// `mac` on the link, by the link's unicast rule.
+    ///
+    /// `mac` is in the format of `network`'s link, which may differ from
+    /// this one's, so only its length is checked: 1 to 18 octets, what a
+    /// DADR carries. [`start`](Self::start) refuses, with SERVICES /
+    /// SERVICE_REQUEST_DENIED, network 0 (an address's name for the local
+    /// network), the global network 65535, and an empty or longer MAC, and
+    /// refuses a non-Device or wildcard identifier or a Device bound twice,
+    /// here or by [`with_source_audit_device_binding`]. Route data only:
+    /// provision the recipient on the Device itself.
+    ///
+    /// [`with_source_audit_device_binding`]: Self::with_source_audit_device_binding
+    ///
+    /// # Panics
+    /// Panics if startup has already consumed the session configuration.
+    pub fn with_source_audit_routed_device_binding(
+        mut self,
+        device: ObjectIdentifier,
+        network: u16,
+        mac: bacnet_types::MacAddr,
+    ) -> Self {
+        self.assert_configurable();
+        self.source_audit_routed_bindings
+            .push((device, network, mac));
+        self
+    }
+
+    /// Hand a builder's link and routed bindings to the session.
     pub(crate) fn with_source_audit_device_bindings(
         mut self,
         bindings: Vec<(ObjectIdentifier, bacnet_types::MacAddr)>,
+        routed: RoutedBindings,
     ) -> Self {
         for (device, mac) in bindings {
             self = self.with_source_audit_device_binding(device, mac);
+        }
+        for (device, network, mac) in routed {
+            self = self.with_source_audit_routed_device_binding(device, network, mac);
         }
         self
     }
@@ -114,7 +163,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                             .into(),
                     ));
                 }
-                SourceRoutes::new(&self.source_audit_bindings, broadcast)
+                SourceRoutes::new(&self.source_audit_bindings, broadcast)?
+                    .bind_routed(&self.source_audit_routed_bindings)
             }
             None => {
                 if !self.source_audit_bindings.is_empty() {
@@ -128,7 +178,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 SourceRoutes::for_link(
                     &self.source_audit_link_bindings,
                     SourceLink::Other { local, groups },
-                )
+                )?
+                .bind_routed(&self.source_audit_routed_bindings)
             }
         }
     }

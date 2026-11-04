@@ -680,9 +680,7 @@ async fn a_call_racing_stop_leaves_the_status_clear() {
                     broadcast: false,
                 };
                 let datagram = Datagram::new(&frame, peer, Some(to));
-                let received =
-                    node.link()
-                        .receive(&datagram, bacnet_bip_core::Instant::ZERO, &mut Permissive);
+                let received = node.link().receive(&datagram, &mut Permissive);
                 let Received::Response(response) = received else {
                     panic!("{received:?}");
                 };

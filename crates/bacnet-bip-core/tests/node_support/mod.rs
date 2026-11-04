@@ -109,16 +109,12 @@ pub fn receive<'d>(
     source: SocketAddrV4,
     to: Addressed,
 ) -> Received<'d> {
-    link.receive(
-        &datagram(payload, source, to),
-        Instant::ZERO,
-        &mut Permissive,
-    )
+    link.receive(&datagram(payload, source, to), &mut Permissive)
 }
 
 /// What `link` makes of `datagram` with a permissive policy.
 pub fn receive_datagram<'d>(link: &Link, datagram: &Datagram<'d>) -> Received<'d> {
-    link.receive(datagram, Instant::ZERO, &mut Permissive)
+    link.receive(datagram, &mut Permissive)
 }
 
 /// `millis` milliseconds after the epoch.
@@ -172,7 +168,7 @@ impl Recording {
 }
 
 impl Policy for Recording {
-    fn admit_management(&mut self, _: SocketAddrV4, function: BvlcFunction, _: Instant) -> bool {
+    fn admit_management(&mut self, _: SocketAddrV4, function: BvlcFunction) -> bool {
         self.asked.push(function);
         self.admit
     }

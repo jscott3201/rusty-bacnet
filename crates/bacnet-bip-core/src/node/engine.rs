@@ -140,7 +140,7 @@ impl<const X: usize> Node<X> {
         policy: &mut impl Policy,
     ) -> Inbound<'d> {
         let now = self.catch_up(now, false);
-        let inbound = match self.link.receive(datagram, now, policy) {
+        let inbound = match self.link.receive(datagram, policy) {
             Received::Deliver(delivery) => Inbound::Deliver(delivery),
             Received::Nak {
                 to,

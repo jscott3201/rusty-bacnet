@@ -82,9 +82,10 @@ async fn source_read_filters_priority_independence_and_unsupported_destinations(
         bacnet_endpoint_core::endpoint_ingress::EndpointApduDestination::Direct {
             destination_mac: MacAddr::from_slice(&encode_bip_mac([255; 4], 47808)),
         },
+        // A routed station is audited (#2371), but not the global network.
         bacnet_endpoint_core::endpoint_ingress::EndpointApduDestination::Routed {
             router_mac: MacAddr::from_slice(peer.local_mac()),
-            destination_network: 7,
+            destination_network: 0xFFFF,
             destination_mac: MacAddr::from_slice(&[2]),
         },
     ] {

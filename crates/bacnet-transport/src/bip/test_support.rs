@@ -5,10 +5,10 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddrV4};
 use std::sync::{Arc, Mutex};
 
 use bacnet_bip_codec::BvlcFunction;
+use bacnet_bip_core::LocalSubnet;
 use bacnet_bip_core::node::{
     Addressed, Datagram, Discard, Link, LocalAddresses, Mode, Permissive, Received,
 };
-use bacnet_bip_core::{Instant as CoreInstant, LocalSubnet};
 use tokio::sync::mpsc;
 
 use super::BipSocket;
@@ -77,7 +77,7 @@ pub(super) fn admitted_delivery(
         SocketAddrV4::new(Ipv4Addr::new(198, 51, 100, 7), 0xBAC0),
         Some(Addressed::classify(destination, os_group_delivery, &local)),
     );
-    let received = link.receive(&datagram, CoreInstant::ZERO, &mut Permissive);
+    let received = link.receive(&datagram, &mut Permissive);
     (received != Received::Discarded(Discard::DestinationMismatch)).then_some(())
 }
 
