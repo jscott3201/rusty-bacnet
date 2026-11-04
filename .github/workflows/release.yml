@@ -613,44 +613,65 @@ jobs:
         run: bash scripts/release/publish_crates.sh --dry-run
       # MCP bundle signatures, for information (#2324): a dry run has no
       # signing key, so each bundle is reported unsigned. Only a malformed
-      # signature block fails.
+      # signature block fails; a tool that doesn't install is a warning.
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        continue-on-error: true
+        timeout-minutes: 4
         with:
           node-version: '24'
       - name: The MCP Bundle CLI (pinned by its lockfile)
+        continue-on-error: true
+        timeout-minutes: 4
         run: npm ci --prefix scripts/release/mcpb/tool --ignore-scripts --no-audit --no-fund
       - name: MCP bundle signatures (information)
+        timeout-minutes: 4
         run: |
           mcpb=scripts/release/mcpb/tool/node_modules/.bin/mcpb
+          if [ ! -x "$mcpb" ]; then
+            echo "::warning::the MCP Bundle CLI didn't install; a release would publish its bundles unsigned"
+          fi
           for bundle in release/*.mcpb; do
             read -r state _ < <(python3 -I scripts/release/mcpb.py signature "$bundle")
             if [ "$state" = malformed ]; then
               echo "::error::$bundle ends with a malformed signature block"
               exit 1
             fi
-            "$mcpb" info "$bundle"
-            if "$mcpb" verify "$bundle"; then verdict=passes; else verdict=fails; fi
+            if [ ! -x "$mcpb" ]; then
+              verdict="wasn't run"
+            else
+              "$mcpb" info "$bundle" || true
+              if "$mcpb" verify "$bundle"; then verdict=passes; else verdict=fails; fi
+            fi
             if python3 -I scripts/release/mcpb.py trailer "$bundle"; then zip=takes; else zip="refuses (mcpb#278)"; fi
             echo "::notice::${bundle#release/} is $state; mcpb verify $verdict; a strict zip reader $zip it"
           done
 
   # Signs each MCP bundle when the release environment holds a certificate
-  # (#2324), which is optional, and never stops a release: without the
-  # secrets, or when a bundle's signing fails or leaves a zip a strict reader
-  # refuses (modelcontextprotocol/mcpb#278), the unsigned bundle is
-  # published, with a notice or a warning. Signing only appends a block, and
-  # the bundle before it must keep the bytes the checks and smoke tests
+  # (#2324), which is optional. No signing failure stops a release: without
+  # the secrets, or when a bundle's signing fails or leaves a zip a strict
+  # reader refuses (modelcontextprotocol/mcpb#278), the unsigned bundle is
+  # published, with a notice or a warning. Each bundle is signed as a copy
+  # outside release/, which takes it only once every check passed, so a step
+  # that stops or times out part way leaves the unsigned bundle. Signing may
+  # append a block and raise the comment length to count it, nothing more:
+  # the bundle under the block must keep the bytes the checks and smoke tests
   # passed. mcpb verify's answer is a notice: it passes only for a chain the
   # OS trusts for code signing, and on Linux never (mcpb 2.1.2 asks OpenSSL
   # for the purpose "codesigning", which OpenSSL names "codesign" from 3.2),
-  # so the job runs on macOS. The GitHub draft and release publish its
-  # output. See docs/ci.md, "Signing the MCP bundles".
+  # so the job runs on macOS. The job itself fails closed, so the GitHub
+  # draft and everything after it wait for a re-run, when the job times out,
+  # a checkout, download or upload fails, or the last step finds a bundle
+  # that isn't the unsigned one or that one correctly signed. The GitHub
+  # draft and release publish its output. See docs/ci.md, "Signing the MCP
+  # bundles".
   mcpb-sign:
     name: Sign the MCP bundles
     needs: [validate, ci-gate, verify, smoke]
     if: needs.validate.outputs.publish == 'true'
     runs-on: macos-26
-    timeout-minutes: 15
+    # The other steps' own limits add up to 17 minutes; the rest is for the
+    # checkout, the download and the upload.
+    timeout-minutes: 30
     environment:
       name: release
     permissions:
@@ -666,16 +687,26 @@ jobs:
         with:
           name: release-assets
           path: release
-      # A failure here leaves the bundles unsigned, not the release stopped.
+      - name: Record the unsigned bundles
+        timeout-minutes: 2
+        run: |
+          for bundle in release/*.mcpb; do
+            read -r state digest < <(python3 -I scripts/release/mcpb.py signature "$bundle")
+            printf '%s %s %s\n' "${bundle#release/}" "$state" "$digest"
+          done >"$RUNNER_TEMP/mcpb-unsigned.txt"
+      # A failure or timeout here leaves the bundles unsigned, not the release stopped.
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         continue-on-error: true
+        timeout-minutes: 4
         with:
           node-version: '24'
       - name: The MCP Bundle CLI (pinned by its lockfile)
         continue-on-error: true
+        timeout-minutes: 4
         run: npm ci --prefix scripts/release/mcpb/tool --ignore-scripts --no-audit --no-fund
       - name: Sign each bundle, when a certificate is configured
         continue-on-error: true
+        timeout-minutes: 5
         env:
           MCPB_SIGNING_KEY: ${{ secrets.MCPB_SIGNING_KEY }}
           MCPB_SIGNING_CERT: ${{ secrets.MCPB_SIGNING_CERT }}
@@ -707,36 +738,58 @@ jobs:
           mcpb=scripts/release/mcpb/tool/node_modules/.bin/mcpb
           for bundle in release/*.mcpb; do
             name=${bundle#release/}
+            # Signed as a copy: release/ keeps the unsigned bundle until the
+            # signed one has passed every check.
+            signing="$keys/$name"
             read -r state before < <(python3 -I scripts/release/mcpb.py signature "$bundle")
             if [ "$state" != unsigned ]; then
               echo "::warning::$name is $state before signing; it is published as it is"
               continue
             fi
-            cp "$bundle" "$keys/unsigned.mcpb"
-            if ! "$mcpb" sign "$bundle" --cert "$keys/cert.pem" --key "$keys/key.pem" "${chain[@]}"; then
-              cp "$keys/unsigned.mcpb" "$bundle"
+            cp "$bundle" "$signing"
+            if ! "$mcpb" sign "$signing" --cert "$keys/cert.pem" --key "$keys/key.pem" "${chain[@]}"; then
               echo "::warning::mcpb sign failed on $name; it is published unsigned"
               continue
             fi
-            read -r state after < <(python3 -I scripts/release/mcpb.py signature "$bundle")
+            # The bundle under the block, with the comment length put back, must be the unsigned one.
+            read -r state after < <(python3 -I scripts/release/mcpb.py signature "$signing")
             if [ "$state" != signed ] || [ "$after" != "$before" ]; then
-              cp "$keys/unsigned.mcpb" "$bundle"
               echo "::warning::signing $name changed more than its appended block; it is published unsigned"
               continue
             fi
             # A strict zip reader, Claude Desktop's among them, refuses a block
             # the end-of-central-directory record doesn't declare
             # (modelcontextprotocol/mcpb#278); never publish one.
-            if ! python3 -I scripts/release/mcpb.py trailer "$bundle"; then
-              cp "$keys/unsigned.mcpb" "$bundle"
+            if ! python3 -I scripts/release/mcpb.py trailer "$signing"; then
               echo "::warning::signed $name would be refused by strict zip readers such as Claude Desktop"\
                 "(modelcontextprotocol/mcpb#278); it is published unsigned"
               continue
             fi
-            "$mcpb" info "$bundle"
-            if "$mcpb" verify "$bundle"; then verdict=passes; else verdict="fails (a chain macOS doesn't trust)"; fi
+            "$mcpb" info "$signing" || true
+            if "$mcpb" verify "$signing"; then verdict=passes; else verdict="fails (a chain macOS doesn't trust)"; fi
+            mv "$signing" "$bundle"
             echo "::notice::$name is signed; mcpb verify $verdict"
           done
+      # Fails the job, and so holds the release for a re-run, if a bundle is
+      # neither the unsigned one nor that one signed with a block a strict
+      # zip reader takes: what a signing step stopped part way could leave.
+      - name: Every bundle is the unsigned one, or that one correctly signed
+        timeout-minutes: 2
+        run: |
+          failed=0
+          while read -r name state digest; do
+            bundle="release/$name"
+            read -r now now_digest < <(python3 -I scripts/release/mcpb.py signature "$bundle") || true
+            if [ "$now_digest" != "$digest" ]; then
+              echo "::error::$name isn't the bundle the checks and smoke tests passed"
+              failed=1
+            elif [ "$now" != "$state" ] && { [ "$state" != unsigned ] || [ "$now" != signed ] ||
+                ! python3 -I scripts/release/mcpb.py trailer "$bundle"; }; then
+              echo "::error::$name went from $state to $now, or a strict zip reader refuses it"
+              failed=1
+            fi
+          done <"$RUNNER_TEMP/mcpb-unsigned.txt"
+          exit "$failed"
       # What the GitHub draft and release publish: the release's files, with
       # the MCP bundles signed or not.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

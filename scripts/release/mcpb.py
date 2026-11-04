@@ -32,7 +32,9 @@ field for the architecture, so the file name says it.
   bundle is checked without its signature block.
 - `signature` says whether a bundle is unsigned, signed or ends with a
   malformed `mcpb sign` block, and gives the sha256 of the bundle without the
-  block, so the release can check that signing only appended it (#2324).
+  block (and with the comment length a signer that fixes mcpb#278 raises
+  put back), so the release can check that signing only appended it
+  (#2324).
 - `trailer` checks that a strict zip reader takes the bundle's end: the
   end-of-central-directory record's comment length must count every byte
   after it, which `mcpb sign` 2.1.2 doesn't do (mcpb#278). The signature itself is
@@ -280,7 +282,10 @@ def split_signature(data):
     """(the bundle without its signature block, its state): "unsigned" when
     it doesn't end with the footer, "signed" when it ends with one whole
     block, and "malformed" when it ends with the footer but the last header
-    before it, or the length that follows, doesn't make one block."""
+    before it, or the length that follows, doesn't make one block. A signed
+    bundle comes back as it was before signing: without the block, and with
+    the comment length the signer may have raised to count it put back
+    (`_undeclare`)."""
     if not data.endswith(SIGNATURE_FOOTER):
         return data, "unsigned"
     end = len(data) - len(SIGNATURE_FOOTER)
@@ -290,11 +295,35 @@ def split_signature(data):
         return data, "malformed"
     if start + 4 + int.from_bytes(data[start:start + 4], "little") != end:
         return data, "malformed"
-    return data[:header], "signed"
+    return _undeclare(data[:header]), "signed"
 
 
 EOCD = b"PK\x05\x06"
 EOCD_SIZE = 22
+
+
+def _last_eocd(data):
+    """Where a strict reader finds the end-of-central-directory record: the
+    last record magic within a full comment's reach of the end, plus 1 MiB
+    for a block appended undeclared; -1 when there is none, or the record
+    there is cut short."""
+    eocd = data.rfind(EOCD, max(0, len(data) - EOCD_SIZE - 0xFFFF - 1024 * 1024))
+    return eocd if eocd >= 0 and eocd + EOCD_SIZE <= len(data) else -1
+
+
+def _undeclare(content):
+    """`content` with its last end-of-central-directory record's comment
+    length set back to the comment it holds. A signer that fixes mcpb#278
+    (modelcontextprotocol/mcpb#204, unreleased after 2.1.2) adds its block's
+    length to that field, which sits before the block, so without this the
+    bundle under the block never matches the unsigned one. The trailer check
+    still requires the field the signer wrote to count every byte after the
+    record."""
+    eocd = _last_eocd(content)
+    comment = len(content) - eocd - EOCD_SIZE
+    if eocd < 0 or comment > 0xFFFF:
+        return content
+    return content[:eocd + 20] + comment.to_bytes(2, "little") + content[eocd + 22:]
 
 
 def trailer_errors(data):
@@ -306,9 +335,8 @@ def trailer_errors(data):
     (modelcontextprotocol/mcpb#278), which Claude Desktop refuses ("Invalid
     comment length"). This only checks; it never rewrites the record.
     """
-    start = max(0, len(data) - EOCD_SIZE - 0xFFFF - 1024 * 1024)
-    eocd = data.rfind(EOCD, start)
-    if eocd < 0 or eocd + EOCD_SIZE > len(data):
+    eocd = _last_eocd(data)
+    if eocd < 0:
         return ["has no end-of-central-directory record"]
     declared = int.from_bytes(data[eocd + 20:eocd + 22], "little")
     after = len(data) - eocd - EOCD_SIZE

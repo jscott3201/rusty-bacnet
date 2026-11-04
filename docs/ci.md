@@ -2067,7 +2067,7 @@ waits for them (see [CI gate](#ci-gate)).
 | Smoke test (Linux x86_64, Linux aarch64, macOS arm64, macOS x86_64, Windows x86_64) | Each platform's wheels and CLI, run on that platform. See [Smoke tests](#smoke-tests). |
 | Publish plan (dry run) | Dry runs only, read only: `release_api.py plan`, `publish_crates.sh --dry-run`, and, for information, each MCP bundle's signature state and `mcpb verify`'s answer. See [Publish plan](#publish-plan-dry-run). |
 | PyPI trusted publishing | Releases only, in the `release` environment, as soon as Validate passes: exchanges the job's OIDC token for a PyPI upload token, which proves PyPI's trusted publisher matches this workflow. The minted token is masked at once, never printed and discarded. See [Secrets and environment](#secrets-and-environment). |
-| Sign the MCP bundles | Releases only, in the `release` environment, on macOS: when the environment holds a signing certificate, `mcpb sign` on each bundle; then the `release-assets-published` artifact, signed or not. It never stops a release. See [Signing the MCP bundles](#signing-the-mcp-bundles). |
+| Sign the MCP bundles | Releases only, in the `release` environment, on macOS: when the environment holds a signing certificate, `mcpb sign` on a copy of each bundle; then the `release-assets-published` artifact, signed or not. A signing failure publishes the bundle unsigned; a timeout, a failed checkout, download or upload, or a bundle left in neither state fails the job, which holds the release until it is re-run. See [Signing the MCP bundles](#signing-the-mcp-bundles). |
 | GitHub draft | `release_api.py stage`: makes the tag's GitHub draft hold exactly the `release-assets-published` files and their `SHA256SUMS`. See [Draft, then publish](#draft-then-publish). |
 | Publish to crates.io | `publish_crates.sh`: one multi-package `cargo publish --no-verify` of the crates whose version isn't on crates.io yet. Cargo orders them and waits for the index. |
 | Publish to PyPI | `pypa/gh-action-pypi-publish` with trusted publishing: the wheels and the sdist. |
@@ -2090,12 +2090,14 @@ with its executable byte for byte the CLI binary of its platform (see
 **Order.** The publish jobs run only for a tag, and only after Validate, the
 CI gate, the artifact check and every smoke test passed. They run one at a
 time in the order above, so a failure stops the jobs after it. Signing the
-MCP bundles comes first and never fails a release. The GitHub draft comes
-next because it is the one reversible step: it shows that GitHub
-takes the release before crates.io and PyPI, which can't be undone. crates.io
-also waits for the PyPI trusted publishing check, so a PyPI publisher that
-doesn't match stops the release before anything is published. The draft
-is published last, so the release page and `releases/latest` show the
+MCP bundles comes first; a signing failure only leaves the bundles
+unsigned, but the job's own failures stop the release before anything is
+published (see [Signing the MCP bundles](#signing-the-mcp-bundles)). The
+GitHub draft comes next because it is the one reversible step: it shows
+that GitHub takes the release before crates.io and PyPI, which can't be
+undone. crates.io also waits for the PyPI trusted publishing check, so a
+PyPI publisher that doesn't match stops the release before anything is
+published. The draft is published last, so the release page and `releases/latest` show the
 release only once its crates and wheels are out.
 
 Release builds use no Rust cache: every build starts from the pinned
@@ -2577,39 +2579,57 @@ releases](https://www.tcpdump.org/) and their security fixes, and bump
 
 Signing is optional (#2324): a release signs its MCP bundles only when the
 `release` environment holds a signing certificate, and publishes them
-unsigned otherwise, as before. The Sign the MCP bundles job never stops a
-release:
+unsigned otherwise, as before. No signing failure stops a release:
 
 - **No certificate.** Without `MCPB_SIGNING_KEY` and `MCPB_SIGNING_CERT`, it
   signs nothing, says so in a notice, and the release publishes the unsigned
   bundles.
-- **A certificate.** It runs `mcpb sign` on each bundle, which appends a
-  block: the header `MCPB_SIG_V1`, a 4-byte length, a detached PKCS#7
-  signature (SHA-256) over the bundle's bytes with the certificate and any
-  intermediates, and the footer `MCPB_SIG_END`. The zip is unchanged, and the
-  job checks that: the bundle before the block must have the sha256 it had
-  before signing (`mcpb.py signature`), and a strict zip reader must take
-  the result (`mcpb.py trailer`: the end-of-central-directory record's
-  comment length counts every byte after it). A bundle whose signing fails,
-  changes more than that, or fails the zip check is put back unsigned with a
-  warning. `mcpb verify`'s
-  answer is a notice, never a failure.
-- **Any other failure** of the job's steps (Node.js, the tool install, the
-  signing step) leaves the bundles as they were, unsigned.
+- **A certificate.** It runs `mcpb sign` on a copy of each bundle, outside
+  `release/`. `mcpb sign` appends a block: the header `MCPB_SIG_V1`, a 4-byte
+  length, a detached PKCS#7 signature (SHA-256) over the bundle's bytes with
+  the certificate and any intermediates, and the footer `MCPB_SIG_END`. A
+  signer that fixes mcpb#278 also raises the comment length in the zip's
+  end-of-central-directory record to count the block, so that strict zip
+  readers take it. That field sits before the block, and nothing else in
+  the zip may change. The job checks both: the bundle before the block, with
+  the comment length put back to the comment it holds, must have the sha256
+  it had before signing (`mcpb.py signature`), and a strict zip reader must
+  take the signed bundle (`mcpb.py trailer`: the comment length counts every
+  byte after the record). Only a copy that passes both replaces the bundle
+  in `release/`. One whose signing fails, changes more than that, or fails
+  the zip check is dropped, and the unsigned bundle is published, with a
+  warning. `mcpb verify`'s answer is a notice, never a failure.
+- **A failing tool step** (Node.js, the tool install, the signing step,
+  each with its own time limit) leaves the bundles unsigned. So does a step
+  that stops part way, since `release/` takes a signed copy only after its
+  checks.
+- **What fails the job.** The job's time limit, a failed checkout,
+  download or upload, or its last step, which fails when a bundle in
+  `release/` is neither the one the checks and smoke tests passed nor that
+  one signed with a block a strict zip reader takes. The job then fails
+  closed: the GitHub draft and every job after it don't run, nothing is
+  published, and re-running the failed jobs resumes the release (see
+  [Re-running a partial release](#re-running-a-partial-release)).
 
 Dry runs, forks' runs and PR runs never reach the `release` environment.
 Their Publish plan reports each bundle's state, `mcpb verify`'s answer and the
-zip check's as notices, and fails only on a malformed signature block.
+zip check's as notices, and fails only on a malformed signature block; a
+tool that doesn't install is a warning.
 
 **Signing stays off in practice** until upstream
-(`modelcontextprotocol/mcpb`) fixes two open issues, with 2.1.2:
+(`modelcontextprotocol/mcpb`) releases fixes for two issues that 2.1.2,
+the version the job pins, has:
 
-- **#278, installability.** `mcpb sign` appends its block after the zip's
-  end-of-central-directory record without declaring it in the record's
-  comment length, and strict zip readers refuse the result, Claude Desktop's
-  among them ("Invalid comment length"). The zip check catches this, so the
-  job publishes such a bundle unsigned rather than one that can't be
-  installed; it never rewrites the record itself.
+- **#278, installability.** `mcpb sign` 2.1.2 appends its block after the
+  zip's end-of-central-directory record without declaring it in the
+  record's comment length, and strict zip readers refuse the result, Claude
+  Desktop's among them ("Invalid comment length"). The zip check catches
+  this, so the job publishes such a bundle unsigned rather than one that
+  can't be installed; it never rewrites the record itself. Upstream fixed
+  it on its main branch (PR #204, not in a release after 2.1.2) by raising
+  the comment length to count the block. The job's checks accept that, so
+  once the pin in `scripts/release/mcpb/tool/` moves to a release with the
+  fix, a bundle signed that way is published signed.
 - **#277 (and #260), verification.** `mcpb verify` succeeds on no platform:
   node-forge's `PkcsSignedData.verify()` isn't implemented and throws, and
   the tool reports the throw as "not signed".

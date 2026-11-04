@@ -85,6 +85,19 @@ def rewrite(path, change):
             bundle.writestr(info, data)
 
 
+def signature_block(blob=b"\x30\x82 stand-in PKCS#7"):
+    """What `mcpb sign` appends: header, little-endian length, signature, footer."""
+    return b"MCPB_SIG_V1" + len(blob).to_bytes(4, "little") + blob + b"MCPB_SIG_END"
+
+
+def declare(unsigned, comment_length):
+    """`unsigned` with its end-of-central-directory record's comment length
+    set, as a signer with mcpb#278's fix (modelcontextprotocol/mcpb#204)
+    raises it to count its block."""
+    eocd = unsigned.rfind(b"PK\x05\x06")
+    return unsigned[:eocd + 20] + comment_length.to_bytes(2, "little") + unsigned[eocd + 22:]
+
+
 def edit_manifest(path, edit):
     def change(entries):
         out = []
@@ -249,30 +262,68 @@ class PackAndCheckTests(unittest.TestCase):
         self.assertTrue(any("icon must be 'icon.png'" in e for e in self.check(path)))
 
     def test_a_signed_bundle_checks_without_its_block(self):
-        path = self.files.pack()
-        unsigned = path.read_bytes()
+        for comment in (b"", b"release 1.2.0"):  # a real ZipFile.comment too
+            with self.subTest(comment=comment):
+                path = self.files.pack()
+                if comment:
+                    with zipfile.ZipFile(path, "a") as bundle:
+                        bundle.comment = comment
+                unsigned = path.read_bytes()
+                self.assertEqual(unsigned[-len(comment) - 2:], len(comment).to_bytes(2, "little") + comment)
+                digest = hashlib.sha256(unsigned).hexdigest()
+                self.assertEqual(mcpb.signature(path), ("unsigned", digest))
+                block = signature_block()
+                for layout, signed in (("2.1.2", unsigned + block),
+                                       ("#204", declare(unsigned, len(comment) + len(block)) + block)):
+                    with self.subTest(layout=layout):
+                        path.write_bytes(signed)
+                        self.assertEqual(mcpb.signature(path), ("signed", digest))
+                        self.assertEqual(self.check(path), [])
+                        # Only the #204 layout declares the block, as a strict reader needs.
+                        self.assertEqual(mcpb.trailer_errors(signed) == [], layout == "#204")
+
+    def test_a_raised_comment_length_is_the_only_change_forgiven(self):
+        unsigned = self.files.pack().read_bytes()
         digest = hashlib.sha256(unsigned).hexdigest()
-        self.assertEqual(mcpb.signature(path), ("unsigned", digest))
-        # What `mcpb sign` appends: header, little-endian length, signature, footer.
-        blob = b"\x30\x82 stand-in PKCS#7"
-        block = b"MCPB_SIG_V1" + len(blob).to_bytes(4, "little") + blob + b"MCPB_SIG_END"
-        path.write_bytes(unsigned + block)
-        self.assertEqual(mcpb.signature(path), ("signed", digest))
-        self.assertEqual(self.check(path), [])
+        block = signature_block()
+        # Any other byte of the bundle changed under the block shows in the digest.
+        eocd = unsigned.rfind(b"PK\x05\x06")
+        for at in (0, eocd - 1, eocd + 8, eocd + 21):
+            with self.subTest(at=at):
+                changed = bytearray(declare(unsigned, len(block)))
+                changed[at] ^= 0x01
+                content, state = mcpb.split_signature(bytes(changed) + block)
+                self.assertEqual(state, "signed")
+                if at in (eocd + 20, eocd + 21):
+                    # The comment length itself: put back, but the trailer check refuses it.
+                    self.assertEqual(hashlib.sha256(content).hexdigest(), digest)
+                    self.assertTrue(mcpb.trailer_errors(bytes(changed) + block))
+                else:
+                    self.assertNotEqual(hashlib.sha256(content).hexdigest(), digest)
 
     def test_a_strict_reader_refuses_an_undeclared_trailing_block(self):
         unsigned = self.files.pack().read_bytes()
         self.assertEqual(mcpb.trailer_errors(unsigned), [])
-        blob = b"stand-in"
-        block = b"MCPB_SIG_V1" + len(blob).to_bytes(4, "little") + blob + b"MCPB_SIG_END"
+        block = signature_block(b"stand-in")
         # As mcpb sign 2.1.2 appends it (mcpb#278): the record still declares no comment.
         errors = mcpb.trailer_errors(unsigned + block)
         self.assertTrue(any(f"has {len(block)} bytes after" in e and "declares 0" in e for e in errors), errors)
         # Declared in the comment-length field, a strict reader takes it.
-        eocd = unsigned.rfind(b"PK\x05\x06")
-        declared = unsigned[:eocd + 20] + len(block).to_bytes(2, "little") + unsigned[eocd + 22:]
-        self.assertEqual(mcpb.trailer_errors(declared + block), [])
+        self.assertEqual(mcpb.trailer_errors(declare(unsigned, len(block)) + block), [])
         self.assertTrue(mcpb.trailer_errors(b"not a zip"))
+        # The last record counts: an earlier record magic (say, inside an
+        # entry) changes nothing.
+        earlier = b"PK\x05\x06" + bytes(40)
+        self.assertEqual(mcpb.trailer_errors(earlier + unsigned), [])
+        self.assertTrue(mcpb.trailer_errors(earlier + unsigned + block))
+        signed = earlier + declare(unsigned, len(block)) + block
+        self.assertEqual(mcpb.trailer_errors(signed), [])
+        self.assertEqual(mcpb.split_signature(signed), (earlier + unsigned, "signed"))
+        # A record cut short is no record, and isn't rewritten.
+        for cut in (1, 5, 21):
+            with self.subTest(cut=cut):
+                self.assertEqual(mcpb.trailer_errors(unsigned[:-cut]), ["has no end-of-central-directory record"])
+                self.assertEqual(mcpb._undeclare(unsigned[:-cut]), unsigned[:-cut])
         path = self.files.dir / "trailer.mcpb"
         path.write_bytes(unsigned + block)
         with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
