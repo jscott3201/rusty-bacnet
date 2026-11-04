@@ -566,7 +566,7 @@ impl PyBipEndpoint {
                     .and_then(EndpointSession::foreign_registration)
                     .ok_or_else(|| PyRuntimeError::new_err("endpoint not started"))?
             };
-            crate::bip_options::registration_dict(registration)
+            crate::registration_dicts::registration_dict(registration)
         })
     }
 

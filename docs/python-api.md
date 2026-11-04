@@ -931,7 +931,19 @@ written lifetime or BBMD takes effect at ReinitializeDevice ACTIVATE_CHANGES,
 and the next registration, sent at once, carries it. The BBMD may also be
 written as a host name, looked up by the system's resolver as on B/IP: the
 device moves to the first IPv6 address it stands for (#2308).
-`foreign_registration()` is B/IP only.
+
+A host name in `ForeignDevice` serves B/IPv6 too (#2365), with the IPv6 addresses it
+stands for. An owner on `ipv6_interface="::"` picks its source address from the route
+to the BBMD, so its start looks the name up first and fails if it has no usable IPv6
+address. On an explicit interface the owner starts and waits: nothing is registered,
+broadcasts raise `OSError` (the transport error), and the name is tried again 30
+seconds after each failure. On a B/IPv6 owner `foreign_registration()` returns a
+`Bip6ForeignRegistrationStatus`: `bbmd` (the address in use, or None while waiting),
+`bbmd_name` (the host name it is known by, `"host:port"`, or None for an address),
+`waiting_for_bbmd`, `bbmd_lookups`, `bbmd_lookup_failures`, `last_bbmd_lookup_failure`
+(as on B/IP, with `"no_ipv6_address"` for a name with no IPv6 address), the
+`previous_releases`, `previous_released`, `previous_release_refused` and
+`previous_release_unanswered` totals, `broadcasts_refused`, and `registrations_sent`.
 
 ```python
 from rusty_bacnet import BACnetClient, ForeignDevice

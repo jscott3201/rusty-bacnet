@@ -174,42 +174,55 @@ impl CovSubscriptionKey {
     /// Every coordinate but the object, in comparison order. Each field of
     /// each family appears, so two keys compare equal exactly when `Eq`
     /// says they are.
+    ///
+    /// Within one object, the ordinary and Single entries come first, by
+    /// property (none for a whole-object one, then by identifier and
+    /// index), recipient and process: the order of the Device's
+    /// Active_COV_Subscriptions, so the table hands that list out in order
+    /// and nothing sorts it (#2363). The COV-multiple references follow.
     #[allow(clippy::type_complexity)]
     fn rank(
         &self,
     ) -> (
-        u8,
-        &CovRecipient,
-        u32,
         bool,
         Option<PropertyIdentifier>,
         Option<u32>,
+        &CovRecipient,
+        u32,
+        bool,
     ) {
         match self {
             Self::Object {
                 recipient,
                 process_id,
                 ..
-            } => (0, recipient, *process_id, false, None, None),
+            } => (false, None, None, recipient, *process_id, false),
             Self::Property {
                 recipient,
                 process_id,
                 property,
                 index,
                 ..
-            } => (1, recipient, *process_id, false, Some(*property), *index),
+            } => (
+                false,
+                Some(*property),
+                *index,
+                recipient,
+                *process_id,
+                false,
+            ),
             Self::Multiple {
                 context,
                 property,
                 index,
                 ..
             } => (
-                2,
+                true,
+                Some(*property),
+                *index,
                 &context.recipient,
                 context.process_id,
                 context.confirmed,
-                Some(*property),
-                *index,
             ),
         }
     }
