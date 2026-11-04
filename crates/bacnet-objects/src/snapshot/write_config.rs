@@ -1,4 +1,5 @@
-//! A Timer's or Channel's written configuration (`RBNWCF01`), as
+//! A Timer's or Channel's written configuration, or an intrinsic
+//! reporter's written reporting settings (`RBNWCF01`), as
 //! `FileWriteConfigPersistence` (with std) writes its file.
 //!
 //! After the magic tag and the four-octet object identifier the file holds
@@ -18,6 +19,15 @@
 //! - [`KIND_TIMER_SET_ONLY`]: a Timer's set alone, as saved before
 //!   Default_Timeout was kept. It still decodes, with no Default_Timeout
 //!   written; [`encode`] never writes it.
+//! - [`KIND_REPORTING`]: the reporting settings an object with intrinsic
+//!   reporting keeps (#2331): Notification_Class (four octets),
+//!   Event_Enable (one octet of transition bits), Notify_Type (its
+//!   four-octet enumeration value), Event_Detection_Enable,
+//!   Event_Message_Texts_Config (three UTF-8 strings, each its length and
+//!   then its octets), Event_Algorithm_Inhibit_Ref (its length and its
+//!   BACnet encoding) and Event_Algorithm_Inhibit, in that order. Only the
+//!   object types that keep them take this kind (see [`keeps_reporting`]);
+//!   none of them has another kind, so their whole file is this one.
 //!
 //! A kind must match the object's type, and an unknown kind is refused, so
 //! a later kind can be added without a new magic tag.
@@ -41,6 +51,12 @@ use crate::write_config::{
     ChannelMembers, ChannelWriteConfig, TimerStateChange, TimerWriteConfig, WriteConfigSnapshot,
 };
 
+mod reporting;
+
+#[cfg(feature = "event-reporting")]
+pub(crate) use reporting::invalid as reporting_invalid;
+pub use reporting::keeps_reporting;
+
 /// The format's tag. One format serves both object types; the kind octet
 /// after the header names which one the body is for.
 pub const MAGIC: [u8; 8] = *b"RBNWCF01";
@@ -53,6 +69,8 @@ pub const KIND_CHANNEL: u8 = 2;
 /// without the new part, and a reader that predates it refuses the file
 /// instead of dropping the part.
 pub const KIND_TIMER: u8 = 3;
+/// The reporting settings of an object with intrinsic reporting (#2331).
+pub const KIND_REPORTING: u8 = 4;
 /// The most octets a file may take. A full member list, or reference list,
 /// of the longest references takes about 30 KiB; the cap leaves room for
 /// large constructed State_Change_Values.
@@ -64,8 +82,8 @@ pub const MAX_LEN: usize = 1024 * 1024;
 /// another object type than `object`'s, one holding what [`decode`]
 /// wouldn't take back (a priority outside 1 to 16, more references or
 /// members than the object keeps, delays that don't pair with the members,
-/// a Control_Groups size outside 1 to [`MAX_CONTROL_GROUPS`]), and one past
-/// [`MAX_LEN`].
+/// a Control_Groups size outside 1 to [`MAX_CONTROL_GROUPS`], reporting
+/// settings no write leaves), and one past [`MAX_LEN`].
 pub fn encode(
     object: ObjectIdentifier,
     snapshot: &WriteConfigSnapshot,
@@ -99,6 +117,10 @@ fn encode_file(
             body.extend_from_slice(&[KIND_CHANNEL]);
             encode_channel(&mut body, config)?;
         }
+        (WriteConfigSnapshot::Reporting(config), kind) if keeps_reporting(kind) => {
+            body.extend_from_slice(&[KIND_REPORTING]);
+            reporting::encode(&mut body, config)?;
+        }
         _ => {
             return Err(SnapshotError::out_of_range(
                 "for another object type can't be saved for this object",
@@ -123,7 +145,10 @@ fn decode_file(
             WriteConfigSnapshot::Timer(reader.timer(false)?)
         }
         (KIND_CHANNEL, ObjectType::CHANNEL) => WriteConfigSnapshot::Channel(reader.channel()?),
-        (KIND_TIMER | KIND_TIMER_SET_ONLY | KIND_CHANNEL, _) => {
+        (KIND_REPORTING, kind) if keeps_reporting(kind) => {
+            WriteConfigSnapshot::Reporting(reader.reporting()?)
+        }
+        (KIND_TIMER | KIND_TIMER_SET_ONLY | KIND_CHANNEL | KIND_REPORTING, _) => {
             return Err(SnapshotError::new(
                 SnapshotErrorKind::OtherObject,
                 "holds another object type's configuration",
