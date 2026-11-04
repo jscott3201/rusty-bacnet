@@ -42,10 +42,23 @@ the database guard, the transport, addressing and time.
   admission caps of a `CovPolicy`, lifetimes on `bacnet-time`, and the
   confirmed reports' state as plain data: a report begun with
   `begin_confirmed` ends through `delivered`, or by itself at its deadline.
+  `evaluate` decides what a change of an object reports, within an
+  `EventBudget`, and hands each notification's parameters to the host;
+  the Device's two subscription lists come from the table (`cov::active`).
   The host keeps the table under its own guard, passes `now` to every call,
   and after each change takes what it fenced or removed (`take_fenced`) and
-  the counts (`take_counts`). `bacnet-server` runs its table on it. The
-  `Responder` doesn't dispatch the COV services yet.
+  the counts (`take_counts`). `bacnet-server` runs its table and its
+  ordinary and Single notifications on it.
+- `report`: `Reporter`, the `Responder` with COV reporting for a host with
+  nothing to await: it answers SubscribeCOV and SubscribeCOVProperty,
+  queues the notifications a request or the host's own change calls for in
+  an outbox allocated once (`OutboxLimits`; one unconfirmed entry per
+  subscription, the newest), hands them out through `pop`
+  (a confirmed one under an invoke ID the host lends through `InvokeIds`),
+  matches each answer (`reply`), resends or gives up at the deadline
+  (`on_deadline`), and answers the Device's subscription lists from its
+  table (`cov::active::ActiveCovOverlay`). Build the database with
+  `report::SERVICES`.
 - `reply`: the reply PDUs, and the one map from an error to its Reject or
   Error PDU.
 - `responder`: `Responder`, which strings the steps together for a host

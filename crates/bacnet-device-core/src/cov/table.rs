@@ -14,6 +14,7 @@ use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::ObjectIdentifier;
 
 use super::flight::{FlightState, FlightTiming, Token};
+use super::observation_order::Pending;
 use super::{CovSubscription, CovSubscriptionSnapshot};
 
 /// Gives each table its own identity, so a snapshot from one table can't
@@ -133,6 +134,8 @@ pub struct CovTable {
     /// Flights with an outstanding report or a hold-off; an absent flight
     /// is idle.
     pub(super) flights: BTreeMap<u64, FlightState>,
+    /// Unconfirmed reports handed to the host whose sends haven't ended.
+    pub(super) pending: Vec<Pending>,
     pub(super) next_flight: u64,
     pub(super) peer_counts: BTreeMap<CovRecipient, usize>,
     pub(super) peer_indefinite_counts: BTreeMap<CovRecipient, usize>,
@@ -163,6 +166,7 @@ impl CovTable {
             generation: 0,
             issued: 0,
             flights: BTreeMap::new(),
+            pending: Vec::new(),
             next_flight: 0,
             peer_counts: BTreeMap::new(),
             peer_indefinite_counts: BTreeMap::new(),
@@ -191,9 +195,10 @@ impl CovTable {
         self.timing
     }
 
-    /// Subscription counts since the last call: created, cancelled, purged
-    /// and refused. `subscriptions_active` is the live count; the
-    /// notification fields stay zero.
+    /// Counts since the last call: subscriptions created, cancelled, purged
+    /// and refused, and notifications [`evaluate`](super::evaluate()) cut
+    /// off at their input's budget. `subscriptions_active` is the live
+    /// count; the other notification fields stay zero.
     pub fn take_counts(&mut self) -> CovCounters {
         let mut counts = core::mem::take(&mut self.counts);
         counts.subscriptions_active = self.subs.len() as u64;

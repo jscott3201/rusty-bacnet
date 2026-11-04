@@ -185,7 +185,7 @@ async fn subscribe_cov_to_device_uses_routed_addressing() {
         .await
         .unwrap();
 
-    client.device_table.lock().await.upsert(routed_device(
+    client.device_table.lock().upsert(routed_device(
         2001,
         &router_mac,
         remote_network,
@@ -239,7 +239,7 @@ async fn unsubscribe_cov_to_device_uses_routed_addressing() {
         .await
         .unwrap();
 
-    client.device_table.lock().await.upsert(routed_device(
+    client.device_table.lock().upsert(routed_device(
         2002,
         &router_mac,
         remote_network,
@@ -352,7 +352,7 @@ async fn subscribe_cov_property_to_device_uses_routed_addressing() {
         .await
         .unwrap();
 
-    client.device_table.lock().await.upsert(routed_device(
+    client.device_table.lock().upsert(routed_device(
         2003,
         &router_mac,
         remote_network,
@@ -481,7 +481,7 @@ async fn unsubscribe_cov_property_to_device_uses_routed_addressing() {
         .await
         .unwrap();
 
-    client.device_table.lock().await.upsert(routed_device(
+    client.device_table.lock().upsert(routed_device(
         2004,
         &router_mac,
         remote_network,

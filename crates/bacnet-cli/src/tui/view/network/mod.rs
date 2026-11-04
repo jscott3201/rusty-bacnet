@@ -143,7 +143,7 @@ fn foreign_panel(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let state = &app.network;
-    let Some(foreign) = state.foreign else {
+    let Some(foreign) = &state.foreign else {
         let lines = vec![
             Line::styled("Not registered as a foreign device.", theme.dim()),
             Line::styled(
@@ -161,9 +161,15 @@ fn foreign_panel(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let areas = Layout::vertical(vec![Constraint::Length(1); lines]).split(inner);
     let [head, status_area] = [areas[0], areas[1]];
     let [result, gauge, own] = [areas[lines - 3], areas[lines - 2], areas[lines - 1]];
+    // A BBMD named by host name shows the name and what it stands for.
+    let bbmd = match (foreign.configured.address(), foreign.bbmd) {
+        (Some(_), Some(at)) => at.to_string(),
+        (None, Some(at)) => format!("{} ({at})", foreign.configured),
+        (_, None) => format!("{} (not resolved yet)", foreign.configured),
+    };
     let line = Line::from(vec![
         Span::styled("BBMD ", theme.dim()),
-        Span::styled(foreign.bbmd.to_string(), theme.accent()),
+        Span::styled(bbmd, theme.accent()),
         Span::styled(format!("   TTL {} s", foreign.ttl), theme.dim()),
         Span::styled(
             format!("   renews every {} s", seconds(foreign.renewal)),
@@ -225,13 +231,14 @@ fn foreign_panel(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
                 .unfilled_style(theme.dim());
             frame.render_widget(widget, gauge);
         }
-        None => frame.render_widget(
-            Paragraph::new(Line::styled(
-                "Next registration: not scheduled",
-                theme.dim(),
-            )),
-            gauge,
-        ),
+        None => {
+            let text = if snapshot.is_some_and(|s| s.waiting_for_bbmd) {
+                "Next registration: once the BBMD's host name resolves"
+            } else {
+                "Next registration: not scheduled"
+            };
+            frame.render_widget(Paragraph::new(Line::styled(text, theme.dim())), gauge);
+        }
     }
     frame.render_widget(Paragraph::new(own_line(state, app, theme, own.width)), own);
 }
@@ -249,14 +256,28 @@ fn status(app: &App, theme: &Theme) -> (String, Style, String) {
             format!("registered, lease {} s left", seconds(left)),
             theme.accent(),
         ),
+        (Some(s), _) if s.waiting_for_bbmd => (
+            "waiting for the BBMD's host name to resolve".to_string(),
+            theme.warn(),
+        ),
         (Some(_), _) => ("not registered".to_string(), theme.warn()),
         (None, _) => ("waiting for the first answer".to_string(), theme.dim()),
     };
     let counts = snapshot.map_or_else(String::new, |s| {
-        format!(
+        let mut counts = format!(
             "attempts {}  accepted {}  refused {}  lapses {}",
             s.attempts, s.accepted, s.refused, s.lapses
-        )
+        );
+        // The BBMD's host name, if it has one (#2308).
+        if let Some(lookups) = crate::foreign::lookups(&s) {
+            counts.push_str("  ");
+            counts.push_str(&lookups);
+            if let Some(failure) = s.last_bbmd_lookup_failure {
+                counts.push_str(": the name ");
+                counts.push_str(&crate::foreign::lookup_failure(failure));
+            }
+        }
+        counts
     });
     (word, style, counts)
 }
@@ -296,7 +317,7 @@ fn own_line<'a>(state: &NetworkState, app: &App, theme: &Theme, width: u16) -> L
     if let (Some(target), false) = (state.target, state.tables_are_ours()) {
         let mut text = format!("Our FDT entry not checked: tables are from {target}, not our BBMD");
         // The way back, when the line has room for it.
-        if let Some(ours) = state.foreign.map(|f| f.bbmd) {
+        if let Some(ours) = state.foreign.as_ref().and_then(|f| f.bbmd) {
             let back = format!("; :bbmd {ours} for ours");
             if text.chars().count() + back.chars().count() <= usize::from(width) {
                 text.push_str(&back);
@@ -346,7 +367,7 @@ fn own_line<'a>(state: &NetworkState, app: &App, theme: &Theme, width: u16) -> L
             ])
         }
         None => {
-            let text = match state.foreign.and_then(|f| f.nat_global) {
+            let text = match state.foreign.as_ref().and_then(|f| f.nat_global) {
                 Some(global) => fit(
                     room,
                     [

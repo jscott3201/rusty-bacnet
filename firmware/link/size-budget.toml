@@ -545,6 +545,25 @@
 # the objects image measured 127536 octets of thumbv7m .text, the same as
 # with it within the layout's few hundred octets, since the linker drops
 # what nothing reaches. The budgets are --suggest's (size plus 12%).
+#
+# On 2026-11-03 (#2303, PR 2b, Rust 1.99.0) the reporting image runs
+# through bacnet-device-core's Reporter: it subscribes, renews and cancels,
+# pops and sends the notifications (one confirmed one resent three times,
+# then failed; one acknowledged), reports a change to six subscribers and
+# reads Active_COV_Subscriptions through the overlay. Its arena grows by
+# 8 KiB to 24 KiB (the host test's peak is 20840 octets), for the
+# subscriptions' baselines, the outbox (6 entries, 256 octets) and the
+# confirmed table. As text / rodata / flash, then RAM:
+#
+#   thumbv7m             192856 / 17316 / 211196    24672
+#   thumbv7em            192920 / 17320 / 211264    24672
+#   riscv32imac          235144 / 20984 / 256150    24672
+#
+# about 44-57 KB of .text more than PR 1's image; the objects rows moved
+# by codegen alone (+32 / +160 / -44 octets of .text). riscv32imac's
+# image fills 256150 of the layout's 262144 octets of flash: PR 3 needs
+# the larger region first (design 8.2). The budgets are --suggest's, but
+# riscv32imac's flash, capped at the region (#2363).
 
 [thumbv7m-none-eabi.mstp]
 text = 18320
@@ -646,12 +665,12 @@ div64_functions = 0
 memmove_functions = 2
 
 [thumbv7m-none-eabi.reporting]
-text = 166176
-rodata = 18400
+text = 213664
+rodata = 19392
 data = 64
-bss = 18464
-flash = 185712
-ram = 18464
+bss = 27632
+flash = 234208
+ram = 27632
 fmt_functions = 0
 div64_functions = 0
 memmove_functions = 4
@@ -932,12 +951,12 @@ div64_functions = 0
 memmove_functions = 2
 
 [thumbv7em-none-eabihf.reporting]
-text = 165936
-rodata = 18400
+text = 213840
+rodata = 19408
 data = 64
-bss = 18464
-flash = 185488
-ram = 18464
+bss = 27632
+flash = 234384
+ram = 27632
 fmt_functions = 0
 div64_functions = 0
 memmove_functions = 4
@@ -954,12 +973,15 @@ div64_functions = 0
 memmove_functions = 2
 
 [riscv32imac-unknown-none-elf.reporting]
-text = 199472
-rodata = 22512
+text = 259248
+rodata = 23504
 data = 64
-bss = 18464
-flash = 222000
-ram = 18464
+bss = 27632
+# Capped at the layout's 262144-octet flash region (2026-11-03): --suggest's
+# 282768 is past it, so it couldn't warn before the link fails. #2363 gives
+# this image a larger region and its budget room again.
+flash = 262144
+ram = 27632
 fmt_functions = 0
 div64_functions = 0
 memmove_functions = 2

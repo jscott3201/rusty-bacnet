@@ -170,13 +170,14 @@ async fn connect(
                         return Ok(());
                     };
                     match outcome {
-                        Ok(()) => tracing::info!(
-                            "BBMD {named} accepted the foreign-device registration; it renews automatically"
+                        Ok(bbmd) => tracing::info!(
+                            "BBMD {bbmd} accepted the foreign-device registration; it renews automatically"
                         ),
                         Err(error) => tracing::warn!("{error}; retrying in the background"),
                     }
                     // The address in use: a host name's once it resolved
-                    // (#2308). Until then the Network screen has no BBMD.
+                    // (#2308). Until then the Network screen waits for it,
+                    // and the network worker reports it when it comes.
                     let in_use = client
                         .transport()
                         .foreign_device_config()
@@ -186,15 +187,14 @@ async fn connect(
                     let renewal = foreign
                         .renewal_interval
                         .unwrap_or(Duration::from_secs(u64::from(foreign.ttl)) / 2);
-                    if let Some(bbmd) = in_use {
-                        let foreign = Foreign {
-                            bbmd,
-                            ttl: foreign.ttl,
-                            renewal,
-                            nat_global: args.nat_global_address,
-                        };
-                        sink.deliver(WorkerEvent::ForeignDevice(foreign)).await;
-                    }
+                    let foreign = Foreign {
+                        configured: named.clone(),
+                        bbmd: in_use,
+                        ttl: foreign.ttl,
+                        renewal,
+                        nat_global: args.nat_global_address,
+                    };
+                    sink.deliver(WorkerEvent::ForeignDevice(foreign)).await;
                 }
                 Box::pin(serve(client, style, sink, commands, options)).await;
             }

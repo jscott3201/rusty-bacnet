@@ -5,7 +5,7 @@ use bacnet_objects::traits::{LifeSafetyOperationEffect, LifeSafetyOperationOutco
 use bacnet_services::life_safety::LifeSafetyOperationRequest;
 use bacnet_types::enums::{ErrorClass, ErrorCode, LifeSafetyOperation};
 
-use crate::life_safety_cov::LifeSafetyCovChange;
+use bacnet_device_core::cov::life_safety::LifeSafetyCovChange;
 
 /// Apply a LifeSafetyOperation and retain exact committed COV changes.
 ///

@@ -1285,7 +1285,21 @@ multicast, link-local, IPv4-mapped or IPv4-compatible) and the TTL nonzero;
 it returns the `Bip6ForeignDeviceRefusal` otherwise. `start()` fails with
 `InvalidInput` for such a registration, and a Network Port activation refuses
 one. The B/IPv6 client builder takes a registration with
-`.foreign_device(config)` alongside `.device_instance(..)` (#1941).
+`.foreign_device(config)` alongside `.device_instance(..)` (#1941), and, as the B/IP
+one does, `.bbmd_resolver(..)` for a host name written to FD_BBMD_Address and
+`.release_previous_bbmd(true)` (#2338).
+
+`Bip6Transport::set_release_previous_bbmd(true)` (off by default) gives B/IPv6 B/IP's
+release of the BBMD a move leaves: after a Network Port activation, or a host name
+that now resolves elsewhere, the old BBMD gets one Delete-Foreign-Device-Table-Entry
+naming the device's own bound B/IPv6 address, sent after the first registration with
+the new BBMD (Annex U.4.5.4). A success, the deletion NAK, or no answer within 3
+seconds is counted in `previous_bbmd_releases()` (`Bip6ReleaseCounters`); none of
+them holds up or fails the move. B/IPv6 registration doesn't run on
+`bacnet-bip-core`'s node, so the transport's re-registration task sends the
+release. One waits for its answer at a time: a newer release ends that wait, a
+move before the task sent one drops it, and a stop ends one still out, each counted
+as unanswered.
 
 A Forwarded-NPDU whose original source address is an IPv6 multicast group, a
 group destination at any port, is malformed for the same reason as on B/IP:
@@ -5155,12 +5169,14 @@ refusal is a `SnapshotError` whose `kind()` names it: `Truncated`,
 carries only static text, so reporting one needs no allocation.
 `is_damage()` says whether a two-slot backend should pass over that copy
 for the other one, and `snapshot::log::newest(object, [slot0, slot1])`
-makes `FileLogPersistence`'s whole choice between two slots. `Error`
+makes `FileLogPersistence`'s whole choice between two slots, as
+`snapshot::audit_log::newest` does for `FileAuditLogPersistence`. `Error`
 implements `From<SnapshotError>`, the mapping the file backends use.
 
 | Module | Snapshot | Tag and versions | File backend |
 | --- | --- | --- | --- |
 | `snapshot::log` | `LogSnapshot<R>` (Trend Log, Trend Log Multiple, Event Log) | `RBLOGS01`, version 2; version 1 still loads | `FileLogPersistence` (one slot of the two) |
+| `snapshot::audit_log` | `AuditLogSnapshot` | `RBALOG01`, version 3; versions 1 and 2 still load | `FileAuditLogPersistence` (one slot of the two) |
 | `snapshot::write_config` | `WriteConfigSnapshot` (Timer, Channel) | `RBNWCF01`, kinds 2 and 3; kind 1 still loads | `FileWriteConfigPersistence` |
 | `snapshot::notification_class` | `NotificationClassSnapshot` | `RBNNCL01` | `FileNotificationClassPersistence` |
 | `snapshot::notification_forwarder` | `ForwarderSnapshot` | `RBNFWD01` | `FileNotificationForwarderPersistence` |
@@ -7620,9 +7636,49 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   change the host takes `take_fenced()`, a `Fenced` naming the tokens whose
   worker should stop, the references removed or owed a fresh look and the
   contexts refreshed, and `take_counts()`. The entries sit in one vector
-  sorted with the monitored object first. `bacnet_server::cov` keeps
-  `CovSubscriptionTable` with its API, which runs on it, and the atomics and
-  in-flight tracker; the `Responder` doesn't dispatch the COV services yet.
+  sorted with the monitored object first. `evaluate` decides what a change
+  of one object reports to its ordinary and Single subscriptions: it
+  compares each with the observation its last delivered notification
+  established, skips a confirmed one whose report is out, encodes each
+  notification's parameters and spends the input's `EventBudget`. Every
+  report takes the host's lease first (for a confirmed one the server's
+  in-flight slot and invoke ID, for the `Reporter` room in its outbox), and
+  a confirmed one then begins its flight; every report comes back through
+  `delivered`, where `Delivery::Sent` commits an unconfirmed one and an Ack
+  commits what `begin_confirmed` kept and names the references owed a
+  fresh look. The values a notification carries are in `cov::prepare`,
+  `flags`, `reported`, `value_source` and `life_safety`, and the Device's
+  two subscription lists in `cov::active`, with `ActiveCovOverlay`, which
+  answers both from a `CovTable` through any read that takes a
+  `ReadOverlay`. `bacnet_server::cov` keeps `CovSubscriptionTable` with its
+  API, which runs on it, and the atomics and in-flight tracker.
+- `report` (#2303): `Reporter`, the `Responder` with COV reporting, for
+  firmware that owns its database. `handle(db, peer, request, now, out)`
+  answers SubscribeCOV and SubscribeCOVProperty and queues the first
+  notification, hands every other request to the `Responder`, reads the
+  Device's lists through the overlay, and queues what a write changes (a
+  Life Safety object from the values the write changed). `capture` and
+  `changed` do the same for the host's own changes. The outbox is one
+  buffer and one queue allocated at build (`OutboxLimits`: entries and
+  octets). A subscription holds one unconfirmed entry: a newer report
+  replaces it in its turn, so one that changes faster than the link sends
+  can't crowd out the others. A report the outbox has no room for leaves
+  its subscription owed, looked at again as room frees. A confirmed
+  report's answers are cut off at `FlightTiming::cutoff` from when the
+  table began it, however late `pop` sent it, as the server's worker's
+  are. `pop(bindings, ids, now, out)` appends the next
+  APDU and returns a `Notification` (token, `Destination`, `NotifyService`,
+  invoke ID, priority); a confirmed one takes an invoke ID from the host's
+  `InvokeIds`, which the device's own requests share. `reply(from, apdu,
+  ids, now)` matches a SimpleACK, Error, Reject or Abort by invoke ID and
+  peer; `next_deadline` and `on_deadline` run lifetimes, abandoned reports,
+  timeouts (resent with the same invoke ID while retries last, then failed)
+  and the looks owed. The host reports each send through `delivered`.
+  `ReportConfig` holds the `CovPolicy`, the outbox and the confirmed
+  timing; `ReporterCounters` what it counted. Build the database with
+  `report::SERVICES`, which adds the two subscribe services to the
+  `Responder`'s. The COV-multiple services stay with `bacnet-server`
+  (#2320).
 - `reply`: `error_apdu`, the one map from an `Error` to its Reject or Error
   PDU (never an Abort: a work or byte limit is the caller's Abort), and the
   refusals a host sends for a service it doesn't run.
@@ -7951,7 +8007,8 @@ registrations at most every 30 seconds, by the system's resolver or the one
 that doesn't resolve still starts the transport: its node waits for a BBMD
 (`bacnet-bip-core`'s waiting state), with no registration sent and broadcasts held
 and then refused, the failure counted in `bbmd_lookups`, `bbmd_lookup_failures` and
-`last_bbmd_lookup_failure`, and the name tried again every 30 seconds. The first
+`last_bbmd_lookup_failure`, `waiting_for_bbmd` reading true, and the name tried again
+every 30 seconds. The first
 address it resolves to that a start would accept is registered with at once;
 `foreign_device_config()` then reads that address.
 

@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use bytes::{Bytes, BytesMut};
-use tokio::sync::{Mutex, broadcast, mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
 #[cfg(test)]
@@ -51,6 +51,7 @@ use crate::discovery::{DeviceTable, DeviceUpsertResult, DiscoveredDevice, Routed
 use crate::segmentation::{
     SegmentReceiver, SegmentedPduType, duplicate_in_window, max_segment_payload, split_payload,
 };
+use crate::sync_mutex::SyncMutex;
 use crate::tsm::{
     ProgressReceiver, RequestTimerExpiration, SegmentAckPhase, SegmentTimerExpiration,
     SegmentedResponseAdmission, TransactionOwner, TransactionProgress, Tsm, TsmConfig, TsmResponse,
@@ -563,8 +564,8 @@ struct SegmentAckRoute {
 pub struct BACnetClient<T: TransportPort = AnyTransport> {
     config: ClientConfig,
     network: Arc<NetworkLayer<T>>,
-    tsm: Arc<Mutex<Tsm>>,
-    device_table: Arc<Mutex<DeviceTable>>,
+    tsm: Arc<SyncMutex<Tsm>>,
+    device_table: Arc<SyncMutex<DeviceTable>>,
     cov_tx: broadcast::Sender<ReceivedCOVNotification>,
     event_tx: broadcast::Sender<ReceivedEventNotification>,
     device_tx: broadcast::Sender<DeviceEvent>,
@@ -578,7 +579,7 @@ pub struct BACnetClient<T: TransportPort = AnyTransport> {
     /// Dispatch may hold [`Self::tsm`] while acquiring this lock so phase
     /// validation and delivery cannot race terminal completion. No path may
     /// acquire the locks in the opposite order.
-    seg_ack_senders: Arc<Mutex<HashMap<SegAckKey, SegmentAckRoute>>>,
+    seg_ack_senders: Arc<SyncMutex<HashMap<SegAckKey, SegmentAckRoute>>>,
     cleanup_tx: mpsc::UnboundedSender<TransactionCleanup>,
     #[cfg(test)]
     segmented_post_wait_cleanup: Arc<SegmentedPostWaitCleanupHook>,

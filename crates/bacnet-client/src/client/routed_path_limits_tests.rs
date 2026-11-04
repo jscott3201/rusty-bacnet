@@ -246,7 +246,7 @@ async fn control_queued_before_activation_cannot_claim_the_new_generation() {
         9,
         ConfirmedServiceChoice::READ_PROPERTY,
     );
-    let tsm = Arc::new(Mutex::new(tsm));
+    let tsm = Arc::new(SyncMutex::new(tsm));
     limits.install_active(
         target,
         tsm_mac.clone(),
@@ -262,7 +262,6 @@ async fn control_queued_before_activation_cannot_claim_the_new_generation() {
         .await;
     assert!(
         tsm.lock()
-            .await
             .owner_is_current(&tsm_mac, 9, &registration.owner)
     );
     assert!(registration.response.try_recv().is_err());

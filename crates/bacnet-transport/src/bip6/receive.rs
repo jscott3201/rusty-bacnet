@@ -615,6 +615,11 @@ impl Receiver {
             }
 
             Bvll6::BvlcResult { code, .. } => {
+                // Perhaps the answer to the release of the BBMD a move
+                // left (#2338).
+                if let Some(target) = &self.foreign_bbmd {
+                    target.release_answered(peer, code);
+                }
                 if code == Bvlc6ResultCode::SUCCESSFUL_COMPLETION {
                     debug!("BIP6: BVLC-Result successful");
                     return None;

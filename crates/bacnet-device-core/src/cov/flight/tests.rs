@@ -76,7 +76,7 @@ fn begin(
 ) -> (Token, PreparedCovCompletion) {
     let report = table.prepare_completion(carried[0]).unwrap();
     let token = table
-        .begin_confirmed(report, carried.iter().copied(), now)
+        .begin_confirmed(report, carried.iter().map(|sub| (*sub, value(0.0))), now)
         .unwrap();
     (token, report)
 }
@@ -156,11 +156,19 @@ fn outcomes_settle_the_report() {
         let (token, _) = begin(&mut table, &[&live], T0);
         assert!(!table.confirmed_idle(&live, T0));
         table.delivered(token, outcome, T0);
-        assert!(
+        // The Ack committed what the report carried, so a snapshot from
+        // before it is stale.
+        assert_eq!(
             table.confirmed_idle(&live, T0),
+            outcome == Delivery::NotSent
+        );
+        let after = table.get_subscription(sub.key()).unwrap().clone();
+        assert!(
+            table.confirmed_idle(&after, T0),
             "{outcome:?} holds nothing off"
         );
     }
+    let sub = table.get_subscription(sub.key()).unwrap().clone();
     let (token, _) = begin(&mut table, &[&sub], T0);
     table.delivered(token, Delivery::Failed, T0 + Duration::from_secs(1));
     let held_until = T0 + Duration::from_secs(3);
