@@ -803,7 +803,7 @@ about a third more):
 | The `objects` scenario's requests go through the same `Reporter`: one request path | 2,740 |
 | The `Reporter`'s overlay leaves Active_COV_Multiple_Subscriptions to the Device (`ActiveCovOverlay<false>`): its table holds no COV-multiple reference until #2320 | 3,852 |
 | The table's keys order as the Device's Active_COV_Subscriptions does, so the list needs no sort | 2,356 |
-| Owed references are looked at in table order: no sort of keys | 2,068 |
+| Owed references are looked at with no sort of their keys | 2,068 |
 | The table's flights and per-peer counts are sorted vectors (`VecMap`), and a flight's carried references and the Life Safety snapshots' objects vectors, not B-trees | 11,080 |
 
 Together 22,096 octets (11.5%) on thumbv7m, 21,720 on thumbv7em and
@@ -960,7 +960,9 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
     report.
 13. The `Reporter` asks the host's admission for every report, so the
     outbox checks room for each; a report it refuses leaves its
-    subscription owed, looked at again as room frees. A subscription holds
+    subscription owed, looked at again as room frees: oldest first, as
+    many as there are free entries, and one refused again keeps its place
+    and is counted once. A subscription holds
     one unconfirmed entry: a newer report replaces it and keeps its turn,
     so a subscription changing faster than the link sends neither crowds
     out the others nor loses its place to every change. A confirmed

@@ -147,9 +147,11 @@ pub struct ReporterCounters {
     /// Subscriptions and notifications: the table's counts, and the
     /// notifications [`Reporter::pop`] handed out.
     pub cov: CovCounters,
-    /// Reports refused for want of room in the outbox, or of an invoke ID
-    /// for a confirmed one, each leaving its subscription owed a later look
-    /// (unless it couldn't fit even an empty outbox).
+    /// Subscriptions left owed a later look by a report refused for want
+    /// of room in the outbox, or of an invoke ID for a confirmed one: one
+    /// count until a look reaches it, however often it is refused
+    /// meanwhile. A report that couldn't fit even an empty outbox counts
+    /// each time, and leaves nothing owed.
     pub owed: u64,
     /// Confirmed notifications sent again after a timeout.
     pub resent: u64,

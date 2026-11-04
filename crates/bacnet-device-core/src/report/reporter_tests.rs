@@ -499,3 +499,77 @@ fn a_hot_subscription_holds_one_entry_and_others_still_report() {
         "the hot one's latest value at its turn"
     );
 }
+
+/// Room for one notification and three subscriptions owed: each popped
+/// entry frees room for one, so a deadline looks at the oldest owed
+/// reference only, and a reference refused again meanwhile isn't counted
+/// again.
+#[test]
+fn a_freed_entry_looks_at_one_owed_reference() {
+    let mut device = Device::new(OutboxLimits {
+        entries: 1,
+        octets: 256,
+    });
+    device.write(P::OUT_OF_SERVICE, PropertyValue::Boolean(true), T0);
+    for process in 1..=4 {
+        device.subscribe(process, false, T0);
+    }
+    assert_eq!(device.reporter.counters().owed, 3);
+    // 1's queued report takes the change; 2, 3 and 4 are refused again.
+    device.write(P::PRESENT_VALUE, PropertyValue::Real(20.0), T0);
+    assert_eq!(device.reporter.counters().owed, 3, "owed once each");
+    let mut order = Vec::new();
+    while let Some((sent, apdu)) = device.pop(T0) {
+        order.push(reported(&apdu).0);
+        device
+            .reporter
+            .delivered(sent.token, Delivery::Sent, &mut device.ids, T0);
+        let looked = device.reporter.looked;
+        if device.reporter.next_deadline() == Some(T0) {
+            device.deadline();
+        }
+        assert!(
+            device.reporter.looked - looked <= 1,
+            "one free entry, one look"
+        );
+    }
+    assert_eq!(order, [1, 2, 3, 4]);
+    assert_eq!(device.reporter.counters().owed, 3);
+    assert!(device.reporter.owed.is_empty());
+}
+
+/// Four subscribers to one object, room for one notification, and the
+/// value changing at every send: each takes its turn, the oldest owed
+/// first. In key order the two lowest would share every freed entry.
+#[test]
+fn owed_references_take_freed_room_oldest_first() {
+    let mut device = Device::new(OutboxLimits {
+        entries: 1,
+        octets: 256,
+    });
+    device.write(P::OUT_OF_SERVICE, PropertyValue::Boolean(true), at(0));
+    for process in [1, 4, 3, 2] {
+        device.subscribe(process, false, at(0));
+    }
+    let mut order = Vec::new();
+    for tick in 1..=8u64 {
+        let now = at(tick * 1_000);
+        let (sent, apdu) = device.pop(now).expect("one queued each tick");
+        device
+            .reporter
+            .delivered(sent.token, Delivery::Sent, &mut device.ids, now);
+        order.push(reported(&apdu).0);
+        if device
+            .reporter
+            .next_deadline()
+            .is_some_and(|due| due <= now)
+        {
+            device
+                .reporter
+                .on_deadline(&device.db, &mut device.ids, now);
+        }
+        let value = PropertyValue::Real(100.0 + tick as f32);
+        device.write(P::PRESENT_VALUE, value, now);
+    }
+    assert_eq!(order, [1, 4, 3, 2, 1, 4, 3, 2]);
+}
