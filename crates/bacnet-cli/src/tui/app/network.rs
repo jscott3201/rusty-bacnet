@@ -66,7 +66,8 @@ pub(crate) enum Registration {
     /// The BBMD's host name hasn't resolved yet (#2308): no attempt is due.
     Waiting,
     /// B/IPv6 (#2378): registrations went to the BBMD, whose answers
-    /// B/IPv6 doesn't track, so whether it holds one isn't known.
+    /// B/IPv6 doesn't track, so whether it accepted or refused them isn't
+    /// known.
     Unconfirmed,
 }
 
@@ -80,7 +81,7 @@ impl Registration {
             Self::NoAnswer { .. } => "no answer",
             Self::Lapsed => "lapsed",
             Self::Waiting => "waiting for name",
-            Self::Unconfirmed => "registering",
+            Self::Unconfirmed => "sent",
         }
     }
 }
@@ -319,16 +320,19 @@ impl NetworkState {
 }
 
 /// Where a B/IPv6 foreign device's registration stands (#2378): waiting
-/// for its BBMD's host name, or registering with an address B/IPv6 tracks
-/// no answers from.
+/// for its BBMD's host name while it has no address (the transport waits
+/// only then; a stopped one reads the same), or sending registrations to
+/// an address B/IPv6 tracks no answers from.
 fn bip6_state(status: &Bip6ForeignStatus) -> Registration {
     match status.bbmd {
-        _ if status.waiting_for_bbmd => Registration::Waiting,
         None => Registration::Waiting,
         Some(_) if status.registrations_sent > 0 => Registration::Unconfirmed,
         Some(_) => Registration::Pending,
     }
 }
+
+/// Why the BBMD tables can't be read off B/IP.
+const TABLES_ON_BIP: &str = "BBMD tables are read on BACnet/IP only.";
 
 /// The WAITING banner of a device whose BBMD's host `name` failed to
 /// resolve, `why`, with what becomes of its `broadcasts` meanwhile.
@@ -428,6 +432,10 @@ impl App {
     /// `:bbmd [ADDRESS]`: that BBMD's tables, or with no address those of
     /// the BBMD the session registers with.
     pub(super) fn show_bbmd(&mut self, bbmd: Option<SocketAddrV4>, out: &mut Vec<Command>) {
+        // A B/IPv6 registration has no B/IP BBMD to read (#2378).
+        if self.transport != "BIP" {
+            return self.flash(TABLES_ON_BIP, FLASH_FOR);
+        }
         match bbmd.or(self.network.foreign.as_ref().and_then(|f| f.bbmd)) {
             Some(bbmd) => self.set_bbmd(bbmd, out),
             None if self.network.foreign.is_some() => self.flash(
@@ -469,7 +477,7 @@ impl App {
     /// The BBMD to read, once the session may read it.
     fn network_target(&mut self) -> Option<SocketAddrV4> {
         if self.transport != "BIP" {
-            self.flash("The Network screen needs BACnet/IP.", FLASH_FOR);
+            self.flash(TABLES_ON_BIP, FLASH_FOR);
             return None;
         }
         if !self.may_transmit() {

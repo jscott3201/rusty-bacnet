@@ -160,12 +160,17 @@ fn foreign_panel(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     frame.render_widget(block, area);
     let state = &app.network;
     let Some((bbmd, ttl, renewal)) = head(state) else {
+        // `:bbmd` reads tables on B/IP only (#2378).
+        let how = match app.transport {
+            "BIP" => {
+                "Connect with --foreign-bbmd ADDRESS to register; :bbmd ADDRESS reads any BBMD's tables."
+            }
+            "BIP6" => "Connect with --foreign-bbmd ADDRESS to register.",
+            _ => "Foreign-device registration is for B/IP and B/IPv6.",
+        };
         let lines = vec![
             Line::styled("Not registered as a foreign device.", theme.dim()),
-            Line::styled(
-                "Connect with --foreign-bbmd ADDRESS to register; :bbmd ADDRESS reads any BBMD's tables.",
-                theme.dim(),
-            ),
+            Line::styled(how, theme.dim()),
         ];
         frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
         return;

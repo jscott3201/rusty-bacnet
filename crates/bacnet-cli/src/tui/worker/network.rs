@@ -90,7 +90,7 @@ pub(crate) async fn run<T: TransportPort + 'static>(
             command = commands.recv() => match command {
                 None => break,
                 Some(command) if bip.is_none() => {
-                    let reason = "the Network screen needs BACnet/IP".to_string();
+                    let reason = "BBMD tables are read on BACnet/IP only".to_string();
                     sink.deliver(WorkerEvent::Network(NetworkEvent::Refused { command, reason })).await;
                 }
                 Some(command) if running == Some(command) || queue.contains(&command) => {}

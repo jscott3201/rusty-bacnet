@@ -1,7 +1,7 @@
 //! A B/IPv6 foreign device on the TUI (#2378): the status bar's `FD`
 //! field, the WAITING banner and the Network screen's panel show its
 //! registration from the status its transport reports, as they show
-//! B/IP's: registering, waiting for the BBMD's host name, or waiting after
+//! B/IP's: sent, waiting for the BBMD's host name, or waiting after
 //! the name failed to resolve. B/IP's frames are pinned in
 //! `network_frames` and `network_names`.
 
@@ -102,13 +102,19 @@ fn a_registered_bip6_device_120x40() {
     );
     assert_eq!(app.network.registration_banner(), None);
     let text = screen(&mut app, 120, 40);
-    assert!(text.contains("FD registering"), "{text}");
+    assert!(text.contains("FD sent"), "{text}");
     assert!(
         text.contains("BBMD bbmd.example:47808 ([2001:db8::10]:47808)   TTL 60 s"),
         "{text}"
     );
     assert!(
-        text.contains("Status registering   registrations sent 3  2 name lookups, 0 failed"),
+        text.contains(
+            "Status registration sent; the BBMD's answer isn't tracked   2 name lookups, 0 failed"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("Registrations sent 3, to every BBMD this device has used"),
         "{text}"
     );
     assert!(text.contains("1 asked, 1 released"), "{text}");
@@ -171,7 +177,7 @@ fn a_bip6_device_whose_name_failed_120x40() {
     );
     assert_eq!(app.network.registration_banner(), None);
     let text = screen(&mut app, 120, 40);
-    assert!(text.contains("FD registering"), "{text}");
+    assert!(text.contains("FD sent"), "{text}");
     assert!(text.contains("([2001:db8::10]:47808)"), "{text}");
 }
 
@@ -198,6 +204,73 @@ fn a_bip6_bbmd_known_by_address() {
     );
     assert!(text.contains("FD pending"), "{text}");
     assert!(text.contains("first registration not sent yet"), "{text}");
+}
+
+/// A name that resolved and later failed to resolve: the device keeps
+/// registering with the address it had, so no WAITING banner, and `FD`
+/// still reads sent; the counts say why the newest lookup failed.
+#[test]
+fn a_resolved_name_that_later_fails_keeps_its_address() {
+    let mut app = bip6_app();
+    report(
+        &mut app,
+        status(|s| {
+            s.bbmd = Some(BBMD);
+            s.registrations_sent = 2;
+            s.lookups.lookups = 3;
+            s.lookups.failures = 1;
+            s.lookups.last_failure = Some(BbmdLookupFailure::Error(std::io::ErrorKind::NotFound));
+        }),
+    );
+    assert_eq!(
+        app.network.registration_state(),
+        Some(Registration::Unconfirmed)
+    );
+    assert_eq!(app.network.registration_banner(), None);
+    let text = screen(&mut app, 120, 40);
+    assert!(text.contains("FD sent"), "{text}");
+    assert!(!text.contains("WAITING"), "{text}");
+    assert!(
+        text.contains("3 name lookups, 1 failed: the name did not resolve"),
+        "{text}"
+    );
+}
+
+/// A stopped device whose name never resolved has no address and no wait:
+/// it reads as waiting for the name, without a banner until a lookup fails.
+#[test]
+fn a_stopped_bip6_device_without_an_address_reads_waiting() {
+    let mut app = bip6_app();
+    report(&mut app, status(|_| {}));
+    assert_eq!(
+        app.network.registration_state(),
+        Some(Registration::Waiting)
+    );
+    assert_eq!(app.network.registration_banner(), None);
+}
+
+/// On B/IPv6 nothing reads BBMD tables: `:bbmd`, `r` and `m` say B/IP
+/// only, even with a registration, and the footer offers none of them.
+#[test]
+fn bbmd_tables_are_b_ip_only_on_bip6() {
+    let mut app = bip6_app();
+    report(&mut app, registered());
+    press(&mut app, KeyCode::Char(':'));
+    type_text(&mut app, "bbmd");
+    assert!(press(&mut app, KeyCode::Enter).is_empty());
+    let flash = app.flash.take().unwrap().text;
+    assert_eq!(flash, "BBMD tables are read on BACnet/IP only.");
+    for key in ['r', 'm'] {
+        assert!(press(&mut app, KeyCode::Char(key)).is_empty(), "{key}");
+        let flash = app.flash.take().unwrap().text;
+        assert!(flash.contains("BACnet/IP only"), "{key}: {flash}");
+    }
+    let text = screen(&mut app, 120, 40);
+    let footer = text.lines().last().unwrap();
+    for gone in ["read tables", "survey", ":bbmd"] {
+        assert!(!footer.contains(gone), "{gone}: {footer}");
+    }
+    assert!(footer.contains("Tab networks"), "{footer}");
 }
 
 /// The network worker polls a real B/IPv6 foreign device's status, the one
