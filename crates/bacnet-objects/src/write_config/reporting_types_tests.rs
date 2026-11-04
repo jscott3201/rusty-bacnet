@@ -430,7 +430,9 @@ fn the_file_backend_writes_the_public_octets_for_each_type() {
         )
     });
     for kind in TYPES {
-        let path = directory.join(format!("{kind:?}"));
+        // The type's number, not its Debug name: "::" isn't allowed in a
+        // Windows file name.
+        let path = directory.join(format!("type-{}", kind.to_raw()));
         let file = || -> Arc<dyn super::WriteConfigPersistence> {
             Arc::new(FileWriteConfigPersistence::new(&path).unwrap())
         };
