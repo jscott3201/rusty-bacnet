@@ -2067,8 +2067,8 @@ waits for them (see [CI gate](#ci-gate)).
 | Smoke test (Linux x86_64, Linux aarch64, macOS arm64, macOS x86_64, Windows x86_64) | Each platform's wheels and CLI, run on that platform. See [Smoke tests](#smoke-tests). |
 | Publish plan (dry run) | Dry runs only, read only: `release_api.py plan`, `publish_crates.sh --dry-run`, and, for information, each MCP bundle's signature state and `mcpb verify`'s answer. See [Publish plan](#publish-plan-dry-run). |
 | PyPI trusted publishing | Releases only, in the `release` environment, as soon as Validate passes: exchanges the job's OIDC token for a PyPI upload token, which proves PyPI's trusted publisher matches this workflow. The minted token is masked at once, never printed and discarded. See [Secrets and environment](#secrets-and-environment). |
-| Sign the MCP bundles | Releases only, in the `release` environment, on macOS: when the environment holds a signing certificate, `mcpb sign` on a copy of each bundle; then the `release-assets-published` artifact, signed or not. A signing failure publishes the bundle unsigned; a timeout, a failed checkout, download or upload, or a bundle left in neither state fails the job, which holds the release until it is re-run. See [Signing the MCP bundles](#signing-the-mcp-bundles). |
-| GitHub draft | `release_api.py stage`: makes the tag's GitHub draft hold exactly the `release-assets-published` files and their `SHA256SUMS`. See [Draft, then publish](#draft-then-publish). |
+| Sign the MCP bundles | Releases only, in the `release` environment, on macOS: when the environment holds a signing certificate, `mcpb sign` on a copy of each bundle; then the `mcpb-bundles` artifact, only the bundles, signed or not. A signing failure publishes the bundle unsigned; the job's time limit or a failed checkout, download or upload fails the job, which holds the release until it is re-run. See [Signing the MCP bundles](#signing-the-mcp-bundles). |
+| GitHub draft | `mcpb.py adopt`: the `release-assets` files, with each MCP bundle replaced by its `mcpb-bundles` copy only when that is the original or the original correctly signed; it fails otherwise. Then `release_api.py stage`: makes the tag's GitHub draft hold exactly those files and their `SHA256SUMS`. See [Draft, then publish](#draft-then-publish). |
 | Publish to crates.io | `publish_crates.sh`: one multi-package `cargo publish --no-verify` of the crates whose version isn't on crates.io yet. Cargo orders them and waits for the index. |
 | Publish to PyPI | `pypa/gh-action-pypi-publish` with trusted publishing: the wheels and the sdist. |
 | GitHub release | `release_api.py publish`: publishes the staged draft, unchanged. |
@@ -2327,10 +2327,13 @@ a malformed signature block fails the job.
 
   That is 0.11.0's asset names (the five CLI binaries on GitHub, the wheels
   and sdist on PyPI) plus the CPython 3.14 wheels and `THIRD-PARTY-NOTICES`.
-- `release-assets-published`: `release-assets` with each MCP bundle signed
-  when a signing certificate is configured, from a release's signing job. The
-  GitHub draft and release publish these files; PyPI takes the wheels and
-  sdist from `release-assets`, which are the same files.
+- `mcpb-bundles`: only the MCP bundles, each signed when a signing
+  certificate is configured, from a release's signing job. The GitHub draft
+  and release jobs take `release-assets` with these bundles in place of its
+  own, after `mcpb.py adopt` has checked them (see
+  [Signing the MCP bundles](#signing-the-mcp-bundles)); PyPI takes the
+  wheels and sdist from `release-assets`, so GitHub and PyPI publish the
+  same files.
 - `release-notes`: `notes.md`. Issue references such as `#1134` link to the
   GitHub issue of that number, which is the right one since the issues moved
   to GitHub (#1472). GitHub refuses bodies over 125,000 characters, so a
@@ -2600,16 +2603,30 @@ unsigned otherwise, as before. No signing failure stops a release:
   the zip check is dropped, and the unsigned bundle is published, with a
   warning. `mcpb verify`'s answer is a notice, never a failure.
 - **A failing tool step** (Node.js, the tool install, the signing step,
-  each with its own time limit) leaves the bundles unsigned. So does a step
-  that stops part way, since `release/` takes a signed copy only after its
-  checks.
-- **What fails the job.** The job's time limit, a failed checkout,
-  download or upload, or its last step, which fails when a bundle in
-  `release/` is neither the one the checks and smoke tests passed nor that
-  one signed with a block a strict zip reader takes. The job then fails
-  closed: the GitHub draft and every job after it don't run, nothing is
-  published, and re-running the failed jobs resumes the release (see
+  each with its own time limit) leaves the bundles unsigned. A signing step
+  that stops part way can leave a mix: the bundles it finished are signed,
+  and the rest unsigned, since `release/` takes a signed copy only after its
+  checks. The GitHub draft's check accepts that mix.
+- **What fails the job.** The job's time limit, or a failed checkout,
+  download or upload. The job then fails closed: the GitHub draft and every
+  job after it don't run, nothing is published, and re-running the failed
+  jobs resumes the release (see
   [Re-running a partial release](#re-running-a-partial-release)).
+- **What the GitHub draft takes.** The signing job runs the npm tree with
+  the key, so the release trusts nothing it leaves behind but the bundles,
+  and those only after a check. It uploads only the `.mcpb` files, as
+  `mcpb-bundles`. The GitHub draft job, on a fresh runner that never ran
+  the npm tree, downloads the untouched `release-assets` and `mcpb-bundles`,
+  and runs `mcpb.py adopt` from the tag's checkout. Each bundle must be
+  byte for byte its original in `release-assets`, or that original signed
+  as above with a block a strict zip reader takes; `mcpb-bundles` must hold
+  one file for each of the release's bundles and nothing else. Only then
+  does it copy the signed ones over their originals; every other file comes
+  from `release-assets` alone, the same files PyPI takes. Otherwise it
+  changes nothing and fails the job, which stops the release before
+  anything is published; a re-run of the signing job and the jobs after it
+  resumes it. The GitHub release job repeats the same steps before it
+  checks the draft against those files.
 
 Dry runs, forks' runs and PR runs never reach the `release` environment.
 Their Publish plan reports each bundle's state, `mcpb verify`'s answer and the

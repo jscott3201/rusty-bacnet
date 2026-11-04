@@ -39,6 +39,10 @@ field for the architecture, so the file name says it.
   end-of-central-directory record's comment length must count every byte
   after it, which `mcpb sign` 2.1.2 doesn't do (mcpb#278). The signature itself is
   checked by `mcpb verify`, not here.
+- `adopt` takes the signing job's bundles into the release's files: each
+  must be its unsigned original from the release's files, or that original
+  signed with a block a strict zip reader takes, with none added or missing
+  and nothing else beside them. Otherwise it changes nothing and fails.
 - `smoke` does what a host does: unzips it (restoring the modes), runs the
   manifest's command with a profile filled in, and checks that a missing or
   unauthorized profile stops the server at once with a message naming
@@ -54,6 +58,7 @@ import json
 import os
 import queue
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -454,6 +459,59 @@ def signature(path):
     return state, hashlib.sha256(content).hexdigest()
 
 
+def adopt_errors(release, bundles):
+    """Why the files in `bundles` (what the signing job uploaded) may not
+    replace the MCP bundles in `release` (the release's untouched files); []
+    when they may. `bundles` must hold one file per bundle in `release`, of
+    the same name and nothing else, and each must be its original, unsigned,
+    or that original with a signature block appended (and the comment length
+    raised to count it) that a strict zip reader takes."""
+    release, bundles = Path(release), Path(bundles)
+    if not bundles.is_dir():
+        return [f"no {bundles} directory"]
+    originals = {p.name for p in release.iterdir() if p.suffix == ".mcpb" and p.is_file()}
+    if not originals:
+        return [f"{release} holds no MCP bundle"]
+    errors, names = [], set()
+    for item in sorted(bundles.iterdir()):
+        if item.suffix != ".mcpb" or item.is_symlink() or not item.is_file():
+            errors.append(f"{item.name}: only MCP bundles may come from the signing job")
+        else:
+            names.add(item.name)
+    errors += [f"{name} is not one of the release's bundles" for name in sorted(names - originals)]
+    errors += [f"{name} is missing" for name in sorted(originals - names)]
+    for name in sorted(names & originals):
+        original = (release / name).read_bytes()
+        data = (bundles / name).read_bytes()
+        if data == original:
+            continue
+        if split_signature(original)[1] != "unsigned":
+            errors.append(f"{name}: the release's own bundle is not unsigned")
+            continue
+        content, state = split_signature(data)
+        if state != "signed" or content != original:
+            errors.append(f"{name} is neither the release's bundle nor that bundle signed")
+        else:
+            errors += [f"{name} is signed, but a strict zip reader refuses it: it {err}"
+                       for err in trailer_errors(data)]
+    return errors
+
+
+def adopt(release, bundles):
+    """Copy the signing job's bundles over the release's when `adopt_errors`
+    finds nothing; (errors, the names that came signed)."""
+    errors = adopt_errors(release, bundles)
+    if errors:
+        return errors, []
+    signed = []
+    for item in sorted(Path(bundles).iterdir()):
+        target = Path(release) / item.name
+        if item.read_bytes() != target.read_bytes():
+            signed.append(item.name)
+            shutil.copyfile(item, target)
+    return [], signed
+
+
 # --- Smoke ------------------------------------------------------------------
 
 def extract(path, into):
@@ -649,6 +707,9 @@ def main(argv=None):
     g.add_argument("bundle", type=Path)
     t = sub.add_parser("trailer", help="check that a strict zip reader takes the bundle's end")
     t.add_argument("bundle", type=Path)
+    a = sub.add_parser("adopt", help="take the signing job's bundles into the release's files")
+    a.add_argument("release", type=Path)
+    a.add_argument("bundles", type=Path)
     s = sub.add_parser("smoke", help="run a bundle as a host does")
     s.add_argument("bundle", type=Path)
     s.add_argument("--timeout", type=float, default=30.0)
@@ -670,6 +731,13 @@ def main(argv=None):
             print(f"error: {args.bundle.name} {err}", file=sys.stderr)
         if not errors:
             print(f"OK: {args.bundle.name}")
+        return 1 if errors else 0
+    if args.action == "adopt":
+        errors, signed = adopt(args.release, args.bundles)
+        for err in errors:
+            print(f"error: {err}", file=sys.stderr)
+        if not errors:
+            print(f"OK: {len(signed)} signed MCP bundle(s) taken{': ' if signed else ''}{', '.join(signed)}")
         return 1 if errors else 0
     if args.action == "signature":
         state, digest = signature(args.bundle)

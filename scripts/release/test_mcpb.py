@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -284,22 +285,23 @@ class PackAndCheckTests(unittest.TestCase):
 
     def test_a_raised_comment_length_is_the_only_change_forgiven(self):
         unsigned = self.files.pack().read_bytes()
-        digest = hashlib.sha256(unsigned).hexdigest()
         block = signature_block()
-        # Any other byte of the bundle changed under the block shows in the digest.
+        signed = declare(unsigned, len(block))
         eocd = unsigned.rfind(b"PK\x05\x06")
-        for at in (0, eocd - 1, eocd + 8, eocd + 21):
-            with self.subTest(at=at):
-                changed = bytearray(declare(unsigned, len(block)))
-                changed[at] ^= 0x01
-                content, state = mcpb.split_signature(bytes(changed) + block)
-                self.assertEqual(state, "signed")
-                if at in (eocd + 20, eocd + 21):
-                    # The comment length itself: put back, but the trailer check refuses it.
-                    self.assertEqual(hashlib.sha256(content).hexdigest(), digest)
-                    self.assertTrue(mcpb.trailer_errors(bytes(changed) + block))
-                else:
-                    self.assertNotEqual(hashlib.sha256(content).hexdigest(), digest)
+        self.assertLess(len(unsigned), 16384)  # small enough to change every byte
+        # Every byte of the bundle under the block, changed in turn, shows in
+        # the content, except the comment length, which is put back and which
+        # the trailer check then refuses.
+        forgiven = []
+        for at in range(len(signed)):
+            changed = bytearray(signed)
+            changed[at] ^= 0x01
+            content, state = mcpb.split_signature(bytes(changed) + block)
+            self.assertEqual(state, "signed")
+            if content == unsigned:
+                forgiven.append(at)
+                self.assertTrue(mcpb.trailer_errors(bytes(changed) + block))
+        self.assertEqual(forgiven, [eocd + 20, eocd + 21])
 
     def test_a_strict_reader_refuses_an_undeclared_trailing_block(self):
         unsigned = self.files.pack().read_bytes()
@@ -359,6 +361,94 @@ class PackAndCheckTests(unittest.TestCase):
         manifest["server"]["mcp_config"]["args"].append("${user_config.other}")
         with self.assertRaises(ValueError):
             mcpb.command(manifest, "/opt/b", "plant-a")
+
+
+class AdoptTests(unittest.TestCase):
+    """mcpb.py adopt: what the GitHub draft takes from the signing job."""
+
+    def setUp(self):
+        self.files = Files(self)
+        self.release = self.files.dir / "release"
+        self.bundles = self.files.dir / "bundles"
+        self.release.mkdir()
+        self.bundles.mkdir()
+        for platform in ("macos-arm64", "linux-x86_64"):
+            path = self.files.pack(platform=platform)
+            (self.release / path.name).write_bytes(path.read_bytes())
+            (self.bundles / path.name).write_bytes(path.read_bytes())
+        (self.release / "rusty_bacnet-1.2.0-cp312-cp312-win_amd64.whl").write_bytes(b"wheel")
+        self.before = {p.name: p.read_bytes() for p in self.release.iterdir()}
+        self.mac = "bacnet-macos-arm64.mcpb"
+
+    def adopt(self):
+        return mcpb.adopt(self.release, self.bundles)
+
+    def unchanged(self):
+        self.assertEqual({p.name: p.read_bytes() for p in self.release.iterdir()}, self.before)
+
+    def test_unsigned_bundles_change_nothing(self):
+        self.assertEqual(self.adopt(), ([], []))
+        self.unchanged()
+
+    def test_a_correctly_signed_bundle_is_taken(self):
+        block = signature_block()
+        signed = declare(self.before[self.mac], len(block)) + block
+        (self.bundles / self.mac).write_bytes(signed)
+        self.assertEqual(self.adopt(), ([], [self.mac]))
+        self.assertEqual((self.release / self.mac).read_bytes(), signed)
+        self.before[self.mac] = signed
+        self.unchanged()  # nothing else changed
+
+    def test_each_fault_changes_nothing(self):
+        block = signature_block()
+        original = self.before[self.mac]
+        faults = {
+            "2.1.2 layout": (lambda: (self.bundles / self.mac).write_bytes(original + block), "strict zip reader"),
+            "changed": (lambda: (self.bundles / self.mac).write_bytes(original[:-1] + b"\x01"),
+                        "neither the release's bundle nor that bundle signed"),
+            "changed, then signed": (lambda: (self.bundles / self.mac).write_bytes(
+                b"Q" + declare(original, len(block))[1:] + block), "neither"),
+            "malformed block": (lambda: (self.bundles / self.mac).write_bytes(original + b"MCPB_SIG_END"), "neither"),
+            "added bundle": (lambda: (self.bundles / "bacnet-extra.mcpb").write_bytes(original),
+                             "not one of the release's bundles"),
+            "missing bundle": (lambda: (self.bundles / self.mac).unlink(), "is missing"),
+            "a wheel": (lambda: (self.bundles / "rusty_bacnet-1.2.0-cp312-cp312-win_amd64.whl").write_bytes(b"other"),
+                        "only MCP bundles"),
+            "a directory": (lambda: (self.bundles / "x.mcpb").mkdir(), "only MCP bundles"),
+            "a link": (lambda: (self.bundles / self.mac).unlink() or (self.bundles / self.mac).symlink_to(
+                self.release / self.mac), "only MCP bundles"),
+        }
+        for label, (fault, want) in faults.items():
+            with self.subTest(fault=label):
+                for folder in (self.release, self.bundles):
+                    shutil.rmtree(folder)
+                    folder.mkdir()
+                for name, data in self.before.items():
+                    (self.release / name).write_bytes(data)
+                    if name.endswith(".mcpb"):
+                        (self.bundles / name).write_bytes(data)
+                fault()
+                errors, signed = self.adopt()
+                self.assertTrue(any(want in e for e in errors), errors)
+                self.assertEqual(signed, [])
+                self.unchanged()
+
+    def test_a_signed_original_or_no_bundles_fails(self):
+        signed = self.before[self.mac] + signature_block()
+        (self.release / self.mac).write_bytes(signed)
+        (self.bundles / self.mac).write_bytes(signed + b"x")
+        self.assertTrue(any("not unsigned" in e for e in mcpb.adopt_errors(self.release, self.bundles)))
+        self.assertTrue(mcpb.adopt_errors(self.release, self.files.dir / "absent"))
+        empty = self.files.dir / "empty"
+        empty.mkdir()
+        self.assertTrue(any("holds no MCP bundle" in e for e in mcpb.adopt_errors(empty, self.bundles)))
+
+    def test_main(self):
+        with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(mcpb.main(["adopt", str(self.release), str(self.bundles)]), 0)
+            self.assertIn("OK: 0 signed", out.getvalue())
+            (self.bundles / "extra.txt").write_text("x")
+            self.assertEqual(mcpb.main(["adopt", str(self.release), str(self.bundles)]), 1)
 
 
 class CheckArtifactsBundleTests(unittest.TestCase):

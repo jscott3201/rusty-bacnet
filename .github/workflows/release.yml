@@ -652,24 +652,27 @@ jobs:
   # reader refuses (modelcontextprotocol/mcpb#278), the unsigned bundle is
   # published, with a notice or a warning. Each bundle is signed as a copy
   # outside release/, which takes it only once every check passed, so a step
-  # that stops or times out part way leaves the unsigned bundle. Signing may
-  # append a block and raise the comment length to count it, nothing more:
-  # the bundle under the block must keep the bytes the checks and smoke tests
-  # passed. mcpb verify's answer is a notice: it passes only for a chain the
-  # OS trusts for code signing, and on Linux never (mcpb 2.1.2 asks OpenSSL
-  # for the purpose "codesigning", which OpenSSL names "codesign" from 3.2),
-  # so the job runs on macOS. The job itself fails closed, so the GitHub
-  # draft and everything after it wait for a re-run, when the job times out,
-  # a checkout, download or upload fails, or the last step finds a bundle
-  # that isn't the unsigned one or that one correctly signed. The GitHub
-  # draft and release publish its output. See docs/ci.md, "Signing the MCP
-  # bundles".
+  # that stops or times out part way leaves the bundles each unsigned or
+  # correctly signed. Signing may append a block and raise the comment
+  # length to count it, nothing more: the bundle under the block must keep
+  # the bytes the checks and smoke tests passed. mcpb verify's answer is a
+  # notice: with mcpb 2.1.2 it reports every bundle unsigned
+  # (modelcontextprotocol/mcpb#277), later it passes only for a chain the OS
+  # trusts for code signing, and on Linux never (mcpb 2.1.2 asks OpenSSL for
+  # the purpose "codesigning", which OpenSSL names "codesign" from 3.2), so
+  # the job runs on macOS. It uploads only the .mcpb files, as mcpb-bundles.
+  # This job runs the npm tree, so nothing here is trusted: the GitHub draft
+  # job, on a fresh runner, takes the release's files from release-assets and
+  # only the bundles from mcpb-bundles, after checking them (mcpb.py adopt).
+  # The job fails closed, so the GitHub draft and everything after it wait
+  # for a re-run, when its time limit runs out or a checkout, download or
+  # upload fails. See docs/ci.md, "Signing the MCP bundles".
   mcpb-sign:
     name: Sign the MCP bundles
     needs: [validate, ci-gate, verify, smoke]
     if: needs.validate.outputs.publish == 'true'
     runs-on: macos-26
-    # The other steps' own limits add up to 17 minutes; the rest is for the
+    # The tool steps' own limits add up to 13 minutes; the rest is for the
     # checkout, the download and the upload.
     timeout-minutes: 30
     environment:
@@ -687,13 +690,6 @@ jobs:
         with:
           name: release-assets
           path: release
-      - name: Record the unsigned bundles
-        timeout-minutes: 2
-        run: |
-          for bundle in release/*.mcpb; do
-            read -r state digest < <(python3 -I scripts/release/mcpb.py signature "$bundle")
-            printf '%s %s %s\n' "${bundle#release/}" "$state" "$digest"
-          done >"$RUNNER_TEMP/mcpb-unsigned.txt"
       # A failure or timeout here leaves the bundles unsigned, not the release stopped.
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         continue-on-error: true
@@ -766,36 +762,16 @@ jobs:
               continue
             fi
             "$mcpb" info "$signing" || true
-            if "$mcpb" verify "$signing"; then verdict=passes; else verdict="fails (a chain macOS doesn't trust)"; fi
+            if "$mcpb" verify "$signing"; then verdict=passes; else verdict="fails (with mcpb 2.1.2, always: mcpb#277)"; fi
             mv "$signing" "$bundle"
             echo "::notice::$name is signed; mcpb verify $verdict"
           done
-      # Fails the job, and so holds the release for a re-run, if a bundle is
-      # neither the unsigned one nor that one signed with a block a strict
-      # zip reader takes: what a signing step stopped part way could leave.
-      - name: Every bundle is the unsigned one, or that one correctly signed
-        timeout-minutes: 2
-        run: |
-          failed=0
-          while read -r name state digest; do
-            bundle="release/$name"
-            read -r now now_digest < <(python3 -I scripts/release/mcpb.py signature "$bundle") || true
-            if [ "$now_digest" != "$digest" ]; then
-              echo "::error::$name isn't the bundle the checks and smoke tests passed"
-              failed=1
-            elif [ "$now" != "$state" ] && { [ "$state" != unsigned ] || [ "$now" != signed ] ||
-                ! python3 -I scripts/release/mcpb.py trailer "$bundle"; }; then
-              echo "::error::$name went from $state to $now, or a strict zip reader refuses it"
-              failed=1
-            fi
-          done <"$RUNNER_TEMP/mcpb-unsigned.txt"
-          exit "$failed"
-      # What the GitHub draft and release publish: the release's files, with
-      # the MCP bundles signed or not.
+      # Only the MCP bundles, signed or not; the GitHub draft checks them
+      # against release-assets before it takes them.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-assets-published
-          path: release/
+          name: mcpb-bundles
+          path: release/*.mcpb
           if-no-files-found: error
 
   # Publishing: tag runs only, after Validate, the CI gate, every check and
@@ -817,12 +793,21 @@ jobs:
       sums_sha256: ${{ steps.stage.outputs.sums_sha256 }}
     steps:
       - *release-scripts
-      # The release's files, with the MCP bundles signed when a certificate is configured.
-      - &published-assets
+      # The release's files: release-assets, untouched, with only its MCP
+      # bundles replaced by the signing job's, and only when each is its
+      # original or that original correctly signed, none added or missing
+      # (mcpb.py adopt, from this checkout; fails closed). This runner never
+      # ran the signing job's npm tree.
+      - *release-assets
+      - &mcpb-bundles
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: release-assets-published
-          path: release
+          name: mcpb-bundles
+          path: mcpb-bundles
+      - &adopt-bundles
+        name: Take the signing job's MCP bundles
+        timeout-minutes: 2
+        run: python3 -I scripts/release/mcpb.py adopt release mcpb-bundles
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-notes
@@ -940,7 +925,9 @@ jobs:
       contents: write # reads the draft and publishes it
     steps:
       - *release-scripts
-      - *published-assets
+      - *release-assets
+      - *mcpb-bundles
+      - *adopt-bundles
       - name: Publish the staged draft
         env:
           GITHUB_TOKEN: ${{ github.token }}
