@@ -44,7 +44,15 @@
 //! receive loop reads it beside the primary socket, in arrival order
 //! (#1546). Another program holding the group's port without those options
 //! (bound to `0.0.0.0` on it, say) makes the listener's bind fail, and the
-//! start or activation fails with it. Windows can't bind a group address,
+//! start or activation fails with it. A node's own primary socket claims
+//! its port (socket.rs, #2366). Where a node starts with its group on its
+//! own port, on Linux the primary and the listener both set `SO_REUSEPORT`
+//! to bind it together; macOS and the BSDs need nothing more, since the
+//! listener binds after the primary. On Linux a group activated later on
+//! the port of a node that started without one can't bind its listener
+//! beside the claimed primary, unless the node shares its port
+//! (`set_share_wildcard_port`). Two members on one host at one unicast port
+//! need sharing too. Windows can't bind a group address,
 //! so there the primary socket joins the group itself and the group's port
 //! must be the transport's own, which also means two members can't share
 //! one Windows host; it reports the group delivery in the receive flags.
@@ -578,7 +586,20 @@ impl MulticastControl {
             self.interface,
             next.ttl,
         )?;
-        let socket = group_listener(next.endpoint(running.port), self.interface)?;
+        let endpoint = next.endpoint(running.port);
+        let socket = group_listener(endpoint, self.interface).map_err(|e| {
+            // On Linux the primary socket claims the port the node started
+            // on without a group (socket.rs, #2366).
+            if endpoint.port() != running.port || e.kind() != io::ErrorKind::AddrInUse {
+                return e;
+            }
+            let context = format!(
+                "this node holds UDP port {} for itself; to take a group on it, share the \
+                 port (set_share_wildcard_port) or give the group a port of its own",
+                running.port
+            );
+            super::listener_error::listener_error(context, e)
+        })?;
         Listener::open_group(socket, running.lease.clone(), &running.tap).map(Some)
     }
 

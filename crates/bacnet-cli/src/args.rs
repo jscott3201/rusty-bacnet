@@ -57,6 +57,14 @@ pub(crate) struct Cli {
     #[arg(short, long, default_value_t = 0xBAC0, global = true)]
     pub(crate) port: u16,
 
+    /// Share --port with other programs on this host that bind it the same
+    /// way. Without it the CLI claims the port and fails at once when
+    /// another program holds it. With it, each unicast to the port reaches
+    /// only one of the programs on it, so replies can go astray. BACnet/IP
+    /// only.
+    #[arg(long, global = true)]
+    pub(crate) share_port: bool,
+
     /// Broadcast address for WhoIs.
     #[arg(short, long, default_value = "255.255.255.255", global = true)]
     pub(crate) broadcast: Ipv4Addr,

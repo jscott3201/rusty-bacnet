@@ -5,6 +5,9 @@ use crate::local_addresses::LocalInterface;
 use crate::port_ownership::{ATTEMPTS, restart};
 use socket::{BindPlan, BoundSockets, SocketRole, udp_socket};
 
+#[path = "socket_claim_tests.rs"]
+mod claim_tests;
+
 #[tokio::test]
 async fn socket_is_broadcast_capable_and_binds_inaddr_any() {
     // Regression for the "user-supplied interface IP" silently rejecting
@@ -62,11 +65,13 @@ fn reuses_address(transport: &BipTransport) -> bool {
 }
 
 #[test]
-fn only_an_explicitly_requested_port_opts_into_address_reuse() {
+fn only_a_port_shared_on_request_opts_into_address_reuse() {
     // Linux can hand two SO_REUSEADDR sockets the same ephemeral port, and
-    // unicast to it then reaches only one of them (#892).
+    // unicast to it then reaches only one of them (#892); a requested port
+    // is claimed too unless sharing is asked for (#2366).
     let reuses = |role| udp_socket(role).unwrap().reuse_address().unwrap();
-    assert!(!reuses(SocketRole::PrivateWildcard));
+    assert!(!reuses(SocketRole::ClaimedWildcard));
+    assert!(!reuses(SocketRole::GroupWildcard));
     assert!(reuses(SocketRole::SharedWildcard));
     // In per-address mode (#1538) only macOS and the BSDs share the address,
     // to bind beside their wildcard listener; Linux needs no listener there,
@@ -77,22 +82,23 @@ fn only_an_explicitly_requested_port_opts_into_address_reuse() {
     ));
     assert_eq!(reuses(SocketRole::Address), macos_or_bsd);
     assert!(reuses(SocketRole::BroadcastListener));
-    assert!(!BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST).share_port);
-    assert!(BipTransport::new(Ipv4Addr::LOCALHOST, 0xBAC0, Ipv4Addr::BROADCAST).share_port);
+    assert!(!BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST).requested_port);
+    assert!(BipTransport::new(Ipv4Addr::LOCALHOST, 0xBAC0, Ipv4Addr::BROADCAST).requested_port);
 }
 
 /// Where `bind` put a socket.
-fn address_of(socket: &socket2::Socket) -> SocketAddrV4 {
+pub(super) fn address_of(socket: &socket2::Socket) -> SocketAddrV4 {
     socket.local_addr().unwrap().as_socket_ipv4().unwrap()
 }
 
 /// The plan for `interface` on an explicitly requested `port`, with the
 /// loopback subnet's broadcast address.
-fn plan(interface: Ipv4Addr, port: u16, by_address: bool) -> BindPlan {
+pub(super) fn plan(interface: Ipv4Addr, port: u16, by_address: bool) -> BindPlan {
     BindPlan {
         interface,
         port,
-        share_port: port != 0,
+        requested_port: port != 0,
+        share_wildcard: false,
         by_address,
         broadcast: Ipv4Addr::new(127, 255, 255, 255),
         local: None,
@@ -103,7 +109,11 @@ fn plan(interface: Ipv4Addr, port: u16, by_address: bool) -> BindPlan {
 /// `socket::bind` for an explicitly requested port, which the OS picks here
 /// and the probe releases first. Another process can take it in between
 /// (#1032), so each run of `check` gets a fresh one.
-fn on_a_requested_port(interface: Ipv4Addr, by_address: bool, check: impl Fn(u16, BoundSockets)) {
+pub(super) fn on_a_requested_port(
+    interface: Ipv4Addr,
+    by_address: bool,
+    check: impl Fn(u16, BoundSockets),
+) {
     for attempt in 1..=ATTEMPTS {
         let port = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
             .unwrap()
@@ -126,7 +136,7 @@ fn an_explicit_interface_keeps_one_wildcard_socket_by_default() {
             address_of(&bound.primary),
             SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port)
         );
-        assert!(bound.primary.reuse_address().unwrap());
+        assert!(!bound.primary.reuse_address().unwrap());
         assert!(bound.listeners.is_empty());
     });
 }
@@ -188,7 +198,7 @@ fn a_wildcard_or_a_private_port_keeps_one_wildcard_socket() {
             address_of(&bound.primary),
             SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port)
         );
-        assert!(bound.primary.reuse_address().unwrap());
+        assert!(!bound.primary.reuse_address().unwrap());
         assert!(bound.listeners.is_empty());
     });
     // An ephemeral port is never shared (#892).

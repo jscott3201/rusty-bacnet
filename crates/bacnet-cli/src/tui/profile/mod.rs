@@ -292,6 +292,7 @@ impl Profile {
         let mut args = TransportArgs {
             interface: Ipv4Addr::UNSPECIFIED,
             port: 0,
+            share_port: false,
             broadcast: Ipv4Addr::BROADCAST,
             timeout_ms: 0,
             min_interval_ms: 0,

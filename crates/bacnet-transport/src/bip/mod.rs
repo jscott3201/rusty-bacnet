@@ -117,7 +117,9 @@ pub struct BipTransport {
     port: u16,
     /// Fixed at construction: a restart rebinds the remembered actual port,
     /// but only an explicitly requested one may be shared.
-    share_port: bool,
+    requested_port: bool,
+    /// See [`Self::set_share_wildcard_port`].
+    share_wildcard_port: bool,
     /// See [`Self::set_share_port_by_address`].
     share_port_by_address: bool,
     broadcast_address: Ipv4Addr,
@@ -196,7 +198,9 @@ impl BipTransport {
     ///   [`set_share_port_by_address`](Self::set_share_port_by_address) asks
     ///   for an explicit address's own socket.
     /// - `port`: UDP port (default 47808 / 0xBAC0). Port zero asks for a
-    ///   private ephemeral port.
+    ///   private ephemeral port. The transport claims the port either way, so
+    ///   a second bind of it on this host fails; see
+    ///   [`set_share_wildcard_port`](Self::set_share_wildcard_port).
     /// - `broadcast_address`: Directed broadcast address (e.g., `255.255.255.255`)
     pub fn new(interface: Ipv4Addr, port: u16, broadcast_address: Ipv4Addr) -> Self {
         let fanout_policy = FanoutPolicy::default();
@@ -207,7 +211,8 @@ impl BipTransport {
         Self {
             interface,
             port,
-            share_port: port != 0,
+            requested_port: port != 0,
+            share_wildcard_port: false,
             share_port_by_address: false,
             broadcast_address,
             local_mac: [0; 6],
@@ -240,32 +245,6 @@ impl BipTransport {
             #[cfg(test)]
             between_stops: None,
         }
-    }
-
-    /// Bind the interface address itself, so transports on other addresses
-    /// of this host can share the port, each getting only its own unicast
-    /// (#1538). Off by default: the transport binds `0.0.0.0`. Call it before
-    /// `start()`, which fails unless the interface is an explicit address and
-    /// the port is nonzero.
-    ///
-    /// In this mode every send leaves from the interface address. On Linux,
-    /// macOS and the BSDs, broadcasts arrive on separate receive-only
-    /// listeners, and datagrams go up in the order the kernel stamped them
-    /// on arrival across those sockets (#1546): a unicast that depends on a
-    /// broadcast sent just before it is handled after it; datagrams without
-    /// distinct stamps go up in the order read. The listeners keep only
-    /// broadcasts that arrived on the interface's own link, as looked up at
-    /// start: restart the transport after its interface changes. The
-    /// configured broadcast address must be the interface's subnet broadcast
-    /// or 255.255.255.255 (a loopback interface may also name itself), or
-    /// `start()` fails. On
-    /// Windows one socket claims the address with `SO_EXCLUSIVEADDRUSE`; a
-    /// socket already bound to the wildcard address on that port doesn't stop
-    /// it, and under Windows' strong host model a multihomed BBMD reaches a
-    /// peer only through the interface it is bound to. See
-    /// `docs/rust-api.md` (BIP section) for each OS.
-    pub fn set_share_port_by_address(&mut self, enabled: bool) {
-        self.share_port_by_address = enabled;
     }
 
     /// Enable BBMD mode with the given initial BDT.

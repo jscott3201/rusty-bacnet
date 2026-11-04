@@ -168,6 +168,7 @@ async fn endpoint_number_bbmd_server_wire_admission() {
         let impostor = udp().await;
         let (observer, port) = observer();
         let configured = builder_on(port)
+            .share_wildcard_port(true)
             .role(SessionRole::ServerOnly)
             .mode(BipMode::Bbmd(BbmdOptions {
                 bdt: vec![BdtEntry {

@@ -54,7 +54,7 @@ fn the_arrival_stamp_decides_and_the_read_order_breaks_ties() {
 
 /// A plain socket bound to `127.0.0.1` on a port the OS picks.
 fn loopback_socket() -> socket2::Socket {
-    let socket = socket::udp_socket(socket::SocketRole::PrivateWildcard).unwrap();
+    let socket = socket::udp_socket(socket::SocketRole::ClaimedWildcard).unwrap();
     socket
         .bind(&SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0).into())
         .unwrap();

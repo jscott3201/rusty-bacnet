@@ -95,7 +95,7 @@ class EndpointStubParityTests(unittest.TestCase):
                            "network_port_instance", "max_apdu", "segmentation",
                            "services", "device_uuid", "queue_capacity",
                            "apdu_timeout_ms", "apdu_retries", "registered_network_port",
-                           "read_work_limit", "share_port_by_address",
+                           "read_work_limit", "share_port_by_address", "share_wildcard_port",
                            "min_request_interval_ms", "bbmd", "foreign_device", "multicast",
                            "on_reinitialize", "after_reinitialize", "reinit_password",
                            "device_write_policy", "source_audit_reporter",

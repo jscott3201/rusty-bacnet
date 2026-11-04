@@ -5,8 +5,21 @@
 //!
 //! - **Wildcard** (the default): one socket on `0.0.0.0:port`. It receives
 //!   unicast and broadcasts alike, in the order they arrive, and the receive
-//!   loop takes unicast only to the interface address. A port the OS picks is
-//!   never shared (#892); an explicitly requested one sets `SO_REUSEADDR`.
+//!   loop takes unicast only to the interface address. The socket claims its
+//!   port, whether the OS picked it (#892) or it was requested (#2366): it
+//!   sets no `SO_REUSEADDR`, and on Windows it sets `SO_EXCLUSIVEADDRUSE`
+//!   (`port_ownership`, #950). Another socket that later binds the port then
+//!   fails, where with sharing it would take the unicast sent to the port.
+//!   macOS and the BSDs still let a socket that sets `SO_REUSEADDR` bind a
+//!   specific address on the port and take the unicast sent to that address;
+//!   they have no option to stop it. On a requested port two cases differ:
+//!   - [`set_share_wildcard_port`](super::BipTransport::set_share_wildcard_port)
+//!     opts back into `SO_REUSEADDR`, so other sockets that set it can bind
+//!     the port too, and unicast reaches only one of them.
+//!   - On Linux, a B/IP-M node that starts with its group on its own port
+//!     sets `SO_REUSEPORT` instead, since its group listener binds that port
+//!     too (multicast.rs). Linux lets only a socket of the same user that
+//!     also sets `SO_REUSEPORT` bind beside it.
 //! - **Per address**, opted into with
 //!   [`set_share_port_by_address`](super::BipTransport::set_share_port_by_address)
 //!   and needing an explicit interface and a nonzero port: the socket binds
@@ -68,13 +81,19 @@ use crate::tap::{FrameTap, TapDirection, TapPeer};
 /// What a socket is for, which decides how it shares its port.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SocketRole {
-    /// `0.0.0.0` on a port the OS picks. Linux gives an ephemeral port to an
-    /// `SO_REUSEADDR` socket even while another `SO_REUSEADDR` socket owns it,
-    /// and unicast to that port then reaches only one of them (#892), so it
-    /// never sets the option, and claims the port where the OS has a way to
-    /// (`port_ownership`, #950).
-    PrivateWildcard,
-    /// `0.0.0.0` on an explicitly requested port: `SO_REUSEADDR`, as before.
+    /// `0.0.0.0`, claiming its port where the OS has a way to
+    /// (`port_ownership`, #950), with no `SO_REUSEADDR`: on a port the OS
+    /// picks, since Linux gives an ephemeral port to an `SO_REUSEADDR` socket
+    /// even while another `SO_REUSEADDR` socket owns it (#892), and by
+    /// default on a requested one, so a later bind of it fails (#2366).
+    ClaimedWildcard,
+    /// `0.0.0.0` on a requested port that the node's B/IP-M group uses too,
+    /// claimed as far as the group's listener allows: on Linux
+    /// `SO_REUSEPORT`, which the listener sets too; elsewhere as
+    /// [`ClaimedWildcard`](Self::ClaimedWildcard).
+    GroupWildcard,
+    /// `0.0.0.0` on a requested port, opted into sharing it:
+    /// `SO_REUSEADDR`.
     SharedWildcard,
     /// `interface:port` in per-address mode (#1538): shares nothing on Linux,
     /// sits beside a wildcard listener on macOS and the BSDs, and claims the
@@ -98,7 +117,11 @@ pub(super) fn udp_socket(role: SocketRole) -> io::Result<socket2::Socket> {
         Some(socket2::Protocol::UDP),
     )?;
     match role {
-        SocketRole::PrivateWildcard => crate::port_ownership::claim_exclusive(&socket)?,
+        SocketRole::ClaimedWildcard => crate::port_ownership::claim_exclusive(&socket)?,
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        SocketRole::GroupWildcard => socket.set_reuse_port(true)?,
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        SocketRole::GroupWildcard => crate::port_ownership::claim_exclusive(&socket)?,
         SocketRole::SharedWildcard => socket.set_reuse_address(true)?,
         #[cfg(windows)]
         SocketRole::Address => crate::port_ownership::claim_exclusive(&socket)?,
@@ -116,6 +139,11 @@ pub(super) fn udp_socket(role: SocketRole) -> io::Result<socket2::Socket> {
                 target_os = "netbsd",
             ))]
             socket.set_reuse_port(true)?;
+            // To bind beside its own node's GroupWildcard socket.
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            if role == SocketRole::GroupListener {
+                socket.set_reuse_port(true)?;
+            }
         }
     }
     socket.set_broadcast(true)?;
@@ -129,7 +157,10 @@ pub(super) struct BindPlan {
     pub(super) interface: Ipv4Addr,
     pub(super) port: u16,
     /// Whether the port was explicitly requested (fixed at construction).
-    pub(super) share_port: bool,
+    pub(super) requested_port: bool,
+    /// Whether a requested port is shared in wildcard mode
+    /// (`set_share_wildcard_port`).
+    pub(super) share_wildcard: bool,
     /// Whether per-address mode was asked for.
     pub(super) by_address: bool,
     /// The configured broadcast address.
@@ -149,6 +180,64 @@ pub(super) struct BoundSockets {
 }
 
 impl super::BipTransport {
+    /// Share an explicitly requested port with other sockets on this host
+    /// that bind it the same way, as before #2366. Off by default: the
+    /// wildcard socket claims its port, so a second bind of it fails at once
+    /// (on Windows with `SO_EXCLUSIVEADDRUSE`), and a start that finds the
+    /// port held fails with an error that says so. Call it before `start()`.
+    ///
+    /// With sharing on, the socket sets `SO_REUSEADDR`. Broadcasts reach
+    /// every socket on the port, but each unicast reaches only one of them:
+    /// on Linux the one that bound last. That can be another program that
+    /// takes this transport's replies, registrations and forwards. Two stacks
+    /// on one host are better served each on its own address with
+    /// [`set_share_port_by_address`](Self::set_share_port_by_address), or
+    /// each on its own port. Two B/IP-M members on one host at one unicast
+    /// port also need sharing on, each; members on different ports don't.
+    ///
+    /// It changes nothing for a port the OS picks, which is never shared
+    /// (#892), or in per-address mode. On macOS and the BSDs the claim stops
+    /// another wildcard bind, and a plain bind of any address, but a socket
+    /// that sets `SO_REUSEADDR` may still bind a specific address on the port
+    /// and take the unicast sent there: they have no option to refuse it.
+    /// On Linux, a B/IP-M node that starts with its group on its own port
+    /// sets `SO_REUSEPORT` instead of claiming outright, since its group
+    /// listener binds that port too; another socket can then bind the port
+    /// only if it sets `SO_REUSEPORT` and belongs to the same user. A group
+    /// on a port of its own leaves the claim whole. A node that starts
+    /// without a group and has one activated on its own port through its
+    /// Network Port needs sharing on Linux, or its group listener can't bind.
+    pub fn set_share_wildcard_port(&mut self, enabled: bool) {
+        self.share_wildcard_port = enabled;
+    }
+
+    /// Bind the interface address itself, so transports on other addresses
+    /// of this host can share the port, each getting only its own unicast
+    /// (#1538). Off by default: the transport binds `0.0.0.0`. Call it before
+    /// `start()`, which fails unless the interface is an explicit address and
+    /// the port is nonzero.
+    ///
+    /// In this mode every send leaves from the interface address. On Linux,
+    /// macOS and the BSDs, broadcasts arrive on separate receive-only
+    /// listeners, and datagrams go up in the order the kernel stamped them
+    /// on arrival across those sockets (#1546): a unicast that depends on a
+    /// broadcast sent just before it is handled after it; datagrams without
+    /// distinct stamps go up in the order read. The listeners keep only
+    /// broadcasts that arrived on the interface's own link, as looked up at
+    /// start: restart the transport after its interface changes. The
+    /// configured broadcast address must be the interface's subnet broadcast
+    /// or 255.255.255.255 (a loopback interface may also name itself), or
+    /// `start()` fails. On
+    /// Windows one socket claims the address with `SO_EXCLUSIVEADDRUSE`; a
+    /// socket already bound to the wildcard address on that port without
+    /// claiming it ([`set_share_wildcard_port`](Self::set_share_wildcard_port))
+    /// doesn't stop it, and under Windows' strong host model a multihomed BBMD reaches a
+    /// peer only through the interface it is bound to. See
+    /// `docs/rust-api.md` (BIP section) for each OS.
+    pub fn set_share_port_by_address(&mut self, enabled: bool) {
+        self.share_port_by_address = enabled;
+    }
+
     /// This transport's frame tap: every BVLL message it sends and
     /// receives, BVLC results, registrations and forwarded NPDUs included,
     /// for whoever subscribes. See [`crate::tap`].
@@ -242,7 +331,8 @@ impl super::BipTransport {
         BindPlan {
             interface: self.interface,
             port: self.port,
-            share_port: self.share_port,
+            requested_port: self.requested_port,
+            share_wildcard: self.share_wildcard_port,
             by_address: self.share_port_by_address,
             broadcast: self.broadcast_address,
             local: None,
@@ -320,12 +410,8 @@ pub(super) fn bind(plan: BindPlan) -> io::Result<BoundSockets> {
         Ok(socket)
     };
     if !plan.by_address {
-        let role = if plan.share_port {
-            SocketRole::SharedWildcard
-        } else {
-            SocketRole::PrivateWildcard
-        };
-        let primary = bound(role, Ipv4Addr::UNSPECIFIED)?;
+        let role = wildcard_role(&plan);
+        let primary = bound(role, Ipv4Addr::UNSPECIFIED).map_err(|e| held(&plan, role, e))?;
         let mut listeners = Vec::new();
         if let Some(multicast) = plan.multicast {
             join_group(&plan, &primary, multicast, &mut listeners)?;
@@ -341,7 +427,7 @@ pub(super) fn bind(plan: BindPlan) -> io::Result<BoundSockets> {
              the host its own port and the group a shared one",
         ));
     }
-    if plan.interface.is_unspecified() || !plan.share_port {
+    if plan.interface.is_unspecified() || !plan.requested_port {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "a B/IP transport shares its port by address only with an explicit interface \
@@ -360,6 +446,46 @@ pub(super) fn bind(plan: BindPlan) -> io::Result<BoundSockets> {
         listeners.push(listener);
     }
     Ok(BoundSockets { primary, listeners })
+}
+
+/// How the wildcard socket binds its port (module docs).
+pub(super) fn wildcard_role(plan: &BindPlan) -> SocketRole {
+    if !plan.requested_port {
+        SocketRole::ClaimedWildcard
+    } else if plan.share_wildcard {
+        SocketRole::SharedWildcard
+    } else if plan
+        .multicast
+        .is_some_and(|group| group.endpoint(plan.port).port() == plan.port)
+    {
+        SocketRole::GroupWildcard
+    } else {
+        SocketRole::ClaimedWildcard
+    }
+}
+
+/// A wildcard bind's error: on a requested port that another socket holds,
+/// it says so and names the opt-in, and keeps the OS error as its source,
+/// so its OS code survives (#2231).
+fn held(plan: &BindPlan, role: SocketRole, e: io::Error) -> io::Error {
+    // Windows refuses a bind beside a socket that holds the port with
+    // `SO_EXCLUSIVEADDRUSE` as WSAEACCES.
+    let held = e.kind() == io::ErrorKind::AddrInUse
+        || (cfg!(windows) && e.kind() == io::ErrorKind::PermissionDenied);
+    if !plan.requested_port || !held {
+        return e;
+    }
+    let port = plan.port;
+    let context = if role == SocketRole::SharedWildcard {
+        format!("UDP port {port} is in use on this host by a socket that refuses sharing")
+    } else {
+        format!(
+            "UDP port {port} is in use on this host, and a B/IP transport doesn't share its \
+             port by default; stop the other program, use another port, or share the port \
+             (share_wildcard_port), after which unicast reaches only one of the sockets on it"
+        )
+    };
+    super::listener_error::listener_error(context, e)
 }
 
 /// Set up a B/IP-M node's group (multicast.rs): the primary socket sends

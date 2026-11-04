@@ -58,6 +58,7 @@ pub struct BipEndpointBuilder {
     port: u16,
     broadcast_address: Ipv4Addr,
     share_port_by_address: bool,
+    share_wildcard_port: bool,
     role: SessionRole,
     session: SessionConfig,
     database: Option<ObjectDatabase>,
@@ -86,6 +87,7 @@ impl BipEndpointBuilder {
             port,
             broadcast_address,
             share_port_by_address: false,
+            share_wildcard_port: false,
             role: SessionRole::Both,
             session: SessionConfig::default(),
             database: None,
@@ -110,6 +112,17 @@ impl BipEndpointBuilder {
     /// for what changes.
     pub fn share_port_by_address(mut self, enabled: bool) -> Self {
         self.share_port_by_address = enabled;
+        self
+    }
+
+    /// Shares an explicitly requested port with other sockets on this host
+    /// that bind it the same way (#2366). Off by default: the transport
+    /// claims the port, and starting fails when another socket holds it.
+    /// With sharing on, unicast to the port reaches only one of the sockets
+    /// on it. See
+    /// [`BipTransport::set_share_wildcard_port`](bacnet_transport::bip::BipTransport::set_share_wildcard_port).
+    pub fn share_wildcard_port(mut self, enabled: bool) -> Self {
+        self.share_wildcard_port = enabled;
         self
     }
 
@@ -308,6 +321,7 @@ impl BipEndpointBuilder {
         }
         let mut transport = BipTransport::new(self.interface, self.port, self.broadcast_address);
         transport.set_share_port_by_address(self.share_port_by_address);
+        transport.set_share_wildcard_port(self.share_wildcard_port);
         transport.set_mode(self.mode);
         if self.release_previous_bbmd {
             transport.set_release_previous_bbmd(true);
@@ -411,6 +425,32 @@ mod share_port_tests {
             panic!("start must refuse");
         };
         assert_eq!(refused.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    /// The builder hands `share_wildcard_port` to its transport (#2366): on
+    /// a port another socket holds, a claiming transport's error names the
+    /// opt-in, and a sharing one's says the holder doesn't share. Windows
+    /// lets a sharing bind in beside a socket that set no options, so it
+    /// checks the first only.
+    #[tokio::test]
+    async fn the_builder_hands_its_wildcard_sharing_choice_to_the_transport() {
+        let holder = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).unwrap();
+        let port = holder.local_addr().unwrap().port();
+        for (share, says) in [(false, "share_wildcard_port"), (true, "refuses sharing")] {
+            if share && cfg!(windows) {
+                continue;
+            }
+            let mut endpoint =
+                BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, port, Ipv4Addr::BROADCAST)
+                    .role(SessionRole::ClientOnly)
+                    .share_wildcard_port(share)
+                    .build_session()
+                    .unwrap();
+            let Err(Error::Transport(refused)) = endpoint.start().await else {
+                panic!("start must fail on a held port (share: {share})");
+            };
+            assert!(refused.to_string().contains(says), "{refused}");
+        }
     }
 }
 

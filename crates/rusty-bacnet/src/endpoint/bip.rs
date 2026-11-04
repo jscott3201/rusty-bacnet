@@ -39,6 +39,8 @@ struct BipEndpointConfig {
     port: u16,
     broadcast: Ipv4Addr,
     share_port_by_address: bool,
+    /// See `BipTransport::set_share_wildcard_port` (#2366).
+    share_wildcard_port: bool,
     identity: DeviceIdentity,
     queue_capacity: usize,
     read_work_limit: usize,
@@ -65,24 +67,13 @@ impl BipEndpointConfig {
         // Fail fast before building objects: probe the port and the
         // interface, so conflicts preserve pending for retry. The real bind
         // stays authoritative (TOCTOU residual: a race loser still restores
-        // via the owner). A port shared by address checks exactly what the
-        // transport will bind (#1538).
-        if config.share_port_by_address {
-            let mut transport = BipTransport::new(config.interface, config.port, config.broadcast);
-            transport.set_share_port_by_address(true);
-            transport.check_bind().map_err(to_py_err)?;
-        } else {
-            let wildcard = std::net::SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, config.port);
-            if let Err(e) = std::net::UdpSocket::bind(wildcard) {
-                return Err(to_py_err(bacnet_types::error::Error::Transport(e)));
-            }
-            if !config.interface.is_unspecified() {
-                let probe = std::net::SocketAddrV4::new(config.interface, 0);
-                if let Err(e) = std::net::UdpSocket::bind(probe) {
-                    return Err(to_py_err(bacnet_types::error::Error::Transport(e)));
-                }
-            }
-        }
+        // via the owner). The probe binds exactly what the transport will,
+        // shared by address (#1538) or on the wildcard address, claimed or
+        // shared (#2366).
+        let mut probe = BipTransport::new(config.interface, config.port, config.broadcast);
+        probe.set_share_port_by_address(config.share_port_by_address);
+        probe.set_share_wildcard_port(config.share_wildcard_port);
+        probe.check_bind().map_err(to_py_err)?;
         let boxes = build_pending_boxes(&objects)?;
         let mut db = build_database(&config.identity, boxes)?;
         if let Some(source) = &config.source_audit {
@@ -90,6 +81,7 @@ impl BipEndpointConfig {
         }
         let mut builder = BipEndpointBuilder::new(config.interface, config.port, config.broadcast)
             .share_port_by_address(config.share_port_by_address)
+            .share_wildcard_port(config.share_wildcard_port)
             .role(SessionRole::Both)
             .queue_capacity(config.queue_capacity)
             .read_work_limit(config.read_work_limit)
@@ -195,6 +187,12 @@ impl PyBipEndpoint {
     ///         this host can share the port; needs an explicit interface and
     ///         a nonzero port. Broadcasts and unicast are still handled in
     ///         the order they arrived.
+    ///     share_wildcard_port: Keyword-only (default False). Share an
+    ///         explicitly requested port with other sockets on this host
+    ///         that bind it the same way. By default the endpoint claims
+    ///         its port, and starting fails when another socket holds it;
+    ///         with sharing, unicast to the port reaches only one of the
+    ///         sockets on it.
     ///     min_request_interval_ms: Keyword-only (default 0, no pacing; at
     ///         most 3600000). Least time between the client role's confirmed
     ///         requests to one destination, as for `BACnetClient`.
@@ -244,6 +242,7 @@ impl PyBipEndpoint {
         *,
         read_work_limit=256,
         share_port_by_address=false,
+        share_wildcard_port=false,
         min_request_interval_ms=0,
         bbmd=None,
         foreign_device=None,
@@ -275,6 +274,7 @@ impl PyBipEndpoint {
         registered_network_port: Option<u32>,
         read_work_limit: usize,
         share_port_by_address: bool,
+        share_wildcard_port: bool,
         min_request_interval_ms: u64,
         bbmd: Option<PyRef<'_, crate::bip_options::PyBbmd>>,
         foreign_device: Option<PyRef<'_, crate::bip_options::PyForeignDevice>>,
@@ -360,6 +360,7 @@ impl PyBipEndpoint {
                 port,
                 broadcast,
                 share_port_by_address,
+                share_wildcard_port,
                 identity,
                 queue_capacity,
                 read_work_limit,
