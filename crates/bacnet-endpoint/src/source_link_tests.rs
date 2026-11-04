@@ -499,3 +499,6 @@ fn sc_tls() -> (
         .unwrap(),
     )
 }
+
+#[path = "source_routed_tests.rs"]
+mod routed;

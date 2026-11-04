@@ -7099,11 +7099,13 @@ class BipEndpoint:
         each filtered by the Reporter's level and operations. It needs
         ``device_write_policy`` and ``audit_recipient`` (the Device's Audit
         recipient); the bindings are ``(Device identifier, "ipv4:port")``
-        routes to recipient Devices. A Reporter identifier of another type and
+        routes to recipient Devices, or ``"network:0xMAC"`` for one behind a
+        router on that network (#2371; network 1 to 65534, MAC 1 to 18
+        octets). A Reporter identifier of another type and
         the other shapes construction can check raise ValueError; a Reporter
         that wasn't added raises BacnetError at start. ``ScEndpoint`` and
         ``MstpEndpoint`` take them too, each binding address in its link's
-        format (#2357).
+        format (#2357) or the routed form.
         ``on_reinitialize`` / ``after_reinitialize``: execute
         ReinitializeDevice, as ``BACnetServer``'s keywords do (#1566);
         ``reinit_password`` (needs ``on_reinitialize``, else ValueError; 1 to
@@ -7282,7 +7284,8 @@ class ScEndpoint:
         ``source_audit_reporter`` / ``audit_recipient`` /
         ``audit_device_bindings``: as on ``BipEndpoint`` (#2357), each
         binding address a VMAC as ``local_address()`` gives it
-        (``"xx:xx:xx:xx:xx:xx"``) or as twelve hex digits. An address
+        (``"xx:xx:xx:xx:xx:xx"``) or as twelve hex digits, or a routed
+        ``"network:0xMAC"``. An address
         ``audit_recipient`` takes another node's VMAC: never the broadcast
         or all-zero VMAC or this endpoint's own."""
         ...
@@ -7452,8 +7455,9 @@ class MstpEndpoint:
         ``source_audit_reporter`` / ``audit_recipient`` /
         ``audit_device_bindings``: as on ``BipEndpoint`` (#2357), each
         binding address a station in decimal digits, as ``local_address()``
-        gives it (``"2"``). An address ``audit_recipient`` takes another
-        station: never 255 or this endpoint's own."""
+        gives it (``"2"``), or a routed ``"network:0xMAC"``. An address
+        ``audit_recipient`` takes another station: never 255 or this
+        endpoint's own."""
         ...
 
     def add_analog_input(self, instance: int, name: str, units: EngineeringUnits | int = 62, present_value: float = 0.0, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
