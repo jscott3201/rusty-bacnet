@@ -275,13 +275,29 @@ impl std::fmt::Display for Failure {
     }
 }
 
-/// An OS error by its kind (`address in use`); one the stack wrote itself
-/// (`own address not local`) by its own message.
+/// An OS error by its kind (`address in use`), wrapped or not; one the
+/// stack wrote itself (`own address not local`) by its own message.
 fn io_summary(error: &std::io::Error) -> String {
-    match error.raw_os_error() {
-        Some(_) => error.kind().to_string(),
+    match os_error(error) {
+        Some(os) => os.kind().to_string(),
         None => strip_os_error(&error.to_string()).to_string(),
     }
+}
+
+/// The first error in `error`'s source chain, `error` included, that
+/// carries an OS code: B/IP wraps a bind error with advice and keeps the OS
+/// error as its source (#2231, #2366).
+fn os_error(error: &std::io::Error) -> Option<&std::io::Error> {
+    let mut next: Option<&(dyn std::error::Error + 'static)> = Some(error);
+    while let Some(current) = next {
+        if let Some(io) = current.downcast_ref::<std::io::Error>()
+            && io.raw_os_error().is_some()
+        {
+            return Some(io);
+        }
+        next = current.source();
+    }
+    None
 }
 
 /// `text` without a trailing ` (os error N)`.
@@ -479,5 +495,28 @@ mod tests {
         assert!(!bounded.wants(100) && !bounded.wants(104));
         assert_eq!(bounded.describe(), "network 5 101-103");
         assert_eq!(spec(WhoIsScope::Global, None).describe(), "global, all");
+    }
+
+    /// A B/IP start on a held port fails with advice wrapping the OS error
+    /// (#2366): the summary is the OS error's kind, and the detail keeps
+    /// the advice.
+    #[tokio::test]
+    async fn a_held_port_summarizes_by_the_wrapped_os_error() {
+        use bacnet_transport::port::TransportPort;
+        let holder = std::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, 0)).unwrap();
+        let port = holder.local_addr().unwrap().port();
+        let mut transport = bacnet_transport::bip::BipTransport::new(
+            std::net::Ipv4Addr::LOCALHOST,
+            port,
+            std::net::Ipv4Addr::BROADCAST,
+        );
+        let error = transport.start().await.expect_err("a held port");
+        let failure = Failure::of(&error);
+        assert_eq!(failure.summary, "address in use");
+        assert!(
+            failure.detail.contains("--share-port"),
+            "{}",
+            failure.detail
+        );
     }
 }

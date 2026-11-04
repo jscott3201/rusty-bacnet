@@ -860,7 +860,9 @@ raises when another socket already holds it, with a message naming the port
 and `share_wildcard_port`. Earlier releases shared an explicitly requested
 port, so on Linux and Windows another program could bind it beside the
 device and take the unicast sent to it. macOS and the BSDs still let a
-socket that sets `SO_REUSEADDR` bind a specific address on the port.
+socket that sets `SO_REUSEADDR` bind a specific address on the port, and
+get the unicast sent there. On Linux a B/IP multicast member with its group
+on its own port binds its `interface` address instead of `0.0.0.0`.
 
 The keyword-only `share_wildcard_port=True` keeps the old sharing, for a
 setup that runs two stacks on one port of one host. Broadcasts then reach
@@ -892,7 +894,7 @@ when the device starts: restart it after its interface changes. The
 `255.255.255.255` (a loopback `interface` may also name itself), or
 `start()` fails. On Windows the address is claimed
 exclusively, though the bind still succeeds beside another program's socket
-on `0.0.0.0` at that port if that socket shares it. See
+of the same user on `0.0.0.0` at that port if that socket shares it. See
 [Sharing a port by address](rust-api.md#sharing-a-port-by-address) for each
 OS.
 

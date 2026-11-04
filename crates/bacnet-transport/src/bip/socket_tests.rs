@@ -71,7 +71,6 @@ fn only_a_port_shared_on_request_opts_into_address_reuse() {
     // is claimed too unless sharing is asked for (#2366).
     let reuses = |role| udp_socket(role).unwrap().reuse_address().unwrap();
     assert!(!reuses(SocketRole::ClaimedWildcard));
-    assert!(!reuses(SocketRole::GroupWildcard));
     assert!(reuses(SocketRole::SharedWildcard));
     // In per-address mode (#1538) only macOS and the BSDs share the address,
     // to bind beside their wildcard listener; Linux needs no listener there,

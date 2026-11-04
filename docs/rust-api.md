@@ -1094,18 +1094,17 @@ later socket that set it too could bind the port beside the transport and
 take the unicast sent to it: confirmed requests, replies, registrations and
 forwards.
 
-What each OS refuses once the transport holds the port:
+What a later socket on the port gets once the transport holds it:
 
 | Later bind | Linux | macOS, BSDs | Windows |
 | --- | --- | --- | --- |
-| `0.0.0.0:port`, with or without `SO_REUSEADDR` | refused | refused | refused |
-| a specific address on the port, with `SO_REUSEADDR` | refused | **allowed** | refused |
-| a specific address on the port, without it | refused | refused | refused |
+| `0.0.0.0:port`, any reuse option | refused | refused | refused |
+| a specific address on the port, with `SO_REUSEADDR` or `SO_REUSEPORT` | refused | **binds, and gets the unicast sent to that address** | refused |
+| a specific address on the port, with neither | refused | refused | refused |
 
-macOS and the BSDs have no option to refuse the second row: such a socket
-takes the unicast sent to its own address. A transport that binds after such
-a socket fails there, though, where before it bound beside it and lost that
-unicast without a word.
+macOS and the BSDs have no option to refuse the second row. A transport that
+binds after such a socket fails there, though, where before it bound beside
+it and lost that unicast without a word.
 
 `BipTransport::set_share_wildcard_port(true)` (the B/IP builders'
 `.share_wildcard_port(true)`, `ClientConfig`'s and `ServerConfig`'s
@@ -1120,15 +1119,29 @@ one host are better served each on its own address (below) or each on its
 own port. A port the OS picks is never shared, opt-in or not.
 
 A B/IP-M node whose group is on its own port (the default, see
-[B/IP multicast](#bip-multicast-bip-m)) binds that port twice: the wildcard socket
-and the group's listener. On Linux both then set `SO_REUSEPORT`, which only a
-socket of the same user that sets it too can share; macOS and the BSDs need
-nothing, since the listener binds after the wildcard socket; on Windows the
-wildcard socket joins the group itself and claims the port. A group on a port
-of its own leaves the claim whole. Two members on one host at one unicast
-port need `share_wildcard_port` on both, and so, on Linux, does a node that
-starts without a group and has one activated on its own port through its
-Network Port.
+[B/IP multicast](#bip-multicast-bip-m)) binds that port twice: its own
+socket and the group's listener. On Linux a claimed `0.0.0.0` socket would
+refuse the listener, so a node that starts with such a group binds the
+per-address shape instead: its interface address with no reuse option, the
+broadcast listeners of [Sharing a port by address](#sharing-a-port-by-address)
+(whose broadcasts a member drops, as it did on `0.0.0.0`), and the group's
+listener. Every later bind of `0.0.0.0` or the interface address on the port
+is then refused, whatever reuse options it sets, and another member's
+listener on the group still binds. Its broadcast address must pass the
+per-address check. macOS and the BSDs need nothing, since the listener binds
+after the claimed wildcard socket; on Windows the wildcard socket joins the
+group itself and claims the port. A group on a port of its own leaves the
+claim whole, and a node that shares its port on request keeps `0.0.0.0`.
+
+A group activated later through the Network Port on the own port of a Linux
+node bound to `0.0.0.0` switches that socket to `SO_REUSEPORT` and binds the
+listener with it too, rather than failing. From then until the node
+restarts, a socket of the same user that sets `SO_REUSEPORT` can bind
+`0.0.0.0` on the port and share the node's unicast, and one bound to a
+specific address that way gets the unicast sent there; a socket that sets
+only `SO_REUSEADDR`, or another user's, is still refused. The restart, which
+keeps the activated group, binds the per-address shape. Two members on one
+host at one unicast port need `share_wildcard_port` on both.
 
 #### Sharing a port by address
 
@@ -1196,9 +1209,9 @@ What changes in this mode:
   `SO_REUSEADDR` would let another socket bind the same address and take its
   unicast, so the socket sets `SO_EXCLUSIVEADDRUSE` instead, and no other
   socket can bind that address and port. Other addresses can still share the
-  port, and a socket already bound to `0.0.0.0` on it without
-  `SO_EXCLUSIVEADDRUSE` (a transport that shares its wildcard port) doesn't
-  stop the bind; a default-mode transport claims the port, which stops it,
+  port, and a socket of the same user already bound to `0.0.0.0` on it
+  without `SO_EXCLUSIVEADDRUSE` (a transport that shares its wildcard port)
+  doesn't stop the bind; a default-mode transport claims the port, which stops it,
   and stops a later default-mode start too. Under Windows' strong host model a socket bound to one interface
   sends only through it, so a multihomed BBMD in this mode reaches only the
   peers that interface can.
@@ -3038,10 +3051,9 @@ transport.set_multicast(Some(group))?;
   one host can share a group; each drops its own looped-back copy as an own
   echo (`ReceiveCounters::own_echo`). On Linux, macOS and the BSDs a
   receive-only listener binds the group's address and port with
-  `SO_REUSEADDR` and `SO_REUSEPORT` (on Linux the primary sets
-  `SO_REUSEPORT` too when the group is on its own port, see
-  [Claiming the port](#claiming-the-port)), joins it, and is read beside
-  the primary in arrival order; the primary takes no group traffic (Linux:
+  `SO_REUSEADDR` (and `SO_REUSEPORT` on macOS and the BSDs; for a Linux
+  group on the node's own port, see [Claiming the port](#claiming-the-port)),
+  joins it, and is read beside the primary in arrival order; the primary takes no group traffic (Linux:
   `IP_MULTICAST_ALL` off). Members on one host at one IP address need their
   own unicast ports and a shared group port (`with_port`), or
   `share_wildcard_port` on each. Windows can't bind a group address, so there the primary

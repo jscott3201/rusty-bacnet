@@ -198,13 +198,16 @@ pub(crate) fn bvlc_exchange_err(err: BvlcExchangeError) -> PyErr {
 }
 
 /// `BacnetTransportError` for an `io::Error`: `errno` is the operating
-/// system's code when the error carries one, else the code for its kind where
-/// one exists, else `None`. `strerror` is the error's message. Falls back to
-/// a plain `BacnetError` when Python is finalizing.
+/// system's code when the error or one in its source chain carries one, else
+/// the code for its kind where one exists, else `None`. `strerror` is the
+/// error's message. Falls back to a plain `BacnetError` when Python is
+/// finalizing.
 fn transport_error(io: std::io::Error) -> PyErr {
     let message = io.to_string();
     crate::py_async::attach(|py| {
-        let errno = io.raw_os_error().or_else(|| kind_errno(py, io.kind()));
+        let errno = os_error(&io)
+            .and_then(std::io::Error::raw_os_error)
+            .or_else(|| kind_errno(py, io.kind()));
         let class = transport_error_type(py)?.bind(py);
         let instance = match errno {
             Some(errno) => class.call1((errno, &message))?,
@@ -221,6 +224,22 @@ fn transport_error(io: std::io::Error) -> PyErr {
         Ok(PyErr::from_value(instance))
     })
     .unwrap_or_else(|_| BacnetError::new_err(message))
+}
+
+/// The first error in `error`'s source chain, `error` included, that
+/// carries an OS code: B/IP wraps a bind error with advice and keeps the OS
+/// error as its source (#2231, #2366).
+fn os_error(error: &std::io::Error) -> Option<&std::io::Error> {
+    let mut next: Option<&(dyn std::error::Error + 'static)> = Some(error);
+    while let Some(current) = next {
+        if let Some(io) = current.downcast_ref::<std::io::Error>()
+            && io.raw_os_error().is_some()
+        {
+            return Some(io);
+        }
+        next = current.source();
+    }
+    None
 }
 
 fn kind_errno(py: Python<'_>, kind: std::io::ErrorKind) -> Option<i32> {
@@ -577,7 +596,45 @@ mod tests {
             let other = to_py_err(Error::Transport(std::io::Error::other("closed")));
             assert!(other.is_instance(py, transport_error_type(py).unwrap().bind(py)));
             assert_eq!(errno(&other), None);
+
+            // An OS error wrapped with advice keeps its code (#2366):
+            // Windows' WSAEACCES (10013) for a claimed port too, which
+            // port_retry.py counts as a held port, where the kind's EACCES
+            // would not be.
+            for (kind, code) in [
+                (std::io::ErrorKind::AddrInUse, 98),
+                (std::io::ErrorKind::PermissionDenied, 10013),
+            ] {
+                let wrapped =
+                    std::io::Error::new(kind, Advice(std::io::Error::from_raw_os_error(code)));
+                assert_eq!(wrapped.raw_os_error(), None);
+                let raised = to_py_err(Error::Transport(wrapped));
+                assert_eq!(errno(&raised), Some(code));
+                let shown: String = raised
+                    .value(py)
+                    .getattr("strerror")
+                    .unwrap()
+                    .extract()
+                    .unwrap();
+                assert!(shown.starts_with("UDP port in use; share it"), "{shown}");
+            }
         });
+    }
+
+    /// Advice wrapping an OS error, as B/IP's bind errors do.
+    #[derive(Debug)]
+    struct Advice(std::io::Error);
+
+    impl std::fmt::Display for Advice {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "UDP port in use; share it ({})", self.0)
+        }
+    }
+
+    impl std::error::Error for Advice {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
     }
 
     /// A raised error's class, code and reason are members of their IntEnum

@@ -32,8 +32,9 @@ class ShareWildcardPortTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_held_port_fails_the_start_and_says_why(self):
         # A claiming owner's error names the keyword; a sharing one's says
-        # the holder doesn't share. Windows lets a sharing bind in beside a
-        # socket that set no options, so it checks the first only.
+        # the holder doesn't share. Windows decides a sharing bind beside a
+        # socket that set no options by the two sockets' accounts (Microsoft's
+        # SO_REUSEADDR table), so only the claiming case runs there.
         cases = [(False, "share_wildcard_port")]
         if sys.platform != "win32":
             cases.append((True, "refuses sharing"))

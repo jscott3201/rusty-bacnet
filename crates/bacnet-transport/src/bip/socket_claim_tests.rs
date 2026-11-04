@@ -1,15 +1,17 @@
 //! A requested B/IP port is claimed unless sharing is asked for (#2366):
 //! which sockets can bind it beside the transport on each OS, the error a
 //! transport that finds it held starts with, and a B/IP-M node whose group
-//! sits on its own port.
+//! sits on its own port (on Linux bound to its interface address, or
+//! switched to `SO_REUSEPORT` by a later activation).
 
 use super::*;
 use crate::port_retry::{ATTEMPTS, bind_error, lost_to_another_socket, rerun_on_lost_port};
 use socket::{BindPlan, BoundSockets, SocketRole, udp_socket, wildcard_role};
 use std::io;
 
-/// Whether this OS lets a socket that sets `SO_REUSEADDR` bind a specific
-/// address beside a claimed wildcard socket (`port_ownership`).
+/// Whether this OS lets a socket that sets `SO_REUSEADDR` (or
+/// `SO_REUSEPORT`) bind a specific address beside a claimed wildcard socket
+/// (`port_ownership`).
 const SPECIFIC_ADDRESS_GAP: bool = cfg!(all(
     unix,
     not(any(target_os = "linux", target_os = "android"))
@@ -18,6 +20,16 @@ const SPECIFIC_ADDRESS_GAP: bool = cfg!(all(
 /// Whether two wildcard sockets that both set `SO_REUSEADDR` share a port:
 /// macOS and the BSDs also want `SO_REUSEPORT` on both.
 const WILDCARD_SHARING: bool = cfg!(any(windows, target_os = "linux", target_os = "android"));
+
+/// Whether this OS binds a B/IP-M node with its group on its own port to
+/// its interface address (socket.rs).
+const GROUP_BY_ADDRESS: bool = cfg!(any(target_os = "linux", target_os = "android"));
+
+/// Every combination of `SO_REUSEADDR` and `SO_REUSEPORT` a squatter might
+/// set.
+#[cfg(unix)]
+const EVERY_OPTION: [(bool, bool); 4] =
+    [(false, false), (true, false), (false, true), (true, true)];
 
 /// A UDP port no socket holds now. Another process can take it before the
 /// test binds it, so its users rerun on a lost port.
@@ -29,77 +41,117 @@ fn free_port() -> u16 {
         .port()
 }
 
-/// Another program's socket on `ip:port`, with `SO_REUSEADDR` and, when
-/// asked, `SO_REUSEPORT`.
-fn squatter(ip: Ipv4Addr, port: u16, reuse_port: bool) -> io::Result<socket2::Socket> {
+/// Another program's socket on `ip:port`, with `SO_REUSEADDR` and
+/// `SO_REUSEPORT` as asked (the latter only on Unix).
+fn squatter(
+    ip: Ipv4Addr,
+    port: u16,
+    reuse_address: bool,
+    reuse_port: bool,
+) -> io::Result<socket2::Socket> {
     let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::DGRAM, None)?;
-    socket.set_reuse_address(true)?;
+    socket.set_reuse_address(reuse_address)?;
     #[cfg(unix)]
-    if reuse_port {
-        socket.set_reuse_port(true)?;
-    }
+    socket.set_reuse_port(reuse_port)?;
     #[cfg(not(unix))]
     let _ = reuse_port;
     socket.bind(&SocketAddrV4::new(ip, port).into())?;
     Ok(socket)
 }
 
-/// `socket::bind` for the wildcard plan `adjust` makes on a fresh requested
-/// port, then `check` with the port and what was bound.
-fn on_a_requested_port(adjust: impl Fn(&mut BindPlan), check: impl Fn(u16, &BoundSockets)) {
+/// `socket::bind` for the plan on `interface` that `adjust` makes, on a
+/// fresh requested port, then `check` with the port and what was bound.
+fn on_a_requested_port(
+    interface: Ipv4Addr,
+    adjust: impl Fn(&mut BindPlan),
+    check: impl Fn(u16, &BoundSockets),
+) {
     for attempt in 1..=ATTEMPTS {
         let port = free_port();
-        let mut plan = plan(Ipv4Addr::UNSPECIFIED, port, false);
+        let mut plan = plan(interface, port, false);
         adjust(&mut plan);
         match socket::bind(plan) {
             Ok(bound) => return check(port, &bound),
             Err(e) if attempt < ATTEMPTS && lost_to_another_socket(&e) => continue,
-            Err(e) => panic!("bind 0.0.0.0:{port}: {e}"),
+            Err(e) => panic!("bind {interface}:{port}: {e}"),
         }
     }
 }
 
+const GROUP: Ipv4Addr = Ipv4Addr::new(239, 255, 94, 3);
+
 /// A group at the node's own port.
 fn own_port_group() -> BipMulticast {
-    BipMulticast::new(Ipv4Addr::new(239, 255, 94, 3)).unwrap()
+    BipMulticast::new(GROUP).unwrap()
 }
 
 #[test]
-fn the_wildcard_role_follows_the_port_the_opt_in_and_the_group() {
-    let role = |port, share, group: Option<BipMulticast>| {
-        let mut plan = plan(Ipv4Addr::UNSPECIFIED, port, false);
+fn the_bind_shape_follows_the_port_the_opt_in_and_the_group() {
+    let shape = |interface, port, share, group: Option<BipMulticast>| {
+        let mut plan = plan(interface, port, false);
         plan.share_wildcard = share;
         plan.multicast = group;
-        wildcard_role(&plan)
+        (wildcard_role(&plan), plan.per_address())
     };
     let own = Some(own_port_group());
     let apart = Some(own_port_group().with_port(47809).unwrap());
     let at_47808 = Some(own_port_group().with_port(47808).unwrap());
+    let local = Ipv4Addr::LOCALHOST;
     // A port the OS picks is never shared (#892), whatever is asked.
     for (share, group) in [(false, None), (true, None), (false, own), (true, own)] {
-        assert_eq!(role(0, share, group), SocketRole::ClaimedWildcard);
+        assert_eq!(
+            shape(local, 0, share, group),
+            (SocketRole::ClaimedWildcard, false)
+        );
     }
-    assert_eq!(role(47808, false, None), SocketRole::ClaimedWildcard);
-    assert_eq!(role(47808, false, apart), SocketRole::ClaimedWildcard);
-    assert_eq!(role(47808, false, own), SocketRole::GroupWildcard);
-    assert_eq!(role(47808, false, at_47808), SocketRole::GroupWildcard);
+    for group in [None, apart] {
+        let claimed = (SocketRole::ClaimedWildcard, false);
+        assert_eq!(shape(local, 47808, false, group), claimed);
+    }
+    // A group on the node's own port: by address on Linux.
+    for group in [own, at_47808] {
+        let by_address = shape(local, 47808, false, group).1;
+        assert_eq!(by_address, GROUP_BY_ADDRESS, "{group:?}");
+    }
+    // Not without an interface address, nor when sharing is asked for.
+    assert!(!shape(Ipv4Addr::UNSPECIFIED, 47808, false, own).1);
     for group in [None, own, apart] {
-        assert_eq!(role(47808, true, group), SocketRole::SharedWildcard);
+        let shared = (SocketRole::SharedWildcard, false);
+        assert_eq!(shape(local, 47808, true, group), shared);
     }
+}
+
+/// A transport built plainly claims its requested port: nothing sets the
+/// opt-in, and a later bind of the port fails on every OS.
+#[tokio::test]
+async fn a_plain_transport_claims_its_requested_port() {
+    rerun_on_lost_port(async || {
+        let port = free_port();
+        let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, port, Ipv4Addr::BROADCAST);
+        let _rx = transport.start().await.map_err(bind_error)?;
+        let primary = socket2::SockRef::from(&***transport.socket.as_ref().unwrap());
+        assert!(!primary.reuse_address().unwrap());
+        let refused = squatter(Ipv4Addr::UNSPECIFIED, port, true, false).unwrap_err();
+        assert!(lost_to_another_socket(&refused), "{refused}");
+        transport.stop().await.unwrap();
+        Ok(())
+    })
+    .await;
 }
 
 #[test]
 fn a_requested_port_refuses_a_second_bind_by_default() {
     on_a_requested_port(
+        Ipv4Addr::UNSPECIFIED,
         |_| {},
         |port, bound| {
             assert!(!bound.primary.reuse_address().unwrap());
             // Another wildcard socket asking to share: refused everywhere.
-            let refused = squatter(Ipv4Addr::UNSPECIFIED, port, false).unwrap_err();
+            let refused = squatter(Ipv4Addr::UNSPECIFIED, port, true, false).unwrap_err();
             assert!(lost_to_another_socket(&refused), "{refused}");
             // A specific address asking to share: refused but on macOS and
             // the BSDs, which have no option to stop it.
-            let specific = squatter(Ipv4Addr::LOCALHOST, port, false);
+            let specific = squatter(Ipv4Addr::LOCALHOST, port, true, false);
             assert_eq!(
                 specific.is_ok(),
                 SPECIFIC_ADDRESS_GAP,
@@ -117,6 +169,7 @@ fn a_requested_port_refuses_a_second_bind_by_default() {
                 "{shown}"
             );
             assert!(shown.contains("share_wildcard_port"), "{shown}");
+            assert!(shown.contains("--share-port"), "{shown}");
         },
     );
 }
@@ -124,6 +177,7 @@ fn a_requested_port_refuses_a_second_bind_by_default() {
 #[test]
 fn a_requested_port_shared_on_request_takes_a_second_sharing_bind() {
     on_a_requested_port(
+        Ipv4Addr::UNSPECIFIED,
         |plan| plan.share_wildcard = true,
         |port, bound| {
             assert!(bound.primary.reuse_address().unwrap());
@@ -132,42 +186,55 @@ fn a_requested_port_shared_on_request_takes_a_second_sharing_bind() {
             let second = socket::bind(shared);
             assert_eq!(second.is_ok(), WILDCARD_SHARING, "{:?}", second.err());
             if WILDCARD_SHARING {
-                squatter(Ipv4Addr::UNSPECIFIED, port, false).unwrap();
+                squatter(Ipv4Addr::UNSPECIFIED, port, true, false).unwrap();
             }
             // A specific address asking to share binds beside it everywhere.
-            squatter(Ipv4Addr::LOCALHOST, port, false).unwrap();
+            squatter(Ipv4Addr::LOCALHOST, port, true, false).unwrap();
         },
     );
 }
 
-/// The node's group listener binds its own port beside the primary socket.
-/// On Linux both set `SO_REUSEPORT` for it, so a socket that only sets
-/// `SO_REUSEADDR` is still refused.
-#[cfg(not(windows))]
+/// A B/IP-M node with its group on its own port binds the group's listener
+/// beside its primary socket. On Linux the primary binds the interface
+/// address with no reuse option and broadcast listeners beside it, so every
+/// squatter is refused; macOS binds the claimed wildcard socket, beside
+/// which a specific address with `SO_REUSEADDR` or `SO_REUSEPORT` still
+/// binds.
+#[cfg(unix)]
 #[test]
 fn a_group_on_the_nodes_own_port_binds_beside_its_primary() {
     on_a_requested_port(
+        Ipv4Addr::LOCALHOST,
         |plan| plan.multicast = Some(own_port_group()),
         |port, bound| {
+            let primary = if GROUP_BY_ADDRESS {
+                Ipv4Addr::LOCALHOST
+            } else {
+                Ipv4Addr::UNSPECIFIED
+            };
+            assert_eq!(address_of(&bound.primary), SocketAddrV4::new(primary, port));
             assert!(!bound.primary.reuse_address().unwrap());
-            let linux = cfg!(any(target_os = "linux", target_os = "android"));
-            assert_eq!(bound.primary.reuse_port().unwrap(), linux);
-            let listener = udp_socket(SocketRole::GroupListener).unwrap();
-            let group = SocketAddrV4::new(Ipv4Addr::new(239, 255, 94, 3), port);
-            listener.bind(&group.into()).unwrap();
-            assert_eq!(address_of(&listener), group);
-            assert!(squatter(Ipv4Addr::UNSPECIFIED, port, false).is_err());
-            let specific = squatter(Ipv4Addr::LOCALHOST, port, false);
-            assert_eq!(
-                specific.is_ok(),
-                SPECIFIC_ADDRESS_GAP,
-                "{:?}",
-                specific.err()
-            );
-            // What Linux can't refuse: a socket of the same user that sets
-            // `SO_REUSEPORT` too.
-            let same_user = squatter(Ipv4Addr::UNSPECIFIED, port, true);
-            assert_eq!(same_user.is_ok(), linux, "{:?}", same_user.err());
+            assert!(!bound.primary.reuse_port().unwrap());
+            let group = bound.group.as_ref().expect("the group's listener");
+            assert_eq!(address_of(group), SocketAddrV4::new(GROUP, port));
+            assert_eq!(bound.listeners.is_empty(), !GROUP_BY_ADDRESS);
+            for (reuse_address, reuse_port) in EVERY_OPTION {
+                let wildcard = squatter(Ipv4Addr::UNSPECIFIED, port, reuse_address, reuse_port);
+                assert!(wildcard.is_err(), "0.0.0.0 {reuse_address} {reuse_port}");
+                let specific = squatter(Ipv4Addr::LOCALHOST, port, reuse_address, reuse_port);
+                // macOS and the BSDs: either option skips the wildcard check.
+                let gap = SPECIFIC_ADDRESS_GAP && (reuse_address || reuse_port);
+                assert_eq!(
+                    specific.is_ok(),
+                    gap,
+                    "127.0.0.1 {reuse_address} {reuse_port}"
+                );
+            }
+            // Another member's listener on the group binds beside it.
+            udp_socket(SocketRole::GroupListener)
+                .unwrap()
+                .bind(&SocketAddrV4::new(GROUP, port).into())
+                .unwrap();
         },
     );
 }
@@ -214,36 +281,122 @@ async fn a_second_transport_on_a_requested_port_starts_only_when_both_share() {
     .await;
 }
 
-/// On Linux a node that started without a group claims its port, so a group
-/// activated later on that port can't bind its listener: the activation
-/// says why and changes nothing. Sharing the port lets it in.
 #[cfg(any(target_os = "linux", target_os = "android"))]
-#[tokio::test]
-async fn on_linux_a_group_activated_on_a_claimed_port_needs_it_shared() {
-    rerun_on_lost_port(async || {
-        let port = free_port();
-        let group = own_port_group().group().octets();
-        for share in [false, true] {
-            let mut node = BipTransport::new(Ipv4Addr::LOCALHOST, port, Ipv4Addr::LOCALHOST);
-            node.set_share_wildcard_port(share);
-            let _rx = node.start().await.map_err(bind_error)?;
-            let view = node.bip_port().unwrap().multicast.unwrap();
-            let activated = view.activate(group);
-            if share {
-                activated.map_err(bind_error)?;
-                assert_eq!(node.multicast(), Some(own_port_group()));
-            } else {
-                let Err(Error::Transport(refused)) = activated else {
-                    panic!("a group took a claimed port: {activated:?}");
-                };
-                assert!(lost_to_another_socket(&refused), "{refused}");
-                let shown = refused.to_string();
-                assert!(shown.contains("share the port"), "{shown}");
-                assert_eq!(node.multicast(), None);
+mod linux {
+    use super::*;
+    use std::net::SocketAddr;
+    use tokio::time::timeout;
+
+    /// A Who-Is, as the NPDU every test frame carries.
+    const WHO_IS: &[u8] = &[0x01, 0x20, 0xFF, 0xFF, 0x00, 0xFF, 0x10, 0x08];
+
+    fn frame(function: u8) -> Vec<u8> {
+        let mut frame = vec![0x81, function, 0, (4 + WHO_IS.len()) as u8];
+        frame.extend_from_slice(WHO_IS);
+        frame
+    }
+
+    /// A plain peer on 127.0.0.1 that can send to the group on loopback.
+    fn peer() -> std::net::UdpSocket {
+        let peer = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        peer.set_broadcast(true).unwrap();
+        socket2::SockRef::from(&peer)
+            .set_multicast_if_v4(&Ipv4Addr::LOCALHOST)
+            .unwrap();
+        peer
+    }
+
+    async fn next(rx: &mut mpsc::Receiver<ReceivedNpdu>) -> ReceivedNpdu {
+        timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("nothing heard")
+            .expect("receive channel open")
+    }
+
+    async fn hears_nothing(rx: &mut mpsc::Receiver<ReceivedNpdu>) {
+        let heard = timeout(Duration::from_millis(300), rx.recv()).await;
+        assert!(heard.is_err(), "unexpected NPDU {heard:?}");
+    }
+
+    fn primary_address(node: &BipTransport) -> SocketAddr {
+        node.socket.as_ref().unwrap().local_addr().unwrap()
+    }
+
+    /// A member that starts with its group on its own port binds its
+    /// interface address (socket.rs) and refuses every squatter. It takes
+    /// unicast and its group's broadcasts, drops its own echo, and drops a
+    /// plain peer's directed and limited broadcasts, as the wildcard member
+    /// did, now on the broadcast listeners (#2366).
+    #[tokio::test]
+    async fn a_member_on_its_own_port_binds_its_address_and_hears_as_before() {
+        rerun_on_lost_port(async || {
+            let port = free_port();
+            let subnet = Ipv4Addr::new(127, 255, 255, 255);
+            let mut member = BipTransport::new(Ipv4Addr::LOCALHOST, port, subnet);
+            member.set_multicast(Some(own_port_group())).unwrap();
+            let mut rx = member.start().await.map_err(bind_error)?;
+            let own = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+            assert_eq!(primary_address(&member), own);
+            for ip in [Ipv4Addr::UNSPECIFIED, Ipv4Addr::LOCALHOST] {
+                for (reuse_address, reuse_port) in EVERY_OPTION {
+                    let taken = squatter(ip, port, reuse_address, reuse_port);
+                    assert!(taken.is_err(), "{ip} {reuse_address} {reuse_port}");
+                }
             }
+            let peer = peer();
+            peer.send_to(&frame(0x0A), own).unwrap();
+            let heard = next(&mut rx).await;
+            assert_eq!((&heard.npdu[..], heard.link_layer_group), (WHO_IS, false));
+            peer.send_to(&frame(0x0B), (GROUP, port)).unwrap();
+            let heard = next(&mut rx).await;
+            assert_eq!((&heard.npdu[..], heard.link_layer_group), (WHO_IS, true));
+            for broadcast in [subnet, Ipv4Addr::BROADCAST] {
+                peer.send_to(&frame(0x0B), (broadcast, port)).unwrap();
+            }
+            member.send_broadcast(WHO_IS).await.unwrap();
+            hears_nothing(&mut rx).await;
+            let counters = member.receive_counters();
+            assert_eq!(counters.listener_mismatch, 2, "{counters:?}");
+            assert_eq!(counters.own_echo, 1, "{counters:?}");
+            member.stop().await.unwrap();
+            Ok(())
+        })
+        .await;
+    }
+
+    /// A group activated on the port of a node bound to 0.0.0.0 switches the
+    /// primary to `SO_REUSEPORT` and binds the listener beside it: the group
+    /// is heard, a socket that sets only `SO_REUSEADDR` is still refused, and
+    /// a same-user one that sets `SO_REUSEPORT` can bind until the node
+    /// restarts, which binds the interface address instead.
+    #[tokio::test]
+    async fn a_group_activated_on_a_claimed_port_switches_roles() {
+        rerun_on_lost_port(async || {
+            let port = free_port();
+            let mut node = BipTransport::new(Ipv4Addr::LOCALHOST, port, Ipv4Addr::LOCALHOST);
+            let mut rx = node.start().await.map_err(bind_error)?;
+            let primary = || socket2::SockRef::from(&***node.socket.as_ref().unwrap());
+            assert!(!primary().reuse_port().unwrap());
+            let view = node.bip_port().unwrap().multicast.unwrap();
+            view.activate(GROUP.octets()).map_err(bind_error)?;
+            assert_eq!(node.multicast(), Some(own_port_group()));
+            assert!(primary().reuse_port().unwrap());
+            assert!(!primary().reuse_address().unwrap());
+            peer().send_to(&frame(0x0B), (GROUP, port)).unwrap();
+            let heard = next(&mut rx).await;
+            assert_eq!((&heard.npdu[..], heard.link_layer_group), (WHO_IS, true));
+            assert!(squatter(Ipv4Addr::UNSPECIFIED, port, true, false).is_err());
+            let same_user = squatter(Ipv4Addr::UNSPECIFIED, port, false, true);
+            assert!(same_user.is_ok(), "{:?}", same_user.err());
+            drop(same_user);
             node.stop().await.unwrap();
-        }
-        Ok(())
-    })
-    .await;
+            let _rx = node.start().await.map_err(bind_error)?;
+            let own = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+            assert_eq!(primary_address(&node), own);
+            assert!(squatter(Ipv4Addr::UNSPECIFIED, port, false, true).is_err());
+            node.stop().await.unwrap();
+            Ok(())
+        })
+        .await;
+    }
 }

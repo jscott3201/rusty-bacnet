@@ -430,8 +430,9 @@ mod share_port_tests {
     /// The builder hands `share_wildcard_port` to its transport (#2366): on
     /// a port another socket holds, a claiming transport's error names the
     /// opt-in, and a sharing one's says the holder doesn't share. Windows
-    /// lets a sharing bind in beside a socket that set no options, so it
-    /// checks the first only.
+    /// decides a sharing bind beside a socket that set no options by the two
+    /// sockets' accounts (Microsoft's SO_REUSEADDR table), so only the
+    /// claiming case runs there.
     #[tokio::test]
     async fn the_builder_hands_its_wildcard_sharing_choice_to_the_transport() {
         let holder = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).unwrap();

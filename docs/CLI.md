@@ -113,8 +113,11 @@ both programs, but each unicast to the port reaches only one of them (on
 Linux the one that bound last), so either program's replies can go astray.
 The other program must share the port too, and macOS and the BSDs never let
 two programs share a port on `0.0.0.0` this way. `--share-port` has no
-effect with `-p 0`, nor on B/IPv6, BACnet/SC or MS/TP, nor for a named TUI
-profile, which always claims its port. Passive listening (`--passive`)
+effect with `-p 0`, nor on B/IPv6, BACnet/SC or MS/TP. A named B/IP profile
+keeps the choice as `share_port = true` in its `[bip]` table; `bacnet tui
+--profile NAME --share-port` turns it on for that run, and `bacnet mcp serve
+--profile NAME` refuses the flag, as it refuses every transport flag, so set
+it in the profile and authorize the profile again. Passive listening (`--passive`)
 always binds the port shared, since it only listens beside another stack;
 that stack must share the port too.
 
@@ -447,6 +450,7 @@ ttl = 300
 # bbmd = "127.0.0.2:47808"
 # renewal_secs = 30
 # nat_global_address = "203.0.113.7:61000"  # needs bbmd; display only
+# share_port = true  # as --share-port; see Port sharing
 
 [safety]
 writes = "session"
@@ -1076,7 +1080,7 @@ Experimental in 0.15.
 | Flag | Description |
 |------|-------------|
 | `--stdio` | Serve on stdin and stdout, the transport an agent host launches (required) |
-| `--profile <NAME>` | Named B/IP, BACnet/SC or MS/TP profile to connect with; its `[mcp]` table limits what the agent may reach. Needed unless `--passive`; global transport flags are refused with it, since they would change the transport that was authorized |
+| `--profile <NAME>` | Named B/IP, BACnet/SC or MS/TP profile to connect with; its `[mcp]` table limits what the agent may reach. Needed unless `--passive`; global transport flags, `--share-port` among them, are refused with it, since they would change the transport that was authorized (set `share_port` in the profile instead) |
 | `--passive` | Build no client and send nothing: only the tools that need no network are offered (`bacnet_decode`, and `bacnet_discover`, which only lists) |
 
 **mcp connect flags:**
