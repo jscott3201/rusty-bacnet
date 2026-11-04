@@ -5625,8 +5625,9 @@ endpoint.add_audit_reporter(1, "Source", audit_level="audit_all",
     CLI writes a routed target (`"2:0x05"` is station 5 on network 2). The
     network is 1 to 65534 and the MAC 1 to 18 octets, in the remote link's
     format. Records go through the router to that network, which the session
-    learns from traffic back from there; until then they go with the link's
-    broadcast address. A failed delivery sets the Reporter's Reliability to
+    learns from traffic back from there or from the router's
+    I-Am-Router-To-Network; until then they go with the link's broadcast
+    address. A failed delivery sets the Reporter's Reliability to
     COMMUNICATION_FAILURE as a direct one does.
 
   An address `audit_recipient` follows the same rule on each link, so an SC

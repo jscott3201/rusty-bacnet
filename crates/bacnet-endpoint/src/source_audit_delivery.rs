@@ -216,6 +216,12 @@ type Reservation = (
     oneshot::Receiver<bacnet_server::server::CovAckResult>,
 );
 
+/// Wait for a queued record's outcome: whether it was delivered (sent, and
+/// for a confirmed one acknowledged). A delivery through a learned router
+/// that was lost, with no answer in time or a failed send, forgets the
+/// router ([`Hop::lost`]). A peer's Error, Reject or Abort came back
+/// through it, and a send the local queue refused never reached it, so
+/// neither does; each still counts as undelivered.
 pub(super) async fn finish_send(
     sent: Result<
         bacnet_endpoint_core::endpoint_ingress::EndpointSend,
@@ -225,24 +231,32 @@ pub(super) async fn finish_send(
     reserved: Option<Reservation>,
     deadline: Instant,
 ) -> bool {
+    let admitted = sent.is_ok();
     let mut sent = Some(sent);
     let send = |_| {
         let sent = sent.take().expect("notifications have no retries");
         async move { sent?.complete().await.result }
     };
-    let delivered = tokio::time::timeout_at(deadline, async {
+    // Delivered, and whether the router is to blame if not.
+    let (delivered, lost) = tokio::time::timeout_at(deadline, async {
         if let Some((operation, receiver)) = reserved {
-            run_notification_worker(operation, receiver, DEADLINE, 0, send).await
-                == NotificationWorkerResult::Ack
+            match run_notification_worker(operation, receiver, DEADLINE, 0, send).await {
+                NotificationWorkerResult::Ack => (true, false),
+                NotificationWorkerResult::Error(_) | NotificationWorkerResult::Closed => {
+                    (false, false)
+                }
+                NotificationWorkerResult::Exhausted => (false, admitted),
+            }
         } else {
             let mut send = send;
-            send(0).await.is_ok()
+            let sent = send(0).await.is_ok();
+            (sent, !sent && admitted)
         }
     })
     .await
-    .unwrap_or(false);
-    if !delivered {
-        hop.failed();
+    .unwrap_or((false, admitted));
+    if lost {
+        hop.lost();
     }
     delivered
 }
@@ -301,6 +315,47 @@ pub(super) fn result<T>(outcome: &Result<T, Error>) -> Option<(ErrorClass, Error
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A learned router and a send through it.
+    fn through_router() -> (Arc<SourceRouters>, Hop) {
+        let routers = Arc::new(SourceRouters::default());
+        routers.track(2);
+        routers.learn_for_test(2, &[0xFE]);
+        let route = SourceRoute::Routed {
+            network: 2,
+            mac: MacAddr::from_slice(&[5]),
+        };
+        let (destination, hop) = routers.destination(&route);
+        assert!(matches!(
+            destination,
+            EndpointApduDestination::Routed { router_mac, .. } if router_mac.as_slice() == [0xFE]
+        ));
+        (routers, hop)
+    }
+
+    /// A send the local queue refused never reached the router: the record
+    /// is undelivered, and the router stays (#2371).
+    #[tokio::test(start_paused = true)]
+    async fn a_full_local_queue_keeps_the_learned_router() {
+        let (routers, hop) = through_router();
+        let deadline = Instant::now() + DEADLINE;
+        let sent = Err(EndpointEgressAdmissionError::QueueFull);
+        assert!(!finish_send(sent, hop, None, deadline).await);
+        assert_eq!(routers.router(2).as_deref(), Some(&[0xFE][..]));
+    }
+
+    /// A lost delivery forgets its router only while it is still the one
+    /// learned: one learned since stays.
+    #[test]
+    fn a_lost_hop_forgets_only_its_own_router() {
+        let (routers, hop) = through_router();
+        hop.lost();
+        assert_eq!(routers.router(2), None);
+        let (routers, hop) = through_router();
+        routers.learn_for_test(2, &[0xFD]);
+        hop.lost();
+        assert_eq!(routers.router(2).as_deref(), Some(&[0xFD][..]));
+    }
     #[test]
     fn source_audit_result_codes_preserve_peer_errors_and_cover_reason_boundaries() {
         let abort_codes = [56, 51, 52, 53, 54, 136, 135, 127, 124, 125, 126, 123];

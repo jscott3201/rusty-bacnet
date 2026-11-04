@@ -951,7 +951,7 @@ async fn handle_inbound(parts: &mut DispatchParts, received: ReceivedApdu) {
     let _provenance = &received.provenance;
     let _ingress = received.ingress_network;
     if let Some(routers) = &parts.source_routers {
-        routers.observe(&received, parts.local_network.get());
+        routers.observe(&received);
     }
     let Some(responder) = parts.responder.as_ref() else {
         let mut counters = parts.shared.counters.lock().await;
@@ -1026,7 +1026,7 @@ async fn handle_terminal(parts: &mut DispatchParts, received: ReceivedApdu) {
     let admission = match outcome {
         Ok(AdmissionOutcome::Admitted(admission)) => {
             if let Some(routers) = &parts.source_routers {
-                routers.observe(&received, parts.local_network.get());
+                routers.observe(&received);
             }
             admission
         }

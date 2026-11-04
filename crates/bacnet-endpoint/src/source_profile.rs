@@ -96,8 +96,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// included. Its records go with DNET/DADR through the router that
     /// reaches `network`, which the session learns from traffic back from
     /// that network (an answer it admits, or a request from a station
-    /// there); until then, and after a delivery through the learned router
-    /// fails, they go with the link's broadcast MAC (Clause 6.5.3). A
+    /// there) or from an I-Am-Router-To-Network listing it; until then, and
+    /// after a delivery through the learned router is lost (no answer in
+    /// time, or a failed send), they go with the link's broadcast MAC
+    /// (Clause 6.5.3). A
     /// confirmed record's answer comes back through the router, naming
     /// `network` and `mac` as its source. A failed delivery counts and sets
     /// the Reporter's Reliability as a direct one does. Once the session's

@@ -1,10 +1,10 @@
 """The source Audit Reporter keywords on ScEndpoint and MstpEndpoint (#2357):
 each binding address and address recipient in its link's format, refused at
 construction by that link's rules, and an SC endpoint's records arriving at an
-SC server's Audit Log. Routed bindings, "network:0xMAC" on every endpoint
-(#2371), are checked on the wire in Rust (source_routed_tests.rs). MS/TP records are checked on the wire in Rust
-(bacnet-endpoint's source_link_tests.rs): an MS/TP endpoint needs a serial
-port here."""
+SC server's Audit Log. MS/TP records, and routed bindings ("network:0xMAC" on
+every endpoint, #2371), are checked on the wire in Rust (bacnet-endpoint's
+source_link_tests.rs and source_routed_tests.rs): an MS/TP endpoint needs a
+serial port here."""
 import asyncio
 import subprocess
 import tempfile

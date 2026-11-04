@@ -11228,13 +11228,16 @@ link, since the remote network's link may differ. `start` and the builders
 refuse anything else with SERVICES / SERVICE_REQUEST_DENIED, and a Device bound
 twice, directly or routed. Records go with DNET/DADR through the router to that
 network. The session learns the router from traffic that comes back from the
-network: an answer it admits, or a request from a station there (Clause 6.5.3
-leaves the method to the node). Until then, and after a delivery through the
-learned router fails, a record goes with the link's broadcast MAC instead. A
-confirmed record's answer comes back naming the network and MAC, and a failure
-counts toward AUDITING_FAILURE and sets COMMUNICATION_FAILURE as a direct one
-does. Once the session's number is the binding's network, the binding is a
-direct one by the link's rule. An audited client operation routed to a station
+network (an answer it admits, or a request from a station there) and from an
+I-Am-Router-To-Network that lists it (Clause 6.5.3 leaves the method to the
+node). Until then, and after a delivery through the learned router is lost
+(no answer in time, or a failed send), a record goes with the link's broadcast
+MAC instead; a peer's Error, Reject or Abort keeps the router. A confirmed
+record's answer comes back naming the network and MAC, and a failure counts
+toward AUDITING_FAILURE and sets COMMUNICATION_FAILURE as a direct one does.
+Once the session's number is the binding's network, the binding is a direct
+one by the link's rule, and a record queued or in flight then goes, and is
+answered, as a direct one. An audited client operation routed to a station
 on another network (DNET 1 to 65534, a DADR of 1 to 18 octets, which the
 requester already requires) is audited too, and its record names the station
 by that network and MAC.

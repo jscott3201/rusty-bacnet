@@ -467,3 +467,65 @@ async fn an_audited_read_of_a_routed_station_names_its_network() {
     );
     site.stop().await;
 }
+
+/// A peer's Reject or Error came back through the learned router: the
+/// record fails, setting COMMUNICATION_FAILURE, but the router stays, so the
+/// next record goes to it as a unicast. Only a lost delivery forgets it.
+#[tokio::test(start_paused = true)]
+async fn a_refused_record_keeps_its_router() {
+    let mut site = Site::start(true, &[AuditOperation::DEVICE_RESET]).await;
+    site.session.report_device_reset_local().await.unwrap();
+    let (_, invoke) = notification(&site.receive().await, true);
+    site.acknowledge(invoke.unwrap()).await;
+    // Idle the paused runtime, so every task has handled the answer.
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert_eq!(site.learned().as_deref(), Some(&ROUTER_NEAR[..]));
+    for refusal in ["Reject", "Error", "none"] {
+        site.session.report_device_reset_local().await.unwrap();
+        let (_, invoke) = notification(&site.receive().await, true);
+        let invoke_id = invoke.unwrap();
+        assert_eq!(site.sent_unicasts(), [MacAddr::from_slice(&ROUTER_NEAR)]);
+        let (answer, expected) = match refusal {
+            "Reject" => (
+                Apdu::Reject(RejectPdu {
+                    invoke_id,
+                    reject_reason: RejectReason::OTHER,
+                }),
+                Reliability::COMMUNICATION_FAILURE,
+            ),
+            "Error" => (
+                Apdu::Error(ErrorPdu {
+                    invoke_id,
+                    service_choice: ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION,
+                    error_class: ErrorClass::SERVICES,
+                    error_code: ErrorCode::OTHER,
+                    error_data: Bytes::new(),
+                }),
+                Reliability::COMMUNICATION_FAILURE,
+            ),
+            _ => (
+                Apdu::SimpleAck(SimpleAck {
+                    invoke_id,
+                    service_choice: ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION,
+                }),
+                Reliability::NO_FAULT_DETECTED,
+            ),
+        };
+        site.send(answer, false).await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert_eq!(
+            reliability(&site.session).await,
+            expected.to_raw(),
+            "{refusal}"
+        );
+        assert_eq!(
+            site.learned().as_deref(),
+            Some(&ROUTER_NEAR[..]),
+            "{refusal}"
+        );
+    }
+    site.stop().await;
+}
+
+#[path = "source_routed_change_tests.rs"]
+mod change;

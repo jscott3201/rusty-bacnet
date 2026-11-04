@@ -165,6 +165,7 @@ impl SourceRoutes {
     /// Number owner publishes into.
     pub(crate) fn finalize(&mut self, link: SourceLink, local_network: LocalNetworkNumber) {
         self.link = link;
+        self.routers.set_local_network(local_network.clone());
         self.local_network = local_network;
     }
     /// A direct unicast MAC on the link ([`SourceLink::unicast`]).
