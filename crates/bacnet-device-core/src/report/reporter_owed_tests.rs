@@ -120,3 +120,91 @@ fn a_look_that_settles_nothing_waits_for_a_pop() {
     device.deadline();
     assert_eq!(send(&mut device, T0), Some(3));
 }
+
+/// The octets of an UnconfirmedCOVNotification for one of these
+/// subscriptions; a confirmed one is two more.
+fn unconfirmed_octets() -> usize {
+    let mut device = Device::new(OutboxLimits::default());
+    device.subscribe(1, false, T0);
+    let mut out = BytesMut::new();
+    device
+        .reporter
+        .pop(&NoBindings, &mut device.ids, T0, &mut out)
+        .unwrap();
+    out.len()
+}
+
+/// A budget of octets that fits an unconfirmed notification but not a
+/// confirmed one: the confirmed subscription's report can never go, so
+/// it is counted and not owed, and the owed one behind it goes once an
+/// entry frees.
+#[test]
+fn a_report_over_the_byte_budget_is_not_owed() {
+    let policy = CovPolicy {
+        max_notification_bytes_per_event: unconfirmed_octets(),
+        ..CovPolicy::default()
+    };
+    let room = OutboxLimits {
+        entries: 1,
+        octets: 256,
+    };
+    let mut device = Device::with_policy(room, policy);
+    device.subscribe(3, false, T0);
+    device.subscribe(1, true, T0);
+    device.subscribe_to(ai2(), 2, false, T0);
+    assert_eq!(device.reporter.owed.len(), 1, "2 owed; 1 can never go");
+    assert_eq!(device.reporter.counters().owed, 2);
+    assert_eq!(send(&mut device, T0), Some(3));
+    let mut sent = Vec::new();
+    for _ in 0..4 {
+        if device.reporter.next_deadline() == Some(T0) {
+            device.deadline();
+        }
+        sent.extend(send(&mut device, T0));
+    }
+    assert_eq!(sent, [2]);
+    assert!(device.reporter.owed.is_empty());
+}
+
+/// A budget of octets for one and a half notifications: a look at two
+/// owed references reports the first, and admits the second only for the
+/// budget to drop it. That one stays owed and goes at the next look.
+#[test]
+fn an_owed_report_the_byte_budget_drops_after_admission_stays_owed() {
+    let octets = unconfirmed_octets();
+    let policy = CovPolicy {
+        max_notification_bytes_per_event: octets + octets / 2,
+        ..CovPolicy::default()
+    };
+    let room = OutboxLimits {
+        entries: 2,
+        octets: 256,
+    };
+    let mut device = Device::with_policy(room, policy);
+    for process in 1..=4 {
+        device.subscribe(process, false, T0);
+    }
+    assert_eq!(device.reporter.owed.len(), 2);
+    assert_eq!(send(&mut device, T0), Some(1));
+    assert_eq!(send(&mut device, T0), Some(2));
+    let throttled = device
+        .reporter
+        .counters()
+        .cov
+        .notifications_throttled_fanout;
+    let mut sent = Vec::new();
+    for _ in 0..4 {
+        if device.reporter.next_deadline() == Some(T0) {
+            device.deadline();
+        }
+        sent.extend(send(&mut device, T0));
+    }
+    assert_eq!(sent, [3, 4]);
+    let counters = device.reporter.counters();
+    assert_eq!(
+        counters.cov.notifications_throttled_fanout,
+        throttled + 1,
+        "4's report was admitted, then dropped by the budget"
+    );
+    assert!(device.reporter.owed.is_empty());
+}

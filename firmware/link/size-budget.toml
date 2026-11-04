@@ -603,6 +603,12 @@
 #
 # 600 / 456 / 608 octets of .text more; the objects rows didn't move. The
 # reporting budgets are --suggest's again.
+#
+# Its second review round (dev at f0dd882c6 merged) refuses at admission a
+# report too large for one input's budget of octets, as one too large for
+# the outbox is: 171440 / 171936 / 206732 octets of .text and 189744 /
+# 190244 / 227702 of flash; .rodata and RAM unchanged. The reporting
+# budgets are --suggest's again.
 
 [thumbv7m-none-eabi.mstp]
 text = 18320
@@ -704,11 +710,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [thumbv7m-none-eabi.reporting]
-text = 192368
+text = 192016
 rodata = 19360
 data = 64
 bss = 27648
-flash = 212880
+flash = 212528
 ram = 27648
 fmt_functions = 0
 div64_functions = 0
@@ -990,11 +996,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [thumbv7em-none-eabihf.reporting]
-text = 192688
+text = 192576
 rodata = 19360
 data = 64
 bss = 27648
-flash = 213200
+flash = 213088
 ram = 27648
 fmt_functions = 0
 div64_functions = 0
@@ -1012,11 +1018,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [riscv32imac-unknown-none-elf.reporting]
-text = 231376
+text = 231552
 rodata = 23472
 data = 64
 bss = 27648
-flash = 254864
+flash = 255040
 ram = 27648
 fmt_functions = 0
 div64_functions = 0

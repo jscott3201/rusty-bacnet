@@ -245,6 +245,7 @@ impl Reporter {
         let settled = keys[keys.len() - owed..]
             .iter()
             .any(|key| !self.owed.contains(key));
+        // `|=`: room a fence freed during the look stays freed.
         self.room_freed |=
             settled && !self.owed.is_empty() && self.outbox.room().entries_free() > 0;
     }
@@ -523,6 +524,7 @@ impl Reporter {
         now: Instant,
     ) {
         let mut budget = EventBudget::new(self.table.policy());
+        let max_octets = self.table.policy().max_notification_bytes_per_event;
         let mut room = self.outbox.room();
         let limits = self.outbox.limits();
         let outbox = &self.outbox;
@@ -542,15 +544,15 @@ impl Reporter {
             &mut budget,
             now,
             |sub, octets| {
-                if room.take(octets, outbox.queued(sub.key())) {
+                // Too large for the whole outbox, or for one input's budget
+                // of octets: owing it would only see it refused again.
+                let hopeless = limits.entries == 0 || octets > limits.octets || octets > max_octets;
+                if !hopeless && room.take(octets, outbox.queued(sub.key())) {
                     if owed.contains(sub.key()) {
                         admitted.push(sub.key().clone());
                     }
                     return Some(());
                 }
-                // Too large for the whole outbox: owing it would only find
-                // no room again.
-                let hopeless = limits.entries == 0 || octets > limits.octets;
                 refused.push((sub.key().clone(), hopeless));
                 None
             },

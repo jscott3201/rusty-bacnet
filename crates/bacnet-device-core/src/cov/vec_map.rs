@@ -10,10 +10,11 @@
 //! entries (one per subscription or peer); the server, up to one per
 //! subscription, 1,024 at its default cap. Measured with 1,024 flights (a
 //! release build on a desktop host, 96-octet entries), an insert or a
-//! removal in the middle takes about 250 ns against the `BTreeMap`'s 21
-//! to 25, at the front about 450, and at the end about 10. A flight's
-//! entry goes in when a confirmed report begins and out when it ends, so
-//! that is under half a microsecond twice per confirmed notification.
+//! removal in the middle takes under a microsecond (250 to 700 ns,
+//! depending on the host's load) against the `BTreeMap`'s 21 to 25, and
+//! at the end about 10. A flight's entry goes in when a confirmed report
+//! begins and out when it ends, so that is twice per confirmed
+//! notification.
 
 use alloc::vec::Vec;
 
