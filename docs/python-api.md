@@ -944,6 +944,12 @@ seconds after each failure. On a B/IPv6 owner `foreign_registration()` returns a
 (as on B/IP, with `"no_ipv6_address"` for a name with no IPv6 address), the
 `previous_releases`, `previous_released`, `previous_release_refused` and
 `previous_release_unanswered` totals, `broadcasts_refused`, and `registrations_sent`.
+The BBMD's answer to the latest registration reads as on B/IP (#2388): `last_outcome`
+is `"accepted"` or `"refused"`, with `last_result` the BVLC result code (0x0090 for a
+refusal), or `"timed_out"` once the next registration went first, unanswered;
+`last_outcome_age` says how many seconds ago it came, `unanswered` how many
+registrations in a row went unanswered, and `refused` counts the refusals. A change of
+BBMD, the wait for its name and a stop clear the answer.
 
 ```python
 from rusty_bacnet import BACnetClient, ForeignDevice

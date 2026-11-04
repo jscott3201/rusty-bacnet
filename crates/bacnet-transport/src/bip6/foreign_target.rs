@@ -21,12 +21,16 @@
 //! target's lock. The lock is a short synchronous critical section, never
 //! held across an await.
 
+mod answer;
+#[cfg(test)]
+mod answer_tests;
 mod lookup;
 #[cfg(test)]
 mod name_tests;
 mod release;
 mod waiting;
 
+pub use answer::Bip6RegistrationAnswer;
 pub use release::Bip6ReleaseCounters;
 pub use waiting::Bip6ForeignStatus;
 
@@ -76,6 +80,8 @@ struct State {
     broadcasts_refused: u64,
     /// Register-Foreign-Device messages sent.
     registrations_sent: u64,
+    /// What the BBMD in use made of them (#2388, [`answer`]).
+    answers: answer::Answers,
 }
 
 /// One transport's foreign-device registration, shared with the Network
@@ -223,6 +229,7 @@ impl ForeignTarget {
                 retry_at: None,
                 broadcasts_refused: 0,
                 registrations_sent: 0,
+                answers: answer::Answers::default(),
             }),
             changed: Notify::new(),
             rearmed: Notify::new(),
@@ -311,13 +318,14 @@ impl ForeignTarget {
     }
 
     /// The transport stopped: changes are refused until it runs again, a
-    /// lookup that ends meanwhile counts nothing, and a release still out
-    /// ends unanswered.
+    /// lookup that ends meanwhile counts nothing, a release still out ends
+    /// unanswered, and the BBMD's answers go.
     pub(super) fn detach(&self) {
         let mut state = self.lock();
         state.own = None;
         state.counters.last_failure = None;
         state.end_releases();
+        state.answers.reset();
     }
 
     /// Resolve when an activation changed the registration.

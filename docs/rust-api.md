@@ -1300,7 +1300,14 @@ usable answer registers at once. A stop ends the retry; a restart looks the name
 at once.
 `Bip6Transport::foreign_status()` returns a `Bip6ForeignStatus`: the BBMD's address in
 use, `bbmd_name` (the host name it is known by, if any), `waiting_for_bbmd`, the
-lookup and release counters, `broadcasts_refused` and `registrations_sent`.
+lookup and release counters, `broadcasts_refused` and `registrations_sent`, and the
+BBMD's answers (#2388): `last_answer` (`Bip6RegistrationAnswer::Held`, `Refused`, or
+`Unanswered` once the next registration went first), `last_answer_age`, the
+`unanswered` streak and the `registrations_refused` total. A result counts as a
+registration's answer only from the BBMD in use while a registration there awaits
+one, and a success goes first to a release in flight; a move to another BBMD, the
+wait for its name and a stop clear the answer. Registrations keep their half-TTL
+schedule whatever the answer.
 `foreign_device_config()` reads back the name until it first resolves. The B/IPv6
 client builder takes a registration with
 `.foreign_device(config)` alongside `.device_instance(..)` (#1941), and, as the B/IP

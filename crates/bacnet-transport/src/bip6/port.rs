@@ -242,9 +242,10 @@ impl Bip6Transport {
     }
 
     /// How this foreign device's registration stands (#2365): the BBMD's
-    /// address in use, whether it waits for its BBMD's host name, and the
-    /// lookups, releases and refused broadcasts so far. `None` outside
-    /// foreign-device mode.
+    /// address in use, whether it waits for its BBMD's host name, the
+    /// BBMD's latest answer to a registration (#2388), and the lookups,
+    /// releases, registrations and refused broadcasts so far. `None`
+    /// outside foreign-device mode.
     pub fn foreign_status(&self) -> Option<Bip6ForeignStatus> {
         self.foreign_device.as_ref().map(|target| target.status())
     }
@@ -360,7 +361,7 @@ async fn reregister(target: Arc<ForeignTarget>, socket: Arc<Bip6Socket>, source_
         if let Some(bbmd) = config.bbmd.address()
             && send_register_foreign_device_v6(&socket, bbmd, config.ttl, source_vmac).await
         {
-            target.registration_sent();
+            target.registration_sent(bbmd);
         }
         if let Some((left, entry)) = release
             && !send_release_v6(&socket, left, entry, source_vmac).await
@@ -607,7 +608,7 @@ impl TransportPort for Bip6Transport {
             start_bbmd.as_ref().and_then(|start| start.bbmd),
         ) && send_register_foreign_device_v6(&socket, bbmd, fd.config().ttl, source_vmac).await
         {
-            fd.registration_sent();
+            fd.registration_sent(bbmd);
         }
         // The address a start on `::` found is the registration's from here,
         // before the receive loop and the driver read it: nothing after

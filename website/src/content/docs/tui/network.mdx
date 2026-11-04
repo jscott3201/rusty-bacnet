@@ -26,9 +26,9 @@ A BBMD given by host name shows the name and the address it stands for, or `(not
 
 On B/IPv6 (`--ipv6 --foreign-bbmd`) the panel shows the same BBMD, TTL and status lines, without the tables below:
 
-- **Status.** `registration sent` once one has gone, or waiting for the BBMD's host name. B/IPv6 records no answer from the BBMD, so the panel can't say whether it accepted or refused the registration, and the status bar reads `FD sent`.
+- **Status.** The BBMD's answer to the latest registration and how long ago it came: `registered, accepted 12 s ago`, `REFUSED 4 s ago`, or `no answer to the last 2 registrations` once the next registration went first; before the first answer, `registration sent, waiting for the BBMD's answer`; or waiting for the BBMD's host name. The status bar reads `FD held`, `refused` or `no answer` as on B/IP, and a refusal or silence raises the same banner.
 - **Counts.** Broadcasts refused while waiting for the name (B/IPv6 holds none), and the name's lookups with the newest failure.
-- **Registrations sent.** Every Register-Foreign-Device sent, to any BBMD the device has used.
+- **Registrations sent.** Every Register-Foreign-Device sent, and the BBMDs' refusals, to any BBMD the device has used.
 - **Releases.** Requests to the BBMDs it moved away from to delete its entry, and how each ended.
 
 `:bbmd`, `r` and `m` read tables on B/IP only; on other transports they say so, and the footer leaves them out.

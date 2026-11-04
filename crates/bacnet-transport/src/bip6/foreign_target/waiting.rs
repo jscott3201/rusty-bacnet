@@ -19,17 +19,19 @@
 
 use std::io;
 use std::net::{IpAddr, Ipv6Addr, SocketAddrV6};
+use std::time::Duration;
 
 use bacnet_types::error::Error;
 use tokio::time::Instant;
 
+use super::answer::Bip6RegistrationAnswer;
 use super::release::Bip6ReleaseCounters;
 use super::{Bip6ForeignBbmd, ForeignTarget};
 use crate::bbmd_lookup::{BbmdLookupCounters, BbmdLookupFailure, Ended, Failed, choose};
 
 /// How often a start on `::` checks whether a lookup left running by a
 /// quick restart has ended.
-const SLOT_POLL: std::time::Duration = std::time::Duration::from_millis(10);
+const SLOT_POLL: Duration = Duration::from_millis(10);
 
 /// A B/IPv6 foreign device's registration as it stands
 /// ([`Bip6Transport::foreign_status`](crate::bip6::Bip6Transport::foreign_status)).
@@ -62,9 +64,23 @@ pub struct Bip6ForeignStatus {
     /// Broadcasts refused, with an error, because the device waited for
     /// its BBMD's host name.
     pub broadcasts_refused: u64,
-    /// Register-Foreign-Device messages sent, to whichever BBMD. B/IPv6
-    /// doesn't track the BBMD's answers.
+    /// Register-Foreign-Device messages sent, to whichever BBMD.
     pub registrations_sent: u64,
+    /// What the BBMD in use made of this device's latest registration
+    /// there (#2388): held or refused by its answer, or unanswered when the
+    /// next registration went first. `None` until the first one there is
+    /// answered or goes unanswered; a move to another BBMD, the wait for
+    /// its host name and a stop clear it.
+    pub last_answer: Option<Bip6RegistrationAnswer>,
+    /// How long ago `last_answer` came: the BBMD's answer, or for an
+    /// unanswered registration, the next one going out.
+    pub last_answer_age: Option<Duration>,
+    /// Registrations to the BBMD in use that went unanswered in a row, the
+    /// latest included: nonzero only while `last_answer` is
+    /// [`Unanswered`](Bip6RegistrationAnswer::Unanswered).
+    pub unanswered: u64,
+    /// Register-Foreign-Device NAKs taken as answers, from whichever BBMD.
+    pub registrations_refused: u64,
 }
 
 /// What a start learned of its BBMD before binding.
@@ -112,7 +128,7 @@ impl ForeignTarget {
             (None, named @ Bip6ForeignBbmd::Name { .. }) => Some(named.clone()),
             (None, Bip6ForeignBbmd::Address(_)) => None,
         };
-        Bip6ForeignStatus {
+        let mut status = Bip6ForeignStatus {
             bbmd,
             bbmd_name,
             ttl: state.config.ttl,
@@ -121,7 +137,10 @@ impl ForeignTarget {
             releases: state.releases,
             broadcasts_refused: state.broadcasts_refused,
             registrations_sent: state.registrations_sent,
-        }
+            ..Bip6ForeignStatus::default()
+        };
+        state.answers.fill(&mut status, Instant::now());
+        status
     }
 
     /// Before a start on `interface`: the BBMD's address to bind by. A BBMD
@@ -136,6 +155,8 @@ impl ForeignTarget {
         &self,
         interface: Ipv6Addr,
     ) -> Result<StartBbmd, Error> {
+        // What an earlier start's BBMD said is not this one's (#2388).
+        self.lock().answers.reset();
         let (name, lookup) = loop {
             // `None` while a lookup left running by a quick restart holds
             // the slot, which it frees within the resolver's 10 s.
@@ -253,12 +274,6 @@ impl ForeignTarget {
         if let Some(lookup) = lookup {
             lookup.start();
         }
-    }
-
-    /// A Register-Foreign-Device went out.
-    pub(in crate::bip6) fn registration_sent(&self) {
-        let mut state = self.lock();
-        state.registrations_sent = state.registrations_sent.saturating_add(1);
     }
 
     /// A broadcast was refused while the device waited for its BBMD.

@@ -600,13 +600,16 @@ BBMD, the TTL, the last BVLC-Result, a countdown to the next registration and
 the lease left; a refused registration raises a red banner on every screen.
 A B/IPv6 foreign device (`--ipv6 --foreign-bbmd`) gets the same panel without
 the tables: the BBMD, named by its host name and the address it stands for, or
-`(not resolved yet)`, the TTL, `registration sent` or `waiting for the BBMD's
-host name to resolve`, the broadcasts refused while waiting, the host name's
-lookups and failures with the newest reason, the registrations sent (to every
-BBMD it has used), and the releases of BBMDs it left. B/IPv6 records no answer
-to a registration, so the panel can't say whether the BBMD accepted or refused
-it, and the status bar reads `FD sent` rather than `held` or `refused`. `:bbmd`,
-`r` and `m` read tables on B/IP only, and say so on other transports.
+`(not resolved yet)`, the TTL, the BBMD's answer to the latest registration and
+how long ago it came (`registered, accepted 12 s ago`, `REFUSED 4 s ago`, `no
+answer to the last 2 registrations`, or `waiting for the BBMD's host name to
+resolve`), the broadcasts refused while waiting, the host name's lookups and
+failures with the newest reason, the registrations sent and refused (to every
+BBMD it has used), and the releases of BBMDs it left (#2388). The status bar
+reads `FD held`, `refused` or `no answer` as on B/IP, and a refusal or silence
+raises the same banner. A registration counts as unanswered once the next one
+goes first: B/IPv6 renews at half the TTL whatever the answer. `:bbmd`, `r` and
+`m` read tables on B/IP only, and say so on other transports.
 Once the BBMD accepts, the TUI reads its FDT and shows the entry the BBMD
 recorded for us, the address it forwards broadcasts to. Behind a NAT router
 the BBMD records the router's address instead: give it with
@@ -1021,8 +1024,7 @@ evicting the least recently heard first.
 holds on other devices: COV subscriptions, and our entry in a BBMD's
 foreign-device table. `FD` appears only with a registration and says
 where it stands (`held`, `pending`, `refused`, `no answer`, `lapsed` or
-`waiting for name`, and on B/IPv6 `sent`), from the same state the
-Network screen's banner reads. `ledger n` counts changes
+`waiting for name`), from the same state the Network screen's banner reads. `ledger n` counts changes
 still in effect.
 
 **Status bar and footer.** Both fit their width by priority: at 80 columns
@@ -1855,13 +1857,15 @@ command fails saying why. With `--ipv6-interface` the transport starts and waits
 the name as B/IP does, and its broadcasts fail meanwhile. A one-shot command waits for
 the name's first lookup: one that doesn't resolve fails it (`BBMD bbmd.example:47808
 could not be registered with: its host name did not resolve (1 name lookup, 1
-failed)`), and one that does is logged with its address (`bbmd.example:47808 (at
-[2001:db8::10]:47808; 1 name lookup, 0 failed)`); the TUI logs either and carries on.
-B/IPv6 tracks no registration answers, so the TUI shows what was sent: its status
-bar reads `FD waiting for name` until the name resolves, then `FD sent`; a
-WAITING banner says why a lookup failed, and broadcasts are refused meanwhile; and
-the Network screen's panel shows the name, the address it stands for, and the
-counts (#2378).
+failed)`). It then waits for the BBMD to answer the first registration, as on B/IP
+(#2388), and fails if it refuses (`BBMD [2001:db8::10]:47808 refused the
+foreign-device registration (REGISTER_FOREIGN_DEVICE_NAK)`) or doesn't answer within
+5 seconds; an accepting BBMD is logged, a named one with its address
+(`bbmd.example:47808 (at [2001:db8::10]:47808; 1 name lookup, 0 failed)`). The TUI
+logs the outcome and carries on. Its status bar reads `FD waiting for name` until
+the name resolves, then the BBMD's answer as on B/IP; a WAITING banner says why a
+lookup failed, and broadcasts are refused meanwhile; and the Network screen's panel
+shows the name, the address it stands for, the answer and the counts (#2378).
 
 Behind NAT, keep `--renewal` short so the mapping the BBMD's replies come back
 on stays open; the TTL can stay long. If you know the address and port the NAT

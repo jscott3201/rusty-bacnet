@@ -4,8 +4,8 @@
 //!   BVLC-Result, a countdown to the next registration, and a banner when
 //!   the BBMD refuses the registration (Annex J.5.2.2) or leaves it
 //!   unanswered. A B/IPv6 foreign device shares its state, its status and
-//!   its waiting banner (#2378); B/IPv6 tracks no answers and reads no
-//!   tables, so its panel counts what was sent instead.
+//!   its banners (#2378), from its BBMD's answers (#2388); B/IPv6 reads no
+//!   tables, so its panel counts what was sent instead of our FDT entry.
 //! - The BDT and FDT of the target BBMD, with what each mask means and the
 //!   seconds each FDT entry has left; our own FDT entry is marked, since the
 //!   address the BBMD recorded is the one it forwards broadcasts to.
@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use bacnet_ops::label::kebab;
 use bacnet_transport::bip::{ForeignRegistrationOutcome, ForeignRegistrationSnapshot};
-use bacnet_transport::bip6::Bip6ForeignStatus;
+use bacnet_transport::bip6::{Bip6ForeignStatus, Bip6RegistrationAnswer, Bvlc6ResultCode};
 
 use super::watch::Screen;
 use super::{App, FLASH_FOR, Link};
@@ -50,13 +50,15 @@ pub(crate) enum View {
 /// field and the Network screen's banner both read it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Registration {
-    /// The BBMD accepted it and the lease holds.
+    /// The BBMD accepted it and the lease holds; on B/IPv6, the BBMD's
+    /// latest answer accepted it (#2388).
     Held,
     /// No answer yet: the first attempt is out, or a renewal is.
     Pending,
     /// The BBMD's last answer refused it.
     Refused,
-    /// None accepted, and this many attempts went unanswered.
+    /// None accepted, and this many attempts went unanswered; on B/IPv6,
+    /// the latest went unanswered, this many in a row.
     NoAnswer {
         /// Attempts with no answer.
         unanswered: u64,
@@ -65,10 +67,6 @@ pub(crate) enum Registration {
     Lapsed,
     /// The BBMD's host name hasn't resolved yet (#2308): no attempt is due.
     Waiting,
-    /// B/IPv6 (#2378): registrations went to the BBMD, whose answers
-    /// B/IPv6 doesn't track, so whether it accepted or refused them isn't
-    /// known.
-    Unconfirmed,
 }
 
 impl Registration {
@@ -81,7 +79,6 @@ impl Registration {
             Self::NoAnswer { .. } => "no answer",
             Self::Lapsed => "lapsed",
             Self::Waiting => "waiting for name",
-            Self::Unconfirmed => "sent",
         }
     }
 }
@@ -121,8 +118,9 @@ pub(crate) struct NetworkState {
     /// The latest registration snapshot and when it arrived.
     pub(crate) registration: Option<(ForeignRegistrationSnapshot, Instant)>,
     /// A B/IPv6 foreign device's registration, as its transport last
-    /// reported it (#2378). B/IP's fields above stay empty beside it.
-    pub(crate) bip6: Option<Bip6ForeignStatus>,
+    /// reported it (#2378), and when the report arrived. B/IP's fields
+    /// above stay empty beside it.
+    pub(crate) bip6: Option<(Bip6ForeignStatus, Instant)>,
     /// The target's BDT.
     pub(crate) bdt: Option<Fetched<Vec<BdtRow>>>,
     /// The target's FDT.
@@ -188,6 +186,12 @@ impl NetworkState {
         Some(left.saturating_sub(now.saturating_duration_since(*at)))
     }
 
+    /// How long before `now` a B/IPv6 BBMD's latest answer came (#2388).
+    pub(crate) fn bip6_answer_age(&self, now: Instant) -> Option<Duration> {
+        let (status, at) = self.bip6.as_ref()?;
+        Some(status.last_answer_age? + now.saturating_duration_since(*at))
+    }
+
     /// Where the foreign-device registration stands (#1894), for the
     /// status bar and the banner alike: `None` without a registration and
     /// no refusal on record.
@@ -195,7 +199,7 @@ impl NetworkState {
     /// It keys on the counters rather than the last outcome, since a fresh
     /// attempt reads `Pending` while the earlier ones went unanswered.
     pub(crate) fn registration_state(&self) -> Option<Registration> {
-        if let Some(status) = &self.bip6 {
+        if let Some((status, _)) = &self.bip6 {
             return Some(bip6_state(status));
         }
         let Some((snapshot, _)) = self.registration.as_ref() else {
@@ -242,15 +246,8 @@ impl NetworkState {
     /// or once registrations go unanswered (none accepted after the first
     /// attempt, or a lease lapsed with no newer success).
     pub(crate) fn registration_banner(&self) -> Option<String> {
-        if let Some(status) = &self.bip6 {
-            // Only once a lookup has failed, as on B/IP. B/IPv6 keeps no
-            // hold queue.
-            let failure = status.lookups.last_failure?;
-            let name = status.bbmd_name.as_ref()?.to_string();
-            return (bip6_state(status) == Registration::Waiting).then(|| {
-                let why = crate::foreign::bip6_lookup_failure(failure);
-                waiting_banner(&name, &why, "are refused meanwhile")
-            });
+        if let Some((status, _)) = &self.bip6 {
+            return bip6_banner(status);
         }
         let (snapshot, _) = self.registration.as_ref()?;
         let bbmd = snapshot
@@ -261,22 +258,13 @@ impl NetworkState {
                 let result = snapshot
                     .last_result
                     .map_or_else(String::new, |code| format!(" ({})", kebab(code)));
-                Some(format!(
-                    " REFUSED {bbmd} refused the foreign-device registration{result}; \
-                     broadcasts through it fail until it accepts. Check its foreign-device policy."
-                ))
+                Some(refused_banner(&bbmd, &result))
             }
             Registration::Lapsed => Some(format!(
                 " LAPSED The registration with {bbmd} lapsed, and no renewal since was \
                  accepted; broadcasts through it are not delivered."
             )),
-            Registration::NoAnswer { unanswered } => {
-                let plural = if unanswered == 1 { "" } else { "s" };
-                Some(format!(
-                    " NO ANSWER {bbmd} has not answered {unanswered} foreign-device \
-                     registration{plural}; broadcasts through it are not delivered."
-                ))
-            }
+            Registration::NoAnswer { unanswered } => Some(no_answer_banner(&bbmd, unanswered)),
             Registration::Waiting => {
                 // Only once a lookup has failed: the first is still out at
                 // the start.
@@ -285,7 +273,7 @@ impl NetworkState {
                 let why = crate::foreign::lookup_failure(failure);
                 Some(waiting_banner(&name, &why, "are held, then refused"))
             }
-            Registration::Held | Registration::Pending | Registration::Unconfirmed => None,
+            Registration::Held | Registration::Pending => None,
         }
     }
 
@@ -321,14 +309,64 @@ impl NetworkState {
 
 /// Where a B/IPv6 foreign device's registration stands (#2378): waiting
 /// for its BBMD's host name while it has no address (the transport waits
-/// only then; a stopped one reads the same), or sending registrations to
-/// an address B/IPv6 tracks no answers from.
+/// only then; a stopped one reads the same), or as the BBMD answered the
+/// latest registration there (#2388): held, refused, or no answer by the
+/// next one. Pending until the first answer, or silence, is known.
 fn bip6_state(status: &Bip6ForeignStatus) -> Registration {
-    match status.bbmd {
-        None => Registration::Waiting,
-        Some(_) if status.registrations_sent > 0 => Registration::Unconfirmed,
-        Some(_) => Registration::Pending,
+    if status.bbmd.is_none() {
+        return Registration::Waiting;
     }
+    match status.last_answer {
+        Some(Bip6RegistrationAnswer::Held) => Registration::Held,
+        Some(Bip6RegistrationAnswer::Refused) => Registration::Refused,
+        Some(Bip6RegistrationAnswer::Unanswered) => Registration::NoAnswer {
+            unanswered: status.unanswered,
+        },
+        // None yet, or an answer this CLI doesn't name.
+        _ => Registration::Pending,
+    }
+}
+
+/// A B/IPv6 foreign device's banner (#2378, #2388): REFUSED or NO ANSWER
+/// as on B/IP, naming the BBMD's address, or WAITING once a lookup of its
+/// host name has failed. B/IPv6 keeps no hold queue.
+fn bip6_banner(status: &Bip6ForeignStatus) -> Option<String> {
+    let bbmd = status
+        .bbmd
+        .map_or_else(|| "The BBMD".to_string(), |bbmd| format!("BBMD {bbmd}"));
+    match bip6_state(status) {
+        Registration::Refused => {
+            let code = Bvlc6ResultCode::REGISTER_FOREIGN_DEVICE_NAK;
+            Some(refused_banner(&bbmd, &format!(" ({})", kebab(code))))
+        }
+        Registration::NoAnswer { unanswered } => Some(no_answer_banner(&bbmd, unanswered)),
+        Registration::Waiting => {
+            let failure = status.lookups.last_failure?;
+            let name = status.bbmd_name.as_ref()?.to_string();
+            let why = crate::foreign::bip6_lookup_failure(failure);
+            Some(waiting_banner(&name, &why, "are refused meanwhile"))
+        }
+        Registration::Held | Registration::Pending | Registration::Lapsed => None,
+    }
+}
+
+/// The REFUSED banner, on either link: `bbmd` refused the registration,
+/// with the `result` code it gave, if any.
+fn refused_banner(bbmd: &str, result: &str) -> String {
+    format!(
+        " REFUSED {bbmd} refused the foreign-device registration{result}; \
+         broadcasts through it fail until it accepts. Check its foreign-device policy."
+    )
+}
+
+/// The NO ANSWER banner, on either link: `bbmd` left `unanswered`
+/// registrations unanswered.
+fn no_answer_banner(bbmd: &str, unanswered: u64) -> String {
+    let plural = if unanswered == 1 { "" } else { "s" };
+    format!(
+        " NO ANSWER {bbmd} has not answered {unanswered} foreign-device \
+         registration{plural}; broadcasts through it are not delivered."
+    )
 }
 
 /// Why the BBMD tables can't be read off B/IP.
@@ -350,7 +388,7 @@ impl App {
         let state = &mut self.network;
         match event {
             NetworkEvent::Registration(snapshot) => state.registration = Some((snapshot, now)),
-            NetworkEvent::Bip6Registration(status) => state.bip6 = Some(status),
+            NetworkEvent::Bip6Registration(status) => state.bip6 = Some((status, now)),
             NetworkEvent::Bbmd(bbmd) => state.bbmd_moved(bbmd),
             NetworkEvent::Tables {
                 bbmd,

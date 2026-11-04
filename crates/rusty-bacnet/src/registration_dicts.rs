@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use bacnet_transport::bbmd_lookup::BbmdLookupFailure;
 use bacnet_transport::bip::{ForeignRegistrationOutcome, ForeignRegistrationSnapshot};
-use bacnet_transport::bip6::Bip6ForeignStatus;
+use bacnet_transport::bip6::{Bip6ForeignStatus, Bip6RegistrationAnswer, Bvlc6ResultCode};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
@@ -47,11 +47,25 @@ pub(crate) fn registration_dict(registration: ForeignRegistrationSnapshot) -> Py
 }
 
 /// `status` as the dict a B/IPv6 owner's `foreign_registration()`
-/// returns (#2365). B/IPv6 doesn't track the BBMD's answers, so it reports
-/// the BBMD's address in use and the host name it is known by, the wait for
-/// that name, the lookups, the
-/// releases of BBMDs left and the broadcasts refused while waiting.
+/// returns (#2365): the BBMD's address in use and the host name it is known
+/// by, the wait for that name, the BBMD's latest answer under B/IP's keys
+/// (#2388), the lookups, the releases of BBMDs left and the broadcasts
+/// refused while waiting.
 pub(crate) fn bip6_registration_dict(status: Bip6ForeignStatus) -> PyResult<Py<PyAny>> {
+    // B/IP's words for the outcomes B/IPv6 records; an answer this version
+    // doesn't name reads as none.
+    let (outcome, result) = match status.last_answer {
+        Some(Bip6RegistrationAnswer::Held) => (
+            Some("accepted"),
+            Some(Bvlc6ResultCode::SUCCESSFUL_COMPLETION),
+        ),
+        Some(Bip6RegistrationAnswer::Refused) => (
+            Some("refused"),
+            Some(Bvlc6ResultCode::REGISTER_FOREIGN_DEVICE_NAK),
+        ),
+        Some(Bip6RegistrationAnswer::Unanswered) => (Some("timed_out"), None),
+        _ => (None, None),
+    };
     crate::py_async::attach(|py| {
         let dict = PyDict::new(py);
         dict.set_item("bbmd", status.bbmd.map(|bbmd| bbmd.to_string()))?;
@@ -72,6 +86,14 @@ pub(crate) fn bip6_registration_dict(status: Bip6ForeignStatus) -> PyResult<Py<P
         dict.set_item("previous_release_unanswered", status.releases.unanswered)?;
         dict.set_item("broadcasts_refused", status.broadcasts_refused)?;
         dict.set_item("registrations_sent", status.registrations_sent)?;
+        dict.set_item("last_outcome", outcome)?;
+        dict.set_item("last_result", result.map(Bvlc6ResultCode::to_raw))?;
+        dict.set_item(
+            "last_outcome_age",
+            status.last_answer_age.map(|age| age.as_secs_f64()),
+        )?;
+        dict.set_item("refused", status.registrations_refused)?;
+        dict.set_item("unanswered", status.unanswered)?;
         Ok(dict.into_any().unbind())
     })
 }

@@ -203,14 +203,15 @@ async fn connect(
             if let Some(mut client) =
                 finish_build(Box::pin(transport::build_bip6_client(&args)), &sink).await
             {
-                // The BBMD's host name, if it has one, before the session
-                // starts (#2365): logged either way, and tried again in the
-                // background while it doesn't resolve.
+                // The BBMD's host name, if it has one, and its answer to the
+                // first registration, before the session starts (#2365,
+                // #2388): logged either way, and tried again in the
+                // background.
                 if let Some(foreign) = &args.bip6_foreign_device {
                     let outcome = tokio::select! {
                         biased;
                         () = sink.cancelled() => None,
-                        result = crate::foreign::await_bip6_bbmd(&client, &foreign.bbmd) => Some(result),
+                        result = crate::foreign::await_bip6_registration(&client, &foreign.bbmd) => Some(result),
                     };
                     match outcome {
                         None => {
@@ -220,7 +221,7 @@ async fn connect(
                             return Ok(());
                         }
                         Some(Ok(bbmd)) => tracing::info!(
-                            "BBMD {bbmd} is known; the foreign-device registration goes there and renews automatically"
+                            "BBMD {bbmd} accepted the foreign-device registration; it renews automatically"
                         ),
                         Some(Err(error)) => tracing::warn!("{error}; retrying in the background"),
                     }

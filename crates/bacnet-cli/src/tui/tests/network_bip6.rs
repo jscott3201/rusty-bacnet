@@ -1,9 +1,9 @@
 //! A B/IPv6 foreign device on the TUI (#2378): the status bar's `FD`
-//! field, the WAITING banner and the Network screen's panel show its
-//! registration from the status its transport reports, as they show
-//! B/IP's: sent, waiting for the BBMD's host name, or waiting after
-//! the name failed to resolve. B/IP's frames are pinned in
-//! `network_frames` and `network_names`.
+//! field, the banners and the Network screen's panel show its registration
+//! from the status its transport reports, as they show B/IP's: held,
+//! refused or unanswered by the BBMD (#2388), waiting for the BBMD's host
+//! name, or waiting after the name failed to resolve. B/IP's frames are
+//! pinned in `network_frames` and `network_names`.
 
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6, UdpSocket};
 use std::time::Duration;
@@ -11,7 +11,7 @@ use std::time::Duration;
 use bacnet_client::client::BACnetClient;
 use bacnet_ops::target::AddressStyle;
 use bacnet_transport::bbmd_lookup::BbmdLookupFailure;
-use bacnet_transport::bip6::{Bip6ForeignDeviceConfig, Bip6ForeignStatus};
+use bacnet_transport::bip6::{Bip6ForeignDeviceConfig, Bip6ForeignStatus, Bip6RegistrationAnswer};
 use insta::assert_snapshot;
 use ratatui::crossterm::event::KeyCode;
 use tokio::sync::mpsc;
@@ -63,15 +63,30 @@ fn report(app: &mut App, status: Bip6ForeignStatus) {
     worker(app, WorkerEvent::Network(event));
 }
 
-/// The name resolved and three registrations went there; one release of a
-/// BBMD left was answered.
+/// The name resolved and three registrations went there, the latest
+/// accepted 12 s ago; one release of a BBMD left was answered.
 fn registered() -> Bip6ForeignStatus {
     status(|s| {
         s.bbmd = Some(BBMD);
         s.registrations_sent = 3;
+        s.last_answer = Some(Bip6RegistrationAnswer::Held);
+        s.last_answer_age = Some(Duration::from_secs(12));
         s.lookups.lookups = 2;
         s.releases.releases = 1;
         s.releases.released = 1;
+    })
+}
+
+/// The BBMD refused the latest of four registrations 4 s ago, and an
+/// earlier one too.
+fn refused() -> Bip6ForeignStatus {
+    status(|s| {
+        s.bbmd = Some(BBMD);
+        s.registrations_sent = 4;
+        s.registrations_refused = 2;
+        s.last_answer = Some(Bip6RegistrationAnswer::Refused);
+        s.last_answer_age = Some(Duration::from_secs(4));
+        s.lookups.lookups = 2;
     })
 }
 
@@ -92,34 +107,98 @@ fn failed() -> Bip6ForeignStatus {
     })
 }
 
+/// The BBMD accepted the latest registration: `FD held`, no banner, and
+/// the panel says how long ago, counting on from the report (#2388).
 #[test]
 fn a_registered_bip6_device_120x40() {
     let mut app = bip6_app();
     report(&mut app, registered());
-    assert_eq!(
-        app.network.registration_state(),
-        Some(Registration::Unconfirmed)
-    );
+    assert_eq!(app.network.registration_state(), Some(Registration::Held));
     assert_eq!(app.network.registration_banner(), None);
     let text = screen(&mut app, 120, 40);
-    assert!(text.contains("FD sent"), "{text}");
+    assert!(text.contains("FD held"), "{text}");
     assert!(
         text.contains("BBMD bbmd.example:47808 ([2001:db8::10]:47808)   TTL 60 s"),
         "{text}"
     );
     assert!(
-        text.contains(
-            "Status registration sent; the BBMD's answer isn't tracked   2 name lookups, 0 failed"
-        ),
+        text.contains("Status registered, accepted 12 s ago   2 name lookups, 0 failed"),
         "{text}"
     );
     assert!(
-        text.contains("Registrations sent 3, to every BBMD this device has used"),
+        text.contains("Registrations sent 3, refused 0, to every BBMD this device has used"),
         "{text}"
     );
     assert!(text.contains("1 asked, 1 released"), "{text}");
     assert_snapshot!("network_bip6_registered_120x40", text);
     assert_snapshot!("network_bip6_registered_80x24", screen(&mut app, 80, 24));
+    advance(&mut app, Duration::from_secs(3));
+    let text = screen(&mut app, 120, 40);
+    assert!(text.contains("registered, accepted 15 s ago"), "{text}");
+}
+
+/// The BBMD refused the latest registration: `FD refused` and B/IP's red
+/// banner, naming the B/IPv6 NAK, on every screen (#2388).
+#[test]
+fn a_refused_bip6_device_120x40() {
+    let mut app = bip6_app();
+    report(&mut app, refused());
+    assert_eq!(
+        app.network.registration_state(),
+        Some(Registration::Refused)
+    );
+    let banner = app.network.registration_banner().unwrap();
+    assert_eq!(
+        banner,
+        " REFUSED BBMD [2001:db8::10]:47808 refused the foreign-device registration \
+         (register-foreign-device-nak); broadcasts through it fail until it accepts. \
+         Check its foreign-device policy."
+    );
+    let text = screen(&mut app, 120, 40);
+    assert!(text.contains("FD refused"), "{text}");
+    assert!(text.contains("Status REFUSED 4 s ago"), "{text}");
+    assert!(text.contains("Registrations sent 4, refused 2,"), "{text}");
+    assert_snapshot!("network_bip6_refused_120x40", text);
+    press(&mut app, KeyCode::Char('1'));
+    let text = screen(&mut app, 120, 40);
+    assert!(
+        text.contains(" REFUSED BBMD [2001:db8::10]:47808"),
+        "{text}"
+    );
+}
+
+/// The BBMD left the last two registrations unanswered: `FD no answer`
+/// and B/IP's NO ANSWER banner, counting them (#2388).
+#[test]
+fn an_unanswered_bip6_device() {
+    let mut app = bip6_app();
+    report(
+        &mut app,
+        status(|s| {
+            s.bbmd = Some(BBMD);
+            s.registrations_sent = 2;
+            s.last_answer = Some(Bip6RegistrationAnswer::Unanswered);
+            s.last_answer_age = Some(Duration::ZERO);
+            s.unanswered = 2;
+        }),
+    );
+    assert_eq!(
+        app.network.registration_state(),
+        Some(Registration::NoAnswer { unanswered: 2 })
+    );
+    let banner = app.network.registration_banner().unwrap();
+    assert!(
+        banner.starts_with(
+            " NO ANSWER BBMD [2001:db8::10]:47808 has not answered 2 foreign-device registrations;"
+        ),
+        "{banner}"
+    );
+    let text = screen(&mut app, 120, 40);
+    assert!(text.contains("FD no answer"), "{text}");
+    assert!(
+        text.contains("Status no answer to the last 2 registrations"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -165,7 +244,8 @@ fn a_bip6_device_whose_name_failed_120x40() {
     );
     assert_snapshot!("network_bip6_failed_120x40", text);
 
-    // The name resolves: the banner goes, and the panel shows the address.
+    // The name resolves: the banner goes, and the panel shows the address
+    // and the registration waiting for its answer.
     report(
         &mut app,
         status(|s| {
@@ -177,7 +257,11 @@ fn a_bip6_device_whose_name_failed_120x40() {
     );
     assert_eq!(app.network.registration_banner(), None);
     let text = screen(&mut app, 120, 40);
-    assert!(text.contains("FD sent"), "{text}");
+    assert!(text.contains("FD pending"), "{text}");
+    assert!(
+        text.contains("Status registration sent, waiting for the BBMD's answer"),
+        "{text}"
+    );
     assert!(text.contains("([2001:db8::10]:47808)"), "{text}");
 }
 
@@ -208,7 +292,8 @@ fn a_bip6_bbmd_known_by_address() {
 
 /// A name that resolved and later failed to resolve: the device keeps
 /// registering with the address it had, so no WAITING banner, and `FD`
-/// still reads sent; the counts say why the newest lookup failed.
+/// still reads the BBMD's answer; the counts say why the newest lookup
+/// failed.
 #[test]
 fn a_resolved_name_that_later_fails_keeps_its_address() {
     let mut app = bip6_app();
@@ -217,18 +302,17 @@ fn a_resolved_name_that_later_fails_keeps_its_address() {
         status(|s| {
             s.bbmd = Some(BBMD);
             s.registrations_sent = 2;
+            s.last_answer = Some(Bip6RegistrationAnswer::Held);
+            s.last_answer_age = Some(Duration::from_secs(1));
             s.lookups.lookups = 3;
             s.lookups.failures = 1;
             s.lookups.last_failure = Some(BbmdLookupFailure::Error(std::io::ErrorKind::NotFound));
         }),
     );
-    assert_eq!(
-        app.network.registration_state(),
-        Some(Registration::Unconfirmed)
-    );
+    assert_eq!(app.network.registration_state(), Some(Registration::Held));
     assert_eq!(app.network.registration_banner(), None);
     let text = screen(&mut app, 120, 40);
-    assert!(text.contains("FD sent"), "{text}");
+    assert!(text.contains("FD held"), "{text}");
     assert!(!text.contains("WAITING"), "{text}");
     assert!(
         text.contains("3 name lookups, 1 failed: the name did not resolve"),
