@@ -1411,6 +1411,29 @@ WriteProperty two (27 to 25). ReadPropertyMultiple fell by 274.2 and
 499.2, inside or close to its floors of 873.0 and 350.6, with two
 allocator calls fewer (141 to 139).
 
+### 10.10 The B/IP receive clock read (#2373)
+
+The B/IP transport read the clock for every datagram it received, only to
+pass the time to the B/IP core's management rate-limit check, which used
+it for nothing. The core's receive no longer takes the time, so an
+ordinary datagram costs no clock read
+([benchmarks/results/perf-2373](benchmarks/results/perf-2373/README.md)).
+Counted against dev after section 10.9's changes:
+
+- **Two clock reads per round trip.** On both runtimes, every round trip
+  makes exactly two clock reads fewer, one per received datagram, and no
+  other call count changes. Allocations are unchanged.
+- **About 240 instructions per request.** ReadProperty falls by 242.9
+  instructions per request on the current-thread runtime and 253.7 on the
+  multi-thread one, and WriteProperty by 240.1 and 239.9, with every pair
+  lower. Ten-object ReadPropertyMultiple falls by 241.9 on the
+  current-thread runtime; its multi-thread figure, 154.8, is inside its
+  floor of 985.4. That is about 120 instructions per received datagram.
+- **Short of the rule on one row.** On the multi-thread runtime,
+  ReadProperty's 253.7 is 2.5 times its floor of 101.5, where the rule
+  asks for more than 3. One baseline run, the first, sets that floor; the
+  other eleven baseline values lie within 42.6 instructions per request.
+
 ## 11. How to reproduce
 
 Run one suite at a time on an idle machine. Each Criterion suite takes 1 to

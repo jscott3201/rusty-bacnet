@@ -1,0 +1,151 @@
+{
+ "issue": 2373,
+ "part_of": 1978,
+ "name": "No clock read for a received B/IP datagram (Link::receive and Policy::admit_management take no time)",
+ "image": "rb-perf-counts:ac28c4cf5d0a",
+ "packages": {
+  "gcc": "4:13.2.0-7ubuntu1",
+  "libc6": "2.39-0ubuntu8.9",
+  "valgrind": "1:3.22.0-0ubuntu3"
+ },
+ "aim": "rp",
+ "baseline": "dd786122c4eea1c77ef0ea0d2a7dea2720a9e12b",
+ "candidate": "d6de4282e5b2db43f70ef8b3cd4abd861a61a404",
+ "baseline_builds_identical": true,
+ "accepted": false,
+ "note": "Every pair lower on ReadProperty; the multi-thread row misses the 3-floor rule (2.5 floors), its floor set by the first baseline run. Calls change by exactly two clock reads per round trip on both runtimes.",
+ "rows": [
+  {
+   "workload": "rp",
+   "runtime": "ct",
+   "a_median": 31253.889722222222,
+   "b_median": 31010.960222222224,
+   "delta": -242.92949999999837,
+   "noise_floor": 14.238111111109902,
+   "a_calls": 18.0001,
+   "b_calls": 18.000149999999998,
+   "a_bytes": 2127.0104,
+   "b_bytes": 2127.0155999999997,
+   "verdict": "PASS",
+   "pairs_lower": 6,
+   "pair_deltas": [
+    -242.08377777777787,
+    -246.5467777777776,
+    -243.36322222222225,
+    -241.25655555555568,
+    -245.1161111111105,
+    -240.68811111111063
+   ]
+  },
+  {
+   "workload": "rp",
+   "runtime": "mt",
+   "a_median": 32554.618055555555,
+   "b_median": 32300.884833333334,
+   "delta": -253.73322222222123,
+   "noise_floor": 101.5093333333316,
+   "a_calls": 18.0003,
+   "b_calls": 18.00025,
+   "a_bytes": 2127.0312,
+   "b_bytes": 2127.026,
+   "verdict": "FAIL",
+   "pairs_lower": 6,
+   "pair_deltas": [
+    -205.70444444444365,
+    -245.76511111111176,
+    -268.39300000000003,
+    -231.00288888888826,
+    -255.54288888888914,
+    -234.16999999999825
+   ]
+  },
+  {
+   "workload": "wp",
+   "runtime": "ct",
+   "a_median": 39881.69111111111,
+   "b_median": 39641.585611111106,
+   "delta": -240.10550000000512,
+   "noise_floor": 98.78788888888812,
+   "a_calls": 25.0002,
+   "b_calls": 25.0002,
+   "a_bytes": 7944.0208,
+   "b_bytes": 7944.0208,
+   "verdict": "PASS",
+   "pairs_lower": 6,
+   "pair_deltas": [
+    -254.54099999999744,
+    -234.41455555555876,
+    -251.32200000000012,
+    -234.4535555555558,
+    -236.17955555555818,
+    -237.80133333333652
+   ]
+  },
+  {
+   "workload": "wp",
+   "runtime": "mt",
+   "a_median": 41076.46283333334,
+   "b_median": 40836.587666666666,
+   "delta": -239.87516666667216,
+   "noise_floor": 186.3298888888894,
+   "a_calls": 25.00025,
+   "b_calls": 25.00025,
+   "a_bytes": 7944.026,
+   "b_bytes": 7944.026,
+   "verdict": "PASS",
+   "pairs_lower": 6,
+   "pair_deltas": [
+    -301.2882222222179,
+    -206.85966666667082,
+    -199.58622222222039,
+    -249.0107777777812,
+    -254.60733333333337,
+    -296.9097777777715
+   ]
+  },
+  {
+   "workload": "rpm",
+   "runtime": "ct",
+   "a_median": 91106.50361111111,
+   "b_median": 90864.63611111112,
+   "delta": -241.86749999999302,
+   "noise_floor": 42.00166666666337,
+   "a_calls": 139.0004,
+   "b_calls": 139.0004,
+   "a_bytes": 18496.0416,
+   "b_bytes": 18496.0416,
+   "verdict": "PASS",
+   "pairs_lower": 6,
+   "pair_deltas": [
+    -271.5866666666552,
+    -236.68099999999686,
+    -239.3501111111109,
+    -243.87877777777612,
+    -240.89166666667734,
+    -233.55711111110577
+   ]
+  },
+  {
+   "workload": "rpm",
+   "runtime": "mt",
+   "a_median": 93102.86072222222,
+   "b_median": 92948.10061111112,
+   "delta": -154.76011111109983,
+   "noise_floor": 985.4448888888874,
+   "a_calls": 139.00054999999998,
+   "b_calls": 139.0004,
+   "a_bytes": 18496.0572,
+   "b_bytes": 18496.0416,
+   "verdict": "PASS",
+   "pairs_lower": 5,
+   "pair_deltas": [
+    21.719888888896094,
+    -15.928777777779032,
+    -96.25488888889959,
+    -44.56066666667175,
+    -652.704666666672,
+    -1114.1434444444458
+   ]
+  }
+ ]
+}
