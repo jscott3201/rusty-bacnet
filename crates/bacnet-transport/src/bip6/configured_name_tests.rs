@@ -64,6 +64,11 @@ async fn a_configured_name_registers_where_it_resolves() {
     assert_eq!(status.bbmd.map(|at| at.port()), Some(port));
     assert!(!status.waiting_for_bbmd);
     assert_eq!((status.lookups.lookups, status.lookups.failures), (1, 0));
+    assert_eq!(status.registrations_sent, 1);
+    assert_eq!(
+        status.bbmd_name,
+        Some(format!("{NAME}:{port}").parse().unwrap())
+    );
     let config = transport.foreign_device_config().unwrap();
     assert_eq!(config.bbmd.address(), status.bbmd);
     assert_eq!(
@@ -87,8 +92,10 @@ async fn a_start_on_the_unspecified_address_looks_the_name_up_first() {
         *transport.local_address().unwrap().ip(),
         Ipv6Addr::LOCALHOST
     );
-    // The start's lookup was the first pass's: one call.
+    // The start's lookup was the first pass's: one call, and the start
+    // registered at the address it found.
     assert_eq!((names.calls(), status(&transport).lookups.lookups), (1, 1));
+    assert_eq!(status(&transport).registrations_sent, 1);
     transport.stop().await.unwrap();
 }
 
@@ -130,6 +137,7 @@ async fn a_failing_name_waits_and_registers_once_it_resolves() {
     let refused = transport.send_broadcast(&[0x01, 0x00]).await;
     assert!(refused.is_err(), "{refused:?}");
     assert_eq!(status(&transport).broadcasts_refused, 1);
+    assert_eq!(status(&transport).registrations_sent, 0);
 
     after(29_000).await;
     assert_eq!(names.calls(), 1);
@@ -159,6 +167,7 @@ async fn a_failing_name_waits_and_registers_once_it_resolves() {
     );
     // The device had no BBMD to release.
     assert_eq!(resolved.releases.releases, 0);
+    assert_eq!(resolved.registrations_sent, 1);
     transport.send_broadcast(&[0x01, 0x00]).await.unwrap();
     transport.stop().await.unwrap();
 }
@@ -277,6 +286,76 @@ async fn a_name_written_during_the_start_lookup_wins() {
     assert!(
         peer.try_recv_from(&mut probe).is_err(),
         "nothing went to the configured name's BBMD"
+    );
+    transport.stop().await.unwrap();
+}
+
+/// Only the retry still armed acts: one a newer failure replaced while it
+/// woke leaves the newer one in place and looks nothing up.
+#[tokio::test(start_paused = true)]
+async fn only_the_armed_retry_acts() {
+    let names = Arc::new(Names::default());
+    let config = Bip6ForeignDeviceConfig {
+        bbmd: format!("{NAME}:47808").parse().unwrap(),
+        ttl: 60,
+    };
+    let target = foreign_target::ForeignTarget::new(config, names.clone());
+    target.attach("[::1]:47809".parse().unwrap(), None);
+    target.attempting();
+    after(1).await;
+    assert_eq!(names.calls(), 1);
+    let armed = target.retry_due().expect("a failure arms the retry");
+    target.retry(armed - Duration::from_secs(5));
+    after(1).await;
+    assert_eq!(names.calls(), 1, "a replaced retry looks nothing up");
+    assert_eq!(target.retry_due(), Some(armed));
+    target.retry(armed);
+    after(1).await;
+    assert_eq!(names.calls(), 2);
+    target.detach();
+}
+
+/// A start on `::` that fails after its lookup, here at the bind, keeps
+/// the BBMD configured by name: the next start looks it up again, and
+/// registers where it resolves.
+#[tokio::test]
+async fn a_failed_start_on_the_unspecified_address_keeps_the_name() {
+    let peer = bbmd().await;
+    let names = Arc::new(Names::default());
+    names.answer(NAME, Answer::addresses([Ipv6Addr::LOCALHOST]));
+    // The port the device binds, held exclusively elsewhere.
+    let held = socket2::Socket::new(
+        socket2::Domain::IPV6,
+        socket2::Type::DGRAM,
+        Some(socket2::Protocol::UDP),
+    )
+    .unwrap();
+    crate::port_ownership::claim_exclusive(&held).unwrap();
+    held.bind(&std::net::SocketAddr::from((Ipv6Addr::LOCALHOST, 0)).into())
+        .unwrap();
+    let port = held.local_addr().unwrap().as_socket().unwrap().port();
+    let mut transport = Bip6Transport::new(Ipv6Addr::UNSPECIFIED, port, Some(61));
+    transport.set_bbmd_resolver(names.clone());
+    let bbmd = format!("{NAME}:{}", peer.local_addr().unwrap().port());
+    transport.register_as_foreign_device(Bip6ForeignDeviceConfig {
+        bbmd: bbmd.parse().unwrap(),
+        ttl: 300,
+    });
+    transport.start().await.unwrap_err();
+    assert_eq!(names.calls(), 1);
+    let config = transport.foreign_device_config().unwrap();
+    assert_eq!(config.bbmd, bbmd.parse().unwrap(), "still the name");
+    drop(held);
+    let _rx = transport.start().await.unwrap();
+    assert_eq!(names.calls(), 2);
+    assert_eq!(registration(&peer).await, 300);
+    assert!(
+        transport
+            .foreign_device_config()
+            .unwrap()
+            .bbmd
+            .address()
+            .is_some()
     );
     transport.stop().await.unwrap();
 }

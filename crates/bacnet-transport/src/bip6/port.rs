@@ -345,7 +345,9 @@ async fn reregister(target: Arc<ForeignTarget>, socket: Arc<Bip6Socket>, source_
             // after the newest failure (#2365).
             () = target.rearmed() => continue,
             () = tokio::time::sleep_until(retry_due.unwrap_or(renew_at)), if retry_due.is_some() => {
-                target.retry();
+                if let Some(due) = retry_due {
+                    target.retry(due);
+                }
                 continue;
             }
         }
@@ -355,8 +357,10 @@ async fn reregister(target: Arc<ForeignTarget>, socket: Arc<Bip6Socket>, source_
         let (config, release) = target.pass(tokio::time::Instant::now());
         #[cfg(test)]
         target.in_flight().await;
-        if let Some(bbmd) = config.bbmd.address() {
-            send_register_foreign_device_v6(&socket, bbmd, config.ttl, source_vmac).await;
+        if let Some(bbmd) = config.bbmd.address()
+            && send_register_foreign_device_v6(&socket, bbmd, config.ttl, source_vmac).await
+        {
+            target.registration_sent();
         }
         if let Some((left, entry)) = release
             && !send_release_v6(&socket, left, entry, source_vmac).await
@@ -402,7 +406,7 @@ async fn send_register_foreign_device_v6(
     bbmd_addr: SocketAddrV6,
     ttl: u16,
     source_vmac: Bip6Vmac,
-) {
+) -> bool {
     let registration = Bvll6::RegisterForeignDevice {
         source: source_vmac,
         ttl,
@@ -411,13 +415,15 @@ async fn send_register_foreign_device_v6(
         Ok(buf) => buf,
         Err(e) => {
             warn!(error = %e, "BIP6: failed to encode Register-Foreign-Device");
-            return;
+            return false;
         }
     };
     if let Err(e) = socket.send_to(&buf, bbmd_addr).await {
         warn!(error = %e, "BIP6: failed to send Register-Foreign-Device");
+        false
     } else {
         debug!(bbmd = %bbmd_addr, ttl = ttl, "BIP6: sent Register-Foreign-Device");
+        true
     }
 }
 
@@ -595,11 +601,13 @@ impl TransportPort for Bip6Transport {
         // Do the only foreign-device startup I/O before spawning owned tasks,
         // so cancellation cannot orphan an unpublished receive worker.
         // A device waiting for its BBMD's name registers once it resolves.
-        if let Some(fd) = &self.foreign_device {
-            let config = fd.config();
-            if let Some(bbmd) = config.bbmd.address() {
-                send_register_foreign_device_v6(&socket, bbmd, config.ttl, source_vmac).await;
-            }
+        // A start on `::` registers where its lookup found the BBMD.
+        if let (Some(fd), Some(bbmd)) = (
+            &self.foreign_device,
+            start_bbmd.as_ref().and_then(|start| start.bbmd),
+        ) && send_register_foreign_device_v6(&socket, bbmd, fd.config().ttl, source_vmac).await
+        {
+            fd.registration_sent();
         }
 
         /// NPDU receive channel capacity for high-throughput UDP transports.
@@ -645,11 +653,16 @@ impl TransportPort for Bip6Transport {
 
         // Start foreign device registration if configured
         if let Some(fd) = &self.foreign_device {
-            fd.attach(local_address);
+            // The address a start on `::` found is the registration's now.
+            let found = start_bbmd
+                .as_ref()
+                .filter(|start| start.looked_up)
+                .and_then(|start| start.bbmd);
+            fd.attach(local_address, found);
             // A BBMD named by host name is looked up alongside the
             // registration this start sent, or, waiting, for the first
             // time, unless the start looked it up already.
-            if !start_bbmd.is_some_and(|start| start.looked_up) {
+            if found.is_none() {
                 fd.attempting();
             }
             let reg_task = tokio::spawn(reregister(

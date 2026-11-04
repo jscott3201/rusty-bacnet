@@ -2871,16 +2871,21 @@ class Bip6ForeignRegistrationStatus(TypedDict):
     reports it on a ``transport="ipv6"`` owner (#2365). B/IPv6 doesn't track
     the BBMD's answers. ``bbmd`` is the address in use, ``"[ip]:port"``, or
     None while a host name hasn't resolved yet, when ``waiting_for_bbmd`` is
-    true: nothing is registered, broadcasts are refused (counted in
+    true. ``bbmd_name`` is the host name the BBMD is known by,
+    ``"host:port"`` (configured, or written to FD_BBMD_Address), or None for
+    a BBMD known by address; a waiting device waits for it. While waiting,
+    nothing is registered, broadcasts are refused (counted in
     ``broadcasts_refused``), and the name is tried again 30 seconds after
     each failure. ``bbmd_lookups``, ``bbmd_lookup_failures`` and
     ``last_bbmd_lookup_failure`` are as in ``ForeignRegistrationStatus``,
     with ``"no_ipv6_address"`` for a name with no IPv6 address. The
     ``previous_release*`` totals count the deletions asked of BBMDs the
     device moved away from, by ``release_previous_bbmd``: released,
-    refused, or unanswered. The totals survive a stop; outside
+    refused, or unanswered. ``registrations_sent`` counts the
+    Register-Foreign-Device messages sent. The totals survive a stop; outside
     ``foreign_device=`` they are 0."""
     bbmd: Optional[str]
+    bbmd_name: Optional[str]
     waiting_for_bbmd: bool
     bbmd_lookups: int
     bbmd_lookup_failures: int
@@ -2892,6 +2897,7 @@ class Bip6ForeignRegistrationStatus(TypedDict):
     previous_release_refused: int
     previous_release_unanswered: int
     broadcasts_refused: int
+    registrations_sent: int
 
 
 class FdtEntry(TypedDict):

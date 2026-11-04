@@ -153,7 +153,17 @@ mod tests {
         assert_eq!(parse("[2001:db8::10]"), at(47808));
         assert_eq!(parse("[2001:db8::10]:47809"), at(47809));
         // No brackets: the last group is part of the address, not a port.
-        assert_ne!(parse("2001:db8::10:4780"), at(4780));
+        let whole = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0x10, 0x4780);
+        assert_eq!(
+            parse("2001:db8::10:4780"),
+            Some(Bip6ForeignBbmd::Address(SocketAddrV6::new(
+                whole, 47808, 0, 0
+            )))
+        );
+        assert_eq!(
+            parse("2001:db8::10:4780").unwrap().to_string(),
+            "[2001:db8::10:4780]:47808"
+        );
         let name = |host: &str, port| {
             Some(Bip6ForeignBbmd::Name {
                 host: host.into(),

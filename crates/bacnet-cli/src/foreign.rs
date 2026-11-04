@@ -233,10 +233,11 @@ fn tally(ended: u64, failed: u64) -> Option<String> {
 /// resolver's 10 s, and a little more.
 const BIP6_LOOKUP_WAIT: Duration = Duration::from_secs(11);
 
-/// Wait until a B/IPv6 foreign device knows its BBMD's address (#2365):
-/// `Ok`, naming the BBMD as [`await_registration`] does, once it has one,
-/// or an error naming why its host name didn't resolve. B/IPv6 doesn't
-/// track the BBMD's answers, so the registration itself isn't waited for.
+/// Wait until a B/IPv6 foreign device has sent its registration (#2365):
+/// `Ok`, naming the BBMD as [`await_registration`] does, once its address
+/// is known and a Register-Foreign-Device went there, or an error naming
+/// why its host name didn't resolve. B/IPv6 doesn't track the BBMD's
+/// answers, so the BBMD's acceptance isn't waited for.
 pub(crate) async fn await_bip6_bbmd(
     client: &BACnetClient<Bip6Transport>,
     bbmd: &Bip6ForeignBbmd,
@@ -248,7 +249,9 @@ pub(crate) async fn await_bip6_bbmd(
             .foreign_status()
             .ok_or("the client is not a foreign device")?;
         let tally = tally(status.lookups.lookups, status.lookups.failures);
-        if let Some(at) = status.bbmd {
+        if let Some(at) = status.bbmd
+            && status.registrations_sent > 0
+        {
             if bbmd.address().is_some() {
                 return Ok(bbmd.to_string());
             }
@@ -266,10 +269,15 @@ pub(crate) async fn await_bip6_bbmd(
             ));
         }
         if tokio::time::Instant::now() >= deadline {
-            return Err(format!(
-                "the lookup of BBMD {bbmd}'s host name had no outcome after {} s",
-                BIP6_LOOKUP_WAIT.as_secs()
-            ));
+            let wait = BIP6_LOOKUP_WAIT.as_secs();
+            return Err(match status.bbmd {
+                Some(at) => {
+                    format!("no registration went to BBMD {bbmd} (at {at}) within {wait} s")
+                }
+                None => {
+                    format!("the lookup of BBMD {bbmd}'s host name had no outcome after {wait} s")
+                }
+            });
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }

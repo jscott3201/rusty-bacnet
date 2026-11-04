@@ -4,7 +4,8 @@
 //! A transport bound to `::` picks its source address from the route to
 //! the BBMD, so it can't bind before it has that address: its start looks
 //! the name up in place and fails if the name doesn't resolve to an IPv6
-//! address it could register with ([`ForeignTarget::start_bbmd`]).
+//! address it could register with ([`ForeignTarget::start_bbmd`]). The
+//! address found is the registration's once the start succeeds.
 //!
 //! On an explicit interface the start goes ahead and the device waits: no
 //! registration is sent, broadcasts are refused and counted (B/IPv6 keeps
@@ -22,20 +23,28 @@ use std::net::{IpAddr, Ipv6Addr, SocketAddrV6};
 use bacnet_types::error::Error;
 use tokio::time::Instant;
 
-use super::ForeignTarget;
 use super::release::Bip6ReleaseCounters;
-use crate::bbmd_lookup::{BbmdLookupCounters, BbmdLookupFailure, Failed, choose, resolve};
+use super::{Bip6ForeignBbmd, ForeignTarget};
+use crate::bbmd_lookup::{BbmdLookupCounters, BbmdLookupFailure, Ended, Failed, choose};
+
+/// How often a start on `::` checks whether a lookup left running by a
+/// quick restart has ended.
+const SLOT_POLL: std::time::Duration = std::time::Duration::from_millis(10);
 
 /// A B/IPv6 foreign device's registration as it stands
 /// ([`Bip6Transport::foreign_status`](crate::bip6::Bip6Transport::foreign_status)).
 /// The totals survive a restart.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Bip6ForeignStatus {
     /// The BBMD's address in use: the configured one, or the one its host
     /// name last resolved to. `None` until a configured name first
     /// resolves.
     pub bbmd: Option<SocketAddrV6>,
+    /// The host name and port the BBMD is known by, configured or written
+    /// to FD_BBMD_Address, as a [`Bip6ForeignBbmd::Name`]; `None` for a
+    /// BBMD known by address. A waiting device waits for this name.
+    pub bbmd_name: Option<Bip6ForeignBbmd>,
     /// The time-to-live it registers with, in seconds.
     pub ttl: u16,
     /// Whether the running device waits for its BBMD's host name to
@@ -53,6 +62,9 @@ pub struct Bip6ForeignStatus {
     /// Broadcasts refused, with an error, because the device waited for
     /// its BBMD's host name.
     pub broadcasts_refused: u64,
+    /// Register-Foreign-Device messages sent, to whichever BBMD. B/IPv6
+    /// doesn't track the BBMD's answers.
+    pub registrations_sent: u64,
 }
 
 /// What a start learned of its BBMD before binding.
@@ -92,44 +104,77 @@ impl ForeignTarget {
     pub(in crate::bip6) fn status(&self) -> Bip6ForeignStatus {
         let state = self.lock();
         let bbmd = state.config.bbmd.address();
+        let bbmd_name = match (state.lookups.name(), &state.config.bbmd) {
+            (Some(name), _) => Some(Bip6ForeignBbmd::Name {
+                host: name.host().to_owned(),
+                port: name.port(),
+            }),
+            (None, named @ Bip6ForeignBbmd::Name { .. }) => Some(named.clone()),
+            (None, Bip6ForeignBbmd::Address(_)) => None,
+        };
         Bip6ForeignStatus {
             bbmd,
+            bbmd_name,
             ttl: state.config.ttl,
             waiting_for_bbmd: state.own.is_some() && bbmd.is_none(),
             lookups: state.counters,
             releases: state.releases,
             broadcasts_refused: state.broadcasts_refused,
+            registrations_sent: state.registrations_sent,
         }
     }
 
     /// Before a start on `interface`: the BBMD's address to bind by. A BBMD
     /// known by address, or an explicit interface, needs no lookup now;
     /// the device then waits for a name. On `::` a name is looked up in
-    /// place, counted as any lookup is, and the start fails unless it
-    /// stands for an IPv6 address the device could register with.
+    /// place, in the lookups' one slot, counted as any lookup is, and the
+    /// start fails unless it stands for an IPv6 address the device could
+    /// register with. The address found becomes the registration's only
+    /// once the start succeeds ([`attach`](Self::attach)): a start that
+    /// fails later keeps the name, which the next start looks up again.
     pub(in crate::bip6) async fn start_bbmd(
         &self,
         interface: Ipv6Addr,
     ) -> Result<StartBbmd, Error> {
-        let (name, resolver) = {
-            let state = self.lock();
-            if let Some(bbmd) = state.config.bbmd.address() {
-                return Ok(StartBbmd {
-                    bbmd: Some(bbmd),
-                    looked_up: false,
-                });
-            }
-            match (interface.is_unspecified(), state.config.bbmd.name()) {
-                (true, Some(name)) => (name, state.lookups.resolver()),
-                _ => {
+        let (name, lookup) = loop {
+            // `None` while a lookup left running by a quick restart holds
+            // the slot, which it frees within the resolver's 10 s.
+            let slot = {
+                let mut state = self.lock();
+                if let Some(bbmd) = state.config.bbmd.address() {
+                    return Ok(StartBbmd {
+                        bbmd: Some(bbmd),
+                        looked_up: false,
+                    });
+                }
+                let (true, Some(name)) = (interface.is_unspecified(), state.config.bbmd.name())
+                else {
+                    return Ok(StartBbmd {
+                        bbmd: None,
+                        looked_up: false,
+                    });
+                };
+                if state.lookups.is_running() {
+                    None
+                } else {
+                    // The name is the lookups' own: a lookup always comes.
+                    let lookup = state.lookups.lookup(true, &self.name_target());
+                    Some(lookup.map(|lookup| (name, lookup)))
+                }
+            };
+            match slot {
+                Some(Some(found)) => break found,
+                Some(None) => {
                     return Ok(StartBbmd {
                         bbmd: None,
                         looked_up: false,
                     });
                 }
+                None => tokio::time::sleep(SLOT_POLL).await,
             }
         };
-        let answer = resolve(&*resolver, name.host()).await;
+        // Dropped with a cancelled start, the lookup still frees the slot.
+        let (generation, answer) = lookup.in_place().await;
         let verdict = answer.and_then(|answers| {
             let candidates: Vec<SocketAddrV6> = answers
                 .iter()
@@ -145,15 +190,19 @@ impl ForeignTarget {
                 .map_err(Failed::from)
         });
         let mut state = self.lock();
+        // Nothing can change the row before the start attaches, so this
+        // lookup is the current one; it frees the slot.
+        let ended = state
+            .lookups
+            .ended(generation, false, false, &self.name_target());
+        debug_assert!(matches!(ended, Ended::Current(_)));
+        drop(ended);
         state
             .counters
             .ended(verdict.as_ref().err().map(|failed| failed.failure));
         match verdict {
             Ok(bbmd) => {
                 state.lookups.succeeded(&name);
-                let mut config = state.config.clone();
-                config.bbmd = bbmd.into();
-                state.take(config);
                 Ok(StartBbmd {
                     bbmd: Some(bbmd),
                     looked_up: true,
@@ -185,11 +234,15 @@ impl ForeignTarget {
         self.rearmed.notified().await;
     }
 
-    /// The retry [`retry_due`](Self::retry_due) set is due: look the name
-    /// up, if the device still runs and waits, and no lookup runs already
-    /// (a failure of that one sets the next retry).
-    pub(in crate::bip6) fn retry(&self) {
+    /// The retry [`retry_due`](Self::retry_due) set for `due` is due: look
+    /// the name up, if the device still runs and waits, and no lookup runs
+    /// already (a failure of that one sets the next retry). A retry a newer
+    /// failure replaced while it woke does nothing: the newer one stands.
+    pub(in crate::bip6) fn retry(&self, due: Instant) {
         let mut state = self.lock();
+        if state.retry_at != Some(due) {
+            return;
+        }
         state.retry_at = None;
         let waiting = state.own.is_some() && state.config.bbmd.address().is_none();
         if !waiting || state.lookups.is_running() {
@@ -200,6 +253,12 @@ impl ForeignTarget {
         if let Some(lookup) = lookup {
             lookup.start();
         }
+    }
+
+    /// A Register-Foreign-Device went out.
+    pub(in crate::bip6) fn registration_sent(&self) {
+        let mut state = self.lock();
+        state.registrations_sent = state.registrations_sent.saturating_add(1);
     }
 
     /// A broadcast was refused while the device waited for its BBMD.

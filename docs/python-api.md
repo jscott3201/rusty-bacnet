@@ -939,10 +939,11 @@ address. On an explicit interface the owner starts and waits: nothing is registe
 broadcasts raise `OSError` (the transport error), and the name is tried again 30
 seconds after each failure. On a B/IPv6 owner `foreign_registration()` returns a
 `Bip6ForeignRegistrationStatus`: `bbmd` (the address in use, or None while waiting),
+`bbmd_name` (the host name it is known by, `"host:port"`, or None for an address),
 `waiting_for_bbmd`, `bbmd_lookups`, `bbmd_lookup_failures`, `last_bbmd_lookup_failure`
 (as on B/IP, with `"no_ipv6_address"` for a name with no IPv6 address), the
 `previous_releases`, `previous_released`, `previous_release_refused` and
-`previous_release_unanswered` totals, and `broadcasts_refused`.
+`previous_release_unanswered` totals, `broadcasts_refused`, and `registrations_sent`.
 
 ```python
 from rusty_bacnet import BACnetClient, ForeignDevice

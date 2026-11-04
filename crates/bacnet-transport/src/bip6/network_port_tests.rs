@@ -141,6 +141,15 @@ fn a_registration_names_an_ipv6_unicast_bbmd_and_a_lifetime() {
     ] {
         assert_eq!(config(ip, port, ttl).check(), Err(refusal), "{ip}");
     }
+    // A zone index or flow label, which parsing refuses too.
+    let ip: Ipv6Addr = "2001:db8::bb".parse().unwrap();
+    for (scope, flow) in [(2, 0), (0, 7)] {
+        let config = Bip6ForeignDeviceConfig {
+            bbmd: SocketAddrV6::new(ip, 47808, flow, scope).into(),
+            ttl: 60,
+        };
+        assert_eq!(config.check(), Err(R::ScopeOrFlow), "{scope} {flow}");
+    }
 }
 
 #[tokio::test]

@@ -116,3 +116,5 @@ mod safety_tests;
 mod tests;
 #[cfg(test)]
 mod vmac_generation_tests;
+#[cfg(test)]
+mod waiting_receive_tests;

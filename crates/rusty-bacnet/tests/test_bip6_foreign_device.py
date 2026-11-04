@@ -262,9 +262,10 @@ class LoopbackTests(unittest.IsolatedAsyncioTestCase):
             status = await client.foreign_registration()
             self.assertEqual(set(status), stub_fields("Bip6ForeignRegistrationStatus"))
             self.assertEqual(
-                (status["bbmd"], status["waiting_for_bbmd"], status["bbmd_lookups"],
-                 status["bbmd_lookup_failures"], status["last_bbmd_lookup_failure"]),
-                (self.bbmd.address, False, 1, 0, None))
+                (status["bbmd"], status["bbmd_name"], status["waiting_for_bbmd"],
+                 status["bbmd_lookups"], status["bbmd_lookup_failures"],
+                 status["last_bbmd_lookup_failure"]),
+                (self.bbmd.address, f"localhost:{self.bbmd.port}", False, 1, 0, None))
 
     async def test_a_name_with_no_usable_address_waits(self):
         # localhost stands for the client's own address here, or for no IPv6
@@ -281,9 +282,9 @@ class LoopbackTests(unittest.IsolatedAsyncioTestCase):
                     return status if status["bbmd_lookup_failures"] else None
                 status = await eventually(failed)
                 self.assertEqual(
-                    (status["bbmd"], status["waiting_for_bbmd"], status["bbmd_lookups"],
-                     status["previous_releases"]),
-                    (None, True, 1, 0))
+                    (status["bbmd"], status["bbmd_name"], status["waiting_for_bbmd"],
+                     status["bbmd_lookups"], status["previous_releases"]),
+                    (None, f"localhost:{port}", True, 1, 0))
                 self.assertIn(status["last_bbmd_lookup_failure"],
                               ("unusable_address", "no_ipv6_address"))
                 # With no BBMD, a broadcast is refused, and counted.
@@ -299,6 +300,9 @@ class LoopbackTests(unittest.IsolatedAsyncioTestCase):
                                 ipv6_device_instance=CLIENT_INSTANCE,
                                 foreign_device=foreign) as client:
             self.assertEqual(await self.bbmd.registration(), (vmac(CLIENT_INSTANCE), 90))
+            status = await client.foreign_registration()
+            # Known by address: no host name to show.
+            self.assertEqual((status["bbmd"], status["bbmd_name"]), (self.bbmd.address, None))
             # A Who-Is goes to the BBMD as a Distribute-Broadcast-To-Network.
             await client.who_is(INSTANCE, INSTANCE)
             datagram, _ = await self.bbmd.next(DISTRIBUTE_BROADCAST)

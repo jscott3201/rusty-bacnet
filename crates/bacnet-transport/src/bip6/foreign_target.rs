@@ -74,6 +74,8 @@ struct State {
     retry_at: Option<tokio::time::Instant>,
     /// Broadcasts refused while the device waited for its BBMD.
     broadcasts_refused: u64,
+    /// Register-Foreign-Device messages sent.
+    registrations_sent: u64,
 }
 
 /// One transport's foreign-device registration, shared with the Network
@@ -119,6 +121,9 @@ pub enum Bip6ForeignDeviceRefusal {
     ZeroTtl,
     /// The BBMD's host name isn't in the RFC 1123 form.
     HostName,
+    /// The BBMD address carries a zone index or a flow label, which no
+    /// B/IPv6 address does.
+    ScopeOrFlow,
 }
 
 impl std::fmt::Display for Bip6ForeignDeviceRefusal {
@@ -134,6 +139,7 @@ impl std::fmt::Display for Bip6ForeignDeviceRefusal {
             Self::ZeroPort => "the BBMD port is 0",
             Self::ZeroTtl => "the time-to-live is 0",
             Self::HostName => "the BBMD's host name isn't in the RFC 1123 form",
+            Self::ScopeOrFlow => "the BBMD address carries a zone index or a flow label",
         })
     }
 }
@@ -147,7 +153,9 @@ impl Bip6ForeignDeviceConfig {
     ///
     /// A link-local BBMD is refused: no zone index travels with an address,
     /// so its Forwarded-NPDUs could never be trusted. The IPv4-mapped and
-    /// IPv4-compatible forms name IPv4 hosts, which B/IP serves. The
+    /// IPv4-compatible forms name IPv4 hosts, which B/IP serves. A zone
+    /// index or flow label is refused, as parsing refuses one: none travels
+    /// with a B/IPv6 address. The
     /// transport's start refuses a registration that fails this check, and
     /// so does a Network Port activation. A BBMD named by host name
     /// ([`Bip6ForeignBbmd::Name`]) must be in the RFC 1123 form with a
@@ -178,6 +186,8 @@ impl Bip6ForeignDeviceConfig {
             Bip6ForeignDeviceRefusal::Ipv4Mapped
         } else if ipv4_compatible {
             Bip6ForeignDeviceRefusal::Ipv4Compatible
+        } else if address.scope_id() != 0 || address.flowinfo() != 0 {
+            Bip6ForeignDeviceRefusal::ScopeOrFlow
         } else if address.port() == 0 {
             Bip6ForeignDeviceRefusal::ZeroPort
         } else if self.ttl == 0 {
@@ -212,6 +222,7 @@ impl ForeignTarget {
                 releases: Bip6ReleaseCounters::default(),
                 retry_at: None,
                 broadcasts_refused: 0,
+                registrations_sent: 0,
             }),
             changed: Notify::new(),
             rearmed: Notify::new(),
@@ -279,12 +290,20 @@ impl ForeignTarget {
 
     /// The transport runs, bound to `own`: changes are taken from now on,
     /// and the next registration attempt looks a BBMD host name up again,
-    /// whenever the last lookup was.
-    pub(super) fn attach(&self, own: SocketAddrV6) {
+    /// whenever the last lookup was. A start on `::` that looked its BBMD's
+    /// configured name up registers where it was `found` from now on.
+    pub(super) fn attach(&self, own: SocketAddrV6, found: Option<SocketAddrV6>) {
         let mut state = self.lock();
         state.own = Some(own);
         state.lookups.attached();
         state.counters.last_failure = None;
+        if let Some(found) = found
+            && state.config.bbmd.address().is_none()
+        {
+            let mut config = state.config.clone();
+            config.bbmd = found.into();
+            state.take(config);
+        }
     }
 
     /// The transport stopped: changes are refused until it runs again, a

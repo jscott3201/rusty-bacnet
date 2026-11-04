@@ -48,12 +48,14 @@ pub(crate) fn registration_dict(registration: ForeignRegistrationSnapshot) -> Py
 
 /// `status` as the dict a B/IPv6 owner's `foreign_registration()`
 /// returns (#2365). B/IPv6 doesn't track the BBMD's answers, so it reports
-/// the BBMD's address in use, the wait for its host name, the lookups, the
+/// the BBMD's address in use and the host name it is known by, the wait for
+/// that name, the lookups, the
 /// releases of BBMDs left and the broadcasts refused while waiting.
 pub(crate) fn bip6_registration_dict(status: Bip6ForeignStatus) -> PyResult<Py<PyAny>> {
     crate::py_async::attach(|py| {
         let dict = PyDict::new(py);
         dict.set_item("bbmd", status.bbmd.map(|bbmd| bbmd.to_string()))?;
+        dict.set_item("bbmd_name", status.bbmd_name.map(|name| name.to_string()))?;
         dict.set_item("waiting_for_bbmd", status.waiting_for_bbmd)?;
         dict.set_item("bbmd_lookups", status.lookups.lookups)?;
         dict.set_item("bbmd_lookup_failures", status.lookups.failures)?;
@@ -69,6 +71,7 @@ pub(crate) fn bip6_registration_dict(status: Bip6ForeignStatus) -> PyResult<Py<P
         dict.set_item("previous_release_refused", status.releases.refused)?;
         dict.set_item("previous_release_unanswered", status.releases.unanswered)?;
         dict.set_item("broadcasts_refused", status.broadcasts_refused)?;
+        dict.set_item("registrations_sent", status.registrations_sent)?;
         Ok(dict.into_any().unbind())
     })
 }

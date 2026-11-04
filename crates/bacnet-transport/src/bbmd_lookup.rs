@@ -49,8 +49,6 @@ use std::time::Duration;
 
 use bacnet_types::constructed::{BACnetHostAddress, BACnetHostNPort};
 
-#[cfg(feature = "ipv6")]
-pub(crate) use lookups::resolve;
 pub(crate) use lookups::{Ended, Failed, Lookup, Lookups, NameTarget, choose};
 
 /// What a [`BbmdResolver`] returns: in time, the addresses a host name
@@ -118,8 +116,8 @@ pub enum BbmdLookupFailure {
     Abandoned,
 }
 
-/// What came of the lookups of a foreign device's BBMD host name while its
-/// transport ran (#2308): B/IPv6's report (`Bip6Transport::bbmd_lookup_counters`).
+/// What came of the lookups of a foreign device's BBMD host name (#2308):
+/// B/IPv6's report (`Bip6Transport::bbmd_lookup_counters`).
 /// B/IP reports the same three values in its
 /// [`ForeignRegistrationSnapshot`](crate::bip::ForeignRegistrationSnapshot).
 /// The totals survive a restart; the newest failure is cleared at each
@@ -128,11 +126,14 @@ pub enum BbmdLookupFailure {
 #[non_exhaustive]
 pub struct BbmdLookupCounters {
     /// Lookups that ended with the transport running: one at each
-    /// activation of a name, and one alongside a registration attempt at
-    /// most every 30 seconds.
+    /// activation of a name, one alongside a registration attempt at most
+    /// every 30 seconds, and, while the device waits for a configured name,
+    /// one 30 seconds after each failure (#2365). A B/IPv6 start on `::`
+    /// counts the lookup it makes before binding, whether or not the start
+    /// succeeds.
     pub lookups: u64,
     /// Of those, the ones that failed. The device kept registering with
-    /// the address it had.
+    /// the address it had, or, with none yet, kept waiting for the name.
     pub failures: u64,
     /// Why the newest lookup failed; `None` once one succeeds.
     pub last_failure: Option<BbmdLookupFailure>,

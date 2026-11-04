@@ -138,6 +138,38 @@ async fn an_address_resolution_goes_to_the_group_or_to_the_bbmd() {
     }
 }
 
+/// A foreign device waiting for its BBMD's host name (#2365) has nowhere
+/// to send an Address-Resolution: none goes out, to the group or anywhere,
+/// and the send times out.
+#[tokio::test(start_paused = true)]
+async fn a_waiting_foreign_device_sends_no_address_resolution() {
+    let config = Bip6ForeignDeviceConfig {
+        bbmd: "bbmd.test:47808".parse().unwrap(),
+        ttl: 60,
+    };
+    let waiting = super::foreign_target::ForeignTarget::new(
+        config,
+        Arc::new(crate::bbmd_lookup::SystemResolver),
+    );
+    let resolver = Resolver::with_own(OWN);
+    let capture = Arc::new(Capture::default());
+    let driver = Driver {
+        socket: Arc::clone(&capture),
+        resolver: Arc::clone(&resolver),
+        source: OWN,
+        resolution_to: group(),
+        foreign: Some(waiting),
+    };
+    tokio::spawn(driver.run());
+    let start = Instant::now();
+    let result = resolver
+        .send_unicast(&*capture, OWN, UnresolvedSend::Wait, NPDU, &PEER)
+        .await;
+    assert_eq!(kind(&result), Some(io::ErrorKind::TimedOut), "{result:?}");
+    assert_eq!(capture.sent(start), []);
+    assert_eq!(resolver.counters().address_resolutions_sent, 0);
+}
+
 /// A waiting send goes out the moment its VMAC is learned, to the learned
 /// address, and no further Address-Resolution follows.
 #[tokio::test(start_paused = true)]

@@ -4,7 +4,7 @@ use std::time::Duration;
 use tokio::net::UdpSocket;
 
 use super::frame::encoded;
-use super::ingress::{forwarded_npdu_is_trusted, forwarded_source_is_usable};
+use super::ingress::{Forwarders, forwarded_npdu_is_trusted, forwarded_source_is_usable};
 use super::*;
 use crate::port::TransportPort;
 
@@ -20,7 +20,7 @@ fn forwarded_npdu_requires_multicast_or_configured_bbmd() {
         local_ip,
         &[local_ip],
         false,
-        None,
+        Forwarders::Group,
     ));
     assert!(!forwarded_npdu_is_trusted(
         peer.into(),
@@ -29,7 +29,7 @@ fn forwarded_npdu_requires_multicast_or_configured_bbmd() {
         local_ip,
         &[local_ip],
         false,
-        None,
+        Forwarders::Group,
     ));
     assert!(forwarded_npdu_is_trusted(
         peer.into(),
@@ -38,7 +38,7 @@ fn forwarded_npdu_requires_multicast_or_configured_bbmd() {
         local_ip,
         &[local_ip],
         false,
-        Some((local_ip, 47_808)),
+        Forwarders::Bbmd(local_ip, 47_808),
     ));
     assert!(!forwarded_npdu_is_trusted(
         SocketAddrV6::new(local_ip, 47_809, 0, 0).into(),
@@ -47,7 +47,7 @@ fn forwarded_npdu_requires_multicast_or_configured_bbmd() {
         local_ip,
         &[local_ip],
         false,
-        Some((local_ip, 47_808)),
+        Forwarders::Bbmd(local_ip, 47_808),
     ));
     let link_local = Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1);
     assert!(!forwarded_npdu_is_trusted(
@@ -57,7 +57,7 @@ fn forwarded_npdu_requires_multicast_or_configured_bbmd() {
         local_ip,
         &[local_ip],
         false,
-        Some((link_local, 47_808)),
+        Forwarders::Bbmd(link_local, 47_808),
     ));
 }
 
