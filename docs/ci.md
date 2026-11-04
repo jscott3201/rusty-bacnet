@@ -2065,7 +2065,7 @@ waits for them (see [CI gate](#ci-gate)).
 | Build (linux-x86_64, linux-aarch64, macos-x86_64, macos-arm64, windows-x86_64) | The wheels for CPython 3.11 to 3.14 (`PYTHONS`) and the CLI, on each platform's own runner, then the CLI's MCP bundle from that binary (`mcpb.py pack`, no second build). See [Builds](#builds) and [MCP bundles](#mcp-bundles). |
 | Check the artifacts | `check_artifacts.py` over every file, then the `release-assets` artifact: what the publish jobs upload. See below. |
 | Smoke test (Linux x86_64, Linux aarch64, macOS arm64, macOS x86_64, Windows x86_64) | Each platform's wheels and CLI, run on that platform. See [Smoke tests](#smoke-tests). |
-| Publish plan (dry run) | Dry runs only, read only: `release_api.py plan`, `publish_crates.sh --dry-run`, and, for information, each MCP bundle's signature state and `mcpb verify`'s answer. See [Publish plan](#publish-plan-dry-run). |
+| Publish plan (dry run) | Dry runs only, read only: `release_api.py plan`, `publish_crates.sh --dry-run`, the draft's bundle check (`mcpb.py adopt` on the unsigned bundles), and, for information, each MCP bundle's signature state and `mcpb verify`'s answer. See [Publish plan](#publish-plan-dry-run). |
 | PyPI trusted publishing | Releases only, in the `release` environment, as soon as Validate passes: exchanges the job's OIDC token for a PyPI upload token, which proves PyPI's trusted publisher matches this workflow. The minted token is masked at once, never printed and discarded. See [Secrets and environment](#secrets-and-environment). |
 | Sign the MCP bundles | Releases only, in the `release` environment, on macOS: when the environment holds a signing certificate, `mcpb sign` on a copy of each bundle; then the `mcpb-bundles` artifact, only the bundles, signed or not. A signing failure publishes the bundle unsigned; the job's time limit or a failed checkout, download or upload fails the job, which holds the release until it is re-run. See [Signing the MCP bundles](#signing-the-mcp-bundles). |
 | GitHub draft | `mcpb.py adopt`: the `release-assets` files, with each MCP bundle replaced by its `mcpb-bundles` copy only when that is the original or the original correctly signed; it fails otherwise. Then `release_api.py stage`: makes the tag's GitHub draft hold exactly those files and their `SHA256SUMS`. See [Draft, then publish](#draft-then-publish). |
@@ -2301,7 +2301,10 @@ uploads `stage` would make (or warns that a draft for another commit would
 stop it). Its token can only read, so it doesn't see drafts. While the
 workspace version is already released, it reports what the published release
 lacks as a warning. `publish_crates.sh --dry-run` then lists the crates whose
-version isn't on crates.io yet. Last, for information, each MCP bundle's
+version isn't on crates.io yet. It runs the GitHub draft's bundle check,
+`mcpb.py adopt`, on the unsigned bundles laid out as the signing job
+uploads them, so every dry run exercises that command. Last, for
+information, each MCP bundle's
 signature state (`mcpb.py signature`: unsigned in a dry run, which has no
 signing key) and `mcpb verify`'s answer are notices. Only a bundle ending in
 a malformed signature block fails the job.

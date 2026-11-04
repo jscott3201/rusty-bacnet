@@ -611,6 +611,15 @@ jobs:
         run: python3 scripts/release/release_api.py plan --tag "$TAG" --commit "$COMMIT" --assets release
       - name: crates.io (read only)
         run: bash scripts/release/publish_crates.sh --dry-run
+      # The GitHub draft's bundle check (#2324), run on the unsigned bundles
+      # laid out as the signing job uploads them, so a dry run exercises the
+      # command a release depends on.
+      - name: The GitHub draft's bundle check
+        timeout-minutes: 2
+        run: |
+          mkdir mcpb-bundles
+          cp release/*.mcpb mcpb-bundles/
+          python3 -I scripts/release/mcpb.py adopt release mcpb-bundles
       # MCP bundle signatures, for information (#2324): a dry run has no
       # signing key, so each bundle is reported unsigned. Only a malformed
       # signature block fails; a tool that doesn't install is a warning.
