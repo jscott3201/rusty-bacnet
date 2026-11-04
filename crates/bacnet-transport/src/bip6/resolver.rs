@@ -340,10 +340,13 @@ impl<S: DatagramSender> Driver<S> {
                     source: self.source,
                     target,
                 };
-                let to = self
-                    .foreign
-                    .as_ref()
-                    .map_or(self.resolution_to, |target| target.bbmd_addr());
+                // A foreign device waiting for its BBMD's name has nowhere
+                // to send it; the resolution times out (#2365).
+                let to = match &self.foreign {
+                    Some(target) => target.bbmd_addr(),
+                    None => Some(self.resolution_to),
+                };
+                let Some(to) = to else { continue };
                 self.send(&request, to).await;
                 self.resolver.counts.address_resolution_sent();
             }

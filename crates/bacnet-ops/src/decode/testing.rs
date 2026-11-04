@@ -91,7 +91,8 @@ pub fn rp_ack_with(invoke_id: u8, value: Vec<u8>) -> Apdu {
         property_array_index: None,
         property_value: value,
     }
-    .encode(&mut ack);
+    .encode(&mut ack)
+    .unwrap();
     Apdu::ComplexAck(ComplexAck {
         segmented: false,
         more_follows: false,

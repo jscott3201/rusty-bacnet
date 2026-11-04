@@ -2692,9 +2692,12 @@ class ForeignDevice:
     (port 47808 by default; an IPv6 port needs the brackets, since
     ``"2001:db8::10:4780"`` is read as a bare address); the owner's
     transport must match, else its constructor raises ValueError. A host
-    name (B/IP only, #2308) is looked up when the owner starts and again
-    alongside its registrations; one that doesn't resolve still starts the
-    owner, whose registration waits, tried again every 30 seconds. A B/IPv6
+    name (#2308) serves either transport (B/IPv6 since #2365): it is looked
+    up when the owner starts and again alongside its registrations; one
+    that doesn't resolve still starts the owner, whose registration waits,
+    tried again every 30 seconds. A B/IPv6 owner bound to ``::`` picks its
+    source address from the route to the BBMD, so its start fails instead;
+    give it an interface to start and wait. A B/IPv6
     BBMD must be a unicast host: an unspecified, multicast, link-local,
     IPv4-mapped or IPv4-compatible address, a zone index or port 0 raises
     ValueError saying which. ``ttl`` is how many seconds the BBMD keeps the
@@ -2708,9 +2711,10 @@ class ForeignDevice:
 
     The owner registers at start and renews on its own. Its broadcasts go
     through the BBMD; on B/IP the first few wait for the first registration
-    to be answered, and ``foreign_registration()`` reports how it goes (B/IP
-    only). A B/IPv6 client needs ``ipv6_device_instance``: a B/IPv6 foreign
-    device uses its instance's VMAC.
+    to be answered, and ``foreign_registration()`` reports how it goes. A
+    B/IPv6 client needs ``ipv6_device_instance``: a B/IPv6 foreign device
+    uses its instance's VMAC. While a B/IPv6 one waits for its BBMD's name,
+    its broadcasts raise BacnetError.
     """
 
     def __init__(self, bbmd: str, ttl: int = 300, renewal: Optional[float] = None) -> None: ...
@@ -2860,6 +2864,40 @@ class ForeignRegistrationStatus(TypedDict):
         "not_resolved", "timed_out", "no_ipv4_address", "unusable_address", "abandoned",
         "other"]]
     waiting_for_bbmd: bool
+
+
+class Bip6ForeignRegistrationStatus(TypedDict):
+    """A B/IPv6 foreign device's registration, as ``foreign_registration()``
+    reports it on a ``transport="ipv6"`` owner (#2365). B/IPv6 doesn't track
+    the BBMD's answers. ``bbmd`` is the address in use, ``"[ip]:port"``, or
+    None while a host name hasn't resolved yet, when ``waiting_for_bbmd`` is
+    true. ``bbmd_name`` is the host name the BBMD is known by,
+    ``"host:port"`` (configured, or written to FD_BBMD_Address), or None for
+    a BBMD known by address; a waiting device waits for it. While waiting,
+    nothing is registered, broadcasts are refused (counted in
+    ``broadcasts_refused``), and the name is tried again 30 seconds after
+    each failure. ``bbmd_lookups``, ``bbmd_lookup_failures`` and
+    ``last_bbmd_lookup_failure`` are as in ``ForeignRegistrationStatus``,
+    with ``"no_ipv6_address"`` for a name with no IPv6 address. The
+    ``previous_release*`` totals count the deletions asked of BBMDs the
+    device moved away from, by ``release_previous_bbmd``: released,
+    refused, or unanswered. ``registrations_sent`` counts the
+    Register-Foreign-Device messages sent. The totals survive a stop; outside
+    ``foreign_device=`` they are 0."""
+    bbmd: Optional[str]
+    bbmd_name: Optional[str]
+    waiting_for_bbmd: bool
+    bbmd_lookups: int
+    bbmd_lookup_failures: int
+    last_bbmd_lookup_failure: Optional[Literal[
+        "not_resolved", "timed_out", "no_ipv6_address", "unusable_address", "abandoned",
+        "other"]]
+    previous_releases: int
+    previous_released: int
+    previous_release_refused: int
+    previous_release_unanswered: int
+    broadcasts_refused: int
+    registrations_sent: int
 
 
 class FdtEntry(TypedDict):
@@ -4414,11 +4452,14 @@ class BACnetClient:
         stopped or non-SC client."""
         ...
 
-    def foreign_registration(self) -> Awaitable[ForeignRegistrationStatus]:
+    def foreign_registration(
+        self,
+    ) -> Awaitable[Union[ForeignRegistrationStatus, Bip6ForeignRegistrationStatus]]:
         """How the foreign-device registration is going (#938), a refusal
         included. Sends nothing. Outside ``foreign_device=`` only manual
-        registrations show. RuntimeError before start and after stop; a
-        non-B/IP client raises BacnetError."""
+        registrations show. A ``transport="ipv6"`` client returns a
+        ``Bip6ForeignRegistrationStatus`` (#2365). RuntimeError before start
+        and after stop; a client on another transport raises BacnetError."""
         ...
 
     def stop(self) -> Awaitable[None]:
@@ -6142,7 +6183,9 @@ class BACnetServer:
         """
         ...
 
-    def foreign_registration(self) -> Awaitable[ForeignRegistrationStatus]:
+    def foreign_registration(
+        self,
+    ) -> Awaitable[Union[ForeignRegistrationStatus, Bip6ForeignRegistrationStatus]]:
         """How the foreign-device registration is going (#938), as for
         ``BACnetClient``. RuntimeError before start and after stop."""
         ...

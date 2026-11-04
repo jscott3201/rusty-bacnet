@@ -595,3 +595,7 @@ mod write_tests;
 #[cfg(test)]
 #[path = "responder_multiple_tests.rs"]
 mod multiple_tests;
+
+#[cfg(test)]
+#[path = "responder_legacy_tests.rs"]
+mod legacy_tests;

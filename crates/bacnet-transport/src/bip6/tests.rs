@@ -337,8 +337,7 @@ async fn bip6_forwarded_npdu_delivered() {
     };
     let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(44));
     transport.register_as_foreign_device(Bip6ForeignDeviceConfig {
-        bbmd_ip: *sender_addr.ip(),
-        bbmd_port: sender_addr.port(),
+        bbmd: (*sender_addr.ip(), sender_addr.port()).into(),
         ttl: 60,
     });
     let mut rx = transport.start().await.unwrap();

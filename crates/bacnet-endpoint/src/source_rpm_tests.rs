@@ -82,7 +82,7 @@ fn success(request: &ReadPropertyMultipleRequest) -> ReadPropertyMultipleACK {
 }
 fn response(invoke: u8, ack: &ReadPropertyMultipleACK) -> Apdu {
     let mut bytes = BytesMut::new();
-    ack.encode(&mut bytes);
+    ack.encode(&mut bytes).unwrap();
     Apdu::ComplexAck(ComplexAck {
         segmented: false,
         more_follows: false,

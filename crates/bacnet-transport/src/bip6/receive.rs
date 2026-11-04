@@ -18,7 +18,7 @@ use crate::udp_metadata::ReceivedDatagram;
 
 use super::frame::encoded;
 use super::ingress::{
-    LocalBinding, destination_vmac_matches, forwarded_address_resolution_is_trusted,
+    Forwarders, LocalBinding, destination_vmac_matches, forwarded_address_resolution_is_trusted,
     forwarded_npdu_is_trusted, forwarded_source_is_usable, group_destination, is_answerable_source,
     is_configured_bbmd, original_destination_matches, own_frame, source_drop,
 };
@@ -108,7 +108,19 @@ impl Receiver {
     /// The BBMD this node is registered with as a foreign device, read at
     /// the moment of the check, so a moved registration applies at once.
     fn foreign_bbmd(&self) -> Option<(Ipv6Addr, u16)> {
-        self.foreign_bbmd.as_ref().map(|target| target.bbmd())
+        self.foreign_bbmd.as_ref().and_then(|target| target.bbmd())
+    }
+
+    /// Whom forwarded messages are taken from, read as
+    /// [`foreign_bbmd`](Self::foreign_bbmd) is: a foreign device waiting
+    /// for its BBMD's host name takes none (#2365).
+    fn forwarders(&self) -> Forwarders {
+        match &self.foreign_bbmd {
+            None => Forwarders::Group,
+            Some(target) => target
+                .bbmd()
+                .map_or(Forwarders::None, |(ip, port)| Forwarders::Bbmd(ip, port)),
+        }
     }
 
     /// Receive until the socket fails.
@@ -218,7 +230,7 @@ impl Receiver {
                 self.local_ip,
                 &self.unicast_ips,
                 self.wildcard_bind,
-                self.foreign_bbmd(),
+                self.forwarders(),
             )
         {
             self.drops.count(DropReason::UntrustedForwardedNpdu);
@@ -237,7 +249,7 @@ impl Receiver {
                 received.destination,
                 received.os_group_delivery,
                 &self.binding(),
-                self.foreign_bbmd(),
+                self.forwarders(),
             )
         {
             self.drops.count(DropReason::UntrustedForwardedResolution);

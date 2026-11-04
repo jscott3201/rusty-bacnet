@@ -61,7 +61,7 @@ fn cases() -> Vec<(NotificationParameters, &'static str)> {
         },
     );
     let mut reliability_values = BytesMut::new();
-    encode_bacnet_property_value(&present_value(None), &mut reliability_values);
+    encode_bacnet_property_value(&present_value(None), &mut reliability_values).unwrap();
     vec![
         (
             N::ChangeOfBitstring {

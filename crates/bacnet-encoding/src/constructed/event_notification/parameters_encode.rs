@@ -152,7 +152,7 @@ fn encode_into(params: &NotificationParameters, buf: &mut BytesMut) -> Result<()
                 }
                 validate_tlv_sequence(&property_value.value, "ComplexEventType property value")
                     .map_err(Error::into_encode_refusal)?;
-                encode_bacnet_property_value(property_value, buf);
+                encode_bacnet_property_value(property_value, buf)?;
             }
             tags::encode_closing_tag(buf, 6);
         }

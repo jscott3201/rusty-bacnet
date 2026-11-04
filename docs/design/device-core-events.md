@@ -729,19 +729,20 @@ image would link:
 | `reporting` image (thumbv7m) | `.text` estimate | From |
 |---|---|---|
 | PR 1, measured | 148.4 KB (flash 165.8 KB) | the `objects` image's 127.3 KB, plus the table and the two subscribe services (#2303) |
-| PR 2, measured | 192.9 KB (flash 211.2 KB) | the image through the `Reporter` (§8.3) |
+| PR 2, measured | 171.4 KB (flash 189.7 KB) | the image through the `Reporter`, trimmed by #2363 (§8.3) |
 | + `event-reporting` (after PR 3) | 172-181 KB | ~2,200 lines, plus the measured objects and encoder share |
 | + `event-enrollment` (#2319) | 207-221 KB | ~2,700 lines, the Event Enrollment object, `decode_event_parameter` |
 | + the Multiple path (#2320) | +15-25 KB | ~3,300 lines, the COVNotificationMultiple codec |
 
 Flash runs about 18 KB above `.text`. So COV with intrinsic reporting fits
 a 256 KB part with room; with Event Enrollment it is tight there and easy
-at 512 KB. Each PR replaces its estimate with the measured row. The
-`firmware/link` images share one 256 KiB `memory.x`, and riscv32imac's
-`reporting` image is already 198,210 octets of flash after PR 1, so the
-estimates for PR 3 and #2319 would overflow it on that target: before
-PR 3, the layout gives that image a larger flash region, or each image a
-`memory.x` of its own.
+at 512 KB. Each PR replaces its estimate with the measured row; PR 2's
+came in about 15 KB over the estimate's top even after #2363's trims,
+so PR 3's and #2319's rows should expect as much. The `firmware/link`
+images share one 256 KiB `memory.x`, but riscv32imac's, the largest
+(227,702 octets of flash after PR 2), have their own since #2363,
+`memory-riscv32imac.x`: 512 KiB of flash, sized for an ESP32-C6-class
+part, an RV32IMAC running in place from 4 MiB or more of external flash.
 
 ### 8.3 The `reporting` image and its heap
 
@@ -777,18 +778,42 @@ Measured for PR 2 (2b, 2026-11-03), the scenario through the `Reporter`:
 
 | | Measured |
 |---|---|
-| Outbox entry (token, reference, route, flags, place in the buffer) | 176 octets on a 64-bit host, beside the parameters in the buffer |
+| Outbox entry (token, reference, route, flags, the begin instant, place in the buffer) | 184 octets on a 64-bit host, beside the parameters in the buffer |
 | Confirmed-table entry | 152 octets on a 64-bit host, and its parameters on the heap |
 | The scenario's outbox | 6 entries and 256 octets: one change's six notifications |
-| The `reporting` scenario's peak heap (64-bit host) | 20,840 octets: the arena grows to 24 KiB for the image |
-| The `reporting` image (thumbv7m) | 192,856 `.text`, 211,196 flash, 24,672 RAM |
+| The `reporting` scenario's peak heap (64-bit host) | 19,800 octets with the image's features, 19,952 with the workspace's (20,840 when 2b landed): the arena grows to 24 KiB for the image |
+| The `reporting` image (thumbv7m), as PR 2 left it | 192,856 `.text`, 211,200 flash, 24,672 RAM |
+| The same after #2363's trims | 170,760 `.text`, 189,060 flash, 24,680 RAM |
+| And after its owed-look fixes (decision 13) | 171,440 `.text`, 189,744 flash, 24,680 RAM |
 
-The image passes §8.2's estimate (147-156 KB) by about 37 KB: it links
-the evaluation of every report form (Value_Source, Life Safety, the Table
-13-1 rows), both list encoders and the overlay, and the sort of each list.
-On riscv32imac it takes 256,150 of the layout's 262,144 octets of flash,
-and its flash budget is capped at the region's size until #2363 enlarges
-it.
+#2363 attributed the 65.6 KB of `.text` the image added over `objects`
+(thumbv7m, symbol sizes with LTO, so callers hold what they inline): the
+largest pieces were `evaluate` with the value preparation it inlines (9.4
+KB), the scenario and the `Reporter` calls inlined into it (about 17 KB),
+out-of-line copies of the `Responder`'s write and discovery and of the
+database builder, for the `objects` scenario the image also ran (13 KB,
+most of which the one request path below inlines instead), B-tree code for the
+table's flights, per-peer counts and two small sets (8.8 KB), three sort
+instantiations (4.2 KB), the Multiple list's projection and encoder, and
+no `core::fmt`. It trimmed, each change measured on its own (thumbv7m
+`.text`; thumbv7em follows within a few hundred octets, riscv32imac by
+about a third more):
+
+| Trim | `.text` saved |
+|---|---|
+| The `objects` scenario's requests go through the same `Reporter`: one request path | 2,740 |
+| The `Reporter`'s overlay leaves Active_COV_Multiple_Subscriptions to the Device (`ActiveCovOverlay<false>`): its table holds no COV-multiple reference until #2320 | 3,852 |
+| The table's keys order as the Device's Active_COV_Subscriptions does, so the list needs no sort | 2,356 |
+| Owed references are looked at with no sort of their keys | 2,068 |
+| The table's flights and per-peer counts are sorted vectors (`VecMap`), and a flight's carried references and the Life Safety snapshots' objects vectors, not B-trees | 11,080 |
+
+Together 22,096 octets (11.5%) on thumbv7m, 21,720 on thumbv7em and
+29,480 on riscv32imac, with the wire bytes unchanged: the core tests, the
+parity corpus (the Device's list included) and the image's own expected
+summary, which the `objects` requests now meet through the `Reporter`,
+hold to it. The image still passes §8.2's estimate (147-156 KB) by about
+15 KB: it links the evaluation of every report form (Value_Source, Life
+Safety, the Table 13-1 rows), and the overlay's read path.
 
 ## 9. Risks
 
@@ -936,7 +961,16 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
     report.
 13. The `Reporter` asks the host's admission for every report, so the
     outbox checks room for each; a report it refuses leaves its
-    subscription owed, looked at again as room frees. A subscription holds
+    subscription owed, looked at again as room frees: oldest first, as
+    many as there are free entries. One refused again, or whose report
+    the budget dropped, keeps its place and is counted once; an
+    evaluation that reports it or finds nothing to report ends the debt,
+    and a look drops one whose object or subscription is gone and hands a
+    still-free entry to the next. A report too large for the outbox, or
+    for one input's budget of octets, is counted and not owed. The owed
+    queue is the `Reporter`'s alone: the server has no outbox, and the
+    parity tests' outbox (64 entries, 65,536 octets) never owes, so the
+    core tests, not parity, hold these paths. A subscription holds
     one unconfirmed entry: a newer report replaces it and keeps its turn,
     so a subscription changing faster than the link sends neither crowds
     out the others nor loses its place to every change. A confirmed
