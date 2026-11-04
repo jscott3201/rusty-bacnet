@@ -242,8 +242,9 @@ impl PyMstpEndpoint {
     ///         it the endpoint executes no WriteProperty.
     ///     source_audit_reporter / audit_recipient / audit_device_bindings:
     ///         Keyword-only, as on `BipEndpoint` (#2348, #2357), each binding
-    ///         address a station number as a string (`"2"`), as `local_address()` gives it. `audit_recipient` must be a Device here: an
-    ///         address recipient needs B/IP.
+    ///         address a station in decimal digits (`"2"`), as
+    ///         `local_address()` gives it. An address `audit_recipient` takes
+    ///         another station: never 255 or this endpoint's own.
     #[new]
     #[pyo3(signature = (
         device_instance,

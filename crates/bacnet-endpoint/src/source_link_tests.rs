@@ -29,9 +29,13 @@ fn each_link_takes_only_a_unicast_mac_of_its_own_format() {
     // BACnet/SC, VMAC 02:..:02.
     let sc = other(&[2; 6]);
     assert!(sc.unicast(&[3; 6]));
-    for refused in [&[0xFF; 6][..], &[2; 6], &[3; 3], &[3; 7]] {
+    for refused in [&[0xFF; 6][..], &[0; 6], &[2; 6], &[3; 3], &[3; 7]] {
         assert!(!sc.unicast(refused), "{refused:?}");
     }
+    // Ethernet: the all-zero IEEE MAC is no station either.
+    let ethernet = other(&[0x02, 0, 0, 0, 0, 1]);
+    assert!(ethernet.unicast(&[0x02, 0, 0, 0, 0, 2]));
+    assert!(!ethernet.unicast(&[0; 6]));
     // B/IPv6, VMAC 0x000102; its group rule is the transport's.
     let bip6 = SourceLink::Other {
         local: MacAddr::from_slice(&[0, 1, 2]),
@@ -73,6 +77,7 @@ fn the_sc_and_mstp_builders_check_their_bindings() {
     };
     assert!(sc([3; 6]).is_ok());
     assert!(sc([0xFF; 6]).is_err());
+    assert!(sc([0; 6]).is_err());
     assert!(sc([2; 6]).is_err());
     let mstp = |station| {
         let (line, _peer) = LoopbackSerial::pair();
@@ -112,6 +117,119 @@ async fn bindings_of_the_wrong_link_fail_start() {
     mstp.source_audit_bindings
         .push((oid(ObjectType::DEVICE, 999), address(&sink)));
     assert!(mstp.start().await.is_err());
+}
+
+/// A link that learns its MAC at start, as B/IPv6 does: it reports station
+/// 7 as a placeholder before start, and the started node is station 1.
+struct LateMac {
+    inner: bacnet_transport::loopback::LoopbackTransport,
+    started: bool,
+}
+
+impl TransportPort for LateMac {
+    async fn start(
+        &mut self,
+    ) -> Result<tokio::sync::mpsc::Receiver<bacnet_transport::port::ReceivedNpdu>, Error> {
+        self.started = true;
+        self.inner.start().await
+    }
+    async fn stop(&mut self) -> Result<(), Error> {
+        self.inner.stop().await
+    }
+    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
+        self.inner.send_unicast(npdu, mac).await
+    }
+    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
+        self.inner.send_broadcast(npdu).await
+    }
+    fn local_receive_apdu_capacity(&self) -> u16 {
+        self.inner.local_receive_apdu_capacity()
+    }
+    fn local_mac(&self) -> &[u8] {
+        if self.started {
+            self.inner.local_mac()
+        } else {
+            &[7]
+        }
+    }
+}
+
+/// The selected Reporter's Reliability.
+async fn reporter_reliability<T: TransportPort + 'static>(
+    session: &EndpointSession<T>,
+) -> PropertyValue {
+    let db = session.database.as_ref().unwrap().read().await;
+    db.get(&selected())
+        .unwrap()
+        .audit_reporter()
+        .unwrap()
+        .read_property(PropertyIdentifier::RELIABILITY, None)
+        .unwrap()
+}
+
+/// The node's own MAC is checked again once the link has started (#2357):
+/// a binding to the MAC the link learns at start passes the pre-start
+/// check, then resolves to nothing, so the Reporter reads
+/// CONFIGURATION_ERROR. A binding to the peer resolves.
+#[tokio::test(start_paused = true)]
+async fn a_binding_to_the_mac_learned_at_start_reads_configuration_error() {
+    for (station, expected) in [
+        (2, Reliability::NO_FAULT_DETECTED),
+        (1, Reliability::CONFIGURATION_ERROR),
+    ] {
+        let (inner, _peer) = bacnet_transport::loopback::LoopbackTransport::pair(vec![1], vec![2]);
+        let transport = LateMac {
+            inner,
+            started: false,
+        };
+        let mut session =
+            EndpointSession::new(transport, SessionRole::ClientOnly, SessionConfig::default())
+                .unwrap()
+                .with_database(provisioned())
+                .with_source_audit_device_binding(
+                    oid(ObjectType::DEVICE, 999),
+                    MacAddr::from_slice(&[station]),
+                )
+                .with_source_audit_reporter(selected());
+        session.start().await.unwrap();
+        assert_eq!(
+            reporter_reliability(&session).await,
+            PropertyValue::Enumerated(expected.to_raw()),
+            "station {station}"
+        );
+        session.stop().await.unwrap();
+    }
+}
+
+/// B/IPv6 reports a zero VMAC until it starts, and VMAC 000000 is Device
+/// 0's (Clause H.7.2), so the pre-start check leaves the self check to the
+/// started link: a binding to 000000 resolves, and one to this node's own
+/// VMAC, Device 123's, reads CONFIGURATION_ERROR.
+#[tokio::test]
+async fn a_bip6_session_checks_its_own_vmac_once_started() {
+    use bacnet_transport::bip6::Bip6Transport;
+    for (vmac, expected) in [
+        ([0, 0, 0], Reliability::NO_FAULT_DETECTED),
+        ([0, 0, 123], Reliability::CONFIGURATION_ERROR),
+    ] {
+        let transport = Bip6Transport::new(std::net::Ipv6Addr::LOCALHOST, 0, Some(123));
+        let mut session =
+            EndpointSession::new(transport, SessionRole::ClientOnly, SessionConfig::default())
+                .unwrap()
+                .with_database(provisioned())
+                .with_source_audit_device_binding(
+                    oid(ObjectType::DEVICE, 999),
+                    MacAddr::from_slice(&vmac),
+                )
+                .with_source_audit_reporter(selected());
+        session.start().await.unwrap();
+        assert_eq!(
+            reporter_reliability(&session).await,
+            PropertyValue::Enumerated(expected.to_raw()),
+            "VMAC {vmac:?}"
+        );
+        session.stop().await.unwrap();
+    }
 }
 
 /// The source database with its Device's Audit recipient, Device 999.

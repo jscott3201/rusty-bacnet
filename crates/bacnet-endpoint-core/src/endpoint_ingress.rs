@@ -148,17 +148,21 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
     }
 
     /// Pre-start unicast facts of any link (#2357): the transport's own MAC
-    /// as configured (empty when it is learned only at start) and its
-    /// group-destination rule.
+    /// as configured, and its group-destination rule. The MAC is empty when
+    /// the link learns it only at start: B/IPv6 reports a zero VMAC until
+    /// then, which is also Device 0's, so its self check waits for
+    /// [`IngressReceivers::local_mac`].
     #[doc(hidden)]
     pub fn link_unicast_facts(
         &self,
     ) -> Option<(MacAddr, bacnet_transport::port::GroupDestinations)> {
         let transport = self.network.as_ref()?.transport();
-        Some((
-            MacAddr::from_slice(transport.local_mac()),
-            transport.group_destinations(),
-        ))
+        let local = if transport.bip6_port().is_some() {
+            MacAddr::new()
+        } else {
+            MacAddr::from_slice(transport.local_mac())
+        };
+        Some((local, transport.group_destinations()))
     }
 
     /// Pre-bind B/IP registration capability, with the configured mode.

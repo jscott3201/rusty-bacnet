@@ -11078,10 +11078,13 @@ builders' `ScEndpointBuilder::source_audit_device_binding(device, vmac)` and
 `MstpEndpointBuilder::source_audit_device_binding(device, station)` (there is no
 B/IPv6 endpoint builder). A binding there must be a direct unicast MAC: as long
 as the node's own and not the node's own, not a group destination by the
-transport's rule, and not MS/TP's station 255 or a six-octet all-ones broadcast
-(SC's broadcast VMAC). `start` refuses another with SERVICES /
+transport's rule, and not MS/TP's station 255, a six-octet all-ones broadcast
+(SC's broadcast VMAC) or a six-octet all-zero MAC (SC's reserved VMAC, no
+Ethernet station). `start` refuses another with SERVICES /
 SERVICE_REQUEST_DENIED, and B/IP bindings on another link, or these on B/IP, with
-an error. The node's own MAC is checked again once the link has started. An
+an error. The node's own MAC is checked again once the link has started; B/IPv6,
+which learns its VMAC at start, checks it only then, so a binding to it starts
+and the Reporter reads CONFIGURATION_ERROR. An
 audited client operation on such a link must go to a direct unicast MAC by the
 same rule. Device bindings name a station on the session's own link; a routed
 binding, to a station on another network beyond a router, is not supported.

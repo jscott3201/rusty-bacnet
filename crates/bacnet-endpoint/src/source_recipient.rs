@@ -21,7 +21,8 @@ pub(crate) enum SourceLink {
     /// MAC and group-destination rule (#2357).
     Other {
         /// This node's MAC, in the link's format; empty while it is learned
-        /// only at start, when the length and self checks wait for it.
+        /// only at start (B/IPv6's VMAC), when the length and self checks
+        /// wait for it.
         local: MacAddr,
         /// The transport's group destinations.
         groups: GroupDestinations,
@@ -35,9 +36,11 @@ impl SourceLink {
     ///   broadcast address, at any port, as the server's Device bindings
     ///   refuse it (#2348).
     /// - Any other link: a MAC as long as this node's, not this node's own,
-    ///   not a group destination by the transport's rule, and not the
-    ///   all-ones broadcast of a one-octet (MS/TP's 255) or six-octet (SC's
-    ///   broadcast VMAC, Ethernet's broadcast) link.
+    ///   not a group destination by the transport's rule, not the all-ones
+    ///   broadcast of a one-octet (MS/TP's 255) or six-octet (SC's broadcast
+    ///   VMAC, Ethernet's broadcast) link, and not a six-octet all-zero MAC,
+    ///   which names no device: SC reserves that VMAC for one not yet known
+    ///   (Annex AB.1.5.2, H.7.3), and it is no Ethernet station either.
     pub(crate) fn unicast(&self, mac: &[u8]) -> bool {
         match self {
             Self::Bip(broadcast) => {
@@ -47,11 +50,15 @@ impl SourceLink {
                 }) && mac[..4] != broadcast.ip().octets()
             }
             Self::Other { local, groups } => {
-                let all_ones = matches!(mac.len(), 1 | 6) && mac.iter().all(|octet| *octet == 0xFF);
+                let reserved = match mac.len() {
+                    1 => mac == [0xFF],
+                    6 => mac == [0xFF; 6] || mac == [0; 6],
+                    _ => false,
+                };
                 !mac.is_empty()
                     && (local.is_empty() || (mac.len() == local.len() && mac != local.as_slice()))
                     && !groups.contains(mac)
-                    && !all_ones
+                    && !reserved
             }
         }
     }

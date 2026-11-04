@@ -62,11 +62,14 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// [`start`](Self::start) refuses, with SERVICES /
     /// SERVICE_REQUEST_DENIED, a MAC that isn't a direct unicast destination
     /// on the link: of another length than the node's own, the node's own,
-    /// a group destination (MS/TP's station 255, SC's broadcast VMAC), and
-    /// refuses a non-Device or wildcard identifier or a repeated Device with
-    /// an error naming it. These bindings on a B/IP session, or B/IP ones on
-    /// another link, fail start. Without a selected source Reporter they are
-    /// inert.
+    /// a group destination (MS/TP's station 255, SC's broadcast VMAC), or a
+    /// six-octet all-zero MAC (SC's reserved VMAC), and refuses a non-Device
+    /// or wildcard identifier or a repeated Device with an error naming it.
+    /// A link that learns its MAC at start (B/IPv6) checks the node's own
+    /// only then: a binding to it starts, and the Reporter reads
+    /// CONFIGURATION_ERROR. These bindings on a B/IP session, or B/IP ones
+    /// on another link, fail start. Without a selected source Reporter they
+    /// are inert.
     ///
     /// [`BipEndpointBuilder::source_audit_device_binding`]: crate::bip::BipEndpointBuilder::source_audit_device_binding
     ///

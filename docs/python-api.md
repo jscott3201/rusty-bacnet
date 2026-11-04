@@ -5558,22 +5558,25 @@ endpoint.add_audit_reporter(1, "Source", audit_level="audit_all",
   sources you trust.
 - **When keywords are refused:** construction raises ValueError for anything
   it can check: an identifier that isn't a concrete Audit Reporter, a
-  recipient or binding without a Reporter, a recipient
-  `configure_audit_recipient` would refuse (this device, or an address that
-  isn't a direct unicast B/IP one), and a malformed, repeated or
-  non-unicast binding, each naming its keyword. Whether the Reporter was added is known
+  recipient or binding without a Reporter, a recipient the session could
+  never deliver to (this device, network 65535, or an address that isn't
+  another node's unicast address on the endpoint's link, by the rules
+  below), and a malformed, repeated or non-unicast binding, each naming its
+  keyword. Whether the Reporter was added is known
   only at start, which raises BacnetError for a missing one.
 - **Each link's bindings** (#2357) take the address format of that link's
   `local_address()`:
   - `BipEndpoint`: `"ipv4:port"`, by the rule above.
-  - `ScEndpoint`: a VMAC, `"xx:xx:xx:xx:xx:xx"` (twelve hex digits also do);
-    never the broadcast or zero VMAC or the endpoint's own.
-  - `MstpEndpoint`: a station, `"0"` to `"254"`; never 255 or the
-    endpoint's own `mstp_mac`.
+  - `ScEndpoint`: a VMAC, `"xx:xx:xx:xx:xx:xx"` or the same twelve hex
+    digits with no separators; never the broadcast or all-zero VMAC or the
+    endpoint's own.
+  - `MstpEndpoint`: a station in decimal digits, `"0"` to `"254"`; never 255
+    or the endpoint's own `mstp_mac`.
 
-  On SC and MS/TP, `audit_recipient` must be a Device, as
-  `BACnetServer.configure_audit_recipient` requires off B/IP: an address
-  recipient needs B/IP.
+  An address `audit_recipient` follows the same rule on each link, so an SC
+  or MS/TP endpoint takes one too, unlike `BACnetServer`, whose address
+  recipients are B/IP only: its `mac_address` is another node's VMAC or
+  station, on network 0 or one the endpoint's network number may name.
 
 ```python
 endpoint = MstpEndpoint(

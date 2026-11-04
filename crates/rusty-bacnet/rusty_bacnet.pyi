@@ -7181,9 +7181,10 @@ class ScEndpoint:
 
         ``source_audit_reporter`` / ``audit_recipient`` /
         ``audit_device_bindings``: as on ``BipEndpoint`` (#2357), each
-        binding address a VMAC as ``local_address()`` gives it (``"xx:xx:xx:xx:xx:xx"``).
-        The recipient must be a Device here: an address recipient
-        needs B/IP."""
+        binding address a VMAC as ``local_address()`` gives it
+        (``"xx:xx:xx:xx:xx:xx"``) or as twelve hex digits. An address
+        ``audit_recipient`` takes another node's VMAC: never the broadcast
+        or all-zero VMAC or this endpoint's own."""
         ...
 
     def add_analog_input(self, instance: int, name: str, units: EngineeringUnits | int = 62, present_value: float = 0.0, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
@@ -7347,13 +7348,12 @@ class MstpEndpoint:
         ``mstp_transmit_latency_pad_ms``, ``mstp_usage_timeout_ms`` and
         ``mstp_reply_timeout_ms`` are as for ``BACnetClient``, but a value
         out of range raises ValueError here.
-        
 
         ``source_audit_reporter`` / ``audit_recipient`` /
         ``audit_device_bindings``: as on ``BipEndpoint`` (#2357), each
-        binding address a station as ``local_address()`` gives it (``"2"``).
-        The recipient must be a Device here: an address recipient
-        needs B/IP."""
+        binding address a station in decimal digits, as ``local_address()``
+        gives it (``"2"``). An address ``audit_recipient`` takes another
+        station: never 255 or this endpoint's own."""
         ...
 
     def add_analog_input(self, instance: int, name: str, units: EngineeringUnits | int = 62, present_value: float = 0.0, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:

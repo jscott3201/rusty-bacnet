@@ -100,8 +100,8 @@ impl ScEndpointBuilder {
     /// Bind a Device to its VMAC on the hub, for source Audit delivery to
     /// that Device (#2357); see
     /// [`EndpointSession::with_source_audit_device_binding`]. Every build
-    /// refuses the broadcast VMAC, this node's own and a repeated or
-    /// non-Device identifier. Route data only: provision the recipient on
+    /// refuses the broadcast and all-zero VMACs, this node's own and a
+    /// repeated or non-Device identifier. Route data only: provision the recipient on
     /// the Device itself.
     pub fn source_audit_device_binding(mut self, device: ObjectIdentifier, vmac: Vmac) -> Self {
         self.source_audit_bindings
