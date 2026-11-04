@@ -6,7 +6,9 @@
 
 use super::*;
 use crate::port_retry::{ATTEMPTS, bind_error, lost_to_another_socket, rerun_on_lost_port};
-use socket::{BindPlan, BoundSockets, SocketRole, udp_socket, wildcard_role};
+#[cfg(unix)]
+use socket::udp_socket;
+use socket::{BindPlan, BoundSockets, SocketRole, wildcard_role};
 use std::io;
 
 /// Whether this OS lets a socket that sets `SO_REUSEADDR` (or
