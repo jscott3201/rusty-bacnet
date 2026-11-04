@@ -613,3 +613,6 @@ mod write;
 
 #[path = "source_reinitialize_tests.rs"]
 mod reinitialize;
+
+#[path = "source_link_tests.rs"]
+mod links;

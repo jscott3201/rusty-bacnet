@@ -11166,8 +11166,7 @@ After a complete validated RPM ACK, one distinct concrete Device object with at
 least one successful property establishes Target_Device for all records in that
 operation. Error-only Device results establish none; conflicting successful
 Device IDs retain Address attribution without rejecting the otherwise valid ACK.
-This is operation-local knowledge, with no discovery cache. Direct B/IP source
-limits and the absence of Python source Reporter configuration remain unchanged.
+This is operation-local knowledge, with no discovery cache.
 
 The initiating role supports `read_property`, `read_range`, `read_property_multiple`
 and direct B/IP `write_property`, plus explicit
@@ -11197,6 +11196,24 @@ selected Audit Reporter. Configure the Reporter's READ bit
 and audit level before startup; both `ClientOnly` and `Both` sessions support
 confirmed and unconfirmed notifications. `Both` additionally requires an explicit
 Device write authorizer. Startup itself emits nothing.
+
+Other links work the same way (#2357): B/IPv6, BACnet/SC, MS/TP and any other
+transport take Device bindings to a MAC on their own link, in its format, with
+`EndpointSession::with_source_audit_device_binding(device, mac)`, or the
+builders' `ScEndpointBuilder::source_audit_device_binding(device, vmac)` and
+`MstpEndpointBuilder::source_audit_device_binding(device, station)` (there is no
+B/IPv6 endpoint builder). A binding there must be a direct unicast MAC: as long
+as the node's own and not the node's own, not a group destination by the
+transport's rule, and not MS/TP's station 255, a six-octet all-ones broadcast
+(SC's broadcast VMAC) or a six-octet all-zero MAC (SC's reserved VMAC, no
+Ethernet station). `start` refuses another with SERVICES /
+SERVICE_REQUEST_DENIED, and B/IP bindings on another link, or these on B/IP, with
+an error. The node's own MAC is checked again once the link has started; B/IPv6,
+which learns its VMAC at start, checks it only then, so a binding to it starts
+and the Reporter reads CONFIGURATION_ERROR. An
+audited client operation on such a link must go to a direct unicast MAC by the
+same rule. Device bindings name a station on the session's own link; a routed
+binding, to a station on another network beyond a router, is not supported.
 
 ```rust
 use std::net::{Ipv4Addr, SocketAddrV4};
