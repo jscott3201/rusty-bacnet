@@ -13,12 +13,14 @@
 //! would, and between steps moves the clock to each of the `Reporter`'s
 //! deadlines, so the server's retry timers and the `Reporter`'s fire
 //! together. Each step also states how many notifications it calls for,
-//! so a change both sides get wrong the same way fails too.
+//! so a change both sides get wrong the same way fails too. A deleted
+//! object's subscriptions go on both sides alike.
 use super::*;
 use bacnet_device_core::cov::{Delivery, Token};
 use bacnet_device_core::report::{Bindings, Destination, InvokeIds, peer_address};
 use bacnet_encoding::apdu::{ErrorPdu, SimpleAck};
 use bacnet_encoding::primitives::encode_property_value;
+use bacnet_services::object_mgmt::DeleteObjectRequest;
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::constructed::BACnetAddress;
 
@@ -505,5 +507,95 @@ async fn an_abandoned_report_ends_at_its_deadline() {
     let oos = PropertyValue::Boolean(true);
     assert_eq!(cov.write("after the deadline", &a, ai(), OOS, oos).await, 1);
     assert_eq!(cov.answer("its Ack", false).await, 0);
+    cov.stop().await;
+}
+
+impl CovParity {
+    /// Delete `object`: on the server by DeleteObject from `peer`, and on
+    /// the core side as a `Reporter`'s host does, since the `Responder` runs
+    /// no DeleteObject: out of its database, then `remove_for_object`.
+    /// Neither side sends a notification.
+    async fn delete(&mut self, peer: &SubscriberEndpoint, object: ObjectIdentifier) {
+        let mut body = BytesMut::new();
+        DeleteObjectRequest {
+            object_identifier: object,
+        }
+        .encode(&mut body);
+        self.invoke_id = self.invoke_id.wrapping_add(1);
+        let service = ConfirmedServiceChoice::DELETE_OBJECT;
+        let apdu = confirmed(self.invoke_id, service, &body, 1476);
+        let now = runtime_clock::core_now();
+        let frames = self.deliver(&apdu, peer).await;
+        let reply = frames.first().expect("the server's reply").decode_npdu();
+        let reply = bacnet_encoding::apdu::decode_apdu(reply.payload).unwrap();
+        assert!(matches!(reply, Apdu::SimpleAck(_)), "{reply:?}");
+        let parity = &mut self.parity;
+        parity.db.remove(&object).unwrap().expect("the object");
+        parity.reporter.remove_for_object(object, &mut self.ids);
+        assert_eq!(self.same_notifications("deleted", &frames[1..], now), 0);
+    }
+}
+
+/// DeleteObject (#2384): the same subscriptions go on both sides, the
+/// Device lists the same, and an object created again under the deleted
+/// one's identifier reports to nobody, while another object still reports.
+#[tokio::test(start_paused = true)]
+async fn a_deleted_objects_subscriptions_go() {
+    let mut cov = CovParity::start(CovPolicy::default()).await;
+    let (a, b) = (direct(1), routed(2));
+    let bv = oid(ObjectType::BINARY_VALUE, 1);
+    let steps = [
+        (
+            "whole",
+            &a,
+            SUBSCRIBE,
+            subscribe(1, ai(), Some(false), Some(300)),
+        ),
+        (
+            "confirmed",
+            &a,
+            SUBSCRIBE,
+            subscribe(2, ai(), Some(true), Some(300)),
+        ),
+        (
+            "property",
+            &b,
+            PROPERTY,
+            subscribe_property(3, ai(), PV, None, Some(false), Some(300)),
+        ),
+        (
+            "BV-1",
+            &b,
+            SUBSCRIBE,
+            subscribe(4, bv, Some(false), Some(300)),
+        ),
+    ];
+    for (what, peer, service, body) in &steps {
+        assert_eq!(cov.exchange(what, peer, *service, body).await.1, 1);
+        cov.same_tables(what).await;
+    }
+    // No report out when AI-1 goes: the server's worker would run on after
+    // the deletion, as after a cancellation, where the `Reporter` ends it.
+    assert_eq!(cov.answer("Ack", false).await, 0);
+    let list = P::ACTIVE_COV_SUBSCRIPTIONS;
+    cov.read_list("before", list).await;
+    cov.delete(&a, ai()).await;
+    cov.same_tables("deleted").await;
+    cov.read_list("deleted", list).await;
+
+    let again = || {
+        let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
+        ai.set_present_value(21.5);
+        Box::new(ai)
+    };
+    let server = cov.parity.server.database();
+    server.write().await.add(again()).unwrap();
+    cov.parity.db.add(again()).unwrap();
+    cov.read_list("created again", list).await;
+    let oos = PropertyValue::Boolean(true);
+    let created = cov.write("created again", &a, ai(), OOS, oos.clone()).await;
+    assert_eq!(created, 0);
+    assert_eq!(cov.write("BV-1", &a, bv, OOS, oos).await, 1);
+    cov.same_tables("after").await;
     cov.stop().await;
 }

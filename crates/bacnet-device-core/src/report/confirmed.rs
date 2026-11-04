@@ -10,13 +10,14 @@
 //! at its cutoff ([`FlightTiming::cutoff`](crate::cov::FlightTiming::cutoff)
 //! from when the table began it), as the server's worker does, so its
 //! last answer is never awaited past the table's deadline for the report.
-//! A report the COV table fenced, or the host couldn't send, leaves the
-//! table at once.
+//! A report the COV table fenced, the host couldn't send, or whose object
+//! the host deleted, leaves the table at once.
 
 use alloc::vec::Vec;
 
 use bacnet_time::{Duration, Instant};
 use bacnet_types::constructed::BACnetAddress;
+use bacnet_types::primitives::ObjectIdentifier;
 
 use crate::cov::{SubscriberEndpoint, Token};
 
@@ -24,6 +25,10 @@ use crate::cov::{SubscriberEndpoint, Token};
 #[derive(Debug)]
 pub(super) struct Outstanding {
     pub(super) token: Token,
+    /// The object it reports, encoded: deleting it ends the notification.
+    /// Four octets: an entry is no larger on a 64-bit host, and 8 octets
+    /// larger on a 32-bit target.
+    object: [u8; 4],
     /// Who answers it, and whose invoke ID it holds.
     pub(super) peer: BACnetAddress,
     pub(super) to: SubscriberEndpoint,
@@ -42,7 +47,7 @@ pub(super) struct Outstanding {
 
 impl Outstanding {
     pub(super) fn new(
-        token: Token,
+        (token, object): (Token, ObjectIdentifier),
         peer: BACnetAddress,
         to: SubscriberEndpoint,
         invoke_id: u8,
@@ -52,6 +57,7 @@ impl Outstanding {
     ) -> Self {
         Self {
             token,
+            object: object.encode(),
             peer,
             to,
             invoke_id,
@@ -86,6 +92,13 @@ impl ConfirmedTable {
     /// The notification `token` names, taken out.
     pub(super) fn take(&mut self, token: Token) -> Option<Outstanding> {
         let at = self.out.iter().position(|out| out.token == token)?;
+        Some(self.out.swap_remove(at))
+    }
+
+    /// A notification reporting `object`, taken out.
+    pub(super) fn take_object(&mut self, object: ObjectIdentifier) -> Option<Outstanding> {
+        let object = object.encode();
+        let at = self.out.iter().position(|out| out.object == object)?;
         Some(self.out.swap_remove(at))
     }
 

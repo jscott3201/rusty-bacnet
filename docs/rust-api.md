@@ -7748,6 +7748,12 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   peer; `next_deadline` and `on_deadline` run lifetimes, abandoned reports,
   timeouts (resent with the same invoke ID while retries last, then failed)
   and the looks owed. The host reports each send through `delivered`.
+  The `Responder` runs no DeleteObject, so a host that deletes an object
+  calls `remove_for_object(object, ids)`: the object's subscriptions go, as
+  the server drops them at DeleteObject, with their queued and owed reports
+  and any confirmed notification still out, whose invoke ID goes back to
+  `ids`. Until then an object created again under its identifier would
+  report to the old subscriptions.
   `ReportConfig` holds the `CovPolicy`, the outbox and the confirmed
   timing; `ReporterCounters` what it counted. Build the database with
   `report::SERVICES`, which adds the two subscribe services to the

@@ -45,7 +45,8 @@ mod tests;
 ///
 /// The host hands it each request ([`handle`](Self::handle)), each answer to
 /// a confirmed notification ([`reply`](Self::reply)), the objects it changes
-/// itself ([`changed`](Self::changed)), and the time whenever
+/// itself ([`changed`](Self::changed)) or deletes
+/// ([`remove_for_object`](Self::remove_for_object)), and the time whenever
 /// [`next_deadline`](Self::next_deadline) comes ([`on_deadline`](Self::on_deadline)).
 /// It sends what [`pop`](Self::pop) hands out, and reports how each send
 /// ended ([`delivered`](Self::delivered)).
@@ -168,6 +169,27 @@ impl Reporter {
         self.last = now;
         let snapshots = core::mem::take(&mut self.snapshots);
         self.report_changes(db, objects, &snapshots, now);
+    }
+
+    /// The host deleted `object` from its database: drop its subscriptions,
+    /// as the server does at DeleteObject, with their queued notifications
+    /// and the looks they were owed, and end each confirmed notification
+    /// reporting it that is still out, giving its invoke ID back to `ids`.
+    /// A later answer to one of those matches nothing, as long as `ids`
+    /// hands its invoke ID out again only in turn ([`InvokeIds::take`]).
+    /// Nothing more is sent for `object`, and an object created later under
+    /// its identifier starts with no subscription.
+    ///
+    /// The [`Responder`] runs no DeleteObject, so the host calls this
+    /// whenever it removes an object, at a request or on its own. Removing
+    /// an object with no subscription, or removing one twice, does nothing.
+    pub fn remove_for_object(&mut self, object: ObjectIdentifier, ids: &mut dyn InvokeIds) {
+        while let Some(out) = self.confirmed.take_object(object) {
+            self.releases.push((out.peer, out.invoke_id));
+        }
+        self.table.remove_for_object(object);
+        self.settle();
+        self.release(ids);
     }
 
     /// An answer `from` a peer: true when it answers a confirmed
@@ -314,7 +336,7 @@ impl Reporter {
                 let retries = self.timing.retries;
                 let (to, params) = (to.clone(), params);
                 self.confirmed.insert(Outstanding::new(
-                    token,
+                    (token, key.object()),
                     peer,
                     to,
                     invoke_id,

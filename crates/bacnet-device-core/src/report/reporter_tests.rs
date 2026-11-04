@@ -1,6 +1,7 @@
 //! Unit tests of the [`Reporter`]: a request's notifications through the
 //! outbox, confirmed delivery with its retries, room and invoke IDs running
-//! out, and the Device's list through the overlay. The server parity tests
+//! out, the Device's list through the overlay, and a deleted object's
+//! reports. The server parity tests
 //! (`bacnet-server`, `device_core_parity_tests/cov`) hold the notifications
 //! themselves to the server's.
 
@@ -19,6 +20,8 @@ use bacnet_types::primitives::PropertyValue;
 
 #[path = "reporter_owed_tests.rs"]
 mod owed;
+#[path = "reporter_remove_tests.rs"]
+mod remove;
 
 const T0: Instant = Instant::from_secs(1_000);
 
