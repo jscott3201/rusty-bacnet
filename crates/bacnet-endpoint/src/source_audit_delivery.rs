@@ -1,7 +1,7 @@
 //! Bounded source notification delivery and local communication-result mapping.
+use super::routers::{Hop, SourceRoute, SourceRouters};
 use super::*;
 use bacnet_encoding::apdu::{Apdu, ConfirmedRequest, UnconfirmedRequest, encode_apdu};
-use bacnet_endpoint_core::coordinator::CanonicalPeer;
 use bacnet_endpoint_core::endpoint_ingress::EndpointEgressAdmissionError;
 use bacnet_npdu::NetworkPriority;
 use bacnet_server::server::{
@@ -9,7 +9,6 @@ use bacnet_server::server::{
     __endpoint_run_notification_worker as run_notification_worker,
 };
 use bacnet_services::audit::AuditNotificationRequest;
-use bacnet_types::MacAddr;
 use bacnet_types::enums::{
     AbortReason, ConfirmedServiceChoice, ErrorClass, ErrorCode, RejectReason,
     UnconfirmedServiceChoice,
@@ -65,10 +64,10 @@ pub(super) fn admit(
     source: &Arc<SourceAudit>,
     owner: &NotificationTransactions,
     confirmed: bool,
-    mac: MacAddr,
+    route: SourceRoute,
     notification: BACnetAuditNotification,
     completion: Completion,
-    failure: Option<AuditFailureTicket<MacAddr>>,
+    failure: Option<AuditFailureTicket<SourceRoute>>,
 ) {
     // Invalid/oversized records are not resource losses, even at saturation.
     let Some(mut encoded) = encode(&notification, confirmed, source.max_apdu, 0) else {
@@ -91,7 +90,7 @@ pub(super) fn admit(
     };
     let reserved = if confirmed {
         match owner.reserve(
-            CanonicalPeer::direct(mac.as_slice()),
+            route.peer(),
             ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION,
         ) {
             Ok(reserved) => Some(reserved),
@@ -115,17 +114,18 @@ pub(super) fn admit(
     }
     let deadline = Instant::now() + DEADLINE;
     let egress = source.egress.clone();
+    let routers = Arc::clone(&source.routers);
     let weak_owner = source.notifications.clone();
     let source = Arc::downgrade(source);
     owner.spawn(async move {
         let _permit = permit;
-        let sent = admit_encoded(&egress, mac, encoded, confirmed, deadline);
+        let (sent, hop) = admit_encoded(&egress, &routers, &route, encoded, confirmed, deadline);
         if matches!(sent, Err(EndpointEgressAdmissionError::QueueFull))
             && let (Some(source), Some(owner)) = (source.upgrade(), weak_owner.upgrade())
         {
             failures::record_drop(&source, &owner, failure, timestamp);
         }
-        completion.finish(finish_send(sent, reserved, deadline).await);
+        completion.finish(finish_send(sent, hop, reserved, deadline).await);
     });
 }
 
@@ -165,23 +165,32 @@ pub(super) fn encode(
     (encoded.len() <= usize::from(max_apdu)).then(|| encoded.to_vec())
 }
 
+/// Queue one encoded record for `route`: to a MAC on the link, or through
+/// the network layer to a station behind a router, by the router learned
+/// for its network or the link's broadcast MAC ([`SourceRouters`], #2371).
+/// The [`Hop`] names a learned router the send went through, which a failed
+/// delivery forgets.
 pub(super) fn admit_encoded(
     egress: &EndpointEgress,
-    mac: MacAddr,
+    routers: &Arc<SourceRouters>,
+    route: &SourceRoute,
     encoded: Vec<u8>,
     confirmed: bool,
     deadline: Instant,
-) -> Result<bacnet_endpoint_core::endpoint_ingress::EndpointSend, EndpointEgressAdmissionError> {
-    egress.admit_apdu(
+) -> (
+    Result<bacnet_endpoint_core::endpoint_ingress::EndpointSend, EndpointEgressAdmissionError>,
+    Hop,
+) {
+    let (destination, hop) = routers.destination(route);
+    let sent = egress.admit_apdu(
         encoded,
-        EndpointApduDestination::Direct {
-            destination_mac: mac,
-        },
+        destination,
         confirmed,
         NetworkPriority::Normal,
         Vec::new(),
         Some(deadline),
-    )
+    );
+    (sent, hop)
 }
 
 /// Queue one encoded UnconfirmedAuditNotification for global broadcast
@@ -212,6 +221,7 @@ pub(super) async fn finish_send(
         bacnet_endpoint_core::endpoint_ingress::EndpointSend,
         EndpointEgressAdmissionError,
     >,
+    hop: Hop,
     reserved: Option<Reservation>,
     deadline: Instant,
 ) -> bool {
@@ -220,7 +230,7 @@ pub(super) async fn finish_send(
         let sent = sent.take().expect("notifications have no retries");
         async move { sent?.complete().await.result }
     };
-    tokio::time::timeout_at(deadline, async {
+    let delivered = tokio::time::timeout_at(deadline, async {
         if let Some((operation, receiver)) = reserved {
             run_notification_worker(operation, receiver, DEADLINE, 0, send).await
                 == NotificationWorkerResult::Ack
@@ -230,7 +240,11 @@ pub(super) async fn finish_send(
         }
     })
     .await
-    .unwrap_or(false)
+    .unwrap_or(false);
+    if !delivered {
+        hop.failed();
+    }
+    delivered
 }
 
 /// Clause 18.7 local record codes; never communication-class Error PDUs.

@@ -1,5 +1,6 @@
-//! Source runtime's Device mutation owner and immutable direct route facts,
-//! on IPv4 B/IP or any other link (#2357).
+//! Source runtime's Device mutation owner and immutable route facts: direct
+//! on IPv4 B/IP or any other link (#2357), or behind a router (#2371).
+use super::routers::{Hop, SourceRoute, SourceRouters, routed_unicast};
 use super::*;
 use bacnet_network::network_number::LocalNetworkNumber;
 use bacnet_objects::clock::ClockFrame;
@@ -65,9 +66,10 @@ impl SourceLink {
 }
 
 pub(crate) struct SourceRoutes {
-    devices: HashMap<ObjectIdentifier, MacAddr>,
+    devices: HashMap<ObjectIdentifier, SourceRoute>,
     link: SourceLink,
     local_network: LocalNetworkNumber,
+    routers: Arc<SourceRouters>,
 }
 impl SourceRoutes {
     /// IPv4 B/IP routes, with `broadcast` the link's broadcast endpoint.
@@ -98,25 +100,57 @@ impl SourceRoutes {
             devices: HashMap::new(),
             link,
             local_network: LocalNetworkNumber::default(),
+            routers: Arc::default(),
         };
         for (device, mac) in bindings {
-            if device.object_type() != ObjectType::DEVICE
-                || device.instance_number() == ObjectIdentifier::MAX_INSTANCE
-            {
-                return Err(Error::Encoding(
-                    "source Audit binding requires a concrete Device".into(),
-                ));
-            }
             if !routes.valid_address(mac) {
                 return Err(denied());
             }
-            if routes.devices.insert(*device, mac.clone()).is_some() {
-                return Err(Error::Encoding(
-                    "duplicate source Audit Device binding".into(),
-                ));
-            }
+            routes.bind(*device, SourceRoute::Direct(mac.clone()))?;
         }
         Ok(routes)
+    }
+    /// Add routed bindings, each a Device behind a router by its network
+    /// number and its MAC there (#2371). Refused with SERVICES /
+    /// SERVICE_REQUEST_DENIED unless [`routed_unicast`]: network 0, the
+    /// global network 65535, an empty MAC or one past 18 octets.
+    pub(crate) fn bind_routed(
+        mut self,
+        bindings: &[(ObjectIdentifier, u16, MacAddr)],
+    ) -> Result<Self, Error> {
+        for (device, network, mac) in bindings {
+            if !routed_unicast(*network, mac) {
+                return Err(denied());
+            }
+            self.routers.track(*network);
+            self.bind(
+                *device,
+                SourceRoute::Routed {
+                    network: *network,
+                    mac: mac.clone(),
+                },
+            )?;
+        }
+        Ok(self)
+    }
+    fn bind(&mut self, device: ObjectIdentifier, route: SourceRoute) -> Result<(), Error> {
+        if device.object_type() != ObjectType::DEVICE
+            || device.instance_number() == ObjectIdentifier::MAX_INSTANCE
+        {
+            return Err(Error::Encoding(
+                "source Audit binding requires a concrete Device".into(),
+            ));
+        }
+        if self.devices.insert(device, route).is_some() {
+            return Err(Error::Encoding(
+                "duplicate source Audit Device binding".into(),
+            ));
+        }
+        Ok(())
+    }
+    /// The routers learned for the routed bindings' networks.
+    pub(crate) fn routers(&self) -> &Arc<SourceRouters> {
+        &self.routers
     }
     /// Whether these are IPv4 B/IP routes.
     pub(crate) fn is_bip(&self) -> bool {
@@ -137,22 +171,29 @@ impl SourceRoutes {
     fn valid_address(&self, mac: &[u8]) -> bool {
         self.link.unicast(mac)
     }
-    /// The direct B/IP MAC a recipient is sent to, if it has one. An address
+    /// The route a recipient's records take, if it has one. An address
     /// naming this network by its number, once the number is known, is a
     /// station on this link like a local address (#1403), so its records go
-    /// there with no DNET. Each call reads the number as it is then, so a
-    /// number learned after startup applies from the next record. An address
-    /// on any other network has no route.
-    pub(crate) fn resolve(&self, recipient: &BACnetRecipient) -> Option<MacAddr> {
+    /// there with no DNET; so does a routed binding to it. Each call reads
+    /// the number as it is then, so a number learned after startup applies
+    /// from the next record. A Device bound behind a router on another
+    /// network goes there through it (#2371); an address on another network
+    /// has no route.
+    pub(crate) fn resolve(&self, recipient: &BACnetRecipient) -> Option<SourceRoute> {
         let here = |network: u16| network == 0 || Some(network) == self.local_network.get();
         let mac = match recipient {
-            BACnetRecipient::Device(device) => self.devices.get(device)?,
+            BACnetRecipient::Device(device) => match self.devices.get(device)? {
+                SourceRoute::Direct(mac) => mac,
+                SourceRoute::Routed { network, mac } if here(*network) => mac,
+                routed => return Some(routed.clone()),
+            },
             BACnetRecipient::Address(address) if here(address.network_number) => {
                 &address.mac_address
             }
             _ => return None,
         };
-        self.valid_address(mac).then(|| mac.clone())
+        self.valid_address(mac)
+            .then(|| SourceRoute::Direct(mac.clone()))
     }
     /// Whether `recipient` is an Address on a network numbered 1 to 65534
     /// that is not the session's number in force, with a MAC this source
@@ -192,11 +233,11 @@ pub(crate) struct SourceRecipient {
     pub(super) device: ObjectIdentifier,
     pub(super) status: Arc<AuditReporterStatus>,
     pub(super) sequence: Arc<EventSequence>,
-    pub(super) routes: SourceRoutes,
+    pub(crate) routes: SourceRoutes,
     pub(super) notifications: Weak<NotificationTransactions>,
     pub(super) egress: EndpointEgress,
     pub(super) max_apdu: u16,
-    pub(super) failures: Arc<AuditFailureQueue<MacAddr>>,
+    pub(super) failures: Arc<AuditFailureQueue<SourceRoute>>,
 }
 impl SourceRecipient {
     pub(crate) fn write_local(
@@ -228,9 +269,9 @@ impl SourceRecipient {
             .write_audit_recipient(None, value, None, None)
     }
 
-    /// The direct MAC the Device's current Audit_Notification_Recipient
-    /// resolves to now, if any.
-    pub(crate) fn recipient_route(&self, db: &ObjectDatabase) -> Option<MacAddr> {
+    /// The route the Device's current Audit_Notification_Recipient resolves
+    /// to now, if any.
+    pub(crate) fn recipient_route(&self, db: &ObjectDatabase) -> Option<SourceRoute> {
         let value = db
             .get(&self.device)?
             .read_property(PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT, None)
@@ -336,7 +377,7 @@ impl SourceRecipient {
                         Some(route) if confirmed => Some(
                             notifications
                                 .reserve(
-                                    CanonicalPeer::direct(route),
+                                    route.peer(),
                                     ConfirmedServiceChoice::CONFIRMED_AUDIT_NOTIFICATION,
                                 )
                                 .map_err(|_| denied())?,
@@ -353,6 +394,7 @@ impl SourceRecipient {
                 }
                 *current = new;
                 let egress = self.egress.clone();
+                let routers = Arc::clone(self.routes.routers());
                 let deadline = tokio::time::Instant::now() + delivery::DEADLINE;
                 let first_completion = delivery::Completion::new(Arc::clone(&self.status), token);
                 let second_completion = delivery::Completion::new(Arc::clone(&self.status), token);
@@ -360,21 +402,27 @@ impl SourceRecipient {
                 let first = attempts.next().unwrap();
                 let second = attempts.next().unwrap();
                 Ok(async move {
-                    let run = |(target, permit, reserved, bytes): (Option<MacAddr>, _, _, _),
-                               completion: delivery::Completion| {
-                        let egress = egress.clone();
-                        async move {
-                            let _permit: tokio::sync::OwnedSemaphorePermit = permit;
-                            let sent = match target {
-                                Some(route) => delivery::admit_encoded(
-                                    &egress, route, bytes, confirmed, deadline,
-                                ),
-                                None => delivery::admit_global_broadcast(&egress, bytes, deadline),
-                            };
-                            completion
-                                .finish(delivery::finish_send(sent, reserved, deadline).await);
-                        }
-                    };
+                    let run =
+                        |(target, permit, reserved, bytes): (Option<SourceRoute>, _, _, _),
+                         completion: delivery::Completion| {
+                            let egress = egress.clone();
+                            let routers = Arc::clone(&routers);
+                            async move {
+                                let _permit: tokio::sync::OwnedSemaphorePermit = permit;
+                                let (sent, hop) = match target {
+                                    Some(route) => delivery::admit_encoded(
+                                        &egress, &routers, &route, bytes, confirmed, deadline,
+                                    ),
+                                    None => (
+                                        delivery::admit_global_broadcast(&egress, bytes, deadline),
+                                        Hop::none(),
+                                    ),
+                                };
+                                completion.finish(
+                                    delivery::finish_send(sent, hop, reserved, deadline).await,
+                                );
+                            }
+                        };
                     tokio::join!(run(first, first_completion), run(second, second_completion));
                 })
             })

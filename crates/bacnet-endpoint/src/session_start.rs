@@ -184,6 +184,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             coordinator: Arc::clone(&self.coordinator),
             shared: Arc::clone(&self.shared),
             local_network: egress.local_network_number().clone(),
+            source_routers: source_recipient
+                .as_ref()
+                .map(|runtime| Arc::clone(runtime.routes.routers()))
+                .filter(|routers| !routers.is_empty()),
         };
         let audit_lease = source_recipient
             .as_ref()

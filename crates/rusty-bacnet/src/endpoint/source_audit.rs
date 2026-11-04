@@ -1,6 +1,7 @@
 //! The endpoints' source Audit Reporter keywords (#2348, #2357):
 //! `BipEndpoint`, `ScEndpoint` and `MstpEndpoint` take the same ones, each
-//! binding address in its link's format. They are parsed once at
+//! binding address in its link's format, or a Device behind a router as
+//! `"network:0xMAC"` on any of them (#2371). They are parsed once at
 //! construction and kept for the rebuild at each start, as the object
 //! keywords are (#1867).
 
@@ -36,9 +37,13 @@ impl AuditLink {
     /// A binding's address, in the link's format, as a recipient MAC: an
     /// IPv4 B/IP `"ipv4:port"`; an SC VMAC as `local_address()` gives it,
     /// `"xx:xx:xx:xx:xx:xx"`, or the same twelve hex digits with no
-    /// separators; an MS/TP station in ASCII decimal digits. `None` when it
+    /// separators; an MS/TP station in ASCII decimal digits. On any link, a
+    /// station behind a router as [`routed`] reads it. `None` when it
     /// doesn't parse.
     fn parse(self, address: &str) -> Option<Binding> {
+        if let Some(binding) = routed(address) {
+            return binding;
+        }
         match self {
             Self::Bip(_) => address.parse().ok().map(Binding::Bip),
             Self::Sc(_) => {
@@ -88,6 +93,21 @@ impl AuditLink {
     /// B/IP's recipient rule (#2348), or [`Self::unicast`] on SC and MS/TP.
     fn refusal(self, binding: &Binding, device_instance: u32, name: &str) -> PyResult<()> {
         let mac = match (self, binding) {
+            // The Rust session's routed rule: one station on another network.
+            // The MAC's format is that network's link's, so only its length
+            // is checked.
+            (_, Binding::Routed { network, mac }) => {
+                if !(1..=0xFFFE).contains(network)
+                    || !(1..=bacnet_npdu::MAX_MAC_LEN).contains(&mac.len())
+                {
+                    return Err(PyValueError::new_err(format!(
+                        "{name} must name one station behind a router: a network of \
+                         1 to 65534 and a MAC of 1 to {} octets",
+                        bacnet_npdu::MAX_MAC_LEN
+                    )));
+                }
+                return Ok(());
+            }
             (Self::Bip(broadcast), Binding::Bip(address)) => {
                 let mut mac = address.ip().octets().to_vec();
                 mac.extend_from_slice(&address.port().to_be_bytes());
@@ -115,11 +135,45 @@ impl AuditLink {
     /// The binding address format, for messages.
     fn format(self) -> &'static str {
         match self {
-            Self::Bip(_) => "'ipv4:port'",
-            Self::Sc(_) => "a VMAC, 'xx:xx:xx:xx:xx:xx'",
-            Self::Mstp(_) => "a station, 0 to 254",
+            Self::Bip(_) => "'ipv4:port' or a routed 'network:0xMAC'",
+            Self::Sc(_) => "a VMAC, 'xx:xx:xx:xx:xx:xx', or a routed 'network:0xMAC'",
+            Self::Mstp(_) => "a station, 0 to 254, or a routed 'network:0xMAC'",
         }
     }
+}
+
+/// A station behind a router, written as the CLI writes a routed target
+/// (`bacnet_ops::target::parse_target`'s `dnet:0xMAC`): the network in
+/// decimal digits, a colon, `0x` and an even, nonzero number of hex digits.
+/// `None` when `address` isn't in that form (decimal digits, then `:0x`);
+/// `Some(None)` when it is, but doesn't parse. No other link's form starts
+/// that way: a B/IP address has dots, and a VMAC's second octet no `x`.
+fn routed(address: &str) -> Option<Option<Binding>> {
+    let (network, mac) = address.split_once(':')?;
+    let hex = mac.strip_prefix("0x").or(mac.strip_prefix("0X"))?;
+    if network.is_empty() || !network.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let octets = (!hex.is_empty()
+        && hex.len().is_multiple_of(2)
+        && hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    .then(|| {
+        (0..hex.len())
+            .step_by(2)
+            .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).ok())
+            .collect::<Option<Vec<u8>>>()
+    })
+    .flatten();
+    Some(
+        network
+            .parse()
+            .ok()
+            .zip(octets)
+            .map(|(network, mac)| Binding::Routed {
+                network,
+                mac: MacAddr::from_slice(&mac),
+            }),
+    )
 }
 
 /// One Device binding's address.
@@ -127,6 +181,11 @@ impl AuditLink {
 enum Binding {
     Bip(SocketAddrV4),
     Mac(MacAddr),
+    /// A station behind a router, on any link (#2371).
+    Routed {
+        network: u16,
+        mac: MacAddr,
+    },
 }
 
 /// A validated source Reporter selection: the Reporter, the Device's Audit
@@ -267,13 +326,14 @@ impl SourceAuditKeywords {
             .iter()
             .fold(builder, |builder, (device, address)| match address {
                 Binding::Bip(address) => builder.source_audit_device_binding(*device, *address),
-                Binding::Mac(_) => builder,
+                Binding::Mac(_) | Binding::Routed { .. } => builder,
             })
     }
 
     /// Select the Reporter on `session`, with the routes of a link other
-    /// than B/IP. Its start refuses a Reporter that isn't an Audit Reporter
-    /// in the database, with a BacnetError naming it.
+    /// than B/IP and the routed ones of any link. Its start refuses a
+    /// Reporter that isn't an Audit Reporter in the database, with a
+    /// BacnetError naming it.
     pub(super) fn select<T: TransportPort + 'static>(
         &self,
         session: EndpointSession<T>,
@@ -282,6 +342,9 @@ impl SourceAuditKeywords {
             .iter()
             .fold(session, |session, (device, address)| match address {
                 Binding::Mac(mac) => session.with_source_audit_device_binding(*device, mac.clone()),
+                Binding::Routed { network, mac } => {
+                    session.with_source_audit_routed_device_binding(*device, *network, mac.clone())
+                }
                 Binding::Bip(_) => session,
             })
             .with_source_audit_reporter(self.reporter)
