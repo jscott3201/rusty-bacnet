@@ -291,7 +291,7 @@ impl CovTable {
                 let old_indefinite = old.expires_at.is_none();
                 if old_indefinite != new_indefinite {
                     if new_indefinite {
-                        *self.peer_indefinite_counts.entry(peer).or_default() += 1;
+                        *self.peer_indefinite_counts.or_default(peer) += 1;
                     } else if let Some(count) = self.peer_indefinite_counts.get_mut(&peer) {
                         *count = count.saturating_sub(1);
                         if *count == 0 {
@@ -301,9 +301,9 @@ impl CovTable {
                 }
             }
             _ => {
-                *self.peer_counts.entry(peer.clone()).or_default() += 1;
+                *self.peer_counts.or_default(peer.clone()) += 1;
                 if new_indefinite {
-                    *self.peer_indefinite_counts.entry(peer).or_default() += 1;
+                    *self.peer_indefinite_counts.or_default(peer) += 1;
                 }
                 self.counts.subscriptions_created += 1;
             }
