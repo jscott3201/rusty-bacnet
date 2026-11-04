@@ -578,6 +578,19 @@
 #
 # 22096 / 21720 / 29480 octets of .text less; the objects rows are
 # unchanged. The reporting budgets are --suggest's again.
+#
+# On 2026-11-04 (#2363, Rust 1.99.0, dev at 32c21b87d merged) the Reporter
+# takes three of PR 2b's review nits: a deadline looks at only as many
+# owed references as there are free outbox entries, oldest first, and
+# counts each owed subscription once. As text / rodata / flash, then RAM:
+#
+#   thumbv7m             171156 / 17276 / 189456    24680
+#   thumbv7em            171584 / 17280 / 189888    24680
+#   riscv32imac          205972 / 20944 / 226938    24680
+#
+# 396 / 384 / 308 octets of .text more; .rodata and RAM are unchanged, as
+# the owed list already keeps the order references became owed in. The
+# merge moved no row. The reporting budgets are --suggest's again.
 
 [thumbv7m-none-eabi.mstp]
 text = 18320
@@ -679,11 +692,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [thumbv7m-none-eabi.reporting]
-text = 191264
+text = 191696
 rodata = 19360
 data = 64
 bss = 27648
-flash = 211760
+flash = 212192
 ram = 27648
 fmt_functions = 0
 div64_functions = 0
@@ -965,11 +978,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [thumbv7em-none-eabihf.reporting]
-text = 191744
+text = 192176
 rodata = 19360
 data = 64
 bss = 27648
-flash = 212256
+flash = 212688
 ram = 27648
 fmt_functions = 0
 div64_functions = 0
@@ -987,11 +1000,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [riscv32imac-unknown-none-elf.reporting]
-text = 230352
+text = 230688
 rodata = 23472
 data = 64
 bss = 27648
-flash = 253840
+flash = 254176
 ram = 27648
 fmt_functions = 0
 div64_functions = 0
