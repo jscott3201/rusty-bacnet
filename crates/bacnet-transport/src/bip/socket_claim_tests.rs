@@ -281,6 +281,29 @@ async fn a_second_transport_on_a_requested_port_starts_only_when_both_share() {
     .await;
 }
 
+/// A group-driven broadcast listener that can't bind: a held address fails
+/// the start as a held port, naming it, and any other error is only
+/// warned about (#2366).
+#[test]
+fn a_held_broadcast_address_fails_the_start_and_other_errors_only_warn() {
+    let holder = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let held = holder.local_addr().unwrap();
+    let in_use = std::net::UdpSocket::bind(held).unwrap_err();
+    let ip = Ipv4Addr::new(127, 255, 255, 255);
+    let refused = socket::group_shape_listener_failed(ip, held.port(), in_use)
+        .expect_err("a held address fails the start");
+    assert!(lost_to_another_socket(&refused), "{refused}");
+    let shown = refused.to_string();
+    assert!(
+        shown.contains(&format!("UDP port {} on {ip}", held.port())),
+        "{shown}"
+    );
+    // An address this host doesn't have.
+    let unbindable = std::net::UdpSocket::bind((Ipv4Addr::new(192, 0, 2, 1), 0)).unwrap_err();
+    assert!(!lost_to_another_socket(&unbindable), "{unbindable}");
+    socket::group_shape_listener_failed(ip, held.port(), unbindable).unwrap();
+}
+
 #[cfg(any(target_os = "linux", target_os = "android"))]
 mod linux {
     use super::*;
@@ -535,6 +558,58 @@ mod linux {
             assert_eq!(&forwarded[..2], &[0x81, 0x04]);
             assert!(forwarded[..len].ends_with(WHO_IS));
             bbmd.stop().await.unwrap();
+            Ok(())
+        })
+        .await;
+    }
+
+    /// Another socket holding the subnet broadcast on the port fails a
+    /// member's start with a held-port error naming the port, as its
+    /// `0.0.0.0` bind would have.
+    #[tokio::test]
+    async fn a_held_subnet_broadcast_fails_a_members_start() {
+        let subnet = Ipv4Addr::new(127, 255, 255, 255);
+        let (port, _holder) = loop {
+            let port = free_port();
+            if let Ok(holder) = std::net::UdpSocket::bind((subnet, port)) {
+                break (port, holder);
+            }
+        };
+        let mut member = BipTransport::new(Ipv4Addr::LOCALHOST, port, subnet);
+        member.set_multicast(Some(own_port_group())).unwrap();
+        let Err(Error::Transport(refused)) = member.start().await else {
+            panic!("a member started beside a held subnet broadcast");
+        };
+        assert!(lost_to_another_socket(&refused), "{refused}");
+        let shown = refused.to_string();
+        assert!(
+            shown.contains(&format!("UDP port {port} on {subnet}")),
+            "{shown}"
+        );
+    }
+
+    /// A second switch that fails leaves the first one's `SO_REUSEPORT` set
+    /// and the first group in use and heard.
+    #[tokio::test]
+    async fn a_failed_second_switch_keeps_the_first() {
+        rerun_on_lost_port(async || {
+            let port = free_port();
+            let mut node = BipTransport::new(Ipv4Addr::LOCALHOST, port, Ipv4Addr::LOCALHOST);
+            let mut rx = node.start().await.map_err(bind_error)?;
+            let primary = || socket2::SockRef::from(&***node.socket.as_ref().unwrap());
+            let view = node.bip_port().unwrap().multicast.unwrap();
+            view.activate(GROUP.octets()).map_err(bind_error)?;
+            assert!(primary().reuse_port().unwrap());
+            node.multicast
+                .fail_next_switch
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            let moved = Ipv4Addr::new(239, 255, 94, 4);
+            assert!(view.activate(moved.octets()).is_err());
+            assert!(primary().reuse_port().unwrap());
+            assert_eq!(node.multicast(), Some(own_port_group()));
+            peer().send_to(&frame(0x0B), (GROUP, port)).unwrap();
+            assert!(next(&mut rx).await.link_layer_group);
+            node.stop().await.unwrap();
             Ok(())
         })
         .await;

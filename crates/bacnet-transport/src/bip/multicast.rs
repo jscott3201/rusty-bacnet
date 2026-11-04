@@ -53,8 +53,9 @@
 //! claims `0.0.0.0` switches the primary to `SO_REUSEPORT` and binds the
 //! listener with it too (`switch_roles`); until the node restarts, a
 //! socket of the same user that sets `SO_REUSEPORT` can then share the
-//! port's unicast, even after a switch that failed and was undone. Two members on one host at one unicast port need
-//! `set_share_wildcard_port`. Windows can't bind a group address,
+//! port's unicast, even after a switch that failed and was undone. Two
+//! members on one host at one unicast port need `set_share_wildcard_port`.
+//! Windows can't bind a group address,
 //! so there the primary socket joins the group itself and the group's port
 //! must be the transport's own, which also means two members can't share
 //! one Windows host; it reports the group delivery in the receive flags.

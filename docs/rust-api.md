@@ -1118,24 +1118,26 @@ macOS and the BSDs, which also want `SO_REUSEPORT` on both. Two stacks on
 one host are better served each on its own address (below) or each on its
 own port. A port the OS picks is never shared, opt-in or not.
 
-A B/IP-M node whose group is on its own port (the default, see
-[B/IP multicast](#bip-multicast-bip-m)) binds that port twice: its own
-socket and the group's listener. On Linux a claimed `0.0.0.0` socket would
-refuse the listener, so a node that starts with such a group binds the
-per-address shape instead: its interface address with no reuse option, the
-broadcast listeners of [Sharing a port by address](#sharing-a-port-by-address)
-(whose broadcasts a member drops, as it did on `0.0.0.0`), and the group's
-listener. Every later bind of `0.0.0.0` or the interface address on the port
-is then refused, whatever reuse options it sets, and another member's
-listener on the group still binds. Its broadcast listeners hear what its
-`0.0.0.0` socket heard: 255.255.255.255, and the interface's own subnet
-broadcast from the netmask the host reports (255.255.255.255 alone, with a
-warning, when there is none). The configured broadcast address isn't
-checked: one that is neither of those is logged at warn, as is a broadcast
-listener that can't bind, and the start goes on. macOS and the BSDs need nothing, since the listener binds
-after the claimed wildcard socket; on Windows the wildcard socket joins the
-group itself and claims the port. A group on a port of its own leaves the
-claim whole, and a node that shares its port on request keeps `0.0.0.0`.
+A B/IP-M node whose group is on its own port (the default, see [B/IP
+multicast](#bip-multicast-bip-m)) binds that port twice: its own socket and
+the group's listener. On Linux a claimed `0.0.0.0` socket would refuse the
+listener, so a node that starts with such a group binds the per-address shape
+instead: its interface address with no reuse option, the broadcast listeners
+of [Sharing a port by address](#sharing-a-port-by-address) (whose broadcasts a
+member drops, as it did on `0.0.0.0`), and the group's listener. Every later
+bind of `0.0.0.0` or the interface address on the port is then refused,
+whatever reuse options it sets, and another member's listener on the group
+still binds. Its broadcast listeners hear what its `0.0.0.0` socket heard:
+255.255.255.255, and the interface's own subnet broadcast from the netmask the
+host reports (255.255.255.255 alone, with a warning, when there is none). The
+configured broadcast address isn't checked: one that is neither of those is
+logged at warn, and the start goes on. A broadcast address another socket
+holds on the port fails the start, as the `0.0.0.0` bind would have; a
+broadcast listener that can't bind for another reason is logged at warn and
+left out. macOS and the BSDs need nothing, since the listener binds after the
+claimed wildcard socket; on Windows the wildcard socket joins the group itself
+and claims the port. A group on a port of its own leaves the claim whole, and
+a node that shares its port on request keeps `0.0.0.0`.
 
 A group activated later through the Network Port on the own port of a Linux
 node bound to `0.0.0.0` switches that socket to `SO_REUSEPORT` and binds the

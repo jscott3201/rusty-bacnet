@@ -185,8 +185,9 @@ impl Listeners {
     /// with `None`, no listener: an activation moved the group or ended it
     /// (multicast.rs), and opened the listener already, so nothing here can
     /// fail. The group's listener has a slot of its own. A datagram the old
-    /// listener read ahead and still held is dropped with it: it was sent to the group being left. From here on the
-    /// sockets are read in arrival order, as with any listener; the primary
+    /// listener read ahead and still held is dropped with it: it was sent to
+    /// the group being left. From here on the sockets are read in arrival
+    /// order, as with any listener; the primary
     /// reports no receive stamps unless it started with a listener, and
     /// read order then decides.
     pub(super) fn replace_group(&mut self, listener: Option<Listener>) {

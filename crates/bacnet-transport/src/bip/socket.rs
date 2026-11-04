@@ -71,9 +71,10 @@
 //! what the `0.0.0.0` socket heard: 255.255.255.255 and the interface's own
 //! subnet broadcast from the reported netmask
 //! ([`group_shape_listener_addresses`]). Unlike a node that asks for
-//! per-address binding, it doesn't check the configured broadcast address,
-//! and a broadcast listener that can't bind is left out with a warning; only
-//! the address socket and the group's listener can fail the start. A B/IP-M node always
+//! per-address binding, it doesn't check the configured broadcast address.
+//! A broadcast listener whose address another socket holds fails the start,
+//! as the `0.0.0.0` bind would have; one that can't bind for another reason
+//! is left out with a warning ([`group_shape_listener_failed`]). A B/IP-M node always
 //! has an explicit interface (`set_multicast` refuses `0.0.0.0`); without
 //! one it would bind the wildcard way. A node that shares its wildcard port
 //! on request keeps the wildcard way, as do macOS, where the group's
@@ -477,13 +478,7 @@ pub(super) fn bind(plan: BindPlan) -> io::Result<BoundSockets> {
         for ip in group_shape_listener_addresses(&plan) {
             match bound(SocketRole::BroadcastListener, ip) {
                 Ok(listener) => listeners.push(listener),
-                Err(error) => tracing::warn!(
-                    %ip,
-                    port = plan.port,
-                    %error,
-                    "Could not bind a B/IP broadcast listener; the multicast node goes on \
-                     without it"
-                ),
+                Err(error) => group_shape_listener_failed(ip, plan.port, error)?,
             }
         }
     }
@@ -495,13 +490,39 @@ pub(super) fn bind(plan: BindPlan) -> io::Result<BoundSockets> {
     })
 }
 
+/// A group-driven broadcast listener that couldn't bind (#2366). An address
+/// another socket holds on the port fails the start, as the `0.0.0.0` bind
+/// it replaces would have, with the OS error kept as its source so a held
+/// port is recognised as one; any other error is logged at warn and the
+/// node goes on without that listener.
+pub(super) fn group_shape_listener_failed(
+    ip: Ipv4Addr,
+    port: u16,
+    error: io::Error,
+) -> io::Result<()> {
+    let held = error.kind() == io::ErrorKind::AddrInUse
+        || (cfg!(windows) && error.kind() == io::ErrorKind::PermissionDenied);
+    if held {
+        let context = format!("UDP port {port} on {ip} is in use on this host");
+        return Err(super::listener_error::listener_error(context, error));
+    }
+    tracing::warn!(
+        %ip,
+        port,
+        %error,
+        "Could not bind a B/IP broadcast listener; the multicast node goes on without it"
+    );
+    Ok(())
+}
+
 /// Where a Linux B/IP-M node's group-driven per-address shape listens for
 /// broadcasts (module docs, #2366): what its `0.0.0.0` socket heard before,
 /// 255.255.255.255 and the interface's own subnet broadcast from the netmask
 /// the host reports, whatever broadcast address is configured. Without a
-/// netmask it listens on 255.255.255.255 alone. Neither case refuses the
-/// start: an unknown netmask, or a configured broadcast address that is
-/// neither of those, is logged at warn and the start goes on.
+/// subnet broadcast (no netmask reported, or a /31 or /32) it listens on
+/// 255.255.255.255 alone. Neither case refuses the start: no subnet
+/// broadcast, or a configured broadcast address that is neither of those,
+/// is logged at warn and the start goes on.
 fn group_shape_listener_addresses(plan: &BindPlan) -> Vec<Ipv4Addr> {
     let (interface, broadcast) = (plan.interface, plan.broadcast);
     let subnet = plan
@@ -510,8 +531,8 @@ fn group_shape_listener_addresses(plan: &BindPlan) -> Vec<Ipv4Addr> {
     if subnet.is_none() {
         tracing::warn!(
             %interface,
-            "No netmask reported for the B/IP multicast node's interface; listening for \
-             limited broadcasts only"
+            "No subnet broadcast for the B/IP multicast node's address (no netmask \
+             reported, or a /31 or /32); listening for limited broadcasts only"
         );
     }
     let usual = broadcast.is_broadcast()
