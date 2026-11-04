@@ -1,7 +1,9 @@
 //! The Network screen: the foreign-device panel on top, and below it the
 //! target BBMD's BDT or FDT, the consistency matrix, or the routers heard
 //! and the networks they reach (Tab switches).
-//! Every state is marked by text as well as colour.
+//! Every state is marked by text as well as colour. A B/IPv6 foreign
+//! device's panel shares the BBMD, status and counts lines with B/IP's
+//! (#2378); [`bip6`] draws the rest.
 //!
 //! From [`WIDE_WIDTH`] columns, once the whole BDT fits beside the FDT, the
 //! two sit side by side, with the matrix beneath them when the height
@@ -24,8 +26,14 @@ use crate::tui::app::App;
 use crate::tui::app::devices::age_label;
 use crate::tui::app::network::{Fetched, NetworkState, View};
 
+mod bip6;
 mod matrix;
 use matrix::matrix;
+
+/// The status of a device waiting for its BBMD's host name, on either link.
+const WAITING: &str = "waiting for the BBMD's host name to resolve";
+/// When such a device registers next, on either link.
+const NEXT_ONCE_RESOLVED: &str = "Next registration: once the BBMD's host name resolves";
 
 /// Height of the foreign-device panel, borders included, with the
 /// registration counters on the status line.
@@ -85,7 +93,11 @@ pub(super) fn draw(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         return;
     }
     if app.transport != "BIP" {
-        let text = "B/IP only: BBMDs and foreign devices belong to BACnet/IP (Annex J).";
+        let text = if app.transport == "BIP6" {
+            "B/IP only: the TUI reads BBMD tables on BACnet/IP."
+        } else {
+            "B/IP only: BBMDs and foreign devices belong to BACnet/IP (Annex J)."
+        };
         frame.render_widget(Paragraph::new(Line::styled(text, theme.dim())), inner);
         return;
     }
@@ -105,6 +117,10 @@ fn subtitle(app: &App) -> String {
     let state = &app.network;
     if state.view == View::Networks {
         return super::networks::subtitle(app);
+    }
+    // Off B/IP no table is read, and `r` and `m` say so.
+    if app.transport != "BIP" {
+        return String::new();
     }
     let busy = match state.view {
         View::Matrix if state.surveying => Some("surveying"),
@@ -143,7 +159,7 @@ fn foreign_panel(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let state = &app.network;
-    let Some(foreign) = &state.foreign else {
+    let Some((bbmd, ttl, renewal)) = head(state) else {
         let lines = vec![
             Line::styled("Not registered as a foreign device.", theme.dim()),
             Line::styled(
@@ -159,28 +175,21 @@ fn foreign_panel(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     // The counters take their own line when they don't fit the status's.
     let lines = 5 + usize::from(!inline);
     let areas = Layout::vertical(vec![Constraint::Length(1); lines]).split(inner);
-    let [head, status_area] = [areas[0], areas[1]];
-    let [result, gauge, own] = [areas[lines - 3], areas[lines - 2], areas[lines - 1]];
-    // A BBMD named by host name shows the name and what it stands for.
-    let bbmd = match (foreign.configured.address(), foreign.bbmd) {
-        (Some(_), Some(at)) => at.to_string(),
-        (None, Some(at)) => format!("{} ({at})", foreign.configured),
-        (_, None) => format!("{} (not resolved yet)", foreign.configured),
-    };
-    let line = Line::from(vec![
+    let [head_area, status_area] = [areas[0], areas[1]];
+    let rows = [areas[lines - 3], areas[lines - 2], areas[lines - 1]];
+    let mut line = vec![
         Span::styled("BBMD ", theme.dim()),
         Span::styled(bbmd, theme.accent()),
-        Span::styled(format!("   TTL {} s", foreign.ttl), theme.dim()),
-        Span::styled(
-            format!("   renews every {} s", seconds(foreign.renewal)),
+        Span::styled(format!("   TTL {ttl} s"), theme.dim()),
+    ];
+    if let Some(renewal) = renewal {
+        line.push(Span::styled(
+            format!("   renews every {} s", seconds(renewal)),
             theme.dim(),
-        ),
-    ]);
-    frame.render_widget(Paragraph::new(line), head);
+        ));
+    }
+    frame.render_widget(Paragraph::new(Line::from(line)), head_area);
 
-    let snapshot = state.registration.as_ref().map(|(s, _)| *s);
-    let refused =
-        snapshot.and_then(|s| s.last_outcome) == Some(ForeignRegistrationOutcome::Refused);
     let mut line = vec![
         Span::styled("Status ", theme.dim()),
         Span::styled(word, style),
@@ -196,7 +205,50 @@ fn foreign_panel(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         ]);
         frame.render_widget(Paragraph::new(line), areas[2]);
     }
+    match &state.bip6 {
+        Some(status) => bip6::rows(frame, rows, status, theme),
+        None => bip_rows(frame, rows, app, theme),
+    }
+}
 
+/// The panel's first line: the BBMD, named as [`bbmd_label`] says, its
+/// time-to-live and, on B/IP, how often it renews. `None` without a
+/// foreign-device registration.
+fn head(state: &NetworkState) -> Option<(String, u16, Option<Duration>)> {
+    if let Some(status) = &state.bip6 {
+        let name = status.bbmd_name.as_ref().map(ToString::to_string);
+        let at = status.bbmd.map(|at| at.to_string());
+        return Some((bbmd_label(name, at), status.ttl, None));
+    }
+    let foreign = state.foreign.as_ref()?;
+    let name = (foreign.configured.address().is_none() || foreign.bbmd.is_none())
+        .then(|| foreign.configured.to_string());
+    let at = foreign.bbmd.map(|at| at.to_string());
+    Some((bbmd_label(name, at), foreign.ttl, Some(foreign.renewal)))
+}
+
+/// A BBMD as the panel names it, on either link: its address, or the host
+/// `name` it was given and the address `at` it stands for, or `(not
+/// resolved yet)` (#2308, #2378).
+fn bbmd_label(name: Option<String>, at: Option<String>) -> String {
+    match (name, at) {
+        (Some(name), Some(at)) => format!("{name} ({at})"),
+        (Some(name), None) => format!("{name} (not resolved yet)"),
+        (None, Some(at)) => at,
+        (None, None) => "none".to_string(),
+    }
+}
+
+/// B/IP's last three panel lines: the last BVLC-Result, the countdown to
+/// the next registration, and our FDT entry.
+fn bip_rows(frame: &mut Frame, [result, gauge, own]: [Rect; 3], app: &App, theme: &Theme) {
+    let state = &app.network;
+    let Some(foreign) = &state.foreign else {
+        return;
+    };
+    let snapshot = state.registration.as_ref().map(|(s, _)| *s);
+    let refused =
+        snapshot.and_then(|s| s.last_outcome) == Some(ForeignRegistrationOutcome::Refused);
     let last = match snapshot.and_then(|s| s.last_result) {
         Some(code) => format!("{} (0x{:04X})", kebab(code), code.to_raw()),
         None => "none yet".to_string(),
@@ -233,7 +285,7 @@ fn foreign_panel(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         }
         None => {
             let text = if snapshot.is_some_and(|s| s.waiting_for_bbmd) {
-                "Next registration: once the BBMD's host name resolves"
+                NEXT_ONCE_RESOLVED
             } else {
                 "Next registration: not scheduled"
             };
@@ -247,6 +299,9 @@ fn foreign_panel(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
 /// before the first snapshot).
 fn status(app: &App, theme: &Theme) -> (String, Style, String) {
     let state = &app.network;
+    if let Some(status) = &state.bip6 {
+        return bip6::status(app, status, theme);
+    }
     let snapshot = state.registration.as_ref().map(|(s, _)| *s);
     let refused =
         snapshot.and_then(|s| s.last_outcome) == Some(ForeignRegistrationOutcome::Refused);
@@ -256,10 +311,7 @@ fn status(app: &App, theme: &Theme) -> (String, Style, String) {
             format!("registered, lease {} s left", seconds(left)),
             theme.accent(),
         ),
-        (Some(s), _) if s.waiting_for_bbmd => (
-            "waiting for the BBMD's host name to resolve".to_string(),
-            theme.warn(),
-        ),
+        (Some(s), _) if s.waiting_for_bbmd => (WAITING.to_string(), theme.warn()),
         (Some(_), _) => ("not registered".to_string(), theme.warn()),
         (None, _) => ("waiting for the first answer".to_string(), theme.dim()),
     };
@@ -269,17 +321,26 @@ fn status(app: &App, theme: &Theme) -> (String, Style, String) {
             s.attempts, s.accepted, s.refused, s.lapses
         );
         // The BBMD's host name, if it has one (#2308).
-        if let Some(lookups) = crate::foreign::lookups(&s) {
-            counts.push_str("  ");
-            counts.push_str(&lookups);
-            if let Some(failure) = s.last_bbmd_lookup_failure {
-                counts.push_str(": the name ");
-                counts.push_str(&crate::foreign::lookup_failure(failure));
-            }
-        }
+        let why = s
+            .last_bbmd_lookup_failure
+            .map(crate::foreign::lookup_failure);
+        push_lookups(&mut counts, crate::foreign::lookups(&s), why);
         counts
     });
     (word, style, counts)
+}
+
+/// Add a host name's `lookups` to `counts`, and `why` the newest failed,
+/// on either link.
+fn push_lookups(counts: &mut String, lookups: Option<String>, why: Option<String>) {
+    if let Some(lookups) = lookups {
+        counts.push_str("  ");
+        counts.push_str(&lookups);
+        if let Some(why) = why {
+            counts.push_str(": the name ");
+            counts.push_str(&why);
+        }
+    }
 }
 
 /// Whether the counters fit on the status line, `width` columns wide.
@@ -291,7 +352,7 @@ fn counters_inline(word: &str, counts: &str, width: u16) -> bool {
 /// Height of the foreign-device panel at `width`, borders included: one
 /// more line when the counters don't fit beside the status.
 fn panel_height(app: &App, width: u16) -> u16 {
-    if app.network.foreign.is_none() {
+    if head(&app.network).is_none() {
         return PANEL_HEIGHT;
     }
     // Only the text's width matters here, not its colour.

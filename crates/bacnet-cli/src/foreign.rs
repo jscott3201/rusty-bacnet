@@ -13,7 +13,7 @@ use std::net::{SocketAddrV4, SocketAddrV6};
 use std::time::Duration;
 
 use bacnet_client::client::BACnetClient;
-use bacnet_transport::bbmd_lookup::BbmdLookupFailure;
+use bacnet_transport::bbmd_lookup::{BbmdLookupCounters, BbmdLookupFailure};
 #[cfg(feature = "tui")]
 use bacnet_transport::bip::DEFAULT_BACNET_PORT;
 use bacnet_transport::bip::{
@@ -248,7 +248,7 @@ pub(crate) async fn await_bip6_bbmd(
             .transport()
             .foreign_status()
             .ok_or("the client is not a foreign device")?;
-        let tally = tally(status.lookups.lookups, status.lookups.failures);
+        let tally = bip6_lookups(&status.lookups);
         if let Some(at) = status.bbmd
             && status.registrations_sent > 0
         {
@@ -260,12 +260,9 @@ pub(crate) async fn await_bip6_bbmd(
         }
         if let Some(failure) = status.lookups.last_failure {
             let tally = tally.map_or_else(String::new, |tally| format!(" ({tally})"));
-            let why = match failure {
-                BbmdLookupFailure::NoAddress => "has no IPv6 address".into(),
-                other => lookup_failure(other),
-            };
             return Err(format!(
-                "BBMD {bbmd} could not be registered with: its host name {why}{tally}"
+                "BBMD {bbmd} could not be registered with: its host name {}{tally}",
+                bip6_lookup_failure(failure)
             ));
         }
         if tokio::time::Instant::now() >= deadline {
@@ -280,6 +277,23 @@ pub(crate) async fn await_bip6_bbmd(
             });
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// How many lookups of a B/IPv6 BBMD's host name ended, and how many of
+/// them failed, as [`lookups`] says them for B/IP; `None` before the first
+/// ends.
+pub(crate) fn bip6_lookups(lookups: &BbmdLookupCounters) -> Option<String> {
+    tally(lookups.lookups, lookups.failures)
+}
+
+/// Why a lookup of a B/IPv6 BBMD's host name failed (#2365): as
+/// [`lookup_failure`] says it for B/IP, except that the name must stand
+/// for an IPv6 address.
+pub(crate) fn bip6_lookup_failure(failure: BbmdLookupFailure) -> String {
+    match failure {
+        BbmdLookupFailure::NoAddress => "has no IPv6 address".into(),
+        other => lookup_failure(other),
     }
 }
 
