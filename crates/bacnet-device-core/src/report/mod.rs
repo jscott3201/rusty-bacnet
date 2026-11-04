@@ -14,8 +14,9 @@
 //! ([`Reporter::reply`]) and resends or gives up at its deadline
 //! ([`Reporter::on_deadline`]). The host reports how each send ended through
 //! [`Reporter::delivered`], and each object it deletes through
-//! [`Reporter::remove_for_object`], since the `Responder` runs no
-//! DeleteObject. All time is the host's monotonic `now`.
+//! [`Reporter::remove_for_object`]: the `Responder` runs no DeleteObject,
+//! so a host that serves it takes the request before
+//! [`Reporter::handle`]. All time is the host's monotonic `now`.
 //!
 //! The COV-multiple services stay with `bacnet-server` until #2320, and
 //! event notifications come with #2303's third part: the outbox and the

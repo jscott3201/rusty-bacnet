@@ -574,8 +574,9 @@ async fn a_deleted_objects_subscriptions_go() {
         assert_eq!(cov.exchange(what, peer, *service, body).await.1, 1);
         cov.same_tables(what).await;
     }
-    // No report out when AI-1 goes: the server's worker would run on after
-    // the deletion, as after a cancellation, where the `Reporter` ends it.
+    // No report out when AI-1 goes. The two sides differ there by design:
+    // the server lets an outstanding notification run on after a delete,
+    // as after a cancellation, and the `Reporter` ends it.
     assert_eq!(cov.answer("Ack", false).await, 0);
     let list = P::ACTIVE_COV_SUBSCRIPTIONS;
     cov.read_list("before", list).await;

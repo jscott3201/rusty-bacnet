@@ -91,6 +91,13 @@ impl LifeSafetyCovSnapshots {
         self.held.binary_search(&object_identifier).is_ok()
     }
 
+    /// Drop what is held of `object_identifier`: the object is gone.
+    pub(crate) fn forget(&mut self, object_identifier: ObjectIdentifier) {
+        self.held.retain(|held| *held != object_identifier);
+        self.objects
+            .retain(|snapshot| snapshot.object_identifier != object_identifier);
+    }
+
     /// Capture one object's pre-mutation state.
     pub fn capture_oid(db: &ObjectDatabase, object_identifier: ObjectIdentifier) -> Self {
         Self::capture_oids(db, [object_identifier])

@@ -172,23 +172,31 @@ impl Reporter {
     }
 
     /// The host deleted `object` from its database: drop its subscriptions,
-    /// as the server does at DeleteObject, with their queued notifications
-    /// and the looks they were owed, and end each confirmed notification
-    /// reporting it that is still out, giving its invoke ID back to `ids`.
-    /// A later answer to one of those matches nothing, as long as `ids`
-    /// hands its invoke ID out again only in turn ([`InvokeIds::take`]).
-    /// Nothing more is sent for `object`, and an object created later under
-    /// its identifier starts with no subscription.
+    /// as the server does at DeleteObject, with their queued notifications,
+    /// the looks they were owed and any [`capture`](Self::capture) of the
+    /// object, and end each confirmed notification reporting it that is
+    /// still out, giving its invoke ID back to `ids`. A later answer to one
+    /// of those matches nothing, as long as `ids` hands its invoke ID out
+    /// again only in turn ([`InvokeIds::take`]). [`pop`](Self::pop) hands
+    /// out nothing more for `object`, though one it already handed out is
+    /// still the host's to send, and an object created later under its
+    /// identifier starts with no subscription.
     ///
-    /// The [`Responder`] runs no DeleteObject, so the host calls this
-    /// whenever it removes an object, at a request or on its own. Removing
-    /// an object with no subscription, or removing one twice, does nothing.
+    /// [`handle`](Self::handle) rejects DeleteObject as an unrecognized
+    /// service, as the [`Responder`] runs none. A host that serves it
+    /// takes the request before `handle`, deletes the object, calls this,
+    /// and lists DeleteObject in its own Protocol_Services_Supported
+    /// ([`SERVICES`](super::SERVICES) doesn't). A host that removes an
+    /// object on its own calls this too. Removing an object with no
+    /// subscription, or removing one twice, does nothing.
     pub fn remove_for_object(&mut self, object: ObjectIdentifier, ids: &mut dyn InvokeIds) {
         while let Some(out) = self.confirmed.take_object(object) {
             self.releases.push((out.peer, out.invoke_id));
         }
         self.table.remove_for_object(object);
         self.settle();
+        self.looks.retain(|key| key.object() != object);
+        self.snapshots.forget(object);
         self.release(ids);
     }
 

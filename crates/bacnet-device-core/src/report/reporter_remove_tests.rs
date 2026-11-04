@@ -179,3 +179,67 @@ fn removing_nothing_or_twice_changes_nothing() {
     assert!(device.pop(T0).is_none());
     assert!(device.ids.taken.is_empty());
 }
+
+/// Two confirmed notifications out for AI-1, and one for BO-1: the same
+/// instance under a type whose encoding differs from AI's in the first
+/// octet alone. Deleting AI-1 ends both of its own and gives their invoke
+/// IDs back; BO-1's stays out and its answer still ends it.
+#[test]
+fn a_deletion_ends_each_of_the_objects_notifications_and_only_those() {
+    let mut device = Device::new(OutboxLimits::default());
+    let bo = ObjectIdentifier::new(ObjectType::BINARY_OUTPUT, 1).unwrap();
+    let output = bacnet_objects::binary::BinaryOutputObject::new(1, "BO-1").unwrap();
+    device.db.add(Box::new(output)).unwrap();
+    assert_eq!(ai().encode()[1..], bo.encode()[1..]);
+    device.subscribe(1, true, T0);
+    device.subscribe(2, true, T0);
+    device.subscribe_to(bo, 3, true, T0);
+    let mut out = Vec::new();
+    while let Some((sent, apdu)) = device.pop(T0) {
+        out.push((reported(&apdu).0, sent.invoke_id.unwrap()));
+    }
+    out.sort_unstable();
+    let [(1, _), (2, _), (3, kept)] = out[..] else {
+        panic!("one notification out for each: {out:?}");
+    };
+
+    device.db.remove(&ai()).unwrap();
+    device.reporter.remove_for_object(ai(), &mut device.ids);
+    let held: Vec<_> = device.ids.taken.iter().map(|taken| taken.1).collect();
+    assert_eq!(held, [kept], "AI-1's two invoke IDs went back");
+    for (process, id) in &out[..2] {
+        assert!(!device.ack(*id, T0), "{process}'s notification ended");
+    }
+    assert!(device.ack(kept, T0), "BO-1's is still out");
+    assert!(device.ids.taken.is_empty());
+}
+
+/// A look owed to a deleted object's subscription, and a Life Safety
+/// object's capture, go with the object: no deadline comes for the look,
+/// and a Point created again under the identifier isn't compared with the
+/// old one's values.
+#[test]
+fn a_deleted_objects_owed_look_and_capture_go() {
+    let mut device = Device::new(OutboxLimits::default());
+    device.subscribe(1, true, T0);
+    let (out, _) = device.pop(T0).unwrap();
+    device.write(P::OUT_OF_SERVICE, PropertyValue::Boolean(true), T0);
+    assert!(device.ack(out.invoke_id.unwrap(), T0));
+    assert_eq!(device.reporter.next_deadline(), Some(T0), "a look is owed");
+    let point = ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, 1).unwrap();
+    let lsp = bacnet_objects::life_safety::LifeSafetyPointObject::new(1, "LSP-1").unwrap();
+    device.db.add(Box::new(lsp)).unwrap();
+    device.reporter.capture(&device.db, &[point]);
+    assert!(device.reporter.snapshots.holds(point));
+
+    device.db.remove(&ai()).unwrap();
+    device.reporter.remove_for_object(ai(), &mut device.ids);
+    assert!(device.reporter.looks.is_empty());
+    assert!(
+        device.reporter.next_deadline().is_none_or(|due| due > T0),
+        "no look comes due"
+    );
+    device.db.remove(&point).unwrap();
+    device.reporter.remove_for_object(point, &mut device.ids);
+    assert!(!device.reporter.snapshots.holds(point));
+}
