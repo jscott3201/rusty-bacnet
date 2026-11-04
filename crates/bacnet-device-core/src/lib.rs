@@ -18,6 +18,7 @@ compile_error!(
     "bacnet-device-core needs atomic compare-and-swap, as bacnet-objects does: its objects share state through alloc::sync::Arc"
 );
 
+pub mod clock;
 pub mod cov;
 pub mod discovery;
 pub mod read;

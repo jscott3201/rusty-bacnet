@@ -550,6 +550,14 @@ destination, which Clause 12.21.8 permits, so the configuration can't
 promise a window the device can't keep. Routing stays the host's
 (`event_awaited_recipients.rs`, `event_forwarding.rs:216-256`; `Bindings`).
 
+Firmware with a `clock::DeviceClock` (#2321, decision 14) passes its
+`SyncedClock::window(now)`, `None` until a TimeSynchronization,
+UTCTimeSynchronization or the host's own real-time clock has set it, and
+`clock::destination_open` judges each destination by the server's test
+(`notification_class::in_window`) or, with `None`, by
+`always_in_window`. Such a build stores restricted destinations rather
+than refusing them; only a build with no clock refuses them.
+
 ### 6.4 Acknowledgement
 
 `event::acknowledge` is `handle_acknowledge_alarm`
@@ -978,6 +986,46 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
     began it, however late it was popped, so its last answer is never
     awaited past the table's deadline. Its Life Safety writes report from
     the values each write changed, as the server's do.
+
+**#2321, 2026-11-04 (measured):**
+
+14. A Device clock in the core, `clock::SyncedClock`: the host's
+    `bacnet-time` instant, the UTC day and hundredths it stood for, the
+    zone and a synchronized flag; 32-bit arithmetic past `bacnet-time`'s
+    long division of the elapsed seconds, and no allocation.
+    - Until set it counts from local midnight, 1990-01-01, at the instant
+      it was built (Clauses 12.11.23, 12.11.24), so the Device always has
+      Local_Date and Local_Time and lists both services; windows fail
+      closed and timestamps carry that date until a sync.
+    - A local TimeSynchronization reads back as given; a UTC one less
+      UTC_Offset, plus an hour in daylight-saving time (Clauses 16.7,
+      16.8). The clock keeps the UTC instant with a fixed zone, as the
+      server's `ServerClock` does; the parity tests hold the two to the
+      same Local_Date and Local_Time octets and the same open destinations.
+    - `DeviceClock` pairs it with the host's monotonic timer and is lent to
+      the database as its `ClockReader` (`lend`). Each accepted sync lends
+      a new copy (one `Arc` and a rebind of every object's clocks) rather
+      than mutate a shared one, so the core takes no lock and no 64-bit
+      atomic. The `Responder` runs a sync only when the Device lists the
+      service; admission policy (sources, rate, step) is the host's, which
+      hands over only what it accepts. A host's real-time clock sets it
+      through `Responder::set_time`, and that counts as synchronized.
+    - Restricted Recipient_List entries: stored, not refused, on a build
+      with a clock. The list survives restarts (Clause 12.21.8) and the
+      clock restarts unsynchronized, so a refusal that lifted only once
+      synced would take an entry before a restart that it refused after.
+      Stored, an entry fails closed until the clock is set and is judged
+      by its own days and window from then on. Only a clockless build
+      refuses them (§6.3).
+    - Size (`check-firmware-link.sh`, Rust 1.99.0, flash in octets): the
+      `objects` image 144,648 to 144,868 (thumbv7m), 144,380 to 144,984
+      (thumbv7em), 173,410 to 173,990 (riscv32imac); `reporting` 191,184
+      to 191,628, 191,924 to 192,364, 229,458 to 229,870; RAM unchanged,
+      no `core::fmt` or 64-bit division. The `Responder` reaches the sync
+      step only through a function pointer `with_clock` stores: called
+      directly, the unused path cost the `objects` image 4,720 octets on
+      thumbv7m. A `reporting` image that gives its `Responder` a clock
+      (probe, reverted) is 1,776 octets larger again on thumbv7m.
 
 ## 12. Evidence
 

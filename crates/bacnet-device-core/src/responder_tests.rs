@@ -162,7 +162,9 @@ fn unconfirmed(service: UnconfirmedServiceChoice, body: &[u8]) -> Bytes {
 fn handle_with(responder: &Responder, apdu: Bytes, max_reply: u16) -> (Outcome, Option<Apdu>) {
     let mut db = database();
     let mut out = BytesMut::new();
+    // `handle` takes the responder mutably, for the clock it may set.
     let outcome = responder
+        .clone()
         .handle(&mut db, Inbound::new(apdu, max_reply), &mut out)
         .outcome;
     let reply = (!out.is_empty()).then(|| decode_apdu(out.freeze()).unwrap());
