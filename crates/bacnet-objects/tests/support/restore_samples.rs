@@ -24,8 +24,8 @@ use bacnet_objects::notification_forwarder::{
 };
 use bacnet_objects::object_profile::{FileTagsPersistence, TagsPersistence, TagsSnapshot};
 use bacnet_objects::write_config::{
-    ChannelMembers, ChannelWriteConfig, FileWriteConfigPersistence, TimerStateChange,
-    TimerWriteConfig, WriteConfigPersistence, WriteConfigSnapshot,
+    ChannelMembers, ChannelWriteConfig, FileWriteConfigPersistence, ReportingWriteConfig,
+    TimerStateChange, TimerWriteConfig, WriteConfigPersistence, WriteConfigSnapshot,
 };
 use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits, LogStatus};
 use bacnet_types::constructed::{
@@ -148,6 +148,24 @@ pub fn channel_write_config(path: &Path) {
         allow_group_delay_inhibit: Some(true),
     });
     save_write_config(path, ObjectType::CHANNEL, &snapshot);
+}
+
+/// An Analog Input's written reporting settings, every one set (#2331).
+pub fn reporting_write_config(path: &Path) {
+    let mut settings = ReportingWriteConfig::default();
+    settings.notification_class = Some(7);
+    settings.event_enable =
+        Some(EventTransitionBits::TO_OFFNORMAL | EventTransitionBits::TO_NORMAL);
+    settings.notify_type = Some(NotifyType::EVENT);
+    settings.event_detection_enable = Some(false);
+    settings.event_message_texts_config = Some(["high".into(), String::new(), "normal".into()]);
+    settings.event_algorithm_inhibit_ref = Some(BACnetObjectPropertyReference::new(
+        oid(ObjectType::BINARY_VALUE),
+        PropertyIdentifier::PRESENT_VALUE.to_raw(),
+    ));
+    settings.event_algorithm_inhibit = Some(true);
+    let snapshot = WriteConfigSnapshot::Reporting(settings);
+    save_write_config(path, ObjectType::ANALOG_INPUT, &snapshot);
 }
 
 fn save_write_config(path: &Path, kind: ObjectType, snapshot: &WriteConfigSnapshot) {

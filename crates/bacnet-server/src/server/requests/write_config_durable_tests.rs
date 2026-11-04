@@ -26,7 +26,7 @@ use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetTimer
 use std::sync::atomic::Ordering;
 
 /// The held storage's snapshot is an `Option`, which has a default.
-type ConfigStorage = HeldStorage<Option<WriteConfigSnapshot>>;
+pub(super) type ConfigStorage = HeldStorage<Option<WriteConfigSnapshot>>;
 
 impl WriteConfigPersistence for ConfigStorage {
     fn load(&self, _object: ObjectIdentifier) -> Result<Option<WriteConfigSnapshot>, Error> {
