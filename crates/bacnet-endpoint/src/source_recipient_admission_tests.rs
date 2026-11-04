@@ -1,5 +1,6 @@
 use super::*;
 use bacnet_encoding::apdu::RejectPdu;
+use bacnet_endpoint_core::coordinator::CanonicalPeer;
 use bacnet_types::enums::RejectReason;
 
 fn recipient(fixture: &Fixture) -> BACnetRecipient {

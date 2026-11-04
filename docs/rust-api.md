@@ -11269,8 +11269,30 @@ an error. The node's own MAC is checked again once the link has started; B/IPv6,
 which learns its VMAC at start, checks it only then, so a binding to it starts
 and the Reporter reads CONFIGURATION_ERROR. An
 audited client operation on such a link must go to a direct unicast MAC by the
-same rule. Device bindings name a station on the session's own link; a routed
-binding, to a station on another network beyond a router, is not supported.
+same rule.
+
+A Device behind a router binds on any link, B/IP included (#2371), with
+`EndpointSession::with_source_audit_routed_device_binding(device, network, mac)`
+or each builder's `source_audit_routed_device_binding(device, network, mac)`.
+The network must be 1 to 65534 (0 names the local network and 65535 every
+network) and the MAC 1 to 18 octets; its length isn't checked against this
+link, since the remote network's link may differ. `start` and the builders
+refuse anything else with SERVICES / SERVICE_REQUEST_DENIED, and a Device bound
+twice, directly or routed. Records go with DNET/DADR through the router to that
+network. The session learns the router from traffic that comes back from the
+network (an answer it admits, or a request from a station there) and from an
+I-Am-Router-To-Network that lists it (Clause 6.5.3 leaves the method to the
+node). Until then, and after a delivery through the learned router is lost
+(no answer in time, or a failed send), a record goes with the link's broadcast
+MAC instead; a peer's Error, Reject or Abort keeps the router. A confirmed
+record's answer comes back naming the network and MAC, and a failure counts
+toward AUDITING_FAILURE and sets COMMUNICATION_FAILURE as a direct one does.
+Once the session's number is the binding's network, the binding is a direct
+one by the link's rule, and a record queued or in flight then goes, and is
+answered, as a direct one. An audited client operation routed to a station
+on another network (DNET 1 to 65534, a DADR of 1 to 18 octets, which the
+requester already requires) is audited too, and its record names the station
+by that network and MAC.
 
 ```rust
 use std::net::{Ipv4Addr, SocketAddrV4};
