@@ -562,8 +562,53 @@
 # about 44-57 KB of .text more than PR 1's image; the objects rows moved
 # by codegen alone (+32 / +160 / -44 octets of .text). riscv32imac's
 # image fills 256150 of the layout's 262144 octets of flash: PR 3 needs
-# the larger region first (design 8.2). The budgets are --suggest's, but
-# riscv32imac's flash, capped at the region (#2363).
+# the larger region first (design 8.2). The budgets are --suggest's.
+#
+# On 2026-11-03 (#2363) the reporting image is trimmed: the objects
+# requests go through the same Reporter, its overlay leaves the Multiple
+# list to the Device, the table's keys order as the Device's list does
+# (no sorts), and its flights and per-peer counts are sorted vectors, not
+# B-trees. riscv32imac gets its own layout, memory-riscv32imac.x, with
+# 512 KiB of flash (an ESP32-C6-class part), so PR 3 has room. As text /
+# rodata / flash, then RAM:
+#
+#   thumbv7m             170760 / 17276 / 189060    24680
+#   thumbv7em            171200 / 17280 / 189504    24680
+#   riscv32imac          205664 / 20944 / 226630    24680
+#
+# 22096 / 21720 / 29480 octets of .text less; the objects rows are
+# unchanged. The reporting budgets are --suggest's again.
+#
+# On 2026-11-04 (#2363, Rust 1.99.0, dev at 32c21b87d merged) the Reporter
+# takes three of PR 2b's review nits: a deadline looks at only as many
+# owed references as there are free outbox entries, oldest first, and
+# counts each owed subscription once. As text / rodata / flash, then RAM:
+#
+#   thumbv7m             171156 / 17276 / 189456    24680
+#   thumbv7em            171584 / 17280 / 189888    24680
+#   riscv32imac          205972 / 20944 / 226938    24680
+#
+# 396 / 384 / 308 octets of .text more; .rodata and RAM are unchanged, as
+# the owed list already keeps the order references became owed in. The
+# merge moved no row. The reporting budgets are --suggest's again.
+#
+# Later on 2026-11-04 (#2363's review round, dev at f423d3804 merged), a
+# look drops an owed reference whose object or subscription is gone, hands
+# a still-free entry to the next owed one, and keeps one the budget
+# dropped. As text / rodata / flash, then RAM:
+#
+#   thumbv7m             171756 / 17280 / 190060    24680
+#   thumbv7em            172040 / 17284 / 190348    24680
+#   riscv32imac          206580 / 20948 / 227550    24680
+#
+# 600 / 456 / 608 octets of .text more; the objects rows didn't move. The
+# reporting budgets are --suggest's again.
+#
+# Its second review round (dev at f0dd882c6 merged) refuses at admission a
+# report too large for one input's budget of octets, as one too large for
+# the outbox is: 171440 / 171936 / 206732 octets of .text and 189744 /
+# 190244 / 227702 of flash; .rodata and RAM unchanged. The reporting
+# budgets are --suggest's again.
 
 [thumbv7m-none-eabi.mstp]
 text = 18320
@@ -665,12 +710,12 @@ div64_functions = 0
 memmove_functions = 2
 
 [thumbv7m-none-eabi.reporting]
-text = 213664
-rodata = 19392
+text = 192016
+rodata = 19360
 data = 64
-bss = 27632
-flash = 234208
-ram = 27632
+bss = 27648
+flash = 212528
+ram = 27648
 fmt_functions = 0
 div64_functions = 0
 memmove_functions = 4
@@ -951,12 +996,12 @@ div64_functions = 0
 memmove_functions = 2
 
 [thumbv7em-none-eabihf.reporting]
-text = 213840
-rodata = 19408
+text = 192576
+rodata = 19360
 data = 64
-bss = 27632
-flash = 234384
-ram = 27632
+bss = 27648
+flash = 213088
+ram = 27648
 fmt_functions = 0
 div64_functions = 0
 memmove_functions = 4
@@ -973,15 +1018,12 @@ div64_functions = 0
 memmove_functions = 2
 
 [riscv32imac-unknown-none-elf.reporting]
-text = 259248
-rodata = 23504
+text = 231552
+rodata = 23472
 data = 64
-bss = 27632
-# Capped at the layout's 262144-octet flash region (2026-11-03): --suggest's
-# 282768 is past it, so it couldn't warn before the link fails. #2363 gives
-# this image a larger region and its budget room again.
-flash = 262144
-ram = 27632
+bss = 27648
+flash = 255040
+ram = 27648
 fmt_functions = 0
 div64_functions = 0
 memmove_functions = 2

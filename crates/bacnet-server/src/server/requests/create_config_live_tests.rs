@@ -115,7 +115,8 @@ async fn create(
             })
             .collect(),
     }
-    .encode(&mut bytes);
+    .encode(&mut bytes)
+    .unwrap();
     let create = ConfirmedServiceChoice::CREATE_OBJECT;
     let reply = dispatch(server, create, bytes.freeze()).await;
     assert_eq!(&reply[..3], &[0x30, 5, create.to_raw()], "{reply:?}");

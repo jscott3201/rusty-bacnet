@@ -9,7 +9,7 @@ use std::{
     path::PathBuf,
 };
 
-use bacnet_transport::bip::ForeignBbmd;
+use crate::foreign::ForeignBbmdArg;
 use bacnet_types::primitives::BACnetTimeStamp;
 use clap::builder::{OsStringValueParser, TypedValueParser};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -93,9 +93,11 @@ pub(crate) struct Cli {
     /// at most every 30 s. A one-shot command waits for the registration
     /// first, and fails when the name doesn't resolve; it is renewed while
     /// the CLI runs.
-    /// BACnet/IP only.
-    #[arg(long, global = true, value_name = "ADDR", value_parser = crate::foreign::parse_foreign_bbmd_arg)]
-    pub(crate) foreign_bbmd: Option<ForeignBbmd>,
+    /// With --ipv6: an IPv6 address (ip, or ip in brackets with :port) or a host name,
+    /// and --device-instance; a host name with --ipv6 and no
+    /// --ipv6-interface must resolve at start.
+    #[arg(long, global = true, value_name = "ADDR", value_parser = crate::foreign::parse_foreign_bbmd_cli_arg)]
+    pub(crate) foreign_bbmd: Option<ForeignBbmdArg>,
 
     /// Time-to-live in seconds of a foreign-device registration: with
     /// --foreign-bbmd, register and discover --bbmd.
@@ -721,7 +723,9 @@ pub(crate) fn capture_sources(matches: &clap::ArgMatches) -> Result<Vec<String>,
         .subcommand_matches("tui")
         .is_some_and(|tui| tui.get_one::<String>("profile").is_some());
     if matches.get_one::<u64>("renewal").is_some()
-        && matches.get_one::<ForeignBbmd>("foreign_bbmd").is_none()
+        && matches
+            .get_one::<crate::foreign::ForeignBbmdArg>("foreign_bbmd")
+            .is_none()
         && !named_profile
     {
         return Err(clap::Error::raw(
@@ -733,7 +737,9 @@ pub(crate) fn capture_sources(matches: &clap::ArgMatches) -> Result<Vec<String>,
     if matches
         .get_one::<std::net::SocketAddrV4>("nat_global_address")
         .is_some()
-        && matches.get_one::<ForeignBbmd>("foreign_bbmd").is_none()
+        && matches
+            .get_one::<crate::foreign::ForeignBbmdArg>("foreign_bbmd")
+            .is_none()
         && !named_profile
     {
         return Err(clap::Error::raw(

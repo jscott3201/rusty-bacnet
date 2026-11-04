@@ -172,7 +172,8 @@ pub(super) fn read_ack(
         property_array_index: request.property_array_index,
         property_value: encoded.to_vec(),
     }
-    .encode(&mut service_ack);
+    .encode(&mut service_ack)
+    .unwrap();
     Apdu::ComplexAck(ComplexAck {
         segmented: false,
         more_follows: false,

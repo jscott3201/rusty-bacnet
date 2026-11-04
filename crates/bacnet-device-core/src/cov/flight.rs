@@ -183,8 +183,8 @@ pub(super) struct FlightState {
     hold_until: Option<Instant>,
     /// References the outstanding report carried, kept while a failed one is
     /// holding off or owed, and cleared once it is acknowledged or its owed
-    /// follow-up is taken.
-    carried: BTreeSet<CovSubscriptionKey>,
+    /// follow-up is taken. Each once; a report carries a few.
+    carried: Vec<CovSubscriptionKey>,
     /// The observation each reference of the outstanding report carried:
     /// its Ack commits them.
     completes: Vec<Completion>,
@@ -214,7 +214,7 @@ impl FlightState {
 
     /// If a report is outstanding, or a failed one is still holding off or
     /// owed, the references it carried.
-    fn owed_carried(&self, now: Instant) -> Option<&BTreeSet<CovSubscriptionKey>> {
+    fn owed_carried(&self, now: Instant) -> Option<&Vec<CovSubscriptionKey>> {
         (self.outstanding(now) || self.hold_until.is_some()).then_some(&self.carried)
     }
 
@@ -406,7 +406,7 @@ impl CovTable {
             return Err(BeginRefusal::Busy);
         };
         let mut flight: Option<u64> = None;
-        let mut carried = BTreeSet::new();
+        let mut carried = Vec::new();
         let mut completes = Vec::new();
         for (snapshot, observation) in references {
             let snapshot = snapshot.borrow();
@@ -421,14 +421,16 @@ impl CovTable {
             // context's flight.
             debug_assert!(flight.is_none_or(|known| known == current));
             flight.get_or_insert(current);
-            carried.insert(snapshot.key().clone());
+            if !carried.contains(snapshot.key()) {
+                carried.push(snapshot.key().clone());
+            }
             completes.push(Completion::new(snapshot, observation));
         }
         let Some(flight) = flight else {
             return Err(BeginRefusal::NotCurrent);
         };
         let deadline = now.saturating_add(self.timing.deadline());
-        let state = self.flights.entry(flight).or_default();
+        let state = self.flights.or_default(flight);
         // A report still marked here passed its deadline, or the coordinate
         // would be busy. Its worker may yet be alive, stalled in a send, so
         // it is fenced before the new report takes the mark: one report at

@@ -13,13 +13,14 @@ use crate::bbmd_lookup::{BbmdLookupCounters, BbmdResolver, SystemResolver};
 use crate::port::{Bip6Port, ReceivedNpdu, TransportPort};
 
 use super::collision_probe::Probe;
-use super::foreign_target::{Bip6ReleaseCounters, ForeignTarget};
+use super::foreign_bbmd::Bip6ForeignBbmd;
+use super::foreign_target::{Bip6ForeignStatus, Bip6ReleaseCounters, ForeignTarget};
 use super::frame::encoded;
 use super::receive::Receiver;
 use super::receive_counters::{Bip6ReceiveCounters, ReceiveDrops};
 use super::reply_limit::ReplyLimiter;
 use super::resolver::{Driver, Resolver, UnresolvedSend};
-use super::socket::Bip6Socket;
+use super::socket::{Bip6Socket, Role};
 use super::vmac_table::{generate_random_vmac, vmac_from_device_instance};
 use super::{Bip6Address, Bip6Vmac, Bvll6, MAX_VMAC_RETRIES, encode_bvll6};
 
@@ -99,10 +100,10 @@ pub struct Bip6Transport {
 /// Configuration for BIPv6 foreign device registration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bip6ForeignDeviceConfig {
-    /// BBMD IPv6 address to register with.
-    pub bbmd_ip: Ipv6Addr,
-    /// BBMD port.
-    pub bbmd_port: u16,
+    /// The BBMD to register with: its B/IPv6 address, or a host name and
+    /// port (#2365), which parses from `[ip]:port` or `host:port`
+    /// (`"bbmd.example:47808".parse()?`).
+    pub bbmd: Bip6ForeignBbmd,
     /// Time-to-live in seconds.
     pub ttl: u16,
 }
@@ -175,7 +176,14 @@ impl Bip6Transport {
     /// Configure this transport as a foreign device.
     ///
     /// Foreign `::` derives a concrete source from the route to the BBMD and
-    /// binds the production socket to it. An explicit address is retained.
+    /// binds the production socket to it, so a BBMD named by host name
+    /// ([`Bip6ForeignBbmd::Name`], #2365) is looked up at start, and the
+    /// start fails if the name doesn't stand for an IPv6 address the device
+    /// could register with. An explicit address is retained: a start on
+    /// one goes ahead with a name that doesn't resolve, and the device
+    /// waits for it, registering nothing, refusing its broadcasts (counted
+    /// in [`foreign_status`](Self::foreign_status)) and looking the name up
+    /// again 30 seconds after each failure, until it resolves.
     /// Foreign startup does not require normal-mode multicast membership.
     /// `start()` refuses a registration that fails
     /// [`Bip6ForeignDeviceConfig::check`] (a link-local BBMD, say).
@@ -233,6 +241,14 @@ impl Bip6Transport {
             .unwrap_or_default()
     }
 
+    /// How this foreign device's registration stands (#2365): the BBMD's
+    /// address in use, whether it waits for its BBMD's host name, and the
+    /// lookups, releases and refused broadcasts so far. `None` outside
+    /// foreign-device mode.
+    pub fn foreign_status(&self) -> Option<Bip6ForeignStatus> {
+        self.foreign_device.as_ref().map(|target| target.status())
+    }
+
     /// Look up the host name a foreign device's FD_BBMD_Address names with
     /// `resolver`, instead of the system's resolver on Tokio's blocking
     /// pool, the default (#2308). Call it before or after
@@ -268,8 +284,10 @@ impl Bip6Transport {
     }
 
     /// The foreign-device registration in effect: the one configured, or
-    /// the one a Network Port activation moved it to. `None` outside
-    /// foreign-device mode.
+    /// the one a Network Port activation moved it to. A BBMD configured by
+    /// host name reads back as the name until it first resolves, and as
+    /// the address in use from then on. `None` outside foreign-device
+    /// mode.
     pub fn foreign_device_config(&self) -> Option<Bip6ForeignDeviceConfig> {
         self.foreign_device.as_ref().map(|target| target.config())
     }
@@ -315,6 +333,7 @@ async fn reregister(target: Arc<ForeignTarget>, socket: Arc<Bip6Socket>, source_
     let mut renew_at = tokio::time::Instant::now() + target.renewal_interval();
     loop {
         let release_due = target.release_due();
+        let retry_due = target.retry_due();
         tokio::select! {
             () = tokio::time::sleep_until(renew_at) => {}
             () = target.changed() => {}
@@ -322,15 +341,27 @@ async fn reregister(target: Arc<ForeignTarget>, socket: Arc<Bip6Socket>, source_
                 target.release_expired(tokio::time::Instant::now());
                 continue;
             }
+            // A device waiting for its BBMD's name tries it again 30 s
+            // after the newest failure (#2365).
+            () = target.rearmed() => continue,
+            () = tokio::time::sleep_until(retry_due.unwrap_or(renew_at)), if retry_due.is_some() => {
+                if let Some(due) = retry_due {
+                    target.retry(due);
+                }
+                continue;
+            }
         }
         // The name, if the BBMD has one, is looked up alongside at most
-        // every 30 s; the attempt goes where it was.
+        // every 30 s; the attempt goes where it was, if anywhere yet.
         target.attempting();
         let (config, release) = target.pass(tokio::time::Instant::now());
         #[cfg(test)]
         target.in_flight().await;
-        let bbmd = SocketAddrV6::new(config.bbmd_ip, config.bbmd_port, 0, 0);
-        send_register_foreign_device_v6(&socket, bbmd, config.ttl, source_vmac).await;
+        if let Some(bbmd) = config.bbmd.address()
+            && send_register_foreign_device_v6(&socket, bbmd, config.ttl, source_vmac).await
+        {
+            target.registration_sent();
+        }
         if let Some((left, entry)) = release
             && !send_release_v6(&socket, left, entry, source_vmac).await
         {
@@ -375,7 +406,7 @@ async fn send_register_foreign_device_v6(
     bbmd_addr: SocketAddrV6,
     ttl: u16,
     source_vmac: Bip6Vmac,
-) {
+) -> bool {
     let registration = Bvll6::RegisterForeignDevice {
         source: source_vmac,
         ttl,
@@ -384,13 +415,15 @@ async fn send_register_foreign_device_v6(
         Ok(buf) => buf,
         Err(e) => {
             warn!(error = %e, "BIP6: failed to encode Register-Foreign-Device");
-            return;
+            return false;
         }
     };
     if let Err(e) = socket.send_to(&buf, bbmd_addr).await {
         warn!(error = %e, "BIP6: failed to send Register-Foreign-Device");
+        false
     } else {
         debug!(bbmd = %bbmd_addr, ttl = ttl, "BIP6: sent Register-Foreign-Device");
+        true
     }
 }
 
@@ -466,11 +499,20 @@ impl TransportPort for Bip6Transport {
             )));
         }
 
+        // A foreign device's BBMD, looked up first if a start on `::` needs
+        // a host name's address to bind by (#2365).
+        let start_bbmd = match &self.foreign_device {
+            Some(fd) => Some(fd.start_bbmd(self.interface).await?),
+            None => None,
+        };
+        let role = start_bbmd
+            .as_ref()
+            .map_or(Role::Normal, |start| Role::Foreign(start.bbmd));
+
         // Resolve and prepare privately. No identity, port, VMAC or socket is
         // published until joins and the required collision exchange succeed.
-        let foreign = self.foreign_device.as_ref().map(|fd| fd.bbmd_addr());
         let socket = Arc::new(
-            Bip6Socket::bind(self.interface, self.port, foreign)
+            Bip6Socket::bind(self.interface, self.port, role)
                 .await
                 .map_err(Error::Transport)?
                 .tapped(self.frame_tap.clone())
@@ -558,15 +600,24 @@ impl TransportPort for Bip6Transport {
 
         // Do the only foreign-device startup I/O before spawning owned tasks,
         // so cancellation cannot orphan an unpublished receive worker.
-        if let Some(fd) = &self.foreign_device {
-            let config = fd.config();
-            send_register_foreign_device_v6(
-                &socket,
-                SocketAddrV6::new(config.bbmd_ip, config.bbmd_port, 0, 0),
-                config.ttl,
-                source_vmac,
-            )
-            .await;
+        // A device waiting for its BBMD's name registers once it resolves.
+        // A start on `::` registers where its lookup found the BBMD.
+        if let (Some(fd), Some(bbmd)) = (
+            &self.foreign_device,
+            start_bbmd.as_ref().and_then(|start| start.bbmd),
+        ) && send_register_foreign_device_v6(&socket, bbmd, fd.config().ttl, source_vmac).await
+        {
+            fd.registration_sent();
+        }
+        // The address a start on `::` found is the registration's from here,
+        // before the receive loop and the driver read it: nothing after
+        // this can fail the start, which keeps the name until now.
+        let found = start_bbmd
+            .as_ref()
+            .filter(|start| start.looked_up)
+            .and_then(|start| start.bbmd);
+        if let (Some(fd), Some(found)) = (&self.foreign_device, found) {
+            fd.take_found(found);
         }
 
         /// NPDU receive channel capacity for high-throughput UDP transports.
@@ -614,8 +665,11 @@ impl TransportPort for Bip6Transport {
         if let Some(fd) = &self.foreign_device {
             fd.attach(local_address);
             // A BBMD named by host name is looked up alongside the
-            // registration this start sent.
-            fd.attempting();
+            // registration this start sent, or, waiting, for the first
+            // time, unless the start looked it up already.
+            if found.is_none() {
+                fd.attempting();
+            }
             let reg_task = tokio::spawn(reregister(
                 Arc::clone(fd),
                 Arc::clone(&socket),
@@ -707,7 +761,14 @@ impl TransportPort for Bip6Transport {
 
         // In foreign device mode, use Distribute-Broadcast-To-Network via BBMD
         if let Some(fd) = &self.foreign_device {
-            let bbmd_addr = fd.bbmd_addr();
+            // Waiting for the BBMD's host name: no hold queue, so refused.
+            let Some(bbmd_addr) = fd.bbmd_addr() else {
+                fd.broadcast_refused();
+                return Err(Error::Transport(std::io::Error::new(
+                    std::io::ErrorKind::NotConnected,
+                    "the foreign device's BBMD isn't known yet: its host name hasn't resolved",
+                )));
+            };
             let mut buf = BytesMut::new();
             encode_bvll6(
                 &mut buf,

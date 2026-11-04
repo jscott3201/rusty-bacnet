@@ -17,48 +17,9 @@ fn shutdown_error() -> Error {
 const EFFECTIVE_GROUP_APDU_ERROR: &str =
     "effective group destination requires a valid unconfirmed request APDU";
 
-/// Network-layer destination for one hidden endpoint APDU send.
-#[doc(hidden)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EndpointApduDestination {
-    /// Direct unicast on the local data link. A MAC that reaches a group of
-    /// nodes here, such as the link's broadcast MAC or a multicast address,
-    /// is a local broadcast, so it carries only an Unconfirmed-Request APDU
-    /// (Clause 6.3, #1479).
-    Direct {
-        /// Destination MAC on the local data link.
-        destination_mac: MacAddr,
-    },
-    /// Routed unicast through a known next-hop router. An empty
-    /// `destination_mac` asks that router to broadcast on the network, so it
-    /// carries only an Unconfirmed-Request APDU (Clause 6.3, #1479).
-    Routed {
-        /// Ultimate BACnet network number.
-        destination_network: u16,
-        /// Ultimate BACnet MAC address.
-        destination_mac: MacAddr,
-        /// Immediate router MAC on the local data link.
-        router_mac: MacAddr,
-    },
-    /// Routed unicast using a local broadcast because the router MAC is unknown.
-    /// An empty `destination_mac` is refused: [`Self::RemoteBroadcast`]
-    /// sends that network's broadcast (#1479).
-    RoutedViaLocalBroadcast {
-        /// Ultimate BACnet network number.
-        destination_network: u16,
-        /// Ultimate BACnet MAC address.
-        destination_mac: MacAddr,
-    },
-    /// Broadcast on only the local BACnet network.
-    LocalBroadcast,
-    /// Broadcast to one remote BACnet network.
-    RemoteBroadcast {
-        /// Ultimate BACnet network number.
-        destination_network: u16,
-    },
-    /// Broadcast to all reachable BACnet networks.
-    GlobalBroadcast,
-}
+#[path = "endpoint_destination.rs"]
+mod destination;
+pub use destination::EndpointApduDestination;
 
 #[path = "endpoint_egress.rs"]
 mod egress;
@@ -121,6 +82,9 @@ pub struct IngressReceivers {
     /// Actual IPv4 B/IP broadcast endpoint after transport startup.
     #[doc(hidden)]
     pub bip_broadcast_endpoint: Option<std::net::SocketAddrV4>,
+    /// The link's own MAC after transport startup, in its own format (#2357).
+    #[doc(hidden)]
+    pub local_mac: MacAddr,
     /// Confirmed and unconfirmed request traffic.
     pub inbound_requests: mpsc::Receiver<ReceivedApdu>,
     /// Terminal response and segmentation traffic.
@@ -183,6 +147,24 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
         self.network.as_ref()?.transport().bip_broadcast_endpoint()
     }
 
+    /// Pre-start unicast facts of any link (#2357): the transport's own MAC
+    /// as configured, and its group-destination rule. The MAC is empty when
+    /// the link learns it only at start: B/IPv6 reports a zero VMAC until
+    /// then, which is also Device 0's, so its self check waits for
+    /// [`IngressReceivers::local_mac`].
+    #[doc(hidden)]
+    pub fn link_unicast_facts(
+        &self,
+    ) -> Option<(MacAddr, bacnet_transport::port::GroupDestinations)> {
+        let transport = self.network.as_ref()?.transport();
+        let local = if transport.bip6_port().is_some() {
+            MacAddr::new()
+        } else {
+            MacAddr::from_slice(transport.local_mac())
+        };
+        Some((local, transport.group_destinations()))
+    }
+
     /// Pre-bind B/IP registration capability, with the configured mode.
     #[doc(hidden)]
     pub fn bip_port(&self) -> Option<bacnet_transport::port::BipPort> {
@@ -242,6 +224,7 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
         let bip_port = network.transport().bip_port().map(|port| (port, capacity));
         let bip6_port = network.transport().bip6_port().map(|port| (port, capacity));
         let bip_broadcast_endpoint = network.transport().bip_broadcast_endpoint();
+        let local_mac = MacAddr::from_slice(network.local_mac());
         let bip_local_address = bip_broadcast_endpoint.and_then(|_| {
             bacnet_transport::bvll::decode_bip_mac(network.local_mac())
                 .ok()
@@ -289,6 +272,7 @@ impl<T: TransportPort + 'static> EndpointIngress<T> {
             bip6_port,
             bip_local_address,
             bip_broadcast_endpoint,
+            local_mac,
             inbound_requests,
             terminal_or_segment,
             policy_outcomes,

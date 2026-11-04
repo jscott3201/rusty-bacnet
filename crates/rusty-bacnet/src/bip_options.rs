@@ -6,12 +6,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use bacnet_transport::bbmd::{BdtEntry, ForeignDevicePolicy, NatTraversal, PrivateRange};
-use bacnet_transport::bbmd_lookup::BbmdLookupFailure;
 use bacnet_transport::bip::{
     BbmdOptions, BipMode, BipMulticast, DEFAULT_BACNET_PORT, ForeignBbmd, ForeignDeviceConfig,
-    ForeignRegistrationOutcome, ForeignRegistrationSnapshot,
 };
-use bacnet_transport::bip6::Bip6ForeignDeviceConfig;
+use bacnet_transport::bip6::{Bip6ForeignBbmd, Bip6ForeignDeviceConfig};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
@@ -37,10 +35,12 @@ const MIN_RENEWAL_SECS: f64 = 0.1;
 /// `bbmd` names a B/IP BBMD as `"ip"`, `"host"` or either with `":port"`,
 /// or a B/IPv6 one as `"ip"`, `"[ip]"` or `"[ip]:port"` (port 47808 by
 /// default; a port needs the brackets, since `"2001:db8::10:4780"` is a bare
-/// address); the owner's transport must match. A host name (B/IP only,
-/// #2308) is looked up at start and again alongside the registrations; one
-/// that doesn't resolve still starts the owner, with registration waiting
-/// and the name tried again every 30 s. A B/IPv6 BBMD must be a unicast
+/// address); the owner's transport must match. A host name (#2308, #2365)
+/// serves either transport: it is looked up at start and again alongside
+/// the registrations; one that doesn't resolve still starts the owner,
+/// with registration waiting and the name tried again every 30 s, except a
+/// B/IPv6 owner on the interface `::`, whose start needs the address and
+/// fails. A B/IPv6 BBMD must be a unicast
 /// host: not unspecified, multicast, link-local, IPv4-mapped or
 /// IPv4-compatible. `ttl`, at least
 /// 1, is how many seconds the BBMD keeps the entry. `renewal` (B/IP only)
@@ -118,9 +118,7 @@ impl PyForeignDevice {
     fn bbmd(&self) -> String {
         match &self.registration {
             Registration::Bip(config) => config.bbmd.to_string(),
-            Registration::Bip6(config) => {
-                SocketAddrV6::new(config.bbmd_ip, config.bbmd_port, 0, 0).to_string()
-            }
+            Registration::Bip6(config) => config.bbmd.to_string(),
         }
     }
 
@@ -168,8 +166,7 @@ impl PyForeignDevice {
             ));
         }
         let config = Bip6ForeignDeviceConfig {
-            bbmd_ip: *address.ip(),
-            bbmd_port: address.port(),
+            bbmd: (*address.ip(), address.port()).into(),
             ttl,
         };
         config.check().map_err(|refusal| {
@@ -515,9 +512,17 @@ pub(crate) fn ip_modes(
                     bip6_foreign: Some(config.clone()),
                 });
             }
+            // A host name serves either transport (#2365).
+            (Registration::Bip(config), _) if config.bbmd.address().is_none() => {
+                return Ok(IpModes {
+                    bip: BipMode::Normal,
+                    bip6_foreign: Some(bip6_named(config)?),
+                });
+            }
             (Registration::Bip(_), _) => {
                 return Err(PyValueError::new_err(format!(
-                    "transport='ipv6' needs a B/IPv6 BBMD ('ip' or '[ip]:port'), not {}",
+                    "transport='ipv6' needs a B/IPv6 BBMD ('ip', '[ip]:port' or a host name), \
+                     not {}",
                     foreign.bbmd()
                 )));
             }
@@ -536,6 +541,27 @@ pub(crate) fn ip_modes(
     })
 }
 
+/// A `ForeignDevice` naming its BBMD by host name, for a B/IPv6 owner
+/// (#2365): the name and port, and the time-to-live. `renewal` is B/IP's.
+fn bip6_named(config: &ForeignDeviceConfig) -> PyResult<Bip6ForeignDeviceConfig> {
+    if config.renewal_interval.is_some() {
+        return Err(PyValueError::new_err(
+            "renewal applies only to a B/IP BBMD: a B/IPv6 foreign device renews at \
+             half the ttl, but never more often than every 30 seconds",
+        ));
+    }
+    let ForeignBbmd::Name { host, port } = &config.bbmd else {
+        return Err(PyValueError::new_err("a B/IPv6 BBMD by host name"));
+    };
+    Ok(Bip6ForeignDeviceConfig {
+        bbmd: Bip6ForeignBbmd::Name {
+            host: host.clone(),
+            port: *port,
+        },
+        ttl: config.ttl,
+    })
+}
+
 /// The B/IP mode for a B/IP-only owner (an endpoint or a router port): see
 /// [`ip_modes`].
 pub(crate) fn bip_mode(
@@ -544,56 +570,6 @@ pub(crate) fn bip_mode(
     foreign_device: Option<PyRef<'_, PyForeignDevice>>,
 ) -> PyResult<BipMode> {
     ip_modes(transport, bbmd, foreign_device).map(|modes| modes.bip)
-}
-
-/// `registration` as the dict `foreign_registration()` returns.
-pub(crate) fn registration_dict(registration: ForeignRegistrationSnapshot) -> PyResult<Py<PyAny>> {
-    let seconds = |d: Option<Duration>| d.map(|d| d.as_secs_f64());
-    let outcome = registration.last_outcome.map(|outcome| match outcome {
-        ForeignRegistrationOutcome::Pending => "pending",
-        ForeignRegistrationOutcome::Accepted => "accepted",
-        ForeignRegistrationOutcome::Refused => "refused",
-        ForeignRegistrationOutcome::TimedOut => "timed_out",
-        ForeignRegistrationOutcome::LocalError => "local_error",
-        ForeignRegistrationOutcome::Cancelled => "cancelled",
-    });
-    crate::py_async::attach(|py| {
-        let dict = PyDict::new(py);
-        dict.set_item("registered", registration.registered)?;
-        dict.set_item("lease_remaining", seconds(registration.lease_remaining))?;
-        dict.set_item("next_attempt_in", seconds(registration.next_attempt_in))?;
-        dict.set_item("last_bbmd", registration.last_bbmd.map(|a| a.to_string()))?;
-        dict.set_item("last_result", registration.last_result.map(|c| c.to_raw()))?;
-        dict.set_item("last_outcome", outcome)?;
-        dict.set_item("attempts", registration.attempts)?;
-        dict.set_item("accepted", registration.accepted)?;
-        dict.set_item("refused", registration.refused)?;
-        dict.set_item("lapses", registration.lapses)?;
-        dict.set_item("renewal_hints", registration.renewal_hints)?;
-        dict.set_item("bbmd_lookups", registration.bbmd_lookups)?;
-        dict.set_item("bbmd_lookup_failures", registration.bbmd_lookup_failures)?;
-        dict.set_item(
-            "last_bbmd_lookup_failure",
-            registration.last_bbmd_lookup_failure.map(lookup_failure),
-        )?;
-        dict.set_item("waiting_for_bbmd", registration.waiting_for_bbmd)?;
-        Ok(dict.into_any().unbind())
-    })
-}
-
-/// Why a lookup of the BBMD's host name failed (#2308), as the
-/// `last_bbmd_lookup_failure` value names it. The resolver's own error
-/// keeps only its kind, which for the system resolver says nothing more
-/// than that the name did not resolve.
-fn lookup_failure(failure: BbmdLookupFailure) -> &'static str {
-    match failure {
-        BbmdLookupFailure::Error(_) => "not_resolved",
-        BbmdLookupFailure::TimedOut => "timed_out",
-        BbmdLookupFailure::NoAddress => "no_ipv4_address",
-        BbmdLookupFailure::Unusable(_) => "unusable_address",
-        BbmdLookupFailure::Abandoned => "abandoned",
-        _ => "other",
-    }
 }
 
 /// The NAT setting the `nat_global_address` and `nat_private_ranges`
@@ -709,39 +685,4 @@ pub(crate) fn parse_address(text: &str, what: &str) -> PyResult<SocketAddrV4> {
 pub(crate) fn parse_ip(text: &str, what: &str) -> PyResult<Ipv4Addr> {
     text.parse()
         .map_err(|_| PyValueError::new_err(format!("{what}: '{text}' is not an IPv4 address")))
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeSet;
-    use std::io;
-    use std::net::Ipv4Addr;
-
-    use bacnet_transport::bbmd_lookup::BbmdLookupFailure;
-
-    use super::lookup_failure;
-
-    /// The words `last_bbmd_lookup_failure` takes are the closed set the
-    /// stub's `ForeignRegistrationStatus` lists (#2308): one for each
-    /// failure, and `"other"` for one this version doesn't name.
-    #[test]
-    fn lookup_failures_take_the_stubs_words() {
-        let stub = include_str!("../rusty_bacnet.pyi");
-        let field = "last_bbmd_lookup_failure: Optional[Literal[";
-        let rest = &stub[stub.find(field).expect("the stub's field")..];
-        let literal = &rest[..rest.find("]]").expect("the Literal's end")];
-        let listed: BTreeSet<&str> = literal.split('"').skip(1).step_by(2).collect();
-        let mut named: BTreeSet<&str> = [
-            BbmdLookupFailure::Error(io::ErrorKind::NotFound),
-            BbmdLookupFailure::TimedOut,
-            BbmdLookupFailure::NoAddress,
-            BbmdLookupFailure::Unusable(Ipv4Addr::BROADCAST.into()),
-            BbmdLookupFailure::Abandoned,
-        ]
-        .into_iter()
-        .map(lookup_failure)
-        .collect();
-        named.insert("other");
-        assert_eq!(named, listed);
-    }
 }

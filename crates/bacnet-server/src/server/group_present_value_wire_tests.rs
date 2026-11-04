@@ -45,7 +45,7 @@ fn elements(present_value: &[u8]) -> Vec<Vec<u8>> {
         .iter()
         .map(|result| {
             let mut encoded = BytesMut::new();
-            result.encode(&mut encoded);
+            result.encode(&mut encoded).unwrap();
             encoded.to_vec()
         })
         .collect()

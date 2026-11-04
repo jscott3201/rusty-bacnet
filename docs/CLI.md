@@ -53,7 +53,7 @@ macOS and Windows ones don't yet (see [MS/TP](#mstp)).
 | `-b, --broadcast <IP>` | `255.255.255.255` | Broadcast address for WhoIs |
 | `-t, --timeout <MS>` | `6000` | APDU timeout in milliseconds |
 | `--min-interval-ms <MS>` | `0` | Least time from the latest confirmed request to a device finishing (or being sent, while it is still outstanding) to the next, at most 3600000, so paging or polling leaves a slow device room for others |
-| `--foreign-bbmd <ADDR>` | | Run as a foreign device registered with this BBMD (`ip`, `host`, or either with `:port`), so broadcasts reach its network; BACnet/IP only. See [Foreign-device mode](#foreign-device-mode) |
+| `--foreign-bbmd <ADDR>` | | Run as a foreign device registered with this BBMD (`ip`, `host`, or either with `:port`), so broadcasts reach its network. With `--ipv6`, an IPv6 address (`ip`, `[ip]` or `[ip]:port`) or a host name, and `--device-instance`. See [Foreign-device mode](#foreign-device-mode) |
 | `--ttl <N>` | `300` | Time-to-live in seconds of a foreign-device registration, for `--foreign-bbmd`, `register` and `discover --bbmd` |
 | `--renewal <SECS>` | half the TTL | Seconds between `--foreign-bbmd` registrations, less than `--ttl` |
 | `--nat-global-address <IP:PORT>` | | Our address and port as the `--foreign-bbmd` BBMD records them when a NAT router translates the registration. The TUI's Network screen finds our FDT entry there; nothing sent changes. Needs `--foreign-bbmd` (or a named TUI profile with a BBMD) |
@@ -1852,6 +1852,21 @@ screen's panel shows the name and the address it stands for, or `(not resolved
 yet)`, counts the lookups and failures beside the registration's counters, with
 the newest failure's reason, and follows the name to its address when it resolves
 later or elsewhere.
+
+With `--ipv6`, `--foreign-bbmd` takes a B/IPv6 BBMD (#2365): an IPv6 address as `ip`,
+`[ip]` or `[ip]:port`, or a host name, which stands for its IPv6 addresses; it needs
+`--device-instance`, and `--renewal` is refused (B/IPv6 renews at half the TTL, at
+most every 30 seconds). Without `--ipv6-interface` the transport binds `::` and picks
+its source from the route to the BBMD, so a host name must resolve at start, or the
+command fails saying why. With `--ipv6-interface` the transport starts and waits for
+the name as B/IP does, and its broadcasts fail meanwhile. A one-shot command waits for
+the name's first lookup: one that doesn't resolve fails it (`BBMD bbmd.example:47808
+could not be registered with: its host name did not resolve (1 name lookup, 1
+failed)`), and one that does is logged with its address (`bbmd.example:47808 (at
+[2001:db8::10]:47808; 1 name lookup, 0 failed)`); the TUI logs either and carries on.
+B/IPv6 tracks no registration answers, so the TUI's status bar and Network screen
+show none for it.
+
 Behind NAT, keep `--renewal` short so the mapping the BBMD's replies come back
 on stays open; the TTL can stay long. If you know the address and port the NAT
 router gives the registration, `--nat-global-address IP:PORT` lets the TUI's

@@ -65,7 +65,8 @@ fn notification_from(source: u8, process_id: u32) -> ReceivedNpdu {
             priority: None,
         }],
     }
-    .encode(&mut body);
+    .encode(&mut body)
+    .unwrap();
     let request = ConfirmedRequest {
         segmented: false,
         more_follows: false,

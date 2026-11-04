@@ -182,7 +182,7 @@ impl ControlledPeer {
             property_value: val.to_vec(),
         };
         let mut svc = BytesMut::new();
-        ack.encode(&mut svc);
+        ack.encode(&mut svc).unwrap();
         let resp = Apdu::ComplexAck(bacnet_encoding::apdu::ComplexAck {
             segmented: false,
             more_follows: false,

@@ -11,7 +11,8 @@ fn name_payload(name: &str) -> Bytes {
         property_array_index: None,
         property_value: value.to_vec(),
     }
-    .encode(&mut service);
+    .encode(&mut service)
+    .unwrap();
     service.freeze()
 }
 fn request(accepts_segments: bool) -> Apdu {

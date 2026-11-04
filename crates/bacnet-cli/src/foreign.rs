@@ -9,7 +9,7 @@
 
 #[cfg(feature = "tui")]
 use std::net::Ipv4Addr;
-use std::net::SocketAddrV4;
+use std::net::{SocketAddrV4, SocketAddrV6};
 use std::time::Duration;
 
 use bacnet_client::client::BACnetClient;
@@ -20,6 +20,7 @@ use bacnet_transport::bip::{
     BipTransport, ForeignBbmd, ForeignDeviceConfig, ForeignRegistrationOutcome,
     ForeignRegistrationSnapshot,
 };
+use bacnet_transport::bip6::{Bip6ForeignBbmd, Bip6Transport};
 
 /// How long a one-shot command waits for the first registration's answer.
 /// The transport gives an attempt up after at most three seconds, so this
@@ -47,13 +48,67 @@ pub(crate) fn parse_bbmd_arg(value: &str) -> Result<SocketAddrV4, String> {
     Ok(address)
 }
 
-/// Parse a `--foreign-bbmd` BBMD: `ip`, `host` or either with `:port`
-/// (47808 by default). A host name is looked up when the transport starts
-/// (#2308).
+/// Parse a B/IP BBMD: `ip`, `host` or either with `:port` (47808 by
+/// default), as a TUI profile gives one. A host name is looked up when the
+/// transport starts (#2308).
+#[cfg(any(feature = "tui", test))]
 pub(crate) fn parse_foreign_bbmd_arg(value: &str) -> Result<ForeignBbmd, String> {
     value.parse::<ForeignBbmd>().map_err(|_| {
         format!("'{value}' is not a BBMD a device can register with: ip, host or either with :port")
     })
+}
+
+/// `--foreign-bbmd`: a B/IP BBMD (an IPv4 address or a host name) or a
+/// B/IPv6 address. A host name serves either transport; the session's
+/// transport takes it (#2365).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ForeignBbmdArg {
+    /// An IPv4 address or a host name, with its port.
+    Bip(ForeignBbmd),
+    /// An IPv6 address, with its port.
+    Bip6(SocketAddrV6),
+}
+
+impl ForeignBbmdArg {
+    /// The BBMD for a B/IP session.
+    pub(crate) fn bip(&self) -> Result<ForeignBbmd, String> {
+        match self {
+            Self::Bip(bbmd) => Ok(bbmd.clone()),
+            Self::Bip6(bbmd) => Err(format!(
+                "--foreign-bbmd {bbmd} is a B/IPv6 BBMD: add --ipv6, or give an IPv4 address"
+            )),
+        }
+    }
+
+    /// The BBMD for a B/IPv6 session.
+    pub(crate) fn bip6(&self) -> Result<Bip6ForeignBbmd, String> {
+        match self {
+            Self::Bip6(bbmd) => Ok((*bbmd).into()),
+            Self::Bip(ForeignBbmd::Name { host, port }) => Ok(Bip6ForeignBbmd::Name {
+                host: host.clone(),
+                port: *port,
+            }),
+            Self::Bip(bbmd) => Err(format!(
+                "--foreign-bbmd {bbmd} is an IPv4 address, which B/IPv6 can't register with: \
+                 give an IPv6 address ('[ip]:port') or a host name"
+            )),
+        }
+    }
+}
+
+/// Parse `--foreign-bbmd`: `ip`, `host` or either with `:port` for B/IP,
+/// or `ip`, `[ip]` or `[ip]:port` for B/IPv6 (47808 by default).
+pub(crate) fn parse_foreign_bbmd_cli_arg(value: &str) -> Result<ForeignBbmdArg, String> {
+    if let Ok(bbmd) = value.parse::<ForeignBbmd>() {
+        return Ok(ForeignBbmdArg::Bip(bbmd));
+    }
+    match value.parse::<Bip6ForeignBbmd>() {
+        Ok(Bip6ForeignBbmd::Address(address)) => Ok(ForeignBbmdArg::Bip6(address)),
+        _ => Err(format!(
+            "'{value}' is not a BBMD a device can register with: ip, host or either with :port, \
+             or an IPv6 address as ip or [ip]:port"
+        )),
+    }
 }
 
 /// Parse a `--nat-global-address` (#1943): the `ip:port` a NAT router
@@ -164,14 +219,68 @@ fn label(bbmd: &ForeignBbmd, registration: &ForeignRegistrationSnapshot) -> Stri
 /// How many lookups of the BBMD's host name ended, and how many of them
 /// failed (#2308), for a person to read; `None` before the first ends.
 pub(crate) fn lookups(registration: &ForeignRegistrationSnapshot) -> Option<String> {
-    let ended = registration.bbmd_lookups;
+    tally(registration.bbmd_lookups, registration.bbmd_lookup_failures)
+}
+
+/// `ended` lookups, `failed` of them failed, for a person to read; `None`
+/// before the first ends.
+fn tally(ended: u64, failed: u64) -> Option<String> {
     let plural = if ended == 1 { "" } else { "s" };
-    (ended > 0).then(|| {
-        format!(
-            "{ended} name lookup{plural}, {} failed",
-            registration.bbmd_lookup_failures
-        )
-    })
+    (ended > 0).then(|| format!("{ended} name lookup{plural}, {failed} failed"))
+}
+
+/// How long a one-shot command waits for a B/IPv6 BBMD's host name: the
+/// resolver's 10 s, and a little more.
+const BIP6_LOOKUP_WAIT: Duration = Duration::from_secs(11);
+
+/// Wait until a B/IPv6 foreign device has sent its registration (#2365):
+/// `Ok`, naming the BBMD as [`await_registration`] does, once its address
+/// is known and a Register-Foreign-Device went there, or an error naming
+/// why its host name didn't resolve. B/IPv6 doesn't track the BBMD's
+/// answers, so the BBMD's acceptance isn't waited for.
+pub(crate) async fn await_bip6_bbmd(
+    client: &BACnetClient<Bip6Transport>,
+    bbmd: &Bip6ForeignBbmd,
+) -> Result<String, String> {
+    let deadline = tokio::time::Instant::now() + BIP6_LOOKUP_WAIT;
+    loop {
+        let status = client
+            .transport()
+            .foreign_status()
+            .ok_or("the client is not a foreign device")?;
+        let tally = tally(status.lookups.lookups, status.lookups.failures);
+        if let Some(at) = status.bbmd
+            && status.registrations_sent > 0
+        {
+            if bbmd.address().is_some() {
+                return Ok(bbmd.to_string());
+            }
+            let tally = tally.map_or_else(String::new, |tally| format!("; {tally}"));
+            return Ok(format!("{bbmd} (at {at}{tally})"));
+        }
+        if let Some(failure) = status.lookups.last_failure {
+            let tally = tally.map_or_else(String::new, |tally| format!(" ({tally})"));
+            let why = match failure {
+                BbmdLookupFailure::NoAddress => "has no IPv6 address".into(),
+                other => lookup_failure(other),
+            };
+            return Err(format!(
+                "BBMD {bbmd} could not be registered with: its host name {why}{tally}"
+            ));
+        }
+        if tokio::time::Instant::now() >= deadline {
+            let wait = BIP6_LOOKUP_WAIT.as_secs();
+            return Err(match status.bbmd {
+                Some(at) => {
+                    format!("no registration went to BBMD {bbmd} (at {at}) within {wait} s")
+                }
+                None => {
+                    format!("the lookup of BBMD {bbmd}'s host name had no outcome after {wait} s")
+                }
+            });
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
 
 /// Why a lookup of the BBMD's host name failed, for a person to read.
@@ -214,7 +323,9 @@ mod tests {
     use bacnet_transport::bbmd_lookup::{BbmdLookup, BbmdLookupFailure, BbmdResolver};
     use bacnet_transport::bip::BipMode;
 
-    use super::{await_registration, config, lookup_failure, parse_foreign_bbmd_arg};
+    use super::{
+        await_bip6_bbmd, await_registration, config, lookup_failure, parse_foreign_bbmd_arg,
+    };
 
     #[test]
     fn a_lookup_failure_reads_as_a_reason() {
@@ -306,6 +417,61 @@ mod tests {
                 "BBMD bbmd.example:{port} (at 127.0.0.1:{port}; 1 name lookup, 0 failed) \
                  did not answer the foreign-device registration"
             )
+        );
+        client.stop().await.unwrap();
+    }
+
+    /// A resolver that stands every name for the IPv6 loopback address.
+    struct Loopback6;
+
+    impl BbmdResolver for Loopback6 {
+        fn resolve(&self, _host: &str) -> BbmdLookup {
+            Box::pin(async { Ok(vec![std::net::Ipv6Addr::LOCALHOST.into()]) })
+        }
+    }
+
+    /// A B/IPv6 client on `::1` registering with `bbmd`, its names looked
+    /// up by `resolver`.
+    async fn bip6_client(
+        bbmd: &str,
+        resolver: Arc<dyn BbmdResolver>,
+    ) -> BACnetClient<bacnet_transport::bip6::Bip6Transport> {
+        use bacnet_transport::bip6::Bip6ForeignDeviceConfig;
+        BACnetClient::bip6_builder()
+            .interface(std::net::Ipv6Addr::LOCALHOST)
+            .port(0)
+            .device_instance(4321)
+            .foreign_device(Bip6ForeignDeviceConfig {
+                bbmd: bbmd.parse().unwrap(),
+                ttl: 60,
+            })
+            .bbmd_resolver(resolver)
+            .build()
+            .await
+            .unwrap()
+    }
+
+    /// A B/IPv6 one-shot waits for its BBMD's host name (#2365): one that
+    /// doesn't resolve fails the wait with why and the lookups, and one
+    /// that does names the address it stands for.
+    #[tokio::test]
+    async fn a_bip6_one_shot_waits_for_its_bbmds_name() {
+        let mut client = bip6_client("bbmd.invalid", Arc::new(NoNames)).await;
+        let bbmd = client.transport().foreign_device_config().unwrap().bbmd;
+        let error = await_bip6_bbmd(&client, &bbmd).await.unwrap_err();
+        assert!(
+            error.starts_with("BBMD bbmd.invalid:47808 could not be registered with: its host name did not resolve"),
+            "{error}"
+        );
+        assert!(error.ends_with("(1 name lookup, 1 failed)"), "{error}");
+        client.stop().await.unwrap();
+
+        let mut client = bip6_client("bbmd.example:47809", Arc::new(Loopback6)).await;
+        let bbmd: bacnet_transport::bip6::Bip6ForeignBbmd = "bbmd.example:47809".parse().unwrap();
+        let found = await_bip6_bbmd(&client, &bbmd).await.unwrap();
+        assert_eq!(
+            found,
+            "bbmd.example:47809 (at [::1]:47809; 1 name lookup, 0 failed)"
         );
         client.stop().await.unwrap();
     }

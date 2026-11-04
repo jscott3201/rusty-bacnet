@@ -433,8 +433,7 @@ async fn bip6_builder_hands_the_transport_its_resolver_and_release() {
         .port(0)
         .device_instance(0x12_3456)
         .foreign_device(Bip6ForeignDeviceConfig {
-            bbmd_ip: Ipv6Addr::LOCALHOST,
-            bbmd_port: old.local_addr().unwrap().port(),
+            bbmd: (Ipv6Addr::LOCALHOST, old.local_addr().unwrap().port()).into(),
             ttl: 90,
         })
         .release_previous_bbmd(true)

@@ -382,7 +382,7 @@ fn create_object_with_object_name_initial_value_refreshes_index() {
         }],
     };
     let mut buf = BytesMut::new();
-    req.encode(&mut buf);
+    req.encode(&mut buf).unwrap();
 
     let mut ack_buf = BytesMut::new();
     handle_create_object(&mut db, &buf, &mut ack_buf).unwrap();
@@ -421,7 +421,7 @@ fn create_object_duplicate_object_name_initial_value_rejected_and_rolled_back() 
         }],
     };
     let mut buf = BytesMut::new();
-    req.encode(&mut buf);
+    req.encode(&mut buf).unwrap();
 
     // CreateObject's table (15.3.1.3.1) has no row for a name in use; the
     // initial value is refused as WriteProperty refuses it, PROPERTY /
@@ -473,7 +473,7 @@ fn create_object_rename_then_later_failure_removes_renamed_object() {
         ],
     };
     let mut buf = BytesMut::new();
-    req.encode(&mut buf);
+    req.encode(&mut buf).unwrap();
 
     assert!(
         handle_create_object(&mut db, &buf, &mut BytesMut::new()).is_err(),

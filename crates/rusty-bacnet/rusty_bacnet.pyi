@@ -2692,9 +2692,12 @@ class ForeignDevice:
     (port 47808 by default; an IPv6 port needs the brackets, since
     ``"2001:db8::10:4780"`` is read as a bare address); the owner's
     transport must match, else its constructor raises ValueError. A host
-    name (B/IP only, #2308) is looked up when the owner starts and again
-    alongside its registrations; one that doesn't resolve still starts the
-    owner, whose registration waits, tried again every 30 seconds. A B/IPv6
+    name (#2308) serves either transport (B/IPv6 since #2365): it is looked
+    up when the owner starts and again alongside its registrations; one
+    that doesn't resolve still starts the owner, whose registration waits,
+    tried again every 30 seconds. A B/IPv6 owner bound to ``::`` picks its
+    source address from the route to the BBMD, so its start fails instead;
+    give it an interface to start and wait. A B/IPv6
     BBMD must be a unicast host: an unspecified, multicast, link-local,
     IPv4-mapped or IPv4-compatible address, a zone index or port 0 raises
     ValueError saying which. ``ttl`` is how many seconds the BBMD keeps the
@@ -2708,9 +2711,10 @@ class ForeignDevice:
 
     The owner registers at start and renews on its own. Its broadcasts go
     through the BBMD; on B/IP the first few wait for the first registration
-    to be answered, and ``foreign_registration()`` reports how it goes (B/IP
-    only). A B/IPv6 client needs ``ipv6_device_instance``: a B/IPv6 foreign
-    device uses its instance's VMAC.
+    to be answered, and ``foreign_registration()`` reports how it goes. A
+    B/IPv6 client needs ``ipv6_device_instance``: a B/IPv6 foreign device
+    uses its instance's VMAC. While a B/IPv6 one waits for its BBMD's name,
+    its broadcasts raise BacnetError.
     """
 
     def __init__(self, bbmd: str, ttl: int = 300, renewal: Optional[float] = None) -> None: ...
@@ -2860,6 +2864,40 @@ class ForeignRegistrationStatus(TypedDict):
         "not_resolved", "timed_out", "no_ipv4_address", "unusable_address", "abandoned",
         "other"]]
     waiting_for_bbmd: bool
+
+
+class Bip6ForeignRegistrationStatus(TypedDict):
+    """A B/IPv6 foreign device's registration, as ``foreign_registration()``
+    reports it on a ``transport="ipv6"`` owner (#2365). B/IPv6 doesn't track
+    the BBMD's answers. ``bbmd`` is the address in use, ``"[ip]:port"``, or
+    None while a host name hasn't resolved yet, when ``waiting_for_bbmd`` is
+    true. ``bbmd_name`` is the host name the BBMD is known by,
+    ``"host:port"`` (configured, or written to FD_BBMD_Address), or None for
+    a BBMD known by address; a waiting device waits for it. While waiting,
+    nothing is registered, broadcasts are refused (counted in
+    ``broadcasts_refused``), and the name is tried again 30 seconds after
+    each failure. ``bbmd_lookups``, ``bbmd_lookup_failures`` and
+    ``last_bbmd_lookup_failure`` are as in ``ForeignRegistrationStatus``,
+    with ``"no_ipv6_address"`` for a name with no IPv6 address. The
+    ``previous_release*`` totals count the deletions asked of BBMDs the
+    device moved away from, by ``release_previous_bbmd``: released,
+    refused, or unanswered. ``registrations_sent`` counts the
+    Register-Foreign-Device messages sent. The totals survive a stop; outside
+    ``foreign_device=`` they are 0."""
+    bbmd: Optional[str]
+    bbmd_name: Optional[str]
+    waiting_for_bbmd: bool
+    bbmd_lookups: int
+    bbmd_lookup_failures: int
+    last_bbmd_lookup_failure: Optional[Literal[
+        "not_resolved", "timed_out", "no_ipv6_address", "unusable_address", "abandoned",
+        "other"]]
+    previous_releases: int
+    previous_released: int
+    previous_release_refused: int
+    previous_release_unanswered: int
+    broadcasts_refused: int
+    registrations_sent: int
 
 
 class FdtEntry(TypedDict):
@@ -4423,11 +4461,14 @@ class BACnetClient:
         stopped or non-SC client."""
         ...
 
-    def foreign_registration(self) -> Awaitable[ForeignRegistrationStatus]:
+    def foreign_registration(
+        self,
+    ) -> Awaitable[Union[ForeignRegistrationStatus, Bip6ForeignRegistrationStatus]]:
         """How the foreign-device registration is going (#938), a refusal
         included. Sends nothing. Outside ``foreign_device=`` only manual
-        registrations show. RuntimeError before start and after stop; a
-        non-B/IP client raises BacnetError."""
+        registrations show. A ``transport="ipv6"`` client returns a
+        ``Bip6ForeignRegistrationStatus`` (#2365). RuntimeError before start
+        and after stop; a client on another transport raises BacnetError."""
         ...
 
     def stop(self) -> Awaitable[None]:
@@ -6160,7 +6201,9 @@ class BACnetServer:
         """
         ...
 
-    def foreign_registration(self) -> Awaitable[ForeignRegistrationStatus]:
+    def foreign_registration(
+        self,
+    ) -> Awaitable[Union[ForeignRegistrationStatus, Bip6ForeignRegistrationStatus]]:
         """How the foreign-device registration is going (#938), as for
         ``BACnetClient``. RuntimeError before start and after stop."""
         ...
@@ -7045,9 +7088,9 @@ class BipEndpoint:
         recipient); the bindings are ``(Device identifier, "ipv4:port")``
         routes to recipient Devices. A Reporter identifier of another type and
         the other shapes construction can check raise ValueError; a Reporter
-        that wasn't added raises BacnetError at start. Only B/IP endpoints
-        take these: the Rust session reports source records on IPv4 B/IP
-        only.
+        that wasn't added raises BacnetError at start. ``ScEndpoint`` and
+        ``MstpEndpoint`` take them too, each binding address in its link's
+        format (#2357).
         ``on_reinitialize`` / ``after_reinitialize``: execute
         ReinitializeDevice, as ``BACnetServer``'s keywords do (#1566);
         ``reinit_password`` (needs ``on_reinitialize``, else ValueError; 1 to
@@ -7220,10 +7263,20 @@ class ScEndpoint:
         after_reinitialize: Optional[AfterReinitialize] = None,
         reinit_password: Optional[str] = None,
         device_write_policy: Optional[MutationHandler] = None,
+        source_audit_reporter: Optional[ObjectIdentifier] = None,
+        audit_recipient: Optional[AuditRecipientInput] = None,
+        audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str]]] = None,
     ) -> None:
         """``read_work_limit``, ``min_request_interval_ms``,
         ``on_reinitialize``, ``after_reinitialize``, ``reinit_password`` and
-        ``device_write_policy`` are as for ``BipEndpoint``."""
+        ``device_write_policy`` are as for ``BipEndpoint``.
+
+        ``source_audit_reporter`` / ``audit_recipient`` /
+        ``audit_device_bindings``: as on ``BipEndpoint`` (#2357), each
+        binding address a VMAC as ``local_address()`` gives it
+        (``"xx:xx:xx:xx:xx:xx"``) or as twelve hex digits. An address
+        ``audit_recipient`` takes another node's VMAC: never the broadcast
+        or all-zero VMAC or this endpoint's own."""
         ...
 
     def add_analog_input(self, instance: int, name: str, units: EngineeringUnits | int = 62, present_value: float = 0.0, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
@@ -7242,6 +7295,15 @@ class ScEndpoint:
     def add_binary_value(self, instance: int, name: str, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
         """Optional BV Audit rows: None is absent; priority 'inherit' is present NULL.
         Access, Value_Source and profile keywords as on ``add_analog_value``."""
+        ...
+    def add_audit_reporter(self, instance: int, name: str, *, audit_level: Literal["none", "audit_config", "audit_all"], auditable_operations: int, issue_confirmed_notifications: bool = False) -> None:
+        """Add an Audit Reporter for ``source_audit_reporter`` to select
+        (#2348). ``audit_level`` and ``auditable_operations`` (bit n for
+        AuditOperation n) are required, as on
+        ``BACnetServer.configure_audit_reporters``, and filter what the
+        session reports. Peers can't change them through an endpoint. A
+        Reporter that ``source_audit_reporter`` doesn't select records
+        nothing."""
         ...
     def add_group(
         self,
@@ -7301,11 +7363,11 @@ class ScEndpoint:
         """Record a reset the application makes for its own reasons: a
         DEVICE_RESET Audit record from this device, with no invoke ID, through
         the session's source Reporter when it has one, as
-        ``BACnetServer.report_device_reset_local`` does (#1837). Only a B/IP
-        endpoint can select a source Reporter (the Rust session reports
-        source records on IPv4 B/IP only), so this one records nothing. A
-        peer's accepted restart is recorded already. RuntimeError when the
-        endpoint is not running."""
+        ``BACnetServer.report_device_reset_local`` does (#1837): with
+        ``source_audit_reporter`` set (#2357), a DEVICE_RESET naming this
+        device as source and target, filtered by that Reporter's level and
+        operations; without one, nothing. A peer's accepted restart is
+        recorded already. RuntimeError when the endpoint is not running."""
         ...
 
     @property
@@ -7352,6 +7414,9 @@ class MstpEndpoint:
         after_reinitialize: Optional[AfterReinitialize] = None,
         reinit_password: Optional[str] = None,
         device_write_policy: Optional[MutationHandler] = None,
+        source_audit_reporter: Optional[ObjectIdentifier] = None,
+        audit_recipient: Optional[AuditRecipientInput] = None,
+        audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str]]] = None,
     ) -> None:
         """``read_work_limit``, ``min_request_interval_ms``,
         ``on_reinitialize``, ``after_reinitialize``, ``reinit_password`` and
@@ -7375,7 +7440,12 @@ class MstpEndpoint:
         ``mstp_transmit_latency_pad_ms``, ``mstp_usage_timeout_ms`` and
         ``mstp_reply_timeout_ms`` are as for ``BACnetClient``, but a value
         out of range raises ValueError here.
-        """
+
+        ``source_audit_reporter`` / ``audit_recipient`` /
+        ``audit_device_bindings``: as on ``BipEndpoint`` (#2357), each
+        binding address a station in decimal digits, as ``local_address()``
+        gives it (``"2"``). An address ``audit_recipient`` takes another
+        station: never 255 or this endpoint's own."""
         ...
 
     def add_analog_input(self, instance: int, name: str, units: EngineeringUnits | int = 62, present_value: float = 0.0, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
@@ -7394,6 +7464,15 @@ class MstpEndpoint:
     def add_binary_value(self, instance: int, name: str, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
         """Optional BV Audit rows: None is absent; priority 'inherit' is present NULL.
         Access, Value_Source and profile keywords as on ``add_analog_value``."""
+        ...
+    def add_audit_reporter(self, instance: int, name: str, *, audit_level: Literal["none", "audit_config", "audit_all"], auditable_operations: int, issue_confirmed_notifications: bool = False) -> None:
+        """Add an Audit Reporter for ``source_audit_reporter`` to select
+        (#2348). ``audit_level`` and ``auditable_operations`` (bit n for
+        AuditOperation n) are required, as on
+        ``BACnetServer.configure_audit_reporters``, and filter what the
+        session reports. Peers can't change them through an endpoint. A
+        Reporter that ``source_audit_reporter`` doesn't select records
+        nothing."""
         ...
     def add_group(
         self,
@@ -7453,11 +7532,11 @@ class MstpEndpoint:
         """Record a reset the application makes for its own reasons: a
         DEVICE_RESET Audit record from this device, with no invoke ID, through
         the session's source Reporter when it has one, as
-        ``BACnetServer.report_device_reset_local`` does (#1837). Only a B/IP
-        endpoint can select a source Reporter (the Rust session reports
-        source records on IPv4 B/IP only), so this one records nothing. A
-        peer's accepted restart is recorded already. RuntimeError when the
-        endpoint is not running."""
+        ``BACnetServer.report_device_reset_local`` does (#1837): with
+        ``source_audit_reporter`` set (#2357), a DEVICE_RESET naming this
+        device as source and target, filtered by that Reporter's level and
+        operations; without one, nothing. A peer's accepted restart is
+        recorded already. RuntimeError when the endpoint is not running."""
         ...
 
     @property

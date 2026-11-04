@@ -115,7 +115,8 @@ fn ack(invoke: u8) -> Apdu {
         property_array_index: None,
         property_value: vec![0x72, 0, b'x'],
     }
-    .encode(&mut payload);
+    .encode(&mut payload)
+    .unwrap();
     Apdu::ComplexAck(ComplexAck {
         segmented: false,
         more_follows: false,

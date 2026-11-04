@@ -164,7 +164,7 @@ mod tests {
                         }],
                     };
                     let mut bytes = BytesMut::new();
-                    ack.encode(&mut bytes);
+                    ack.encode(&mut bytes).unwrap();
                     let valid = actual == requested
                         || (requested.is_some() && actual.is_none() && error.is_some());
                     assert_eq!(

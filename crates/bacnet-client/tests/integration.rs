@@ -68,7 +68,7 @@ async fn full_read_property_round_trip() {
                 property_value: vec![0x44, 0x42, 0x90, 0x00, 0x00], // app-tagged Real 72.0
             };
             let mut ack_buf = BytesMut::new();
-            ack.encode(&mut ack_buf);
+            ack.encode(&mut ack_buf).unwrap();
 
             let complex_ack = Apdu::ComplexAck(ComplexAck {
                 segmented: false,

@@ -104,7 +104,7 @@ impl BipEndpointConfig {
         }
         let mut session = builder.build_session().map_err(to_py_err)?;
         if let Some(source) = &config.source_audit {
-            session = session.with_source_audit_reporter(source.reporter());
+            session = source.select(session);
         }
         let session = config.device_writes.install(session);
         Ok(config.reinitialize.install(session))
@@ -317,7 +317,7 @@ impl PyBipEndpoint {
             audit_recipient,
             audit_device_bindings,
             device_instance,
-            broadcast,
+            super::source_audit::AuditLink::Bip(broadcast),
             device_writes.enabled(),
         )?;
         if let Some(selected) = registered_network_port
@@ -382,38 +382,6 @@ impl PyBipEndpoint {
     #[doc(hidden)]
     fn _pending_registration_count(&self) -> PyResult<usize> {
         Ok(self.lifecycle.pending_count())
-    }
-
-    /// Add an Audit Reporter object (before start), for
-    /// `source_audit_reporter` to select (#2348).
-    ///
-    /// `audit_level` ("none", "audit_config" or "audit_all") and
-    /// `auditable_operations` (bit n for AuditOperation n) are required, as
-    /// on `BACnetServer.configure_audit_reporters`, and filter what the
-    /// session reports. Peers can't change them through an endpoint. A
-    /// Reporter that `source_audit_reporter` doesn't select records nothing.
-    #[pyo3(signature = (
-        instance, name, *,
-        audit_level, auditable_operations, issue_confirmed_notifications=false
-    ))]
-    fn add_audit_reporter(
-        &self,
-        instance: u32,
-        name: &str,
-        audit_level: &str,
-        auditable_operations: &Bound<'_, PyAny>,
-        issue_confirmed_notifications: bool,
-    ) -> PyResult<()> {
-        use crate::server::{reporter_audit_level, reporter_auditable_operations};
-        let pending = PendingObject::AuditReporter {
-            instance,
-            name: name.to_string(),
-            level: reporter_audit_level(audit_level)?,
-            operations: reporter_auditable_operations(auditable_operations)?,
-            confirmed: issue_confirmed_notifications,
-        };
-        pending.build()?;
-        self.push_pending(pending)
     }
 
     /// Add a Group object (before start); its Present_Value is rebuilt from
@@ -599,7 +567,7 @@ impl PyBipEndpoint {
                     .and_then(EndpointSession::foreign_registration)
                     .ok_or_else(|| PyRuntimeError::new_err("endpoint not started"))?
             };
-            crate::bip_options::registration_dict(registration)
+            crate::registration_dicts::registration_dict(registration)
         })
     }
 
