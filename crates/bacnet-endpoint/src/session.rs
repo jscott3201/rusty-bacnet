@@ -76,7 +76,7 @@ use tokio::task::JoinHandle;
 
 #[path = "source_profile.rs"]
 mod source_profile;
-pub(crate) use source_profile::check_link_bindings;
+pub(crate) use source_profile::{RoutedBindings, check_link_bindings};
 #[path = "source_reporter.rs"]
 pub(crate) mod source_reporter;
 #[path = "session_start.rs"]
@@ -291,6 +291,7 @@ pub struct EndpointSession<T: TransportPort + 'static = bacnet_transport::any::A
     source_audit: Option<Arc<crate::source_audit::SourceAudit>>,
     pub(crate) source_audit_bindings: Vec<(ObjectIdentifier, std::net::SocketAddrV4)>,
     pub(crate) source_audit_link_bindings: Vec<(ObjectIdentifier, bacnet_types::MacAddr)>,
+    pub(crate) source_audit_routed_bindings: Vec<(ObjectIdentifier, u16, bacnet_types::MacAddr)>,
     source_recipient: Option<Arc<crate::source_audit::recipient::SourceRecipient>>,
     stop_exit: Option<Result<SessionExit, Error>>,
     durable_settlement: Option<JoinHandle<()>>,
@@ -405,6 +406,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             source_audit: None,
             source_audit_bindings: Vec::new(),
             source_audit_link_bindings: Vec::new(),
+            source_audit_routed_bindings: Vec::new(),
             source_recipient: None,
             stop_exit: None,
             durable_settlement: None,
@@ -911,6 +913,8 @@ struct DispatchParts {
     /// The layer's network number, which the session's Number owner
     /// publishes; answers relayed with it as SNET match like direct ones.
     local_network: LocalNetworkNumber,
+    /// Routed source Audit bindings' routers, learned from traffic (#2371).
+    source_routers: Option<Arc<crate::source_audit::routers::SourceRouters>>,
 }
 
 #[path = "session_dispatch.rs"]
@@ -946,6 +950,9 @@ async fn handle_inbound(parts: &mut DispatchParts, received: ReceivedApdu) {
     let _attributes = received.data_attributes.clone();
     let _provenance = &received.provenance;
     let _ingress = received.ingress_network;
+    if let Some(routers) = &parts.source_routers {
+        routers.observe(&received);
+    }
     let Some(responder) = parts.responder.as_ref() else {
         let mut counters = parts.shared.counters.lock().await;
         counters.no_server_role += 1;
@@ -1017,7 +1024,12 @@ async fn handle_terminal(parts: &mut DispatchParts, received: ReceivedApdu) {
         &apdu,
     );
     let admission = match outcome {
-        Ok(AdmissionOutcome::Admitted(admission)) => admission,
+        Ok(AdmissionOutcome::Admitted(admission)) => {
+            if let Some(routers) = &parts.source_routers {
+                routers.observe(&received);
+            }
+            admission
+        }
         Ok(_) => {
             let mut counters = parts.shared.counters.lock().await;
             counters.unclaimed_terminal += 1;

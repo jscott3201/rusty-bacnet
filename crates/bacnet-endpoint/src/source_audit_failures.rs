@@ -5,7 +5,7 @@ use tokio::time::{Instant, timeout_at};
 pub(super) fn record_drop(
     source: &Arc<SourceAudit>,
     owner: &NotificationTransactions,
-    ticket: Option<AuditFailureTicket<MacAddr>>,
+    ticket: Option<AuditFailureTicket<routers::SourceRoute>>,
     timestamp: BACnetTimeStamp,
 ) {
     let Some(ticket) = ticket else {
@@ -61,9 +61,10 @@ pub(super) fn record_drop(
             };
             // Keep the DB read guard through synchronous egress admission, not
             // through transport or ACK waits. Later changes cannot recall a send.
-            let sent = delivery::admit_encoded(
+            let (sent, hop) = delivery::admit_encoded(
                 &source.egress,
-                batch.context.route.clone(),
+                &source.routers,
+                &batch.context.route,
                 encoded,
                 batch.context.confirmed,
                 deadline,
@@ -89,7 +90,7 @@ pub(super) fn record_drop(
                 continue;
             }
             drop(source);
-            completion.finish(delivery::finish_send(sent, reserved, deadline).await);
+            completion.finish(delivery::finish_send(sent, hop, reserved, deadline).await);
         }
     });
 }

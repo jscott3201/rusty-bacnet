@@ -7,7 +7,6 @@ use bacnet_client::{
     EndpointOperationAck, EndpointOperationRequest, EndpointReadAck, EndpointReadRequest,
     EndpointRequester,
 };
-use bacnet_endpoint_core::coordinator::CanonicalPeer;
 use bacnet_endpoint_core::endpoint_ingress::{EndpointApduDestination, EndpointEgress};
 use bacnet_objects::audit::AuditReporterStatus;
 use bacnet_objects::database::ObjectDatabase;
@@ -32,9 +31,12 @@ use tokio::sync::{RwLock, Semaphore, oneshot};
 
 #[path = "source_recipient.rs"]
 pub(crate) mod recipient;
+#[path = "source_routers.rs"]
+pub(crate) mod routers;
 use bacnet_objects::database::AuditOwnership;
 use bacnet_objects::device::AuditRecipientChangeSink;
 use recipient::{SourceRecipient, SourceRoutes};
+use routers::{SourceRoute, SourceRouters};
 
 #[path = "source_audit_delivery.rs"]
 mod delivery;
@@ -53,7 +55,9 @@ pub(crate) struct SourceAudit {
     notifications: Weak<NotificationTransactions>,
     operations: Arc<Semaphore>,
     max_apdu: u16,
-    failures: Arc<AuditFailureQueue<MacAddr>>,
+    failures: Arc<AuditFailureQueue<SourceRoute>>,
+    /// The routers learned for routed bindings' networks (#2371).
+    routers: Arc<SourceRouters>,
     #[cfg(test)]
     pub(crate) summary_queue_full: tokio::sync::Notify,
 }
@@ -86,6 +90,7 @@ impl SourceAudit {
         routes.validate_initial(&initial)?;
         status.set_configured(routes.resolve(&initial).is_some());
         let failures = Arc::new(AuditFailureQueue::default());
+        let routers = Arc::clone(routes.routers());
         let runtime = Arc::new(SourceRecipient {
             device,
             status,
@@ -108,6 +113,7 @@ impl SourceAudit {
             operations: Arc::new(Semaphore::new(64)),
             max_apdu,
             failures,
+            routers,
             #[cfg(test)]
             summary_queue_full: tokio::sync::Notify::new(),
         });
@@ -285,17 +291,32 @@ impl SourceAudit {
         };
         // A routed destination on this network goes to the station directly
         // (#1403), as pacing localized it, so it is audited as the direct
-        // operation it is.
+        // operation it is. One on another network must name one station there
+        // by the rule a routed binding meets (#2371), and the record names
+        // it by that network and MAC.
         let message = if runtime.routes.is_bip() {
-            "audited operation requires direct B/IP IPv4 unicast"
+            "audited operation requires direct B/IP IPv4 unicast or a routed station"
         } else {
-            "audited operation requires direct unicast on the link"
+            "audited operation requires direct unicast on the link or a routed station"
         };
-        let EndpointApduDestination::Direct { destination_mac } = operation.destination() else {
-            return Err(Error::Encoding(message.into()));
+        let (target_network, destination_mac) = match operation.destination() {
+            EndpointApduDestination::Direct { destination_mac } => (0, destination_mac.clone()),
+            EndpointApduDestination::Routed {
+                destination_network,
+                destination_mac,
+                ..
+            }
+            | EndpointApduDestination::RoutedViaLocalBroadcast {
+                destination_network,
+                destination_mac,
+            } if routers::routed_unicast(*destination_network, destination_mac) => {
+                (*destination_network, destination_mac.clone())
+            }
+            _ => return Err(Error::Encoding(message.into())),
         };
-        let destination_mac = destination_mac.clone();
-        let unicast = if runtime.routes.is_bip() {
+        let unicast = if target_network != 0 {
+            true
+        } else if runtime.routes.is_bip() {
             let (ip, port) = decode_bip_mac(&destination_mac)?;
             let ip = Ipv4Addr::from(ip);
             !(ip.is_unspecified()
@@ -332,7 +353,7 @@ impl SourceAudit {
                 epoch,
                 device,
                 confirmed,
-                peer: CanonicalPeer::direct(route.as_slice()),
+                peer: route.peer(),
                 route: route.clone(),
                 max_apdu: u32::from(self.max_apdu),
             })
@@ -350,7 +371,7 @@ impl SourceAudit {
             source_user_id: None,
             source_user_role: None,
             target_device: BACnetRecipient::Address(BACnetAddress {
-                network_number: 0,
+                network_number: target_network,
                 mac_address: destination_mac,
             }),
             target_object: None,
@@ -510,7 +531,7 @@ impl SourceAudit {
                 epoch,
                 device,
                 confirmed,
-                peer: CanonicalPeer::direct(route.as_slice()),
+                peer: route.peer(),
                 route: route.clone(),
                 max_apdu: u32::from(self.max_apdu),
             })

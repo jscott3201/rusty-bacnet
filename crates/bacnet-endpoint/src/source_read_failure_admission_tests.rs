@@ -3,7 +3,7 @@
 use super::*;
 use bacnet_encoding::apdu::{Apdu, SimpleAck, decode_apdu};
 use bacnet_endpoint_core::coordinator::{
-    LeaseMetadata, OutboundTransactionCoordinator, TerminalPolicy,
+    CanonicalPeer, LeaseMetadata, OutboundTransactionCoordinator, TerminalPolicy,
 };
 use bacnet_endpoint_core::endpoint_ingress::EndpointIngress;
 use bacnet_network::layer::NetworkLayer;
@@ -97,8 +97,8 @@ impl Fixture {
             status,
         }
     }
-    fn ticket(&self, confirmed: bool) -> AuditFailureTicket<MacAddr> {
-        let route = MacAddr::from_slice(self.peer.local_mac());
+    fn ticket(&self, confirmed: bool) -> AuditFailureTicket<SourceRoute> {
+        let route = SourceRoute::Direct(MacAddr::from_slice(self.peer.local_mac()));
         self.source
             .failures
             .observe(AuditFailureContext {
@@ -106,7 +106,7 @@ impl Fixture {
                 epoch: self.status.auditing_failure_epoch().unwrap(),
                 device: oid(ObjectType::DEVICE, 123),
                 confirmed,
-                peer: CanonicalPeer::direct(&route),
+                peer: route.peer(),
                 route,
                 max_apdu: 1476,
             })
@@ -148,7 +148,7 @@ impl Fixture {
             &self.source,
             &self.owner,
             confirmed,
-            MacAddr::from_slice(self.peer.local_mac()),
+            SourceRoute::Direct(MacAddr::from_slice(self.peer.local_mac())),
             notification,
             delivery::Completion::new(self.status.clone(), self.status.begin_delivery()),
             Some(self.ticket(confirmed)),
