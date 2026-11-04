@@ -168,6 +168,18 @@ pub fn reporting_write_config(path: &Path) {
     save_write_config(path, ObjectType::ANALOG_INPUT, &snapshot);
 }
 
+/// An Alert Enrollment's written reporting settings: a class, Event_Enable,
+/// a Notify_Type of EVENT and detection off (#2331).
+pub fn alert_reporting_write_config(path: &Path) {
+    let mut settings = ReportingWriteConfig::default();
+    settings.notification_class = Some(3);
+    settings.event_enable = Some(EventTransitionBits::TO_FAULT);
+    settings.notify_type = Some(NotifyType::EVENT);
+    settings.event_detection_enable = Some(false);
+    let snapshot = WriteConfigSnapshot::Reporting(settings);
+    save_write_config(path, ObjectType::ALERT_ENROLLMENT, &snapshot);
+}
+
 fn save_write_config(path: &Path, kind: ObjectType, snapshot: &WriteConfigSnapshot) {
     FileWriteConfigPersistence::new(path)
         .unwrap()

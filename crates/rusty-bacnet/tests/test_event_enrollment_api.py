@@ -49,8 +49,17 @@ def stub_parameter(method: ast.FunctionDef, name: str) -> tuple[str, bool]:
 class EventEnrollmentApiTests(unittest.IsolatedAsyncioTestCase):
     def test_runtime_and_stub_give_event_type_a_default(self) -> None:
         parameters = inspect.signature(BACnetServer.add_event_enrollment).parameters
+        # Then the keyword-only reporting-settings storage (#2331).
         self.assertEqual(
-            list(parameters), ["self", "instance", "name", "event_type"]
+            list(parameters),
+            [
+                "self",
+                "instance",
+                "name",
+                "event_type",
+                "storage_path",
+                "clear_written_reporting",
+            ],
         )
         # PyO3 renders a non-literal default as `...`; the read-back test
         # below checks which value it is.

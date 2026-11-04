@@ -7,9 +7,13 @@
 //! Event_Detection_Enable and the `ReportingOptions` of its
 //! `EventHistory`). An object opts in by holding a `ReportingStore`,
 //! implementing `KeepsReporting` to lend its rows, and offering each write
-//! to [`admit`] before it makes it; [`impl_reporting_persistence!`] does all
-//! of that, and the builder call, for objects that hold the rows in the
-//! usual fields.
+//! to [`admit`] before it makes it; [`impl_reporting_persistence!`] gives it
+//! the builder call and the staging, and the `KeepsReporting` too for
+//! objects that hold the rows in the usual fields. Every object type with
+//! intrinsic reporting here serves all seven rows, so each keeps them all:
+//! the analog, binary and multi-state objects, Access Door and Access Zone
+//! (through their `ChangeOfStateReporting`), and Event and Alert
+//! Enrollment. The logs keep the same rows in their own files (#1952).
 //!
 //! Storage is the object's
 //! [`WriteConfigPersistence`](super::WriteConfigPersistence), one file per
@@ -22,6 +26,11 @@
 //! saves where it is. Only the rows a write set are kept, and a kept row
 //! wins over its setter until `clear_written_reporting` drops them all.
 //!
+//! An object CreateObject builds through the built-in constructors
+//! ([`crate::creation::builtin_constructor`]) keeps nothing: an application
+//! that wants a created object's settings kept registers a constructor of its
+//! own that attaches storage.
+//!
 //! All of this needs the `event-reporting` feature, which `std` turns on.
 //! Without it the objects keep nothing: they hold no store, [`admit`] lets
 //! every write through, and the builder call isn't there, so an image that
@@ -30,7 +39,11 @@
 #[cfg(feature = "event-reporting")]
 mod kept;
 #[cfg(feature = "event-reporting")]
+mod macros;
+#[cfg(feature = "event-reporting")]
 pub(crate) use kept::*;
+#[cfg(feature = "event-reporting")]
+pub(crate) use macros::*;
 
 #[cfg(not(feature = "event-reporting"))]
 pub(crate) use off::*;
@@ -40,7 +53,21 @@ pub(crate) use off::*;
 mod off {
     use bacnet_types::enums::PropertyIdentifier;
     use bacnet_types::error::Error;
-    use bacnet_types::primitives::PropertyValue;
+    use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+
+    /// Nothing to hold: an object built without `event-reporting` keeps no
+    /// reporting settings, and this field costs it nothing.
+    #[derive(Clone, Default)]
+    pub(crate) struct ReportingStore;
+
+    /// Every setter applies.
+    pub(crate) fn setter_gives_way(
+        _store: &ReportingStore,
+        _object: ObjectIdentifier,
+        _property: PropertyIdentifier,
+    ) -> bool {
+        false
+    }
 
     /// Every write goes through as the object makes it.
     pub(crate) fn admit<T>(
@@ -52,7 +79,7 @@ mod off {
         Ok(())
     }
 
-    /// The object lends only its Tags staging.
+    /// The object lends only its Tags staging, if it has any.
     macro_rules! impl_reporting_persistence {
         ($object:ty) => {
             impl $object {
@@ -61,6 +88,16 @@ mod off {
                     &mut self,
                 ) -> Option<&mut dyn $crate::durable::DurableWrites> {
                     self.profile.capability()
+                }
+            }
+        };
+        ($object:ty, without_tags) => {
+            impl $object {
+                #[cfg(feature = "durable-writes")]
+                fn durable_capability(
+                    &mut self,
+                ) -> Option<&mut dyn $crate::durable::DurableWrites> {
+                    None
                 }
             }
         };

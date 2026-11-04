@@ -20,12 +20,17 @@ const MAX_REFERENCE_OCTETS: usize = 64;
 
 /// Whether objects of `object_type` keep their reporting settings in a
 /// [`KIND_REPORTING`](super::KIND_REPORTING) file: the analog, binary and
-/// multi-state Input, Output and Value objects. A file of that kind for any
-/// other object type is refused.
+/// multi-state Input, Output and Value objects, Access Door, Access Zone,
+/// Event Enrollment and Alert Enrollment. A file of that kind for any other
+/// object type is refused.
 pub fn keeps_reporting(object_type: ObjectType) -> bool {
     matches!(
         object_type,
-        ObjectType::ANALOG_INPUT
+        ObjectType::ACCESS_DOOR
+            | ObjectType::ACCESS_ZONE
+            | ObjectType::EVENT_ENROLLMENT
+            | ObjectType::ALERT_ENROLLMENT
+            | ObjectType::ANALOG_INPUT
             | ObjectType::ANALOG_OUTPUT
             | ObjectType::ANALOG_VALUE
             | ObjectType::BINARY_INPUT

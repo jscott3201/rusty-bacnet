@@ -118,6 +118,10 @@ impl BACnetServer {
     /// Alarm_Values, Fault_Values and Masked_Alarm_Values as
     /// BACnetDoorAlarmState numbers other than NORMAL (1 to 8, or 256 to
     /// 65535). Any other number raises VALUE_OUT_OF_RANGE.
+    ///
+    /// `storage_path` and `clear_written_reporting` keep the reporting
+    /// settings a peer writes in that file, as on `add_analog_input`
+    /// (#2331).
     #[pyo3(signature = (
         instance,
         name,
@@ -125,8 +129,11 @@ impl BACnetServer {
         door_members=None,
         alarm_values=None,
         fault_values=None,
-        masked_alarm_values=None
+        masked_alarm_values=None,
+        storage_path=None,
+        clear_written_reporting=false
     ))]
+    #[allow(clippy::too_many_arguments)]
     fn add_access_door(
         &self,
         instance: u32,
@@ -135,6 +142,8 @@ impl BACnetServer {
         alarm_values: Option<Vec<u32>>,
         fault_values: Option<Vec<u32>>,
         masked_alarm_values: Option<Vec<u32>>,
+        storage_path: Option<&str>,
+        clear_written_reporting: bool,
     ) -> PyResult<()> {
         let settings = DoorSettings {
             door_members: device_references(door_members, "door_members")?,
@@ -142,7 +151,13 @@ impl BACnetServer {
             fault_values,
             masked_alarm_values,
         };
-        let obj = access_door(instance, name, settings).map_err(to_py_err)?;
+        let obj = crate::object_options::keep_reporting(
+            || access_door(instance, name, settings.clone()),
+            storage_path,
+            clear_written_reporting,
+            AccessDoorObject::with_reporting_persistence,
+            AccessDoorObject::clear_written_reporting,
+        )?;
         self.push_pending(Box::new(obj))
     }
 
@@ -228,14 +243,21 @@ impl BACnetServer {
     /// BACnetAccessZoneOccupancyState numbers other than NORMAL (1 to 6, or
     /// 64 to 65535). Any other number raises VALUE_OUT_OF_RANGE naming the
     /// element.
+    ///
+    /// `storage_path` and `clear_written_reporting` keep the reporting
+    /// settings a peer writes in that file, as on `add_analog_input`
+    /// (#2331).
     #[pyo3(signature = (
         instance,
         name,
         *,
         entry_points=None,
         exit_points=None,
-        alarm_values=None
+        alarm_values=None,
+        storage_path=None,
+        clear_written_reporting=false
     ))]
+    #[allow(clippy::too_many_arguments)]
     fn add_access_zone(
         &self,
         instance: u32,
@@ -243,13 +265,21 @@ impl BACnetServer {
         entry_points: Option<Vec<PyDeviceObjectReference>>,
         exit_points: Option<Vec<PyDeviceObjectReference>>,
         alarm_values: Option<Vec<u32>>,
+        storage_path: Option<&str>,
+        clear_written_reporting: bool,
     ) -> PyResult<()> {
         let settings = ZoneSettings {
             entry_points: device_references(entry_points, "entry_points")?,
             exit_points: device_references(exit_points, "exit_points")?,
             alarm_values,
         };
-        let obj = access_zone(instance, name, settings).map_err(to_py_err)?;
+        let obj = crate::object_options::keep_reporting(
+            || access_zone(instance, name, settings.clone()),
+            storage_path,
+            clear_written_reporting,
+            AccessZoneObject::with_reporting_persistence,
+            AccessZoneObject::clear_written_reporting,
+        )?;
         self.push_pending(Box::new(obj))
     }
 
@@ -311,7 +341,7 @@ impl BACnetServer {
 
 /// The optional `add_access_door` keyword arguments; `None` keeps the
 /// door's default.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct DoorSettings {
     door_members: Option<Vec<BACnetDeviceObjectReference>>,
     alarm_values: Option<Vec<u32>>,
@@ -381,7 +411,7 @@ fn access_point(
 
 /// The optional `add_access_zone` keyword arguments; `None` keeps the
 /// zone's default.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct ZoneSettings {
     entry_points: Option<Vec<BACnetDeviceObjectReference>>,
     exit_points: Option<Vec<BACnetDeviceObjectReference>>,

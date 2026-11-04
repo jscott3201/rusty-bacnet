@@ -35,7 +35,7 @@ const TYPES: [ObjectType; 9] = [
     ObjectType::MULTI_STATE_VALUE,
 ];
 
-fn persistence(storage: &Arc<MemoryConfig>) -> Arc<dyn WriteConfigPersistence> {
+pub(super) fn persistence(storage: &Arc<MemoryConfig>) -> Arc<dyn WriteConfigPersistence> {
     Arc::clone(storage) as Arc<dyn WriteConfigPersistence>
 }
 
@@ -98,7 +98,7 @@ fn ai(storage: &Arc<MemoryConfig>) -> AnalogInputObject {
         .unwrap()
 }
 
-fn reference_value() -> PropertyValue {
+pub(super) fn reference_value() -> PropertyValue {
     let mut octets = BytesMut::new();
     encode_object_property_reference(
         &mut octets,
@@ -110,7 +110,7 @@ fn reference_value() -> PropertyValue {
     PropertyValue::ApplicationData(octets.to_vec())
 }
 
-fn texts(texts: [&str; 3]) -> PropertyValue {
+pub(super) fn texts(texts: [&str; 3]) -> PropertyValue {
     PropertyValue::List(
         texts
             .iter()
@@ -121,7 +121,7 @@ fn texts(texts: [&str; 3]) -> PropertyValue {
 
 /// Each kept row's write: the property, the index and the value. The
 /// detection write turns it to the other value, read off the object.
-fn covered(detection: bool) -> Vec<(P, Option<u32>, PropertyValue)> {
+pub(super) fn covered(detection: bool) -> Vec<(P, Option<u32>, PropertyValue)> {
     vec![
         (P::NOTIFICATION_CLASS, None, PropertyValue::Unsigned(9)),
         (
@@ -161,7 +161,7 @@ fn covered(detection: bool) -> Vec<(P, Option<u32>, PropertyValue)> {
     ]
 }
 
-fn detection(object: &dyn BACnetObject) -> bool {
+pub(super) fn detection(object: &dyn BACnetObject) -> bool {
     object
         .read_property(P::EVENT_DETECTION_ENABLE, None)
         .unwrap()
@@ -211,7 +211,7 @@ fn each_written_row_survives_a_rebuild_on_each_type() {
     }
 }
 
-fn refused_with(result: &Result<(), Error>, class: ErrorClass, code: ErrorCode) -> bool {
+pub(super) fn refused_with(result: &Result<(), Error>, class: ErrorClass, code: ErrorCode) -> bool {
     matches!(result, Err(Error::Remote(RemoteError::Error { class: c, code: e }))
         if *c == class && *e == code)
 }

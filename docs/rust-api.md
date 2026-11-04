@@ -4559,8 +4559,9 @@ above; there is no alternate immediate-commit path. Standalone detector
 #### Keeping written reporting settings (#2331)
 
 With the `event-reporting` feature, which `std` turns on, the analog, binary
-and multi-state Input, Output and Value objects can keep the reporting
-settings a peer writes across a restart: Notification_Class,
+and multi-state Input, Output and Value objects, Access Door, Access Zone,
+Event Enrollment and Alert Enrollment can keep the reporting settings a peer
+writes across a restart: Notification_Class,
 Event_Enable, Notify_Type, Event_Detection_Enable,
 Event_Message_Texts_Config, Event_Algorithm_Inhibit_Ref and
 Event_Algorithm_Inhibit. Opt in with the builder call
@@ -4589,8 +4590,12 @@ ai.set_notification_class(5); // a value a peer wrote and saved wins
   NO_SPACE_TO_WRITE_PROPERTY, whatever the storage.
 - **Saved wins.** Only the settings a write set are kept. Once one is saved,
   its setter (`set_notification_class`, `set_event_enable`,
-  `set_notify_type`) leaves it alone, so an application that configures the
-  object at each start keeps a peer's write. `written_reporting()` lists what
+  `set_notify_type`, and an Alert Enrollment's `set_event_detection_enable`)
+  leaves it alone, so an application that configures the object at each
+  start keeps a peer's write. Access Door and Access Zone have no setters
+  for these settings. An Alert Enrollment's Event_Enable,
+  Notification_Class and Event_Detection_Enable are no longer public fields:
+  set them through the setters so the rule holds. `written_reporting()` lists what
   is saved, and `clear_written_reporting()` drops it all, saving before it
   returns, so the setters apply again; the values served stay until a setter
   or a write changes them.
@@ -4602,10 +4607,18 @@ ai.set_notification_class(5); // a value a peer wrote and saved wins
   `WriteConfigSnapshot` and `ReportingWriteConfig` are `#[non_exhaustive]`:
   a match takes a wildcard arm, and a `ReportingWriteConfig` is built from
   `Default` with its fields set.
+- **Created objects.** An object CreateObject builds through the built-in
+  constructors (`creation::builtin_constructor`), an Event Enrollment for
+  example, has no storage: its written settings last until a restart. To
+  keep them, register a constructor with the server's
+  `ObjectTypeRegistry::register` that attaches storage with
+  `with_reporting_persistence`.
 - **Feature.** `event-reporting` gates `with_reporting_persistence`, the
-  three setters, `written_reporting`, `clear_written_reporting` and
+  three setters of the analog, binary and multi-state objects,
+  `written_reporting`, `clear_written_reporting` and
   `wait_for_reporting_saves`; without it the objects keep nothing, and an
-  image that reports nothing links none of it.
+  image that reports nothing links none of it. The Event and Alert
+  Enrollment setters are there either way, and always apply without it.
 
 #### Creation and deletion
 
@@ -7807,6 +7820,16 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   peer; `next_deadline` and `on_deadline` run lifetimes, abandoned reports,
   timeouts (resent with the same invoke ID while retries last, then failed)
   and the looks owed. The host reports each send through `delivered`.
+  The `Responder` runs no DeleteObject, and `handle` rejects it as an
+  unrecognized service, so a host that serves it takes the request before
+  `handle` and lists the service in its own Protocol_Services_Supported.
+  Whenever the host deletes an object, at a request or on its own, it
+  calls `remove_for_object(object, ids)`: the object's subscriptions go, as
+  the server drops them at DeleteObject, with their queued and owed reports
+  and any confirmed notification still out, whose invoke ID goes back to
+  `ids`. `pop` hands out nothing more for the object; one it already
+  handed out is the host's to send. Until then an object created again
+  under its identifier would report to the old subscriptions.
   `ReportConfig` holds the `CovPolicy`, the outbox and the confirmed
   timing; `ReporterCounters` what it counted. Build the database with
   `report::SERVICES`, which adds the two subscribe services to the
