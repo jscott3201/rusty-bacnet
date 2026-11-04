@@ -38,7 +38,7 @@ use bacnet_encoding::primitives::{
     encode_app_enumerated_to_sink, encode_app_object_id_to_sink, encode_app_real_to_sink,
     encode_app_unsigned_to_sink,
 };
-use bacnet_encoding::sink::SinkFull;
+use bacnet_encoding::sink::{SinkEncodeError, SinkFull};
 use bacnet_npdu::{Address, Npdu};
 use bacnet_services::read_property::{ReadPropertyAckRef, ReadPropertyRequest};
 use bacnet_services::who_is::{IAmRequest, WhoIsRequest};
@@ -321,13 +321,19 @@ fn read_property(
                 service_choice,
             }
             .encode_to_sink(out)?;
-            ReadPropertyAckRef {
+            let ack = ReadPropertyAckRef {
                 object_identifier,
                 property_identifier: read.property_identifier,
                 property_array_index: read.property_array_index,
                 property_value: &value[..written],
+            };
+            match ack.encode_to_sink(out) {
+                Ok(_) => {}
+                Err(SinkEncodeError::Full(full)) => return Err(full),
+                // The encoder refuses only a legacy-form Event_Parameters
+                // value, which this device doesn't serve.
+                Err(SinkEncodeError::Refused(_)) => unreachable!(),
             }
-            .encode_to_sink(out)?;
         }
         Err(Refusal::Error(class, code)) => {
             ApduHeader::Error {

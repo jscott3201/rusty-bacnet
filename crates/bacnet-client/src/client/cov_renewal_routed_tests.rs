@@ -78,7 +78,9 @@ async fn relay_notification(
     time_remaining: u32,
 ) {
     let mut service_request = BytesMut::new();
-    notification(9, ai(1), time_remaining).encode(&mut service_request);
+    notification(9, ai(1), time_remaining)
+        .encode(&mut service_request)
+        .unwrap();
     let apdu = Apdu::UnconfirmedRequest(UnconfirmedRequest {
         service_choice: UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION,
         service_request: service_request.freeze(),

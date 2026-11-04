@@ -166,8 +166,7 @@ fn read_property_decoded<O: ReadOverlay>(
         property_value: value_buf.to_vec(),
     };
 
-    ack.encode(buf);
-    Ok(())
+    ack.encode(buf)
 }
 
 /// The stored object a read of `oid` targets: never one at the unregistered

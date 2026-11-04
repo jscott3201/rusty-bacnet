@@ -133,7 +133,8 @@ fn rp_ack(object: ObjectIdentifier, property: P, value: &[u8]) -> Vec<u8> {
         property_array_index: None,
         property_value: value.to_vec(),
     }
-    .encode(&mut params);
+    .encode(&mut params)
+    .unwrap();
     ack(Confirmed::READ_PROPERTY, params)
 }
 
@@ -235,7 +236,8 @@ read-property-multiple parameters @4..17
             ],
         }],
     }
-    .encode(&mut params);
+    .encode(&mut params)
+    .unwrap();
     assert_snapshot(
         &ack(Confirmed::READ_PROPERTY_MULTIPLE, params),
         "
@@ -300,7 +302,8 @@ fn cov_params() -> BytesMut {
             },
         ],
     }
-    .encode(&mut params);
+    .encode(&mut params)
+    .unwrap();
     params
 }
 

@@ -115,7 +115,7 @@ async fn send_unconfirmed_cov_notification<T: TransportPort>(
         time_remaining,
     );
     let mut service_request = BytesMut::new();
-    notification.encode(&mut service_request);
+    notification.encode(&mut service_request).unwrap();
     let apdu = Apdu::UnconfirmedRequest(UnconfirmedRequest {
         service_choice: UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION,
         service_request: service_request.freeze(),
