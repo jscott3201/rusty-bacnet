@@ -42,6 +42,7 @@ mod access;
 mod bbmd_receive;
 mod bbmd_start;
 mod client_snapshot;
+mod datagram;
 mod exchange;
 pub use bacnet_bip_core::node::ExchangeRefusal;
 pub use exchange::BvlcExchangeError;
