@@ -125,7 +125,7 @@ fn read_property() -> (Bytes, Bytes) {
     };
     (
         encoded(|buf| request.encode(buf)).into(),
-        encoded(|buf| ack.encode(buf)).into(),
+        encoded(|buf| ack.encode(buf).unwrap()).into(),
     )
 }
 

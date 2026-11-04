@@ -259,7 +259,7 @@ pub(super) fn seeds() -> Vec<Seed> {
         ("ForwardedEventNotification", notification),
         (
             "ReadProperty-ACK, borrowed",
-            encoded(|buf| read_property_ack.encode(buf)),
+            encoded(|buf| read_property_ack.encode(buf).unwrap()),
         ),
         (
             "WriteProperty-Request",

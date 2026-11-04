@@ -156,7 +156,7 @@ async fn bip_same_id_opposite_directions_routed_and_wrong_peer() {
         property_value: val.to_vec(),
     };
     let mut svc_ack = BytesMut::new();
-    ack.encode(&mut svc_ack);
+    ack.encode(&mut svc_ack).unwrap();
     let resp = Apdu::ComplexAck(bacnet_encoding::apdu::ComplexAck {
         segmented: false,
         more_follows: false,
@@ -246,7 +246,7 @@ async fn bip_same_id_opposite_directions_routed_and_wrong_peer() {
                 property_value: v.to_vec(),
             };
             let mut s = BytesMut::new();
-            a.encode(&mut s);
+            a.encode(&mut s).unwrap();
             s.freeze()
         },
     });
@@ -271,7 +271,7 @@ async fn bip_same_id_opposite_directions_routed_and_wrong_peer() {
         property_value: val2.to_vec(),
     };
     let mut s2 = BytesMut::new();
-    ack2.encode(&mut s2);
+    ack2.encode(&mut s2).unwrap();
     let good = Apdu::ComplexAck(bacnet_encoding::apdu::ComplexAck {
         segmented: false,
         more_follows: false,
@@ -364,7 +364,7 @@ async fn bip_routed_and_confirmed_cov_event_flows() {
         property_value: val.to_vec(),
     };
     let mut svc = BytesMut::new();
-    ack.encode(&mut svc);
+    ack.encode(&mut svc).unwrap();
     let resp = Apdu::ComplexAck(bacnet_encoding::apdu::ComplexAck {
         segmented: false,
         more_follows: false,
@@ -447,7 +447,7 @@ async fn bip_routed_and_confirmed_cov_event_flows() {
         property_value: v2.to_vec(),
     };
     let mut s2 = BytesMut::new();
-    ack2.encode(&mut s2);
+    ack2.encode(&mut s2).unwrap();
     let resp2 = Apdu::ComplexAck(bacnet_encoding::apdu::ComplexAck {
         segmented: false,
         more_follows: false,

@@ -286,23 +286,29 @@ impl SourceAudit {
         // A routed destination on this network goes to the station directly
         // (#1403), as pacing localized it, so it is audited as the direct
         // operation it is.
+        let message = if runtime.routes.is_bip() {
+            "audited operation requires direct B/IP IPv4 unicast"
+        } else {
+            "audited operation requires direct unicast on the link"
+        };
         let EndpointApduDestination::Direct { destination_mac } = operation.destination() else {
-            return Err(Error::Encoding(
-                "audited operation requires direct B/IP IPv4 unicast".into(),
-            ));
+            return Err(Error::Encoding(message.into()));
         };
         let destination_mac = destination_mac.clone();
-        let (ip, port) = decode_bip_mac(&destination_mac)?;
-        let ip = Ipv4Addr::from(ip);
-        if ip.is_unspecified()
-            || ip.is_multicast()
-            || ip.is_broadcast()
-            || ip == self.broadcast
-            || port == 0
-        {
-            return Err(Error::Encoding(
-                "audited operation requires direct B/IP IPv4 unicast".into(),
-            ));
+        let unicast = if runtime.routes.is_bip() {
+            let (ip, port) = decode_bip_mac(&destination_mac)?;
+            let ip = Ipv4Addr::from(ip);
+            !(ip.is_unspecified()
+                || ip.is_multicast()
+                || ip.is_broadcast()
+                || ip == self.broadcast
+                || port == 0)
+        } else {
+            // Another link: a direct unicast MAC there (#2357).
+            runtime.routes.link().unicast(&destination_mac)
+        };
+        if !unicast {
+            return Err(Error::Encoding(message.into()));
         }
         let device = self.device;
         if db.local_device().identifier() != Some(device) {

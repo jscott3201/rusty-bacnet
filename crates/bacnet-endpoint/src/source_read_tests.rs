@@ -122,7 +122,8 @@ fn ack(invoke: u8, request: &ReadPropertyRequest) -> Apdu {
         property_array_index: request.property_array_index,
         property_value: vec![0x21, 42],
     }
-    .encode(&mut service);
+    .encode(&mut service)
+    .unwrap();
     Apdu::ComplexAck(ComplexAck {
         segmented: false,
         more_follows: false,
@@ -613,3 +614,6 @@ mod write;
 
 #[path = "source_reinitialize_tests.rs"]
 mod reinitialize;
+
+#[path = "source_link_tests.rs"]
+mod links;

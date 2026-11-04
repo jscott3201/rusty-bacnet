@@ -1,30 +1,105 @@
-//! Source runtime's Device mutation owner and immutable direct B/IP route facts.
+//! Source runtime's Device mutation owner and immutable direct route facts,
+//! on IPv4 B/IP or any other link (#2357).
 use super::*;
 use bacnet_network::network_number::LocalNetworkNumber;
 use bacnet_objects::clock::ClockFrame;
 use bacnet_objects::database::{AuditOwnership, EventSequence};
 use bacnet_objects::device::{AuditRecipientChangeSink, AuditWriteSource};
+use bacnet_transport::port::GroupDestinations;
 use bacnet_types::enums::{ConfirmedServiceChoice, ErrorClass, ErrorCode};
 use bacnet_types::error::RemoteError;
 use std::collections::HashMap;
 use std::net::SocketAddrV4;
 
+/// Which MACs on the session's link can be a source Audit recipient: a
+/// direct unicast destination there.
+#[derive(Clone, Debug)]
+pub(crate) enum SourceLink {
+    /// IPv4 B/IP, by the link's broadcast endpoint.
+    Bip(SocketAddrV4),
+    /// Any other link (B/IPv6, BACnet/SC, MS/TP and the rest), by its own
+    /// MAC and group-destination rule (#2357).
+    Other {
+        /// This node's MAC, in the link's format; empty while it is learned
+        /// only at start (B/IPv6's VMAC), when the length and self checks
+        /// wait for it.
+        local: MacAddr,
+        /// The transport's group destinations.
+        groups: GroupDestinations,
+    },
+}
+
+impl SourceLink {
+    /// Whether `mac` is a direct unicast destination on this link.
+    ///
+    /// - IPv4 B/IP: a unicast address and nonzero port, and never the link's
+    ///   broadcast address, at any port, as the server's Device bindings
+    ///   refuse it (#2348).
+    /// - Any other link: a MAC as long as this node's, not this node's own,
+    ///   not a group destination by the transport's rule, not the all-ones
+    ///   broadcast of a one-octet (MS/TP's 255) or six-octet (SC's broadcast
+    ///   VMAC, Ethernet's broadcast) link, and not a six-octet all-zero MAC,
+    ///   which names no device: SC reserves that VMAC for one not yet known
+    ///   (Annex AB.1.5.2, H.7.3), and it is no Ethernet station either.
+    pub(crate) fn unicast(&self, mac: &[u8]) -> bool {
+        match self {
+            Self::Bip(broadcast) => {
+                bacnet_server::server::valid_bip_audit_address(&BACnetAddress {
+                    network_number: 0,
+                    mac_address: MacAddr::from_slice(mac),
+                }) && mac[..4] != broadcast.ip().octets()
+            }
+            Self::Other { local, groups } => {
+                let reserved = match mac.len() {
+                    1 => mac == [0xFF],
+                    6 => mac == [0xFF; 6] || mac == [0; 6],
+                    _ => false,
+                };
+                !mac.is_empty()
+                    && (local.is_empty() || (mac.len() == local.len() && mac != local.as_slice()))
+                    && !groups.contains(mac)
+                    && !reserved
+            }
+        }
+    }
+}
+
 pub(crate) struct SourceRoutes {
     devices: HashMap<ObjectIdentifier, MacAddr>,
-    broadcast: SocketAddrV4,
+    link: SourceLink,
     local_network: LocalNetworkNumber,
 }
 impl SourceRoutes {
+    /// IPv4 B/IP routes, with `broadcast` the link's broadcast endpoint.
     pub(crate) fn new(
         bindings: &[(ObjectIdentifier, SocketAddrV4)],
         broadcast: SocketAddrV4,
     ) -> Result<Self, Error> {
+        let bindings: Vec<_> = bindings
+            .iter()
+            .map(|(device, address)| {
+                (
+                    *device,
+                    MacAddr::from_slice(&bacnet_transport::bvll::encode_bip_mac(
+                        address.ip().octets(),
+                        address.port(),
+                    )),
+                )
+            })
+            .collect();
+        Self::for_link(&bindings, SourceLink::Bip(broadcast))
+    }
+    /// Routes on `link`, each binding a Device to a MAC there.
+    pub(crate) fn for_link(
+        bindings: &[(ObjectIdentifier, MacAddr)],
+        link: SourceLink,
+    ) -> Result<Self, Error> {
         let mut routes = Self {
             devices: HashMap::new(),
-            broadcast,
+            link,
             local_network: LocalNetworkNumber::default(),
         };
-        for (device, address) in bindings {
+        for (device, mac) in bindings {
             if device.object_type() != ObjectType::DEVICE
                 || device.instance_number() == ObjectIdentifier::MAX_INSTANCE
             {
@@ -32,14 +107,10 @@ impl SourceRoutes {
                     "source Audit binding requires a concrete Device".into(),
                 ));
             }
-            let mac = MacAddr::from_slice(&bacnet_transport::bvll::encode_bip_mac(
-                address.ip().octets(),
-                address.port(),
-            ));
-            if !routes.valid_address(&mac) {
+            if !routes.valid_address(mac) {
                 return Err(denied());
             }
-            if routes.devices.insert(*device, mac).is_some() {
+            if routes.devices.insert(*device, mac.clone()).is_some() {
                 return Err(Error::Encoding(
                     "duplicate source Audit Device binding".into(),
                 ));
@@ -47,19 +118,24 @@ impl SourceRoutes {
         }
         Ok(routes)
     }
-    /// Take the started link's broadcast endpoint and the layer's number
-    /// slot, which the session's Number owner publishes into.
-    pub(crate) fn finalize(&mut self, broadcast: SocketAddrV4, local_network: LocalNetworkNumber) {
-        self.broadcast = broadcast;
+    /// Whether these are IPv4 B/IP routes.
+    pub(crate) fn is_bip(&self) -> bool {
+        matches!(self.link, SourceLink::Bip(_))
+    }
+    /// The link's unicast rule.
+    pub(crate) fn link(&self) -> &SourceLink {
+        &self.link
+    }
+    /// Take the started link's facts (B/IP's broadcast endpoint, another
+    /// link's own MAC) and the layer's number slot, which the session's
+    /// Number owner publishes into.
+    pub(crate) fn finalize(&mut self, link: SourceLink, local_network: LocalNetworkNumber) {
+        self.link = link;
         self.local_network = local_network;
     }
-    /// A direct unicast B/IP MAC. The link's broadcast address is refused
-    /// at any port, as the server's Device bindings refuse it (#2348).
+    /// A direct unicast MAC on the link ([`SourceLink::unicast`]).
     fn valid_address(&self, mac: &[u8]) -> bool {
-        bacnet_server::server::valid_bip_audit_address(&BACnetAddress {
-            network_number: 0,
-            mac_address: MacAddr::from_slice(mac),
-        }) && mac[..4] != self.broadcast.ip().octets()
+        self.link.unicast(mac)
     }
     /// The direct B/IP MAC a recipient is sent to, if it has one. An address
     /// naming this network by its number, once the number is known, is a

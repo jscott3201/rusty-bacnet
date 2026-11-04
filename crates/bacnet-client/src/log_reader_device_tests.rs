@@ -128,7 +128,8 @@ impl FakeLog {
                     property_array_index: None,
                     property_value: property_value.to_vec(),
                 }
-                .encode(&mut buf);
+                .encode(&mut buf)
+                .unwrap();
                 Ok(buf.to_vec())
             }
             ConfirmedServiceChoice::READ_RANGE => {

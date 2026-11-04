@@ -31,7 +31,7 @@ fn bacnet_property_value_round_trip() {
         priority: None,
     };
     let mut buf = BytesMut::new();
-    encode_bacnet_property_value(&pv, &mut buf);
+    encode_bacnet_property_value(&pv, &mut buf).unwrap();
     let (decoded, _) = decode_bacnet_property_value(&buf, 0).unwrap();
     assert_eq!(pv, decoded);
 }
@@ -51,9 +51,9 @@ fn bacnet_property_value_stops_at_the_next_concatenated_value() {
         priority: None,
     };
     let mut buf = BytesMut::new();
-    encode_bacnet_property_value(&first, &mut buf);
+    encode_bacnet_property_value(&first, &mut buf).unwrap();
     let first_end = buf.len();
-    encode_bacnet_property_value(&second, &mut buf);
+    encode_bacnet_property_value(&second, &mut buf).unwrap();
 
     let (decoded_first, next) = decode_bacnet_property_value(&buf, 0).unwrap();
     let (decoded_second, end) = decode_bacnet_property_value(&buf, next).unwrap();
@@ -73,7 +73,7 @@ fn bacnet_property_value_with_all_fields() {
         priority: Some(8),
     };
     let mut buf = BytesMut::new();
-    encode_bacnet_property_value(&pv, &mut buf);
+    encode_bacnet_property_value(&pv, &mut buf).unwrap();
     let (decoded, _) = decode_bacnet_property_value(&buf, 0).unwrap();
     assert_eq!(pv, decoded);
 }
@@ -86,12 +86,20 @@ fn bacnet_property_value_preserves_legacy_event_parameters() {
         value: vec![0xfe, 0xff, 1, 0xff, 0xff, 0x2f, 2, 0xff, 0xff],
         priority: None,
     };
-    let mut buf = BytesMut::new();
-    encode_bacnet_property_value(&pv, &mut buf);
+    // The inner `ff ff 2f` could end the value, so the encoder refuses it
+    // (#2376) and leaves the buffer as it was.
+    let mut buf = BytesMut::from(&[0xaa][..]);
+    assert!(encode_bacnet_property_value(&pv, &mut buf).is_err());
+    assert_eq!(buf.as_ref(), [0xaa]);
 
-    let (decoded, consumed) = decode_bacnet_property_value(&buf, 0).unwrap();
+    // From an older peer it still decodes: `02` after that pair is no valid
+    // next field, so the pair is payload.
+    let mut wire = vec![0x09, 0x53, 0x2e];
+    wire.extend_from_slice(&pv.value);
+    wire.push(0x2f);
+    let (decoded, consumed) = decode_bacnet_property_value(&wire, 0).unwrap();
     assert_eq!(decoded, pv);
-    assert_eq!(consumed, buf.len());
+    assert_eq!(consumed, wire.len());
 }
 
 #[test]
@@ -103,9 +111,11 @@ fn bacnet_property_value_rejects_unclosed_legacy_event_parameters() {
         priority: None,
     };
     let mut buf = BytesMut::new();
-    encode_bacnet_property_value(&pv, &mut buf);
+    assert!(encode_bacnet_property_value(&pv, &mut buf).is_err());
+    assert!(buf.is_empty());
 
-    assert!(decode_bacnet_property_value(&buf, 0).is_err());
+    let wire = [0x09, 0x53, 0x2e, 0xfe, 0xff, 1, 2, 0x2f];
+    assert!(decode_bacnet_property_value(&wire, 0).is_err());
 }
 
 #[test]
@@ -117,7 +127,7 @@ fn bacnet_property_value_priority_validation() {
         priority: None,
     };
     let mut base = BytesMut::new();
-    encode_bacnet_property_value(&pv, &mut base);
+    encode_bacnet_property_value(&pv, &mut base).unwrap();
 
     for priority in [0, 17, 257, 272, u64::MAX] {
         let mut encoded = base.clone();
@@ -211,7 +221,7 @@ fn test_decode_bacnet_property_value_truncated_1_byte() {
         priority: None,
     };
     let mut buf = BytesMut::new();
-    encode_bacnet_property_value(&pv, &mut buf);
+    encode_bacnet_property_value(&pv, &mut buf).unwrap();
     assert!(decode_bacnet_property_value(&buf[..1], 0).is_err());
 }
 
@@ -224,7 +234,7 @@ fn test_decode_bacnet_property_value_truncated_2_bytes() {
         priority: None,
     };
     let mut buf = BytesMut::new();
-    encode_bacnet_property_value(&pv, &mut buf);
+    encode_bacnet_property_value(&pv, &mut buf).unwrap();
     assert!(decode_bacnet_property_value(&buf[..2], 0).is_err());
 }
 
@@ -237,7 +247,7 @@ fn test_decode_bacnet_property_value_truncated_3_bytes() {
         priority: None,
     };
     let mut buf = BytesMut::new();
-    encode_bacnet_property_value(&pv, &mut buf);
+    encode_bacnet_property_value(&pv, &mut buf).unwrap();
     assert!(decode_bacnet_property_value(&buf[..3], 0).is_err());
 }
 

@@ -226,6 +226,19 @@ pub(super) fn is_configured_bbmd(peer: SocketAddr, foreign_bbmd: Option<(Ipv6Add
     })
 }
 
+/// Whom a node takes Forwarded-NPDUs and Forwarded-Address-Resolutions
+/// from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Forwarders {
+    /// A normal node: ones delivered on a BACnet multicast group.
+    Group,
+    /// A foreign device: the BBMD it registers with, by unicast.
+    Bbmd(Ipv6Addr, u16),
+    /// A foreign device waiting for its BBMD's host name (#2365): it has no
+    /// BBMD yet, so it takes none.
+    None,
+}
+
 /// Whether a Forwarded-Address-Resolution came by a path this node answers.
 ///
 /// A BBMD sends one by unicast to each foreign device it serves, and by
@@ -234,7 +247,8 @@ pub(super) fn is_configured_bbmd(peer: SocketAddr, foreign_bbmd: Option<(Ipv6Add
 /// address comes from the message, who may send one matters:
 ///
 /// - A foreign device takes one only by unicast from the BBMD it is
-///   configured to register with.
+///   configured to register with, and none while it waits for that BBMD's
+///   host name.
 /// - Any other node has no configured BBMD to check the sender against. It
 ///   takes one that arrives on a BACnet multicast group from an answerable
 ///   source ([`is_answerable_source`]). A forged one draws at most one
@@ -250,13 +264,17 @@ pub(super) fn forwarded_address_resolution_is_trusted(
     destination: IpAddr,
     os_group_delivery: Option<bool>,
     local: &LocalBinding<'_>,
-    foreign_bbmd: Option<(Ipv6Addr, u16)>,
+    forwarders: Forwarders,
 ) -> bool {
-    if foreign_bbmd.is_some() {
-        is_configured_bbmd(peer, foreign_bbmd)
-            && is_local_unicast_address(destination, local, os_group_delivery)
-    } else {
-        is_bacnet_group_delivery(destination, os_group_delivery) && is_answerable_source(peer)
+    match forwarders {
+        Forwarders::Bbmd(ip, port) => {
+            is_configured_bbmd(peer, Some((ip, port)))
+                && is_local_unicast_address(destination, local, os_group_delivery)
+        }
+        Forwarders::Group => {
+            is_bacnet_group_delivery(destination, os_group_delivery) && is_answerable_source(peer)
+        }
+        Forwarders::None => false,
     }
 }
 
@@ -267,10 +285,10 @@ pub(super) fn forwarded_npdu_is_trusted(
     local_ip: Ipv6Addr,
     local_unicast_ips: &[Ipv6Addr],
     wildcard_bind: bool,
-    foreign_bbmd: Option<(Ipv6Addr, u16)>,
+    forwarders: Forwarders,
 ) -> bool {
-    if foreign_bbmd.is_some() {
-        let peer_matches = is_configured_bbmd(peer, foreign_bbmd);
+    if let Forwarders::Bbmd(ip, port) = forwarders {
+        let peer_matches = is_configured_bbmd(peer, Some((ip, port)));
         let destination_matches = match destination {
             IpAddr::V6(ip) if wildcard_bind => {
                 !ip.is_multicast()
@@ -282,6 +300,6 @@ pub(super) fn forwarded_npdu_is_trusted(
         };
         peer_matches && destination_matches && os_group_delivery != Some(true)
     } else {
-        is_bacnet_group_delivery(destination, os_group_delivery)
+        forwarders == Forwarders::Group && is_bacnet_group_delivery(destination, os_group_delivery)
     }
 }

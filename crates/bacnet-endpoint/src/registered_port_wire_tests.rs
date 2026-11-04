@@ -333,7 +333,8 @@ async fn registered_port_capacity_1476_valid_wp_and_rp_through_both_owners() {
                     property_array_index: None,
                     property_value: value.to_vec(),
                 }
-                .encode(&mut body);
+                .encode(&mut body)
+                .unwrap();
                 let mut apdu = BytesMut::new();
                 encode_apdu(
                     &mut apdu,

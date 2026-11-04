@@ -26,6 +26,7 @@ mod object_audit_policy;
 mod object_options;
 mod py_async;
 mod read_range;
+mod registration_dicts;
 mod reinitialize;
 mod router;
 mod sc_events;

@@ -316,7 +316,8 @@ fn ack(request: &ConfirmedRequest, value: u8) -> Apdu {
         property_array_index: None,
         property_value: vec![0x21, value],
     }
-    .encode(&mut service);
+    .encode(&mut service)
+    .unwrap();
     Apdu::ComplexAck(ComplexAck {
         segmented: false,
         more_follows: false,

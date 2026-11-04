@@ -478,6 +478,7 @@ pub(super) fn seeds() -> Vec<Seed> {
                     },
                     buf,
                 )
+                .unwrap()
             }),
         ),
         (

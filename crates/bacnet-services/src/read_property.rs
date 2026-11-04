@@ -10,7 +10,7 @@
 use alloc::vec::Vec;
 
 use bacnet_encoding::primitives;
-use bacnet_encoding::sink::{EncodeSink, SinkFull};
+use bacnet_encoding::sink::{EncodeSink, SinkEncodeError, SinkFull};
 use bacnet_encoding::tags;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
@@ -21,7 +21,9 @@ use bytes::BytesMut;
 use bacnet_encoding::constructed::tagged::{
     decode_ctx_object_id, decode_ctx_unsigned, decode_optional_ctx, expect_end, expect_opening,
 };
-use bacnet_encoding::constructed::{PropertyValueBoundary, extract_property_value};
+use bacnet_encoding::constructed::{
+    PropertyValueBoundary, check_property_value, extract_property_value,
+};
 
 use crate::who_is::staged;
 
@@ -169,7 +171,15 @@ pub struct ReadPropertyAckRef<'a> {
 impl<'a> ReadPropertyAckRef<'a> {
     /// Append the acknowledgment parameters to `sink` as one value
     /// ([`EncodeSink::write_parts`]); returns the octets appended.
-    pub fn encode_to_sink<S: EncodeSink + ?Sized>(&self, sink: &mut S) -> Result<usize, SinkFull> {
+    ///
+    /// Writes nothing when the sink is full, or when the value is one
+    /// [`check_property_value`] refuses.
+    pub fn encode_to_sink<S: EncodeSink + ?Sized>(
+        &self,
+        sink: &mut S,
+    ) -> Result<usize, SinkEncodeError> {
+        check_property_value(self.property_identifier, self.property_value, 3)
+            .map_err(|refused| refused.within("ReadPropertyACK"))?;
         let mut head = [0; 16];
         let mut tail = &mut head[..];
         let head_len = encode_reference(
@@ -268,11 +278,16 @@ impl ReadPropertyACK {
         }
     }
 
-    /// Encode the acknowledgment parameters into `buf`.
-    pub fn encode(&self, buf: &mut BytesMut) {
-        self.as_borrowed()
-            .encode_to_sink(buf)
-            .expect("the BytesMut sink cannot return SinkFull");
+    /// Encode the acknowledgment parameters into `buf`; fails, leaving `buf`
+    /// unchanged, on a value [`check_property_value`] refuses.
+    pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
+        match self.as_borrowed().encode_to_sink(buf) {
+            Ok(_) => Ok(()),
+            Err(SinkEncodeError::Refused(refused)) => Err(refused.into()),
+            Err(SinkEncodeError::Full(_)) => {
+                unreachable!("the BytesMut sink cannot return SinkFull")
+            }
+        }
     }
 
     /// Decode the acknowledgment from its service-ack octets; fails on malformed or truncated
@@ -376,7 +391,7 @@ mod tests {
             property_value: vec![0x44, 0x42, 0x90, 0x00, 0x00], // Real 72.5
         };
         let mut buf = BytesMut::new();
-        ack.encode(&mut buf);
+        ack.encode(&mut buf).unwrap();
         let decoded = ReadPropertyACK::decode(&buf).unwrap();
         assert_eq!(ack, decoded);
     }
@@ -390,7 +405,7 @@ mod tests {
             property_value: vec![0x44, 0x42, 0x90, 0x00, 0x00],
         };
         let mut buf = BytesMut::new();
-        ack.encode(&mut buf);
+        ack.encode(&mut buf).unwrap();
         let decoded = ReadPropertyACK::decode(&buf).unwrap();
         assert_eq!(ack, decoded);
     }
@@ -415,7 +430,7 @@ mod tests {
             property_value: property_value.to_vec(),
         };
         let mut encoded = BytesMut::new();
-        ack.encode(&mut encoded);
+        ack.encode(&mut encoded).unwrap();
         let decoded = ReadPropertyACK::decode(&encoded).unwrap();
         assert_eq!(decoded, ack);
 
@@ -449,20 +464,31 @@ mod tests {
             property_array_index: None,
             property_value: property_value.clone(),
         };
-        let mut encoded = BytesMut::new();
-        ack.encode(&mut encoded);
-        assert_eq!(ReadPropertyACK::decode(&encoded).unwrap(), ack);
-
         let request = WritePropertyRequest {
             object_identifier,
             property_identifier: PropertyIdentifier::EVENT_PARAMETERS,
             property_array_index: None,
-            property_value,
+            property_value: property_value.clone(),
             priority: Some(8),
         };
-        encoded.clear();
-        request.encode(&mut encoded).unwrap();
-        assert_eq!(WritePropertyRequest::decode(&encoded).unwrap(), request);
+        // The inner `ff ff 3f` could end the value, so both encoders refuse
+        // it (#2376).
+        let mut encoded = BytesMut::new();
+        assert!(ack.encode(&mut encoded).is_err());
+        assert!(request.encode(&mut encoded).is_err());
+        assert!(encoded.is_empty());
+
+        // From an older peer both still decode: what follows that pair is no
+        // valid next field.
+        let mut wire = BytesMut::new();
+        primitives::encode_ctx_object_id(&mut wire, 0, &object_identifier);
+        primitives::encode_ctx_unsigned(&mut wire, 1, 83);
+        tags::encode_opening_tag(&mut wire, 3);
+        wire.extend_from_slice(&property_value);
+        tags::encode_closing_tag(&mut wire, 3);
+        assert_eq!(ReadPropertyACK::decode(&wire).unwrap(), ack);
+        primitives::encode_ctx_unsigned(&mut wire, 4, 8);
+        assert_eq!(WritePropertyRequest::decode(&wire).unwrap(), request);
     }
 
     #[test]
@@ -704,7 +730,7 @@ mod tests {
             property_value: vec![0x44, 0x42, 0x90, 0x00, 0x00],
         };
         let mut buf = BytesMut::new();
-        ack.encode(&mut buf);
+        ack.encode(&mut buf).unwrap();
         assert!(ReadPropertyACK::decode(&buf[..1]).is_err());
     }
 
@@ -717,7 +743,7 @@ mod tests {
             property_value: vec![0x44, 0x42, 0x90, 0x00, 0x00],
         };
         let mut buf = BytesMut::new();
-        ack.encode(&mut buf);
+        ack.encode(&mut buf).unwrap();
         assert!(ReadPropertyACK::decode(&buf[..3]).is_err());
     }
 
@@ -730,7 +756,7 @@ mod tests {
             property_value: vec![0x44, 0x42, 0x90, 0x00, 0x00],
         };
         let mut buf = BytesMut::new();
-        ack.encode(&mut buf);
+        ack.encode(&mut buf).unwrap();
         let half = buf.len() / 2;
         assert!(ReadPropertyACK::decode(&buf[..half]).is_err());
     }

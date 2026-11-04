@@ -27,15 +27,15 @@ use crate::port::{ReceivedNpdu, TransportPort};
 use crate::udp_metadata::ReceivedDatagram;
 use crate::warn_throttle::WARNING_INTERVAL;
 
-const LOCAL_VMAC: Bip6Vmac = Bip6Vmac::new([0x00, 0x06, 0x50]);
+pub(super) const LOCAL_VMAC: Bip6Vmac = Bip6Vmac::new([0x00, 0x06, 0x50]);
 const PEER_VMAC: Bip6Vmac = Bip6Vmac::new([0x00, 0x06, 0x51]);
 const OTHER_VMAC: Bip6Vmac = Bip6Vmac::new([0x00, 0x06, 0x52]);
 const LOCAL_PORT: u16 = 0xBAC0;
 /// A Who-Is.
-const NPDU: &[u8] = &[0x01, 0x00, 0x10, 0x08];
-const GROUP: Ipv6Addr = BACNET_IPV6_MULTICAST_SITE_LOCAL;
+pub(super) const NPDU: &[u8] = &[0x01, 0x00, 0x10, 0x08];
+pub(super) const GROUP: Ipv6Addr = BACNET_IPV6_MULTICAST_SITE_LOCAL;
 
-fn local_ip() -> Ipv6Addr {
+pub(super) fn local_ip() -> Ipv6Addr {
     Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x10)
 }
 
@@ -45,7 +45,7 @@ fn own() -> SocketAddrV6 {
 }
 
 /// Another node on the link.
-fn peer() -> SocketAddrV6 {
+pub(super) fn peer() -> SocketAddrV6 {
     SocketAddrV6::new(
         Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x30),
         0xBAC0,
@@ -55,12 +55,12 @@ fn peer() -> SocketAddrV6 {
 }
 
 /// The BBMD a foreign-device node registers with.
-fn bbmd() -> SocketAddrV6 {
+pub(super) fn bbmd() -> SocketAddrV6 {
     SocketAddrV6::new(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1), 0xBAC0, 0, 0)
 }
 
 /// A node on another link: a Forwarded-NPDU's origin, or an asker.
-fn station() -> SocketAddrV6 {
+pub(super) fn station() -> SocketAddrV6 {
     SocketAddrV6::new(
         Ipv6Addr::new(0x2001, 0xdb8, 0, 9, 0, 0, 0, 0x20),
         0xBAC0,
@@ -75,9 +75,9 @@ fn group_source() -> SocketAddrV6 {
 }
 
 /// A receiver and the network layer's end of its channel.
-struct Node {
+pub(super) struct Node {
     receiver: Receiver,
-    rx: mpsc::Receiver<ReceivedNpdu>,
+    pub(super) rx: mpsc::Receiver<ReceivedNpdu>,
 }
 
 impl Node {
@@ -85,7 +85,16 @@ impl Node {
     /// whose channel to the network layer holds `capacity` NPDUs. Its
     /// socket is never used: replies are returned, not sent.
     async fn new(foreign: bool, capacity: usize) -> Self {
-        let socket = Bip6Socket::bind(Ipv6Addr::LOCALHOST, 0, None)
+        let target = foreign.then(|| super::foreign_target::ForeignTarget::at(bbmd()));
+        Self::with_target(target, capacity).await
+    }
+
+    /// [`Node::new`], registering as `target` says, if it is a foreign device.
+    pub(super) async fn with_target(
+        target: Option<Arc<super::foreign_target::ForeignTarget>>,
+        capacity: usize,
+    ) -> Self {
+        let socket = Bip6Socket::bind(Ipv6Addr::LOCALHOST, 0, super::socket::Role::Normal)
             .await
             .unwrap();
         let (tx, rx) = mpsc::channel(capacity);
@@ -97,7 +106,7 @@ impl Node {
             local_ip: local_ip(),
             unicast_ips: vec![local_ip()],
             wildcard_bind: false,
-            foreign_bbmd: foreign.then(|| super::foreign_target::ForeignTarget::at(bbmd())),
+            foreign_bbmd: target,
             neighbours: Resolver::with_own(LOCAL_VMAC),
             forwarded_group_origin_drops: Arc::default(),
             drops: Arc::default(),
@@ -108,7 +117,12 @@ impl Node {
     }
 
     /// Feed `datagram` from `from`, sent to `to`.
-    async fn feed(&self, datagram: &[u8], from: SocketAddrV6, to: Ipv6Addr) -> Option<Reply> {
+    pub(super) async fn feed(
+        &self,
+        datagram: &[u8],
+        from: SocketAddrV6,
+        to: Ipv6Addr,
+    ) -> Option<Reply> {
         let received = ReceivedDatagram {
             len: datagram.len(),
             peer: SocketAddr::V6(from),
@@ -121,21 +135,26 @@ impl Node {
     }
 
     /// Feed `message` from `from`, sent to `to`.
-    async fn send(&self, message: Bvll6<'_>, from: SocketAddrV6, to: Ipv6Addr) -> Option<Reply> {
+    pub(super) async fn send(
+        &self,
+        message: Bvll6<'_>,
+        from: SocketAddrV6,
+        to: Ipv6Addr,
+    ) -> Option<Reply> {
         self.feed(&encoded(&message).unwrap(), from, to).await
     }
 
-    fn counters(&self) -> Bip6ReceiveCounters {
+    pub(super) fn counters(&self) -> Bip6ReceiveCounters {
         self.receiver.drops.snapshot()
     }
 
-    fn nothing_handed_up(&mut self) {
+    pub(super) fn nothing_handed_up(&mut self) {
         assert!(self.rx.try_recv().is_err(), "an NPDU was handed up");
     }
 }
 
 /// Counters where only what `set` writes moved.
-fn only(set: impl FnOnce(&mut Bip6ReceiveCounters)) -> Bip6ReceiveCounters {
+pub(super) fn only(set: impl FnOnce(&mut Bip6ReceiveCounters)) -> Bip6ReceiveCounters {
     let mut counters = Bip6ReceiveCounters::default();
     set(&mut counters);
     counters
@@ -156,7 +175,7 @@ fn broadcast() -> Bvll6<'static> {
     }
 }
 
-fn forwarded(origin: SocketAddrV6, npdu: &[u8]) -> BytesMut {
+pub(super) fn forwarded(origin: SocketAddrV6, npdu: &[u8]) -> BytesMut {
     encoded(&Bvll6::ForwardedNpdu {
         original_source: PEER_VMAC,
         original_address: origin.into(),
@@ -165,7 +184,7 @@ fn forwarded(origin: SocketAddrV6, npdu: &[u8]) -> BytesMut {
     .unwrap()
 }
 
-fn forwarded_resolution(target: Bip6Vmac, asker: SocketAddrV6) -> Bvll6<'static> {
+pub(super) fn forwarded_resolution(target: Bip6Vmac, asker: SocketAddrV6) -> Bvll6<'static> {
     Bvll6::ForwardedAddressResolution {
         original_source: PEER_VMAC,
         target,
