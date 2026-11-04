@@ -13,6 +13,7 @@ use crate::common;
 use crate::durable::staged::{self, StagedSaves};
 use crate::durable::{PendingWrite, SaveWait, StageStep};
 use crate::event::options::{MAX_KEPT_TEXT_OCTETS, ReportingOptions};
+use crate::prelude::Box;
 use crate::traits::BACnetObject;
 use crate::write_config::{ReportingWriteConfig, WriteConfigPersistence, WriteConfigSnapshot};
 
@@ -196,7 +197,11 @@ pub(crate) struct ReportingStore {
     /// Writes of the kept rows made so far, so a staged step is taken only
     /// if no other came between.
     writes: u64,
-    storage: Option<Storage>,
+    /// Boxed: every object with intrinsic reporting holds a store, and most
+    /// never attach storage, so an unattached object pays one pointer, not
+    /// the staged-save state (the firmware `reporting` scenario's arena,
+    /// #2331).
+    storage: Option<Box<Storage>>,
 }
 
 impl ReportingStore {
@@ -291,9 +296,8 @@ pub(crate) fn attach<T: KeepsReporting>(
     object.restore_reporting_rows(&saved);
     let store = object.reporting_store();
     store.written = Written::of(&saved);
-    store.storage = Some(StagedSaves::new(crate::write_config::saving::writer(
-        oid,
-        persistence,
+    store.storage = Some(Box::new(StagedSaves::new(
+        crate::write_config::saving::writer(oid, persistence),
     )));
     Ok(object)
 }
@@ -411,7 +415,7 @@ pub(crate) fn release<T: KeepsReporting>(object: &mut T, staged: &SaveWait) {
 
 /// See [`DurableWrites::has_staged_write`](crate::durable::DurableWrites::has_staged_write).
 pub(crate) fn has_staged(store: &ReportingStore) -> bool {
-    store.storage.as_ref().is_some_and(Storage::is_staged)
+    store.storage.as_deref().is_some_and(Storage::is_staged)
 }
 
 /// See [`DurableWrites::settle_forgotten_writes`](crate::durable::DurableWrites::settle_forgotten_writes).
