@@ -59,11 +59,7 @@ fn routed_row(dnet: u16, dadr: &[u8]) -> DiscoveredDevice {
 async fn routed_confirmed_request_to_no_single_device_fails_before_any_state() {
     let (mut client, _inbound, mut outbound) = client().await;
     for (dnet, dadr) in not_one_device() {
-        client
-            .device_table
-            .lock()
-            .await
-            .upsert(routed_row(dnet, &dadr));
+        client.device_table.lock().upsert(routed_row(dnet, &dadr));
         let pv = PropertyIdentifier::PRESENT_VALUE;
         let results = [
             client
@@ -98,7 +94,7 @@ async fn routed_confirmed_request_to_no_single_device_fails_before_any_state() {
             outbound.try_recv().is_err(),
             "DNET {dnet}: a frame went out"
         );
-        assert_eq!(client.tsm.lock().await.pending_count(), 0);
+        assert_eq!(client.tsm.lock().pending_count(), 0);
         assert_eq!(client.routed_path_limits.entry_count(), 0);
     }
 

@@ -34,7 +34,7 @@ mod forwarding;
 mod log_metadata;
 pub use forwarding::AuditLogForwarding;
 mod notification;
-mod persistence;
+pub(crate) mod persistence;
 mod receipt;
 mod reporter_change;
 mod reporter_delay;

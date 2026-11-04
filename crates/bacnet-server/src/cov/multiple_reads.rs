@@ -8,9 +8,9 @@ use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 
-use super::flags::PreparedFlags;
-use super::value_source::{self, PreparedValueSource};
 use super::{CovObservation, CovSubscription};
+use bacnet_device_core::cov::flags::PreparedFlags;
+use bacnet_device_core::cov::value_source::{self, PreparedValueSource};
 
 /// One reference's current values and the observation they establish, read
 /// once; [`MultipleReads::reports`] later qualifies it without object reads.
@@ -20,7 +20,7 @@ pub(crate) struct PreparedReference {
     /// Baseline established by conveying these values.
     pub observation: CovObservation,
     oid: ObjectIdentifier,
-    criterion: Option<super::prepare::PreparedCovValue>,
+    criterion: Option<bacnet_device_core::cov::prepare::PreparedCovValue>,
 }
 
 /// Per-object reads shared by every reference in one preparation. Each object's
@@ -118,7 +118,7 @@ impl MultipleReads {
                     object.read_property(property_identifier, sub.monitored_property_array_index)
                 })
                 .and_then(|value| {
-                    super::prepare::prepare_value(
+                    bacnet_device_core::cov::prepare::prepare_value(
                         object,
                         property_identifier,
                         sub.monitored_property_array_index,

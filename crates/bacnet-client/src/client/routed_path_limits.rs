@@ -315,7 +315,7 @@ impl RoutedPathLimits {
 
     pub(super) async fn handle_network_control(
         &self,
-        tsm: &Arc<Mutex<Tsm>>,
+        tsm: &Arc<SyncMutex<Tsm>>,
         control: ReceivedNetworkControl,
     ) {
         if control.npdu.message_type != Some(NetworkMessageType::REJECT_MESSAGE_TO_NETWORK) {
@@ -335,7 +335,7 @@ impl RoutedPathLimits {
         ) else {
             return;
         };
-        let outcome = tsm.lock().await.complete_network_path_too_long_for_owner(
+        let outcome = tsm.lock().complete_network_path_too_long_for_owner(
             &active.tsm_mac,
             active.invoke_id,
             &active.owner,

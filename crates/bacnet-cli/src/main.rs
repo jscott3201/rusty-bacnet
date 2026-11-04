@@ -702,15 +702,18 @@ async fn cli_main(cli: Cli) -> CliResult {
         let cmd = cli.command.as_ref().expect("a command after parsing");
         // Broadcasts reach the remote network once the BBMD has taken the
         // registration (#938).
-        if let Some(bbmd) = &cli.foreign_bbmd
-            && let Err(e) = foreign::await_registration(&client, bbmd).await
-        {
-            // The registration's failure is the error to report.
-            return Err(match client.stop().await {
-                Ok(()) => e,
-                Err(stop) => format!("{e}; stopping the client also failed: {stop}"),
+        if let Some(bbmd) = &cli.foreign_bbmd {
+            match foreign::await_registration(&client, bbmd).await {
+                Ok(bbmd) => tracing::info!("BBMD {bbmd} accepted the foreign-device registration"),
+                // The registration's failure is the error to report.
+                Err(e) => {
+                    return Err(match client.stop().await {
+                        Ok(()) => e,
+                        Err(stop) => format!("{e}; stopping the client also failed: {stop}"),
+                    }
+                    .into());
+                }
             }
-            .into());
         }
         if !execute_bip_command(&client, cmd, cli.ttl, format).await? {
             execute_command(&client, cmd, format).await?;

@@ -78,7 +78,7 @@ async fn assert_active_initial_abort(
             if reason == AbortReason::INVALID_APDU_IN_THIS_STATE
     ));
     {
-        let mut tsm = client.tsm.lock().await;
+        let mut tsm = client.tsm.lock();
         assert_eq!(tsm.pending_count(), 0);
         assert_eq!(tsm.allocate_invoke_id(SERVER_MAC), Some(invoke_id));
         tsm.release_invoke_id(SERVER_MAC, invoke_id);
@@ -114,7 +114,7 @@ async fn idle_precedes_unsupported_capability() {
 
     send_to_client(&server, &response_segment(42, 0, true, &[0xAA])).await;
     expect_abort(&mut rx, 42, AbortReason::INVALID_APDU_IN_THIS_STATE).await;
-    assert_eq!(client.tsm.lock().await.pending_count(), 0);
+    assert_eq!(client.tsm.lock().pending_count(), 0);
     expect_silence(&mut rx).await;
 
     client.stop().await.unwrap();
@@ -135,7 +135,7 @@ async fn supported_sequence_zero_enters_segmented_response_and_completes() {
         .expect("valid segmented response did not complete")
         .unwrap();
     assert_eq!(result.unwrap().as_ref(), b"first-response");
-    assert_eq!(client.tsm.lock().await.pending_count(), 0);
+    assert_eq!(client.tsm.lock().pending_count(), 0);
     client.stop().await.unwrap();
     server.stop().await.unwrap();
 }

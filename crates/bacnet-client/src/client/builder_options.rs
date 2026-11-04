@@ -140,6 +140,26 @@ impl Bip6ClientBuilder {
         self
     }
 
+    /// As a foreign device, after a move to another BBMD (a Network Port
+    /// activation, or the BBMD's host name resolving elsewhere), ask the
+    /// BBMD left behind to delete this device's entry rather than let it
+    /// lapse (#2338). Off by default; see
+    /// [`Bip6Transport::set_release_previous_bbmd`] for why, and
+    /// [`Bip6Transport::previous_bbmd_releases`] for the counts it keeps.
+    /// Ignored, with a warning, without [`Self::foreign_device`].
+    pub fn release_previous_bbmd(mut self, release: bool) -> Self {
+        self.release_previous_bbmd = release;
+        self
+    }
+
+    /// Look up a BBMD that FD_BBMD_Address names by host name with
+    /// `resolver` instead of the system's resolver (#2308, #2338). See
+    /// [`Bip6Transport::set_bbmd_resolver`].
+    pub fn bbmd_resolver(mut self, resolver: Arc<dyn BbmdResolver>) -> Self {
+        self.bbmd_resolver = Some(resolver);
+        self
+    }
+
     /// Set the independent event notification broadcast channel capacity.
     pub fn event_channel_capacity(mut self, capacity: usize) -> Self {
         self.options.event_channel_capacity = capacity;

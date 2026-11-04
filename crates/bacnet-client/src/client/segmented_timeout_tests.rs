@@ -33,8 +33,8 @@ async fn segment_timer_timeout_ends_the_reassembly_session() {
         result,
         Err(Error::Remote(RemoteError::Abort { reason })) if reason == AbortReason::TSM_TIMEOUT
     ));
-    assert_eq!(client.tsm.lock().await.pending_count(), 0);
-    assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
+    assert_eq!(client.tsm.lock().pending_count(), 0);
+    assert_eq!(client.tsm.lock().coordinated_active_count(), 0);
     assert!(
         timeout(
             Duration::from_secs(2),
@@ -139,13 +139,12 @@ async fn segmented_request_without_segment_ack_returns_local_tsm_timeout() {
         result,
         Err(Error::Remote(RemoteError::Abort { reason })) if reason == AbortReason::TSM_TIMEOUT
     ));
-    assert_eq!(client.tsm.lock().await.pending_count(), 0);
-    assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
+    assert_eq!(client.tsm.lock().pending_count(), 0);
+    assert_eq!(client.tsm.lock().coordinated_active_count(), 0);
     assert!(
         !client
             .seg_ack_senders
             .lock()
-            .await
             .contains_key(&(bacnet_types::MacAddr::from_slice(SERVER_MAC), invoke_id)),
         "SegmentTimer expiry left the SegmentAck sender registered"
     );
@@ -227,8 +226,8 @@ async fn delayed_timeout_cleanup_preserves_newer_segmented_response() {
         .expect("dispatch did not process delayed cleanup"),
         "owner A cleanup did not reclaim its stale reassembly state"
     );
-    assert_eq!(client.tsm.lock().await.pending_count(), 1);
-    assert_eq!(client.tsm.lock().await.coordinated_active_count(), 1);
+    assert_eq!(client.tsm.lock().pending_count(), 1);
+    assert_eq!(client.tsm.lock().coordinated_active_count(), 1);
 
     send_to_client(
         &server,
@@ -255,7 +254,11 @@ async fn delayed_timeout_cleanup_preserves_newer_segmented_response() {
     server.stop().await.unwrap();
 }
 
-#[tokio::test]
+// The test thread holds the TSM lock across the cancellation, so the
+// dispatch task, which takes it to clean up, must run on a worker of its own:
+// the lock blocks, and on one thread it would wait for the test forever.
+#[allow(clippy::await_holding_lock)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn caller_cancellation_reclaims_reassembly_after_tsm_lock_contention() {
     let (client_transport, mut server) =
         LoopbackTransport::pair(CLIENT_MAC.to_vec(), SERVER_MAC.to_vec());
@@ -279,9 +282,14 @@ async fn caller_cancellation_reclaims_reassembly_after_tsm_lock_contention() {
     send_to_client(&server, &response_segment(invoke_id, 0, true, b"partial")).await;
     expect_segment_ack(&mut rx, invoke_id, 0).await;
 
-    let tsm_lock = client.tsm.lock().await;
+    // Cancellation itself must not need the TSM lock: the dropped request
+    // hands its cleanup to the dispatch task, which waits for the lock.
+    let tsm_lock = client.tsm.lock();
     request.abort();
-    assert!(request.await.unwrap_err().is_cancelled());
+    let cancelled = timeout(Duration::from_secs(2), request)
+        .await
+        .expect("cancelling the request waited for the TSM lock");
+    assert!(cancelled.unwrap_err().is_cancelled());
     drop(tsm_lock);
 
     assert!(
@@ -293,8 +301,8 @@ async fn caller_cancellation_reclaims_reassembly_after_tsm_lock_contention() {
         .expect("dispatch did not process cancellation cleanup"),
         "cancellation cleanup did not remove the matching reassembly"
     );
-    assert_eq!(client.tsm.lock().await.pending_count(), 0);
-    assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
+    assert_eq!(client.tsm.lock().pending_count(), 0);
+    assert_eq!(client.tsm.lock().coordinated_active_count(), 0);
     assert!(
         timeout(Duration::from_millis(50), rx.recv()).await.is_err(),
         "cancellation cleanup sent an unexpected peer PDU"
@@ -348,13 +356,12 @@ async fn caller_cancellation_reclaims_segmented_request_sender() {
         .expect("dispatch did not process segmented-request cancellation"),
         "outgoing request unexpectedly owned receive reassembly state"
     );
-    assert_eq!(client.tsm.lock().await.pending_count(), 0);
-    assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
+    assert_eq!(client.tsm.lock().pending_count(), 0);
+    assert_eq!(client.tsm.lock().coordinated_active_count(), 0);
     assert!(
         !client
             .seg_ack_senders
             .lock()
-            .await
             .contains_key(&(bacnet_types::MacAddr::from_slice(SERVER_MAC), invoke_id)),
         "cancellation left the SegmentAck sender registered"
     );

@@ -15,7 +15,7 @@
 use super::local_writes::LocalWriter;
 use super::*;
 use crate::command_lists::TakenRuns;
-use crate::life_safety_cov::LifeSafetyCovChange;
+use bacnet_device_core::cov::life_safety::LifeSafetyCovChange;
 use bacnet_objects::staging::StagingWritePlan;
 use futures_util::FutureExt;
 use std::future::Future;

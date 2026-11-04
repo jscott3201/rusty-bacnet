@@ -68,6 +68,20 @@ Screenshots are real production pages, not visual baselines to auto-approve.
 Automated axe and browser tests do not establish full accessibility conformance;
 screen-reader and physical-device checks remain separate lanes.
 
+## Sample checks
+
+Every fenced block and `<Code>` component on the pages, and every fenced block
+in the repository's README, has an entry in `tests/python/site_samples.py`
+saying how CI checks it. `tests/SAMPLES.md` lists them with counts by language
+and status, and is generated from that table: run
+`python tests/python/site_samples.py` after changing an entry. The Python tests
+(`tests/python/`, run in CI's Python bindings job) run the CLI and Python
+samples against loopback servers, parse the rest with the CLI and the Python
+module, and run the embedded examples with `cargo`; `npm test` checks every
+displayed `bacnet` command against the CLI's argument definitions without a
+build. The TUI's profile tables and command-bar lines are parsed by the CLI's
+own code in `crates/bacnet-cli/src/tui/site_samples_tests.rs`.
+
 ## Tutorial validation
 
 `examples/python/loopback_lab.py` is the sole tutorial body: MDX imports it and

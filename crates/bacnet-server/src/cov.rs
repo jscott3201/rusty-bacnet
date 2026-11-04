@@ -18,24 +18,19 @@ use tokio::sync::Notify;
 
 use crate::runtime_clock;
 use bacnet_device_core::cov::{
-    BeginRefusal, CovObservation, CovPolicy, CovRecipient, CovSample, CovSubscription,
-    CovSubscriptionKey, CovSubscriptionSnapshot, CovTable, CovTimeRemaining, Delivery,
-    FlightTiming, MultipleContextKey, MultipleRefusal, PreparedCovCompletion, SubscriberEndpoint,
-    Token,
+    BeginRefusal, CovObservation, CovPolicy, CovRecipient, CovReport, CovSample, CovSubscription,
+    CovSubscriptionKey, CovSubscriptionSnapshot, CovTable, CovTimeRemaining, Delivery, Evaluation,
+    EventBudget, FlightTiming, MultipleContextKey, MultipleRefusal, PreparedCovCompletion,
+    SubscriberEndpoint, Token,
 };
 use bacnet_objects::database::ObjectDatabase;
 
-pub(crate) mod active;
 mod confirmed;
 pub(crate) use confirmed::{ConfirmedFlight, CovRevisits};
-pub(crate) mod flags;
 pub(crate) mod multiple_reads;
-pub(crate) mod prepare;
-pub(crate) mod reported;
 pub(crate) mod timed;
 mod timed_capture;
 pub(crate) use timed_capture::TimedWriteCapture;
-pub(crate) mod value_source;
 
 mod policy;
 pub use policy::*;
@@ -44,6 +39,8 @@ pub use policy::*;
 mod identity_tests;
 #[cfg(test)]
 mod policy_tests;
+#[cfg(test)]
+mod prepare_tests;
 #[cfg(test)]
 mod tests;
 
@@ -110,6 +107,25 @@ impl CovSubscriptionTable {
     pub fn with_flight_timing(mut self, timing: FlightTiming) -> Self {
         self.core = self.core.with_flight_timing(timing);
         self
+    }
+
+    /// Copy only the selected Device lists' entries live at `now`; see
+    /// [`CovTable::live_cov_entries`].
+    pub(crate) fn live_cov_entries(
+        &self,
+        selection: bacnet_device_core::read::LiveLists,
+        now: bacnet_time::Instant,
+    ) -> bacnet_device_core::cov::active::LiveCovEntries {
+        #[cfg(test)]
+        self.live_samples
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.core.live_cov_entries(selection, now)
+    }
+
+    /// How many times a read request has sampled the live lists.
+    #[cfg(test)]
+    pub(crate) fn live_samples(&self) -> usize {
+        self.live_samples.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Pending timestamped COV-multiple changes of this table's references.
@@ -371,15 +387,16 @@ impl CovSubscriptionTable {
     }
 
     /// Mark the coordinate of one confirmed notification's references
-    /// outstanding, and register its worker's wake-up for a fence.
-    pub(crate) fn begin_confirmed<'a>(
+    /// outstanding, keeping the observation each carries for the Ack, and
+    /// register its worker's wake-up for a fence.
+    pub(crate) fn begin_confirmed<S: std::borrow::Borrow<CovSubscriptionSnapshot>>(
         &mut self,
         completion: PreparedCovCompletion,
-        snapshots: impl IntoIterator<Item = &'a CovSubscriptionSnapshot>,
+        references: impl IntoIterator<Item = (S, CovObservation)>,
     ) -> Result<ConfirmedFlight, BeginRefusal> {
         let token = self
             .core
-            .begin_confirmed(completion, snapshots, runtime_clock::core_now())?;
+            .begin_confirmed(completion, references, runtime_clock::core_now())?;
         // A report it replaced past its deadline is fenced: wake its worker,
         // if one still runs, and drop its wake-up (#2303).
         self.sync(&[]);
@@ -388,15 +405,68 @@ impl CovSubscriptionTable {
         Ok(ConfirmedFlight::new(token, wake))
     }
 
-    /// End the report `flight` names, as `outcome` says.
-    pub(crate) fn delivered(&mut self, flight: &ConfirmedFlight, outcome: Delivery) {
+    /// End the report `flight` names, as `outcome` says; an Ack commits
+    /// what it carried and returns the references owed a fresh look. See
+    /// [`CovTable::delivered`].
+    pub(crate) fn delivered(
+        &mut self,
+        flight: &ConfirmedFlight,
+        outcome: Delivery,
+    ) -> Vec<CovSubscriptionKey> {
         self.wakes.remove(&flight.token());
         self.core
-            .delivered(flight.token(), outcome, runtime_clock::core_now());
+            .delivered(flight.token(), outcome, runtime_clock::core_now())
+    }
+
+    /// Decide what a change of `object` reports to its ordinary and Single
+    /// subscriptions `subscriptions`, now; see
+    /// [`evaluate`](bacnet_device_core::cov::evaluate()). Each confirmed report
+    /// comes with its begun flight, whose worker's wake-up is registered
+    /// for a fence.
+    pub(crate) fn evaluate<L>(
+        &mut self,
+        object: &dyn bacnet_objects::traits::BACnetObject,
+        subscriptions: &[CovSubscriptionSnapshot],
+        evaluation: Evaluation,
+        budget: &mut EventBudget,
+        admit: impl FnMut(&CovSubscriptionSnapshot, usize) -> Option<L>,
+    ) -> Vec<(CovReport<L>, Option<ConfirmedFlight>)> {
+        let reports = bacnet_device_core::cov::evaluate(
+            &mut self.core,
+            object,
+            subscriptions,
+            evaluation,
+            budget,
+            runtime_clock::core_now(),
+            admit,
+        );
+        // Budget refusals counted, and a report a new one replaced past its
+        // deadline fenced, before the new reports' wake-ups exist.
+        self.sync(&[]);
+        reports
+            .into_iter()
+            .map(|report| {
+                let confirmed = subscriptions[report.index].issue_confirmed_notifications;
+                let flight = confirmed.then(|| {
+                    let wake = Arc::new(Notify::new());
+                    self.wakes.insert(report.token, Arc::clone(&wake));
+                    ConfirmedFlight::new(report.token, wake)
+                });
+                (report, flight)
+            })
+            .collect()
+    }
+
+    /// End an unconfirmed report `evaluate` handed out: a sent one commits
+    /// its observation.
+    pub(crate) fn delivered_unconfirmed(&mut self, token: Token, outcome: Delivery) {
+        self.core
+            .delivered(token, outcome, runtime_clock::core_now());
     }
 
     /// Whether a fanout may report this ordinary or Single subscription now;
     /// see [`CovTable::confirmed_idle`].
+    #[cfg(test)]
     pub(crate) fn confirmed_idle(&self, snapshot: &CovSubscriptionSnapshot) -> bool {
         self.core
             .confirmed_idle(snapshot, runtime_clock::core_now())
@@ -536,7 +606,7 @@ impl CovSubscriptionTable {
         if !snapshot.issue_confirmed_notifications {
             return self.complete_observation(snapshot, completion, value);
         }
-        let Ok(flight) = self.begin_confirmed(completion, [snapshot]) else {
+        let Ok(flight) = self.begin_confirmed(completion, [(snapshot, value.clone())]) else {
             return false;
         };
         let completed = self.complete_observation(snapshot, completion, value);
@@ -549,7 +619,8 @@ impl CovSubscriptionTable {
 /// cancelled, purged or refused. The live count changes only with one of
 /// those.
 fn counted(counts: &bacnet_device_core::cov::CovCounters) -> bool {
-    counts.subscriptions_created != 0
+    counts.notifications_throttled_fanout != 0
+        || counts.subscriptions_created != 0
         || counts.subscriptions_cancelled != 0
         || counts.subscriptions_purged != 0
         || counts.subscriptions_rejected_quota != 0

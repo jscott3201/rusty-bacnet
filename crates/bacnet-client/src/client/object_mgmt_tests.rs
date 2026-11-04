@@ -394,7 +394,7 @@ async fn object_mgmt_routed_structured_error_protocol_error_reject_and_abort_sur
             ));
         }
     }
-    assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
+    assert_eq!(client.tsm.lock().coordinated_active_count(), 0);
     client.stop().await.unwrap();
     peer.transport.stop().await.unwrap();
 }
@@ -437,7 +437,7 @@ async fn object_mgmt_unknown_device_and_oversized_alarm_send_nothing() {
         }))
     ));
     peer.empty();
-    assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
+    assert_eq!(client.tsm.lock().coordinated_active_count(), 0);
     client.stop().await.unwrap();
     peer.transport.stop().await.unwrap();
 }

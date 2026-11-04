@@ -4,38 +4,69 @@
 //! the `Responder` answering reads, writes and discovery), so the image
 //! links what a device that reports also serves, and its size less the
 //! objects image's is what COV costs. Then it builds the objects image's
-//! database again (the Device, two Analog Inputs and two Binary Values) and
-//! a `bacnet-device-core` `CovTable` capped at [`CAP`] subscriptions, and
-//! hands the table each request in
-//! [`REQUESTS`] through the core's staged functions,
-//! `CovTable::subscribe_cov` and `subscribe_cov_property`, as firmware that
-//! owns its table would: a SubscribeCOV of AI-1, a SubscribeCOVProperty of
-//! BV-1's Present_Value, a renewal of the first, six more subscriptions up
-//! to the cap, one past it, which is refused, and the cancellation of the
-//! first two. After each request it records the reply it would send and how
-//! many subscriptions the table holds. Last, it runs the expiry pass once
-//! every lifetime left has run out. The core sends no notifications yet.
+//! database again (the Device, two Analog Inputs and two Binary Values),
+//! its Device declaring the `Reporter`'s services, and a `bacnet-device-core`
+//! `Reporter` capped at [`CAP`] subscriptions with an outbox of [`OUTBOX`],
+//! and runs it as firmware's main loop would: each request in [`REQUESTS`]
+//! goes through `Reporter::handle` at its second, the deadlines on the way
+//! through `on_deadline`, and after each step every notification `pop`
+//! hands out is sent (an unconfirmed one reported sent, a confirmed one
+//! from 10 s on acknowledged). The requests are a SubscribeCOV of AI-1, a
+//! confirmed SubscribeCOVProperty of BV-1's Present_Value, which nobody
+//! answers, so it is sent again three times and then fails, a renewal of
+//! the first, now confirmed, six more subscriptions up to the cap, one past
+//! it, which is refused, and the cancellation of the first two. Then a
+//! WriteProperty takes AI-2 out of service ([`CHANGE`]), which its six
+//! subscribers hear of, a ReadProperty of the Device's
+//! Active_COV_Subscriptions ([`READ_LIST`]) lists them, and at
+//! [`EXPIRY_AT`] every lifetime left has run out.
 //!
-//! The work lives on the heap, in an arena of the objects image's size
-//! ([`ARENA`](crate::objects::ARENA)). `tests/reporting.rs` runs the
+//! The work lives on the heap, in an arena of [`ARENA`] octets.
+//! `tests/reporting.rs` runs the
 //! scenario natively and compares the whole [`Summary`] with `expected()`,
 //! then runs it again in the image's allocator over that arena. The
 //! `reporting` image (`src/bin/reporting.rs`) links it.
 
+use alloc::boxed::Box;
 use alloc::vec::Vec;
 
-use bacnet_device_core::cov::{CovCounters, CovPolicy, CovTable, SubscriberEndpoint};
-use bacnet_device_core::reply::error_apdu;
-use bacnet_encoding::apdu::{Apdu, SimpleAck, encode_apdu};
+use bacnet_device_core::cov::{CovPolicy, Delivery, SubscriberEndpoint};
+use bacnet_device_core::report::{
+    self, Bindings, Destination, InvokeIds, OutboxLimits, ReportConfig, Reporter, peer_address,
+};
+use bacnet_device_core::responder::{Inbound, Limits, Responder};
+use bacnet_encoding::apdu::{Apdu, ConfirmedRequest, SimpleAck, encode_apdu};
+use bacnet_objects::DeviceIdentity;
+use bacnet_objects::analog::AnalogInputObject;
+use bacnet_objects::binary::BinaryValueObject;
+use bacnet_objects::database::ObjectDatabase;
+use bacnet_objects::device_identity::build_database_with_extra;
+use bacnet_objects::traits::BACnetObject;
 use bacnet_time::{Duration, Instant};
-use bacnet_types::enums::ConfirmedServiceChoice;
-use bytes::BytesMut;
+use bacnet_types::constructed::BACnetAddress;
+use bacnet_types::enums::{ConfirmedServiceChoice, EngineeringUnits};
+use bacnet_types::error::Error;
+use bacnet_types::primitives::ObjectIdentifier;
+use bytes::{Bytes, BytesMut};
 
 /// The most subscriptions the table holds, all subscribers together.
 pub const CAP: usize = 8;
 
-/// The requests [`run`] hands the table, in this order.
+/// The heap the scenario runs in, in octets: the objects image's
+/// ([`crate::objects::ARENA`]) and 8 KiB, which the subscriptions' baselines,
+/// the outbox and the confirmed table take (`tests/reporting.rs` prints the
+/// peak).
+pub const ARENA: usize = crate::objects::ARENA + 8 * 1024;
+
+/// The requests [`run`] hands the reporter, in this order.
 pub const STEPS: usize = 12;
+
+/// The outbox: room for the six notifications [`CHANGE`] sends at once,
+/// 34 octets of parameters at most each.
+pub const OUTBOX: OutboxLimits = OutboxLimits {
+    entries: 6,
+    octets: 256,
+};
 
 /// One request: the service, the MS/TP station it comes from, the second
 /// it arrives at, and its parameters.
@@ -163,8 +194,20 @@ pub const REQUESTS: [Request; STEPS] = [
     ),
 ];
 
-/// When [`run`] runs the expiry pass, in seconds: after every lifetime the
-/// requests left.
+/// WriteProperty of AI-2's Out_Of_Service, TRUE, from station 9 at
+/// [`CHANGE_AT`]: `[0]` the object, `[1]` Out_Of_Service (81), `[3]` the
+/// value. It changes AI-2's Status_Flags.
+pub const CHANGE: &[u8] = &[0x0C, 0x00, 0x00, 0x00, 0x02, 0x19, 0x51, 0x3E, 0x11, 0x3F];
+
+/// When [`CHANGE`] arrives, in seconds.
+pub const CHANGE_AT: u64 = 25;
+
+/// ReadProperty of the Device's (1234, 0x020004D2) Active_COV_Subscriptions
+/// (152), a second after [`CHANGE`].
+pub const READ_LIST: &[u8] = &[0x0C, 0x02, 0x00, 0x04, 0xD2, 0x19, 0x98];
+
+/// When [`run`] runs the last deadlines, in seconds: after every lifetime
+/// the requests left.
 pub const EXPIRY_AT: u64 = 100;
 
 /// What [`run`] saw, compared whole by the host test.
@@ -176,17 +219,153 @@ pub struct Summary {
     pub answers: [Vec<u8>; STEPS],
     /// How many subscriptions the table held after each request.
     pub held: [usize; STEPS],
-    /// The subscriptions the expiry pass removed, and how many it left.
-    pub expired: (usize, usize),
-    /// The table's subscription counts over the whole run.
-    pub counts: CovCounters,
+    /// Every notification sent, in order: its subscriber's station, its
+    /// invoke ID when confirmed, and its APDU's octets.
+    pub sent: Vec<(u8, Option<u8>, usize)>,
+    /// The replies to [`CHANGE`] and to [`READ_LIST`].
+    pub change: Vec<u8>,
+    /// See [`change`](Self::change).
+    pub list: Vec<u8>,
+    /// Subscriptions left at [`EXPIRY_AT`].
+    pub left: usize,
+    /// The reporter's counts: subscriptions created, cancelled, purged and
+    /// refused for capacity; notifications sent, confirmed and
+    /// unconfirmed; resends, failures and reports owed.
+    pub counts: [u64; 10],
     /// Calls that failed where the scenario expects success: building the
-    /// database or encoding a reply. Zero in a good run.
+    /// database or the reporter, or encoding a request. Zero in a good run.
     pub errors: u8,
 }
 
+/// Invoke IDs in turn; nothing else shares them.
+struct Ids(u8);
+
+impl InvokeIds for Ids {
+    fn take(&mut self, _: &BACnetAddress) -> Option<u8> {
+        let id = self.0;
+        self.0 = self.0.wrapping_add(1);
+        Some(id)
+    }
+    fn release(&mut self, _: &BACnetAddress, _: u8) {}
+}
+
+/// No Device recipients: COV notifications go to their subscribers.
+struct NoBindings;
+
+impl Bindings for NoBindings {
+    fn address_of(&self, _: ObjectIdentifier) -> Option<BACnetAddress> {
+        None
+    }
+}
+
+/// The device's main loop around its reporter.
+struct Device {
+    reporter: Reporter,
+    db: ObjectDatabase,
+    ids: Ids,
+    invoke_id: u8,
+}
+
+impl Device {
+    /// Hand the confirmed request `service` with `body` from `station` to
+    /// the reporter at `now`, after the deadlines before it; its reply.
+    fn request(
+        &mut self,
+        station: u8,
+        service: ConfirmedServiceChoice,
+        body: &'static [u8],
+        now: Instant,
+        summary: &mut Summary,
+    ) -> Option<Vec<u8>> {
+        self.until(now, summary);
+        self.invoke_id = self.invoke_id.wrapping_add(1);
+        let mut apdu = BytesMut::new();
+        let request = Apdu::ConfirmedRequest(ConfirmedRequest {
+            segmented: false,
+            more_follows: false,
+            segmented_response_accepted: false,
+            max_segments: None,
+            max_apdu_length: crate::objects::MAX_REPLY,
+            invoke_id: self.invoke_id,
+            sequence_number: None,
+            proposed_window_size: None,
+            service_choice: service,
+            service_request: Bytes::from_static(body),
+        });
+        encode_apdu(&mut apdu, &request).ok()?;
+        let peer = SubscriberEndpoint::new(&[station], None);
+        let inbound = Inbound::new(apdu.freeze(), crate::objects::MAX_REPLY);
+        let mut out = BytesMut::new();
+        self.reporter
+            .handle(&mut self.db, &peer, inbound, now, &mut out);
+        self.send(now, summary);
+        Some(out.to_vec())
+    }
+
+    /// Run every deadline up to `now`, sending what each calls for.
+    fn until(&mut self, now: Instant, summary: &mut Summary) {
+        while let Some(due) = self.reporter.next_deadline().filter(|due| *due <= now) {
+            self.reporter.on_deadline(&self.db, &mut self.ids, due);
+            self.send(due, summary);
+        }
+    }
+
+    /// Send every notification the outbox hands out at `now`: report an
+    /// unconfirmed one sent, and acknowledge a confirmed one from 10 s on.
+    fn send(&mut self, now: Instant, summary: &mut Summary) {
+        let mut out = BytesMut::new();
+        while let Some(sent) = self.reporter.pop(&NoBindings, &mut self.ids, now, &mut out) {
+            let Destination::Subscriber(to) = sent.to else {
+                continue;
+            };
+            summary.sent.push((to.mac[0], sent.invoke_id, out.len()));
+            out.clear();
+            match sent.invoke_id {
+                None => self
+                    .reporter
+                    .delivered(sent.token, Delivery::Sent, &mut self.ids, now),
+                Some(invoke_id) if now >= Instant::from_secs(10) => {
+                    let ack = Apdu::SimpleAck(SimpleAck {
+                        invoke_id,
+                        service_choice: ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION,
+                    });
+                    if encode_apdu(&mut out, &ack).is_ok() {
+                        self.reporter
+                            .reply(&peer_address(&to), &out, &mut self.ids, now);
+                    }
+                    out.clear();
+                }
+                Some(_) => {}
+            }
+        }
+    }
+}
+
+/// The objects image's database (the Device, AI-1 and AI-2 with
+/// [`ANALOG_VALUES`](crate::objects::ANALOG_VALUES), BV-1 inactive and BV-2
+/// active), its Device declaring the `Reporter`'s services, so it lists
+/// Active_COV_Subscriptions. Built here, so the objects image's own
+/// builder stays as it is.
+fn device() -> Result<(DeviceIdentity, ObjectDatabase), Error> {
+    use crate::objects::{ANALOG_VALUES, DEVICE, VENDOR};
+    let identity = DeviceIdentity::new(DEVICE, VENDOR)?.with_services(report::SERVICES);
+    let mut extra: Vec<Box<dyn BACnetObject>> = Vec::new();
+    for (instance, value) in (1..).zip(ANALOG_VALUES) {
+        let name = if instance == 1 { "AI-1" } else { "AI-2" };
+        let mut input = AnalogInputObject::new(instance, name, EngineeringUnits::NO_UNITS)?;
+        input.set_present_value(value);
+        extra.push(Box::new(input));
+    }
+    extra.push(Box::new(BinaryValueObject::new(1, "BV-1")?));
+    let mut active = BinaryValueObject::new(2, "BV-2")?;
+    active.set_relinquish_default(1)?;
+    extra.push(Box::new(active));
+    let db = build_database_with_extra(&identity, extra)?;
+    Ok((identity, db))
+}
+
 /// Run the whole scenario: the objects image's on `apdus`
-/// ([`APDUS`](crate::objects::APDUS)), then the table's on `requests`
+/// ([`APDUS`](crate::objects::APDUS)), then the reporter's on `requests`
 /// ([`REQUESTS`]), both passed in so an image can hide them from the
 /// optimizer.
 ///
@@ -197,67 +376,76 @@ pub fn run(apdus: &[&[u8]; crate::objects::REQUESTS], requests: &[Request; STEPS
         objects: crate::objects::run(apdus),
         answers: core::array::from_fn(|_| Vec::new()),
         held: [0; STEPS],
-        expired: (0, 0),
-        counts: CovCounters::default(),
+        sent: Vec::new(),
+        change: Vec::new(),
+        list: Vec::new(),
+        left: 0,
+        counts: [0; 10],
         errors: 0,
     };
-    let Ok((_, db)) = crate::objects::device() else {
+    let built = device().and_then(|(identity, db)| {
+        let responder = Responder::new(identity, Limits::default())?;
+        let config = ReportConfig::new(CovPolicy {
+            max_subscriptions_global: CAP,
+            ..CovPolicy::default()
+        })
+        .with_outbox(OUTBOX);
+        Ok((Reporter::new(responder, config)?, db))
+    });
+    let Ok((reporter, db)) = built else {
         summary.errors += 1;
         return summary;
     };
-    let mut table = CovTable::new(CovPolicy {
-        max_subscriptions_global: CAP,
-        ..CovPolicy::default()
-    });
-    let start = Instant::ZERO;
-    for (((invoke_id, request), answer), held) in (1u8..)
-        .zip(requests)
-        .zip(&mut summary.answers)
-        .zip(&mut summary.held)
-    {
-        let peer = SubscriberEndpoint::new(&[request.peer], None);
-        let now = start + Duration::from_secs(request.at);
-        let (service, result) = if request.property {
-            let service = ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY;
-            (
-                service,
-                table.subscribe_cov_property(&db, &peer, request.body, now),
-            )
+    let mut device = Device {
+        reporter,
+        db,
+        ids: Ids(0),
+        invoke_id: 0,
+    };
+    let at = |seconds| Instant::ZERO + Duration::from_secs(seconds);
+    for (step, request) in requests.iter().enumerate() {
+        let service = if request.property {
+            ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY
         } else {
-            let service = ConfirmedServiceChoice::SUBSCRIBE_COV;
-            (service, table.subscribe_cov(&db, &peer, request.body, now))
+            ConfirmedServiceChoice::SUBSCRIBE_COV
         };
-        let reply = match result {
-            Ok(_) => Apdu::SimpleAck(SimpleAck {
-                invoke_id,
-                service_choice: service,
-            }),
-            Err(error) => error_apdu(invoke_id, service, &error),
-        };
-        let mut out = BytesMut::new();
-        if encode_apdu(&mut out, &reply).is_err() {
+        let now = at(request.at);
+        let Some(answer) = device.request(request.peer, service, request.body, now, &mut summary)
+        else {
             summary.errors += 1;
             return summary;
-        }
-        *answer = out.to_vec();
-        *held = table.len();
-        add(&mut summary.counts, table.take_counts());
+        };
+        summary.answers[step] = answer;
+        summary.held[step] = device.reporter.table().len();
     }
-    let expired = table.expire(start + Duration::from_secs(EXPIRY_AT));
-    summary.expired = (expired, table.len());
-    add(&mut summary.counts, table.take_counts());
+    let write = ConfirmedServiceChoice::WRITE_PROPERTY;
+    let read = ConfirmedServiceChoice::READ_PROPERTY;
+    let replies = (
+        device.request(9, write, CHANGE, at(CHANGE_AT), &mut summary),
+        device.request(9, read, READ_LIST, at(CHANGE_AT + 1), &mut summary),
+    );
+    let (Some(change), Some(list)) = replies else {
+        summary.errors += 1;
+        return summary;
+    };
+    (summary.change, summary.list) = (change, list);
+    device.until(at(EXPIRY_AT), &mut summary);
+    summary.left = device.reporter.table().len();
+    let counters = device.reporter.counters();
+    let cov = &counters.cov;
+    summary.counts = [
+        cov.subscriptions_created,
+        cov.subscriptions_cancelled,
+        cov.subscriptions_purged,
+        cov.subscriptions_rejected_capacity,
+        cov.notifications_sent,
+        cov.notifications_confirmed,
+        cov.notifications_unconfirmed,
+        counters.resent,
+        counters.failed,
+        counters.owed,
+    ];
     summary
-}
-
-/// Add `counts` to `total`, taking its live count.
-fn add(total: &mut CovCounters, counts: CovCounters) {
-    total.subscriptions_created += counts.subscriptions_created;
-    total.subscriptions_cancelled += counts.subscriptions_cancelled;
-    total.subscriptions_purged += counts.subscriptions_purged;
-    total.subscriptions_rejected_quota += counts.subscriptions_rejected_quota;
-    total.subscriptions_rejected_capacity += counts.subscriptions_rejected_capacity;
-    total.subscriptions_rejected_indefinite += counts.subscriptions_rejected_indefinite;
-    total.subscriptions_active = counts.subscriptions_active;
 }
 
 /// The summary of a good run, which the host test compares with
@@ -286,16 +474,45 @@ pub fn expected() -> Summary {
             ack(12, 28),
         ],
         held: [1, 2, 2, 3, 4, 5, 6, 7, 8, 8, 7, 6],
-        // The six subscriptions of AI-2 lapsed at 40 s.
-        expired: (6, 0),
-        counts: CovCounters {
-            subscriptions_active: 0,
-            subscriptions_created: 8,
-            subscriptions_rejected_capacity: 1,
-            subscriptions_cancelled: 2,
-            subscriptions_purged: 6,
-            ..CovCounters::default()
+        sent: [
+            // AI-1's first notification at 0 s; BV-1's, confirmed, under
+            // invoke ID 0, then again at 3, 6 and 9 s, unanswered.
+            alloc::vec![(7, None, 34)],
+            alloc::vec![(7, Some(0), 33); 4],
+            // The renewal's, confirmed, at 10 s, acknowledged: two octets
+            // more of header and one of Time_Remaining (300 s).
+            alloc::vec![(7, Some(1), 37)],
+            // The six subscriptions of AI-2 at 10 s, then each hearing of
+            // its Status_Flags at 25 s.
+            alloc::vec![(8, None, 34); 12],
+        ]
+        .concat(),
+        // SimpleACK, invoke ID 13, WriteProperty (15).
+        change: ack(13, 15),
+        list: {
+            // ComplexACK (0x30), invoke ID 14, ReadProperty (12): the
+            // Device, Active_COV_Subscriptions, then the list in [3].
+            let mut list = alloc::vec![
+                0x30, 0x0E, 0x0C, 0x0C, 0x02, 0x00, 0x04, 0xD2, 0x19, 0x98, 0x3E,
+            ];
+            for process in 10..=15 {
+                // Station 8 on the local network (network 0), the process,
+                // AI-2's Present_Value, unconfirmed, 14 s left, and
+                // AI-2's COV_Increment, 0.0.
+                list.extend_from_slice(&[
+                    0x0E, 0x0E, 0x1E, 0x21, 0x00, 0x61, 0x08, 0x1F, 0x0F, 0x19, process, 0x0F,
+                    0x1E, 0x0C, 0x00, 0x00, 0x00, 0x02, 0x19, 0x55, 0x1F, 0x29, 0x00, 0x39, 0x0E,
+                    0x4C, 0x00, 0x00, 0x00, 0x00,
+                ]);
+            }
+            list.push(0x3F);
+            list
         },
+        // The six subscriptions of AI-2 lapsed at 40 s.
+        left: 0,
+        // Created 8, cancelled 2, purged 6, refused 1; sent 15 (2
+        // confirmed, 13 unconfirmed), resent 3, failed 1, owed none.
+        counts: [8, 2, 6, 1, 15, 2, 13, 3, 1, 0],
         errors: 0,
     }
 }

@@ -6,6 +6,7 @@ use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort, TransportProvenance};
 use bacnet_types::enums::AbortReason;
+use tokio::sync::Mutex;
 
 struct ImmediateReplyTransport {
     local_mac: MacAddr,

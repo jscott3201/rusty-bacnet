@@ -167,6 +167,44 @@ impl Node {
     }
 }
 
+/// Wait until the foreign device's first registration resolves, as its own
+/// response timer decides, and judge what the BBMD answered.
+///
+/// An attempt that goes unanswered here lost its datagram to another socket
+/// (#2352): on Linux, a later SO_REUSEADDR socket in another test process can
+/// bind the BBMD's port beside it, from a reservation of the same port or a
+/// port-0 bind the kernel hands the shared port (#892), and it then takes the
+/// unicast sent there. The bind succeeds on both sides, so nothing else
+/// reports the loss, and the retry comes one response timeout later. That
+/// goes back to [`rerun_on_lost_port`] as a lost port; a refusal, or a
+/// registration that never resolves, fails the test.
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
+async fn registered(foreign: &BipTransport) -> std::io::Result<()> {
+    use crate::bip::ForeignRegistrationOutcome as Outcome;
+    let snapshot = || foreign.bvlc_client_snapshot().foreign_registration;
+    // A hang backstop past the three-second response timeout, not the
+    // signal: the transport resolves the attempt itself.
+    let resolved = timeout(Duration::from_secs(10), async {
+        loop {
+            let registration = snapshot();
+            if registration
+                .last_outcome
+                .is_some_and(|outcome| outcome != Outcome::Pending)
+            {
+                return registration;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("the first registration never resolved: {:?}", snapshot()));
+    match resolved.last_outcome {
+        Some(Outcome::Accepted) if resolved.registered => Ok(()),
+        Some(Outcome::TimedOut) => Err(std::io::Error::from_raw_os_error(libc::EADDRINUSE)),
+        _ => panic!("the foreign device didn't register: {resolved:?}"),
+    }
+}
+
 /// A Who-Is, an I-Am and a third broadcast, told apart.
 #[cfg(any(target_os = "linux", target_vendor = "apple"))]
 const FROM_MEMBER: &[u8] = &[0x01, 0x20, 0xFF, 0xFF, 0x00, 0xFF, 0x10, 0x08];
@@ -214,14 +252,12 @@ async fn a_group_bbmd_joins_members_a_plain_peer_and_a_foreign_device() {
             renewal_interval: None,
         });
         let mut foreign = Node::start("foreign device", foreign).await?;
+        registered(&foreign.transport).await?;
         let state = Arc::clone(bbmd.transport.bbmd_state().unwrap());
-        timeout(Duration::from_secs(2), async {
-            while bbmd::lock(&state).fdt().is_empty() {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("the foreign device registers");
+        assert!(
+            !bbmd::lock(&state).fdt().is_empty(),
+            "the BBMD holds the row"
+        );
 
         // A member's broadcast: the other member hears it through the group,
         // the BBMD forwards it to its peer and its foreign device.

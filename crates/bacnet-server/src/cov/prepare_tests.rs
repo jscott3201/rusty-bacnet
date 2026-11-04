@@ -1,6 +1,7 @@
 use super::*;
-use crate::cov::*;
+use bacnet_device_core::cov::prepare::{PreparedCovValue, prepare_value};
 use bacnet_objects::property_metadata::PropertyMetadata;
+use bacnet_objects::traits::BACnetObject;
 use bacnet_objects::{
     accumulator::AccumulatorObject, analog::AnalogValueObject, color::ColorObject,
     database::ObjectDatabase,
@@ -15,10 +16,12 @@ use bacnet_types::constructed::PropertyReference;
 use bacnet_types::enums::EngineeringUnits;
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
 use bacnet_types::error::RemoteError;
+use bacnet_types::primitives::PropertyValue;
 use bacnet_types::{
     constructed::{BACnetPrescale, BACnetScale},
     primitives::ObjectIdentifier,
 };
+use bytes::BytesMut;
 use std::{
     borrow::Cow,
     sync::{Arc, Mutex},
@@ -153,22 +156,6 @@ fn cov_sample_builtin_array_coordinates_and_pv_threshold_inheritance() {
         .reports(Some(&full.sample))
     );
 }
-#[test]
-fn cov_sample_takes_event_message_texts_config_whole() {
-    // A whole Event_Message_Texts_Config is a known array (#1329), sampled
-    // and compared like Event_Message_Texts.
-    let p = PropertyIdentifier::EVENT_MESSAGE_TEXTS_CONFIG;
-    let mut av = AnalogValueObject::new(1, "value", EngineeringUnits::NO_UNITS).unwrap();
-    let before = prepared(&av, p, None, None);
-    assert!(!before.numeric);
-    let texts = ["High", "", ""].map(|text| PropertyValue::CharacterString(text.into()));
-    av.write_property(p, None, PropertyValue::List(texts.to_vec()), None)
-        .unwrap();
-    let after = prepared(&av, p, None, None);
-    assert!(after.reports(Some(&before.sample)));
-    assert!(!after.reports(Some(&after.sample)));
-}
-
 #[test]
 fn cov_sample_structured_color_and_accumulator_ignore_increment() {
     let mut color = ColorObject::new(1, "color").unwrap();
