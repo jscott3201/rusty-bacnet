@@ -66,6 +66,11 @@ pub(super) struct Room {
 }
 
 impl Room {
+    /// Entries still free.
+    pub(super) fn entries_free(&self) -> usize {
+        self.entries
+    }
+
     /// Octets still free.
     pub(super) fn octets_free(&self) -> usize {
         self.octets

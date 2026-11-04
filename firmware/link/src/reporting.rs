@@ -1,13 +1,14 @@
 //! The reporting image's scenario (#2303).
 //!
-//! [`run`] first runs the objects image's scenario (`crate::objects::run`:
-//! the `Responder` answering reads, writes and discovery), so the image
-//! links what a device that reports also serves, and its size less the
-//! objects image's is what COV costs. Then it builds the objects image's
-//! database again (the Device, two Analog Inputs and two Binary Values),
-//! its Device declaring the `Reporter`'s services, and a `bacnet-device-core`
-//! `Reporter` capped at [`CAP`] subscriptions with an outbox of [`OUTBOX`],
-//! and runs it as firmware's main loop would: each request in [`REQUESTS`]
+//! [`run`] builds the objects image's database (the Device, two Analog
+//! Inputs and two Binary Values), its Device declaring the `Reporter`'s
+//! services, and a `bacnet-device-core` `Reporter` capped at [`CAP`]
+//! subscriptions with an outbox of [`OUTBOX`]. It first hands the reporter
+//! the objects image's requests ([`APDUS`](crate::objects::APDUS)), which
+//! it must answer as the objects image's `Responder` does, so the image
+//! links what a device that reports also serves, through one request path,
+//! and its size less the objects image's is what COV costs (#2363). Then
+//! it runs the reporter as firmware's main loop would: each request in [`REQUESTS`]
 //! goes through `Reporter::handle` at its second, the deadlines on the way
 //! through `on_deadline`, and after each step every notification `pop`
 //! hands out is sent (an unconfirmed one reported sent, a confirmed one
@@ -34,7 +35,7 @@ use bacnet_device_core::cov::{CovPolicy, Delivery, SubscriberEndpoint};
 use bacnet_device_core::report::{
     self, Bindings, Destination, InvokeIds, OutboxLimits, ReportConfig, Reporter, peer_address,
 };
-use bacnet_device_core::responder::{Inbound, Limits, Responder};
+use bacnet_device_core::responder::{Inbound, Limits, Outcome, Responder};
 use bacnet_encoding::apdu::{Apdu, ConfirmedRequest, SimpleAck, encode_apdu};
 use bacnet_objects::DeviceIdentity;
 use bacnet_objects::analog::AnalogInputObject;
@@ -373,7 +374,12 @@ fn device() -> Result<(DeviceIdentity, ObjectDatabase), Error> {
 /// [`Summary::errors`] and stops.
 pub fn run(apdus: &[&[u8]; crate::objects::REQUESTS], requests: &[Request; STEPS]) -> Summary {
     let mut summary = Summary {
-        objects: crate::objects::run(apdus),
+        objects: crate::objects::Summary {
+            outcomes: [Outcome::Unhandled; crate::objects::REQUESTS],
+            answers: core::array::from_fn(|_| Vec::new()),
+            written: Vec::new(),
+            errors: 0,
+        },
         answers: core::array::from_fn(|_| Vec::new()),
         held: [0; STEPS],
         sent: Vec::new(),
@@ -402,6 +408,29 @@ pub fn run(apdus: &[&[u8]; crate::objects::REQUESTS], requests: &[Request; STEPS
         ids: Ids(0),
         invoke_id: 0,
     };
+    // The objects image's requests first, through the same reporter: one
+    // device answering them as a device that reports does, which must
+    // answer as the objects image's `Responder` alone does.
+    let requester = SubscriberEndpoint::new(&[crate::objects::REQUESTER], None);
+    let objects = &mut summary.objects;
+    for ((request, outcome), answer) in apdus
+        .iter()
+        .zip(&mut objects.outcomes)
+        .zip(&mut objects.answers)
+    {
+        let mut out = BytesMut::new();
+        let inbound = Inbound::new(Bytes::copy_from_slice(request), crate::objects::MAX_REPLY)
+            .with_source(crate::objects::requester());
+        let handled =
+            device
+                .reporter
+                .handle(&mut device.db, &requester, inbound, Instant::ZERO, &mut out);
+        *outcome = handled.outcome;
+        objects.written.extend(handled.objects);
+        *answer = out.to_vec();
+    }
+    // A write the requests make reports nothing yet: nobody subscribes.
+    device.send(Instant::ZERO, &mut summary);
     let at = |seconds| Instant::ZERO + Duration::from_secs(seconds);
     for (step, request) in requests.iter().enumerate() {
         let service = if request.property {
