@@ -68,6 +68,7 @@ pub struct BipEndpointBuilder {
     reinitialize: Option<bacnet_server::server::ReinitializeHandler>,
     reinit_password: Option<String>,
     source_audit_bindings: Vec<(ObjectIdentifier, SocketAddrV4)>,
+    source_audit_routed: crate::session::RoutedBindings,
     mode: BipMode,
     multicast: Option<BipMulticast>,
     release_previous_bbmd: bool,
@@ -97,6 +98,7 @@ impl BipEndpointBuilder {
             reinitialize: None,
             reinit_password: None,
             source_audit_bindings: Vec::new(),
+            source_audit_routed: Vec::new(),
             mode: BipMode::Normal,
             multicast: None,
             release_previous_bbmd: false,
@@ -250,6 +252,23 @@ impl BipEndpointBuilder {
         self
     }
 
+    /// Bind a Device behind a router, on `network` at `mac` there, for
+    /// source Audit delivery to that Device (#2371); see
+    /// [`EndpointSession::with_source_audit_routed_device_binding`]. Every
+    /// build refuses network 0 or 65535, an empty MAC or one past 18 octets,
+    /// and a repeated or non-Device identifier. Route data only: provision
+    /// the recipient on the Device itself.
+    /// `build_transport` refuses these too.
+    pub fn source_audit_routed_device_binding(
+        mut self,
+        device: ObjectIdentifier,
+        network: u16,
+        mac: bacnet_types::MacAddr,
+    ) -> Self {
+        self.source_audit_routed.push((device, network, mac));
+        self
+    }
+
     /// Sets the B/IP mode: a normal node (the default), a foreign device or
     /// a BBMD (#938). See [`BipMode`]. With a `0.0.0.0` interface, a BBMD's
     /// own B/IP address comes from its BDT, as described at
@@ -314,7 +333,7 @@ impl BipEndpointBuilder {
                 "ReinitializeDevice and its password require build_session()".into(),
             ));
         }
-        if !self.source_audit_bindings.is_empty() {
+        if !self.source_audit_bindings.is_empty() || !self.source_audit_routed.is_empty() {
             return Err(Error::Encoding(
                 "source Audit route data requires build_session()".into(),
             ));
@@ -378,10 +397,12 @@ impl BipEndpointBuilder {
         let reinitialize = self.reinitialize.take();
         let reinit_password = self.reinit_password.take();
         let bindings = std::mem::take(&mut self.source_audit_bindings);
+        let routed = std::mem::take(&mut self.source_audit_routed);
         crate::source_audit::recipient::SourceRoutes::new(
             &bindings,
             SocketAddrV4::new(self.broadcast_address, self.port),
-        )?;
+        )?
+        .bind_routed(&routed)?;
         let role = self.role;
         let session = self.session.clone();
         let database = self.database.take();
@@ -403,6 +424,7 @@ impl BipEndpointBuilder {
         endpoint.reinitialize = reinitialize;
         endpoint.reinit_password = reinit_password;
         endpoint.source_audit_bindings = bindings;
+        endpoint.source_audit_routed_bindings = routed;
         Ok(endpoint)
     }
 }

@@ -218,7 +218,8 @@ impl PyBipEndpoint {
     ///         `audit_recipient`, the Device's Audit recipient (an
     ///         `AuditRecipientInput`). `audit_device_bindings` is a list of
     ///         `(ObjectIdentifier, "ipv4:port")` routes to recipient
-    ///         Devices. A Reporter identifier of another type, and other
+    ///         Devices, or `"network:0xMAC"` for one behind a router
+    ///         (#2371). A Reporter identifier of another type, and other
     ///         shapes construction can check, raise ValueError here; a
     ///         Reporter that wasn't added raises BacnetError at start.
     #[new]

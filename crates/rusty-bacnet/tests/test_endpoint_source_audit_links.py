@@ -1,17 +1,19 @@
 """The source Audit Reporter keywords on ScEndpoint and MstpEndpoint (#2357):
 each binding address and address recipient in its link's format, refused at
 construction by that link's rules, and an SC endpoint's records arriving at an
-SC server's Audit Log. MS/TP records are checked on the wire in Rust
-(bacnet-endpoint's source_link_tests.rs): an MS/TP endpoint needs a serial
-port here."""
+SC server's Audit Log. MS/TP records, and routed bindings ("network:0xMAC" on
+every endpoint, #2371), are checked on the wire in Rust (bacnet-endpoint's
+source_link_tests.rs and source_routed_tests.rs): an MS/TP endpoint needs a
+serial port here."""
 import asyncio
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
-from rusty_bacnet import (AuditOperation, BACnetClient, BACnetServer, BacnetError, MstpEndpoint,
-                          ObjectIdentifier, ObjectType, ReinitializedState, ScEndpoint, ScHub)
+from rusty_bacnet import (AuditOperation, BACnetClient, BACnetServer, BacnetError, BipEndpoint,
+                          MstpEndpoint, ObjectIdentifier, ObjectType, PropertyIdentifier,
+                          ReinitializedState, ScEndpoint, ScHub)
 
 O = ObjectType
 REPORTER = ObjectIdentifier(O.AUDIT_REPORTER, 1)
@@ -134,6 +136,59 @@ class LinkBindingTests(unittest.TestCase):
                     owner.add_audit_reporter(1, "Source", audit_level="sometimes",
                                              auditable_operations=RESET)
                 self.assertEqual(owner._pending_registration_count(), 0)
+
+
+def bip_endpoint(**overrides):
+    return BipEndpoint(2357, interface="127.0.0.1", port=0,
+                       broadcast_address="127.255.255.255", **source(**overrides))
+
+
+class RoutedBindingTests(unittest.IsolatedAsyncioTestCase):
+    """A Device behind a router, written "network:0xMAC" as the CLI writes a
+    routed target, binds on every link (#2371)."""
+
+    MAKERS = (bip_endpoint, sc_endpoint, mstp_endpoint)
+
+    def test_every_link_takes_a_routed_station(self):
+        # The MAC is in the remote network's format: any length to 18 octets.
+        for make in self.MAKERS:
+            for address in ("2:0x05", "65534:0X0A000001BAC0", "1:0x" + "ab" * 18):
+                with self.subTest(make=make.__name__, address=address):
+                    owner = make(audit_device_bindings=[(LOGGER, address)])
+                    owner.add_audit_reporter(1, "Source", audit_level="audit_all",
+                                             auditable_operations=RESET)
+                    self.assertEqual(owner._pending_registration_count(), 1)
+
+    def test_a_routed_binding_names_one_station_on_another_network(self):
+        # Network 0 is an address's name for this network and 65535 every
+        # network; an empty MAC is the network's broadcast.
+        refused = ("0:0x05", "65535:0x05", "65536:0x05", "2:0x", "2:0x5", "2:0xzz",
+                   "2:0x" + "ab" * 19, "+2:0x05", " 2:0x05", "2:0x05 ", "-2:0x05",
+                   "2:05")
+        for make in self.MAKERS:
+            for address in refused:
+                with self.subTest(make=make.__name__, address=address):
+                    with self.assertRaisesRegex(ValueError, r"audit_device_bindings\[0\]"):
+                        make(audit_device_bindings=[(LOGGER, address)])
+            with self.subTest(make=make.__name__, repeated=True):
+                with self.assertRaisesRegex(ValueError, "repeats a Device"):
+                    make(audit_device_bindings=[(LOGGER, "2:0x05"), (LOGGER, "3:0x05")])
+
+    async def test_a_routed_binding_resolves_in_a_running_session(self):
+        """The Reporter of a B/IP endpoint bound to a Device behind a router
+        reads NO_FAULT_DETECTED: its recipient has a route."""
+        owner = bip_endpoint(audit_device_bindings=[(LOGGER, "5:0x7f000001bac0")])
+        owner.add_audit_reporter(1, "Source", audit_level="audit_all",
+                                 auditable_operations=RESET)
+        client = BACnetClient(interface="127.0.0.1", port=0, apdu_timeout_ms=2000)
+        await client.__aenter__()
+        try:
+            async with owner:
+                reliability = await client.read_property(
+                    await owner.local_address(), REPORTER, PropertyIdentifier.RELIABILITY)
+                self.assertEqual(reliability.value, 0)  # NO_FAULT_DETECTED
+        finally:
+            await client.stop()
 
 
 class ScSessionTests(unittest.IsolatedAsyncioTestCase):
