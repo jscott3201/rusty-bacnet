@@ -19,6 +19,7 @@ use std::time::Duration;
 pub(crate) use bacnet_ops::bbmd::{BdtRow, FdtRow, address_of, mac, probe_error};
 use bacnet_ops::bbmd::{Probe, Unfollowed, unreachable_reason};
 use bacnet_transport::bip::{BvlcExchangeError, ForeignBbmd, ForeignRegistrationSnapshot};
+use bacnet_transport::bip6::Bip6ForeignStatus;
 
 /// UI to the network worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,6 +108,9 @@ pub(crate) fn read_error(error: &BvlcExchangeError) -> String {
 pub(crate) enum NetworkEvent {
     /// How the foreign-device registration is going, polled once a second.
     Registration(ForeignRegistrationSnapshot),
+    /// How a B/IPv6 foreign device's registration stands, polled once a
+    /// second (#2378): the status the CLI's one-shot wait reads.
+    Bip6Registration(Bip6ForeignStatus),
     /// The registration's BBMD is at this address now: its host name
     /// resolved, at last or elsewhere (#2308).
     Bbmd(SocketAddrV4),
