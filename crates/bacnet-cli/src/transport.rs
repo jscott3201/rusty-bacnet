@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use bacnet_client::client::BACnetClient;
 use bacnet_transport::bip::{BipMode, BipMulticast, BipTransport, ForeignDeviceConfig};
-use bacnet_transport::bip6::Bip6Transport;
+use bacnet_transport::bip6::{Bip6ForeignDeviceConfig, Bip6Transport};
 use bacnet_types::error::Error;
 
 /// CLI-level transport arguments for constructing a BACnet client.
@@ -37,6 +37,8 @@ pub struct TransportArgs {
     pub device_instance: Option<u32>,
     /// `--foreign-bbmd`, with `--ttl` and `--renewal` (#938).
     pub foreign_device: Option<ForeignDeviceConfig>,
+    /// `--foreign-bbmd` with `--ttl`, in a B/IPv6 session (#2365).
+    pub bip6_foreign_device: Option<Bip6ForeignDeviceConfig>,
     /// `--nat-global-address` (#1943): our address as the BBMD records it
     /// behind a NAT router. Only the TUI's Network screen reads it.
     pub nat_global_address: Option<std::net::SocketAddrV4>,
@@ -62,11 +64,36 @@ impl TransportArgs {
                     .map_err(|e| format!("invalid --ipv6-interface address '{s}': {e}"))
             })
             .transpose()?;
-        if cli.foreign_bbmd.is_some() && (cli.sc || cli.ipv6) {
+        if cli.foreign_bbmd.is_some() && cli.sc {
             return Err(
-                "--foreign-bbmd requires BACnet/IP transport (do not use --sc or --ipv6)".into(),
+                "--foreign-bbmd requires BACnet/IP or BACnet/IPv6 (do not use --sc)".into(),
             );
         }
+        // The BBMD of the session's transport (#2365).
+        let (foreign_device, bip6_foreign_device) = match &cli.foreign_bbmd {
+            Some(_) if cli.ipv6 && cli.renewal.is_some() => {
+                return Err(
+                    "--renewal applies only to B/IP: a B/IPv6 foreign device renews \
+                     at half the --ttl, but never more often than every 30 s"
+                        .into(),
+                );
+            }
+            Some(bbmd) if cli.ipv6 => {
+                let config = Bip6ForeignDeviceConfig {
+                    bbmd: bbmd.bip6()?,
+                    ttl: cli.ttl,
+                };
+                config
+                    .check()
+                    .map_err(|refusal| format!("--foreign-bbmd: {refusal}"))?;
+                (None, Some(config))
+            }
+            Some(bbmd) => (
+                crate::foreign::config(Some(bbmd.bip()?), cli.ttl, cli.renewal),
+                None,
+            ),
+            None => (None, None),
+        };
         let multicast = crate::multicast::from_cli(cli, interface)?;
         if let (Some(failover), Some(primary)) = (&cli.sc_failover_url, &cli.sc_url)
             && same_hub_url(failover, primary)
@@ -95,7 +122,8 @@ impl TransportArgs {
             ipv6: cli.ipv6,
             ipv6_interface,
             device_instance: cli.device_instance,
-            foreign_device: crate::foreign::config(cli.foreign_bbmd.clone(), cli.ttl, cli.renewal),
+            foreign_device,
+            bip6_foreign_device,
             nat_global_address: cli.nat_global_address,
             multicast,
             mstp: crate::mstp::MstpArgs::from_cli(cli)?,
@@ -355,6 +383,9 @@ pub async fn build_bip6_client(args: &TransportArgs) -> Result<BACnetClient<Bip6
     if let Some(instance) = args.device_instance {
         builder = builder.device_instance(instance);
     }
+    if let Some(foreign) = &args.bip6_foreign_device {
+        builder = builder.foreign_device(foreign.clone());
+    }
 
     builder.build().await
 }
@@ -385,6 +416,7 @@ mod tests {
             ipv6_interface: None,
             device_instance: None,
             foreign_device: None,
+            bip6_foreign_device: None,
             nat_global_address: None,
             multicast: None,
             mstp: None,

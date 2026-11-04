@@ -28,7 +28,8 @@ pub(super) fn request(
             })
             .collect(),
     }
-    .encode(&mut bytes);
+    .encode(&mut bytes)
+    .unwrap();
     bytes.freeze()
 }
 

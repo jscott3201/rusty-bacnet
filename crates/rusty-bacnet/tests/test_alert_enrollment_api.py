@@ -35,10 +35,19 @@ class AlertEnrollmentApiTests(unittest.TestCase):
         parameters = list(
             inspect.signature(BACnetServer.add_alert_enrollment).parameters.values()
         )
+        # Then the keyword-only reporting-settings storage (#2331).
         self.assertEqual(
             [parameter.name for parameter in parameters],
-            ["self", "instance", "name", "initial_source"],
+            [
+                "self",
+                "instance",
+                "name",
+                "initial_source",
+                "storage_path",
+                "clear_written_reporting",
+            ],
         )
+        parameters = parameters[:4]
         self.assertTrue(
             all(parameter.default is inspect.Parameter.empty for parameter in parameters)
         )

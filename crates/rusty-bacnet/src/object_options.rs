@@ -1,9 +1,14 @@
 //! Keywords the object builders share (#1552, #1553, #1554): how a Value
-//! object's Present_Value is written and whether its source is tracked, and
-//! the optional Tags, Profile_Location and Profile_Name rows.
+//! object's Present_Value is written and whether its source is tracked, the
+//! optional Tags, Profile_Location and Profile_Name rows, and the
+//! `storage_path` and `clear_written_reporting` that keep the reporting
+//! settings a peer writes (#2331).
+
+use std::sync::Arc;
 
 use bacnet_objects::object_profile::ObjectProfile;
 use bacnet_objects::present_value_access::PresentValueAccess;
+use bacnet_objects::write_config::{FileWriteConfigPersistence, WriteConfigPersistence};
 use bacnet_types::error::Error;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -75,4 +80,32 @@ pub(crate) fn apply_profile(
         Some(profile) => set_profile(profile).map_err(to_py_err),
         None => Ok(()),
     }
+}
+
+/// Build an object with `build`, keeping its reporting settings in the file
+/// at `storage_path` when there is one (#2331). With `clear`, the settings a
+/// write saved are dropped first and the object is opened again on the
+/// cleared file, so it starts from its defaults, as `add_timer` does. Every
+/// server builder of an object with intrinsic reporting takes it.
+pub(crate) fn keep_reporting<T>(
+    build: impl Fn() -> Result<T, Error>,
+    storage_path: Option<&str>,
+    clear: bool,
+    attach: fn(T, Arc<dyn WriteConfigPersistence>) -> Result<T, Error>,
+    clear_written: fn(&mut T) -> Result<(), Error>,
+) -> PyResult<T> {
+    let Some(path) = storage_path else {
+        return build().map_err(to_py_err);
+    };
+    let storage: Arc<dyn WriteConfigPersistence> =
+        Arc::new(FileWriteConfigPersistence::new(path).map_err(to_py_err)?);
+    let open = || build().and_then(|object| attach(object, storage.clone()));
+    let mut object = open().map_err(to_py_err)?;
+    if clear {
+        clear_written(&mut object).map_err(to_py_err)?;
+        // Dropping it waits for its saves.
+        drop(object);
+        object = open().map_err(to_py_err)?;
+    }
+    Ok(object)
 }

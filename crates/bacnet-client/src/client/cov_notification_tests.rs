@@ -127,7 +127,7 @@ async fn unconfirmed_cov_notification_includes_source_and_delivery() {
 
     let notification = cov_notification(10);
     let mut service_request = BytesMut::new();
-    notification.encode(&mut service_request);
+    notification.encode(&mut service_request).unwrap();
     send_cov_notification(
         &peer_transport,
         &client_mac,
@@ -175,7 +175,7 @@ async fn confirmed_cov_notification_enqueues_and_sends_simple_ack() {
 
     let notification = cov_notification(11);
     let mut service_request = BytesMut::new();
-    notification.encode(&mut service_request);
+    notification.encode(&mut service_request).unwrap();
     send_cov_notification(
         &peer_transport,
         &client_mac,
@@ -234,7 +234,7 @@ async fn confirmed_cov_notification_routes_ack_to_npdu_source() {
 
     let notification = cov_notification(14);
     let mut service_request = BytesMut::new();
-    notification.encode(&mut service_request);
+    notification.encode(&mut service_request).unwrap();
     send_cov_notification(
         &router_transport,
         &client_mac,
@@ -307,7 +307,7 @@ async fn confirmed_cov_notification_ack_policy_can_reject() {
 
     let notification = cov_notification(12);
     let mut service_request = BytesMut::new();
-    notification.encode(&mut service_request);
+    notification.encode(&mut service_request).unwrap();
     send_cov_notification(
         &peer_transport,
         &client_mac,
@@ -360,7 +360,7 @@ async fn confirmed_cov_notification_ack_policy_can_suppress_response() {
 
     let notification = cov_notification(13);
     let mut service_request = BytesMut::new();
-    notification.encode(&mut service_request);
+    notification.encode(&mut service_request).unwrap();
     send_cov_notification(
         &peer_transport,
         &client_mac,

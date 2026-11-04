@@ -50,7 +50,8 @@ fn create(specifier: ObjectSpecifier, values: Vec<(PropertyIdentifier, Vec<u8>)>
             })
             .collect(),
     }
-    .encode(&mut bytes);
+    .encode(&mut bytes)
+    .unwrap();
     bytes.freeze()
 }
 

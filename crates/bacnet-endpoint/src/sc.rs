@@ -35,7 +35,9 @@ over a `TlsWebSocket` connected to a local constrained-TLS `ScHub` for RB-16 pro
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_transport::sc::{ScReconnectConfig, ScTransport};
 use bacnet_transport::sc_frame::Vmac;
+use bacnet_types::MacAddr;
 use bacnet_types::error::Error;
+use bacnet_types::primitives::ObjectIdentifier;
 
 use crate::session::{EndpointSession, SessionConfig, SessionRole};
 
@@ -71,6 +73,7 @@ pub struct ScEndpointBuilder {
     heartbeat_interval_ms: u64,
     heartbeat_timeout_ms: u64,
     reconnect: Option<ScReconnectConfig>,
+    source_audit_bindings: Vec<(ObjectIdentifier, MacAddr)>,
 }
 
 impl ScEndpointBuilder {
@@ -90,7 +93,20 @@ impl ScEndpointBuilder {
             heartbeat_interval_ms: 30_000,
             heartbeat_timeout_ms: 60_000,
             reconnect: None,
+            source_audit_bindings: Vec::new(),
         }
+    }
+
+    /// Bind a Device to its VMAC on the hub, for source Audit delivery to
+    /// that Device (#2357); see
+    /// [`EndpointSession::with_source_audit_device_binding`]. Every build
+    /// refuses the broadcast and all-zero VMACs, this node's own and a
+    /// repeated or non-Device identifier. Route data only: provision the recipient on
+    /// the Device itself.
+    pub fn source_audit_device_binding(mut self, device: ObjectIdentifier, vmac: Vmac) -> Self {
+        self.source_audit_bindings
+            .push((device, MacAddr::from_slice(&vmac)));
+        self
     }
 
     /// Selects the composed roles (default [`Both`](SessionRole::Both)).
@@ -180,6 +196,7 @@ impl ScEndpointBuilder {
         if let Some(config) = &self.reconnect {
             config.validate()?;
         }
+        crate::session::check_link_bindings(&self.source_audit_bindings, &self.vmac)?;
         // Heartbeat timing mirrors `ScTransport` startup validation range
         // (Annex AB.6.3, 3..300s interval, timeout > interval): validated
         // here without hub I/O so misconfiguration fails fast at composition
@@ -242,7 +259,8 @@ impl ScEndpointBuilder {
         if let Some(id) = self.identity.take() {
             endpoint = endpoint.device(id);
         }
-        Ok(endpoint)
+        Ok(endpoint
+            .with_source_audit_device_bindings(std::mem::take(&mut self.source_audit_bindings)))
     }
 
     /// Builds an unstarted real-hub SC session over constrained TLS (RB-16).
@@ -310,6 +328,7 @@ impl ScEndpointBuilder {
         if let Some(id) = self.identity.take() {
             endpoint = endpoint.device(id);
         }
-        Ok(endpoint)
+        Ok(endpoint
+            .with_source_audit_device_bindings(std::mem::take(&mut self.source_audit_bindings)))
     }
 }

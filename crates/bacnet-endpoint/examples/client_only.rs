@@ -74,7 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         property_array_index: None,
         property_value: val.to_vec(),
     }
-    .encode(&mut svc);
+    .encode(&mut svc)?;
     let mut enc = BytesMut::new();
     encode_apdu(
         &mut enc,

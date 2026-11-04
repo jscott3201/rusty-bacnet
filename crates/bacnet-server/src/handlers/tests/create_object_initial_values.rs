@@ -44,7 +44,8 @@ pub(super) fn request(object_type: ObjectType, values: Vec<BACnetPropertyValue>)
         object_specifier: ObjectSpecifier::Type(object_type),
         list_of_initial_values: values,
     }
-    .encode(&mut request);
+    .encode(&mut request)
+    .unwrap();
     request
 }
 

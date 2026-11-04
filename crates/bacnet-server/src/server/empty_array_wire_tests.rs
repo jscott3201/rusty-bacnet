@@ -213,7 +213,8 @@ async fn create(
             })
             .collect(),
     }
-    .encode(&mut body);
+    .encode(&mut body)
+    .unwrap();
     h.request(ConfirmedServiceChoice::CREATE_OBJECT, body).await;
     let invoke_id = h.invoke_id;
     let reply = tokio::time::timeout(Duration::from_secs(5), async {

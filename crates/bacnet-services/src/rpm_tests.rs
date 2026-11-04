@@ -108,7 +108,7 @@ fn ack_success_round_trip() {
         }],
     };
     let mut buf = BytesMut::new();
-    ack.encode(&mut buf);
+    ack.encode(&mut buf).unwrap();
     let decoded = ReadPropertyMultipleACK::decode(&buf).unwrap();
     assert_eq!(ack, decoded);
 }
@@ -135,7 +135,7 @@ fn ack_mixed_success_error_round_trip() {
         }],
     };
     let mut buf = BytesMut::new();
-    ack.encode(&mut buf);
+    ack.encode(&mut buf).unwrap();
     let decoded = ReadPropertyMultipleACK::decode(&buf).unwrap();
     assert_eq!(ack, decoded);
 }
@@ -161,32 +161,40 @@ fn legacy_event_parameters_do_not_consume_the_next_result() {
             ],
         }],
     };
-    let mut buf = BytesMut::new();
-    ack.encode(&mut buf);
+    // The inner `ff ff 4f` could end the value, so the encoder refuses it
+    // (#2376) and leaves the buffer as it was.
+    let mut buf = BytesMut::from(&[0xaa][..]);
+    assert!(ack.encode(&mut buf).is_err());
+    assert_eq!(buf.as_ref(), [0xaa]);
 
-    assert_eq!(ReadPropertyMultipleACK::decode(&buf).unwrap(), ack);
+    // From an older peer it still decodes: `02` after that pair is no valid
+    // next field.
+    let wire = [
+        0x0c, 0x02, 0x40, 0x00, 0x01, 0x1e, 0x29, 0x53, 0x4e, 0xfe, 0xff, 1, 0xff, 0xff, 0x4f, 2,
+        0xff, 0xff, 0x4f, 0x29, 0x11, 0x4e, 0x21, 8, 0x4f, 0x1f,
+    ];
+    assert_eq!(ReadPropertyMultipleACK::decode(&wire).unwrap(), ack);
 }
 
 #[test]
-fn ambiguous_legacy_event_parameters_result_is_rejected() {
-    let ack = ReadPropertyMultipleACK {
-        list_of_read_access_results: vec![ReadAccessResult {
-            object_identifier: ObjectIdentifier::new(ObjectType::EVENT_ENROLLMENT, 1).unwrap(),
-            list_of_results: vec![ReadResultElement {
-                property_identifier: PropertyIdentifier::EVENT_PARAMETERS,
-                property_array_index: None,
-                property_value: Some(vec![
-                    0xfe, 0xff, 0xaa, 0xff, 0xff, 0x4f, 0x29, 0x53, 0x4e, 0xfe, 0xff, 0xbb, 0xff,
-                    0xff,
-                ]),
-                error: None,
-            }],
-        }],
+fn an_older_peers_legacy_result_with_two_possible_ends_is_read_to_the_first() {
+    // An older peer's value holding `ff ff 4f` and then what looks like a
+    // next result: either pair could end it, and the first does.
+    let wire = [
+        0x0c, 0x02, 0x40, 0x00, 0x01, 0x1e, 0x29, 0x53, 0x4e, 0xfe, 0xff, 0xaa, 0xff, 0xff, 0x4f,
+        0x29, 0x53, 0x4e, 0xfe, 0xff, 0xbb, 0xff, 0xff, 0x4f, 0x1f,
+    ];
+    let legacy = |marker| ReadResultElement {
+        property_identifier: PropertyIdentifier::EVENT_PARAMETERS,
+        property_array_index: None,
+        property_value: Some(vec![0xfe, 0xff, marker, 0xff, 0xff]),
+        error: None,
     };
-    let mut buf = BytesMut::new();
-    ack.encode(&mut buf);
-
-    assert!(ReadPropertyMultipleACK::decode(&buf).is_err());
+    let ack = ReadPropertyMultipleACK::decode(&wire).unwrap();
+    assert_eq!(
+        ack.list_of_read_access_results[0].list_of_results,
+        [legacy(0xaa), legacy(0xbb)]
+    );
 }
 
 #[test]
@@ -342,7 +350,7 @@ fn test_decode_rpm_ack_truncated_1_byte() {
         }],
     };
     let mut buf = BytesMut::new();
-    ack.encode(&mut buf);
+    ack.encode(&mut buf).unwrap();
     assert!(ReadPropertyMultipleACK::decode(&buf[..1]).is_err());
 }
 
@@ -360,7 +368,7 @@ fn test_decode_rpm_ack_truncated_3_bytes() {
         }],
     };
     let mut buf = BytesMut::new();
-    ack.encode(&mut buf);
+    ack.encode(&mut buf).unwrap();
     assert!(ReadPropertyMultipleACK::decode(&buf[..3]).is_err());
 }
 
@@ -378,7 +386,7 @@ fn test_decode_rpm_ack_truncated_half() {
         }],
     };
     let mut buf = BytesMut::new();
-    ack.encode(&mut buf);
+    ack.encode(&mut buf).unwrap();
     let half = buf.len() / 2;
     assert!(ReadPropertyMultipleACK::decode(&buf[..half]).is_err());
 }
@@ -461,7 +469,7 @@ fn read_access_result_encodes_alone_as_in_the_ack() {
         }],
     };
     let mut alone = BytesMut::new();
-    result.encode(&mut alone);
+    result.encode(&mut alone).unwrap();
     assert_eq!(
         &alone[..],
         &[0x0C, 0, 0, 0, 9, 0x1E, 0x29, 85, 0x5E, 0x91, 1, 0x91, 31, 0x5F, 0x1F]
@@ -470,6 +478,6 @@ fn read_access_result_encodes_alone_as_in_the_ack() {
     ReadPropertyMultipleACK {
         list_of_read_access_results: vec![result],
     }
-    .encode(&mut ack);
+    .encode(&mut ack).unwrap();
     assert_eq!(ack, alone);
 }

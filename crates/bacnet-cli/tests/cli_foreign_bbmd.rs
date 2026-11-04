@@ -141,11 +141,15 @@ async fn a_silent_bbmd_fails_the_command() {
 }
 
 #[tokio::test]
-async fn the_flags_need_b_ip_and_each_other() {
+async fn the_flags_need_an_ip_transport_and_each_other() {
     let output = run(["--renewal", "20", "discover"]).await;
     failure(&output, "--foreign-bbmd");
+    // B/IPv6 takes an IPv6 address or a host name (#2365), not an IPv4 one.
     let output = run(["--ipv6", "--foreign-bbmd", "127.0.0.1", "discover"]).await;
-    failure(&output, "--foreign-bbmd requires BACnet/IP");
+    failure(
+        &output,
+        "is an IPv4 address, which B/IPv6 can't register with",
+    );
     let output = run(["--foreign-bbmd", "127.0.0.1:0", "discover"]).await;
     failure(&output, "is not a BBMD a device can register with");
 }

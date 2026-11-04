@@ -8,8 +8,8 @@ use bacnet_encoding::constructed::tagged::{
     expect_closing, expect_opening,
 };
 use bacnet_encoding::constructed::{
-    decode_read_access_specification, encode_read_access_specification, extract_property_value,
-    PropertyValueBoundary,
+    check_property_value, decode_read_access_specification, encode_read_access_specification,
+    extract_property_value, PropertyValueBoundary,
 };
 use bacnet_encoding::primitives;
 use bacnet_encoding::tags;
@@ -109,13 +109,19 @@ pub struct ReadPropertyMultipleACK {
 
 impl ReadAccessResult {
     /// Append the whole result: the object identifier in context tag `[0]`,
-    /// then each element between an opening and a closing tag `[1]`.
-    pub fn encode(&self, buf: &mut BytesMut) {
+    /// then each element between an opening and a closing tag `[1]`. Fails,
+    /// leaving `buf` unchanged, when an element's encoder refuses its value.
+    pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
+        let start = buf.len();
         Self::encode_header(buf, &self.object_identifier);
         for elem in &self.list_of_results {
-            elem.encode(buf);
+            if let Err(refused) = elem.encode(buf) {
+                buf.truncate(start);
+                return Err(refused);
+            }
         }
         Self::encode_footer(buf);
+        Ok(())
     }
 
     /// Encode an object's identifier and opening list-of-results tag.
@@ -131,8 +137,13 @@ impl ReadAccessResult {
 }
 
 impl ReadResultElement {
-    /// Encode one result, preserving value-over-error precedence.
-    pub fn encode(&self, buf: &mut BytesMut) {
+    /// Encode one result, preserving value-over-error precedence. Fails,
+    /// leaving `buf` unchanged, on a value [`check_property_value`] refuses.
+    pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
+        if let Some(value) = &self.property_value {
+            check_property_value(self.property_identifier, value, 4)
+                .map_err(|refused| refused.within("ReadPropertyMultiple-ACK"))?;
+        }
         primitives::encode_ctx_unsigned(buf, 2, self.property_identifier.to_raw() as u64);
         if let Some(idx) = self.property_array_index {
             primitives::encode_ctx_unsigned(buf, 3, idx as u64);
@@ -147,15 +158,22 @@ impl ReadResultElement {
             primitives::encode_app_enumerated(buf, u32::from(code.to_raw()));
             tags::encode_closing_tag(buf, 5);
         }
+        Ok(())
     }
 }
 
 impl ReadPropertyMultipleACK {
-    /// Encode the acknowledgment parameters into `buf`.
-    pub fn encode(&self, buf: &mut BytesMut) {
+    /// Encode the acknowledgment parameters into `buf`; fails, leaving `buf`
+    /// unchanged, when an element's encoder refuses its value.
+    pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
+        let start = buf.len();
         for result in &self.list_of_read_access_results {
-            result.encode(buf);
+            if let Err(refused) = result.encode(buf) {
+                buf.truncate(start);
+                return Err(refused);
+            }
         }
+        Ok(())
     }
 
     /// Decode the acknowledgment from its service-ack octets; fails on malformed or truncated

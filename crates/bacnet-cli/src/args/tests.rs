@@ -60,7 +60,7 @@ fn the_foreign_device_flags_reach_the_transport() {
 /// value in neither form is refused before anything starts.
 #[test]
 fn the_foreign_bbmd_may_be_a_host_name() {
-    let named = |host: &str, port| ForeignBbmd::Name {
+    let named = |host: &str, port| bacnet_transport::bip::ForeignBbmd::Name {
         host: host.into(),
         port,
     };
@@ -69,7 +69,10 @@ fn the_foreign_bbmd_may_be_a_host_name() {
         ("bbmd.example:47809", named("bbmd.example", 47809)),
     ] {
         let cli = parse(["bacnet", "--foreign-bbmd", value, "discover"]).unwrap();
-        assert_eq!(cli.foreign_bbmd, Some(bbmd.clone()));
+        assert_eq!(
+            cli.foreign_bbmd,
+            Some(crate::foreign::ForeignBbmdArg::Bip(bbmd.clone()))
+        );
         let args = crate::transport::TransportArgs::from_cli(
             &cli,
             Ipv4Addr::UNSPECIFIED,
@@ -81,6 +84,57 @@ fn the_foreign_bbmd_may_be_a_host_name() {
     for value in ["bb md", "bbmd:0", "0.0.0.0", "999.1.1.1"] {
         let error = parse(["bacnet", "--foreign-bbmd", value, "discover"]).unwrap_err();
         assert_eq!(error.kind(), ErrorKind::ValueValidation, "{value}");
+    }
+}
+
+/// With `--ipv6`, `--foreign-bbmd` takes an IPv6 address or a host name
+/// for B/IPv6 (#2365); each transport refuses the other's addresses, and
+/// B/IPv6 takes no `--renewal`.
+#[test]
+fn the_foreign_bbmd_of_a_bip6_session() {
+    use bacnet_transport::bip6::Bip6ForeignBbmd;
+    // The B/IPv6 registration the flags ask for, or why they're refused.
+    macro_rules! bip6 {
+        ($($arg:expr),*) => {{
+            let cli = parse(["bacnet", $($arg,)* "discover"]).unwrap();
+            crate::transport::TransportArgs::from_cli(&cli, Ipv4Addr::UNSPECIFIED, Ipv4Addr::BROADCAST)
+                .map(|args| args.bip6_foreign_device.map(|config| config.bbmd))
+        }};
+    }
+    assert_eq!(
+        bip6!("--ipv6", "--foreign-bbmd", "bbmd.example"),
+        Ok(Some(Bip6ForeignBbmd::Name {
+            host: "bbmd.example".into(),
+            port: 0xBAC0
+        }))
+    );
+    assert_eq!(
+        bip6!("--ipv6", "--foreign-bbmd", "[2001:db8::10]:47809"),
+        Ok(Some("[2001:db8::10]:47809".parse().unwrap()))
+    );
+    for (refused, why) in [
+        (
+            bip6!("--foreign-bbmd", "[2001:db8::10]:47809"),
+            "add --ipv6",
+        ),
+        (
+            bip6!("--ipv6", "--foreign-bbmd", "192.0.2.1"),
+            "IPv4 address",
+        ),
+        (
+            bip6!(
+                "--ipv6",
+                "--foreign-bbmd",
+                "bbmd.example",
+                "--renewal",
+                "20"
+            ),
+            "--renewal applies only to B/IP",
+        ),
+        (bip6!("--ipv6", "--foreign-bbmd", "[fe80::1]"), "link-local"),
+    ] {
+        let error = refused.unwrap_err();
+        assert!(error.contains(why), "{error}");
     }
 }
 

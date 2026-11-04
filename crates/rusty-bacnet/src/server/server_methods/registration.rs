@@ -310,15 +310,28 @@ impl BACnetServer {
     }
 
     /// Add an Alert Enrollment object to the server (before starting).
-    #[pyo3(signature = (instance, name, initial_source))]
+    ///
+    /// `storage_path` and `clear_written_reporting` keep the reporting
+    /// settings a peer writes in that file, as on `add_analog_input`
+    /// (#2331).
+    #[pyo3(signature = (
+        instance, name, initial_source, *, storage_path=None, clear_written_reporting=false
+    ))]
     fn add_alert_enrollment(
         &self,
         instance: u32,
         name: &str,
         initial_source: PyObjectIdentifier,
+        storage_path: Option<&str>,
+        clear_written_reporting: bool,
     ) -> PyResult<()> {
-        let obj = AlertEnrollmentObject::new(instance, name, initial_source.to_rust())
-            .map_err(to_py_err)?;
+        let obj = crate::object_options::keep_reporting(
+            || AlertEnrollmentObject::new(instance, name, initial_source.to_rust()),
+            storage_path,
+            clear_written_reporting,
+            AlertEnrollmentObject::with_reporting_persistence,
+            AlertEnrollmentObject::clear_written_reporting,
+        )?;
         self.push_pending(Box::new(obj))
     }
 
@@ -491,19 +504,33 @@ impl BACnetServer {
     /// `event_type` defaults to `EventType.CHANGE_OF_BITSTRING`. Event_Type
     /// follows Event_Parameters; this type applies only while the legacy
     /// octet-string parameters, which name no algorithm, are held (#1868).
+    ///
+    /// `storage_path` and `clear_written_reporting` keep the reporting
+    /// settings a peer writes in that file, as on `add_analog_input`
+    /// (#2331).
     #[pyo3(signature = (
         instance,
         name,
-        event_type=PyEventType { inner: EventType::CHANGE_OF_BITSTRING }
+        event_type=PyEventType { inner: EventType::CHANGE_OF_BITSTRING },
+        *,
+        storage_path=None,
+        clear_written_reporting=false
     ))]
     fn add_event_enrollment(
         &self,
         instance: u32,
         name: &str,
         event_type: PyEventType,
+        storage_path: Option<&str>,
+        clear_written_reporting: bool,
     ) -> PyResult<()> {
-        let obj =
-            EventEnrollmentObject::new(instance, name, event_type.to_rust()).map_err(to_py_err)?;
+        let obj = crate::object_options::keep_reporting(
+            || EventEnrollmentObject::new(instance, name, event_type.to_rust()),
+            storage_path,
+            clear_written_reporting,
+            EventEnrollmentObject::with_reporting_persistence,
+            EventEnrollmentObject::clear_written_reporting,
+        )?;
         self.push_pending(Box::new(obj))
     }
 

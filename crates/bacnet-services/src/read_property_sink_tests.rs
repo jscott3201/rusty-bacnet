@@ -33,10 +33,10 @@ fn ack(value: &[u8]) -> ReadPropertyAckRef<'_> {
 
 /// `encode` into a slice of `room` octets: the octets written, or the
 /// refusal with the slice and its storage checked unchanged.
-fn into_slice(
+fn into_slice<E>(
     room: usize,
-    encode: impl FnOnce(&mut &mut [u8]) -> Result<usize, SinkFull>,
-) -> Result<([u8; 32], usize), SinkFull> {
+    encode: impl FnOnce(&mut &mut [u8]) -> Result<usize, E>,
+) -> Result<([u8; 32], usize), E> {
     let mut storage = [0xA5; 32];
     let mut tail = &mut storage[..room];
     match encode(&mut tail) {
@@ -91,10 +91,10 @@ fn a_value_that_does_not_fit_is_not_written_at_all() {
     for room in 0..ACK.len() {
         assert_eq!(
             into_slice(room, |s| ack(value).encode_to_sink(s)),
-            Err(SinkFull {
+            Err(SinkEncodeError::Full(SinkFull {
                 needed: ACK.len(),
                 available: room
-            })
+            }))
         );
     }
 }
@@ -184,7 +184,7 @@ fn the_sink_encoders_write_the_hosted_octets() {
         hosted.extend_from_slice(&value);
         tags::encode_closing_tag(&mut hosted, 3);
         let mut sink = BytesMut::new();
-        owned.encode(&mut sink);
+        owned.encode(&mut sink).unwrap();
         assert_eq!(sink, hosted, "{owned:?}");
         assert_eq!(ReadPropertyACK::decode(&sink).unwrap(), owned);
         assert_eq!(
@@ -192,4 +192,30 @@ fn the_sink_encoders_write_the_hosted_octets() {
             owned.as_borrowed()
         );
     }
+}
+
+/// A legacy-form Event_Parameters value that wouldn't decode back is
+/// refused before anything is written, whatever the room (#2376).
+#[test]
+fn a_value_that_would_not_decode_back_is_not_written_at_all() {
+    let refused = [0xfe, 0xff, 1, 0xff, 0xff, 0x3f, 2, 0xff, 0xff];
+    let ack = ReadPropertyAckRef {
+        property_identifier: PropertyIdentifier::EVENT_PARAMETERS,
+        ..ack(&refused)
+    };
+    for room in [0, 32] {
+        assert!(matches!(
+            into_slice(room, |s| ack.encode_to_sink(s)),
+            Err(SinkEncodeError::Refused(_))
+        ));
+    }
+    let taken = ReadPropertyAckRef {
+        property_value: &refused[..5],
+        ..ack
+    };
+    let (storage, written) = into_slice(32, |s| taken.encode_to_sink(s)).unwrap();
+    assert_eq!(
+        ReadPropertyAckRef::decode(&storage[..written]).unwrap(),
+        taken
+    );
 }

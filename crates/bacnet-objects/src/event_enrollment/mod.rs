@@ -22,6 +22,54 @@ use crate::event::{
 use crate::property_metadata::PropertyMetadata;
 use crate::traits::BACnetObject;
 
+/// Implement `KeepsReporting` (`write_config::reporting`) for an Event or
+/// Alert Enrollment, which holds the kept rows in its own
+/// fields and a `ReportingStore` in `reporting_store` (#2331).
+macro_rules! keep_enrollment_reporting {
+    ($object:ty $(, takes_notify_type: $takes:path)?) => {
+        #[cfg(feature = "event-reporting")]
+        impl $crate::write_config::reporting::KeepsReporting for $object {
+            fn reporting_store(&mut self) -> &mut $crate::write_config::reporting::ReportingStore {
+                &mut self.reporting_store
+            }
+
+            fn reporting_store_ref(&self) -> &$crate::write_config::reporting::ReportingStore {
+                &self.reporting_store
+            }
+
+            fn reporting_rows(&self) -> $crate::write_config::reporting::ReportingRows {
+                $crate::write_config::reporting::ReportingRows {
+                    notification_class: self.notification_class,
+                    event_enable: self.event_enable,
+                    notify_type: self.notify_type,
+                    event_detection_enable: self.event_detection_enable,
+                    options: self.event_history.options.clone(),
+                }
+            }
+
+            fn restore_reporting_rows(
+                &mut self,
+                saved: &$crate::write_config::ReportingWriteConfig,
+            ) {
+                $crate::write_config::reporting::RowFields {
+                    notification_class: &mut self.notification_class,
+                    event_enable: &mut self.event_enable,
+                    notify_type: &mut self.notify_type,
+                    event_detection_enable: &mut self.event_detection_enable,
+                    options: &mut self.event_history.options,
+                }
+                .restore(saved);
+            }
+
+            $(
+                fn takes_notify_type(notify_type: bacnet_types::enums::NotifyType) -> bool {
+                    $takes(notify_type)
+                }
+            )?
+        }
+    };
+}
+
 mod alert;
 mod creation_only;
 mod metadata;
@@ -73,6 +121,9 @@ pub struct EventEnrollmentObject {
     /// Domain-tagged monitored value that caused the last OFFNORMAL transition
     /// (Clause 13.3.2 condition (c)). In-memory only.
     last_offnormal_value: Option<u64>,
+    /// The reporting settings a write set, kept in storage once the
+    /// enrollment opts in (#2331).
+    reporting_store: crate::write_config::reporting::ReportingStore,
 }
 
 impl EventEnrollmentObject {
@@ -119,6 +170,7 @@ impl EventEnrollmentObject {
             monitored_reference: None,
             cov_baseline: None,
             last_offnormal_value: None,
+            reporting_store: Default::default(),
         })
     }
 
@@ -212,16 +264,26 @@ impl EventEnrollmentObject {
         self.event_state = state;
     }
 
-    /// Set the notification class.
+    /// Set the notification class. On an enrollment keeping its reporting
+    /// settings, a value a write saved wins until `clear_written_reporting`
+    /// (#2331), as for `Event_Enable`.
     pub fn set_notification_class(&mut self, nc: u32) {
-        self.notification_class = nc;
+        if !self.kept_over_setter(PropertyIdentifier::NOTIFICATION_CLASS) {
+            self.notification_class = nc;
+        }
     }
 
     /// Set `Event_Enable`: the transitions whose notifications are distributed.
     ///
     /// Flags outside the three named transitions are dropped.
     pub fn set_event_enable(&mut self, enable: EventTransitionBits) {
-        self.event_enable = enable & EventTransitionBits::all();
+        if !self.kept_over_setter(PropertyIdentifier::EVENT_ENABLE) {
+            self.event_enable = enable & EventTransitionBits::all();
+        }
+    }
+
+    fn kept_over_setter(&self, property: PropertyIdentifier) -> bool {
+        crate::write_config::reporting::setter_gives_way(&self.reporting_store, self.oid, property)
     }
 
     /// Set `Time_Delay_Normal` (the pTimeDelayNormal parameter). `None`
@@ -396,6 +458,7 @@ impl BACnetObject for EventEnrollmentObject {
         _priority: Option<u8>,
     ) -> Result<(), Error> {
         crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
+        crate::write_config::reporting::admit(self, property, array_index, &value)?;
         if property == PropertyIdentifier::NOTIFY_TYPE {
             // BACnetNotifyType is a closed three-value production {alarm,
             // event, ack-notification} (Clause 21); out-of-production values
@@ -493,10 +556,18 @@ impl BACnetObject for EventEnrollmentObject {
 
     crate::traits::lend_event_reporting!();
 
+    #[cfg(feature = "durable-writes")]
+    fn durable_writes(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
+        self.durable_capability()
+    }
+
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
         Cow::Borrowed(metadata::EVENT_ENROLLMENT_PROPERTIES)
     }
 }
+
+crate::write_config::reporting::impl_reporting_persistence!(EventEnrollmentObject, without_tags);
+keep_enrollment_reporting!(EventEnrollmentObject);
 
 impl crate::creation::Creatable for EventEnrollmentObject {
     const CREATION_ONLY_PROPERTIES: &'static [PropertyIdentifier] = creation_only::CREATION_ONLY;

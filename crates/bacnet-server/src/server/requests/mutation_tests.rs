@@ -259,14 +259,17 @@ pub(super) fn cases() -> Vec<(ConfirmedServiceChoice, Bytes, MutationTarget)> {
             priority: Some(8),
         }),
     ));
-    case!(
-        CREATE_OBJECT,
-        CreateObject,
-        CreateObjectRequest {
-            object_specifier: ObjectSpecifier::Identifier(oid(ObjectType::BINARY_VALUE, 3)),
-            list_of_initial_values: vec![],
-        }
-    );
+    let request = CreateObjectRequest {
+        object_specifier: ObjectSpecifier::Identifier(oid(ObjectType::BINARY_VALUE, 3)),
+        list_of_initial_values: vec![],
+    };
+    let mut bytes = BytesMut::new();
+    request.encode(&mut bytes).unwrap();
+    cases.push((
+        ConfirmedServiceChoice::CREATE_OBJECT,
+        bytes.freeze(),
+        MutationTarget::CreateObject(request),
+    ));
     case!(
         DELETE_OBJECT,
         DeleteObject,

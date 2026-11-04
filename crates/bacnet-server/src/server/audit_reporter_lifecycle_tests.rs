@@ -24,7 +24,8 @@ fn create(specifier: ObjectSpecifier, values: Vec<BACnetPropertyValue>) -> Bytes
         object_specifier: specifier,
         list_of_initial_values: values,
     }
-    .encode(&mut bytes);
+    .encode(&mut bytes)
+    .unwrap();
     bytes.freeze()
 }
 

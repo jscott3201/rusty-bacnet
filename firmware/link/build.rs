@@ -1,6 +1,7 @@
 //! Hands the linker the image's memory layout on a bare-metal target: the
-//! generic `memory.x`, which the link test's images use, or in the emulation
-//! build the layout of the board its one board feature names, from `boards/`.
+//! generic `memory.x`, which the link test's images use, riscv32imac's
+//! larger `memory-riscv32imac.x` (#2363), or in the emulation build the
+//! layout of the board its one board feature names, from `boards/`.
 //! The emulation build also gets the board's QEMU machine name and the target
 //! triple, which its images print.
 //!
@@ -24,6 +25,7 @@ const BOARDS: [(&str, &str, &str); 4] = [
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=memory.x");
+    println!("cargo:rerun-if-changed=memory-riscv32imac.x");
     println!("cargo:rerun-if-changed=boards");
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("none") {
         return;
@@ -34,6 +36,9 @@ fn main() {
             println!("cargo:rustc-env=FIRMWARE_LINK_BOARD={machine}");
             println!("cargo:rustc-env=FIRMWARE_LINK_TARGET={target}");
             format!("boards/{machine}.x")
+        }
+        None if env::var("TARGET").is_ok_and(|target| target.starts_with("riscv32imac-")) => {
+            "memory-riscv32imac.x".to_owned()
         }
         None => "memory.x".to_owned(),
     };

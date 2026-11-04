@@ -138,6 +138,38 @@ async fn an_address_resolution_goes_to_the_group_or_to_the_bbmd() {
     }
 }
 
+/// A foreign device waiting for its BBMD's host name (#2365) has nowhere
+/// to send an Address-Resolution: none goes out, to the group or anywhere,
+/// and the send times out.
+#[tokio::test(start_paused = true)]
+async fn a_waiting_foreign_device_sends_no_address_resolution() {
+    let config = Bip6ForeignDeviceConfig {
+        bbmd: "bbmd.test:47808".parse().unwrap(),
+        ttl: 60,
+    };
+    let waiting = super::foreign_target::ForeignTarget::new(
+        config,
+        Arc::new(crate::bbmd_lookup::SystemResolver),
+    );
+    let resolver = Resolver::with_own(OWN);
+    let capture = Arc::new(Capture::default());
+    let driver = Driver {
+        socket: Arc::clone(&capture),
+        resolver: Arc::clone(&resolver),
+        source: OWN,
+        resolution_to: group(),
+        foreign: Some(waiting),
+    };
+    tokio::spawn(driver.run());
+    let start = Instant::now();
+    let result = resolver
+        .send_unicast(&*capture, OWN, UnresolvedSend::Wait, NPDU, &PEER)
+        .await;
+    assert_eq!(kind(&result), Some(io::ErrorKind::TimedOut), "{result:?}");
+    assert_eq!(capture.sent(start), []);
+    assert_eq!(resolver.counters().address_resolutions_sent, 0);
+}
+
 /// A waiting send goes out the moment its VMAC is learned, to the learned
 /// address, and no further Address-Resolution follows.
 #[tokio::test(start_paused = true)]
@@ -248,8 +280,7 @@ async fn foreign_device(bbmd: &UdpSocket) -> Bip6Transport {
     };
     let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(10));
     transport.register_as_foreign_device(Bip6ForeignDeviceConfig {
-        bbmd_ip: *bbmd.ip(),
-        bbmd_port: bbmd.port(),
+        bbmd: (*bbmd.ip(), bbmd.port()).into(),
         ttl: 60,
     });
     transport
@@ -388,7 +419,7 @@ async fn receiver(
     resolver: Arc<Resolver>,
     foreign: bool,
 ) -> (Receiver, mpsc::Receiver<crate::port::ReceivedNpdu>) {
-    let socket = Bip6Socket::bind(Ipv6Addr::LOCALHOST, 0, None)
+    let socket = Bip6Socket::bind(Ipv6Addr::LOCALHOST, 0, super::socket::Role::Normal)
         .await
         .unwrap();
     let local_ip = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x10);

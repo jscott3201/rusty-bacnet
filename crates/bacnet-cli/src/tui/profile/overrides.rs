@@ -4,6 +4,8 @@ use super::sc::{DeviceUuid, Vmac};
 use super::{Profile, Transport};
 use crate::args::Cli;
 use bacnet_transport::bip::ForeignBbmd;
+
+use crate::foreign::ForeignBbmdArg;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::PathBuf;
 
@@ -91,7 +93,12 @@ impl Overrides {
                 interface: cli.interface.filter(|_| has("interface")),
                 port: has("port").then_some(cli.port),
                 broadcast: has("broadcast").then_some(cli.broadcast),
-                bbmd: cli.foreign_bbmd.clone().filter(|_| has("foreign_bbmd")),
+                bbmd: cli
+                    .foreign_bbmd
+                    .as_ref()
+                    .filter(|_| has("foreign_bbmd"))
+                    .map(ForeignBbmdArg::bip)
+                    .transpose()?,
                 ttl: has("ttl").then_some(cli.ttl),
                 renewal_secs: cli.renewal.filter(|_| has("renewal")),
                 nat_global_address: cli.nat_global_address.filter(|_| has("nat_global_address")),

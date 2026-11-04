@@ -15,7 +15,8 @@ fn create(db: &mut ObjectDatabase, object_specifier: ObjectSpecifier) -> Result<
         object_specifier,
         list_of_initial_values: vec![],
     }
-    .encode(&mut request);
+    .encode(&mut request)
+    .unwrap();
     let mut response = BytesMut::new();
     let result = handle_create_object(db, &request, &mut response);
     if result.is_err() {
