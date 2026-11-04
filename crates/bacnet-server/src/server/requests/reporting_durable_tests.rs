@@ -1,5 +1,6 @@
-//! The reporting settings a peer writes to an analog, binary or multi-state
-//! object keeping them in storage save through the server (#2331): each
+//! The reporting settings a peer writes to an object keeping them in storage
+//! save through the server (#2331): the analog, binary and multi-state
+//! objects, Access Door and Zone, and Event and Alert Enrollment. Each
 //! covered WriteProperty stages one save, the write takes it, and a server
 //! rebuilt on the same storage serves what was written. A write that cannot
 //! be saved is refused on the wire with the old value kept, and a request
@@ -15,8 +16,10 @@ use super::mutation_tests::{Fixture, oid, value, wpm};
 use super::write_config_durable_tests::ConfigStorage;
 use super::*;
 use bacnet_encoding::constructed::encode_object_property_reference;
+use bacnet_objects::access_control::{AccessDoorObject, AccessZoneObject};
 use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use bacnet_objects::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
+use bacnet_objects::event_enrollment::{AlertEnrollmentObject, EventEnrollmentObject};
 use bacnet_objects::multistate::{
     MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject,
 };
@@ -28,12 +31,12 @@ use bacnet_services::wpm::WriteAccessSpecification;
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::constructed::{BACnetNameValue, BACnetObjectPropertyReference};
-use bacnet_types::enums::{EngineeringUnits, NotifyType};
+use bacnet_types::enums::{EngineeringUnits, EventType, NotifyType};
 use std::sync::atomic::Ordering;
 
 use PropertyIdentifier as P;
 
-const TYPES: [ObjectType; 9] = [
+const TYPES: [ObjectType; 13] = [
     ObjectType::ANALOG_INPUT,
     ObjectType::ANALOG_OUTPUT,
     ObjectType::ANALOG_VALUE,
@@ -43,6 +46,10 @@ const TYPES: [ObjectType; 9] = [
     ObjectType::MULTI_STATE_INPUT,
     ObjectType::MULTI_STATE_OUTPUT,
     ObjectType::MULTI_STATE_VALUE,
+    ObjectType::ACCESS_DOOR,
+    ObjectType::ACCESS_ZONE,
+    ObjectType::EVENT_ENROLLMENT,
+    ObjectType::ALERT_ENROLLMENT,
 ];
 
 /// The fixture's database already holds Binary Values 1 and 2 and
@@ -71,7 +78,19 @@ fn object(kind: ObjectType, storage: &Arc<ConfigStorage>) -> Box<dyn BACnetObjec
         ObjectType::BINARY_VALUE => build!(BinaryValueObject::new(INSTANCE, "BV")),
         ObjectType::MULTI_STATE_INPUT => build!(MultiStateInputObject::new(INSTANCE, "MSI", 3)),
         ObjectType::MULTI_STATE_OUTPUT => build!(MultiStateOutputObject::new(INSTANCE, "MSO", 3)),
-        _ => build!(MultiStateValueObject::new(INSTANCE, "MSV", 3)),
+        ObjectType::MULTI_STATE_VALUE => build!(MultiStateValueObject::new(INSTANCE, "MSV", 3)),
+        ObjectType::ACCESS_DOOR => build!(AccessDoorObject::new(INSTANCE, "Door")),
+        ObjectType::ACCESS_ZONE => build!(AccessZoneObject::new(INSTANCE, "Zone")),
+        ObjectType::EVENT_ENROLLMENT => build!(EventEnrollmentObject::new(
+            INSTANCE,
+            "EE",
+            EventType::CHANGE_OF_STATE
+        )),
+        _ => build!(AlertEnrollmentObject::new(
+            INSTANCE,
+            "AE",
+            oid(ObjectType::ANALOG_INPUT, 1)
+        )),
     }
 }
 

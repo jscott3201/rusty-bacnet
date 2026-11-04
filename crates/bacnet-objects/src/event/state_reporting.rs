@@ -240,7 +240,70 @@ impl ChangeOfStateReporting {
     ) -> Option<bacnet_types::constructed::BACnetObjectPropertyReference> {
         self.event_history.options.inhibit_reference().cloned()
     }
+
+    /// The rows an object keeping its reporting settings saves (#2331).
+    #[cfg(feature = "event-reporting")]
+    pub(crate) fn reporting_rows(&self) -> crate::write_config::reporting::ReportingRows {
+        crate::write_config::reporting::ReportingRows {
+            notification_class: self.event_detector.notification_class,
+            event_enable: self.event_detector.event_enable,
+            notify_type: self.event_detector.notify_type,
+            event_detection_enable: self.event_detection_enable,
+            options: self.event_history.options.clone(),
+        }
+    }
+
+    /// Serve the saved rows of an object keeping its reporting settings,
+    /// as it is built (#2331).
+    #[cfg(feature = "event-reporting")]
+    pub(crate) fn restore_reporting_rows(
+        &mut self,
+        saved: &crate::write_config::ReportingWriteConfig,
+    ) {
+        crate::write_config::reporting::RowFields {
+            notification_class: &mut self.event_detector.notification_class,
+            event_enable: &mut self.event_detector.event_enable,
+            notify_type: &mut self.event_detector.notify_type,
+            event_detection_enable: &mut self.event_detection_enable,
+            options: &mut self.event_history.options,
+        }
+        .restore(saved);
+    }
 }
+
+/// Implement `KeepsReporting` (`write_config::reporting`) and reporting
+/// persistence for `$object`, which holds a
+/// [`ChangeOfStateReporting`] in `reporting` and a `ReportingStore` in
+/// `reporting_store` (#2331). Its rows have no setters to guard.
+macro_rules! keep_change_of_state_reporting {
+    ($object:ty) => {
+        $crate::write_config::reporting::impl_reporting_persistence!($object, without_tags);
+
+        #[cfg(feature = "event-reporting")]
+        impl $crate::write_config::reporting::KeepsReporting for $object {
+            fn reporting_store(&mut self) -> &mut $crate::write_config::reporting::ReportingStore {
+                &mut self.reporting_store
+            }
+
+            fn reporting_store_ref(&self) -> &$crate::write_config::reporting::ReportingStore {
+                &self.reporting_store
+            }
+
+            fn reporting_rows(&self) -> $crate::write_config::reporting::ReportingRows {
+                self.reporting.reporting_rows()
+            }
+
+            fn restore_reporting_rows(
+                &mut self,
+                saved: &$crate::write_config::ReportingWriteConfig,
+            ) {
+                self.reporting.restore_reporting_rows(saved);
+            }
+        }
+    };
+}
+
+pub(crate) use keep_change_of_state_reporting;
 
 /// The states a list on a CHANGE_OF_STATE object may hold, such as its
 /// Alarm_Values: members of the watched enumeration, named or proprietary,

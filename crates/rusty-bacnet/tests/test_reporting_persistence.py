@@ -1,7 +1,8 @@
 """Reporting settings a peer writes, kept across a restart (#2331).
 
-Every analog, binary and multi-state builder takes keyword-only
-``storage_path`` and ``clear_written_reporting``. A write of
+Every builder of an object with intrinsic reporting takes keyword-only
+``storage_path`` and ``clear_written_reporting``: the analog, binary and
+multi-state ones, Access Door and Zone, and Event and Alert Enrollment. A write of
 Notification_Class, Event_Enable, Notify_Type, Event_Detection_Enable,
 Event_Message_Texts_Config or the Event_Algorithm_Inhibit pair is saved in
 that file before it is answered, and a server started on the same file
@@ -36,6 +37,10 @@ BUILDERS = (
     "add_multistate_input",
     "add_multistate_output",
     "add_multistate_value",
+    "add_access_door",
+    "add_access_zone",
+    "add_event_enrollment",
+    "add_alert_enrollment",
 )
 # One object of each family.
 ANALOG = ObjectIdentifier(ObjectType.ANALOG_INPUT, 1)
@@ -132,6 +137,72 @@ class WrittenReportingTests(unittest.IsolatedAsyncioTestCase):
             await server.stop()
         for name in ("ai-1", "bo-1", "msv-1"):
             self.assertTrue((self.state / name).exists())
+
+
+# One object of each further family: the Access objects and the enrollments.
+DOOR = ObjectIdentifier(ObjectType.ACCESS_DOOR, 1)
+ZONE = ObjectIdentifier(ObjectType.ACCESS_ZONE, 1)
+ENROLLMENT = ObjectIdentifier(ObjectType.EVENT_ENROLLMENT, 1)
+ALERT = ObjectIdentifier(ObjectType.ALERT_ENROLLMENT, 1)
+
+
+class FurtherTypesTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.state = Path(directory.name)
+
+    async def start(self, clear: bool = False) -> BACnetServer:
+        server = BACnetServer(2_331_002, interface="127.0.0.1", port=0)
+        kept = lambda name: {  # noqa: E731
+            "storage_path": str(self.state / name),
+            "clear_written_reporting": clear,
+        }
+        server.add_access_door(1, "Door-1", **kept("door-1"))
+        server.add_access_zone(1, "Zone-1", **kept("zone-1"))
+        server.add_event_enrollment(1, "EE-1", **kept("ee-1"))
+        server.add_alert_enrollment(1, "AE-1", ANALOG, **kept("ae-1"))
+        await server.start()
+        return server
+
+    async def test_written_settings_survive_a_restart_until_cleared(self) -> None:
+        server = await self.start()
+        try:
+            for oid in (DOOR, ZONE, ENROLLMENT, ALERT):
+                await server.write_property_local(
+                    oid, P.NOTIFICATION_CLASS, PropertyValue.unsigned(9), source_object=None
+                )
+            await server.write_property_local(
+                ALERT, P.EVENT_DETECTION_ENABLE, PropertyValue.boolean(False), source_object=None
+            )
+        finally:
+            await server.stop()
+
+        server = await self.start()
+        try:
+            for oid in (DOOR, ZONE, ENROLLMENT, ALERT):
+                with self.subTest(oid=oid):
+                    self.assertEqual(
+                        await server.read_property(oid, P.NOTIFICATION_CLASS),
+                        PropertyValue.unsigned(9),
+                    )
+            self.assertEqual(
+                await server.read_property(ALERT, P.EVENT_DETECTION_ENABLE),
+                PropertyValue.boolean(False),
+            )
+        finally:
+            await server.stop()
+
+        server = await self.start(clear=True)
+        try:
+            for oid in (DOOR, ZONE, ENROLLMENT, ALERT):
+                with self.subTest(cleared=oid):
+                    self.assertEqual(
+                        await server.read_property(oid, P.NOTIFICATION_CLASS),
+                        PropertyValue.unsigned(0),
+                    )
+        finally:
+            await server.stop()
 
 
 if __name__ == "__main__":

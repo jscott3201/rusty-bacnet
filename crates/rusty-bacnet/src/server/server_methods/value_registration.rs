@@ -6,37 +6,8 @@
 //! `value_source_tracking` (#1552) and the independently optional Audit
 //! policy.
 use super::super::*;
-use crate::object_options::{present_value_access, provision_profile};
-use bacnet_objects::write_config::{FileWriteConfigPersistence, WriteConfigPersistence};
+use crate::object_options::{keep_reporting, present_value_access, provision_profile};
 use bacnet_types::enums::EngineeringUnits;
-use bacnet_types::error::Error;
-
-/// Build an object with `build`, keeping its reporting settings in the file
-/// at `storage_path` when there is one (#2331). With `clear`, the settings a
-/// write saved are dropped first and the object is opened again on the
-/// cleared file, so it starts from its defaults, as `add_timer` does.
-fn keep_reporting<T>(
-    build: impl Fn() -> Result<T, Error>,
-    storage_path: Option<&str>,
-    clear: bool,
-    attach: fn(T, Arc<dyn WriteConfigPersistence>) -> Result<T, Error>,
-    clear_written: fn(&mut T) -> Result<(), Error>,
-) -> PyResult<T> {
-    let Some(path) = storage_path else {
-        return build().map_err(to_py_err);
-    };
-    let storage: Arc<dyn WriteConfigPersistence> =
-        Arc::new(FileWriteConfigPersistence::new(path).map_err(to_py_err)?);
-    let open = || build().and_then(|object| attach(object, storage.clone()));
-    let mut object = open().map_err(to_py_err)?;
-    if clear {
-        clear_written(&mut object).map_err(to_py_err)?;
-        // Dropping it waits for its saves.
-        drop(object);
-        object = open().map_err(to_py_err)?;
-    }
-    Ok(object)
-}
 
 #[pymethods]
 impl BACnetServer {

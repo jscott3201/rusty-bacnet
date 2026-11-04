@@ -4482,8 +4482,9 @@ above; there is no alternate immediate-commit path. Standalone detector
 #### Keeping written reporting settings (#2331)
 
 With the `event-reporting` feature, which `std` turns on, the analog, binary
-and multi-state Input, Output and Value objects can keep the reporting
-settings a peer writes across a restart: Notification_Class,
+and multi-state Input, Output and Value objects, Access Door, Access Zone,
+Event Enrollment and Alert Enrollment can keep the reporting settings a peer
+writes across a restart: Notification_Class,
 Event_Enable, Notify_Type, Event_Detection_Enable,
 Event_Message_Texts_Config, Event_Algorithm_Inhibit_Ref and
 Event_Algorithm_Inhibit. Opt in with the builder call
@@ -4512,8 +4513,12 @@ ai.set_notification_class(5); // a value a peer wrote and saved wins
   NO_SPACE_TO_WRITE_PROPERTY, whatever the storage.
 - **Saved wins.** Only the settings a write set are kept. Once one is saved,
   its setter (`set_notification_class`, `set_event_enable`,
-  `set_notify_type`) leaves it alone, so an application that configures the
-  object at each start keeps a peer's write. `written_reporting()` lists what
+  `set_notify_type`, and an Alert Enrollment's `set_event_detection_enable`)
+  leaves it alone, so an application that configures the object at each
+  start keeps a peer's write. Access Door and Access Zone have no setters
+  for these settings. An Alert Enrollment's Event_Enable,
+  Notification_Class and Event_Detection_Enable are no longer public fields:
+  set them through the setters so the rule holds. `written_reporting()` lists what
   is saved, and `clear_written_reporting()` drops it all, saving before it
   returns, so the setters apply again; the values served stay until a setter
   or a write changes them.
@@ -4526,9 +4531,11 @@ ai.set_notification_class(5); // a value a peer wrote and saved wins
   a match takes a wildcard arm, and a `ReportingWriteConfig` is built from
   `Default` with its fields set.
 - **Feature.** `event-reporting` gates `with_reporting_persistence`, the
-  three setters, `written_reporting`, `clear_written_reporting` and
+  three setters of the analog, binary and multi-state objects,
+  `written_reporting`, `clear_written_reporting` and
   `wait_for_reporting_saves`; without it the objects keep nothing, and an
-  image that reports nothing links none of it.
+  image that reports nothing links none of it. The Event and Alert
+  Enrollment setters are there either way, and always apply without it.
 
 #### Creation and deletion
 
