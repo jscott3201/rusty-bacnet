@@ -4559,7 +4559,7 @@ ai.set_notification_class(5); // a value a peer wrote and saved wins
   `written_reporting`, `clear_written_reporting` and
   `wait_for_reporting_saves`; without it the objects keep nothing, and an
   image that reports nothing links none of it. The Event and Alert
-  Enrollment setters, and every object's `set_description`, are there
+  Enrollment setters, and these objects' `set_description`, are there
   either way, and always apply without it.
 
 #### Keeping a written Description (#2364)
