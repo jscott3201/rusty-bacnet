@@ -159,6 +159,8 @@ impl fmt::Display for SinkEncodeError {
     }
 }
 
+// A transparent wrapper: Display is the wrapped error's own text, so
+// `source` stays `None` (as the wrapped errors' do) rather than repeating it.
 impl core::error::Error for SinkEncodeError {}
 
 /// Writes at the front and advances the slice to its unused tail.

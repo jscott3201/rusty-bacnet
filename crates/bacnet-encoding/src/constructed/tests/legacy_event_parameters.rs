@@ -53,20 +53,22 @@ fn the_minimized_fuzz_input_no_longer_breaks_the_round_trip() {
         0x09, 0x53, 0x19, 0x42, 0x2e, 0xfe, 0xff, 0xff, 0xff, 0x2f, 0x3c, 0x4e, 0xff, 0xff, 0x2f,
         0x0d, 0x0c, 0x00, 0x2f,
     ];
-    // The value used to end at the second `ff ff 2f`, and alone the first
-    // ended it. Now the first ends it here too, since a priority [3] may
-    // follow a value, and the four-octet "priority" after it is out of
-    // range.
-    let error = decode_bacnet_property_value(&input, 0).unwrap_err();
-    assert!(error.to_string().contains("priority"), "{error}");
-    assert_eq!(fuzz_round_trip(&input), None);
+    // The first `ff ff 2f` is followed by a four-octet [3], neither a
+    // one-octet priority nor one that runs to the end, so the value ends at
+    // the second, before the next value's [0].
+    let (value, end) = decode_bacnet_property_value(&input, 0).unwrap();
+    assert_eq!(
+        value,
+        BACnetPropertyValue {
+            property_array_index: Some(0x42),
+            ..legacy(&[0xfe, 0xff, 0xff, 0xff, 0x2f, 0x3c, 0x4e, 0xff, 0xff])
+        }
+    );
+    assert_eq!(end, 15);
 
-    // The value it used to decode to holds the outer closing tag after a
-    // pair before its end: the encoder refuses it.
-    let value = BACnetPropertyValue {
-        property_array_index: Some(0x42),
-        ..legacy(&[0xfe, 0xff, 0xff, 0xff, 0x2f, 0x3c, 0x4e, 0xff, 0xff])
-    };
+    // Alone, the first pair would end it: the encoder refuses the value, which
+    // ends the fuzzer's round trip.
+    assert_eq!(fuzz_round_trip(&input), None);
     let mut buf = BytesMut::new();
     let refused = encode_bacnet_property_value(&value, &mut buf).unwrap_err();
     assert!(buf.is_empty());
@@ -216,6 +218,39 @@ fn an_older_peers_value_with_two_possible_ends_is_read_to_the_first() {
     let (second, end) = decode_bacnet_property_value(&wire, next).unwrap();
     assert_eq!(second, legacy(&[0xfe, 0xff, 0xbb, 0xff, 0xff]));
     assert_eq!(end, wire.len());
+}
+
+#[test]
+fn a_one_octet_priority_then_the_next_value_ends_a_legacy_value() {
+    // What the encoder writes for a legacy value with priority 5 followed
+    // by another value: two values, the first with its priority.
+    let wire = [
+        0x09, 0x53, 0x2e, 0xfe, 0xff, 0x01, 0xff, 0xff, 0x2f, 0x39, 0x05, 0x09, 0x53, 0x2e, 0xfe,
+        0xff, 0x02, 0xff, 0xff, 0x2f,
+    ];
+    let mut first = legacy(&[0xfe, 0xff, 1, 0xff, 0xff]);
+    first.priority = Some(5);
+    assert_eq!(
+        encoded(&[first.clone(), legacy(&[0xfe, 0xff, 2, 0xff, 0xff])]).as_ref(),
+        wire
+    );
+    let (decoded, next) = decode_bacnet_property_value(&wire, 0).unwrap();
+    assert_eq!((decoded, next), (first, 11));
+
+    // A [3] of two octets, or one followed by anything but the end or a [0],
+    // is payload: the value runs on to the last pair.
+    for after in [
+        &[0x3a, 0x00, 0x05, 0x09, 0x53][..],
+        &[0x3a, 0x05, 0x09, 0x53],
+        &[0x39, 0x05, 0x19, 0x53],
+    ] {
+        let mut wire = vec![0x09, 0x53, 0x2e, 0xfe, 0xff, 0x01, 0xff, 0xff, 0x2f];
+        wire.extend_from_slice(after);
+        wire.extend_from_slice(&[0xff, 0xff, 0x2f]);
+        let (decoded, end) = decode_bacnet_property_value(&wire, 0).unwrap();
+        assert_eq!(decoded.value, wire[3..wire.len() - 1]);
+        assert_eq!(end, wire.len());
+    }
 }
 
 #[test]

@@ -153,8 +153,9 @@ pub fn evaluate<L>(
             time_remaining,
             list_of_values: values,
         };
-        // A value the encoder refuses (a legacy-form Event_Parameters value
-        // that wouldn't decode back, #2376) can't be reported.
+        // Skip this report when the encoder refuses a value (a legacy-form
+        // Event_Parameters value that wouldn't decode back, #2376): no
+        // notification can carry it, and the subscription stays as it was.
         if notification.encode(&mut params).is_err() {
             continue;
         }

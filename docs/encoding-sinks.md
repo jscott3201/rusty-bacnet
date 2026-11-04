@@ -34,7 +34,10 @@ composite encoder families still use their `BytesMut` buffers and need
 
 `SinkFull { needed: usize, available: usize }` describes the refused append
 without a string allocation. Each sink encoder returns `Result<usize,
-SinkFull>`, reporting the appended byte count on success. A known shortage
+SinkFull>`, reporting the appended byte count on success, except one that
+checks its input: `ReadPropertyAckRef::encode_to_sink` returns
+`SinkEncodeError`, whose `Full` holds the `SinkFull` and whose `Refused`
+holds the `EncodeError` for a value it won't write (#2376). A known shortage
 returns the total required and available lengths without calling `write`.
 A custom sink can still refuse a write despite unknown or sufficient advertised
 capacity; its error is returned unchanged. This contract is for byte storage,

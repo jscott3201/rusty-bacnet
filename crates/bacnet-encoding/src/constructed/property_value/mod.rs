@@ -131,6 +131,10 @@ pub enum PropertyValueBoundary {
     ContextToEnd(u8),
     /// A closing tag with this number.
     Closing(u8),
+    /// A primitive context tag with this number holding one octet, followed
+    /// by the end of the input or a context tag `[0]`: a priority as the
+    /// encoder writes it, then the end or the next property value.
+    OneOctetContext(u8),
 }
 
 /// Whether `offset` in `data` is at `boundary`.
@@ -150,6 +154,21 @@ fn matches_property_boundary(data: &[u8], offset: usize, boundary: PropertyValue
         }
         PropertyValueBoundary::Closing(number) => {
             tags::decode_tag(data, offset).is_ok_and(|(tag, _)| tag.is_closing_tag(number))
+        }
+        PropertyValueBoundary::OneOctetContext(number) => {
+            tags::decode_tag(data, offset).is_ok_and(|(tag, content_start)| {
+                tag.is_context(number)
+                    && tag.length == 1
+                    && (matches_property_boundary(
+                        data,
+                        content_start + 1,
+                        PropertyValueBoundary::End,
+                    ) || matches_property_boundary(
+                        data,
+                        content_start + 1,
+                        PropertyValueBoundary::Context(0),
+                    ))
+            })
         }
     }
 }
