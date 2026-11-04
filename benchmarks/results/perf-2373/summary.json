@@ -12,8 +12,8 @@
  "baseline": "dd786122c4eea1c77ef0ea0d2a7dea2720a9e12b",
  "candidate": "d6de4282e5b2db43f70ef8b3cd4abd861a61a404",
  "baseline_builds_identical": true,
- "accepted": false,
- "note": "Every pair lower on ReadProperty; the multi-thread row misses the 3-floor rule (2.5 floors), its floor set by the first baseline run. Calls change by exactly two clock reads per round trip on both runtimes.",
+ "accepted": true,
+ "note": "Accepted by the official count (GitHub run 41923877549). The local count had every pair lower on ReadProperty, but its multi-thread row missed the 3-floor rule (2.5 floors), its floor set by the first baseline run. Calls change by exactly two clock reads per round trip on both runtimes.",
  "rows": [
   {
    "workload": "rp",
@@ -147,5 +147,148 @@
     -1114.1434444444458
    ]
   }
- ]
+ ],
+ "official": {
+  "name": "The manual Perf counts workflow (GitHub run 41923877549)",
+  "aim": "rp",
+  "baseline": "dd786122c4eea1c77ef0ea0d2a7dea2720a9e12b",
+  "candidate": "d6de4282e5b2db43f70ef8b3cd4abd861a61a404",
+  "note": "GitHub arm64 runner; A and B binaries byte-identical to the local count's",
+  "baseline_builds_identical": true,
+  "accepted": true,
+  "rows": [
+   {
+    "workload": "rp",
+    "runtime": "ct",
+    "a_median": 31266.54838888889,
+    "b_median": 31026.323833333332,
+    "delta": -240.22455555555644,
+    "noise_floor": 12.877000000000407,
+    "a_calls": 18.0005,
+    "b_calls": 18.0005,
+    "a_bytes": 2127.052,
+    "b_bytes": 2127.052,
+    "verdict": "PASS",
+    "pairs_lower": 6,
+    "pair_deltas": [
+     -242.35000000000218,
+     -243.22977777777487,
+     -246.84666666666817,
+     -237.34611111111008,
+     -234.91300000000047,
+     -238.0991111111107
+    ]
+   },
+   {
+    "workload": "rp",
+    "runtime": "mt",
+    "a_median": 32643.861277777778,
+    "b_median": 32413.048722222222,
+    "delta": -230.81255555555617,
+    "noise_floor": 41.696333333333314,
+    "a_calls": 18.0008,
+    "b_calls": 18.0008,
+    "a_bytes": 2127.0832,
+    "b_bytes": 2127.0832,
+    "verdict": "PASS",
+    "pairs_lower": 6,
+    "pair_deltas": [
+     -224.36777777777752,
+     -238.39433333333363,
+     -236.81300000000192,
+     -195.6137777777767,
+     -223.68877777777743,
+     -243.2688888888879
+    ]
+   },
+   {
+    "workload": "rpm",
+    "runtime": "ct",
+    "a_median": 91137.28166666668,
+    "b_median": 90894.59844444445,
+    "delta": -242.68322222222923,
+    "noise_floor": 12.505777777769254,
+    "a_calls": 139.00115,
+    "b_calls": 139.00115,
+    "a_bytes": 18496.119599999998,
+    "b_bytes": 18496.119599999998,
+    "verdict": "PASS",
+    "pairs_lower": 6,
+    "pair_deltas": [
+     -249.0701111110975,
+     -238.36699999999837,
+     -232.37544444443483,
+     -241.5846666666621,
+     -242.2183333333378,
+     -243.92766666667012
+    ]
+   },
+   {
+    "workload": "rpm",
+    "runtime": "mt",
+    "a_median": 94215.99461111112,
+    "b_median": 94061.59705555555,
+    "delta": -154.3975555555662,
+    "noise_floor": 480.47966666666616,
+    "a_calls": 139.0015,
+    "b_calls": 139.00144999999998,
+    "a_bytes": 18496.156,
+    "b_bytes": 18496.1508,
+    "verdict": "PASS",
+    "pairs_lower": 6,
+    "pair_deltas": [
+     -68.60333333333256,
+     -627.9293333333335,
+     -159.6961111111159,
+     -534.7815555555571,
+     -254.93688888888573,
+     -53.270888888888294
+    ]
+   },
+   {
+    "workload": "wp",
+    "runtime": "ct",
+    "a_median": 39900.201,
+    "b_median": 39657.08072222222,
+    "delta": -243.12027777777985,
+    "noise_floor": 98.76011111111438,
+    "a_calls": 25.0006,
+    "b_calls": 25.0006,
+    "a_bytes": 7944.0624,
+    "b_bytes": 7944.0624,
+    "verdict": "PASS",
+    "pairs_lower": 6,
+    "pair_deltas": [
+     -234.54788888889016,
+     -239.922111111111,
+     -242.54811111111485,
+     -242.74577777778177,
+     -246.0563333333339,
+     -251.28988888888853
+    ]
+   },
+   {
+    "workload": "wp",
+    "runtime": "mt",
+    "a_median": 41171.59305555555,
+    "b_median": 40890.44183333333,
+    "delta": -281.1512222222227,
+    "noise_floor": 141.5338888888873,
+    "a_calls": 25.0009,
+    "b_calls": 25.0009,
+    "a_bytes": 7944.0936,
+    "b_bytes": 7944.0936,
+    "verdict": "PASS",
+    "pairs_lower": 6,
+    "pair_deltas": [
+     -175.53022222222353,
+     -328.32100000000355,
+     -313.20300000000134,
+     -230.01966666666704,
+     -258.6727777777778,
+     -333.7392222222261
+    ]
+   }
+  ]
+ }
 }

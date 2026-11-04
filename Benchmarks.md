@@ -1429,10 +1429,18 @@ Counted against dev after section 10.9's changes:
   lower. Ten-object ReadPropertyMultiple falls by 241.9 on the
   current-thread runtime; its multi-thread figure, 154.8, is inside its
   floor of 985.4. That is about 120 instructions per received datagram.
-- **Short of the rule on one row.** On the multi-thread runtime,
+- **Short of the rule on one row, locally.** On the multi-thread runtime,
   ReadProperty's 253.7 is 2.5 times its floor of 101.5, where the rule
   asks for more than 3. One baseline run, the first, sets that floor; the
   other eleven baseline values lie within 42.6 instructions per request.
+
+The manual Perf counts workflow then compared dev with the change (GitHub
+run 41923877549): ReadProperty fell by 240.2 instructions per request on
+the current-thread runtime and 230.8 on the multi-thread one, 18.7 and 5.5
+times its floors, and WriteProperty by 243.1 and 281.2, with every pair
+lower; the change was accepted. Ten-object ReadPropertyMultiple fell by
+242.7 and 154.4, the latter inside its floor of 480.5. Allocations are
+unchanged.
 
 ## 11. How to reproduce
 

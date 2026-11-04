@@ -76,7 +76,9 @@ pub trait Policy {
     /// limit. One refused is dropped unanswered.
     ///
     /// No time is passed in: a limit that needs one reads its own clock, so
-    /// only these four requests pay for the read, never an NPDU (#2373).
+    /// only these four requests pay for the read, never an NPDU (#2373). A
+    /// host without a clock of its own can store the `now` it passes to the
+    /// port in its policy before the call.
     fn admit_management(&mut self, source: SocketAddrV4, function: BvlcFunction) -> bool {
         let _ = (source, function);
         true

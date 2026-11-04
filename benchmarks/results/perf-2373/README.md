@@ -58,7 +58,7 @@ or a port's `receive`, or passed `Instant::ZERO`.
 | ReadPropertyMultiple | ct | 91,106.5 | 90,864.6 | -241.9 | 42.0 | 6 of 6 | 139.0004 / 139.0004 | 18,496.04 / 18,496.04 | PASS |
 | ReadPropertyMultiple | mt | 93,102.9 | 92,948.1 | -154.8 | 985.4 | 5 of 6 | 139.0005 / 139.0004 | 18,496.06 / 18,496.04 | PASS |
 
-**Verdict: not accepted by this local count.** ReadProperty falls by
+**Local verdict: short of the rule on one row; the official count below accepts it.** ReadProperty falls by
 242.9 instructions per request on the current-thread runtime, 17.1 times
 its floor, with all pairs lower. On the multi-thread runtime it falls by
 253.7, with all six pairs lower (by 205.7 to 268.4), but that is 2.5
@@ -90,7 +90,8 @@ and allocator calls and bytes are unchanged on every row.
   instructions per request, 96 come from `bacnet-bip-core`'s
   `node/receive.rs`, 40 from its `node/addressing.rs`, 20 from the BVLL
   codec and 38 from the lock the link is read under, and only 18 from
-  `bacnet-time`. In B that code sits in the receive closure. So the two
+  `bacnet-time`; the other 22 are spread over smaller sources. This split
+  is by source file in A's profile (`count/profiles/rp-ct.md`). In B that code sits in the receive closure. So the two
   rows are mostly the same instructions under another name, and the net,
   241.0 and 249.1 instructions per request over the functions that moved,
   is the clock reads.
@@ -142,3 +143,24 @@ python3 scripts/perf/perf_counts.py run --baseline dd786122c --candidate d6de428
   --workloads rp,wp,rpm --out /tmp/perf-2373
 python3 scripts/perf/perf_counts.py attribute /tmp/perf-2373 --workload rp --runtime mt
 ```
+
+## The official count
+
+The manual Perf counts workflow compared dev `dd786122c` with `d6de4282e`
+on GitHub's arm64 runner (run 41923877549, `official/`). Its A and B
+binaries are byte-identical to this count's.
+
+| Workload | Runtime | A | B | B - A | Floor | Pairs lower | Calls A / B | Bytes A / B | Verdict |
+| --- | --- | ---: | ---: | ---: | ---: | --- | --- | --- | --- |
+| ReadProperty | ct | 31,266.5 | 31,026.3 | -240.2 | 12.9 | 6 of 6 | 18.0005 / 18.0005 | 2,127.05 / 2,127.05 | PASS |
+| ReadProperty | mt | 32,643.9 | 32,413.0 | -230.8 | 41.7 | 6 of 6 | 18.0008 / 18.0008 | 2,127.08 / 2,127.08 | PASS |
+| WriteProperty | ct | 39,900.2 | 39,657.1 | -243.1 | 98.8 | 6 of 6 | 25.0006 / 25.0006 | 7,944.06 / 7,944.06 | PASS |
+| WriteProperty | mt | 41,171.6 | 40,890.4 | -281.2 | 141.5 | 6 of 6 | 25.0009 / 25.0009 | 7,944.09 / 7,944.09 | PASS |
+| ReadPropertyMultiple | ct | 91,137.3 | 90,894.6 | -242.7 | 12.5 | 6 of 6 | 139.0012 / 139.0012 | 18,496.12 / 18,496.12 | PASS |
+| ReadPropertyMultiple | mt | 94,216.0 | 94,061.6 | -154.4 | 480.5 | 6 of 6 | 139.0015 / 139.0014 | 18,496.16 / 18,496.15 | PASS |
+
+**Verdict: accepted.** ReadProperty falls by 240.2 and 230.8 instructions
+per request, 18.7 and 5.5 times its floors of 12.9 and 41.7, with every
+pair lower on both runtimes. WriteProperty falls by 243.1 and 281.2, and
+ReadPropertyMultiple by 242.7 and 154.4 (the latter inside its floor of
+480.5), every pair lower. Allocator calls and bytes are unchanged.
