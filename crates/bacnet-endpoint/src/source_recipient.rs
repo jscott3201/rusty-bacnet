@@ -164,8 +164,8 @@ impl SourceRoutes {
     /// link's own MAC) and the layer's number slot, which the session's
     /// Number owner publishes into.
     pub(crate) fn finalize(&mut self, link: SourceLink, local_network: LocalNetworkNumber) {
+        self.routers.finalize(link.clone(), local_network.clone());
         self.link = link;
-        self.routers.set_local_network(local_network.clone());
         self.local_network = local_network;
     }
     /// A direct unicast MAC on the link ([`SourceLink::unicast`]).

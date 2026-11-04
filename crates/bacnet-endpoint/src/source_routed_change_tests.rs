@@ -11,8 +11,15 @@ use bacnet_transport::port::ReceivedNpdu;
 const BOUND: u16 = 7;
 
 /// A loopback link whose node takes the local Number controls, as B/IP,
-/// SC and MS/TP do, so the session reads network messages.
-struct ControlLink(LoopbackTransport);
+/// SC and MS/TP do, so the session reads network messages. Each send takes
+/// a permit from its gate, so a test can hold sends in the transport.
+struct ControlLink(LoopbackTransport, Arc<tokio::sync::Semaphore>);
+
+impl ControlLink {
+    async fn pass(&self) {
+        self.1.acquire().await.unwrap().forget();
+    }
+}
 
 impl TransportPort for ControlLink {
     async fn start(&mut self) -> Result<tokio::sync::mpsc::Receiver<ReceivedNpdu>, Error> {
@@ -22,9 +29,11 @@ impl TransportPort for ControlLink {
         self.0.stop().await
     }
     async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
+        self.pass().await;
         self.0.send_unicast(npdu, mac).await
     }
     async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
+        self.pass().await;
         self.0.send_broadcast(npdu).await
     }
     fn local_receive_apdu_capacity(&self) -> u16 {
@@ -45,6 +54,8 @@ struct Link {
     session: EndpointSession<ControlLink>,
     peer: LoopbackTransport,
     rx: tokio::sync::mpsc::Receiver<ReceivedNpdu>,
+    /// The session's sends' gate, open until a test closes it.
+    gate: Arc<tokio::sync::Semaphore>,
 }
 
 impl Link {
@@ -68,8 +79,9 @@ impl Link {
                 None,
             )
             .unwrap();
+        let gate = Arc::new(tokio::sync::Semaphore::new(1 << 20));
         let mut session = EndpointSession::new(
-            ControlLink(near),
+            ControlLink(near, Arc::clone(&gate)),
             SessionRole::ClientOnly,
             SessionConfig::default(),
         )
@@ -83,7 +95,24 @@ impl Link {
         .with_source_audit_reporter(selected());
         session.start().await.unwrap();
         let rx = peer.start().await.unwrap();
-        Self { session, peer, rx }
+        Self {
+            session,
+            peer,
+            rx,
+            gate,
+        }
+    }
+
+    /// The routers the session's source Audit learns.
+    fn routers(&self) -> Arc<crate::source_audit::routers::SourceRouters> {
+        Arc::clone(
+            self.session
+                .source_recipient
+                .as_ref()
+                .unwrap()
+                .routes
+                .routers(),
+        )
     }
 
     /// The next APDU-carrying NPDU the session sent, skipping network
@@ -221,5 +250,52 @@ async fn an_i_am_router_to_network_teaches_its_sender() {
     assert!(!group, "sent to the router's MAC");
     assert_eq!(npdu.destination.unwrap().network, BOUND);
     assert_eq!(record.operation, AuditOperation::DEVICE_RESET);
+    link.session.stop().await.unwrap();
+}
+
+/// A routed record that expires in the session's own egress queue never
+/// went out on the link, so it fails, setting COMMUNICATION_FAILURE, but
+/// the router it would have gone through stays learned.
+#[tokio::test(start_paused = true)]
+async fn a_record_expired_in_the_local_queue_keeps_its_router() {
+    let link = Link::start(&[AuditOperation::DEVICE_RESET]).await;
+    let routers = link.routers();
+    link.send(&[0x01, 0x80, 0x01, 0, BOUND as u8], true).await;
+    eventually(WAIT, "the announcement teaches the router", async || {
+        routers.router(BOUND).is_some()
+    })
+    .await;
+    // One unrelated send enters the transport and waits at the closed
+    // gate, so the record queues behind it until its deadline.
+    link.gate.forget_permits(usize::MAX);
+    let blocker = link
+        .session
+        .egress
+        .as_ref()
+        .unwrap()
+        .admit_apdu(
+            vec![0x10, 8],
+            EndpointApduDestination::Direct {
+                destination_mac: MacAddr::from_slice(&STATION),
+            },
+            false,
+            NetworkPriority::Normal,
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+    link.session.report_device_reset_local().await.unwrap();
+    let failed = Reliability::COMMUNICATION_FAILURE.to_raw();
+    eventually(
+        Duration::from_secs(10),
+        "the record expires unsent",
+        async || reliability(&link.session).await == failed,
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert_eq!(routers.router(BOUND).as_deref(), Some(&STATION[..]));
+    link.gate.add_permits(1 << 20);
+    blocker.complete().await.result.unwrap();
+    let mut link = link;
     link.session.stop().await.unwrap();
 }

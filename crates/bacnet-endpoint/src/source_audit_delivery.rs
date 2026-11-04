@@ -168,8 +168,11 @@ pub(super) fn encode(
 /// Queue one encoded record for `route`: to a MAC on the link, or through
 /// the network layer to a station behind a router, by the router learned
 /// for its network or the link's broadcast MAC ([`SourceRouters`], #2371).
-/// The [`Hop`] names a learned router the send went through, which a failed
-/// delivery forgets.
+/// The [`Hop`] names a learned router the send went through, which a lost
+/// delivery forgets. A routed record for a network that has become this one
+/// goes direct only to a MAC the link's unicast rule takes; any other is
+/// refused here, unsent, like a send the egress can't take, so it fails
+/// without counting as a resource loss.
 pub(super) fn admit_encoded(
     egress: &EndpointEgress,
     routers: &Arc<SourceRouters>,
@@ -181,7 +184,9 @@ pub(super) fn admit_encoded(
     Result<bacnet_endpoint_core::endpoint_ingress::EndpointSend, EndpointEgressAdmissionError>,
     Hop,
 ) {
-    let (destination, hop) = routers.destination(route);
+    let Some((destination, hop)) = routers.destination(route) else {
+        return (Err(EndpointEgressAdmissionError::Closed), Hop::none());
+    };
     let sent = egress.admit_apdu(
         encoded,
         destination,
@@ -219,9 +224,10 @@ type Reservation = (
 /// Wait for a queued record's outcome: whether it was delivered (sent, and
 /// for a confirmed one acknowledged). A delivery through a learned router
 /// that was lost, with no answer in time or a failed send, forgets the
-/// router ([`Hop::lost`]). A peer's Error, Reject or Abort came back
-/// through it, and a send the local queue refused never reached it, so
-/// neither does; each still counts as undelivered.
+/// router ([`Hop::lost`]), but only once the send went out on the link. A
+/// peer's Error, Reject or Abort came back through it, and a send the local
+/// queue refused, expired in it or lost to shutdown never reached it, so
+/// none of those does; each still counts as undelivered.
 pub(super) async fn finish_send(
     sent: Result<
         bacnet_endpoint_core::endpoint_ingress::EndpointSend,
@@ -231,11 +237,19 @@ pub(super) async fn finish_send(
     reserved: Option<Reservation>,
     deadline: Instant,
 ) -> bool {
-    let admitted = sent.is_ok();
+    // Whether the egress began the send on the link: only then can a
+    // missing answer or a failed send be the router's.
+    let attempted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let went_out = || attempted.load(std::sync::atomic::Ordering::Acquire);
     let mut sent = Some(sent);
     let send = |_| {
         let sent = sent.take().expect("notifications have no retries");
-        async move { sent?.complete().await.result }
+        let attempted = Arc::clone(&attempted);
+        async move {
+            let outcome = sent?.complete().await;
+            attempted.store(outcome.attempted, std::sync::atomic::Ordering::Release);
+            outcome.result
+        }
     };
     // Delivered, and whether the router is to blame if not.
     let (delivered, lost) = tokio::time::timeout_at(deadline, async {
@@ -245,16 +259,16 @@ pub(super) async fn finish_send(
                 NotificationWorkerResult::Error(_) | NotificationWorkerResult::Closed => {
                     (false, false)
                 }
-                NotificationWorkerResult::Exhausted => (false, admitted),
+                NotificationWorkerResult::Exhausted => (false, went_out()),
             }
         } else {
             let mut send = send;
             let sent = send(0).await.is_ok();
-            (sent, !sent && admitted)
+            (sent, !sent && went_out())
         }
     })
     .await
-    .unwrap_or((false, admitted));
+    .unwrap_or_else(|_| (false, went_out()));
     if lost {
         hop.lost();
     }
@@ -325,7 +339,7 @@ mod tests {
             network: 2,
             mac: MacAddr::from_slice(&[5]),
         };
-        let (destination, hop) = routers.destination(&route);
+        let (destination, hop) = routers.destination(&route).unwrap();
         assert!(matches!(
             destination,
             EndpointApduDestination::Routed { router_mac, .. } if router_mac.as_slice() == [0xFE]
@@ -342,6 +356,38 @@ mod tests {
         let sent = Err(EndpointEgressAdmissionError::QueueFull);
         assert!(!finish_send(sent, hop, None, deadline).await);
         assert_eq!(routers.router(2).as_deref(), Some(&[0xFE][..]));
+    }
+
+    /// A routed record for a network that has become this one goes direct
+    /// only to a MAC the link's unicast rule takes: this node's own, the
+    /// one-octet broadcast and a MAC of another length have no destination.
+    #[test]
+    fn a_record_for_this_network_meets_the_links_unicast_rule() {
+        let routers = Arc::new(SourceRouters::default());
+        let number = bacnet_network::network_number::LocalNetworkNumber::default();
+        number.publish(bacnet_types::network_number::NetworkNumber::configured(7).unwrap());
+        let link = super::recipient::SourceLink::Other {
+            local: MacAddr::from_slice(&[1]),
+            groups: bacnet_transport::port::GroupDestinations::unknown(),
+        };
+        routers.finalize(link, number);
+        let to = |mac: &[u8]| {
+            routers
+                .destination(&SourceRoute::Routed {
+                    network: 7,
+                    mac: MacAddr::from_slice(mac),
+                })
+                .map(|(destination, _)| destination)
+        };
+        assert_eq!(
+            to(&[5]),
+            Some(EndpointApduDestination::Direct {
+                destination_mac: MacAddr::from_slice(&[5]),
+            })
+        );
+        for refused in [&[1][..], &[0xFF], &[5, 5]] {
+            assert_eq!(to(refused), None, "{refused:?}");
+        }
     }
 
     /// A lost delivery forgets its router only while it is still the one

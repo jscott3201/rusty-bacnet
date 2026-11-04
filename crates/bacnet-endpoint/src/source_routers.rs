@@ -23,6 +23,8 @@ use bacnet_network::layer::{
 use bacnet_network::network_number::LocalNetworkNumber;
 use bacnet_types::MacAddr;
 
+use super::recipient::SourceLink;
+
 /// Where one source Audit record goes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SourceRoute {
@@ -92,6 +94,9 @@ pub(crate) struct SourceRouters {
     /// handed over: a record queued for a network that has since become
     /// this one goes direct.
     local_network: OnceLock<LocalNetworkNumber>,
+    /// The started link's unicast rule, which such a record must meet, as
+    /// a direct binding does.
+    link: OnceLock<SourceLink>,
 }
 
 impl SourceRouters {
@@ -100,8 +105,10 @@ impl SourceRouters {
         self.routers.lock().unwrap().entry(network).or_default();
     }
 
-    /// Read the session's own network number from `slot` from now on.
-    pub(super) fn set_local_network(&self, slot: LocalNetworkNumber) {
+    /// Take the started link's unicast rule, and read the session's own
+    /// network number from `slot` from now on.
+    pub(super) fn finalize(&self, link: SourceLink, slot: LocalNetworkNumber) {
+        let _ = self.link.set(link);
         let _ = self.local_network.set(slot);
     }
 
@@ -158,12 +165,15 @@ impl SourceRouters {
     /// broadcast MAC while none is (Clause 6.5.3). A routed one for a
     /// network that has become this one, queued or in flight when the
     /// number changed, goes to its MAC with no DNET, since a non-routing
-    /// node drops an NPDU whose DNET names a network (Clause 6.5.2.1).
+    /// node drops an NPDU whose DNET names a network (Clause 6.5.2.1); it
+    /// must then be a direct unicast MAC by the link's rule, as
+    /// [`SourceRoutes::resolve`](super::recipient::SourceRoutes::resolve)
+    /// requires of new records, or it has no destination (`None`).
     pub(crate) fn destination(
         self: &Arc<Self>,
         route: &SourceRoute,
-    ) -> (EndpointApduDestination, Hop) {
-        match route {
+    ) -> Option<(EndpointApduDestination, Hop)> {
+        Some(match route {
             SourceRoute::Routed { network, mac } if Some(*network) != self.local_network() => {
                 let router = self.routers.lock().unwrap().get(network).cloned().flatten();
                 match router {
@@ -184,13 +194,24 @@ impl SourceRouters {
                     ),
                 }
             }
-            SourceRoute::Direct(mac) | SourceRoute::Routed { mac, .. } => (
+            SourceRoute::Direct(mac) => (
                 EndpointApduDestination::Direct {
                     destination_mac: mac.clone(),
                 },
                 Hop::none(),
             ),
-        }
+            SourceRoute::Routed { mac, .. } => {
+                if !self.link.get().is_some_and(|link| link.unicast(mac)) {
+                    return None;
+                }
+                (
+                    EndpointApduDestination::Direct {
+                        destination_mac: mac.clone(),
+                    },
+                    Hop::none(),
+                )
+            }
+        })
     }
 
     /// The router learned for `network`, if any.
