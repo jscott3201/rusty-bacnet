@@ -134,8 +134,7 @@ async fn untrusted_forwarded_npdu_cannot_replace_learned_peer() {
     };
     let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(45));
     transport.register_as_foreign_device(Bip6ForeignDeviceConfig {
-        bbmd_ip: *bbmd_addr.ip(),
-        bbmd_port: bbmd_addr.port(),
+        bbmd: (*bbmd_addr.ip(), bbmd_addr.port()).into(),
         ttl: 60,
     });
     let mut rx = transport.start().await.unwrap();

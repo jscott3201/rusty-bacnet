@@ -152,8 +152,7 @@ async fn a_confirmed_request_forwarded_to_a_bip6_foreign_device_is_ignored() {
     };
     let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(DEVICE));
     transport.register_as_foreign_device(Bip6ForeignDeviceConfig {
-        bbmd_ip: *bbmd_address.ip(),
-        bbmd_port: bbmd_address.port(),
+        bbmd: (*bbmd_address.ip(), bbmd_address.port()).into(),
         ttl: 60,
     });
     // The I-Am fence goes by broadcast, which a foreign device hands its BBMD.

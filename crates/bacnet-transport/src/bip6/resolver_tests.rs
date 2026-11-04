@@ -248,8 +248,7 @@ async fn foreign_device(bbmd: &UdpSocket) -> Bip6Transport {
     };
     let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(10));
     transport.register_as_foreign_device(Bip6ForeignDeviceConfig {
-        bbmd_ip: *bbmd.ip(),
-        bbmd_port: bbmd.port(),
+        bbmd: (*bbmd.ip(), bbmd.port()).into(),
         ttl: 60,
     });
     transport
@@ -388,7 +387,7 @@ async fn receiver(
     resolver: Arc<Resolver>,
     foreign: bool,
 ) -> (Receiver, mpsc::Receiver<crate::port::ReceivedNpdu>) {
-    let socket = Bip6Socket::bind(Ipv6Addr::LOCALHOST, 0, None)
+    let socket = Bip6Socket::bind(Ipv6Addr::LOCALHOST, 0, super::socket::Role::Normal)
         .await
         .unwrap();
     let local_ip = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x10);

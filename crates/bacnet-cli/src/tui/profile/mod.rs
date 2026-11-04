@@ -296,6 +296,7 @@ impl Profile {
             timeout_ms: 0,
             min_interval_ms: 0,
             foreign_device: None,
+            bip6_foreign_device: None,
             nat_global_address: None,
             multicast: None,
             mstp: None,

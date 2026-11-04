@@ -42,7 +42,7 @@ fn sender() -> SocketAddrV6 {
 /// returned NPDU channel. The socket is only used for address-resolution
 /// replies, which these tests never draw.
 async fn receiver() -> (Receiver, mpsc::Receiver<ReceivedNpdu>) {
-    let socket = Bip6Socket::bind(Ipv6Addr::LOCALHOST, 0, None)
+    let socket = Bip6Socket::bind(Ipv6Addr::LOCALHOST, 0, super::socket::Role::Normal)
         .await
         .unwrap();
     let (tx, rx) = mpsc::channel(4);
@@ -317,8 +317,7 @@ async fn a_running_transport_counts_multicast_origins() {
     };
     let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(45));
     transport.register_as_foreign_device(Bip6ForeignDeviceConfig {
-        bbmd_ip: *bbmd_addr.ip(),
-        bbmd_port: bbmd_addr.port(),
+        bbmd: (*bbmd_addr.ip(), bbmd_addr.port()).into(),
         ttl: 60,
     });
     let mut rx = transport.start().await.unwrap();

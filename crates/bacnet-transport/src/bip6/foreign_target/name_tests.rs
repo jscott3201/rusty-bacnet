@@ -41,8 +41,7 @@ impl Device {
     fn new() -> Self {
         let names = Arc::new(Names::default());
         let config = Bip6ForeignDeviceConfig {
-            bbmd_ip: Ipv6Addr::LOCALHOST,
-            bbmd_port: A,
+            bbmd: (Ipv6Addr::LOCALHOST, A).into(),
             ttl: 60,
         };
         let resolver = Arc::clone(&names) as Arc<dyn BbmdResolver>;
@@ -68,7 +67,7 @@ impl Device {
     }
 
     fn bbmd(&self) -> SocketAddrV6 {
-        self.target.bbmd_addr()
+        self.target.bbmd_addr().expect("a BBMD address")
     }
 
     fn counters(&self) -> BbmdLookupCounters {

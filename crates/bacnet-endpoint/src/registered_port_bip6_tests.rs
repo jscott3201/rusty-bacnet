@@ -128,8 +128,7 @@ async fn a_normal_or_foreign_b_ipv6_endpoint_serves_its_network_port() {
         let mut transport = transport();
         if foreign {
             transport.register_as_foreign_device(Bip6ForeignDeviceConfig {
-                bbmd_ip: Ipv6Addr::LOCALHOST,
-                bbmd_port,
+                bbmd: (Ipv6Addr::LOCALHOST, bbmd_port).into(),
                 ttl: 300,
             });
         }

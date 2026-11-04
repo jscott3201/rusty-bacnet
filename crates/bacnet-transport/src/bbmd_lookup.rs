@@ -49,6 +49,8 @@ use std::time::Duration;
 
 use bacnet_types::constructed::{BACnetHostAddress, BACnetHostNPort};
 
+#[cfg(feature = "ipv6")]
+pub(crate) use lookups::resolve;
 pub(crate) use lookups::{Ended, Failed, Lookup, Lookups, NameTarget, choose};
 
 /// What a [`BbmdResolver`] returns: in time, the addresses a host name

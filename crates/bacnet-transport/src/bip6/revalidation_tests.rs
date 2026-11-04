@@ -85,8 +85,7 @@ async fn a_quiet_peer_is_checked_by_unicast_and_removed_when_silent() {
     };
     let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(10));
     transport.register_as_foreign_device(Bip6ForeignDeviceConfig {
-        bbmd_ip: *bbmd_address.ip(),
-        bbmd_port: bbmd_address.port(),
+        bbmd: (*bbmd_address.ip(), bbmd_address.port()).into(),
         ttl: 60,
     });
     let mut rx = transport.start().await.unwrap();

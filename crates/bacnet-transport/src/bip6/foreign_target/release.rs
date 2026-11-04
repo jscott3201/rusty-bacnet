@@ -70,25 +70,21 @@ pub(super) struct Awaiting {
     due: Instant,
 }
 
-/// The BBMD `config` registers with.
-fn bbmd_of(config: &Bip6ForeignDeviceConfig) -> SocketAddrV6 {
-    SocketAddrV6::new(config.bbmd_ip, config.bbmd_port, 0, 0)
-}
-
 impl State {
     /// Make `config` the registration in effect. A move to another BBMD
     /// drops a release still queued, and, with the release on, queues one
-    /// of the BBMD left.
+    /// of the BBMD left. A device that waited for its BBMD's name left
+    /// none (#2365).
     pub(super) fn take(&mut self, config: Bip6ForeignDeviceConfig) {
-        let left = bbmd_of(&self.config);
+        let left = self.config.bbmd.address();
         self.config = config;
-        if left == bbmd_of(&self.config) {
+        if left == self.config.bbmd.address() {
             return;
         }
         if let Some(dropped) = self.queued.take() {
             self.unanswered(dropped, "dropped unsent by a later move");
         }
-        if self.release_previous {
+        if let (true, Some(left)) = (self.release_previous, left) {
             self.releases.releases = self.releases.releases.saturating_add(1);
             self.queued = Some(left);
         }

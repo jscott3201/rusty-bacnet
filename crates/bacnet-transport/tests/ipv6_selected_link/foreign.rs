@@ -12,8 +12,7 @@ async fn foreign_source(automatic: bool) {
     };
     let mut transport = Bip6Transport::new(requested, 0, Some(0x12_3456));
     transport.register_as_foreign_device(Bip6ForeignDeviceConfig {
-        bbmd_ip: selected,
-        bbmd_port,
+        bbmd: (selected, bbmd_port).into(),
         ttl: 60,
     });
     let mut incoming = transport.start().await.unwrap();

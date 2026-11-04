@@ -25,8 +25,10 @@ mod lookup;
 #[cfg(test)]
 mod name_tests;
 mod release;
+mod waiting;
 
 pub use release::Bip6ReleaseCounters;
+pub use waiting::Bip6ForeignStatus;
 
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
@@ -38,6 +40,7 @@ use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
 use tokio::sync::Notify;
 
+use super::foreign_bbmd::Bip6ForeignBbmd;
 use super::port::Bip6ForeignDeviceConfig;
 use crate::bbmd_lookup::{BbmdLookupCounters, BbmdName, BbmdResolver, Lookups};
 
@@ -46,7 +49,8 @@ struct State {
     /// The registration in effect, and the one the next start uses. While
     /// FD_BBMD_Address names the BBMD by host name, its address is the one
     /// the name last resolved to, or the BBMD before it until it first
-    /// does.
+    /// does. A BBMD configured by host name stays a name until it first
+    /// resolves (#2365): the device waits for it meanwhile.
     config: Bip6ForeignDeviceConfig,
     /// This node's bound address while the transport runs.
     own: Option<SocketAddrV6>,
@@ -63,6 +67,13 @@ struct State {
     awaiting: Option<release::Awaiting>,
     /// What came of the releases.
     releases: Bip6ReleaseCounters,
+    /// While the device waits for its BBMD's name, when the name is looked
+    /// up again: 30 s after the newest failure ([`waiting`]). One left from
+    /// before a restart does nothing: the start's own lookup either
+    /// replaces it with its failure, ends the wait, or still runs.
+    retry_at: Option<tokio::time::Instant>,
+    /// Broadcasts refused while the device waited for its BBMD.
+    broadcasts_refused: u64,
 }
 
 /// One transport's foreign-device registration, shared with the Network
@@ -72,6 +83,9 @@ pub(crate) struct ForeignTarget {
     /// Wakes the re-registration task when an activation, or a lookup of
     /// the BBMD's host name, changes the registration.
     changed: Notify,
+    /// Wakes the re-registration task when a failed lookup sets when the
+    /// name is tried again ([`waiting`]).
+    rearmed: Notify,
     /// This target, for the lookups it starts.
     me: Weak<ForeignTarget>,
     /// Holds a re-registration after it has read the target and before it
@@ -103,6 +117,8 @@ pub enum Bip6ForeignDeviceRefusal {
     ZeroPort,
     /// The time-to-live is 0.
     ZeroTtl,
+    /// The BBMD's host name isn't in the RFC 1123 form.
+    HostName,
 }
 
 impl std::fmt::Display for Bip6ForeignDeviceRefusal {
@@ -117,6 +133,7 @@ impl std::fmt::Display for Bip6ForeignDeviceRefusal {
             }
             Self::ZeroPort => "the BBMD port is 0",
             Self::ZeroTtl => "the time-to-live is 0",
+            Self::HostName => "the BBMD's host name isn't in the RFC 1123 form",
         })
     }
 }
@@ -132,9 +149,24 @@ impl Bip6ForeignDeviceConfig {
     /// so its Forwarded-NPDUs could never be trusted. The IPv4-mapped and
     /// IPv4-compatible forms name IPv4 hosts, which B/IP serves. The
     /// transport's start refuses a registration that fails this check, and
-    /// so does a Network Port activation.
+    /// so does a Network Port activation. A BBMD named by host name
+    /// ([`Bip6ForeignBbmd::Name`]) must be in the RFC 1123 form with a
+    /// nonzero port; its address is checked once looked up.
     pub fn check(&self) -> Result<(), Bip6ForeignDeviceRefusal> {
-        let ip = self.bbmd_ip;
+        let address = match &self.bbmd {
+            Bip6ForeignBbmd::Address(address) => *address,
+            Bip6ForeignBbmd::Name { port: 0, .. } => {
+                return Err(Bip6ForeignDeviceRefusal::ZeroPort);
+            }
+            named @ Bip6ForeignBbmd::Name { .. } => {
+                return match (named.name(), self.ttl) {
+                    (None, _) => Err(Bip6ForeignDeviceRefusal::HostName),
+                    (Some(_), 0) => Err(Bip6ForeignDeviceRefusal::ZeroTtl),
+                    (Some(_), _) => Ok(()),
+                };
+            }
+        };
+        let ip = *address.ip();
         let ipv4_compatible = ip.segments()[..6] == [0; 6] && ip.segments()[6] != 0;
         let refusal = if ip.is_unspecified() {
             Bip6ForeignDeviceRefusal::Unspecified
@@ -146,7 +178,7 @@ impl Bip6ForeignDeviceConfig {
             Bip6ForeignDeviceRefusal::Ipv4Mapped
         } else if ipv4_compatible {
             Bip6ForeignDeviceRefusal::Ipv4Compatible
-        } else if self.bbmd_port == 0 {
+        } else if address.port() == 0 {
             Bip6ForeignDeviceRefusal::ZeroPort
         } else if self.ttl == 0 {
             Bip6ForeignDeviceRefusal::ZeroTtl
@@ -170,16 +202,19 @@ impl ForeignTarget {
     ) -> Arc<Self> {
         Arc::new_cyclic(|me| Self {
             state: Mutex::new(State {
+                lookups: Lookups::new(resolver, config.bbmd.name()),
                 config,
                 own: None,
-                lookups: Lookups::new(resolver, None),
                 counters: BbmdLookupCounters::default(),
                 release_previous: false,
                 queued: None,
                 awaiting: None,
                 releases: Bip6ReleaseCounters::default(),
+                retry_at: None,
+                broadcasts_refused: 0,
             }),
             changed: Notify::new(),
+            rearmed: Notify::new(),
             me: me.clone(),
             #[cfg(test)]
             gate: tokio::sync::Semaphore::new(tokio::sync::Semaphore::MAX_PERMITS),
@@ -209,8 +244,7 @@ impl ForeignTarget {
     #[cfg(test)]
     pub(super) fn at(bbmd: SocketAddrV6) -> Arc<Self> {
         let config = Bip6ForeignDeviceConfig {
-            bbmd_ip: *bbmd.ip(),
-            bbmd_port: bbmd.port(),
+            bbmd: bbmd.into(),
             ttl: 60,
         };
         Self::new(config, Arc::new(crate::bbmd_lookup::SystemResolver))
@@ -225,16 +259,16 @@ impl ForeignTarget {
         self.lock().config.clone()
     }
 
-    /// The BBMD's address and port, as the receive path checks a sender.
-    pub(super) fn bbmd(&self) -> (Ipv6Addr, u16) {
-        let state = self.lock();
-        (state.config.bbmd_ip, state.config.bbmd_port)
+    /// The BBMD's address and port, as the receive path checks a sender;
+    /// `None` while the device waits for its BBMD's name.
+    pub(super) fn bbmd(&self) -> Option<(Ipv6Addr, u16)> {
+        self.bbmd_addr().map(|bbmd| (*bbmd.ip(), bbmd.port()))
     }
 
-    /// The BBMD as a destination.
-    pub(super) fn bbmd_addr(&self) -> SocketAddrV6 {
-        let (ip, port) = self.bbmd();
-        SocketAddrV6::new(ip, port, 0, 0)
+    /// The BBMD as a destination; `None` while the device waits for its
+    /// BBMD's name.
+    pub(super) fn bbmd_addr(&self) -> Option<SocketAddrV6> {
+        self.lock().config.bbmd.address()
     }
 
     /// How long until the next re-registration: half the time-to-live, and
@@ -292,14 +326,21 @@ impl ForeignTarget {
             match &bbmd.host {
                 // A B/IPv6 address: an IPv6 host and a port.
                 BACnetHostAddress::Ip(IpAddr::V6(ip)) => {
-                    config.bbmd_ip = *ip;
-                    config.bbmd_port = bbmd.port;
+                    config.bbmd = (*ip, bbmd.port).into();
                     name = Some(None);
                 }
                 // Until it resolves, the device keeps registering with the
                 // address it has.
                 BACnetHostAddress::Name(host) => {
                     let named = BbmdName::new(host, bbmd.port).ok_or_else(out_of_range)?;
+                    // A device still waiting for its configured name waits
+                    // for this one instead (#2365).
+                    if config.bbmd.address().is_none() {
+                        config.bbmd = Bip6ForeignBbmd::Name {
+                            host: host.clone(),
+                            port: bbmd.port,
+                        };
+                    }
                     name = Some(Some(named));
                 }
                 // 'none' names no BBMD.
@@ -321,14 +362,18 @@ impl ForeignTarget {
     /// BBMD passes [`Bip6ForeignDeviceConfig::check`], isn't the device
     /// itself, and is one this host's routes reach from `own`. The socket
     /// stays bound to its address, so the route is checked by a local
-    /// probe, which sends nothing.
+    /// probe, which sends nothing. A BBMD still known only by name, which
+    /// the device waits for, has no address to check yet.
     fn usable(own: SocketAddrV6, config: &Bip6ForeignDeviceConfig) -> bool {
-        let own_address = config.bbmd_ip == *own.ip() && config.bbmd_port == own.port();
-        if config.check().is_err() || own_address {
+        if config.check().is_err() {
             return false;
         }
-        let bbmd = SocketAddrV6::new(config.bbmd_ip, config.bbmd_port, 0, 0);
-        matches!(super::socket::route_source(bbmd), Ok(source) if source == *own.ip())
+        let Some(bbmd) = config.bbmd.address() else {
+            return true;
+        };
+        let own_address = bbmd.ip() == own.ip() && bbmd.port() == own.port();
+        !own_address
+            && matches!(super::socket::route_source(bbmd), Ok(source) if source == *own.ip())
     }
 }
 
@@ -337,12 +382,17 @@ impl ForeignRegistration for ForeignTarget {
     /// the address otherwise.
     fn bbmd(&self) -> BACnetHostNPort {
         let state = self.lock();
-        match state.lookups.name() {
-            Some(name) => name.value(),
-            None => {
-                let (ip, port) = (state.config.bbmd_ip, state.config.bbmd_port);
-                BACnetHostNPort::from_socket_addr(SocketAddr::V6(SocketAddrV6::new(ip, port, 0, 0)))
+        match (state.lookups.name(), &state.config.bbmd) {
+            (Some(name), _) => name.value(),
+            (None, Bip6ForeignBbmd::Address(bbmd)) => {
+                BACnetHostNPort::from_socket_addr(SocketAddr::V6(*bbmd))
             }
+            // A configured name always has its lookups' name; this is the
+            // name as configured, should one fail the RFC 1123 form.
+            (None, Bip6ForeignBbmd::Name { host, port }) => BACnetHostNPort {
+                host: BACnetHostAddress::Name(host.clone()),
+                port: *port,
+            },
         }
     }
 

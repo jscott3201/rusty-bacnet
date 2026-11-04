@@ -85,7 +85,7 @@ impl Node {
     /// whose channel to the network layer holds `capacity` NPDUs. Its
     /// socket is never used: replies are returned, not sent.
     async fn new(foreign: bool, capacity: usize) -> Self {
-        let socket = Bip6Socket::bind(Ipv6Addr::LOCALHOST, 0, None)
+        let socket = Bip6Socket::bind(Ipv6Addr::LOCALHOST, 0, super::socket::Role::Normal)
             .await
             .unwrap();
         let (tx, rx) = mpsc::channel(capacity);

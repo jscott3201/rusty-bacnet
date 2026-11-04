@@ -66,8 +66,7 @@ pub(super) async fn started(
 ) -> (Bip6Transport, Arc<dyn ForeignRegistration>) {
     let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(55));
     transport.register_as_foreign_device(Bip6ForeignDeviceConfig {
-        bbmd_ip: Ipv6Addr::LOCALHOST,
-        bbmd_port: peer.local_addr().unwrap().port(),
+        bbmd: (Ipv6Addr::LOCALHOST, peer.local_addr().unwrap().port()).into(),
         ttl,
     });
     let BipPortMode::Foreign { registration: lent } = transport.bip6_port().unwrap().mode else {
@@ -107,7 +106,7 @@ async fn activation_sends_the_next_registration_to_the_new_bbmd_with_the_new_ttl
     assert_eq!(lent.subscription_lifetime(), 120);
     let config = transport.foreign_device_config().unwrap();
     assert_eq!(
-        (config.bbmd_port, config.ttl),
+        (config.bbmd.port(), config.ttl),
         (new.local_addr().unwrap().port(), 120)
     );
     // Broadcasts now go to the new BBMD.
@@ -196,8 +195,7 @@ async fn forwarded_npdus_are_trusted_from_the_new_bbmd_only() {
     let new = bbmd().await;
     let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(56));
     transport.register_as_foreign_device(Bip6ForeignDeviceConfig {
-        bbmd_ip: Ipv6Addr::LOCALHOST,
-        bbmd_port: old.local_addr().unwrap().port(),
+        bbmd: (Ipv6Addr::LOCALHOST, old.local_addr().unwrap().port()).into(),
         ttl: 300,
     });
     let BipPortMode::Foreign { registration: lent } = transport.bip6_port().unwrap().mode else {
@@ -361,8 +359,7 @@ async fn started_with(
         transport.set_bbmd_resolver(resolver);
     }
     transport.register_as_foreign_device(Bip6ForeignDeviceConfig {
-        bbmd_ip: Ipv6Addr::LOCALHOST,
-        bbmd_port: peer.local_addr().unwrap().port(),
+        bbmd: (Ipv6Addr::LOCALHOST, peer.local_addr().unwrap().port()).into(),
         ttl: 300,
     });
     let BipPortMode::Foreign { registration: lent } = transport.bip6_port().unwrap().mode else {
@@ -411,7 +408,7 @@ async fn a_host_name_moves_the_running_transport() {
     assert_eq!(registration(&new).await, 300);
     assert_eq!(lent.bbmd(), named);
     let config = transport.foreign_device_config().unwrap();
-    assert_eq!(config.bbmd_port, named.port);
+    assert_eq!(config.bbmd.port(), named.port);
     let counters = counted(&transport, |counters| counters.lookups == 1).await;
     assert_eq!((counters.failures, names.calls()), (0, 1));
     transport.stop().await.unwrap();
@@ -441,10 +438,10 @@ async fn a_host_name_resolves_through_the_system_resolver() {
     let config = transport.foreign_device_config().unwrap();
     if answers.contains(&Ipv6Addr::LOCALHOST.into()) {
         assert_eq!(registration(&new).await, 300);
-        assert_eq!((counters.failures, config.bbmd_port), (0, port));
+        assert_eq!((counters.failures, config.bbmd.port()), (0, port));
     } else {
         assert_eq!(counters.failures, 1, "{answers:?}");
-        assert_eq!(config.bbmd_port, old.local_addr().unwrap().port());
+        assert_eq!(config.bbmd.port(), old.local_addr().unwrap().port());
     }
     assert_eq!(lent.bbmd(), named);
     transport.stop().await.unwrap();
@@ -464,8 +461,7 @@ async fn renewals_and_restarts_look_the_name_up_again() {
     transport.set_bbmd_resolver(names.clone());
     let port = peer.local_addr().unwrap().port();
     transport.register_as_foreign_device(Bip6ForeignDeviceConfig {
-        bbmd_ip: Ipv6Addr::LOCALHOST,
-        bbmd_port: port,
+        bbmd: (Ipv6Addr::LOCALHOST, port).into(),
         ttl: 300,
     });
     let BipPortMode::Foreign { registration: lent } = transport.bip6_port().unwrap().mode else {

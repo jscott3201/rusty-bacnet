@@ -108,7 +108,7 @@ impl Receiver {
     /// The BBMD this node is registered with as a foreign device, read at
     /// the moment of the check, so a moved registration applies at once.
     fn foreign_bbmd(&self) -> Option<(Ipv6Addr, u16)> {
-        self.foreign_bbmd.as_ref().map(|target| target.bbmd())
+        self.foreign_bbmd.as_ref().and_then(|target| target.bbmd())
     }
 
     /// Receive until the socket fails.

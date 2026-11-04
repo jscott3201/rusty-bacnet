@@ -179,8 +179,7 @@ async fn a_bip6_client_with_a_foreign_registration_registers_at_start() {
         .port(0)
         .device_instance(0x12_3456)
         .foreign_device(Bip6ForeignDeviceConfig {
-            bbmd_ip: Ipv6Addr::LOCALHOST,
-            bbmd_port: bbmd.local_addr().unwrap().port(),
+            bbmd: (Ipv6Addr::LOCALHOST, bbmd.local_addr().unwrap().port()).into(),
             ttl: 90,
         })
         .build_any()

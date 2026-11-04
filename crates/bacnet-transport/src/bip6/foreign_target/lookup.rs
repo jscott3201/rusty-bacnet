@@ -13,7 +13,9 @@ use tracing::info;
 
 use super::super::port::Bip6ForeignDeviceConfig;
 use super::ForeignTarget;
-use crate::bbmd_lookup::{BbmdLookupFailure, BbmdName, Ended, Failed, NameTarget, choose};
+use crate::bbmd_lookup::{
+    ATTEMPT_LOOKUP_INTERVAL, BbmdLookupFailure, BbmdName, Ended, Failed, NameTarget, choose,
+};
 
 impl ForeignTarget {
     /// This target, as its lookups report to it.
@@ -49,14 +51,12 @@ impl ForeignTarget {
             .collect();
         let at = |bbmd: SocketAddrV6| {
             let mut moved = config.clone();
-            moved.bbmd_ip = *bbmd.ip();
-            moved.bbmd_port = bbmd.port();
+            moved.bbmd = bbmd.into();
             moved
         };
-        let current = SocketAddrV6::new(config.bbmd_ip, config.bbmd_port, 0, 0);
         let usable = |bbmd| Self::usable(own, &at(bbmd));
         let ip = |bbmd: SocketAddrV6| IpAddr::V6(*bbmd.ip());
-        Ok(choose(&candidates, Some(current), usable, ip)?.map(at))
+        Ok(choose(&candidates, config.bbmd.address(), usable, ip)?.map(at))
     }
 }
 
@@ -96,8 +96,14 @@ impl NameTarget for ForeignTarget {
         let moved_to = match verdict {
             Ok(moved_to) => moved_to,
             Err(failed) => {
-                let bbmd = SocketAddrV6::new(state.config.bbmd_ip, state.config.bbmd_port, 0, 0);
-                state.lookups.failed(&name, Some(bbmd), &failed);
+                let bbmd = state.config.bbmd.address();
+                state.lookups.failed(&name, bbmd, &failed);
+                if bbmd.is_none() {
+                    // Still waiting: try again 30 s after this failure.
+                    state.retry_at = Some(tokio::time::Instant::now() + ATTEMPT_LOOKUP_INTERVAL);
+                    drop(state);
+                    self.rearmed.notify_one();
+                }
                 return;
             }
         };
@@ -105,8 +111,13 @@ impl NameTarget for ForeignTarget {
         let Some(config) = moved_to else {
             return;
         };
-        let bbmd = SocketAddrV6::new(config.bbmd_ip, config.bbmd_port, 0, 0);
-        info!(host = %name.host(), %bbmd, "The B/IPv6 BBMD's host name now resolves elsewhere; registering there");
+        let bbmd = config.bbmd.address();
+        if state.config.bbmd.address().is_none() {
+            info!(host = %name.host(), ?bbmd, "The B/IPv6 BBMD's host name resolves; registering there");
+        } else {
+            info!(host = %name.host(), ?bbmd, "The B/IPv6 BBMD's host name now resolves elsewhere; registering there");
+        }
+        state.retry_at = None;
         state.take(config);
         drop(state);
         self.changed.notify_one();

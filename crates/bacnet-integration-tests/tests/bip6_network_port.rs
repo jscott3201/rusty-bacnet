@@ -234,8 +234,7 @@ async fn a_foreign_b_ipv6_server_serves_its_bbmd_and_lifetime() {
     let bbmd_port = bbmd.local_addr().unwrap().port();
     let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(SERVER_INSTANCE));
     transport.register_as_foreign_device(Bip6ForeignDeviceConfig {
-        bbmd_ip: Ipv6Addr::LOCALHOST,
-        bbmd_port,
+        bbmd: (Ipv6Addr::LOCALHOST, bbmd_port).into(),
         ttl: 300,
     });
     let mut server = server(transport).await;
@@ -283,8 +282,7 @@ async fn activate_changes_moves_a_b_ipv6_foreign_registration() {
     let new = UdpSocket::bind("[::1]:0").await.unwrap();
     let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(SERVER_INSTANCE));
     transport.register_as_foreign_device(Bip6ForeignDeviceConfig {
-        bbmd_ip: Ipv6Addr::LOCALHOST,
-        bbmd_port: old.local_addr().unwrap().port(),
+        bbmd: (Ipv6Addr::LOCALHOST, old.local_addr().unwrap().port()).into(),
         ttl: 300,
     });
     let mut server = server_with(transport, true).await;
@@ -353,7 +351,7 @@ async fn activate_changes_moves_a_b_ipv6_foreign_registration() {
     );
     let config = server.transport().unwrap().foreign_device_config().unwrap();
     assert_eq!(
-        (config.bbmd_port, config.ttl),
+        (config.bbmd.port(), config.ttl),
         (new.local_addr().unwrap().port(), 120)
     );
     client.stop().await.unwrap();
@@ -425,8 +423,7 @@ async fn failed_start_and_stop() -> std::io::Result<()> {
     // the port was reserved and the lease handed over.
     let mut failing = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, None);
     failing.register_as_foreign_device(Bip6ForeignDeviceConfig {
-        bbmd_ip: Ipv6Addr::LOCALHOST,
-        bbmd_port: 47808,
+        bbmd: (Ipv6Addr::LOCALHOST, 47808).into(),
         ttl: 60,
     });
     assert!(

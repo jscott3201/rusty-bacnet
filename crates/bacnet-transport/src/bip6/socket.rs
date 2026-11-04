@@ -50,21 +50,15 @@ fn udp_socket(port: u16) -> io::Result<socket2::Socket> {
 }
 
 impl Bip6Socket {
-    pub async fn bind(
-        requested: Ipv6Addr,
-        port: u16,
-        foreign: Option<SocketAddrV6>,
-    ) -> io::Result<Self> {
-        let selection = if foreign.is_none() {
-            Some(SelectedLink::resolve(requested).await?)
-        } else {
-            None
+    pub async fn bind(requested: Ipv6Addr, port: u16, role: Role) -> io::Result<Self> {
+        let selection = match role {
+            Role::Normal => Some(SelectedLink::resolve(requested).await?),
+            Role::Foreign(_) => None,
         };
         let socket = udp_socket(port)?;
-        let bound = if let Some(bbmd) = foreign {
-            foreign_bind_address(requested, port, bbmd)?
-        } else {
-            SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, port, 0, 0)
+        let bound = match role {
+            Role::Foreign(bbmd) => foreign_bind_address(requested, port, bbmd)?,
+            Role::Normal => SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, port, 0, 0),
         };
         socket.bind(&bound.into())?;
         let receiver = DestinationReceiver::configure(&socket, IpVersion::V6)?;
@@ -184,15 +178,34 @@ pub(super) enum Inbound {
 fn foreign_bind_address(
     requested: Ipv6Addr,
     port: u16,
-    bbmd: SocketAddrV6,
+    bbmd: Option<SocketAddrV6>,
 ) -> io::Result<SocketAddrV6> {
     if !requested.is_unspecified() {
         return Ok(SocketAddrV6::new(requested, port, 0, 0));
     }
+    // A start on `::` looks a BBMD's host name up first (#2365).
+    let bbmd = bbmd.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a foreign device bound to '::' needs its BBMD's address",
+        )
+    })?;
     // Bind the production socket to the route's exact source, so subsequent
     // registration and DBTN cannot silently advertise one address while
     // using another.
     route_source(bbmd).map(|source| SocketAddrV6::new(source, port, 0, 0))
+}
+
+/// How a socket is bound.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Role {
+    /// A normal node: bound to `::` and joined to the BACnet groups on its
+    /// selected link.
+    Normal,
+    /// A foreign device, which joins no group: bound to the interface
+    /// given, or on `::` to the source of the route to its BBMD, whose
+    /// address it then needs.
+    Foreign(Option<SocketAddrV6>),
 }
 
 /// The source address this host's routes would send from to reach `bbmd`.
@@ -230,7 +243,7 @@ mod tests {
     async fn only_an_explicit_port_opts_into_address_reuse() {
         assert!(!udp_socket(0).unwrap().reuse_address().unwrap());
         assert!(udp_socket(0xBAC0).unwrap().reuse_address().unwrap());
-        let ephemeral = Bip6Socket::bind(Ipv6Addr::LOCALHOST, 0, None)
+        let ephemeral = Bip6Socket::bind(Ipv6Addr::LOCALHOST, 0, Role::Normal)
             .await
             .unwrap();
         assert!(

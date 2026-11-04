@@ -32,6 +32,14 @@ pub(crate) struct Failed {
     error: Option<io::Error>,
 }
 
+impl Failed {
+    /// The resolver's error, when it gave one.
+    #[cfg(feature = "ipv6")]
+    pub(crate) fn error(&self) -> Option<&io::Error> {
+        self.error.as_ref()
+    }
+}
+
 impl From<BbmdLookupFailure> for Failed {
     fn from(failure: BbmdLookupFailure) -> Self {
         Self {
@@ -84,6 +92,12 @@ impl Lookups {
 
     pub(crate) fn set_resolver(&mut self, resolver: Arc<dyn BbmdResolver>) {
         self.resolver = resolver;
+    }
+
+    /// The resolver in use.
+    #[cfg(feature = "ipv6")]
+    pub(crate) fn resolver(&self) -> Arc<dyn BbmdResolver> {
+        Arc::clone(&self.resolver)
     }
 
     /// The host name FD_BBMD_Address holds, if it holds one.
@@ -220,6 +234,23 @@ impl Lookups {
     }
 }
 
+/// What `resolver` answers for `host`, given up after [`LOOKUP_TIMEOUT`]:
+/// a [`Lookup`]'s call, or, awaited in place, a B/IPv6 start's on `::`
+/// (#2365).
+pub(crate) async fn resolve(
+    resolver: &dyn BbmdResolver,
+    host: &str,
+) -> Result<Vec<IpAddr>, Failed> {
+    match tokio::time::timeout(LOOKUP_TIMEOUT, resolver.resolve(host)).await {
+        Ok(Ok(addresses)) => Ok(addresses),
+        Ok(Err(error)) => Err(Failed {
+            failure: BbmdLookupFailure::Error(error.kind()),
+            error: Some(error),
+        }),
+        Err(_) => Err(BbmdLookupFailure::TimedOut.into()),
+    }
+}
+
 /// Where a lookup's `answers`, the ones of the transport's family in the
 /// order given, put the BBMD now at `current` (`None` when it has no
 /// address yet): `None` to stay, while it is still among them, or else the
@@ -287,15 +318,7 @@ impl Lookup {
     }
 
     async fn run(mut self) {
-        let lookup = self.resolver.resolve(&self.host);
-        let answer = match tokio::time::timeout(LOOKUP_TIMEOUT, lookup).await {
-            Ok(Ok(addresses)) => Ok(addresses),
-            Ok(Err(error)) => Err(Failed {
-                failure: BbmdLookupFailure::Error(error.kind()),
-                error: Some(error),
-            }),
-            Err(_) => Err(BbmdLookupFailure::TimedOut.into()),
-        };
+        let answer = resolve(&*self.resolver, &self.host).await;
         self.end(answer);
     }
 

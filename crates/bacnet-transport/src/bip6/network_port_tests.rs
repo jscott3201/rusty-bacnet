@@ -41,8 +41,7 @@ fn a_foreign_device_lends_a_registration_that_takes_changes_while_running() {
     let mut transport = Bip6Transport::new(INTERFACE, 47809, Some(1234));
     let bbmd = Ipv6Addr::new(0x2001, 0xDB8, 0, 0, 0, 0, 0, 0xBB);
     transport.register_as_foreign_device(Bip6ForeignDeviceConfig {
-        bbmd_ip: bbmd,
-        bbmd_port: 47810,
+        bbmd: (bbmd, 47810).into(),
         ttl: 300,
     });
     let BipPortMode::Foreign { registration } = transport.bip6_port().unwrap().mode else {
@@ -123,9 +122,8 @@ async fn a_dropped_transport_releases_the_lease_once_its_tasks_end() {
 
 #[test]
 fn a_registration_names_an_ipv6_unicast_bbmd_and_a_lifetime() {
-    let config = |bbmd_ip: &str, bbmd_port, ttl| Bip6ForeignDeviceConfig {
-        bbmd_ip: bbmd_ip.parse().unwrap(),
-        bbmd_port,
+    let config = |ip: &str, port, ttl| Bip6ForeignDeviceConfig {
+        bbmd: (ip.parse::<Ipv6Addr>().unwrap(), port).into(),
         ttl,
     };
     for ip in ["::1", "2001:db8::bb", "fd00::bb"] {
@@ -149,8 +147,7 @@ fn a_registration_names_an_ipv6_unicast_bbmd_and_a_lifetime() {
 async fn start_refuses_a_registration_that_cannot_work() {
     let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, Some(79));
     transport.register_as_foreign_device(Bip6ForeignDeviceConfig {
-        bbmd_ip: "fe80::1".parse().unwrap(),
-        bbmd_port: 47808,
+        bbmd: ("fe80::1".parse().unwrap(), 47808).into(),
         ttl: 60,
     });
     let Err(Error::Transport(error)) = transport.start().await else {

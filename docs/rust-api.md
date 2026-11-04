@@ -1284,7 +1284,20 @@ BBMD must be an IPv6 unicast host with a nonzero port (not unspecified,
 multicast, link-local, IPv4-mapped or IPv4-compatible) and the TTL nonzero;
 it returns the `Bip6ForeignDeviceRefusal` otherwise. `start()` fails with
 `InvalidInput` for such a registration, and a Network Port activation refuses
-one. The B/IPv6 client builder takes a registration with
+one. `Bip6ForeignDeviceConfig::bbmd` is a `Bip6ForeignBbmd` (#2365): an address, or
+a host name and port, parsed from `[ip]:port` or `host:port`. A configured host name
+is looked up as a written one is. On `::` the start needs the BBMD's address to pick
+its source, so it looks the name up first and fails, with an error naming the name and
+why, unless it stands for an IPv6 address the device could register with. On an
+explicit interface the start goes ahead and the device waits: no registration, no
+Address-Resolution, no trusted Forwarded-NPDU, and its broadcasts are refused
+(`NotConnected`) and counted, since B/IPv6 keeps no hold queue. The name is tried
+again 30 seconds after each failure, at the time the newest failure sets, which a
+stop clears, and the first usable answer registers at once.
+`Bip6Transport::foreign_status()` returns a `Bip6ForeignStatus`: the BBMD's address in
+use, `waiting_for_bbmd`, the lookup and release counters and `broadcasts_refused`.
+`foreign_device_config()` reads back the name until it first resolves. The B/IPv6
+client builder takes a registration with
 `.foreign_device(config)` alongside `.device_instance(..)` (#1941), and, as the B/IP
 one does, `.bbmd_resolver(..)` for a host name written to FD_BBMD_Address and
 `.release_previous_bbmd(true)` (#2338).

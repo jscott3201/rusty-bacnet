@@ -100,8 +100,7 @@ async fn out_of_range_device_instance_fails_before_bip6_startup() {
 async fn random_vmac_foreign_device_fails_before_bip6_startup() {
     let mut transport = Bip6Transport::new(Ipv6Addr::LOCALHOST, 0, None);
     transport.register_as_foreign_device(Bip6ForeignDeviceConfig {
-        bbmd_ip: Ipv6Addr::LOCALHOST,
-        bbmd_port: 47_808,
+        bbmd: (Ipv6Addr::LOCALHOST, 47_808).into(),
         ttl: 60,
     });
 

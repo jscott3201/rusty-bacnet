@@ -695,14 +695,30 @@ async fn cli_main(cli: Cli) -> CliResult {
             std::process::exit(1);
         }
     } else if args.ipv6 {
-        let client = transport::build_bip6_client(&args).await?;
+        let mut client = transport::build_bip6_client(&args).await?;
+        // Broadcasts reach the remote network once the BBMD's address is
+        // known (#2365).
+        if let Some(foreign) = &args.bip6_foreign_device {
+            match foreign::await_bip6_bbmd(&client, &foreign.bbmd).await {
+                Ok(bbmd) => tracing::info!(
+                    "BBMD {bbmd} is known; the foreign-device registration goes there"
+                ),
+                Err(e) => {
+                    return Err(match client.stop().await {
+                        Ok(()) => e,
+                        Err(stop) => format!("{e}; stopping the client also failed: {stop}"),
+                    }
+                    .into());
+                }
+            }
+        }
         run(client, &cli, format).await?;
     } else {
         let mut client = transport::build_bip_client(&args).await?;
         let cmd = cli.command.as_ref().expect("a command after parsing");
         // Broadcasts reach the remote network once the BBMD has taken the
         // registration (#938).
-        if let Some(bbmd) = &cli.foreign_bbmd {
+        if let Some(bbmd) = args.foreign_device.as_ref().map(|config| &config.bbmd) {
             match foreign::await_registration(&client, bbmd).await {
                 Ok(bbmd) => tracing::info!("BBMD {bbmd} accepted the foreign-device registration"),
                 // The registration's failure is the error to report.
