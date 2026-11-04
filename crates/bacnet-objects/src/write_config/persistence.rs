@@ -1,5 +1,6 @@
-//! What a Timer or Channel keeps of the configuration peers write, the
-//! storage trait both share, and its file backend (#2243).
+//! What a Timer or Channel keeps of the configuration peers write, and an
+//! intrinsic reporter of its reporting settings (#2331), the storage trait
+//! they share, and its file backend (#2243).
 //!
 //! See the [module documentation](super) for what is kept and when.
 
@@ -7,23 +8,60 @@ use crate::prelude::*;
 #[cfg(feature = "std")]
 use std::path::Path;
 
-use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
+use bacnet_types::bitstring::EventTransitionBits;
+use bacnet_types::constructed::{
+    BACnetDeviceObjectPropertyReference, BACnetObjectPropertyReference,
+};
+use bacnet_types::enums::NotifyType;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 
 use crate::timer::StateChangeValues;
 
-/// What one Timer or Channel keeps across a restart: the configuration
-/// peers wrote to it, tagged with the object type it belongs to.
+/// What one Timer, Channel or intrinsic reporter keeps across a restart:
+/// the configuration peers wrote to it, tagged with what it belongs to.
 // A Timer's seven values make its variant the larger; a snapshot is built
 // once per save, so boxing it would buy nothing but a harder pattern match.
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq)]
+// More object types will keep their configuration here (#2331), so a match
+// outside the crate takes a wildcard arm.
+#[non_exhaustive]
 pub enum WriteConfigSnapshot {
     /// A Timer's.
     Timer(TimerWriteConfig),
     /// A Channel's.
     Channel(ChannelWriteConfig),
+    /// The reporting settings of an object with intrinsic reporting (#2331).
+    Reporting(ReportingWriteConfig),
+}
+
+/// The reporting settings every intrinsic reporter shares, as storage keeps
+/// them once a write sets them (#2331). Each is `None` until then: what the
+/// application configures applies at each start until then.
+///
+/// More settings may join it, so outside the crate it is built from
+/// [`Default`] with its fields then set.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct ReportingWriteConfig {
+    /// Notification_Class.
+    pub notification_class: Option<u32>,
+    /// Event_Enable.
+    pub event_enable: Option<EventTransitionBits>,
+    /// Notify_Type.
+    pub notify_type: Option<NotifyType>,
+    /// Event_Detection_Enable.
+    pub event_detection_enable: Option<bool>,
+    /// Event_Message_Texts_Config, ordered TO_OFFNORMAL, TO_FAULT,
+    /// TO_NORMAL; at most 16 KiB of UTF-8 each, as a durable object refuses
+    /// a longer write.
+    pub event_message_texts_config: Option<[String; 3]>,
+    /// Event_Algorithm_Inhibit_Ref, when a write set one. A write of the
+    /// unset form leaves `None`, which reopens as unset too.
+    pub event_algorithm_inhibit_ref: Option<BACnetObjectPropertyReference>,
+    /// Event_Algorithm_Inhibit.
+    pub event_algorithm_inhibit: Option<bool>,
 }
 
 /// What a Timer keeps across a restart.
@@ -82,8 +120,8 @@ pub struct ChannelMembers {
     pub execution_delay: Vec<u32>,
 }
 
-/// Application-owned storage for the configuration peers write to Timers
-/// and Channels, one object's at a time.
+/// Application-owned storage for the configuration peers write to Timers,
+/// Channels and intrinsic reporters, one object's at a time.
 ///
 /// The object calls `load` once, as it is built, and `save` from its writer
 /// thread, one call at a time. A written value lands in storage a moment

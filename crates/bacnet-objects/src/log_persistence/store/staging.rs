@@ -73,8 +73,11 @@ impl LogReporting {
     fn after(&self, write: &PendingWrite, total: u32) -> Result<Self, Error> {
         let mut next = self.clone();
         make(&mut next.buffer_ready, next.cov.as_mut(), write, total)?;
+        // Only texts the snapshot keeps, the written ones, count (#2331).
         let texts = next.buffer_ready.message_texts_config();
-        if texts.iter().any(|text| text.len() > MAX_TEXT_OCTETS) {
+        if next.buffer_ready.written(P::EVENT_MESSAGE_TEXTS_CONFIG)
+            && texts.iter().any(|text| text.len() > MAX_TEXT_OCTETS)
+        {
             return Err(common::protocol_error(
                 ErrorClass::RESOURCES,
                 ErrorCode::NO_SPACE_TO_WRITE_PROPERTY,
@@ -383,4 +386,45 @@ pub(crate) fn clear<L: DurableLog>(log: &mut L) -> Result<(), Error> {
         cov.unwrite();
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bacnet_types::error::RemoteError;
+
+    /// A long message text the snapshot doesn't keep, as one unwritten,
+    /// refuses no other write; once a write sets the texts it is refused
+    /// (#2331).
+    #[test]
+    fn only_kept_texts_meet_the_cap() {
+        let long = "x".repeat(MAX_TEXT_OCTETS + 1);
+        let mut buffer_ready = BufferReadyReporting::default();
+        buffer_ready.restore(&LogReportingSettings {
+            event_message_texts_config: Some([long, String::new(), String::new()]),
+            ..LogReportingSettings::default()
+        });
+        buffer_ready.unwrite();
+        let reporting = LogReporting {
+            buffer_ready,
+            cov: None,
+        };
+        let write = |property, array_index, value| PendingWrite {
+            property,
+            array_index,
+            value,
+        };
+        let class = write(P::NOTIFICATION_CLASS, None, PropertyValue::Unsigned(9));
+        assert!(reporting.after(&class, 0).is_ok());
+        let text = write(
+            P::EVENT_MESSAGE_TEXTS_CONFIG,
+            Some(3),
+            PropertyValue::CharacterString("back".into()),
+        );
+        assert!(matches!(
+            reporting.after(&text, 0),
+            Err(Error::Remote(RemoteError::Error { class, code }))
+                if class == ErrorClass::RESOURCES && code == ErrorCode::NO_SPACE_TO_WRITE_PROPERTY
+        ));
+    }
 }
