@@ -354,7 +354,7 @@ fn the_policy_sees_covered_requests_before_their_payload() {
         let frame = raw(function, &[0x01]);
         let datagram = datagram(&frame, PEER, UNICAST);
         assert_eq!(
-            link.receive(&datagram, Instant::ZERO, &mut refusing),
+            link.receive(&datagram, &mut refusing),
             Received::Discarded(Discard::RateLimited)
         );
     }
@@ -368,7 +368,7 @@ fn the_policy_sees_covered_requests_before_their_payload() {
     for frame in [&write, &distribute, &unicast] {
         let datagram = datagram(frame, PEER, UNICAST);
         assert!(!matches!(
-            link.receive(&datagram, Instant::ZERO, &mut refusing),
+            link.receive(&datagram, &mut refusing),
             Received::Discarded(_)
         ));
     }
@@ -389,7 +389,7 @@ fn the_policy_sees_covered_requests_before_their_payload() {
     let mut picky = Recording::new(true, false);
     let datagram = datagram(&ack, PEER, UNICAST);
     assert!(matches!(
-        link.receive(&datagram, Instant::ZERO, &mut picky),
+        link.receive(&datagram, &mut picky),
         Received::Response(Response {
             accepted: false,
             message: Ok(_),
