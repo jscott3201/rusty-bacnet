@@ -473,7 +473,7 @@ mod tests {
             primitives::encode_ctx_object_id(&mut data, 0, &spec.object_identifier);
             tags::encode_opening_tag(&mut data, 1);
             for property in spec.list_of_properties {
-                encode_bacnet_property_value(&property, &mut data);
+                encode_bacnet_property_value(&property, &mut data).unwrap();
             }
             tags::encode_closing_tag(&mut data, 1);
         }

@@ -745,7 +745,7 @@ fn append_property_value(
         priority: None,
     };
     let mut entry = BytesMut::new();
-    encode_bacnet_property_value(&property_value, &mut entry);
+    encode_bacnet_property_value(&property_value, &mut entry).ok()?;
     validate_tlv_sequence(&entry, "committed reliability property value").ok()?;
     encoded.extend_from_slice(&entry);
     Some(())

@@ -462,7 +462,8 @@ async fn object_audit_policy_bv_create_delete_and_failed_access_point_create_fal
                 })
                 .collect(),
         }
-        .encode(&mut bytes);
+        .encode(&mut bytes)
+        .unwrap();
         assert!(matches!(
             dispatch(
                 &f.server,
@@ -494,7 +495,8 @@ async fn object_audit_policy_bv_create_delete_and_failed_access_point_create_fal
         object_specifier: ObjectSpecifier::Type(ObjectType::ACCESS_POINT),
         list_of_initial_values: vec![],
     }
-    .encode(&mut bytes);
+    .encode(&mut bytes)
+    .unwrap();
     assert!(matches!(
         dispatch(
             &f.server,

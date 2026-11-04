@@ -144,10 +144,10 @@ pub(crate) fn value<O: ReadOverlay>(
                     .collect(),
             };
             let mut encoded = BytesMut::new();
-            result.encode(&mut encoded);
-            PropertyValue::ApplicationData(encoded.to_vec())
+            result.encode(&mut encoded)?;
+            Ok(PropertyValue::ApplicationData(encoded.to_vec()))
         })
-        .collect();
+        .collect::<Result<_, Error>>()?;
     Ok(PropertyValue::List(results))
 }
 

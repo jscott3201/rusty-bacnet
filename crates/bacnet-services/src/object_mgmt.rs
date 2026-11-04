@@ -49,8 +49,10 @@ pub struct CreateObjectRequest {
 }
 
 impl CreateObjectRequest {
-    /// Encode the request parameters into `buf`.
-    pub fn encode(&self, buf: &mut BytesMut) {
+    /// Encode the request parameters into `buf`; fails, leaving `buf`
+    /// unchanged, when an initial value's encoder refuses it.
+    pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
+        let start = buf.len();
         // [0] object-specifier (constructed)
         tags::encode_opening_tag(buf, 0);
         match &self.object_specifier {
@@ -67,10 +69,14 @@ impl CreateObjectRequest {
         if !self.list_of_initial_values.is_empty() {
             tags::encode_opening_tag(buf, 1);
             for pv in &self.list_of_initial_values {
-                encode_bacnet_property_value(pv, buf);
+                if let Err(refused) = encode_bacnet_property_value(pv, buf) {
+                    buf.truncate(start);
+                    return Err(refused);
+                }
             }
             tags::encode_closing_tag(buf, 1);
         }
+        Ok(())
     }
 
     /// Decode the request from service-request octets; fails on malformed or truncated input.
@@ -210,7 +216,7 @@ mod tests {
             list_of_initial_values: vec![],
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let decoded = CreateObjectRequest::decode(&buf).unwrap();
         assert_eq!(req, decoded);
     }
@@ -229,7 +235,7 @@ mod tests {
             }],
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         let decoded = CreateObjectRequest::decode(&buf).unwrap();
         assert_eq!(req, decoded);
     }
@@ -283,7 +289,7 @@ mod tests {
             list_of_initial_values: vec![value.clone(); MAX_DECODED_ITEMS],
         };
         let mut encoded = BytesMut::new();
-        request.encode(&mut encoded);
+        request.encode(&mut encoded).unwrap();
         assert_eq!(
             CreateObjectRequest::decode(&encoded)
                 .unwrap()
@@ -297,7 +303,7 @@ mod tests {
             list_of_initial_values: vec![value; MAX_DECODED_ITEMS + 1],
         };
         encoded.clear();
-        request.encode(&mut encoded);
+        request.encode(&mut encoded).unwrap();
         assert!(CreateObjectRequest::decode(&encoded).is_err());
     }
 
@@ -363,7 +369,7 @@ mod tests {
             list_of_initial_values: vec![],
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         assert!(CreateObjectRequest::decode(&buf[..1]).is_err());
     }
 
@@ -374,7 +380,7 @@ mod tests {
             list_of_initial_values: vec![],
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         assert!(CreateObjectRequest::decode(&buf[..2]).is_err());
     }
 
@@ -385,7 +391,7 @@ mod tests {
             list_of_initial_values: vec![],
         };
         let mut buf = BytesMut::new();
-        req.encode(&mut buf);
+        req.encode(&mut buf).unwrap();
         if buf.len() > 3 {
             assert!(CreateObjectRequest::decode(&buf[..3]).is_err());
         }

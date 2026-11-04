@@ -9,6 +9,8 @@
 
 use core::fmt;
 
+use bacnet_types::error::EncodeError;
+
 /// Storage that accepts a complete byte slice or leaves its output unchanged.
 ///
 /// A write appends after earlier output. On failure, neither the output bytes
@@ -126,6 +128,40 @@ impl fmt::Display for SinkFull {
 }
 
 impl core::error::Error for SinkFull {}
+
+/// Why a sink encoder that checks its input wrote nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SinkEncodeError {
+    /// The output didn't fit the sink.
+    Full(SinkFull),
+    /// The encoder refused its input, as its `BytesMut` form would.
+    Refused(EncodeError),
+}
+
+impl From<SinkFull> for SinkEncodeError {
+    fn from(full: SinkFull) -> Self {
+        Self::Full(full)
+    }
+}
+
+impl From<EncodeError> for SinkEncodeError {
+    fn from(refused: EncodeError) -> Self {
+        Self::Refused(refused)
+    }
+}
+
+impl fmt::Display for SinkEncodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Full(full) => fmt::Display::fmt(full, f),
+            Self::Refused(refused) => fmt::Display::fmt(refused, f),
+        }
+    }
+}
+
+// A transparent wrapper: Display is the wrapped error's own text, so
+// `source` stays `None` (as the wrapped errors' do) rather than repeating it.
+impl core::error::Error for SinkEncodeError {}
 
 /// Writes at the front and advances the slice to its unused tail.
 /// A failed write leaves both the slice and its backing bytes unchanged.

@@ -13,7 +13,9 @@ use bytes::BytesMut;
 use bacnet_encoding::constructed::tagged::{
     decode_ctx_object_id, decode_ctx_unsigned, decode_optional_ctx, expect_end, expect_opening,
 };
-use bacnet_encoding::constructed::{extract_property_value, PropertyValueBoundary};
+use bacnet_encoding::constructed::{
+    check_property_value, extract_property_value, PropertyValueBoundary,
+};
 
 // ---------------------------------------------------------------------------
 // WritePropertyRequest
@@ -56,9 +58,12 @@ pub fn validate_priority(priority: Option<u8>) -> Result<(), Error> {
 }
 
 impl WritePropertyRequest {
-    /// Encode transactionally: invalid priority leaves `buf` unchanged.
+    /// Encode transactionally: an invalid priority, or a value
+    /// [`check_property_value`] refuses, leaves `buf` unchanged.
     pub fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
         validate_priority(self.priority)?;
+        check_property_value(self.property_identifier, &self.property_value, 3)
+            .map_err(|refused| refused.within("WriteProperty"))?;
         primitives::encode_ctx_object_id(buf, 0, &self.object_identifier);
         primitives::encode_ctx_unsigned(buf, 1, self.property_identifier.to_raw() as u64);
         if let Some(idx) = self.property_array_index {

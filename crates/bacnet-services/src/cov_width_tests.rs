@@ -63,7 +63,7 @@ fn cov_notification(process_id: &[u8], time_remaining: &[u8]) -> BytesMut {
             priority: None,
         },
         &mut buf,
-    );
+    ).unwrap();
     tags::encode_closing_tag(&mut buf, 4);
     buf
 }

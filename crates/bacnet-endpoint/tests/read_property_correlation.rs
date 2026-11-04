@@ -220,7 +220,7 @@ async fn correlation_matrix(endpoint: bool, routed: bool) {
             };
             let mut body = BytesMut::new();
             if i != last - 1 {
-                ack.encode(&mut body);
+                ack.encode(&mut body).unwrap();
             }
             let mut apdu = BytesMut::new();
             encode_apdu(
