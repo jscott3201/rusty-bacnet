@@ -33,9 +33,10 @@
 //! the Timer is dropped for the application's value, with a warning.
 //!
 //! The same store keeps the reporting settings peers write to the analog,
-//! binary and multi-state Input, Output and Value objects (#2331), as kind 4
-//! of the format: a [`ReportingWriteConfig`], kept once an object opts in
-//! with its `with_reporting_persistence` builder call.
+//! binary and multi-state Input, Output and Value objects, Access Door,
+//! Access Zone, Event Enrollment and Alert Enrollment (#2331), as kind 4 of
+//! the format: a [`ReportingWriteConfig`], kept once an object opts in with
+//! its `with_reporting_persistence` builder call.
 //!
 //! A Command has nothing here: its Action is read-only over the network
 //! (Table 12-12 codes it R, and this stack takes no write to it), so only
@@ -64,6 +65,11 @@ mod persistence_tests;
 #[cfg(all(test, feature = "event-reporting"))]
 #[path = "write_config/reporting_tests.rs"]
 mod reporting_tests;
+// The other object types with intrinsic reporting: Access Door and Zone,
+// Event and Alert Enrollment.
+#[cfg(all(test, feature = "event-reporting"))]
+#[path = "write_config/reporting_types_tests.rs"]
+mod reporting_types_tests;
 #[cfg(test)]
 #[path = "write_config/test_storage.rs"]
 pub(crate) mod test_storage;

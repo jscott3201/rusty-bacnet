@@ -1370,6 +1370,47 @@ multi-thread one, WriteProperty by 1,109.9 and 1,089.4, and
 ReadPropertyMultiple by 921.1 and 1,162.5, with every pair lower and
 allocations unchanged.
 
+### 10.9 Allocations on the request path (#1978 items 3, 5 and 4)
+
+Three changes aimed at allocations, each counted against its own baseline
+on dev after section 10.8's changes
+([benchmarks/results/perf-s5](benchmarks/results/perf-s5/README.md)):
+
+- **The ReadProperty value.** A ReadProperty reply encoded the value into
+  a buffer of its own and copied it twice on the way into the reply. It
+  is now encoded straight into the reply, with the same bytes. That saves
+  about 460 to 475 instructions and two allocator calls per ReadProperty
+  request (22 to 20), on both runtimes, with every pair lower.
+  WriteProperty and ReadPropertyMultiple don't take this path and are not
+  higher.
+- **The B/IP send buffer.** Each B/IP unicast copied the network-layer
+  message into a new buffer behind its four-octet header. The socket now
+  sends the header and the message as one datagram without the copy (a
+  vectored send), with the same bytes on the wire. That saves about 420
+  instructions per ReadProperty request on both runtimes, and 422 per
+  WriteProperty request on the current-thread runtime and 479 on the
+  multi-thread one, with every pair of both lower, and two allocator calls
+  per round trip (one per send). Ten-object ReadPropertyMultiple fell by
+  444 on the current-thread runtime; its multi-thread figure, 611, is
+  only 1.2 times its floor of 530, with 5 of 6 pairs lower, so it is no
+  measured saving. Callgrind counts only the program's own instructions,
+  so the kernel's side of the vectored send isn't in these figures.
+- **Not accepted: one box per request handler.** Every confirmed service
+  but ReadProperty boxed its handler a second time. Removing that box saved
+  one allocator call and about 270 to 310 instructions per WriteProperty
+  request, but on the multi-thread runtime only 1.6 times the run-to-run
+  floor, where the rule asks for more than 3. ReadProperty did not rise.
+  The change was dropped.
+
+The manual Perf counts workflow then compared dev with the two accepted
+changes together (GitHub run 41890882196): ReadProperty fell by 883.5
+instructions per request on the current-thread runtime and 907.2 on the
+multi-thread one, and WriteProperty by 420.8 and 452.8, with every pair
+lower; ReadProperty makes four allocator calls fewer (22 to 18) and
+WriteProperty two (27 to 25). ReadPropertyMultiple fell by 274.2 and
+499.2, inside or close to its floors of 873.0 and 350.6, with two
+allocator calls fewer (141 to 139).
+
 ## 11. How to reproduce
 
 Run one suite at a time on an idle machine. Each Criterion suite takes 1 to

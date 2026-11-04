@@ -2958,8 +2958,9 @@ server.add_multistate_value(instance=1, name="Season", number_of_states=4)
 
 #### Keeping written reporting settings
 
-The analog, binary and multi-state builders take keyword-only `storage_path`
-(a `str`) and `clear_written_reporting` (#2331):
+The analog, binary and multi-state builders, `add_access_door`,
+`add_access_zone`, `add_event_enrollment` and `add_alert_enrollment` take
+keyword-only `storage_path` (a `str`) and `clear_written_reporting` (#2331):
 
 ```python
 server.add_analog_input(
@@ -2979,6 +2980,12 @@ string past 16 KiB is refused with RESOURCES / NO_SPACE_TO_WRITE_PROPERTY. A
 server started on the same file serves the saved settings.
 `clear_written_reporting=True` drops what was saved first, so the object
 starts from its defaults. A file that doesn't load raises `BacnetError`.
+An Alert Enrollment takes only ALARM and EVENT as Notify_Type, so a file
+holding another fails its build the same way.
+
+The endpoints' object builders (`BipEndpoint.add_analog_input` and the rest)
+don't take these keywords: an endpoint executes WriteProperty only on its own
+Device, so no peer can write these settings there.
 
 #### Object profiles and Value_Source
 

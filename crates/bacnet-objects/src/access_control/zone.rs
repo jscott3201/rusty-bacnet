@@ -55,6 +55,10 @@ pub struct AccessZoneObject {
     out_of_service: bool,
     /// Intrinsic reporting on Occupancy_State.
     reporting: ChangeOfStateReporting,
+    /// The reporting settings a write set, kept in storage once the zone
+    /// opts in (#2331).
+    #[cfg(feature = "event-reporting")]
+    reporting_store: crate::write_config::reporting::ReportingStore,
 }
 
 impl AccessZoneObject {
@@ -76,6 +80,8 @@ impl AccessZoneObject {
             exit_points: Vec::new(),
             out_of_service: false,
             reporting: ChangeOfStateReporting::new(ALARM_STATES),
+            #[cfg(feature = "event-reporting")]
+            reporting_store: Default::default(),
         })
     }
 
@@ -197,6 +203,8 @@ impl AccessZoneObject {
     }
 }
 
+crate::event::state_reporting::keep_change_of_state_reporting!(AccessZoneObject);
+
 impl BACnetObject for AccessZoneObject {
     fn object_identifier(&self) -> ObjectIdentifier {
         self.oid
@@ -275,6 +283,7 @@ impl BACnetObject for AccessZoneObject {
         _priority: Option<u8>,
     ) -> Result<(), Error> {
         crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
+        crate::write_config::reporting::admit(self, property, array_index, &value)?;
         // The zone starts in service and only this write moves Out_Of_Service,
         // so the entry edge is always seen and there is no fallback.
         if let Some(result) = common::write_out_of_service_with_restore(
@@ -318,6 +327,11 @@ impl BACnetObject for AccessZoneObject {
                 property,
             )),
         }
+    }
+
+    #[cfg(feature = "durable-writes")]
+    fn durable_writes(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
+        self.durable_capability()
     }
 
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {

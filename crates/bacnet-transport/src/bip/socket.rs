@@ -62,6 +62,7 @@ use bacnet_types::data_link::DataLink;
 use bacnet_types::error::Error;
 use tokio::net::UdpSocket;
 
+use super::datagram::OutgoingDatagram;
 use crate::local_addresses::LocalInterface;
 use crate::tap::{FrameTap, TapDirection, TapPeer};
 
@@ -460,9 +461,19 @@ impl BipSocket {
     /// and the tap sees each one sent.
     #[cfg(not(test))]
     pub(super) fn send_to<'a>(&'a self, buf: &'a [u8], target: SocketAddrV4) -> SendTo<'a> {
+        self.send_datagram(OutgoingDatagram::whole(buf), target)
+    }
+
+    /// [`Self::send_to`] for a datagram in parts.
+    #[cfg(not(test))]
+    pub(super) fn send_datagram<'a>(
+        &'a self,
+        datagram: OutgoingDatagram<'a>,
+        target: SocketAddrV4,
+    ) -> SendTo<'a> {
         #[cfg(feature = "test-support")]
         super::send_observer::attempted(&self.socket);
-        self.send_to_socket(buf, target)
+        self.send_to_socket(datagram, target)
     }
 
     /// [`Self::send_to`] for this crate's tests, which may send to a sink
@@ -473,28 +484,44 @@ impl BipSocket {
     /// that same [`SendTo`].
     #[cfg(test)]
     pub(super) async fn send_to(&self, buf: &[u8], target: SocketAddrV4) -> io::Result<usize> {
+        self.send_datagram(OutgoingDatagram::whole(buf), target)
+            .await
+    }
+
+    /// [`Self::send_to`] for a datagram in parts, in this crate's tests.
+    #[cfg(test)]
+    pub(super) async fn send_datagram(
+        &self,
+        datagram: OutgoingDatagram<'_>,
+        target: SocketAddrV4,
+    ) -> io::Result<usize> {
         super::send_observer::attempted(&self.socket);
         if let Some(sink) = &self.sink {
             if sink.yields() {
                 tokio::task::yield_now().await;
             }
-            return self.recorded(sink.send(buf, target), buf, target);
+            let sent = sink.send(&datagram.joined(), target);
+            return self.recorded(sent, &datagram, target);
         }
-        self.send_to_socket(buf, target).await
+        self.send_to_socket(datagram, target).await
     }
 
-    fn send_to_socket<'a>(&'a self, buf: &'a [u8], target: SocketAddrV4) -> SendTo<'a> {
+    fn send_to_socket<'a>(
+        &'a self,
+        datagram: OutgoingDatagram<'a>,
+        target: SocketAddrV4,
+    ) -> SendTo<'a> {
         SendTo {
             socket: self,
-            buf,
+            datagram,
             target,
             blocked: None,
             done: false,
         }
     }
 
-    /// One try at sending `buf`, without waiting for the socket.
-    fn try_send(&self, buf: &[u8], target: SocketAddrV4) -> io::Result<usize> {
+    /// One try at sending `datagram`, without waiting for the socket.
+    fn try_send(&self, datagram: &OutgoingDatagram<'_>, target: SocketAddrV4) -> io::Result<usize> {
         #[cfg(test)]
         if self
             .block_next_try
@@ -502,20 +529,28 @@ impl BipSocket {
         {
             return Err(io::ErrorKind::WouldBlock.into());
         }
-        self.socket.try_send_to(buf, SocketAddr::V4(target))
+        datagram.try_send(&self.socket, target)
     }
 
-    /// `sent`, after the tap sees `buf` if it was sent.
+    /// `sent`, after the tap sees `datagram` if it was sent. A datagram in
+    /// parts is put in one buffer only when the tap has a subscriber.
     fn recorded(
         &self,
         sent: io::Result<usize>,
-        buf: &[u8],
+        datagram: &OutgoingDatagram<'_>,
         target: SocketAddrV4,
     ) -> io::Result<usize> {
-        if sent.is_ok() {
+        if sent.is_ok() && self.tap.is_active() {
             let peer = || TapPeer::Udp(target.into());
-            self.tap
-                .record(TapDirection::Outbound, DataLink::Bip, peer, buf);
+            let record = |bytes: &[u8]| {
+                self.tap
+                    .record(TapDirection::Outbound, DataLink::Bip, peer, bytes)
+            };
+            if datagram.head().is_empty() {
+                record(datagram.payload());
+            } else {
+                record(&datagram.joined());
+            }
         }
         sent
     }
@@ -533,7 +568,7 @@ impl BipSocket {
 /// socket.
 pub(super) struct SendTo<'a> {
     socket: &'a BipSocket,
-    buf: &'a [u8],
+    datagram: OutgoingDatagram<'a>,
     target: SocketAddrV4,
     blocked: Option<BlockedSend<'a>>,
     done: bool,
@@ -551,19 +586,22 @@ impl std::future::Future for SendTo<'_> {
     ) -> std::task::Poll<Self::Output> {
         let this = &mut *self;
         assert!(!this.done, "a B/IP send polled after it finished");
-        let (socket, buf, target) = (this.socket, this.buf, this.target);
+        let (socket, datagram, target) = (this.socket, this.datagram, this.target);
         let sent = match &mut this.blocked {
             None => {
                 // The try spends the task's cooperative budget as the
                 // awaited send did, so a task that only sends (the BBMD
                 // fanout worker) still yields to its neighbours.
                 let coop = std::task::ready!(tokio::task::coop::poll_proceed(cx));
-                match socket.try_send(buf, target) {
+                match socket.try_send(&datagram, target) {
                     Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                         // The boxed send keeps its own budget.
                         drop(coop);
-                        let mut blocked: BlockedSend<'_> =
-                            Box::pin(socket.socket.send_to(buf, target));
+                        let mut blocked: BlockedSend<'_> = if datagram.head().is_empty() {
+                            Box::pin(socket.socket.send_to(datagram.payload(), target))
+                        } else {
+                            Box::pin(send_when_writable(&socket.socket, datagram, target))
+                        };
                         let polled = blocked.as_mut().poll(cx);
                         this.blocked = Some(blocked);
                         std::task::ready!(polled)
@@ -578,7 +616,22 @@ impl std::future::Future for SendTo<'_> {
         };
         this.done = true;
         this.blocked = None;
-        std::task::Poll::Ready(socket.recorded(sent, buf, target))
+        std::task::Poll::Ready(socket.recorded(sent, &datagram, target))
+    }
+}
+
+/// Send a datagram in parts once `socket` is writable.
+async fn send_when_writable(
+    socket: &UdpSocket,
+    datagram: OutgoingDatagram<'_>,
+    target: SocketAddrV4,
+) -> io::Result<usize> {
+    loop {
+        socket.writable().await?;
+        match datagram.try_send(socket, target) {
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+            sent => return sent,
+        }
     }
 }
 

@@ -4969,7 +4969,8 @@ class BACnetServer:
         after a restart. ``clear_written_reporting=True`` drops what was
         saved first, so the object starts from its defaults. A file that
         doesn't load raises BacnetError. Every analog, binary and multi-state
-        builder takes both."""
+        builder takes both, as do ``add_access_door``, ``add_access_zone``,
+        ``add_event_enrollment`` and ``add_alert_enrollment``."""
         ...
     def add_analog_output(self, instance: int, name: str, units: EngineeringUnits | int = 62, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
         """Profile keywords as on ``add_analog_input``."""
@@ -5694,6 +5695,8 @@ class BACnetServer:
         alarm_values: Optional[list[int]] = None,
         fault_values: Optional[list[int]] = None,
         masked_alarm_values: Optional[list[int]] = None,
+        storage_path: Optional[str] = None,
+        clear_written_reporting: bool = False,
     ) -> None:
         """Add an Access Door object to the server (before starting).
 
@@ -5713,6 +5716,9 @@ class BACnetServer:
         Time_Delay, and a fault value makes Reliability MULTI_STATE_FAULT. Any
         other number, NORMAL (0) included, raises BacnetProtocolError with
         VALUE_OUT_OF_RANGE, and nothing is registered.
+
+        ``storage_path`` and ``clear_written_reporting`` keep the reporting
+        settings a peer writes in that file, as on ``add_analog_input``.
         """
         ...
     def add_access_credential(
@@ -5911,6 +5917,8 @@ class BACnetServer:
             list[ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier]]
         ] = None,
         alarm_values: Optional[list[int]] = None,
+        storage_path: Optional[str] = None,
+        clear_written_reporting: bool = False,
     ) -> None:
         """Add an Access Zone object to the server (before starting).
 
@@ -5930,6 +5938,9 @@ class BACnetServer:
         included, raises BacnetProtocolError with VALUE_OUT_OF_RANGE and
         ``first_failed_element_number`` naming it, from 1, and nothing is
         registered. Left out, the list starts empty.
+
+        ``storage_path`` and ``clear_written_reporting`` keep the reporting
+        settings a peer writes in that file, as on ``add_analog_input``.
         """
         ...
     def add_credential_data_input(
@@ -5958,10 +5969,28 @@ class BACnetServer:
         """
         ...
     def add_alert_enrollment(
-        self, instance: int, name: str, initial_source: ObjectIdentifier
-    ) -> None: ...
+        self,
+        instance: int,
+        name: str,
+        initial_source: ObjectIdentifier,
+        *,
+        storage_path: Optional[str] = None,
+        clear_written_reporting: bool = False,
+    ) -> None:
+        """Add an Alert Enrollment to the server (before starting).
+
+        ``storage_path`` and ``clear_written_reporting`` keep the reporting
+        settings a peer writes in that file, as on ``add_analog_input``.
+        """
+        ...
     def add_event_enrollment(
-        self, instance: int, name: str, event_type: EventType = ...
+        self,
+        instance: int,
+        name: str,
+        event_type: EventType = ...,
+        *,
+        storage_path: Optional[str] = None,
+        clear_written_reporting: bool = False,
     ) -> None:
         """Add an Event Enrollment (Clause 12.12) to the server (before starting).
 
@@ -5977,6 +6006,9 @@ class BACnetServer:
         Fault_Parameters reads as the context-tagged ``none`` choice while no
         fault algorithm is set, and writing that clears it; a null written to
         it succeeds and changes nothing.
+
+        ``storage_path`` and ``clear_written_reporting`` keep the reporting
+        settings a peer writes in that file, as on ``add_analog_input``.
         """
         ...
 

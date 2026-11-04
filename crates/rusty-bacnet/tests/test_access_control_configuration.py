@@ -65,6 +65,12 @@ KEYWORDS = (
     ("add_access_user", ["credentials", "members", "member_of"]),
     ("add_credential_data_input", ["supported_formats"]),
 )
+# The reporting-settings keywords the two intrinsic reporters take after
+# their configuration keywords (#2331); test_reporting_persistence covers them.
+STORAGE = {
+    "add_access_door": ["storage_path", "clear_written_reporting"],
+    "add_access_zone": ["storage_path", "clear_written_reporting"],
+}
 
 
 def installed_stub_method(name: str) -> ast.FunctionDef:
@@ -103,11 +109,12 @@ class AccessControlStubContractTests(unittest.TestCase):
     def test_runtime_and_stub_expose_the_keywords(self) -> None:
         for method_name, keywords in KEYWORDS:
             with self.subTest(method=method_name):
+                storage = STORAGE.get(method_name, [])
                 parameters = inspect.signature(
                     getattr(BACnetServer, method_name)
                 ).parameters
                 self.assertEqual(
-                    list(parameters), ["self", "instance", "name", *keywords]
+                    list(parameters), ["self", "instance", "name", *keywords, *storage]
                 )
                 for keyword in keywords:
                     self.assertIs(
@@ -120,9 +127,10 @@ class AccessControlStubContractTests(unittest.TestCase):
                     ["self", "instance", "name"],
                 )
                 self.assertEqual(
-                    [argument.arg for argument in method.args.kwonlyargs], keywords
+                    [argument.arg for argument in method.args.kwonlyargs],
+                    [*keywords, *storage],
                 )
-                for default in method.args.kw_defaults:
+                for default in method.args.kw_defaults[: len(keywords)]:
                     self.assertIsInstance(default, ast.Constant)
                     self.assertIsNone(default.value)
 

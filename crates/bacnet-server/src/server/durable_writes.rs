@@ -92,8 +92,10 @@ enum TargetValue {
 /// Allow_Group_Delay_Inhibit (#2243), a colour object its default
 /// (#1956), with Tags as the other objects with a profile do, the three
 /// logs the reporting settings they keep (#1952), a Trend Log its two COV
-/// settings too, and the nine analog, binary and multi-state object types
-/// those reporting settings beside their Tags (#2331).
+/// settings too, the nine analog, binary and multi-state object types
+/// those reporting settings beside their Tags, and Access Door, Access Zone,
+/// Event Enrollment and Alert Enrollment the same reporting settings
+/// (#2331).
 /// Under a policy
 /// that decides mutations, only these attempts of a WritePropertyMultiple are decided
 /// ahead of the handler (#1321).
@@ -168,7 +170,12 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
                         | PropertyIdentifier::COV_RESUBSCRIPTION_INTERVAL
                 )
         }
-        ObjectType::TREND_LOG_MULTIPLE | ObjectType::EVENT_LOG => reporting_row(property),
+        ObjectType::TREND_LOG_MULTIPLE
+        | ObjectType::EVENT_LOG
+        | ObjectType::ACCESS_DOOR
+        | ObjectType::ACCESS_ZONE
+        | ObjectType::EVENT_ENROLLMENT
+        | ObjectType::ALERT_ENROLLMENT => reporting_row(property),
         _ => false,
     }
 }
