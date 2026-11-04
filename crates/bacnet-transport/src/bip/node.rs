@@ -81,12 +81,7 @@ impl<'a> HostPolicy<'a> {
 }
 
 impl Policy for HostPolicy<'_> {
-    fn admit_management(
-        &mut self,
-        source: SocketAddrV4,
-        _function: BvlcFunction,
-        _now: CoreInstant,
-    ) -> bool {
+    fn admit_management(&mut self, source: SocketAddrV4, _function: BvlcFunction) -> bool {
         let mut limiter = self.limiter.lock().unwrap_or_else(PoisonError::into_inner);
         limiter.check_now(source.ip().octets())
     }
@@ -443,11 +438,6 @@ impl NodeHandle {
     /// Where this node's exchanges are counted.
     pub(super) fn record(&self) -> &ClientRecord {
         &self.record
-    }
-
-    /// The node's clock.
-    pub(super) fn clock(&self) -> HostClock {
-        self.clock
     }
 
     /// The socket every send leaves from.

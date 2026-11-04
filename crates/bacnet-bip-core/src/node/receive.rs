@@ -4,7 +4,6 @@
 use core::net::SocketAddrV4;
 
 use bacnet_bip_codec::{BvlcFunction, BvlcResultCode, Bvll, BvllError, BvllFrame};
-use bacnet_time::Instant;
 
 use super::addressing::Addressed;
 use super::config::{ForwardedTrust, Link, Mode};
@@ -75,13 +74,11 @@ pub trait Policy {
     /// Register-Foreign-Device or Delete-Foreign-Device-Table-Entry of
     /// `function` from `source` goes on, before its payload is read: a rate
     /// limit. One refused is dropped unanswered.
-    fn admit_management(
-        &mut self,
-        source: SocketAddrV4,
-        function: BvlcFunction,
-        now: Instant,
-    ) -> bool {
-        let _ = (source, function, now);
+    ///
+    /// No time is passed in: a limit that needs one reads its own clock, so
+    /// only these four requests pay for the read, never an NPDU (#2373).
+    fn admit_management(&mut self, source: SocketAddrV4, function: BvlcFunction) -> bool {
+        let _ = (source, function);
         true
     }
 
@@ -302,12 +299,7 @@ impl Link {
     /// ([`BvlcFunction::nak`]), unless [`Mode::Bbmd`] claims it, from any
     /// source a reply can reach ([`Link::is_answerable`]). Write-BDT is
     /// refused in every mode, and so is a malformed BBMD-only request.
-    pub fn receive<'d>(
-        &self,
-        datagram: &Datagram<'d>,
-        now: Instant,
-        policy: &mut impl Policy,
-    ) -> Received<'d> {
+    pub fn receive<'d>(&self, datagram: &Datagram<'d>, policy: &mut impl Policy) -> Received<'d> {
         let source = datagram.source;
         if datagram.truncated {
             return Received::Discarded(Discard::Truncated);
@@ -336,7 +328,7 @@ impl Link {
         if listener && arrival != Arrival::Broadcast {
             return listener_mismatch(false);
         }
-        if rate_limited(frame.function) && !policy.admit_management(source, frame.function, now) {
+        if rate_limited(frame.function) && !policy.admit_management(source, frame.function) {
             return Received::Discarded(Discard::RateLimited);
         }
         match frame.message() {
