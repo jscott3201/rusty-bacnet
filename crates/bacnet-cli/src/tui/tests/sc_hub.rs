@@ -149,6 +149,7 @@ pub(super) fn args(dir: &Path, site: &Site, node: &Leaf, url: &str) -> Transport
         ipv6_interface: None,
         device_instance: None,
         foreign_device: None,
+        bip6_foreign_device: None,
         nat_global_address: None,
         multicast: None,
         mstp: None,

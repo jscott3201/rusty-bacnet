@@ -32,6 +32,14 @@ pub(crate) struct Failed {
     error: Option<io::Error>,
 }
 
+impl Failed {
+    /// The resolver's error, when it gave one.
+    #[cfg(feature = "ipv6")]
+    pub(crate) fn error(&self) -> Option<&io::Error> {
+        self.error.as_ref()
+    }
+}
+
 impl From<BbmdLookupFailure> for Failed {
     fn from(failure: BbmdLookupFailure) -> Self {
         Self {
@@ -220,6 +228,19 @@ impl Lookups {
     }
 }
 
+/// What `resolver` answers for `host`, given up after [`LOOKUP_TIMEOUT`]:
+/// a [`Lookup`]'s call.
+async fn resolve(resolver: &dyn BbmdResolver, host: &str) -> Result<Vec<IpAddr>, Failed> {
+    match tokio::time::timeout(LOOKUP_TIMEOUT, resolver.resolve(host)).await {
+        Ok(Ok(addresses)) => Ok(addresses),
+        Ok(Err(error)) => Err(Failed {
+            failure: BbmdLookupFailure::Error(error.kind()),
+            error: Some(error),
+        }),
+        Err(_) => Err(BbmdLookupFailure::TimedOut.into()),
+    }
+}
+
 /// Where a lookup's `answers`, the ones of the transport's family in the
 /// order given, put the BBMD now at `current` (`None` when it has no
 /// address yet): `None` to stay, while it is still among them, or else the
@@ -286,16 +307,21 @@ impl Lookup {
         }
     }
 
+    /// Run it here, as a B/IPv6 start on `::` does (#2365): its generation
+    /// and answer, which the caller reports to [`Lookups::ended`] under its
+    /// lock. Dropped before it answers, it ends as abandoned, as a started
+    /// one does, so the slot is freed either way.
+    #[cfg(feature = "ipv6")]
+    pub(crate) async fn in_place(mut self) -> (u64, Result<Vec<IpAddr>, Failed>) {
+        self.armed = true;
+        self.started = true;
+        let answer = resolve(&*self.resolver, &self.host).await;
+        self.armed = false;
+        (self.generation, answer)
+    }
+
     async fn run(mut self) {
-        let lookup = self.resolver.resolve(&self.host);
-        let answer = match tokio::time::timeout(LOOKUP_TIMEOUT, lookup).await {
-            Ok(Ok(addresses)) => Ok(addresses),
-            Ok(Err(error)) => Err(Failed {
-                failure: BbmdLookupFailure::Error(error.kind()),
-                error: Some(error),
-            }),
-            Err(_) => Err(BbmdLookupFailure::TimedOut.into()),
-        };
+        let answer = resolve(&*self.resolver, &self.host).await;
         self.end(answer);
     }
 

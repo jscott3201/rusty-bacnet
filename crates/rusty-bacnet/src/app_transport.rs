@@ -32,6 +32,14 @@ impl AppTransport {
             Self::Router(_) => None,
         }
     }
+
+    /// The stack's own B/IPv6 link, if it has one.
+    pub(crate) fn bip6(&self) -> Option<&bacnet_transport::bip6::Bip6Transport> {
+        match self.link()? {
+            AnyTransport::Bip6(transport) => Some(transport),
+            _ => None,
+        }
+    }
 }
 
 impl From<AnyTransport> for AppTransport {

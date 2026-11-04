@@ -1281,10 +1281,28 @@ with `local_address()`. This branch requires the existing configured Device inst
 and preserves trusted-BBMD handling without normal multicast prerequisites.
 `Bip6ForeignDeviceConfig::check()` says whether a registration can work: the
 BBMD must be an IPv6 unicast host with a nonzero port (not unspecified,
-multicast, link-local, IPv4-mapped or IPv4-compatible) and the TTL nonzero;
+multicast, link-local, IPv4-mapped or IPv4-compatible, and with no zone index or
+flow label) and the TTL nonzero;
 it returns the `Bip6ForeignDeviceRefusal` otherwise. `start()` fails with
 `InvalidInput` for such a registration, and a Network Port activation refuses
-one. The B/IPv6 client builder takes a registration with
+one. `Bip6ForeignDeviceConfig::bbmd` is a `Bip6ForeignBbmd` (#2365): an address, or
+a host name and port, parsed from `[ip]:port` or `host:port`. A configured host name
+is looked up as a written one is. On `::` the start needs the BBMD's address to pick
+its source, so it looks the name up first and fails, with an error naming the name and
+why, unless it stands for an IPv6 address the device could register with. The
+address found becomes the registration's once the start succeeds: a start that
+fails later keeps the name, and the next start looks it up again. On an
+explicit interface the start goes ahead and the device waits: no registration, no
+Address-Resolution, no Forwarded-NPDU or Forwarded-Address-Resolution taken, and its
+broadcasts are refused (`NotConnected`) and counted, since B/IPv6 keeps no hold
+queue. The name is tried again 30 seconds after the newest failure, and the first
+usable answer registers at once. A stop ends the retry; a restart looks the name up
+at once.
+`Bip6Transport::foreign_status()` returns a `Bip6ForeignStatus`: the BBMD's address in
+use, `bbmd_name` (the host name it is known by, if any), `waiting_for_bbmd`, the
+lookup and release counters, `broadcasts_refused` and `registrations_sent`.
+`foreign_device_config()` reads back the name until it first resolves. The B/IPv6
+client builder takes a registration with
 `.foreign_device(config)` alongside `.device_instance(..)` (#1941), and, as the B/IP
 one does, `.bbmd_resolver(..)` for a host name written to FD_BBMD_Address and
 `.release_previous_bbmd(true)` (#2338).

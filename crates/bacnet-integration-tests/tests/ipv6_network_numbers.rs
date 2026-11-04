@@ -254,8 +254,7 @@ async fn foreign_full_server_network_number_wire() {
         let bbmd = udp(selected, 0, index, false);
         let mut transport = Bip6Transport::new(Ipv6Addr::UNSPECIFIED, 0, Some(0x12_3456));
         transport.register_as_foreign_device(Bip6ForeignDeviceConfig {
-            bbmd_ip: selected,
-            bbmd_port: bbmd.local_addr().unwrap().port(),
+            bbmd: (selected, bbmd.local_addr().unwrap().port()).into(),
             ttl: 60,
         });
         let (mut server, local) = start(transport).await;

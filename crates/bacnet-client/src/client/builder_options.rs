@@ -134,7 +134,10 @@ impl Bip6ClientBuilder {
     /// Make the client a foreign device of a B/IPv6 BBMD (Annex U.4.5),
     /// which then carries its broadcasts. Needs
     /// [`Self::device_instance`]; the build fails without one, or when the
-    /// registration fails [`Bip6ForeignDeviceConfig::check`].
+    /// registration fails [`Bip6ForeignDeviceConfig::check`]. A BBMD named
+    /// by host name fails the build on the interface `::` unless it
+    /// resolves at start; on an explicit interface the client waits for it
+    /// (#2365, [`Bip6Transport::register_as_foreign_device`]).
     pub fn foreign_device(mut self, config: Bip6ForeignDeviceConfig) -> Self {
         self.foreign_device = Some(config);
         self
