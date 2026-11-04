@@ -19,7 +19,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         &self,
         device_instance: u32,
     ) -> Result<(Vec<u8>, Option<(u16, Vec<u8>)>), Error> {
-        let dt = self.device_table.lock().await;
+        let dt = self.device_table.lock();
         let device = dt.get(device_instance).ok_or_else(|| {
             Error::Encoding(format!("device {device_instance} not in device table"))
         })?;
@@ -94,17 +94,17 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 
     /// Get a snapshot of all discovered devices.
     pub async fn discovered_devices(&self) -> Vec<DiscoveredDevice> {
-        self.device_table.lock().await.all()
+        self.device_table.lock().all()
     }
 
     /// Look up a discovered device by instance number.
     pub async fn get_device(&self, instance: u32) -> Option<DiscoveredDevice> {
-        self.device_table.lock().await.get(instance).cloned()
+        self.device_table.lock().get(instance).cloned()
     }
 
     /// Clear the discovered devices table.
     pub async fn clear_devices(&self) {
-        self.device_table.lock().await.clear();
+        self.device_table.lock().clear();
     }
 
     /// Manually register a local device in the device table.
@@ -133,7 +133,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         };
         // Placeholder capability defaults (NONE, 1476) are not I-Am evidence;
         // they must never drive a segmentation-capability decision (#371).
-        self.device_table.lock().await.upsert_placeholder(device);
+        self.device_table.lock().upsert_placeholder(device);
         Ok(())
     }
 
@@ -184,7 +184,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             source_network: Some(config.remote_network),
             source_address: Some(MacAddr::from_slice(&config.remote_mac)),
         };
-        self.device_table.lock().await.upsert(device);
+        self.device_table.lock().upsert(device);
         Ok(())
     }
 }

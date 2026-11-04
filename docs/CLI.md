@@ -1824,9 +1824,17 @@ up when the CLI starts. Until it first resolves it is tried again 30 seconds aft
 each failure; from then on it is looked up alongside the registrations, at most
 every 30 seconds. A name that doesn't resolve still starts the transport, with
 nothing registered and broadcasts held: a one-shot command then fails at once,
-saying why the name didn't resolve, and the TUI logs that reason and keeps
-trying the name. Its Network screen shows the BBMD when the name resolved as the session
-started; one that resolves later registers, but the screen doesn't show it.
+saying why the name didn't resolve and counting its lookups (`its host name did
+not resolve (1 name lookup, 1 failed)`), and the TUI logs that reason and keeps
+trying the name. A one-shot command's other registration errors name the BBMD with
+the address its name stood for and its lookups (`BBMD bbmd.example:47808 (at
+192.0.2.10:47808; 1 name lookup, 0 failed) did not answer the foreign-device
+registration`). In the TUI the status bar reads `FD waiting for name` until the
+name resolves, and once a lookup fails a WAITING banner says why. The Network
+screen's panel shows the name and the address it stands for, or `(not resolved
+yet)`, counts the lookups and failures beside the registration's counters, with
+the newest failure's reason, and follows the name to its address when it resolves
+later or elsewhere.
 Behind NAT, keep `--renewal` short so the mapping the BBMD's replies come back
 on stays open; the TTL can stay long. If you know the address and port the NAT
 router gives the registration, `--nat-global-address IP:PORT` lets the TUI's

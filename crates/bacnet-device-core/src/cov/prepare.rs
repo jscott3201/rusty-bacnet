@@ -1,5 +1,10 @@
 //! The checks a COV coordinate passes before it is admitted: whether its
-//! property and index can be monitored, and its value retained.
+//! property and index can be monitored, and its value retained; and the
+//! shared preparation of one selected coordinate's value, which never
+//! substitutes Present_Value.
+use alloc::vec::Vec;
+
+use bacnet_encoding::primitives::encode_property_value;
 use bacnet_objects::property_metadata::is_array_property;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::{
@@ -7,8 +12,49 @@ use bacnet_types::{
     error::Error,
     primitives::PropertyValue,
 };
+use bytes::BytesMut;
 
 use super::CovSample;
+
+/// One selected coordinate's value, bounded and encoded, with the
+/// increment its changes are measured against.
+pub struct PreparedCovValue {
+    /// The bounded value a report establishes as its baseline.
+    pub sample: CovSample,
+    /// The value encoded as a notification carries it.
+    pub encoded: Vec<u8>,
+    pub(super) numeric: bool,
+    pub(super) increment: Option<f64>,
+}
+impl PreparedCovValue {
+    /// Whether this value differs enough from `previous` to report.
+    pub fn reports(&self, previous: Option<&CovSample>) -> bool {
+        self.sample.reports(previous, self.increment, self.numeric)
+    }
+}
+/// Caller has already performed the selected read, preserving its error precedence.
+pub fn prepare_value(
+    object: &dyn BACnetObject,
+    property: PropertyIdentifier,
+    index: Option<u32>,
+    increment: Option<f32>,
+    value: &PropertyValue,
+) -> Result<PreparedCovValue, Error> {
+    let (sample, numeric) = validate_sample(object, property, index, value)?;
+    let increment = effective_increment(object, property, numeric, increment);
+    let mut encoded = BytesMut::new();
+    encode_property_value(&mut encoded, sample.value())?;
+    Ok(PreparedCovValue {
+        sample,
+        encoded: encoded.to_vec(),
+        numeric,
+        increment,
+    })
+}
+
+/// Sole increment rule, shared with Trend Log COV acquisition (#1480): see
+/// [`bacnet_objects::cov_change::effective_increment`].
+pub(crate) use bacnet_objects::cov_change::effective_increment;
 
 fn property_error(code: ErrorCode) -> Error {
     Error::protocol(ErrorClass::PROPERTY, code)
@@ -108,3 +154,6 @@ fn known_whole_array(object: ObjectType, property: PropertyIdentifier) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod tests;

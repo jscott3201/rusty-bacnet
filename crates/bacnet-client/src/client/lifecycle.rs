@@ -91,9 +91,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         };
 
         let coordinator = Arc::new(OutboundTransactionCoordinator::new());
-        let tsm = Arc::new(Mutex::new(new_coordinated_tsm(&config, coordinator)));
+        let tsm = Arc::new(SyncMutex::new(new_coordinated_tsm(&config, coordinator)));
         let tsm_dispatch = Arc::clone(&tsm);
-        let device_table = Arc::new(Mutex::new(DeviceTable::new()));
+        let device_table = Arc::new(SyncMutex::new(DeviceTable::new()));
         let device_table_dispatch = Arc::clone(&device_table);
         let network_dispatch = Arc::clone(&network);
         let (cov_tx, _) =
@@ -112,8 +112,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let i_have_tx_dispatch = i_have_tx.clone();
         let (network_report_tx, _) = broadcast::channel(NETWORK_REPORT_CHANNEL_CAPACITY);
         let network_report_tx_dispatch = network_report_tx.clone();
-        let seg_ack_senders: Arc<Mutex<HashMap<SegAckKey, SegmentAckRoute>>> =
-            Arc::new(Mutex::new(HashMap::new()));
+        let seg_ack_senders: Arc<SyncMutex<HashMap<SegAckKey, SegmentAckRoute>>> =
+            Arc::new(SyncMutex::new(HashMap::new()));
         let seg_ack_senders_dispatch = Arc::clone(&seg_ack_senders);
         let (cleanup_tx, mut cleanup_rx) = mpsc::unbounded_channel::<TransactionCleanup>();
         #[cfg(test)]
@@ -174,7 +174,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                             break;
                         };
                         if cleanup.cancel_tsm {
-                            tsm_dispatch.lock().await.cancel_transaction_for_owner(
+                            tsm_dispatch.lock().cancel_transaction_for_owner(
                                 &cleanup.mac,
                                 cleanup.invoke_id,
                                 &cleanup.owner,
@@ -202,7 +202,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         }
                         if let Some(expected_sender) = cleanup.seg_ack_sender {
                             let key = (cleanup.mac, cleanup.invoke_id);
-                            let mut senders = seg_ack_senders_dispatch.lock().await;
+                            let mut senders = seg_ack_senders_dispatch.lock();
                             if senders
                                 .get(&key)
                                 .is_some_and(|route| {
@@ -219,7 +219,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     _ = device_purge_interval.tick() => {
                         let lost_devices = device_table_dispatch
                             .lock()
-                            .await
                             .purge_stale_collect(DEVICE_MAX_AGE);
                         for device in lost_devices {
                             let _ = device_tx_dispatch.send(DeviceEvent {
@@ -364,7 +363,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         self.abort_owned_tasks();
         join_owned_task(&mut self.network_number_task).await;
         join_owned_task(&mut self.dispatch_task).await;
-        self.tsm.lock().await.cancel_all_transactions();
+        self.tsm.lock().cancel_all_transactions();
         let network = Arc::get_mut(&mut self.network).ok_or_else(|| {
             Error::Encoding("cannot stop BACnetClient while network references remain".into())
         })?;
@@ -376,7 +375,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
 impl<T: TransportPort> Drop for BACnetClient<T> {
     fn drop(&mut self) {
         self.abort_owned_tasks();
-        if let Ok(mut tsm) = self.tsm.try_lock() {
+        if let Some(mut tsm) = self.tsm.try_lock() {
             tsm.cancel_all_transactions();
         }
     }

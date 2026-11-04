@@ -5,18 +5,20 @@
 //! executed services, an Analog Input, a Binary Value, a Multi-state Value
 //! with its state texts and a Group of the first two, both reading one fixed
 //! clock. A `BACnetServer` on the shared `TestTransport` serves one; a
-//! `Responder` with the server's resolved identity and limits serves the
-//! other. Each request goes to both, and the APDU of the frame the server
-//! sends is compared with the `Responder`'s, octet for octet; silence
-//! matches silence. The server serves its executor-owned Device properties
-//! from its view, and the `Responder`, with no overlay, from the Device
-//! object, so those rows may differ: [`DIFFER`] pins exactly which do, and
-//! [`DIFFER_EXCHANGES`] the other exchanges that differ by design. The
-//! WriteProperty rows are in `write`, the ReadPropertyMultiple rows in `rpm`,
-//! the WritePropertyMultiple rows in `wpm` and the COV subscriptions in `cov`.
+//! `Responder` with the server's resolved identity and limits, inside a
+//! `Reporter`, serves the other. Each request goes to both, and the APDU of
+//! the frame the server sends is compared with the core's, octet for octet;
+//! silence matches silence. The `Reporter` answers the Device's
+//! subscription lists from its table, as the server does from its own, so
+//! every ReadProperty row matches (#2303); [`DIFFER_EXCHANGES`] pins the
+//! exchanges that differ by design. The WriteProperty rows are in `write`,
+//! the ReadPropertyMultiple rows in `rpm`, the WritePropertyMultiple rows in
+//! `wpm` and the COV subscriptions and notifications in `cov`.
 use super::*;
 use crate::server::test_transport::{self, SendLog, TestTransport};
+use bacnet_device_core::cov::SubscriberEndpoint;
 use bacnet_device_core::read::ReadPropertyMultipleBudget;
+use bacnet_device_core::report::{OutboxLimits, ReportConfig, Reporter};
 use bacnet_device_core::responder::{Inbound, Limits, Outcome, Responder};
 use bacnet_encoding::npdu::{Npdu, encode_npdu};
 use bacnet_objects::analog::AnalogInputObject;
@@ -37,17 +39,6 @@ use std::collections::BTreeSet;
 use tokio::sync::mpsc;
 
 const DEVICE: u32 = 4321;
-
-/// The ReadProperty rows that differ by design, as (object type, property,
-/// index): the executor-owned Device properties, which the server serves
-/// from its view and the `Responder`, with no overlay, from the object.
-///
-/// The server answers Active_COV_Subscriptions from its subscription table,
-/// which holds the one subscription the test makes; the Device object knows
-/// of none. Every other Device row agrees, the identity and services
-/// included: both databases declare the executed services from one identity.
-const DIFFER: &[(ObjectType, P, Option<u32>)] =
-    &[(ObjectType::DEVICE, P::ACTIVE_COV_SUBSCRIPTIONS, None)];
 
 /// The other exchanges that differ by design, by the name the test gives
 /// them. The core segments neither way, so a reply longer than the
@@ -135,9 +126,21 @@ struct Parity {
     server: BACnetServer<TestTransport>,
     tx: mpsc::Sender<ReceivedNpdu>,
     sent: SendLog,
-    responder: Responder,
+    reporter: Reporter,
     db: ObjectDatabase,
     requests: u16,
+}
+
+/// The core side: a `Reporter` over `responder`, under the server's COV
+/// policy and confirmed timing, with an outbox the parity tests never fill.
+fn reporter(responder: Responder, config: &ServerConfig) -> Reporter {
+    let report = ReportConfig::new(config.cov_policy.clone())
+        .with_confirmed(config.cov_flight_timing())
+        .with_outbox(OutboxLimits {
+            entries: 64,
+            octets: 65_536,
+        });
+    Reporter::new(responder, report).unwrap()
 }
 
 impl Parity {
@@ -185,13 +188,14 @@ impl Parity {
             .clone()
             .with_segmentation(Segmentation::NONE);
         let responder = Responder::new(core_identity, limits).unwrap();
+        let reporter = reporter(responder, &server.config);
         tokio::time::sleep(Duration::from_millis(50)).await;
         sent.clear();
         Self {
             server,
             tx,
             sent,
-            responder,
+            reporter,
             db: fixture(&identity),
             requests: 0,
         }
@@ -201,6 +205,16 @@ impl Parity {
     fn source(&self) -> MacAddr {
         let [high, low] = self.requests.to_be_bytes();
         MacAddr::from_slice(&[10, 0, high, low, 0xBA, 0xC0])
+    }
+
+    /// Hand `request` from the latest request's source to the core side;
+    /// its outcome.
+    fn core(&mut self, request: Inbound, out: &mut BytesMut) -> Outcome {
+        let peer = SubscriberEndpoint::new(&self.source(), None);
+        let now = crate::runtime_clock::core_now();
+        self.reporter
+            .handle(&mut self.db, &peer, request, now, out)
+            .outcome
     }
 
     /// Deliver `apdu` to the server alone, from a source of its own, and
@@ -243,11 +257,7 @@ impl Parity {
         let server = frames.first().map(|frame| frame.decode_npdu().payload);
         let mut out = BytesMut::new();
         let request = Inbound::new(apdu, max_reply).with_source(self.origin());
-        let core = match self
-            .responder
-            .handle(&mut self.db, request, &mut out)
-            .outcome
-        {
+        let core = match self.core(request, &mut out) {
             Outcome::Reply | Outcome::Announce => Some(out.freeze()),
             Outcome::Silent => None,
             other => unreachable!("handle answers every request: {other:?}"),
@@ -411,10 +421,10 @@ fn rows(db: &ObjectDatabase) -> Vec<(ObjectIdentifier, P, Option<u32>)> {
 }
 
 #[tokio::test(start_paused = true)]
-async fn read_property_rows_match_but_the_pinned_device_rows() {
+async fn read_property_rows_match() {
     let mut parity = Parity::start().await;
-    // One live subscription, so the server's Active_COV_Subscriptions has
-    // an entry the Device object lacks.
+    // One live subscription on both sides, which Active_COV_Subscriptions
+    // lists, and the Device object alone wouldn't.
     let mut body = BytesMut::new();
     bacnet_services::cov::SubscribeCOVRequest {
         subscriber_process_identifier: 1,
@@ -431,6 +441,11 @@ async fn read_property_rows_match_but_the_pinned_device_rows() {
             .any(|frame| matches!(frame.apdu(), Apdu::SimpleAck(_))),
         "{sent:?}"
     );
+    let mut out = BytesMut::new();
+    assert_eq!(
+        parity.core(Inbound::new(subscribe, 1476), &mut out),
+        Outcome::Reply
+    );
     let mut differ = BTreeSet::new();
     let rows = rows(&parity.db);
     // Five objects, each with no fewer than ten properties.
@@ -446,20 +461,11 @@ async fn read_property_rows_match_but_the_pinned_device_rows() {
             differ.insert((object.object_type().to_raw(), property.to_raw(), index));
         }
     }
-    let pinned: BTreeSet<_> = DIFFER
+    let named: Vec<String> = differ
         .iter()
-        .map(|&(object_type, property, index)| (object_type.to_raw(), property.to_raw(), index))
+        .map(|&(t, p, i)| format!("{:?} {:?} {i:?}", ObjectType::from_raw(t), P::from_raw(p)))
         .collect();
-    let named = |set: &BTreeSet<(u32, u32, Option<u32>)>| -> Vec<String> {
-        set.iter()
-            .map(|&(t, p, i)| format!("{:?} {:?} {i:?}", ObjectType::from_raw(t), P::from_raw(p)))
-            .collect()
-    };
-    assert_eq!(
-        named(&differ),
-        named(&pinned),
-        "differing rows, then pinned rows"
-    );
+    assert!(named.is_empty(), "differing rows: {named:?}");
     parity.server.stop().await.unwrap();
 }
 

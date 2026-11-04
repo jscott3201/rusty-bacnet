@@ -74,8 +74,15 @@ impl Bip6ClientBuilder {
     fn prepare(self) -> (ClientConfig, Bip6Transport, ClientOptions) {
         let mut transport =
             Bip6Transport::new(self.interface, self.config.port, self.device_instance);
+        if self.release_previous_bbmd && self.foreign_device.is_none() {
+            warn!("release_previous_bbmd set without foreign_device(); it will be ignored");
+        }
         if let Some(foreign) = self.foreign_device {
             transport.register_as_foreign_device(foreign);
+        }
+        transport.set_release_previous_bbmd(self.release_previous_bbmd);
+        if let Some(resolver) = self.bbmd_resolver {
+            transport.set_bbmd_resolver(resolver);
         }
         (self.config, transport, self.options)
     }

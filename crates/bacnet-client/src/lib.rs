@@ -7,6 +7,7 @@ pub mod discovery;
 mod endpoint_requester;
 pub mod log_reader;
 pub mod segmentation;
+mod sync_mutex;
 pub mod tags;
 pub mod tsm;
 

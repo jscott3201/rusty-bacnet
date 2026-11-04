@@ -1,6 +1,6 @@
 use super::*;
-use crate::cov::active::LiveDeviceCov;
 use crate::device_view::{DeviceExecution, DeviceReadContext};
+use bacnet_device_core::cov::active::LiveDeviceCov;
 use bacnet_device_core::read::{self, LiveLists, ReadFailure, ReadScope};
 use bacnet_services::read_property::ReadPropertyRequest;
 

@@ -56,6 +56,8 @@ async fn write(
     }
 }
 
+// The probe below holds the device table lock across the request.
+#[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn wpm_validation_invalid_direct_local_routed_and_unknown_never_resolve_admit_or_send() {
     let (mut client, mut peer, mut received) = setup().await;
@@ -84,7 +86,9 @@ async fn wpm_validation_invalid_direct_local_routed_and_unknown_never_resolve_ad
     }
     for invalid in cases {
         for path in [0, 10, 11, 999] {
-            let _lookup = client.device_table.lock().await;
+            // A blocking lock now: a path that took it would hang this
+            // thread instead of timing out, and nextest ends the test.
+            let _lookup = client.device_table.lock();
             let error = timeout(
                 Duration::from_secs(1),
                 write(&client, path, invalid.clone()),
@@ -93,8 +97,8 @@ async fn wpm_validation_invalid_direct_local_routed_and_unknown_never_resolve_ad
             .unwrap()
             .unwrap_err();
             assert!(matches!(error, Error::Encode(_)));
-            assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
-            assert_eq!(client.tsm.lock().await.pending_count(), 0);
+            assert_eq!(client.tsm.lock().coordinated_active_count(), 0);
+            assert_eq!(client.tsm.lock().pending_count(), 0);
             assert!(received.try_recv().is_err());
         }
     }
@@ -166,7 +170,7 @@ async fn wpm_validation_valid_direct_local_routed_preserve_exact_wire_and_comple
             };
             let (result, ()) = tokio::join!(send, reply);
             result.unwrap();
-            assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
+            assert_eq!(client.tsm.lock().coordinated_active_count(), 0);
         }
     }
     client.stop().await.unwrap();

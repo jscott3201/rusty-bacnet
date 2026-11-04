@@ -560,9 +560,9 @@ impl NodeHandle {
         let Some(snapshot) = state.node.registration(now) else {
             return;
         };
-        let renewal = match state.node.link().mode {
-            Mode::Foreign(foreign) => Some(foreign.effective_renewal()),
-            Mode::Normal | Mode::Bbmd => None,
+        let (renewal, waiting) = match state.node.link().mode {
+            Mode::Foreign(foreign) => (Some(foreign.effective_renewal()), foreign.bbmd.is_none()),
+            Mode::Normal | Mode::Bbmd => (None, false),
         };
         let next = snapshot
             .next_attempt
@@ -571,6 +571,7 @@ impl NodeHandle {
             |at: CoreInstant| Duration::from_nanos(at.saturating_duration_since(now).as_nanos());
         foreign.next_attempt_in = next.map(until);
         foreign.registered = snapshot.registered;
+        foreign.waiting_for_bbmd = waiting;
         foreign.lease_remaining = snapshot
             .lease_remaining
             .map(|left| Duration::from_nanos(left.as_nanos()));

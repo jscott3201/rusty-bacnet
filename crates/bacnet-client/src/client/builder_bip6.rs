@@ -13,6 +13,8 @@ impl BACnetClient<Bip6Transport> {
             interface: Ipv6Addr::UNSPECIFIED,
             device_instance: None,
             foreign_device: None,
+            release_previous_bbmd: false,
+            bbmd_resolver: None,
         }
     }
 }
@@ -26,6 +28,10 @@ pub struct Bip6ClientBuilder {
     pub(super) interface: Ipv6Addr,
     pub(super) device_instance: Option<u32>,
     pub(super) foreign_device: Option<Bip6ForeignDeviceConfig>,
+    /// See [`Self::release_previous_bbmd`].
+    pub(super) release_previous_bbmd: bool,
+    /// See [`Self::bbmd_resolver`].
+    pub(super) bbmd_resolver: Option<Arc<dyn BbmdResolver>>,
 }
 
 #[cfg(feature = "ipv6")]

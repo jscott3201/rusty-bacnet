@@ -116,7 +116,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             Some(selection) if self.dispatch_task.is_none() => {
                 let bindings = address_bindings(&self.device_bindings, selection).await;
                 Some(
-                    crate::cov::active::LiveDeviceCov::stopped(selection)
+                    bacnet_device_core::cov::active::LiveDeviceCov::stopped(selection)
                         .with_address_bindings(selection, bindings),
                 )
             }

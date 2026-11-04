@@ -301,6 +301,13 @@ impl NotificationTransactions {
         }
     }
 
+    /// Test hook: abort every worker, as a crash would, leaving the owner
+    /// open for new ones.
+    #[cfg(test)]
+    pub(crate) fn abort_workers(&self) {
+        self.workers.lock().unwrap().tasks.abort_all();
+    }
+
     #[doc(hidden)]
     pub fn close(&self) {
         self.audit_permits.close();

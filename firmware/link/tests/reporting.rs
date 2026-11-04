@@ -15,8 +15,8 @@ use bacnet_device_core::cov::{
 use bacnet_types::MacAddr;
 use bacnet_types::enums::ObjectType;
 use bacnet_types::primitives::ObjectIdentifier;
-use firmware_link::objects::{APDUS, ARENA};
-use firmware_link::reporting::{CAP, REQUESTS, expected, run};
+use firmware_link::objects::APDUS;
+use firmware_link::reporting::{ARENA, CAP, REQUESTS, expected, run};
 use linked_list_allocator::LockedHeap;
 
 /// The whole summary, against the one written out by hand

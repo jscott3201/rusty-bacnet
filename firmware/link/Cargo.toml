@@ -131,8 +131,8 @@ alloc = [
 objects = ["alloc", "dep:bacnet-objects", "dep:bacnet-device-core"]
 
 # `reporting`: the reporting image and its scenario (#2303), the objects
-# image's database and bacnet-device-core's COV table, which subscribes,
-# renews and cancels through the core's staged functions. Its timeline is
+# image's database and bacnet-device-core's COV `Reporter`, which
+# subscribes, renews, cancels, reports and lists. Its timeline is
 # bacnet-time's. bacnet-device-core has no `cov` feature: the linker drops
 # the COV code an image doesn't reach, so the objects image is no smaller
 # without it. On by default, as `objects` is, for the host builds.

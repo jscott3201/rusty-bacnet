@@ -17,8 +17,9 @@ use crate::bbmd_lookup::BbmdName;
 /// ([`BipTransport::set_bbmd_resolver`](crate::bip::BipTransport::set_bbmd_resolver),
 /// #1852): at start, then alongside the registration attempts at most once
 /// every 30 seconds. Until its first lookup succeeds the transport runs
-/// with no BBMD: foreign registration waits, broadcasts are held and then
-/// refused, and a failed lookup is counted in the registration snapshot
+/// with no BBMD: foreign registration waits (the registration snapshot's
+/// `waiting_for_bbmd`), broadcasts are held and then refused, and a failed
+/// lookup is counted in that snapshot
 /// (`bbmd_lookups`, `bbmd_lookup_failures`, `last_bbmd_lookup_failure`)
 /// and tried again every 30 seconds.
 ///

@@ -18,7 +18,7 @@ use std::time::Duration;
 
 pub(crate) use bacnet_ops::bbmd::{BdtRow, FdtRow, address_of, mac, probe_error};
 use bacnet_ops::bbmd::{Probe, Unfollowed, unreachable_reason};
-use bacnet_transport::bip::{BvlcExchangeError, ForeignRegistrationSnapshot};
+use bacnet_transport::bip::{BvlcExchangeError, ForeignBbmd, ForeignRegistrationSnapshot};
 
 /// UI to the network worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,10 +37,13 @@ pub(crate) enum NetworkCommand {
 }
 
 /// The configured foreign-device registration, from the connection plan.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Foreign {
-    /// The BBMD the client registers with.
-    pub(crate) bbmd: SocketAddrV4,
+    /// The BBMD as configured: an address, or a host name (#2308).
+    pub(crate) configured: ForeignBbmd,
+    /// The address the client registers with: the configured one, or the
+    /// one its host name last resolved to. `None` until it first resolves.
+    pub(crate) bbmd: Option<SocketAddrV4>,
     /// The time-to-live it asks for, in seconds.
     pub(crate) ttl: u16,
     /// How often it registers again.
@@ -104,6 +107,9 @@ pub(crate) fn read_error(error: &BvlcExchangeError) -> String {
 pub(crate) enum NetworkEvent {
     /// How the foreign-device registration is going, polled once a second.
     Registration(ForeignRegistrationSnapshot),
+    /// The registration's BBMD is at this address now: its host name
+    /// resolved, at last or elsewhere (#2308).
+    Bbmd(SocketAddrV4),
     /// A BBMD's tables, from [`NetworkCommand::Tables`].
     Tables {
         /// The BBMD read.

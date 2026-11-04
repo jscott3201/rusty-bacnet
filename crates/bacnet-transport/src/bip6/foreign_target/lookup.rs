@@ -107,7 +107,7 @@ impl NameTarget for ForeignTarget {
         };
         let bbmd = SocketAddrV6::new(config.bbmd_ip, config.bbmd_port, 0, 0);
         info!(host = %name.host(), %bbmd, "The B/IPv6 BBMD's host name now resolves elsewhere; registering there");
-        state.config = config;
+        state.take(config);
         drop(state);
         self.changed.notify_one();
     }

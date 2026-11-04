@@ -57,8 +57,8 @@ pub struct AtomicCovCounters {
 }
 
 impl AtomicCovCounters {
-    /// Add the subscription counts a table mutation reports, and take its
-    /// live count.
+    /// Add the counts a table mutation or evaluation reports (subscriptions,
+    /// and notifications cut off at their budget), and take its live count.
     pub(crate) fn add(&self, counts: &CovCounters) {
         for (counter, count) in [
             (&self.subscriptions_created, counts.subscriptions_created),
@@ -79,6 +79,10 @@ impl AtomicCovCounters {
                 counts.subscriptions_cancelled,
             ),
             (&self.subscriptions_purged, counts.subscriptions_purged),
+            (
+                &self.notifications_throttled_fanout,
+                counts.notifications_throttled_fanout,
+            ),
         ] {
             if count != 0 {
                 counter.fetch_add(count, Ordering::Relaxed);

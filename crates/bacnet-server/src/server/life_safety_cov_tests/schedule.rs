@@ -36,7 +36,7 @@ async fn live_schedule_retains_actual_life_safety_status_delta() {
     assert!(committed.coarse.is_empty());
     assert_eq!(
         committed.life_safety,
-        vec![crate::life_safety_cov::LifeSafetyCovChange {
+        vec![bacnet_device_core::cov::life_safety::LifeSafetyCovChange {
             object_identifier: point_oid(),
             changed_properties: vec![PropertyIdentifier::STATUS_FLAGS],
         }]
