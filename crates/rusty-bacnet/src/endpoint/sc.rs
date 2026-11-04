@@ -159,7 +159,8 @@ impl PyScEndpoint {
     ///     source_audit_reporter / audit_recipient / audit_device_bindings:
     ///         Keyword-only, as on `BipEndpoint` (#2348, #2357), each binding
     ///         address a VMAC as `local_address()` gives it
-    ///         (`"xx:xx:xx:xx:xx:xx"`) or as twelve hex digits. An address
+    ///         (`"xx:xx:xx:xx:xx:xx"`) or as twelve hex digits, or a routed
+    ///         `"network:0xMAC"` (#2371). An address
     ///         `audit_recipient` takes another node's VMAC: never the
     ///         broadcast or all-zero VMAC or this endpoint's own.
     #[new]

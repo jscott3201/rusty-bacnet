@@ -58,7 +58,13 @@ the database guard, the transport, addressing and time.
   matches each answer (`reply`), resends or gives up at the deadline
   (`on_deadline`), and answers the Device's subscription lists from its
   table (`cov::active::ActiveCovOverlay`). Build the database with
-  `report::SERVICES`.
+  `report::SERVICES`. It runs no DeleteObject (`handle` rejects it as an
+  unrecognized service): a host that serves it takes the request before
+  `handle`, lists the service in its own Protocol_Services_Supported, and,
+  like a host that deletes an object on its own, calls
+  `remove_for_object`. That drops the object's subscriptions, their queued
+  and owed reports and any confirmed one still out, giving its invoke ID
+  back; `pop` hands out nothing more for the object.
 - `reply`: the reply PDUs, and the one map from an error to its Reject or
   Error PDU.
 - `responder`: `Responder`, which strings the steps together for a host

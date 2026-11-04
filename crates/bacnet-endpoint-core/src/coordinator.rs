@@ -103,6 +103,25 @@ impl CanonicalPeer {
             })
             .map(|source| Self::routed(source.network, &source.mac_address))
     }
+
+    /// The routed form of a direct answer's source: `Routed(local_network,
+    /// immediate MAC)` when the answer has no SNET and `local_network` is
+    /// known, otherwise `None`. A request routed to a network that has since
+    /// become this one is keyed to that form, and its station, now on this
+    /// link, may answer with no SNET (#2371). Like [`Self::routed_alias`], it
+    /// names the same station.
+    pub fn direct_alias(
+        immediate_mac: &[u8],
+        routed_source: Option<&NpduAddress>,
+        local_network: Option<u16>,
+    ) -> Option<Self> {
+        match (routed_source, local_network) {
+            (None, Some(network)) if !immediate_mac.is_empty() => {
+                Some(Self::routed(network, immediate_mac))
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Workspace role that owns an outbound confirmed transaction.
@@ -509,9 +528,10 @@ impl OutboundTransactionCoordinator {
     /// SNET/SADR, and `local_network`, the receiving link's known network
     /// number. The answer is matched against [`CanonicalPeer::from_source`].
     /// Only when that misses on the peer, and the answer has a
-    /// [`CanonicalPeer::routed_alias`], is the alias tried: a lease reserved
-    /// while the number was unknown then gets the answer it would have
-    /// matched before (#1465). The admission's metadata names the peer that
+    /// [`CanonicalPeer::routed_alias`] or [`CanonicalPeer::direct_alias`], is
+    /// the alias tried: a lease reserved while the number was unknown then
+    /// gets the answer it would have matched before (#1465), or the station's
+    /// direct answer (#2371). The admission's metadata names the peer that
     /// matched, which the owner keys its completion to.
     pub fn admit_from_source(
         &self,
@@ -523,7 +543,9 @@ impl OutboundTransactionCoordinator {
         let peer = CanonicalPeer::from_source(immediate_mac, routed_source, local_network);
         match self.admit(&peer, apdu)? {
             AdmissionOutcome::PeerMismatch => {
-                match CanonicalPeer::routed_alias(routed_source, local_network) {
+                match CanonicalPeer::routed_alias(routed_source, local_network).or_else(|| {
+                    CanonicalPeer::direct_alias(immediate_mac, routed_source, local_network)
+                }) {
                     Some(alias) => self.admit(&alias, apdu),
                     None => Ok(AdmissionOutcome::PeerMismatch),
                 }
