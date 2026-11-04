@@ -102,6 +102,10 @@ pub struct AccessDoorObject {
     /// Elapsed time for a door with no bound clock, advanced by the
     /// test-only `advance_time`.
     logical_now: Duration,
+    /// The reporting settings a write set, kept in storage once the door
+    /// opts in (#2331).
+    #[cfg(feature = "event-reporting")]
+    reporting_store: crate::write_config::reporting::ReportingStore,
 }
 
 impl AccessDoorObject {
@@ -128,6 +132,8 @@ impl AccessDoorObject {
             pulse_deadlines: [None; 16],
             monotonic_clock: None,
             logical_now: Duration::ZERO,
+            #[cfg(feature = "event-reporting")]
+            reporting_store: Default::default(),
         })
     }
 
@@ -447,6 +453,8 @@ fn checked_tenths(value: PropertyValue) -> Result<u32, Error> {
     common::u64_to_u32(raw)
 }
 
+crate::event::state_reporting::keep_change_of_state_reporting!(AccessDoorObject);
+
 impl BACnetObject for AccessDoorObject {
     fn object_identifier(&self) -> ObjectIdentifier {
         self.oid
@@ -542,6 +550,7 @@ impl BACnetObject for AccessDoorObject {
         priority: Option<u8>,
     ) -> Result<(), Error> {
         crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
+        crate::write_config::reporting::admit(self, property, array_index, &value)?;
         // The door's entry edge is always seen (it starts in service and only
         // this write moves Out_Of_Service), so there is no fallback state.
         if let Some(result) = common::write_out_of_service_with_restore(
@@ -619,6 +628,11 @@ impl BACnetObject for AccessDoorObject {
                 property,
             )),
         }
+    }
+
+    #[cfg(feature = "durable-writes")]
+    fn durable_writes(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
+        self.durable_capability()
     }
 
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {

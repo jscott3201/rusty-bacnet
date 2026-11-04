@@ -41,6 +41,7 @@ use bacnet_objects::color::{
     ColorObject, ColorOutputPersistence, ColorOutputSnapshot, ColorTemperatureObject,
     FileColorOutputPersistence,
 };
+use bacnet_objects::event_enrollment::AlertEnrollmentObject;
 use bacnet_objects::event_log::EventLogObject;
 use bacnet_objects::log_persistence::{FileLogPersistence, LogPersistence};
 use bacnet_objects::notification_class::{
@@ -91,6 +92,7 @@ enum Kind {
     TimerWriteConfig,
     ChannelWriteConfig,
     ReportingWriteConfig,
+    AlertReportingWriteConfig,
 }
 
 /// Where a check's storage lives. Each method opens one backend on it; a
@@ -255,6 +257,13 @@ pub const FORMATS: &[Format] = &[
         sample: samples::reporting_write_config,
         kind: Kind::ReportingWriteConfig,
     },
+    // Last, so the selectors of the formats before it stay as they were.
+    Format {
+        name: "alert_reporting_write_config",
+        two_slot: false,
+        sample: samples::alert_reporting_write_config,
+        kind: Kind::AlertReportingWriteConfig,
+    },
 ];
 
 impl Format {
@@ -331,6 +340,18 @@ impl Format {
                 |store| {
                     let units = EngineeringUnits::DEGREES_CELSIUS;
                     AnalogInputObject::new(1, "AI", units)?
+                        .with_reporting_persistence(store)
+                        .map(drop)
+                },
+            ),
+            // An Alert Enrollment refuses an ACK_NOTIFICATION Notify_Type
+            // the format itself takes (#2331).
+            Kind::AlertReportingWriteConfig => check_file(
+                medium,
+                oid(ObjectType::ALERT_ENROLLMENT),
+                M::write_config,
+                |store| {
+                    AlertEnrollmentObject::new(1, "AE", oid(ObjectType::ANALOG_INPUT))?
                         .with_reporting_persistence(store)
                         .map(drop)
                 },

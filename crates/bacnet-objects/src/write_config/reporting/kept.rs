@@ -7,7 +7,7 @@ use core::time::Duration;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{ErrorClass, ErrorCode, NotifyType, PropertyIdentifier as P};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::PropertyValue;
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use crate::common;
 use crate::durable::staged::{self, StagedSaves};
@@ -117,12 +117,17 @@ impl DetectorFields {
 }
 
 impl Kept {
-    /// What `write` leaves on top of this, or the object's refusal of it.
-    /// A message text past what storage keeps is refused with RESOURCES /
-    /// NO_SPACE_TO_WRITE_PROPERTY, before anything is saved, so every
-    /// backend gives that answer (#1952), once the texts are written and
-    /// so kept.
-    fn after(&self, write: &PendingWrite) -> Result<Self, Error> {
+    /// What `write` leaves on top of this, or the object's refusal of it;
+    /// `takes_notify_type` is the object type's own Notify_Type rule
+    /// ([`KeepsReporting::takes_notify_type`]). A message text past what
+    /// storage keeps is refused with RESOURCES / NO_SPACE_TO_WRITE_PROPERTY,
+    /// before anything is saved, so every backend gives that answer (#1952),
+    /// once the texts are written and so kept.
+    fn after(
+        &self,
+        write: &PendingWrite,
+        takes_notify_type: fn(NotifyType) -> bool,
+    ) -> Result<Self, Error> {
         let mut next = self.clone();
         let rows = &mut next.rows;
         let value = &write.value;
@@ -134,6 +139,9 @@ impl Kept {
                 common::write_generic_event_properties!(scratch, write.property, value.clone())
                     .unwrap_or_else(|| Err(common::unknown_property_error()))?;
                 scratch.event_detector.apply_to(rows);
+                if write.property == P::NOTIFY_TYPE && !takes_notify_type(rows.notify_type) {
+                    return Err(common::value_out_of_range_error());
+                }
             }
             P::EVENT_DETECTION_ENABLE => match *value {
                 PropertyValue::Boolean(enable) => rows.event_detection_enable = enable,
@@ -204,6 +212,18 @@ pub(crate) struct ReportingStore {
     storage: Option<Box<Storage>>,
 }
 
+/// A copy holds no storage, as a copy of an object's Tags doesn't: an Access
+/// Door's COV snapshot is a frozen copy for reading, which saves nothing.
+impl Clone for ReportingStore {
+    fn clone(&self) -> Self {
+        Self {
+            written: self.written,
+            writes: self.writes,
+            storage: None,
+        }
+    }
+}
+
 impl ReportingStore {
     /// Whether the object keeps its reporting settings in storage.
     pub(crate) fn attached(&self) -> bool {
@@ -241,6 +261,13 @@ pub(crate) trait KeepsReporting: BACnetObject {
     fn reporting_rows(&self) -> ReportingRows;
     /// Serve the rows `saved` holds.
     fn restore_reporting_rows(&mut self, saved: &ReportingWriteConfig);
+    /// Whether the object takes `notify_type`, a named value, as its
+    /// Notify_Type: most take every one, and an Alert Enrollment only ALARM
+    /// and EVENT. A staged write is refused as the object refuses it, and
+    /// storage holding another fails the build.
+    fn takes_notify_type(_notify_type: NotifyType) -> bool {
+        true
+    }
 }
 
 /// Run `f` on `object`'s store, which is taken out meanwhile so `f` can look
@@ -293,6 +320,14 @@ pub(crate) fn attach<T: KeepsReporting>(
             "saved reporting settings {reason}"
         )));
     }
+    if saved
+        .notify_type
+        .is_some_and(|notify_type| !T::takes_notify_type(notify_type))
+    {
+        return Err(Error::Encoding(
+            "saved reporting settings hold a Notify_Type this object refuses".into(),
+        ));
+    }
     object.restore_reporting_rows(&saved);
     let store = object.reporting_store();
     store.written = Written::of(&saved);
@@ -318,7 +353,12 @@ pub(crate) fn admit<T: KeepsReporting>(
     }
     let mut store = core::mem::take(object.reporting_store());
     let current = store.kept(object.reporting_rows());
-    let result = admit_to(&mut store, current, property, array_index, value);
+    let write = PendingWrite {
+        property,
+        array_index,
+        value: value.clone(),
+    };
+    let result = admit_to(&mut store, current, &write, T::takes_notify_type);
     *object.reporting_store() = store;
     result
 }
@@ -327,12 +367,17 @@ pub(crate) fn admit<T: KeepsReporting>(
 fn admit_to(
     store: &mut ReportingStore,
     current: Kept,
-    property: P,
-    array_index: Option<u32>,
-    value: &PropertyValue,
+    write: &PendingWrite,
+    takes_notify_type: fn(NotifyType) -> bool,
 ) -> Result<(), Error> {
     let storage = store.storage.as_mut().expect("checked by the caller");
-    let next = match storage.claim(property, array_index, value, store.writes) {
+    let claimed = storage.claim(
+        write.property,
+        write.array_index,
+        &write.value,
+        store.writes,
+    );
+    let next = match claimed {
         Some(Ok(next)) => {
             // Steps the request has still to take keep, as the state served,
             // the rows this write leaves.
@@ -344,14 +389,9 @@ fn admit_to(
             return Err(operational_problem());
         }
         None => {
-            let write = PendingWrite {
-                property,
-                array_index,
-                value: value.clone(),
-            };
             // A write the object refuses leaves another request's staged
             // write alone (#1424).
-            let next = current.after(&write)?;
+            let next = current.after(write, takes_notify_type)?;
             storage.drop_staged();
             // Storage goes back to the served rows first, should the save
             // below fail.
@@ -396,7 +436,7 @@ pub(crate) fn stage_writes<T: KeepsReporting>(
                 write.array_index,
             )?;
             let from = earlier.last().map_or(&current, |step| &step.next);
-            from.after(write).map(Some)
+            from.after(write, T::takes_notify_type).map(Some)
         });
         storage.stage(steps, store.writes, current.snapshot(), |snapshot, kept| {
             *snapshot = kept.snapshot();
@@ -500,200 +540,53 @@ pub(crate) fn joined(
     }
 }
 
-/// Put `saved`'s Event_Message_Texts_Config and Event_Algorithm_Inhibit pair
-/// into `options`.
-pub(crate) fn restore_options(options: &mut ReportingOptions, saved: &ReportingWriteConfig) {
-    if let Some(texts) = &saved.event_message_texts_config {
-        options.restore_message_texts_config(texts.clone());
+/// Whether a setter of `property` on `object` leaves it alone: the object
+/// keeps its reporting settings and a write saved the row.
+pub(crate) fn setter_gives_way(
+    store: &ReportingStore,
+    object: ObjectIdentifier,
+    property: P,
+) -> bool {
+    let kept = store.kept_over_setter(property);
+    if kept {
+        log_debug!(object = %object, ?property, "A written reporting setting kept over a setter");
     }
-    if let Some(reference) = &saved.event_algorithm_inhibit_ref {
-        options.restore_inhibit_reference(Some(reference.clone()));
-    }
-    if let Some(inhibit) = saved.event_algorithm_inhibit {
-        options.restore_inhibit(inhibit);
-    }
+    kept
 }
 
-/// Implement reporting persistence for `$object`, which holds the kept rows
-/// in the usual fields (`event_detector`, `event_detection_enable`,
-/// `event_history`), its Tags storage in `profile`, and a [`ReportingStore`]
-/// in `reporting_store`. It gets `with_reporting_persistence`,
-/// `written_reporting`, `clear_written_reporting`, the three setters, and
-/// [`DurableWrites`](crate::durable::DurableWrites) staging both its Tags and
-/// its reporting settings; its `durable_writes` returns
-/// `self.durable_capability()`, and its `write_property` offers each write
-/// to [`admit`] once the array index is checked.
-macro_rules! impl_reporting_persistence {
-    ($object:ty) => {
-        impl $object {
-            /// Keep the reporting settings peers write (Notification_Class,
-            /// Event_Enable, Notify_Type, Event_Detection_Enable,
-            /// Event_Message_Texts_Config and the Event_Algorithm_Inhibit
-            /// pair) in `persistence`, serving what is saved there for this
-            /// object, if anything (#2331).
-            ///
-            /// A write of one of them is then saved before the object serves
-            /// it, and refused with DEVICE / OPERATIONAL_PROBLEM, the old
-            /// value kept, when the save fails. A row a write saved wins over
-            /// its setter until [`clear_written_reporting`](Self::clear_written_reporting).
-            /// Fails when storage can't be loaded, holds another kind of
-            /// configuration, or holds what no write leaves.
-            pub fn with_reporting_persistence(
-                self,
-                persistence: alloc::sync::Arc<dyn $crate::write_config::WriteConfigPersistence>,
-            ) -> Result<Self, bacnet_types::error::Error> {
-                $crate::write_config::reporting::attach(self, persistence)
-            }
-
-            /// The reporting settings storage keeps because a write set them,
-            /// now or before a restart; all `None` without storage.
-            pub fn written_reporting(&self) -> $crate::write_config::ReportingWriteConfig {
-                $crate::write_config::reporting::written(self)
-            }
-
-            /// Drop every reporting setting a write saved, so the setters
-            /// apply again. The values served stay until a setter or a write
-            /// changes them. Saves before it returns; a save that fails keeps
-            /// the written settings and returns storage's error. Does nothing
-            /// without storage. Call it before the object joins the database,
-            /// as the setters are: it waits for its save.
-            pub fn clear_written_reporting(&mut self) -> Result<(), bacnet_types::error::Error> {
-                $crate::write_config::reporting::clear(self)
-            }
-
-            /// Block until the reporting saves queued so far have run.
-            /// Dropping the object waits for them too.
-            pub fn wait_for_reporting_saves(&self) {
-                self.reporting_store.wait_idle();
-            }
-
-            /// Set Notification_Class. On an object keeping its reporting
-            /// settings, a value a write saved wins, as for the next two.
-            pub fn set_notification_class(&mut self, class: u32) {
-                if !self.kept_over_setter(bacnet_types::enums::PropertyIdentifier::NOTIFICATION_CLASS) {
-                    self.event_detector.notification_class = class;
-                }
-            }
-
-            /// Set Event_Enable.
-            pub fn set_event_enable(&mut self, enable: bacnet_types::bitstring::EventTransitionBits) {
-                if !self.kept_over_setter(bacnet_types::enums::PropertyIdentifier::EVENT_ENABLE) {
-                    self.event_detector.event_enable = enable;
-                }
-            }
-
-            /// Set Notify_Type.
-            pub fn set_notify_type(&mut self, notify_type: bacnet_types::enums::NotifyType) {
-                if !self.kept_over_setter(bacnet_types::enums::PropertyIdentifier::NOTIFY_TYPE) {
-                    self.event_detector.notify_type = notify_type;
-                }
-            }
-
-            fn kept_over_setter(&self, property: bacnet_types::enums::PropertyIdentifier) -> bool {
-                let kept = self.reporting_store.kept_over_setter(property);
-                if kept {
-                    log_debug!(object = %self.oid, ?property, "A written reporting setting kept over a setter");
-                }
-                kept
-            }
-
-            /// The staging this object lends: its Tags and its reporting
-            /// settings, whichever it keeps.
-            #[cfg(feature = "durable-writes")]
-            fn durable_capability(&mut self) -> Option<&mut dyn $crate::durable::DurableWrites> {
-                let keeps = self.profile.capability().is_some() || self.reporting_store.attached();
-                keeps.then_some(self as _)
-            }
-        }
-
-        impl $crate::write_config::reporting::KeepsReporting for $object {
-            fn reporting_store(&mut self) -> &mut $crate::write_config::reporting::ReportingStore {
-                &mut self.reporting_store
-            }
-
-            fn reporting_store_ref(&self) -> &$crate::write_config::reporting::ReportingStore {
-                &self.reporting_store
-            }
-
-            fn reporting_rows(&self) -> $crate::write_config::reporting::ReportingRows {
-                $crate::write_config::reporting::ReportingRows {
-                    notification_class: self.event_detector.notification_class,
-                    event_enable: self.event_detector.event_enable,
-                    notify_type: self.event_detector.notify_type,
-                    event_detection_enable: self.event_detection_enable,
-                    options: self.event_history.options.clone(),
-                }
-            }
-
-            fn restore_reporting_rows(&mut self, saved: &$crate::write_config::ReportingWriteConfig) {
-                if let Some(class) = saved.notification_class {
-                    self.event_detector.notification_class = class;
-                }
-                if let Some(enable) = saved.event_enable {
-                    self.event_detector.event_enable = enable;
-                }
-                if let Some(notify_type) = saved.notify_type {
-                    self.event_detector.notify_type = notify_type;
-                }
-                if let Some(enable) = saved.event_detection_enable {
-                    self.event_detection_enable = enable;
-                }
-                $crate::write_config::reporting::restore_options(&mut self.event_history.options, saved);
-            }
-        }
-
-        impl $crate::durable::DurableWrites for $object {
-            fn stage_write(
-                &mut self,
-                property: bacnet_types::enums::PropertyIdentifier,
-                array_index: Option<u32>,
-                value: &bacnet_types::primitives::PropertyValue,
-            ) -> $crate::durable::StageStep {
-                self.stage_writes(&[$crate::durable::PendingWrite {
-                    property,
-                    array_index,
-                    value: value.clone(),
-                }])
-            }
-
-            fn stage_writes(
-                &mut self,
-                writes: &[$crate::durable::PendingWrite],
-            ) -> $crate::durable::StageStep {
-                let tags = $crate::durable::DurableWrites::stage_writes(&mut self.profile, writes);
-                if matches!(tags, $crate::durable::StageStep::Busy(_)) {
-                    return tags;
-                }
-                let reporting = $crate::write_config::reporting::stage_writes(self, writes);
-                $crate::write_config::reporting::joined(tags, reporting, |tags| {
-                    $crate::durable::DurableWrites::release_staged_write(&mut self.profile, tags);
-                })
-            }
-
-            fn release_staged_write(&mut self, staged: &$crate::durable::SaveWait) {
-                $crate::durable::DurableWrites::release_staged_write(&mut self.profile, staged);
-                $crate::write_config::reporting::release(self, staged);
-            }
-
-            fn has_staged_write(&self) -> bool {
-                $crate::durable::DurableWrites::has_staged_write(&self.profile)
-                    || $crate::write_config::reporting::has_staged(&self.reporting_store)
-            }
-
-            fn settle_forgotten_writes(&mut self) -> Option<$crate::durable::SaveWait> {
-                let tags = $crate::durable::DurableWrites::settle_forgotten_writes(&mut self.profile);
-                match (tags, $crate::write_config::reporting::settle(self)) {
-                    (Some(tags), Some(reporting)) => Some(tags.and(reporting)),
-                    (tags, reporting) => tags.or(reporting),
-                }
-            }
-
-            fn expire_staged(&mut self, now: core::time::Duration) {
-                $crate::durable::DurableWrites::expire_staged(&mut self.profile, now);
-                $crate::write_config::reporting::expire(self, now);
-            }
-        }
-    };
+/// Where an object holds the kept rows, borrowed to put saved rows back.
+pub(crate) struct RowFields<'a> {
+    pub(crate) notification_class: &'a mut u32,
+    pub(crate) event_enable: &'a mut EventTransitionBits,
+    pub(crate) notify_type: &'a mut NotifyType,
+    pub(crate) event_detection_enable: &'a mut bool,
+    pub(crate) options: &'a mut ReportingOptions,
 }
 
-pub(crate) use impl_reporting_persistence;
+impl RowFields<'_> {
+    /// Serve the rows `saved` holds, leaving the others as they are.
+    pub(crate) fn restore(self, saved: &ReportingWriteConfig) {
+        if let Some(class) = saved.notification_class {
+            *self.notification_class = class;
+        }
+        if let Some(enable) = saved.event_enable {
+            *self.event_enable = enable;
+        }
+        if let Some(notify_type) = saved.notify_type {
+            *self.notify_type = notify_type;
+        }
+        if let Some(enable) = saved.event_detection_enable {
+            *self.event_detection_enable = enable;
+        }
+        if let Some(texts) = &saved.event_message_texts_config {
+            self.options.restore_message_texts_config(texts.clone());
+        }
+        if let Some(reference) = &saved.event_algorithm_inhibit_ref {
+            self.options
+                .restore_inhibit_reference(Some(reference.clone()));
+        }
+        if let Some(inhibit) = saved.event_algorithm_inhibit {
+            self.options.restore_inhibit(inhibit);
+        }
+    }
+}
