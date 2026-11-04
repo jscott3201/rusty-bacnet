@@ -61,6 +61,8 @@ mod watched;
 mod worker;
 
 #[cfg(test)]
+mod site_samples_tests;
+#[cfg(test)]
 mod tests;
 
 use std::io::Write as _;

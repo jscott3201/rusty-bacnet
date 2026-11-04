@@ -124,7 +124,7 @@ async fn create_object_error_surfaces_the_failed_initial_value() {
         structured(result, ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED),
         ErrorDetail::FirstFailedElementNumber(2)
     );
-    assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
+    assert_eq!(client.tsm.lock().coordinated_active_count(), 0);
     client.stop().await.unwrap();
     peer.stop().await.unwrap();
 }

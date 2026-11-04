@@ -50,8 +50,8 @@ async fn a_confirmed_request_to_the_broadcast_mac_is_refused_before_any_state() 
         frames.try_recv().is_err(),
         "a refused request reached the link"
     );
-    assert_eq!(client.tsm.lock().await.pending_count(), 0);
-    assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
+    assert_eq!(client.tsm.lock().pending_count(), 0);
+    assert_eq!(client.tsm.lock().coordinated_active_count(), 0);
 
     // An unconfirmed request may be broadcast this way.
     client
@@ -153,7 +153,7 @@ async fn refuses_each_group_form(groups: GroupDestinations, forms: &[Vec<u8>], u
         frames.try_recv().is_err(),
         "a refused request reached the link"
     );
-    assert_eq!(client.tsm.lock().await.pending_count(), 0);
+    assert_eq!(client.tsm.lock().pending_count(), 0);
 
     // One device's address still takes a confirmed request.
     let sent = client
@@ -228,7 +228,7 @@ async fn a_confirmed_request_to_an_18_octet_bip6_address_is_refused() {
             "{mac:02X?}: {refused:?}"
         );
     }
-    assert_eq!(client.tsm.lock().await.pending_count(), 0);
+    assert_eq!(client.tsm.lock().pending_count(), 0);
     assert_eq!(
         client.transport().resolution_counters(),
         Bip6ResolutionCounters::default(),
@@ -269,7 +269,7 @@ async fn a_routed_request_to_this_networks_broadcast_mac_is_refused() {
         frames.try_recv().is_err(),
         "a refused request reached the link"
     );
-    assert_eq!(client.tsm.lock().await.pending_count(), 0);
-    assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
+    assert_eq!(client.tsm.lock().pending_count(), 0);
+    assert_eq!(client.tsm.lock().coordinated_active_count(), 0);
     client.stop().await.unwrap();
 }

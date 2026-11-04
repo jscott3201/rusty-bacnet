@@ -48,7 +48,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// The caller is responsible for having removed the `seg_state` entry —
     /// that removal implements the return to IDLE.
     pub(super) async fn abort_reassembly(
-        tsm: &Arc<Mutex<Tsm>>,
+        tsm: &Arc<SyncMutex<Tsm>>,
         network: &Arc<NetworkLayer<T>>,
         target: ReassemblyAbortTarget<'_>,
         invoke_id: u8,
@@ -61,7 +61,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             reply_network,
         } = target;
         Self::send_client_abort(network, reply_mac, reply_network, invoke_id, reason).await;
-        tsm.lock().await.complete_transaction_for_owner(
+        tsm.lock().complete_transaction_for_owner(
             tsm_mac,
             invoke_id,
             owner,

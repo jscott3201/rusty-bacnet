@@ -63,20 +63,24 @@ async fn write(
     }
 }
 
+// The probe below holds the device table lock across the request.
+#[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn write_priority_invalid_direct_local_routed_and_batch_never_admit_or_send() {
     let (mut client, mut peer, mut received) = setup().await;
     for priority in [0, 17, 255] {
         for path in [0, 10, 11, 999] {
             // Holding the lookup table also proves invalid input is rejected before resolution.
-            let _lookup = client.device_table.lock().await;
+            // A blocking lock now: a path that took it would hang this
+            // thread instead of timing out, and nextest ends the test.
+            let _lookup = client.device_table.lock();
             let error = timeout(Duration::from_secs(1), write(&client, path, Some(priority)))
                 .await
                 .unwrap()
                 .unwrap_err();
             assert!(matches!(error, Error::Encode(refused) if refused.label.contains("priority")));
-            assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
-            assert_eq!(client.tsm.lock().await.pending_count(), 0);
+            assert_eq!(client.tsm.lock().coordinated_active_count(), 0);
+            assert_eq!(client.tsm.lock().pending_count(), 0);
             assert!(received.try_recv().is_err());
         }
         let results = client
@@ -100,7 +104,7 @@ async fn write_priority_invalid_direct_local_routed_and_batch_never_admit_or_sen
             .await
             .is_err()
     );
-    assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
+    assert_eq!(client.tsm.lock().coordinated_active_count(), 0);
     client.stop().await.unwrap();
     peer.stop().await.unwrap();
 }
@@ -163,7 +167,7 @@ async fn write_priority_valid_direct_local_routed_preserve_exact_wire_and_comple
             };
             let (result, ()) = tokio::join!(send, reply);
             result.unwrap();
-            assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
+            assert_eq!(client.tsm.lock().coordinated_active_count(), 0);
         }
     }
     client.stop().await.unwrap();

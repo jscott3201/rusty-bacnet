@@ -475,7 +475,7 @@ async fn managed_cov_subscription_stop_cancels_in_flight_renewal() {
     timeout(Duration::from_millis(500), managed.stop())
         .await
         .expect("managed stop should cancel in-flight renewal promptly");
-    assert_eq!(client.tsm.lock().await.pending_count(), 0);
+    assert_eq!(client.tsm.lock().pending_count(), 0);
 
     let mut client = match Arc::try_unwrap(client) {
         Ok(client) => client,
@@ -548,7 +548,7 @@ async fn managed_cov_subscription_records_failure_without_event_receiver() {
         panic!("expected durable RenewalFailed event");
     };
     assert_eq!(error, "BACnet abort: tsm-timeout");
-    assert_eq!(client.tsm.lock().await.pending_count(), 0);
+    assert_eq!(client.tsm.lock().pending_count(), 0);
 
     managed.stop().await;
     let mut client = match Arc::try_unwrap(client) {

@@ -500,7 +500,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 source_address: src_addr,
                             };
                             let status = {
-                                let mut table = device_table.lock().await;
+                                let mut table = device_table.lock();
                                 table.upsert_with_result(device.clone())
                             };
                             match status {
@@ -634,39 +634,42 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 // Hold the TSM lock through the route lookup and try_send.
                 // Terminal completion uses this same lock, so a raw sender
                 // entry cannot outlive the authoritative phase for delivery.
-                let tsm_guard = tsm.lock().await;
+                // Both locks are blocking ones, released before any await.
                 let coordinator_apdu = Apdu::SegmentAck(sa.clone());
-                match tsm_guard.coordinated_segment_ack_phase(
-                    tsm_mac,
-                    invoke_id,
-                    &canonical_peer,
-                    &coordinator_apdu,
-                ) {
-                    SegmentAckPhase::SegmentedRequest(owner) => {
-                        // Lock order is TSM then SegmentACK routes. Setup and
-                        // cleanup never hold both locks. Compat mode: SegmentACK
-                        // delivery stays provenance-agnostic (RB-09 later).
-                        let send_key = (MacAddr::from_slice(tsm_mac), invoke_id);
-                        let senders = seg_ack_senders.lock().await;
-                        if let Some(route) = senders
-                            .get(&send_key)
-                            .filter(|route| route.owner.same_as(&owner))
-                        {
-                            let _ = route.sender.try_send(sa);
+                let outstanding = {
+                    let tsm_guard = tsm.lock();
+                    match tsm_guard.coordinated_segment_ack_phase(
+                        tsm_mac,
+                        invoke_id,
+                        &canonical_peer,
+                        &coordinator_apdu,
+                    ) {
+                        SegmentAckPhase::SegmentedRequest(owner) => {
+                            // Lock order is TSM then SegmentACK routes. Setup and
+                            // cleanup never hold both locks. Compat mode: SegmentACK
+                            // delivery stays provenance-agnostic (RB-09 later).
+                            let send_key = (MacAddr::from_slice(tsm_mac), invoke_id);
+                            let senders = seg_ack_senders.lock();
+                            if let Some(route) = senders
+                                .get(&send_key)
+                                .filter(|route| route.owner.same_as(&owner))
+                            {
+                                let _ = route.sender.try_send(sa);
+                            }
+                            return;
                         }
-                        return;
+                        SegmentAckPhase::Outstanding => true,
+                        SegmentAckPhase::CoordinatorRejected => return,
+                        SegmentAckPhase::Idle => false,
                     }
-                    SegmentAckPhase::Outstanding => {
-                        debug!(
-                            invoke_id,
-                            "Discarding duplicate SegmentAck for an outstanding transaction"
-                        );
-                        return;
-                    }
-                    SegmentAckPhase::CoordinatorRejected => return,
-                    SegmentAckPhase::Idle => {}
+                };
+                if outstanding {
+                    debug!(
+                        invoke_id,
+                        "Discarding duplicate SegmentAck for an outstanding transaction"
+                    );
+                    return;
                 }
-                drop(tsm_guard);
 
                 // IDLE (5.4.4.1) `UnexpectedSegmentInfoReceived`: nothing is
                 // outstanding, so a server SegmentACK earns a client Abort.

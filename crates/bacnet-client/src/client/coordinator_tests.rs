@@ -35,7 +35,7 @@ async fn receive_invoke_id(
 async fn wait_for_active_count(client: &BACnetClient<LoopbackTransport>, expected: usize) {
     timeout(Duration::from_secs(2), async {
         loop {
-            if client.tsm.lock().await.coordinated_active_count() == expected {
+            if client.tsm.lock().coordinated_active_count() == expected {
                 return;
             }
             tokio::task::yield_now().await;
@@ -49,7 +49,6 @@ async fn seed_pending_transaction(client: &BACnetClient<LoopbackTransport>) {
     client
         .tsm
         .lock()
-        .await
         .register_coordinated_transaction_with_progress(
             MacAddr::from_slice(ROUTER_MAC),
             CanonicalPeer::direct(ROUTER_MAC),
@@ -67,10 +66,10 @@ async fn client_stop_releases_coordinated_pending_transactions() {
         .await
         .unwrap();
     seed_pending_transaction(&client).await;
-    assert_eq!(client.tsm.lock().await.coordinated_active_count(), 1);
+    assert_eq!(client.tsm.lock().coordinated_active_count(), 1);
 
     client.stop().await.unwrap();
-    assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
+    assert_eq!(client.tsm.lock().coordinated_active_count(), 0);
 }
 
 #[tokio::test]
@@ -82,10 +81,10 @@ async fn client_drop_releases_coordinated_pending_transactions() {
         .unwrap();
     seed_pending_transaction(&client).await;
     let tsm = Arc::clone(&client.tsm);
-    assert_eq!(tsm.lock().await.coordinated_active_count(), 1);
+    assert_eq!(tsm.lock().coordinated_active_count(), 1);
 
     drop(client);
-    assert_eq!(tsm.lock().await.coordinated_active_count(), 0);
+    assert_eq!(tsm.lock().coordinated_active_count(), 0);
 }
 
 #[tokio::test]
@@ -103,8 +102,8 @@ async fn initial_send_failure_cancels_the_exact_coordinated_lease() {
             .await
             .is_err()
     );
-    assert_eq!(client.tsm.lock().await.pending_count(), 0);
-    assert_eq!(client.tsm.lock().await.coordinated_active_count(), 0);
+    assert_eq!(client.tsm.lock().pending_count(), 0);
+    assert_eq!(client.tsm.lock().coordinated_active_count(), 0);
 
     client.stop().await.unwrap();
 }
