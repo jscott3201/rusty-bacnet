@@ -29,7 +29,7 @@ async fn over_long_routed_path_macs_fail_before_registration_or_emission() {
             .await;
         assert!(matches!(result, Err(Error::Encoding(_))), "{result:?}");
         assert!(outbound.try_recv().is_err());
-        assert_eq!(client.tsm.lock().await.pending_count(), 0);
+        assert_eq!(client.tsm.lock().pending_count(), 0);
         for refused in [
             client
                 .configure_routed_path_max_npdu(&too_long, DNET, 1497)

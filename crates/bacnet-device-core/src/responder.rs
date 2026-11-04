@@ -229,6 +229,11 @@ impl Responder {
         })
     }
 
+    /// The Device identity this responder answers for.
+    pub fn identity(&self) -> &DeviceIdentity {
+        &self.identity
+    }
+
     /// Resolve the Network_Port wildcard instance to `port`, the port the
     /// requests arrive on, while the database registers it.
     pub fn with_registered_port(mut self, port: ObjectIdentifier) -> Self {

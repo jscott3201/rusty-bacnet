@@ -22,6 +22,7 @@ pub mod cov;
 pub mod discovery;
 pub mod read;
 pub mod reply;
+pub mod report;
 pub mod responder;
 pub mod write;
 

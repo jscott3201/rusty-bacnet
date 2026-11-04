@@ -73,10 +73,7 @@ impl FullCapacityFixture {
             });
         }
 
-        assert_eq!(
-            fixture.client.tsm.lock().await.pending_count(),
-            SESSION_CAPACITY
-        );
+        assert_eq!(fixture.client.tsm.lock().pending_count(), SESSION_CAPACITY);
         fixture
     }
 
@@ -104,7 +101,7 @@ impl FullCapacityFixture {
 
     async fn shadow_receive_state(&self) -> HashMap<SegKey, SegmentedReceiveState> {
         let owners = {
-            let mut tsm = self.client.tsm.lock().await;
+            let mut tsm = self.client.tsm.lock();
             self.sessions
                 .iter()
                 .map(|session| {
@@ -159,7 +156,7 @@ impl FullCapacityFixture {
         for session in self.sessions {
             expect_abort_result(session.task, AbortReason::BUFFER_OVERFLOW).await;
         }
-        assert_eq!(self.client.tsm.lock().await.pending_count(), 0);
+        assert_eq!(self.client.tsm.lock().pending_count(), 0);
 
         let mut client = Arc::try_unwrap(self.client)
             .unwrap_or_else(|_| panic!("request tasks retained the client"));
@@ -281,10 +278,7 @@ async fn full_receive_capacity_aborts_only_the_new_transaction_and_reclaims_its_
     )
     .await;
     expect_abort_result(unsupported_task, AbortReason::INVALID_APDU_IN_THIS_STATE).await;
-    assert_eq!(
-        fixture.client.tsm.lock().await.pending_count(),
-        SESSION_CAPACITY
-    );
+    assert_eq!(fixture.client.tsm.lock().pending_count(), SESSION_CAPACITY);
 
     let (rejected_invoke_id, rejected_task) = fixture.start_pending_request(0xA3).await;
     send_to_client(
@@ -300,10 +294,7 @@ async fn full_receive_capacity_aborts_only_the_new_transaction_and_reclaims_its_
     )
     .await;
     expect_abort_result(rejected_task, AbortReason::BUFFER_OVERFLOW).await;
-    assert_eq!(
-        fixture.client.tsm.lock().await.pending_count(),
-        SESSION_CAPACITY
-    );
+    assert_eq!(fixture.client.tsm.lock().pending_count(), SESSION_CAPACITY);
 
     send_to_client(
         &fixture.server,
@@ -337,7 +328,7 @@ async fn full_receive_capacity_aborts_only_the_new_transaction_and_reclaims_its_
     reclaimed_response.extend_from_slice(b"complete");
     expect_response(reclaimed.task, &reclaimed_response).await;
     assert_eq!(
-        fixture.client.tsm.lock().await.pending_count(),
+        fixture.client.tsm.lock().pending_count(),
         SESSION_CAPACITY - 1
     );
 
@@ -356,7 +347,7 @@ async fn full_receive_capacity_aborts_only_the_new_transaction_and_reclaims_its_
     expect_segment_ack(&mut fixture.rx, replacement_invoke_id, 1).await;
     expect_response(replacement_task, b"replacement-response").await;
     assert_eq!(
-        fixture.client.tsm.lock().await.pending_count(),
+        fixture.client.tsm.lock().pending_count(),
         SESSION_CAPACITY - 1
     );
 

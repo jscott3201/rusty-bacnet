@@ -65,12 +65,10 @@ async fn routed_confirmed_request_honors_discovered_peer_max_apdu() {
         .await
         .unwrap();
 
-    client.device_table.lock().await.upsert(routed_peer(
-        128,
-        &router_mac,
-        remote_network,
-        &remote_mac,
-    ));
+    client
+        .device_table
+        .lock()
+        .upsert(routed_peer(128, &router_mac, remote_network, &remote_mac));
 
     let service_data: Vec<u8> = (0..200u16).map(|i| i as u8).collect();
     let expected_data = service_data.clone();
@@ -176,12 +174,10 @@ async fn routed_confirmed_request_rejects_subminimum_peer_limit() {
         .await
         .unwrap();
 
-    client.device_table.lock().await.upsert(routed_peer(
-        3,
-        &router_mac,
-        remote_network,
-        &remote_mac,
-    ));
+    client
+        .device_table
+        .lock()
+        .upsert(routed_peer(3, &router_mac, remote_network, &remote_mac));
 
     let err = client
         .confirmed_request_routed(
@@ -246,7 +242,7 @@ async fn manual_routed_registration_honors_seeded_peer_limit() {
         .unwrap();
 
     // The registration must preserve every supplied field.
-    let row = client.device_table.lock().await.get(3003).cloned().unwrap();
+    let row = client.device_table.lock().get(3003).cloned().unwrap();
     assert_eq!(row.mac_address.as_slice(), &router_mac);
     assert_eq!(row.source_network, Some(remote_network));
     assert_eq!(
@@ -374,7 +370,7 @@ async fn manual_routed_registration_rejects_empty_addresses() {
     }
 
     assert!(
-        client.device_table.lock().await.get(3003).is_none(),
+        client.device_table.lock().get(3003).is_none(),
         "a refused registration must not create a row"
     );
 }
@@ -393,7 +389,7 @@ async fn legacy_add_device_creates_local_row_only() {
     let mac = vec![192, 168, 1, 100, 0xBA, 0xC0];
     client.add_device(1234, &mac).await.unwrap();
 
-    let dt = client.device_table.lock().await;
+    let dt = client.device_table.lock();
     let local = dt.get_by_mac(&mac).expect("local lookup must find the row");
     assert_eq!(local.object_identifier.instance_number(), 1234);
     assert!(

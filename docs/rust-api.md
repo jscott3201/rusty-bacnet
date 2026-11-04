@@ -7691,16 +7691,45 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   of one object reports to its ordinary and Single subscriptions: it
   compares each with the observation its last delivered notification
   established, skips a confirmed one whose report is out, encodes each
-  notification's parameters and spends the input's `EventBudget`. A
-  confirmed report takes the host's lease (an invoke ID, an in-flight
-  slot) and begins its flight; every report comes back through
+  notification's parameters and spends the input's `EventBudget`. Every
+  report takes the host's lease first (for a confirmed one the server's
+  in-flight slot and invoke ID, for the `Reporter` room in its outbox), and
+  a confirmed one then begins its flight; every report comes back through
   `delivered`, where `Delivery::Sent` commits an unconfirmed one and an Ack
   commits what `begin_confirmed` kept and names the references owed a
   fresh look. The values a notification carries are in `cov::prepare`,
   `flags`, `reported`, `value_source` and `life_safety`, and the Device's
-  two subscription lists in `cov::active`. `bacnet_server::cov` keeps
-  `CovSubscriptionTable` with its API, which runs on it, and the atomics and
-  in-flight tracker; the `Responder` doesn't dispatch the COV services yet.
+  two subscription lists in `cov::active`, with `ActiveCovOverlay`, which
+  answers both from a `CovTable` through any read that takes a
+  `ReadOverlay`. `bacnet_server::cov` keeps `CovSubscriptionTable` with its
+  API, which runs on it, and the atomics and in-flight tracker.
+- `report` (#2303): `Reporter`, the `Responder` with COV reporting, for
+  firmware that owns its database. `handle(db, peer, request, now, out)`
+  answers SubscribeCOV and SubscribeCOVProperty and queues the first
+  notification, hands every other request to the `Responder`, reads the
+  Device's lists through the overlay, and queues what a write changes (a
+  Life Safety object from the values the write changed). `capture` and
+  `changed` do the same for the host's own changes. The outbox is one
+  buffer and one queue allocated at build (`OutboxLimits`: entries and
+  octets). A subscription holds one unconfirmed entry: a newer report
+  replaces it in its turn, so one that changes faster than the link sends
+  can't crowd out the others. A report the outbox has no room for leaves
+  its subscription owed, looked at again as room frees. A confirmed
+  report's answers are cut off at `FlightTiming::cutoff` from when the
+  table began it, however late `pop` sent it, as the server's worker's
+  are. `pop(bindings, ids, now, out)` appends the next
+  APDU and returns a `Notification` (token, `Destination`, `NotifyService`,
+  invoke ID, priority); a confirmed one takes an invoke ID from the host's
+  `InvokeIds`, which the device's own requests share. `reply(from, apdu,
+  ids, now)` matches a SimpleACK, Error, Reject or Abort by invoke ID and
+  peer; `next_deadline` and `on_deadline` run lifetimes, abandoned reports,
+  timeouts (resent with the same invoke ID while retries last, then failed)
+  and the looks owed. The host reports each send through `delivered`.
+  `ReportConfig` holds the `CovPolicy`, the outbox and the confirmed
+  timing; `ReporterCounters` what it counted. Build the database with
+  `report::SERVICES`, which adds the two subscribe services to the
+  `Responder`'s. The COV-multiple services stay with `bacnet-server`
+  (#2320).
 - `reply`: `error_apdu`, the one map from an `Error` to its Reject or Error
   PDU (never an Abort: a work or byte limit is the caller's Abort), and the
   refusals a host sends for a service it doesn't run.

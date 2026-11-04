@@ -86,6 +86,11 @@ fn properties_for(object_identifier: ObjectIdentifier) -> Option<&'static [Prope
 }
 
 impl LifeSafetyCovSnapshots {
+    /// Whether `object_identifier`'s pre-mutation state is held.
+    pub fn holds(&self, object_identifier: ObjectIdentifier) -> bool {
+        self.held.contains(&object_identifier)
+    }
+
     /// Capture one object's pre-mutation state.
     pub fn capture_oid(db: &ObjectDatabase, object_identifier: ObjectIdentifier) -> Self {
         Self::capture_oids(db, [object_identifier])

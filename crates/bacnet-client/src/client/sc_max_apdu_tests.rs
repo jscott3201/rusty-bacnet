@@ -178,7 +178,7 @@ async fn client_segments_known_device_requests_to_live_transport_limit() {
     assert_eq!(client.transport_max_apdu_length(), 478);
     assert_eq!(client.max_apdu_length(), 206);
 
-    client.device_table.lock().await.upsert(DiscoveredDevice {
+    client.device_table.lock().upsert(DiscoveredDevice {
         object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 42).unwrap(),
         mac_address: MacAddr::from_slice(&peer_mac),
         max_apdu_length: 1476,
