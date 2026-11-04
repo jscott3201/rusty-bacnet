@@ -1,6 +1,6 @@
 //! A B/IP profile with a multicast group (#941): the editor's Group and
 //! Group TTL fields, and the summary that shows the group in place of the
-//! broadcast address.
+//! broadcast address; also the summary's port-sharing line (#2366).
 
 use super::*;
 use crate::tui::app::connection::{Connection, Screen};
@@ -131,5 +131,30 @@ fn multicast_profile_frames_at_minimum_and_full_size() {
         let text = screen(&mut app, w, h);
         assert!(text.contains("239.255.66.1"), "{text}");
         assert_snapshot!(format!("multicast_editor_{w}x{h}"), text);
+    }
+}
+
+/// A profile with `share_port` set says so in its preview; one without it
+/// shows no such line.
+#[test]
+fn the_preview_shows_a_shared_port_only_when_set() {
+    for share in [false, true] {
+        let mut profile = member();
+        profile.bip_mut().share_port = share;
+        let mut app = profile_app();
+        worker(
+            &mut app,
+            WorkerEvent::Profile(Ok(Reply::Loaded {
+                name: "group".into(),
+                profile,
+                checks: Default::default(),
+            })),
+        );
+        let text = screen(&mut app, 120, 40);
+        assert_eq!(
+            text.contains("Port: shared with other programs"),
+            share,
+            "{text}"
+        );
     }
 }

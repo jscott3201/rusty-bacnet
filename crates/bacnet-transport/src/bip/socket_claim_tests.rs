@@ -399,4 +399,144 @@ mod linux {
         })
         .await;
     }
+
+    /// A peer's subnet-directed and limited broadcasts on loopback, which a
+    /// member's broadcast listeners take and drop (#2366).
+    fn send_subnet_broadcasts(port: u16) {
+        let peer = peer();
+        for broadcast in [Ipv4Addr::new(127, 255, 255, 255), Ipv4Addr::BROADCAST] {
+            peer.send_to(&frame(0x0B), (broadcast, port)).unwrap();
+        }
+    }
+
+    /// A member whose configured broadcast address is neither its subnet's
+    /// nor 255.255.255.255 still starts with its group on its own port, as
+    /// it did on `0.0.0.0`, and its listeners still hear the subnet-directed
+    /// and limited broadcasts, worked out from the netmask: at start, and at
+    /// the restart after a remote group write.
+    #[tokio::test]
+    async fn an_unusual_broadcast_address_never_refuses_the_start() {
+        rerun_on_lost_port(async || {
+            let unusual = Ipv4Addr::new(192, 0, 2, 255);
+            for written in [false, true] {
+                let port = free_port();
+                let mut member = BipTransport::new(Ipv4Addr::LOCALHOST, port, unusual);
+                if written {
+                    let _rx = member.start().await.map_err(bind_error)?;
+                    let view = member.bip_port().unwrap().multicast.unwrap();
+                    view.activate(GROUP.octets()).map_err(bind_error)?;
+                    member.stop().await.unwrap();
+                } else {
+                    member.set_multicast(Some(own_port_group())).unwrap();
+                }
+                let mut rx = member.start().await.map_err(bind_error)?;
+                let own = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+                assert_eq!(primary_address(&member), own, "written: {written}");
+                send_subnet_broadcasts(port);
+                hears_nothing(&mut rx).await;
+                let counters = member.receive_counters();
+                assert_eq!(counters.listener_mismatch, 2, "{written}: {counters:?}");
+                member.stop().await.unwrap();
+            }
+            Ok(())
+        })
+        .await;
+    }
+
+    /// A role switch whose listener fails is undone: the primary's
+    /// `SO_REUSEPORT` is clear again, the group stays as it was, and the
+    /// next activation switches and joins.
+    #[tokio::test]
+    async fn a_failed_switch_is_undone() {
+        rerun_on_lost_port(async || {
+            let port = free_port();
+            let mut node = BipTransport::new(Ipv4Addr::LOCALHOST, port, Ipv4Addr::LOCALHOST);
+            let mut rx = node.start().await.map_err(bind_error)?;
+            let primary = || socket2::SockRef::from(&***node.socket.as_ref().unwrap());
+            let view = node.bip_port().unwrap().multicast.unwrap();
+            node.multicast
+                .fail_next_switch
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            assert!(view.activate(GROUP.octets()).is_err());
+            assert!(!primary().reuse_port().unwrap());
+            assert_eq!(node.multicast(), None);
+            // Nothing listens on the group's port for the node: a datagram
+            // sent there is not heard.
+            peer().send_to(&frame(0x0B), (GROUP, port)).unwrap();
+            hears_nothing(&mut rx).await;
+            view.activate(GROUP.octets()).map_err(bind_error)?;
+            assert!(primary().reuse_port().unwrap());
+            peer().send_to(&frame(0x0B), (GROUP, port)).unwrap();
+            assert!(next(&mut rx).await.link_layer_group);
+            node.stop().await.unwrap();
+            Ok(())
+        })
+        .await;
+    }
+
+    /// A group activated through the Network Port on a member bound by
+    /// address moves its listener to the new group on its own port, with no
+    /// switch: the primary keeps its address and no reuse option.
+    #[tokio::test]
+    async fn a_group_activated_on_a_member_bound_by_address_joins_without_a_switch() {
+        rerun_on_lost_port(async || {
+            let port = free_port();
+            let mut member = BipTransport::new(Ipv4Addr::LOCALHOST, port, Ipv4Addr::LOCALHOST);
+            member.set_multicast(Some(own_port_group())).unwrap();
+            let mut rx = member.start().await.map_err(bind_error)?;
+            let moved = Ipv4Addr::new(239, 255, 94, 4);
+            let view = member.bip_port().unwrap().multicast.unwrap();
+            view.activate(moved.octets()).map_err(bind_error)?;
+            assert_eq!(member.multicast(), Some(BipMulticast::new(moved).unwrap()));
+            let primary = socket2::SockRef::from(&***member.socket.as_ref().unwrap());
+            assert!(!primary.reuse_port().unwrap());
+            let own = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+            assert_eq!(primary_address(&member), own);
+            let peer = peer();
+            peer.send_to(&frame(0x0B), (GROUP, port)).unwrap();
+            hears_nothing(&mut rx).await;
+            peer.send_to(&frame(0x0B), (moved, port)).unwrap();
+            assert!(next(&mut rx).await.link_layer_group);
+            member.stop().await.unwrap();
+            Ok(())
+        })
+        .await;
+    }
+
+    /// A BBMD serving its group on its own port (#941) binds by address
+    /// too: a broadcast heard through the group goes up, and on to its
+    /// two-hop BDT peer as a Forwarded-NPDU from the BBMD's address.
+    #[tokio::test]
+    async fn a_group_bbmd_on_its_own_port_binds_by_address_and_forwards() {
+        rerun_on_lost_port(async || {
+            let port = free_port();
+            let bdt_peer = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+            bdt_peer
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let row = |port| crate::bbmd::BdtEntry {
+                ip: Ipv4Addr::LOCALHOST.octets(),
+                port,
+                broadcast_mask: [0xFF; 4],
+            };
+            let peer_port = bdt_peer.local_addr().unwrap().port();
+            let mut bbmd = BipTransport::new(Ipv4Addr::LOCALHOST, port, Ipv4Addr::LOCALHOST);
+            bbmd.set_multicast(Some(own_port_group())).unwrap();
+            bbmd.enable_bbmd(vec![row(port), row(peer_port)]);
+            let mut rx = bbmd.start().await.map_err(bind_error)?;
+            let own = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+            assert_eq!(primary_address(&bbmd), own);
+            let member = peer();
+            member.send_to(&frame(0x0B), (GROUP, port)).unwrap();
+            assert!(next(&mut rx).await.link_layer_group);
+            let mut forwarded = [0; 64];
+            let (len, from) = bdt_peer.recv_from(&mut forwarded).unwrap();
+            assert_eq!(from, own);
+            assert_eq!(&forwarded[..2], &[0x81, 0x04]);
+            assert!(forwarded[..len].ends_with(WHO_IS));
+            bbmd.stop().await.unwrap();
+            Ok(())
+        })
+        .await;
+    }
 }

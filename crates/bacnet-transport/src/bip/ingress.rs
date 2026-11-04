@@ -184,8 +184,8 @@ impl Listeners {
     /// Read a B/IP-M node's new group listener in place of the old one, or,
     /// with `None`, no listener: an activation moved the group or ended it
     /// (multicast.rs), and opened the listener already, so nothing here can
-    /// fail. The group's listener has a slot of its own. A datagram the old listener read ahead and still held is dropped
-    /// with it: it was sent to the group being left. From here on the
+    /// fail. The group's listener has a slot of its own. A datagram the old
+    /// listener read ahead and still held is dropped with it: it was sent to the group being left. From here on the
     /// sockets are read in arrival order, as with any listener; the primary
     /// reports no receive stamps unless it started with a listener, and
     /// read order then decides.

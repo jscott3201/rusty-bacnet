@@ -290,12 +290,19 @@ fn io_summary(error: &std::io::Error) -> String {
 fn os_error(error: &std::io::Error) -> Option<&std::io::Error> {
     let mut next: Option<&(dyn std::error::Error + 'static)> = Some(error);
     while let Some(current) = next {
-        if let Some(io) = current.downcast_ref::<std::io::Error>()
-            && io.raw_os_error().is_some()
-        {
+        let Some(io) = current.downcast_ref::<std::io::Error>() else {
+            next = current.source();
+            continue;
+        };
+        if io.raw_os_error().is_some() {
             return Some(io);
         }
-        next = current.source();
+        // An `io::Error`'s `source()` skips its own payload, which may be
+        // another `io::Error`.
+        next = match io.get_ref() {
+            Some(inner) => Some(inner),
+            None => std::error::Error::source(io),
+        };
     }
     None
 }
@@ -518,5 +525,12 @@ mod tests {
             "{}",
             failure.detail
         );
+        // An `io::Error` that wraps the OS error directly, whose `source()`
+        // skips it.
+        let os = std::net::UdpSocket::bind(holder.local_addr().unwrap()).unwrap_err();
+        let direct = std::io::Error::new(os.kind(), os);
+        assert_eq!(direct.raw_os_error(), None);
+        let failure = Failure::of(&bacnet_types::error::Error::Transport(direct));
+        assert_eq!(failure.summary, "address in use");
     }
 }

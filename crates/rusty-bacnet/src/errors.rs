@@ -232,12 +232,19 @@ fn transport_error(io: std::io::Error) -> PyErr {
 fn os_error(error: &std::io::Error) -> Option<&std::io::Error> {
     let mut next: Option<&(dyn std::error::Error + 'static)> = Some(error);
     while let Some(current) = next {
-        if let Some(io) = current.downcast_ref::<std::io::Error>()
-            && io.raw_os_error().is_some()
-        {
+        let Some(io) = current.downcast_ref::<std::io::Error>() else {
+            next = current.source();
+            continue;
+        };
+        if io.raw_os_error().is_some() {
             return Some(io);
         }
-        next = current.source();
+        // An `io::Error`'s `source()` skips its own payload, which may be
+        // another `io::Error`.
+        next = match io.get_ref() {
+            Some(inner) => Some(inner),
+            None => std::error::Error::source(io),
+        };
     }
     None
 }
@@ -617,6 +624,11 @@ mod tests {
                     .extract()
                     .unwrap();
                 assert!(shown.starts_with("UDP port in use; share it"), "{shown}");
+                // An `io::Error` that wraps the OS error directly, whose
+                // `source()` skips it.
+                let direct = std::io::Error::new(kind, std::io::Error::from_raw_os_error(code));
+                assert_eq!(direct.raw_os_error(), None);
+                assert_eq!(errno(&to_py_err(Error::Transport(direct))), Some(code));
             }
         });
     }

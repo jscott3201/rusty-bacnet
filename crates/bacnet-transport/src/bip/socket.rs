@@ -67,8 +67,13 @@
 //! broadcast listeners (whose broadcasts the node drops, as a member takes
 //! broadcasts only from its group) and the group's listener. Every squatter,
 //! on the wildcard or the interface address, with or without
-//! `SO_REUSEADDR` or `SO_REUSEPORT`, is then refused, and the configured
-//! broadcast address must pass the per-address check. A B/IP-M node always
+//! `SO_REUSEADDR` or `SO_REUSEPORT`, is then refused. Its listeners hear
+//! what the `0.0.0.0` socket heard: 255.255.255.255 and the interface's own
+//! subnet broadcast from the reported netmask
+//! ([`group_shape_listener_addresses`]). Unlike a node that asks for
+//! per-address binding, it doesn't check the configured broadcast address,
+//! and a broadcast listener that can't bind is left out with a warning; only
+//! the address socket and the group's listener can fail the start. A B/IP-M node always
 //! has an explicit interface (`set_multicast` refuses `0.0.0.0`); without
 //! one it would bind the wildcard way. A node that shares its wildcard port
 //! on request keeps the wildcard way, as do macOS, where the group's
@@ -453,17 +458,34 @@ pub(super) fn bind(plan: BindPlan) -> io::Result<BoundSockets> {
              address and a nonzero port",
         ));
     }
-    check_broadcast(&plan)?;
+    if plan.by_address {
+        check_broadcast(&plan)?;
+    }
     let primary = bound(SocketRole::Address, plan.interface)
         .map_err(|e| held(&plan, SocketRole::Address, e))?;
     let mut listeners = Vec::new();
-    for ip in listener_addresses(plan.interface, plan.broadcast) {
-        let listener = bound(SocketRole::BroadcastListener, ip).map_err(|e| {
-            let port = plan.port;
-            let context = format!("could not bind the B/IP broadcast listener to {ip}:{port}");
-            super::listener_error::listener_error(context, e)
-        })?;
-        listeners.push(listener);
+    if plan.by_address {
+        for ip in listener_addresses(plan.interface, plan.broadcast) {
+            let listener = bound(SocketRole::BroadcastListener, ip).map_err(|e| {
+                let port = plan.port;
+                let context = format!("could not bind the B/IP broadcast listener to {ip}:{port}");
+                super::listener_error::listener_error(context, e)
+            })?;
+            listeners.push(listener);
+        }
+    } else {
+        for ip in group_shape_listener_addresses(&plan) {
+            match bound(SocketRole::BroadcastListener, ip) {
+                Ok(listener) => listeners.push(listener),
+                Err(error) => tracing::warn!(
+                    %ip,
+                    port = plan.port,
+                    %error,
+                    "Could not bind a B/IP broadcast listener; the multicast node goes on \
+                     without it"
+                ),
+            }
+        }
     }
     let group = join_group(&plan, &primary)?;
     Ok(BoundSockets {
@@ -471,6 +493,40 @@ pub(super) fn bind(plan: BindPlan) -> io::Result<BoundSockets> {
         listeners,
         group,
     })
+}
+
+/// Where a Linux B/IP-M node's group-driven per-address shape listens for
+/// broadcasts (module docs, #2366): what its `0.0.0.0` socket heard before,
+/// 255.255.255.255 and the interface's own subnet broadcast from the netmask
+/// the host reports, whatever broadcast address is configured. Without a
+/// netmask it listens on 255.255.255.255 alone. Neither case refuses the
+/// start: an unknown netmask, or a configured broadcast address that is
+/// neither of those, is logged at warn and the start goes on.
+fn group_shape_listener_addresses(plan: &BindPlan) -> Vec<Ipv4Addr> {
+    let (interface, broadcast) = (plan.interface, plan.broadcast);
+    let subnet = plan
+        .local
+        .and_then(|local| local.subnet_broadcast(interface));
+    if subnet.is_none() {
+        tracing::warn!(
+            %interface,
+            "No netmask reported for the B/IP multicast node's interface; listening for \
+             limited broadcasts only"
+        );
+    }
+    let usual = broadcast.is_broadcast()
+        || Some(broadcast) == subnet
+        || (broadcast == interface && interface.is_loopback());
+    if !usual && subnet.is_some() {
+        tracing::warn!(
+            %broadcast,
+            ?subnet,
+            "Configured broadcast for this multicast node matches neither its subnet nor \
+             255.255.255.255; kept as configured"
+        );
+    }
+    let directed = subnet.filter(|subnet| !subnet.is_broadcast() && *subnet != interface);
+    directed.into_iter().chain([Ipv4Addr::BROADCAST]).collect()
 }
 
 /// How the wildcard socket binds its port (module docs).
