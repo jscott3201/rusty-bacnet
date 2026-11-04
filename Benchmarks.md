@@ -1370,6 +1370,39 @@ multi-thread one, WriteProperty by 1,109.9 and 1,089.4, and
 ReadPropertyMultiple by 921.1 and 1,162.5, with every pair lower and
 allocations unchanged.
 
+### 10.9 Allocations on the request path (#1978 items 3, 5 and 4)
+
+Three changes aimed at allocations, each counted against its own baseline
+on dev after section 10.8's changes
+([benchmarks/results/perf-s5](benchmarks/results/perf-s5/README.md)):
+
+- **The ReadProperty value.** A ReadProperty reply encoded the value into
+  a buffer of its own and copied it twice on the way into the reply. It
+  is now encoded straight into the reply, with the same bytes. That saves
+  about 460 to 475 instructions and two allocator calls per ReadProperty
+  request (22 to 20), on both runtimes, with every pair lower.
+  WriteProperty and ReadPropertyMultiple don't take this path and are not
+  higher.
+- **The B/IP send buffer.** Each B/IP unicast copied the network-layer
+  message into a new buffer behind its four-octet header. The socket now
+  sends the header and the message as one datagram without the copy (a
+  vectored send), with the same bytes on the wire. That saves about 420
+  instructions per ReadProperty and WriteProperty request and 445 to 610
+  per ten-object ReadPropertyMultiple, on both runtimes, and two
+  allocator calls per round trip (one per send). Every ReadProperty pair
+  was lower. Callgrind counts only the program's own instructions, so the
+  kernel's side of the vectored send isn't in these figures.
+- **Not accepted: one box per request handler.** Every confirmed service
+  but ReadProperty boxed its handler a second time. Removing that box saved
+  one allocator call and about 270 to 310 instructions per WriteProperty
+  request, but on the multi-thread runtime only 1.6 times the run-to-run
+  floor, where the rule asks for more than 3. ReadProperty did not rise.
+  The change was dropped.
+
+Added up from the two comparisons, the accepted changes take about 880 to
+900 instructions and four allocator calls (22 to 18) off a ReadProperty
+round trip.
+
 ## 11. How to reproduce
 
 Run one suite at a time on an idle machine. Each Criterion suite takes 1 to
