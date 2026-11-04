@@ -316,6 +316,11 @@ fn screen_hints(app: &App, theme: &Theme, tab_focus: bool) -> Vec<Part> {
             parts.push(h(3, ":find", "NAME"));
             parts.push(h(8, "Esc", "back"));
         }
+        // Off B/IP no table is read (#2378): only the Networks tab works.
+        Screen::Network if app.transport != "BIP" => {
+            parts.push(h(5, "Tab", "networks"));
+            parts.push(h(8, "Esc", "back"));
+        }
         Screen::Network => {
             parts.push(h(6, "r", "read tables"));
             parts.push(h(4, "m", "survey BBMDs"));

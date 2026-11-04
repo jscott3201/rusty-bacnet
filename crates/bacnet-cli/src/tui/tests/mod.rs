@@ -14,7 +14,8 @@
 //! - `event_loop`: the `select!` loop on a `TestBackend` with scripted input.
 //! - `network`: the Network screen against real B/IP transports and BBMDs
 //!   on loopback; `network_frames`: its frames from synthetic events;
-//!   `network_nat`: our FDT entry behind a NAT router.
+//!   `network_nat`: our FDT entry behind a NAT router; `network_bip6`: a
+//!   B/IPv6 foreign device's registration on it and the status bar.
 //! - `discovery`: the `:find` panel and the Networks tab, from synthetic
 //!   events and against a real BBMD and `BACnetRouter`.
 //! - `sc_profiles`: profiles created through the screen and reloaded, the
@@ -103,6 +104,7 @@ mod names_cache;
 mod names_filter;
 mod names_site;
 mod network;
+mod network_bip6;
 mod network_frames;
 mod network_names;
 mod network_nat;

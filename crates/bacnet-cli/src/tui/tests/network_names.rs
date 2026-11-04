@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use bacnet_transport::bbmd_lookup::BbmdLookupFailure;
 use bacnet_transport::bip::{ForeignBbmd, ForeignRegistrationOutcome, ForeignRegistrationSnapshot};
+use insta::assert_snapshot;
 use ratatui::crossterm::event::KeyCode;
 
 use super::*;
@@ -90,6 +91,15 @@ fn a_device_waiting_for_its_bbmds_name_says_so() {
         banner.contains("trying again 30 s after each failure"),
         "{banner}"
     );
+}
+
+/// B/IP's waiting panel and banner, pinned before #2378 shared their
+/// view with B/IPv6: the shared view must leave B/IP's frame unchanged.
+#[test]
+fn bip_waiting_panel_120x40() {
+    let mut app = waiting_app();
+    report(&mut app, waiting(2));
+    assert_snapshot!("network_bip_waiting_120x40", screen(&mut app, 120, 40));
 }
 
 #[test]
