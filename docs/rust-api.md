@@ -10971,6 +10971,14 @@ session.stop().await?;
 `ScEndpointBuilder` composes SC (`build_loopback_session` for unit
 validation; `build_hub_session` over a caller-dialed `TlsWebSocket`,
 `sc-tls` only, proven against the local constrained-TLS hub).
+`connect_hub_session(ScHubDialer::new(url, tls))` (`sc-tls`) dials the hub
+itself through the dialer `BACnetClient::sc_builder()` uses, so with
+`reconnect(...)` and `ScHubDialer::failover_url` the session redials a lost
+hub and moves between the primary and failover hubs as a client does (#1946).
+Every SC session's `sc_link()` hands out the transport's `ScLinkMonitor`:
+`connection_events()` (subscribe before `start()` to see the first
+connection) and `connection_status()`, the same stream and snapshot as
+`ScTransport::connection_events` and `connection_status`.
 `MstpEndpointBuilder` composes one serial owner (simulator evidence only —
 no bench or on-wire conformance; timing is RB-26). It runs standard frames
 and a 480-octet APDU bound by default; `extended_frames(true)` turns on
@@ -10986,7 +10994,7 @@ The port declares its own echo, as for a transport built by hand
 | `BACnetClient::bip_builder()...build().await` | `BipEndpointBuilder::new(iface, port, bcast).role(ClientOnly).build_session()?` then `start()` |
 | `BACnetServer::bip_builder()...build().await` | `BipEndpointBuilder::new(iface, port, bcast).role(ServerOnly).database(db).device(id).build_session()?` then `start()` |
 | Client + server on one device | One `...role(Both).database(db).device(id).build_session()?` (B/IP, SC, or MS/TP builder) |
-| `BACnetClient::sc_builder()...build().await` | `ScEndpointBuilder::new(vmac, uuid)...build_hub_session(ws)?` (dial first, then compose) |
+| `BACnetClient::sc_builder()...build().await` | `ScEndpointBuilder::new(vmac, uuid)...connect_hub_session(hubs).await?` (reconnect and failover as on the client), or `build_hub_session(ws)?` over a caller-dialed socket |
 | `BACnetServer::sc_builder()...build().await` | Same `ScEndpointBuilder` with `ServerOnly` + `database` + `device` |
 | `generic_builder().transport(mstp)...` | `MstpEndpointBuilder::new(serial, station)...build_session()?` (one serial owner) |
 

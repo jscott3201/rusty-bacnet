@@ -6,7 +6,7 @@
 //! waits for a subscriber: one that falls more than [`SC_EVENT_CAPACITY`]
 //! events behind gets `RecvError::Lagged` and the oldest events are lost.
 
-use std::sync::Mutex as StdMutex;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 use bacnet_types::enums::{ErrorClass, ErrorCode};
@@ -444,6 +444,52 @@ impl<W: WebSocketPort> ScTransport<W> {
     /// it can be polled as often as a UI redraws.
     pub fn connection_status(&self) -> ScLinkStatus {
         self.observer.status(*self.state_tx.borrow())
+    }
+
+    /// A handle on this transport's events and link status that stays with
+    /// an owner the transport is handed to (#1946); see [`ScLinkMonitor`].
+    pub fn link_monitor(&self) -> ScLinkMonitor {
+        ScLinkMonitor {
+            observer: Arc::clone(&self.observer),
+            state: self.state_tx.subscribe(),
+        }
+    }
+}
+
+/// One [`ScTransport`]'s hub-connector events and link status, for code that
+/// no longer holds the transport, such as the owner of an endpoint session
+/// built over it (#1946).
+///
+/// It reads the same event stream and snapshot as
+/// [`ScTransport::connection_events`] and
+/// [`ScTransport::connection_status`], before start, while running and after
+/// stop. Clones share them. A handle keeps the event stream open: receivers
+/// end once the transport and every handle are gone.
+#[derive(Clone)]
+pub struct ScLinkMonitor {
+    observer: Arc<ScObserver>,
+    state: watch::Receiver<ScConnectionState>,
+}
+
+impl ScLinkMonitor {
+    /// Subscribe to the hub-connector events, as
+    /// [`ScTransport::connection_events`] does. Subscribe before the
+    /// transport starts to see its first connection.
+    pub fn connection_events(&self) -> broadcast::Receiver<ScEvent> {
+        self.observer.subscribe()
+    }
+
+    /// The snapshot [`ScTransport::connection_status`] returns.
+    pub fn connection_status(&self) -> ScLinkStatus {
+        self.observer.status(*self.state.borrow())
+    }
+}
+
+impl std::fmt::Debug for ScLinkMonitor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScLinkMonitor")
+            .field("status", &self.connection_status())
+            .finish()
     }
 }
 

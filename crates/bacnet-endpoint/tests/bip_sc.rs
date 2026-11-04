@@ -95,6 +95,8 @@ fn bip_builder_builds_unstarted_session() {
         .expect("unstarted B/IP session must build");
     // Unstarted session owns no leases and no policy outcomes yet.
     assert_eq!(session.active_leases(), 0);
+    // Only an SC session has an SC link (#1946).
+    assert!(session.sc_link().is_none());
 }
 
 #[test]
@@ -139,4 +141,10 @@ fn sc_loopback_builder_constructs_typed_session() {
         .build_loopback_session(ws_client)
         .expect("typed SC loopback session must build");
     assert_eq!(session.active_leases(), 0);
+    let status = session.sc_link().expect("an SC link").connection_status();
+    assert_eq!(
+        status.state,
+        bacnet_transport::sc::ScConnectionState::Disconnected
+    );
+    assert_eq!(status.active_hub, None);
 }

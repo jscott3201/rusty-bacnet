@@ -309,6 +309,8 @@ pub struct EndpointSession<T: TransportPort + 'static = bacnet_transport::any::A
     pub(crate) bip_status: Option<bacnet_transport::bip::BvlcClientStatus>,
     /// The MS/TP transport's counters, when the MS/TP builder built it.
     pub(crate) mstp_diagnostics: Option<bacnet_transport::mstp::MstpDiagnostics>,
+    /// The SC transport's events and link status, when the SC builder built it.
+    pub(crate) sc_link: Option<bacnet_transport::sc::ScLinkMonitor>,
 }
 
 /// Terminal state of the session dispatch task.
@@ -421,6 +423,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             egress: None,
             bip_status: None,
             mstp_diagnostics: None,
+            sc_link: None,
         })
     }
 
@@ -794,6 +797,19 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// before handing a transport to [`Self::new`].
     pub fn mstp_diagnostics(&self) -> Option<bacnet_transport::mstp::MstpDiagnostics> {
         self.mstp_diagnostics.clone()
+    }
+
+    /// The BACnet/SC hub link's events and status (#1946): a handle on the
+    /// transport's own event stream and status snapshot, readable in any
+    /// state, after stop included. Subscribe to its events before
+    /// [`start`](Self::start) to see the first connection, and through every
+    /// reconnect and failover the transport makes after. It is there for a
+    /// session [`ScEndpointBuilder`](crate::sc::ScEndpointBuilder) built, and
+    /// `None` for any other: take
+    /// [`ScTransport::link_monitor`](bacnet_transport::sc::ScTransport::link_monitor)
+    /// before handing a transport to [`Self::new`].
+    pub fn sc_link(&self) -> Option<bacnet_transport::sc::ScLinkMonitor> {
+        self.sc_link.clone()
     }
 
     /// Returns the composed session role (narrow admin).

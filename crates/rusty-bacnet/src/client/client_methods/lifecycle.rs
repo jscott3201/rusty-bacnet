@@ -96,7 +96,7 @@ impl BACnetClient {
                 "reconnect applies only to transport='sc'",
             ));
         }
-        sc_hub_options(
+        crate::sc_reconnect::hub_options(
             transport,
             reconnect.is_some(),
             sc_failover_hub.as_deref(),
@@ -367,34 +367,6 @@ impl BACnetClient {
     fn stop<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         crate::py_async::future_into_py(py, crate::unit_result(state::close(self.inner.clone())))
     }
-}
-
-/// The `sc_failover_hub` and `sc_connect_timeout_ms` keywords (#1829):
-/// SC only, and a failover hub only with `reconnect`, since without
-/// reconnection the client would never turn to it or come back. Each is
-/// refused with `ValueError` at construction, before any I/O.
-fn sc_hub_options(
-    transport: &str,
-    reconnect: bool,
-    failover_hub: Option<&str>,
-    connect_timeout_ms: Option<u64>,
-) -> PyResult<()> {
-    if transport != "sc" && (failover_hub.is_some() || connect_timeout_ms.is_some()) {
-        return Err(PyValueError::new_err(
-            "sc_failover_hub and sc_connect_timeout_ms apply only to transport='sc'",
-        ));
-    }
-    if failover_hub.is_some() && !reconnect {
-        return Err(PyValueError::new_err(
-            "sc_failover_hub requires reconnect=ScReconnect(...)",
-        ));
-    }
-    if connect_timeout_ms == Some(0) {
-        return Err(PyValueError::new_err(
-            "sc_connect_timeout_ms must be at least 1",
-        ));
-    }
-    Ok(())
 }
 
 /// The `ipv6_device_instance` keyword: the device instance whose VMAC an ipv6

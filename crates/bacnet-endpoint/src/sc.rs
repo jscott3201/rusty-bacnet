@@ -255,36 +255,12 @@ impl ScEndpointBuilder {
     /// unit proofs. RB-15 tests prefer [`LoopbackTransport`](bacnet_transport::loopback::LoopbackTransport)
     /// for full session I/O and use this builder for config validation only.
     pub fn build_loopback_session(
-        mut self,
+        self,
         ws: bacnet_transport::sc::LoopbackWebSocket,
     ) -> Result<EndpointSession<ScTransport<bacnet_transport::sc::LoopbackWebSocket>>, Error> {
         self.validate()?;
-        let vmac = self.vmac;
-        let uuid = self.device_uuid;
-        let hb_interval = self.heartbeat_interval_ms;
-        let hb_timeout = self.heartbeat_timeout_ms;
-        let reconnect = self.reconnect.take();
-        let role = self.role;
-        let session = self.session.clone();
-        let transport = ScTransport::new(ws, vmac)
-            .with_device_uuid(uuid)
-            .with_heartbeat_interval_ms(hb_interval)
-            .with_heartbeat_timeout_ms(hb_timeout);
-        let transport = match reconnect {
-            Some(config) => transport.with_reconnect(config),
-            None => transport,
-        };
-        let mut endpoint = EndpointSession::new(transport, role, session)?;
-        if let Some(db) = self.database.take() {
-            endpoint = endpoint.with_database(db);
-        }
-        if let Some(id) = self.identity.take() {
-            endpoint = endpoint.device(id);
-        }
-        Ok(endpoint.with_source_audit_device_bindings(
-            std::mem::take(&mut self.source_audit_bindings),
-            std::mem::take(&mut self.source_audit_routed),
-        ))
+        let transport = ScTransport::new(ws, self.vmac);
+        self.compose(transport)
     }
 
     /// Builds an unstarted real-hub SC session over constrained TLS (RB-16).
@@ -299,53 +275,119 @@ impl ScEndpointBuilder {
     /// (neither generated nor stored here). One SC node connection per session;
     /// kill/reconnect preserves VMAC+UUID via the caller-owned reconnect
     /// config (vs transient connections that renegotiate).
+    ///
+    /// The transport has no way to dial a fresh connection, so
+    /// [`reconnect`](Self::reconnect) can only reuse this socket.
+    /// [`connect_hub_session`](Self::connect_hub_session) dials the hub
+    /// itself and redials it, and a failover hub, after a loss.
     #[cfg(feature = "sc-tls")]
     #[cfg_attr(docsrs, doc(cfg(feature = "sc-tls")))]
     pub fn build_hub_session(
-        mut self,
+        self,
         ws: bacnet_transport::sc_tls::TlsWebSocket,
     ) -> Result<EndpointSession<ScTransport<bacnet_transport::sc_tls::TlsWebSocket>>, Error> {
         self.validate()?;
-        if let Some(identity) = self.identity.as_ref() {
-            // Identity VMAC is the SC port MAC when an SC port is present;
-            // otherwise the identity carries no VMAC and the builder VMAC wins.
-            // UUID must always agree when both are present (durable-caller-owned).
-            if identity.device_uuid() != [0; 16] && identity.device_uuid() != self.device_uuid {
-                return Err(Error::Encoding(
-                    "SC endpoint: identity device UUID must equal builder device_uuid".into(),
-                ));
-            }
-            let sc_macs: Vec<_> = identity
-                .network_ports()
-                .iter()
-                .filter(|p| {
-                    p.network_type == bacnet_types::enums::NetworkType::VIRTUAL.to_raw()
-                        && p.mac.as_slice().len() == 6
-                })
-                .map(|p| p.mac.as_slice().to_vec())
-                .collect();
-            if !sc_macs.is_empty() && !sc_macs.iter().any(|m| m.as_slice() == self.vmac) {
-                return Err(Error::Encoding(
-                    "SC endpoint: identity SC port VMAC must equal builder vmac".into(),
-                ));
-            }
-        }
-        let vmac = self.vmac;
-        let uuid = self.device_uuid;
-        let hb_interval = self.heartbeat_interval_ms;
-        let hb_timeout = self.heartbeat_timeout_ms;
+        self.check_identity()?;
+        let transport = ScTransport::new(ws, self.vmac);
+        self.compose(transport)
+    }
+
+    /// Dials the hubs `hubs` names and builds an unstarted session over the
+    /// connection, as [`BACnetClient::sc_builder`](bacnet_client::client::BACnetClient::sc_builder)
+    /// does for a client (#1946).
+    ///
+    /// Everything is checked before any dial: this builder's settings, the
+    /// composed identity as in [`build_hub_session`](Self::build_hub_session),
+    /// and [`ScHubDialer::validate`](bacnet_transport::sc::ScHubDialer::validate)
+    /// with this builder's [`reconnect`](Self::reconnect) configuration, which
+    /// a failover hub needs. With it, the transport redials a lost hub and
+    /// moves between the primary and failover hubs as the client's does;
+    /// follow it through [`EndpointSession::sc_link`].
+    ///
+    /// ```no_run
+    /// use bacnet_endpoint::sc::ScEndpointBuilder;
+    /// use bacnet_transport::sc::{ScEvent, ScHubDialer, ScReconnectConfig};
+    /// use bacnet_transport::sc_tls::ScNodeTlsConfig;
+    ///
+    /// async fn run(tls: ScNodeTlsConfig) -> Result<(), bacnet_types::error::Error> {
+    ///     let hubs = ScHubDialer::new("wss://hub.example.com/bacnet", tls)
+    ///         .failover_url("wss://failover.example.com/bacnet");
+    ///     let mut session = ScEndpointBuilder::new([0x02, 0, 0, 0, 0, 0x01], [0x42; 16])
+    ///         .reconnect(ScReconnectConfig::default())
+    ///         .connect_hub_session(hubs)
+    ///         .await?;
+    ///     let link = session.sc_link().expect("an SC session");
+    ///     // Subscribed before start, so it holds the first connection.
+    ///     let mut events = link.connection_events();
+    ///     session.start().await?;
+    ///     assert!(matches!(events.recv().await, Ok(ScEvent::Connected { .. })));
+    ///     let _status = link.connection_status();
+    ///     session.stop().await?;
+    ///     Ok(())
+    /// }
+    /// ```
+    #[cfg(feature = "sc-tls")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "sc-tls")))]
+    pub async fn connect_hub_session(
+        mut self,
+        hubs: bacnet_transport::sc::ScHubDialer,
+    ) -> Result<EndpointSession<ScTransport<bacnet_transport::sc_tls::TlsWebSocket>>, Error> {
+        self.validate()?;
+        self.check_identity()?;
         let reconnect = self.reconnect.take();
-        let role = self.role;
-        let session = self.session.clone();
-        let transport = ScTransport::new(ws, vmac)
-            .with_device_uuid(uuid)
-            .with_heartbeat_interval_ms(hb_interval)
-            .with_heartbeat_timeout_ms(hb_timeout);
-        let transport = match reconnect {
-            Some(config) => transport.with_reconnect(config),
-            None => transport,
+        let transport = Box::pin(hubs.connect(self.vmac, reconnect)).await?;
+        self.compose(transport)
+    }
+
+    /// A composed identity must carry this builder's device UUID and, when
+    /// it has an SC port, this builder's VMAC.
+    #[cfg(feature = "sc-tls")]
+    fn check_identity(&self) -> Result<(), Error> {
+        let Some(identity) = self.identity.as_ref() else {
+            return Ok(());
         };
-        let mut endpoint = EndpointSession::new(transport, role, session)?;
+        // Identity VMAC is the SC port MAC when an SC port is present;
+        // otherwise the identity carries no VMAC and the builder VMAC wins.
+        // UUID must always agree when both are present (durable-caller-owned).
+        if identity.device_uuid() != [0; 16] && identity.device_uuid() != self.device_uuid {
+            return Err(Error::Encoding(
+                "SC endpoint: identity device UUID must equal builder device_uuid".into(),
+            ));
+        }
+        let sc_macs: Vec<_> = identity
+            .network_ports()
+            .iter()
+            .filter(|p| {
+                p.network_type == bacnet_types::enums::NetworkType::VIRTUAL.to_raw()
+                    && p.mac.as_slice().len() == 6
+            })
+            .map(|p| p.mac.as_slice().to_vec())
+            .collect();
+        if !sc_macs.is_empty() && !sc_macs.iter().any(|m| m.as_slice() == self.vmac) {
+            return Err(Error::Encoding(
+                "SC endpoint: identity SC port VMAC must equal builder vmac".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Gives `transport` this node's UUID and heartbeat timing, and the
+    /// reconnect configuration unless the hub dialer took it, then composes
+    /// the session over it, keeping the transport's link monitor.
+    fn compose<W: bacnet_transport::sc::WebSocketPort>(
+        mut self,
+        transport: ScTransport<W>,
+    ) -> Result<EndpointSession<ScTransport<W>>, Error> {
+        let mut transport = transport
+            .with_device_uuid(self.device_uuid)
+            .with_heartbeat_interval_ms(self.heartbeat_interval_ms)
+            .with_heartbeat_timeout_ms(self.heartbeat_timeout_ms);
+        if let Some(config) = self.reconnect.take() {
+            transport = transport.with_reconnect(config);
+        }
+        let link = transport.link_monitor();
+        let mut endpoint = EndpointSession::new(transport, self.role, self.session.clone())?;
+        endpoint.sc_link = Some(link);
         if let Some(db) = self.database.take() {
             endpoint = endpoint.with_database(db);
         }

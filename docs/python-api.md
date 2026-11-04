@@ -5567,6 +5567,48 @@ cannot claim unsupported execution; incompatible server-role profiles fail
 startup before ingress.
 ClientOnly has no responder and keeps its service list as a local declaration.
 
+### ScEndpoint reconnect, failover hub and link events
+
+`ScEndpoint` takes the keyword-only `reconnect`, `sc_failover_hub` and
+`sc_connect_timeout_ms` that `BACnetClient` takes, with the same names,
+defaults and checks (#1946); see [SC reconnect](#sc-reconnect) and
+[SC failover hub, connection events and link status](#sc-failover-hub-connection-events-and-link-status).
+`reconnect=ScReconnect(...)` redials a lost hub; `sc_failover_hub` needs
+`reconnect` (`ValueError` otherwise); `sc_connect_timeout_ms` (default 10,000,
+at least 1) bounds each hub dial and Connect-Request, the one `start()` makes
+included. Without them the endpoint dials its hub once at start and stays
+disconnected after a loss, as before; that first dial is now bounded by the
+10-second default.
+
+```python
+endpoint = ScEndpoint(
+    1001, "wss://hub.example.com/bacnet", node_vmac,
+    "site-ca.pem", "node.pem", "node.key",
+    sc_device_uuid=persistent_node_uuid,
+    sc_failover_hub="wss://failover.example.com/bacnet",
+    reconnect=ScReconnect(initial_delay_ms=1_000, max_delay_ms=30_000, max_retries=3),
+)
+async with endpoint:
+    events = await endpoint.connection_events()
+    async for event in events:
+        print(event.kind, event.hub)
+```
+
+`await endpoint.connection_events()` and `await endpoint.connection_status()`
+return the client's `ScEventIterator` and `ScLinkStatus`, with the same event
+names and lag rules. The first `connection_events()` call after a start gets
+the events since the session was built, from its first `connected` (#1908);
+a later call is a late subscriber. Iteration ends when the endpoint closes,
+and both methods raise `RuntimeError` before start or after close.
+
+A reconnect or a change of hub keeps the session: its VMAC, Device, roles and
+source Audit Reporter carry on once a hub is connected again, and the server
+role answers through whichever hub is in use. Nothing is replayed. While no
+hub is connected, anything the endpoint sends fails at once: a reply, an
+I-Am, an Audit notification (counted as undelivered) or a client-role
+request, which raises. A request whose answer was lost with the old
+connection times out, since the endpoint's client role makes no retries.
+
 ### Endpoint source Audit Reporter
 
 `BipEndpoint`, `ScEndpoint` and `MstpEndpoint` can name a source Audit
