@@ -214,6 +214,7 @@ fn a_saved_set_the_timer_would_refuse_fails_the_build() {
                 priority_for_writing,
             }),
             default_timeout: None,
+            description: None,
         })
     };
     let build = |storage: Arc<MemoryConfig>| {

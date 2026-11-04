@@ -10,7 +10,7 @@ use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{NotifyType, ObjectType};
 use bytes::BytesMut;
 
-use super::{Reader, SnapshotError};
+use super::{Reader, SnapshotError, put_octets};
 use crate::event::options::MAX_KEPT_TEXT_OCTETS;
 use crate::write_config::ReportingWriteConfig;
 
@@ -132,23 +132,7 @@ fn put<T>(body: &mut BytesMut, part: Option<T>, encode: impl FnOnce(&mut BytesMu
     }
 }
 
-/// A length, then that many octets. The caps keep every length well inside
-/// 32 bits.
-fn put_octets(body: &mut BytesMut, octets: &[u8]) {
-    body.extend_from_slice(&(octets.len() as u32).to_be_bytes());
-    body.extend_from_slice(octets);
-}
-
-impl<'a> Reader<'a> {
-    /// A length of at most `cap`, then that many octets.
-    fn octets(&mut self, cap: usize) -> Result<&'a [u8], SnapshotError> {
-        let len = usize::try_from(self.u32()?)
-            .ok()
-            .filter(|len| *len <= cap)
-            .ok_or(SnapshotError::damaged("holds a part longer than its cap"))?;
-        self.take(len)
-    }
-
+impl Reader<'_> {
     /// A part behind its presence octet.
     fn part<T>(
         &mut self,
@@ -192,6 +176,7 @@ impl<'a> Reader<'a> {
             event_message_texts_config,
             event_algorithm_inhibit_ref,
             event_algorithm_inhibit,
+            description: None,
         };
         match invalid(&config) {
             Some(reason) => Err(SnapshotError::damaged(reason)),

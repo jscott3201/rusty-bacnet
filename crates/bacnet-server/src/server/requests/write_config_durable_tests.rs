@@ -47,6 +47,7 @@ const DELAYS: PropertyIdentifier = PropertyIdentifier::EXECUTION_DELAY;
 const NUMBER: PropertyIdentifier = PropertyIdentifier::CHANNEL_NUMBER;
 const GROUPS: PropertyIdentifier = PropertyIdentifier::CONTROL_GROUPS;
 const INHIBIT: PropertyIdentifier = PropertyIdentifier::ALLOW_GROUP_DELAY_INHIBIT;
+const DESCRIPTION: PropertyIdentifier = PropertyIdentifier::DESCRIPTION;
 
 fn reference(kind: ObjectType, instance: u32) -> BACnetDeviceObjectPropertyReference {
     BACnetDeviceObjectPropertyReference {
@@ -94,7 +95,7 @@ fn object(kind: ObjectType, storage: &Arc<ConfigStorage>) -> Box<dyn BACnetObjec
     Box::new(channel)
 }
 
-async fn served_by(kind: ObjectType, storage: &Arc<ConfigStorage>) -> Arc<Fixture> {
+pub(super) async fn served_by(kind: ObjectType, storage: &Arc<ConfigStorage>) -> Arc<Fixture> {
     let fixture = Fixture::new(None);
     fixture.db.write().await.add(object(kind, storage)).unwrap();
     Arc::new(fixture)
@@ -108,9 +109,10 @@ async fn configuration(fixture: &Fixture, kind: ObjectType) -> Vec<PropertyValue
             REFERENCES,
             PropertyIdentifier::PRIORITY_FOR_WRITING,
             TIMEOUT,
+            DESCRIPTION,
         ]
     } else {
-        &[REFERENCES, DELAYS, NUMBER, GROUPS, INHIBIT]
+        &[REFERENCES, DELAYS, NUMBER, GROUPS, INHIBIT, DESCRIPTION]
     };
     let mut values = Vec::new();
     for property in properties {
@@ -150,6 +152,8 @@ fn covered() -> Vec<(ObjectType, PropertyIdentifier, Option<u32>, Vec<u8>)> {
     ];
     let mut groups = value(PropertyValue::Unsigned(5));
     groups.extend(value(PropertyValue::Unsigned(6)));
+    // Kept beside the configuration (#2364).
+    let lobby = value(PropertyValue::CharacterString("lobby".into()));
     vec![
         (TIMER, VALUES, None, whole_values.to_vec()),
         (TIMER, VALUES, Some(2), value(PropertyValue::Real(42.0))),
@@ -172,6 +176,8 @@ fn covered() -> Vec<(ObjectType, PropertyIdentifier, Option<u32>, Vec<u8>)> {
         (CHANNEL, NUMBER, None, value(PropertyValue::Unsigned(77))),
         (CHANNEL, GROUPS, None, groups),
         (CHANNEL, INHIBIT, None, value(PropertyValue::Boolean(true))),
+        (TIMER, DESCRIPTION, None, lobby.clone()),
+        (CHANNEL, DESCRIPTION, None, lobby),
     ]
 }
 
@@ -258,13 +264,18 @@ async fn a_write_property_multiple_saves_a_channels_writes_once() {
 }
 
 /// The save runs with the database guard dropped: the database answers a
-/// reader and a writer while it is held, for a set write and a
-/// Default_Timeout write (#2312) alike.
+/// reader and a writer while it is held, for a set write, a
+/// Default_Timeout write (#2312) and a Description write (#2364) alike.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_timer_save_runs_while_the_database_stays_available() {
     for (property, index, written) in [
         (VALUES, Some(3), PropertyValue::Real(5.0)),
         (TIMEOUT, None, PropertyValue::Unsigned(5_000)),
+        (
+            DESCRIPTION,
+            None,
+            PropertyValue::CharacterString("lobby".into()),
+        ),
     ] {
         let storage = Arc::new(ConfigStorage::default());
         let fixture = served_by(TIMER, &storage).await;

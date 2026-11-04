@@ -241,24 +241,31 @@ impl ChangeOfStateReporting {
         self.event_history.options.inhibit_reference().cloned()
     }
 
-    /// The rows an object keeping its reporting settings saves (#2331).
+    /// The rows an object keeping its reporting settings saves (#2331),
+    /// with the object's `description` (#2364).
     #[cfg(feature = "event-reporting")]
-    pub(crate) fn reporting_rows(&self) -> crate::write_config::reporting::ReportingRows {
+    pub(crate) fn reporting_rows(
+        &self,
+        description: &str,
+    ) -> crate::write_config::reporting::ReportingRows {
         crate::write_config::reporting::ReportingRows {
             notification_class: self.event_detector.notification_class,
             event_enable: self.event_detector.event_enable,
             notify_type: self.event_detector.notify_type,
             event_detection_enable: self.event_detection_enable,
             options: self.event_history.options.clone(),
+            description: description.into(),
         }
     }
 
     /// Serve the saved rows of an object keeping its reporting settings,
-    /// as it is built (#2331).
+    /// as it is built (#2331), a saved Description into the object's
+    /// `description` (#2364).
     #[cfg(feature = "event-reporting")]
     pub(crate) fn restore_reporting_rows(
         &mut self,
         saved: &crate::write_config::ReportingWriteConfig,
+        description: &mut String,
     ) {
         crate::write_config::reporting::RowFields {
             notification_class: &mut self.event_detector.notification_class,
@@ -266,6 +273,7 @@ impl ChangeOfStateReporting {
             notify_type: &mut self.event_detector.notify_type,
             event_detection_enable: &mut self.event_detection_enable,
             options: &mut self.event_history.options,
+            description,
         }
         .restore(saved);
     }
@@ -290,14 +298,15 @@ macro_rules! keep_change_of_state_reporting {
             }
 
             fn reporting_rows(&self) -> $crate::write_config::reporting::ReportingRows {
-                self.reporting.reporting_rows()
+                self.reporting.reporting_rows(&self.description)
             }
 
             fn restore_reporting_rows(
                 &mut self,
                 saved: &$crate::write_config::ReportingWriteConfig,
             ) {
-                self.reporting.restore_reporting_rows(saved);
+                self.reporting
+                    .restore_reporting_rows(saved, &mut self.description);
             }
         }
     };

@@ -152,11 +152,6 @@ impl MultiStateInputObject {
         Ok(())
     }
 
-    /// Set the description string.
-    pub fn set_description(&mut self, desc: impl Into<String>) {
-        self.description = desc.into();
-    }
-
     /// The values the object keeps that name a state, which a new count
     /// may not strand: Present_Value and Alarm_Values.
     fn held_states(&self) -> impl Iterator<Item = u32> + '_ {

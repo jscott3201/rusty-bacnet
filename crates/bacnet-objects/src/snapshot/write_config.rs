@@ -28,6 +28,13 @@
 //!   BACnet encoding) and Event_Algorithm_Inhibit, in that order. Only the
 //!   object types that keep them take this kind (see [`keeps_reporting`]);
 //!   none of them has another kind, so their whole file is this one.
+//! - [`KIND_WITH_DESCRIPTION`]: a written Description (#2364), its length
+//!   and then its UTF-8 octets, at most 16 KiB, followed by the kind octet
+//!   and body of one of kinds 2, 3 and 4 as above. [`encode`] writes it only
+//!   for a snapshot holding a Description, so a file without one keeps its
+//!   plain kind, octet for octet, and a build that predates kind 5 still
+//!   reads it; one holding a Description is refused there as an unknown
+//!   kind.
 //!
 //! A kind must match the object's type, and an unknown kind is refused, so
 //! a later kind can be added without a new magic tag.
@@ -47,6 +54,7 @@ use super::framing::{self, HEADER_LEN};
 use super::{SnapshotError, SnapshotErrorKind};
 use crate::channel::{MAX_CHANNEL_MEMBERS, MAX_CONTROL_GROUPS};
 use crate::timer::MAX_TIMER_REFERENCES;
+use crate::write_config::description::MAX_OCTETS as MAX_DESCRIPTION_OCTETS;
 use crate::write_config::{
     ChannelMembers, ChannelWriteConfig, TimerStateChange, TimerWriteConfig, WriteConfigSnapshot,
 };
@@ -71,6 +79,12 @@ pub const KIND_CHANNEL: u8 = 2;
 pub const KIND_TIMER: u8 = 3;
 /// The reporting settings of an object with intrinsic reporting (#2331).
 pub const KIND_REPORTING: u8 = 4;
+/// A written Description, then the kind and body of one of the kinds
+/// [`KIND_CHANNEL`], [`KIND_TIMER`] and [`KIND_REPORTING`] (#2364). A kind
+/// around the others rather than a part added to each, so their octets
+/// don't change and a reader that predates it refuses the file instead of
+/// dropping the Description.
+pub const KIND_WITH_DESCRIPTION: u8 = 5;
 /// The most octets a file may take. A full member list, or reference list,
 /// of the longest references takes about 30 KiB; the cap leaves room for
 /// large constructed State_Change_Values.
@@ -83,7 +97,8 @@ pub const MAX_LEN: usize = 1024 * 1024;
 /// wouldn't take back (a priority outside 1 to 16, more references or
 /// members than the object keeps, delays that don't pair with the members,
 /// a Control_Groups size outside 1 to [`MAX_CONTROL_GROUPS`], reporting
-/// settings no write leaves), and one past [`MAX_LEN`].
+/// settings no write leaves, a Description past 16 KiB), and one past
+/// [`MAX_LEN`].
 pub fn encode(
     object: ObjectIdentifier,
     snapshot: &WriteConfigSnapshot,
@@ -108,6 +123,15 @@ fn encode_file(
     snapshot: &WriteConfigSnapshot,
 ) -> Result<Vec<u8>, SnapshotError> {
     let mut body = BytesMut::new();
+    if let Some(description) = snapshot.description() {
+        if description.len() > MAX_DESCRIPTION_OCTETS {
+            return Err(SnapshotError::out_of_range(
+                "holds a Description past its cap",
+            ));
+        }
+        body.extend_from_slice(&[KIND_WITH_DESCRIPTION]);
+        put_octets(&mut body, description.as_bytes());
+    }
     match (snapshot, object.object_type()) {
         (WriteConfigSnapshot::Timer(config), ObjectType::TIMER) => {
             body.extend_from_slice(&[KIND_TIMER]);
@@ -139,7 +163,20 @@ fn decode_file(
 ) -> Result<WriteConfigSnapshot, SnapshotError> {
     let (_, body) = framing::open(octets, &MAGIC, None, MAX_LEN, object)?;
     let mut reader = Reader { body, at: 0 };
-    let snapshot = match (reader.u8()?, object.object_type()) {
+    let mut kind = reader.u8()?;
+    let description = if kind == KIND_WITH_DESCRIPTION {
+        let description = reader.description()?;
+        kind = reader.u8()?;
+        if matches!(kind, KIND_WITH_DESCRIPTION | KIND_TIMER_SET_ONLY) {
+            return Err(SnapshotError::damaged(
+                "wraps a Description around a kind it never wraps",
+            ));
+        }
+        Some(description)
+    } else {
+        None
+    };
+    let mut snapshot = match (kind, object.object_type()) {
         (KIND_TIMER, ObjectType::TIMER) => WriteConfigSnapshot::Timer(reader.timer(true)?),
         (KIND_TIMER_SET_ONLY, ObjectType::TIMER) => {
             WriteConfigSnapshot::Timer(reader.timer(false)?)
@@ -164,11 +201,19 @@ fn decode_file(
     if reader.at != body.len() {
         return Err(SnapshotError::damaged("has octets past its end"));
     }
+    *snapshot.description_mut() = description;
     Ok(snapshot)
 }
 
 fn too_large() -> SnapshotError {
     SnapshotError::out_of_range("is too large to save")
+}
+
+/// A length, then that many octets. The callers' caps keep every length
+/// well inside 32 bits.
+fn put_octets(body: &mut BytesMut, octets: &[u8]) {
+    body.extend_from_slice(&(octets.len() as u32).to_be_bytes());
+    body.extend_from_slice(octets);
 }
 
 /// Append `count`, as four octets, and then `section` with its length.
@@ -306,6 +351,22 @@ impl<'a> Reader<'a> {
         Ok(u64::from_be_bytes(self.take(8)?.try_into().expect("eight")))
     }
 
+    /// A length of at most `cap`, then that many octets.
+    fn octets(&mut self, cap: usize) -> Result<&'a [u8], SnapshotError> {
+        let len = usize::try_from(self.u32()?)
+            .ok()
+            .filter(|len| *len <= cap)
+            .ok_or(SnapshotError::damaged("holds a part longer than its cap"))?;
+        self.take(len)
+    }
+
+    /// A kept Description: at most [`MAX_DESCRIPTION_OCTETS`] of UTF-8.
+    fn description(&mut self) -> Result<String, SnapshotError> {
+        let octets = self.octets(MAX_DESCRIPTION_OCTETS)?;
+        String::from_utf8(octets.to_vec())
+            .map_err(|_| SnapshotError::damaged("holds a Description that isn't UTF-8"))
+    }
+
     /// A presence octet or a BOOLEAN: 0 or 1, nothing else.
     fn flag(&mut self) -> Result<bool, SnapshotError> {
         match self.u8()? {
@@ -350,6 +411,7 @@ impl<'a> Reader<'a> {
         Ok(TimerWriteConfig {
             state_change,
             default_timeout,
+            description: None,
         })
     }
 
@@ -415,6 +477,7 @@ impl<'a> Reader<'a> {
             channel_number,
             control_groups,
             allow_group_delay_inhibit,
+            description: None,
         })
     }
 }

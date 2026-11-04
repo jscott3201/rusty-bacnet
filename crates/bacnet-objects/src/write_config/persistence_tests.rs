@@ -102,6 +102,7 @@ pub(crate) fn timer_sample() -> WriteConfigSnapshot {
             priority_for_writing: 9,
         }),
         default_timeout: Some(45_000),
+        description: None,
     })
 }
 
@@ -115,6 +116,7 @@ pub(crate) fn channel_sample() -> WriteConfigSnapshot {
         channel_number: Some(12),
         control_groups: Some(vec![3, 0, 70_000]),
         allow_group_delay_inhibit: Some(true),
+        description: None,
     })
 }
 

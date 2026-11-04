@@ -123,6 +123,7 @@ fn timer_config() -> WriteConfigSnapshot {
     WriteConfigSnapshot::Timer(TimerWriteConfig {
         state_change: None,
         default_timeout: Some(90_000),
+        description: None,
     })
 }
 
@@ -147,6 +148,7 @@ fn channel_config() -> WriteConfigSnapshot {
         channel_number: Some(12),
         control_groups: Some(vec![1, 9]),
         allow_group_delay_inhibit: Some(true),
+        description: None,
     })
 }
 

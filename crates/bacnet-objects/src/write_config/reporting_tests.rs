@@ -119,8 +119,9 @@ pub(super) fn texts(texts: [&str; 3]) -> PropertyValue {
     )
 }
 
-/// Each kept row's write: the property, the index and the value. The
-/// detection write turns it to the other value, read off the object.
+/// Each kept row's write, Description included: the property, the index
+/// and the value. The detection write turns it to the other value, read off
+/// the object.
 pub(super) fn covered(detection: bool) -> Vec<(P, Option<u32>, PropertyValue)> {
     vec![
         (P::NOTIFICATION_CLASS, None, PropertyValue::Unsigned(9)),
@@ -157,6 +158,12 @@ pub(super) fn covered(detection: bool) -> Vec<(P, Option<u32>, PropertyValue)> {
             P::EVENT_ALGORITHM_INHIBIT,
             None,
             PropertyValue::Boolean(true),
+        ),
+        // Kept beside them (#2364).
+        (
+            P::DESCRIPTION,
+            None,
+            PropertyValue::CharacterString("lobby".into()),
         ),
     ]
 }

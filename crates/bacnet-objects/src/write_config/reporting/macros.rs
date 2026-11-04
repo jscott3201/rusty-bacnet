@@ -45,6 +45,15 @@ macro_rules! impl_reporting_persistence {
                 }
             }
 
+            /// Set the description string. On an object keeping its
+            /// reporting settings, a Description a write saved wins
+            /// (#2364).
+            pub fn set_description(&mut self, desc: impl Into<String>) {
+                if !self.kept_over_setter(bacnet_types::enums::PropertyIdentifier::DESCRIPTION) {
+                    self.description = desc.into();
+                }
+            }
+
             fn kept_over_setter(&self, property: bacnet_types::enums::PropertyIdentifier) -> bool {
                 $crate::write_config::reporting::setter_gives_way(&self.reporting_store, self.oid, property)
             }
@@ -74,6 +83,7 @@ macro_rules! impl_reporting_persistence {
                     notify_type: self.event_detector.notify_type,
                     event_detection_enable: self.event_detection_enable,
                     options: self.event_history.options.clone(),
+                    description: self.description.clone(),
                 }
             }
 
@@ -84,6 +94,7 @@ macro_rules! impl_reporting_persistence {
                     notify_type: &mut self.event_detector.notify_type,
                     event_detection_enable: &mut self.event_detection_enable,
                     options: &mut self.event_history.options,
+                    description: &mut self.description,
                 }
                 .restore(saved);
             }
@@ -198,13 +209,16 @@ macro_rules! impl_reporting_persistence {
             /// Keep the reporting settings peers write (Notification_Class,
             /// Event_Enable, Notify_Type, Event_Detection_Enable,
             /// Event_Message_Texts_Config and the Event_Algorithm_Inhibit
-            /// pair) in `persistence`, serving what is saved there for this
-            /// object, if anything (#2331).
+            /// pair) in `persistence`, and a written Description (#2364),
+            /// serving what is saved there for this object, if anything
+            /// (#2331).
             ///
             /// A write of one of them is then saved before the object serves
             /// it, and refused with DEVICE / OPERATIONAL_PROBLEM, the old
-            /// value kept, when the save fails. A row a write saved wins over
-            /// its setter until [`clear_written_reporting`](Self::clear_written_reporting).
+            /// value kept, when the save fails; a Description past 16 KiB is
+            /// refused with RESOURCES / NO_SPACE_TO_WRITE_PROPERTY. A row a
+            /// write saved wins over its setter until
+            /// [`clear_written_reporting`](Self::clear_written_reporting).
             /// Fails when storage can't be loaded, holds another kind of
             /// configuration, or holds what no write leaves.
             pub fn with_reporting_persistence(
@@ -214,14 +228,15 @@ macro_rules! impl_reporting_persistence {
                 $crate::write_config::reporting::attach(self, persistence)
             }
 
-            /// The reporting settings storage keeps because a write set them,
-            /// now or before a restart; all `None` without storage.
+            /// The reporting settings, and Description, storage keeps because
+            /// a write set them, now or before a restart; all `None` without
+            /// storage.
             pub fn written_reporting(&self) -> $crate::write_config::ReportingWriteConfig {
                 $crate::write_config::reporting::written(self)
             }
 
-            /// Drop every reporting setting a write saved, so the setters
-            /// apply again. The values served stay until a setter or a write
+            /// Drop every reporting setting a write saved, and a saved
+            /// Description, so the setters apply again. The values served stay until a setter or a write
             /// changes them. Saves before it returns; a save that fails keeps
             /// the written settings and returns storage's error. Does nothing
             /// without storage. Call it before the object joins the database,

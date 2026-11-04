@@ -236,6 +236,8 @@ def add_analog_input(
     tags: Optional[list[NameValue]] = None,
     profile_location: Optional[str] = None,
     profile_name: Optional[str] = None,
+    storage_path: Optional[str] = None,
+    clear_written_reporting: bool = False,
 ) -> None
 ```
 
@@ -247,6 +249,19 @@ primitive, a location whose URI scheme isn't http, https or bacnet,
 or a profile name without its vendor-number prefix (`"555-room"`)
 raises BacnetProtocolError, and wrong shapes TypeError or
 ValueError.
+
+`storage_path` (a `str`) keeps the reporting settings a peer
+writes (Notification\_Class, Event\_Enable, Notify\_Type,
+Event\_Detection\_Enable, Event\_Message\_Texts\_Config and the
+Event\_Algorithm\_Inhibit pair) and a written Description in that
+file: such a write is saved before it is answered, refused when it
+can't be, and served again after a restart; a Description past
+16 KiB is refused with NO\_SPACE\_TO\_WRITE\_PROPERTY.
+`clear_written_reporting=True` drops what was saved first,
+Description included, so the object starts from its defaults. A file that
+doesn't load raises BacnetError. Every analog, binary and multi-state
+builder takes both, as do `add_access_door`, `add_access_zone`,
+`add_event_enrollment` and `add_alert_enrollment`.
 
 ### BACnetServer.add_analog_output
 
@@ -260,6 +275,8 @@ def add_analog_output(
     tags: Optional[list[NameValue]] = None,
     profile_location: Optional[str] = None,
     profile_name: Optional[str] = None,
+    storage_path: Optional[str] = None,
+    clear_written_reporting: bool = False,
 ) -> None
 ```
 
@@ -282,6 +299,8 @@ def add_analog_value(
     tags: Optional[list[NameValue]] = None,
     profile_location: Optional[str] = None,
     profile_name: Optional[str] = None,
+    storage_path: Optional[str] = None,
+    clear_written_reporting: bool = False,
 ) -> None
 ```
 
@@ -307,6 +326,8 @@ def add_binary_input(
     tags: Optional[list[NameValue]] = None,
     profile_location: Optional[str] = None,
     profile_name: Optional[str] = None,
+    storage_path: Optional[str] = None,
+    clear_written_reporting: bool = False,
 ) -> None
 ```
 
@@ -323,6 +344,8 @@ def add_binary_output(
     tags: Optional[list[NameValue]] = None,
     profile_location: Optional[str] = None,
     profile_name: Optional[str] = None,
+    storage_path: Optional[str] = None,
+    clear_written_reporting: bool = False,
 ) -> None
 ```
 
@@ -344,6 +367,8 @@ def add_binary_value(
     tags: Optional[list[NameValue]] = None,
     profile_location: Optional[str] = None,
     profile_name: Optional[str] = None,
+    storage_path: Optional[str] = None,
+    clear_written_reporting: bool = False,
 ) -> None
 ```
 
@@ -362,6 +387,8 @@ def add_multistate_input(
     tags: Optional[list[NameValue]] = None,
     profile_location: Optional[str] = None,
     profile_name: Optional[str] = None,
+    storage_path: Optional[str] = None,
+    clear_written_reporting: bool = False,
 ) -> None
 ```
 
@@ -379,6 +406,8 @@ def add_multistate_output(
     tags: Optional[list[NameValue]] = None,
     profile_location: Optional[str] = None,
     profile_name: Optional[str] = None,
+    storage_path: Optional[str] = None,
+    clear_written_reporting: bool = False,
 ) -> None
 ```
 
@@ -398,6 +427,8 @@ def add_multistate_value(
     tags: Optional[list[NameValue]] = None,
     profile_location: Optional[str] = None,
     profile_name: Optional[str] = None,
+    storage_path: Optional[str] = None,
+    clear_written_reporting: bool = False,
 ) -> None
 ```
 
@@ -566,6 +597,7 @@ def add_trend_log(
     align_intervals: bool | None = None,
     interval_offset: int | None = None,
     storage_path: Optional[str] = None,
+    clear_written_reporting: bool = False,
     total_record_count: int = 0,
 ) -> None
 ```
@@ -611,9 +643,13 @@ a reader's handling of the wrap be tested. Out of range raises
 OverflowError.
 
 `storage_path` keeps the log in files, as on
-`add_trend_log_multiple`. `client_cov_increment` and
-`cov_resubscription_interval` aren't saved: they apply on every
-start, reopened or not.
+`add_trend_log_multiple`. A Client\_COV\_Increment or
+COV\_Resubscription\_Interval written over the network, or with
+`write_property_local`, is saved too, and refused when it can't be;
+once saved it wins over `client_cov_increment` and
+`cov_resubscription_interval` at every later start.
+`clear_written_reporting=True` drops the saved writes first, so
+the keywords apply again. Unwritten, they apply on every start.
 
 ### BACnetServer.add_trend_log_multiple
 
@@ -632,6 +668,7 @@ def add_trend_log_multiple(
     align_intervals: bool | None = None,
     interval_offset: int | None = None,
     storage_path: Optional[str] = None,
+    clear_written_reporting: bool = False,
     total_record_count: int = 0,
 ) -> None
 ```
@@ -678,7 +715,10 @@ minute, and once more at `stop()`, so a power loss costs at most
 about a minute of records; a failed commit is retried. A log reopened
 from those files serves its saved records, Total\_Record\_Count,
 BUFFER\_READY counts and Notification\_Threshold, Enable,
-Stop\_When\_Full and every setting a peer can write, and appends one
+Stop\_When\_Full and every setting a peer can write, Notification\_Class
+and the other reporting settings among them
+(`clear_written_reporting=True` drops those first, as on
+`add_trend_log`), and appends one
 LOG\_INTERRUPTED record to mark the restart (none when it reopens full
 and stopped); the saved state wins over the keyword arguments.
 `buffer_size` wins over the saved Buffer\_Size: a smaller one keeps
@@ -700,6 +740,7 @@ def add_event_log(
     log_received_notifications: bool = False,
     *,
     storage_path: Optional[str] = None,
+    clear_written_reporting: bool = False,
     total_record_count: int = 0,
 ) -> None
 ```
@@ -722,7 +763,10 @@ from a peer.
 `add_trend_log`; BUFFER\_READY counts from the seeded value.
 
 `storage_path` keeps the log in files, as on
-`add_trend_log_multiple`. `log_received_notifications` isn't
+`add_trend_log_multiple`, Notification\_Class and the other
+reporting settings a write set included; such a write is refused when
+it can't be saved, and `clear_written_reporting=True` drops them
+first, as on `add_trend_log`. `log_received_notifications` isn't
 saved and applies on every start.
 
 ### BACnetServer.add_audit_log
@@ -910,6 +954,8 @@ def add_timer(
     state_change_values: Optional[list[Optional[PropertyValue]]] = None,
     references: Optional[list[tuple[ObjectIdentifier, PropertyIdentifier] | tuple[ObjectIdentifier, PropertyIdentifier, Optional[int]] | DeviceObjectPropertyReference]] = None,
     priority_for_writing: Optional[int] = None,
+    storage_path: Optional[str] = None,
+    clear_written_config: bool = False,
 ) -> None
 ```
 
@@ -926,6 +972,14 @@ A wrong entry count, or `priority_for_writing` without either of
 the other two, raises ValueError, a non-primitive entry TypeError,
 and a priority outside 1..=16 BacnetProtocolError with
 VALUE\_OUT\_OF\_RANGE.
+
+With `storage_path` the Timer keeps in that file what a peer writes
+to State\_Change\_Values, List\_Of\_Object\_Property\_References (with
+Priority\_For\_Writing), Default\_Timeout and Description, and a saved
+write wins over the keywords at the next start; such a write is refused when it can't
+be saved. `clear_written_config=True` drops what was saved first,
+so the keywords apply again. A file that doesn't load raises
+BacnetError.
 
 ### BACnetServer.add_load_control
 
@@ -1027,6 +1081,7 @@ def add_color(
     present_value: Optional[tuple[float, float]] = None,
     default_color: Optional[tuple[float, float]] = None,
     storage_path: Optional[str] = None,
+    clear_written_default: bool = False,
     value_source_tracking: bool = False,
     tags: Optional[list[NameValue]] = None,
     profile_location: Optional[str] = None,
@@ -1047,7 +1102,11 @@ keeps the colour from before the restart instead, kept in
 `storage_path` (the file the object keeps Present\_Value in); with
 nothing stored it keeps `present_value`, and with neither,
 In\_Progress reads NOT\_CONTROLLED until a write drives the output.
-A file that doesn't load raises BacnetError.
+The file keeps a Default\_Color written over the network too, which
+wins over `default_color` at the next start; such a write is
+refused when it can't be saved. `clear_written_default=True` drops
+a saved one first, so `default_color` applies again. A file that
+doesn't load raises BacnetError.
 
 ### BACnetServer.add_color_temperature
 
@@ -1062,6 +1121,7 @@ def add_color_temperature(
     max_pres_value: Optional[int] = None,
     default_color_temperature: Optional[int] = None,
     storage_path: Optional[str] = None,
+    clear_written_default: bool = False,
     value_source_tracking: bool = False,
     tags: Optional[list[NameValue]] = None,
     profile_location: Optional[str] = None,
@@ -1076,9 +1136,9 @@ range and come together (ValueError otherwise); `present_value` is
 clamped to them. A value out of range raises BacnetProtocolError.
 `value_source_tracking` is as on `add_color`.
 `default_color_temperature` (4000 unless given, clamped to the
-limits) and `storage_path` work as `default_color` and
-`storage_path` on `add_color`, with 0 keeping the temperature
-from before the restart.
+limits), `storage_path` and `clear_written_default` work as on
+`add_color`, with 0 keeping the temperature from before the
+restart.
 
 ### BACnetServer.add_channel
 
@@ -1093,6 +1153,8 @@ def add_channel(
     control_groups: Optional[list[int]] = None,
     *,
     allow_group_delay_inhibit: bool = False,
+    storage_path: Optional[str] = None,
+    clear_written_config: bool = False,
 ) -> None
 ```
 
@@ -1118,6 +1180,14 @@ count that differs from the member count or an empty group list
 raises BacnetProtocolError with VALUE\_OUT\_OF\_RANGE; more than
 1024 members or 64 groups, NO\_SPACE\_TO\_WRITE\_PROPERTY. Nothing is
 registered after any of them.
+
+With `storage_path` the Channel keeps in that file what a peer
+writes to its members, Execution\_Delay, Channel\_Number,
+Control\_Groups, Allow\_Group\_Delay\_Inhibit and Description, and each
+saved write wins over its argument at the next start; such a write is refused
+when it can't be saved. `clear_written_config=True` drops what was
+saved first, so the arguments apply again. A file that doesn't load
+raises BacnetError.
 
 ### BACnetServer.add_life_safety_point
 
@@ -1186,6 +1256,8 @@ def add_access_door(
     alarm_values: Optional[list[int]] = None,
     fault_values: Optional[list[int]] = None,
     masked_alarm_values: Optional[list[int]] = None,
+    storage_path: Optional[str] = None,
+    clear_written_reporting: bool = False,
 ) -> None
 ```
 
@@ -1207,6 +1279,10 @@ door to NORMAL. An alarm value raises a CHANGE\_OF\_STATE alarm after
 Time\_Delay, and a fault value makes Reliability MULTI\_STATE\_FAULT. Any
 other number, NORMAL (0) included, raises BacnetProtocolError with
 VALUE\_OUT\_OF\_RANGE, and nothing is registered.
+
+`storage_path` and `clear_written_reporting` keep the reporting
+settings and Description a peer writes in that file, as on
+`add_analog_input`.
 
 ### BACnetServer.add_access_credential
 
@@ -1413,6 +1489,8 @@ def add_access_zone(
     entry_points: Optional[list[ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier]]] = None,
     exit_points: Optional[list[ObjectIdentifier | tuple[ObjectIdentifier, ObjectIdentifier]]] = None,
     alarm_values: Optional[list[int]] = None,
+    storage_path: Optional[str] = None,
+    clear_written_reporting: bool = False,
 ) -> None
 ```
 
@@ -1434,6 +1512,10 @@ BACnetAccessZoneOccupancyState numbers other than NORMAL (1 to 6, or
 included, raises BacnetProtocolError with VALUE\_OUT\_OF\_RANGE and
 `first_failed_element_number` naming it, from 1, and nothing is
 registered. Left out, the list starts empty.
+
+`storage_path` and `clear_written_reporting` keep the reporting
+settings and Description a peer writes in that file, as on
+`add_analog_input`.
 
 ### BACnetServer.add_credential_data_input
 
@@ -1470,8 +1552,17 @@ def add_alert_enrollment(
     instance: int,
     name: str,
     initial_source: ObjectIdentifier,
+    *,
+    storage_path: Optional[str] = None,
+    clear_written_reporting: bool = False,
 ) -> None
 ```
+
+Add an Alert Enrollment to the server (before starting).
+
+`storage_path` and `clear_written_reporting` keep the reporting
+settings and Description a peer writes in that file, as on
+`add_analog_input`.
 
 ### BACnetServer.add_event_enrollment
 
@@ -1481,6 +1572,9 @@ def add_event_enrollment(
     instance: int,
     name: str,
     event_type: EventType = ...,
+    *,
+    storage_path: Optional[str] = None,
+    clear_written_reporting: bool = False,
 ) -> None
 ```
 
@@ -1498,6 +1592,10 @@ Object\_Property\_Reference, read-only to peers, reads as one typed
 Fault\_Parameters reads as the context-tagged `none` choice while no
 fault algorithm is set, and writing that clears it; a null written to
 it succeeds and changes nothing.
+
+`storage_path` and `clear_written_reporting` keep the reporting
+settings and Description a peer writes in that file, as on
+`add_analog_input`.
 
 ### BACnetServer.add_elevator_group
 
@@ -1848,7 +1946,9 @@ instance and subsequent address queries raise RuntimeError.
 ### BACnetServer.foreign_registration
 
 ```python
-def foreign_registration(self) -> Awaitable[ForeignRegistrationStatus]
+def foreign_registration(
+    self,
+) -> Awaitable[Union[ForeignRegistrationStatus, Bip6ForeignRegistrationStatus]]
 ```
 
 How the foreign-device registration is going (#938), as for

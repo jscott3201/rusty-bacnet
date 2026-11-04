@@ -4964,10 +4964,12 @@ class BACnetServer:
         ``storage_path`` (a ``str``) keeps the reporting settings a peer
         writes (Notification_Class, Event_Enable, Notify_Type,
         Event_Detection_Enable, Event_Message_Texts_Config and the
-        Event_Algorithm_Inhibit pair) in that file: such a write is saved
-        before it is answered, refused when it can't be, and served again
-        after a restart. ``clear_written_reporting=True`` drops what was
-        saved first, so the object starts from its defaults. A file that
+        Event_Algorithm_Inhibit pair) and a written Description in that
+        file: such a write is saved before it is answered, refused when it
+        can't be, and served again after a restart; a Description past
+        16 KiB is refused with NO_SPACE_TO_WRITE_PROPERTY.
+        ``clear_written_reporting=True`` drops what was saved first,
+        Description included, so the object starts from its defaults. A file that
         doesn't load raises BacnetError. Every analog, binary and multi-state
         builder takes both, as do ``add_access_door``, ``add_access_zone``,
         ``add_event_enrollment`` and ``add_alert_enrollment``."""
@@ -5447,8 +5449,8 @@ class BACnetServer:
 
         With ``storage_path`` the Timer keeps in that file what a peer writes
         to State_Change_Values, List_Of_Object_Property_References (with
-        Priority_For_Writing) and Default_Timeout, and a saved write wins over
-        the keywords at the next start; such a write is refused when it can't
+        Priority_For_Writing), Default_Timeout and Description, and a saved
+        write wins over the keywords at the next start; such a write is refused when it can't
         be saved. ``clear_written_config=True`` drops what was saved first,
         so the keywords apply again. A file that doesn't load raises
         BacnetError.
@@ -5632,8 +5634,8 @@ class BACnetServer:
 
         With ``storage_path`` the Channel keeps in that file what a peer
         writes to its members, Execution_Delay, Channel_Number,
-        Control_Groups and Allow_Group_Delay_Inhibit, and each saved write
-        wins over its argument at the next start; such a write is refused
+        Control_Groups, Allow_Group_Delay_Inhibit and Description, and each
+        saved write wins over its argument at the next start; such a write is refused
         when it can't be saved. ``clear_written_config=True`` drops what was
         saved first, so the arguments apply again. A file that doesn't load
         raises BacnetError.
@@ -5718,7 +5720,8 @@ class BACnetServer:
         VALUE_OUT_OF_RANGE, and nothing is registered.
 
         ``storage_path`` and ``clear_written_reporting`` keep the reporting
-        settings a peer writes in that file, as on ``add_analog_input``.
+        settings and Description a peer writes in that file, as on
+        ``add_analog_input``.
         """
         ...
     def add_access_credential(
@@ -5940,7 +5943,8 @@ class BACnetServer:
         registered. Left out, the list starts empty.
 
         ``storage_path`` and ``clear_written_reporting`` keep the reporting
-        settings a peer writes in that file, as on ``add_analog_input``.
+        settings and Description a peer writes in that file, as on
+        ``add_analog_input``.
         """
         ...
     def add_credential_data_input(
@@ -5980,7 +5984,8 @@ class BACnetServer:
         """Add an Alert Enrollment to the server (before starting).
 
         ``storage_path`` and ``clear_written_reporting`` keep the reporting
-        settings a peer writes in that file, as on ``add_analog_input``.
+        settings and Description a peer writes in that file, as on
+        ``add_analog_input``.
         """
         ...
     def add_event_enrollment(
@@ -6008,7 +6013,8 @@ class BACnetServer:
         it succeeds and changes nothing.
 
         ``storage_path`` and ``clear_written_reporting`` keep the reporting
-        settings a peer writes in that file, as on ``add_analog_input``.
+        settings and Description a peer writes in that file, as on
+        ``add_analog_input``.
         """
         ...
 

@@ -17,7 +17,7 @@ use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 
-use super::{WriteConfigPersistence, WriteConfigSnapshot};
+use super::{WriteConfigPersistence, WriteConfigSnapshot, description};
 use crate::common;
 use crate::durable::staged::{self, StagedSaves};
 use crate::durable::{PendingWrite, SaveWait, SaveWriter, StageStep};
@@ -165,10 +165,11 @@ pub(crate) fn changed<T: ConfigWrites>(object: &mut T) {
 /// [`DurableWrites::stage_writes`](crate::durable::DurableWrites::stage_writes)):
 /// one save of what they leave together (#1423).
 pub(crate) fn stage_writes<T: ConfigWrites>(object: &mut T, writes: &[PendingWrite]) -> StageStep {
-    if object.storage_ref().is_none()
-        || object.config().is_none()
-        || !writes.iter().any(|write| T::saves(write.property))
-    {
+    // A NULL to Description changes nothing, so it stages nothing (#2364).
+    let kept = |write: &PendingWrite| {
+        T::saves(write.property) && !description::null_write(write.property, &write.value)
+    };
+    if object.storage_ref().is_none() || object.config().is_none() || !writes.iter().any(kept) {
         return StageStep::Skip;
     }
     if let Some(wait) = with_storage(object, Storage::busy).flatten() {
@@ -176,7 +177,7 @@ pub(crate) fn stage_writes<T: ConfigWrites>(object: &mut T, writes: &[PendingWri
     }
     let current = object.config().expect("checked above");
     let steps = staged::steps(writes, |earlier, write| {
-        if !T::saves(write.property) {
+        if !kept(write) {
             return Ok(None);
         }
         let config = earlier.last().map_or(current, |step| &step.next);
