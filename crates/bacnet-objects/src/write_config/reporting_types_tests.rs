@@ -154,87 +154,129 @@ fn enable(bits: EventTransitionBits) -> PropertyValue {
     }
 }
 
-/// An Event Enrollment's two setters give way to a saved write until the
-/// clear; a row no write set still takes its setter.
+/// One guarded setter: the row it sets, a value a write saves there, and
+/// the setter called with a value other than the saved one (`over`) and
+/// with one other than the starting value (`apply`, serving `applied`).
+struct Guarded<T> {
+    row: P,
+    written: PropertyValue,
+    over: fn(&mut T),
+    apply: fn(&mut T),
+    applied: PropertyValue,
+}
+
+/// For each guarded row on its own: a write saves it, and on a rebuild its
+/// setter gives way while every other row's setter still applies; after
+/// the clear its setter applies again. A guard keyed on the wrong row fails
+/// one of the two.
+fn each_setter_gives_way_to_its_own_row<T: BACnetObject>(
+    open: fn(&Arc<MemoryConfig>) -> T,
+    clear: fn(&mut T) -> Result<(), Error>,
+    rows: &[Guarded<T>],
+) {
+    for saved in rows {
+        let storage = MemoryConfig::new();
+        let mut object = open(&storage);
+        write(&mut object, saved.row, saved.written.clone()).unwrap();
+        drop(object);
+
+        let mut object = open(&storage);
+        for row in rows {
+            if row.row == saved.row {
+                (row.over)(&mut object);
+                assert_eq!(read(&object, row.row), saved.written, "{:?} kept", row.row);
+            } else {
+                (row.apply)(&mut object);
+                assert_eq!(
+                    read(&object, row.row),
+                    row.applied,
+                    "{:?} applies with {:?} saved",
+                    row.row,
+                    saved.row
+                );
+            }
+        }
+        clear(&mut object).unwrap();
+        (saved.apply)(&mut object);
+        assert_eq!(
+            read(&object, saved.row),
+            saved.applied,
+            "{:?} cleared",
+            saved.row
+        );
+    }
+}
+
 #[test]
-fn an_event_enrollment_setter_gives_way_to_a_saved_write_until_cleared() {
-    let storage = MemoryConfig::new();
-    let mut object = ee(&storage);
-    write(&mut object, P::NOTIFICATION_CLASS, class(9)).unwrap();
-    write(
-        &mut object,
-        P::EVENT_ENABLE,
-        enable(EventTransitionBits::TO_FAULT),
-    )
-    .unwrap();
-    drop(object);
-
-    let mut object = ee(&storage);
-    object.set_notification_class(3);
-    object.set_event_enable(EventTransitionBits::TO_NORMAL);
-    assert_eq!(read(&object, P::NOTIFICATION_CLASS), class(9));
-    assert_eq!(
-        read(&object, P::EVENT_ENABLE),
-        enable(EventTransitionBits::TO_FAULT)
-    );
-
-    object.clear_written_reporting().unwrap();
-    assert_eq!(object.written_reporting(), ReportingWriteConfig::default());
-    object.set_notification_class(3);
-    object.set_event_enable(EventTransitionBits::TO_NORMAL);
-    assert_eq!(read(&object, P::NOTIFICATION_CLASS), class(3));
-    assert_eq!(
-        read(&object, P::EVENT_ENABLE),
-        enable(EventTransitionBits::TO_NORMAL)
+fn each_event_enrollment_setter_gives_way_to_its_own_row_until_cleared() {
+    each_setter_gives_way_to_its_own_row(
+        ee,
+        EventEnrollmentObject::clear_written_reporting,
+        &[
+            Guarded {
+                row: P::NOTIFICATION_CLASS,
+                written: class(9),
+                over: |object| object.set_notification_class(3),
+                apply: |object| object.set_notification_class(3),
+                applied: class(3),
+            },
+            Guarded {
+                row: P::EVENT_ENABLE,
+                written: enable(EventTransitionBits::TO_FAULT),
+                over: |object| object.set_event_enable(EventTransitionBits::TO_NORMAL),
+                apply: |object| object.set_event_enable(EventTransitionBits::TO_NORMAL),
+                applied: enable(EventTransitionBits::TO_NORMAL),
+            },
+        ],
     );
 }
 
-/// An Alert Enrollment's three setters give way the same way, and a write
-/// of Event_Detection_Enable over a saved one still lands: only the setter
-/// gives way.
 #[test]
-fn an_alert_enrollment_setter_gives_way_to_a_saved_write_until_cleared() {
+fn each_alert_enrollment_setter_gives_way_to_its_own_row_until_cleared() {
+    each_setter_gives_way_to_its_own_row(
+        ae,
+        AlertEnrollmentObject::clear_written_reporting,
+        &[
+            Guarded {
+                row: P::NOTIFICATION_CLASS,
+                written: class(9),
+                over: |object| object.set_notification_class(3),
+                apply: |object| object.set_notification_class(3),
+                applied: class(3),
+            },
+            Guarded {
+                row: P::EVENT_ENABLE,
+                written: enable(EventTransitionBits::TO_FAULT),
+                over: |object| object.set_event_enable(EventTransitionBits::TO_NORMAL),
+                apply: |object| object.set_event_enable(EventTransitionBits::TO_NORMAL),
+                applied: enable(EventTransitionBits::TO_NORMAL),
+            },
+            // Detection starts on: the write saves it off, the setter over
+            // it turns it on, and the setter that applies turns it off.
+            Guarded {
+                row: P::EVENT_DETECTION_ENABLE,
+                written: PropertyValue::Boolean(false),
+                over: |object| object.set_event_detection_enable(true),
+                apply: |object| object.set_event_detection_enable(false),
+                applied: PropertyValue::Boolean(false),
+            },
+        ],
+    );
+}
+
+/// Only the setter gives way: a write of Event_Detection_Enable over a
+/// saved one still lands, and the clear saves nothing written.
+#[test]
+fn an_alert_enrollment_write_over_a_saved_row_lands() {
     let storage = MemoryConfig::new();
     let mut object = ae(&storage);
-    write(&mut object, P::NOTIFICATION_CLASS, class(9)).unwrap();
-    write(
-        &mut object,
-        P::EVENT_ENABLE,
-        enable(EventTransitionBits::TO_FAULT),
-    )
-    .unwrap();
-    write(
-        &mut object,
-        P::EVENT_DETECTION_ENABLE,
-        PropertyValue::Boolean(false),
-    )
-    .unwrap();
+    let detection = P::EVENT_DETECTION_ENABLE;
+    write(&mut object, detection, PropertyValue::Boolean(false)).unwrap();
     drop(object);
-
     let mut object = ae(&storage);
-    object.set_notification_class(3);
-    object.set_event_enable(EventTransitionBits::TO_NORMAL);
-    object.set_event_detection_enable(true);
-    assert_eq!(read(&object, P::NOTIFICATION_CLASS), class(9));
-    assert_eq!(
-        read(&object, P::EVENT_ENABLE),
-        enable(EventTransitionBits::TO_FAULT)
-    );
-    let detection = |object: &AlertEnrollmentObject| read(object, P::EVENT_DETECTION_ENABLE);
-    assert_eq!(detection(&object), PropertyValue::Boolean(false));
-    write(
-        &mut object,
-        P::EVENT_DETECTION_ENABLE,
-        PropertyValue::Boolean(true),
-    )
-    .unwrap();
-    assert_eq!(detection(&object), PropertyValue::Boolean(true));
-
+    write(&mut object, detection, PropertyValue::Boolean(true)).unwrap();
+    assert_eq!(read(&object, detection), PropertyValue::Boolean(true));
     object.clear_written_reporting().unwrap();
-    object.set_notification_class(3);
-    object.set_event_detection_enable(false);
-    assert_eq!(read(&object, P::NOTIFICATION_CLASS), class(3));
-    assert_eq!(detection(&object), PropertyValue::Boolean(false));
     drop(object);
     assert_eq!(
         storage.saved(),

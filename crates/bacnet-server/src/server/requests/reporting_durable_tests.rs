@@ -54,10 +54,10 @@ const TYPES: [ObjectType; 13] = [
 
 /// The fixture's database already holds Binary Values 1 and 2 and
 /// Multi-State Input 1.
-const INSTANCE: u32 = 5;
+pub(super) const INSTANCE: u32 = 5;
 
 /// Object 5 of `kind`, keeping its reporting settings in `storage`.
-fn object(kind: ObjectType, storage: &Arc<ConfigStorage>) -> Box<dyn BACnetObject> {
+pub(super) fn object(kind: ObjectType, storage: &Arc<ConfigStorage>) -> Box<dyn BACnetObject> {
     let units = EngineeringUnits::NO_UNITS;
     let kept = Arc::clone(storage) as Arc<dyn WriteConfigPersistence>;
     macro_rules! build {
@@ -94,7 +94,7 @@ fn object(kind: ObjectType, storage: &Arc<ConfigStorage>) -> Box<dyn BACnetObjec
     }
 }
 
-async fn served_by(kind: ObjectType, storage: &Arc<ConfigStorage>) -> Arc<Fixture> {
+pub(super) async fn served_by(kind: ObjectType, storage: &Arc<ConfigStorage>) -> Arc<Fixture> {
     let fixture = Fixture::new(None);
     fixture.db.write().await.add(object(kind, storage)).unwrap();
     Arc::new(fixture)
@@ -175,7 +175,12 @@ fn cases() -> Vec<(ObjectType, P, Option<u32>, Vec<u8>)> {
     cases
 }
 
-fn write_property(kind: ObjectType, property: P, index: Option<u32>, octets: Vec<u8>) -> Bytes {
+pub(super) fn write_property(
+    kind: ObjectType,
+    property: P,
+    index: Option<u32>,
+    octets: Vec<u8>,
+) -> Bytes {
     let mut request = BytesMut::new();
     WritePropertyRequest {
         object_identifier: oid(kind, INSTANCE),

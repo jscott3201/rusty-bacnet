@@ -26,6 +26,11 @@
 //! saves where it is. Only the rows a write set are kept, and a kept row
 //! wins over its setter until `clear_written_reporting` drops them all.
 //!
+//! An object CreateObject builds through the built-in constructors
+//! ([`crate::creation::builtin_constructor`]) keeps nothing: an application
+//! that wants a created object's settings kept registers a constructor of its
+//! own that attaches storage.
+//!
 //! All of this needs the `event-reporting` feature, which `std` turns on.
 //! Without it the objects keep nothing: they hold no store, [`admit`] lets
 //! every write through, and the builder call isn't there, so an image that

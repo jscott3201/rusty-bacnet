@@ -4530,6 +4530,12 @@ ai.set_notification_class(5); // a value a peer wrote and saved wins
   `WriteConfigSnapshot` and `ReportingWriteConfig` are `#[non_exhaustive]`:
   a match takes a wildcard arm, and a `ReportingWriteConfig` is built from
   `Default` with its fields set.
+- **Created objects.** An object CreateObject builds through the built-in
+  constructors (`creation::builtin_constructor`), an Event Enrollment for
+  example, has no storage: its written settings last until a restart. To
+  keep them, register a constructor with the server's
+  `ObjectTypeRegistry::register` that attaches storage with
+  `with_reporting_persistence`.
 - **Feature.** `event-reporting` gates `with_reporting_persistence`, the
   three setters of the analog, binary and multi-state objects,
   `written_reporting`, `clear_written_reporting` and

@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import ast
 import inspect
+import struct
 import tempfile
 import unittest
 from pathlib import Path
 
 import rusty_bacnet
 from rusty_bacnet import (
+    BacnetError,
     BACnetServer,
     ObjectIdentifier,
     ObjectType,
@@ -203,6 +205,35 @@ class FurtherTypesTests(unittest.IsolatedAsyncioTestCase):
                     )
         finally:
             await server.stop()
+
+
+
+def ack_notification_file(object_type: int, instance: int) -> bytes:
+    """A written-configuration file (RBNWCF01, kind 4) holding only a
+    Notify_Type of ACK_NOTIFICATION (2), in the layout
+    ``bacnet_objects::snapshot::write_config`` documents: the tag, the
+    object identifier, the kind, then each setting behind a presence octet.
+    """
+    identifier = struct.pack(">I", (object_type << 22) | instance)
+    body = bytes([4, 0, 0, 1]) + struct.pack(">I", 2) + bytes([0, 0, 0, 0])
+    return b"RBNWCF01" + identifier + body
+
+
+class NotifyTypeFileTests(unittest.TestCase):
+    def test_an_alert_enrollment_file_holding_ack_notification_fails_the_build(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            server = BACnetServer(2_331_004, interface="127.0.0.1", port=0)
+            alert = Path(directory) / "ae-1"
+            alert.write_bytes(ack_notification_file(ObjectType.ALERT_ENROLLMENT.to_raw(), 1))
+            with self.assertRaises(BacnetError):
+                server.add_alert_enrollment(1, "AE-1", ANALOG, storage_path=str(alert))
+            # The same settings load on an Event Enrollment, which takes all
+            # three Notify_Types.
+            enrollment = Path(directory) / "ee-1"
+            enrollment.write_bytes(
+                ack_notification_file(ObjectType.EVENT_ENROLLMENT.to_raw(), 1)
+            )
+            server.add_event_enrollment(1, "EE-1", storage_path=str(enrollment))
 
 
 if __name__ == "__main__":

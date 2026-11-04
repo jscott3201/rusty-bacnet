@@ -19,7 +19,9 @@ impl BACnetServer {
     /// Event_Algorithm_Inhibit pair) in that file (#2331): such a write is
     /// saved before it is answered, refused if it can't be, and served again
     /// after a restart. `clear_written_reporting` drops what was saved first.
-    /// Every analog, binary and multi-state builder takes both.
+    /// Every analog, binary and multi-state builder takes both, as do
+    /// `add_access_door`, `add_access_zone`, `add_event_enrollment` and
+    /// `add_alert_enrollment`.
     #[pyo3(signature = (
         instance, name, units=62, present_value=0.0, *,
         tags=None, profile_location=None, profile_name=None,
