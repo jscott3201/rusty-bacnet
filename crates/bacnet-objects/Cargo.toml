@@ -40,7 +40,12 @@ std = [
 # `event-reporting`: `event_reporting()`/`event_reporting_mut()` and
 # `enrollment_eval()`/`enrollment_eval_mut()`, so intrinsic reporting, the
 # Event and Alert Enrollments' transitions and the logs' buffer-ready
-# reports. The event properties still read and write.
+# reports. The event properties still read and write. It also gates keeping
+# the reporting settings peers write on the analog, binary and multi-state
+# objects (#2331): `with_reporting_persistence`, the three setters
+# (`set_notification_class`, `set_event_enable`, `set_notify_type`),
+# `written_reporting`, `clear_written_reporting` and
+# `wait_for_reporting_saves`.
 event-reporting = []
 # `durable-writes`: `durable_writes()`, the staged saves a host makes off
 # the database lock. Off, a write to an object with storage saves on the

@@ -2944,6 +2944,30 @@ server.add_multistate_output(instance=1, name="Speed", number_of_states=3)
 server.add_multistate_value(instance=1, name="Season", number_of_states=4)
 ```
 
+#### Keeping written reporting settings
+
+The analog, binary and multi-state builders take keyword-only `storage_path`
+(a `str`) and `clear_written_reporting` (#2331):
+
+```python
+server.add_analog_input(
+    instance=1,
+    name="Zone Temp",
+    units=64,
+    storage_path="/application/state/ai-1",  # optional
+)
+```
+
+With `storage_path`, the reporting settings a peer writes
+(Notification_Class, Event_Enable, Notify_Type, Event_Detection_Enable,
+Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair) are kept in
+that file. Each write is saved before it is answered, and refused with DEVICE
+/ OPERATIONAL_PROBLEM when the save fails; an Event_Message_Texts_Config
+string past 16 KiB is refused with RESOURCES / NO_SPACE_TO_WRITE_PROPERTY. A
+server started on the same file serves the saved settings.
+`clear_written_reporting=True` drops what was saved first, so the object
+starts from its defaults. A file that doesn't load raises `BacnetError`.
+
 #### Object profiles and Value_Source
 
 The analog, binary and multi-state builders, `add_color`,
@@ -3242,10 +3266,17 @@ server.add_trend_log_multiple(
   trend logs Logging_Type, Log_Interval, Align_Intervals, Interval_Offset and
   Log_DeviceObjectProperty, as peers last wrote them: the saved state wins
   over `total_record_count` and the configuration keywords.
-  `add_trend_log`'s `client_cov_increment` and `cov_resubscription_interval`,
-  `add_event_log`'s `log_received_notifications`, and the reporting settings
-  other than Notification_Threshold aren't saved, so they apply on every
-  start.
+- It keeps the reporting settings a peer writes too (#1952):
+  Notification_Class, Event_Enable, Notify_Type, Event_Detection_Enable,
+  Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair, and on a
+  Trend Log Client_COV_Increment and COV_Resubscription_Interval. Each is
+  saved before the write is answered, and once saved wins over
+  `add_trend_log`'s `client_cov_increment` and `cov_resubscription_interval`.
+  All three take keyword-only `clear_written_reporting`: `True` drops the
+  saved settings, so `add_trend_log`'s keywords apply again; the others
+  keep their values until the next start.
+  `add_event_log`'s `log_received_notifications` isn't saved and applies on
+  every start.
 - `buffer_size` is the application's, so it wins over the saved Buffer_Size:
   a larger one keeps every record, and a smaller one keeps the newest
   records that fit and logs a warning. A durable log holds at most 828,302
