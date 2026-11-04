@@ -254,7 +254,8 @@ impl Wire {
             object_specifier: ObjectSpecifier::Identifier(oid),
             list_of_initial_values: Vec::new(),
         }
-        .encode(&mut request);
+        .encode(&mut request)
+        .unwrap();
         self.send(ConfirmedServiceChoice::CREATE_OBJECT, request)
             .await
     }

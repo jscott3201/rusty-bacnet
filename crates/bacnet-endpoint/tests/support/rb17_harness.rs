@@ -468,7 +468,7 @@ pub fn complex_ack_npdu(invoke_id: u8, value: f32) -> Bytes {
         property_value: val.to_vec(),
     };
     let mut svc = BytesMut::new();
-    ack.encode(&mut svc);
+    ack.encode(&mut svc).unwrap();
     let apdu = Apdu::ComplexAck(ComplexAck {
         segmented: false,
         more_follows: false,

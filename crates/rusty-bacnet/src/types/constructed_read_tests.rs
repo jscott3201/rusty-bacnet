@@ -260,7 +260,7 @@ fn group_present_value_reads_as_read_property_multiple_results() {
             list_of_read_access_results: results,
         };
         let mut octets = BytesMut::new();
-        ack.encode(&mut octets);
+        ack.encode(&mut octets).unwrap();
         let expected = rpm_ack_to_py(py, ack).unwrap().into_bound(py);
         assert_typed(
             py,

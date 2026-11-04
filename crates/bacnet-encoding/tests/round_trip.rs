@@ -456,7 +456,7 @@ proptest! {
         };
         round_trip(
             &property_value,
-            |buf, value| { encode_bacnet_property_value(value, buf); Ok(()) },
+            |buf, value| encode_bacnet_property_value(value, buf),
             decode_bacnet_property_value,
         )?;
     }

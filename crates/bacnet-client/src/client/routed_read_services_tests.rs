@@ -358,7 +358,8 @@ async fn reply_count(peer: &Peer, request: &ConfirmedRequest, property: Property
         property_array_index: None,
         property_value: value.to_vec(),
     }
-    .encode(&mut bytes);
+    .encode(&mut bytes)
+    .unwrap();
     peer.reply(request, bytes.freeze()).await;
 }
 

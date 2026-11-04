@@ -252,8 +252,8 @@ pub fn run(datagrams: &[&[u8]; MESSAGES]) -> Summary {
 
 /// Service parameters the scenario carries.
 trait Parameters: Sized + PartialEq {
-    /// Encode them into `buf`.
-    fn encode(&self, buf: &mut BytesMut);
+    /// Encode them into `buf`, or refuse.
+    fn encode(&self, buf: &mut BytesMut) -> Result<(), Error>;
     /// Decode them from service-request or service-ACK octets.
     fn decode(data: &[u8]) -> Result<Self, Error>;
 }
@@ -261,8 +261,9 @@ trait Parameters: Sized + PartialEq {
 macro_rules! parameters {
     ($($service:ty),+) => {$(
         impl Parameters for $service {
-            fn encode(&self, buf: &mut BytesMut) {
+            fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
                 <$service>::encode(self, buf);
+                Ok(())
             }
             fn decode(data: &[u8]) -> Result<Self, Error> {
                 <$service>::decode(data)
@@ -271,12 +272,16 @@ macro_rules! parameters {
     )+};
 }
 
-parameters!(
-    WhoIsRequest,
-    IAmRequest,
-    ReadPropertyRequest,
-    ReadPropertyACK
-);
+parameters!(WhoIsRequest, IAmRequest, ReadPropertyRequest);
+
+impl Parameters for ReadPropertyACK {
+    fn encode(&self, buf: &mut BytesMut) -> Result<(), Error> {
+        <ReadPropertyACK>::encode(self, buf)
+    }
+    fn decode(data: &[u8]) -> Result<Self, Error> {
+        <ReadPropertyACK>::decode(data)
+    }
+}
 
 /// Which APDU carries a message's parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -469,7 +474,10 @@ fn round_trip<P: Parameters>(
         return;
     };
     let mut parameters = BytesMut::new();
-    message.parameters.encode(&mut parameters);
+    if message.parameters.encode(&mut parameters).is_err() {
+        summary.error();
+        return;
+    }
     let apdu = message.header.apdu(parameters.freeze());
     let mut payload = BytesMut::new();
     if encode_apdu(&mut payload, &apdu).is_err() {

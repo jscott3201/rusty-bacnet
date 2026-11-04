@@ -387,7 +387,8 @@ async fn command_source_wire_wpm_prefix_and_create_initial_values_rollback() {
                 object_specifier: ObjectSpecifier::Identifier(oid),
                 list_of_initial_values: values,
             }
-            .encode(&mut bytes);
+            .encode(&mut bytes)
+            .unwrap();
             let response = wire
                 .send(&routed(), (ConfirmedServiceChoice::CREATE_OBJECT, bytes))
                 .await;

@@ -5,6 +5,7 @@ use super::group::{self, GroupMembers};
 use super::property;
 use super::{LiveLists, ReadOverlay, ReadScope};
 use alloc::vec::Vec;
+use bacnet_encoding::constructed::check_property_value;
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::property_metadata::check_read_array_index;
@@ -191,7 +192,7 @@ impl RpmPlan {
                 let requested_index = row.reference.property_array_index;
                 let result = read_row(db, overlay, object, row);
                 let mut encoded = BytesMut::new();
-                result.encode(&mut encoded);
+                result.encode(&mut encoded).map_err(ReadFailure::Service)?;
                 scratch.append(&encoded, footer.len())?;
                 completed(
                     spec.lookup_oid,
@@ -322,9 +323,17 @@ pub(crate) fn element(
                 // One property may return/encode an arbitrarily large owned
                 // value. Only accumulated service bytes are bounded here.
                 let mut encoded = BytesMut::new();
-                encode_property_value(&mut encoded, &value)
-                    .map(|()| encoded.to_vec())
-                    .map_err(|_| (ErrorClass::PROPERTY, ErrorCode::OTHER))
+                match encode_property_value(&mut encoded, &value) {
+                    Err(_) => Err((ErrorClass::PROPERTY, ErrorCode::OTHER)),
+                    // A value the RPM-ACK encoder refuses, a legacy-form
+                    // Event_Parameters value that wouldn't decode back
+                    // (#2376), is this row's error, as ReadProperty's Error
+                    // PDU would be, and the other rows are still answered.
+                    Ok(()) if check_property_value(id, &encoded, 4).is_err() => {
+                        Err((ErrorClass::SERVICES, ErrorCode::OTHER))
+                    }
+                    Ok(()) => Ok(encoded.to_vec()),
+                }
             }
             Err(Error::Remote(RemoteError::Error { class, code })) => Err((class, code)),
             Err(_) => Err((ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY)),

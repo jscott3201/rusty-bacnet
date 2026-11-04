@@ -49,7 +49,7 @@ fn encoded_ack(invoke_id: u8, property_value: PropertyValue) -> (Apdu, Bytes) {
         property_value: value.to_vec(),
     };
     let mut service_ack = BytesMut::new();
-    ack.encode(&mut service_ack);
+    ack.encode(&mut service_ack).unwrap();
     let apdu = Apdu::ComplexAck(ComplexAck {
         segmented: false,
         more_follows: false,

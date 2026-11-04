@@ -51,7 +51,8 @@ impl Devices {
             property_array_index: read.property_array_index,
             property_value: vec![0x21, 42],
         }
-        .encode(&mut service_ack);
+        .encode(&mut service_ack)
+        .unwrap();
         let mut apdu = BytesMut::new();
         encode_apdu(
             &mut apdu,
