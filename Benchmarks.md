@@ -1442,6 +1442,33 @@ lower; the change was accepted. Ten-object ReadPropertyMultiple fell by
 242.7 and 154.4, the latter inside its floor of 480.5. Allocations are
 unchanged.
 
+### 10.11 A cheap policy's trip to the blocking pool (#2049)
+
+Since #2032 the server asks every `ServerPolicy` decision on Tokio's
+blocking pool, so that a policy that blocks can't hold a runtime worker or
+`stop()`. A policy that only compares a field pays for that trip on every
+mutating request; one that declares `decides_inline` is now called on the
+request task instead. A WriteProperty round trip with such a policy,
+counted the harness's way from one build
+([benchmarks/results/perf-2049](benchmarks/results/perf-2049/README.md)):
+
+- **The trip costs about 4,000 to 4,800 instructions per request.** Asked
+  on the pool, the policy costs 3,952.3 instructions per request more than
+  asked inline on the current-thread runtime and 4,840.5 more on the
+  multi-thread one, every pair of runs at least 12 times its range apart,
+  plus one allocator call (the blocking task) and 256 bytes.
+- **Most of its cost is waiting.** Callgrind doesn't see the kernel's side
+  of the two thread wake-ups. In wall time, on the same laptop under other
+  builds, the pool added about 12 microseconds to a 5.8-microsecond round
+  trip on the current-thread runtime and about 21 to a 17-microsecond one
+  on the multi-thread runtime; inline, the policy added about 0.1.
+- **What's left inline is shared work.** Inline, the policy still costs
+  about 1,760 to 1,795 instructions and four allocator calls per request
+  over no policy: decoding the request for it, building its context and
+  carrying its decision. A server without a policy doesn't reach the new
+  branch, and its count matches the official WriteProperty count after
+  section 10.10.
+
 ## 11. How to reproduce
 
 Run one suite at a time on an idle machine. Each Criterion suite takes 1 to
