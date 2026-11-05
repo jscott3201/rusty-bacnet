@@ -74,6 +74,57 @@ async fn the_bbmds_answers_mark_the_registration_held_or_refused() {
     );
 }
 
+/// The BBMD's answer can arrive before the send that carried the
+/// registration has returned. The registration awaits it from its pass on,
+/// so the answer counts: the test holds the pass at the gate between the
+/// two and answers meanwhile. The start's registration is refused first, so
+/// the success can only be the new one's.
+#[tokio::test]
+async fn an_answer_that_beats_the_send_still_counts() {
+    let a = bbmd().await;
+    let (mut transport, lent) = started(&a, 300).await;
+    result(&a, &transport, Bvlc6ResultCode::REGISTER_FOREIGN_DEVICE_NAK).await;
+    answered(&transport, Some(Bip6RegistrationAnswer::Refused)).await;
+    let target = Arc::clone(transport.foreign_target().unwrap());
+    target
+        .gate
+        .forget_permits(tokio::sync::Semaphore::MAX_PERMITS);
+    lent.activate(&changes(None, Some(120))).unwrap();
+    target.reached.notified().await;
+    result(&a, &transport, Bvlc6ResultCode::SUCCESSFUL_COMPLETION).await;
+    answered(&transport, Some(Bip6RegistrationAnswer::Held)).await;
+    target.gate.add_permits(tokio::sync::Semaphore::MAX_PERMITS);
+    assert_eq!(registration(&a).await, 120);
+    for _ in 0..10_000 {
+        if status(&transport).registrations_sent == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    let held = status(&transport);
+    assert_eq!(
+        (held.last_answer, held.registrations_sent),
+        (Some(Bip6RegistrationAnswer::Held), 2)
+    );
+    transport.stop().await.unwrap();
+}
+
+/// An activation's immediate registration supersedes the one still
+/// awaiting its answer, which wasn't left unanswered: no NO ANSWER flickers
+/// on before the BBMD answers the new one.
+#[tokio::test]
+async fn an_activation_supersedes_a_registration_rather_than_leave_it_unanswered() {
+    let a = bbmd().await;
+    let (mut transport, lent) = started(&a, 300).await;
+    lent.activate(&changes(None, Some(120))).unwrap();
+    assert_eq!(registration(&a).await, 120);
+    let superseded = status(&transport);
+    assert_eq!((superseded.last_answer, superseded.unanswered), (None, 0));
+    result(&a, &transport, Bvlc6ResultCode::SUCCESSFUL_COMPLETION).await;
+    answered(&transport, Some(Bip6RegistrationAnswer::Held)).await;
+    transport.stop().await.unwrap();
+}
+
 /// After a move, the old BBMD's success answers its release, not the
 /// registration with the new BBMD, and the old answer is gone.
 #[tokio::test]

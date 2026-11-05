@@ -31,6 +31,7 @@ mod release;
 mod waiting;
 
 pub use answer::Bip6RegistrationAnswer;
+pub(super) use answer::Cause;
 pub use release::Bip6ReleaseCounters;
 pub use waiting::Bip6ForeignStatus;
 

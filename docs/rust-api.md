@@ -1302,7 +1302,7 @@ at once.
 use, `bbmd_name` (the host name it is known by, if any), `waiting_for_bbmd`, the
 lookup and release counters, `broadcasts_refused` and `registrations_sent`, and the
 BBMD's answers (#2388): `last_answer` (`Bip6RegistrationAnswer::Held`, `Refused`, or
-`Unanswered` once the next registration went first), `last_answer_age`, the
+`Unanswered` once its renewal went first), `last_answer_age`, the
 `unanswered` streak and the `registrations_refused` total. A result counts as a
 registration's answer only from the BBMD in use while a registration there awaits
 one, and a success goes first to a release in flight; a move to another BBMD, the

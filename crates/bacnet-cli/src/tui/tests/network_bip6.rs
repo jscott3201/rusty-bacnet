@@ -138,7 +138,9 @@ fn a_registered_bip6_device_120x40() {
 }
 
 /// The BBMD refused the latest registration: `FD refused` and B/IP's red
-/// banner, naming the B/IPv6 NAK, on every screen (#2388).
+/// banner, naming the B/IPv6 NAK, on every screen (#2388). B/IPv6 only
+/// logs the NAK a broadcast then draws, so the banner says broadcasts go
+/// undelivered rather than fail.
 #[test]
 fn a_refused_bip6_device_120x40() {
     let mut app = bip6_app();
@@ -151,8 +153,8 @@ fn a_refused_bip6_device_120x40() {
     assert_eq!(
         banner,
         " REFUSED BBMD [2001:db8::10]:47808 refused the foreign-device registration \
-         (register-foreign-device-nak); broadcasts through it fail until it accepts. \
-         Check its foreign-device policy."
+         (register-foreign-device-nak); broadcasts through it are not delivered until it \
+         accepts. Check its foreign-device policy."
     );
     let text = screen(&mut app, 120, 40);
     assert!(text.contains("FD refused"), "{text}");

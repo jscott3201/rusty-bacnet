@@ -258,7 +258,7 @@ impl NetworkState {
                 let result = snapshot
                     .last_result
                     .map_or_else(String::new, |code| format!(" ({})", kebab(code)));
-                Some(refused_banner(&bbmd, &result))
+                Some(refused_banner(&bbmd, &result, "fail"))
             }
             Registration::Lapsed => Some(format!(
                 " LAPSED The registration with {bbmd} lapsed, and no renewal since was \
@@ -337,7 +337,11 @@ fn bip6_banner(status: &Bip6ForeignStatus) -> Option<String> {
     match bip6_state(status) {
         Registration::Refused => {
             let code = Bvlc6ResultCode::REGISTER_FOREIGN_DEVICE_NAK;
-            Some(refused_banner(&bbmd, &format!(" ({})", kebab(code))))
+            // The BBMD's Distribute-Broadcast-To-Network NAK is only
+            // logged on B/IPv6: the broadcast doesn't fail, it goes
+            // nowhere.
+            let result = format!(" ({})", kebab(code));
+            Some(refused_banner(&bbmd, &result, "are not delivered"))
         }
         Registration::NoAnswer { unanswered } => Some(no_answer_banner(&bbmd, unanswered)),
         Registration::Waiting => {
@@ -351,11 +355,12 @@ fn bip6_banner(status: &Bip6ForeignStatus) -> Option<String> {
 }
 
 /// The REFUSED banner, on either link: `bbmd` refused the registration,
-/// with the `result` code it gave, if any.
-fn refused_banner(bbmd: &str, result: &str) -> String {
+/// with the `result` code it gave, if any, and what its `broadcasts` do
+/// meanwhile.
+fn refused_banner(bbmd: &str, result: &str, broadcasts: &str) -> String {
     format!(
         " REFUSED {bbmd} refused the foreign-device registration{result}; \
-         broadcasts through it fail until it accepts. Check its foreign-device policy."
+         broadcasts through it {broadcasts} until it accepts. Check its foreign-device policy."
     )
 }
 

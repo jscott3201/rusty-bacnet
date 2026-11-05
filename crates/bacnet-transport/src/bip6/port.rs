@@ -14,7 +14,7 @@ use crate::port::{Bip6Port, ReceivedNpdu, TransportPort};
 
 use super::collision_probe::Probe;
 use super::foreign_bbmd::Bip6ForeignBbmd;
-use super::foreign_target::{Bip6ForeignStatus, Bip6ReleaseCounters, ForeignTarget};
+use super::foreign_target::{Bip6ForeignStatus, Bip6ReleaseCounters, Cause, ForeignTarget};
 use super::frame::encoded;
 use super::receive::Receiver;
 use super::receive_counters::{Bip6ReceiveCounters, ReceiveDrops};
@@ -326,8 +326,9 @@ impl Bip6Transport {
 
 /// Re-register with `target` every half time-to-live, and at once with
 /// the new values when an activation, or a lookup of the BBMD's host name,
-/// moves the registration. Each pass reads the target afresh; no lock is
-/// held across an await. A move's release of the BBMD left (#2338) goes
+/// moves the registration. Each pass reads the target afresh, and marks
+/// the registration it sends outstanding before the send (#2388); no lock
+/// is held across an await. A move's release of the BBMD left (#2338) goes
 /// after the registration with the new one, and is given up here when its
 /// answer is overdue.
 async fn reregister(target: Arc<ForeignTarget>, socket: Arc<Bip6Socket>, source_vmac: Bip6Vmac) {
@@ -335,9 +336,9 @@ async fn reregister(target: Arc<ForeignTarget>, socket: Arc<Bip6Socket>, source_
     loop {
         let release_due = target.release_due();
         let retry_due = target.retry_due();
-        tokio::select! {
-            () = tokio::time::sleep_until(renew_at) => {}
-            () = target.changed() => {}
+        let cause = tokio::select! {
+            () = tokio::time::sleep_until(renew_at) => Cause::Renewal,
+            () = target.changed() => Cause::Change,
             () = tokio::time::sleep_until(release_due.unwrap_or(renew_at)), if release_due.is_some() => {
                 target.release_expired(tokio::time::Instant::now());
                 continue;
@@ -351,17 +352,19 @@ async fn reregister(target: Arc<ForeignTarget>, socket: Arc<Bip6Socket>, source_
                 }
                 continue;
             }
-        }
+        };
         // The name, if the BBMD has one, is looked up alongside at most
         // every 30 s; the attempt goes where it was, if anywhere yet.
         target.attempting();
-        let (config, release) = target.pass(tokio::time::Instant::now());
+        let (config, release) = target.pass(tokio::time::Instant::now(), cause);
         #[cfg(test)]
         target.in_flight().await;
-        if let Some(bbmd) = config.bbmd.address()
-            && send_register_foreign_device_v6(&socket, bbmd, config.ttl, source_vmac).await
-        {
-            target.registration_sent(bbmd);
+        if let Some(bbmd) = config.bbmd.address() {
+            if send_register_foreign_device_v6(&socket, bbmd, config.ttl, source_vmac).await {
+                target.registration_sent();
+            } else {
+                target.registration_not_sent(bbmd);
+            }
         }
         if let Some((left, entry)) = release
             && !send_release_v6(&socket, left, entry, source_vmac).await
@@ -606,9 +609,14 @@ impl TransportPort for Bip6Transport {
         if let (Some(fd), Some(bbmd)) = (
             &self.foreign_device,
             start_bbmd.as_ref().and_then(|start| start.bbmd),
-        ) && send_register_foreign_device_v6(&socket, bbmd, fd.config().ttl, source_vmac).await
-        {
-            fd.registration_sent(bbmd);
+        ) {
+            // Outstanding before it goes, so its answer finds it (#2388).
+            fd.registration_going(bbmd);
+            if send_register_foreign_device_v6(&socket, bbmd, fd.config().ttl, source_vmac).await {
+                fd.registration_sent();
+            } else {
+                fd.registration_not_sent(bbmd);
+            }
         }
         // The address a start on `::` found is the registration's from here,
         // before the receive loop and the driver read it: nothing after

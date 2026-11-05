@@ -67,13 +67,13 @@ pub struct Bip6ForeignStatus {
     /// Register-Foreign-Device messages sent, to whichever BBMD.
     pub registrations_sent: u64,
     /// What the BBMD in use made of this device's latest registration
-    /// there (#2388): held or refused by its answer, or unanswered when the
-    /// next registration went first. `None` until the first one there is
+    /// there (#2388): held or refused by its answer, or unanswered when its
+    /// renewal went first. `None` until the first one there is
     /// answered or goes unanswered; a move to another BBMD, the wait for
     /// its host name and a stop clear it.
     pub last_answer: Option<Bip6RegistrationAnswer>,
     /// How long ago `last_answer` came: the BBMD's answer, or for an
-    /// unanswered registration, the next one going out.
+    /// unanswered registration, its renewal going out.
     pub last_answer_age: Option<Duration>,
     /// Registrations to the BBMD in use that went unanswered in a row, the
     /// latest included: nonzero only while `last_answer` is

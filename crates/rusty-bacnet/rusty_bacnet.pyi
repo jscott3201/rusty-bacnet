@@ -2885,8 +2885,8 @@ class Bip6ForeignRegistrationStatus(TypedDict):
     Register-Foreign-Device messages sent. The BBMD's answer to the latest
     one (#2388) reads as on B/IP: ``last_outcome`` is ``"accepted"`` or
     ``"refused"``, with ``last_result`` the BVLC result code (0x0090 for a
-    refusal), or ``"timed_out"`` when the next registration went first,
-    unanswered, with ``last_result`` None; both are None before the BBMD's
+    refusal), or ``"timed_out"`` when its renewal went first, the BBMD
+    silent, with ``last_result`` None; both are None before the BBMD's
     first answer, and clear when the BBMD changes, while waiting, and when
     the owner stops. ``last_outcome_age`` is how many seconds ago that
     outcome came, ``unanswered`` how many registrations in a row the BBMD

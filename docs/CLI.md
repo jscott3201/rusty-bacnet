@@ -607,9 +607,11 @@ resolve`), the broadcasts refused while waiting, the host name's lookups and
 failures with the newest reason, the registrations sent and refused (to every
 BBMD it has used), and the releases of BBMDs it left (#2388). The status bar
 reads `FD held`, `refused` or `no answer` as on B/IP, and a refusal or silence
-raises the same banner. A registration counts as unanswered once the next one
-goes first: B/IPv6 renews at half the TTL whatever the answer. `:bbmd`, `r` and
-`m` read tables on B/IP only, and say so on other transports.
+raises B/IP's banner; after a refusal it says broadcasts go undelivered, since
+B/IPv6 only logs the BBMD's refusal of each. A registration counts as unanswered
+once its renewal goes first: B/IPv6 renews at half the TTL whatever the answer,
+and one that a Network Port activation replaces at once isn't counted. `:bbmd`,
+`r` and `m` read tables on B/IP only, and say so on other transports.
 Once the BBMD accepts, the TUI reads its FDT and shows the entry the BBMD
 recorded for us, the address it forwards broadcasts to. Behind a NAT router
 the BBMD records the router's address instead: give it with
@@ -1024,8 +1026,8 @@ evicting the least recently heard first.
 holds on other devices: COV subscriptions, and our entry in a BBMD's
 foreign-device table. `FD` appears only with a registration and says
 where it stands (`held`, `pending`, `refused`, `no answer`, `lapsed` or
-`waiting for name`), from the same state the Network screen's banner reads. `ledger n` counts changes
-still in effect.
+`waiting for name`), on B/IP and B/IPv6 alike, from the same state the
+Network screen's banner reads. `ledger n` counts changes still in effect.
 
 **Status bar and footer.** Both fit their width by priority: at 80 columns
 the least useful fields and keys go first, while the link state, the

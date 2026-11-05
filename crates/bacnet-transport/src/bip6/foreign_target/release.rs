@@ -31,6 +31,7 @@ use tokio::time::Instant;
 use tracing::{debug, info};
 
 use super::super::port::Bip6ForeignDeviceConfig;
+use super::answer::Cause;
 use super::{ForeignTarget, State};
 
 /// What came of a B/IPv6 foreign device's releases of the BBMDs it moved
@@ -118,16 +119,22 @@ impl ForeignTarget {
         self.lock().releases
     }
 
-    /// For the re-registration task's pass at `now`: the registration in
-    /// effect, and the release queued, if any, as the BBMD to ask and the
-    /// entry to name, now awaiting its answer. Read in one lock, so the
-    /// release never goes to the BBMD the registration does.
+    /// For the re-registration task's pass at `now`, for `cause`: the
+    /// registration in effect, now outstanding (#2388), and the release
+    /// queued, if any, as the BBMD to ask and the entry to name, now
+    /// awaiting its answer. Read in one lock, so the release never goes to
+    /// the BBMD the registration does, and both await their answers before
+    /// they are sent.
     pub(in crate::bip6) fn pass(
         &self,
         now: Instant,
+        cause: Cause,
     ) -> (Bip6ForeignDeviceConfig, Option<(SocketAddrV6, Bip6Address)>) {
         let mut state = self.lock();
         let config = state.config.clone();
+        if let Some(bbmd) = config.bbmd.address() {
+            state.registration_going(bbmd, cause, now);
+        }
         let Some(bbmd) = state.queued.take() else {
             return (config, None);
         };

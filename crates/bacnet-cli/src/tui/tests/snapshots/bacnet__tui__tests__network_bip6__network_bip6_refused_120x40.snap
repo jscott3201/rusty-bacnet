@@ -4,7 +4,7 @@ expression: text
 ---
 " bacnet | 1 2 3 [4 Network] 7 | BIP6 [2001:db8::5]:47808 | up | READ-ONLY | COV 0 | FD refused | drop 0          ? help "
 " REFUSED BBMD [2001:db8::10]:47808 refused the foreign-device registration (register-foreign-device-nak); broadcasts    "
-" through it fail until it accepts. Check its foreign-device policy.                                                     "
+" through it are not delivered until it accepts. Check its foreign-device policy.                                        "
 "┌ Foreign device ──────────────────────────────────────────────────────────────────────────────────────────────────────┐"
 "│BBMD bbmd.example:47808 ([2001:db8::10]:47808)   TTL 60 s                                                             │"
 "│Status REFUSED 4 s ago   2 name lookups, 0 failed                                                                     │"

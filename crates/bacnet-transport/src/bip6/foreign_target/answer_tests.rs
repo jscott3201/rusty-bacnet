@@ -29,6 +29,12 @@ fn config(bbmd: SocketAddrV6) -> Bip6ForeignDeviceConfig {
     }
 }
 
+/// A renewal pass of `target`, its registration sent.
+fn renew(target: &ForeignTarget) {
+    target.pass(Instant::now(), Cause::Renewal);
+    target.registration_sent();
+}
+
 /// The answer, unanswered streak and refusals `target` reports.
 fn answer(target: &ForeignTarget) -> (Option<Bip6RegistrationAnswer>, u64, u64) {
     let status = target.status();
@@ -46,7 +52,7 @@ async fn a_success_marks_the_registration_held() {
     let a = bbmd(1);
     let target = ForeignTarget::at(a);
     assert_eq!(answer(&target), (None, 0, 0));
-    target.registration_sent(a);
+    renew(&target);
     // Sent, not answered yet.
     assert_eq!(answer(&target), (None, 0, 0));
     target.result(a, SUCCESS);
@@ -65,14 +71,14 @@ async fn a_success_marks_the_registration_held() {
 async fn a_nak_marks_the_registration_refused_and_counts_it() {
     let a = bbmd(1);
     let target = ForeignTarget::at(a);
-    target.registration_sent(a);
+    renew(&target);
     target.result(a, NAK);
     assert_eq!(
         answer(&target),
         (Some(Bip6RegistrationAnswer::Refused), 0, 1)
     );
     // The renewal goes as usual, and the refusal stands until answered.
-    target.registration_sent(a);
+    renew(&target);
     assert_eq!(
         answer(&target),
         (Some(Bip6RegistrationAnswer::Refused), 0, 1)
@@ -91,7 +97,7 @@ async fn only_the_outstanding_registration_is_answered() {
     target.result(a, SUCCESS);
     target.result(a, NAK);
     assert_eq!(answer(&target), (None, 0, 0));
-    target.registration_sent(a);
+    renew(&target);
     // Another peer, or another request's NAK.
     target.result(b, SUCCESS);
     target.result(b, NAK);
@@ -113,15 +119,15 @@ async fn only_the_outstanding_registration_is_answered() {
 async fn no_answer_by_the_next_registration_is_unanswered() {
     let a = bbmd(1);
     let target = ForeignTarget::at(a);
-    target.registration_sent(a);
+    renew(&target);
     advance(Duration::from_secs(30)).await;
-    target.registration_sent(a);
+    renew(&target);
     assert_eq!(
         answer(&target),
         (Some(Bip6RegistrationAnswer::Unanswered), 1, 0)
     );
     assert_eq!(target.status().last_answer_age, Some(Duration::ZERO));
-    target.registration_sent(a);
+    renew(&target);
     assert_eq!(
         answer(&target),
         (Some(Bip6RegistrationAnswer::Unanswered), 2, 0)
@@ -138,13 +144,13 @@ async fn a_success_for_a_release_is_not_a_registrations() {
     let target = ForeignTarget::at(a);
     target.set_release_previous(true);
     target.lock().own = Some(bbmd(9));
-    target.registration_sent(a);
+    renew(&target);
     target.result(a, SUCCESS);
     // A move to B: the pass registers there and releases A.
     target.lock().take(config(b));
-    let (_, release) = target.pass(Instant::now());
+    let (_, release) = target.pass(Instant::now(), Cause::Change);
     assert_eq!(release.map(|(left, _)| left), Some(a));
-    target.registration_sent(b);
+    target.registration_sent();
     target.result(a, SUCCESS);
     assert_eq!(target.release_counters().released, 1);
     assert_eq!(answer(&target), (None, 0, 0));
@@ -163,11 +169,11 @@ async fn a_release_and_a_registration_to_one_bbmd_take_one_success_each() {
     // A to B releases A; with the release off, back to A releases nothing,
     // so A's release still waits when the registration to A goes.
     target.lock().take(config(b));
-    target.pass(Instant::now());
+    target.pass(Instant::now(), Cause::Change);
     target.set_release_previous(false);
     target.lock().take(config(a));
-    target.pass(Instant::now());
-    target.registration_sent(a);
+    target.pass(Instant::now(), Cause::Change);
+    target.registration_sent();
     target.result(a, SUCCESS);
     assert_eq!(target.release_counters().released, 1);
     assert_eq!(answer(&target), (None, 0, 0));
@@ -181,15 +187,15 @@ async fn a_release_and_a_registration_to_one_bbmd_take_one_success_each() {
 async fn a_bbmd_change_clears_the_old_answer() {
     let (a, b) = (bbmd(1), bbmd(2));
     let target = ForeignTarget::at(a);
-    target.registration_sent(a);
+    renew(&target);
     target.result(a, SUCCESS);
     let mut longer = config(a);
     longer.ttl = 120;
     target.lock().take(longer);
     assert_eq!(answer(&target), (Some(Bip6RegistrationAnswer::Held), 0, 0));
 
-    target.registration_sent(a);
-    target.registration_sent(a);
+    renew(&target);
+    renew(&target);
     assert_eq!(
         answer(&target),
         (Some(Bip6RegistrationAnswer::Unanswered), 1, 0)
@@ -199,7 +205,7 @@ async fn a_bbmd_change_clears_the_old_answer() {
     // A's answer to its outstanding registration comes too late.
     target.result(a, NAK);
     assert_eq!(answer(&target), (None, 0, 0));
-    target.registration_sent(b);
+    renew(&target);
     target.result(b, NAK);
     assert_eq!(
         answer(&target),
@@ -213,12 +219,12 @@ async fn a_bbmd_change_clears_the_old_answer() {
 async fn waiting_and_stopping_clear_the_answer() {
     let a = bbmd(1);
     let target = ForeignTarget::at(a);
-    target.registration_sent(a);
+    renew(&target);
     target.result(a, NAK);
     target.detach();
     assert_eq!(answer(&target), (None, 0, 1));
 
-    target.registration_sent(a);
+    renew(&target);
     target.result(a, NAK);
     let named = Bip6ForeignDeviceConfig {
         bbmd: "bbmd.example:47808".parse().unwrap(),
@@ -228,14 +234,16 @@ async fn waiting_and_stopping_clear_the_answer() {
     assert_eq!(answer(&target), (None, 0, 2));
 }
 
-/// A pass that read a BBMD since left starts nothing outstanding; the
-/// start's registration to the address its lookup found does, though the
-/// device still waits for the name until the start takes that address.
+/// A start's registration to a BBMD the device has since left starts
+/// nothing outstanding; one to the address the start's lookup found does,
+/// though the device still waits for the name until the start takes that
+/// address.
 #[tokio::test(start_paused = true)]
 async fn only_a_registration_to_the_bbmd_in_use_waits_for_an_answer() {
     let (a, b) = (bbmd(1), bbmd(2));
     let target = ForeignTarget::at(b);
-    target.registration_sent(a);
+    target.registration_going(a);
+    target.registration_sent();
     target.result(a, SUCCESS);
     assert_eq!(answer(&target), (None, 0, 0));
     assert_eq!(target.status().registrations_sent, 1);
@@ -245,8 +253,57 @@ async fn only_a_registration_to_the_bbmd_in_use_waits_for_an_answer() {
         ttl: 60,
     };
     let target = ForeignTarget::new(named, Arc::new(crate::bbmd_lookup::SystemResolver));
-    target.registration_sent(a);
+    target.registration_going(a);
+    target.registration_sent();
     target.take_found(a);
+    target.result(a, SUCCESS);
+    assert_eq!(answer(&target), (Some(Bip6RegistrationAnswer::Held), 0, 0));
+}
+
+/// A registration is outstanding from its pass, before the send returns,
+/// so an answer that beats the bookkeeping still counts.
+#[tokio::test(start_paused = true)]
+async fn a_registration_awaits_its_answer_before_it_is_sent() {
+    let a = bbmd(1);
+    let target = ForeignTarget::at(a);
+    target.pass(Instant::now(), Cause::Renewal);
+    target.result(a, SUCCESS);
+    assert_eq!(answer(&target), (Some(Bip6RegistrationAnswer::Held), 0, 0));
+    target.registration_sent();
+    assert_eq!(answer(&target), (Some(Bip6RegistrationAnswer::Held), 0, 0));
+    assert_eq!(target.status().registrations_sent, 1);
+}
+
+/// A registration that couldn't be sent awaits no answer and goes
+/// unanswered at no renewal.
+#[tokio::test(start_paused = true)]
+async fn a_failed_send_is_not_an_unanswered_registration() {
+    let a = bbmd(1);
+    let target = ForeignTarget::at(a);
+    target.pass(Instant::now(), Cause::Renewal);
+    target.registration_not_sent(a);
+    target.result(a, SUCCESS);
+    assert_eq!(answer(&target), (None, 0, 0));
+    renew(&target);
+    assert_eq!(answer(&target), (None, 0, 0));
+    assert_eq!(target.status().registrations_sent, 1);
+}
+
+/// A registration an activation's immediate one supersedes wasn't left
+/// unanswered; one its renewal finds still outstanding was.
+#[tokio::test(start_paused = true)]
+async fn a_superseded_registration_is_not_unanswered() {
+    let a = bbmd(1);
+    let target = ForeignTarget::at(a);
+    renew(&target);
+    target.pass(Instant::now(), Cause::Change);
+    target.registration_sent();
+    assert_eq!(answer(&target), (None, 0, 0));
+    renew(&target);
+    assert_eq!(
+        answer(&target),
+        (Some(Bip6RegistrationAnswer::Unanswered), 1, 0)
+    );
     target.result(a, SUCCESS);
     assert_eq!(answer(&target), (Some(Bip6RegistrationAnswer::Held), 0, 0));
 }
