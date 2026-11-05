@@ -62,7 +62,7 @@ pub struct Bip6ReleaseCounters {
 
 /// How long a release's answer is waited for: B/IP's default response
 /// timeout (`bacnet_bip_core::node::DEFAULT_RESPONSE_TIMEOUT`).
-const RELEASE_TIMEOUT: Duration = Duration::from_secs(3);
+pub(super) const RELEASE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// The release in flight: the BBMD asked and when its answer is due.
 #[derive(Clone, Copy, Debug)]

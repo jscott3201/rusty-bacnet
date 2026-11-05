@@ -360,7 +360,9 @@ async fn reregister(target: Arc<ForeignTarget>, socket: Arc<Bip6Socket>, source_
         #[cfg(test)]
         target.in_flight().await;
         if let Some(bbmd) = config.bbmd.address() {
-            if send_register_foreign_device_v6(&socket, bbmd, config.ttl, source_vmac).await {
+            if !send_fails(&target)
+                && send_register_foreign_device_v6(&socket, bbmd, config.ttl, source_vmac).await
+            {
                 target.registration_sent();
             } else {
                 target.registration_not_sent(bbmd);
@@ -373,6 +375,20 @@ async fn reregister(target: Arc<ForeignTarget>, socket: Arc<Bip6Socket>, source_
         }
         renew_at = tokio::time::Instant::now() + target.renewal_interval();
     }
+}
+
+/// Whether a test made this re-registration's send fail, unsent.
+#[cfg(test)]
+fn send_fails(target: &ForeignTarget) -> bool {
+    target
+        .fail_send
+        .swap(false, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Whether a test made this re-registration's send fail: never outside one.
+#[cfg(not(test))]
+fn send_fails(_: &ForeignTarget) -> bool {
+    false
 }
 
 /// Ask `bbmd` to delete the FDT entry `entry` (Clause U.4.5.4); whether it
@@ -707,6 +723,10 @@ impl TransportPort for Bip6Transport {
         if let Some(task) = self.resolve_task.take() {
             task.abort();
             let _ = task.await;
+        }
+        // Only now, so no pass or answer in flight leaves one behind.
+        if let Some(fd) = &self.foreign_device {
+            fd.forget_answers();
         }
         self.socket = None;
         self.local_mac = [0; 3];

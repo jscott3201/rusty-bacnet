@@ -35,6 +35,12 @@ fn renew(target: &ForeignTarget) {
     target.registration_sent();
 }
 
+/// An activation's pass of `target`, its registration sent.
+fn activate(target: &ForeignTarget) {
+    target.pass(Instant::now(), Cause::Change);
+    target.registration_sent();
+}
+
 /// The answer, unanswered streak and refusals `target` reports.
 fn answer(target: &ForeignTarget) -> (Option<Bip6RegistrationAnswer>, u64, u64) {
     let status = target.status();
@@ -222,6 +228,7 @@ async fn waiting_and_stopping_clear_the_answer() {
     renew(&target);
     target.result(a, NAK);
     target.detach();
+    target.forget_answers();
     assert_eq!(answer(&target), (None, 0, 1));
 
     renew(&target);
@@ -304,6 +311,86 @@ async fn a_superseded_registration_is_not_unanswered() {
         answer(&target),
         (Some(Bip6RegistrationAnswer::Unanswered), 1, 0)
     );
+    target.result(a, SUCCESS);
+    assert_eq!(answer(&target), (Some(Bip6RegistrationAnswer::Held), 0, 0));
+}
+
+/// Activations faster than the renewal can't hide a silent BBMD: once it
+/// has been silent for the 3 s answer timeout since the first registration
+/// they superseded, the next one counts it unanswered, and the streak goes
+/// on every 3 s of silence after.
+#[tokio::test(start_paused = true)]
+async fn repeated_activations_reach_no_answer_within_the_timeout() {
+    let a = bbmd(1);
+    let target = ForeignTarget::at(a);
+    renew(&target);
+    target.result(a, SUCCESS);
+    renew(&target);
+    for _ in 0..2 {
+        advance(Duration::from_secs(1)).await;
+        activate(&target);
+        assert_eq!(answer(&target), (Some(Bip6RegistrationAnswer::Held), 0, 0));
+    }
+    advance(Duration::from_secs(1)).await;
+    activate(&target);
+    assert_eq!(
+        answer(&target),
+        (Some(Bip6RegistrationAnswer::Unanswered), 1, 0)
+    );
+    for _ in 0..2 {
+        advance(Duration::from_secs(1)).await;
+        activate(&target);
+    }
+    assert_eq!(
+        answer(&target),
+        (Some(Bip6RegistrationAnswer::Unanswered), 1, 0)
+    );
+    advance(Duration::from_secs(1)).await;
+    activate(&target);
+    assert_eq!(
+        answer(&target),
+        (Some(Bip6RegistrationAnswer::Unanswered), 2, 0)
+    );
+}
+
+/// An answer that comes within the timeout still marks the registration
+/// held, however many activations superseded it meanwhile.
+#[tokio::test(start_paused = true)]
+async fn an_answer_within_the_timeout_marks_it_held() {
+    let a = bbmd(1);
+    let target = ForeignTarget::at(a);
+    renew(&target);
+    advance(Duration::from_millis(1_400)).await;
+    activate(&target);
+    advance(Duration::from_millis(1_500)).await;
+    activate(&target);
+    target.result(a, SUCCESS);
+    assert_eq!(answer(&target), (Some(Bip6RegistrationAnswer::Held), 0, 0));
+}
+
+/// A renewal whose send fails counts nothing, and the registration it
+/// would have replaced awaits its answer again; the next renewal that goes
+/// out counts that one unanswered.
+#[tokio::test(start_paused = true)]
+async fn a_failed_renewal_puts_the_one_before_back() {
+    let a = bbmd(1);
+    let target = ForeignTarget::at(a);
+    renew(&target);
+    advance(Duration::from_secs(30)).await;
+    target.pass(Instant::now(), Cause::Renewal);
+    target.registration_not_sent(a);
+    assert_eq!(answer(&target), (None, 0, 0));
+    renew(&target);
+    assert_eq!(
+        answer(&target),
+        (Some(Bip6RegistrationAnswer::Unanswered), 1, 0)
+    );
+
+    // The registration put back is the one an answer finds.
+    let target = ForeignTarget::at(a);
+    renew(&target);
+    target.pass(Instant::now(), Cause::Renewal);
+    target.registration_not_sent(a);
     target.result(a, SUCCESS);
     assert_eq!(answer(&target), (Some(Bip6RegistrationAnswer::Held), 0, 0));
 }

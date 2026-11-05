@@ -19,21 +19,33 @@
 //! - A registration still outstanding when its renewal goes is unanswered:
 //!   B/IPv6 renews at half the time-to-live and retries on that schedule,
 //!   whatever the answer. One an activation's immediate registration
-//!   supersedes wasn't left unanswered, and isn't counted.
+//!   supersedes is unanswered only once the BBMD has been silent for
+//!   [`ANSWER_TIMEOUT`] since the oldest registration the chain of
+//!   supersedes left unanswered: a younger one may still be answered, so
+//!   NO ANSWER doesn't flicker on, while activations faster than the
+//!   renewal can't hide a silent BBMD for good.
 //!
 //! A registration is outstanding from just before it is sent, under the
 //! lock the re-registration pass reads the target with, so an answer that
-//! beats the send's return still finds it; a send that fails takes it back.
-//! A move to another BBMD, the wait for a BBMD's host name and a stop clear
-//! what the old BBMD said; the refusal total stays.
+//! beats the send's return still finds it. The one it replaces counts as
+//! unanswered only once the send has gone out; a send that fails puts that
+//! one back. A move to another BBMD, the wait for a BBMD's host name and a
+//! stop clear what the old BBMD said; the refusal total stays.
 
 use std::net::SocketAddrV6;
+use std::time::Duration;
 
 use bacnet_bip_codec::ipv6::Bvlc6ResultCode;
 use tokio::time::Instant;
 use tracing::debug;
 
+use super::release::RELEASE_TIMEOUT;
 use super::{Bip6ForeignStatus, ForeignTarget, State};
+
+/// How long the BBMD may stay silent before a registration an activation
+/// supersedes counts as unanswered: the release's wait, B/IP's default
+/// response timeout (3 s).
+pub(super) const ANSWER_TIMEOUT: Duration = RELEASE_TIMEOUT;
 
 /// What the BBMD in use made of this device's latest registration there
 /// (#2388), as
@@ -47,8 +59,8 @@ pub enum Bip6RegistrationAnswer {
     /// The BBMD answered with the Register-Foreign-Device NAK: it won't
     /// take this device. Registrations go on at the usual renewal.
     Refused,
-    /// Its renewal went before the BBMD answered it. One that an
-    /// activation's immediate registration replaced isn't counted.
+    /// Its renewal went before the BBMD answered it, or an activation's
+    /// registration replaced it with the BBMD silent for 3 s or more.
     Unanswered,
 }
 
@@ -63,12 +75,25 @@ pub(in crate::bip6) enum Cause {
     Change,
 }
 
+/// A registration awaiting its answer.
+#[derive(Clone, Copy, Debug)]
+struct Mark {
+    /// The BBMD it went to.
+    bbmd: SocketAddrV6,
+    /// Since when the BBMD has been silent: when this registration went,
+    /// or the oldest one it superseded unanswered went.
+    since: Instant,
+}
+
 /// The registrations' answers, kept under the target's lock.
 #[derive(Debug, Default)]
 pub(super) struct Answers {
-    /// The BBMD the latest registration went to, while it waits for its
-    /// answer.
-    outstanding: Option<SocketAddrV6>,
+    /// The latest registration, while it waits for its answer.
+    outstanding: Option<Mark>,
+    /// The registration the outstanding one replaced, while the send of the
+    /// outstanding one is out, and whether it went unanswered: counted once
+    /// that send goes, and put back if it fails.
+    replaced: Option<(Mark, bool)>,
     /// The BBMD's latest answer, and when it was recorded.
     last: Option<(Bip6RegistrationAnswer, Instant)>,
     /// Registrations to the BBMD in use that went unanswered in a row.
@@ -90,10 +115,11 @@ impl Answers {
         if !self
             .outstanding
             .zip(bbmd)
-            .is_some_and(|(sent, now)| same(sent, now))
+            .is_some_and(|(sent, now)| same(sent.bbmd, now))
         {
             self.outstanding = None;
         }
+        self.replaced = None;
         self.last = None;
         self.unanswered = 0;
     }
@@ -102,6 +128,7 @@ impl Answers {
     /// again.
     pub(super) fn reset(&mut self) {
         self.outstanding = None;
+        self.replaced = None;
         self.last = None;
         self.unanswered = 0;
     }
@@ -120,10 +147,12 @@ impl State {
     /// A Register-Foreign-Device is about to go to `bbmd` at `now`, for
     /// `cause`: it is outstanding from here, before the send. The one
     /// before, if still outstanding, went unanswered when this is its
-    /// renewal, and was superseded otherwise. A start's registration to a
-    /// BBMD the device has since left starts nothing; one while the device
-    /// still waits for its BBMD's name goes to the address the start found
-    /// (#2365).
+    /// renewal or the BBMD has been silent for [`ANSWER_TIMEOUT`], and was
+    /// superseded otherwise, its silence carried on; either way it is
+    /// settled when the send goes ([`ForeignTarget::registration_sent`]).
+    /// A start's registration to a BBMD the device has since left starts
+    /// nothing; one while the device still waits for its BBMD's name goes
+    /// to the address the start found (#2365).
     pub(super) fn registration_going(&mut self, bbmd: SocketAddrV6, cause: Cause, now: Instant) {
         let left = self
             .config
@@ -134,11 +163,16 @@ impl State {
             return;
         }
         let answers = &mut self.answers;
-        if answers.outstanding.replace(bbmd).is_some() && cause == Cause::Renewal {
-            answers.unanswered = answers.unanswered.saturating_add(1);
-            answers.last = Some((Bip6RegistrationAnswer::Unanswered, now));
-            debug!(%bbmd, "B/IPv6 BBMD left a foreign-device registration unanswered");
-        }
+        let previous = answers.outstanding;
+        let unanswered = previous.is_some_and(|before| {
+            cause == Cause::Renewal || now.saturating_duration_since(before.since) >= ANSWER_TIMEOUT
+        });
+        let since = match previous {
+            Some(before) if !unanswered => before.since,
+            _ => now,
+        };
+        answers.outstanding = Some(Mark { bbmd, since });
+        answers.replaced = previous.map(|before| (before, unanswered));
     }
 
     /// `peer` sent a BVLC-Result with `code` at `now`: the answer to the
@@ -146,7 +180,10 @@ impl State {
     /// success or the Register-Foreign-Device NAK.
     fn registration_answered(&mut self, peer: SocketAddrV6, code: Bvlc6ResultCode, now: Instant) {
         let answers = &mut self.answers;
-        if !answers.outstanding.is_some_and(|sent| same(sent, peer)) {
+        if !answers
+            .outstanding
+            .is_some_and(|sent| same(sent.bbmd, peer))
+        {
             return;
         }
         let answer = if code == Bvlc6ResultCode::SUCCESSFUL_COMPLETION {
@@ -159,6 +196,7 @@ impl State {
             return;
         };
         answers.outstanding = None;
+        answers.replaced = None;
         answers.unanswered = 0;
         answers.last = Some((answer, now));
     }
@@ -171,19 +209,36 @@ impl ForeignTarget {
             .registration_going(bbmd, Cause::Change, Instant::now());
     }
 
-    /// The Register-Foreign-Device about to go went out.
+    /// The Register-Foreign-Device about to go went out: the one it
+    /// replaced, if that went unanswered, is counted now.
     pub(in crate::bip6) fn registration_sent(&self) {
         let mut state = self.lock();
         state.registrations_sent = state.registrations_sent.saturating_add(1);
+        let answers = &mut state.answers;
+        if let Some((before, true)) = answers.replaced.take() {
+            answers.unanswered = answers.unanswered.saturating_add(1);
+            answers.last = Some((Bip6RegistrationAnswer::Unanswered, Instant::now()));
+            debug!(bbmd = %before.bbmd, "B/IPv6 BBMD left a foreign-device registration unanswered");
+        }
     }
 
     /// The Register-Foreign-Device to `bbmd` couldn't be sent: it awaits no
-    /// answer, and goes unanswered at no renewal.
+    /// answer, and the one it replaced awaits its own again.
     pub(in crate::bip6) fn registration_not_sent(&self, bbmd: SocketAddrV6) {
         let answers = &mut self.lock().answers;
-        if answers.outstanding.is_some_and(|sent| same(sent, bbmd)) {
-            answers.outstanding = None;
+        let replaced = answers.replaced.take();
+        if answers
+            .outstanding
+            .is_some_and(|sent| same(sent.bbmd, bbmd))
+        {
+            answers.outstanding = replaced.map(|(before, _)| before);
         }
+    }
+
+    /// Forget what the BBMD said, once the stopping transport's tasks have
+    /// ended, so no pass in flight leaves a registration outstanding.
+    pub(in crate::bip6) fn forget_answers(&self) {
+        self.lock().answers.reset();
     }
 
     /// `peer` sent a BVLC-Result with `code`: the answer to the release in

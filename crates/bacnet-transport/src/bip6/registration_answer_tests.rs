@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::net::UdpSocket;
+use tokio::time::timeout;
 
 use super::foreign_retarget_tests::{
     address_of, bbmd, changes, next, next_within, registration, started,
@@ -197,5 +198,55 @@ async fn a_refusal_keeps_the_schedule_and_silence_is_unanswered() {
     answered(&transport, Some(Bip6RegistrationAnswer::Unanswered)).await;
     let silent = status(&transport);
     assert_eq!((silent.unanswered, silent.registrations_refused), (1, 1));
+    transport.stop().await.unwrap();
+}
+
+/// The reviewer's case: activations every second against a silent BBMD.
+/// Each registers at once and supersedes the one before, but once the BBMD
+/// has been silent for the 3 s answer timeout the status reads unanswered.
+/// Time is paused; each pass is read at the gate, and its bookkeeping a
+/// millisecond later.
+#[tokio::test(start_paused = true)]
+async fn activations_against_a_silent_bbmd_reach_no_answer() {
+    let peer = bbmd().await;
+    let (mut transport, lent) = started(&peer, 300).await;
+    let target = Arc::clone(transport.foreign_target().unwrap());
+    for second in 1..=3 {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        lent.activate(&changes(None, Some(300))).unwrap();
+        target.reached.notified().await;
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        let want = (second == 3).then_some(Bip6RegistrationAnswer::Unanswered);
+        assert_eq!(status(&transport).last_answer, want, "after {second} s");
+    }
+    assert_eq!(status(&transport).unanswered, 1);
+    transport.stop().await.unwrap();
+}
+
+/// A renewal whose send fails counts nothing, sends nothing, and leaves
+/// the registration before it awaiting its answer, which still counts.
+#[tokio::test(start_paused = true)]
+async fn a_failed_send_counts_nothing_and_keeps_the_one_before() {
+    let peer = bbmd().await;
+    let (mut transport, _lent) = started(&peer, 60).await;
+    let target = Arc::clone(transport.foreign_target().unwrap());
+    target
+        .fail_send
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    target.reached.notified().await;
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    let failed = status(&transport);
+    assert_eq!(
+        (
+            failed.last_answer,
+            failed.unanswered,
+            failed.registrations_sent
+        ),
+        (None, 0, 1)
+    );
+    let nothing = timeout(Duration::from_millis(500), registration(&peer)).await;
+    assert!(nothing.is_err(), "the failed renewal sent {nothing:?}");
+    result(&peer, &transport, Bvlc6ResultCode::SUCCESSFUL_COMPLETION).await;
+    answered(&transport, Some(Bip6RegistrationAnswer::Held)).await;
     transport.stop().await.unwrap();
 }

@@ -609,9 +609,10 @@ BBMD it has used), and the releases of BBMDs it left (#2388). The status bar
 reads `FD held`, `refused` or `no answer` as on B/IP, and a refusal or silence
 raises B/IP's banner; after a refusal it says broadcasts go undelivered, since
 B/IPv6 only logs the BBMD's refusal of each. A registration counts as unanswered
-once its renewal goes first: B/IPv6 renews at half the TTL whatever the answer,
-and one that a Network Port activation replaces at once isn't counted. `:bbmd`,
-`r` and `m` read tables on B/IP only, and say so on other transports.
+once its renewal goes first: B/IPv6 renews at half the TTL whatever the answer.
+One that a Network Port activation replaces at once counts only once the BBMD has
+been silent for 3 seconds. `:bbmd`, `r` and `m` read tables on B/IP only, and say
+so on other transports.
 Once the BBMD accepts, the TUI reads its FDT and shows the entry the BBMD
 recorded for us, the address it forwards broadcasts to. Behind a NAT router
 the BBMD records the router's address instead: give it with

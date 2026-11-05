@@ -104,6 +104,9 @@ pub(crate) struct ForeignTarget {
     /// Signalled when a re-registration reaches [`Self::gate`].
     #[cfg(test)]
     pub(super) reached: Notify,
+    /// Makes the next re-registration's send fail, unsent, in a test.
+    #[cfg(test)]
+    pub(super) fail_send: std::sync::atomic::AtomicBool,
 }
 
 /// Why a [`Bip6ForeignDeviceConfig`] can't register: see
@@ -239,6 +242,8 @@ impl ForeignTarget {
             gate: tokio::sync::Semaphore::new(tokio::sync::Semaphore::MAX_PERMITS),
             #[cfg(test)]
             reached: Notify::new(),
+            #[cfg(test)]
+            fail_send: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -319,14 +324,14 @@ impl ForeignTarget {
     }
 
     /// The transport stopped: changes are refused until it runs again, a
-    /// lookup that ends meanwhile counts nothing, a release still out ends
-    /// unanswered, and the BBMD's answers go.
+    /// lookup that ends meanwhile counts nothing, and a release still out
+    /// ends unanswered. The BBMD's answers go once the tasks have ended
+    /// ([`Self::forget_answers`]).
     pub(super) fn detach(&self) {
         let mut state = self.lock();
         state.own = None;
         state.counters.last_failure = None;
         state.end_releases();
-        state.answers.reset();
     }
 
     /// Resolve when an activation changed the registration.
