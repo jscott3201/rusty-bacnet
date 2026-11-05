@@ -431,8 +431,8 @@ impl AnyTransport {
     }
 
     /// The variant's frame tap (see [`crate::tap`]): B/IP, B/IPv6,
-    /// BACnet/SC and MS/TP have one; Ethernet and loopback do not yet, and
-    /// give `None`.
+    /// BACnet/SC, MS/TP and Ethernet have one; loopback, which is no data
+    /// link, gives `None`.
     pub fn frame_tap(&self) -> Option<&crate::tap::FrameTap> {
         match self {
             Self::Bip(t) => Some(t.frame_tap()),
@@ -440,7 +440,7 @@ impl AnyTransport {
             #[cfg(feature = "ipv6")]
             Self::Bip6(t) => Some(t.frame_tap()),
             #[cfg(all(feature = "ethernet", target_os = "linux"))]
-            Self::Ethernet(_) => None,
+            Self::Ethernet(t) => Some(t.frame_tap()),
             #[cfg(feature = "sc-tls")]
             Self::Sc(t) => Some(t.frame_tap()),
             Self::Loopback(_) => None,

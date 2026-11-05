@@ -193,6 +193,31 @@ pub struct SessionConfig {
     pub min_request_interval_ms: u64,
 }
 
+impl SessionConfig {
+    /// The checks [`EndpointSession::new`] makes, without a transport, so a
+    /// builder that dials can make them before it does (#1946).
+    pub(crate) fn validate(&self) -> Result<(), Error> {
+        if self.queue_capacity == 0 {
+            return Err(Error::Encoding(
+                "endpoint session queue capacity must be greater than zero".into(),
+            ));
+        }
+        if self.read_work_limit == 0 {
+            return Err(Error::Encoding(
+                "endpoint session read work limit must be greater than zero".into(),
+            ));
+        }
+        let interval = self.min_request_interval_ms;
+        if interval > bacnet_client::client::MAX_MIN_REQUEST_INTERVAL_MS {
+            return Err(Error::Encoding(format!(
+                "endpoint session min-request-interval {interval} ms is more than {} ms",
+                bacnet_client::client::MAX_MIN_REQUEST_INTERVAL_MS
+            )));
+        }
+        Ok(())
+    }
+}
+
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
@@ -309,6 +334,8 @@ pub struct EndpointSession<T: TransportPort + 'static = bacnet_transport::any::A
     pub(crate) bip_status: Option<bacnet_transport::bip::BvlcClientStatus>,
     /// The MS/TP transport's counters, when the MS/TP builder built it.
     pub(crate) mstp_diagnostics: Option<bacnet_transport::mstp::MstpDiagnostics>,
+    /// The SC transport's events and link status, when the SC builder built it.
+    pub(crate) sc_link: Option<bacnet_transport::sc::ScLinkMonitor>,
 }
 
 /// Terminal state of the session dispatch task.
@@ -348,30 +375,14 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// assert!(EndpointSession::new(transport, SessionRole::Both, bad).is_err());
     /// ```
     pub fn new(transport: T, role: SessionRole, config: SessionConfig) -> Result<Self, Error> {
-        if config.queue_capacity == 0 {
-            return Err(Error::Encoding(
-                "endpoint session queue capacity must be greater than zero".into(),
-            ));
-        }
-        if config.read_work_limit == 0 {
-            return Err(Error::Encoding(
-                "endpoint session read work limit must be greater than zero".into(),
-            ));
-        }
-        let interval = config.min_request_interval_ms;
-        if interval > bacnet_client::client::MAX_MIN_REQUEST_INTERVAL_MS {
-            return Err(Error::Encoding(format!(
-                "endpoint session min-request-interval {interval} ms is more than {} ms",
-                bacnet_client::client::MAX_MIN_REQUEST_INTERVAL_MS
-            )));
-        }
+        config.validate()?;
         let coordinator = Arc::new(OutboundTransactionCoordinator::new());
         let token = SessionToken::new(Arc::clone(&coordinator));
         let client_config = ClientConfig {
             apdu_timeout_ms: config.apdu_timeout_ms,
             apdu_retries: config.apdu_retries,
             max_apdu_length: config.max_apdu_length,
-            min_request_interval_ms: interval,
+            min_request_interval_ms: config.min_request_interval_ms,
             ..ClientConfig::default()
         };
         let local_receive_capacity = transport.local_receive_apdu_capacity();
@@ -421,6 +432,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             egress: None,
             bip_status: None,
             mstp_diagnostics: None,
+            sc_link: None,
         })
     }
 
@@ -794,6 +806,19 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// before handing a transport to [`Self::new`].
     pub fn mstp_diagnostics(&self) -> Option<bacnet_transport::mstp::MstpDiagnostics> {
         self.mstp_diagnostics.clone()
+    }
+
+    /// The BACnet/SC hub link's events and status (#1946): a handle on the
+    /// transport's own event stream and status snapshot, readable in any
+    /// state, after stop included. Subscribe to its events before
+    /// [`start`](Self::start) to see the first connection, and through every
+    /// reconnect and failover the transport makes after. It is there for a
+    /// session [`ScEndpointBuilder`](crate::sc::ScEndpointBuilder) built, and
+    /// `None` for any other: take
+    /// [`ScTransport::link_monitor`](bacnet_transport::sc::ScTransport::link_monitor)
+    /// before handing a transport to [`Self::new`].
+    pub fn sc_link(&self) -> Option<bacnet_transport::sc::ScLinkMonitor> {
+        self.sc_link.clone()
     }
 
     /// Returns the composed session role (narrow admin).

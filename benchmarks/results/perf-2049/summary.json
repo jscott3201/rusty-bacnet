@@ -1,0 +1,400 @@
+{
+  "state": {
+    "sha": "7bef2e4a78d520cff6cfbacefe91a801ed2c9a65",
+    "image": {
+      "tag": "rb-perf-counts:ac28c4cf5d0a",
+      "id": "sha256:862581e14c39b2ad98278c9309a30abf30dbb3b9b6ad1dbe5bdbd23f351a5092",
+      "packages": {
+        "gcc": "4:13.2.0-7ubuntu1",
+        "libc6": "2.39-0ubuntu8.9",
+        "valgrind": "1:3.22.0-0ubuntu3"
+      }
+    },
+    "volumes": [
+      "rb-perf-2049-47cd594f-registry",
+      "rb-perf-2049-47cd594f-target"
+    ],
+    "binary_sha256": "b0c2f53d5f524872051b1bbc08404f04cee694c97312dbf7ce8735f21480dc6d",
+    "rustc": "1.99.0",
+    "lock_dropped": [],
+    "environment": {
+      "GLIBC_TUNABLES": "glibc.malloc.tcache_count=32:glibc.malloc.mmap_threshold=1048576:glibc.malloc.trim_threshold=1048576:glibc.malloc.top_pad=1048576"
+    }
+  },
+  "rows": {
+    "none/ct": {
+      "values": [
+        39654.70788888889,
+        39657.54911111111,
+        39656.254,
+        39656.29666666667,
+        39660.85955555556,
+        39647.371333333336
+      ],
+      "median": 39656.27533333334,
+      "range": 13.488222222222248,
+      "median_with_harness": 40709.28444444445,
+      "alloc_calls": 25.0002,
+      "alloc_bytes": 7944.0208,
+      "wall_ns_per_request": [
+        5664.4,
+        5711.7,
+        5714.2,
+        5730.3,
+        5741.4,
+        5759.0,
+        5804.7,
+        5820.7,
+        5852.8,
+        5936.2
+      ],
+      "wall_median": 5750.2
+    },
+    "none/mt": {
+      "values": [
+        40812.82988888889,
+        40855.601777777774,
+        40833.299666666666,
+        40809.08511111111,
+        40848.975,
+        40827.842
+      ],
+      "median": 40830.57083333333,
+      "range": 46.516666666662786,
+      "median_with_harness": 41878.57994444444,
+      "alloc_calls": 25.0002,
+      "alloc_bytes": 7944.0208,
+      "wall_ns_per_request": [
+        16773.9,
+        16838.3,
+        16843.5,
+        16903.8,
+        17047.5,
+        17331.2,
+        17437.4,
+        17511.4,
+        17839.9,
+        20614.1
+      ],
+      "wall_median": 17189.35
+    },
+    "pool/ct": {
+      "values": [
+        45323.39155555556,
+        45220.09966666667,
+        45329.78477777778,
+        45506.948333333334,
+        45418.45411111111,
+        45407.377555555555
+      ],
+      "median": 45368.58116666667,
+      "range": 286.84866666666494,
+      "median_with_harness": 46645.61794444444,
+      "alloc_calls": 30.0008,
+      "alloc_bytes": 8406.0398,
+      "wall_ns_per_request": [
+        17753.2,
+        17939.1,
+        17996.7,
+        18020.6,
+        18037.1,
+        18186.5,
+        18220.1,
+        18839.6,
+        19400.0,
+        25410.4
+      ],
+      "wall_median": 18111.8
+    },
+    "pool/mt": {
+      "values": [
+        47620.073333333334,
+        47623.301222222224,
+        47558.780666666666,
+        47300.16033333333,
+        47371.692777777775,
+        47331.058666666664
+      ],
+      "median": 47465.236722222224,
+      "range": 323.1408888888909,
+      "median_with_harness": 48737.25266666667,
+      "alloc_calls": 30.000349999999997,
+      "alloc_bytes": 8406.0364,
+      "wall_ns_per_request": [
+        33664.9,
+        34096.3,
+        35362.4,
+        36684.8,
+        37131.9,
+        38884.0,
+        40721.9,
+        41546.7,
+        47970.0,
+        49096.8
+      ],
+      "wall_median": 38007.95
+    },
+    "inline/ct": {
+      "values": [
+        41422.542,
+        41414.98822222222,
+        41505.00466666667,
+        41409.62066666667,
+        41415.67533333333,
+        41416.91388888889
+      ],
+      "median": 41416.29461111111,
+      "range": 95.3839999999982,
+      "median_with_harness": 42628.30372222222,
+      "alloc_calls": 29.0002,
+      "alloc_bytes": 8150.0208,
+      "wall_ns_per_request": [
+        5781.7,
+        5820.7,
+        5840.4,
+        5851.5,
+        5856.3,
+        5881.0,
+        5891.4,
+        5895.5,
+        5902.6,
+        6005.1
+      ],
+      "wall_median": 5868.65
+    },
+    "inline/mt": {
+      "values": [
+        42619.78244444444,
+        42666.36855555556,
+        42742.137444444445,
+        42623.69388888889,
+        42625.82666666667,
+        42621.16855555555
+      ],
+      "median": 42624.76027777778,
+      "range": 122.3550000000032,
+      "median_with_harness": 43831.76938888889,
+      "alloc_calls": 29.0002,
+      "alloc_bytes": 8150.0208,
+      "wall_ns_per_request": [
+        16295.4,
+        17069.7,
+        17078.3,
+        17160.2,
+        17212.5,
+        17318.0,
+        17508.9,
+        18478.3,
+        23322.4,
+        25742.5
+      ],
+      "wall_median": 17265.25
+    }
+  },
+  "call_differences_pool_minus_inline": {
+    "ct": [
+      [
+        35.01188888888889,
+        "__aarch64_cas4_acq"
+      ],
+      [
+        13.00266666666667,
+        "__aarch64_swp4_rel"
+      ],
+      [
+        11.002500000000001,
+        "__pthread_disable_asynccancel"
+      ],
+      [
+        11.002500000000001,
+        "__pthread_enable_asynccancel"
+      ],
+      [
+        10.007833333333338,
+        "__aarch64_ldadd8_relax"
+      ],
+      [
+        6.219444444444445,
+        "__aarch64_cas8_rel"
+      ],
+      [
+        6.016000000000005,
+        "__aarch64_cas8_acq_rel"
+      ],
+      [
+        5.013777777777779,
+        "<std::sys::pal::unix::time::Timespec>::now"
+      ],
+      [
+        5.011666666666667,
+        "clock_gettime@@GLIBC_2.17"
+      ],
+      [
+        4.2172777777777775,
+        "__aarch64_cas8_acq"
+      ],
+      [
+        4.007333333333335,
+        "__aarch64_ldadd8_acq_rel"
+      ],
+      [
+        4.0,
+        "core::ptr::drop_glue::<tokio::runtime::task::core::Stage<tokio::runtime::blocking::task::BlockingTask<bacnet_server::server::requests::mutations::ask_mutation_policy::{closure#0}::{closure#0}>>>"
+      ],
+      [
+        3.009166666666667,
+        "<std::sys::pal::unix::time::Timespec>::sub_timespec"
+      ],
+      [
+        3.0,
+        "<bacnet_server::server::requests::mutations::Request>::decide::{closure#0}"
+      ],
+      [
+        -2.197222222222223,
+        "__aarch64_swp8_acq"
+      ],
+      [
+        2.035333333333334,
+        "policy_counts::main"
+      ],
+      [
+        2.004999999999999,
+        "<tokio::runtime::time::Driver>::park_internal"
+      ],
+      [
+        2.003222222222222,
+        "<tokio::runtime::scheduler::inject::Inject<alloc::sync::Arc<tokio::runtime::scheduler::current_thread::Handle>>>::pop"
+      ],
+      [
+        2.000611111111109,
+        "malloc"
+      ],
+      [
+        2.000111111111111,
+        "syscall"
+      ],
+      [
+        2.0,
+        "<bacnet_server::server::BACnetServer<bacnet_transport::bip::BipTransport>>::handle_admitted_confirmed_request::{closure#0}"
+      ],
+      [
+        2.0,
+        "<bacnet_server::server::request_tasks::RequestTasks>::try_spawn::<futures_util::future::either::Either<<bacnet_server::server::BACnetServer<bacnet_transport::bip::BipTransport>>::handle_admitted_read_property::{closure#0}, core::pin::Pin<alloc::boxed::Box<<bacnet_server::server::BACnetServer<bacnet_transport::bip::BipTransport>>::run_admitted_confirmed_request::{closure#0}>>>, <bacnet_server::server::BACnetServer<bacnet_transport::bip::BipTransport>>::dispatch::{closure#0}::{closure#1}>::{closure#0}"
+      ],
+      [
+        2.0,
+        "<std::sys::sync::condvar::futex::Condvar>::wait_timeout"
+      ],
+      [
+        2.0,
+        "tokio::runtime::task::harness::can_read_output"
+      ],
+      [
+        2.0,
+        "tokio::runtime::task::raw::poll::<<bacnet_server::server::request_tasks::RequestTasks>::try_spawn<futures_util::future::either::Either<<bacnet_server::server::BACnetServer<bacnet_transport::bip::BipTransport>>::handle_admitted_read_property::{closure#0}, core::pin::Pin<alloc::boxed::Box<<bacnet_server::server::BACnetServer<bacnet_transport::bip::BipTransport>>::run_admitted_confirmed_request::{closure#0}>>>, <bacnet_server::server::BACnetServer<bacnet_transport::bip::BipTransport>>::dispatch::{closure#0}::{closure#1}>::{closure#0}, alloc::sync::Arc<tokio::runtime::scheduler::current_thread::Handle>>"
+      ]
+    ],
+    "mt": [
+      [
+        24.322666666666663,
+        "__aarch64_cas4_acq"
+      ],
+      [
+        20.242999999999995,
+        "__aarch64_swp4_rel"
+      ],
+      [
+        11.001611111111117,
+        "__aarch64_cas8_acq_rel"
+      ],
+      [
+        10.214055555555557,
+        "clock_gettime@@GLIBC_2.17"
+      ],
+      [
+        10.015444444444455,
+        "__aarch64_ldadd8_relax"
+      ],
+      [
+        8.338944444444444,
+        "__aarch64_ldadd8_acq_rel"
+      ],
+      [
+        6.096555555555554,
+        "<std::sys::pal::unix::time::Timespec>::now"
+      ],
+      [
+        5.123055555555556,
+        "<std::sys::pal::unix::time::Timespec>::sub_timespec"
+      ],
+      [
+        4.339444444444444,
+        "tokio::runtime::task::raw::poll::<tokio::runtime::blocking::task::BlockingTask<<tokio::runtime::scheduler::multi_thread::worker::Launch>::launch::{closure#0}>, tokio::runtime::blocking::schedule::BlockingSchedule>"
+      ],
+      [
+        4.1915555555555555,
+        "syscall"
+      ],
+      [
+        4.0,
+        "core::ptr::drop_glue::<tokio::runtime::task::core::Stage<tokio::runtime::blocking::task::BlockingTask<bacnet_server::server::requests::mutations::ask_mutation_policy::{closure#0}::{closure#0}>>>"
+      ],
+      [
+        3.985388888888888,
+        "__aarch64_ldset8_acq_rel"
+      ],
+      [
+        3.034388888888889,
+        "<tokio::runtime::scheduler::multi_thread::worker::Context>::park_internal"
+      ],
+      [
+        3.0,
+        "<bacnet_server::server::requests::mutations::Request>::decide::{closure#0}"
+      ],
+      [
+        2.9899444444444443,
+        "__aarch64_swp8_acq_rel"
+      ],
+      [
+        2.0713888888888894,
+        "<tokio::runtime::time::Driver>::park_internal"
+      ],
+      [
+        2.0454444444444437,
+        "__aarch64_cas1_acq_rel"
+      ],
+      [
+        2.0415000000000005,
+        "<tokio::runtime::scheduler::multi_thread::worker::Core>::maintenance"
+      ],
+      [
+        2.035666666666666,
+        "__pthread_disable_asynccancel"
+      ],
+      [
+        2.035666666666666,
+        "__pthread_enable_asynccancel"
+      ],
+      [
+        2.0166666666666657,
+        "__aarch64_ldadd8_rel"
+      ],
+      [
+        2.0053333333333336,
+        "<tokio::runtime::scheduler::multi_thread::worker::Context>::run_task"
+      ],
+      [
+        2.000111111111111,
+        "<std::sys::sync::condvar::futex::Condvar>::wait_timeout"
+      ],
+      [
+        2.0,
+        "<bacnet_server::server::BACnetServer<bacnet_transport::bip::BipTransport>>::handle_admitted_confirmed_request::{closure#0}"
+      ],
+      [
+        2.0,
+        "<bacnet_server::server::request_tasks::RequestTasks>::try_spawn::<futures_util::future::either::Either<<bacnet_server::server::BACnetServer<bacnet_transport::bip::BipTransport>>::handle_admitted_read_property::{closure#0}, core::pin::Pin<alloc::boxed::Box<<bacnet_server::server::BACnetServer<bacnet_transport::bip::BipTransport>>::run_admitted_confirmed_request::{closure#0}>>>, <bacnet_server::server::BACnetServer<bacnet_transport::bip::BipTransport>>::dispatch::{closure#0}::{closure#1}>::{closure#0}"
+      ]
+    ]
+  }
+}

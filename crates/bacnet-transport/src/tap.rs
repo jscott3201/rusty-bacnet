@@ -1,11 +1,12 @@
 //! An opt-in, bounded and lossy tap on the link-layer frames a transport
 //! sends and receives (#957).
 //!
-//! B/IP, B/IPv6, BACnet/SC and MS/TP each own a [`FrameTap`], reached with
-//! their `frame_tap()` method (through `BACnetClient::transport()` on a
-//! running client). [`FrameTap::subscribe`] returns a [`FrameTapReceiver`]
-//! that gets a [`TappedFrame`] for every frame the transport sends, and
-//! every frame it receives, control traffic included:
+//! B/IP, B/IPv6, BACnet/SC, MS/TP and Ethernet each own a [`FrameTap`],
+//! reached with their `frame_tap()` method (through
+//! `BACnetClient::transport()` on a running client). [`FrameTap::subscribe`]
+//! returns a [`FrameTapReceiver`] that gets a [`TappedFrame`] for every frame
+//! the transport sends, and every frame it receives, control traffic
+//! included:
 //!
 //! - B/IP and B/IPv6: every BVLL message, as the UDP datagram's payload. A
 //!   received one appears if the transport takes it: what a B/IP broadcast
@@ -14,15 +15,22 @@
 //!   WebSocket message's payload.
 //! - MS/TP: every frame, preamble to CRC, Token and Poll For Master
 //!   included, that the station sends or hears on the line: other
-//!   stations' traffic too, since the bus is shared. Frames are found from
-//!   the octets alone, without the master node's inter-octet timing, so one
-//!   the node aborted for a gap can still appear.
+//!   stations' traffic too, since the bus is shared. Frames are found with
+//!   the master node's inter-octet timing: a frame the node gives up, for a
+//!   silence longer than T_frame_abort in the middle of it or because it
+//!   started to send, is not reported.
+//! - Ethernet: every 802.3 frame, from the destination MAC to the padding,
+//!   as the packet socket sends or reads it (the network card adds and
+//!   strips the frame check sequence). XID and TEST commands and their
+//!   responses are included. A received frame appears if the transport
+//!   takes it: one addressed to this station or to the broadcast, and not
+//!   sent from this station's MAC, whatever the node then does with it.
 //!
 //! # What it is not
 //!
 //! The tap sees what this process sends and receives, inside the process.
-//! On B/IP, B/IPv6 and BACnet/SC that is this node's own traffic only, so
-//! it does not replace a wire capture. For BACnet/SC it is the plaintext:
+//! On B/IP, B/IPv6, BACnet/SC and Ethernet that is this node's own traffic
+//! only, so it does not replace a wire capture. For BACnet/SC it is the plaintext:
 //! frames are taken before TLS encrypts them on the way out and after it
 //! decrypts them on the way in.
 //!
@@ -87,6 +95,10 @@ pub enum TapPeer {
     /// MS/TP: the frame's source station for an inbound frame, its
     /// destination (255 for broadcast) for an outbound one.
     Mstp(u8),
+    /// Ethernet: the frame's source MAC for an inbound frame, its
+    /// destination MAC (the all-ones broadcast included) for an outbound
+    /// one.
+    Ethernet([u8; 6]),
 }
 
 /// One link-layer frame a transport sent or received.
@@ -103,7 +115,8 @@ pub struct TappedFrame {
     /// The other end.
     pub peer: TapPeer,
     /// The frame as the link carries it: a BVLL message for B/IP and
-    /// B/IPv6, a BVLC-SC message for BACnet/SC, a whole frame for MS/TP.
+    /// B/IPv6, a BVLC-SC message for BACnet/SC, a whole frame for MS/TP,
+    /// and a whole 802.3 frame, headers and padding, for Ethernet.
     pub bytes: Bytes,
 }
 

@@ -8175,9 +8175,9 @@ connection are not public.
 
 ### Frame tap
 
-`frame_tap()` on `BipTransport`, `Bip6Transport`, `ScTransport` and
-`MstpTransport` (and `AnyTransport::frame_tap()`, `None` for Ethernet and
-loopback) returns the transport's `FrameTap` (#957). `subscribe()` gives a
+`frame_tap()` on `BipTransport`, `Bip6Transport`, `ScTransport`,
+`MstpTransport` and `EthernetTransport` (and `AnyTransport::frame_tap()`,
+`None` for loopback) returns the transport's `FrameTap` (#957, #1856). `subscribe()` gives a
 `FrameTapReceiver` of `TappedFrame { timestamp, direction, link, peer, bytes }`
 for every frame the transport sends, and every frame it receives (on MS/TP,
 every frame it hears on the line), control traffic included:
@@ -8193,13 +8193,20 @@ every frame it hears on the line), control traffic included:
   primary or failover. Direct connections are not tapped yet.
 - MS/TP: each whole frame, preamble to CRC, Token and Poll For Master too,
   found in what the line delivered: every frame on the bus, other stations'
-  traffic included. Frames are found from the octets alone, without the
-  master node's inter-octet timing, so a frame the node aborted for a gap
-  can still appear. `peer` is the source station of a received frame and the
-  destination of a sent one.
+  traffic included. Frames are timed as the master node times them: a frame
+  the node gives up, for a silence longer than T_frame_abort in the middle of
+  it or because it started to send, does not appear, and one it takes appears
+  once. `peer` is the source station of a received frame and the destination
+  of a sent one.
+- Ethernet (Linux): each whole 802.3 frame as the packet socket sends or reads
+  it, from the destination MAC to the padding (the network card adds and
+  strips the frame check sequence), XID and TEST commands and responses too.
+  A received frame appears if the transport takes it: one addressed to this
+  station or to the broadcast, and not from this station's own MAC. `peer` is
+  the source MAC of a received frame and the destination MAC of a sent one.
 
-The tap is in-process. On B/IP, B/IPv6 and BACnet/SC it shows only this
-node's own traffic, so it does not replace a wire capture. A BACnet/SC message
+The tap is in-process. On B/IP, B/IPv6, BACnet/SC and Ethernet it shows only
+this node's own traffic, so it does not replace a wire capture. A BACnet/SC message
 is taken in plaintext, before TLS encrypts it and after TLS decrypts it.
 
 Each receiver has a bounded queue (`DEFAULT_TAP_CAPACITY`, 1024 frames, or
@@ -9890,7 +9897,16 @@ Every decision for a received request, DeviceCommunicationControl,
 LifeSafetyOperation and AuditNotification included, runs on Tokio's blocking
 pool while the request waits (#2032), so a blocking policy delays only its own
 request and `stop()` doesn't wait for it; a call that never returns keeps its
-thread and keeps the process from exiting. Policies should still be fast,
+thread and keeps the process from exiting. A policy that never blocks can skip
+that trip: when its `decides_inline()` returns `true` (`FnPolicy::inline()` for
+closures), the server calls every method of it on the request task instead
+(#2049). Opt in only when no method blocks or awaits, takes a lock the request
+path may also hold, calls back into the server, or does I/O. Otherwise the call
+holds the request task and the runtime worker under it (on a current-thread
+runtime, every task), and `stop()`, which ends only after each inline call
+already running has returned, waits for it; one that never returns keeps
+`stop()` from ending. A Python `mutation_policy` callable always runs on the
+pool. Policies should still be fast,
 reentry-free and side-effect-free, and may be called concurrently. Context addresses and
 process IDs are claimed, not authenticated identities. DeviceCommunicationControl
 has its own method, `authorize_device_communication_control` (allow by default),
@@ -11138,6 +11154,14 @@ session.stop().await?;
 `ScEndpointBuilder` composes SC (`build_loopback_session` for unit
 validation; `build_hub_session` over a caller-dialed `TlsWebSocket`,
 `sc-tls` only, proven against the local constrained-TLS hub).
+`connect_hub_session(ScHubDialer::new(url, tls))` (`sc-tls`) dials the hub
+itself through the dialer `BACnetClient::sc_builder()` uses, so with
+`reconnect(...)` and `ScHubDialer::failover_url` the session redials a lost
+hub and moves between the primary and failover hubs as a client does (#1946).
+Every SC session's `sc_link()` hands out the transport's `ScLinkMonitor`:
+`connection_events()` (subscribe before `start()` to see the first
+connection) and `connection_status()`, the same stream and snapshot as
+`ScTransport::connection_events` and `connection_status`.
 `MstpEndpointBuilder` composes one serial owner (simulator evidence only —
 no bench or on-wire conformance; timing is RB-26). It runs standard frames
 and a 480-octet APDU bound by default; `extended_frames(true)` turns on
@@ -11153,7 +11177,7 @@ The port declares its own echo, as for a transport built by hand
 | `BACnetClient::bip_builder()...build().await` | `BipEndpointBuilder::new(iface, port, bcast).role(ClientOnly).build_session()?` then `start()` |
 | `BACnetServer::bip_builder()...build().await` | `BipEndpointBuilder::new(iface, port, bcast).role(ServerOnly).database(db).device(id).build_session()?` then `start()` |
 | Client + server on one device | One `...role(Both).database(db).device(id).build_session()?` (B/IP, SC, or MS/TP builder) |
-| `BACnetClient::sc_builder()...build().await` | `ScEndpointBuilder::new(vmac, uuid)...build_hub_session(ws)?` (dial first, then compose) |
+| `BACnetClient::sc_builder()...build().await` | `ScEndpointBuilder::new(vmac, uuid)...connect_hub_session(hubs).await?` (reconnect and failover as on the client), or `build_hub_session(ws)?` over a caller-dialed socket |
 | `BACnetServer::sc_builder()...build().await` | Same `ScEndpointBuilder` with `ServerOnly` + `database` + `device` |
 | `generic_builder().transport(mstp)...` | `MstpEndpointBuilder::new(serial, station)...build_session()?` (one serial owner) |
 

@@ -7328,6 +7328,9 @@ class ScEndpoint:
         source_audit_reporter: Optional[ObjectIdentifier] = None,
         audit_recipient: Optional[AuditRecipientInput] = None,
         audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str]]] = None,
+        reconnect: Optional[ScReconnect] = None,
+        sc_failover_hub: str | None = None,
+        sc_connect_timeout_ms: int | None = None,
     ) -> None:
         """``read_work_limit``, ``min_request_interval_ms``,
         ``on_reinitialize``, ``after_reinitialize``, ``reinit_password`` and
@@ -7339,7 +7342,17 @@ class ScEndpoint:
         (``"xx:xx:xx:xx:xx:xx"``) or as twelve hex digits, or a routed
         ``"network:0xMAC"``. An address
         ``audit_recipient`` takes another node's VMAC: never the broadcast
-        or all-zero VMAC or this endpoint's own."""
+        or all-zero VMAC or this endpoint's own.
+
+        ``reconnect``, ``sc_failover_hub`` and ``sc_connect_timeout_ms``: as
+        on ``BACnetClient`` (#1946). ``reconnect`` (an ``ScReconnect``)
+        redials a lost hub; ``sc_failover_hub`` (needs ``reconnect``, else
+        ValueError) is a second hub's ``wss://`` URL, dialled with the same
+        TLS settings when the primary can't be reached, and the endpoint
+        keeps trying the primary and returns to it. ``sc_connect_timeout_ms``
+        (at least 1, default 10000) bounds each hub dial and Connect-Request.
+        Follow the link with ``connection_events()`` and
+        ``connection_status()``."""
         ...
 
     def add_analog_input(self, instance: int, name: str, units: EngineeringUnits | int = 62, present_value: float = 0.0, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
@@ -7420,6 +7433,22 @@ class ScEndpoint:
 
     def broadcast_i_am(self) -> Awaitable[None]:
         """Broadcast one I-Am via the hub relay."""
+        ...
+
+    def connection_events(self) -> Awaitable[ScEventIterator]:
+        """Subscribe to the SC hub-connector events (#1946), as
+        ``BACnetClient.connection_events()`` does. The first call after a
+        start gets the events since the session was built, starting with
+        the first ``connected`` (#1908); a later call gets the events from
+        that call on. A slow reader never holds up the connector: see
+        ``ScEventIterator.missed``. Iteration ends when the endpoint closes.
+        RuntimeError before start or after close."""
+        ...
+
+    def connection_status(self) -> Awaitable[ScLinkStatus]:
+        """Snapshot the SC hub link without I/O (#1946), as
+        ``BACnetClient.connection_status()`` does. RuntimeError before start
+        or after close."""
         ...
 
     def report_device_reset_local(self) -> Awaitable[None]:

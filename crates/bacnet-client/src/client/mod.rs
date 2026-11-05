@@ -809,11 +809,13 @@ impl ScClientBuilder {
         }
     }
 
-    fn sc_transport<W: bacnet_transport::sc::WebSocketPort>(
+    /// This node's own settings on a transport the hub dialer made, or on
+    /// one over a test socket.
+    fn sc_settings<W: bacnet_transport::sc::WebSocketPort>(
         &self,
-        ws: W,
+        transport: bacnet_transport::sc::ScTransport<W>,
     ) -> bacnet_transport::sc::ScTransport<W> {
-        bacnet_transport::sc::ScTransport::new(ws, self.vmac)
+        transport
             .with_device_uuid(self.device_uuid)
             .with_npdu_per_origin_limit(self.npdu_admission_policy.per_origin_limit)
             .with_control_rate_limit(self.npdu_admission_policy.control_rate)
@@ -830,7 +832,7 @@ impl ScClientBuilder {
         ws: W,
     ) -> Result<BACnetClient<bacnet_transport::sc::ScTransport<W>>, Error> {
         self.validate()?;
-        let transport = self.sc_transport(ws);
+        let transport = self.sc_settings(bacnet_transport::sc::ScTransport::new(ws, self.vmac));
         BACnetClient::start_with_options(self.config, transport, self.options).await
     }
 }

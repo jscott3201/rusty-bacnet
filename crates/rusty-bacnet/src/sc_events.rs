@@ -1,6 +1,7 @@
 //! Frozen Python copies of SC hub-connector events and link status, and the
 //! async iterator over the events (#1829).
 
+use std::sync::{Mutex as StdMutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use bacnet_transport::sc::{
@@ -9,6 +10,7 @@ use bacnet_transport::sc::{
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
+use tokio::sync::broadcast;
 
 use crate::event_stream::LossyReceiver;
 use crate::types::IntEnumValue;
@@ -271,6 +273,29 @@ impl PyScLinkStatus {
     /// [`crate::types::not_picklable`].
     fn __reduce__(slf: &Bound<'_, Self>) -> PyResult<()> {
         Err(crate::types::not_picklable(slf.as_any()))
+    }
+}
+
+/// The event receiver an SC owner subscribed before its transport started,
+/// so it holds the first `connected` (#1908), kept for the first
+/// `connection_events()` call. `BACnetClient` and `ScEndpoint` share it
+/// (#1946). A leaf lock: never held across an await.
+#[derive(Default)]
+pub(crate) struct FirstScEvents(StdMutex<Option<broadcast::Receiver<ScEvent>>>);
+
+impl FirstScEvents {
+    /// Keep the receiver a build subscribed, replacing any earlier one.
+    pub(crate) fn keep(&self, events: broadcast::Receiver<ScEvent>) {
+        *self.slot() = Some(events);
+    }
+
+    /// The kept receiver, once; `None` after the first call.
+    pub(crate) fn take(&self) -> Option<broadcast::Receiver<ScEvent>> {
+        self.slot().take()
+    }
+
+    fn slot(&self) -> MutexGuard<'_, Option<broadcast::Receiver<ScEvent>>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 

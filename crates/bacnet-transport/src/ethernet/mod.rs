@@ -288,10 +288,11 @@ mod transport {
     use tokio::task::JoinHandle;
     use tracing::{debug, warn};
 
-    use super::egress::{LlcReply, ReplyFailures, send_whole_frame};
-    use super::ingress::{FrameIngress, classify_frame, npdu_channel_full};
+    use super::egress::{ReplyFailures, send_tapped};
+    use super::ingress::{npdu_channel_full, receive_frame};
     use crate::port::{ReceivedNpdu, TransportPort, TransportProvenance};
     use crate::sys::packet_socket::AsyncSocket;
+    use crate::tap::FrameTap;
     use crate::warn_throttle::WarnThrottle;
 
     /// Max NPDU size for Ethernet: 1518 (max frame) - 14 (eth header) - 3 (LLC) - 4 (FCS by NIC) = 1497.
@@ -319,6 +320,8 @@ mod transport {
         group_source_drops: Arc<AtomicU64>,
         /// See [`Self::reply_send_failures`].
         reply_failures: Arc<ReplyFailures>,
+        /// See [`Self::frame_tap`].
+        frame_tap: FrameTap,
     }
 
     impl EthernetTransport {
@@ -332,7 +335,17 @@ mod transport {
                 recv_task: None,
                 group_source_drops: Arc::default(),
                 reply_failures: Arc::default(),
+                frame_tap: FrameTap::new(),
             }
+        }
+
+        /// This transport's frame tap (#1856): every 802.3 frame it sends
+        /// and every one it takes, XID and TEST commands and responses
+        /// included, for whoever subscribes. The tap outlives a stop and a
+        /// restart; clone it, or subscribe, before handing the transport
+        /// over. See [`crate::tap`].
+        pub fn frame_tap(&self) -> &FrameTap {
+            &self.frame_tap
         }
 
         /// Frames dropped since this transport was created because their
@@ -577,6 +590,7 @@ mod transport {
             let send_socket = Arc::clone(&socket);
             let group_source_drops = Arc::clone(&self.group_source_drops);
             let reply_failures = Arc::clone(&self.reply_failures);
+            let tap = self.frame_tap.clone();
             let recv_task = tokio::spawn(async move {
                 let mut recv_buf = vec![0u8; 2048];
                 let channel_full = WarnThrottle::default();
@@ -591,75 +605,39 @@ mod transport {
 
                     match readable.try_io(|socket| (&**socket.get_ref()).read(&mut recv_buf)) {
                         Ok(Ok(len)) => {
-                            let data = &recv_buf[..len];
                             // Destination admission, then the group-source
                             // drop (#1492), then the XID and TEST commands
-                            // (Clause 7.1), all before a UI frame is decoded.
-                            match classify_frame(data, &local_mac) {
-                                FrameIngress::Ignore => continue,
-                                FrameIngress::GroupSource { source } => {
-                                    group_source_drops.fetch_add(1, Ordering::Relaxed);
-                                    debug!(
-                                        src = ?source,
-                                        "Dropping frame whose source MAC is a group address"
-                                    );
-                                    continue;
-                                }
-                                FrameIngress::Xid { source } => {
-                                    debug!(src = ?source, "XID command, sending response");
-                                    let resp = build_xid_response(&local_mac, &source);
-                                    reply_failures.send_reply(
-                                        LlcReply::Xid,
-                                        &source,
-                                        &resp,
-                                        |frame| send_socket.send(frame),
-                                    );
-                                    continue;
-                                }
-                                FrameIngress::Test { source, data } => {
-                                    debug!(
-                                        src = ?source,
-                                        len = data.len(),
-                                        "TEST command, sending response"
-                                    );
-                                    let resp = build_test_response(&local_mac, &source, data);
-                                    reply_failures.send_reply(
-                                        LlcReply::Test,
-                                        &source,
-                                        &resp,
-                                        |frame| send_socket.send(frame),
-                                    );
-                                    continue;
-                                }
-                                FrameIngress::Decode => {}
-                            }
-
-                            match decode_ethernet_frame(data) {
-                                Ok(frame) => {
-                                    debug!(
-                                        src = ?frame.source,
-                                        dst = ?frame.destination,
-                                        payload_len = frame.payload.len(),
-                                        "Ethernet frame received"
-                                    );
-                                    if tx
-                                        .try_send(ReceivedNpdu {
-                                            direct_response: None,
-                                            npdu: frame.payload.clone(),
-                                            source_mac: MacAddr::from(frame.source),
-                                            link_layer_group: is_ethernet_group(&frame.destination),
-                                            data_attributes: Vec::new(),
-                                            provenance: TransportProvenance::unverified(),
-                                            reply_tx: None,
-                                        })
-                                        .is_err()
-                                    {
-                                        npdu_channel_full(&channel_full);
-                                    }
-                                }
-                                Err(_) => {
-                                    continue;
-                                }
+                            // (Clause 7.1), all before a UI frame is decoded;
+                            // the tap sees a frame the transport takes first.
+                            let Some(frame) = receive_frame(
+                                &recv_buf[..len],
+                                &local_mac,
+                                &tap,
+                                &group_source_drops,
+                                &reply_failures,
+                                |frame| send_socket.send(frame),
+                            ) else {
+                                continue;
+                            };
+                            debug!(
+                                src = ?frame.source,
+                                dst = ?frame.destination,
+                                payload_len = frame.payload.len(),
+                                "Ethernet frame received"
+                            );
+                            if tx
+                                .try_send(ReceivedNpdu {
+                                    direct_response: None,
+                                    npdu: frame.payload,
+                                    source_mac: MacAddr::from(frame.source),
+                                    link_layer_group: is_ethernet_group(&frame.destination),
+                                    data_attributes: Vec::new(),
+                                    provenance: TransportProvenance::unverified(),
+                                    reply_tx: None,
+                                })
+                                .is_err()
+                            {
+                                npdu_channel_full(&channel_full);
                             }
                         }
                         Ok(Err(e)) => {
@@ -727,8 +705,9 @@ mod transport {
 
             // The frame carries its own 802.3 header, destination first, and
             // the bound socket sends on its interface: no address needed.
-            // A short send is an error (#1918).
-            send_whole_frame(&buf, |frame| socket.send(frame)).map_err(Error::Transport)
+            // A short send is an error (#1918); a frame that went is tapped.
+            send_tapped(&self.frame_tap, &dst, &buf, |frame| socket.send(frame))
+                .map_err(Error::Transport)
         }
 
         async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
@@ -764,5 +743,7 @@ mod transport {
 #[cfg(target_os = "linux")]
 pub use transport::EthernetTransport;
 
+#[cfg(test)]
+mod tap_tests;
 #[cfg(test)]
 mod tests;

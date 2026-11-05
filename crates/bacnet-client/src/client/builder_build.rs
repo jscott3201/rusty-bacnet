@@ -142,13 +142,6 @@ impl ScClientBuilder {
         if let Some(config) = &self.reconnect {
             config.validate()?;
         }
-        if self.failover_hub_url.is_some() && self.reconnect.is_none() {
-            // Without reconnection a lost connection is never re-established,
-            // so the failover hub would never be reached or left again.
-            return Err(Error::Encoding(
-                "SC client builder: failover_hub_url requires reconnect".into(),
-            ));
-        }
         self.validate_identity()?;
         self.options.validate()?;
         self.config.validate_request_settings()?;
@@ -170,62 +163,15 @@ impl ScClientBuilder {
             self.tls_config.as_ref().cloned().ok_or_else(|| {
                 Error::Encoding("SC client builder: tls_config is required".into())
             })?;
-        use bacnet_transport::sc::ScActiveHub;
-        use bacnet_transport::sc_tls::TlsWebSocket;
-        TlsWebSocket::validate_url(&self.hub_url)?;
+        // The dialer checks both URLs, and that a failover hub comes with
+        // reconnect, before it dials (#1946).
+        let mut hubs = bacnet_transport::sc::ScHubDialer::new(&self.hub_url, tls_config)
+            .connect_timeout_ms(self.connect_timeout_ms);
         if let Some(url) = &self.failover_hub_url {
-            TlsWebSocket::validate_url(url)?;
+            hubs = hubs.failover_url(url);
         }
-        // An unreachable primary starts the client on the failover hub; the
-        // transport restores the primary once it answers (Annex AB.5.2).
-        // Bounded like the transport's own redials: a blackholed or stalled
-        // hub must not hold up build() or the failover fallback.
-        let limit = std::time::Duration::from_millis(self.connect_timeout_ms);
-        let dial = |url: &str| {
-            let tls = tls_config.clone();
-            let url = url.to_owned();
-            async move {
-                bacnet_transport::sc::dial_within(limit, Box::pin(TlsWebSocket::connect(&url, tls)))
-                    .await
-            }
-        };
-        let (ws, hub) = match dial(&self.hub_url).await {
-            Ok(ws) => (ws, ScActiveHub::Primary),
-            Err(primary) => match &self.failover_hub_url {
-                Some(url) => {
-                    // No transport (or event stream) exists yet to report it.
-                    tracing::warn!(error = %primary, "BACnet/SC primary hub dial failed; trying the failover hub");
-                    match dial(url).await {
-                        Ok(ws) => (ws, ScActiveHub::Failover),
-                        Err(_) => return Err(primary),
-                    }
-                }
-                None => return Err(primary),
-            },
-        };
-        let mut transport = self.sc_transport(ws).with_initial_hub(hub);
-        if let Some(failover_url) = self.failover_hub_url {
-            let tls_config = tls_config.clone();
-            transport = transport.with_failover_connector(move || {
-                let failover_url = failover_url.clone();
-                let tls_config = tls_config.clone();
-                async move {
-                    bacnet_transport::sc_tls::TlsWebSocket::connect(&failover_url, tls_config).await
-                }
-            });
-        }
-        if let Some(rc) = self.reconnect {
-            let hub_url = self.hub_url;
-            transport = transport
-                .with_connector(move || {
-                    let hub_url = hub_url.clone();
-                    let tls_config = tls_config.clone();
-                    async move {
-                        bacnet_transport::sc_tls::TlsWebSocket::connect(&hub_url, tls_config).await
-                    }
-                })
-                .with_reconnect(rc);
-        }
+        let transport = Box::pin(hubs.connect(self.vmac, self.reconnect.clone())).await?;
+        let transport = self.sc_settings(transport);
         Ok((self.config, transport, self.options))
     }
 

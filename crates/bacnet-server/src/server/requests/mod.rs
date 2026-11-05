@@ -68,6 +68,8 @@ mod mutation_wpm_unlocked_tests;
 #[cfg(test)]
 mod notification_class_durable_tests;
 #[cfg(test)]
+mod policy_inline_tests;
+#[cfg(test)]
 mod policy_off_task_tests;
 #[cfg(test)]
 mod reporting_durable_tests;

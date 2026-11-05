@@ -7,8 +7,8 @@ use bacnet_types::error::Error;
 use pyo3::PyResult;
 use pyo3::exceptions::PyRuntimeError;
 use std::future::Future;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex as StdMutex, MutexGuard, PoisonError};
 use tokio::sync::{Mutex, Notify, RwLock, RwLockReadGuard, RwLockWriteGuard, broadcast};
 use tokio::task::JoinHandle;
 
@@ -28,26 +28,20 @@ pub(super) struct ClientState {
     shutdown: Mutex<Option<JoinHandle<Result<(), Error>>>>,
     /// An SC client's event receiver, subscribed while it was built, so it
     /// holds the first `Connected` (#1908). The first `connection_events()`
-    /// call takes it. A leaf lock: never held across an await.
-    first_sc_events: StdMutex<Option<broadcast::Receiver<ScEvent>>>,
+    /// call takes it.
+    first_sc_events: crate::sc_events::FirstScEvents,
 }
 
 impl ClientState {
     /// Keep the receiver an SC build subscribed, for the first
     /// `connection_events()` caller. Called before the client is published.
     pub(super) fn keep_first_sc_events(&self, events: broadcast::Receiver<ScEvent>) {
-        *self.first_sc_events() = Some(events);
+        self.first_sc_events.keep(events);
     }
 
     /// The build's receiver, once; `None` after the first call.
     pub(super) fn take_first_sc_events(&self) -> Option<broadcast::Receiver<ScEvent>> {
-        self.first_sc_events().take()
-    }
-
-    fn first_sc_events(&self) -> MutexGuard<'_, Option<broadcast::Receiver<ScEvent>>> {
-        self.first_sc_events
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        self.first_sc_events.take()
     }
 }
 

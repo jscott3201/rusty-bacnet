@@ -129,7 +129,7 @@ fn each_closure_decides_only_its_own_service() {
     assert_eq!(decisions(&one), [true, false, true, true, false]);
     assert_eq!(
         format!("{one:?}"),
-        "FnPolicy { mutation: false, life_safety_operation: false, \
+        "FnPolicy { inline: false, mutation: false, life_safety_operation: false, \
          device_communication_control: false, audit_notification: true, \
          unconfirmed_audit_notification: false }"
     );
@@ -153,4 +153,23 @@ fn shared_and_boxed_policies_forward_every_decision() {
     assert!(Defaults.decides_mutations());
     assert!(!FnPolicy::new().decides_mutations());
     assert!(!Arc::new(FnPolicy::new().audit_notification(|_| true)).decides_mutations());
+}
+
+/// Only a policy that says so is asked on the request task (#2049): the
+/// trait's default, `FnPolicy` and the shared and boxed forms all keep the
+/// pool until told otherwise.
+#[test]
+fn only_a_declared_policy_decides_inline() {
+    assert!(!Defaults.decides_inline());
+    assert!(!FnPolicy::new().mutation(|_| true).decides_inline());
+    let inline = || FnPolicy::new().mutation(|_| true).inline();
+    let shared: Arc<dyn ServerPolicy> = Arc::new(inline());
+    let boxed: Box<dyn ServerPolicy> = Box::new(inline());
+    for policy in [&shared as &dyn ServerPolicy, &boxed, &Arc::new(inline())] {
+        assert!(policy.decides_inline());
+        assert!(policy.decides_mutations());
+    }
+    let pooled: Arc<dyn ServerPolicy> = Arc::new(FnPolicy::new().mutation(|_| true));
+    assert!(!Box::new(pooled).decides_inline());
+    assert!(format!("{:?}", inline()).starts_with("FnPolicy { inline: true, mutation: true,"));
 }

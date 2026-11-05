@@ -29,7 +29,7 @@ Install one `ServerPolicy` with `policy(..)` on a server builder, or in `ServerC
 
 Returning `false` denies, and so does a panic: the server catches it and treats it as a denial. Each method's rustdoc says exactly when it is asked.
 
-Every decision for a received request runs on Tokio's blocking pool, with no database guard held, so a policy that blocks delays only its own request, and `stop()` doesn't wait for it. A call that never returns still keeps the process from exiting. Keep each method fast, free of side effects and from calling back into the server; it may be called concurrently. WritePropertyMultiple asks about each element, in order up to the first denial, before it takes the write lock; elements before a denied one stay written.
+Every decision for a received request runs on Tokio's blocking pool, with no database guard held, so a policy that blocks delays only its own request, and `stop()` doesn't wait for it. A call that never returns still keeps the process from exiting. A policy that never blocks, locks, calls back into the server or does I/O can skip that trip by returning `true` from `decides_inline()`; the server then calls it on the request task, and `stop()` waits for any such call already running. Keep each method fast, free of side effects and from calling back into the server; it may be called concurrently. WritePropertyMultiple asks about each element, in order up to the first denial, before it takes the write lock; elements before a denied one stay written.
 
 Some decisions are settings rather than policy methods:
 
