@@ -38,6 +38,13 @@
 //! the format: a [`ReportingWriteConfig`], kept once an object opts in with
 //! its `with_reporting_persistence` builder call.
 //!
+//! Each of these object types keeps a written Description in the same file
+//! too (#2364), as kind 5 of the format wrapped around the kind it writes,
+//! with the same rules. A Timer and a Channel drop it with their
+//! `clear_written_config`, and the reporting objects with
+//! `clear_written_reporting`. On every other object type a written
+//! Description lasts until a restart.
+//!
 //! A Command has nothing here: its Action is read-only over the network
 //! (Table 12-12 codes it R, and this stack takes no write to it), so only
 //! the application sets it.
@@ -46,6 +53,7 @@
 //! [`TimerObject`]: crate::timer::TimerObject
 //! [`ChannelObject`]: crate::channel::ChannelObject
 
+pub(crate) mod description;
 mod persistence;
 pub(crate) mod reporting;
 pub(crate) mod saving;
@@ -57,6 +65,10 @@ pub use persistence::{
     WriteConfigPersistence, WriteConfigSnapshot,
 };
 
+// A written Description kept beside the rest (#2364).
+#[cfg(test)]
+#[path = "write_config/description_tests.rs"]
+mod description_tests;
 // std: these load and save through the file backend.
 #[cfg(all(test, feature = "std"))]
 #[path = "write_config/persistence_tests.rs"]

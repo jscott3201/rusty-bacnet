@@ -171,13 +171,14 @@ impl Node {
 /// response timer decides, and judge what the BBMD answered.
 ///
 /// An attempt that goes unanswered here lost its datagram to another socket
-/// (#2352): on Linux, a later SO_REUSEADDR socket in another test process can
-/// bind the BBMD's port beside it, from a reservation of the same port or a
-/// port-0 bind the kernel hands the shared port (#892), and it then takes the
-/// unicast sent there. The bind succeeds on both sides, so nothing else
-/// reports the loss, and the retry comes one response timeout later. That
-/// goes back to [`rerun_on_lost_port`] as a lost port; a refusal, or a
-/// registration that never resolves, fails the test.
+/// (#2352). Before #2366 the BBMD shared its requested port, and on Linux a
+/// later SO_REUSEADDR socket in another test process could bind it beside the
+/// BBMD and take the unicast sent there. The BBMD claims its port now, but
+/// macOS still lets a SO_REUSEADDR socket bind 127.0.0.1 on it and take the
+/// unicast sent to that address (`port_ownership`). The bind succeeds on both
+/// sides, so nothing else reports the loss, and the retry comes one response
+/// timeout later. That goes back to [`rerun_on_lost_port`] as a lost port; a
+/// refusal, or a registration that never resolves, fails the test.
 #[cfg(any(target_os = "linux", target_vendor = "apple"))]
 async fn registered(foreign: &BipTransport) -> std::io::Result<()> {
     use crate::bip::ForeignRegistrationOutcome as Outcome;

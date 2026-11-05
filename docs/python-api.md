@@ -809,6 +809,7 @@ client = BACnetClient(
     apdu_timeout_ms=6000,
     transport="bip",             # "bip", "ipv6", "sc", "mstp" or "router"
     share_port_by_address=False, # Keyword-only; B/IP, see "Sharing a port by address"
+    share_wildcard_port=False,   # Keyword-only; B/IP, see "Claiming the port"
     bbmd=None,                   # Keyword-only; B/IP, a Bbmd: see "BBMD and foreign-device modes"
     foreign_device=None,         # Keyword-only; B/IP or B/IPv6, a ForeignDevice; not with bbmd
     multicast=None,              # Keyword-only; B/IP, a Multicast: see "B/IP multicast"
@@ -851,6 +852,27 @@ their `EndpointClient`'s confirmed requests with the same pacer (#1542). On
 both, only new confirmed requests wait: a retry keeps its request's turn, and
 replies, notifications and unconfirmed requests go at once.
 
+### Claiming the port
+
+A B/IP client, server or `BipEndpoint` claims its UDP port (#2366): a second
+bind of it on this host fails, and `start()` (for a client, `async with`)
+raises when another socket already holds it, with a message naming the port
+and `share_wildcard_port`. Earlier releases shared an explicitly requested
+port, so on Linux and Windows another program could bind it beside the
+device and take the unicast sent to it. macOS and the BSDs still let a
+socket that sets `SO_REUSEADDR` bind a specific address on the port, and
+get the unicast sent there. On Linux a B/IP multicast member with its group
+on its own port binds its `interface` address instead of `0.0.0.0`.
+
+The keyword-only `share_wildcard_port=True` keeps the old sharing, for a
+setup that runs two stacks on one port of one host. Broadcasts then reach
+both, but each unicast reaches only one of them (on Linux the one that
+bound last), so replies can go astray; prefer `share_port_by_address=True`
+on separate addresses, or separate ports. It has no effect with `port=0`,
+which is never shared, and another transport raises `ValueError`. Two B/IP
+multicast members on one host at one unicast port need it too. See
+[Claiming the port](rust-api.md#claiming-the-port) for each OS.
+
 ### Sharing a port by address
 
 By default a B/IP client, server or `BipEndpoint` binds `0.0.0.0` on its port,
@@ -872,7 +894,7 @@ when the device starts: restart it after its interface changes. The
 `255.255.255.255` (a loopback `interface` may also name itself), or
 `start()` fails. On Windows the address is claimed
 exclusively, though the bind still succeeds beside another program's socket
-on `0.0.0.0` at that port. See
+of the same user on `0.0.0.0` at that port if that socket shares it. See
 [Sharing a port by address](rust-api.md#sharing-a-port-by-address) for each
 OS.
 
@@ -2897,6 +2919,7 @@ server = BACnetServer(
     broadcast_address="255.255.255.255",
     transport="bip",             # "bip", "ipv6", "sc", "mstp" or "router"
     share_port_by_address=False, # keyword-only; B/IP, see "Sharing a port by address"
+    share_wildcard_port=False,   # keyword-only; B/IP, see "Claiming the port"
     bbmd=None,                   # keyword-only; B/IP, see "BBMD and foreign-device modes"
     foreign_device=None,         # keyword-only; B/IP or B/IPv6; not with bbmd
     multicast=None,              # keyword-only; B/IP, see "B/IP multicast"
@@ -2981,14 +3004,18 @@ server.add_analog_input(
 With `storage_path`, the reporting settings a peer writes
 (Notification_Class, Event_Enable, Notify_Type, Event_Detection_Enable,
 Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair) are kept in
-that file. Each write is saved before it is answered, and refused with DEVICE
-/ OPERATIONAL_PROBLEM when the save fails; an Event_Message_Texts_Config
-string past 16 KiB is refused with RESOURCES / NO_SPACE_TO_WRITE_PROPERTY. A
-server started on the same file serves the saved settings.
-`clear_written_reporting=True` drops what was saved first, so the object
-starts from its defaults. A file that doesn't load raises `BacnetError`.
+that file, and so is a written Description (#2364). Each write is saved
+before it is answered, and refused with DEVICE / OPERATIONAL_PROBLEM when the
+save fails; an Event_Message_Texts_Config string or a Description past 16 KiB
+is refused with RESOURCES / NO_SPACE_TO_WRITE_PROPERTY. A NULL to Description
+succeeds and saves nothing. A server started on the same file serves the
+saved settings. `clear_written_reporting=True` drops what was saved first,
+Description included, so the object starts from its defaults. A file that doesn't load raises `BacnetError`.
 An Alert Enrollment takes only ALARM and EVENT as Notify_Type, so a file
 holding another fails its build the same way.
+
+On every other object type, a Description a peer writes lasts until the
+server restarts; only these builders, `add_timer` and `add_channel` keep it.
 
 The endpoints' object builders (`BipEndpoint.add_analog_input` and the rest)
 don't take these keywords: an endpoint executes WriteProperty only on its own
@@ -3863,9 +3890,10 @@ server.add_staging(
 
 `add_timer`'s `storage_path` keeps in that file what a peer writes to
 State_Change_Values, List_Of_Object_Property_References (with
-Priority_For_Writing) and Default_Timeout (#2312). Each write is saved before
+Priority_For_Writing), Default_Timeout (#2312) and Description (#2364). Each write is saved before
 it is answered, and refused with DEVICE / OPERATIONAL_PROBLEM when the save
-fails. At the next start a saved write wins over the keywords;
+fails; a Description past 16 KiB is refused with RESOURCES /
+NO_SPACE_TO_WRITE_PROPERTY. At the next start a saved write wins over the keywords;
 `clear_written_config=True` drops what was saved, so they apply again.
 `add_channel` takes the same two keywords (see [Channels](#channels)).
 
@@ -4194,9 +4222,10 @@ under [Lighting & Color](rust-api.md#lighting--color-5)).
 omitted), `control_groups` the groups whose WriteGroup the Channel takes, and
 `allow_group_delay_inhibit` whether a WriteGroup that asks for no delays skips
 them. Peers can write all of these, and Channel_Number, over the network. With
-`storage_path` the Channel keeps those writes in that file, and each saved one
-wins over its argument at the next start, Channel_Number over `channel_number`
-included, until `clear_written_config=True` drops them (#2312).
+`storage_path` the Channel keeps those writes in that file, and a written
+Description too (#2364), and each saved one wins over its argument at the
+next start, Channel_Number over `channel_number` included, until
+`clear_written_config=True` drops them (#2312).
 
 Once the server runs, a value written to the Channel's Present_Value, over the
 network or with `write_property_local`, goes on to each member at the write's

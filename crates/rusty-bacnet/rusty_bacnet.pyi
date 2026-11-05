@@ -3336,6 +3336,7 @@ class BACnetClient:
         mstp_reply_timeout_ms: Optional[int] = None,
         sc_device_uuid: Optional[bytes | bytearray] = None,
         share_port_by_address: bool = False,
+        share_wildcard_port: bool = False,
         min_request_interval_ms: int = 0,
         ipv6_device_instance: Optional[int] = None,
         bbmd: Optional[Bbmd] = None,
@@ -3431,6 +3432,14 @@ class BACnetClient:
         of this host can share the port. Needs an explicit interface and a
         nonzero port; broadcasts and unicast are still handled in the order
         they arrived.
+
+        ``share_wildcard_port`` (B/IP only, default False): share an
+        explicitly requested port with other sockets on this host that bind
+        it the same way. By default the client claims its port, so a second
+        bind of it fails, and ``start()`` raises when another socket holds
+        it. With sharing, broadcasts reach every socket on the port, but
+        each unicast reaches only one of them; prefer
+        ``share_port_by_address`` or separate ports.
 
         ``min_request_interval_ms`` (default 0, no pacing; at most
         3,600,000, else ValueError) paces the confirmed requests to each
@@ -4853,6 +4862,7 @@ class BACnetServer:
         cov_policy: CovPolicy | None = None,
         time_sync_policy: TimeSyncPolicy | None = None,
         share_port_by_address: bool = False,
+        share_wildcard_port: bool = False,
         segmentation_supported: Segmentation = Segmentation.NONE,
         apdu_segment_timeout_ms: int = 5000,
         bbmd: Optional[Bbmd] = None,
@@ -4914,6 +4924,14 @@ class BACnetServer:
         interface address itself, so devices on other addresses of this host
         can share the port. Needs an explicit interface and a nonzero port;
         broadcasts and unicast are still handled in the order they arrived.
+
+        ``share_wildcard_port`` (B/IP only, default False): share an
+        explicitly requested port with other sockets on this host that bind
+        it the same way. By default the server claims its port, so a second
+        bind of it fails, and ``start()`` raises when another socket holds
+        it. With sharing, broadcasts reach every socket on the port, but
+        each unicast reaches only one of them; prefer
+        ``share_port_by_address`` or separate ports.
 
         ``bbmd`` / ``foreign_device`` (at most one, else ValueError): run
         the device as a BBMD (B/IP only), or register it with a BBMD on
@@ -4978,10 +4996,12 @@ class BACnetServer:
         ``storage_path`` (a ``str``) keeps the reporting settings a peer
         writes (Notification_Class, Event_Enable, Notify_Type,
         Event_Detection_Enable, Event_Message_Texts_Config and the
-        Event_Algorithm_Inhibit pair) in that file: such a write is saved
-        before it is answered, refused when it can't be, and served again
-        after a restart. ``clear_written_reporting=True`` drops what was
-        saved first, so the object starts from its defaults. A file that
+        Event_Algorithm_Inhibit pair) and a written Description in that
+        file: such a write is saved before it is answered, refused when it
+        can't be, and served again after a restart; a Description past
+        16 KiB is refused with NO_SPACE_TO_WRITE_PROPERTY.
+        ``clear_written_reporting=True`` drops what was saved first,
+        Description included, so the object starts from its defaults. A file that
         doesn't load raises BacnetError. Every analog, binary and multi-state
         builder takes both, as do ``add_access_door``, ``add_access_zone``,
         ``add_event_enrollment`` and ``add_alert_enrollment``."""
@@ -5461,11 +5481,12 @@ class BACnetServer:
 
         With ``storage_path`` the Timer keeps in that file what a peer writes
         to State_Change_Values, List_Of_Object_Property_References (with
-        Priority_For_Writing) and Default_Timeout, and a saved write wins over
-        the keywords at the next start; such a write is refused when it can't
-        be saved. ``clear_written_config=True`` drops what was saved first,
-        so the keywords apply again. A file that doesn't load raises
-        BacnetError.
+        Priority_For_Writing), Default_Timeout and Description, and a saved
+        write wins over the keywords at the next start; such a write is refused when it can't
+        be saved, and a Description past 16 KiB is refused with RESOURCES /
+        NO_SPACE_TO_WRITE_PROPERTY. ``clear_written_config=True`` drops what
+        was saved first, so the keywords apply again. A file that doesn't
+        load raises BacnetError.
         """
         ...
     def add_load_control(self, instance: int, name: str) -> None: ...
@@ -5646,11 +5667,12 @@ class BACnetServer:
 
         With ``storage_path`` the Channel keeps in that file what a peer
         writes to its members, Execution_Delay, Channel_Number,
-        Control_Groups and Allow_Group_Delay_Inhibit, and each saved write
-        wins over its argument at the next start; such a write is refused
-        when it can't be saved. ``clear_written_config=True`` drops what was
-        saved first, so the arguments apply again. A file that doesn't load
-        raises BacnetError.
+        Control_Groups, Allow_Group_Delay_Inhibit and Description, and each
+        saved write wins over its argument at the next start; such a write is refused
+        when it can't be saved, and a Description past 16 KiB is refused with
+        RESOURCES / NO_SPACE_TO_WRITE_PROPERTY. ``clear_written_config=True``
+        drops what was saved first, so the arguments apply again. A file
+        that doesn't load raises BacnetError.
         """
         ...
 
@@ -5732,7 +5754,8 @@ class BACnetServer:
         VALUE_OUT_OF_RANGE, and nothing is registered.
 
         ``storage_path`` and ``clear_written_reporting`` keep the reporting
-        settings a peer writes in that file, as on ``add_analog_input``.
+        settings and Description a peer writes in that file, as on
+        ``add_analog_input``.
         """
         ...
     def add_access_credential(
@@ -5954,7 +5977,8 @@ class BACnetServer:
         registered. Left out, the list starts empty.
 
         ``storage_path`` and ``clear_written_reporting`` keep the reporting
-        settings a peer writes in that file, as on ``add_analog_input``.
+        settings and Description a peer writes in that file, as on
+        ``add_analog_input``.
         """
         ...
     def add_credential_data_input(
@@ -5994,7 +6018,8 @@ class BACnetServer:
         """Add an Alert Enrollment to the server (before starting).
 
         ``storage_path`` and ``clear_written_reporting`` keep the reporting
-        settings a peer writes in that file, as on ``add_analog_input``.
+        settings and Description a peer writes in that file, as on
+        ``add_analog_input``.
         """
         ...
     def add_event_enrollment(
@@ -6022,7 +6047,8 @@ class BACnetServer:
         it succeeds and changes nothing.
 
         ``storage_path`` and ``clear_written_reporting`` keep the reporting
-        settings a peer writes in that file, as on ``add_analog_input``.
+        settings and Description a peer writes in that file, as on
+        ``add_analog_input``.
         """
         ...
 
@@ -7093,6 +7119,7 @@ class BipEndpoint:
         *,
         read_work_limit: int = 256,
         share_port_by_address: bool = False,
+        share_wildcard_port: bool = False,
         min_request_interval_ms: int = 0,
         bbmd: Optional[Bbmd] = None,
         foreign_device: Optional[ForeignDevice] = None,
@@ -7144,6 +7171,11 @@ class BipEndpoint:
         itself, so endpoints on other addresses of this host can share the
         port. Needs an explicit interface and a nonzero port; broadcasts and
         unicast are still handled in the order they arrived.
+        ``share_wildcard_port`` (default False): share an explicitly
+        requested port with other sockets on this host that bind it the
+        same way. By default the endpoint claims its port, and ``start()``
+        raises when another socket holds it; with sharing, each unicast
+        reaches only one of the sockets on the port.
         ``min_request_interval_ms`` (default 0, no pacing; at most 3,600,000,
         else ValueError) paces the client role's confirmed requests to each
         destination exactly as ``BACnetClient``'s keyword does (#1542). A

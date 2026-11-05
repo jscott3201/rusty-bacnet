@@ -274,11 +274,6 @@ impl BinaryInputObject {
         self.present_value = v;
         Ok(())
     }
-
-    /// Set the description string.
-    pub fn set_description(&mut self, desc: impl Into<String>) {
-        self.description = desc.into();
-    }
 }
 
 crate::write_config::reporting::impl_reporting_persistence!(BinaryInputObject);

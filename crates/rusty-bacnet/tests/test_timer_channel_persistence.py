@@ -1,7 +1,7 @@
 """Installed-artifact tests for add_timer's and add_channel's storage_path (#2312).
 
 What a client writes over the network to a Timer's or a Channel's
-configuration is saved in the file, and a server rebuilt on the same files
+configuration, or Description (#2364), is saved in the file, and a server rebuilt on the same files
 serves it over the keyword arguments, until clear_written_config drops it.
 """
 
@@ -47,6 +47,9 @@ WRITES = [
     (CH1, P.CHANNEL_NUMBER, None, PropertyValue.unsigned(77)),
     (CH1, P.CONTROL_GROUPS, 1, PropertyValue.unsigned(9)),
     (CH1, P.ALLOW_GROUP_DELAY_INHIBIT, None, PropertyValue.boolean(True)),
+    # Kept beside the configuration (#2364).
+    (TMR1, P.DESCRIPTION, None, PropertyValue.character_string("Lobby")),
+    (CH1, P.DESCRIPTION, None, PropertyValue.character_string("Lobby")),
 ]
 # What a read compares: each covered property, and Priority_For_Writing,
 # kept with the Timer's two.

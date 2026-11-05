@@ -131,6 +131,10 @@ pub(crate) struct TimerConfig {
     held_timeout: Option<u64>,
     min_pres_value: u64,
     max_pres_value: u64,
+    /// Description as a write set it, while storage keeps it (#2364); the
+    /// Timer serves the same text. `None` without storage, until a write,
+    /// and after `clear_written_config`.
+    description: Option<String>,
 }
 
 impl TimerConfig {
@@ -159,6 +163,7 @@ impl TimerObject {
                 held_timeout: None,
                 min_pres_value: DEFAULT_MIN_PRES_VALUE,
                 max_pres_value: DEFAULT_MAX_PRES_VALUE,
+                description: None,
             },
             configured_timeout: DEFAULT_TIMEOUT,
             countdown: Countdown::Stopped,
@@ -399,6 +404,18 @@ impl BACnetObject for TimerObject {
                 self.service_changed();
             }
             return result;
+        }
+        // Saved first with storage (`saving`, #2364).
+        if self.config_storage.is_some()
+            && property == PropertyIdentifier::DESCRIPTION
+            && !crate::write_config::description::null_write(property, &value)
+        {
+            let write = crate::durable::PendingWrite {
+                property,
+                array_index,
+                value,
+            };
+            return crate::write_config::saving::write(self, write);
         }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;

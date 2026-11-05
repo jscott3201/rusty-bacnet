@@ -5,8 +5,8 @@
 //! hands its allocator an arena of
 //! [`ARENA`](firmware_link::reporting::ARENA) octets, then runs
 //! [`firmware_link::reporting::run`] once on the hand-written requests,
-//! which subscribe, renew and cancel through the `Reporter`, and report and
-//! read what they subscribed to.
+//! which subscribe, renew and cancel through the `Reporter`, report and
+//! read what they subscribed to, and set and read the Device clock.
 //! The requests and the summary pass through [`core::hint::black_box`], so
 //! none of the work can be optimized away, and then it loops. CI never runs
 //! it: building it proves that COV reporting links `no_std` with `alloc`,

@@ -37,8 +37,9 @@ pub enum WriteConfigSnapshot {
 }
 
 /// The reporting settings every intrinsic reporter shares, as storage keeps
-/// them once a write sets them (#2331). Each is `None` until then: what the
-/// application configures applies at each start until then.
+/// them once a write sets them (#2331), and its Description (#2364). Each
+/// is `None` until then: what the application configures applies at each
+/// start until then.
 ///
 /// More settings may join it, so outside the crate it is built from
 /// [`Default`] with its fields then set.
@@ -62,10 +63,18 @@ pub struct ReportingWriteConfig {
     pub event_algorithm_inhibit_ref: Option<BACnetObjectPropertyReference>,
     /// Event_Algorithm_Inhibit.
     pub event_algorithm_inhibit: Option<bool>,
+    /// Description, which the same objects keep beside these settings
+    /// (#2364); at most 16 KiB of UTF-8, as a durable object refuses a
+    /// longer write.
+    pub description: Option<String>,
 }
 
 /// What a Timer keeps across a restart.
+///
+/// More parts may join it, so outside the crate it is built from
+/// [`Default`] with its fields then set.
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct TimerWriteConfig {
     /// State_Change_Values, List_Of_Object_Property_References and
     /// Priority_For_Writing, once a write has set either of the first two.
@@ -79,6 +88,9 @@ pub struct TimerWriteConfig {
     ///
     /// [`TimerObject::set_pres_value_range`]: crate::timer::TimerObject::set_pres_value_range
     pub default_timeout: Option<u64>,
+    /// Description, once a write has set it (#2364); at most 16 KiB of
+    /// UTF-8.
+    pub description: Option<String>,
 }
 
 /// The three properties a Timer serves together (Clause 12.57, Table 12-75
@@ -98,7 +110,11 @@ pub struct TimerStateChange {
 /// What a Channel keeps across a restart. Each member is `None` until a
 /// write sets it: what the application configures applies at each start
 /// until then.
+///
+/// More parts may join it, so outside the crate it is built from
+/// [`Default`] with its fields then set.
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct ChannelWriteConfig {
     /// List_Of_Object_Property_References with Execution_Delay, once a
     /// write has set either: the two have one size, so they are kept as one.
@@ -109,6 +125,9 @@ pub struct ChannelWriteConfig {
     pub control_groups: Option<Vec<u32>>,
     /// Allow_Group_Delay_Inhibit, once a write has set it.
     pub allow_group_delay_inhibit: Option<bool>,
+    /// Description, once a write has set it (#2364); at most 16 KiB of
+    /// UTF-8.
+    pub description: Option<String>,
 }
 
 /// A Channel's members and their delays, slot by slot.
@@ -118,6 +137,26 @@ pub struct ChannelMembers {
     pub references: Vec<BACnetDeviceObjectPropertyReference>,
     /// Execution_Delay in milliseconds, one per reference.
     pub execution_delay: Vec<u32>,
+}
+
+impl WriteConfigSnapshot {
+    /// The Description a write set, kept beside the configuration.
+    pub(crate) fn description(&self) -> Option<&str> {
+        match self {
+            Self::Timer(config) => config.description.as_deref(),
+            Self::Channel(config) => config.description.as_deref(),
+            Self::Reporting(config) => config.description.as_deref(),
+        }
+    }
+
+    /// Where the kept Description goes.
+    pub(crate) fn description_mut(&mut self) -> &mut Option<String> {
+        match self {
+            Self::Timer(config) => &mut config.description,
+            Self::Channel(config) => &mut config.description,
+            Self::Reporting(config) => &mut config.description,
+        }
+    }
 }
 
 /// Application-owned storage for the configuration peers write to Timers,

@@ -5,9 +5,12 @@
 //! (#1315), an Access Rights object a written rule array, Enable (#1392) or
 //! Accompaniment (#1393), an Audit Log a Log_Enable or Buffer_Size change,
 //! a Timer or Channel the configuration a peer writes to it (#2243), a
-//! Color or Color Temperature a written default (#1956), and a Trend Log,
+//! Color or Color Temperature a written default (#1956), a Trend Log,
 //! Trend Log Multiple or Event Log a written reporting setting (#1952),
-//! before serving it, and refuses the write if the save fails. So
+//! an analog, binary or multi-state object, Access Door, Access Zone,
+//! Event or Alert Enrollment a written reporting setting (#2331), and those
+//! objects, a Timer and a Channel a written Description (#2364), before
+//! serving it, and refuses the write if the save fails. So
 //! that the save never runs while the database guard is held, a request
 //! that makes such a write stages it first ([`DurableWrites`]): under the
 //! guard the object queues the save, the request awaits it with the guard
@@ -95,7 +98,8 @@ enum TargetValue {
 /// settings too, the nine analog, binary and multi-state object types
 /// those reporting settings beside their Tags, and Access Door, Access Zone,
 /// Event Enrollment and Alert Enrollment the same reporting settings
-/// (#2331).
+/// (#2331). A Timer, a Channel and the thirteen types with a reporting
+/// store keep a written Description too (#2364).
 /// Under a policy
 /// that decides mutations, only these attempts of a WritePropertyMultiple are decided
 /// ahead of the handler (#1321).
@@ -136,7 +140,7 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
         | ObjectType::ANALOG_OUTPUT
         | ObjectType::BINARY_OUTPUT
         | ObjectType::MULTI_STATE_OUTPUT => {
-            property == PropertyIdentifier::TAGS || reporting_row(property)
+            property == PropertyIdentifier::TAGS || kept_with_reporting(property)
         }
         ObjectType::LIGHTING_OUTPUT | ObjectType::BINARY_LIGHTING_OUTPUT | ObjectType::DEVICE => {
             property == PropertyIdentifier::TAGS
@@ -153,6 +157,7 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
             PropertyIdentifier::STATE_CHANGE_VALUES
                 | PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES
                 | PropertyIdentifier::DEFAULT_TIMEOUT
+                | PropertyIdentifier::DESCRIPTION
         ),
         ObjectType::CHANNEL => matches!(
             property,
@@ -161,6 +166,7 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
                 | PropertyIdentifier::CHANNEL_NUMBER
                 | PropertyIdentifier::CONTROL_GROUPS
                 | PropertyIdentifier::ALLOW_GROUP_DELAY_INHIBIT
+                | PropertyIdentifier::DESCRIPTION
         ),
         ObjectType::TREND_LOG => {
             reporting_row(property)
@@ -170,14 +176,19 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
                         | PropertyIdentifier::COV_RESUBSCRIPTION_INTERVAL
                 )
         }
-        ObjectType::TREND_LOG_MULTIPLE
-        | ObjectType::EVENT_LOG
-        | ObjectType::ACCESS_DOOR
+        ObjectType::TREND_LOG_MULTIPLE | ObjectType::EVENT_LOG => reporting_row(property),
+        ObjectType::ACCESS_DOOR
         | ObjectType::ACCESS_ZONE
         | ObjectType::EVENT_ENROLLMENT
-        | ObjectType::ALERT_ENROLLMENT => reporting_row(property),
+        | ObjectType::ALERT_ENROLLMENT => kept_with_reporting(property),
         _ => false,
     }
+}
+
+/// What the objects with a reporting store keep (#2331): the reporting
+/// settings, and Description beside them (#2364).
+fn kept_with_reporting(property: PropertyIdentifier) -> bool {
+    reporting_row(property) || property == PropertyIdentifier::DESCRIPTION
 }
 
 /// The reporting settings every intrinsic reporter keeps once written: the

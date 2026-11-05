@@ -227,6 +227,14 @@ fn each_event_enrollment_setter_gives_way_to_its_own_row_until_cleared() {
                 apply: |object| object.set_event_enable(EventTransitionBits::TO_NORMAL),
                 applied: enable(EventTransitionBits::TO_NORMAL),
             },
+            // Kept beside the reporting settings (#2364).
+            Guarded {
+                row: P::DESCRIPTION,
+                written: PropertyValue::CharacterString("lobby".into()),
+                over: |object| object.set_description("configured"),
+                apply: |object| object.set_description("configured"),
+                applied: PropertyValue::CharacterString("configured".into()),
+            },
         ],
     );
 }

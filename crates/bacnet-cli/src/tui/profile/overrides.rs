@@ -42,6 +42,8 @@ struct BipOverrides {
     multicast: Option<Ipv4Addr>,
     multicast_ttl: Option<u8>,
     multicast_port: Option<u16>,
+    /// `--share-port` turns sharing on; there is no flag to turn it off.
+    share_port: bool,
 }
 
 /// Flags that only an SC profile takes. `--sc` itself only says which
@@ -105,6 +107,7 @@ impl Overrides {
                 multicast: cli.bip_multicast.filter(|_| has("bip_multicast")),
                 multicast_ttl: has("bip_multicast_ttl").then_some(cli.bip_multicast_ttl),
                 multicast_port: cli.bip_multicast_port.filter(|_| has("bip_multicast_port")),
+                share_port: has("share_port") && cli.share_port,
             },
             sc: ScOverrides {
                 sc: has("sc") && cli.sc,
@@ -185,6 +188,9 @@ impl Overrides {
                 if let Some(v) = o.multicast_port {
                     b.multicast_port = Some(v);
                 }
+                if o.share_port {
+                    b.share_port = true;
+                }
             }
             Transport::Sc => {
                 if self.bip != BipOverrides::default() {
@@ -239,6 +245,7 @@ pub(crate) fn has_transport_flags(cli: &Cli) -> bool {
             id.as_str(),
             "interface"
                 | "port"
+                | "share_port"
                 | "broadcast"
                 | "timeout"
                 | "min_interval_ms"

@@ -550,6 +550,16 @@ destination, which Clause 12.21.8 permits, so the configuration can't
 promise a window the device can't keep. Routing stays the host's
 (`event_awaited_recipients.rs`, `event_forwarding.rs:216-256`; `Bindings`).
 
+Firmware with a `clock::DeviceClock` (#2321, decision 14) passes
+`SyncedClock::window(now)`, through `Reporter::clock`: `None` until a
+TimeSynchronization, UTCTimeSynchronization or the host's own real-time
+clock has set it. `clock::destination_open` judges each destination by
+the server's test (`notification_class::in_window`) or, with `None`, by
+`always_in_window`. Never work the window out from `db.clock_frame()`:
+an unsynchronized `DeviceClock` gives a valid 1990 frame there, and the
+windows would open on it. Such a build stores restricted destinations;
+only a `Responder` with no clock refuses them (decision 14).
+
 ### 6.4 Acknowledgement
 
 `event::acknowledge` is `handle_acknowledge_alarm`
@@ -978,6 +988,72 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
     began it, however late it was popped, so its last answer is never
     awaited past the table's deadline. Its Life Safety writes report from
     the values each write changed, as the server's do.
+
+**#2321, 2026-11-04 (measured):**
+
+14. A Device clock in the core, `clock::SyncedClock`: the host's
+    `bacnet-time` instant, the UTC day and hundredths it stood for, the
+    zone and a synchronized flag; 32-bit arithmetic past `bacnet-time`'s
+    long division of the elapsed seconds, and no allocation.
+    - Until set it counts from local midnight, 1990-01-01, at the instant
+      it was built (Clauses 12.11.23, 12.11.24), so the Device always has
+      Local_Date and Local_Time and lists both services; windows fail
+      closed and timestamps carry that date until a sync.
+    - A local TimeSynchronization reads back as given; a UTC one less
+      UTC_Offset, plus an hour in daylight-saving time (Clauses 16.7,
+      16.8). The clock keeps the UTC instant with a fixed zone, as the
+      server's `ServerClock` does; the parity tests hold the two to the
+      same Local_Date and Local_Time octets and the same open destinations.
+    - `DeviceClock` pairs it with the host's monotonic timer and is lent to
+      the database as its `ClockReader` (`lend`). Each accepted sync lends
+      a new copy (one `Arc` and a rebind of every object's clocks) rather
+      than mutate a shared one, so the core takes no lock and no 64-bit
+      atomic. The `Responder` runs a sync only when the Device lists the
+      service; admission policy (sources, rate, step) is the host's, which
+      hands over only what it accepts. A host's real-time clock sets it
+      through `Responder::set_time`, and that counts as synchronized.
+    - Restricted Recipient_List entries: stored, not refused, on a build
+      with a clock. The list survives restarts (Clause 12.21.8) and the
+      clock restarts unsynchronized, so a refusal that lifted only once
+      synced would take an entry before a restart that it refused after.
+      Stored, an entry fails closed until the clock is set and is judged
+      by its own days and window from then on.
+    - For PR 3, the refusal's signal: a `Responder` built without
+      `with_clock`, checked on its own write path before a Notification
+      Class's Recipient_List write commits (a host that runs
+      AddListElement itself applies the same rule). Not a database with no
+      `ClockReader`, and not inside `bacnet-objects`' Recipient_List
+      write: the server shares that write, and judges windows by system
+      UTC even when started with `start_clockless`, so it keeps storing
+      restricted entries.
+    - For PR 3, the window: ask the synchronized state,
+      `SyncedClock::window`, never `db.clock_frame()`, whose unsynchronized
+      1990 frame is valid and would open windows on a made-up date.
+    - For PR 3, the filter: Clause 12.21.8 lets a device restrict a
+      writable list only to the one configuration that always sends:
+      every day, 00:00:00.00 to 23:59:59.99, all three transitions.
+      `always_in_window` passes that configuration and refuses only
+      entries that differ from it, so as the write filter it stays within
+      the clause. It also passes other whole-day windows (across midnight
+      with no gap, an unspecified hour) and any transitions, all of which
+      the device can honour; whether to refuse an unspecified hour, which
+      Table 12-25 doesn't allow in a destination, is a separate check.
+    - The zone stays fixed: changing UTC_Offset or daylight saving at run
+      time (Clause 12.11.25) is a follow-up for the server and the core
+      together.
+    - Size (`check-firmware-link.sh`, Rust 1.99.0, flash in octets): the
+      `objects` image 144,648 to 144,868 (thumbv7m), 144,380 to 144,984
+      (thumbv7em), 173,410 to 173,990 (riscv32imac); `reporting` 191,184
+      to 191,628, 191,924 to 192,364, 229,458 to 229,870; RAM unchanged,
+      no `core::fmt` or 64-bit division. The `Responder` reaches the sync
+      step only through a function pointer `with_clock` stores: called
+      directly, the unused path cost the `objects` image 4,720 octets on
+      thumbv7m. The `reporting` image then gives its `Responder` a clock,
+      synchronizes it and reads it back, so the size check's `core::fmt`
+      and 64-bit division counts cover the clock: 195,404 (thumbv7m),
+      196,228 (thumbv7em) and 234,458 (riscv32imac) octets of flash, still
+      none of either, within budget; its scenario's host heap peaks at
+      20,016 of 24,576 octets.
 
 ## 12. Evidence
 

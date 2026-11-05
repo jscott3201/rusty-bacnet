@@ -110,6 +110,7 @@ impl BACnetServer {
         let port = self.port;
         let broadcast_str = self.broadcast_address.clone();
         let share_port_by_address = self.share_port_by_address;
+        let share_wildcard_port = self.share_wildcard_port;
         let bip_mode = self.bip_mode.clone();
         let bip6_foreign = self.bip6_foreign.clone();
         let multicast = self.multicast;
@@ -170,6 +171,7 @@ impl BACnetServer {
                         .map_err(|e| PyRuntimeError::new_err(format!("invalid broadcast: {e}")))?;
                     let mut bip = BipTransport::new(interface, port, broadcast);
                     bip.set_share_port_by_address(share_port_by_address);
+                    bip.set_share_wildcard_port(share_wildcard_port);
                     bip.set_mode(bip_mode);
                     bip.set_multicast(multicast)
                         .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
