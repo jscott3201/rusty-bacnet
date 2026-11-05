@@ -479,6 +479,8 @@ mod reply_tests;
 #[cfg(test)]
 mod slow_adapter_tests;
 #[cfg(test)]
+mod tap_tests;
+#[cfg(test)]
 mod test_time_tests;
 #[cfg(test)]
 mod tests;

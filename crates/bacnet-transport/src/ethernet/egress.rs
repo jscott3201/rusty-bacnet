@@ -1,12 +1,15 @@
-//! Sending one whole raw frame, and what the receive loop does when an XID
-//! or TEST reply fails to go out (#1918). The send itself is injected, so
-//! every OS can test a failed or short send without a packet socket.
+//! Sending one whole raw frame and handing it to the frame tap, and what the
+//! receive loop does when an XID or TEST reply fails to go out (#1918). The
+//! send itself is injected, so every OS can test a failed or short send
+//! without a packet socket.
 
 use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use bacnet_types::data_link::DataLink;
 use tracing::{debug, warn};
 
+use crate::tap::{FrameTap, TapDirection, TapPeer};
 use crate::warn_throttle::WarnThrottle;
 
 /// Send `frame` with `send`, which returns how many octets went, as a
@@ -30,6 +33,22 @@ pub(super) fn send_whole_frame(
             Err(error) => return Err(error),
         }
     }
+}
+
+/// Send `frame`, addressed to `destination`, whole with `send`
+/// ([`send_whole_frame`]), and once it went, hand it to `tap` (#1856). Every
+/// frame the transport sends goes through here: NPDUs, and XID and TEST
+/// responses. A frame that failed to go out is not tapped.
+pub(super) fn send_tapped(
+    tap: &FrameTap,
+    destination: &[u8; 6],
+    frame: &[u8],
+    send: impl FnMut(&[u8]) -> io::Result<usize>,
+) -> io::Result<()> {
+    send_whole_frame(frame, send)?;
+    let peer = || TapPeer::Ethernet(*destination);
+    tap.record(TapDirection::Outbound, DataLink::Ethernet, peer, frame);
+    Ok(())
 }
 
 /// Which LLC command a reply answers.
@@ -68,17 +87,18 @@ impl ReplyFailures {
         self.count.load(Ordering::Relaxed)
     }
 
-    /// Send `reply`, a `kind` reply to `destination`, with `send`; on a
-    /// failed or short send, count and log it. Returns the failures
-    /// reported when it warns.
+    /// Send `reply`, a `kind` reply to `destination`, with `send`, handing
+    /// it to `tap` once it went; on a failed or short send, count and log
+    /// it. Returns the failures reported when it warns.
     pub(super) fn send_reply(
         &self,
         kind: LlcReply,
         destination: &[u8; 6],
         reply: &[u8],
+        tap: &FrameTap,
         send: impl FnMut(&[u8]) -> io::Result<usize>,
     ) -> Option<u64> {
-        let error = send_whole_frame(reply, send).err()?;
+        let error = send_tapped(tap, destination, reply, send).err()?;
         self.count.fetch_add(1, Ordering::Relaxed);
         let failed = self.warning.note();
         let kind = kind.name();

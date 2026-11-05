@@ -380,7 +380,10 @@ fn a_frame_from_a_group_source_is_dropped_before_any_answer_or_decode() {
         }
     );
     let ui = from_station(LLC_CONTROL_UI);
-    assert_eq!(classify_frame(&ui, &local), FrameIngress::Decode);
+    assert_eq!(
+        classify_frame(&ui, &local),
+        FrameIngress::Decode { source: station }
+    );
     assert_eq!(decode_ethernet_frame(&ui).unwrap().payload, WHO_IS[..]);
 
     // Destination admission still comes first, and this station's own
@@ -442,6 +445,7 @@ async fn a_failed_llc_reply_is_counted_and_its_warning_throttled() {
     use crate::warn_throttle::WARNING_INTERVAL;
     use std::io::{Error, ErrorKind};
     let failures = ReplyFailures::default();
+    let tap = crate::tap::FrameTap::new();
     let local = [2, 0, 0, 0, 0, 1];
     let station = INDIVIDUAL_MACS[0];
     let xid = build_xid_response(&local, &station);
@@ -449,18 +453,18 @@ async fn a_failed_llc_reply_is_counted_and_its_warning_throttled() {
     let refused = |_: &[u8]| Err(Error::from(ErrorKind::OutOfMemory));
 
     assert_eq!(
-        failures.send_reply(LlcReply::Xid, &station, &xid, |f| Ok(f.len())),
+        failures.send_reply(LlcReply::Xid, &station, &xid, &tap, |f| Ok(f.len())),
         None
     );
     assert_eq!(failures.count(), 0, "a reply that went out isn't counted");
 
     assert_eq!(
-        failures.send_reply(LlcReply::Xid, &station, &xid, refused),
+        failures.send_reply(LlcReply::Xid, &station, &xid, &tap, refused),
         Some(1),
         "the first failure warns"
     );
     assert_eq!(
-        failures.send_reply(LlcReply::Test, &station, &test, |f| Ok(f.len() / 2)),
+        failures.send_reply(LlcReply::Test, &station, &test, &tap, |f| Ok(f.len() / 2)),
         None,
         "a short send fails too, and logs at debug inside the interval"
     );
@@ -468,7 +472,7 @@ async fn a_failed_llc_reply_is_counted_and_its_warning_throttled() {
 
     tokio::time::advance(WARNING_INTERVAL).await;
     assert_eq!(
-        failures.send_reply(LlcReply::Test, &station, &test, refused),
+        failures.send_reply(LlcReply::Test, &station, &test, &tap, refused),
         Some(2),
         "the next warning reports the one held back, and this one"
     );
