@@ -181,6 +181,13 @@ async fn a_refusal_keeps_the_schedule_and_silence_is_unanswered() {
 
     reached().await;
     let renewed = tokio::time::Instant::now();
+    // Still refused as the renewal goes out. Read at the gate: while the
+    // test waits for the datagram below, paused time can jump to the next
+    // renewal, which would count this one unanswered first.
+    assert_eq!(
+        status(&transport).last_answer,
+        Some(Bip6RegistrationAnswer::Refused)
+    );
     let long = Duration::from_secs(3600);
     let ttl = next_within(&peer, long, |message| match message {
         Bvll6::RegisterForeignDevice { ttl, .. } => Some(ttl),
@@ -188,11 +195,6 @@ async fn a_refusal_keeps_the_schedule_and_silence_is_unanswered() {
     })
     .await;
     assert_eq!(ttl, 60);
-    // Still refused while the renewal waits for its answer.
-    assert_eq!(
-        status(&transport).last_answer,
-        Some(Bip6RegistrationAnswer::Refused)
-    );
     reached().await;
     assert_eq!(renewed.elapsed(), Duration::from_secs(30), "the usual 30 s");
     answered(&transport, Some(Bip6RegistrationAnswer::Unanswered)).await;
