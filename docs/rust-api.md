@@ -9762,7 +9762,16 @@ Every decision for a received request, DeviceCommunicationControl,
 LifeSafetyOperation and AuditNotification included, runs on Tokio's blocking
 pool while the request waits (#2032), so a blocking policy delays only its own
 request and `stop()` doesn't wait for it; a call that never returns keeps its
-thread and keeps the process from exiting. Policies should still be fast,
+thread and keeps the process from exiting. A policy that never blocks can skip
+that trip: when its `decides_inline()` returns `true` (`FnPolicy::inline()` for
+closures), the server calls every method of it on the request task instead
+(#2049). Opt in only when no method blocks or awaits, takes a lock the request
+path may also hold, calls back into the server, or does I/O. Otherwise the call
+holds the request task and the runtime worker under it (on a current-thread
+runtime, every task), and `stop()`, which ends only after each inline call
+already running has returned, waits for it; one that never returns keeps
+`stop()` from ending. A Python `mutation_policy` callable always runs on the
+pool. Policies should still be fast,
 reentry-free and side-effect-free, and may be called concurrently. Context addresses and
 process IDs are claimed, not authenticated identities. DeviceCommunicationControl
 has its own method, `authorize_device_communication_control` (allow by default),

@@ -63,8 +63,11 @@
 //! request the server calls them on Tokio's blocking pool with no object
 //! database guard held (#2032; each method says when it asks), so a slow
 //! policy delays only its own request, but a call that never returns keeps
-//! the process from exiting. Calls may run concurrently. Returning `false`, or
-//! panicking, denies, and the request changes nothing.
+//! the process from exiting. A policy that never blocks can skip the pool
+//! and be called on the request task instead, by returning `true` from
+//! [`ServerPolicy::decides_inline`], which says when that is safe (#2049).
+//! Calls may run concurrently. Returning `false`, or panicking, denies, and
+//! the request changes nothing.
 //!
 //! ```
 //! use bacnet_server::mutation::MutationAuthorizationContext;
@@ -77,6 +80,11 @@
 //! }
 //!
 //! impl ServerPolicy for Site {
+//!     // One comparison: it never blocks, locks, calls back or does I/O.
+//!     fn decides_inline(&self) -> bool {
+//!         true
+//!     }
+//!
 //!     fn authorize_mutation(&self, context: &MutationAuthorizationContext) -> bool {
 //!         context.principal() == Some(self.operator)
 //!     }
@@ -196,6 +204,38 @@ pub trait ServerPolicy: Send + Sync + 'static {
         true
     }
 
+    /// Whether the server may ask this policy on the request task itself,
+    /// instead of on Tokio's blocking pool (default: `false`, the pool).
+    ///
+    /// Each decision for a received request normally takes a trip to the
+    /// blocking pool (#2032), so that a policy that blocks holds neither a
+    /// runtime worker nor `BACnetServer::stop`. That trip is a task
+    /// allocation and two thread hand-offs per request, which a cheap
+    /// policy never needed. A policy that returns `true` is called inline,
+    /// on the request task, for every method it has (#2049).
+    ///
+    /// Return `true` only when every one of its methods:
+    /// - never blocks or awaits: no lock wait, channel receive, sleep,
+    ///   `block_on` or wait on another thread;
+    /// - takes no lock the request path may also hold, such as one the
+    ///   application holds while it calls into the server;
+    /// - never calls back into the server, its database included;
+    /// - does no I/O: no files, sockets or blocking log writer.
+    ///
+    /// Otherwise the call holds the request task, and the runtime worker
+    /// under it, for as long as it runs; on a current-thread runtime that
+    /// is every task. `stop()` joins every request it admitted, and a
+    /// request's abort lands only when its task next yields, so `stop()`
+    /// waits for each inline call already running and returns once it does;
+    /// one that never returns keeps `stop()` from ending at all. On the
+    /// pool, `stop()` ends without waiting. A panic denies either way.
+    ///
+    /// The server reads this before each decision, so it must give the
+    /// same answer for the policy's lifetime.
+    fn decides_inline(&self) -> bool {
+        false
+    }
+
     /// Whether to carry out one covered mutation (default: allow).
     ///
     /// Asked after DeviceCommunicationControl's checks, request admission,
@@ -227,7 +267,10 @@ pub trait ServerPolicy: Send + Sync + 'static {
     /// returns keeps its blocking thread after `stop()`, and a Tokio runtime
     /// waits for blocking tasks when it shuts down, so such a policy keeps
     /// the process from exiting. The other `authorize_*` methods for a
-    /// received request run the same way.
+    /// received request run the same way. A policy whose
+    /// [`decides_inline`](Self::decides_inline) is `true` skips the pool
+    /// and is called on the request task instead, under the rules given
+    /// there.
     ///
     /// An inbound WriteGroup asks once per Channel it would write, with no
     /// database guard held, no invoke ID and the unconfirmed service in the
@@ -314,9 +357,12 @@ type Decide<C> = Arc<dyn Fn(&C) -> bool + Send + Sync>;
 /// closure keeps the trait's default; with no mutation closure it doesn't
 /// decide mutations at all ([`ServerPolicy::decides_mutations`]).
 ///
-/// Each closure follows the calling rules of the method it stands for.
+/// Each closure follows the calling rules of the method it stands for. Its
+/// closures run on Tokio's blocking pool unless [`inline`](Self::inline)
+/// declares that none of them blocks.
 #[derive(Clone, Default)]
 pub struct FnPolicy {
+    inline: bool,
     mutation: Option<Decide<MutationAuthorizationContext>>,
     life_safety_operation: Option<Decide<LifeSafetyOperationAuthorizationContext>>,
     device_communication_control: Option<Decide<DeviceCommunicationControlAuthorizationContext>>,
@@ -329,6 +375,15 @@ impl FnPolicy {
     /// A policy that decides as the defaults do, until given closures.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Have the server call every closure on the request task, not on
+    /// Tokio's blocking pool ([`ServerPolicy::decides_inline`]). Only for
+    /// closures that keep the rules given there: none blocks, takes a lock
+    /// the request path may hold, calls back into the server or does I/O.
+    pub fn inline(mut self) -> Self {
+        self.inline = true;
+        self
     }
 
     /// Decide mutations with `decide`; see [`ServerPolicy::authorize_mutation`].
@@ -388,6 +443,9 @@ impl<P: ServerPolicy + ?Sized> ServerPolicy for Arc<P> {
     fn decides_mutations(&self) -> bool {
         (**self).decides_mutations()
     }
+    fn decides_inline(&self) -> bool {
+        (**self).decides_inline()
+    }
     fn authorize_mutation(&self, context: &MutationAuthorizationContext) -> bool {
         (**self).authorize_mutation(context)
     }
@@ -421,6 +479,9 @@ impl<P: ServerPolicy + ?Sized> ServerPolicy for Box<P> {
     fn decides_mutations(&self) -> bool {
         (**self).decides_mutations()
     }
+    fn decides_inline(&self) -> bool {
+        (**self).decides_inline()
+    }
     fn authorize_mutation(&self, context: &MutationAuthorizationContext) -> bool {
         (**self).authorize_mutation(context)
     }
@@ -453,6 +514,7 @@ impl<P: ServerPolicy + ?Sized> ServerPolicy for Box<P> {
 impl std::fmt::Debug for FnPolicy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FnPolicy")
+            .field("inline", &self.inline)
             .field("mutation", &self.mutation.is_some())
             .field(
                 "life_safety_operation",
@@ -475,6 +537,11 @@ impl ServerPolicy for FnPolicy {
     /// Only when it was given a mutation closure.
     fn decides_mutations(&self) -> bool {
         self.mutation.is_some()
+    }
+
+    /// Only when [`FnPolicy::inline`] said so.
+    fn decides_inline(&self) -> bool {
+        self.inline
     }
 
     fn authorize_mutation(&self, context: &MutationAuthorizationContext) -> bool {

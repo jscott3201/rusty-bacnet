@@ -14,13 +14,13 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 /// A blocking wait the test releases; `entered` fires once it is blocked.
-struct Gate {
-    block: Arc<dyn Fn() + Send + Sync>,
-    entered: mpsc::UnboundedReceiver<()>,
-    release: std_mpsc::Sender<()>,
+pub(super) struct Gate {
+    pub(super) block: Arc<dyn Fn() + Send + Sync>,
+    pub(super) entered: mpsc::UnboundedReceiver<()>,
+    pub(super) release: std_mpsc::Sender<()>,
 }
 
-fn gate() -> Gate {
+pub(super) fn gate() -> Gate {
     let (entered_tx, entered) = mpsc::unbounded_channel();
     let (release, release_rx) = std_mpsc::channel::<()>();
     let release_rx = std::sync::Mutex::new(release_rx);
@@ -37,7 +37,7 @@ fn gate() -> Gate {
 }
 
 /// Feed `apdu` to the server as one NPDU from MAC 1.
-async fn send(inbound: &mpsc::Sender<ReceivedNpdu>, apdu: Apdu) {
+pub(super) async fn send(inbound: &mpsc::Sender<ReceivedNpdu>, apdu: Apdu) {
     let mut encoded = BytesMut::new();
     encode_apdu(&mut encoded, &apdu).unwrap();
     let mut npdu = BytesMut::new();
@@ -63,7 +63,7 @@ async fn send(inbound: &mpsc::Sender<ReceivedNpdu>, apdu: Apdu) {
         .unwrap();
 }
 
-fn confirmed(service_choice: ConfirmedServiceChoice, service_request: Bytes) -> Apdu {
+pub(super) fn confirmed(service_choice: ConfirmedServiceChoice, service_request: Bytes) -> Apdu {
     Apdu::ConfirmedRequest(ConfirmedRequestPdu {
         segmented: false,
         more_follows: false,
@@ -78,7 +78,7 @@ fn confirmed(service_choice: ConfirmedServiceChoice, service_request: Bytes) -> 
     })
 }
 
-fn life_safety() -> Apdu {
+pub(super) fn life_safety() -> Apdu {
     let mut data = BytesMut::new();
     bacnet_services::life_safety::LifeSafetyOperationRequest {
         requesting_process_identifier: 7,
@@ -91,7 +91,7 @@ fn life_safety() -> Apdu {
     confirmed(ConfirmedServiceChoice::LIFE_SAFETY_OPERATION, data.freeze())
 }
 
-fn dcc() -> Apdu {
+pub(super) fn dcc() -> Apdu {
     // DISABLE_INITIATION with no duration and no password.
     confirmed(
         ConfirmedServiceChoice::DEVICE_COMMUNICATION_CONTROL,
@@ -99,12 +99,49 @@ fn dcc() -> Apdu {
     )
 }
 
-fn unconfirmed_audit() -> Apdu {
+pub(super) fn unconfirmed_audit() -> Apdu {
     let notification = crate::server::audit_notification_tests::notification(AuditOperation::WRITE);
     Apdu::UnconfirmedRequest(UnconfirmedRequestPdu {
         service_choice: UnconfirmedServiceChoice::UNCONFIRMED_AUDIT_NOTIFICATION,
         service_request: crate::server::audit_notification_tests::request_bytes(vec![notification]),
     })
+}
+
+/// A server asking `policy`, fed through the returned sender: Device 100
+/// and Binary Values 1 and 2, DeviceCommunicationControl without a
+/// password, and an Audit Log sink.
+pub(super) async fn server(
+    policy: impl crate::ServerPolicy,
+) -> (BACnetServer<TestTransport>, mpsc::Sender<ReceivedNpdu>) {
+    let (transport, inbound) = TestTransport::inbound(4);
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(
+        DeviceObject::new(DeviceConfig {
+            identity: bacnet_objects::DeviceIdentity::new(100, 0).unwrap(),
+            ..DeviceConfig::default()
+        })
+        .unwrap(),
+    ))
+    .unwrap();
+    for instance in [1, 2] {
+        db.add(Box::new(
+            bacnet_objects::binary::BinaryValueObject::new(instance, format!("bv{instance}"))
+                .unwrap(),
+        ))
+        .unwrap();
+    }
+    let server = BACnetServer::generic_builder()
+        .device(bacnet_objects::DeviceIdentity::new(100, 0).unwrap())
+        .transport(transport)
+        .database(db)
+        .enable_event_enrollment(false)
+        .dcc_policy(DccPolicy::LegacyPermissive)
+        .audit_notification_sink(ObjectIdentifier::new(ObjectType::AUDIT_LOG, 1).unwrap())
+        .policy(policy)
+        .build()
+        .await
+        .unwrap();
+    (server, inbound)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -126,27 +163,7 @@ async fn stop_ends_while_a_dcc_life_safety_or_audit_policy_is_blocked() {
                 true
             }),
         };
-        let (transport, inbound) = TestTransport::inbound(4);
-        let mut db = ObjectDatabase::new();
-        db.add(Box::new(
-            DeviceObject::new(DeviceConfig {
-                identity: bacnet_objects::DeviceIdentity::new(100, 0).unwrap(),
-                ..DeviceConfig::default()
-            })
-            .unwrap(),
-        ))
-        .unwrap();
-        let mut server = BACnetServer::generic_builder()
-            .device(bacnet_objects::DeviceIdentity::new(100, 0).unwrap())
-            .transport(transport)
-            .database(db)
-            .enable_event_enrollment(false)
-            .dcc_policy(DccPolicy::LegacyPermissive)
-            .audit_notification_sink(ObjectIdentifier::new(ObjectType::AUDIT_LOG, 1).unwrap())
-            .policy(policy)
-            .build()
-            .await
-            .unwrap();
+        let (mut server, inbound) = server(policy).await;
         let request = match service {
             "dcc" => dcc(),
             "life_safety" => life_safety(),

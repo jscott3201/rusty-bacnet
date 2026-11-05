@@ -203,12 +203,17 @@ pub(in crate::server) fn fail_closed_authorize(authorize: impl FnOnce() -> bool)
 /// [`ask_mutation_policy`] does for mutations
 /// (#2032): the request task awaits the answer, so a policy that blocks holds
 /// no runtime worker and `stop()` can still abort the request. A panic, or a
-/// call that never reports back, denies.
+/// call that never reports back, denies. A policy that
+/// [`decides_inline`](crate::ServerPolicy::decides_inline) is asked on the
+/// request task instead, with no trip (#2049).
 pub(in crate::server) async fn ask_policy<C: Send + 'static>(
     policy: &Arc<dyn crate::ServerPolicy>,
     context: C,
     ask: fn(&dyn crate::ServerPolicy, &C) -> bool,
 ) -> bool {
+    if policy.decides_inline() {
+        return fail_closed_authorize(|| ask(&**policy, &context));
+    }
     let policy = Arc::clone(policy);
     tokio::task::spawn_blocking(move || fail_closed_authorize(|| ask(&*policy, &context)))
         .await

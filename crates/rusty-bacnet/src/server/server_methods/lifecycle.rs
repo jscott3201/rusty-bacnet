@@ -303,28 +303,14 @@ impl BACnetServer {
                 .cov_policy(cov_policy)
                 .time_sync_policy(time_sync_policy)
                 .transport(transport);
-            // One policy holds every decision Python configures: installing
-            // a second would replace the first.
-            let mut policy = None;
             if let Some(sink) = audit_notification_sink {
                 builder = builder.audit_notification_sink(sink.object_id);
-                if sink.allow_all {
-                    policy = Some(
-                        bacnet_server::FnPolicy::new()
-                            .audit_notification(|_| true)
-                            .unconfirmed_audit_notification(|_| true),
-                    );
-                }
-                // deny_all deliberately retains the Rust fail-closed defaults.
             }
-            if let Some(callback) = mutation_callback {
-                policy = Some(
-                    policy
-                        .unwrap_or_default()
-                        .mutation(move |context| callback.decide(context)),
-                );
-            }
-            if let Some(policy) = policy {
+            // deny_all deliberately retains the Rust fail-closed defaults.
+            let audit_allow_all = audit_notification_sink.is_some_and(|sink| sink.allow_all);
+            if let Some(policy) =
+                crate::mutation_policy::server_policy(audit_allow_all, mutation_callback)
+            {
                 builder = builder.policy(policy);
             }
             if let Some(pw) = dcc_password {
