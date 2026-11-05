@@ -1,8 +1,12 @@
 //! An endpoint session's BACnet/SC link through hub loss, failover, primary
-//! restore and redial, against real in-process hubs, beside a client on the
-//! same hubs (#1946).
+//! restore, redial and stop, against real in-process hubs, beside a client on
+//! the same hubs (#1946). Every test name starts with `sc_`, so
+//! `cargo nextest run -p bacnet-endpoint --features sc-tls -E 'test(/sc/)'`
+//! runs them; the binary is `sc_link`.
 #![cfg(feature = "sc-tls")]
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use bacnet_client::client::BACnetClient;
@@ -11,7 +15,7 @@ use bacnet_endpoint::sc::ScEndpointBuilder;
 use bacnet_endpoint::session::EndpointSession;
 use bacnet_transport::sc::{
     ScActiveHub, ScConnectError, ScConnectionState, ScDisconnectCause, ScEvent, ScHubDialer,
-    ScLinkStatus, ScReconnectConfig, ScTransport, ScWebSocketErrorKind,
+    ScLinkMonitor, ScLinkStatus, ScReconnectConfig, ScTransport, ScWebSocketErrorKind,
 };
 use bacnet_transport::sc_hub::{ScHub, ScHubTlsConfig};
 use bacnet_transport::sc_tls::{ScNodeTlsConfig, TlsWebSocket};
@@ -184,7 +188,7 @@ async fn read_device(client: &BACnetClient<ScTransport<TlsWebSocket>>, vmac: [u8
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn failover_and_primary_restore_read_as_the_clients_do() {
+async fn sc_failover_and_primary_restore_read_as_the_clients_do() {
     let pki = Pki::new();
     let mut primary = pki.hub(0, "127.0.0.1:0", PRIMARY_VMAC).await.unwrap();
     let primary_addr = primary.local_addr().unwrap();
@@ -304,7 +308,7 @@ async fn failover_and_primary_restore_read_as_the_clients_do() {
 /// A primary that accepts TCP and never answers TLS is given up on within the
 /// connect timeout, and the session starts on the failover hub.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_stalled_primary_times_out_and_starts_on_the_failover_hub() {
+async fn sc_a_stalled_primary_times_out_and_starts_on_the_failover_hub() {
     let pki = Pki::new();
     let stalled = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let stalled_port = stalled.local_addr().unwrap().port();
@@ -349,7 +353,7 @@ async fn a_stalled_primary_times_out_and_starts_on_the_failover_hub() {
 /// After the hub drops, each redial is bounded by the connect timeout, and
 /// the session reconnects once the hub is back.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_dropped_hub_is_redialled_within_the_connect_timeout() {
+async fn sc_a_dropped_hub_is_redialled_within_the_connect_timeout() {
     let pki = Pki::new();
     let mut hub = pki.hub(0, "127.0.0.1:0", PRIMARY_VMAC).await.unwrap();
     let addr = hub.local_addr().unwrap();
@@ -428,7 +432,7 @@ async fn a_dropped_hub_is_redialled_within_the_connect_timeout() {
 /// Without reconnect, both the caller-dialled build and the dialer build
 /// stay disconnected after the hub drops, as before #1946.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn without_reconnect_a_lost_hub_stays_lost() {
+async fn sc_without_reconnect_a_lost_hub_stays_lost() {
     let pki = Pki::new();
     let mut hub = pki.hub(0, "127.0.0.1:0", PRIMARY_VMAC).await.unwrap();
     let dialled_vmac = [0x02, 0, 0, 0, 0, 0x36];
@@ -481,7 +485,7 @@ async fn without_reconnect_a_lost_hub_stays_lost() {
 }
 
 #[tokio::test]
-async fn hub_settings_are_checked_before_any_dial() {
+async fn sc_hub_settings_are_checked_before_any_dial() {
     let pki = Pki::new();
     let vmac = [0x02, 0, 0, 0, 0, 0x35];
     let builder = || ScEndpointBuilder::new(vmac, uuid(vmac));
@@ -513,4 +517,168 @@ async fn hub_settings_are_checked_before_any_dial() {
         .err()
         .expect("another identity is refused");
     assert!(error.to_string().contains("must equal builder"), "{error}");
+    // The session's own settings too, which only starting a session checked.
+    let session_errors = [
+        (builder().queue_capacity(0), "queue capacity"),
+        (builder().read_work_limit(0), "read work limit"),
+        (
+            builder().min_request_interval_ms(3_600_001),
+            "min-request-interval",
+        ),
+    ];
+    for (builder, wanted) in session_errors {
+        assert!(builder.validate_only().is_err(), "{wanted}");
+        let error = builder
+            .connect_hub_session(hubs())
+            .await
+            .err()
+            .expect("a bad session setting is refused");
+        assert!(error.to_string().contains(wanted), "{error}");
+    }
+}
+
+/// A listener that accepts TCP and never answers, so a hub dial to it stalls
+/// in TLS until its connect timeout. It counts the dials it takes.
+struct Stall {
+    port: u16,
+    dials: Arc<AtomicUsize>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Stall {
+    /// Bind `addr`, retrying while a stopped hub's port lingers.
+    async fn bind(addr: &str) -> Self {
+        let mut bound = None;
+        for _ in 0..100 {
+            if let Ok(listener) = tokio::net::TcpListener::bind(addr).await {
+                bound = Some(listener);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let listener = bound.unwrap_or_else(|| panic!("could not bind {addr}"));
+        let port = listener.local_addr().unwrap().port();
+        let dials = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&dials);
+        let task = tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                counted.fetch_add(1, Ordering::SeqCst);
+                held.push(socket);
+            }
+        });
+        Self { port, dials, task }
+    }
+
+    fn dials(&self) -> usize {
+        self.dials.load(Ordering::SeqCst)
+    }
+}
+
+impl Drop for Stall {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+/// Stop `session`, then check that it dials no hub after `stop()` returns
+/// and that its event stream ends once the session and `monitor` are gone.
+async fn stop_and_check_quiet(
+    mut session: Session,
+    monitor: ScLinkMonitor,
+    mut events: broadcast::Receiver<ScEvent>,
+    listeners: &[&Stall],
+) {
+    session.stop().await.unwrap();
+    // A dial begun before stop() may still be in the accept queue.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let dials = || listeners.iter().map(|l| l.dials()).collect::<Vec<_>>();
+    let stopped = dials();
+    // Several redial periods: a running connector would dial again.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(dials(), stopped, "a hub was dialled after stop()");
+    drop(session);
+    drop(monitor);
+    tokio::time::timeout(WAIT, async {
+        loop {
+            if let Err(broadcast::error::RecvError::Closed) = events.recv().await {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("the event stream ends with the session");
+}
+
+/// Stopped while on the failover hub, probing a stalled primary: the probes
+/// end with the session.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sc_stop_on_the_failover_hub_ends_the_primary_probes() {
+    let pki = Pki::new();
+    let primary = Stall::bind("127.0.0.1:0").await;
+    let mut failover = pki.hub(1, "127.0.0.1:0", FAILOVER_VMAC).await.unwrap();
+    let hubs = ScHubDialer::new(
+        &format!("wss://localhost:{}", primary.port),
+        pki.node.clone(),
+    )
+    .failover_url(&url(&failover))
+    .connect_timeout_ms(300);
+    let mut session = endpoint(hubs, [0x02, 0, 0, 0, 0, 0x38], Some(reconnect(1))).await;
+    let monitor = session.sc_link().unwrap();
+    let mut events = monitor.connection_events();
+    session.start().await.unwrap();
+    let mut seen = Vec::new();
+    until_event(&mut events, &mut seen, |e| {
+        is_connected(e, ScActiveHub::Failover, FAILOVER_VMAC)
+    })
+    .await;
+    // Restore probes of the primary are under way, each stalling there.
+    until_event(&mut events, &mut seen, |e| {
+        matches!(e, ScEvent::PrimaryRestoreFailed { .. })
+    })
+    .await;
+    assert!(primary.dials() >= 2, "the first dial and a probe");
+    stop_and_check_quiet(session, monitor, events, &[&primary]).await;
+    failover.stop().await;
+}
+
+/// Stopped while reconnecting after both hubs are lost: the redials end with
+/// the session.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sc_stop_while_both_hubs_are_lost_ends_the_redials() {
+    let pki = Pki::new();
+    let mut primary = pki.hub(0, "127.0.0.1:0", PRIMARY_VMAC).await.unwrap();
+    let primary_addr = primary.local_addr().unwrap().to_string();
+    let mut failover = pki.hub(1, "127.0.0.1:0", FAILOVER_VMAC).await.unwrap();
+    let failover_addr = failover.local_addr().unwrap().to_string();
+    let hubs = ScHubDialer::new(&url(&primary), pki.node.clone())
+        .failover_url(&url(&failover))
+        .connect_timeout_ms(300);
+    let retries = ScReconnectConfig {
+        initial_delay_ms: 50,
+        max_delay_ms: 50,
+        max_retries: 1_000,
+    };
+    let mut session = endpoint(hubs, [0x02, 0, 0, 0, 0, 0x39], Some(retries)).await;
+    let monitor = session.sc_link().unwrap();
+    let mut events = monitor.connection_events();
+    session.start().await.unwrap();
+    let first = recv(&mut events).await;
+    assert!(
+        is_connected(&first, ScActiveHub::Primary, PRIMARY_VMAC),
+        "{first:?}"
+    );
+
+    primary.stop().await;
+    failover.stop().await;
+    let primary = Stall::bind(&primary_addr).await;
+    let failover = Stall::bind(&failover_addr).await;
+    tokio::time::timeout(WAIT, async {
+        while primary.dials() < 2 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the session redials the lost primary");
+    stop_and_check_quiet(session, monitor, events, &[&primary, &failover]).await;
 }

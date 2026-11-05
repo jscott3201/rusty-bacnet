@@ -151,8 +151,8 @@ impl ScEndpointBuilder {
     /// Least time between the client role's confirmed requests to one
     /// destination (default 0: no pacing). See
     /// [`SessionConfig::min_request_interval_ms`]; more than an hour fails
-    /// [`build_loopback_session`](Self::build_loopback_session) and
-    /// `build_hub_session`.
+    /// [`build_loopback_session`](Self::build_loopback_session),
+    /// `build_hub_session` and `connect_hub_session`, before any dial.
     pub fn min_request_interval_ms(mut self, ms: u64) -> Self {
         self.session.min_request_interval_ms = ms;
         self
@@ -214,6 +214,9 @@ impl ScEndpointBuilder {
         if let Some(config) = &self.reconnect {
             config.validate()?;
         }
+        // The session's own checks, so a bad queue capacity, read work
+        // limit or pacing interval fails before connect_hub_session dials.
+        self.session.validate()?;
         crate::session::check_link_bindings(
             &self.source_audit_bindings,
             &self.source_audit_routed,
@@ -240,8 +243,9 @@ impl ScEndpointBuilder {
 
     /// Validates concrete SC configuration without hub I/O.
     ///
-    /// Checks VMAC reservation, UUID presence, heartbeat range, and reconnect
-    /// config. Returns a typed
+    /// Checks VMAC reservation, UUID presence, heartbeat range, reconnect
+    /// config, source Audit bindings and the session settings (queue
+    /// capacity, read work limit, pacing interval). Returns a typed
     /// [`Error::Encoding`] on the first
     /// violation, before any dial.
     pub fn validate_only(&self) -> Result<(), Error> {
@@ -296,11 +300,12 @@ impl ScEndpointBuilder {
     /// connection, as [`BACnetClient::sc_builder`](bacnet_client::client::BACnetClient::sc_builder)
     /// does for a client (#1946).
     ///
-    /// Everything is checked before any dial: this builder's settings, the
-    /// composed identity as in [`build_hub_session`](Self::build_hub_session),
-    /// and [`ScHubDialer::validate`](bacnet_transport::sc::ScHubDialer::validate)
-    /// with this builder's [`reconnect`](Self::reconnect) configuration, which
-    /// a failover hub needs. With it, the transport redials a lost hub and
+    /// Everything is checked before any dial: this builder's settings (those
+    /// of [`validate_only`](Self::validate_only)), the composed identity as in
+    /// [`build_hub_session`](Self::build_hub_session), and the hub settings
+    /// [`ScHubDialer::connect`](bacnet_transport::sc::ScHubDialer::connect)
+    /// checks, with this builder's [`reconnect`](Self::reconnect)
+    /// configuration, which a failover hub needs. With it, the transport redials a lost hub and
     /// moves between the primary and failover hubs as the client's does;
     /// follow it through [`EndpointSession::sc_link`].
     ///

@@ -210,11 +210,8 @@ impl ScHubDialer {
         self
     }
 
-    /// Check the settings without any I/O: both URLs as
-    /// [`TlsWebSocket::connect`](crate::sc_tls::TlsWebSocket::connect) parses
-    /// them, `reconnect`'s delays, and that a failover hub comes with
-    /// `reconnect`.
-    pub fn validate(&self, reconnect: Option<&ScReconnectConfig>) -> Result<(), Error> {
+    /// The checks [`connect`](Self::connect) makes before it dials.
+    fn validate(&self, reconnect: Option<&ScReconnectConfig>) -> Result<(), Error> {
         use crate::sc_tls::TlsWebSocket;
         if let Some(config) = reconnect {
             config.validate()?;
@@ -230,11 +227,15 @@ impl ScHubDialer {
             .map_or(Ok(()), TlsWebSocket::validate_url)
     }
 
-    /// Check the settings as [`validate`](Self::validate) does, then dial the
-    /// primary hub and, when that fails and a failover hub is set, the
-    /// failover hub. Returns an unstarted transport for `local_vmac` over
-    /// that connection, set to redial the failover hub and, with
-    /// `reconnect`, the primary hub.
+    /// Check the settings without any I/O, then dial the primary hub and,
+    /// when that fails and a failover hub is set, the failover hub. Returns
+    /// an unstarted transport for `local_vmac` over that connection, set to
+    /// redial the failover hub and, with `reconnect`, the primary hub.
+    ///
+    /// The checks: both URLs as
+    /// [`TlsWebSocket::connect`](crate::sc_tls::TlsWebSocket::connect) parses
+    /// them, `reconnect`'s delays, and that a failover hub comes with
+    /// `reconnect`. A failed check is the error, and nothing is dialled.
     ///
     /// Each dial is bounded by the connect timeout, so a blackholed or
     /// stalled hub cannot hold up the start or the turn to the failover hub.

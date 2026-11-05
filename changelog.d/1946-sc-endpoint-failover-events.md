@@ -1,8 +1,8 @@
 ---
 section: Added
 ---
-- `ScEndpoint` reconnects, fails over to a second hub and reports its hub
-  link as `BACnetClient` does (`reconnect`, `sc_failover_hub`,
-  `sc_connect_timeout_ms`, `connection_events()`, `connection_status()`);
-  in Rust, `ScEndpointBuilder::connect_hub_session` and
-  `EndpointSession::sc_link` (#1946).
+- `ScEndpoint` reconnects, fails over to a second hub and reports its link
+  like `BACnetClient`. In Rust, `ScEndpointBuilder::connect_hub_session`
+  dials through the new `ScHubDialer`, shared with the SC client (dial logs
+  now come from `bacnet_transport`); `EndpointSession::sc_link` reports it
+  (#1946).

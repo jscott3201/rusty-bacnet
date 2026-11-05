@@ -193,6 +193,31 @@ pub struct SessionConfig {
     pub min_request_interval_ms: u64,
 }
 
+impl SessionConfig {
+    /// The checks [`EndpointSession::new`] makes, without a transport, so a
+    /// builder that dials can make them before it does (#1946).
+    pub(crate) fn validate(&self) -> Result<(), Error> {
+        if self.queue_capacity == 0 {
+            return Err(Error::Encoding(
+                "endpoint session queue capacity must be greater than zero".into(),
+            ));
+        }
+        if self.read_work_limit == 0 {
+            return Err(Error::Encoding(
+                "endpoint session read work limit must be greater than zero".into(),
+            ));
+        }
+        let interval = self.min_request_interval_ms;
+        if interval > bacnet_client::client::MAX_MIN_REQUEST_INTERVAL_MS {
+            return Err(Error::Encoding(format!(
+                "endpoint session min-request-interval {interval} ms is more than {} ms",
+                bacnet_client::client::MAX_MIN_REQUEST_INTERVAL_MS
+            )));
+        }
+        Ok(())
+    }
+}
+
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
@@ -350,30 +375,14 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// assert!(EndpointSession::new(transport, SessionRole::Both, bad).is_err());
     /// ```
     pub fn new(transport: T, role: SessionRole, config: SessionConfig) -> Result<Self, Error> {
-        if config.queue_capacity == 0 {
-            return Err(Error::Encoding(
-                "endpoint session queue capacity must be greater than zero".into(),
-            ));
-        }
-        if config.read_work_limit == 0 {
-            return Err(Error::Encoding(
-                "endpoint session read work limit must be greater than zero".into(),
-            ));
-        }
-        let interval = config.min_request_interval_ms;
-        if interval > bacnet_client::client::MAX_MIN_REQUEST_INTERVAL_MS {
-            return Err(Error::Encoding(format!(
-                "endpoint session min-request-interval {interval} ms is more than {} ms",
-                bacnet_client::client::MAX_MIN_REQUEST_INTERVAL_MS
-            )));
-        }
+        config.validate()?;
         let coordinator = Arc::new(OutboundTransactionCoordinator::new());
         let token = SessionToken::new(Arc::clone(&coordinator));
         let client_config = ClientConfig {
             apdu_timeout_ms: config.apdu_timeout_ms,
             apdu_retries: config.apdu_retries,
             max_apdu_length: config.max_apdu_length,
-            min_request_interval_ms: interval,
+            min_request_interval_ms: config.min_request_interval_ms,
             ..ClientConfig::default()
         };
         let local_receive_capacity = transport.local_receive_apdu_capacity();
