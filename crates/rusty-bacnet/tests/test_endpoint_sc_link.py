@@ -183,9 +183,11 @@ class ScEndpointLinkTests(ClientScFixture):
     async def test_reconnect_redials_the_hub_within_the_connect_timeout(self):
         hub = await self.started_hub()
         relay = await self.relay(await hub.url())
-        # 2 s: well under the 10 s default this test tells apart, with room
-        # for a Windows runner's TLS handshake on the first connect.
-        endpoint = self.endpoint(relay.url, sc_connect_timeout_ms=2_000, reconnect=ScReconnect(
+        # 3 s, as the client's relay tests use: on Windows the relay's own
+        # connect to "localhost" spends about 2 s on a refused ::1 before
+        # 127.0.0.1, inside this dial's TLS stage. Still well under the 10 s
+        # default this test tells apart.
+        endpoint = self.endpoint(relay.url, sc_connect_timeout_ms=3_000, reconnect=ScReconnect(
             initial_delay_ms=50, max_delay_ms=50, max_retries=50))
         await asyncio.wait_for(endpoint.start(), 10)
         events = await endpoint.connection_events()
@@ -198,8 +200,8 @@ class ScEndpointLinkTests(ClientScFixture):
         kinds = [event.kind for event in seen]
         self.assertEqual(kinds, ["disconnected", "reconnect_attempt", "connect_failed"], seen)
         self.assertEqual((seen[-1].cause, seen[-1].dial_stage), ("dial_timeout", "tls"))
-        # The 2 s bound, not the 10 s default.
-        self.assertLess(times[-1] - times[1], 5)
+        # The 3 s bound, not the 10 s default.
+        self.assertLess(times[-1] - times[1], 8)
         status = await endpoint.connection_status()
         self.assertEqual(status.active_hub, "primary")
         self.assertIsNone(status.hub_vmac)
