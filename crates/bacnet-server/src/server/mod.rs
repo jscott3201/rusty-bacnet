@@ -342,6 +342,7 @@ impl BipServerBuilder {
         let mut transport =
             BipTransport::new(config.interface, config.port, config.broadcast_address);
         transport.set_share_port_by_address(config.share_port_by_address);
+        transport.set_share_wildcard_port(config.share_wildcard_port);
         transport.set_mode(self.mode);
         transport.set_multicast(self.multicast)?;
         let db = crate::local_device::prepare_database(

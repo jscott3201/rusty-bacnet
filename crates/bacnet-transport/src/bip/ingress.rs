@@ -134,11 +134,12 @@ async fn read_on(listener: Option<&mut Listener>) -> io::Result<ReceivedDatagram
     }
 }
 
-/// The sockets one receive loop reads: the primary, and in per-address mode
-/// up to two broadcast listeners (socket.rs).
+/// The sockets one receive loop reads: the primary, in the per-address shape
+/// up to two broadcast listeners (socket.rs), and a B/IP-M node's group
+/// listener, in the last slot.
 pub(super) struct Listeners {
     primary: Listener,
-    broadcast: [Option<Listener>; 2],
+    broadcast: [Option<Listener>; 3],
     /// Whether the start bound broadcast listeners, so that datagrams are
     /// handed up in the order the kernel received them across the sockets
     /// (#1546). Fixed at open: it stays on after a listener closes.
@@ -148,22 +149,28 @@ pub(super) struct Listeners {
 }
 
 /// Which socket [`Listeners::recv`] read: `None` for the primary, or the
-/// index of a broadcast listener.
+/// index of a listener ([`GROUP_SLOT`] for the group's).
 pub(super) type Source = Option<usize>;
+
+/// The listener slot a B/IP-M node's group listener takes.
+const GROUP_SLOT: usize = 2;
 
 impl Listeners {
     /// Hand the sockets one start bound to tokio. Each keeps `lease` until
-    /// it closes, and reports its datagrams to `tap`. With broadcast
-    /// listeners, every socket asks for receive timestamps.
+    /// it closes, and reports its datagrams to `tap`. With any listener,
+    /// every socket asks for receive timestamps.
     pub(super) fn open(
         bound: BoundSockets,
         lease: Option<Arc<()>>,
         tap: &FrameTap,
     ) -> io::Result<Self> {
-        let ordered = !bound.listeners.is_empty();
-        let mut broadcast = [None, None];
-        for (slot, socket) in broadcast.iter_mut().zip(bound.listeners) {
+        let ordered = !bound.listeners.is_empty() || bound.group.is_some();
+        let mut broadcast = [None, None, None];
+        for (slot, socket) in broadcast[..GROUP_SLOT].iter_mut().zip(bound.listeners) {
             *slot = Some(Listener::open(socket, lease.clone(), tap, false, ordered)?);
+        }
+        if let Some(group) = bound.group {
+            broadcast[GROUP_SLOT] = Some(Listener::open(group, lease.clone(), tap, false, true)?);
         }
         let primary = Listener::open(bound.primary, lease, tap, true, ordered)?;
         Ok(Self {
@@ -177,17 +184,17 @@ impl Listeners {
     /// Read a B/IP-M node's new group listener in place of the old one, or,
     /// with `None`, no listener: an activation moved the group or ended it
     /// (multicast.rs), and opened the listener already, so nothing here can
-    /// fail. A member binds no other listener, so the group's is the first.
-    /// A datagram the old listener read ahead and still held is dropped
-    /// with it: it was sent to the group being left. From here on the
-    /// sockets are read in arrival order, as with any listener; the primary
+    /// fail. The group's listener has a slot of its own. A datagram the old
+    /// listener read ahead and still held is dropped with it: it was sent to
+    /// the group being left. From here on the sockets are read in arrival
+    /// order, as with any listener; the primary
     /// reports no receive stamps unless it started with a listener, and
     /// read order then decides.
     pub(super) fn replace_group(&mut self, listener: Option<Listener>) {
         if listener.is_some() {
             self.ordered = true;
         }
-        self.broadcast[0] = listener;
+        self.broadcast[GROUP_SLOT] = listener;
     }
 
     /// The socket every send leaves from.
@@ -219,7 +226,7 @@ impl Listeners {
     async fn recv_in_order(&mut self) -> (Source, io::Result<ReceivedDatagram>) {
         let Self {
             primary,
-            broadcast: [first, second],
+            broadcast: [first, second, group],
             reads,
             ..
         } = self;
@@ -227,16 +234,18 @@ impl Listeners {
             (None, Some(primary)),
             (Some(0), first.as_mut()),
             (Some(1), second.as_mut()),
+            (Some(GROUP_SLOT), group.as_mut()),
         ];
         if slots
             .iter()
             .all(|(_, listener)| listener.as_ref().is_none_or(|l| l.held.is_none()))
         {
-            let [(_, primary), (_, first), (_, second)] = &mut slots;
+            let [(_, primary), (_, first), (_, second), (_, group)] = &mut slots;
             let (source, received) = tokio::select! {
                 received = read_on(primary.as_deref_mut()) => (None, received),
                 received = read_on(first.as_deref_mut()) => (Some(0), received),
                 received = read_on(second.as_deref_mut()) => (Some(1), received),
+                received = read_on(group.as_deref_mut()) => (Some(GROUP_SLOT), received),
             };
             let Some((_, Some(listener))) = slots.iter_mut().find(|(at, _)| *at == source) else {
                 unreachable!("the source is one of the slots, and only an open one reads");

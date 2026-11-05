@@ -276,6 +276,9 @@ async fn a_restart_follows_the_group_whatever_moved_it_at_run_time() {
         bbmd.stop().await.unwrap();
 
         // Started without one, joined at run time, cleared: serves none.
+        // Without a group at start the BBMD claims its port; on Linux the
+        // group joined later on that port switches it to SO_REUSEPORT
+        // (multicast.rs, #2366).
         let mut bbmd = group_bbmd(own_port, None);
         let _rx = bbmd.start().await.map_err(bind_error)?;
         assert!(!serves_group(&bbmd));

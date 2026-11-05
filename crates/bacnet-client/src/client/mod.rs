@@ -116,6 +116,12 @@ pub struct ClientConfig {
     /// `BipTransport::set_share_port_by_address` for what changes. Only the
     /// B/IP builder reads it; a transport passed to `start` has its own.
     pub share_port_by_address: bool,
+    /// B/IP only: share an explicitly requested port with other sockets on
+    /// this host, as before #2366. Off by default: the transport claims the
+    /// port, so a second bind of it fails. See
+    /// `BipTransport::set_share_wildcard_port` for what sharing costs. Only
+    /// the B/IP builder reads it; a transport passed to `start` has its own.
+    pub share_wildcard_port: bool,
     /// APDU timeout in milliseconds.
     pub apdu_timeout_ms: u64,
     /// Number of APDU retries.
@@ -172,6 +178,7 @@ impl Default for ClientConfig {
             port: 0xBAC0,
             broadcast_address: Ipv4Addr::BROADCAST,
             share_port_by_address: false,
+            share_wildcard_port: false,
             apdu_timeout_ms: 6000,
             apdu_retries: 3,
             max_apdu_length: 1476,
@@ -382,6 +389,16 @@ impl BipClientBuilder {
     /// See [`BipTransport::set_share_port_by_address`] for what changes.
     pub fn share_port_by_address(mut self, enabled: bool) -> Self {
         self.config.share_port_by_address = enabled;
+        self
+    }
+
+    /// Share an explicitly requested port with other sockets on this host
+    /// that bind it the same way (#2366). Off by default: the transport
+    /// claims the port, and `build` fails when another socket holds it. With
+    /// sharing on, unicast to the port reaches only one of the sockets on
+    /// it. See [`BipTransport::set_share_wildcard_port`].
+    pub fn share_wildcard_port(mut self, enabled: bool) -> Self {
+        self.config.share_wildcard_port = enabled;
         self
     }
 

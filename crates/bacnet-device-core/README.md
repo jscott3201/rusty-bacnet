@@ -19,7 +19,8 @@ the database guard, the transport, addressing and time.
   WriteProperty, WritePropertyMultiple, Who-Is and Who-Has on it, through
   the staged functions in `read`, `write` and `discovery`.
 - Firmware hands each request to `responder::Responder::handle`, which
-  answers those six services, and refuses every other confirmed request
+  answers those six services (and, given a clock, TimeSynchronization and
+  UTCTimeSynchronization), and refuses every other confirmed request
   with a Reject, or with an Abort when it arrives segmented. An APDU that
   doesn't decode is dropped without an answer, as the server drops it.
 
@@ -65,6 +66,18 @@ the database guard, the transport, addressing and time.
   `remove_for_object`. That drops the object's subscriptions, their queued
   and owed reports and any confirmed one still out, giving its invoke ID
   back; `pop` hands out nothing more for the object.
+- `clock`: the Device's clock for firmware with none of its own (#2321).
+  `SyncedClock` is plain data on the host's monotonic timeline: until
+  set it counts from local midnight, 1990-01-01, as a device does after a
+  restart, and recipient windows fail closed; a TimeSynchronization sets it
+  to the local time given, a UTCTimeSynchronization to UTC less UTC_Offset
+  (plus an hour in daylight-saving time), as the server's clock does.
+  `DeviceClock` pairs it with the host's timer and is lent to the database,
+  so the Device serves Local_Date and Local_Time from it.
+  `Responder::with_clock` runs the two services the Device lists
+  (`clock::SERVICES`), and `Responder::set_time` (or `Reporter::set_time`)
+  takes a board's real-time clock. `destination_open` judges a Notification Class destination
+  against the clock's window.
 - `reply`: the reply PDUs, and the one map from an error to its Reject or
   Error PDU.
 - `responder`: `Responder`, which strings the steps together for a host

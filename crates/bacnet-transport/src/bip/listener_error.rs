@@ -1,5 +1,6 @@
-//! The error a B/IP receive-only listener's bind or group join fails with:
-//! it names the listener and keeps the OS error as its source (#2231).
+//! The error a B/IP receive-only listener's bind or group join fails with,
+//! or a wildcard socket's bind of a port another socket holds (#2366): it
+//! names the socket and keeps the OS error as its source (#2231).
 //!
 //! An `io::Error` built from a message string keeps the kind but drops
 //! `raw_os_error()`, so a caller could tell a port held by another socket

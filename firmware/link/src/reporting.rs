@@ -22,6 +22,13 @@
 //! Active_COV_Subscriptions ([`READ_LIST`]) lists them, and at
 //! [`EXPIRY_AT`] every lifetime left has run out.
 //!
+//! The reporter's `Responder` has the core's Device clock (#2321), on a
+//! timer the scenario moves with each request, in UTC_Offset [`ZONE`]. A
+//! UTCTimeSynchronization ([`SYNC`]) at [`SYNC_AT`] sets it, and two
+//! ReadProperty requests then read the Device's Local_Date and Local_Time
+//! ([`READ_CLOCK`]), so the image links the clock, and the size check's
+//! `core::fmt` and 64-bit division counts cover it.
+//!
 //! The work lives on the heap, in an arena of [`ARENA`] octets.
 //! `tests/reporting.rs` runs the
 //! scenario natively and compares the whole [`Summary`] with `expected()`,
@@ -29,8 +36,11 @@
 //! `reporting` image (`src/bin/reporting.rs`) links it.
 
 use alloc::boxed::Box;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU32, Ordering};
 
+use bacnet_device_core::clock::{self, DeviceClock, Zone};
 use bacnet_device_core::cov::{CovPolicy, Delivery, SubscriberEndpoint};
 use bacnet_device_core::report::{
     self, Bindings, Destination, InvokeIds, OutboxLimits, ReportConfig, Reporter, peer_address,
@@ -44,10 +54,11 @@ use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::device_identity::build_database_with_extra;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_time::{Duration, Instant};
+use bacnet_types::bitstring::DaysOfWeek;
 use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::enums::{ConfirmedServiceChoice, EngineeringUnits};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::ObjectIdentifier;
+use bacnet_types::primitives::{ObjectIdentifier, Time};
 use bytes::{Bytes, BytesMut};
 
 /// The most subscriptions the table holds, all subscribers together.
@@ -211,6 +222,27 @@ pub const READ_LIST: &[u8] = &[0x0C, 0x02, 0x00, 0x04, 0xD2, 0x19, 0x98];
 /// the requests left.
 pub const EXPIRY_AT: u64 = 100;
 
+/// The Device's UTC_Offset, in minutes west of UTC: five hours, with no
+/// daylight-saving time.
+pub const ZONE: i16 = 300;
+
+/// A UTCTimeSynchronization (Unconfirmed-Request 0x10, service 9): an
+/// application-tagged Date, 2026-11-04 (year 126), a Wednesday (3), then a
+/// Time, 15:30:00.00, from station 9 at [`SYNC_AT`].
+pub const SYNC: &[u8] = &[
+    0x10, 0x09, 0xA4, 0x7E, 0x0B, 0x04, 0x03, 0xB4, 0x0F, 0x1E, 0x00, 0x00,
+];
+
+/// When [`SYNC`] arrives, in seconds.
+pub const SYNC_AT: u64 = 27;
+
+/// ReadProperty of the Device's Local_Date (56) and Local_Time (57), a
+/// second and a half after [`SYNC`].
+pub const READ_CLOCK: [&[u8]; 2] = [
+    &[0x0C, 0x02, 0x00, 0x04, 0xD2, 0x19, 0x38],
+    &[0x0C, 0x02, 0x00, 0x04, 0xD2, 0x19, 0x39],
+];
+
 /// What [`run`] saw, compared whole by the host test.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Summary {
@@ -227,6 +259,12 @@ pub struct Summary {
     pub change: Vec<u8>,
     /// See [`change`](Self::change).
     pub list: Vec<u8>,
+    /// What `handle` did with [`SYNC`], and the replies to
+    /// [`READ_CLOCK`].
+    pub clock: (Outcome, [Vec<u8>; 2]),
+    /// The clock's recipient window when the reads were answered: the local
+    /// day and time.
+    pub window: Option<(DaysOfWeek, Time)>,
     /// Subscriptions left at [`EXPIRY_AT`].
     pub left: usize,
     /// The reporter's counts: subscriptions created, cancelled, purged and
@@ -265,9 +303,30 @@ struct Device {
     db: ObjectDatabase,
     ids: Ids,
     invoke_id: u8,
+    /// The Device clock's timer, in milliseconds: the instant of the
+    /// request being handled.
+    timer: Arc<AtomicU32>,
 }
 
 impl Device {
+    /// Hand the unconfirmed `apdu` from station 9 to the reporter at `now`;
+    /// what it did.
+    fn unconfirmed(&mut self, apdu: &'static [u8], now: Instant) -> Outcome {
+        self.tick(now);
+        let peer = SubscriberEndpoint::new(&[9], None);
+        let inbound = Inbound::new(Bytes::from_static(apdu), crate::objects::MAX_REPLY);
+        let mut out = BytesMut::new();
+        self.reporter
+            .handle(&mut self.db, &peer, inbound, now, &mut out)
+            .outcome
+    }
+
+    /// Move the clock's timer to `now`.
+    fn tick(&self, now: Instant) {
+        let millis = u32::try_from(now.as_millis()).unwrap_or(u32::MAX);
+        self.timer.store(millis, Ordering::Relaxed);
+    }
+
     /// Hand the confirmed request `service` with `body` from `station` to
     /// the reporter at `now`, after the deadlines before it; its reply.
     fn request(
@@ -294,6 +353,7 @@ impl Device {
             service_request: Bytes::from_static(body),
         });
         encode_apdu(&mut apdu, &request).ok()?;
+        self.tick(now);
         let peer = SubscriberEndpoint::new(&[station], None);
         let inbound = Inbound::new(apdu.freeze(), crate::objects::MAX_REPLY);
         let mut out = BytesMut::new();
@@ -345,11 +405,16 @@ impl Device {
 /// The objects image's database (the Device, AI-1 and AI-2 with
 /// [`ANALOG_VALUES`](crate::objects::ANALOG_VALUES), BV-1 inactive and BV-2
 /// active), its Device declaring the `Reporter`'s services, so it lists
-/// Active_COV_Subscriptions. Built here, so the objects image's own
-/// builder stays as it is.
+/// Active_COV_Subscriptions, and the clock's two synchronizations. Built
+/// here, so the objects image's own builder stays as it is.
 fn device() -> Result<(DeviceIdentity, ObjectDatabase), Error> {
     use crate::objects::{ANALOG_VALUES, DEVICE, VENDOR};
-    let identity = DeviceIdentity::new(DEVICE, VENDOR)?.with_services(report::SERVICES);
+    let services: Vec<_> = report::SERVICES
+        .iter()
+        .chain(clock::SERVICES)
+        .copied()
+        .collect();
+    let identity = DeviceIdentity::new(DEVICE, VENDOR)?.with_services(&services);
     let mut extra: Vec<Box<dyn BACnetObject>> = Vec::new();
     for (instance, value) in (1..).zip(ANALOG_VALUES) {
         let name = if instance == 1 { "AI-1" } else { "AI-2" };
@@ -385,12 +450,18 @@ pub fn run(apdus: &[&[u8]; crate::objects::REQUESTS], requests: &[Request; STEPS
         sent: Vec::new(),
         change: Vec::new(),
         list: Vec::new(),
+        clock: (Outcome::Unhandled, [Vec::new(), Vec::new()]),
+        window: None,
         left: 0,
         counts: [0; 10],
         errors: 0,
     };
-    let built = device().and_then(|(identity, db)| {
-        let responder = Responder::new(identity, Limits::default())?;
+    let timer = Arc::new(AtomicU32::new(0));
+    let built = device().and_then(|(identity, mut db)| {
+        let millis = Arc::clone(&timer);
+        let now = move || Instant::from_millis(u64::from(millis.load(Ordering::Relaxed)));
+        let clock = DeviceClock::new(Zone::new(ZONE, false)?, Arc::new(now));
+        let responder = Responder::new(identity, Limits::default())?.with_clock(clock, &mut db);
         let config = ReportConfig::new(CovPolicy {
             max_subscriptions_global: CAP,
             ..CovPolicy::default()
@@ -407,6 +478,7 @@ pub fn run(apdus: &[&[u8]; crate::objects::REQUESTS], requests: &[Request; STEPS
         db,
         ids: Ids(0),
         invoke_id: 0,
+        timer,
     };
     // The objects image's requests first, through the same reporter: one
     // device answering them as a device that reports does, which must
@@ -458,6 +530,18 @@ pub fn run(apdus: &[&[u8]; crate::objects::REQUESTS], requests: &[Request; STEPS
         return summary;
     };
     (summary.change, summary.list) = (change, list);
+    let synced = device.unconfirmed(SYNC, at(SYNC_AT));
+    let read_at = at(SYNC_AT) + Duration::from_millis(1_500);
+    let reads = READ_CLOCK.map(|body| device.request(9, read, body, read_at, &mut summary));
+    let [Some(date), Some(time)] = reads else {
+        summary.errors += 1;
+        return summary;
+    };
+    summary.clock = (synced, [date, time]);
+    summary.window = device
+        .reporter
+        .clock()
+        .and_then(|clock| clock.clock().window(read_at));
     device.until(at(EXPIRY_AT), &mut summary);
     summary.left = device.reporter.table().len();
     let counters = device.reporter.counters();
@@ -537,6 +621,32 @@ pub fn expected() -> Summary {
             list.push(0x3F);
             list
         },
+        // The synchronization answers nothing. ComplexACKs, invoke IDs 15
+        // and 16, ReadProperty: the Device, the property, then in [3] the
+        // Date, 2026-11-04 (a Wednesday), and the Time 1.5 s after 15:30
+        // UTC, less UTC_Offset's five hours: 10:30:01.50.
+        clock: (
+            Outcome::Silent,
+            [
+                alloc::vec![
+                    0x30, 0x0F, 0x0C, 0x0C, 0x02, 0x00, 0x04, 0xD2, 0x19, 0x38, 0x3E, 0xA4, 0x7E,
+                    0x0B, 0x04, 0x03, 0x3F,
+                ],
+                alloc::vec![
+                    0x30, 0x10, 0x0C, 0x0C, 0x02, 0x00, 0x04, 0xD2, 0x19, 0x39, 0x3E, 0xB4, 0x0A,
+                    0x1E, 0x01, 0x32, 0x3F,
+                ],
+            ],
+        ),
+        window: Some((
+            DaysOfWeek::WEDNESDAY,
+            Time {
+                hour: 10,
+                minute: 30,
+                second: 1,
+                hundredths: 50,
+            },
+        )),
         // The six subscriptions of AI-2 lapsed at 40 s.
         left: 0,
         // Created 8, cancelled 2, purged 6, refused 1; sent 15 (2

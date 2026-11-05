@@ -10,6 +10,7 @@ impl BipClientBuilder {
             self.config.broadcast_address,
         );
         transport.set_share_port_by_address(self.config.share_port_by_address);
+        transport.set_share_wildcard_port(self.config.share_wildcard_port);
         transport.set_mode(self.mode);
         if self.release_previous_bbmd {
             transport.set_release_previous_bbmd(true);

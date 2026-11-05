@@ -31,6 +31,7 @@ impl BACnetClient {
         mstp_reply_timeout_ms=None,
         sc_device_uuid=None,
         share_port_by_address=false,
+        share_wildcard_port=false,
         min_request_interval_ms=0,
         ipv6_device_instance=None,
         bbmd=None,
@@ -70,6 +71,7 @@ impl BACnetClient {
         mstp_reply_timeout_ms: Option<u32>,
         sc_device_uuid: Option<Vec<u8>>,
         share_port_by_address: bool,
+        share_wildcard_port: bool,
         min_request_interval_ms: u64,
         ipv6_device_instance: Option<u32>,
         bbmd: Option<PyRef<'_, crate::bip_options::PyBbmd>>,
@@ -102,7 +104,8 @@ impl BACnetClient {
             sc_failover_hub.as_deref(),
             sc_connect_timeout_ms,
         )?;
-        crate::bip_options::only_on_bip(share_port_by_address, transport)?;
+        crate::bip_options::only_on_bip("share_port_by_address", share_port_by_address, transport)?;
+        crate::bip_options::only_on_bip("share_wildcard_port", share_wildcard_port, transport)?;
         let crate::bip_options::IpModes {
             bip: bip_mode,
             bip6_foreign,
@@ -141,6 +144,7 @@ impl BACnetClient {
             port,
             broadcast_address: broadcast_address.to_string(),
             share_port_by_address,
+            share_wildcard_port,
             bip_mode,
             bip6_foreign,
             multicast,
@@ -189,6 +193,7 @@ impl BACnetClient {
         let port = slf.borrow().port;
         let broadcast_str = slf.borrow().broadcast_address.clone();
         let share_port_by_address = slf.borrow().share_port_by_address;
+        let share_wildcard_port = slf.borrow().share_wildcard_port;
         let bip_mode = slf.borrow().bip_mode.clone();
         let bip6_foreign = slf.borrow().bip6_foreign.clone();
         let multicast = slf.borrow().multicast;
@@ -227,6 +232,7 @@ impl BACnetClient {
                             .port(port)
                             .broadcast_address(broadcast)
                             .share_port_by_address(share_port_by_address)
+                            .share_wildcard_port(share_wildcard_port)
                             .mode(bip_mode)
                             .multicast(multicast)
                             .apdu_timeout_ms(timeout_ms)

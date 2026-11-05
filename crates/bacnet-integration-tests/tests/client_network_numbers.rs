@@ -40,8 +40,9 @@ async fn client_number_normal_bip_actual_broadcast_wire_and_release() {
     port_retry::rerun_on_lost_port(async || {
         // This exact SO_REUSEADDR wildcard/broadcast-specific pattern was separately
         // qualified with actual Linux UDP in the preceding B/IP full-server slice.
-        // The observer binds first: only an explicitly requested client port sets
-        // SO_REUSEADDR (#892), and both sockets need it to share the port.
+        // The observer binds first: only an explicitly requested client port
+        // shared on request sets SO_REUSEADDR (#892, #2366), and both sockets
+        // need it to share the port.
         let raw = socket2::Socket::new(
             socket2::Domain::IPV4,
             socket2::Type::DGRAM,
@@ -53,7 +54,8 @@ async fn client_number_normal_bip_actual_broadcast_wire_and_release() {
         raw.bind(&SocketAddrV4::new(BROADCAST, 0).into()).unwrap();
         let observer = UdpSocket::from_std(raw.into()).unwrap();
         let port = observer.local_addr().unwrap().port();
-        let transport = BipTransport::new(Ipv4Addr::LOCALHOST, port, BROADCAST);
+        let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, port, BROADCAST);
+        transport.set_share_wildcard_port(true);
         let mut client = BACnetClient::start(ClientConfig::default(), transport)
             .await
             .unwrap();

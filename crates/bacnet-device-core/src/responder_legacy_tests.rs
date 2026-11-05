@@ -103,7 +103,7 @@ fn reply_to(apdu: Bytes) -> Apdu {
         .unwrap()
         .with_services(SERVICES);
     let mut db = build_database_with_extra(&identity, vec![Box::new(Legacy)]).unwrap();
-    let responder = Responder::new(identity, Limits::default()).unwrap();
+    let mut responder = Responder::new(identity, Limits::default()).unwrap();
     let mut out = BytesMut::new();
     let outcome = responder
         .handle(&mut db, Inbound::new(apdu, 1476), &mut out)
