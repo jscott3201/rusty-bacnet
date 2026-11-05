@@ -82,6 +82,36 @@ pub(crate) fn parse(value: &Bound<'_, PyAny>) -> PyResult<MutationSetting> {
     ))
 }
 
+/// The one `ServerPolicy` a Python server installs, if it needs one: every
+/// decision Python configures, since installing a second policy would
+/// replace the first. With `audit_allow_all` it stores both Audit
+/// notification services; with `callback`, that callable decides mutations.
+///
+/// It never [decides inline](bacnet_server::ServerPolicy::decides_inline),
+/// and Python can't ask it to (#2049): a callable may block, so the server
+/// asks it on Tokio's blocking pool, where `stop()` doesn't wait for it.
+pub(crate) fn server_policy(
+    audit_allow_all: bool,
+    callback: Option<Arc<PyMutationPolicy>>,
+) -> Option<bacnet_server::FnPolicy> {
+    // Without a callback this policy runs no Python code, only these two
+    // closures, so it could safely be declared inline; it isn't, which costs
+    // each Audit notification one pool trip and keeps one rule for Python.
+    let audit = audit_allow_all.then(|| {
+        bacnet_server::FnPolicy::new()
+            .audit_notification(|_| true)
+            .unconfirmed_audit_notification(|_| true)
+    });
+    match callback {
+        Some(callback) => Some(
+            audit
+                .unwrap_or_default()
+                .mutation(move |context| callback.decide(context)),
+        ),
+        None => audit,
+    }
+}
+
 /// A server's Python mutation callable, or an endpoint's Device-write one.
 pub(crate) struct PyMutationPolicy {
     callable: Py<PyAny>,
@@ -462,3 +492,7 @@ impl PyMutationContext {
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyMutationContext>()
 }
+
+#[cfg(test)]
+#[path = "mutation_policy_tests.rs"]
+mod tests;

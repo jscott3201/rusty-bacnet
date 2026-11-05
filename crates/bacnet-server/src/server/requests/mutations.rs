@@ -62,26 +62,40 @@ pub(super) struct Request<'a> {
 /// its own thread and its answer is dropped. A panic denies, as in
 /// [`fail_closed_authorize`](audit_notification::fail_closed_authorize), and
 /// so does a call that never reports back.
+///
+/// A policy that [`decides_inline`](crate::ServerPolicy::decides_inline) is
+/// asked right here on the request task instead, with no trip (#2049);
+/// `stop()` then waits for these calls, which that method's rules keep
+/// short.
 pub(in crate::server) async fn ask_mutation_policy(
     policy: &Arc<dyn crate::ServerPolicy>,
     contexts: Vec<MutationAuthorizationContext>,
 ) -> Vec<bool> {
+    if policy.decides_inline() {
+        return ask_in_turn(&**policy, &contexts);
+    }
     let policy = Arc::clone(policy);
     let asked = contexts.len().min(1);
-    tokio::task::spawn_blocking(move || {
-        let mut answers = Vec::with_capacity(contexts.len());
-        for context in &contexts {
-            let allowed =
-                audit_notification::fail_closed_authorize(|| policy.authorize_mutation(context));
-            answers.push(allowed);
-            if !allowed {
-                break;
-            }
+    tokio::task::spawn_blocking(move || ask_in_turn(&*policy, &contexts))
+        .await
+        .unwrap_or_else(|_| vec![false; asked])
+}
+
+/// [`ask_mutation_policy`]'s calls, on whichever thread it chose.
+fn ask_in_turn(
+    policy: &dyn crate::ServerPolicy,
+    contexts: &[MutationAuthorizationContext],
+) -> Vec<bool> {
+    let mut answers = Vec::with_capacity(contexts.len());
+    for context in contexts {
+        let allowed =
+            audit_notification::fail_closed_authorize(|| policy.authorize_mutation(context));
+        answers.push(allowed);
+        if !allowed {
+            break;
         }
-        answers
-    })
-    .await
-    .unwrap_or_else(|_| vec![false; asked])
+    }
+    answers
 }
 
 impl Request<'_> {

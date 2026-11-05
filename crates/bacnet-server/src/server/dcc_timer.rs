@@ -113,7 +113,8 @@ pub(super) async fn replace<T: TransportPort + 'static>(
     // refused requester never spends it. ENABLE never checks the budget. A
     // successful charge precedes every cancellable await.
     // The policy is asked on Tokio's blocking pool (#2032), so a policy that
-    // blocks can't hold up stop(); nothing has changed before that await.
+    // blocks can't hold up stop(), unless it declared itself inline (#2049);
+    // nothing has changed before that await.
     let source_refused = config
         .dcc_source_restriction
         .as_ref()
