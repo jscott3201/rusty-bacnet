@@ -349,3 +349,21 @@ fn connect_finds_the_listening_profile() {
     let error = attached_socket(&store, None).unwrap_err();
     assert!(error.contains("plant, site"), "{error}");
 }
+
+/// `--share-port` is a transport flag (#2366): `mcp serve --profile` refuses
+/// it, since an authorized profile's transport changes only by editing the
+/// profile, whose `share_port` it reads.
+#[test]
+fn serve_with_a_profile_refuses_the_share_port_flag() {
+    let flag = crate::tui::profile::tests::cli(&[
+        "bacnet",
+        "mcp",
+        "serve",
+        "--stdio",
+        "--profile",
+        "site",
+        "--share-port",
+    ]);
+    let refused = from_profile(&flag, "site").err();
+    assert_eq!(refused.as_deref(), Some(FLAGS_WITH_PROFILE));
+}

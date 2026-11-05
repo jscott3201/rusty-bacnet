@@ -1076,15 +1076,78 @@ explicit-port rule, but binds a fresh ephemeral port on each start instead of
 remembering one.
 
 By default the transport binds one socket on `0.0.0.0:port`, whatever the
-interface: an explicitly requested port sets `SO_REUSEADDR`, and port zero is
-private. The wildcard socket receives directed and limited broadcasts and
+interface. The wildcard socket receives directed and limited broadcasts and
 unicast alike, in the order they arrive, and the receive loop takes unicast
 only to the interface address (or, for `0.0.0.0`, to one of the host's
 addresses, below). Sends leave from it, so the OS picks their source address
-by route. On an explicit port, Linux lets a second application bind the same
-wildcard address, with the same single-receiver unicast caveat, so two
-devices on two addresses of one host can't both rely on the standard port;
-macOS and BSD refuse a second wildcard bind.
+by route.
+
+#### Claiming the port
+
+The wildcard socket claims its port, whether requested or picked by the OS
+(#2366): it sets no `SO_REUSEADDR`, and on Windows it sets
+`SO_EXCLUSIVEADDRUSE`. Another program that later binds the port fails at
+once, and a transport that finds the port already held fails its `start()`
+with an error naming the port and the opt-in below. Through 0.15, an
+explicitly requested port set `SO_REUSEADDR`, and on Linux and Windows a
+later socket that set it too could bind the port beside the transport and
+take the unicast sent to it: confirmed requests, replies, registrations and
+forwards.
+
+What a later socket on the port gets once the transport holds it:
+
+| Later bind | Linux | macOS, BSDs | Windows |
+| --- | --- | --- | --- |
+| `0.0.0.0:port`, any reuse option | refused | refused | refused |
+| a specific address on the port, with `SO_REUSEADDR` or `SO_REUSEPORT` | refused | **binds, and gets the unicast sent to that address** | refused |
+| a specific address on the port, with neither | refused | refused | refused |
+
+macOS and the BSDs have no option to refuse the second row. A transport that
+binds after such a socket fails there, though, where before it bound beside
+it and lost that unicast without a word.
+
+`BipTransport::set_share_wildcard_port(true)` (the B/IP builders'
+`.share_wildcard_port(true)`, `ClientConfig`'s and `ServerConfig`'s
+`share_wildcard_port`, Python's `share_wildcard_port=True` on
+`BACnetClient`, `BACnetServer` and `BipEndpoint`, the CLI's `--share-port`)
+keeps the old sharing: the socket sets `SO_REUSEADDR`, so on Linux and
+Windows other sockets that set it can bind the port too. Broadcasts reach
+every socket on the port, but each unicast reaches only one of them: on
+Linux the one that bound last. Two wildcard sockets never shared a port on
+macOS and the BSDs, which also want `SO_REUSEPORT` on both. Two stacks on
+one host are better served each on its own address (below) or each on its
+own port. A port the OS picks is never shared, opt-in or not.
+
+A B/IP-M node whose group is on its own port (the default, see [B/IP
+multicast](#bip-multicast-bip-m)) binds that port twice: its own socket and
+the group's listener. On Linux a claimed `0.0.0.0` socket would refuse the
+listener, so a node that starts with such a group binds the per-address shape
+instead: its interface address with no reuse option, the broadcast listeners
+of [Sharing a port by address](#sharing-a-port-by-address) (whose broadcasts a
+member drops, as it did on `0.0.0.0`), and the group's listener. Every later
+bind of `0.0.0.0` or the interface address on the port is then refused,
+whatever reuse options it sets, and another member's listener on the group
+still binds. Its broadcast listeners hear what its `0.0.0.0` socket heard:
+255.255.255.255, and the interface's own subnet broadcast from the netmask the
+host reports (255.255.255.255 alone, with a warning, when there is none). The
+configured broadcast address isn't checked: one that is neither of those is
+logged at warn, and the start goes on. A broadcast address another socket
+holds on the port fails the start, as the `0.0.0.0` bind would have; a
+broadcast listener that can't bind for another reason is logged at warn and
+left out. macOS and the BSDs need nothing, since the listener binds after the
+claimed wildcard socket; on Windows the wildcard socket joins the group itself
+and claims the port. A group on a port of its own leaves the claim whole, and
+a node that shares its port on request keeps `0.0.0.0`.
+
+A group activated later through the Network Port on the own port of a Linux
+node bound to `0.0.0.0` switches that socket to `SO_REUSEPORT` and binds the
+listener with it too, rather than failing. From then until the node
+restarts, a socket of the same user that sets `SO_REUSEPORT` can bind
+`0.0.0.0` on the port and share the node's unicast, and one bound to a
+specific address that way gets the unicast sent there; a socket that sets
+only `SO_REUSEADDR`, or another user's, is still refused. The restart, which
+keeps the activated group, binds the per-address shape. Two members on one
+host at one unicast port need `share_wildcard_port` on both.
 
 #### Sharing a port by address
 
@@ -1152,9 +1215,10 @@ What changes in this mode:
   `SO_REUSEADDR` would let another socket bind the same address and take its
   unicast, so the socket sets `SO_EXCLUSIVEADDRUSE` instead, and no other
   socket can bind that address and port. Other addresses can still share the
-  port, and a socket already bound to `0.0.0.0` on it without
-  `SO_EXCLUSIVEADDRUSE` doesn't stop the bind (it does stop a default-mode
-  start). Under Windows' strong host model a socket bound to one interface
+  port, and a socket of the same user already bound to `0.0.0.0` on it
+  without `SO_EXCLUSIVEADDRUSE` (a transport that shares its wildcard port)
+  doesn't stop the bind; a default-mode transport claims the port, which stops it,
+  and stops a later default-mode start too. Under Windows' strong host model a socket bound to one interface
   sends only through it, so a multihomed BBMD in this mode reaches only the
   peers that interface can.
 
@@ -2993,11 +3057,12 @@ transport.set_multicast(Some(group))?;
   one host can share a group; each drops its own looped-back copy as an own
   echo (`ReceiveCounters::own_echo`). On Linux, macOS and the BSDs a
   receive-only listener binds the group's address and port with
-  `SO_REUSEADDR` (and `SO_REUSEPORT` on macOS and the BSDs), joins it, and
-  is read beside the primary in arrival order; the primary takes no group
-  traffic (Linux: `IP_MULTICAST_ALL` off). Members on one host at one IP
-  address need their own unicast ports and a shared group port
-  (`with_port`). Windows can't bind a group address, so there the primary
+  `SO_REUSEADDR` (and `SO_REUSEPORT` on macOS and the BSDs; for a Linux
+  group on the node's own port, see [Claiming the port](#claiming-the-port)),
+  joins it, and is read beside the primary in arrival order; the primary takes no group traffic (Linux:
+  `IP_MULTICAST_ALL` off). Members on one host at one IP address need their
+  own unicast ports and a shared group port (`with_port`), or
+  `share_wildcard_port` on each. Windows can't bind a group address, so there the primary
   socket joins the group, the group's port must be the transport's, and
   Windows multicast is untested; since the group's port is the
   transport's there, two members can't share one Windows host. The group is
@@ -7837,6 +7902,27 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   `report::SERVICES`, which adds the two subscribe services to the
   `Responder`'s. The COV-multiple services stay with `bacnet-server`
   (#2320).
+- `clock` (#2321): the Device's clock, for firmware with none of its own.
+  `SyncedClock` holds a `bacnet_time::Instant`, the UTC date and time it
+  stood for and the `Zone` (UTC_Offset, minutes west, and
+  Daylight_Savings_Status, fixed at build as the server's `ClockConfig`
+  is); it allocates nothing and divides nothing in 64 bits. Until the first
+  `set` it is unsynchronized and counts from local midnight, 1990-01-01,
+  at the instant it was built, as a device with no time source does after a
+  restart. `set(Basis::Local, ..)`, a TimeSynchronization's, makes the
+  date and time given the local ones; `set(Basis::Utc, ..)`, a
+  UTCTimeSynchronization's, reads locally as less UTC_Offset, plus an hour
+  in daylight-saving time; a value that isn't a specific date and time is
+  refused and changes nothing. `frame(now)` is the Device's four clock
+  properties; `window(now)` is the local day and time recipient windows are
+  judged at, `None` until synchronized. `DeviceClock` pairs it with the
+  host's timer (`MonotonicNow`, on the timeline it passes as `now`) and
+  implements `ClockReader`; `lend` binds a copy to the database.
+  `destination_open(destination, window)` judges a Notification Class
+  destination's days and window by the server's test
+  (`bacnet_objects::notification_class::in_window`), and with no window
+  fails closed: only a destination open every day, all day
+  (`always_in_window`), is.
 - `reply`: `error_apdu`, the one map from an `Error` to its Reject or Error
   PDU (never an Abort: a work or byte limit is the caller's Abort), and the
   refusals a host sends for a service it doesn't run.
@@ -7851,7 +7937,19 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   well-formed confirmed request, and drops an APDU that doesn't decode, as
   the server does.
   `bacnet_device_core::SERVICES` lists the services it runs, for the
-  Device's Protocol_Services_Supported.
+  Device's Protocol_Services_Supported. `Responder::with_clock(clock, db)`
+  gives it a `DeviceClock` and lends it to the database: `write` (and so
+  `handle`, which now takes the responder mutably) then runs each
+  TimeSynchronization and UTCTimeSynchronization the Device lists (add
+  `clock::SERVICES` to its identity's services), setting the clock and
+  lending it again, and `classify` calls both writes. A host filters the
+  requests it doesn't accept (source, rate) before handing them over.
+  `Responder::set_time` sets the clock from a board's real-time clock,
+  which counts as synchronized; a `Reporter` built on such a responder has
+  `Reporter::set_time` and `Reporter::clock` for the same, and its
+  `clock().window(now)` is what recipient windows are judged by, never
+  the database's clock frame, which reads a valid 1990 date before a
+  sync.
 
 `Responder::new` refuses an identity that claims segmentation support, since
 the core aborts every segmented request and every reply too long for one APDU,
@@ -7876,7 +7974,7 @@ of its actions performed.
 ```rust
 use bacnet_device_core::responder::{Inbound, Limits, Outcome, Responder};
 
-let responder = Responder::new(identity, Limits::default())?;
+let mut responder = Responder::new(identity, Limits::default())?;
 // `request` is the received APDU as `Bytes`; `max_reply` is the smaller of
 // its Max-APDU-Length-Accepted and the route's limit.
 let mut out = bytes::BytesMut::new();

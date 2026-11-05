@@ -47,7 +47,7 @@ impl PassiveBip {
             ));
         }
         let role = if port == 0 {
-            SocketRole::PrivateWildcard
+            SocketRole::ClaimedWildcard
         } else {
             SocketRole::SharedWildcard
         };

@@ -44,7 +44,18 @@
 //! receive loop reads it beside the primary socket, in arrival order
 //! (#1546). Another program holding the group's port without those options
 //! (bound to `0.0.0.0` on it, say) makes the listener's bind fail, and the
-//! start or activation fails with it. Windows can't bind a group address,
+//! start or activation fails with it. A node's own primary socket claims
+//! its port (socket.rs, #2366). Where a node starts with its group on its
+//! own port, on Linux the primary binds the interface address instead of
+//! `0.0.0.0` (socket.rs), so the listener binds beside it; macOS and the
+//! BSDs need nothing more, since the listener binds after the primary. On
+//! Linux a group activated later on the port of a node whose primary
+//! claims `0.0.0.0` switches the primary to `SO_REUSEPORT` and binds the
+//! listener with it too (`switch_roles`); until the node restarts, a
+//! socket of the same user that sets `SO_REUSEPORT` can then share the
+//! port's unicast, even after a switch that failed and was undone. Two
+//! members on one host at one unicast port need `set_share_wildcard_port`.
+//! Windows can't bind a group address,
 //! so there the primary socket joins the group itself and the group's port
 //! must be the transport's own, which also means two members can't share
 //! one Windows host; it reports the group delivery in the receive flags.
@@ -294,13 +305,18 @@ pub(super) fn configure_sender(
 }
 
 /// A receive-only socket on `group`'s address and port, joined to it on
-/// `interface`.
+/// `interface`, with `SO_REUSEPORT` too when `reuse_port` (Linux, beside a
+/// primary `switch_roles` switched).
 #[cfg(not(windows))]
 pub(super) fn group_listener(
     group: SocketAddrV4,
     interface: Ipv4Addr,
+    reuse_port: bool,
 ) -> io::Result<socket2::Socket> {
     let socket = super::socket::udp_socket(super::socket::SocketRole::GroupListener)?;
+    if reuse_port {
+        socket.set_reuse_port(true)?;
+    }
     socket.bind(&group.into()).map_err(|e| {
         let context = format!("could not bind the B/IP multicast listener to {group}");
         super::listener_error::listener_error(context, e)
@@ -315,6 +331,68 @@ pub(super) fn group_listener(
     #[cfg(target_os = "linux")]
     socket.set_multicast_all_v4(false)?;
     Ok(socket)
+}
+
+impl MulticastControl {
+    /// Bind a group's listener on the node's own port beside a primary that
+    /// claims `0.0.0.0` there (socket.rs, #2366), which refused it with
+    /// `refused`: on Linux both then set `SO_REUSEPORT`. From then until the node
+    /// restarts, a socket of the same user that sets `SO_REUSEPORT` can bind the
+    /// port and share its unicast; a restart binds the interface address
+    /// instead. A primary bound otherwise fails with `refused`. A listener that
+    /// still can't bind fails the switch, and the primary's `SO_REUSEPORT` goes
+    /// back to what it was before (a switch for an earlier group may have set
+    /// it). A same-user socket that bound with `SO_REUSEPORT` in between keeps
+    /// its share of the unicast after that undo, until it closes or the node
+    /// restarts.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    fn switch_roles(
+        &self,
+        node: &NodeHandle,
+        group: SocketAddrV4,
+        refused: io::Error,
+    ) -> io::Result<socket2::Socket> {
+        let primary = socket2::SockRef::from(&***node.socket());
+        let claimed_wildcard = primary
+            .local_addr()
+            .ok()
+            .and_then(|address| address.as_socket_ipv4())
+            .is_some_and(|address| address.ip().is_unspecified())
+            && !primary.reuse_address()?;
+        if !claimed_wildcard {
+            return Err(refused);
+        }
+        let had_reuse_port = primary.reuse_port()?;
+        primary.set_reuse_port(true)?;
+        let listener = group_listener(group, self.interface, true);
+        #[cfg(test)]
+        let listener = listener.and_then(|socket| {
+            if self
+                .fail_next_switch
+                .swap(false, std::sync::atomic::Ordering::Relaxed)
+            {
+                drop(socket);
+                return Err(io::Error::other("injected switch failure"));
+            }
+            Ok(socket)
+        });
+        match listener {
+            Ok(listener) => {
+                warn!(
+                    port = group.port(),
+                    "B/IP primary socket now shares its port with SO_REUSEPORT for its multicast \
+                 group until restart; a same-user socket that sets it can share its unicast"
+                );
+                Ok(listener)
+            }
+            Err(error) => {
+                if !had_reuse_port {
+                    primary.set_reuse_port(false)?;
+                }
+                Err(error)
+            }
+        }
+    }
 }
 
 /// What the control's lock guards.
@@ -374,6 +452,10 @@ pub(crate) struct MulticastControl {
     /// Windows, which opens no listener.
     #[cfg(all(test, not(windows)))]
     pub(super) fail_next_listener: std::sync::atomic::AtomicBool,
+    /// Makes the next role switch's listener fail once bound, for tests of
+    /// its undo (Linux only, where roles switch).
+    #[cfg(all(test, any(target_os = "linux", target_os = "android")))]
+    pub(super) fail_next_switch: std::sync::atomic::AtomicBool,
     /// Makes the next link move a BBMD's group change makes fail, after
     /// its tables went in, for tests of the undo.
     #[cfg(test)]
@@ -396,6 +478,8 @@ impl MulticastControl {
             bbmd_serves_group: Default::default(),
             #[cfg(all(test, not(windows)))]
             fail_next_listener: Default::default(),
+            #[cfg(all(test, any(target_os = "linux", target_os = "android")))]
+            fail_next_switch: Default::default(),
             #[cfg(test)]
             fail_next_subnet: Default::default(),
         }
@@ -578,7 +662,14 @@ impl MulticastControl {
             self.interface,
             next.ttl,
         )?;
-        let socket = group_listener(next.endpoint(running.port), self.interface)?;
+        let endpoint = next.endpoint(running.port);
+        let socket = match group_listener(endpoint, self.interface, false) {
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            Err(e) if endpoint.port() == running.port && e.kind() == io::ErrorKind::AddrInUse => {
+                self.switch_roles(node, endpoint, e)?
+            }
+            listener => listener?,
+        };
         Listener::open_group(socket, running.lease.clone(), &running.tap).map(Some)
     }
 
