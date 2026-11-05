@@ -34,6 +34,8 @@ mod audit_log_buffer_wire_tests;
 #[cfg(test)]
 mod color_command_wire_tests;
 #[cfg(test)]
+mod description_durable_tests;
+#[cfg(test)]
 mod durable_stop_tests;
 #[cfg(test)]
 mod durable_write_wire_tests;

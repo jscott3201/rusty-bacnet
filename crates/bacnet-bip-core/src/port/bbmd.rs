@@ -144,7 +144,7 @@ impl<'t, const B: usize, const F: usize> BbmdPort<'t, B, F> {
     ) -> Ingress<'d> {
         let now = self.clock(now);
         let link = self.link;
-        match link.receive(datagram, now, policy) {
+        match link.receive(datagram, policy) {
             Received::Deliver(delivery) => Ingress::Npdu(delivery),
             Received::Nak { to, code, .. } => {
                 count(&mut self.counters, out.send(to, &Bvll::BvlcResult(code)));

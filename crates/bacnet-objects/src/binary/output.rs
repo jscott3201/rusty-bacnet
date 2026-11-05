@@ -103,11 +103,6 @@ impl BinaryOutputObject {
         self.profile.wait_for_saves();
     }
 
-    /// Set the description string.
-    pub fn set_description(&mut self, desc: impl Into<String>) {
-        self.description = desc.into();
-    }
-
     fn recalculate_present_value(&mut self) {
         self.present_value =
             common::recalculate_from_priority_array(&self.priority_array, self.relinquish_default);

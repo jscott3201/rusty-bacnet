@@ -13,8 +13,9 @@ use crate::common;
 use crate::durable::staged::{self, StagedSaves};
 use crate::durable::{PendingWrite, SaveWait, StageStep};
 use crate::event::options::{MAX_KEPT_TEXT_OCTETS, ReportingOptions};
-use crate::prelude::Box;
+use crate::prelude::{Box, String};
 use crate::traits::BACnetObject;
+use crate::write_config::description;
 use crate::write_config::{ReportingWriteConfig, WriteConfigPersistence, WriteConfigSnapshot};
 
 /// The kept rows' values as an object serves them.
@@ -25,6 +26,8 @@ pub(crate) struct ReportingRows {
     pub(crate) notify_type: NotifyType,
     pub(crate) event_detection_enable: bool,
     pub(crate) options: ReportingOptions,
+    /// Description, kept beside the reporting settings (#2364).
+    pub(crate) description: String,
 }
 
 /// The rows a write has set, now or before a restart.
@@ -37,6 +40,7 @@ pub(crate) struct Written {
     texts: bool,
     inhibit_ref: bool,
     inhibit: bool,
+    description: bool,
 }
 
 impl Written {
@@ -50,6 +54,7 @@ impl Written {
             P::EVENT_MESSAGE_TEXTS_CONFIG => &mut self.texts,
             P::EVENT_ALGORITHM_INHIBIT_REF => &mut self.inhibit_ref,
             P::EVENT_ALGORITHM_INHIBIT => &mut self.inhibit,
+            P::DESCRIPTION => &mut self.description,
             _ => return None,
         })
     }
@@ -64,6 +69,7 @@ impl Written {
             texts: saved.event_message_texts_config.is_some(),
             inhibit_ref: saved.event_algorithm_inhibit_ref.is_some(),
             inhibit: saved.event_algorithm_inhibit.is_some(),
+            description: saved.description.is_some(),
         }
     }
 }
@@ -71,6 +77,12 @@ impl Written {
 /// Whether `property` is one of the kept rows.
 pub(crate) fn kept_row(property: P) -> bool {
     Written::default().flag(property).is_some()
+}
+
+/// Whether storage keeps a write of `value` to `property`: one of a kept
+/// row, but not a NULL to Description, which changes nothing (#2364).
+fn kept_write(property: P, value: &PropertyValue) -> bool {
+    kept_row(property) && !description::null_write(property, value)
 }
 
 /// The rows and which of them a write set: what one staged write leaves.
@@ -147,6 +159,8 @@ impl Kept {
                 PropertyValue::Boolean(enable) => rows.event_detection_enable = enable,
                 _ => return Err(common::invalid_data_type_error()),
             },
+            // Past its cap it is refused before anything is saved (#2364).
+            P::DESCRIPTION => rows.description = description::written(value)?,
             property => rows
                 .options
                 .write(
@@ -188,6 +202,7 @@ impl Kept {
                 .then(|| rows.options.inhibit_reference().cloned())
                 .flatten(),
             event_algorithm_inhibit: written.inhibit.then(|| rows.options.inhibited()),
+            description: written.description.then(|| rows.description.clone()),
         }
     }
 
@@ -315,6 +330,7 @@ pub(crate) fn attach<T: KeepsReporting>(
             ));
         }
     };
+    description::check_saved(saved.description.as_deref())?;
     if let Some(reason) = crate::snapshot::write_config::reporting_invalid(&saved) {
         return Err(Error::Encoding(format!(
             "saved reporting settings {reason}"
@@ -348,7 +364,7 @@ pub(crate) fn admit<T: KeepsReporting>(
     array_index: Option<u32>,
     value: &PropertyValue,
 ) -> Result<(), Error> {
-    if !kept_row(property) || !object.reporting_store_ref().attached() {
+    if !kept_write(property, value) || !object.reporting_store_ref().attached() {
         return Ok(());
     }
     let mut store = core::mem::take(object.reporting_store());
@@ -414,7 +430,8 @@ pub(crate) fn stage_writes<T: KeepsReporting>(
     object: &mut T,
     writes: &[PendingWrite],
 ) -> StageStep {
-    if !object.reporting_store_ref().attached() || !writes.iter().any(|w| kept_row(w.property)) {
+    let kept = |write: &PendingWrite| kept_write(write.property, &write.value);
+    if !object.reporting_store_ref().attached() || !writes.iter().any(kept) {
         return StageStep::Skip;
     }
     with_store(object, |store, object| {
@@ -427,7 +444,7 @@ pub(crate) fn stage_writes<T: KeepsReporting>(
             written: store.written,
         };
         let steps = staged::steps(writes, |earlier, write| {
-            if !kept_row(write.property) {
+            if !kept(write) {
                 return Ok(None);
             }
             crate::property_metadata::check_write_array_index(
@@ -561,6 +578,7 @@ pub(crate) struct RowFields<'a> {
     pub(crate) notify_type: &'a mut NotifyType,
     pub(crate) event_detection_enable: &'a mut bool,
     pub(crate) options: &'a mut ReportingOptions,
+    pub(crate) description: &'a mut String,
 }
 
 impl RowFields<'_> {
@@ -587,6 +605,9 @@ impl RowFields<'_> {
         }
         if let Some(inhibit) = saved.event_algorithm_inhibit {
             self.options.restore_inhibit(inhibit);
+        }
+        if let Some(text) = &saved.description {
+            self.description.clone_from(text);
         }
     }
 }

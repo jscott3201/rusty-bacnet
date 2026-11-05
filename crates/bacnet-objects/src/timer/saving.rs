@@ -4,7 +4,8 @@
 //!
 //! A Timer [`with_persistence`](TimerObject::with_persistence) saves its set
 //! whenever a write changes either property, Priority_For_Writing with them,
-//! and a written Default_Timeout, and a rebuilt Timer serves what was saved.
+//! a written Default_Timeout and a written Description (#2364), and a
+//! rebuilt Timer serves what was saved.
 //! A saved Default_Timeout outside the range the application gives the
 //! Timer is dropped for the application's value (see
 //! [`TimerObject::set_pres_value_range`]). The Timer's state machine is not
@@ -22,6 +23,7 @@ use super::{TimerConfig, TimerObject};
 use crate::common;
 use crate::durable::PendingWrite;
 use crate::durable::staged::StagedSaves;
+use crate::write_config::description;
 use crate::write_config::saving::{self, ConfigWrites, Storage, impl_config_durable};
 use crate::write_config::{
     TimerStateChange, TimerWriteConfig, WriteConfigPersistence, WriteConfigSnapshot,
@@ -30,19 +32,21 @@ use crate::write_config::{
 impl TimerObject {
     /// A Timer that keeps a written State_Change_Values and
     /// List_Of_Object_Property_References in `persistence`, with
-    /// Priority_For_Writing, and a written Default_Timeout, starting from
-    /// what is saved there for this object, if anything. Otherwise as
-    /// [`new`](Self::new).
+    /// Priority_For_Writing, and a written Default_Timeout and Description
+    /// (#2364), starting from what is saved there for this object, if
+    /// anything. Otherwise as [`new`](Self::new).
     ///
-    /// Writing one of the three then saves it before the Timer serves it,
-    /// and is refused with DEVICE / OPERATIONAL_PROBLEM, leaving the value
-    /// as it was, when the save fails. Once a write has saved a set,
+    /// Writing one of them then saves it before the Timer serves it, and is
+    /// refused with DEVICE / OPERATIONAL_PROBLEM, leaving the value as it
+    /// was, when the save fails; a Description past 16 KiB is refused with
+    /// RESOURCES / NO_SPACE_TO_WRITE_PROPERTY. Once a write has saved a set,
     /// [`set_state_change`](Self::set_state_change) no longer replaces it,
     /// and once one has saved a Default_Timeout,
     /// [`set_default_timeout`](Self::set_default_timeout) no longer does.
     ///
     /// Fails when what storage holds can't be loaded, belongs to another
-    /// object type, or holds a set `set_state_change` would refuse. A saved
+    /// object type, or holds a set `set_state_change` would refuse or a
+    /// Description past 16 KiB. A saved
     /// Default_Timeout of zero, which no range holds, is dropped with a
     /// warning. One past the range a new Timer takes is held aside, unserved
     /// and still kept in storage, until
@@ -64,6 +68,7 @@ impl TimerObject {
                 ));
             }
         };
+        description::check_saved(saved.description.as_deref())?;
         if let Some(saved) = saved.state_change {
             check_set(&saved.values, &saved.references, saved.priority_for_writing)?;
             timer.config.set = Some(TimerSet {
@@ -72,6 +77,10 @@ impl TimerObject {
                 priority: saved.priority_for_writing,
                 written: true,
             });
+        }
+        if let Some(text) = saved.description {
+            timer.description.clone_from(&text);
+            timer.config.description = Some(text);
         }
         timer.config_storage = Some(StagedSaves::new(saving::writer(oid, persistence)));
         match saved.default_timeout {
@@ -108,7 +117,8 @@ impl TimerObject {
         self.config_storage.is_some() && self.config.timeout_written
     }
 
-    /// Drop everything a write saved, the set and Default_Timeout: storage
+    /// Drop everything a write saved, the set, Default_Timeout and
+    /// Description: storage
     /// keeps nothing from now on, so the setters apply again. What the
     /// Timer serves now stays until they, or a write, change it. Saves
     /// before it returns; a save that fails keeps the written values and
@@ -173,6 +183,9 @@ impl ConfigWrites for TimerObject {
     }
 
     fn install(&mut self, config: TimerConfig) {
+        if let Some(text) = &config.description {
+            self.description.clone_from(text);
+        }
         self.config = config;
         self.config_writes = self.config_writes.wrapping_add(1);
     }
@@ -199,16 +212,27 @@ impl ConfigWrites for TimerObject {
             } else {
                 config.held_timeout
             },
+            description: config.description.clone(),
         })
     }
 
     fn saves(property: PropertyIdentifier) -> bool {
-        TimerSet::written_by(property) || property == PropertyIdentifier::DEFAULT_TIMEOUT
+        TimerSet::written_by(property)
+            || matches!(
+                property,
+                PropertyIdentifier::DEFAULT_TIMEOUT | PropertyIdentifier::DESCRIPTION
+            )
     }
 
     /// A set write on a Timer without the set is UNKNOWN_PROPERTY: the
     /// Timer doesn't serve the property.
     fn next(config: &TimerConfig, write: &PendingWrite) -> Result<TimerConfig, Error> {
+        if write.property == PropertyIdentifier::DESCRIPTION {
+            return Ok(TimerConfig {
+                description: Some(description::written(&write.value)?),
+                ..config.clone()
+            });
+        }
         if write.property != PropertyIdentifier::DEFAULT_TIMEOUT {
             let set = config
                 .set
@@ -240,6 +264,7 @@ impl ConfigWrites for TimerObject {
         }
         config.timeout_written = false;
         config.held_timeout = None;
+        config.description = None;
     }
 }
 
@@ -253,6 +278,7 @@ impl TimerConfig {
             held_timeout: self.held_timeout,
             min_pres_value: self.min_pres_value,
             max_pres_value: self.max_pres_value,
+            description: self.description.clone(),
         }
     }
 }

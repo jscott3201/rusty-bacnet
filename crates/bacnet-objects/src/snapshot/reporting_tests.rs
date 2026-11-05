@@ -34,6 +34,7 @@ fn every_setting() -> ReportingWriteConfig {
         event_message_texts_config: Some(["off".into(), String::new(), "back".into()]),
         event_algorithm_inhibit_ref: Some(inhibit_reference()),
         event_algorithm_inhibit: Some(true),
+        description: None,
     }
 }
 

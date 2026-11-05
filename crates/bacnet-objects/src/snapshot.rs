@@ -25,7 +25,7 @@
 //! | --- | --- | --- | --- | --- |
 //! | [`log`] | [`LogSnapshot`] | `RBLOGS01` | 1, 2 (2) | `FileLogPersistence`, one slot of two |
 //! | [`audit_log`] | [`AuditLogSnapshot`] | `RBALOG01` | 1, 2, 3 (3) | `FileAuditLogPersistence`, one slot of two |
-//! | [`write_config`] | [`WriteConfigSnapshot`] | `RBNWCF01` | kinds 1, 2, 3, 4 (2, 3, 4) | `FileWriteConfigPersistence` |
+//! | [`write_config`] | [`WriteConfigSnapshot`] | `RBNWCF01` | kinds 1 to 5 (2 to 5) | `FileWriteConfigPersistence` |
 //! | [`notification_class`] | [`NotificationClassSnapshot`] | `RBNNCL01` | 1 (1) | `FileNotificationClassPersistence` |
 //! | [`notification_forwarder`] | [`ForwarderSnapshot`] | `RBNFWD01` | 1 (1) | `FileNotificationForwarderPersistence` |
 //! | [`tags`] | [`TagsSnapshot`] | `RBNTAG01` | 1 (1) | `FileTagsPersistence` |
@@ -97,10 +97,9 @@
 //! let channel = ObjectIdentifier::new(ObjectType::CHANNEL, 1)?;
 //! assert_eq!(flash.load(channel)?, None);
 //!
-//! let written = WriteConfigSnapshot::Channel(ChannelWriteConfig {
-//!     channel_number: Some(12),
-//!     ..ChannelWriteConfig::default()
-//! });
+//! let mut config = ChannelWriteConfig::default();
+//! config.channel_number = Some(12);
+//! let written = WriteConfigSnapshot::Channel(config);
 //! flash.save(channel, &written)?;
 //! assert!(flash.0.lock().unwrap().starts_with(&write_config::MAGIC));
 //! assert_eq!(flash.load(channel)?, Some(written));
@@ -133,6 +132,8 @@ pub use error::{SnapshotError, SnapshotErrorKind};
 
 #[cfg(test)]
 mod audit_log_tests;
+#[cfg(test)]
+mod description_tests;
 #[cfg(test)]
 mod one_file_tests;
 #[cfg(test)]

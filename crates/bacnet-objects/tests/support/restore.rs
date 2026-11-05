@@ -264,6 +264,26 @@ pub const FORMATS: &[Format] = &[
         sample: samples::alert_reporting_write_config,
         kind: Kind::AlertReportingWriteConfig,
     },
+    // Kind 5 around kinds 3, 2 and 4 (#2364), after the rest for the same
+    // reason.
+    Format {
+        name: "described_timer_write_config",
+        two_slot: false,
+        sample: samples::described_timer_write_config,
+        kind: Kind::TimerWriteConfig,
+    },
+    Format {
+        name: "described_channel_write_config",
+        two_slot: false,
+        sample: samples::described_channel_write_config,
+        kind: Kind::ChannelWriteConfig,
+    },
+    Format {
+        name: "described_reporting_write_config",
+        two_slot: false,
+        sample: samples::described_reporting_write_config,
+        kind: Kind::ReportingWriteConfig,
+    },
 ];
 
 impl Format {

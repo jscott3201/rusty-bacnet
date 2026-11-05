@@ -123,6 +123,7 @@ fn a_fully_written_channel_keeps_its_configuration() {
             channel_number: Some(9),
             control_groups: Some(vec![7]),
             allow_group_delay_inhibit: Some(true),
+            description: None,
         }))
     );
     let mut rebuilt = channel(&storage);

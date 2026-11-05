@@ -117,6 +117,15 @@ fn save_color(path: &Path, kind: ObjectType, snapshot: &ColorOutputSnapshot) {
 }
 
 pub fn timer_write_config(path: &Path) {
+    save_write_config(path, ObjectType::TIMER, &timer_config(None));
+}
+
+/// A Timer's write configuration with a written Description (#2364).
+pub fn described_timer_write_config(path: &Path) {
+    save_write_config(path, ObjectType::TIMER, &timer_config(Some("Lobby")));
+}
+
+fn timer_config(description: Option<&str>) -> WriteConfigSnapshot {
     let values = [
         BACnetTimerStateChangeValue::Primitive(PropertyValue::Real(20.5)),
         BACnetTimerStateChangeValue::NoValue,
@@ -126,32 +135,52 @@ pub fn timer_write_config(path: &Path) {
         BACnetTimerStateChangeValue::NoValue,
         BACnetTimerStateChangeValue::Primitive(PropertyValue::Unsigned(9)),
     ];
-    let snapshot = WriteConfigSnapshot::Timer(TimerWriteConfig {
-        state_change: Some(TimerStateChange {
-            values,
-            references: vec![member(1, None), member(2, Some(9))],
-            priority_for_writing: 8,
-        }),
-        default_timeout: Some(90_000),
+    let mut config = TimerWriteConfig::default();
+    config.state_change = Some(TimerStateChange {
+        values,
+        references: vec![member(1, None), member(2, Some(9))],
+        priority_for_writing: 8,
     });
-    save_write_config(path, ObjectType::TIMER, &snapshot);
+    config.default_timeout = Some(90_000);
+    config.description = description.map(Into::into);
+    WriteConfigSnapshot::Timer(config)
 }
 
 pub fn channel_write_config(path: &Path) {
-    let snapshot = WriteConfigSnapshot::Channel(ChannelWriteConfig {
-        members: Some(ChannelMembers {
-            references: vec![member(1, None), member(2, Some(9))],
-            execution_delay: vec![0, 250],
-        }),
-        channel_number: Some(12),
-        control_groups: Some(vec![3, 0]),
-        allow_group_delay_inhibit: Some(true),
+    save_write_config(path, ObjectType::CHANNEL, &channel_config(None));
+}
+
+/// A Channel's write configuration with a written Description (#2364).
+pub fn described_channel_write_config(path: &Path) {
+    save_write_config(path, ObjectType::CHANNEL, &channel_config(Some("Lobby")));
+}
+
+fn channel_config(description: Option<&str>) -> WriteConfigSnapshot {
+    let mut config = ChannelWriteConfig::default();
+    config.members = Some(ChannelMembers {
+        references: vec![member(1, None), member(2, Some(9))],
+        execution_delay: vec![0, 250],
     });
-    save_write_config(path, ObjectType::CHANNEL, &snapshot);
+    config.channel_number = Some(12);
+    config.control_groups = Some(vec![3, 0]);
+    config.allow_group_delay_inhibit = Some(true);
+    config.description = description.map(Into::into);
+    WriteConfigSnapshot::Channel(config)
 }
 
 /// An Analog Input's written reporting settings, every one set (#2331).
 pub fn reporting_write_config(path: &Path) {
+    save_write_config(path, ObjectType::ANALOG_INPUT, &reporting_config(None));
+}
+
+/// An Analog Input's written reporting settings with a written Description
+/// (#2364).
+pub fn described_reporting_write_config(path: &Path) {
+    let snapshot = reporting_config(Some("Lobby"));
+    save_write_config(path, ObjectType::ANALOG_INPUT, &snapshot);
+}
+
+fn reporting_config(description: Option<&str>) -> WriteConfigSnapshot {
     let mut settings = ReportingWriteConfig::default();
     settings.notification_class = Some(7);
     settings.event_enable =
@@ -164,8 +193,8 @@ pub fn reporting_write_config(path: &Path) {
         PropertyIdentifier::PRESENT_VALUE.to_raw(),
     ));
     settings.event_algorithm_inhibit = Some(true);
-    let snapshot = WriteConfigSnapshot::Reporting(settings);
-    save_write_config(path, ObjectType::ANALOG_INPUT, &snapshot);
+    settings.description = description.map(Into::into);
+    WriteConfigSnapshot::Reporting(settings)
 }
 
 /// An Alert Enrollment's written reporting settings: a class, Event_Enable,

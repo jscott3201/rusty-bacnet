@@ -101,8 +101,7 @@ fn frame_kind(datagram: &Datagram<'_>) -> &'static str {
 /// counted, and its reason returned for the caller's own log.
 pub(super) async fn receive(datagram: &Datagram<'_>, ctx: &RecvContext) -> Option<Discard> {
     let mut policy = HostPolicy::new(&ctx.management_limiter);
-    let now = ctx.node.clock().now();
-    match ctx.node.link().receive(datagram, now, &mut policy) {
+    match ctx.node.link().receive(datagram, &mut policy) {
         Received::Deliver(delivery) => {
             let kind = frame_kind(datagram);
             hand_up(ctx, delivery.npdu, delivery.source, delivery.group, kind);

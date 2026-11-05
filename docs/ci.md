@@ -2068,9 +2068,10 @@ waits for them (see [CI gate](#ci-gate)).
 | Build (linux-x86_64, linux-aarch64, macos-x86_64, macos-arm64, windows-x86_64) | The wheels for CPython 3.11 to 3.14 (`PYTHONS`) and the CLI, on each platform's own runner, then the CLI's MCP bundle from that binary (`mcpb.py pack`, no second build). See [Builds](#builds) and [MCP bundles](#mcp-bundles). |
 | Check the artifacts | `check_artifacts.py` over every file, then the `release-assets` artifact: what the publish jobs upload. See below. |
 | Smoke test (Linux x86_64, Linux aarch64, macOS arm64, macOS x86_64, Windows x86_64) | Each platform's wheels and CLI, run on that platform. See [Smoke tests](#smoke-tests). |
-| Publish plan (dry run) | Dry runs only, read only: `release_api.py plan` and `publish_crates.sh --dry-run`. See [Publish plan](#publish-plan-dry-run). |
+| Publish plan (dry run) | Dry runs only, read only: `release_api.py plan`, `publish_crates.sh --dry-run`, the draft's bundle check (`mcpb.py adopt` on the unsigned bundles), and, for information, each MCP bundle's signature state and `mcpb verify`'s answer. See [Publish plan](#publish-plan-dry-run). |
 | PyPI trusted publishing | Releases only, in the `release` environment, as soon as Validate passes: exchanges the job's OIDC token for a PyPI upload token, which proves PyPI's trusted publisher matches this workflow. The minted token is masked at once, never printed and discarded. See [Secrets and environment](#secrets-and-environment). |
-| GitHub draft | `release_api.py stage`: makes the tag's GitHub draft hold exactly the `release-assets` files and their `SHA256SUMS`. See [Draft, then publish](#draft-then-publish). |
+| Sign the MCP bundles | Releases only, in the `release` environment, on macOS: when the environment holds a signing certificate, `mcpb sign` on a copy of each bundle; then the `mcpb-bundles` artifact, only the bundles, signed or not. A signing failure publishes the bundle unsigned; the job's time limit or a failed checkout, download or upload fails the job, which holds the release until it is re-run. See [Signing the MCP bundles](#signing-the-mcp-bundles). |
+| GitHub draft | `mcpb.py adopt`: the `release-assets` files, with each MCP bundle replaced by its `mcpb-bundles` copy only when that is the original or the original correctly signed; it fails otherwise. Then `release_api.py stage`: makes the tag's GitHub draft hold exactly those files and their `SHA256SUMS`. See [Draft, then publish](#draft-then-publish). |
 | Publish to crates.io | `publish_crates.sh`: one multi-package `cargo publish --no-verify` of the crates whose version isn't on crates.io yet. Cargo orders them and waits for the index. |
 | Publish to PyPI | `pypa/gh-action-pypi-publish` with trusted publishing: the wheels and the sdist. |
 | GitHub release | `release_api.py publish`: publishes the staged draft, unchanged. |
@@ -2091,12 +2092,15 @@ with its executable byte for byte the CLI binary of its platform (see
 
 **Order.** The publish jobs run only for a tag, and only after Validate, the
 CI gate, the artifact check and every smoke test passed. They run one at a
-time in the order above, so a failure stops the jobs after it. The GitHub
-draft comes first because it is the one reversible step: it shows that GitHub
-takes the release before crates.io and PyPI, which can't be undone. crates.io
-also waits for the PyPI trusted publishing check, so a PyPI publisher that
-doesn't match stops the release before anything is published. The draft
-is published last, so the release page and `releases/latest` show the
+time in the order above, so a failure stops the jobs after it. Signing the
+MCP bundles comes first; a signing failure only leaves the bundles
+unsigned, but the job's own failures stop the release before anything is
+published (see [Signing the MCP bundles](#signing-the-mcp-bundles)). The
+GitHub draft comes next because it is the one reversible step: it shows
+that GitHub takes the release before crates.io and PyPI, which can't be
+undone. crates.io also waits for the PyPI trusted publishing check, so a
+PyPI publisher that doesn't match stops the release before anything is
+published. The draft is published last, so the release page and `releases/latest` show the
 release only once its crates and wheels are out.
 
 Release builds use no Rust cache: every build starts from the pinned
@@ -2300,7 +2304,13 @@ uploads `stage` would make (or warns that a draft for another commit would
 stop it). Its token can only read, so it doesn't see drafts. While the
 workspace version is already released, it reports what the published release
 lacks as a warning. `publish_crates.sh --dry-run` then lists the crates whose
-version isn't on crates.io yet.
+version isn't on crates.io yet. It runs the GitHub draft's bundle check,
+`mcpb.py adopt`, on the unsigned bundles laid out as the signing job
+uploads them, so every dry run exercises that command. Last, for
+information, each MCP bundle's
+signature state (`mcpb.py signature`: unsigned in a dry run, which has no
+signing key) and `mcpb verify`'s answer are notices. Only a bundle ending in
+a malformed signature block fails the job.
 
 ### Artifacts
 
@@ -2323,6 +2333,13 @@ version isn't on crates.io yet.
 
   That is 0.11.0's asset names (the five CLI binaries on GitHub, the wheels
   and sdist on PyPI) plus the CPython 3.14 wheels and `THIRD-PARTY-NOTICES`.
+- `mcpb-bundles`: only the MCP bundles, each signed when a signing
+  certificate is configured, from a release's signing job. The GitHub draft
+  and release jobs take `release-assets` with these bundles in place of its
+  own, after `mcpb.py adopt` has checked them (see
+  [Signing the MCP bundles](#signing-the-mcp-bundles)); PyPI takes the
+  wheels and sdist from `release-assets`, so GitHub and PyPI publish the
+  same files.
 - `release-notes`: `notes.md`. Issue references such as `#1134` link to the
   GitHub issue of that number, which is the right one since the issues moved
   to GitHub (#1472). GitHub refuses bodies over 125,000 characters, so a
@@ -2347,8 +2364,8 @@ Each build job packs its CLI binary into an MCP bundle for Claude Desktop
 `out/`, so the bundle travels in the `cli-<platform>` artifact. A bundle is a
 zip of the MCP Bundle format, manifest version 0.3
 (`modelcontextprotocol/mcpb`): `manifest.json`, the binary as
-`server/bacnet` (`server/bacnet.exe` on Windows, mode 755 either way),
-`LICENSE` and `THIRD-PARTY-NOTICES`. The manifest comes from
+`server/bacnet` (`server/bacnet.exe` on Windows, mode 755 either way), the
+project icon `icon.png`, `LICENSE` and `THIRD-PARTY-NOTICES`. The manifest comes from
 [`mcpb/manifest.json`](../scripts/release/mcpb/manifest.json) with the
 release version, the entry point and the one OS the bundle is for. It runs
 `bacnet mcp serve --stdio --profile <profile>`, where the profile is the
@@ -2356,9 +2373,26 @@ bundle's one setting. The format names the OS but not the architecture, so
 there is one bundle per platform. Entries are in a fixed order with the
 commit's time, so a rebuild of the same binary packs the same bytes.
 
-No Node.js runs in the release: `mcpb.py check` holds a transcription of the
-0.3 schema plus the checks `mcpb validate` adds (the entry point exists and
-is executable, and `mcp_config` uses only variables a host substitutes).
+No Node.js builds or checks a bundle: `mcpb.py check` holds a transcription
+of the 0.3 schema plus the checks `mcpb validate` adds (the entry point exists
+and is executable, and `mcp_config` uses only variables a host substitutes),
+and checks that the icon is a 512x512 PNG that the manifest's `icon` names. A
+signed bundle is checked without its signature block. Node.js runs only the
+MCP Bundle CLI that signs (when a certificate is configured) and verifies
+the bundles, installed with `npm ci
+--ignore-scripts` from
+[`mcpb/tool/package-lock.json`](../scripts/release/mcpb/tool/package-lock.json)
+(`@anthropic-ai/mcpb` 2.1.2 and its dependencies, each pinned by version and
+integrity hash).
+
+**The icon** (#2324) is an original geometric drawing with no product, vendor
+or protocol mark: a rounded square holding a vertical bus with three floors,
+each a hub linking two nodes.
+[`mcpb/icon.py`](../scripts/release/mcpb/icon.py) draws
+[`icon.svg`](../scripts/release/mcpb/icon.svg) and its 512x512 export
+[`icon.png`](../scripts/release/mcpb/icon.png) from one list of shapes, with
+the standard library alone, so both change together:
+`python3 scripts/release/mcpb/icon.py`.
 `@anthropic-ai/mcpb` 2.1.2's `mcpb validate` accepted the manifests when this
 was written; run it again by hand after a format change. The smoke profile
 records an authorization, because a host can't run `bacnet mcp authorize`;
@@ -2550,6 +2584,140 @@ tracking by hand: watch the [tcpdump/libpcap
 releases](https://www.tcpdump.org/) and their security fixes, and bump
 `LIBPCAP_VERSION` and `LIBPCAP_SHA256` in `.github/ci-pins.env` together.
 
+### Signing the MCP bundles
+
+Signing is optional (#2324): a release signs its MCP bundles only when the
+`release` environment holds a signing certificate, and publishes them
+unsigned otherwise, as before. No signing failure stops a release:
+
+- **No certificate.** Without `MCPB_SIGNING_KEY` and `MCPB_SIGNING_CERT`, it
+  signs nothing, says so in a notice, and the release publishes the unsigned
+  bundles.
+- **A certificate.** It runs `mcpb sign` on a copy of each bundle, outside
+  `release/`. `mcpb sign` appends a block: the header `MCPB_SIG_V1`, a 4-byte
+  length, a detached PKCS#7 signature (SHA-256) over the bundle's bytes with
+  the certificate and any intermediates, and the footer `MCPB_SIG_END`. A
+  signer that fixes mcpb#278 also raises the comment length in the zip's
+  end-of-central-directory record to count the block, so that strict zip
+  readers take it. That field sits before the block, and nothing else in
+  the zip may change. The job checks both: the bundle before the block, with
+  the comment length put back to the comment it holds, must have the sha256
+  it had before signing (`mcpb.py signature`), and a strict zip reader must
+  take the signed bundle (`mcpb.py trailer`: the comment length counts every
+  byte after the record). Only a copy that passes both replaces the bundle
+  in `release/`. One whose signing fails, changes more than that, or fails
+  the zip check is dropped, and the unsigned bundle is published, with a
+  warning. `mcpb verify`'s answer is a notice, never a failure.
+- **A failing tool step** (Node.js, the tool install, the signing step,
+  each with its own time limit) leaves the bundles unsigned. A signing step
+  that stops part way can leave a mix: the bundles it finished are signed,
+  and the rest unsigned, since `release/` takes a signed copy only after its
+  checks. The GitHub draft's check accepts that mix.
+- **What fails the job.** The job's time limit, or a failed checkout,
+  download or upload. The job then fails closed: the GitHub draft and every
+  job after it don't run, nothing is published, and re-running the failed
+  jobs resumes the release (see
+  [Re-running a partial release](#re-running-a-partial-release)).
+- **What the GitHub draft takes.** The signing job runs the npm tree with
+  the key, so the release trusts nothing it leaves behind but the bundles,
+  and those only after a check. It uploads only the `.mcpb` files, as
+  `mcpb-bundles`. The GitHub draft job, on a fresh runner that never ran
+  the npm tree, downloads the untouched `release-assets` and `mcpb-bundles`,
+  and runs `mcpb.py adopt` from the tag's checkout. Each bundle must be
+  byte for byte its original in `release-assets`, or that original signed
+  as above with a block a strict zip reader takes; `mcpb-bundles` must hold
+  one file for each of the release's bundles and nothing else. Only then
+  does it copy the signed ones over their originals; every other file comes
+  from `release-assets` alone, the same files PyPI takes. Otherwise it
+  changes nothing and fails the job, which stops the release before
+  anything is published; a re-run of the signing job and the jobs after it
+  resumes it. The GitHub release job repeats the same steps before it
+  checks the draft against those files.
+
+Dry runs, forks' runs and PR runs never reach the `release` environment.
+Their Publish plan reports each bundle's state, `mcpb verify`'s answer and the
+zip check's as notices, and fails only on a malformed signature block; a
+tool that doesn't install is a warning.
+
+**Signing stays off in practice** until upstream
+(`modelcontextprotocol/mcpb`) releases fixes for two issues that 2.1.2,
+the version the job pins, has:
+
+- **#278, installability.** `mcpb sign` 2.1.2 appends its block after the
+  zip's end-of-central-directory record without declaring it in the
+  record's comment length, and strict zip readers refuse the result, Claude
+  Desktop's among them ("Invalid comment length"). The zip check catches
+  this, so the job publishes such a bundle unsigned rather than one that
+  can't be installed; it never rewrites the record itself. Upstream fixed
+  it on its main branch (PR #204, not in a release after 2.1.2) by raising
+  the comment length to count the block. The job's checks accept that, so
+  once the pin in `scripts/release/mcpb/tool/` moves to a release with the
+  fix, a bundle signed that way is published signed.
+- **#277 (and #260), verification.** `mcpb verify` succeeds on no platform:
+  node-forge's `PkcsSignedData.verify()` isn't implemented and throws, and
+  the tool reports the throw as "not signed".
+- **Linux** has a third problem, behind #277: the purpose name below.
+
+**What `mcpb` 2.1.2 takes and checks** (`src/node/sign.ts`):
+
+- **Key and certificate.** PEM files: the certificate (`--cert`), its
+  private key (`--key`, unencrypted; node-forge reads RSA keys only, so the
+  key must be RSA, PKCS#1 or PKCS#8) and any intermediates (`--intermediate`,
+  one certificate per file).
+- **Verification.** `mcpb verify` checks the signature and the digest, then
+  the certificate chain against the operating system's trust store for code
+  signing: `security verify-cert -p codeSign` on macOS, an `X509Chain` with
+  online revocation checks and the code-signing policy on Windows, and
+  `openssl verify -purpose codesigning -CApath /etc/ssl/certs` on Linux. A
+  chain the OS doesn't trust makes it report the bundle "not signed". A
+  self-signed certificate passes only where it is trusted (it then reports
+  "self-signed").
+- **Linux can't verify.** OpenSSL has no purpose named `codesigning` (OpenSSL
+  3.2 added `codesign`; 3.0 and 3.5 both refuse `codesigning`), so with mcpb
+  2.1.2 `mcpb verify` reports every bundle unsigned on Linux, whatever signed
+  it. The signing job runs on macOS for that reason.
+
+**Which certificate.** For `mcpb verify` to pass on a user's machine, the
+certificate must be a code-signing certificate (extended key usage
+`codeSigning`) that chains to a root the user's OS trusts for code signing.
+
+- An Apple Developer ID certificate is the practical choice: its key can be
+  exported, so it can live in a CI secret. macOS trusts it; Windows doesn't,
+  and Linux can't verify any.
+- Public certificate authorities issue code-signing certificates only with
+  keys held in hardware (a token or an HSM), which a CI secret can't hold, so
+  they don't fit this job.
+- A self-signed certificate signs, but `mcpb verify` reports it unsigned
+  wherever it isn't trusted.
+
+**Handling the key.** GitHub masks the secrets in logs. The job writes the
+key to a temporary directory only its user can read (`umask 077`) and
+removes it when the step ends; no command prints it.
+
+**Setting it up** (the maintainer, when signing is wanted):
+
+1. Get a code-signing certificate with an exportable RSA key (3072 bits or
+   more), such as an Apple Developer ID, and keep the key off shared
+   machines.
+2. Export the PEM files: the certificate, the unencrypted private key, and
+   the intermediate certificates, concatenated.
+3. In the repository's Settings, Environments, `release`, add the environment
+   secrets (or `gh secret set NAME --env release < FILE`):
+   `MCPB_SIGNING_KEY` (the key PEM), `MCPB_SIGNING_CERT` (the certificate
+   PEM) and `MCPB_SIGNING_CHAIN` (the intermediates PEM; leave it out when
+   there are none). Never add them as repository secrets.
+4. Keep the `release` environment protected: deployments only from tags
+   matching `v*` (as it is), and optionally required reviewers.
+5. Delete the exported key files.
+6. Check the next release's Sign the MCP bundles log: a notice per bundle
+   says it is signed and what `mcpb verify` answered. Renew the certificate
+   before it expires and replace the secrets the same way; remove them to
+   stop signing.
+
+A re-run signs again: the signature holds the signing time, so a re-signed
+bundle has other bytes, which the GitHub draft takes (see
+[Re-running a partial release](#re-running-a-partial-release)).
+
 ### Re-running a partial release
 
 Every publish job is safe to run again:
@@ -2591,13 +2759,17 @@ permissions it declares (the workflow's default is none):
 | Validate, Crates and sdist, Build, Check the artifacts, Smoke test, Publish plan | `contents: read` | |
 | CI gate | `actions: read`, `checks: read`, `contents: read` | |
 | GitHub draft, GitHub release | `contents: write` | |
+| Sign the MCP bundles | `contents: read` | the `release` environment's optional `MCPB_SIGNING_KEY`, `MCPB_SIGNING_CERT` and `MCPB_SIGNING_CHAIN` |
 | Publish to crates.io | `contents: read` | the `release` environment's `CARGO_REGISTRY_TOKEN` |
 | PyPI trusted publishing, Publish to PyPI | `id-token: write` only | the `release` environment, for trusted publishing |
 
 - **The `release` environment.** Only tags matching `v*` may deploy to it (a
   custom deployment policy since 2026-10-04; before, only protected branches
-  could). It holds `CARGO_REGISTRY_TOKEN`. Only the two jobs above deploy to
-  it, so a dry run, whatever started it, gets no secret.
+  could). It holds `CARGO_REGISTRY_TOKEN`, and the MCP bundle signing secrets
+  once the maintainer adds them (see
+  [Signing the MCP bundles](#signing-the-mcp-bundles)). Only the jobs
+  above that name it deploy to it, so a dry run, whatever started it, gets
+  no secret.
 - **`CARGO_REGISTRY_TOKEN`**: a crates.io token that can publish new crates
   and update existing ones. 0.13.0 is the first release of `bacnet-time`,
   `bacnet-mstp-codec`, `bacnet-bip-codec`, `bacnet-mstp-core`,
