@@ -142,7 +142,9 @@ fn handle(
     max_reply: u16,
 ) -> (Outcome, Option<Apdu>, Vec<ObjectIdentifier>) {
     let mut out = BytesMut::new();
-    let written = responder.handle(db, Inbound::new(apdu, max_reply), &mut out);
+    let written = responder
+        .clone()
+        .handle(db, Inbound::new(apdu, max_reply), &mut out);
     let reply = (!out.is_empty()).then(|| decode_apdu(out.freeze()).unwrap());
     (written.outcome, reply, written.objects)
 }
@@ -396,7 +398,7 @@ fn wpm_commands_a_commandable_present_value_for_the_source() {
     let mut db = database();
     db.add(Box::new(BinaryValueObject::new(3, "BV-3").unwrap()))
         .unwrap();
-    let responder = responder_with(Limits::default());
+    let mut responder = responder_with(Limits::default());
     let active = PropertyValue::Enumerated(1);
     let body = wpm_body(&[(bv(3), P::PRESENT_VALUE, active.clone())]);
     let (_, reply, written) = handle(&responder, &mut db, wpm(&body), 1476);

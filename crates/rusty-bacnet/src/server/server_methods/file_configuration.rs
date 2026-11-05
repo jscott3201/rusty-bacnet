@@ -191,6 +191,7 @@ mod tests {
             port: 0,
             broadcast_address: "255.255.255.255".into(),
             share_port_by_address: false,
+            share_wildcard_port: false,
             bip_mode: Default::default(),
             bip6_foreign: None,
             multicast: None,

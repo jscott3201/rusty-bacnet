@@ -1,5 +1,6 @@
 //! [`Responder`]: the staged steps strung together for a host with nothing
 //! to await between them, such as firmware that owns its database.
+use crate::clock::{self, Basis, DeviceClock};
 use crate::discovery;
 use crate::read::{self, ReadFailure, ReadOverlay, ReadPropertyMultipleBudget, ReadScope, RpmPlan};
 use crate::reply::{self, SEGMENTED, emit};
@@ -20,7 +21,7 @@ use bacnet_types::enums::{
     UnconfirmedServiceChoice,
 };
 use bacnet_types::error::Error;
-use bacnet_types::primitives::ObjectIdentifier;
+use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 use bytes::{Bytes, BytesMut};
 
 /// The services a [`Responder`] runs, for the Device's
@@ -48,8 +49,10 @@ pub enum Access {
     /// ReadProperty, ReadPropertyMultiple, Who-Is or Who-Has:
     /// [`Responder::read`] under a shared guard.
     Read,
-    /// WriteProperty or WritePropertyMultiple: [`Responder::write`] under an
-    /// exclusive guard.
+    /// WriteProperty, WritePropertyMultiple, TimeSynchronization or
+    /// UTCTimeSynchronization: [`Responder::write`] under an exclusive
+    /// guard. A synchronization sets the clock and lends it to the database
+    /// again, when the responder has a clock ([`Responder::with_clock`]).
     Write,
     /// Nothing: a request the core doesn't run, answered (if at all) by
     /// [`reply::refuse`], or one the host routes to its own handlers. A
@@ -185,7 +188,8 @@ impl Default for Limits {
 
 /// Answers ReadProperty, ReadPropertyMultiple, WriteProperty,
 /// WritePropertyMultiple, Who-Is and Who-Has from a borrowed database, for
-/// one Device.
+/// one Device, and with a clock ([`with_clock`](Self::with_clock)) runs
+/// TimeSynchronization and UTCTimeSynchronization too.
 ///
 /// It holds the Device's frozen identity: a Who-Is and a Who-Has are
 /// answered for it, and only while the database holds its Device, and the
@@ -195,6 +199,23 @@ pub struct Responder {
     identity: DeviceIdentity,
     scope: ReadScope,
     rpm: ReadPropertyMultipleBudget,
+    clock: Option<Clocked>,
+}
+
+/// The Device's clock, and the step that runs a synchronization on it:
+/// [`clock::synchronize`], which only [`Responder::with_clock`] names, so
+/// an image that never gives a responder a clock links none of it: 4.5 KB
+/// of the `objects` firmware image's flash on thumbv7m.
+#[derive(Clone, Debug)]
+struct Clocked {
+    clock: DeviceClock,
+    synchronize: fn(
+        &mut DeviceClock,
+        &mut ObjectDatabase,
+        ObjectIdentifier,
+        UnconfirmedServiceChoice,
+        &[u8],
+    ) -> bool,
 }
 
 impl Responder {
@@ -226,7 +247,53 @@ impl Responder {
             identity,
             scope,
             rpm: limits.rpm,
+            clock: None,
         })
+    }
+
+    /// This responder with `clock` as the Device's clock, lent to `db` (the
+    /// database it answers from) now: the Device then serves Local_Date and
+    /// Local_Time from it, and lists TimeSynchronization and
+    /// UTCTimeSynchronization in Protocol_Services_Supported when its
+    /// identity names them ([`clock::SERVICES`]). [`write`](Self::write)
+    /// runs each one the Device lists, setting the clock and lending it to
+    /// the database again; one the Device doesn't list, or whose date and
+    /// time aren't specific, changes nothing. See [`clock`] for how each
+    /// sets it.
+    pub fn with_clock(mut self, clock: DeviceClock, db: &mut ObjectDatabase) -> Self {
+        clock.lend(db);
+        self.clock = Some(Clocked {
+            clock,
+            synchronize: clock::synchronize,
+        });
+        self
+    }
+
+    /// The Device's clock, if it has one.
+    pub fn clock(&self) -> Option<&DeviceClock> {
+        self.clock.as_ref().map(|clocked| &clocked.clock)
+    }
+
+    /// Set the Device's clock to `date` and `time` on `basis`, as a
+    /// real-time clock on the board does, and lend it to `db` again. It
+    /// counts as synchronized. Refused, changing nothing, when the
+    /// responder has no clock or [`SyncedClock::set`](clock::SyncedClock::set)
+    /// refuses the value.
+    pub fn set_time(
+        &mut self,
+        db: &mut ObjectDatabase,
+        basis: Basis,
+        date: Date,
+        time: Time,
+    ) -> Result<(), Error> {
+        let clock = self
+            .clock
+            .as_mut()
+            .map(|clocked| &mut clocked.clock)
+            .ok_or(Error::range("the responder has no clock"))?;
+        clock.set(basis, date, time)?;
+        clock.lend(db);
+        Ok(())
     }
 
     /// The Device identity this responder answers for.
@@ -264,13 +331,17 @@ impl Responder {
                     _ => {}
                 }
             }
-        } else if pdu_type == PduType::UNCONFIRMED_REQUEST.to_raw()
-            && apdu.get(1).is_some_and(|&service| {
-                service == UnconfirmedServiceChoice::WHO_IS.to_raw()
-                    || service == UnconfirmedServiceChoice::WHO_HAS.to_raw()
-            })
-        {
-            return Access::Read;
+        } else if pdu_type == PduType::UNCONFIRMED_REQUEST.to_raw() {
+            match apdu.get(1).copied().map(UnconfirmedServiceChoice::from_raw) {
+                Some(UnconfirmedServiceChoice::WHO_IS | UnconfirmedServiceChoice::WHO_HAS) => {
+                    return Access::Read;
+                }
+                Some(
+                    UnconfirmedServiceChoice::TIME_SYNCHRONIZATION
+                    | UnconfirmedServiceChoice::UTC_TIME_SYNCHRONIZATION,
+                ) => return Access::Write,
+                _ => {}
+            }
         }
         Access::None
     }
@@ -314,8 +385,11 @@ impl Responder {
 
     /// Run `request` if it is a WriteProperty or a WritePropertyMultiple,
     /// writing the SimpleACK, or the Error or Reject that refuses it, to
-    /// `out`. `observer` sees each attempt, as the server's audit and change
-    /// capture do. A WritePropertyMultiple keeps the attempts that succeeded
+    /// `out`; or, with a clock, a TimeSynchronization or
+    /// UTCTimeSynchronization, which is [`Outcome::Silent`] whatever it
+    /// does ([`with_clock`](Self::with_clock)). `observer` sees each
+    /// attempt, as the server's audit and change capture do. A
+    /// WritePropertyMultiple keeps the attempts that succeeded
     /// before one failed, and its Error names the one that failed. A write
     /// that queues a Command's or Channel's run ends that run at once, unmade:
     /// the core has no task to make its writes in, so it performs none of
@@ -331,7 +405,7 @@ impl Responder {
     /// default Binary Value, Analog Value and Analog Output among them)
     /// refuses a write to it with WRITE_ACCESS_DENIED.
     pub fn write(
-        &self,
+        &mut self,
         db: &mut ObjectDatabase,
         observer: Option<&mut dyn WriteCommitObserver>,
         request: Inbound,
@@ -352,6 +426,20 @@ impl Responder {
                 if confirmed.service_choice == ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE =>
             {
                 return Self::write_property_multiple(db, observer, origin, &confirmed, out);
+            }
+            Ok(Apdu::UnconfirmedRequest(request)) => {
+                let device = self.identity.device_oid();
+                let ran = self.clock.as_mut().is_some_and(|clocked| {
+                    let service = request.service_choice;
+                    let parameters = &request.service_request;
+                    (clocked.synchronize)(&mut clocked.clock, db, device, service, parameters)
+                });
+                return if ran {
+                    Outcome::Silent
+                } else {
+                    Outcome::Unhandled
+                }
+                .into();
             }
             Ok(_) => return Outcome::Unhandled.into(),
             // Neither a type nor an invoke ID to answer.
@@ -388,8 +476,14 @@ impl Responder {
     /// Its writes are [`write`](Self::write)'s: commanded for the request's
     /// [`Inbound::source`] (a commandable Present_Value refuses a request
     /// with none), and with any Command or Channel run they start ended
-    /// unmade.
-    pub fn handle(&self, db: &mut ObjectDatabase, request: Inbound, out: &mut BytesMut) -> Written {
+    /// unmade. With a clock it runs the time synchronizations the Device
+    /// lists, too.
+    pub fn handle(
+        &mut self,
+        db: &mut ObjectDatabase,
+        request: Inbound,
+        out: &mut BytesMut,
+    ) -> Written {
         let apdu = request.apdu.clone();
         let handled = if Self::classify(&apdu) == Access::Write {
             self.write(db, None, request, out)

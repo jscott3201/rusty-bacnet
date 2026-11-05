@@ -13,7 +13,7 @@
 //! *local* time, derived from the wall clock plus the Device object's
 //! `UTC_Offset` property (signed minutes) at the sender. A window with
 //! `to_time < from_time` (e.g. 22:00–02:00) crosses midnight and is active
-//! outside the `[from, to]` interval; see `time_in_window`.
+//! outside the `[from, to]` interval; see [`in_window`].
 //!
 //! # Restarts
 //!
@@ -46,6 +46,7 @@ mod metadata;
 mod persistence;
 pub(crate) mod recipient_list;
 mod saving;
+mod window;
 #[doc(hidden)]
 pub use enrollment_summary::{
     EnrollmentSummaryClassProjection, EnrollmentSummaryClassProjectionError,
@@ -55,6 +56,7 @@ pub use enrollment_summary::{
 pub use persistence::FileNotificationClassPersistence;
 pub use persistence::{NotificationClassPersistence, NotificationClassSnapshot};
 pub use recipient_list::MAX_RECIPIENT_LIST_DESTINATIONS;
+pub use window::{always_in_window, in_window};
 
 /// BACnet NotificationClass object.
 ///
@@ -269,54 +271,6 @@ impl crate::creation::Creatable for NotificationClass {
         value: PropertyValue,
     ) -> Result<(), Error> {
         creation_only::initialize(self, property, value)
-    }
-}
-
-/// Convert a `Time` to centiseconds (hundredths of a second since midnight).
-fn time_to_centiseconds(t: &Time) -> u32 {
-    let h = if t.hour == Time::UNSPECIFIED {
-        0
-    } else {
-        t.hour as u32
-    };
-    let m = if t.minute == Time::UNSPECIFIED {
-        0
-    } else {
-        t.minute as u32
-    };
-    let s = if t.second == Time::UNSPECIFIED {
-        0
-    } else {
-        t.second as u32
-    };
-    let cs = if t.hundredths == Time::UNSPECIFIED {
-        0
-    } else {
-        t.hundredths as u32
-    };
-    h * 360_000 + m * 6_000 + s * 100 + cs
-}
-
-/// Check if `current` falls within the `[from, to]` time window.
-///
-/// If either bound has an unspecified hour (0xFF), the window is treated as
-/// "all day". A window whose `to` is earlier than its `from` (e.g.
-/// 22:00–02:00) crosses midnight: it is active from `from` up to midnight and
-/// again from midnight up to `to`, i.e. when `current >= from || current <= to`.
-/// This matches the ASHRAE 135-2020 reading that `To_Time` is the end of the
-/// active period; a wrap-around pair denotes an overnight schedule.
-fn time_in_window(current: &Time, from: &Time, to: &Time) -> bool {
-    if from.hour == Time::UNSPECIFIED || to.hour == Time::UNSPECIFIED {
-        return true;
-    }
-    let cur = time_to_centiseconds(current);
-    let from_cs = time_to_centiseconds(from);
-    let to_cs = time_to_centiseconds(to);
-    if to_cs < from_cs {
-        // Overnight window crossing midnight.
-        cur >= from_cs || cur <= to_cs
-    } else {
-        cur >= from_cs && cur <= to_cs
     }
 }
 
@@ -604,8 +558,7 @@ fn filter_destinations(
     let transition_mask = transition.bit_mask();
     destinations
         .into_iter()
-        .filter(|dest| dest.valid_days.intersects(today))
-        .filter(|dest| time_in_window(current_time, &dest.from_time, &dest.to_time))
+        .filter(|dest| in_window(dest, today, current_time))
         .filter(|dest| dest.transitions.intersects(transition_mask))
         .map(|dest| {
             (

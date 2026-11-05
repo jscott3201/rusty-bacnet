@@ -37,8 +37,10 @@ pub struct ReceiveCounters {
     /// on the socket every send leaves from, the transport stops receiving.
     pub receive_errors: u64,
     /// Datagrams a broadcast listener read but doesn't keep, in per-address
-    /// mode ([`set_share_port_by_address`](super::BipTransport::set_share_port_by_address)),
-    /// whatever they hold: one not sent to this link's broadcast address,
+    /// mode ([`set_share_port_by_address`](super::BipTransport::set_share_port_by_address))
+    /// or the per-address shape a Linux B/IP-M node takes for a group on its
+    /// own port (#2366), where every subnet broadcast lands here, whatever
+    /// they hold: one not sent to this link's broadcast address,
     /// such as a unicast for a local address no socket on the port is bound
     /// to or another subnet's broadcast, or a broadcast that came in on
     /// another interface. Routine on a shared port or a multihomed host.

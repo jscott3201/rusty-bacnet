@@ -69,6 +69,7 @@ async fn client_number_bbmd_wire_admission_and_release() {
         let denied = udp().await;
         let (captured, port) = observer();
         let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, port, BROADCAST);
+        transport.set_share_wildcard_port(true);
         transport.enable_bbmd(vec![BdtEntry {
             ip: Ipv4Addr::LOCALHOST.octets(),
             port: address(&bdt).port(),

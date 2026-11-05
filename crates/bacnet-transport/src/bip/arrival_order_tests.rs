@@ -54,7 +54,7 @@ fn the_arrival_stamp_decides_and_the_read_order_breaks_ties() {
 
 /// A plain socket bound to `127.0.0.1` on a port the OS picks.
 fn loopback_socket() -> socket2::Socket {
-    let socket = socket::udp_socket(socket::SocketRole::PrivateWildcard).unwrap();
+    let socket = socket::udp_socket(socket::SocketRole::ClaimedWildcard).unwrap();
     socket
         .bind(&SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0).into())
         .unwrap();
@@ -72,7 +72,11 @@ fn open(listener: bool) -> (Listeners, SocketAddr, Option<SocketAddr>) {
     let primary_at = port_of(&primary);
     let listeners: Vec<_> = listener.then(loopback_socket).into_iter().collect();
     let listener_at = listeners.first().map(port_of);
-    let bound = BoundSockets { primary, listeners };
+    let bound = BoundSockets {
+        primary,
+        listeners,
+        group: None,
+    };
     let listeners = Listeners::open(bound, None, &crate::tap::FrameTap::new()).unwrap();
     (listeners, primary_at, listener_at)
 }

@@ -136,6 +136,7 @@ async fn bip_number_bbmd_full_server_wire_admission() {
         let impostor = udp().await;
         let (observer, port) = observer();
         let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, port, BROADCAST);
+        transport.set_share_wildcard_port(true);
         transport.enable_bbmd(vec![BdtEntry {
             ip: Ipv4Addr::LOCALHOST.octets(),
             port: address(&bdt).port(),
@@ -236,6 +237,8 @@ async fn gated_progress_and_stop(bbmd_mode: bool, bare_drop: bool) -> std::io::R
     let port = 0;
     let (mut server, local, bbmd) = if bbmd_mode {
         let mut transport = BipTransport::new(Ipv4Addr::LOCALHOST, port, BROADCAST);
+        // Beside the observer on Linux; a port the OS picks is never shared.
+        transport.set_share_wildcard_port(true);
         transport.enable_bbmd(vec![]);
         let (server, local) = start(transport, Some(gates.clone())).await;
         (server, local, None)

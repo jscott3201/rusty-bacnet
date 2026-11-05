@@ -13,7 +13,7 @@ use bacnet_time::Instant;
 use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::enums::{ConfirmedServiceChoice, UnconfirmedServiceChoice};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::ObjectIdentifier;
+use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 use bytes::{Bytes, BytesMut};
 
 use super::confirmed::{ConfirmedTable, Outstanding};
@@ -22,6 +22,7 @@ use super::{
     Bindings, Destination, InvokeIds, Notification, NotifyService, ReportConfig, ReporterCounters,
     peer_address,
 };
+use crate::clock::{Basis, DeviceClock};
 use crate::cov::active::ActiveCovOverlay;
 use crate::cov::life_safety::{LifeSafetyCovSnapshots, is_life_safety_object};
 use crate::cov::{
@@ -113,6 +114,29 @@ impl Reporter {
     /// The subscription table.
     pub fn table(&self) -> &CovTable {
         &self.table
+    }
+
+    /// The Device's clock, which the `Responder` this reporter was built
+    /// from was given ([`Responder::with_clock`]), if any. Its
+    /// [`window`](crate::clock::SyncedClock::window) is the one to judge
+    /// recipient windows by: the database's clock frame reads a valid date
+    /// before the clock is synchronized.
+    pub fn clock(&self) -> Option<&DeviceClock> {
+        self.responder.clock()
+    }
+
+    /// Set the Device's clock from the host's own real-time clock, as
+    /// [`Responder::set_time`] does: lent to `db` again, and counted
+    /// synchronized. Refused, changing nothing, when the reporter's
+    /// `Responder` has no clock or the value isn't a specific date and time.
+    pub fn set_time(
+        &mut self,
+        db: &mut ObjectDatabase,
+        basis: Basis,
+        date: Date,
+        time: Time,
+    ) -> Result<(), Error> {
+        self.responder.set_time(db, basis, date, time)
     }
 
     /// Run `request` from `peer` against `db`, writing any answer to `out`

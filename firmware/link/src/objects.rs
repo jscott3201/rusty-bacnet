@@ -154,7 +154,7 @@ pub fn run(requests: &[&[u8]; REQUESTS]) -> Summary {
         summary.errors += 1;
         return summary;
     };
-    let Ok(responder) = Responder::new(identity, Limits::default()) else {
+    let Ok(mut responder) = Responder::new(identity, Limits::default()) else {
         summary.errors += 1;
         return summary;
     };
