@@ -327,9 +327,13 @@ class ScSessionTests(unittest.IsolatedAsyncioTestCase):
                             await asyncio.sleep(0.05)
                 finally:
                     await asyncio.wait_for(owner.close(), 5)
-                # The log lists the newest first: the local reset, then the
-                # peer's, which names the peer and its invoke ID.
-                local, peer = found[0], found[1]
+                # The two newest records are the local reset and the peer's,
+                # which names the peer and its invoke ID. They are separate
+                # sends, so either can reach the sink first: tell them apart
+                # by the invoke ID, not by position.
+                newest = found[:2]
+                local = next(r for r in newest if r["invoke_id"] is None)
+                peer = next(r for r in newest if r["invoke_id"] is not None)
                 for record in (local, peer):
                     self.assertEqual(record["operation"], AuditOperation.DEVICE_RESET)
                     self.assertEqual(record["target_device"], this_device)
