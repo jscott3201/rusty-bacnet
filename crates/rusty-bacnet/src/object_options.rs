@@ -2,7 +2,7 @@
 //! object's Present_Value is written and whether its source is tracked, the
 //! optional Tags, Profile_Location and Profile_Name rows, and the
 //! `storage_path` and `clear_written_reporting` that keep the reporting
-//! settings a peer writes (#2331).
+//! settings and Description a peer writes (#2331, #2364).
 
 use std::sync::Arc;
 
@@ -82,8 +82,9 @@ pub(crate) fn apply_profile(
     }
 }
 
-/// Build an object with `build`, keeping its reporting settings in the file
-/// at `storage_path` when there is one (#2331). With `clear`, the settings a
+/// Build an object with `build`, keeping its reporting settings and a
+/// written Description in the file at `storage_path` when there is one
+/// (#2331, #2364). With `clear`, the settings a
 /// write saved are dropped first and the object is opened again on the
 /// cleared file, so it starts from its defaults, as `add_timer` does. Every
 /// server builder of an object with intrinsic reporting takes it.

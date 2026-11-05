@@ -120,8 +120,8 @@ impl BACnetServer {
     /// 65535). Any other number raises VALUE_OUT_OF_RANGE.
     ///
     /// `storage_path` and `clear_written_reporting` keep the reporting
-    /// settings a peer writes in that file, as on `add_analog_input`
-    /// (#2331).
+    /// settings and Description a peer writes in that file, as on
+    /// `add_analog_input` (#2331, #2364).
     #[pyo3(signature = (
         instance,
         name,
@@ -245,8 +245,8 @@ impl BACnetServer {
     /// element.
     ///
     /// `storage_path` and `clear_written_reporting` keep the reporting
-    /// settings a peer writes in that file, as on `add_analog_input`
-    /// (#2331).
+    /// settings and Description a peer writes in that file, as on
+    /// `add_analog_input` (#2331, #2364).
     #[pyo3(signature = (
         instance,
         name,

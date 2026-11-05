@@ -9,7 +9,10 @@
 //! implementing `KeepsReporting` to lend its rows, and offering each write
 //! to [`admit`] before it makes it; [`impl_reporting_persistence!`] gives it
 //! the builder call and the staging, and the `KeepsReporting` too for
-//! objects that hold the rows in the usual fields. Every object type with
+//! objects that hold the rows in the usual fields. Each object keeps its
+//! Description the same way, as one more row (#2364): it isn't a reporting
+//! setting, but these objects already keep a file, and a head end that
+//! labels an object expects the label to stay. Every object type with
 //! intrinsic reporting here serves all seven rows, so each keeps them all:
 //! the analog, binary and multi-state objects, Access Door and Access Zone
 //! (through their `ChangeOfStateReporting`), and Event and Alert
@@ -24,7 +27,9 @@
 //! OPERATIONAL_PROBLEM, the old value kept, when the save fails. The server
 //! stages it, so the save runs off the database guard; a write nobody staged
 //! saves where it is. Only the rows a write set are kept, and a kept row
-//! wins over its setter until `clear_written_reporting` drops them all.
+//! wins over its setter until `clear_written_reporting` drops them all,
+//! Description included. A NULL to Description changes nothing, so it is
+//! neither saved nor staged.
 //!
 //! An object CreateObject builds through the built-in constructors
 //! ([`crate::creation::builtin_constructor`]) keeps nothing: an application
@@ -79,10 +84,16 @@ mod off {
         Ok(())
     }
 
-    /// The object lends only its Tags staging, if it has any.
+    /// The object lends only its Tags staging, if it has any; its
+    /// Description setter always applies.
     macro_rules! impl_reporting_persistence {
         ($object:ty) => {
             impl $object {
+                /// Set the description string.
+                pub fn set_description(&mut self, desc: impl Into<String>) {
+                    self.description = desc.into();
+                }
+
                 #[cfg(feature = "durable-writes")]
                 fn durable_capability(
                     &mut self,

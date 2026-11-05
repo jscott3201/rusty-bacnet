@@ -111,11 +111,6 @@ impl AnalogOutputObject {
         self.profile.wait_for_saves();
     }
 
-    /// Set the description string.
-    pub fn set_description(&mut self, desc: impl Into<String>) {
-        self.description = desc.into();
-    }
-
     /// Set minimum engineering-bound metadata; this is not a reliability fault limit.
     pub fn set_min_pres_value(&mut self, value: f32) {
         self.min_pres_value = Some(value);

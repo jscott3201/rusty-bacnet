@@ -102,9 +102,10 @@ fn damaged_files_never_panic_and_refused_restores_write_nothing() {
 
 /// The samples cover every format the crate saves: one per file backend
 /// (the Color backend twice, once for each object type it serves, and the
-/// write configuration backend four times: a Timer's, a Channel's, and two
+/// write configuration backend seven times: a Timer's, a Channel's, two
 /// intrinsic reporters', an Analog Input's and an Alert Enrollment's, which
-/// takes fewer Notify_Types).
+/// takes fewer Notify_Types, and kind 5 around the Timer's, the Channel's
+/// and the Analog Input's, #2364).
 #[test]
 fn every_format_has_a_sample() {
     let names: Vec<&str> = FORMATS.iter().map(|format| format.name).collect();
@@ -125,6 +126,9 @@ fn every_format_has_a_sample() {
             "channel_write_config",
             "reporting_write_config",
             "alert_reporting_write_config",
+            "described_timer_write_config",
+            "described_channel_write_config",
+            "described_reporting_write_config",
         ]
     );
 }

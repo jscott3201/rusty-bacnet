@@ -39,8 +39,9 @@ impl BACnetServer {
     ///
     /// With `storage_path` (a `str`), the Channel keeps in that file what a
     /// peer writes to its members, Execution_Delay, Channel_Number,
-    /// Control_Groups and Allow_Group_Delay_Inhibit, and each saved write
-    /// wins over its argument at the next start (#2312). A write that cannot
+    /// Control_Groups, Allow_Group_Delay_Inhibit and Description (#2364),
+    /// and each saved write wins over its argument at the next start
+    /// (#2312). A write that cannot
     /// be saved is refused with DEVICE / OPERATIONAL_PROBLEM.
     /// `clear_written_config` drops what was saved first, so the arguments
     /// apply. A file that doesn't load raises BacnetError.

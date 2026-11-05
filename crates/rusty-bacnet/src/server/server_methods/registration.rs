@@ -175,8 +175,8 @@ impl BACnetServer {
     ///
     /// With `storage_path` (a `str`), the Timer keeps in that file what a
     /// peer writes to State_Change_Values, List_Of_Object_Property_References
-    /// (with Priority_For_Writing) and Default_Timeout (#2312), and a saved
-    /// write wins over the keywords at the next start. A write that cannot
+    /// (with Priority_For_Writing), Default_Timeout (#2312) and Description
+    /// (#2364), and a saved write wins over the keywords at the next start. A write that cannot
     /// be saved is refused with DEVICE / OPERATIONAL_PROBLEM.
     /// `clear_written_config` drops what was saved first, so the keywords
     /// apply. A file that doesn't load raises BacnetError.
@@ -312,8 +312,8 @@ impl BACnetServer {
     /// Add an Alert Enrollment object to the server (before starting).
     ///
     /// `storage_path` and `clear_written_reporting` keep the reporting
-    /// settings a peer writes in that file, as on `add_analog_input`
-    /// (#2331).
+    /// settings and Description a peer writes in that file, as on
+    /// `add_analog_input` (#2331, #2364).
     #[pyo3(signature = (
         instance, name, initial_source, *, storage_path=None, clear_written_reporting=false
     ))]
@@ -506,8 +506,8 @@ impl BACnetServer {
     /// octet-string parameters, which name no algorithm, are held (#1868).
     ///
     /// `storage_path` and `clear_written_reporting` keep the reporting
-    /// settings a peer writes in that file, as on `add_analog_input`
-    /// (#2331).
+    /// settings and Description a peer writes in that file, as on
+    /// `add_analog_input` (#2331, #2364).
     #[pyo3(signature = (
         instance,
         name,

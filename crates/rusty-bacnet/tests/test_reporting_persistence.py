@@ -6,7 +6,8 @@ multi-state ones, Access Door and Zone, and Event and Alert Enrollment. A write 
 Notification_Class, Event_Enable, Notify_Type, Event_Detection_Enable,
 Event_Message_Texts_Config or the Event_Algorithm_Inhibit pair is saved in
 that file before it is answered, and a server started on the same file
-serves it again, until ``clear_written_reporting=True`` drops it.
+serves it again, until ``clear_written_reporting=True`` drops it. A written
+Description is kept the same way (#2364).
 """
 
 from __future__ import annotations
@@ -29,6 +30,8 @@ from rusty_bacnet import (
 )
 
 P = PropertyIdentifier
+LOBBY = PropertyValue.character_string("Lobby")
+EMPTY = PropertyValue.character_string("")
 BUILDERS = (
     "add_analog_input",
     "add_analog_output",
@@ -107,6 +110,9 @@ class WrittenReportingTests(unittest.IsolatedAsyncioTestCase):
                 await server.write_property_local(
                     oid, P.NOTIFICATION_CLASS, PropertyValue.unsigned(9), source_object=None
                 )
+                await server.write_property_local(
+                    oid, P.DESCRIPTION, LOBBY, source_object=None
+                )
             await server.write_property_local(
                 ANALOG, P.NOTIFY_TYPE, PropertyValue.enumerated(1), source_object=None
             )
@@ -121,6 +127,7 @@ class WrittenReportingTests(unittest.IsolatedAsyncioTestCase):
                         await self.read(server, oid, P.NOTIFICATION_CLASS),
                         PropertyValue.unsigned(9),
                     )
+                    self.assertEqual(await self.read(server, oid, P.DESCRIPTION), LOBBY)
             self.assertEqual(
                 await self.read(server, ANALOG, P.NOTIFY_TYPE), PropertyValue.enumerated(1)
             )
@@ -135,6 +142,7 @@ class WrittenReportingTests(unittest.IsolatedAsyncioTestCase):
                         await self.read(server, oid, P.NOTIFICATION_CLASS),
                         PropertyValue.unsigned(0),
                     )
+                    self.assertEqual(await self.read(server, oid, P.DESCRIPTION), EMPTY)
         finally:
             await server.stop()
         for name in ("ai-1", "bo-1", "msv-1"):
@@ -174,6 +182,9 @@ class FurtherTypesTests(unittest.IsolatedAsyncioTestCase):
                 await server.write_property_local(
                     oid, P.NOTIFICATION_CLASS, PropertyValue.unsigned(9), source_object=None
                 )
+                await server.write_property_local(
+                    oid, P.DESCRIPTION, LOBBY, source_object=None
+                )
             await server.write_property_local(
                 ALERT, P.EVENT_DETECTION_ENABLE, PropertyValue.boolean(False), source_object=None
             )
@@ -188,6 +199,7 @@ class FurtherTypesTests(unittest.IsolatedAsyncioTestCase):
                         await server.read_property(oid, P.NOTIFICATION_CLASS),
                         PropertyValue.unsigned(9),
                     )
+                    self.assertEqual(await server.read_property(oid, P.DESCRIPTION), LOBBY)
             self.assertEqual(
                 await server.read_property(ALERT, P.EVENT_DETECTION_ENABLE),
                 PropertyValue.boolean(False),
@@ -203,6 +215,7 @@ class FurtherTypesTests(unittest.IsolatedAsyncioTestCase):
                         await server.read_property(oid, P.NOTIFICATION_CLASS),
                         PropertyValue.unsigned(0),
                     )
+                    self.assertEqual(await server.read_property(oid, P.DESCRIPTION), EMPTY)
         finally:
             await server.stop()
 
