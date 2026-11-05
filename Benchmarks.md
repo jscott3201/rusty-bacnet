@@ -1466,8 +1466,8 @@ counted the harness's way from one build
   about 1,760 to 1,795 instructions and four allocator calls per request
   over no policy: decoding the request for it, building its context and
   carrying its decision. A server without a policy doesn't reach the new
-  branch, and its count matches the official WriteProperty count after
-  section 10.10.
+  branch, and its count is within 0.15% of the official WriteProperty
+  count after section 10.10.
 
 ## 11. How to reproduce
 

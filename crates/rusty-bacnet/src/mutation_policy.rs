@@ -94,6 +94,9 @@ pub(crate) fn server_policy(
     audit_allow_all: bool,
     callback: Option<Arc<PyMutationPolicy>>,
 ) -> Option<bacnet_server::FnPolicy> {
+    // Without a callback this policy runs no Python code, only these two
+    // closures, so it could safely be declared inline; it isn't, which costs
+    // each Audit notification one pool trip and keeps one rule for Python.
     let audit = audit_allow_all.then(|| {
         bacnet_server::FnPolicy::new()
             .audit_notification(|_| true)

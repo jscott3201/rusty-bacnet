@@ -5,7 +5,7 @@
 //!
 //! [`ServerPolicy::decides_inline`]: crate::ServerPolicy::decides_inline
 
-use super::mutation_tests::{oid, value, wpm};
+use super::mutation_tests::{Fixture, apdu, assert_denied, oid, value, wpm};
 use super::policy_off_task_tests::{
     Gate, confirmed, dcc, gate, life_safety, send, server, unconfirmed_audit,
 };
@@ -17,7 +17,7 @@ use crate::mutation::MutationAuthorizationContext;
 use crate::server::test_transport::TestTransport;
 use bacnet_services::wpm::WriteAccessSpecification;
 use bacnet_services::write_property::WritePropertyRequest;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::thread::ThreadId;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -75,6 +75,13 @@ fn description(instance: u32) -> WriteAccessSpecification {
 
 /// A WriteProperty of Binary Value 1's Description.
 fn write_property() -> Apdu {
+    confirmed(
+        ConfirmedServiceChoice::WRITE_PROPERTY,
+        write_property_request(),
+    )
+}
+
+fn write_property_request() -> Bytes {
     let mut request = BytesMut::new();
     WritePropertyRequest {
         object_identifier: oid(ObjectType::BINARY_VALUE, 1),
@@ -85,7 +92,7 @@ fn write_property() -> Apdu {
     }
     .encode(&mut request)
     .unwrap();
-    confirmed(ConfirmedServiceChoice::WRITE_PROPERTY, request.freeze())
+    request.freeze()
 }
 
 /// Each request that reaches a policy, through both of the server's ways
@@ -204,7 +211,15 @@ async fn a_blocking_policy_that_keeps_the_default_still_cannot_hold_stop() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stop_ends_once_a_running_inline_call_returns() {
     let (mut server, gate, returned) = blocked(true).await;
-    let stopping = tokio::spawn(async move { server.stop().await });
+    let mut stopping = tokio::spawn(async move { server.stop().await });
+    // Inline, stop can't end while the call blocks, so this window can only
+    // pass; asked on the pool, stop would end well inside it.
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut stopping)
+            .await
+            .is_err(),
+        "stop waits while the call blocks"
+    );
     gate.release.send(()).unwrap();
     tokio::time::timeout(WAIT, stopping)
         .await
@@ -212,4 +227,54 @@ async fn stop_ends_once_a_running_inline_call_returns() {
         .unwrap()
         .unwrap();
     assert!(returned.load(Ordering::SeqCst), "stop waited for the call");
+}
+
+/// A closure that panics on its first call and allows every later one.
+fn panics_once<C>() -> impl Fn(&C) -> bool + Send + Sync + 'static {
+    let calls = AtomicUsize::new(0);
+    move |_| {
+        assert_ne!(calls.fetch_add(1, Ordering::SeqCst), 0, "policy panic");
+        true
+    }
+}
+
+/// A panic in an inline policy denies, as it does on the pool, and the
+/// request path keeps serving: the next request is asked and allowed. One
+/// service through each of the server's ways of asking.
+#[tokio::test]
+async fn an_inline_policy_that_panics_denies_and_the_next_request_is_served() {
+    let mut fixture = Fixture::new(None);
+    fixture.config.policy = Some(Arc::new(
+        crate::FnPolicy::new()
+            .mutation(panics_once())
+            .life_safety_operation(panics_once())
+            .inline(),
+    ));
+    let mut life_safety = BytesMut::new();
+    bacnet_services::life_safety::LifeSafetyOperationRequest {
+        requesting_process_identifier: 7,
+        requesting_source: "operator".into(),
+        request: bacnet_types::enums::LifeSafetyOperation::SILENCE,
+        object_identifier: None,
+    }
+    .encode(&mut life_safety)
+    .unwrap();
+    for (service, request) in [
+        (
+            ConfirmedServiceChoice::WRITE_PROPERTY,
+            write_property_request(),
+        ),
+        (
+            ConfirmedServiceChoice::LIFE_SAFETY_OPERATION,
+            life_safety.freeze(),
+        ),
+    ] {
+        let denied = fixture.dispatch(service, request.clone(), 1).await;
+        assert_denied(denied.expect("answered"), service, 1);
+        let served = fixture.dispatch(service, request, 2).await;
+        assert!(
+            matches!(apdu(served.expect("answered")), Apdu::SimpleAck(_)),
+            "{service:?}: served after the panic"
+        );
+    }
 }

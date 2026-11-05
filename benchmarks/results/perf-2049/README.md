@@ -70,9 +70,10 @@ this one within each row's range.
   and 1,794.2 instructions and four allocator calls over no policy, is the
   work both paths share: decoding the request for the policy, building its
   context, and the vectors that carry the decisions.
-- **`none` is the harness's `wp`.** 39,656.3 and 40,830.6 match the
-  official count of `wp` on dev after #2373 (39,657.1 and 40,890.4), so the
-  example measures the same round trip. A server without a policy doesn't
+- **`none` is the harness's `wp`.** 39,656.3 and 40,830.6 are within
+  0.15% of the official count of `wp` on dev after #2373 (39,657.1 and
+  40,890.4; on the multi-thread runtime 59.8 lower, inside that count's
+  floor of 141.5), so the example measures the same round trip. A server without a policy doesn't
   reach the new branch.
 
 What the pool path adds, in calls per request (`summary.md` lists the top
