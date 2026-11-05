@@ -79,6 +79,9 @@ pub mod value_types;
 pub mod write_config;
 
 #[cfg(test)]
+mod description_kept_tests;
+
+#[cfg(test)]
 mod log_status_tests;
 
 #[cfg(test)]

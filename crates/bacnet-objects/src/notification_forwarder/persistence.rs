@@ -22,7 +22,8 @@ use crate::durable::file::ObjectFile;
 #[cfg(feature = "std")]
 use crate::snapshot::notification_forwarder as format;
 
-/// What a forwarder keeps across a restart: both of its lists.
+/// What a forwarder keeps across a restart: both of its lists, and a
+/// written Description (#2364).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ForwarderSnapshot {
     /// Recipient_List, in list order, once a write has set it. `None` until
@@ -32,6 +33,11 @@ pub struct ForwarderSnapshot {
     /// The live Subscribed_Recipients entries, in list order, each with the
     /// whole minutes it had left when saved.
     pub subscribed_recipients: Vec<BACnetEventNotificationSubscription>,
+    /// Description, once a write has set it (#2364); at most 16 KiB of
+    /// UTF-8, as a forwarder with storage refuses a longer write. `None`
+    /// until then: the application's `set_description` applies at each
+    /// start.
+    pub description: Option<String>,
 }
 
 /// Application-owned storage for one Notification Forwarder's lists.

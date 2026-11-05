@@ -1,6 +1,6 @@
-//! An Access Rights object's written rule arrays, Enable and Accompaniment
-//! (`RBNACR01`), as `FileAccessRightsPersistence` (with std) writes its
-//! file.
+//! An Access Rights object's written rule arrays, Enable, Accompaniment and
+//! Description (`RBNACR01`, and `RBNACR02` with a Description), as
+//! `FileAccessRightsPersistence` (with std) writes its file.
 //!
 //! After the magic tag and the four-octet object identifier, BACnet
 //! encodings of up to four members, in this order, each only once a write
@@ -16,6 +16,14 @@
 //! A file written before Accompaniment was kept (#1393) is one without that
 //! member. Decoding doesn't check the rules or the reference themselves;
 //! the object does, as it loads them.
+//!
+//! A file holding a written Description (#2364) takes version 2's tag,
+//! [`MAGIC_WITH_DESCRIPTION`]: the Description, its length in four
+//! big-endian octets and then at most 16 KiB of UTF-8, comes between the
+//! header and those members. Unlike Accompaniment it is no new member, which
+//! a build that predates it would take for damage: [`encode`] writes version
+//! 1 for a snapshot without one, so its octets don't change, and a build
+//! that reads only version 1 refuses version 2 as an unknown version.
 
 use crate::prelude::*;
 use bacnet_encoding::constructed::tagged::{
@@ -31,14 +39,17 @@ use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
 use super::SnapshotError;
-use super::framing::{self, HEADER_LEN};
+use super::framing;
 use crate::access_control::{AccessRightsSnapshot, MAX_ACCESS_RULES};
 
-/// The format's tag. A new layout gets a new tag.
+/// The format's tag, version 1: a snapshot without a written Description.
 pub const MAGIC: [u8; 8] = *b"RBNACR01";
+/// Version 2's tag, for a snapshot with a written Description (#2364).
+pub const MAGIC_WITH_DESCRIPTION: [u8; 8] = *b"RBNACR02";
 /// The most octets a file may take: a rule this object accepts encodes in
 /// at most 40 octets, so two full arrays of [`MAX_ACCESS_RULES`] take about
-/// 80 KiB, and Accompaniment at most 12 octets more.
+/// 80 KiB, Accompaniment at most 12 octets more and a Description at most
+/// 16 KiB.
 pub const MAX_LEN: usize = 128 * 1024;
 
 const POSITIVE_TAG: u8 = 0;
@@ -51,8 +62,8 @@ const WHAT: &str = "Access Rights file";
 /// The file octets for `snapshot`, saved for `object`.
 ///
 /// Refuses ([`OutOfRange`](super::SnapshotErrorKind::OutOfRange)) an array
-/// of more than [`MAX_ACCESS_RULES`] rules and octets past [`MAX_LEN`]:
-/// what [`decode`] would refuse.
+/// of more than [`MAX_ACCESS_RULES`] rules, a Description past 16 KiB and
+/// octets past [`MAX_LEN`]: what [`decode`] would refuse.
 pub fn encode(
     object: ObjectIdentifier,
     snapshot: &AccessRightsSnapshot,
@@ -62,10 +73,11 @@ pub fn encode(
 
 /// The snapshot a file's `octets` hold for `object`.
 ///
-/// Refuses octets past [`MAX_LEN`], without this format's tag, saved for
+/// Refuses octets past [`MAX_LEN`], without either version's tag, saved for
 /// another object, an array of more than [`MAX_ACCESS_RULES`] rules,
 /// members out of order or repeated, a rule or reference that does not
-/// decode, and octets after the last member.
+/// decode, octets after the last member, and a Description cut short, past
+/// 16 KiB or not UTF-8.
 pub fn decode(
     object: ObjectIdentifier,
     octets: &[u8],
@@ -103,10 +115,16 @@ fn encode_file(
         encode_device_object_reference(&mut body, reference);
         tags::encode_closing_tag(&mut body, ACCOMPANIMENT_TAG);
     }
-    if HEADER_LEN + body.len() > MAX_LEN {
+    let octets = framing::seal_described(
+        (&MAGIC, &MAGIC_WITH_DESCRIPTION),
+        object,
+        snapshot.description.as_deref(),
+        &body,
+    )?;
+    if octets.len() > MAX_LEN {
         return Err(SnapshotError::out_of_range("is too large to save"));
     }
-    Ok(framing::seal(&MAGIC, object, &body))
+    Ok(octets)
 }
 
 fn undecodable() -> SnapshotError {
@@ -117,7 +135,8 @@ fn decode_file(
     object: ObjectIdentifier,
     octets: &[u8],
 ) -> Result<AccessRightsSnapshot, SnapshotError> {
-    let (_, body) = framing::open(octets, &MAGIC, None, MAX_LEN, object)?;
+    let (description, body) =
+        framing::open_described(octets, (&MAGIC, &MAGIC_WITH_DESCRIPTION), MAX_LEN, object)?;
     let mut pos = 0;
     let positive_access_rules = decode_array(body, &mut pos, POSITIVE_TAG)?;
     let negative_access_rules = decode_array(body, &mut pos, NEGATIVE_TAG)?;
@@ -138,6 +157,7 @@ fn decode_file(
         negative_access_rules,
         enable,
         accompaniment,
+        description,
     })
 }
 

@@ -58,6 +58,7 @@ fn written_rules_and_enable_read_back_after_a_rebuild() {
         negative_access_rules: Some(negative.to_vec()),
         enable: Some(false),
         accompaniment: None,
+        description: None,
     };
     assert_eq!(storage.snapshot(), Some(expected));
     assert_eq!(storage.saves(), 4);
@@ -156,6 +157,7 @@ fn saved_values_win_over_configured_ones() {
             negative_access_rules: None,
             enable: Some(true),
             accompaniment: None,
+            description: None,
         })
     );
 }
@@ -165,15 +167,7 @@ fn configured_values_apply_at_every_start_until_a_write() {
     let storage = Arc::new(MemoryPersistence::default());
     let mut first = persistent(&storage);
     first.set_positive_access_rules([zone_rule(1)]).unwrap();
-    // Writes to the properties the object doesn't save save nothing.
-    first
-        .write_property(
-            P::DESCRIPTION,
-            None,
-            PropertyValue::CharacterString("doors".into()),
-            None,
-        )
-        .unwrap();
+    // A write to a property the object doesn't save saves nothing.
     write(
         &mut first,
         P::GLOBAL_IDENTIFIER,
@@ -333,6 +327,7 @@ fn file_persistence_round_trips_each_member_and_refuses_bad_files() {
         negative_access_rules: Some(vec![zone_rule(2)]),
         enable: Some(false),
         accompaniment: Some(accompaniment.clone()),
+        description: None,
     };
     // Each member may be absent, and an array may be empty.
     for saved in [
@@ -514,6 +509,7 @@ fn file_persistence_refuses_a_file_past_its_size_or_entry_caps() {
             device_identifier: Some(ObjectIdentifier::new(ObjectType::DEVICE, 99).unwrap()),
             object_identifier: ObjectIdentifier::new(ObjectType::ACCESS_CREDENTIAL, 5).unwrap(),
         }),
+        description: None,
     };
     storage.save(rights, &full).unwrap();
     let file_len = std::fs::metadata(&path).unwrap().len();

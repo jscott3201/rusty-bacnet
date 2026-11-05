@@ -31,6 +31,11 @@
 //! therefore never carries more than about a minute beyond what it had left,
 //! so a device that restarts often still sees each entry run out.
 //!
+//! A written Description is kept in the same file (#2364), saved and staged
+//! as a list write is. A NULL changes nothing, so it is neither saved nor
+//! staged, and one past 16 KiB is refused with RESOURCES /
+//! NO_SPACE_TO_WRITE_PROPERTY.
+//!
 //! A failed save is logged and counted in [`ForwarderSaveCounters`]. The
 //! operation task retries its saves a minute later, and storage keeps the last
 //! lists that were saved.
@@ -83,10 +88,12 @@ impl ForwarderSaveCounters {
     }
 }
 
-/// The list a write leaves, in the form the forwarder holds it.
+/// The list a write leaves, in the form the forwarder holds it, or the
+/// written Description (#2364).
 pub(super) enum NextList {
     RecipientList(Vec<BACnetDestination>),
     SubscribedRecipients(SubscribedRecipients),
+    Description(String),
 }
 
 /// Put the list `next` leaves into `snapshot`.
@@ -96,6 +103,7 @@ pub(super) fn apply(snapshot: &mut ForwarderSnapshot, next: &NextList) {
         NextList::SubscribedRecipients(store) => {
             snapshot.subscribed_recipients = store.subscriptions();
         }
+        NextList::Description(text) => snapshot.description = Some(text.clone()),
     }
 }
 

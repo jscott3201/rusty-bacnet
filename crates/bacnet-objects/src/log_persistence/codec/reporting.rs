@@ -19,6 +19,12 @@
 //!
 //! A mask bit this schema doesn't name is damage, as is any value a write
 //! of that property would refuse.
+//!
+//! Schema version 3 (#2364) follows them with a written Description: its
+//! length in four octets, then at most 16 KiB of UTF-8. It is outside the
+//! mask, since a build that predates it would take an unknown bit as damage
+//! and fall back to the other slot; an unknown version stops the load
+//! instead.
 
 use crate::prelude::*;
 use bacnet_encoding::constructed::{
@@ -97,6 +103,15 @@ pub(super) fn validate(
     {
         return Err(corrupt("holds an unset Event_Algorithm_Inhibit_Ref"));
     }
+    if settings
+        .description
+        .as_ref()
+        .is_some_and(|text| text.len() > MAX_TEXT_OCTETS)
+    {
+        return Err(SnapshotError::out_of_range(
+            "holds a Description past the 16 KiB a log keeps",
+        ));
+    }
     Ok(())
 }
 
@@ -157,6 +172,10 @@ pub(super) fn put(data: &mut Vec<u8>, settings: &LogReportingSettings, element: 
     if let Some(seconds) = settings.cov_resubscription_interval {
         data.extend_from_slice(&seconds.to_be_bytes());
     }
+    // Schema version 3, which the encoder writes for a Description.
+    if let Some(text) = &settings.description {
+        put_octets(data, text.as_bytes());
+    }
 }
 
 /// A length, then that many octets. [`validate`] keeps every string and
@@ -166,8 +185,12 @@ fn put_octets(data: &mut Vec<u8>, octets: &[u8]) {
     data.extend_from_slice(octets);
 }
 
-/// Read the settings [`put`] wrote; the caller validates the snapshot whole.
-pub(super) fn read(reader: &mut Reader<'_>) -> Result<LogReportingSettings, SnapshotError> {
+/// Read the settings [`put`] wrote, and a Description after them when
+/// `described` (schema version 3); the caller validates the snapshot whole.
+pub(super) fn read(
+    reader: &mut Reader<'_>,
+    described: bool,
+) -> Result<LogReportingSettings, SnapshotError> {
     let mask = u16::from_be_bytes(
         reader
             .take(2, "reporting presence")?
@@ -222,6 +245,12 @@ pub(super) fn read(reader: &mut Reader<'_>) -> Result<LogReportingSettings, Snap
     }
     if has(RESUBSCRIPTION) {
         settings.cov_resubscription_interval = Some(reader.u32("COV_Resubscription_Interval")?);
+    }
+    if described {
+        let octets = octets(reader, "Description", MAX_TEXT_OCTETS)?;
+        settings.description = Some(
+            String::from_utf8(octets.to_vec()).map_err(|_| corrupt("Description is not UTF-8"))?,
+        );
     }
     Ok(settings)
 }

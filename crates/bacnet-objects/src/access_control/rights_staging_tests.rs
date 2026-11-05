@@ -98,6 +98,7 @@ fn indexed_index_zero_and_enable_writes_stage_too() {
         negative_access_rules: Some(vec![super::super::rights_writes::grown_rule()]),
         enable: Some(false),
         accompaniment: None,
+        description: None,
     };
     assert_eq!(storage.snapshot(), Some(expected));
     drop(rights);
@@ -215,10 +216,11 @@ fn staging_skips_writes_the_object_does_not_save_or_will_refuse() {
     let mut rights = persistent(&storage);
     let skipped = |step| matches!(step, StageStep::Skip);
     let rules = octets(&[zone_rule(1)]);
+    // A NULL Description changes nothing (#2364).
     assert!(skipped(rights.stage_write(
         P::DESCRIPTION,
         None,
-        &PropertyValue::CharacterString("doors".into())
+        &PropertyValue::Null
     )));
     assert!(skipped(rights.stage_write(
         P::GLOBAL_IDENTIFIER,

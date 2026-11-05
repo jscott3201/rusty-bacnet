@@ -129,6 +129,10 @@ impl DurableLog for TrendLogMultipleObject {
         (&mut self.reporting, None)
     }
 
+    fn description_mut(&mut self) -> &mut String {
+        &mut self.description
+    }
+
     fn durable_parts(
         &mut self,
     ) -> (

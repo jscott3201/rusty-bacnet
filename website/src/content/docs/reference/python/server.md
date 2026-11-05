@@ -529,10 +529,11 @@ def add_notification_class(
 ```
 
 Add a Notification Class (Clause 12.21). With `storage_path`, a
-Recipient\_List a client writes is kept in that file across restarts; a
-write whose list cannot be saved is refused with DEVICE /
-OPERATIONAL\_PROBLEM and the old list stays. Without it the list lives in
-memory only.
+Recipient\_List or Description a client writes is kept in that file
+across restarts; a write that cannot be saved is refused with DEVICE /
+OPERATIONAL\_PROBLEM and the old value stays, and a Description past
+16 KiB is refused with RESOURCES / NO\_SPACE\_TO\_WRITE\_PROPERTY. Without
+it they live in memory only.
 
 `storage_path` is a `str`; a `pathlib.Path` raises TypeError, as
 for `add_notification_forwarder`. Give each class a file of its own:
@@ -568,8 +569,10 @@ def add_notification_forwarder(
 Add a Notification Forwarder (Clause 12.51) that sends the event
 notifications this server receives on to its Recipient\_List and
 Subscribed\_Recipients. `process_identifier_filter=None` forwards every
-process identifier. With `storage_path`, Recipient\_List and
-Subscribed\_Recipients are kept in that file across restarts.
+process identifier. With `storage_path`, Recipient\_List,
+Subscribed\_Recipients and a Description a client writes are kept in
+that file across restarts; a Description past 16 KiB is refused with
+RESOURCES / NO\_SPACE\_TO\_WRITE\_PROPERTY.
 
 `recipients` seeds Recipient\_List in order; more than 32 destinations,
 or an address MAC past 18 octets, raises BacnetProtocolError, as a
@@ -715,15 +718,16 @@ minute, and once more at `stop()`, so a power loss costs at most
 about a minute of records; a failed commit is retried. A log reopened
 from those files serves its saved records, Total\_Record\_Count,
 BUFFER\_READY counts and Notification\_Threshold, Enable,
-Stop\_When\_Full and every setting a peer can write, Notification\_Class
-and the other reporting settings among them
+Stop\_When\_Full and every setting a peer can write, Notification\_Class,
+the other reporting settings and Description among them
 (`clear_written_reporting=True` drops those first, as on
-`add_trend_log`), and appends one
+`add_trend_log`; a Description past 16 KiB is refused with
+RESOURCES / NO\_SPACE\_TO\_WRITE\_PROPERTY), and appends one
 LOG\_INTERRUPTED record to mark the restart (none when it reopens full
 and stopped); the saved state wins over the keyword arguments.
 `buffer_size` wins over the saved Buffer\_Size: a smaller one keeps
-the newest records. A durable Trend Log Multiple holds at most 15849
-records (178437 for an Event Log, 828302 for a Trend Log); a larger
+the newest records. A durable Trend Log Multiple holds at most 15848
+records (178426 for an Event Log, 828251 for a Trend Log); a larger
 `buffer_size`, or a file pair that can't be read or holds another
 object's state, raises BacnetError. To tell whether a log will
 reopen, check whether either slot file exists before the call. The
@@ -763,10 +767,10 @@ from a peer.
 `add_trend_log`; BUFFER\_READY counts from the seeded value.
 
 `storage_path` keeps the log in files, as on
-`add_trend_log_multiple`, Notification\_Class and the other
-reporting settings a write set included; such a write is refused when
-it can't be saved, and `clear_written_reporting=True` drops them
-first, as on `add_trend_log`. `log_received_notifications` isn't
+`add_trend_log_multiple`, Notification\_Class, the other reporting
+settings and Description a write set included; such a write is
+refused when it can't be saved, and `clear_written_reporting=True`
+drops them first, as on `add_trend_log`. `log_received_notifications` isn't
 saved and applies on every start.
 
 ### BACnetServer.add_audit_log
@@ -1436,10 +1440,12 @@ whose device isn't a Device raises ValueError, and any other object
 type raises BacnetProtocolError with VALUE\_OUT\_OF\_RANGE. A read
 gives the reference back in the form the keyword takes.
 
-With `storage_path`, a rule array, Enable or Accompaniment that a
-client writes is kept in that file across restarts, and wins over the
-keyword given for it at the next start, which is then checked but not
-applied; a saved Accompaniment is served even without the keyword.
+With `storage_path`, a rule array, Enable, Accompaniment or
+Description that a client writes is kept in that file across
+restarts, and wins over the keyword given for it at the next start,
+which is then checked but not applied; a saved Accompaniment is
+served even without the keyword. A Description past 16 KiB is
+refused with RESOURCES / NO\_SPACE\_TO\_WRITE\_PROPERTY.
 To lift a saved requirement, write the no-accompaniment reference
 (instance 4194303), which keeps the row; to drop the row, remove the
 storage file, which also drops the saved rules and Enable. A

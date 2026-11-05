@@ -146,9 +146,12 @@ impl EventLogObject {
         self.log_buffer.clear();
     }
 
-    /// Set the description string.
+    /// Set the description string. On a log with storage, a Description a
+    /// write saved wins until `clear_written_reporting` (#2364).
     pub fn set_description(&mut self, desc: impl Into<String>) {
-        self.description = desc.into();
+        if !self.kept_over_setter(PropertyIdentifier::DESCRIPTION) {
+            self.description = desc.into();
+        }
     }
 
     /// Set Start_Time, the local date and time from which records are kept,

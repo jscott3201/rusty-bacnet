@@ -402,6 +402,7 @@ async fn a_denied_write_property_multiple_attempt_never_reaches_storage() {
         Some(ForwarderSnapshot {
             recipient_list: Some(vec![destination(4)]),
             subscribed_recipients: Vec::new(),
+            description: None,
         })
     );
     assert_eq!(
@@ -446,16 +447,17 @@ async fn a_list_that_cannot_be_saved_is_refused_on_the_wire_and_the_old_list_sta
 async fn a_write_property_multiple_stopped_before_its_list_write_puts_the_served_list_back() {
     let storage = Arc::new(HeldStorage::default());
     let (fixture, nf) = fixture(&storage).await;
-    // The first attempt fails, since Description takes a character string,
-    // so the list write after it, staged and already saved, never reaches
-    // the forwarder.
+    // The first attempt fails, since Local_Forwarding_Only takes a
+    // BOOLEAN, so the list write after it, staged and already saved, never
+    // reaches the forwarder. (The forwarder keeps Description, so a refused
+    // one would end the staging, #2364.)
     let mut unsigned = BytesMut::new();
     bacnet_encoding::primitives::encode_app_unsigned(&mut unsigned, 1);
     let request = wpm(
         nf,
         vec![
             BACnetPropertyValue {
-                property_identifier: PropertyIdentifier::DESCRIPTION,
+                property_identifier: PropertyIdentifier::LOCAL_FORWARDING_ONLY,
                 property_array_index: None,
                 value: unsigned.to_vec(),
                 priority: None,

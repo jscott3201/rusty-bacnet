@@ -7,6 +7,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 
 use super::{SnapshotError, SnapshotErrorKind};
+use crate::write_config::description::MAX_OCTETS as MAX_DESCRIPTION_OCTETS;
 
 /// The magic tag and the object identifier.
 pub(crate) const HEADER_LEN: usize = 8 + 4;
@@ -75,6 +76,75 @@ pub(crate) fn seal(magic: &[u8; 8], object: ObjectIdentifier, body: &[u8]) -> Ve
     octets.extend_from_slice(&object.encode());
     octets.extend_from_slice(body);
     octets
+}
+
+/// The file octets for `body` saved for `object` under `magic`, or, with a
+/// written `description`, under `described`, the Description going before
+/// `body` (#2364): so a file without one keeps `magic`'s octets, and a
+/// build that predates `described` refuses one with it as an unknown
+/// version. Refuses a Description past 16 KiB.
+pub(crate) fn seal_described(
+    (magic, described): (&[u8; 8], &[u8; 8]),
+    object: ObjectIdentifier,
+    description: Option<&str>,
+    body: &[u8],
+) -> Result<Vec<u8>, SnapshotError> {
+    let Some(text) = description else {
+        return Ok(seal(magic, object, body));
+    };
+    let mut described_body = Vec::with_capacity(4 + text.len() + body.len());
+    put_description(&mut described_body, text)?;
+    described_body.extend_from_slice(body);
+    Ok(seal(described, object, &described_body))
+}
+
+/// [`open`] for a format whose `described` version holds a Description
+/// before the body of `magic`'s ([`seal_described`]): the Description, if
+/// the file has one, and the body after it.
+pub(crate) fn open_described<'a>(
+    octets: &'a [u8],
+    (magic, described): (&[u8; 8], &[u8; 8]),
+    max_len: usize,
+    object: ObjectIdentifier,
+) -> Result<(Option<String>, &'a [u8]), SnapshotError> {
+    let (plain, body) = open(octets, described, Some(magic), max_len, object)?;
+    if plain {
+        return Ok((None, body));
+    }
+    let (description, body) = take_description(body)?;
+    Ok((Some(description), body))
+}
+
+/// Append a kept Description: its length in four big-endian octets, then
+/// its UTF-8, at most [`MAX_DESCRIPTION_OCTETS`].
+pub(crate) fn put_description(body: &mut Vec<u8>, text: &str) -> Result<(), SnapshotError> {
+    if text.len() > MAX_DESCRIPTION_OCTETS {
+        return Err(SnapshotError::out_of_range(
+            "holds a Description past its cap",
+        ));
+    }
+    body.extend_from_slice(&(text.len() as u32).to_be_bytes());
+    body.extend_from_slice(text.as_bytes());
+    Ok(())
+}
+
+/// The Description [`put_description`] wrote at the start of `body`, and
+/// what follows it.
+pub(crate) fn take_description(body: &[u8]) -> Result<(String, &[u8]), SnapshotError> {
+    let Some((length, rest)) = body.split_first_chunk::<4>() else {
+        return Err(SnapshotError::truncated("ends inside its Description"));
+    };
+    let length = usize::try_from(u32::from_be_bytes(*length))
+        .ok()
+        .filter(|length| *length <= MAX_DESCRIPTION_OCTETS)
+        .ok_or(SnapshotError::damaged("holds a Description past its cap"))?;
+    if rest.len() < length {
+        return Err(SnapshotError::truncated("ends inside its Description"));
+    }
+    let (text, rest) = rest.split_at(length);
+    let text = String::from_utf8(text.to_vec())
+        .map_err(|_| SnapshotError::damaged("holds a Description that isn't UTF-8"))?;
+    Ok((text, rest))
 }
 
 /// Decode `bytes` as one element after another with `decode`, refusing

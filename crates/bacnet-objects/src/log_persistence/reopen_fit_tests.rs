@@ -237,7 +237,7 @@ fn a_buffer_size_a_slot_cannot_hold_is_refused() {
         TrendLogMultipleObject::with_persistence(1, "TLM-1", size, MemoryLog::new()).map(drop)
     });
     // Each family's limit, as rust-api.md documents it.
-    assert_eq!(max_buffer_size::<BACnetLogRecord>(), 828_302);
-    assert_eq!(max_buffer_size::<BACnetEventLogRecord>(), 178_437);
-    assert_eq!(max_buffer_size::<BACnetLogMultipleRecord>(), 15_849);
+    assert_eq!(max_buffer_size::<BACnetLogRecord>(), 828_251);
+    assert_eq!(max_buffer_size::<BACnetEventLogRecord>(), 178_426);
+    assert_eq!(max_buffer_size::<BACnetLogMultipleRecord>(), 15_848);
 }

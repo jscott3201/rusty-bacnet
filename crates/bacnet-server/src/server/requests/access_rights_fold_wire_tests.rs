@@ -11,13 +11,18 @@ async fn a_write_property_multiple_refused_at_its_second_write_puts_storage_back
     let (fixture, rights) = served_by(&storage).await;
     let first = [zone_rule(1), zone_rule(2)];
     // The first and third attempts stage one save together. The second is
-    // refused, since Description takes a character string, so the request
-    // makes its first write and never its third.
+    // refused, since Global_Identifier takes an unsigned, so the request
+    // makes its first write and never its third. (A refused Description
+    // would end the staging there, as the object keeps it, #2364.)
     let request = write_property_multiple(
         rights,
         vec![
             attempt(P::POSITIVE_ACCESS_RULES, None, encoded(&first)),
-            attempt(P::DESCRIPTION, None, value(PropertyValue::Unsigned(1))),
+            attempt(
+                P::GLOBAL_IDENTIFIER,
+                None,
+                value(PropertyValue::CharacterString("x".into())),
+            ),
             attempt(P::LOG_ENABLE, None, value(PropertyValue::Boolean(false))),
         ],
     );

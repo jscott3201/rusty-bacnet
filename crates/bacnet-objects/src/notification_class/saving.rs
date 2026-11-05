@@ -34,6 +34,12 @@
 //! saved list, and [`add_destination`](NotificationClass::add_destination)
 //! checks a destination without adding it. The configured destinations are
 //! never saved.
+//!
+//! A written Description is kept the same way, in the same file (#2364):
+//! saved before it is answered, refused with DEVICE / OPERATIONAL_PROBLEM
+//! when the save fails, and winning over `set_description` once saved. A
+//! NULL changes nothing, so it is neither saved nor staged, and one past
+//! 16 KiB is refused with RESOURCES / NO_SPACE_TO_WRITE_PROPERTY.
 
 use crate::prelude::*;
 use alloc::sync::Arc;
@@ -49,9 +55,25 @@ use super::{MAX_RECIPIENT_LIST_DESTINATIONS, NotificationClass, recipient_list};
 use crate::common;
 use crate::durable::staged::{self, StagedSaves};
 use crate::durable::{DurableWrites, PendingWrite, SaveWait, SaveWriter, StageStep};
+use crate::write_config::description;
 
-/// A class's writer and the Recipient_List write staged on it.
-pub(super) type Storage = StagedSaves<NotificationClassSnapshot, Vec<BACnetDestination>>;
+/// What a saved write leaves: the property it sets, as the class holds it.
+pub(super) enum Next {
+    RecipientList(Vec<BACnetDestination>),
+    Description(String),
+}
+
+/// A class's writer and the write staged on it.
+pub(super) type Storage = StagedSaves<NotificationClassSnapshot, Next>;
+
+/// Whether the class keeps a write of `value` to `property`: a
+/// Recipient_List, or a Description other than a NULL, which changes
+/// nothing.
+pub(super) fn kept(property: PropertyIdentifier, value: &PropertyValue) -> bool {
+    property == PropertyIdentifier::RECIPIENT_LIST
+        || (property == PropertyIdentifier::DESCRIPTION
+            && !description::null_write(property, value))
+}
 
 impl NotificationClass {
     /// A Notification Class that keeps a written Recipient_List in
@@ -59,9 +81,13 @@ impl NotificationClass {
     /// any. Its Notification_Class number defaults to the instance number,
     /// as with [`new`](Self::new).
     ///
+    /// A written Description is kept there too (#2364), and the saved one
+    /// served.
+    ///
     /// Fails when the saved list cannot be loaded, or holds what a write
     /// would refuse: more than [`MAX_RECIPIENT_LIST_DESTINATIONS`]
-    /// destinations, or an address recipient whose MAC is too long.
+    /// destinations, an address recipient whose MAC is too long, or a
+    /// Description past 16 KiB.
     pub fn with_persistence(
         instance: u32,
         name: impl Into<String>,
@@ -69,10 +95,9 @@ impl NotificationClass {
     ) -> Result<Self, Error> {
         let mut class = Self::new(instance, name)?;
         let oid = class.oid;
-        if let Some(list) = persistence
-            .load(oid)?
-            .and_then(|saved| saved.recipient_list)
-        {
+        let saved = persistence.load(oid)?.unwrap_or_default();
+        description::check_saved(saved.description.as_deref())?;
+        if let Some(list) = saved.recipient_list {
             if list.len() > MAX_RECIPIENT_LIST_DESTINATIONS {
                 return Err(recipient_list::no_space_error());
             }
@@ -81,6 +106,10 @@ impl NotificationClass {
             }
             class.recipient_list = list;
             class.recipient_list_written = true;
+        }
+        if let Some(text) = saved.description {
+            class.description = text;
+            class.description_written = true;
         }
         let writer = SaveWriter::new(
             format!("bacnet-nc-{instance}-save"),
@@ -114,34 +143,62 @@ impl NotificationClass {
         }
     }
 
-    /// What storage holds for the list the class serves.
+    /// Whether a setter of Description leaves it alone: storage holds a
+    /// Description a write set, now or before a restart (#2364).
+    pub(super) fn description_saved(&self) -> bool {
+        self.storage.is_some() && self.description_written
+    }
+
+    /// What storage holds for the state the class serves.
     fn snapshot(&self) -> NotificationClassSnapshot {
         NotificationClassSnapshot {
             recipient_list: self
                 .recipient_list_written
                 .then(|| self.recipient_list.clone()),
+            description: self.description_written.then(|| self.description.clone()),
         }
     }
 
-    fn install(&mut self, list: Vec<BACnetDestination>) {
-        self.recipient_list = list;
-        self.recipient_list_written = true;
-        self.list_writes = self.list_writes.wrapping_add(1);
+    fn install(&mut self, next: Next) {
+        match next {
+            Next::RecipientList(list) => {
+                self.recipient_list = list;
+                self.recipient_list_written = true;
+            }
+            Next::Description(text) => {
+                self.description = text;
+                self.description_written = true;
+            }
+        }
+        self.kept_writes = self.kept_writes.wrapping_add(1);
     }
 
-    /// Replace Recipient_List with a written list, saving it before the class
-    /// serves it. A staged write takes the list already saved; any other
-    /// saves now. A list that cannot be saved is refused with DEVICE /
-    /// OPERATIONAL_PROBLEM and the old list stays.
-    pub(super) fn write_recipient_list(&mut self, value: PropertyValue) -> Result<(), Error> {
+    /// What a write of `value` to `property`, one the class [`kept`], leaves,
+    /// or its refusal.
+    fn next(property: PropertyIdentifier, value: PropertyValue) -> Result<Next, Error> {
+        if property == PropertyIdentifier::DESCRIPTION {
+            return description::written(&value).map(Next::Description);
+        }
+        recipient_list::decode_write(value).map(Next::RecipientList)
+    }
+
+    /// Make a write of Recipient_List, or of Description with storage,
+    /// saving it before the class serves it. A staged write takes the state
+    /// already saved; any other saves now. A write that cannot be saved is
+    /// refused with DEVICE / OPERATIONAL_PROBLEM and the old value stays.
+    pub(super) fn write_kept(
+        &mut self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
         let refused =
             |_| common::protocol_error(ErrorClass::DEVICE, ErrorCode::OPERATIONAL_PROBLEM);
-        if let Some(taken) = self.take_staged(&value) {
+        if let Some(taken) = self.take_staged(property, &value) {
             return taken.map_err(refused);
         }
-        // A list the class refuses leaves a write staged for another
+        // A write the class refuses leaves a write staged for another
         // request alone (#1424).
-        let next = recipient_list::decode_write(value)?;
+        let next = Self::next(property, value)?;
         if self.storage.is_some() {
             let mut snapshot = self.snapshot();
             apply(&mut snapshot, &next);
@@ -155,15 +212,19 @@ impl NotificationClass {
         Ok(())
     }
 
-    /// Take the staged step for a Recipient_List write of `value`, if it is
-    /// the next one: the class then serves its list, or the save's error
+    /// Take the staged step for a write of `value` to `property`, if it is
+    /// the next one: the class then serves its state, or the save's error
     /// comes back. `None` when nothing staged is this write.
-    fn take_staged(&mut self, value: &PropertyValue) -> Option<Result<(), Error>> {
+    fn take_staged(
+        &mut self,
+        property: PropertyIdentifier,
+        value: &PropertyValue,
+    ) -> Option<Result<(), Error>> {
         let mut storage = self.storage.take()?;
-        let base = self.list_writes;
+        let base = self.kept_writes;
         let taken = storage
-            .claim(PropertyIdentifier::RECIPIENT_LIST, None, value, base)
-            .map(|claimed| claimed.map(|list| self.install(list)));
+            .claim(property, None, value, base)
+            .map(|claimed| claimed.map(|next| self.install(next)));
         // Steps the request has still to take keep the list served now.
         storage.correct(|| self.snapshot());
         self.storage = Some(storage);
@@ -182,9 +243,12 @@ impl NotificationClass {
     }
 }
 
-/// Put a written Recipient_List into `snapshot`.
-fn apply(snapshot: &mut NotificationClassSnapshot, list: &[BACnetDestination]) {
-    snapshot.recipient_list = Some(list.to_vec());
+/// Put what a write leaves into `snapshot`.
+fn apply(snapshot: &mut NotificationClassSnapshot, next: &Next) {
+    match next {
+        Next::RecipientList(list) => snapshot.recipient_list = Some(list.clone()),
+        Next::Description(text) => snapshot.description = Some(text.clone()),
+    }
 }
 
 impl DurableWrites for NotificationClass {
@@ -201,10 +265,11 @@ impl DurableWrites for NotificationClass {
         }])
     }
 
-    /// Fold the request's Recipient_List writes into one staged save
-    /// (#1423); the list each leaves replaces the one before it.
+    /// Fold the request's Recipient_List and Description writes into one
+    /// staged save (#1423); each leaves its property on top of the ones
+    /// before it.
     fn stage_writes(&mut self, writes: &[PendingWrite]) -> StageStep {
-        let listed = |write: &PendingWrite| write.property == PropertyIdentifier::RECIPIENT_LIST;
+        let listed = |write: &PendingWrite| kept(write.property, &write.value);
         if self.storage.is_none() || !writes.iter().any(listed) {
             return StageStep::Skip;
         }
@@ -218,12 +283,12 @@ impl DurableWrites for NotificationClass {
             if write.array_index.is_some() {
                 return Err(common::property_is_not_an_array_error());
             }
-            recipient_list::decode_write(write.value.clone()).map(Some)
+            Self::next(write.property, write.value.clone()).map(Some)
         });
         let served = self.snapshot();
-        let base = self.list_writes;
+        let base = self.kept_writes;
         let storage = self.storage.as_mut().expect("checked above");
-        storage.stage(steps, base, served, |snapshot, list| apply(snapshot, list))
+        storage.stage(steps, base, served, apply)
     }
 
     fn release_staged_write(&mut self, staged: &SaveWait) {

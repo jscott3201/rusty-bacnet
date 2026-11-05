@@ -9,8 +9,9 @@
 //! Trend Log Multiple or Event Log a written reporting setting (#1952),
 //! an analog, binary or multi-state object, Access Door, Access Zone,
 //! Event or Alert Enrollment a written reporting setting (#2331), and those
-//! objects, a Timer and a Channel a written Description (#2364), before
-//! serving it, and refuses the write if the save fails. So
+//! objects, a Timer, a Channel, the three logs, a Notification Class or
+//! Forwarder and an Access Rights object a written Description (#2364),
+//! before serving it, and refuses the write if the save fails. So
 //! that the save never runs while the database guard is held, a request
 //! that makes such a write stages it first ([`DurableWrites`]): under the
 //! guard the object queues the save, the request awaits it with the guard
@@ -98,8 +99,9 @@ enum TargetValue {
 /// settings too, the nine analog, binary and multi-state object types
 /// those reporting settings beside their Tags, and Access Door, Access Zone,
 /// Event Enrollment and Alert Enrollment the same reporting settings
-/// (#2331). A Timer, a Channel and the thirteen types with a reporting
-/// store keep a written Description too (#2364).
+/// (#2331). A Timer, a Channel, the thirteen types with a reporting store,
+/// the three logs, a Notification Class, a forwarder and an Access Rights
+/// object keep a written Description too (#2364).
 /// Under a policy
 /// that decides mutations, only these attempts of a WritePropertyMultiple are decided
 /// ahead of the handler (#1321).
@@ -113,13 +115,18 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
     match oid.object_type() {
         ObjectType::NOTIFICATION_FORWARDER => matches!(
             property,
-            PropertyIdentifier::RECIPIENT_LIST | PropertyIdentifier::SUBSCRIBED_RECIPIENTS
+            PropertyIdentifier::RECIPIENT_LIST
+                | PropertyIdentifier::SUBSCRIBED_RECIPIENTS
+                | PropertyIdentifier::DESCRIPTION
         ),
         ObjectType::AUDIT_LOG => matches!(
             property,
             PropertyIdentifier::LOG_ENABLE | PropertyIdentifier::BUFFER_SIZE
         ),
-        ObjectType::NOTIFICATION_CLASS => property == PropertyIdentifier::RECIPIENT_LIST,
+        ObjectType::NOTIFICATION_CLASS => matches!(
+            property,
+            PropertyIdentifier::RECIPIENT_LIST | PropertyIdentifier::DESCRIPTION
+        ),
         // A colour object saves a written default with its output (#1956).
         ObjectType::COLOR => {
             matches!(
@@ -151,6 +158,7 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
                 | PropertyIdentifier::NEGATIVE_ACCESS_RULES
                 | PropertyIdentifier::LOG_ENABLE
                 | PropertyIdentifier::ACCOMPANIMENT
+                | PropertyIdentifier::DESCRIPTION
         ),
         ObjectType::TIMER => matches!(
             property,
@@ -169,15 +177,16 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
                 | PropertyIdentifier::DESCRIPTION
         ),
         ObjectType::TREND_LOG => {
-            reporting_row(property)
+            kept_with_reporting(property)
                 || matches!(
                     property,
                     PropertyIdentifier::CLIENT_COV_INCREMENT
                         | PropertyIdentifier::COV_RESUBSCRIPTION_INTERVAL
                 )
         }
-        ObjectType::TREND_LOG_MULTIPLE | ObjectType::EVENT_LOG => reporting_row(property),
-        ObjectType::ACCESS_DOOR
+        ObjectType::TREND_LOG_MULTIPLE
+        | ObjectType::EVENT_LOG
+        | ObjectType::ACCESS_DOOR
         | ObjectType::ACCESS_ZONE
         | ObjectType::EVENT_ENROLLMENT
         | ObjectType::ALERT_ENROLLMENT => kept_with_reporting(property),
@@ -185,8 +194,8 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
     }
 }
 
-/// What the objects with a reporting store keep (#2331): the reporting
-/// settings, and Description beside them (#2364).
+/// What the logs (#1952) and the objects with a reporting store (#2331)
+/// keep: the reporting settings, and Description beside them (#2364).
 fn kept_with_reporting(property: PropertyIdentifier) -> bool {
     reporting_row(property) || property == PropertyIdentifier::DESCRIPTION
 }

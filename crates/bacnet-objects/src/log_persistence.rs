@@ -75,6 +75,14 @@
 //! `clear_written_reporting` (on each log) drops them all, so the setters
 //! apply again.
 //!
+//! A written Description is kept the same way, beside these settings
+//! (#2364): saved before it is answered, winning over `set_description`
+//! until `clear_written_reporting`, and dropped by it. A NULL changes
+//! nothing and is never saved, and a Description past 16 KiB is refused
+//! with RESOURCES / NO_SPACE_TO_WRITE_PROPERTY. Clause 12 says nothing
+//! about restarts, so keeping it is this stack's choice: a head end that
+//! labelled a log expects the label to stay.
+//!
 //! These writes don't wait for the cadence. A write of one of them commits a
 //! snapshot holding it before the log serves it, and is refused with
 //! DEVICE / OPERATIONAL_PROBLEM, the old value kept, when that commit fails.
@@ -159,6 +167,10 @@ pub struct LogReportingSettings {
     pub client_cov_increment: Option<Option<f32>>,
     /// COV_Resubscription_Interval in seconds, on a Trend Log only.
     pub cov_resubscription_interval: Option<u32>,
+    /// Description, which a log keeps beside these settings (#2364); at
+    /// most 16 KiB of UTF-8, as a durable log refuses a longer write. Only
+    /// a snapshot holding one takes schema version 3.
+    pub description: Option<String>,
 }
 
 /// The durable state of one Trend Log (`R` = `BACnetLogRecord`), Trend Log
@@ -285,6 +297,9 @@ mod codec_tests;
 
 #[cfg(test)]
 mod reporting_codec_tests;
+
+#[cfg(test)]
+mod description_codec_tests;
 
 #[cfg(test)]
 mod reporting_tests;

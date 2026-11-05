@@ -29,7 +29,7 @@ use std::sync::atomic::Ordering;
 
 /// Storage holding a log's last snapshot. The held snapshot is an
 /// `Option`, which has a default.
-type LogStorage<R> = HeldStorage<Option<LogSnapshot<R>>>;
+pub(super) type LogStorage<R> = HeldStorage<Option<LogSnapshot<R>>>;
 
 impl<R: Clone + Send + Sync + 'static> LogPersistence<R> for LogStorage<R> {
     fn load(&self, _object: ObjectIdentifier) -> Result<Option<LogSnapshot<R>>, Error> {

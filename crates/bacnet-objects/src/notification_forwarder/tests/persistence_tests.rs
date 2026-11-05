@@ -231,6 +231,7 @@ fn subscribed_recipients_saved_out_of_range_refuses_the_forwarder() {
         ForwarderSnapshot {
             recipient_list: None,
             subscribed_recipients: vec![subscription(device(7), 1, 0)],
+            description: None,
         },
     );
     assert!(NotificationForwarderObject::with_persistence(1, "NF", storage).is_err());
@@ -269,6 +270,7 @@ fn file_persistence_round_trips_and_refuses_another_objects_file() {
             subscription(device(7), 1, 10),
             subscription(address(5, &[1, 2, 3, 4, 0xBA, 0xC0]), 9, 1440),
         ],
+        description: None,
     };
     storage.save(forwarder, &snapshot).unwrap();
     assert_eq!(storage.load(forwarder).unwrap().unwrap(), snapshot);
@@ -370,6 +372,7 @@ fn file_persistence_refuses_a_file_past_its_size_or_entry_caps() {
     let full = ForwarderSnapshot {
         recipient_list: Some(destinations.clone()),
         subscribed_recipients: subscriptions.clone(),
+        description: None,
     };
     storage.save(forwarder, &full).unwrap();
     assert_eq!(storage.load(forwarder).unwrap().unwrap(), full);

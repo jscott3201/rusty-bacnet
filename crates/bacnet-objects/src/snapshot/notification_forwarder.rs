@@ -1,4 +1,5 @@
-//! A Notification Forwarder's two lists (`RBNFWD01`), as
+//! A Notification Forwarder's two lists and written Description
+//! (`RBNFWD01`, and `RBNFWD02` with a Description), as
 //! `FileNotificationForwarderPersistence` (with std) writes its file.
 //!
 //! After the magic tag and the four-octet object identifier: one presence
@@ -7,6 +8,13 @@
 //! destinations, each in its BACnet encoding; then Subscribed_Recipients,
 //! each entry in its BACnet encoding, filling the rest. Each entry
 //! carries the whole minutes it had left when it was saved.
+//!
+//! A file holding a written Description (#2364) takes version 2's tag,
+//! [`MAGIC_WITH_DESCRIPTION`]: the Description, its length in four
+//! big-endian octets and then at most 16 KiB of UTF-8, comes between the
+//! header and that body. [`encode`] writes version 1 for a snapshot without
+//! one, so its octets don't change, and a build that reads only version 1
+//! refuses version 2 as an unknown version.
 
 use crate::prelude::*;
 use bacnet_encoding::constructed::{
@@ -17,16 +25,18 @@ use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
 use super::SnapshotError;
-use super::framing::{self, HEADER_LEN};
+use super::framing;
 use crate::notification_class::MAX_RECIPIENT_LIST_DESTINATIONS;
 use crate::notification_forwarder::ForwarderSnapshot;
 use crate::subscribed_recipients::MAX_SUBSCRIBED_RECIPIENTS;
 
-/// The format's tag.
+/// The format's tag, version 1: a snapshot without a written Description.
 pub const MAGIC: [u8; 8] = *b"RBNFWD01";
+/// Version 2's tag, for a snapshot with a written Description (#2364).
+pub const MAGIC_WITH_DESCRIPTION: [u8; 8] = *b"RBNFWD02";
 /// The most octets a file may take: a full Recipient_List of the longest
-/// destinations is 1,504 octets and a full Subscribed_Recipients 1,184, so
-/// anything much larger is not a save.
+/// destinations is 1,504 octets, a full Subscribed_Recipients 1,184 and a
+/// Description at most 16 KiB, so anything much larger is not a save.
 pub const MAX_LEN: usize = 64 * 1024;
 
 /// The presence octet and the Recipient_List's length.
@@ -36,8 +46,9 @@ const BODY_HEADER_LEN: usize = 1 + 4;
 ///
 /// Refuses ([`OutOfRange`](super::SnapshotErrorKind::OutOfRange)) a list
 /// longer than a forwarder keeps ([`MAX_RECIPIENT_LIST_DESTINATIONS`],
-/// [`MAX_SUBSCRIBED_RECIPIENTS`]), an entry that doesn't encode, and octets
-/// past [`MAX_LEN`]: what [`decode`] would refuse.
+/// [`MAX_SUBSCRIBED_RECIPIENTS`]), an entry that doesn't encode, a
+/// Description past 16 KiB, and octets past [`MAX_LEN`]: what [`decode`]
+/// would refuse.
 pub fn encode(
     object: ObjectIdentifier,
     snapshot: &ForwarderSnapshot,
@@ -48,10 +59,10 @@ pub fn encode(
 
 /// The snapshot a file's `octets` hold for the forwarder `object`.
 ///
-/// Refuses octets past [`MAX_LEN`], without this format's tag, saved for
+/// Refuses octets past [`MAX_LEN`], without either version's tag, saved for
 /// another object, cut short, with a presence octet other than 0 or 1 (or a
-/// list behind a 0), a list longer than the forwarder keeps, or an entry
-/// that does not decode.
+/// list behind a 0), a list longer than the forwarder keeps, an entry that
+/// does not decode, or a Description past 16 KiB or not UTF-8.
 pub fn decode(object: ObjectIdentifier, octets: &[u8]) -> Result<ForwarderSnapshot, SnapshotError> {
     decode_file(object, octets).map_err(|error| error.in_format("Notification Forwarder file"))
 }
@@ -80,17 +91,24 @@ fn encode_file(
     body.extend_from_slice(&recipient_list);
     encode_event_notification_subscription_list(&mut body, &snapshot.subscribed_recipients)
         .map_err(|_| unencodable)?;
-    if HEADER_LEN + body.len() > MAX_LEN {
+    let octets = framing::seal_described(
+        (&MAGIC, &MAGIC_WITH_DESCRIPTION),
+        object,
+        snapshot.description.as_deref(),
+        &body,
+    )?;
+    if octets.len() > MAX_LEN {
         return Err(SnapshotError::out_of_range("is too large to save"));
     }
-    Ok(framing::seal(&MAGIC, object, &body))
+    Ok(octets)
 }
 
 fn decode_file(
     object: ObjectIdentifier,
     octets: &[u8],
 ) -> Result<ForwarderSnapshot, SnapshotError> {
-    let (_, body) = framing::open(octets, &MAGIC, None, MAX_LEN, object)?;
+    let (description, body) =
+        framing::open_described(octets, (&MAGIC, &MAGIC_WITH_DESCRIPTION), MAX_LEN, object)?;
     if body.len() < BODY_HEADER_LEN {
         return Err(SnapshotError::truncated("has no valid header"));
     }
@@ -119,5 +137,6 @@ fn decode_file(
             MAX_SUBSCRIBED_RECIPIENTS,
             decode_event_notification_subscription,
         )?,
+        description,
     })
 }

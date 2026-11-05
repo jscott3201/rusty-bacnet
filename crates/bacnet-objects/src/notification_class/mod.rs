@@ -77,14 +77,18 @@ pub struct NotificationClass {
     pub ack_required: EventTransitionBits,
     /// Recipient list, at most [`MAX_RECIPIENT_LIST_DESTINATIONS`] long.
     recipient_list: Vec<BACnetDestination>,
-    /// Where a written Recipient_List is saved, with persistence.
+    /// Where a written Recipient_List and Description are saved, with
+    /// persistence.
     storage: Option<saving::Storage>,
-    /// Recipient_List writes taken, so a staged write can tell whether
-    /// another came between.
-    list_writes: u64,
+    /// Kept writes taken, so a staged write can tell whether another came
+    /// between.
+    kept_writes: u64,
     /// A write set Recipient_List, now or before a restart, so storage keeps
     /// it and configured destinations no longer apply.
     recipient_list_written: bool,
+    /// A write set Description, now or before a restart, so storage keeps
+    /// it and `set_description` no longer applies (#2364).
+    description_written: bool,
 }
 
 impl NotificationClass {
@@ -105,14 +109,19 @@ impl NotificationClass {
             ack_required: EventTransitionBits::empty(),
             recipient_list: Vec::new(),
             storage: None,
-            list_writes: 0,
+            kept_writes: 0,
             recipient_list_written: false,
+            description_written: false,
         })
     }
 
-    /// Set the description string.
+    /// Set the description string. On a class
+    /// [`with_persistence`](Self::with_persistence), a Description a write
+    /// saved wins (#2364).
     pub fn set_description(&mut self, desc: impl Into<String>) {
-        self.description = desc.into();
+        if !self.description_saved() {
+            self.description = desc.into();
+        }
     }
 
     /// Add a destination to the recipient list.
@@ -241,7 +250,11 @@ impl BACnetObject for NotificationClass {
             if array_index.is_some() {
                 return Err(common::property_is_not_an_array_error());
             }
-            return self.write_recipient_list(value);
+            return self.write_kept(property, value);
+        }
+        // Saved first with storage (#2364).
+        if self.storage.is_some() && saving::kept(property, &value) {
+            return self.write_kept(property, value);
         }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;

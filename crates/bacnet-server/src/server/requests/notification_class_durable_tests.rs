@@ -29,7 +29,7 @@ use bacnet_types::error::RemoteError;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-type ClassStorage = HeldStorage<NotificationClassSnapshot>;
+pub(super) type ClassStorage = HeldStorage<NotificationClassSnapshot>;
 
 impl NotificationClassPersistence for ClassStorage {
     fn load(&self, _class: ObjectIdentifier) -> Result<Option<NotificationClassSnapshot>, Error> {
@@ -361,14 +361,14 @@ async fn configured_destinations_are_never_saved_and_a_written_list_wins_on_rest
     let (fixture, nc) = served_by(&storage, &configured).await;
     // A write to another property saves nothing, so a restart applies the
     // configuration again.
-    let mut description = BytesMut::new();
-    bacnet_encoding::primitives::encode_app_character_string(&mut description, "alarms").unwrap();
+    let mut number = BytesMut::new();
+    bacnet_encoding::primitives::encode_app_unsigned(&mut number, 9);
     let mut request = BytesMut::new();
     WritePropertyRequest {
         object_identifier: nc,
-        property_identifier: PropertyIdentifier::DESCRIPTION,
+        property_identifier: PropertyIdentifier::NOTIFICATION_CLASS,
         property_array_index: None,
-        property_value: description.to_vec(),
+        property_value: number.to_vec(),
         priority: None,
     }
     .encode(&mut request)
@@ -412,18 +412,19 @@ async fn configured_destinations_are_never_saved_and_a_written_list_wins_on_rest
 async fn a_write_property_multiple_stopped_before_its_list_write_saves_no_list() {
     let storage = Arc::new(ClassStorage::default());
     let (fixture, nc) = served_by(&storage, &[destination(1)]).await;
-    // The first attempt fails, since Description takes a character string,
+    // The first attempt fails, since Notification_Class takes an unsigned,
     // so the list write after it, staged and already saved, never reaches
-    // the class.
-    let mut unsigned = BytesMut::new();
-    bacnet_encoding::primitives::encode_app_unsigned(&mut unsigned, 1);
+    // the class. (The class keeps Description, so a refused one would end
+    // the staging, #2364.)
+    let mut text = BytesMut::new();
+    bacnet_encoding::primitives::encode_app_character_string(&mut text, "x").unwrap();
     let request = write_property_multiple(
         nc,
         vec![
             BACnetPropertyValue {
-                property_identifier: PropertyIdentifier::DESCRIPTION,
+                property_identifier: PropertyIdentifier::NOTIFICATION_CLASS,
                 property_array_index: None,
-                value: unsigned.to_vec(),
+                value: text.to_vec(),
                 priority: None,
             },
             list_attempt(&[destination(9)]),
@@ -549,6 +550,7 @@ const TICK: Duration = Duration::from_secs(1);
 fn snapshot(list: &[BACnetDestination]) -> NotificationClassSnapshot {
     NotificationClassSnapshot {
         recipient_list: Some(list.to_vec()),
+        description: None,
     }
 }
 

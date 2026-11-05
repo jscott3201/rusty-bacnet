@@ -131,6 +131,11 @@ pub(crate) struct BufferReadyReporting {
     report: Option<BufferReadyReport>,
     /// The settings a write has set (#1952).
     written: Written,
+    /// The Description a write set, which a durable log keeps beside these
+    /// settings (#2364): the text the log serves, until
+    /// [`unwrite`](Self::unwrite). Always `None` without storage, since only
+    /// a durable log's staging sets it.
+    kept_description: Option<String>,
 }
 
 /// The reporting settings a write has set, now or before a restart
@@ -181,6 +186,7 @@ impl Default for BufferReadyReporting {
             event_detection_enable: true,
             report: None,
             written: Written::default(),
+            kept_description: None,
         }
     }
 }
@@ -245,8 +251,16 @@ impl BufferReadyReporting {
     /// Whether a write has set `property`, one of the settings a durable
     /// log keeps (#1952).
     pub(crate) fn written(&self, property: P) -> bool {
+        if property == P::DESCRIPTION {
+            return self.kept_description.is_some();
+        }
         let mut written = self.written;
         written.flag(property).is_some_and(|flag| *flag)
+    }
+
+    /// Keep `text`, a written Description a durable log saved (#2364).
+    pub(crate) fn keep_description(&mut self, text: String) {
+        self.kept_description = Some(text);
     }
 
     /// The settings a write has set, as a durable log saves them; the two
@@ -273,6 +287,7 @@ impl BufferReadyReporting {
             event_algorithm_inhibit: written.inhibit.then(|| options.inhibited()),
             client_cov_increment: None,
             cov_resubscription_interval: None,
+            description: self.kept_description.clone(),
         }
     }
 
@@ -308,6 +323,9 @@ impl BufferReadyReporting {
             options.restore_inhibit(inhibit);
             self.written.inhibit = true;
         }
+        if saved.description.is_some() {
+            self.kept_description.clone_from(&saved.description);
+        }
     }
 
     /// Event_Message_Texts_Config, whose strings a durable log caps (#1952).
@@ -319,6 +337,7 @@ impl BufferReadyReporting {
     /// setters apply again (#1952). The values stay.
     pub(crate) fn unwrite(&mut self) {
         self.written = Written::default();
+        self.kept_description = None;
     }
 
     /// Serve one of the event rows for a log whose Total_Record_Count is
