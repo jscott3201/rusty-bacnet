@@ -21,12 +21,17 @@
 //! target's lock. The lock is a short synchronous critical section, never
 //! held across an await.
 
+mod answer;
+#[cfg(test)]
+mod answer_tests;
 mod lookup;
 #[cfg(test)]
 mod name_tests;
 mod release;
 mod waiting;
 
+pub use answer::Bip6RegistrationAnswer;
+pub(super) use answer::Cause;
 pub use release::Bip6ReleaseCounters;
 pub use waiting::Bip6ForeignStatus;
 
@@ -76,6 +81,8 @@ struct State {
     broadcasts_refused: u64,
     /// Register-Foreign-Device messages sent.
     registrations_sent: u64,
+    /// What the BBMD in use made of them (#2388, [`answer`]).
+    answers: answer::Answers,
 }
 
 /// One transport's foreign-device registration, shared with the Network
@@ -97,6 +104,9 @@ pub(crate) struct ForeignTarget {
     /// Signalled when a re-registration reaches [`Self::gate`].
     #[cfg(test)]
     pub(super) reached: Notify,
+    /// Makes the next re-registration's send fail, unsent, in a test.
+    #[cfg(test)]
+    pub(super) fail_send: std::sync::atomic::AtomicBool,
 }
 
 /// Why a [`Bip6ForeignDeviceConfig`] can't register: see
@@ -223,6 +233,7 @@ impl ForeignTarget {
                 retry_at: None,
                 broadcasts_refused: 0,
                 registrations_sent: 0,
+                answers: answer::Answers::default(),
             }),
             changed: Notify::new(),
             rearmed: Notify::new(),
@@ -231,6 +242,8 @@ impl ForeignTarget {
             gate: tokio::sync::Semaphore::new(tokio::sync::Semaphore::MAX_PERMITS),
             #[cfg(test)]
             reached: Notify::new(),
+            #[cfg(test)]
+            fail_send: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -312,7 +325,8 @@ impl ForeignTarget {
 
     /// The transport stopped: changes are refused until it runs again, a
     /// lookup that ends meanwhile counts nothing, and a release still out
-    /// ends unanswered.
+    /// ends unanswered. The BBMD's answers go once the tasks have ended
+    /// ([`Self::forget_answers`]).
     pub(super) fn detach(&self) {
         let mut state = self.lock();
         state.own = None;

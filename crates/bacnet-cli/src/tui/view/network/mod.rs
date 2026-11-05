@@ -211,7 +211,7 @@ fn foreign_panel(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         frame.render_widget(Paragraph::new(line), areas[2]);
     }
     match &state.bip6 {
-        Some(status) => bip6::rows(frame, rows, status, theme),
+        Some((status, _)) => bip6::rows(frame, rows, status, theme),
         None => bip_rows(frame, rows, app, theme),
     }
 }
@@ -220,7 +220,7 @@ fn foreign_panel(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
 /// time-to-live and, on B/IP, how often it renews. `None` without a
 /// foreign-device registration.
 fn head(state: &NetworkState) -> Option<(String, u16, Option<Duration>)> {
-    if let Some(status) = &state.bip6 {
+    if let Some((status, _)) = &state.bip6 {
         let name = status.bbmd_name.as_ref().map(ToString::to_string);
         let at = status.bbmd.map(|at| at.to_string());
         return Some((bbmd_label(name, at), status.ttl, None));
@@ -304,7 +304,7 @@ fn bip_rows(frame: &mut Frame, [result, gauge, own]: [Rect; 3], app: &App, theme
 /// before the first snapshot).
 fn status(app: &App, theme: &Theme) -> (String, Style, String) {
     let state = &app.network;
-    if let Some(status) = &state.bip6 {
+    if let Some((status, _)) = &state.bip6 {
         return bip6::status(app, status, theme);
     }
     let snapshot = state.registration.as_ref().map(|(s, _)| *s);

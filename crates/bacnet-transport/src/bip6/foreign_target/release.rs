@@ -10,18 +10,18 @@
 //!
 //! B/IP runs it in `bacnet-bip-core`'s node engine. B/IPv6's registration
 //! doesn't run on that node, which speaks B/IP's IPv4 BVLL: this
-//! transport's own re-registration task sends each registration and leaves
-//! its answer alone. So the release lives here, beside the moves that call
-//! for it.
+//! transport's own re-registration task sends each registration, and the
+//! receive loop records its answer ([`super::answer`], #2388). So the
+//! release lives here, beside the moves that call for it.
 //!
 //! One release is queued at a time, and one awaits its answer: a move
 //! while one is still queued drops it unsent, and a release sent while an
 //! earlier one waits ends that wait. Either counts as unanswered, as does
 //! one still out when the transport stops. A BVLC-Result names no request,
 //! so any success from the old BBMD while the release waits counts as its
-//! answer, as in B/IP's node engine: a late answer to a renewal sent just
-//! before the move, or to the registration after a move back there, can
-//! pass for one.
+//! answer, as in B/IP's node engine, ahead of any registration's: a late
+//! answer to a renewal sent just before the move, or to the registration
+//! after a move back there, can pass for one.
 
 use std::net::SocketAddrV6;
 use std::time::Duration;
@@ -31,6 +31,7 @@ use tokio::time::Instant;
 use tracing::{debug, info};
 
 use super::super::port::Bip6ForeignDeviceConfig;
+use super::answer::Cause;
 use super::{ForeignTarget, State};
 
 /// What came of a B/IPv6 foreign device's releases of the BBMDs it moved
@@ -61,7 +62,7 @@ pub struct Bip6ReleaseCounters {
 
 /// How long a release's answer is waited for: B/IP's default response
 /// timeout (`bacnet_bip_core::node::DEFAULT_RESPONSE_TIMEOUT`).
-const RELEASE_TIMEOUT: Duration = Duration::from_secs(3);
+pub(super) const RELEASE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// The release in flight: the BBMD asked and when its answer is due.
 #[derive(Clone, Copy, Debug)]
@@ -74,13 +75,14 @@ impl State {
     /// Make `config` the registration in effect. A move to another BBMD
     /// drops a release still queued, and, with the release on, queues one
     /// of the BBMD left. A device that waited for its BBMD's name left
-    /// none (#2365).
+    /// none (#2365). What the BBMD left said goes with it (#2388).
     pub(super) fn take(&mut self, config: Bip6ForeignDeviceConfig) {
         let left = self.config.bbmd.address();
         self.config = config;
         if left == self.config.bbmd.address() {
             return;
         }
+        self.answers.moved(self.config.bbmd.address());
         if let Some(dropped) = self.queued.take() {
             self.unanswered(dropped, "dropped unsent by a later move");
         }
@@ -117,16 +119,22 @@ impl ForeignTarget {
         self.lock().releases
     }
 
-    /// For the re-registration task's pass at `now`: the registration in
-    /// effect, and the release queued, if any, as the BBMD to ask and the
-    /// entry to name, now awaiting its answer. Read in one lock, so the
-    /// release never goes to the BBMD the registration does.
+    /// For the re-registration task's pass at `now`, for `cause`: the
+    /// registration in effect, now outstanding (#2388), and the release
+    /// queued, if any, as the BBMD to ask and the entry to name, now
+    /// awaiting its answer. Read in one lock, so the release never goes to
+    /// the BBMD the registration does, and both await their answers before
+    /// they are sent.
     pub(in crate::bip6) fn pass(
         &self,
         now: Instant,
+        cause: Cause,
     ) -> (Bip6ForeignDeviceConfig, Option<(SocketAddrV6, Bip6Address)>) {
         let mut state = self.lock();
         let config = state.config.clone();
+        if let Some(bbmd) = config.bbmd.address() {
+            state.registration_going(bbmd, cause, now);
+        }
         let Some(bbmd) = state.queued.take() else {
             return (config, None);
         };
@@ -167,28 +175,31 @@ impl ForeignTarget {
             state.unanswered(awaiting.bbmd, "no answer within 3 s");
         }
     }
+}
 
+impl State {
     /// `peer` sent a BVLC-Result with `code`: the answer to the release in
     /// flight, if `peer` is its BBMD and `code` a success or the
-    /// Delete-Foreign-Device-Table-Entry NAK (U.4.5.4).
-    pub(in crate::bip6) fn release_answered(&self, peer: SocketAddrV6, code: Bvlc6ResultCode) {
-        let mut state = self.lock();
-        let Some(awaiting) = state.awaiting else {
-            return;
+    /// Delete-Foreign-Device-Table-Entry NAK (U.4.5.4). Whether it was.
+    pub(super) fn release_answered(&mut self, peer: SocketAddrV6, code: Bvlc6ResultCode) -> bool {
+        let Some(awaiting) = self.awaiting else {
+            return false;
         };
-        let from_it = *peer.ip() == *awaiting.bbmd.ip() && peer.port() == awaiting.bbmd.port();
         let bbmd = awaiting.bbmd;
-        if !from_it {
-            return;
+        if *peer.ip() != *bbmd.ip() || peer.port() != bbmd.port() {
+            return false;
         }
         if code == Bvlc6ResultCode::SUCCESSFUL_COMPLETION {
-            state.awaiting = None;
-            state.releases.released = state.releases.released.saturating_add(1);
+            self.awaiting = None;
+            self.releases.released = self.releases.released.saturating_add(1);
             debug!(%bbmd, "The B/IPv6 BBMD this foreign device left deleted its entry");
         } else if code == Bvlc6ResultCode::DELETE_FOREIGN_DEVICE_TABLE_ENTRY_NAK {
-            state.awaiting = None;
-            state.releases.refused = state.releases.refused.saturating_add(1);
+            self.awaiting = None;
+            self.releases.refused = self.releases.refused.saturating_add(1);
             info!(%bbmd, "The B/IPv6 BBMD this foreign device left refused to delete its entry; it lapses on its own");
+        } else {
+            return false;
         }
+        true
     }
 }

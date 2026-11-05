@@ -58,7 +58,9 @@ mod collision_probe;
 mod foreign_bbmd;
 mod foreign_target;
 pub use foreign_bbmd::Bip6ForeignBbmd;
-pub use foreign_target::{Bip6ForeignDeviceRefusal, Bip6ForeignStatus, Bip6ReleaseCounters};
+pub use foreign_target::{
+    Bip6ForeignDeviceRefusal, Bip6ForeignStatus, Bip6RegistrationAnswer, Bip6ReleaseCounters,
+};
 mod frame;
 pub use frame::{bvll6_error, decode_bvll6, encode_bvll6};
 mod ingress;
@@ -100,6 +102,8 @@ mod multicast_resolution_tests;
 mod network_port_tests;
 #[cfg(test)]
 mod receive_counters_tests;
+#[cfg(test)]
+mod registration_answer_tests;
 #[cfg(test)]
 mod release_tests;
 #[cfg(test)]

@@ -27,6 +27,8 @@ REGISTER = b"\x82\x09\x00\x09"
 DISTRIBUTE_BROADCAST = b"\x82\x0c"
 # BVLC-Result, successful completion, from the BBMD's VMAC.
 RESULT_OK = b"\x82\x00\x00\x09\x0b\xbb\xbb\x00\x00"
+# The same with the Register-Foreign-Device NAK (Clause U.2.1.1).
+RESULT_NAK = b"\x82\x00\x00\x09\x0b\xbb\xbb\x00\x90"
 
 
 def stub_fields(name):
@@ -98,10 +100,11 @@ class FakeBbmd:
                 if datagram.startswith(prefix):
                     return datagram, sender
 
-    async def registration(self):
-        """The VMAC and time-to-live of the next registration, answered."""
+    async def registration(self, answer=RESULT_OK):
+        """The VMAC and time-to-live of the next registration, answered
+        with ``answer``."""
         datagram, sender = await self.next(REGISTER)
-        self.sock.sendto(RESULT_OK, sender[:2])
+        self.sock.sendto(answer, sender[:2])
         return datagram[4:7], int.from_bytes(datagram[7:9], "big")
 
 
@@ -293,6 +296,40 @@ class LoopbackTests(unittest.IsolatedAsyncioTestCase):
                 status = await client.foreign_registration()
                 self.assertEqual(status["broadcasts_refused"], 1)
         await rerun_on_lost_port(run)
+
+    async def test_the_bbmds_answer_reads_as_on_b_ip(self):
+        # #2388: the answer to the latest registration, under B/IP's keys.
+        for answer, outcome, result, refused in ((RESULT_OK, "accepted", 0x0000, 0),
+                                                 (RESULT_NAK, "refused", 0x0090, 1)):
+            with self.subTest(outcome=outcome):
+                bbmd = FakeBbmd()
+                try:
+                    foreign = ForeignDevice(bbmd.address, ttl=90)
+                    async with BACnetClient(transport="ipv6", ipv6_interface="::1", port=0,
+                                            ipv6_device_instance=CLIENT_INSTANCE,
+                                            foreign_device=foreign) as client:
+                        # The BBMD hasn't answered yet.
+                        status = await client.foreign_registration()
+                        self.assertEqual(set(status), stub_fields("Bip6ForeignRegistrationStatus"))
+                        self.assertEqual(
+                            (status["last_outcome"], status["last_result"],
+                             status["last_outcome_age"], status["refused"],
+                             status["unanswered"]),
+                            (None, None, None, 0, 0))
+                        await bbmd.registration(answer)
+
+                        async def answered():
+                            status = await client.foreign_registration()
+                            return status if status["last_outcome"] else None
+                        status = await eventually(answered)
+                        self.assertEqual(
+                            (status["last_outcome"], status["last_result"], status["refused"],
+                             status["unanswered"]),
+                            (outcome, result, refused, 0))
+                        self.assertIsInstance(status["last_outcome_age"], float)
+                        self.assertGreaterEqual(status["last_outcome_age"], 0.0)
+                finally:
+                    bbmd.close()
 
     async def test_a_foreign_client_registers_and_broadcasts_through_its_bbmd(self):
         foreign = ForeignDevice(self.bbmd.address, ttl=90)

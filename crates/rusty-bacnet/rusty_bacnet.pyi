@@ -2868,8 +2868,8 @@ class ForeignRegistrationStatus(TypedDict):
 
 class Bip6ForeignRegistrationStatus(TypedDict):
     """A B/IPv6 foreign device's registration, as ``foreign_registration()``
-    reports it on a ``transport="ipv6"`` owner (#2365). B/IPv6 doesn't track
-    the BBMD's answers. ``bbmd`` is the address in use, ``"[ip]:port"``, or
+    reports it on a ``transport="ipv6"`` owner (#2365). ``bbmd`` is the
+    address in use, ``"[ip]:port"``, or
     None while a host name hasn't resolved yet, when ``waiting_for_bbmd`` is
     true. ``bbmd_name`` is the host name the BBMD is known by,
     ``"host:port"`` (configured, or written to FD_BBMD_Address), or None for
@@ -2882,7 +2882,16 @@ class Bip6ForeignRegistrationStatus(TypedDict):
     ``previous_release*`` totals count the deletions asked of BBMDs the
     device moved away from, by ``release_previous_bbmd``: released,
     refused, or unanswered. ``registrations_sent`` counts the
-    Register-Foreign-Device messages sent. The totals survive a stop; outside
+    Register-Foreign-Device messages sent. The BBMD's answer to the latest
+    one (#2388) reads as on B/IP: ``last_outcome`` is ``"accepted"`` or
+    ``"refused"``, with ``last_result`` the BVLC result code (0x0090 for a
+    refusal), or ``"timed_out"`` when its renewal went first, the BBMD
+    silent, or an activation's registration did after 3 s of silence, with
+    ``last_result`` None; both are None before the BBMD's first answer, and
+    clear when the BBMD changes, while waiting, and when the owner stops.
+    ``last_outcome_age`` is how many seconds ago that outcome came,
+    ``unanswered`` how many registrations in a row the BBMD left unanswered,
+    and ``refused`` counts its refusals. The totals survive a stop; outside
     ``foreign_device=`` they are 0."""
     bbmd: Optional[str]
     bbmd_name: Optional[str]
@@ -2898,6 +2907,11 @@ class Bip6ForeignRegistrationStatus(TypedDict):
     previous_release_unanswered: int
     broadcasts_refused: int
     registrations_sent: int
+    last_outcome: Optional[Literal["accepted", "refused", "timed_out"]]
+    last_result: Optional[int]
+    last_outcome_age: Optional[float]
+    refused: int
+    unanswered: int
 
 
 class FdtEntry(TypedDict):
