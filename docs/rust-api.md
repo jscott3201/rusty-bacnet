@@ -7815,6 +7815,27 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   `report::SERVICES`, which adds the two subscribe services to the
   `Responder`'s. The COV-multiple services stay with `bacnet-server`
   (#2320).
+- `clock` (#2321): the Device's clock, for firmware with none of its own.
+  `SyncedClock` holds a `bacnet_time::Instant`, the UTC date and time it
+  stood for and the `Zone` (UTC_Offset, minutes west, and
+  Daylight_Savings_Status, fixed at build as the server's `ClockConfig`
+  is); it allocates nothing and divides nothing in 64 bits. Until the first
+  `set` it is unsynchronized and counts from local midnight, 1990-01-01,
+  at the instant it was built, as a device with no time source does after a
+  restart. `set(Basis::Local, ..)`, a TimeSynchronization's, makes the
+  date and time given the local ones; `set(Basis::Utc, ..)`, a
+  UTCTimeSynchronization's, reads locally as less UTC_Offset, plus an hour
+  in daylight-saving time; a value that isn't a specific date and time is
+  refused and changes nothing. `frame(now)` is the Device's four clock
+  properties; `window(now)` is the local day and time recipient windows are
+  judged at, `None` until synchronized. `DeviceClock` pairs it with the
+  host's timer (`MonotonicNow`, on the timeline it passes as `now`) and
+  implements `ClockReader`; `lend` binds a copy to the database.
+  `destination_open(destination, window)` judges a Notification Class
+  destination's days and window by the server's test
+  (`bacnet_objects::notification_class::in_window`), and with no window
+  fails closed: only a destination open every day, all day
+  (`always_in_window`), is.
 - `reply`: `error_apdu`, the one map from an `Error` to its Reject or Error
   PDU (never an Abort: a work or byte limit is the caller's Abort), and the
   refusals a host sends for a service it doesn't run.
@@ -7829,7 +7850,19 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   well-formed confirmed request, and drops an APDU that doesn't decode, as
   the server does.
   `bacnet_device_core::SERVICES` lists the services it runs, for the
-  Device's Protocol_Services_Supported.
+  Device's Protocol_Services_Supported. `Responder::with_clock(clock, db)`
+  gives it a `DeviceClock` and lends it to the database: `write` (and so
+  `handle`, which now takes the responder mutably) then runs each
+  TimeSynchronization and UTCTimeSynchronization the Device lists (add
+  `clock::SERVICES` to its identity's services), setting the clock and
+  lending it again, and `classify` calls both writes. A host filters the
+  requests it doesn't accept (source, rate) before handing them over.
+  `Responder::set_time` sets the clock from a board's real-time clock,
+  which counts as synchronized; a `Reporter` built on such a responder has
+  `Reporter::set_time` and `Reporter::clock` for the same, and its
+  `clock().window(now)` is what recipient windows are judged by, never
+  the database's clock frame, which reads a valid 1990 date before a
+  sync.
 
 `Responder::new` refuses an identity that claims segmentation support, since
 the core aborts every segmented request and every reply too long for one APDU,
@@ -7854,7 +7887,7 @@ of its actions performed.
 ```rust
 use bacnet_device_core::responder::{Inbound, Limits, Outcome, Responder};
 
-let responder = Responder::new(identity, Limits::default())?;
+let mut responder = Responder::new(identity, Limits::default())?;
 // `request` is the received APDU as `Bytes`; `max_reply` is the smaller of
 // its Max-APDU-Length-Accepted and the route's limit.
 let mut out = bytes::BytesMut::new();

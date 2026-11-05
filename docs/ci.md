@@ -313,9 +313,10 @@ credited to a crate reliably within one LTO image:
   `thumbv7em-none-eabihf` and `riscv32imac-unknown-none-elf` only, the last
   for this image and the next alone;
 - `reporting` links what `objects` links and `bacnet-device-core`'s COV
-  table, with its SubscribeCOV and SubscribeCOVProperty (#2303), in the same
-  arena and on the same targets. Its size less the objects image's is what
-  COV costs.
+  table, with its SubscribeCOV and SubscribeCOVProperty (#2303), and the
+  core's Device clock, which a UTCTimeSynchronization sets (#2321), in the
+  same arena and on the same targets. Its size less the objects image's is
+  what COV and the clock cost.
 
 A use of `alloc` anywhere in an image but `apdu`, `objects` and `reporting`, the device's application layer included, fails its build with "no
 global memory allocator found". In any image, a symbol that only a hosted
@@ -443,8 +444,10 @@ targets, so a crate that needs one builds only with a backend such as
     eight subscriptions twelve SubscribeCOV and SubscribeCOVProperty
     requests: two subscriptions, a renewal, six more up to the cap, one
     past it, which is refused, and two cancellations; then an expiry pass
-    removes the rest. `reporting::expected()` holds each reply and how many
-    subscriptions the table held after it.
+    removes the rest. Before that pass a UTCTimeSynchronization sets the
+    Device clock, and two reads return its Local_Date and Local_Time.
+    `reporting::expected()` holds each reply and how many subscriptions the
+    table held after it.
 
   The host tests in `firmware/link/tests/` (`mstp.rs`, `mstp_extended.rs`,
   `bip.rs`, `node.rs`, `bbmd.rs`, `router.rs`, `device.rs`, `apdu.rs`,
