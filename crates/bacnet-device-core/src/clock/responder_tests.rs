@@ -40,6 +40,10 @@ impl Timer {
     fn advance(&self, by: Duration) {
         self.0.fetch_add(by.as_nanos(), Ordering::Relaxed);
     }
+
+    fn now(&self) -> Instant {
+        Instant::from_nanos(self.0.load(Ordering::Relaxed))
+    }
 }
 
 /// A Device listing the responder's services and `clock_services`, and a
@@ -255,4 +259,54 @@ fn the_reporter_runs_them_through_its_responder() {
     assert_eq!(written.outcome, Outcome::Silent);
     assert!(out.is_empty());
     assert_eq!(local(&db), (date(2024, 7, 4, 4), time(8, 15, 0, 0)));
+}
+
+/// A host sets the clock of a running `Reporter` from its real-time clock,
+/// and a later synchronization through `handle` sets the same clock: the
+/// reporter, its responder and the database read one clock throughout.
+#[test]
+fn a_reporter_takes_the_hosts_rtc_and_later_syncs() {
+    let timer = Timer::default();
+    let (responder, mut db) = device(clock::SERVICES, Some(&timer));
+    let mut reporter = Reporter::new(responder, ReportConfig::new(CovPolicy::default())).unwrap();
+    let clock = |reporter: &Reporter| *reporter.clock().unwrap().clock();
+    assert!(!clock(&reporter).is_synced());
+    assert_eq!(clock(&reporter).window(Instant::ZERO), None);
+
+    // Wednesday 2026-11-04, 07:30 local.
+    reporter
+        .set_time(
+            &mut db,
+            Basis::Local,
+            date(2026, 11, 4, 3),
+            time(7, 30, 0, 0),
+        )
+        .unwrap();
+    assert!(clock(&reporter).is_synced());
+    assert_eq!(local(&db), (date(2026, 11, 4, 3), time(7, 30, 0, 0)));
+    let window = clock(&reporter).window(Instant::ZERO);
+    let wednesday = bacnet_types::bitstring::DaysOfWeek::WEDNESDAY;
+    assert_eq!(window, Some((wednesday, time(7, 30, 0, 0))));
+    // A value that isn't specific is refused and changes nothing.
+    let refused = reporter.set_time(&mut db, Basis::Utc, date(2026, 11, 4, 4), time(7, 0, 0, 0));
+    assert!(refused.is_err());
+    assert_eq!(local(&db), (date(2026, 11, 4, 3), time(7, 30, 0, 0)));
+
+    timer.advance(Duration::from_secs(60));
+    let apdu = sync(UTC, date(2026, 11, 4, 3), time(13, 0, 0, 0));
+    let peer = SubscriberEndpoint::new(&[3], None);
+    let mut out = BytesMut::new();
+    let request = Inbound::new(apdu, 1476);
+    let now = Instant::from_secs(60);
+    let written = reporter.handle(&mut db, &peer, request, now, &mut out);
+    assert_eq!(written.outcome, Outcome::Silent);
+    assert_eq!(local(&db), (date(2026, 11, 4, 3), time(8, 0, 0, 0)));
+    let window = clock(&reporter).window(timer.now());
+    assert_eq!(window, Some((wednesday, time(8, 0, 0, 0))));
+
+    let (clockless, mut db) = device(&[], None);
+    let mut clockless = Reporter::new(clockless, ReportConfig::new(CovPolicy::default())).unwrap();
+    assert!(clockless.clock().is_none());
+    let refused = clockless.set_time(&mut db, Basis::Utc, date(2026, 11, 4, 3), time(7, 0, 0, 0));
+    assert!(refused.is_err());
 }

@@ -75,8 +75,8 @@ the database guard, the transport, addressing and time.
   `DeviceClock` pairs it with the host's timer and is lent to the database,
   so the Device serves Local_Date and Local_Time from it.
   `Responder::with_clock` runs the two services the Device lists
-  (`clock::SERVICES`), and `Responder::set_time` takes a board's real-time
-  clock. `destination_open` judges a Notification Class destination
+  (`clock::SERVICES`), and `Responder::set_time` (or `Reporter::set_time`)
+  takes a board's real-time clock. `destination_open` judges a Notification Class destination
   against the clock's window.
 - `reply`: the reply PDUs, and the one map from an error to its Reject or
   Error PDU.

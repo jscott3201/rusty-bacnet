@@ -7819,7 +7819,11 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   lending it again, and `classify` calls both writes. A host filters the
   requests it doesn't accept (source, rate) before handing them over.
   `Responder::set_time` sets the clock from a board's real-time clock,
-  which counts as synchronized.
+  which counts as synchronized; a `Reporter` built on such a responder has
+  `Reporter::set_time` and `Reporter::clock` for the same, and its
+  `clock().window(now)` is what recipient windows are judged by, never
+  the database's clock frame, which reads a valid 1990 date before a
+  sync.
 
 `Responder::new` refuses an identity that claims segmentation support, since
 the core aborts every segmented request and every reply too long for one APDU,

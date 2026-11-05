@@ -59,6 +59,9 @@ pub fn in_window(destination: &BACnetDestination, today: DaysOfWeek, now: &Time)
 /// applies (an unspecified hour, 00:00:00.00 to 23:59:59.99, or a window
 /// across midnight that leaves no hundredth out). A device that can't tell
 /// the day and time sends only to such destinations.
+///
+/// A bound no real time has, an hour of 25 say, can leave `in_window` open
+/// all day while this says no: it fails closed, as it should.
 pub fn always_in_window(destination: &BACnetDestination) -> bool {
     if !destination.valid_days.contains(DaysOfWeek::all()) {
         return false;

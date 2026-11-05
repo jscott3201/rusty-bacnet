@@ -29,7 +29,8 @@
 //!   core only the requests it accepts.
 //! - A host with a real-time clock on the board sets it directly, at boot
 //!   and whenever it likes: [`DeviceClock::set`] before lending,
-//!   [`Responder::set_time`](crate::responder::Responder::set_time) after.
+//!   [`Responder::set_time`](crate::responder::Responder::set_time) or
+//!   [`Reporter::set_time`](crate::report::Reporter::set_time) after.
 //!   That counts as synchronized: the host vouches for its clock.
 //! - [`destination_open`] judges a Notification Class destination's valid
 //!   days and time window against [`SyncedClock::window`]: by the server's
