@@ -176,7 +176,7 @@ impl<S: SerialPort> Task<S> {
             filter: EchoFilter::new(Duration::from_millis(super::HOST_FRAME_ABORT_MS)),
             empty_reads: 0,
             tap,
-            tap_decoder: tap::TapDecoder::new(&mut tap_storage),
+            tap_decoder: tap::TapDecoder::new(&mut tap_storage, config.t_frame_abort),
         };
         mac.run(&mut core).await;
     }
@@ -561,9 +561,11 @@ impl<S: SerialPort> Mac<'_, S> {
         }
     }
 
-    /// Feed one octet to the core and carry out the actions.
+    /// Feed one octet to the core and carry out the actions. The tap's
+    /// decoder takes it with the same stamp, so it times frames as the core
+    /// does.
     fn feed(&mut self, core: &mut Core<'_>, octet: u8, now: bacnet_mstp_core::Instant) {
-        self.tap_decoder.push(octet, &self.tap);
+        self.tap_decoder.push(octet, now, &self.tap);
         core.on_octet(octet, now);
         self.drain_actions(core);
     }

@@ -79,6 +79,9 @@ impl<S: SerialPort> Mac<'_, S> {
                     return Ok(());
                 }
             };
+        // The core dropped any frame part way in, as its receiver went off;
+        // the tap's decoder drops it too.
+        self.tap_decoder.abandon();
         // What the last echo's hunt still holds was its continuation.
         if self.filter.confirmed_start() > 0 {
             increment(&self.counts.echo_fragments_dropped);

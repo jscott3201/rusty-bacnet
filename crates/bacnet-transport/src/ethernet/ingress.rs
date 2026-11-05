@@ -1,10 +1,21 @@
-//! What the Linux receive loop does with one raw frame before it answers an
-//! LLC command or decodes the frame, as a pure decision every OS can test.
+//! What the Linux receive loop does with one raw frame before it hands an
+//! NPDU up: a pure decision ([`classify_frame`]), and the work that follows
+//! it ([`receive_frame`]) with the socket's send injected, so every OS can
+//! test both.
 
+use std::io;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use bacnet_types::data_link::DataLink;
+use tracing::debug;
+
+use super::egress::{LlcReply, ReplyFailures};
 use super::{
-    LLC_CONTROL_TEST_CMD, LLC_CONTROL_XID_CMD, accepts_ethernet_destination, check_llc_control,
+    EthernetFrame, LLC_CONTROL_TEST_CMD, LLC_CONTROL_XID_CMD, accepts_ethernet_destination,
+    build_test_response, build_xid_response, check_llc_control, decode_ethernet_frame,
     is_group_mac,
 };
+use crate::tap::{FrameTap, TapDirection, TapPeer};
 use crate::warn_throttle::WarnThrottle;
 
 /// Log a frame dropped because the network layer's NPDU channel is full:
@@ -48,7 +59,24 @@ pub(super) enum FrameIngress<'a> {
         data: &'a [u8],
     },
     /// Anything else: decode it as a UI frame, which drops what isn't one.
-    Decode,
+    Decode {
+        /// The station that sent it.
+        source: [u8; 6],
+    },
+}
+
+impl FrameIngress<'_> {
+    /// The sender of a frame the transport takes: every one but an
+    /// ignored frame.
+    fn taken_from(&self) -> Option<[u8; 6]> {
+        match *self {
+            Self::Ignore => None,
+            Self::GroupSource { source }
+            | Self::Xid { source }
+            | Self::Test { source, .. }
+            | Self::Decode { source } => Some(source),
+        }
+    }
 }
 
 /// Decide what to do with `data`, a raw frame received by the station at
@@ -75,6 +103,53 @@ pub(super) fn classify_frame<'a>(data: &'a [u8], local_mac: &[u8; 6]) -> FrameIn
             source,
             data: data.get(17..).unwrap_or_default(),
         },
-        _ => FrameIngress::Decode,
+        _ => FrameIngress::Decode { source },
+    }
+}
+
+/// Carry out the receive loop's decision on `data`, a raw frame received by
+/// the station at `local_mac`, and return the frame whose NPDU goes up, if
+/// any. A frame the transport takes goes to `tap` first (#1856), before the
+/// node acts on it, so an XID or TEST command shows before its response.
+/// Then a frame from a group source is counted in `group_source_drops`, an
+/// XID or TEST command is answered with `send` (a failure counted in
+/// `reply_failures`), and anything else is decoded as a UI frame.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(super) fn receive_frame(
+    data: &[u8],
+    local_mac: &[u8; 6],
+    tap: &FrameTap,
+    group_source_drops: &AtomicU64,
+    reply_failures: &ReplyFailures,
+    send: impl FnMut(&[u8]) -> io::Result<usize>,
+) -> Option<EthernetFrame> {
+    let ingress = classify_frame(data, local_mac);
+    if let Some(source) = ingress.taken_from() {
+        let peer = || TapPeer::Ethernet(source);
+        tap.record(TapDirection::Inbound, DataLink::Ethernet, peer, data);
+    }
+    match ingress {
+        FrameIngress::Ignore => None,
+        FrameIngress::GroupSource { source } => {
+            group_source_drops.fetch_add(1, Ordering::Relaxed);
+            debug!(
+                src = ?source,
+                "Dropping frame whose source MAC is a group address"
+            );
+            None
+        }
+        FrameIngress::Xid { source } => {
+            debug!(src = ?source, "XID command, sending response");
+            let response = build_xid_response(local_mac, &source);
+            reply_failures.send_reply(LlcReply::Xid, &source, &response, tap, send);
+            None
+        }
+        FrameIngress::Test { source, data } => {
+            debug!(src = ?source, len = data.len(), "TEST command, sending response");
+            let response = build_test_response(local_mac, &source, data);
+            reply_failures.send_reply(LlcReply::Test, &source, &response, tap, send);
+            None
+        }
+        FrameIngress::Decode { .. } => decode_ethernet_frame(data).ok(),
     }
 }

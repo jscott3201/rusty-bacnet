@@ -8080,9 +8080,9 @@ connection are not public.
 
 ### Frame tap
 
-`frame_tap()` on `BipTransport`, `Bip6Transport`, `ScTransport` and
-`MstpTransport` (and `AnyTransport::frame_tap()`, `None` for Ethernet and
-loopback) returns the transport's `FrameTap` (#957). `subscribe()` gives a
+`frame_tap()` on `BipTransport`, `Bip6Transport`, `ScTransport`,
+`MstpTransport` and `EthernetTransport` (and `AnyTransport::frame_tap()`,
+`None` for loopback) returns the transport's `FrameTap` (#957, #1856). `subscribe()` gives a
 `FrameTapReceiver` of `TappedFrame { timestamp, direction, link, peer, bytes }`
 for every frame the transport sends, and every frame it receives (on MS/TP,
 every frame it hears on the line), control traffic included:
@@ -8098,13 +8098,20 @@ every frame it hears on the line), control traffic included:
   primary or failover. Direct connections are not tapped yet.
 - MS/TP: each whole frame, preamble to CRC, Token and Poll For Master too,
   found in what the line delivered: every frame on the bus, other stations'
-  traffic included. Frames are found from the octets alone, without the
-  master node's inter-octet timing, so a frame the node aborted for a gap
-  can still appear. `peer` is the source station of a received frame and the
-  destination of a sent one.
+  traffic included. Frames are timed as the master node times them: a frame
+  the node gives up, for a silence longer than T_frame_abort in the middle of
+  it or because it started to send, does not appear, and one it takes appears
+  once. `peer` is the source station of a received frame and the destination
+  of a sent one.
+- Ethernet (Linux): each whole 802.3 frame as the packet socket sends or reads
+  it, from the destination MAC to the padding (the network card adds and
+  strips the frame check sequence), XID and TEST commands and responses too.
+  A received frame appears if the transport takes it: one addressed to this
+  station or to the broadcast, and not from this station's own MAC. `peer` is
+  the source MAC of a received frame and the destination MAC of a sent one.
 
-The tap is in-process. On B/IP, B/IPv6 and BACnet/SC it shows only this
-node's own traffic, so it does not replace a wire capture. A BACnet/SC message
+The tap is in-process. On B/IP, B/IPv6, BACnet/SC and Ethernet it shows only
+this node's own traffic, so it does not replace a wire capture. A BACnet/SC message
 is taken in plaintext, before TLS encrypts it and after TLS decrypts it.
 
 Each receiver has a bounded queue (`DEFAULT_TAP_CAPACITY`, 1024 frames, or
