@@ -93,10 +93,10 @@ physical-device interoperability or BACnet conformance.
 | Feature selection | Availability |
 |---|---|
 | Default or `--no-default-features` | Hosted endpoint sessions and the B/IP, generic SC and MS/TP builders; `std`, Tokio and allocation remain required. |
-| `sc-tls` | Adds `ScEndpointBuilder::build_hub_session` over the constrained-TLS SC connection; it does not enable full standalone-server dispatch parity. |
+| `sc-tls` | Adds `ScEndpointBuilder::build_hub_session` over the constrained-TLS SC connection, and `connect_hub_session`, which dials the hub with the client's reconnect and failover hub (#1946); it does not enable full standalone-server dispatch parity. |
 
 The docs.rs profile selects `sc-tls` with default features disabled for
-`x86_64-unknown-linux-gnu`. The hub-session method is labeled with its feature
+`x86_64-unknown-linux-gnu`. The hub-session methods are labeled with their feature
 requirement; the generic SC module remains available without it. This README
 is also the crate landing page, so the primary program runs as a doctest.
 
@@ -250,7 +250,7 @@ for the narrower endpoint responder scope above.
 | `BACnetClient::bip_builder()...build().await` | `BipEndpointBuilder::new(iface, port, bcast).role(ClientOnly).build_session()?` then `start()` |
 | `BACnetServer::bip_builder()...build().await` | `BipEndpointBuilder::new(iface, port, bcast).role(ServerOnly).database(db).device(id).build_session()?` then `start()` |
 | Client + server on one device | `BipEndpointBuilder::...role(Both).database(db).device(id).build_session()?` (or the SC / MS/TP builder) |
-| `BACnetClient::sc_builder()...build().await` | `ScEndpointBuilder::new(vmac, uuid)...build_hub_session(ws)?` (`sc-tls`; dial first, then compose) |
+| `BACnetClient::sc_builder()...build().await` | `ScEndpointBuilder::new(vmac, uuid)...connect_hub_session(hubs).await?` (`sc-tls`; reconnect and failover as on the client), or `build_hub_session(ws)?` over a caller-dialed socket |
 | `BACnetServer::sc_builder()...build().await` | Same `ScEndpointBuilder` with `ServerOnly` + `database` + `device` |
 | `generic_builder().transport(mstp)...` | `MstpEndpointBuilder::new(serial, station)...build_session()?` (one serial owner, simulator evidence) |
 

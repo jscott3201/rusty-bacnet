@@ -53,6 +53,7 @@ pub use peer_info::ScHubPeerInfo;
 mod lifecycle;
 mod loopback;
 mod observability;
+pub use observability::ScLinkMonitor;
 pub use observability::{SC_EVENT_CAPACITY, ScActiveHub, ScDisconnectCause, ScEvent, ScLinkStatus};
 use observability::{ScDisconnectCause as Cause, ScObserver};
 pub(crate) mod npdu_admission;
@@ -67,6 +68,8 @@ mod tap;
 use tap::{TappedSocket, tapped_connector};
 mod unknown_function;
 pub use connection::{ScConnection, ScConnectionState};
+#[cfg(feature = "sc-tls")]
+pub use connector::ScHubDialer;
 pub use connector::dial_within;
 #[cfg(feature = "sc-tls")]
 pub(crate) use connector::enter_dial_stage;
