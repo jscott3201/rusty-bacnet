@@ -2868,8 +2868,8 @@ class ForeignRegistrationStatus(TypedDict):
 
 class Bip6ForeignRegistrationStatus(TypedDict):
     """A B/IPv6 foreign device's registration, as ``foreign_registration()``
-    reports it on a ``transport="ipv6"`` owner (#2365). B/IPv6 doesn't track
-    the BBMD's answers. ``bbmd`` is the address in use, ``"[ip]:port"``, or
+    reports it on a ``transport="ipv6"`` owner (#2365). ``bbmd`` is the
+    address in use, ``"[ip]:port"``, or
     None while a host name hasn't resolved yet, when ``waiting_for_bbmd`` is
     true. ``bbmd_name`` is the host name the BBMD is known by,
     ``"host:port"`` (configured, or written to FD_BBMD_Address), or None for
@@ -2882,7 +2882,16 @@ class Bip6ForeignRegistrationStatus(TypedDict):
     ``previous_release*`` totals count the deletions asked of BBMDs the
     device moved away from, by ``release_previous_bbmd``: released,
     refused, or unanswered. ``registrations_sent`` counts the
-    Register-Foreign-Device messages sent. The totals survive a stop; outside
+    Register-Foreign-Device messages sent. The BBMD's answer to the latest
+    one (#2388) reads as on B/IP: ``last_outcome`` is ``"accepted"`` or
+    ``"refused"``, with ``last_result`` the BVLC result code (0x0090 for a
+    refusal), or ``"timed_out"`` when its renewal went first, the BBMD
+    silent, or an activation's registration did after 3 s of silence, with
+    ``last_result`` None; both are None before the BBMD's first answer, and
+    clear when the BBMD changes, while waiting, and when the owner stops.
+    ``last_outcome_age`` is how many seconds ago that outcome came,
+    ``unanswered`` how many registrations in a row the BBMD left unanswered,
+    and ``refused`` counts its refusals. The totals survive a stop; outside
     ``foreign_device=`` they are 0."""
     bbmd: Optional[str]
     bbmd_name: Optional[str]
@@ -2898,6 +2907,11 @@ class Bip6ForeignRegistrationStatus(TypedDict):
     previous_release_unanswered: int
     broadcasts_refused: int
     registrations_sent: int
+    last_outcome: Optional[Literal["accepted", "refused", "timed_out"]]
+    last_result: Optional[int]
+    last_outcome_age: Optional[float]
+    refused: int
+    unanswered: int
 
 
 class FdtEntry(TypedDict):
@@ -3322,6 +3336,7 @@ class BACnetClient:
         mstp_reply_timeout_ms: Optional[int] = None,
         sc_device_uuid: Optional[bytes | bytearray] = None,
         share_port_by_address: bool = False,
+        share_wildcard_port: bool = False,
         min_request_interval_ms: int = 0,
         ipv6_device_instance: Optional[int] = None,
         bbmd: Optional[Bbmd] = None,
@@ -3417,6 +3432,14 @@ class BACnetClient:
         of this host can share the port. Needs an explicit interface and a
         nonzero port; broadcasts and unicast are still handled in the order
         they arrived.
+
+        ``share_wildcard_port`` (B/IP only, default False): share an
+        explicitly requested port with other sockets on this host that bind
+        it the same way. By default the client claims its port, so a second
+        bind of it fails, and ``start()`` raises when another socket holds
+        it. With sharing, broadcasts reach every socket on the port, but
+        each unicast reaches only one of them; prefer
+        ``share_port_by_address`` or separate ports.
 
         ``min_request_interval_ms`` (default 0, no pacing; at most
         3,600,000, else ValueError) paces the confirmed requests to each
@@ -4839,6 +4862,7 @@ class BACnetServer:
         cov_policy: CovPolicy | None = None,
         time_sync_policy: TimeSyncPolicy | None = None,
         share_port_by_address: bool = False,
+        share_wildcard_port: bool = False,
         segmentation_supported: Segmentation = Segmentation.NONE,
         apdu_segment_timeout_ms: int = 5000,
         bbmd: Optional[Bbmd] = None,
@@ -4900,6 +4924,14 @@ class BACnetServer:
         interface address itself, so devices on other addresses of this host
         can share the port. Needs an explicit interface and a nonzero port;
         broadcasts and unicast are still handled in the order they arrived.
+
+        ``share_wildcard_port`` (B/IP only, default False): share an
+        explicitly requested port with other sockets on this host that bind
+        it the same way. By default the server claims its port, so a second
+        bind of it fails, and ``start()`` raises when another socket holds
+        it. With sharing, broadcasts reach every socket on the port, but
+        each unicast reaches only one of them; prefer
+        ``share_port_by_address`` or separate ports.
 
         ``bbmd`` / ``foreign_device`` (at most one, else ValueError): run
         the device as a BBMD (B/IP only), or register it with a BBMD on
@@ -7087,6 +7119,7 @@ class BipEndpoint:
         *,
         read_work_limit: int = 256,
         share_port_by_address: bool = False,
+        share_wildcard_port: bool = False,
         min_request_interval_ms: int = 0,
         bbmd: Optional[Bbmd] = None,
         foreign_device: Optional[ForeignDevice] = None,
@@ -7138,6 +7171,11 @@ class BipEndpoint:
         itself, so endpoints on other addresses of this host can share the
         port. Needs an explicit interface and a nonzero port; broadcasts and
         unicast are still handled in the order they arrived.
+        ``share_wildcard_port`` (default False): share an explicitly
+        requested port with other sockets on this host that bind it the
+        same way. By default the endpoint claims its port, and ``start()``
+        raises when another socket holds it; with sharing, each unicast
+        reaches only one of the sockets on the port.
         ``min_request_interval_ms`` (default 0, no pacing; at most 3,600,000,
         else ValueError) paces the client role's confirmed requests to each
         destination exactly as ``BACnetClient``'s keyword does (#1542). A

@@ -64,6 +64,7 @@ impl BACnetServer {
         cov_policy=None,
         time_sync_policy=None,
         share_port_by_address=false,
+        share_wildcard_port=false,
         segmentation_supported=crate::types::PySegmentation { inner: bacnet_types::enums::Segmentation::NONE },
         apdu_segment_timeout_ms=5000,
         bbmd=None,
@@ -136,6 +137,7 @@ impl BACnetServer {
         cov_policy: Option<&Bound<'_, pyo3::types::PyDict>>,
         time_sync_policy: Option<&Bound<'_, pyo3::types::PyDict>>,
         share_port_by_address: bool,
+        share_wildcard_port: bool,
         segmentation_supported: crate::types::PySegmentation,
         apdu_segment_timeout_ms: u64,
         bbmd: Option<PyRef<'_, crate::bip_options::PyBbmd>>,
@@ -166,7 +168,8 @@ impl BACnetServer {
             segmentation_supported,
             apdu_segment_timeout_ms,
         )?;
-        crate::bip_options::only_on_bip(share_port_by_address, transport)?;
+        crate::bip_options::only_on_bip("share_port_by_address", share_port_by_address, transport)?;
+        crate::bip_options::only_on_bip("share_wildcard_port", share_wildcard_port, transport)?;
         let crate::bip_options::IpModes {
             bip: bip_mode,
             bip6_foreign,
@@ -251,6 +254,7 @@ impl BACnetServer {
             port,
             broadcast_address: broadcast_address.to_string(),
             share_port_by_address,
+            share_wildcard_port,
             bip_mode,
             bip6_foreign,
             multicast,

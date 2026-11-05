@@ -230,8 +230,9 @@ pub async fn start(transport: BipTransport, gates: Option<Arc<Gates>>) -> (Serve
     (server, SocketAddrV4::new(Ipv4Addr::from(ip), port))
 }
 /// A broadcast observer bound before the node under test, which then starts on
-/// the returned port. Only an explicitly requested B/IP port sets SO_REUSEADDR
-/// (#892), and both sockets need it to share the port.
+/// the returned port, sharing it (`share_wildcard_port`, #2366): only a
+/// requested B/IP port shared on request sets SO_REUSEADDR (#892), and both
+/// sockets need it to share the port.
 #[cfg(target_os = "linux")]
 pub fn observer() -> (UdpSocket, u16) {
     let socket = socket2::Socket::new(

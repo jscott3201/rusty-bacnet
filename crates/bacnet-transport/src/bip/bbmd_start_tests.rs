@@ -47,12 +47,12 @@ fn free_port() -> u16 {
 /// bounded number of times; the last attempt's result is returned whatever it
 /// is. Removes the persisted BDT, if `build` set one, once each start returns.
 ///
-/// The retry only sees a bind that fails. On macOS a socket holding the port on
-/// 127.0.0.1 shadows the transport's SO_REUSEADDR wildcard bind instead of
-/// failing it, and neither this helper nor the transport can detect that (see
-/// `port_ownership`); the port is then lost silently and the test fails on its
-/// own assertions. The window is the few microseconds between the probe and the
-/// bind.
+/// The retry only sees a bind that fails. The transport claims its port
+/// (#2366), so a socket already holding it, on 127.0.0.1 or anywhere, fails
+/// the start. On macOS a SO_REUSEADDR socket can still bind 127.0.0.1 on the
+/// port after the start and take the unicast sent there, and neither this
+/// helper nor the transport can detect that (see `port_ownership`); the port
+/// is then lost silently and the test fails on its own assertions.
 /// Gives back the transport, its port and the start's result.
 async fn start_on_free_port(
     build: impl Fn(u16) -> BipTransport,

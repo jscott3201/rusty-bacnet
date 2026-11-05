@@ -15,6 +15,8 @@ pub(crate) mod sc;
 #[cfg(test)]
 pub(crate) mod sc_tests;
 pub(crate) mod service;
+#[cfg(test)]
+mod share_port_tests;
 pub(crate) mod startup;
 pub(crate) mod store;
 #[cfg(test)]
@@ -123,6 +125,11 @@ pub(crate) struct Bip {
     /// one host at one address each take their own `port` and share this.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) multicast_port: Option<u16>,
+    /// Share `port` with other programs on this host that bind it the same
+    /// way, as `--share-port` does (#2366); off by default, and then left
+    /// out of the file, so older profiles save unchanged.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) share_port: bool,
 }
 
 impl Default for Bip {
@@ -140,6 +147,7 @@ impl Default for Bip {
             multicast: None,
             multicast_ttl: 1,
             multicast_port: None,
+            share_port: false,
         }
     }
 }
@@ -292,6 +300,7 @@ impl Profile {
         let mut args = TransportArgs {
             interface: Ipv4Addr::UNSPECIFIED,
             port: 0,
+            share_port: false,
             broadcast: Ipv4Addr::BROADCAST,
             timeout_ms: 0,
             min_interval_ms: 0,
@@ -317,6 +326,7 @@ impl Profile {
         if let Some(b) = &self.bip {
             args.interface = b.interface;
             args.port = b.port;
+            args.share_port = b.share_port;
             args.broadcast = b.broadcast;
             args.timeout_ms = b.timeout_ms;
             args.min_interval_ms = b.min_interval_ms;

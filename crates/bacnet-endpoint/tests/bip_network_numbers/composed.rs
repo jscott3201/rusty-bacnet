@@ -13,8 +13,8 @@ async fn endpoint_number_bbmd_both_roles_progress_stop_and_drop() {
         rerun_on_lost_port(async || {
             let (observer, port) = observer();
             let bbmd = BipMode::Bbmd(bacnet_transport::bip::BbmdOptions::default());
-            let (mut endpoint, local) =
-                start(builder_on(port).role(SessionRole::Both).mode(bbmd)).await;
+            let builder = builder_on(port).share_wildcard_port(true);
+            let (mut endpoint, local) = start(builder.role(SessionRole::Both).mode(bbmd)).await;
             let query_peer = udp().await;
             let responder_peer = udp().await;
             let requester_peer = udp().await;

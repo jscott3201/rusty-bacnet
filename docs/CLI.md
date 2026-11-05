@@ -49,6 +49,7 @@ macOS and Windows ones don't yet (see [MS/TP](#mstp)).
 |------|---------|-------------|
 | `-i, --interface <IP>` | (see below) | Network interface IP to bind |
 | `-p, --port <PORT>` | `47808` | BACnet UDP port |
+| `--share-port` | off | Share `--port` with other programs on this host that bind it the same way; BACnet/IP only. See [Port sharing](#port-sharing) |
 | `-b, --broadcast <IP>` | `255.255.255.255` | Broadcast address for WhoIs |
 | `-t, --timeout <MS>` | `6000` | APDU timeout in milliseconds |
 | `--min-interval-ms <MS>` | `0` | Least time from the latest confirmed request to a device finishing (or being sent, while it is still outstanding) to the next, at most 3600000, so paging or polling leaves a slow device room for others |
@@ -100,6 +101,25 @@ with control characters escaped as JSON requires; a script that prints a
 JSON string to a terminal should clean it first.
 
 **Interface selection:** A one-shot command without `--interface` binds `0.0.0.0`. The terminal UI on BACnet/IP without `-i` lists the available network interfaces in a dialog; named B/IP profiles use their saved interface.
+
+<a id="port-sharing"></a>**Port sharing:** on BACnet/IP the CLI claims its
+`--port` (#2366). When another program on this host already holds the port
+(a BACnet device, a BMS, another `bacnet`), the CLI fails at once with an
+error naming the port, rather than binding beside it. Give the CLI another
+port (`-p 47809`, or `-p 0` for one the OS picks, which hears only the
+broadcasts sent to that port), stop the other program, or pass `--share-port`
+to bind beside it as earlier releases did. With sharing, broadcasts reach
+both programs, but each unicast to the port reaches only one of them (on
+Linux the one that bound last), so either program's replies can go astray.
+The other program must share the port too, and macOS and the BSDs never let
+two programs share a port on `0.0.0.0` this way. `--share-port` has no
+effect with `-p 0`, nor on B/IPv6, BACnet/SC or MS/TP. A named B/IP profile
+keeps the choice as `share_port = true` in its `[bip]` table; `bacnet tui
+--profile NAME --share-port` turns it on for that run, and `bacnet mcp serve
+--profile NAME` refuses the flag, as it refuses every transport flag, so set
+it in the profile and authorize the profile again. Passive listening (`--passive`)
+always binds the port shared, since it only listens beside another stack;
+that stack must share the port too.
 
 ## Target Resolution
 
@@ -430,6 +450,7 @@ ttl = 300
 # bbmd = "127.0.0.2:47808"
 # renewal_secs = 30
 # nat_global_address = "203.0.113.7:61000"  # needs bbmd; display only
+# share_port = true  # as --share-port; see Port sharing
 
 [safety]
 writes = "session"
@@ -600,13 +621,19 @@ BBMD, the TTL, the last BVLC-Result, a countdown to the next registration and
 the lease left; a refused registration raises a red banner on every screen.
 A B/IPv6 foreign device (`--ipv6 --foreign-bbmd`) gets the same panel without
 the tables: the BBMD, named by its host name and the address it stands for, or
-`(not resolved yet)`, the TTL, `registration sent` or `waiting for the BBMD's
-host name to resolve`, the broadcasts refused while waiting, the host name's
-lookups and failures with the newest reason, the registrations sent (to every
-BBMD it has used), and the releases of BBMDs it left. B/IPv6 records no answer
-to a registration, so the panel can't say whether the BBMD accepted or refused
-it, and the status bar reads `FD sent` rather than `held` or `refused`. `:bbmd`,
-`r` and `m` read tables on B/IP only, and say so on other transports.
+`(not resolved yet)`, the TTL, the BBMD's answer to the latest registration and
+how long ago it came (`registered, accepted 12 s ago`, `REFUSED 4 s ago`, `no
+answer to the last 2 registrations`, or `waiting for the BBMD's host name to
+resolve`), the broadcasts refused while waiting, the host name's lookups and
+failures with the newest reason, the registrations sent and refused (to every
+BBMD it has used), and the releases of BBMDs it left (#2388). The status bar
+reads `FD held`, `refused` or `no answer` as on B/IP, and a refusal or silence
+raises B/IP's banner; after a refusal it says broadcasts go undelivered, since
+B/IPv6 only logs the BBMD's refusal of each. A registration counts as unanswered
+once its renewal goes first: B/IPv6 renews at half the TTL whatever the answer.
+One that a Network Port activation replaces at once counts only once the BBMD has
+been silent for 3 seconds. `:bbmd`, `r` and `m` read tables on B/IP only, and say
+so on other transports.
 Once the BBMD accepts, the TUI reads its FDT and shows the entry the BBMD
 recorded for us, the address it forwards broadcasts to. Behind a NAT router
 the BBMD records the router's address instead: give it with
@@ -1021,9 +1048,8 @@ evicting the least recently heard first.
 holds on other devices: COV subscriptions, and our entry in a BBMD's
 foreign-device table. `FD` appears only with a registration and says
 where it stands (`held`, `pending`, `refused`, `no answer`, `lapsed` or
-`waiting for name`, and on B/IPv6 `sent`), from the same state the
-Network screen's banner reads. `ledger n` counts changes
-still in effect.
+`waiting for name`), on B/IP and B/IPv6 alike, from the same state the
+Network screen's banner reads. `ledger n` counts changes still in effect.
 
 **Status bar and footer.** Both fit their width by priority: at 80 columns
 the least useful fields and keys go first, while the link state, the
@@ -1069,7 +1095,7 @@ Experimental in 0.15.
 | Flag | Description |
 |------|-------------|
 | `--stdio` | Serve on stdin and stdout, the transport an agent host launches (required) |
-| `--profile <NAME>` | Named B/IP, BACnet/SC or MS/TP profile to connect with; its `[mcp]` table limits what the agent may reach. Needed unless `--passive`; global transport flags are refused with it, since they would change the transport that was authorized |
+| `--profile <NAME>` | Named B/IP, BACnet/SC or MS/TP profile to connect with; its `[mcp]` table limits what the agent may reach. Needed unless `--passive`; global transport flags, `--share-port` among them, are refused with it, since they would change the transport that was authorized (set `share_port` in the profile instead) |
 | `--passive` | Build no client and send nothing: only the tools that need no network are offered (`bacnet_decode`, and `bacnet_discover`, which only lists) |
 
 **mcp connect flags:**
@@ -1855,13 +1881,15 @@ command fails saying why. With `--ipv6-interface` the transport starts and waits
 the name as B/IP does, and its broadcasts fail meanwhile. A one-shot command waits for
 the name's first lookup: one that doesn't resolve fails it (`BBMD bbmd.example:47808
 could not be registered with: its host name did not resolve (1 name lookup, 1
-failed)`), and one that does is logged with its address (`bbmd.example:47808 (at
-[2001:db8::10]:47808; 1 name lookup, 0 failed)`); the TUI logs either and carries on.
-B/IPv6 tracks no registration answers, so the TUI shows what was sent: its status
-bar reads `FD waiting for name` until the name resolves, then `FD sent`; a
-WAITING banner says why a lookup failed, and broadcasts are refused meanwhile; and
-the Network screen's panel shows the name, the address it stands for, and the
-counts (#2378).
+failed)`). It then waits for the BBMD to answer the first registration, as on B/IP
+(#2388), and fails if it refuses (`BBMD [2001:db8::10]:47808 refused the
+foreign-device registration (REGISTER_FOREIGN_DEVICE_NAK)`) or doesn't answer within
+5 seconds; an accepting BBMD is logged, a named one with its address
+(`bbmd.example:47808 (at [2001:db8::10]:47808; 1 name lookup, 0 failed)`). The TUI
+logs the outcome and carries on. Its status bar reads `FD waiting for name` until
+the name resolves, then the BBMD's answer as on B/IP; a WAITING banner says why a
+lookup failed, and broadcasts are refused meanwhile; and the Network screen's panel
+shows the name, the address it stands for, the answer and the counts (#2378).
 
 Behind NAT, keep `--renewal` short so the mapping the BBMD's replies come back
 on stays open; the TTL can stay long. If you know the address and port the NAT

@@ -696,13 +696,11 @@ async fn cli_main(cli: Cli) -> CliResult {
         }
     } else if args.ipv6 {
         let mut client = transport::build_bip6_client(&args).await?;
-        // Broadcasts reach the remote network once the BBMD's address is
-        // known (#2365).
+        // Broadcasts reach the remote network once the BBMD has taken the
+        // registration (#2365, #2388).
         if let Some(foreign) = &args.bip6_foreign_device {
-            match foreign::await_bip6_bbmd(&client, &foreign.bbmd).await {
-                Ok(bbmd) => tracing::info!(
-                    "BBMD {bbmd} is known; the foreign-device registration goes there"
-                ),
+            match foreign::await_bip6_registration(&client, &foreign.bbmd).await {
+                Ok(bbmd) => tracing::info!("BBMD {bbmd} accepted the foreign-device registration"),
                 Err(e) => {
                     return Err(match client.stop().await {
                         Ok(()) => e,
