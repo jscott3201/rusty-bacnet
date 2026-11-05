@@ -16,9 +16,11 @@ impl BACnetServer {
     /// `storage_path` (a `str`) keeps the reporting settings a peer writes
     /// (Notification_Class, Event_Enable, Notify_Type,
     /// Event_Detection_Enable, Event_Message_Texts_Config and the
-    /// Event_Algorithm_Inhibit pair) in that file (#2331): such a write is
-    /// saved before it is answered, refused if it can't be, and served again
-    /// after a restart. `clear_written_reporting` drops what was saved first.
+    /// Event_Algorithm_Inhibit pair) in that file (#2331), and a written
+    /// Description (#2364): such a write is saved before it is answered,
+    /// refused if it can't be, and served again after a restart.
+    /// `clear_written_reporting` drops what was saved first, Description
+    /// included.
     /// Every analog, binary and multi-state builder takes both, as do
     /// `add_access_door`, `add_access_zone`, `add_event_enrollment` and
     /// `add_alert_enrollment`.

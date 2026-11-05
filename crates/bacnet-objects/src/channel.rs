@@ -453,6 +453,18 @@ impl BACnetObject for ChannelObject {
         if let Some(result) = common::write_object_name(&mut self.name, property, &value) {
             return result;
         }
+        // Saved first with storage (`saving`, #2364).
+        if self.config_storage.is_some()
+            && property == PropertyIdentifier::DESCRIPTION
+            && !crate::write_config::description::null_write(property, &value)
+        {
+            let write = crate::durable::PendingWrite {
+                property,
+                array_index,
+                value,
+            };
+            return crate::write_config::saving::write(self, write);
+        }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }

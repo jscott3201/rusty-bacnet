@@ -36,7 +36,8 @@ use std::sync::atomic::Ordering;
 
 use PropertyIdentifier as P;
 
-const TYPES: [ObjectType; 13] = [
+/// The object types with a reporting store.
+pub(super) const TYPES: [ObjectType; 13] = [
     ObjectType::ANALOG_INPUT,
     ObjectType::ANALOG_OUTPUT,
     ObjectType::ANALOG_VALUE,
@@ -119,8 +120,8 @@ fn reference_octets() -> Vec<u8> {
     octets.to_vec()
 }
 
-/// Every covered write on every type: the object type, the property, the
-/// index and the value. Detection is turned to the other value; the
+/// Every covered write on every type, Description included: the object
+/// type, the property, the index and the value. Detection is turned to the other value; the
 /// inhibit, which takes a write only while detection is on, is left out on
 /// the Outputs, whose detection starts off.
 fn cases() -> Vec<(ObjectType, P, Option<u32>, Vec<u8>)> {
@@ -166,6 +167,12 @@ fn cases() -> Vec<(ObjectType, P, Option<u32>, Vec<u8>)> {
                 value(PropertyValue::Boolean(true)),
             ));
         }
+        // Kept beside them (#2364).
+        writes.push((
+            P::DESCRIPTION,
+            None,
+            value(PropertyValue::CharacterString("lobby".into())),
+        ));
         cases.extend(
             writes
                 .into_iter()

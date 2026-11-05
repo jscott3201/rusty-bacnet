@@ -49,7 +49,7 @@
 //! use core::net::{Ipv4Addr, SocketAddrV4};
 //! use bacnet_bip_core::codec::Bvll;
 //! use bacnet_bip_core::node::{Addressed, Datagram, Link, Mode, Permissive, Received};
-//! use bacnet_bip_core::{Instant, LocalSubnet};
+//! use bacnet_bip_core::LocalSubnet;
 //!
 //! let own = SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 10), 47808);
 //! let subnet = LocalSubnet::new(SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 255), 47808));
@@ -62,8 +62,7 @@
 //! let peer = SocketAddrV4::new(Ipv4Addr::new(192, 0, 2, 20), 47808);
 //! let to = Addressed { node: true, broadcast: false };
 //! let datagram = Datagram::new(&wire[..length], peer, Some(to));
-//! let Received::Deliver(delivery) = link.receive(&datagram, Instant::ZERO, &mut Permissive)
-//! else {
+//! let Received::Deliver(delivery) = link.receive(&datagram, &mut Permissive) else {
 //!     panic!("delivered");
 //! };
 //! assert_eq!((delivery.npdu, delivery.source, delivery.group), (&npdu[..], peer, false));

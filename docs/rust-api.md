@@ -4624,7 +4624,43 @@ ai.set_notification_class(5); // a value a peer wrote and saved wins
   `written_reporting`, `clear_written_reporting` and
   `wait_for_reporting_saves`; without it the objects keep nothing, and an
   image that reports nothing links none of it. The Event and Alert
-  Enrollment setters are there either way, and always apply without it.
+  Enrollment setters, and these objects' `set_description`, are there
+  either way, and always apply without it.
+
+#### Keeping a written Description (#2364)
+
+The object types with a write-configuration store keep a Description a peer
+writes in the same file, with the same rules:
+
+- the thirteen above, through `with_reporting_persistence`: the analog,
+  binary and multi-state Input, Output and Value objects, Access Door,
+  Access Zone, Event Enrollment and Alert Enrollment;
+- Timer and Channel, through `TimerObject::with_persistence` and
+  `ChannelObject::with_persistence`.
+
+A write of Description is saved before it is answered, refused with DEVICE /
+OPERATIONAL_PROBLEM when the save fails, and staged by the server with the
+request's other kept writes, one save for them all. A Description past
+16 KiB is refused with RESOURCES / NO_SPACE_TO_WRITE_PROPERTY before
+anything is saved; a long one the object took before it had storage refuses
+no other write. A NULL succeeds, changes nothing and saves nothing. A saved
+Description wins over `set_description` (on the analog, binary and
+multi-state objects and Event Enrollment; the others have no setter) until
+`clear_written_reporting`, or a Timer's or Channel's `clear_written_config`,
+drops it. `written_reporting().description` and the `description` field of
+`TimerWriteConfig` and `ChannelWriteConfig` show what is saved.
+
+Storage holds it as kind 5 of `RBNWCF01`
+(`snapshot::write_config::KIND_WITH_DESCRIPTION`): the Description, then the
+kind and body the object writes without one. A file with no written
+Description keeps its plain kind, octet for octet, so an older build still
+reads it; one holding a Description fails to load there as an unknown kind.
+`TimerWriteConfig` and `ChannelWriteConfig` are now `#[non_exhaustive]`, as
+`ReportingWriteConfig` is: build them from `Default` and set their fields.
+
+Every other object type, Device, the logs, Notification Class and
+Forwarder, Access Rights, the colour and lighting objects included, keeps a
+written Description in memory only: it lasts until a restart.
 
 #### Creation and deletion
 
@@ -5324,7 +5360,7 @@ implements `From<SnapshotError>`, the mapping the file backends use.
 | --- | --- | --- | --- |
 | `snapshot::log` | `LogSnapshot<R>` (Trend Log, Trend Log Multiple, Event Log) | `RBLOGS01`, version 2; version 1 still loads | `FileLogPersistence` (one slot of the two) |
 | `snapshot::audit_log` | `AuditLogSnapshot` | `RBALOG01`, version 3; versions 1 and 2 still load | `FileAuditLogPersistence` (one slot of the two) |
-| `snapshot::write_config` | `WriteConfigSnapshot` (Timer, Channel, an intrinsic reporter's reporting settings) | `RBNWCF01`, kinds 2, 3 and 4; kind 1 still loads | `FileWriteConfigPersistence` |
+| `snapshot::write_config` | `WriteConfigSnapshot` (Timer, Channel, an intrinsic reporter's reporting settings, each with a written Description) | `RBNWCF01`, kinds 2 to 5; kind 1 still loads | `FileWriteConfigPersistence` |
 | `snapshot::notification_class` | `NotificationClassSnapshot` | `RBNNCL01` | `FileNotificationClassPersistence` |
 | `snapshot::notification_forwarder` | `ForwarderSnapshot` | `RBNFWD01` | `FileNotificationForwarderPersistence` |
 | `snapshot::tags` | `TagsSnapshot` | `RBNTAG01` | `FileTagsPersistence` |
@@ -6313,6 +6349,8 @@ is saved without it; the rest of what was saved still applies. A saved value
 past the range a new Timer takes (above `u32::MAX` milliseconds) is held aside
 at the build, unserved but still saved, until `set_pres_value_range` serves it
 or drops it; zero, which no range holds, is dropped at once.
+A written Description is kept the same way (#2364; see [Keeping a written
+Description](#keeping-a-written-description-2364)).
 `clear_written_config` drops everything saved (saving that, and returning
 storage's error if the save fails) so the setters apply again. The state
 machine is not kept: the Timer still starts IDLE. Storage is
@@ -7010,7 +7048,8 @@ naming another Device keeps it (#1264).
 
 `ChannelObject::with_persistence(instance, name, channel_number, persistence)`
 keeps what peers write to the members, Execution_Delay, Channel_Number,
-Control_Groups and Allow_Group_Delay_Inhibit across a restart (#2243), in the
+Control_Groups, Allow_Group_Delay_Inhibit and Description (#2364) across a
+restart (#2243), in the
 same `WriteConfigPersistence` storage a Timer uses. Each write saves before the
 Channel serves it, and is refused with DEVICE / OPERATIONAL_PROBLEM when the
 save fails. The members and their delays are kept together. A part a write

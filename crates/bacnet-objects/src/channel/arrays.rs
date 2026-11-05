@@ -134,6 +134,10 @@ pub(crate) struct ChannelConfig {
     pub(super) control_groups: Vec<u32>,
     pub(super) allow_group_delay_inhibit: bool,
     pub(super) written: Written,
+    /// Description as a write set it, while storage keeps it (#2364); the
+    /// Channel serves the same text. `None` without storage, until a write,
+    /// and after `clear_written_config`.
+    pub(super) description: Option<String>,
 }
 
 /// The parts of a Channel's configuration a write has set, now or before a
@@ -158,6 +162,7 @@ impl ChannelConfig {
             control_groups: vec![0],
             allow_group_delay_inhibit: false,
             written: Written::default(),
+            description: None,
         }
     }
 

@@ -2997,14 +2997,18 @@ server.add_analog_input(
 With `storage_path`, the reporting settings a peer writes
 (Notification_Class, Event_Enable, Notify_Type, Event_Detection_Enable,
 Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair) are kept in
-that file. Each write is saved before it is answered, and refused with DEVICE
-/ OPERATIONAL_PROBLEM when the save fails; an Event_Message_Texts_Config
-string past 16 KiB is refused with RESOURCES / NO_SPACE_TO_WRITE_PROPERTY. A
-server started on the same file serves the saved settings.
-`clear_written_reporting=True` drops what was saved first, so the object
-starts from its defaults. A file that doesn't load raises `BacnetError`.
+that file, and so is a written Description (#2364). Each write is saved
+before it is answered, and refused with DEVICE / OPERATIONAL_PROBLEM when the
+save fails; an Event_Message_Texts_Config string or a Description past 16 KiB
+is refused with RESOURCES / NO_SPACE_TO_WRITE_PROPERTY. A NULL to Description
+succeeds and saves nothing. A server started on the same file serves the
+saved settings. `clear_written_reporting=True` drops what was saved first,
+Description included, so the object starts from its defaults. A file that doesn't load raises `BacnetError`.
 An Alert Enrollment takes only ALARM and EVENT as Notify_Type, so a file
 holding another fails its build the same way.
+
+On every other object type, a Description a peer writes lasts until the
+server restarts; only these builders, `add_timer` and `add_channel` keep it.
 
 The endpoints' object builders (`BipEndpoint.add_analog_input` and the rest)
 don't take these keywords: an endpoint executes WriteProperty only on its own
@@ -3879,9 +3883,10 @@ server.add_staging(
 
 `add_timer`'s `storage_path` keeps in that file what a peer writes to
 State_Change_Values, List_Of_Object_Property_References (with
-Priority_For_Writing) and Default_Timeout (#2312). Each write is saved before
+Priority_For_Writing), Default_Timeout (#2312) and Description (#2364). Each write is saved before
 it is answered, and refused with DEVICE / OPERATIONAL_PROBLEM when the save
-fails. At the next start a saved write wins over the keywords;
+fails; a Description past 16 KiB is refused with RESOURCES /
+NO_SPACE_TO_WRITE_PROPERTY. At the next start a saved write wins over the keywords;
 `clear_written_config=True` drops what was saved, so they apply again.
 `add_channel` takes the same two keywords (see [Channels](#channels)).
 
@@ -4210,9 +4215,10 @@ under [Lighting & Color](rust-api.md#lighting--color-5)).
 omitted), `control_groups` the groups whose WriteGroup the Channel takes, and
 `allow_group_delay_inhibit` whether a WriteGroup that asks for no delays skips
 them. Peers can write all of these, and Channel_Number, over the network. With
-`storage_path` the Channel keeps those writes in that file, and each saved one
-wins over its argument at the next start, Channel_Number over `channel_number`
-included, until `clear_written_config=True` drops them (#2312).
+`storage_path` the Channel keeps those writes in that file, and a written
+Description too (#2364), and each saved one wins over its argument at the
+next start, Channel_Number over `channel_number` included, until
+`clear_written_config=True` drops them (#2312).
 
 Once the server runs, a value written to the Channel's Present_Value, over the
 network or with `write_property_local`, goes on to each member at the write's

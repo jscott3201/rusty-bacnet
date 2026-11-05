@@ -44,6 +44,7 @@ macro_rules! keep_enrollment_reporting {
                     notify_type: self.notify_type,
                     event_detection_enable: self.event_detection_enable,
                     options: self.event_history.options.clone(),
+                    description: self.description.clone(),
                 }
             }
 
@@ -57,6 +58,7 @@ macro_rules! keep_enrollment_reporting {
                     notify_type: &mut self.notify_type,
                     event_detection_enable: &mut self.event_detection_enable,
                     options: &mut self.event_history.options,
+                    description: &mut self.description,
                 }
                 .restore(saved);
             }
@@ -211,9 +213,12 @@ impl EventEnrollmentObject {
         self.last_offnormal_value = None;
     }
 
-    /// Set the description string.
+    /// Set the description string. On an enrollment keeping its reporting
+    /// settings, a Description a write saved wins (#2364).
     pub fn set_description(&mut self, desc: impl Into<String>) {
-        self.description = desc.into();
+        if !self.kept_over_setter(PropertyIdentifier::DESCRIPTION) {
+            self.description = desc.into();
+        }
     }
 
     /// Set Object_Property_Reference, the property the enrollment monitors,
