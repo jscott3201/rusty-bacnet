@@ -40,6 +40,12 @@ pub struct ServerConfig {
     /// `BipTransport::set_share_port_by_address` for what changes. Only the
     /// B/IP builder reads it; a transport passed to `start` has its own.
     pub share_port_by_address: bool,
+    /// B/IP only: share an explicitly requested port with other sockets on
+    /// this host, as before #2366. Off by default: the transport claims the
+    /// port, so a second bind of it fails. See
+    /// `BipTransport::set_share_wildcard_port` for what sharing costs. Only
+    /// the B/IP builder reads it; a transport passed to `start` has its own.
+    pub share_wildcard_port: bool,
     /// Device declarations shared by stock objects, discovery and active limits.
     /// Startup resolves its receive ceiling against the owned transport. An
     /// explicitly supplied selected Device must match; an empty database may
@@ -193,6 +199,7 @@ impl std::fmt::Debug for ServerConfig {
             .field("port", &self.port)
             .field("broadcast_address", &self.broadcast_address)
             .field("share_port_by_address", &self.share_port_by_address)
+            .field("share_wildcard_port", &self.share_wildcard_port)
             .field("device", &self.device)
             .field("cov_retry_timeout_ms", &self.cov_retry_timeout_ms)
             .field("time_sync_policy", &self.time_sync_policy)
@@ -266,6 +273,7 @@ impl Default for ServerConfig {
             port: 0xBAC0,
             broadcast_address: Ipv4Addr::BROADCAST,
             share_port_by_address: false,
+            share_wildcard_port: false,
             cov_retry_timeout_ms: 3000,
             time_sync_policy: TimeSyncPolicy::default(),
             on_time_sync: None,
@@ -370,6 +378,16 @@ impl BipServerBuilder {
     /// See [`BipTransport::set_share_port_by_address`] for what changes.
     pub fn share_port_by_address(mut self, enabled: bool) -> Self {
         self.config.share_port_by_address = enabled;
+        self
+    }
+
+    /// Share an explicitly requested port with other sockets on this host
+    /// that bind it the same way (#2366). Off by default: the transport
+    /// claims the port, and `build` fails when another socket holds it. With
+    /// sharing on, unicast to the port reaches only one of the sockets on
+    /// it. See [`BipTransport::set_share_wildcard_port`].
+    pub fn share_wildcard_port(mut self, enabled: bool) -> Self {
+        self.config.share_wildcard_port = enabled;
         self
     }
 

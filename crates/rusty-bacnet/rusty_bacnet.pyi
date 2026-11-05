@@ -3322,6 +3322,7 @@ class BACnetClient:
         mstp_reply_timeout_ms: Optional[int] = None,
         sc_device_uuid: Optional[bytes | bytearray] = None,
         share_port_by_address: bool = False,
+        share_wildcard_port: bool = False,
         min_request_interval_ms: int = 0,
         ipv6_device_instance: Optional[int] = None,
         bbmd: Optional[Bbmd] = None,
@@ -3417,6 +3418,14 @@ class BACnetClient:
         of this host can share the port. Needs an explicit interface and a
         nonzero port; broadcasts and unicast are still handled in the order
         they arrived.
+
+        ``share_wildcard_port`` (B/IP only, default False): share an
+        explicitly requested port with other sockets on this host that bind
+        it the same way. By default the client claims its port, so a second
+        bind of it fails, and ``start()`` raises when another socket holds
+        it. With sharing, broadcasts reach every socket on the port, but
+        each unicast reaches only one of them; prefer
+        ``share_port_by_address`` or separate ports.
 
         ``min_request_interval_ms`` (default 0, no pacing; at most
         3,600,000, else ValueError) paces the confirmed requests to each
@@ -4839,6 +4848,7 @@ class BACnetServer:
         cov_policy: CovPolicy | None = None,
         time_sync_policy: TimeSyncPolicy | None = None,
         share_port_by_address: bool = False,
+        share_wildcard_port: bool = False,
         segmentation_supported: Segmentation = Segmentation.NONE,
         apdu_segment_timeout_ms: int = 5000,
         bbmd: Optional[Bbmd] = None,
@@ -4900,6 +4910,14 @@ class BACnetServer:
         interface address itself, so devices on other addresses of this host
         can share the port. Needs an explicit interface and a nonzero port;
         broadcasts and unicast are still handled in the order they arrived.
+
+        ``share_wildcard_port`` (B/IP only, default False): share an
+        explicitly requested port with other sockets on this host that bind
+        it the same way. By default the server claims its port, so a second
+        bind of it fails, and ``start()`` raises when another socket holds
+        it. With sharing, broadcasts reach every socket on the port, but
+        each unicast reaches only one of them; prefer
+        ``share_port_by_address`` or separate ports.
 
         ``bbmd`` / ``foreign_device`` (at most one, else ValueError): run
         the device as a BBMD (B/IP only), or register it with a BBMD on
@@ -7087,6 +7105,7 @@ class BipEndpoint:
         *,
         read_work_limit: int = 256,
         share_port_by_address: bool = False,
+        share_wildcard_port: bool = False,
         min_request_interval_ms: int = 0,
         bbmd: Optional[Bbmd] = None,
         foreign_device: Optional[ForeignDevice] = None,
@@ -7138,6 +7157,11 @@ class BipEndpoint:
         itself, so endpoints on other addresses of this host can share the
         port. Needs an explicit interface and a nonzero port; broadcasts and
         unicast are still handled in the order they arrived.
+        ``share_wildcard_port`` (default False): share an explicitly
+        requested port with other sockets on this host that bind it the
+        same way. By default the endpoint claims its port, and ``start()``
+        raises when another socket holds it; with sharing, each unicast
+        reaches only one of the sockets on the port.
         ``min_request_interval_ms`` (default 0, no pacing; at most 3,600,000,
         else ValueError) paces the client role's confirmed requests to each
         destination exactly as ``BACnetClient``'s keyword does (#1542). A
