@@ -9,7 +9,7 @@ expression: text
 "│BBMD bbmd.example:47808 (not resolved yet)   TTL 60 s                                                                 │"
 "│Status waiting for the BBMD's host name to resolve                                                                    │"
 "│Counts broadcasts refused 4  2 name lookups, 2 failed: the name has no IPv6 address                                   │"
-"│Registrations sent 0, to every BBMD this device has used                                                              │"
+"│Registrations sent 0, refused 0, to every BBMD this device has used                                                   │"
 "│Next registration: once the BBMD's host name resolves                                                                 │"
 "│Releases of BBMDs left: none asked                                                                                    │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘"

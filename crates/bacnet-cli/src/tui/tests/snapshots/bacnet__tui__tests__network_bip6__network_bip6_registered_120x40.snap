@@ -2,11 +2,11 @@
 source: crates/bacnet-cli/src/tui/tests/network_bip6.rs
 expression: text
 ---
-" bacnet | 1 2 3 [4 Network] 7 | BIP6 [2001:db8::5]:47808 | up | READ-ONLY | COV 0 | FD sent | drop 0             ? help "
+" bacnet | 1 2 3 [4 Network] 7 | BIP6 [2001:db8::5]:47808 | up | READ-ONLY | COV 0 | FD held | drop 0             ? help "
 "┌ Foreign device ──────────────────────────────────────────────────────────────────────────────────────────────────────┐"
 "│BBMD bbmd.example:47808 ([2001:db8::10]:47808)   TTL 60 s                                                             │"
-"│Status registration sent; the BBMD's answer isn't tracked   2 name lookups, 0 failed                                  │"
-"│Registrations sent 3, to every BBMD this device has used                                                              │"
+"│Status registered, accepted 12 s ago   2 name lookups, 0 failed                                                       │"
+"│Registrations sent 3, refused 0, to every BBMD this device has used                                                   │"
 "│Next registration: automatic, at half the TTL (30 s at least)                                                         │"
 "│Releases of BBMDs left: 1 asked, 1 released, 0 refused, 0 unanswered                                                  │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘"
