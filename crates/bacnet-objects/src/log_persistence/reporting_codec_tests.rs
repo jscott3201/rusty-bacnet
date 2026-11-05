@@ -21,7 +21,7 @@ fn oid(kind: ObjectType) -> ObjectIdentifier {
 }
 
 /// Every setting every log keeps, as writes set them.
-fn every_setting() -> LogReportingSettings {
+pub(super) fn every_setting() -> LogReportingSettings {
     LogReportingSettings {
         notification_class: Some(7),
         event_enable: Some(EventTransitionBits::TO_FAULT),
@@ -35,11 +35,12 @@ fn every_setting() -> LogReportingSettings {
         event_algorithm_inhibit: Some(true),
         client_cov_increment: None,
         cov_resubscription_interval: None,
+        description: None,
     }
 }
 
 /// A Trend Log holding two records, with `reporting`.
-fn trend(reporting: LogReportingSettings) -> LogSnapshot<BACnetLogRecord> {
+pub(super) fn trend(reporting: LogReportingSettings) -> LogSnapshot<BACnetLogRecord> {
     LogSnapshot {
         object_identifier: oid(ObjectType::TREND_LOG),
         generation: 3,
@@ -74,7 +75,7 @@ fn trend_settings(increment: Option<f32>) -> LogReportingSettings {
 }
 
 /// An Event Log holding one record, with `reporting`.
-fn event(reporting: LogReportingSettings) -> LogSnapshot<BACnetEventLogRecord> {
+pub(super) fn event(reporting: LogReportingSettings) -> LogSnapshot<BACnetEventLogRecord> {
     LogSnapshot {
         object_identifier: oid(ObjectType::EVENT_LOG),
         generation: 2,
@@ -96,7 +97,7 @@ fn event(reporting: LogReportingSettings) -> LogSnapshot<BACnetEventLogRecord> {
 
 /// Rewrite the declared payload length and the checksum after an edit, so
 /// only the edit is wrong.
-fn reseal(data: &mut [u8]) {
+pub(super) fn reseal(data: &mut [u8]) {
     let payload = (data.len() - HEADER_LEN - TRAILER_LEN) as u32;
     data[22..26].copy_from_slice(&payload.to_be_bytes());
     let at = data.len() - TRAILER_LEN;
@@ -113,7 +114,7 @@ fn slot_and_block<R: codec::SnapshotRecord>(snapshot: &LogSnapshot<R>) -> (Vec<u
     (codec::encode(snapshot).unwrap(), start)
 }
 
-fn decoded<R: codec::SnapshotRecord + core::fmt::Debug>(
+pub(super) fn decoded<R: codec::SnapshotRecord + core::fmt::Debug>(
     data: &[u8],
     expected: ObjectIdentifier,
 ) -> Result<LogSnapshot<R>, Error> {

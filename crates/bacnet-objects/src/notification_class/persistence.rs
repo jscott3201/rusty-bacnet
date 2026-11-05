@@ -22,13 +22,18 @@ use crate::durable::file::ObjectFile;
 #[cfg(feature = "std")]
 use crate::snapshot::notification_class as format;
 
-/// What a Notification Class keeps across a restart.
+/// What a Notification Class keeps across a restart: a written
+/// Recipient_List, and a written Description (#2364).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct NotificationClassSnapshot {
     /// Recipient_List, in list order, once a write has set it. `None` until
     /// then: the destinations the application configures apply at each
     /// start.
     pub recipient_list: Option<Vec<BACnetDestination>>,
+    /// Description, once a write has set it (#2364); at most 16 KiB of
+    /// UTF-8, as a class with storage refuses a longer write. `None` until
+    /// then: the application's `set_description` applies at each start.
+    pub description: Option<String>,
 }
 
 /// Application-owned storage for one Notification Class's Recipient_List.

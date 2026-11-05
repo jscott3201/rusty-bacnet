@@ -25,9 +25,9 @@
 //!
 //! | Target | Formats |
 //! | --- | --- |
-//! | `log_restore`, `log_restore_file` | the Trend Log, Trend Log Multiple and Event Log snapshots, schema versions 1 and 2 (`log_persistence/codec.rs`) |
+//! | `log_restore`, `log_restore_file` | the Trend Log, Trend Log Multiple and Event Log snapshots, schema versions 1 and 2 (`log_persistence/codec.rs`), and a Trend Log's schema version 3, with a written Description |
 //! | `audit_restore`, `audit_restore_file` | the Audit Log snapshot, schema versions 1 to 3 |
-//! | `object_file_restore`, `object_file_restore_file` | the one-file formats: Notification Forwarder, Notification Class, Tags, the two colour objects' output, Access Rights, the Timer's and Channel's write configuration, and an Analog Input's and an Alert Enrollment's written reporting settings, each kind of the write configuration also with a written Description (kind 5) |
+//! | `object_file_restore`, `object_file_restore_file` | the one-file formats: Notification Forwarder, Notification Class, Tags, the two colour objects' output, Access Rights, the Timer's and Channel's write configuration, and an Analog Input's and an Alert Enrollment's written reporting settings, each kind of the write configuration also with a written Description (kind 5), as are the Notification Forwarder's, Notification Class's and Access Rights' (their version 2) |
 //!
 //! An input is a selector octet, which picks a format of the target's
 //! (modulo their count), then the files. For a two-slot format: a flags

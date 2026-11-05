@@ -155,6 +155,7 @@ fn a_recipient_list_write_saves_the_subscriptions_with_it() {
         ForwarderSnapshot {
             recipient_list: Some(list.to_vec()),
             subscribed_recipients: subscriptions.to_vec(),
+            description: None,
         }
     );
 }
@@ -171,6 +172,7 @@ fn a_saved_recipient_list_past_the_cap_refuses_the_forwarder() {
                     .collect(),
             ),
             subscribed_recipients: Vec::new(),
+            description: None,
         },
     );
     assert!(NotificationForwarderObject::with_persistence(1, "NF", storage).is_err());

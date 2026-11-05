@@ -30,7 +30,7 @@ use bacnet_types::enums::{AccessRuleLocationSpecifier, AccessRuleTimeRangeSpecif
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-type RightsStorage = HeldStorage<AccessRightsSnapshot>;
+pub(super) type RightsStorage = HeldStorage<AccessRightsSnapshot>;
 
 impl AccessRightsPersistence for RightsStorage {
     fn load(&self, _rights: ObjectIdentifier) -> Result<Option<AccessRightsSnapshot>, Error> {
@@ -284,6 +284,7 @@ async fn a_write_property_multiple_with_several_rights_writes_saves_once_and_sur
         negative_access_rules: Some(vec![grown_rule()]),
         enable: Some(false),
         accompaniment: None,
+        description: None,
     };
     assert_eq!(storage.load_saved(), Some(expected.clone()));
     drop(fixture);

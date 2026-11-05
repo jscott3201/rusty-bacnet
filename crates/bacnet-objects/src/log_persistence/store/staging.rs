@@ -25,6 +25,11 @@
 //!   log commits the state it serves at once. A write nobody staged commits
 //!   where it is and waits for the commit.
 //!
+//! A written Description is kept with them (#2364): the log's copy in its
+//! BUFFER_READY state is what the snapshot holds, and the log serves the
+//! same text. A NULL to it changes nothing, so it is neither saved nor
+//! staged.
+//!
 //! Each step holds the settings as a write leaves them ([`LogReporting`]);
 //! the write itself is made on the log's own state, so a BUFFER_READY report
 //! committed while the request waited keeps its counts and history. The
@@ -46,6 +51,7 @@ use crate::log_persistence::LogReportingSettings;
 use crate::log_persistence::codec::MAX_TEXT_OCTETS;
 use crate::log_reporting::BufferReadyReporting;
 use crate::trend::CovSettings;
+use crate::write_config::description;
 
 /// A log's reporting settings as a write leaves them: a copy of its
 /// BUFFER_READY state, and of a Trend Log's COV settings.
@@ -143,17 +149,31 @@ fn kept(log: &impl DurableLog, property: P) -> bool {
         | P::EVENT_ALGORITHM_INHIBIT_REF
         | P::EVENT_ALGORITHM_INHIBIT => true,
         P::CLIENT_COV_INCREMENT | P::COV_RESUBSCRIPTION_INTERVAL => log.reporting().1.is_some(),
+        // Beside them, a written Description (#2364).
+        P::DESCRIPTION => true,
         _ => false,
     }
 }
 
-/// Make `write`, of a setting [`kept`] names, on these parts.
+/// Whether the log keeps `write`: one of the settings [`kept`] names, but
+/// not a NULL to Description, which changes nothing.
+fn kept_write(log: &impl DurableLog, write: &PendingWrite) -> bool {
+    kept(log, write.property) && !description::null_write(write.property, &write.value)
+}
+
+/// Make `write`, of a setting [`kept`] names, on these parts. A
+/// Description past 16 KiB is refused here, before anything is staged or
+/// committed, as a message text is (#2364).
 fn make(
     buffer_ready: &mut BufferReadyReporting,
     cov: Option<&mut CovSettings>,
     write: &PendingWrite,
     total: u32,
 ) -> Result<(), Error> {
+    if write.property == P::DESCRIPTION {
+        buffer_ready.keep_description(description::written(&write.value)?);
+        return Ok(());
+    }
     if let Some(cov) = cov
         && let Some(result) = cov.write(write.property, &write.value)
     {
@@ -164,11 +184,17 @@ fn make(
         .unwrap_or_else(|| Err(common::unknown_property_error()))
 }
 
-/// Make `write` on the log itself, counting it.
+/// Make `write` on the log itself, counting it; the log serves a written
+/// Description it keeps.
 fn make_on<L: DurableLog>(log: &mut L, write: &PendingWrite) -> Result<(), Error> {
     let total = log.durable_parts().1.total_record_count();
     let (buffer_ready, cov) = log.reporting_mut();
     make(buffer_ready, cov, write, total)?;
+    if let PropertyValue::CharacterString(text) = &write.value
+        && write.property == P::DESCRIPTION
+    {
+        log.description_mut().clone_from(text);
+    }
     if let Some(store) = log.durable_parts().0 {
         store.writes = store.writes.wrapping_add(1);
     }
@@ -188,12 +214,15 @@ pub(crate) fn kept_over_setter(log: &impl DurableLog, property: P) -> bool {
 }
 
 /// Take back the settings a reopened log saved, before its state is noted
-/// as the one storage holds.
+/// as the one storage holds, and serve a saved Description.
 pub(crate) fn restore<L: DurableLog>(log: &mut L, saved: &LogReportingSettings) {
     let (buffer_ready, cov) = log.reporting_mut();
     buffer_ready.restore(saved);
     if let Some(cov) = cov {
         cov.restore(saved);
+    }
+    if let Some(text) = &saved.description {
+        log.description_mut().clone_from(text);
     }
 }
 
@@ -228,7 +257,7 @@ pub(crate) fn write<L: DurableLog>(
     array_index: Option<u32>,
     value: &PropertyValue,
 ) -> Option<Result<(), Error>> {
-    if log.store().is_none() || !kept(log, property) {
+    if log.store().is_none() || !kept(log, property) || description::null_write(property, value) {
         return None;
     }
     let write = PendingWrite {
@@ -307,7 +336,7 @@ impl<R: SnapshotRecord> LogStore<R> {
 /// ([`DurableWrites::stage_writes`](crate::durable::DurableWrites::stage_writes)):
 /// one commit of the log's state with the settings they leave together.
 pub(crate) fn stage_writes<L: DurableLog>(log: &mut L, writes: &[PendingWrite]) -> StageStep {
-    if log.store().is_none() || !writes.iter().any(|write| kept(log, write.property)) {
+    if log.store().is_none() || !writes.iter().any(|write| kept_write(log, write)) {
         return StageStep::Skip;
     }
     let busy = log.durable_parts().0.and_then(|store| store.saves.busy());
@@ -320,7 +349,7 @@ pub(crate) fn stage_writes<L: DurableLog>(log: &mut L, writes: &[PendingWrite]) 
     let total = state.total_record_count;
     let view: &L = log;
     let steps = staged::steps(writes, |earlier, write| {
-        if !kept(view, write.property) {
+        if !kept_write(view, write) {
             return Ok(None);
         }
         crate::property_metadata::check_write_array_index(view, write.property, write.array_index)?;

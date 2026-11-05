@@ -120,9 +120,9 @@ fn configured_destinations_apply_at_every_start_until_a_write() {
     // Writes to other properties save nothing.
     first
         .write_property(
-            PropertyIdentifier::DESCRIPTION,
+            PropertyIdentifier::NOTIFICATION_CLASS,
             None,
-            PropertyValue::CharacterString("alarms".into()),
+            PropertyValue::Unsigned(9),
             None,
         )
         .unwrap();
@@ -199,6 +199,7 @@ fn a_saved_recipient_list_a_write_would_refuse_refuses_the_class() {
             class,
             NotificationClassSnapshot {
                 recipient_list: Some(saved),
+                description: None,
             },
         );
         assert!(NotificationClass::with_persistence(1, "NC", storage).is_err());
@@ -235,12 +236,14 @@ fn file_persistence_round_trips_and_refuses_another_objects_file() {
             make_dest_device(3),
             address_destination(&[1, 2, 3, 4, 0xBA, 0xC0]),
         ]),
+        description: None,
     };
     // The list may be empty, or absent.
     for saved in [
         snapshot.clone(),
         NotificationClassSnapshot {
             recipient_list: Some(Vec::new()),
+            description: None,
         },
         NotificationClassSnapshot::default(),
     ] {
@@ -328,6 +331,7 @@ fn file_persistence_refuses_a_file_past_its_size_or_entry_caps() {
         .collect();
     let full = NotificationClassSnapshot {
         recipient_list: Some(destinations.clone()),
+        description: None,
     };
     storage.save(class, &full).unwrap();
     assert_eq!(storage.load(class).unwrap(), Some(full.clone()));
@@ -338,6 +342,7 @@ fn file_persistence_refuses_a_file_past_its_size_or_entry_caps() {
     too_many.push(make_dest_device(999));
     let past_cap = NotificationClassSnapshot {
         recipient_list: Some(too_many),
+        description: None,
     };
     assert!(matches!(
         storage.save(class, &past_cap),

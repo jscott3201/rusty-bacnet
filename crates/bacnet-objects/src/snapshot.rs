@@ -23,14 +23,22 @@
 //!
 //! | Module | Snapshot | Tag | Versions read (written) | File backend |
 //! | --- | --- | --- | --- | --- |
-//! | [`log`] | [`LogSnapshot`] | `RBLOGS01` | 1, 2 (2) | `FileLogPersistence`, one slot of two |
+//! | [`log`] | [`LogSnapshot`] | `RBLOGS01` | 1, 2, 3 (2, 3) | `FileLogPersistence`, one slot of two |
 //! | [`audit_log`] | [`AuditLogSnapshot`] | `RBALOG01` | 1, 2, 3 (3) | `FileAuditLogPersistence`, one slot of two |
 //! | [`write_config`] | [`WriteConfigSnapshot`] | `RBNWCF01` | kinds 1 to 5 (2 to 5) | `FileWriteConfigPersistence` |
-//! | [`notification_class`] | [`NotificationClassSnapshot`] | `RBNNCL01` | 1 (1) | `FileNotificationClassPersistence` |
-//! | [`notification_forwarder`] | [`ForwarderSnapshot`] | `RBNFWD01` | 1 (1) | `FileNotificationForwarderPersistence` |
+//! | [`notification_class`] | [`NotificationClassSnapshot`] | `RBNNCL01` | 1, 2 (1, 2) | `FileNotificationClassPersistence` |
+//! | [`notification_forwarder`] | [`ForwarderSnapshot`] | `RBNFWD01` | 1, 2 (1, 2) | `FileNotificationForwarderPersistence` |
 //! | [`tags`] | [`TagsSnapshot`] | `RBNTAG01` | 1 (1) | `FileTagsPersistence` |
 //! | [`color`] | [`ColorOutputSnapshot`] | `RBNCLR02` | 1 (`RBNCLR01`), 2 (2) | `FileColorOutputPersistence` |
-//! | [`access_rights`] | [`AccessRightsSnapshot`] | `RBNACR01` | 1 (1) | `FileAccessRightsPersistence` |
+//! | [`access_rights`] | [`AccessRightsSnapshot`] | `RBNACR01` | 1, 2 (1, 2) | `FileAccessRightsPersistence` |
+//!
+//! A written Description (#2364) takes the newest version (or kind) in each
+//! row it changed: log schema version 3, write configuration kind 5 and the
+//! one-file formats' version 2. Only a snapshot holding one is written that
+//! way, so a snapshot without one keeps the octets an earlier release wrote,
+//! and a release that predates the version refuses one with it as
+//! [`UnknownVersion`](SnapshotErrorKind::UnknownVersion) or
+//! [`UnknownKind`](SnapshotErrorKind::UnknownKind).
 //!
 //! The one-file formats share a header: the eight-octet tag, which names the
 //! format and its version, then the four-octet identifier of the object the
@@ -132,6 +140,8 @@ pub use error::{SnapshotError, SnapshotErrorKind};
 
 #[cfg(test)]
 mod audit_log_tests;
+#[cfg(test)]
+mod described_tests;
 #[cfg(test)]
 mod description_tests;
 #[cfg(test)]

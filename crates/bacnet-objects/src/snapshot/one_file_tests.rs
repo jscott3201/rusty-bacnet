@@ -49,6 +49,7 @@ pub(super) fn destination(instance: u32) -> BACnetDestination {
 pub(super) fn class() -> (ObjectIdentifier, NotificationClassSnapshot) {
     let snapshot = NotificationClassSnapshot {
         recipient_list: Some(vec![destination(2), destination(3)]),
+        description: None,
     };
     (oid(ObjectType::NOTIFICATION_CLASS, 1), snapshot)
 }
@@ -62,6 +63,7 @@ pub(super) fn forwarder() -> (ObjectIdentifier, ForwarderSnapshot) {
             issue_confirmed_notifications: false,
             time_remaining: 15,
         }],
+        description: None,
     };
     (oid(ObjectType::NOTIFICATION_FORWARDER, 1), snapshot)
 }
@@ -100,6 +102,7 @@ pub(super) fn rights() -> (ObjectIdentifier, AccessRightsSnapshot) {
             device_identifier: None,
             object_identifier: oid(ObjectType::ACCESS_CREDENTIAL, 3),
         }),
+        description: None,
     };
     (oid(ObjectType::ACCESS_RIGHTS, 1), snapshot)
 }
@@ -222,9 +225,9 @@ fn a_version_1_colour_file_loads_with_no_default() {
 fn a_newer_tag_or_kind_is_not_damage() {
     let (object, snapshot) = class();
     let mut octets = notification_class::encode(object, &snapshot).unwrap();
-    octets[6..8].copy_from_slice(b"02");
+    octets[6..8].copy_from_slice(b"03");
     let error = notification_class::decode(object, &octets).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::UnknownVersion(2));
+    assert_eq!(error.kind(), SnapshotErrorKind::UnknownVersion(3));
     assert!(!error.is_damage());
     let (object, snapshot) = colour();
     let mut octets = color::encode(object, &snapshot).unwrap();

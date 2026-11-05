@@ -156,7 +156,8 @@ fn a_dropped_staged_write_leaves_configured_destinations_unsaved() {
     assert_eq!(
         storage.snapshot(),
         Some(NotificationClassSnapshot {
-            recipient_list: None
+            recipient_list: None,
+            description: None,
         })
     );
     drop(nc);
@@ -266,10 +267,11 @@ fn staging_skips_writes_the_class_does_not_save_or_will_refuse() {
     let mut nc = persistent(&storage);
     let list = framed(&[make_dest_device(7)]);
     let skipped = |step| matches!(step, StageStep::Skip);
+    // A NULL Description changes nothing (#2364).
     assert!(skipped(nc.stage_write(
         P::DESCRIPTION,
         None,
-        &PropertyValue::CharacterString("alarms".into())
+        &PropertyValue::Null
     )));
     assert!(skipped(nc.stage_write(P::RECIPIENT_LIST, Some(1), &list)));
     // A malformed list is refused by the write itself.
@@ -320,7 +322,8 @@ fn a_class_dropped_with_a_staged_write_and_no_written_list_saves_none() {
     assert_eq!(
         storage.snapshot(),
         Some(NotificationClassSnapshot {
-            recipient_list: None
+            recipient_list: None,
+            description: None,
         })
     );
     assert!(!persistent(&storage).recipient_list_saved());

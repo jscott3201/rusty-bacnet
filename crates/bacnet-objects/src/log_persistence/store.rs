@@ -413,6 +413,9 @@ pub(crate) trait DurableLog: BACnetObject {
     /// [`reporting`](Self::reporting), to change.
     fn reporting_mut(&mut self) -> (&mut BufferReadyReporting, Option<&mut CovSettings>);
 
+    /// The Description the log serves, for a written one it keeps (#2364).
+    fn description_mut(&mut self) -> &mut String;
+
     /// The storage, if the log has one, and the resident records, borrowed
     /// together.
     fn durable_parts(

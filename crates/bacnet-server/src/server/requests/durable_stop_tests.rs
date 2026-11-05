@@ -32,6 +32,7 @@ const RECIPIENT_LIST: PropertyIdentifier = PropertyIdentifier::RECIPIENT_LIST;
 fn snapshot(list: &[BACnetDestination]) -> NotificationClassSnapshot {
     NotificationClassSnapshot {
         recipient_list: Some(list.to_vec()),
+        description: None,
     }
 }
 

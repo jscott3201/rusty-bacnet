@@ -4564,14 +4564,18 @@ ai.set_notification_class(5); // a value a peer wrote and saved wins
 
 #### Keeping a written Description (#2364)
 
-The object types with a write-configuration store keep a Description a peer
+The object types with a store of their own keep a Description a peer
 writes in the same file, with the same rules:
 
 - the thirteen above, through `with_reporting_persistence`: the analog,
   binary and multi-state Input, Output and Value objects, Access Door,
   Access Zone, Event Enrollment and Alert Enrollment;
 - Timer and Channel, through `TimerObject::with_persistence` and
-  `ChannelObject::with_persistence`.
+  `ChannelObject::with_persistence`;
+- the Trend Log, Trend Log Multiple and Event Log, beside their written
+  reporting settings, through their `with_persistence`;
+- Notification Class, Notification Forwarder and Access Rights, through
+  their `with_persistence`.
 
 A write of Description is saved before it is answered, refused with DEVICE /
 OPERATIONAL_PROBLEM when the save fails, and staged by the server with the
@@ -4580,10 +4584,15 @@ request's other kept writes, one save for them all. A Description past
 anything is saved; a long one the object took before it had storage refuses
 no other write. A NULL succeeds, changes nothing and saves nothing. A saved
 Description wins over `set_description` (on the analog, binary and
-multi-state objects and Event Enrollment; the others have no setter) until
+multi-state objects, Event Enrollment, the logs, Notification Class and
+Notification Forwarder; the others have no setter) until
 `clear_written_reporting`, or a Timer's or Channel's `clear_written_config`,
-drops it. `written_reporting().description` and the `description` field of
-`TimerWriteConfig` and `ChannelWriteConfig` show what is saved.
+drops it; Notification Class, Notification Forwarder and Access Rights have
+no clear, so a saved Description wins until the file goes. A log's
+`written_reporting().description`, and the `description` field of
+`TimerWriteConfig`, `ChannelWriteConfig`, `LogReportingSettings`,
+`NotificationClassSnapshot`, `ForwarderSnapshot` and `AccessRightsSnapshot`,
+show what is saved.
 
 Storage holds it as kind 5 of `RBNWCF01`
 (`snapshot::write_config::KIND_WITH_DESCRIPTION`): the Description, then the
@@ -4593,9 +4602,19 @@ reads it; one holding a Description fails to load there as an unknown kind.
 `TimerWriteConfig` and `ChannelWriteConfig` are now `#[non_exhaustive]`, as
 `ReportingWriteConfig` is: build them from `Default` and set their fields.
 
-Every other object type, Device, the logs, Notification Class and
-Forwarder, Access Rights, the colour and lighting objects included, keeps a
-written Description in memory only: it lasts until a restart.
+The other formats take a new version for it, written only for a snapshot
+holding a Description, so a file without one keeps its octets and an older
+build refuses one with it as an unknown version:
+
+- the logs' slot, schema version 3 of `RBLOGS01`
+  (`snapshot::log::VERSION_WITH_DESCRIPTION`): the Description follows the
+  written reporting settings;
+- `RBNNCL02`, `RBNFWD02` and `RBNACR02` (each module's
+  `MAGIC_WITH_DESCRIPTION`): the Description, its length in four octets and
+  its UTF-8, between the header and version 1's body.
+
+Every other object type, Device, the colour and lighting objects included,
+keeps a written Description in memory only: it lasts until a restart.
 
 #### Creation and deletion
 
@@ -5480,12 +5499,14 @@ Loop's measured input has its own route,
 | `EventEnrollmentObject` | `::new(instance, name, event_type)` |
 
 A `NotificationClass` built with `with_persistence` keeps a written
-`Recipient_List` across a restart (Clause 12.21.8, #1315). The storage is an
+`Recipient_List` across a restart (Clause 12.21.8, #1315), and a written
+Description (#2364, see [Keeping a written
+Description](#keeping-a-written-description-2364)). The storage is an
 application-owned `NotificationClassPersistence` that loads and saves a
 `NotificationClassSnapshot`; `FileNotificationClassPersistence` keeps it in
 one file, replaced whole the same way as the forwarder's file (a format of
-its own, tagged `RBNNCL01`, with the same 64 KiB and 32-destination caps on
-load). A class built with `new` keeps the list in memory only.
+its own, tagged `RBNNCL01`, or `RBNNCL02` with a Description, with the same
+64 KiB and 32-destination caps on load). A class built with `new` keeps the list in memory only.
 
 Saves follow the forwarder's rules (see
 [Notification forwarding](#notification-forwarding)), and the two objects
@@ -5782,9 +5803,10 @@ persistence)`.
   numbers, Total_Record_Count and the BUFFER_READY counts don't change.
 - **Size limit.** A slot holds at most 256 MiB, so `with_persistence` refuses
   with `Error::OutOfRange` a `buffer_size` whose full buffer of the family's
-  largest records couldn't fit: 828,302 records for a Trend Log, 178,437 for
-  an Event Log and 15,849 for a Trend Log Multiple (sized for 64 references
-  of 256-octet values). A record an application adds that is larger than the
+  largest records couldn't fit: 828,251 records for a Trend Log, 178,426 for
+  an Event Log and 15,848 for a Trend Log Multiple (sized for 64 references
+  of 256-octet values, beside the written reporting settings and a written
+  Description, #2364). A record an application adds that is larger than the
   stack's own can still make a commit fail; the log warns and retries.
 - **Checks.** `FileLogPersistence` checks each slot as it reads it, as
   `restore_log_buffer` checks its arguments plus the snapshot's own rules:

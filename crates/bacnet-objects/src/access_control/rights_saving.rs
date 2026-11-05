@@ -30,6 +30,11 @@
 //! storing it. Configuration alone is never saved, but a write saves the
 //! whole array it leaves, so an element or index-0 write to an array no
 //! write has set yet also saves the configured rules it didn't touch.
+//!
+//! A written Description is kept in the same file (#2364), saved and staged
+//! as the others are. A NULL changes nothing, so it is neither saved nor
+//! staged, and one past 16 KiB is refused with RESOURCES /
+//! NO_SPACE_TO_WRITE_PROPERTY.
 
 use crate::prelude::*;
 use alloc::sync::Arc;
@@ -45,6 +50,7 @@ use super::{AccessRightsObject, check_accompaniment, checked_rules};
 use crate::common;
 use crate::durable::staged::{self, StagedSaves, Step};
 use crate::durable::{DurableWrites, PendingWrite, SaveWait, SaveWriter, StageStep};
+use crate::write_config::description;
 
 /// The state a saved write leaves: the property it sets, as the object
 /// holds it.
@@ -53,6 +59,7 @@ pub(super) enum NextState {
     NegativeAccessRules(Vec<BACnetAccessRule>),
     Enable(bool),
     Accompaniment(BACnetDeviceObjectReference),
+    Description(String),
 }
 
 /// An object's writer and the write staged on it.
@@ -65,17 +72,20 @@ pub(super) struct Written {
     negative: bool,
     enable: bool,
     accompaniment: bool,
+    description: bool,
 }
 
-/// Whether `property` is one an Access Rights object saves.
-fn saved_property(property: PropertyIdentifier) -> bool {
+/// Whether an Access Rights object with storage saves a write of `value` to
+/// `property`: a rule array, Enable, Accompaniment, or a Description other
+/// than a NULL, which changes nothing (#2364).
+pub(super) fn saved_write(property: PropertyIdentifier, value: &PropertyValue) -> bool {
     matches!(
         property,
         PropertyIdentifier::POSITIVE_ACCESS_RULES
             | PropertyIdentifier::NEGATIVE_ACCESS_RULES
             | PropertyIdentifier::LOG_ENABLE
             | PropertyIdentifier::ACCOMPANIMENT
-    )
+    ) || (property == PropertyIdentifier::DESCRIPTION && !description::null_write(property, value))
 }
 
 impl AccessRightsObject {
@@ -89,7 +99,8 @@ impl AccessRightsObject {
     /// [`MAX_ACCESS_RULES`](super::MAX_ACCESS_RULES) rules or a rule the
     /// setters refuse, or the saved Accompaniment is one
     /// [`set_accompaniment`](AccessRightsObject::set_accompaniment) refuses,
-    /// as well as when storage cannot be read.
+    /// or the saved Description is past 16 KiB, as well as when storage
+    /// cannot be read. A written Description is kept there too (#2364).
     pub fn with_persistence(
         instance: u32,
         name: impl Into<String>,
@@ -115,6 +126,11 @@ impl AccessRightsObject {
                 rights.accompaniment = Some(reference);
                 rights.written.accompaniment = true;
             }
+            description::check_saved(saved.description.as_deref())?;
+            if let Some(text) = saved.description {
+                rights.description = text;
+                rights.written.description = true;
+            }
         }
         let writer = SaveWriter::new(
             format!("bacnet-ar-{instance}-save"),
@@ -131,9 +147,9 @@ impl AccessRightsObject {
 
     /// Whether storage holds a value a write set for `property`
     /// (Positive_Access_Rules, Negative_Access_Rules, Enable, property 133,
-    /// or Accompaniment), now or before a restart. That property's setter
-    /// then leaves it alone. Always false without persistence, and for any
-    /// other property.
+    /// Accompaniment or Description), now or before a restart. That
+    /// property's setter then leaves it alone. Always false without
+    /// persistence, and for any other property.
     pub fn property_saved(&self, property: PropertyIdentifier) -> bool {
         self.storage.is_some()
             && match property {
@@ -141,6 +157,7 @@ impl AccessRightsObject {
                 PropertyIdentifier::NEGATIVE_ACCESS_RULES => self.written.negative,
                 PropertyIdentifier::LOG_ENABLE => self.written.enable,
                 PropertyIdentifier::ACCOMPANIMENT => self.written.accompaniment,
+                PropertyIdentifier::DESCRIPTION => self.written.description,
                 _ => false,
             }
     }
@@ -179,6 +196,7 @@ impl AccessRightsObject {
                 .accompaniment
                 .then(|| self.accompaniment.clone())
                 .flatten(),
+            description: self.written.description.then(|| self.description.clone()),
         }
     }
 
@@ -212,9 +230,13 @@ impl AccessRightsObject {
             PropertyIdentifier::ACCOMPANIMENT if self.accompaniment.is_none() => {
                 return Err(common::unknown_property_error());
             }
-            // Enable and Accompaniment are no arrays: the handlers refuse an
-            // index before the object sees it, and so does a direct call.
+            // Enable, Accompaniment and Description are no arrays: the
+            // handlers refuse an index before the object sees it, and so
+            // does a direct call.
             _ if array_index.is_some() => return Err(common::property_is_not_an_array_error()),
+            PropertyIdentifier::DESCRIPTION => {
+                return description::written(&value).map(NextState::Description);
+            }
             PropertyIdentifier::ACCOMPANIMENT => {
                 let reference: BACnetDeviceObjectReference =
                     crate::device_reference::decode_reference(&value)?;
@@ -260,12 +282,17 @@ impl AccessRightsObject {
                 self.accompaniment = Some(reference);
                 self.written.accompaniment = true;
             }
+            NextState::Description(text) => {
+                self.description = text;
+                self.written.description = true;
+            }
         }
         self.writes = self.writes.wrapping_add(1);
     }
 
-    /// Write Positive_Access_Rules, Negative_Access_Rules, Enable or
-    /// Accompaniment, saving the result before the object serves it. A
+    /// Write Positive_Access_Rules, Negative_Access_Rules, Enable,
+    /// Accompaniment or, with storage, Description, saving the result
+    /// before the object serves it. A
     /// staged write takes the state already saved; any other saves now. A
     /// state that cannot be saved is refused with DEVICE /
     /// OPERATIONAL_PROBLEM and the old value stays.
@@ -339,6 +366,7 @@ fn apply(snapshot: &mut AccessRightsSnapshot, next: &NextState) {
         }
         NextState::Enable(enable) => snapshot.enable = Some(*enable),
         NextState::Accompaniment(reference) => snapshot.accompaniment = Some(reference.clone()),
+        NextState::Description(text) => snapshot.description = Some(text.clone()),
     }
 }
 
@@ -360,14 +388,15 @@ impl DurableWrites for AccessRightsObject {
     /// save (#1423), so a head end that provisions both rule arrays and
     /// Enable in one WritePropertyMultiple saves once, off the guard.
     fn stage_writes(&mut self, writes: &[PendingWrite]) -> StageStep {
-        if self.storage.is_none() || !writes.iter().any(|write| saved_property(write.property)) {
+        let saved = |write: &PendingWrite| saved_write(write.property, &write.value);
+        if self.storage.is_none() || !writes.iter().any(saved) {
             return StageStep::Skip;
         }
         if let Some(wait) = self.with_storage(Storage::busy).flatten() {
             return StageStep::Busy(wait);
         }
         let steps = staged::steps(writes, |earlier, write| {
-            if !saved_property(write.property) {
+            if !saved(write) {
                 return Ok(None);
             }
             let PendingWrite {

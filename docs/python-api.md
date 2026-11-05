@@ -2984,8 +2984,11 @@ Description included, so the object starts from its defaults. A file that doesn'
 An Alert Enrollment takes only ALARM and EVENT as Notify_Type, so a file
 holding another fails its build the same way.
 
-On every other object type, a Description a peer writes lasts until the
-server restarts; only these builders, `add_timer` and `add_channel` keep it.
+These builders, `add_timer`, `add_channel`, the three log builders,
+`add_notification_class`, `add_notification_forwarder` and
+`add_access_rights` keep a written Description in their `storage_path` file,
+with these rules. On every other object type, a Description a peer writes
+lasts until the server restarts.
 
 The endpoints' object builders (`BipEndpoint.add_analog_input` and the rest)
 don't take these keywords: an endpoint executes WriteProperty only on its own
@@ -3105,8 +3108,8 @@ server.add_event_enrollment(
 ```
 
 A Notification Class with `storage_path` keeps the Recipient_List a client
-writes in that file and serves it again after a restart; without it the list
-lives in memory only. The file is replaced whole on each list write, and the
+writes in that file and serves it again after a restart, and a written
+Description too (#2364); without it they live in memory only. The file is replaced whole on each list write, and the
 save runs on a thread of its own while the server goes on answering other
 requests. A write whose list cannot be saved is refused with DEVICE /
 OPERATIONAL_PROBLEM, and the class keeps its old list. `storage_path` takes a
@@ -3122,8 +3125,9 @@ applies at every start and is not saved (#1364).
 The Notification Forwarder sends each event notification the server
 receives, and each one its own objects address to its Device, on to the
 destinations its Recipient_List and Subscribed_Recipients name. Clients
-configure both lists over the network. `storage_path` keeps both lists in
-one file, replaced whole when either list changes and at most once a minute
+configure both lists over the network. `storage_path` keeps both lists, and
+a written Description (#2364), in one file, replaced whole when either list
+or the Description changes and at most once a minute
 while the Subscribed_Recipients entries count down, so the lists and each
 entry's remaining minutes survive a restart; without it the lists live in
 memory only. Saves run on a thread of their own, and the server waits for a
@@ -3295,15 +3299,17 @@ server.add_trend_log_multiple(
   Trend Log Client_COV_Increment and COV_Resubscription_Interval. Each is
   saved before the write is answered, and once saved wins over
   `add_trend_log`'s `client_cov_increment` and `cov_resubscription_interval`.
+  A written Description is kept with them (#2364), and one past 16 KiB is
+  refused with RESOURCES / NO_SPACE_TO_WRITE_PROPERTY.
   All three take keyword-only `clear_written_reporting`: `True` drops the
-  saved settings, so `add_trend_log`'s keywords apply again; the others
-  keep their values until the next start.
+  saved settings, Description included, so `add_trend_log`'s keywords apply
+  again; the others keep their values until the next start.
   `add_event_log`'s `log_received_notifications` isn't saved and applies on
   every start.
 - `buffer_size` is the application's, so it wins over the saved Buffer_Size:
   a larger one keeps every record, and a smaller one keeps the newest
-  records that fit and logs a warning. A durable log holds at most 828,302
-  records (Trend Log), 178,437 (Event Log) or 15,849 (Trend Log Multiple); a
+  records that fit and logs a warning. A durable log holds at most 828,251
+  records (Trend Log), 178,426 (Event Log) or 15,848 (Trend Log Multiple); a
   larger `buffer_size` raises `BacnetError`.
 - The `add_*` methods return nothing, so to tell whether a log will reopen,
   check whether `<storage_path>.slot0` or `.slot1` exists before the call.
@@ -4488,8 +4494,8 @@ Device raises `ValueError`, and another object type raises
 `BacnetProtocolError` (VALUE_OUT_OF_RANGE), from the keyword or a write.
 
 With `storage_path`, the arrays, Enable and Accompaniment that peers write are
-kept in that file and served again after a restart; without it they live in
-memory only:
+kept in that file and served again after a restart, and so is a written
+Description (#2364); without it they live in memory only:
 
 ```python
 server.add_access_rights(

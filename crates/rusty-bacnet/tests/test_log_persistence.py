@@ -101,9 +101,9 @@ class StoragePathSignatureTests(unittest.TestCase):
                     with self.assertRaises(TypeError):
                         getattr(server, name)(2, "Log", storage_path=Path(directory) / "p")
             # Past what a slot holds for a Trend Log Multiple.
-            with self.assertRaisesRegex(BacnetError, "at most 15849"):
+            with self.assertRaisesRegex(BacnetError, "at most 15848"):
                 server.add_trend_log_multiple(
-                    3, "TLM-3", 15_850, storage_path=str(Path(directory) / "big")
+                    3, "TLM-3", 15_849, storage_path=str(Path(directory) / "big")
                 )
         self.assertEqual(server._pending_registration_count(), 0)
 

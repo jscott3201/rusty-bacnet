@@ -42,7 +42,9 @@
 //! too (#2364), as kind 5 of the format wrapped around the kind it writes,
 //! with the same rules. A Timer and a Channel drop it with their
 //! `clear_written_config`, and the reporting objects with
-//! `clear_written_reporting`. On every other object type a written
+//! `clear_written_reporting`. The three logs, Notification Class,
+//! Notification Forwarder and Access Rights keep it in their own formats
+//! (see [`crate::snapshot`]). On every other object type a written
 //! Description lasts until a restart.
 //!
 //! A Command has nothing here: its Action is read-only over the network

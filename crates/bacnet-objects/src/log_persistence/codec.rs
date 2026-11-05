@@ -12,7 +12,11 @@
 //! followed by length-prefixed Clause 21 encodings. Schema version 2
 //! (#1952) ends the payload with the written reporting settings
 //! ([`reporting`]); a version 1 slot, which stops after the records, still
-//! loads, with none written. Every integer is big-endian.
+//! loads, with none written. Schema version 3 (#2364) adds a written
+//! Description after them; only a snapshot holding one takes it, so a slot
+//! without one keeps version 2's octets, and a build that predates version
+//! 3 refuses one with it as an unknown version. Every integer is
+//! big-endian.
 
 use crate::prelude::*;
 use bacnet_encoding::constructed::{
@@ -40,10 +44,13 @@ mod reporting;
 pub(super) use reporting::MAX_TEXT_OCTETS;
 
 pub(crate) const MAGIC: &[u8; 8] = b"RBLOGS01";
-/// The schema written: version 2 adds the written reporting settings.
+/// The schema written without a Description: version 2 adds the written
+/// reporting settings.
 pub(crate) const SCHEMA_VERSION: u16 = 2;
 /// The schema before them (#1541), still read.
 pub(crate) const SCHEMA_VERSION_1: u16 = 1;
+/// The schema written with a written Description (#2364).
+pub(crate) const SCHEMA_VERSION_DESCRIBED: u16 = 3;
 pub(super) const HEADER_LEN: usize = 8 + 2 + 4 + 8 + 4;
 pub(super) const TRAILER_LEN: usize = 4;
 /// The most octets one record or reference may take in a slot.
@@ -97,10 +104,10 @@ impl SnapshotRecord for BACnetLogMultipleRecord {
 }
 
 /// Room in a slot for everything but the records: header, trailer, the
-/// fixed fields, 64 references and the written reporting settings, whose
-/// three message texts [`reporting::MAX_TEXT_OCTETS`] caps (about 50 KiB
-/// in all).
-const FIXED_ALLOWANCE: usize = 64 * 1024;
+/// fixed fields, 64 references, the written reporting settings, whose
+/// three message texts [`reporting::MAX_TEXT_OCTETS`] caps, and a written
+/// Description under the same cap (about 67 KiB in all, #2364).
+const FIXED_ALLOWANCE: usize = 80 * 1024;
 
 /// The largest Buffer_Size an `R` log can keep in a slot: enough of the
 /// family's worst-case records, each with its length prefix, to fill the
@@ -221,7 +228,11 @@ fn encode_slot<R: SnapshotRecord>(snapshot: &LogSnapshot<R>) -> Result<Vec<u8>, 
     // the payload is written in place rather than copied in after (#2233).
     let mut data = Vec::new();
     data.extend_from_slice(MAGIC);
-    data.extend_from_slice(&SCHEMA_VERSION.to_be_bytes());
+    let version = match snapshot.reporting.description {
+        Some(_) => SCHEMA_VERSION_DESCRIBED,
+        None => SCHEMA_VERSION,
+    };
+    data.extend_from_slice(&version.to_be_bytes());
     data.extend_from_slice(&snapshot.object_identifier.encode());
     data.extend_from_slice(&snapshot.generation.to_be_bytes());
     data.extend_from_slice(&[0; 4]);
@@ -326,7 +337,7 @@ fn decode_slot<R: SnapshotRecord>(
 ) -> Result<LogSnapshot<R>, SnapshotError> {
     verify_integrity(data)?;
     let version = u16::from_be_bytes([data[8], data[9]]);
-    if version != SCHEMA_VERSION && version != SCHEMA_VERSION_1 {
+    if !(SCHEMA_VERSION_1..=SCHEMA_VERSION_DESCRIBED).contains(&version) {
         return Err(SnapshotError::new(
             SnapshotErrorKind::UnknownVersion(version),
             "",
@@ -500,7 +511,7 @@ fn decode_payload<R: SnapshotRecord>(
     let reporting = if version == SCHEMA_VERSION_1 {
         LogReportingSettings::default()
     } else {
-        reporting::read(&mut reader)?
+        reporting::read(&mut reader, version == SCHEMA_VERSION_DESCRIBED)?
     };
     if reader.offset != reader.data.len() {
         return Err(corrupt("payload has trailing octets"));

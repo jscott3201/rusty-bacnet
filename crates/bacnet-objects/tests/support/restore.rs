@@ -284,6 +284,33 @@ pub const FORMATS: &[Format] = &[
         sample: samples::described_reporting_write_config,
         kind: Kind::ReportingWriteConfig,
     },
+    // The formats of their own with a written Description (#2364), after
+    // the rest for the same reason: the log's schema version 3, and the
+    // version 2 tags of the forwarder's, the class's and Access Rights'.
+    Format {
+        name: "described_trend_log",
+        two_slot: true,
+        sample: samples::described_trend_log,
+        kind: Kind::TrendLog,
+    },
+    Format {
+        name: "described_notification_forwarder",
+        two_slot: false,
+        sample: samples::described_notification_forwarder,
+        kind: Kind::NotificationForwarder,
+    },
+    Format {
+        name: "described_notification_class",
+        two_slot: false,
+        sample: samples::described_notification_class,
+        kind: Kind::NotificationClass,
+    },
+    Format {
+        name: "described_access_rights",
+        two_slot: false,
+        sample: samples::described_access_rights,
+        kind: Kind::AccessRights,
+    },
 ];
 
 impl Format {
@@ -568,6 +595,14 @@ where
                     Some(PropertyValue::Unsigned(snapshot.total_record_count.into())),
                     "the reopened log lost its Total_Record_Count"
                 );
+                if let Some(text) = &snapshot.reporting.description {
+                    let served = log.read_property(PropertyIdentifier::DESCRIPTION, None);
+                    assert_eq!(
+                        served.ok(),
+                        Some(PropertyValue::CharacterString(text.clone())),
+                        "the reopened log lost its written Description"
+                    );
+                }
                 if let Some(class) = snapshot.reporting.notification_class {
                     let served = log.read_property(PropertyIdentifier::NOTIFICATION_CLASS, None);
                     assert_eq!(

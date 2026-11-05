@@ -52,6 +52,7 @@ fn destination(instance: u32) -> BACnetDestination {
 fn snapshot(list: &[BACnetDestination]) -> NotificationClassSnapshot {
     NotificationClassSnapshot {
         recipient_list: Some(list.to_vec()),
+        description: None,
     }
 }
 

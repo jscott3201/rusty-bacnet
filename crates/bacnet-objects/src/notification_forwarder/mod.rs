@@ -70,6 +70,7 @@ use crate::durable::{DurableWrites, PendingWrite, SaveWait, StageStep};
 use crate::notification_class::recipient_list;
 use crate::subscribed_recipients::SubscribedRecipients;
 use crate::traits::BACnetObject;
+use crate::write_config::description;
 
 mod metadata;
 mod persistence;
@@ -108,12 +109,15 @@ pub struct NotificationForwarderObject {
     local_forwarding_only: bool,
     port_filter: Option<Vec<BACnetPortPermission>>,
     storage: Option<saving::Storage>,
-    /// Writes either list has taken, so a staged write can tell whether
-    /// another came between.
-    list_writes: u64,
+    /// Kept writes taken, either list's or Description's, so a staged write
+    /// can tell whether another came between.
+    kept_writes: u64,
     /// A write set Recipient_List, now or before a restart, so storage keeps
     /// it and configured destinations no longer apply.
     recipient_list_written: bool,
+    /// A write set Description, now or before a restart, so storage keeps
+    /// it and `set_description` no longer applies (#2364).
+    description_written: bool,
     save_counters: ForwarderSaveCounters,
 }
 
@@ -134,8 +138,9 @@ impl NotificationForwarderObject {
             local_forwarding_only: false,
             port_filter: None,
             storage: None,
-            list_writes: 0,
+            kept_writes: 0,
             recipient_list_written: false,
+            description_written: false,
             save_counters: ForwarderSaveCounters::default(),
         })
     }
@@ -144,10 +149,13 @@ impl NotificationForwarderObject {
     /// in `persistence`, starting from the lists saved there for this object,
     /// if any.
     ///
+    /// A written Description is kept there too (#2364), and the saved one
+    /// served.
+    ///
     /// Fails when the saved lists cannot be loaded, or hold an entry a write
     /// would refuse: a destination a framed write could not carry, a
     /// subscription with a Time Remaining of 0 or past a day, or more entries
-    /// than a list's cap.
+    /// than a list's cap; or when the saved Description is past 16 KiB.
     pub fn with_persistence(
         instance: u32,
         name: impl Into<String>,
@@ -155,6 +163,11 @@ impl NotificationForwarderObject {
     ) -> Result<Self, Error> {
         let mut forwarder = Self::new(instance, name)?;
         if let Some(saved) = persistence.load(forwarder.oid)? {
+            description::check_saved(saved.description.as_deref())?;
+            if let Some(text) = saved.description {
+                forwarder.description = text;
+                forwarder.description_written = true;
+            }
             if let Some(list) = saved.recipient_list {
                 if list.len() > MAX_RECIPIENT_LIST_DESTINATIONS {
                     return Err(recipient_list::no_space_error());
@@ -187,9 +200,13 @@ impl NotificationForwarderObject {
         self.save_counters.clone()
     }
 
-    /// Set the description string.
+    /// Set the description string. On a forwarder
+    /// [`with_persistence`](Self::with_persistence), a Description a write
+    /// saved wins (#2364).
     pub fn set_description(&mut self, description: impl Into<String>) {
-        self.description = description.into();
+        if !(self.storage.is_some() && self.description_written) {
+            self.description = description.into();
+        }
     }
 
     /// The process identifier a notification must carry to be forwarded, or
@@ -284,6 +301,7 @@ impl NotificationForwarderObject {
                 .recipient_list_written
                 .then(|| self.recipient_list.clone()),
             subscribed_recipients: self.subscribed_recipients.subscriptions(),
+            description: self.description_written.then(|| self.description.clone()),
         }
     }
 
@@ -298,6 +316,9 @@ impl NotificationForwarderObject {
         if property == PropertyIdentifier::RECIPIENT_LIST {
             return recipient_list::decode_write(value).map(saving::NextList::RecipientList);
         }
+        if property == PropertyIdentifier::DESCRIPTION {
+            return description::written(&value).map(saving::NextList::Description);
+        }
         // A written entry keeps the deadline of a live one it renews, so the
         // store builds on the one an earlier step left.
         let current = earlier
@@ -305,7 +326,7 @@ impl NotificationForwarderObject {
             .rev()
             .find_map(|step| match &step.next {
                 saving::NextList::SubscribedRecipients(store) => Some(store),
-                saving::NextList::RecipientList(_) => None,
+                _ => None,
             })
             .unwrap_or(&self.subscribed_recipients);
         let mut next = current.clone();
@@ -320,15 +341,19 @@ impl NotificationForwarderObject {
                 self.recipient_list_written = true;
             }
             saving::NextList::SubscribedRecipients(store) => self.subscribed_recipients = store,
+            saving::NextList::Description(text) => {
+                self.description = text;
+                self.description_written = true;
+            }
         }
-        self.list_writes = self.list_writes.wrapping_add(1);
+        self.kept_writes = self.kept_writes.wrapping_add(1);
     }
 
     /// Replace Recipient_List or Subscribed_Recipients with a written list,
-    /// saving both lists before the forwarder serves it. A staged write takes
-    /// the lists already saved; any other saves now. A list that cannot be
-    /// saved is refused with DEVICE / OPERATIONAL_PROBLEM and the old list
-    /// stays.
+    /// or Description with written text (#2364), saving what the forwarder
+    /// keeps before it serves the change. A staged write takes the state
+    /// already saved; any other saves now. A write that cannot be saved is
+    /// refused with DEVICE / OPERATIONAL_PROBLEM and the old value stays.
     fn write_list(
         &mut self,
         property: PropertyIdentifier,
@@ -369,7 +394,7 @@ impl NotificationForwarderObject {
     ) -> Option<Result<(), Error>> {
         let mut storage = self.storage.take()?;
         let taken = storage
-            .claim(property, value, self.list_writes)
+            .claim(property, value, self.kept_writes)
             .map(|claimed| claimed.map(|next| self.install(next)));
         // Steps the request has still to take keep the lists served now.
         storage.correct(|| self.snapshot());
@@ -408,6 +433,15 @@ fn listed(property: PropertyIdentifier) -> bool {
     )
 }
 
+/// Whether a forwarder with storage saves a write of `value` to `property`:
+/// either list, or a Description other than a NULL, which changes nothing
+/// (#2364).
+fn kept(property: PropertyIdentifier, value: &PropertyValue) -> bool {
+    listed(property)
+        || (property == PropertyIdentifier::DESCRIPTION
+            && !description::null_write(property, value))
+}
+
 impl DurableWrites for NotificationForwarderObject {
     fn stage_write(
         &mut self,
@@ -422,17 +456,18 @@ impl DurableWrites for NotificationForwarderObject {
         }])
     }
 
-    /// Fold the request's writes to both lists into one staged save
-    /// (#1423).
+    /// Fold the request's writes to both lists and Description into one
+    /// staged save (#1423).
     fn stage_writes(&mut self, writes: &[PendingWrite]) -> StageStep {
-        if self.storage.is_none() || !writes.iter().any(|write| listed(write.property)) {
+        let kept = |write: &PendingWrite| kept(write.property, &write.value);
+        if self.storage.is_none() || !writes.iter().any(kept) {
             return StageStep::Skip;
         }
         if let Some(wait) = self.with_storage(|storage, _| storage.busy()).flatten() {
             return StageStep::Busy(wait);
         }
         let steps = staged::steps(writes, |earlier, write| {
-            if !listed(write.property) {
+            if !kept(write) {
                 return Ok(None);
             }
             if write.array_index.is_some() {
@@ -442,7 +477,7 @@ impl DurableWrites for NotificationForwarderObject {
                 .map(Some)
         });
         let served = self.snapshot();
-        let base = self.list_writes;
+        let base = self.kept_writes;
         let storage = self.storage.as_mut().expect("checked above");
         storage.stage(steps, base, served)
     }
@@ -539,6 +574,10 @@ impl BACnetObject for NotificationForwarderObject {
         }
         match property {
             PropertyIdentifier::RECIPIENT_LIST | PropertyIdentifier::SUBSCRIBED_RECIPIENTS => {
+                return self.write_list(property, value);
+            }
+            // Saved first with storage (#2364).
+            PropertyIdentifier::DESCRIPTION if self.storage.is_some() && kept(property, &value) => {
                 return self.write_list(property, value);
             }
             PropertyIdentifier::PROCESS_IDENTIFIER_FILTER if array_index.is_none() => {

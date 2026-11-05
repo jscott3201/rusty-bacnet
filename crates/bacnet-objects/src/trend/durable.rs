@@ -25,8 +25,11 @@ impl TrendLogObject {
     /// counting and Notification_Threshold, the settings a peer can write
     /// (the window, Logging_Type, Log_Interval, Align_Intervals,
     /// Interval_Offset and Log_DeviceObjectProperty), and the reporting and
-    /// COV settings a write set, which then win over their setters (#1952;
-    /// see [`clear_written_reporting`](Self::clear_written_reporting)).
+    /// COV settings and Description a write set, which then win over their
+    /// setters (#1952, #2364; see
+    /// [`clear_written_reporting`](Self::clear_written_reporting)). A
+    /// Description past 16 KiB is refused with RESOURCES /
+    /// NO_SPACE_TO_WRITE_PROPERTY.
     /// `buffer_size` wins over the saved Buffer_Size; a smaller one keeps
     /// the newest records.
     /// It then owes a LOG_INTERRUPTED record, appended once it can read a
@@ -90,14 +93,16 @@ impl TrendLogObject {
     }
 
     /// The reporting and COV settings storage keeps because a write set
-    /// them, now or before a restart (#1952); all `None` without storage.
-    /// Their setters leave each of these alone.
+    /// them, now or before a restart (#1952), and a written Description
+    /// (#2364); all `None` without storage. Their setters leave each of
+    /// these alone.
     pub fn written_reporting(&self) -> LogReportingSettings {
         staging::written(self)
     }
 
-    /// Drop every reporting and COV setting a write saved: storage keeps
-    /// none from then on, so the setters apply again (#1952). The values
+    /// Drop every reporting and COV setting a write saved, and a saved
+    /// Description: storage keeps none from then on, so the setters apply
+    /// again (#1952, #2364). The values
     /// served stay until a setter or a write changes them. Commits before
     /// it returns; a commit that fails keeps the written settings and
     /// returns storage's error. Does nothing without storage. Call it
@@ -145,6 +150,10 @@ impl DurableLog for TrendLogObject {
 
     fn reporting_mut(&mut self) -> (&mut BufferReadyReporting, Option<&mut CovSettings>) {
         (&mut self.reporting, Some(&mut self.cov))
+    }
+
+    fn description_mut(&mut self) -> &mut String {
+        &mut self.description
     }
 
     fn durable_parts(

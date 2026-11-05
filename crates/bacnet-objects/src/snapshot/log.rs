@@ -5,8 +5,11 @@
 //! object identifier, the generation and the payload length), the payload,
 //! and a CRC-32 of everything before it. Version 2 ends the payload with the
 //! written reporting settings; a version 1 slot still loads, with none
-//! written. [`decode`] checks everything [`encode`] does, so a slot that
-//! loads always saves again.
+//! written. Version 3 ([`VERSION_WITH_DESCRIPTION`], #2364) adds a written
+//! Description after them, and [`encode`] writes it only for a snapshot
+//! holding one, so a slot without one keeps version 2's octets.
+//! [`decode`] checks everything [`encode`] does, so a slot that loads
+//! always saves again.
 //!
 //! The file backend keeps two slots and writes the one the generation's
 //! parity names, so a commit cut off part way leaves the other to load. A
@@ -24,8 +27,12 @@ use crate::log_persistence::codec;
 
 /// The magic tag every slot starts with.
 pub const MAGIC: [u8; 8] = *codec::MAGIC;
-/// The schema version [`encode`] writes.
+/// The schema version [`encode`] writes for a snapshot without a written
+/// Description.
 pub const VERSION: u16 = codec::SCHEMA_VERSION;
+/// The schema version [`encode`] writes for a snapshot with a written
+/// Description (#2364): the newest [`decode`] reads.
+pub const VERSION_WITH_DESCRIPTION: u16 = codec::SCHEMA_VERSION_DESCRIBED;
 /// The oldest schema version [`decode`] still reads.
 pub const OLDEST_VERSION: u16 = codec::SCHEMA_VERSION_1;
 /// The most octets a slot may take.
@@ -89,7 +96,8 @@ pub fn encode<R: LogRecord>(snapshot: &LogSnapshot<R>) -> Result<Vec<u8>, Snapsh
 /// Refuses damage (a slot cut short or past [`MAX_LEN`], a bad magic tag,
 /// length or checksum, or contents that don't decode or don't hold
 /// together), and a sound slot of another object or of a schema version
-/// this build doesn't read (any but [`OLDEST_VERSION`] to [`VERSION`]).
+/// this build doesn't read (any but [`OLDEST_VERSION`] to
+/// [`VERSION_WITH_DESCRIPTION`]).
 pub fn decode<R: LogRecord>(
     object: ObjectIdentifier,
     octets: &[u8],

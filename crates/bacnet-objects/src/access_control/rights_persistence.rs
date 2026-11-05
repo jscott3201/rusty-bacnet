@@ -39,6 +39,9 @@ pub struct AccessRightsSnapshot {
     pub enable: Option<bool>,
     /// Accompaniment, once a write has set it (#1393).
     pub accompaniment: Option<BACnetDeviceObjectReference>,
+    /// Description, once a write has set it (#2364); at most 16 KiB of
+    /// UTF-8, as an object with storage refuses a longer write.
+    pub description: Option<String>,
 }
 
 /// Application-owned storage for one Access Rights object's rule arrays,

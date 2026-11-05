@@ -61,8 +61,8 @@ pub struct AccessRightsObject {
     accompaniment: Option<BACnetDeviceObjectReference>,
     status_flags: StatusFlags,
     reliability: Reliability,
-    /// Where written rules, Enable and Accompaniment are saved, with
-    /// persistence.
+    /// Where written rules, Enable, Accompaniment and Description are saved,
+    /// with persistence.
     storage: Option<saving::Storage>,
     /// Saved writes taken, so a staged write can tell whether another came
     /// between.
@@ -364,6 +364,13 @@ impl BACnetObject for AccessRightsObject {
         _priority: Option<u8>,
     ) -> Result<(), Error> {
         crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
+        // Saved first with storage (#2364).
+        if property == PropertyIdentifier::DESCRIPTION
+            && self.storage.is_some()
+            && saving::saved_write(property, &value)
+        {
+            return self.write_saved(property, array_index, value);
+        }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }

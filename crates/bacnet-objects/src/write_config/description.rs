@@ -1,6 +1,8 @@
-//! A peer-written Description, kept in the same write-configuration storage
-//! as what else the object keeps there (#2364): a Timer's and a Channel's
-//! configuration, and an intrinsic reporter's reporting settings.
+//! A peer-written Description, kept in the storage the object already has
+//! (#2364): the write-configuration storage of a Timer, a Channel and an
+//! intrinsic reporter, and the snapshot formats of the three logs, a
+//! Notification Class, a Notification Forwarder and an Access Rights
+//! object.
 //!
 //! Clause 12 says nothing about restarts, so keeping Description is this
 //! stack's choice, as for the rest of that storage: a head end that labelled

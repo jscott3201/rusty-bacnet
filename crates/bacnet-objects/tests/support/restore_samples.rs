@@ -52,6 +52,13 @@ pub fn event_log(base: &Path) {
     commit_log(base, event_snapshot());
 }
 
+/// A Trend Log with a written Description: schema version 3 (#2364).
+pub fn described_trend_log(base: &Path) {
+    let mut snapshot = trend_snapshot();
+    snapshot.reporting.description = Some("Lobby".into());
+    commit_log(base, snapshot);
+}
+
 pub fn audit_log(base: &Path) {
     FileAuditLogPersistence::new(base)
         .unwrap()
@@ -60,18 +67,36 @@ pub fn audit_log(base: &Path) {
 }
 
 pub fn notification_forwarder(path: &Path) {
+    save_forwarder(path, forwarder_snapshot());
+}
+
+/// A forwarder with a written Description: `RBNFWD02` (#2364).
+pub fn described_notification_forwarder(path: &Path) {
+    let mut snapshot = forwarder_snapshot();
+    snapshot.description = Some("Lobby".into());
+    save_forwarder(path, snapshot);
+}
+
+fn save_forwarder(path: &Path, snapshot: ForwarderSnapshot) {
     FileNotificationForwarderPersistence::new(path)
         .unwrap()
-        .save(
-            oid(ObjectType::NOTIFICATION_FORWARDER),
-            &forwarder_snapshot(),
-        )
+        .save(oid(ObjectType::NOTIFICATION_FORWARDER), &snapshot)
         .expect("the sample saves");
 }
 
 pub fn notification_class(path: &Path) {
+    save_class(path, None);
+}
+
+/// A Notification Class with a written Description: `RBNNCL02` (#2364).
+pub fn described_notification_class(path: &Path) {
+    save_class(path, Some("Lobby"));
+}
+
+fn save_class(path: &Path, description: Option<&str>) {
     let snapshot = NotificationClassSnapshot {
         recipient_list: Some(destinations()),
+        description: description.map(Into::into),
     };
     FileNotificationClassPersistence::new(path)
         .unwrap()
@@ -229,9 +254,20 @@ fn member(instance: u32, device: Option<u32>) -> BACnetDeviceObjectPropertyRefer
 }
 
 pub fn access_rights(path: &Path) {
+    save_rights(path, access_rights_snapshot());
+}
+
+/// An Access Rights object with a written Description: `RBNACR02` (#2364).
+pub fn described_access_rights(path: &Path) {
+    let mut snapshot = access_rights_snapshot();
+    snapshot.description = Some("Lobby".into());
+    save_rights(path, snapshot);
+}
+
+fn save_rights(path: &Path, snapshot: AccessRightsSnapshot) {
     FileAccessRightsPersistence::new(path)
         .unwrap()
-        .save(oid(ObjectType::ACCESS_RIGHTS), &access_rights_snapshot())
+        .save(oid(ObjectType::ACCESS_RIGHTS), &snapshot)
         .expect("the sample saves");
 }
 
@@ -326,6 +362,7 @@ fn written_reporting() -> LogReportingSettings {
         event_algorithm_inhibit: Some(true),
         client_cov_increment: None,
         cov_resubscription_interval: None,
+        description: None,
     }
 }
 
@@ -443,6 +480,7 @@ fn forwarder_snapshot() -> ForwarderSnapshot {
             issue_confirmed_notifications: false,
             time_remaining: 30,
         }],
+        description: None,
     }
 }
 
@@ -456,5 +494,6 @@ fn access_rights_snapshot() -> AccessRightsSnapshot {
         negative_access_rules: Some(Vec::new()),
         enable: Some(true),
         accompaniment: None,
+        description: None,
     }
 }

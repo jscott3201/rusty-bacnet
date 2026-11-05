@@ -105,7 +105,8 @@ fn damaged_files_never_panic_and_refused_restores_write_nothing() {
 /// write configuration backend seven times: a Timer's, a Channel's, two
 /// intrinsic reporters', an Analog Input's and an Alert Enrollment's, which
 /// takes fewer Notify_Types, and kind 5 around the Timer's, the Channel's
-/// and the Analog Input's, #2364).
+/// and the Analog Input's, #2364), and a written Description in the log's,
+/// the forwarder's, the class's and Access Rights' formats (#2364).
 #[test]
 fn every_format_has_a_sample() {
     let names: Vec<&str> = FORMATS.iter().map(|format| format.name).collect();
@@ -129,6 +130,10 @@ fn every_format_has_a_sample() {
             "described_timer_write_config",
             "described_channel_write_config",
             "described_reporting_write_config",
+            "described_trend_log",
+            "described_notification_forwarder",
+            "described_notification_class",
+            "described_access_rights",
         ]
     );
 }

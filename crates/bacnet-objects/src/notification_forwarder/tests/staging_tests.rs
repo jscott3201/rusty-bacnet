@@ -529,6 +529,7 @@ fn a_forwarder_dropped_with_a_staged_write_puts_back_the_lists_it_serves_as_it_g
         ForwarderSnapshot {
             recipient_list: None,
             subscribed_recipients: vec![subscription(device(2), 1, 5)],
+            description: None,
         }
     );
 }
