@@ -244,7 +244,7 @@ async fn audit_reporter_range_file_segmented_response_and_divergence_are_silent(
                 .config_mut()
                 .device
                 .clone()
-                .with_segmentation(Segmentation::BOTH);
+                .with_segmentation(Segmentation::SEGMENTED_BOTH);
             let (tx, rx) = oneshot::channel();
             ingress(
                 &fixture.server,

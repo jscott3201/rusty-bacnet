@@ -423,7 +423,7 @@ fn i_am_request() -> Result<Message<IAmRequest>, Error> {
         parameters: IAmRequest {
             object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, DEVICE)?,
             max_apdu_length: DEVICE_MAX_APDU,
-            segmentation_supported: Segmentation::NONE,
+            segmentation_supported: Segmentation::NO_SEGMENTATION,
             vendor_id: VENDOR,
         },
     })

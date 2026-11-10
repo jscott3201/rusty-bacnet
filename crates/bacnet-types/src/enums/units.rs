@@ -48,8 +48,8 @@ bacnet_enum! {
     const OHM_METER_SQUARED_PER_METER = 237;
     const OHM_METERS = 172;
     const MILLIOHMS = 145;
-    const KILOHMS = 122;
-    const MEGOHMS = 123;
+    const KILOOHMS = 122;
+    const MEGAOHMS = 123;
     const MICROSIEMENS = 190;
     const MILLISIEMENS = 202;
     const SIEMENS = 173;
@@ -389,8 +389,9 @@ bacnet_enum! {
     const POUNDS_FORCE_PER_SQUARE_INCH_ABSOLUTE = 47907;
     const POUNDS_FORCE_PER_SQUARE_INCH_GAUGE = 47908;
     const MICROSIEMENS_PER_CENTIMETER = 47909;
-    // 47910 stays unnamed: the revision 24 data file gives it two names, and
-    // we name it once the right one is confirmed (47918 stays unnamed too).
+    /// The revision 24 data file also lists the active-energy pulse-value
+    /// name at this value; we keep that name at 47918.
+    const MILLISIEMENS_PER_CENTIMETER = 47910;
     const MILLISIEMENS_PER_METER = 47911;
     const MILLIONS_OF_US_GALLONS = 47912;
     const MILLIONS_OF_IMPERIAL_GALLONS = 47913;
@@ -398,6 +399,9 @@ bacnet_enum! {
     const MILS_PER_YEAR = 47915;
     const MILLIMETERS_PER_YEAR = 47916;
     const PULSES_PER_MINUTE = 47917;
+    /// The revision 24 data file lists this name at 47910 and no name
+    /// here; we keep it at 47918, next to the other pulse-value units.
+    const ACTIVE_ENERGY_PULSE_VALUE = 47918;
     const REACTIVE_ENERGY_PULSE_VALUE = 47919;
     const APPARENT_ENERGY_PULSE_VALUE = 47920;
     const VOLT_SQUARED_HOUR_PULSE_VALUE = 47921;

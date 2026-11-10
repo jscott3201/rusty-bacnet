@@ -272,7 +272,7 @@ fn access_rights_property_list() {
     assert!(list.contains(&PropertyIdentifier::POSITIVE_ACCESS_RULES));
     assert!(list.contains(&PropertyIdentifier::NEGATIVE_ACCESS_RULES));
     // Table 12-39's Enable row, property 133 (#1332).
-    assert!(list.contains(&PropertyIdentifier::LOG_ENABLE));
+    assert!(list.contains(&PropertyIdentifier::ENABLE));
 }
 
 #[test]

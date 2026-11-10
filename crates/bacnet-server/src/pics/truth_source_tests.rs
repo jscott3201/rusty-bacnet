@@ -35,7 +35,7 @@ fn pics_log_family_writability_comes_from_runtime_routes() {
             // Table 12-31 has no Log_Interval or Out_Of_Service (#1064).
             ObjectType::EVENT_LOG,
             &[
-                PropertyIdentifier::LOG_ENABLE,
+                PropertyIdentifier::ENABLE,
                 PropertyIdentifier::STOP_WHEN_FULL,
                 PropertyIdentifier::RECORD_COUNT,
                 PropertyIdentifier::DESCRIPTION,
@@ -47,7 +47,7 @@ fn pics_log_family_writability_comes_from_runtime_routes() {
         (
             ObjectType::TREND_LOG,
             &[
-                PropertyIdentifier::LOG_ENABLE,
+                PropertyIdentifier::ENABLE,
                 PropertyIdentifier::LOG_INTERVAL,
                 PropertyIdentifier::STOP_WHEN_FULL,
                 PropertyIdentifier::RECORD_COUNT,
@@ -69,7 +69,7 @@ fn pics_log_family_writability_comes_from_runtime_routes() {
         (
             ObjectType::TREND_LOG_MULTIPLE,
             &[
-                PropertyIdentifier::LOG_ENABLE,
+                PropertyIdentifier::ENABLE,
                 PropertyIdentifier::LOG_INTERVAL,
                 PropertyIdentifier::STOP_WHEN_FULL,
                 PropertyIdentifier::RECORD_COUNT,

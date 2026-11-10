@@ -183,7 +183,7 @@ async fn audit_reporter_query_outbound_segmentation_and_divergence_are_silent() 
                 .config_mut()
                 .device
                 .clone()
-                .with_segmentation(Segmentation::BOTH);
+                .with_segmentation(Segmentation::SEGMENTED_BOTH);
             let mut req = request(encode(&query(None, 1)));
             req.segmented_response_accepted = segmented;
             let (tx, rx) = oneshot::channel();

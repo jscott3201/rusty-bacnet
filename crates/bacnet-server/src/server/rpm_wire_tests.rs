@@ -104,7 +104,7 @@ async fn rpm_whole_abort_direct_routed_reply_and_segmentation_matrix() {
                         "rpm",
                         ServerConfig {
                             device: bacnet_objects::DeviceIdentity::default()
-                                .with_segmentation(Segmentation::BOTH),
+                                .with_segmentation(Segmentation::SEGMENTED_BOTH),
                             read_property_multiple_budget: budget,
                             ..Default::default()
                         },

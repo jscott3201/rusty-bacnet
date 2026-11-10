@@ -60,12 +60,8 @@ fn rpm_audit_log_indexed_reads_and_list_bytes_are_unchanged() {
             Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
         ),
         (P::OBJECT_TYPE, None, Ok(&[0x91, 61])),
-        (P::LOG_ENABLE, None, Ok(&[0x11])),
-        (
-            P::LOG_ENABLE,
-            Some(0),
-            Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-        ),
+        (P::ENABLE, None, Ok(&[0x11])),
+        (P::ENABLE, Some(0), Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY)),
         (P::BUFFER_SIZE, None, Ok(&[0x21, 4])),
         (
             P::BUFFER_SIZE,

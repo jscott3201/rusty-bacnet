@@ -159,7 +159,7 @@ fn trendlog_disable_logging() {
     let mut tl = TrendLogObject::new(1, "TL-1", 100).unwrap();
     bind_clock(&mut tl);
     tl.write_property(
-        PropertyIdentifier::LOG_ENABLE,
+        PropertyIdentifier::ENABLE,
         None,
         PropertyValue::Boolean(false),
         None,
@@ -522,15 +522,14 @@ fn trendlog_multiple_write_log_enable() {
     let mut tlm = TrendLogMultipleObject::new(1, "TLM-1", 100).unwrap();
     bind_clock(&mut tlm);
     tlm.write_property(
-        PropertyIdentifier::LOG_ENABLE,
+        PropertyIdentifier::ENABLE,
         None,
         PropertyValue::Boolean(false),
         None,
     )
     .unwrap();
     assert_eq!(
-        tlm.read_property(PropertyIdentifier::LOG_ENABLE, None)
-            .unwrap(),
+        tlm.read_property(PropertyIdentifier::ENABLE, None).unwrap(),
         PropertyValue::Boolean(false)
     );
     // Records should not be added when disabled

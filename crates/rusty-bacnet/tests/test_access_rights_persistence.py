@@ -11,7 +11,7 @@ from rusty_bacnet import (
 
 POSITIVE = PropertyIdentifier.POSITIVE_ACCESS_RULES
 NEGATIVE = PropertyIdentifier.NEGATIVE_ACCESS_RULES
-ENABLE = PropertyIdentifier.LOG_ENABLE
+ENABLE = PropertyIdentifier.ENABLE
 
 # BACnetAccessRule encodings: ALWAYS, ALL and disabled; ALWAYS in Access Zone 3
 # of Device 99; and the rule an index-0 write appends (SPECIFIED with

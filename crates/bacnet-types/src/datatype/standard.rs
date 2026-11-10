@@ -218,7 +218,7 @@ const fn by_identifier(property: P) -> Option<ValueType> {
         | P::IN_PROCESS
         | P::ISSUE_CONFIRMED_NOTIFICATIONS
         | P::LOCAL_FORWARDING_ONLY
-        | P::LOG_ENABLE
+        | P::ENABLE
         | P::OCCUPANCY_COUNT_ENABLE
         | P::PASSENGER_ALARM
         | P::POWER_MODE

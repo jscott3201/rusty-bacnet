@@ -33,7 +33,7 @@ fn discovered(instance: u32, vendor_id: u16, routed: Option<(u16, &[u8])>) -> Di
         object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap(),
         mac_address: MacAddr::from_slice(&link),
         max_apdu_length: if routed.is_some() { 480 } else { 1476 },
-        segmentation_supported: Segmentation::BOTH,
+        segmentation_supported: Segmentation::SEGMENTED_BOTH,
         max_segments_accepted: None,
         vendor_id,
         last_seen: at(3),

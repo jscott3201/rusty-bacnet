@@ -624,7 +624,7 @@ mod tests {
         );
         assert_eq!(
             ResolvedEnum::from_property(PropertyIdentifier::SEGMENTATION_SUPPORTED, 3),
-            ResolvedEnum::Segmentation(Segmentation::NONE),
+            ResolvedEnum::Segmentation(Segmentation::NO_SEGMENTATION),
         );
     }
 

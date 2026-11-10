@@ -160,7 +160,7 @@ fn assigned(
     companion: ObjectIdentifier,
 ) -> Result<bool, AccompanimentProblem> {
     let oid = reference.object_identifier;
-    let enable = PropertyIdentifier::LOG_ENABLE;
+    let enable = PropertyIdentifier::ENABLE;
     match rights.read_property(enable, None) {
         Ok(PropertyValue::Boolean(true)) => {}
         Ok(PropertyValue::Boolean(false)) => return Ok(false),

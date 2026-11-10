@@ -271,7 +271,7 @@ fn i_am_request(identifier: ObjectIdentifier) -> UnconfirmedRequestPdu {
     let i_am = IAmRequest {
         object_identifier: identifier,
         max_apdu_length: 1476,
-        segmentation_supported: Segmentation::NONE,
+        segmentation_supported: Segmentation::NO_SEGMENTATION,
         vendor_id: 1,
     };
     let mut service_request = BytesMut::new();

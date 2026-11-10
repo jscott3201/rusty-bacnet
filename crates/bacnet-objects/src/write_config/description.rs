@@ -9,7 +9,7 @@
 //! Clause 12 says nothing about restarts, so keeping Description is this
 //! stack's choice, as for the rest of that storage: a head end that labelled
 //! an object once expects the label to stay. Every type with storage keeps
-//! it except the Audit Log, whose store holds its records, Log_Enable and
+//! it except the Audit Log, whose store holds its records, Enable and
 //! Buffer_Size alone. There, on an object built without storage, and on a
 //! type that has none, a written Description lasts until a restart.
 //!

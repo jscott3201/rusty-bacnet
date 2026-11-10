@@ -15,7 +15,7 @@ expression: text
 "│ Services          33 supported                           ││ event-detection-enable          true                                                                                                     │"
 "│ Object types      64 supported                           ││ out-of-service                  true                                                                                                     │"
 "│ Max APDU          1476                                   ││ units                           degrees-fahrenheit                                                                                       │"
-"│ Segmentation      none                                   ││ cov-increment                   0                                                                                                        │"
+"│ Segmentation      no-segmentation                        ││ cov-increment                   0                                                                                                        │"
 "│ Database revision 0                                      ││ high-limit                      100                                                                                                      │"
 "└──────────────────────────────────────────────────────────┘│ low-limit                       0                                                                                                        │"
 "┌ Objects (11) ────────────────────────────────────────────┐│ deadband                        1                                                                                                        │"

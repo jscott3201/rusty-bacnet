@@ -266,7 +266,7 @@ fn records_outside_the_window_are_ignored_and_each_change_is_logged() {
         // A record outside the window is ignored, and Enable stays TRUE.
         log.add(at(9, 30));
         assert_eq!(log.seen(), [DISABLED], "{kind:?}");
-        assert_eq!(log.read(P::LOG_ENABLE), PropertyValue::Boolean(true));
+        assert_eq!(log.read(P::ENABLE), PropertyValue::Boolean(true));
 
         // Start_Time reached: the next pass logs the opening, once.
         log.set_clock(at(10, 0));
@@ -299,16 +299,14 @@ fn while_enable_is_false_the_window_moves_without_a_record() {
     for kind in KINDS {
         let mut log = Log::new(kind);
         log.write(P::START_TIME, datetime(at(10, 0))).unwrap();
-        log.write(P::LOG_ENABLE, PropertyValue::Boolean(false))
-            .unwrap();
+        log.write(P::ENABLE, PropertyValue::Boolean(false)).unwrap();
         // While shut, the Enable change keeps logging off: no record.
         assert_eq!(log.seen(), [DISABLED], "{kind:?}");
         log.set_clock(at(10, 0));
         assert!(!log.pass(), "{kind:?}");
         assert_eq!(log.seen(), [DISABLED], "{kind:?}");
         // Enable written TRUE inside the window logs a clear status.
-        log.write(P::LOG_ENABLE, PropertyValue::Boolean(true))
-            .unwrap();
+        log.write(P::ENABLE, PropertyValue::Boolean(true)).unwrap();
         assert_eq!(log.seen(), [DISABLED, ENABLED], "{kind:?}");
         // A purge outside the window carries LOG_DISABLED.
         log.write(P::STOP_TIME, datetime(at(10, 0))).unwrap();

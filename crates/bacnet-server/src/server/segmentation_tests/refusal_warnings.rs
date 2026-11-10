@@ -79,7 +79,7 @@ fn warned(spy: &WarnSpy, messages: &[&str]) -> Vec<(String, Option<u64>)> {
 #[tokio::test(start_paused = true)]
 async fn a_flood_of_bad_apdus_and_refused_segments_warns_once_per_interval() {
     let (spy, _guard) = WarnSpy::install();
-    let (server, client, mut rx) = start_reassembly_server(Segmentation::BOTH).await;
+    let (server, client, mut rx) = start_reassembly_server(Segmentation::SEGMENTED_BOTH).await;
     let segment = [WINDOW, GAP, NO_SEGMENT_0];
     flood(&client, &mut rx, 5, 0).await;
     assert_eq!(

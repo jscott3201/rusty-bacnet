@@ -11,7 +11,8 @@ async fn fixture() -> (TestCa, Fixture) {
     let f = Fixture::new(
         &ca,
         ServerConfig {
-            device: bacnet_objects::DeviceIdentity::default().with_segmentation(Segmentation::BOTH),
+            device: bacnet_objects::DeviceIdentity::default()
+                .with_segmentation(Segmentation::SEGMENTED_BOTH),
             ..Default::default()
         },
         db,

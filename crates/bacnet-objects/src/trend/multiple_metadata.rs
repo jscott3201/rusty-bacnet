@@ -5,7 +5,7 @@ use bacnet_types::enums::{LoggingType, PropertyIdentifier as P};
 
 use super::metadata::{ALIGN_INTERVALS_METADATA, INTERVAL_OFFSET_METADATA};
 use crate::log_buffer::{BUFFER_SIZE_METADATA, LOG_BUFFER_METADATA, TOTAL_RECORD_COUNT_METADATA};
-use crate::log_lifecycle::{LOG_ENABLE_METADATA, RECORD_COUNT_METADATA, STOP_WHEN_FULL_METADATA};
+use crate::log_lifecycle::{ENABLE_METADATA, RECORD_COUNT_METADATA, STOP_WHEN_FULL_METADATA};
 use crate::log_reporting::BUFFER_READY_METADATA;
 use crate::log_window::{START_TIME_METADATA, STOP_TIME_METADATA};
 use crate::property_metadata::{
@@ -34,7 +34,7 @@ const fn rows(log_interval: PropertyWriteCapability) -> [PropertyMetadata; 35] {
         PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
         PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
         PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
-        LOG_ENABLE_METADATA,
+        ENABLE_METADATA,
         PropertyMetadata::new(P::LOG_INTERVAL, RequiredRead, None, log_interval),
         STOP_WHEN_FULL_METADATA,
         BUFFER_SIZE_METADATA,

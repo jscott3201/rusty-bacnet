@@ -407,7 +407,7 @@ fn a_record_the_log_ignores_still_serves_the_trigger() {
     // Enable FALSE: the record is ignored, but the acquisition was made.
     write(
         &mut log,
-        PropertyIdentifier::LOG_ENABLE,
+        PropertyIdentifier::ENABLE,
         PropertyValue::Boolean(false),
     )
     .unwrap();
@@ -423,7 +423,7 @@ fn a_record_the_log_ignores_still_serves_the_trigger() {
     // Outside the window, the same.
     write(
         &mut log,
-        PropertyIdentifier::LOG_ENABLE,
+        PropertyIdentifier::ENABLE,
         PropertyValue::Boolean(true),
     )
     .unwrap();

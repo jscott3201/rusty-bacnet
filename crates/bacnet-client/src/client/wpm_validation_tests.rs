@@ -24,7 +24,7 @@ async fn setup() -> (
             remote_network: 100,
             remote_mac: vec![3],
             max_apdu_length: 1476,
-            segmentation_supported: Segmentation::NONE,
+            segmentation_supported: Segmentation::NO_SEGMENTATION,
             max_segments_accepted: None,
         })
         .await

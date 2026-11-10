@@ -281,7 +281,7 @@ async fn a_disabled_log_takes_no_notification() {
     let mut h =
         Harness::start_with(ServerConfig::default(), |db| alarm_and_logs(db, &[1, 2], 8)).await;
     h.set_clock(30);
-    write_boolean(&mut h, el(2), PropertyIdentifier::LOG_ENABLE, false).await;
+    write_boolean(&mut h, el(2), PropertyIdentifier::ENABLE, false).await;
     h.set_clock(40);
     h.write_local(90.0).await;
     let alarm = sent_notification(&h).await;
@@ -324,7 +324,7 @@ async fn stop_when_full_stops_logging_before_the_buffer_fills() {
             .await
             .get(&el(1))
             .unwrap()
-            .read_property(PropertyIdentifier::LOG_ENABLE, None)
+            .read_property(PropertyIdentifier::ENABLE, None)
             .unwrap(),
         PropertyValue::Boolean(false)
     );

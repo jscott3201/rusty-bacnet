@@ -30,8 +30,8 @@ pub const MAX_ACCESS_RULES: usize = 1024;
 /// [`set_positive_access_rules`](Self::set_positive_access_rules) and
 /// [`set_negative_access_rules`](Self::set_negative_access_rules), and peers
 /// write them whole, one element at a time, or resize them at index 0, with
-/// the setters' checks. Enable (property 133, `LOG_ENABLE` in
-/// `PropertyIdentifier`) switches the whole object: while it is FALSE every
+/// the setters' checks. Enable (property 133, `PropertyIdentifier::ENABLE`)
+/// switches the whole object: while it is FALSE every
 /// rule in both arrays counts as disabled (Clause 12.34.8). The optional
 /// Accompaniment row (#1393) is served once the application sets it with
 /// [`set_accompaniment`](Self::set_accompaniment). The object stores the
@@ -103,7 +103,7 @@ impl AccessRightsObject {
     /// a write has set Enable and it was saved, the saved value wins and
     /// this does nothing.
     pub fn set_enable(&mut self, enable: bool) {
-        if !self.keeps_saved(PropertyIdentifier::LOG_ENABLE) {
+        if !self.keeps_saved(PropertyIdentifier::ENABLE) {
             self.enable = enable;
         }
     }
@@ -340,8 +340,8 @@ impl BACnetObject for AccessRightsObject {
                 Ok(PropertyValue::Unsigned(self.global_identifier))
             }
             // Table 12-39's Enable row is property 133, which the enum names
-            // after the log objects' Log_Enable.
-            p if p == PropertyIdentifier::LOG_ENABLE => Ok(PropertyValue::Boolean(self.enable)),
+            // after the log objects' Enable.
+            p if p == PropertyIdentifier::ENABLE => Ok(PropertyValue::Boolean(self.enable)),
             p if p == PropertyIdentifier::POSITIVE_ACCESS_RULES => {
                 common::read_array(rule_values(&self.positive_access_rules), array_index)
             }
@@ -388,7 +388,7 @@ impl BACnetObject for AccessRightsObject {
             // implementation's choice (Clause 12.1.2 leaves it open): a head
             // end provisions access rights over the network. With
             // persistence, each is saved before it is served.
-            p if p == PropertyIdentifier::LOG_ENABLE
+            p if p == PropertyIdentifier::ENABLE
                 || p == PropertyIdentifier::POSITIVE_ACCESS_RULES
                 || p == PropertyIdentifier::NEGATIVE_ACCESS_RULES =>
             {

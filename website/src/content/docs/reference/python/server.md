@@ -30,7 +30,7 @@ Provision before deployment and durably reuse the same UUID for the device's
 lifetime. No generation, persistence, change detection, or version/variant
 enforcement is provided. Non-SC transports ignore this option.
 
-Segmentation defaults to NONE. When enabled, apdu\_segment\_timeout\_ms must
+Segmentation defaults to NO\_SEGMENTATION. When enabled, apdu\_segment\_timeout\_ms must
 be positive; it supplies Device APDU\_SEGMENT\_TIMEOUT, response SegmentACK
 waits, and the 4\*Tseg receive inactivity timer. A separate 16-second
 no-progress resource limit aborts abandoned request transfers with OTHER.
@@ -115,7 +115,7 @@ def __init__(
     daylight_savings: bool = False,
     share_port_by_address: bool = False,
     share_wildcard_port: bool = False,
-    segmentation_supported: Segmentation = Segmentation.NONE,
+    segmentation_supported: Segmentation = Segmentation.NO_SEGMENTATION,
     apdu_segment_timeout_ms: int = 5000,
     bbmd: Optional[Bbmd] = None,
     foreign_device: Optional[ForeignDevice] = None,
@@ -1543,7 +1543,7 @@ Add an Access Rights object to the server (before starting).
 
 `positive_access_rules` and `negative_access_rules` set the two
 rule arrays as `AccessRule` mappings, and `enable` sets Enable
-(`PropertyIdentifier.LOG_ENABLE`, property 133), whose FALSE
+(`PropertyIdentifier.ENABLE`, property 133), whose FALSE
 disables every rule. Peers can write all three over the network. A
 wrong shape or type raises TypeError, an unknown or missing key or a
 device that isn't a Device raises ValueError, and a location naming

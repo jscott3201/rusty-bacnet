@@ -43,7 +43,7 @@ async fn expect_silence(
 
 #[tokio::test]
 async fn incomplete_window_silences_ndup_duplicates_then_naks_the_next() {
-    let (server, client, mut rx) = start_reassembly_server(Segmentation::BOTH).await;
+    let (server, client, mut rx) = start_reassembly_server(Segmentation::SEGMENTED_BOTH).await;
     let text = "duplicate-window";
     let chunks = split_into(&write_property_payload(text), 7);
 
@@ -85,7 +85,7 @@ async fn incomplete_window_silences_ndup_duplicates_then_naks_the_next() {
 
 #[tokio::test]
 async fn out_of_order_segment_naks_immediately_and_resets_duplicate_state() {
-    let (server, client, mut rx) = start_reassembly_server(Segmentation::BOTH).await;
+    let (server, client, mut rx) = start_reassembly_server(Segmentation::SEGMENTED_BOTH).await;
     let text = "gap-window";
     let chunks = split_into(&write_property_payload(text), 5);
 

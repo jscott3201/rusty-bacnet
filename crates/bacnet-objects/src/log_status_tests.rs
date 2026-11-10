@@ -174,7 +174,7 @@ impl Family {
     }
 
     fn enabled(&self) -> bool {
-        self.read(PropertyIdentifier::LOG_ENABLE) == PropertyValue::Boolean(true)
+        self.read(PropertyIdentifier::ENABLE) == PropertyValue::Boolean(true)
     }
 
     fn stop_when_full(&self) -> bool {
@@ -388,10 +388,7 @@ fn purge_is_unconditional_initial_status_and_repeats_for_every_log_family() {
         let mut disabled = kind.object(3);
         disabled.bind_clock(TestClock::valid());
         disabled
-            .write(
-                PropertyIdentifier::LOG_ENABLE,
-                PropertyValue::Boolean(false),
-            )
+            .write(PropertyIdentifier::ENABLE, PropertyValue::Boolean(false))
             .unwrap();
         disabled
             .write(PropertyIdentifier::RECORD_COUNT, PropertyValue::Unsigned(0))
@@ -508,32 +505,23 @@ fn enable_and_stop_when_full_transitions_emit_exactly_one_status() {
         let mut transitions = kind.object(3);
         transitions.bind_clock(TestClock::valid());
         transitions
-            .write(
-                PropertyIdentifier::LOG_ENABLE,
-                PropertyValue::Boolean(false),
-            )
+            .write(PropertyIdentifier::ENABLE, PropertyValue::Boolean(false))
             .unwrap();
         assert_eq!(transitions.total(), 1, "{kind:?}");
         assert_status(&transitions, LOG_DISABLED);
         transitions
-            .write(
-                PropertyIdentifier::LOG_ENABLE,
-                PropertyValue::Boolean(false),
-            )
+            .write(PropertyIdentifier::ENABLE, PropertyValue::Boolean(false))
             .unwrap();
         assert_eq!(transitions.total(), 1, "{kind:?}");
         transitions
-            .write(PropertyIdentifier::LOG_ENABLE, PropertyValue::Boolean(true))
+            .write(PropertyIdentifier::ENABLE, PropertyValue::Boolean(true))
             .unwrap();
         assert!(transitions.enabled(), "{kind:?}");
         assert_eq!(transitions.total(), 2, "{kind:?}");
         assert_status(&transitions, LogStatus::empty());
 
         transitions
-            .write(
-                PropertyIdentifier::LOG_ENABLE,
-                PropertyValue::Boolean(false),
-            )
+            .write(PropertyIdentifier::ENABLE, PropertyValue::Boolean(false))
             .unwrap();
         transitions.clear();
         transitions.add_record(ordinary(1, 10)).unwrap();
@@ -543,10 +531,7 @@ fn enable_and_stop_when_full_transitions_emit_exactly_one_status() {
         fills.bind_clock(TestClock::valid());
         fills.add_record(ordinary(1, 10)).unwrap();
         fills
-            .write(
-                PropertyIdentifier::LOG_ENABLE,
-                PropertyValue::Boolean(false),
-            )
+            .write(PropertyIdentifier::ENABLE, PropertyValue::Boolean(false))
             .unwrap();
         fills
             .write(
@@ -555,7 +540,7 @@ fn enable_and_stop_when_full_transitions_emit_exactly_one_status() {
             )
             .unwrap();
         fills
-            .write(PropertyIdentifier::LOG_ENABLE, PropertyValue::Boolean(true))
+            .write(PropertyIdentifier::ENABLE, PropertyValue::Boolean(true))
             .unwrap();
         assert!(!fills.enabled(), "{kind:?}");
         assert_eq!(fills.total(), 3, "{kind:?}");
@@ -579,7 +564,7 @@ fn enable_and_stop_when_full_transitions_emit_exactly_one_status() {
         assert_status(&full, LOG_DISABLED);
         let reads = clock.reads();
         let error = full
-            .write(PropertyIdentifier::LOG_ENABLE, PropertyValue::Boolean(true))
+            .write(PropertyIdentifier::ENABLE, PropertyValue::Boolean(true))
             .unwrap_err();
         assert_protocol(error, ErrorClass::OBJECT, ErrorCode::LOG_BUFFER_FULL);
         assert_eq!(clock.reads(), reads, "{kind:?}");
@@ -616,7 +601,7 @@ fn zero_capacity_counts_without_residents_and_enforces_full_enable_gate() {
         assert_eq!(object.total(), 4, "{kind:?}");
         let reads = clock.reads();
         let error = object
-            .write(PropertyIdentifier::LOG_ENABLE, PropertyValue::Boolean(true))
+            .write(PropertyIdentifier::ENABLE, PropertyValue::Boolean(true))
             .unwrap_err();
         assert_protocol(error, ErrorClass::OBJECT, ErrorCode::LOG_BUFFER_FULL);
         assert_eq!(clock.reads(), reads, "{kind:?}");
@@ -651,10 +636,7 @@ fn status_writes_require_a_valid_clock_before_mutation() {
                 enable.bind_clock(clock);
             }
             let error = enable
-                .write(
-                    PropertyIdentifier::LOG_ENABLE,
-                    PropertyValue::Boolean(false),
-                )
+                .write(PropertyIdentifier::ENABLE, PropertyValue::Boolean(false))
                 .unwrap_err();
             assert_protocol(error, ErrorClass::DEVICE, ErrorCode::OPERATIONAL_PROBLEM);
             assert!(enable.enabled(), "{kind:?}");
@@ -688,7 +670,7 @@ fn log_family_writability_matches_runtime_routes() {
         (
             FamilyKind::Event,
             vec![
-                PropertyIdentifier::LOG_ENABLE,
+                PropertyIdentifier::ENABLE,
                 PropertyIdentifier::STOP_WHEN_FULL,
                 PropertyIdentifier::RECORD_COUNT,
                 PropertyIdentifier::DESCRIPTION,
@@ -697,7 +679,7 @@ fn log_family_writability_matches_runtime_routes() {
         (
             FamilyKind::Trend,
             vec![
-                PropertyIdentifier::LOG_ENABLE,
+                PropertyIdentifier::ENABLE,
                 PropertyIdentifier::LOG_INTERVAL,
                 PropertyIdentifier::STOP_WHEN_FULL,
                 PropertyIdentifier::RECORD_COUNT,
@@ -707,7 +689,7 @@ fn log_family_writability_matches_runtime_routes() {
         (
             FamilyKind::TrendMultiple,
             vec![
-                PropertyIdentifier::LOG_ENABLE,
+                PropertyIdentifier::ENABLE,
                 PropertyIdentifier::LOG_INTERVAL,
                 PropertyIdentifier::STOP_WHEN_FULL,
                 PropertyIdentifier::RECORD_COUNT,

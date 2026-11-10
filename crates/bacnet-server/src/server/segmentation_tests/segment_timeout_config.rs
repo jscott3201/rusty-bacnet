@@ -20,13 +20,48 @@ fn database(mode: Segmentation, timeout: u64) -> ObjectDatabase {
 #[tokio::test]
 async fn segment_timeout_invalid_configuration_and_declaration_fail_before_io() {
     for (mode, timeout, device_mode, device_timeout) in [
-        (Segmentation::BOTH, 0, Segmentation::BOTH, 5000),
-        (Segmentation::BOTH, u64::MAX, Segmentation::BOTH, 5000),
-        (Segmentation::from_raw(64), 5000, Segmentation::NONE, 5000),
-        (Segmentation::BOTH, 5000, Segmentation::NONE, 5000),
-        (Segmentation::NONE, 5000, Segmentation::BOTH, 5000),
-        (Segmentation::RECEIVE, 5000, Segmentation::TRANSMIT, 5000),
-        (Segmentation::BOTH, 5000, Segmentation::BOTH, 6000),
+        (
+            Segmentation::SEGMENTED_BOTH,
+            0,
+            Segmentation::SEGMENTED_BOTH,
+            5000,
+        ),
+        (
+            Segmentation::SEGMENTED_BOTH,
+            u64::MAX,
+            Segmentation::SEGMENTED_BOTH,
+            5000,
+        ),
+        (
+            Segmentation::from_raw(64),
+            5000,
+            Segmentation::NO_SEGMENTATION,
+            5000,
+        ),
+        (
+            Segmentation::SEGMENTED_BOTH,
+            5000,
+            Segmentation::NO_SEGMENTATION,
+            5000,
+        ),
+        (
+            Segmentation::NO_SEGMENTATION,
+            5000,
+            Segmentation::SEGMENTED_BOTH,
+            5000,
+        ),
+        (
+            Segmentation::SEGMENTED_RECEIVE,
+            5000,
+            Segmentation::SEGMENTED_TRANSMIT,
+            5000,
+        ),
+        (
+            Segmentation::SEGMENTED_BOTH,
+            5000,
+            Segmentation::SEGMENTED_BOTH,
+            6000,
+        ),
     ] {
         let config = ServerConfig {
             device: bacnet_objects::DeviceIdentity::default()
@@ -66,7 +101,7 @@ async fn segment_timeout_builder_validation_precedes_transport_start_or_sc_dial(
             .transport(TestTransport::never_start())
             .device(
                 bacnet_objects::DeviceIdentity::default()
-                    .with_segmentation(Segmentation::BOTH)
+                    .with_segmentation(Segmentation::SEGMENTED_BOTH)
                     .with_apdu_segment_timeout_ms(timeout),
             )
             .build()
@@ -76,7 +111,7 @@ async fn segment_timeout_builder_validation_precedes_transport_start_or_sc_dial(
             .port(0)
             .device(
                 bacnet_objects::DeviceIdentity::default()
-                    .with_segmentation(Segmentation::BOTH)
+                    .with_segmentation(Segmentation::SEGMENTED_BOTH)
                     .with_apdu_segment_timeout_ms(timeout),
             )
             .build()
@@ -93,7 +128,7 @@ async fn segment_timeout_builder_validation_precedes_transport_start_or_sc_dial(
                 .device_uuid(crate::server::sc_builder::TEST_DEVICE_UUID)
                 .device(
                     bacnet_objects::DeviceIdentity::default()
-                        .with_segmentation(Segmentation::BOTH)
+                        .with_segmentation(Segmentation::SEGMENTED_BOTH)
                         .with_apdu_segment_timeout_ms(timeout),
                 )
                 .build()
@@ -107,10 +142,10 @@ async fn segment_timeout_builder_validation_precedes_transport_start_or_sc_dial(
 #[tokio::test]
 async fn segment_timeout_all_known_modes_start_with_coherent_device() {
     for mode in [
-        Segmentation::NONE,
-        Segmentation::TRANSMIT,
-        Segmentation::RECEIVE,
-        Segmentation::BOTH,
+        Segmentation::NO_SEGMENTATION,
+        Segmentation::SEGMENTED_TRANSMIT,
+        Segmentation::SEGMENTED_RECEIVE,
+        Segmentation::SEGMENTED_BOTH,
     ] {
         let (transport, _) = recording_transport();
         let mut server = BACnetServer::generic_builder()
@@ -138,7 +173,7 @@ async fn configured_segment_timeout_drives_real_server_response_ack_wait() {
         DeviceObject::new(DeviceConfig {
             identity: bacnet_objects::DeviceIdentity::default()
                 .with_name("large-response-".repeat(20))
-                .with_segmentation(Segmentation::TRANSMIT)
+                .with_segmentation(Segmentation::SEGMENTED_TRANSMIT)
                 .with_apdu_segment_timeout_ms(250),
             ..Default::default()
         })
@@ -150,7 +185,7 @@ async fn configured_segment_timeout_drives_real_server_response_ack_wait() {
         .database(db)
         .device(
             bacnet_objects::DeviceIdentity::default()
-                .with_segmentation(Segmentation::TRANSMIT)
+                .with_segmentation(Segmentation::SEGMENTED_TRANSMIT)
                 .with_apdu_segment_timeout_ms(250),
         )
         .build()

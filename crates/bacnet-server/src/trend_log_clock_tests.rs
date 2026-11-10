@@ -91,7 +91,7 @@ fn served(obj: &dyn BACnetObject) -> Vec<Vec<u8>> {
         .collect()
 }
 
-/// The served records, then Record_Count, Total_Record_Count and Log_Enable.
+/// The served records, then Record_Count, Total_Record_Count and Enable.
 fn snapshot(db: &ObjectDatabase, oid: ObjectIdentifier) -> Vec<PropertyValue> {
     let obj = db.get(&oid).unwrap();
     let records = served(obj)
@@ -103,7 +103,7 @@ fn snapshot(db: &ObjectDatabase, oid: ObjectIdentifier) -> Vec<PropertyValue> {
         [
             PropertyIdentifier::RECORD_COUNT,
             PropertyIdentifier::TOTAL_RECORD_COUNT,
-            PropertyIdentifier::LOG_ENABLE,
+            PropertyIdentifier::ENABLE,
         ]
         .map(|p| obj.read_property(p, None).unwrap()),
     );

@@ -3,7 +3,7 @@
 //! A Notification Forwarder saves a written Recipient_List or
 //! Subscribed_Recipients, a Notification Class a written Recipient_List
 //! (#1315), an Access Rights object a written rule array, Enable (#1392) or
-//! Accompaniment (#1393), an Audit Log a Log_Enable or Buffer_Size change,
+//! Accompaniment (#1393), an Audit Log a Enable or Buffer_Size change,
 //! a Timer or Channel the configuration a peer writes to it (#2243), a
 //! Color or Color Temperature a written default (#1956), a Trend Log,
 //! Trend Log Multiple or Event Log a written reporting setting (#1952),
@@ -91,9 +91,9 @@ enum TargetValue {
 
 /// Whether a bundled object of `oid`'s type may save a write of `property`
 /// first. A forwarder saves its Recipient_List and Subscribed_Recipients, a
-/// Notification Class its Recipient_List, an Audit Log its Log_Enable and
+/// Notification Class its Recipient_List, an Audit Log its Enable and
 /// Buffer_Size, an Access Rights object its two rule arrays, Enable
-/// (property 133, named `LOG_ENABLE`) and Accompaniment, a Timer its
+/// (property 133) and Accompaniment, a Timer its
 /// State_Change_Values, List_Of_Object_Property_References and
 /// Default_Timeout (#2312), and a
 /// Channel its members, Execution_Delay, Channel_Number, Control_Groups and
@@ -134,7 +134,7 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
         ),
         ObjectType::AUDIT_LOG => matches!(
             property,
-            PropertyIdentifier::LOG_ENABLE | PropertyIdentifier::BUFFER_SIZE
+            PropertyIdentifier::ENABLE | PropertyIdentifier::BUFFER_SIZE
         ),
         ObjectType::NOTIFICATION_CLASS => matches!(
             property,
@@ -178,7 +178,7 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
             property,
             PropertyIdentifier::POSITIVE_ACCESS_RULES
                 | PropertyIdentifier::NEGATIVE_ACCESS_RULES
-                | PropertyIdentifier::LOG_ENABLE
+                | PropertyIdentifier::ENABLE
                 | PropertyIdentifier::ACCOMPANIMENT
                 | PropertyIdentifier::DESCRIPTION
         ),

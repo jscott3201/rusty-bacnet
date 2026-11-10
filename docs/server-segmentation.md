@@ -7,20 +7,20 @@ response SegmentACK and uses `4 * Tseg` for incoming request inactivity.
 `APDU_Timeout` and retry counts keep their separate meanings.
 
 A selected Device must declare the same `Segmentation_Supported` as the server.
-For `TRANSMIT`, `RECEIVE` or `BOTH`, its `DeviceConfig.identity` segment timeout
+For `SEGMENTED_TRANSMIT`, `SEGMENTED_RECEIVE` or `SEGMENTED_BOTH`, its `DeviceConfig.identity` segment timeout
 must also match the resolved server identity. The Device exposes the configured
 value as read-only `APDU_Segment_Timeout`; its property list, metadata and PICS
-include the property only when segmentation is supported. `NONE` omits it.
+include the property only when segmentation is supported. `NO_SEGMENTATION` omits it.
 Unknown server modes, active zero timeouts, mismatches, multiplication overflow
 and unrepresentable deadlines fail before transport startup or SC dialing.
 An existing empty database remains supported.
 
 | Mode | Receive segmented requests | Send segmented responses | Segment timeout property |
 | --- | --- | --- | --- |
-| `NONE` | No | No | Absent |
-| `TRANSMIT` | No | Yes | Present |
-| `RECEIVE` | Yes | No | Present |
-| `BOTH` | Yes | Yes | Present |
+| `NO_SEGMENTATION` | No | No | Absent |
+| `SEGMENTED_TRANSMIT` | No | Yes | Present |
+| `SEGMENTED_RECEIVE` | Yes | No | Present |
+| `SEGMENTED_BOTH` | Yes | Yes | Present |
 
 Receive protocol expiry is silent and occurs only after elapsed inactivity is
 **greater than** `4 * Tseg`. Equality remains live. Valid duplicate/gap traffic
@@ -47,13 +47,13 @@ slots, 4 MiB saved-payload budget and 256-segment limit remain in force.
 
 `DeviceIdentity` is shared by full servers and endpoints, with a 5000 ms
 segment timeout. `with_apdu_segment_timeout_ms(...)` changes both.
-The narrow `EndpointSession` roles require `NONE` in both an explicit identity
+The narrow `EndpointSession` roles require `NO_SEGMENTATION` in both an explicit identity
 and the selected Device database, and reject unsupported declarations before
 ingress. Client timers remain caller-owned; this does not change their coupling
 or add segmentation to endpoint roles.
 
 The Python full server accepts keyword-only `segmentation_supported` (default
-`Segmentation.NONE`) and `apdu_segment_timeout_ms` (default 5000). It constructs
+`Segmentation.NO_SEGMENTATION`) and `apdu_segment_timeout_ms` (default 5000). It constructs
 a matching Device and server configuration and validates the enum and timeout
 before startup. See the [Python constructor](python-api.md#constructor).
 

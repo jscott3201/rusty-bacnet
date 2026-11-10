@@ -7,7 +7,7 @@ use request_reassembly::{
 
 #[tokio::test(start_paused = true)]
 async fn default_receive_timeout_keeps_a_transfer_live_after_four_seconds() {
-    let (server, client, mut rx) = start_reassembly_server(Segmentation::BOTH).await;
+    let (server, client, mut rx) = start_reassembly_server(Segmentation::SEGMENTED_BOTH).await;
     let chunks = split_into(&write_property_payload("within-receive-tseg"), 2);
     send_segment_with_window(&client, 42, 0, 1, true, &chunks[0]).await;
     expect_positive_ack(&mut rx, 42, 0).await;
@@ -21,8 +21,11 @@ async fn default_receive_timeout_keeps_a_transfer_live_after_four_seconds() {
 
 #[tokio::test(start_paused = true)]
 async fn configured_receive_timeout_keeps_exact_equality_live_and_refreshes_deadline() {
-    let (server, client, mut rx) =
-        request_reassembly::start_reassembly_server_with_timeout(Segmentation::RECEIVE, 1000).await;
+    let (server, client, mut rx) = request_reassembly::start_reassembly_server_with_timeout(
+        Segmentation::SEGMENTED_RECEIVE,
+        1000,
+    )
+    .await;
     let chunks = split_into(&write_property_payload("refreshed-at-equality"), 3);
     send_segment_with_window(&client, 42, 0, 1, true, &chunks[0]).await;
     expect_positive_ack(&mut rx, 42, 0).await;
@@ -50,8 +53,11 @@ async fn configured_receive_timeout_keeps_exact_equality_live_and_refreshes_dead
 async fn quiet_protocol_expiry_releases_payload_without_an_abort_or_new_ingress() {
     use crate::server::segmented_receive::tests::observe_payload_drops;
     use std::sync::atomic::AtomicUsize;
-    let (server, client, mut rx) =
-        request_reassembly::start_reassembly_server_with_timeout(Segmentation::BOTH, 1000).await;
+    let (server, client, mut rx) = request_reassembly::start_reassembly_server_with_timeout(
+        Segmentation::SEGMENTED_BOTH,
+        1000,
+    )
+    .await;
     let drops = Arc::new(AtomicUsize::new(0));
     let probe = observe_payload_drops(&drops);
     let chunks = split_into(&write_property_payload("fresh-incarnation"), 2);
@@ -154,7 +160,8 @@ async fn stopping_during_local_expiry_abort_joins_dispatch_and_releases_payload(
 #[tokio::test(start_paused = true)]
 async fn duplicate_and_gap_each_refresh_receive_timeout_without_saving_payload() {
     let (server, client, mut rx) =
-        request_reassembly::start_reassembly_server_with_timeout(Segmentation::BOTH, 250).await;
+        request_reassembly::start_reassembly_server_with_timeout(Segmentation::SEGMENTED_BOTH, 250)
+            .await;
     let chunks = split_into(&write_property_payload("only-original-bytes"), 2);
     send_segment_with_window(&client, 42, 0, 1, true, &chunks[0]).await;
     expect_positive_ack(&mut rx, 42, 0).await;

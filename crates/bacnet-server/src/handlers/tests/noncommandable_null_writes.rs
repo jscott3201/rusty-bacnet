@@ -225,7 +225,7 @@ fn assert_error(result: Result<impl std::fmt::Debug, Error>, class: ErrorClass, 
 fn cases() -> Vec<(ObjectIdentifier, P, Option<u32>, bool)> {
     vec![
         // Access Rights Enable, a rule array whole, by element and resized.
-        (ar(), P::LOG_ENABLE, None, false),
+        (ar(), P::ENABLE, None, false),
         (ar(), P::POSITIVE_ACCESS_RULES, None, false),
         (ar(), P::POSITIVE_ACCESS_RULES, Some(1), false),
         (ar(), P::NEGATIVE_ACCESS_RULES, Some(0), false),

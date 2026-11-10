@@ -110,7 +110,7 @@ fn expected_rows(kind: ObjectType, triggered: bool) -> Vec<(P, bool, bool)> {
         (P::OBJECT_NAME, false, false),
         (P::DESCRIPTION, true, true),
         (P::OBJECT_TYPE, false, false),
-        (P::LOG_ENABLE, false, true),
+        (P::ENABLE, false, true),
         (P::LOG_INTERVAL, false, !triggered),
         (P::STOP_WHEN_FULL, false, true),
         (P::BUFFER_SIZE, false, false),

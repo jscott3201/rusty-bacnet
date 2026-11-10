@@ -485,7 +485,7 @@ mod tests {
             network: station.map(|(network, _)| network),
             vendor_id: 260,
             max_apdu: 480,
-            segmentation: Segmentation::NONE,
+            segmentation: Segmentation::NO_SEGMENTATION,
             last_seen: std::time::Instant::now(),
         }
     }

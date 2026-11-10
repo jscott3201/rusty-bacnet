@@ -10,7 +10,7 @@
 //!
 //! The seeds, each the smallest that makes the state show:
 //! - a log record in the Trend Log, Trend Log Multiple and Event Log (the
-//!   Audit Log gains its records from Log_Enable writes);
+//!   Audit Log gains its records from Enable writes);
 //! - a Command with two action lists, each writing Analog Value 1;
 //! - a B/IP Network Port in BBMD mode whose tables take changes, with a
 //!   multicast group lent and an owner that activates changes, so the
@@ -597,7 +597,7 @@ pub fn prerequisite(
 ) -> (PropertyIdentifier, PropertyValue) {
     use PropertyIdentifier as P;
     match (object_type, property) {
-        (ObjectType::AUDIT_LOG, P::BUFFER_SIZE) => (P::LOG_ENABLE, PropertyValue::Boolean(false)),
+        (ObjectType::AUDIT_LOG, P::BUFFER_SIZE) => (P::ENABLE, PropertyValue::Boolean(false)),
         _ => (P::OUT_OF_SERVICE, PropertyValue::Boolean(true)),
     }
 }

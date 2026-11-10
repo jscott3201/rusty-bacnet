@@ -42,7 +42,7 @@ async fn max_apdu_stays_fixed_when_the_receive_capacity_falls() {
     let mut server = BACnetServer::generic_builder()
         .device(
             bacnet_objects::DeviceIdentity::default()
-                .with_segmentation(bacnet_types::enums::Segmentation::BOTH),
+                .with_segmentation(bacnet_types::enums::Segmentation::SEGMENTED_BOTH),
         )
         .transport(transport)
         .build()

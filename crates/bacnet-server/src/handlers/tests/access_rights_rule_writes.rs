@@ -174,7 +174,7 @@ fn access_rights_wpm_writes_the_arrays_and_enable() {
             (P::POSITIVE_ACCESS_RULES, None, REMOTE_ZONE.to_vec()),
             (P::NEGATIVE_ACCESS_RULES, Some(1), ANYWHERE_OFF.to_vec()),
             (P::NEGATIVE_ACCESS_RULES, Some(0), size(2)),
-            (P::LOG_ENABLE, None, vec![0x10]),
+            (P::ENABLE, None, vec![0x10]),
         ],
     )
     .unwrap();
@@ -183,7 +183,7 @@ fn access_rights_wpm_writes_the_arrays_and_enable() {
         P::NEGATIVE_ACCESS_RULES,
         &[ANYWHERE_OFF, GROWN],
     ));
-    cases.push((P::LOG_ENABLE, None, Ok(vec![0x10])));
+    cases.push((P::ENABLE, None, Ok(vec![0x10])));
     assert_reads(&db, rights, &cases);
 
     // A refused element ends the request there: the write before it stays,
@@ -199,7 +199,7 @@ fn access_rights_wpm_writes_the_arrays_and_enable() {
             &mut db,
             rights,
             vec![
-                (P::LOG_ENABLE, None, vec![0x11]),
+                (P::ENABLE, None, vec![0x11]),
                 (P::POSITIVE_ACCESS_RULES, Some(1), door),
                 (P::NEGATIVE_ACCESS_RULES, None, Vec::new()),
             ],
@@ -208,7 +208,7 @@ fn access_rights_wpm_writes_the_arrays_and_enable() {
         ErrorCode::VALUE_OUT_OF_RANGE,
     );
     cases.pop();
-    cases.push((P::LOG_ENABLE, None, Ok(vec![0x11])));
+    cases.push((P::ENABLE, None, Ok(vec![0x11])));
     assert_reads(&db, rights, &cases);
 }
 
@@ -317,20 +317,20 @@ fn access_rights_refused_rule_writes_leave_the_arrays_unchanged() {
 #[test]
 fn access_rights_enable_reads_and_writes_over_the_wire() {
     let (mut db, rights) = db_with(Box::new(AccessRightsObject::new(7, "AR-7").unwrap()));
-    assert_reads(&db, rights, &[(P::LOG_ENABLE, None, Ok(vec![0x11]))]);
-    write(&mut db, rights, P::LOG_ENABLE, None, vec![0x10]).unwrap();
-    assert_reads(&db, rights, &[(P::LOG_ENABLE, None, Ok(vec![0x10]))]);
+    assert_reads(&db, rights, &[(P::ENABLE, None, Ok(vec![0x11]))]);
+    write(&mut db, rights, P::ENABLE, None, vec![0x10]).unwrap();
+    assert_reads(&db, rights, &[(P::ENABLE, None, Ok(vec![0x10]))]);
     assert_error(
-        write(&mut db, rights, P::LOG_ENABLE, None, size(1)),
+        write(&mut db, rights, P::ENABLE, None, size(1)),
         ErrorClass::PROPERTY,
         ErrorCode::INVALID_DATA_TYPE,
     );
     assert_error(
-        write(&mut db, rights, P::LOG_ENABLE, Some(1), vec![0x11]),
+        write(&mut db, rights, P::ENABLE, Some(1), vec![0x11]),
         ErrorClass::PROPERTY,
         ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
     );
-    assert_reads(&db, rights, &[(P::LOG_ENABLE, None, Ok(vec![0x10]))]);
+    assert_reads(&db, rights, &[(P::ENABLE, None, Ok(vec![0x10]))]);
 }
 
 #[test]
@@ -345,7 +345,7 @@ fn rpm_all_after_network_writes_carries_the_written_rules_and_enable() {
     )
     .unwrap();
     write(&mut db, rights, P::NEGATIVE_ACCESS_RULES, Some(0), size(1)).unwrap();
-    write(&mut db, rights, P::LOG_ENABLE, None, vec![0x10]).unwrap();
+    write(&mut db, rights, P::ENABLE, None, vec![0x10]).unwrap();
 
     let mut request = BytesMut::new();
     ReadPropertyMultipleRequest {
@@ -369,7 +369,7 @@ fn rpm_all_after_network_writes_carries_the_written_rules_and_enable() {
             [BUSINESS_HOURS, ANYWHERE_OFF].concat(),
         ),
         (P::NEGATIVE_ACCESS_RULES, GROWN.to_vec()),
-        (P::LOG_ENABLE, vec![0x10]),
+        (P::ENABLE, vec![0x10]),
     ] {
         let found: Vec<_> = results
             .iter()

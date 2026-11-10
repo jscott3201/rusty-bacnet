@@ -172,7 +172,7 @@ fn an_increment_change_alone_keeps_the_baseline() {
 fn enable_gates_cov_records_and_restarts_from_the_current_value() {
     let (mut db, oid, _) = cov_fixture(PropertyValue::Real(1.0));
     db.poll_trend_logs();
-    write(&mut db, oid, P::LOG_ENABLE, PropertyValue::Boolean(false));
+    write(&mut db, oid, P::ENABLE, PropertyValue::Boolean(false));
     set_value(&mut db, 5.0);
     db.poll_trend_logs();
     // Back within the increment of the last logged 0.0.
@@ -184,7 +184,7 @@ fn enable_gates_cov_records_and_restarts_from_the_current_value() {
     );
     // Collection resumes with the value as it stands, though it is short
     // of the increment from the last one logged.
-    write(&mut db, oid, P::LOG_ENABLE, PropertyValue::Boolean(true));
+    write(&mut db, oid, P::ENABLE, PropertyValue::Boolean(true));
     db.poll_trend_logs();
     assert_eq!(
         logged(&db, oid),

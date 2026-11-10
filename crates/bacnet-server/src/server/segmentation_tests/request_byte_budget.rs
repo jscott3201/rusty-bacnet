@@ -43,7 +43,7 @@ async fn fill_budget(
 
 #[tokio::test]
 async fn request_byte_budget_repeated_initial_and_final_refusals_are_stateless() {
-    let (mut server, client, mut rx) = start_reassembly_server(Segmentation::BOTH).await;
+    let (mut server, client, mut rx) = start_reassembly_server(Segmentation::SEGMENTED_BOTH).await;
     let next = fill_budget(&client, &mut rx, BUDGET).await;
     let write = write_property_payload("must not execute a refused final initial request");
     for invoke in 12..20 {
@@ -77,7 +77,7 @@ async fn request_byte_budget_repeated_initial_and_final_refusals_are_stateless()
 
 #[tokio::test]
 async fn request_byte_budget_repeated_final_continuation_denial_releases_only_current() {
-    let (mut server, client, mut rx) = start_reassembly_server(Segmentation::BOTH).await;
+    let (mut server, client, mut rx) = start_reassembly_server(Segmentation::SEGMENTED_BOTH).await;
     let write = write_property_payload("never write a partial request");
     let (prefix, final_byte) = write.split_at(write.len() - 1);
     let next = fill_budget(&client, &mut rx, BUDGET - prefix.len()).await;
@@ -115,7 +115,7 @@ async fn request_byte_budget_repeated_final_continuation_denial_releases_only_cu
 
 #[tokio::test]
 async fn request_byte_budget_completion_at_exact_fit_releases_capacity_for_initial_final() {
-    let (mut server, client, mut rx) = start_reassembly_server(Segmentation::BOTH).await;
+    let (mut server, client, mut rx) = start_reassembly_server(Segmentation::SEGMENTED_BOTH).await;
     let text = "exact-fit-write";
     let write = write_property_payload(text);
     fill_budget(&client, &mut rx, BUDGET - write.len()).await;
@@ -144,7 +144,7 @@ async fn request_byte_budget_completion_at_exact_fit_releases_capacity_for_initi
 
 #[tokio::test]
 async fn request_byte_budget_full_discards_oversized_duplicates_gaps_and_accepts_empty_growth() {
-    let (mut server, client, mut rx) = start_reassembly_server(Segmentation::BOTH).await;
+    let (mut server, client, mut rx) = start_reassembly_server(Segmentation::SEGMENTED_BOTH).await;
     let next = fill_budget(&client, &mut rx, BUDGET).await;
     for seq in [next[0] - 1, next[0] + 1, 0] {
         send_segment_with_window(&client, 0, seq, 1, false, &[7; 1500]).await;
@@ -177,7 +177,7 @@ async fn request_byte_budget_full_discards_oversized_duplicates_gaps_and_accepts
 
 #[tokio::test]
 async fn request_byte_budget_server_abort_preserves_bytes_peer_abort_releases_them() {
-    let (mut server, client, mut rx) = start_reassembly_server(Segmentation::BOTH).await;
+    let (mut server, client, mut rx) = start_reassembly_server(Segmentation::SEGMENTED_BOTH).await;
     fill_budget(&client, &mut rx, BUDGET).await;
     for sent_by_server in [true, false] {
         send_apdu(
@@ -203,9 +203,10 @@ async fn request_byte_budget_server_abort_preserves_bytes_peer_abort_releases_th
 
 #[tokio::test]
 async fn request_byte_budget_is_per_server_instance_not_shared_globally() {
-    let (mut full, client, mut rx) = start_reassembly_server(Segmentation::BOTH).await;
+    let (mut full, client, mut rx) = start_reassembly_server(Segmentation::SEGMENTED_BOTH).await;
     fill_budget(&client, &mut rx, BUDGET).await;
-    let (mut other, other_client, mut other_rx) = start_reassembly_server(Segmentation::BOTH).await;
+    let (mut other, other_client, mut other_rx) =
+        start_reassembly_server(Segmentation::SEGMENTED_BOTH).await;
     let write = write_property_payload("independent server budget");
     send_segment_with_window(&other_client, 0, 0, 1, false, &write).await;
     expect_positive_ack(&mut other_rx, 0, 0).await;
@@ -226,7 +227,7 @@ async fn request_byte_budget_is_per_server_instance_not_shared_globally() {
 
 #[tokio::test]
 async fn request_byte_budget_full_silent_oversized_duplicates_preserve_window_and_payload() {
-    let (mut server, client, mut rx) = start_reassembly_server(Segmentation::BOTH).await;
+    let (mut server, client, mut rx) = start_reassembly_server(Segmentation::SEGMENTED_BOTH).await;
     let text = "full-budget window survives discarded payloads";
     let write = write_property_payload(text);
     fill_budget(&client, &mut rx, BUDGET - write.len()).await;
@@ -259,7 +260,7 @@ async fn request_byte_budget_full_silent_oversized_duplicates_preserve_window_an
 
 #[tokio::test]
 async fn request_byte_budget_actual_four_mib_exact_fit_then_one_byte_initial_abort() {
-    let (mut server, client, mut rx) = start_reassembly_server(Segmentation::BOTH).await;
+    let (mut server, client, mut rx) = start_reassembly_server(Segmentation::SEGMENTED_BOTH).await;
     assert_eq!(2841 * 1476 + 988, BUDGET);
     let next = fill_budget(&client, &mut rx, BUDGET).await;
     assert_eq!(

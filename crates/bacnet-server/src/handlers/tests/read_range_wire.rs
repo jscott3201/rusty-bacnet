@@ -11,13 +11,18 @@ use std::time::Duration;
 #[tokio::test]
 async fn read_range_unsegmented_direct_and_routed_fit_actual_peer_local_envelope() {
     for segmentation in [
-        Segmentation::NONE,
-        Segmentation::RECEIVE,
-        Segmentation::TRANSMIT,
-        Segmentation::BOTH,
+        Segmentation::NO_SEGMENTATION,
+        Segmentation::SEGMENTED_RECEIVE,
+        Segmentation::SEGMENTED_TRANSMIT,
+        Segmentation::SEGMENTED_BOTH,
     ] {
         for accepts in [false, true] {
-            if accepts && matches!(segmentation, Segmentation::TRANSMIT | Segmentation::BOTH) {
+            if accepts
+                && matches!(
+                    segmentation,
+                    Segmentation::SEGMENTED_TRANSMIT | Segmentation::SEGMENTED_BOTH
+                )
+            {
                 continue;
             }
             for (peer, local) in [(50, 1476), (480, 50)] {
@@ -131,7 +136,10 @@ async fn read_range_unsegmented_direct_and_routed_fit_actual_peer_local_envelope
 #[tokio::test]
 async fn read_range_segmented_complete_page_keeps_config_cap_and_actual_identity() {
     use bacnet_client::client::BACnetClient;
-    for segmentation in [Segmentation::TRANSMIT, Segmentation::BOTH] {
+    for segmentation in [
+        Segmentation::SEGMENTED_TRANSMIT,
+        Segmentation::SEGMENTED_BOTH,
+    ] {
         let items = unsigned_items(&(1..=100).collect::<Vec<_>>());
         let ids = (0..100).map(|i| identity(1000 + i * 2, 1)).collect();
         let (db, oid) = list_db(PropertyIdentifier::LOG_BUFFER, items.clone(), Some(ids));

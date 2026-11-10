@@ -132,8 +132,8 @@ fn engineering_units_ashrae_extended() {
 
 #[test]
 fn segmentation_values() {
-    assert_eq!(Segmentation::BOTH.to_raw(), 0);
-    assert_eq!(Segmentation::NONE.to_raw(), 3);
+    assert_eq!(Segmentation::SEGMENTED_BOTH.to_raw(), 0);
+    assert_eq!(Segmentation::NO_SEGMENTATION.to_raw(), 3);
 }
 
 #[test]

@@ -107,7 +107,8 @@ async fn fixture_with_name(
     fixture_with_config(
         name,
         ServerConfig {
-            device: bacnet_objects::DeviceIdentity::default().with_segmentation(Segmentation::BOTH),
+            device: bacnet_objects::DeviceIdentity::default()
+                .with_segmentation(Segmentation::SEGMENTED_BOTH),
             ..ServerConfig::default()
         },
     )

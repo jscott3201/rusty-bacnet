@@ -46,7 +46,7 @@ async fn hear(wire: &Wire, instance: u32, mac: &[u8], source: Option<NpduAddress
     IAmRequest {
         object_identifier: peer(instance),
         max_apdu_length: 1476,
-        segmentation_supported: Segmentation::NONE,
+        segmentation_supported: Segmentation::NO_SEGMENTATION,
         vendor_id: 260,
     }
     .encode(&mut service);

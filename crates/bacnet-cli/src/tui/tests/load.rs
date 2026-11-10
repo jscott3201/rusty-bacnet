@@ -25,7 +25,7 @@ fn device(instance: u32) -> DiscoveredDevice {
         object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap(),
         mac_address: MacAddr::from_slice(&[10, 1, a, b, 0xBA, 0xC0]),
         max_apdu_length: 1476,
-        segmentation_supported: Segmentation::NONE,
+        segmentation_supported: Segmentation::NO_SEGMENTATION,
         max_segments_accepted: None,
         vendor_id: 260,
         last_seen: std::time::Instant::now(),

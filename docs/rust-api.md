@@ -5035,7 +5035,7 @@ writes](#authorized-endpoint-device-writes)).
 
 So every type with a store keeps a written Description, with one
 exception: the Audit Log. Its `AuditLogPersistence` keeps the records,
-Log_Enable and Buffer_Size, and a Description a peer writes to it lasts
+Enable and Buffer_Size, and a Description a peer writes to it lasts
 until a restart. The store must also be the one that takes it: an analog,
 binary or multi-state object, a Color or a Color Temperature built with
 Tags storage alone keeps a written Description in memory, since its
@@ -5663,7 +5663,7 @@ framing, through the shared `bacnet-encoding` codecs.
   as it was. Growing at index 0 appends SPECIFIED rules with unspecified
   references (Schedule 4194303's Present_Value, Access Point 4194303) and
   the enable flag FALSE (Clause 12.34.9.3); shrinking drops rules from the
-  end. Enable (property 133, `PropertyIdentifier::LOG_ENABLE`) is a BOOLEAN,
+  end. Enable (property 133, `PropertyIdentifier::ENABLE`) is a BOOLEAN,
   TRUE by default, set with `set_enable` or written by peers; FALSE disables
   every rule in both arrays (Clause 12.34.8) without touching each rule's own
   flag. The object stores and serves the rules and the flag, and
@@ -10141,7 +10141,7 @@ represents receipt only; no Audit Reporting BIBB, including AR-L-A, is claimed.
 `AuditLogObject` makes every `AuditLogPersistence::commit` call on a writer
 thread of its own, one at a time, so a custom backend never sees two calls at
 once; dropping the object waits for queued commits. The bundled server stages
-each inbound notification batch, each network or `write_local` Log_Enable or
+each inbound notification batch, each network or `write_local` Enable or
 Buffer_Size change, and each `purge_audit_log`: the log builds the next
 snapshot and queues its commit, the server
 waits for the commit with the object database guard dropped, and only then
@@ -10169,7 +10169,7 @@ not returned.
 #### Buffer_Size and purging
 
 Buffer_Size takes a write, from a peer or through `write_local`, only while
-Log_Enable is FALSE (Clause 12.64.9). With logging on the write fails with
+Enable is FALSE (Clause 12.64.9). With logging on the write fails with
 `PROPERTY / WRITE_ACCESS_DENIED`, whatever the value. The value is an
 Unsigned up to `MAX_AUDIT_RECORDS`: another datatype is `INVALID_DATA_TYPE`,
 and a larger size, 2^32-1 included, `VALUE_OUT_OF_RANGE`. A smaller size
@@ -10179,7 +10179,7 @@ the current size changes nothing. The size is part of the stored snapshot:
 a reopened log keeps the size last written, and the `buffer_size` passed to
 `AuditLogObject::new` only sizes a log its storage does not hold yet. When the
 two differ the log keeps the stored size and logs a warning. To give a stored
-log a new size, turn Log_Enable off, write Buffer_Size and turn Log_Enable on
+log a new size, turn Enable off, write Buffer_Size and turn Enable on
 again, or start from empty storage.
 
 Peers cannot purge an Audit Log. Its Record_Count is read-only, unlike the
@@ -10193,9 +10193,9 @@ completed receipts survive, so a confirmed notification already stored
 is still a duplicate afterwards. AuditLogQuery then returns no records, since
 it returns notifications only; ReadRange shows the purge record.
 
-Both stage like a Log_Enable write, so the commit runs with the database
+Both stage like a Enable write, so the commit runs with the database
 guard dropped and the log serves the new state only once storage holds it.
-A WritePropertyMultiple that turns Log_Enable off and then writes
+A WritePropertyMultiple that turns Enable off and then writes
 Buffer_Size stages the two together as one commit, made off the guard as
 well; the request takes each change as it reaches it, and if it stops
 between them, storage is set back to the state the log serves. That holds
@@ -10205,7 +10205,7 @@ served state, and a log dropped with changes still staged commits the served
 state as it goes. A staged notification batch is left as it stands, since
 the log takes a batch whose commit succeeded.
 A commit that fails refuses the write or the purge with
-`DEVICE / OPERATIONAL_PROBLEM` and leaves the log as it was; a Log_Enable
+`DEVICE / OPERATIONAL_PROBLEM` and leaves the log as it was; a Enable
 write whose commit fails is refused the same way. Changes to one log land one
 at a time, in the order they were staged, so a notification batch lands whole
 on one side of a purge: a batch already committing when the purge is asked for

@@ -6,7 +6,7 @@ fn local_device(instance: u32, mac: &[u8], last_seen: Instant) -> DiscoveredDevi
         object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap(),
         mac_address: MacAddr::from_slice(mac),
         max_apdu_length: 1476,
-        segmentation_supported: Segmentation::NONE,
+        segmentation_supported: Segmentation::NO_SEGMENTATION,
         max_segments_accepted: None,
         vendor_id: 42,
         last_seen,
@@ -63,7 +63,7 @@ fn first_i_am_inserts_and_same_local_endpoint_refreshes_metadata() {
 
     let mut refreshed = original;
     refreshed.max_apdu_length = 480;
-    refreshed.segmentation_supported = Segmentation::BOTH;
+    refreshed.segmentation_supported = Segmentation::SEGMENTED_BOTH;
     refreshed.max_segments_accepted = Some(8);
     refreshed.vendor_id = 84;
     refreshed.last_seen = now + Duration::from_secs(10);
@@ -98,7 +98,7 @@ fn same_routed_endpoint_refreshes_router_and_metadata() {
 
     let mut refreshed = routed_device(1001, &[0x20], 100, &[0x03], now + Duration::from_secs(10));
     refreshed.max_apdu_length = 480;
-    refreshed.segmentation_supported = Segmentation::BOTH;
+    refreshed.segmentation_supported = Segmentation::SEGMENTED_BOTH;
     refreshed.vendor_id = 84;
     assert!(matches!(
         table.upsert_with_result(refreshed.clone()),

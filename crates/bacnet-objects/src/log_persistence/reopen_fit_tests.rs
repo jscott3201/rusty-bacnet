@@ -99,7 +99,7 @@ fn a_smaller_buffer_size_leaves_a_stop_when_full_log_its_last_slot() {
         // One slot short of full, so the log still collects...
         assert_eq!(sequence_numbers(&served(log.as_ref())), vec![2, 3]);
         assert_eq!(
-            log.read_property(P::LOG_ENABLE, None).unwrap(),
+            log.read_property(P::ENABLE, None).unwrap(),
             PropertyValue::Boolean(true),
             "{kind:?}"
         );
@@ -110,7 +110,7 @@ fn a_smaller_buffer_size_leaves_a_stop_when_full_log_its_last_slot() {
         });
         assert_eq!(served(log.as_ref()).len(), 3, "{kind:?}");
         assert_eq!(
-            log.read_property(P::LOG_ENABLE, None).unwrap(),
+            log.read_property(P::ENABLE, None).unwrap(),
             PropertyValue::Boolean(false),
             "{kind:?}"
         );
@@ -180,7 +180,7 @@ fn a_stopped_log_with_room_takes_the_marker_marked_disabled() {
             ..crate::traits::Clocks::default()
         });
         add(log.as_mut(), 1);
-        write(log.as_mut(), P::LOG_ENABLE, PropertyValue::Boolean(false));
+        write(log.as_mut(), P::ENABLE, PropertyValue::Boolean(false));
         drop(log);
 
         let (mut log, _) = open(kind, base.path(), 5).unwrap();

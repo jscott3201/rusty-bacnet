@@ -42,7 +42,7 @@ bacnet_enum! {
     const RENEW_FD_REGISTRATION = 2;
     const RESTART_SLAVE_DISCOVERY = 3;
     const RENEW_DHCP = 4;
-    const RESTART_AUTONEG = 5;
+    const RESTART_AUTONEGOTIATION = 5;
     const DISCONNECT = 6;
     const RESTART_PORT = 7;
     // 8-9: added after revision 22 (135-2020); ASHRAE's revision 24 data
@@ -59,15 +59,6 @@ bacnet_enum! {
     const LEARNED = 1;
     const LEARNED_CONFIGURED = 2;
     const CONFIGURED = 3;
-}
-
-bacnet_enum! {
-    /// Network reachability status (Clause 6.6.1).
-    pub struct NetworkReachability(u32);
-
-    const REACHABLE = 0;
-    const BUSY = 1;
-    const UNREACHABLE = 2;
 }
 
 bacnet_enum! {

@@ -1,7 +1,10 @@
 use super::*;
 
 pub(super) fn can_segment(segmentation: Segmentation) -> bool {
-    matches!(segmentation, Segmentation::BOTH | Segmentation::TRANSMIT)
+    matches!(
+        segmentation,
+        Segmentation::SEGMENTED_BOTH | Segmentation::SEGMENTED_TRANSMIT
+    )
 }
 
 pub(super) fn limit(peer: u16, local: u32) -> u16 {

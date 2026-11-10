@@ -213,7 +213,7 @@ impl Site {
 async fn server(transport: LoopbackTransport, instance: u32) -> BACnetServer<LoopbackTransport> {
     let identity = bacnet_objects::DeviceIdentity::new(instance, 0)
         .unwrap()
-        .with_segmentation(Segmentation::BOTH);
+        .with_segmentation(Segmentation::SEGMENTED_BOTH);
     let mut db = ObjectDatabase::new();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {

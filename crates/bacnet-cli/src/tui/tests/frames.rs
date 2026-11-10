@@ -29,7 +29,7 @@ fn populated() -> App {
     }
     let mut routed = routed_row(2001, (2, &[5]), "10.0.1.1:47808", 24, 7);
     routed.max_apdu = 480;
-    routed.segmentation = bacnet_types::enums::Segmentation::BOTH;
+    routed.segmentation = bacnet_types::enums::Segmentation::SEGMENTED_BOTH;
     worker(&mut app, WorkerEvent::Discovered(routed));
 
     press(&mut app, KeyCode::Char('d'));

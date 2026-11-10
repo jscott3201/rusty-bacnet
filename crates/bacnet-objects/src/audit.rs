@@ -148,7 +148,7 @@ impl AuditLogObject {
     /// `buffer_size` sizes a log that storage does not hold yet. A log
     /// reopened from storage keeps the Buffer_Size it stored, which a write
     /// may have changed since (#1238), and logs a warning when that differs
-    /// from `buffer_size`. To give a stored log a new size, turn Log_Enable
+    /// from `buffer_size`. To give a stored log a new size, turn Enable
     /// off, write Buffer_Size and turn it on again, or start from empty
     /// storage.
     pub fn new(
@@ -305,7 +305,7 @@ impl AuditLogObject {
     }
 }
 
-/// The log-status record a Log_Enable change appends.
+/// The log-status record a Enable change appends.
 fn log_enable_record(
     timestamp: (
         bacnet_types::primitives::Date,
@@ -504,7 +504,7 @@ impl BACnetObject for AuditLogObject {
             p if p == PropertyIdentifier::OBJECT_TYPE => {
                 Ok(PropertyValue::Enumerated(ObjectType::AUDIT_LOG.to_raw()))
             }
-            p if p == PropertyIdentifier::LOG_ENABLE => Ok(PropertyValue::Boolean(self.log_enable)),
+            p if p == PropertyIdentifier::ENABLE => Ok(PropertyValue::Boolean(self.log_enable)),
             p if p == PropertyIdentifier::BUFFER_SIZE => {
                 Ok(PropertyValue::Unsigned(self.buffer_size as u64))
             }
@@ -576,7 +576,7 @@ impl BACnetObject for AuditLogObject {
         _priority: Option<u8>,
     ) -> Result<(), Error> {
         crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
-        if property == PropertyIdentifier::LOG_ENABLE {
+        if property == PropertyIdentifier::ENABLE {
             if let PropertyValue::Boolean(v) = value {
                 if v == self.log_enable {
                     return Ok(());

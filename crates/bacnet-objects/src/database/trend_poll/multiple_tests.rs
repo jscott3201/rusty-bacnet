@@ -296,7 +296,7 @@ fn polled_records_follow_the_buffer_size_and_stop_when_full() {
         let enabled = db
             .get(&oid)
             .unwrap()
-            .read_property(P::LOG_ENABLE, None)
+            .read_property(P::ENABLE, None)
             .unwrap();
         if stop_when_full {
             // The second sample would fill the buffer, so a LOG_DISABLED
@@ -350,7 +350,7 @@ fn a_disabled_log_accepts_the_poll_without_a_record() {
         clock: Some(Arc::new(WallClock(Mutex::new(Some(frame()))))),
         ..crate::traits::Clocks::default()
     });
-    log.write_property(P::LOG_ENABLE, None, PropertyValue::Boolean(false), None)
+    log.write_property(P::ENABLE, None, PropertyValue::Boolean(false), None)
         .unwrap();
     let oid = log.object_identifier();
     db.add(Box::new(log)).unwrap();

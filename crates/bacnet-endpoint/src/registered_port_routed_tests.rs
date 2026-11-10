@@ -60,12 +60,13 @@ async fn registered_port_routed_read_uses_receiving_owner_not_remote_number() {
 async fn registered_port_reassembled_routed_read_and_endpoint_segmentation_boundary() {
     for full in [true, false] {
         let mut owner = if full {
-            let id = identity().with_segmentation(bacnet_types::enums::Segmentation::BOTH);
+            let id =
+                identity().with_segmentation(bacnet_types::enums::Segmentation::SEGMENTED_BOTH);
             let mut config = crate::identity::server_config(&id);
             config.registered_network_port = Some(port());
             config.device = config
                 .device
-                .with_segmentation(bacnet_types::enums::Segmentation::BOTH);
+                .with_segmentation(bacnet_types::enums::Segmentation::SEGMENTED_BOTH);
             Owner::Server(Box::new(
                 bacnet_server::server::BACnetServer::start(
                     config,

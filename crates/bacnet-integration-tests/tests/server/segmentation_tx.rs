@@ -19,7 +19,7 @@ async fn server_segments_large_rpm_response() {
         identity: bacnet_objects::DeviceIdentity::new(5678, 555)
             .expect("valid Device identity")
             .with_name("Segmentation Test Device")
-            .with_segmentation(Segmentation::BOTH),
+            .with_segmentation(Segmentation::SEGMENTED_BOTH),
         vendor_name: "Rusty BACnet Seg Test".into(),
         ..DeviceConfig::default()
     })
@@ -52,7 +52,7 @@ async fn server_segments_large_rpm_response() {
         .port(0)
         // The transmit side is gated on the advertisement too (Clause
         // 5.4.5.3 case (a)): segmenting the response requires saying so.
-        .device(bacnet_objects::DeviceIdentity::new(5678, 555).unwrap().with_segmentation(Segmentation::BOTH))
+        .device(bacnet_objects::DeviceIdentity::new(5678, 555).unwrap().with_segmentation(Segmentation::SEGMENTED_BOTH))
         .database(db)
         .build()
         .await

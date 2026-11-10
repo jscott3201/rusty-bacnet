@@ -182,7 +182,7 @@ async fn client_segments_known_device_requests_to_live_transport_limit() {
         object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 42).unwrap(),
         mac_address: MacAddr::from_slice(&peer_mac),
         max_apdu_length: 1476,
-        segmentation_supported: Segmentation::BOTH,
+        segmentation_supported: Segmentation::SEGMENTED_BOTH,
         max_segments_accepted: None,
         vendor_id: 42,
         last_seen: Instant::now(),

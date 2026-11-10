@@ -2,9 +2,9 @@
 //! read by `xd_crosscheck.rs` (#2435).
 //!
 //! The file is protocol revision 24; this stack implements revision 22
-//! (135-2020). Step 2 of #2435 named the later values, so no `later-addition`
-//! entry is left; step 3 (renaming to the 2020 names) works from this list,
-//! and the test makes it delete each entry it resolves.
+//! (135-2020). Step 2 of #2435 named the later values and step 3 renamed our
+//! identifiers to the 2020 names, so no `later-addition` or `older-name` entry
+//! is left; the categories stay so that a new difference can be recorded.
 //!
 //! One entry per line: `<category> <table> <value>[..<last>] [<ours> <file's>] | <reason>`.
 //! `<table>` is our type name, or the file's table path for a file table with
@@ -12,25 +12,17 @@
 //! and each of those must still differ. The reason is in our own words.
 //!
 //! - `later-addition`: the file names values that 135-2020 doesn't, and we don't name them yet.
-//! - `older-name`: our identifier differs from the 2020 name, which the file keeps (step 3 renames).
+//! - `older-name`: our identifier differs from the 2020 name, which the file keeps.
 //! - `later-rename`: our identifier is the 2020 name; the file carries a later rename (we keep ours).
 //! - `ours-only`: we name values the file doesn't.
 //! - `file-duplicate`: the file gives one value two names, so we leave it unnamed.
+//! - `file-error`: the file also gives `<value>` a name that belongs to another value; we name
+//!   both values as corrected, so the file's stray name is excused at its other value too.
 //! - `unmatched-type`: a table with no counterpart on the other side (value 0, no names).
 
 use core::ops::RangeInclusive;
 
 pub(super) const ALLOWED: &str = "
-older-name EngineeringUnits 122 KILOHMS kiloohms | spelled as in 2020's cross-reference comments
-older-name EngineeringUnits 123 MEGOHMS megaohms | spelled as in 2020's cross-reference comments
-older-name NetworkPortCommand 5 RESTART_AUTONEG restart-autonegotiation | our abbreviation
-older-name PropertyIdentifier 133 LOG_ENABLE enable | the name before an early revision renamed it
-older-name PropertyIdentifier 417 COMMAND_NP command | our suffix, after the Network Port object
-older-name Segmentation 0 BOTH segmented-both | our short form
-older-name Segmentation 1 TRANSMIT segmented-transmit | our short form
-older-name Segmentation 2 RECEIVE segmented-receive | our short form
-older-name Segmentation 3 NONE no-segmentation | our short form
-
 later-rename EngineeringUnits 63 DEGREES_KELVIN kelvin | 2020 says degrees kelvin
 later-rename EngineeringUnits 121 DELTA_DEGREES_KELVIN delta-kelvin | 2020 says degrees kelvin
 later-rename EngineeringUnits 127 JOULES_PER_DEGREE_KELVIN joules-per-kelvin | 2020 says degree kelvin
@@ -67,14 +59,14 @@ ours-only ObjectType 38 | network security, which 2020 already removed
 ours-only ObjectTypesSupported 38 | network security, which 2020 already removed
 ours-only PropertyIdentifier 327..337 | network security, which 2020 already removed
 
-file-duplicate EngineeringUnits 47910 | the file names this value twice; we name it once the right assignment is confirmed
+file-error EngineeringUnits 47910 MILLISIEMENS_PER_CENTIMETER active-energy-pulse-value | the file lists the pulse-value name here as well; we keep that name at 47918
+ours-only EngineeringUnits 47918 | the file lists this name at 47910 and no name at 47918
 
-unmatched-type NetworkReachability 0 | Clause 6 router reachability, unused; tried RouterEntry status
 unmatched-type PduType 0 | the file describes PDUs as a choice of sequences, not an enumeration
 unmatched-type 0-BACnetAccumulatorRecord/accumulator-status 0 | no table of ours yet
 unmatched-type 0-BACnetPriorityFilter 0 | BACnetPriorityFilter has no per-bit names (bit N is priority N+1)
 unmatched-type 0-BACnetResultFlags 0 | ReadRange result flags are three booleans in bacnet-services
-unmatched-type 0-BACnetRouterEntry/status 0 | no table of ours; NetworkReachability is a different concept
+unmatched-type 0-BACnetRouterEntry/status 0 | no table of ours; nothing reports a router entry status
 unmatched-type 0-BACnetSCConnectionState 0 | added after 2020; bacnet-transport has its own state type
 unmatched-type 0-BACnetSCHubConnectorState 0 | added after 2020 with the SC port properties
 ";
@@ -87,6 +79,7 @@ pub(super) enum Category {
     LaterRename,
     OursOnly,
     FileDuplicate,
+    FileError,
     UnmatchedType,
 }
 
@@ -116,10 +109,14 @@ pub(super) fn allowed() -> Vec<Allowed> {
             "later-rename" => Category::LaterRename,
             "ours-only" => Category::OursOnly,
             "file-duplicate" => Category::FileDuplicate,
+            "file-error" => Category::FileError,
             "unmatched-type" => Category::UnmatchedType,
             other => panic!("unknown category {other}: {line}"),
         };
-        let names = matches!(category, Category::OlderName | Category::LaterRename);
+        let names = matches!(
+            category,
+            Category::OlderName | Category::LaterRename | Category::FileError
+        );
         assert_eq!(
             fields.len(),
             if names { 5 } else { 3 },
