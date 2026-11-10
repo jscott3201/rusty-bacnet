@@ -11,11 +11,12 @@ use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
 
 use super::*;
 use crate::cov::CovSubscriptionTable;
+use bacnet_device_core::cov::timed::TimedClaim;
 use bacnet_device_core::cov::{
     CovNotificationKind, CovObservation, CovRecipient, CovSample, CovSubscription,
     SubscriberEndpoint,
 };
-use bacnet_time::Duration;
+use bacnet_time::{Duration, Instant};
 
 fn context(process_id: u32) -> MultipleContextKey {
     MultipleContextKey {
@@ -80,10 +81,18 @@ fn store() -> (HistoryStore, Arc<AtomicCovCounters>) {
 
 /// A claim of every pending change of `k`'s generation 1.
 fn claim_all(store: &HistoryStore, k: &CovSubscriptionKey) -> ClaimGuard {
-    let mut claim = ClaimGuard::new(store.clone());
+    let mut claim = TimedClaim::new();
     let (incarnation, drained) = store.lock().drain(k, 1);
     claim.add(k.clone(), incarnation, drained);
-    claim
+    ClaimGuard::of(store, claim)
+}
+
+/// [`claim_all`], lodged until `deadline` as a confirmed report's is: by
+/// the histories, with the worker's handle over the lodged claim.
+fn lodge_all(store: &HistoryStore, k: &CovSubscriptionKey, deadline: Instant) -> LodgedClaim {
+    let claim = claim_all(store, k).into_plain();
+    let id = store.lock().lodge(claim, deadline);
+    LodgedClaim::of(store, id)
 }
 
 fn timed_reference(process_id: u32, expires_at: bacnet_time::Instant) -> CovSubscription {
@@ -130,7 +139,7 @@ async fn cancel_and_expiry_take_a_contexts_deadline_state_along() {
     for expire in [false, true] {
         let mut table = CovSubscriptionTable::new();
         let sub = table.admit_for_test(timed_reference(1, far), 10).unwrap();
-        table.timed().hold_until(
+        table.timed().lock().hold_until(
             &context(1),
             runtime_clock::core_now() + Duration::from_secs(5),
         );
@@ -168,7 +177,9 @@ fn a_send_turn_holds_back_other_reports_and_owes_one_follow_up() {
     let revisits = Arc::new(crate::cov::CovRevisits::default());
     let k = key(1, 1);
     let begin = |context: MultipleContextKey, keys: Vec<CovSubscriptionKey>| {
-        SendTurn::begin(&store, &context, &revisits, keys)
+        // As the fanout does: the core takes the turn, a guard holds it.
+        let taken = store.lock().begin_send(&context);
+        taken.then(|| SendTurn::held(&store, &context, &revisits, keys))
     };
     let turn = begin(context(1), vec![k.clone()]).expect("free");
     assert!(
@@ -261,9 +272,9 @@ fn the_guard_publishes_what_a_section_counted() {
     store.lock().reset_untimed(&a, 1, 10);
     store.lock().reset(&b, 1, 0);
     // An untimestamped reference whose values fit no notification.
-    let mut claim = ClaimGuard::new(store.clone());
+    let mut claim = TimedClaim::new();
     claim.add_untimed(a.clone(), 1, None);
-    claim.forgo_untimed();
+    store.lock().forgo_untimed(&mut claim);
     assert_eq!(
         counters
             .untimed_references_oversized
@@ -293,18 +304,18 @@ async fn a_lodged_claim_is_settled_by_its_worker_or_at_its_deadline() {
 
     // Acknowledged: retired.
     store.lock().push(&k, 1, change(1));
-    claim_all(&store, &k).lodge(deadline()).commit();
+    lodge_all(&store, &k, deadline()).commit();
     assert!(store.lock().drain(&k, 1).1.is_empty());
 
     // Its worker ended any other way, or was aborted: returned at once.
     store.lock().push(&k, 1, change(2));
-    drop(claim_all(&store, &k).lodge(deadline()));
+    drop(lodge_all(&store, &k, deadline()));
     assert_eq!(seconds(&store.lock().drain(&k, 1).1), [2]);
 
     // A worker that never settles: the deadline wait gives the claim back,
     // and its late Ack retires nothing.
     store.lock().push(&k, 1, change(3));
-    let lodged = claim_all(&store, &k).lodge(deadline());
+    let lodged = lodge_all(&store, &k, deadline());
     let waiter = tokio::spawn({
         let store = store.clone();
         async move { store.next_due().await }

@@ -12,8 +12,8 @@ use super::Token;
 
 /// The outstanding confirmed report of one notification, as its worker
 /// holds it: the token its outcome goes back with
-/// ([`CovSubscriptionTable::delivered`](super::CovSubscriptionTable::delivered)),
-/// the wake-up a fence fires, and the deadline the table gave the report.
+/// ([`CovSubscriptionTable::delivered`](super::CovSubscriptionTable::delivered))
+/// and the wake-up a fence fires.
 ///
 /// Dropping it ends nothing: a worker reports every outcome, and a report
 /// whose worker was aborted ends itself at its deadline.
@@ -21,23 +21,11 @@ use super::Token;
 pub(crate) struct ConfirmedFlight {
     token: Token,
     wake: Arc<Notify>,
-    deadline: bacnet_time::Instant,
 }
 
 impl ConfirmedFlight {
-    pub(super) fn new(token: Token, wake: Arc<Notify>, deadline: bacnet_time::Instant) -> Self {
-        Self {
-            token,
-            wake,
-            deadline,
-        }
-    }
-
-    /// When the report ends itself in the table if its worker reports no
-    /// outcome: the instant anything else the worker holds for it, such as
-    /// a lodged claim, ends too.
-    pub(crate) fn deadline(&self) -> bacnet_time::Instant {
-        self.deadline
+    pub(super) fn new(token: Token, wake: Arc<Notify>) -> Self {
+        Self { token, wake }
     }
 
     /// The report's token.

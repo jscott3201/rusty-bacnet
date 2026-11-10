@@ -25,14 +25,15 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use bacnet_device_core::cov::{CovSubscriptionKey, MultipleContextKey};
-use bacnet_time::Instant;
 use tokio::sync::Notify;
 use tracing::{debug, warn};
 
 use super::{AtomicCovCounters, CovRevisits};
 use crate::runtime_clock;
+#[cfg(test)]
+use bacnet_device_core::cov::timed::TimedChange;
 use bacnet_device_core::cov::timed::{
-    self, ClaimId, DropReason, Dropped, Settlement, TimedChange, TimedCounts, TimedHistories,
+    self, ClaimId, DropReason, Dropped, Settlement, TimedCounts, TimedHistories,
 };
 
 /// What a store's handles share.
@@ -175,11 +176,6 @@ impl HistoryStore {
     pub(crate) fn rearm(&self) {
         self.lock().rearm();
     }
-
-    /// See [`TimedHistories::hold_until`].
-    pub(crate) fn hold_until(&self, context: &MultipleContextKey, until: Instant) {
-        self.lock().hold_until(context, until);
-    }
 }
 
 /// Changes drained into one notification, and the untimestamped references
@@ -199,13 +195,6 @@ pub(crate) struct ClaimGuard {
 }
 
 impl ClaimGuard {
-    pub(crate) fn new(store: HistoryStore) -> Self {
-        Self {
-            store,
-            claim: timed::TimedClaim::new(),
-        }
-    }
-
     /// `claim`, of `store`'s histories, settling itself from here on: a part
     /// the split of a report handed back as plain data.
     pub(crate) fn of(store: &HistoryStore, claim: timed::TimedClaim) -> Self {
@@ -227,46 +216,15 @@ impl ClaimGuard {
         self.take()
     }
 
-    /// See [`timed::TimedClaim::add_untimed`].
-    pub(crate) fn add_untimed(
-        &mut self,
-        key: CovSubscriptionKey,
-        generation: u64,
-        owed_since: Option<Instant>,
-    ) {
-        self.claim.add_untimed(key, generation, owed_since);
-    }
-
-    /// See [`TimedHistories::forgo_untimed`].
-    pub(crate) fn forgo_untimed(&mut self) {
-        self.store.lock().forgo_untimed(&mut self.claim);
-    }
-
-    /// See [`timed::TimedClaim::without_eviction`].
-    pub(crate) fn without_eviction(mut self) -> Self {
-        self.claim = self.take().without_eviction();
-        self
-    }
-
     /// See [`timed::TimedClaim::owing`].
     pub(crate) fn owing(mut self) -> Self {
         self.claim = self.take().owing();
         self
     }
 
-    /// See [`timed::TimedClaim::add`].
-    pub(crate) fn add(
-        &mut self,
-        key: CovSubscriptionKey,
-        incarnation: u64,
-        changes: Vec<TimedChange>,
-    ) {
-        self.claim.add(key, incarnation, changes);
-    }
-
-    /// See [`timed::TimedClaim::untimed`].
-    pub(crate) fn untimed(&self) -> impl Iterator<Item = &CovSubscriptionKey> {
-        self.claim.untimed()
+    /// The plain claim, to look at.
+    pub(crate) fn plain(&self) -> &timed::TimedClaim {
+        &self.claim
     }
 
     /// See [`timed::TimedClaim::in_order`].
@@ -275,34 +233,11 @@ impl ClaimGuard {
         self.claim.in_order()
     }
 
-    /// See [`timed::TimedClaim::last_changes`].
-    pub(crate) fn last_changes(&self) -> impl Iterator<Item = (&CovSubscriptionKey, &TimedChange)> {
-        self.claim.last_changes()
-    }
-
     /// The notification carrying these changes and values was delivered; see
     /// [`TimedHistories::commit`].
     pub(crate) fn commit(mut self) {
         let claim = self.take();
         self.store.lock().commit(claim);
-    }
-
-    /// See [`TimedHistories::going_out`].
-    pub(crate) fn going_out(&self) {
-        self.store.lock().going_out(&self.claim);
-    }
-
-    /// Hand the claim to the histories for a confirmed worker, until
-    /// `deadline`, its report's own ([`TimedHistories::lodge`]). The worker
-    /// settles it through the handle returned; the histories give it back
-    /// themselves if the worker has not by then.
-    pub(crate) fn lodge(mut self, deadline: Instant) -> LodgedClaim {
-        let claim = self.take();
-        let id = self.store.lock().lodge(claim, deadline);
-        LodgedClaim {
-            store: self.store.clone(),
-            id: Some(id),
-        }
     }
 }
 
@@ -331,6 +266,15 @@ pub(crate) struct LodgedClaim {
 }
 
 impl LodgedClaim {
+    /// The claim `id`, which `store`'s histories keep lodged for a
+    /// confirmed worker, settling itself from here on.
+    pub(crate) fn of(store: &HistoryStore, id: ClaimId) -> Self {
+        Self {
+            store: store.clone(),
+            id: Some(id),
+        }
+    }
+
     fn settle(&mut self, outcome: Settlement) {
         if let Some(id) = self.id.take() {
             self.store
@@ -367,20 +311,21 @@ pub(crate) struct SendTurn {
 }
 
 impl SendTurn {
-    /// Take the turn of `context`, unless a report of it is still going out.
-    /// `keys` are the context's references, for the follow-up.
-    pub(crate) fn begin(
+    /// The turn of `context` that a report already took from the histories
+    /// (`Reading::gather`), held from here on. `keys` are the context's
+    /// references, for the follow-up.
+    pub(crate) fn held(
         store: &HistoryStore,
         context: &MultipleContextKey,
         revisits: &Arc<CovRevisits>,
         keys: Vec<CovSubscriptionKey>,
-    ) -> Option<Self> {
-        store.lock().begin_send(context).then(|| Self {
+    ) -> Self {
+        Self {
             store: store.clone(),
             context: context.clone(),
             revisits: Arc::clone(revisits),
             keys,
-        })
+        }
     }
 }
 

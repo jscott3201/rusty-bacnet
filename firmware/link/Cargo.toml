@@ -139,6 +139,22 @@ objects = ["alloc", "dep:bacnet-objects", "dep:bacnet-device-core"]
 # without it. On by default, as `objects` is, for the host builds.
 reporting = ["objects", "dep:bacnet-time"]
 
+# `reporting-multiple`: the reporting image with bacnet-device-core's
+# `cov-multiple` on and one COV-multiple context in its scenario (#2320),
+# for measuring what that path costs an image. Off by default, and
+# scripts/ci/check-firmware-link.sh doesn't build it: the image is over the
+# reporting rows of size-budget.toml and over memory.x's 256 KiB of flash,
+# so build.rs gives it the 512 KiB layout. To measure, per target:
+#   cargo build -p firmware-link --profile firmware --target <triple> \
+#     --no-default-features --features reporting-multiple --lib --bin reporting
+#   python3 scripts/ci/firmware_size.py target/<triple>/firmware/reporting \
+#     firmware/link/size-budget.toml <triple>.reporting
+# CI's workspace clippy, rustdoc and test runs turn it on, on the host only
+# (their feature lists name it), so the scenario and its expected summary
+# are kept; the `--features alloc,firmware-link/reporting` test line runs
+# the scenario without it.
+reporting-multiple = ["reporting", "bacnet-device-core/cov-multiple"]
+
 # `emulate`: the emulation build, which scripts/emu/emulate-firmware.sh runs
 # under QEMU by hand, never in CI (docs/ci.md, "Emulation (manual)"). Each
 # image's reset entry runs its scenario, checks the summary against the one

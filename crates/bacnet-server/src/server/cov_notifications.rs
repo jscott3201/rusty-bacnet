@@ -67,7 +67,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         if ctx.comm_state.initiation_restricted() {
             return;
         }
-        let (subs, counters, in_flight_tracker, dispatch_turn) = {
+        let (subs, counters, in_flight_tracker, dispatch_turn, timed) = {
             let mut table = ctx.cov_table.write().await;
             (
                 table
@@ -78,6 +78,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 Arc::clone(table.counters()),
                 Arc::clone(table.in_flight_tracker()),
                 table.next_dispatch_turn(),
+                table.timed().clone(),
             )
         };
 
@@ -89,6 +90,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             ctx,
             in_flight_tracker: &in_flight_tracker,
             counters: &counters,
+            timed: &timed,
         };
         Self::fire_cov_by_kind(&handles, dispatch_turn, oid, subs, snapshot, false).await;
     }
@@ -191,7 +193,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             return;
         }
 
-        let (counters, in_flight_tracker) = {
+        let (counters, in_flight_tracker, timed) = {
             let table = ctx.cov_table.read().await;
             if !table.is_current(subscription) {
                 return;
@@ -199,6 +201,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             (
                 Arc::clone(table.counters()),
                 Arc::clone(table.in_flight_tracker()),
+                table.timed().clone(),
             )
         };
         let mut budget = EventBudget::new(&ctx.config.cov_policy);
@@ -208,6 +211,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 ctx,
                 in_flight_tracker: &in_flight_tracker,
                 counters: &counters,
+                timed: &timed,
             },
             &subscription.monitored_object_identifier,
             std::slice::from_ref(subscription),

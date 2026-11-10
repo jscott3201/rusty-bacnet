@@ -282,6 +282,7 @@ async fn cov_order_specialized_whole_tuple_is_never_partially_replaced() {
 struct Dispatch {
     counters: Arc<crate::cov::AtomicCovCounters>,
     tracker: Arc<crate::cov::CovInFlightTracker>,
+    timed: crate::cov::timed_store::HistoryStore,
 }
 impl Dispatch {
     async fn new(f: &Fixture) -> Self {
@@ -289,6 +290,7 @@ impl Dispatch {
         Self {
             counters: table.counters().clone(),
             tracker: table.in_flight_tracker().clone(),
+            timed: table.timed().clone(),
         }
     }
     async fn send(&self, f: &Fixture, subs: &[CovSubscriptionSnapshot]) {
@@ -306,6 +308,7 @@ impl Dispatch {
                 },
                 in_flight_tracker: &self.tracker,
                 counters: &self.counters,
+                timed: &self.timed,
             },
             &object(),
             subs,

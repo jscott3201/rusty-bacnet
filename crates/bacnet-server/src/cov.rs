@@ -17,11 +17,14 @@ use bacnet_types::primitives::ObjectIdentifier;
 use tokio::sync::Notify;
 
 use crate::runtime_clock;
+#[cfg(test)]
+use bacnet_device_core::cov::CovTimeRemaining;
+use bacnet_device_core::cov::multiple_report;
 use bacnet_device_core::cov::{
     BeginRefusal, CovObservation, CovPolicy, CovRecipient, CovReport, CovSample, CovSubscription,
-    CovSubscriptionKey, CovSubscriptionSnapshot, CovTable, CovTimeRemaining, Delivery, Evaluation,
-    EventBudget, FlightTiming, MultipleContextKey, MultipleRefusal, PreparedCovCompletion,
-    SubscriberEndpoint, Token,
+    CovSubscriptionKey, CovSubscriptionSnapshot, CovTable, Delivery, Evaluation, EventBudget,
+    FlightTiming, MultipleContextKey, MultipleRefusal, PreparedCovCompletion, SubscriberEndpoint,
+    Token,
 };
 use bacnet_objects::database::ObjectDatabase;
 
@@ -176,6 +179,7 @@ impl CovSubscriptionTable {
     }
 
     /// Every accepted reference of one Multiple context.
+    #[cfg(test)]
     pub(crate) fn multiple_context_references<'a>(
         &'a self,
         context: &'a MultipleContextKey,
@@ -384,6 +388,7 @@ impl CovSubscriptionTable {
 
     /// Resolve captured owner/key/generation/route authority against live
     /// expiry at `now`, on the server's core timeline.
+    #[cfg(test)]
     pub(crate) fn remaining_lifetime(
         &self,
         snapshot: &CovSubscriptionSnapshot,
@@ -395,6 +400,7 @@ impl CovSubscriptionTable {
     /// Issue the completion ticket of `snapshot`'s observation; see
     /// [`CovTable::prepare_completion`]. Call it under the database guard
     /// the observation was read under.
+    #[cfg(test)]
     pub(crate) fn prepare_completion(
         &mut self,
         snapshot: &CovSubscriptionSnapshot,
@@ -413,32 +419,98 @@ impl CovSubscriptionTable {
             .complete_observation(snapshot, completion, value, runtime_clock::core_now())
     }
 
-    /// Mark the coordinate of one confirmed notification's references
-    /// outstanding, keeping the observation each carries for the Ack, and
-    /// register its worker's wake-up for a fence.
+    /// Test adapter: begin a confirmed report that holds nothing of the
+    /// histories, through [`Self::begin_confirmed_report`], the one way
+    /// production begins one.
+    #[cfg(test)]
     pub(crate) fn begin_confirmed<S: std::borrow::Borrow<CovSubscriptionSnapshot>>(
         &mut self,
         completion: PreparedCovCompletion,
         references: impl IntoIterator<Item = (S, CovObservation)>,
     ) -> Result<ConfirmedFlight, BeginRefusal> {
-        let now = runtime_clock::core_now();
-        let token = self.core.begin_confirmed(completion, references, now)?;
-        // A report it replaced past its deadline is fenced: wake its worker,
-        // if one still runs, and drop its wake-up (#2303).
-        self.sync(&[]);
-        Ok(self.flight(token, now))
+        let observations: Vec<_> = references
+            .into_iter()
+            .map(|(snapshot, observation)| (snapshot.borrow().clone(), observation))
+            .collect();
+        self.begin_confirmed_report(completion, &observations, None, Vec::new())
+            .map(|(flight, _)| flight)
     }
 
-    /// The worker's hold on the report `token`, which the table began at
-    /// `now`: its wake-up, registered for a fence, and the report's own
-    /// deadline, read off the table.
-    fn flight(&mut self, token: Token, now: bacnet_time::Instant) -> ConfirmedFlight {
-        let deadline = self.core.report_deadline(token);
-        debug_assert!(deadline.is_some(), "a report just begun is outstanding");
+    /// The worker's hold on the report `token`, which the table just
+    /// began: its wake-up, registered for a fence.
+    fn flight(&mut self, token: Token) -> ConfirmedFlight {
+        debug_assert!(
+            self.core.report_deadline(token).is_some(),
+            "a report just begun is outstanding"
+        );
         let wake = Arc::new(Notify::new());
         self.wakes.insert(token, Arc::clone(&wake));
-        // Were the report gone already, whatever its worker holds ends now.
-        ConfirmedFlight::new(token, wake, deadline.unwrap_or(now))
+        ConfirmedFlight::new(token, wake)
+    }
+
+    /// Decide, now, what one fanout reports to a COV-multiple context, and
+    /// gather it; see [`Reading::gather`](multiple_report::Reading::gather).
+    /// The store is locked for the call, last, under the database and
+    /// table guards its caller holds; nothing in the step drops a claim
+    /// guard or a turn of this store.
+    pub(crate) fn gather_multiple<'a>(
+        &mut self,
+        reading: multiple_report::Reading<'a>,
+    ) -> multiple_report::Gathering<'a> {
+        let mut histories = self.timed.lock();
+        reading.gather(&mut self.core, &mut histories, runtime_clock::core_now())
+    }
+
+    /// Begin one confirmed notification and settle what it holds of the
+    /// histories, in one step; see
+    /// [`begin_confirmed`](multiple_report::begin_confirmed). The worker
+    /// gets the report's flight, its wake-up registered for a fence, and
+    /// its claim, lodged until the report's deadline. A refusal has given
+    /// `claim` and `deferred` back.
+    pub(crate) fn begin_confirmed_report(
+        &mut self,
+        completion: PreparedCovCompletion,
+        observations: &[(CovSubscriptionSnapshot, CovObservation)],
+        claim: Option<timed_store::ClaimGuard>,
+        deferred: Vec<timed_store::ClaimGuard>,
+    ) -> Result<(ConfirmedFlight, Option<timed_store::LodgedClaim>), BeginRefusal> {
+        let now = runtime_clock::core_now();
+        // Plain before the store is locked: an emptied guard's drop takes
+        // no lock, and nothing returns before the step settles each claim.
+        let claim = claim.map(timed_store::ClaimGuard::into_plain);
+        let deferred = deferred
+            .into_iter()
+            .map(timed_store::ClaimGuard::into_plain)
+            .collect();
+        let begun = multiple_report::begin_confirmed(
+            &mut self.core,
+            &mut self.timed.lock(),
+            completion,
+            observations,
+            claim,
+            deferred,
+            now,
+        );
+        // A report it replaced past its deadline is fenced: wake its worker,
+        // if one still runs, and drop its wake-up (#2303).
+        self.settle();
+        let begun = begun?;
+        let claim = begun
+            .claim
+            .map(|id| timed_store::LodgedClaim::of(&self.timed, id));
+        Ok((self.flight(begun.token), claim))
+    }
+
+    /// A confirmed report to `context` failed: its timestamped history goes
+    /// out once the hold-off ends; see
+    /// [`hold_off`](multiple_report::hold_off).
+    pub(crate) fn hold_off(&self, context: &MultipleContextKey) {
+        multiple_report::hold_off(
+            &self.core,
+            &mut self.timed.lock(),
+            context,
+            runtime_clock::core_now(),
+        );
     }
 
     /// End the report `flight` names, as `outcome` says; an Ack commits
@@ -484,7 +556,7 @@ impl CovSubscriptionTable {
             .into_iter()
             .map(|report| {
                 let confirmed = subscriptions[report.index].issue_confirmed_notifications;
-                let flight = confirmed.then(|| self.flight(report.token, now));
+                let flight = confirmed.then(|| self.flight(report.token));
                 (report, flight)
             })
             .collect()
@@ -505,8 +577,10 @@ impl CovSubscriptionTable {
             .confirmed_idle(snapshot, runtime_clock::core_now())
     }
 
-    /// Whether a whole COV-multiple context may report now; see
-    /// [`CovTable::context_idle`].
+    /// Test probe: whether a whole COV-multiple context may report now; see
+    /// [`CovTable::context_idle`]. Production asks inside the core's
+    /// `Reading::gather`.
+    #[cfg(test)]
     pub(crate) fn context_idle(
         &self,
         context: &MultipleContextKey,
@@ -514,23 +588,6 @@ impl CovSubscriptionTable {
     ) -> bool {
         self.core
             .context_idle(context, snapshots, runtime_clock::core_now())
-    }
-
-    /// End of the hold-off a failed report put on a confirmed context,
-    /// while it is in force; see [`CovTable::context_hold_until`].
-    pub(crate) fn context_hold_until(
-        &self,
-        context: &MultipleContextKey,
-    ) -> Option<bacnet_time::Instant> {
-        self.core
-            .context_hold_until(context, runtime_clock::core_now())
-    }
-
-    /// Whether an idle context still owes the follow-up of a failed report;
-    /// see [`CovTable::take_owed_context`].
-    pub(crate) fn take_owed_context(&mut self, context: &MultipleContextKey) -> bool {
-        self.core
-            .take_owed_context(context, runtime_clock::core_now())
     }
 
     /// References owed a fresh evaluation after an acknowledgment.

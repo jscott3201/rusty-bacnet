@@ -85,7 +85,7 @@ for `HostClock`); `bacnet-objects` takes it too, for the delay instants of
 | `cov` | `dep:bacnet-time` | `cov`, `report`; SubscribeCOV and SubscribeCOVProperty in `SERVICES` and the facade |
 | `event-reporting` | `dep:bacnet-time`, `bacnet-objects/event-reporting` | `event`, `report`; AcknowledgeAlarm, GetEventInformation |
 | `event-enrollment` | `event-reporting` | `event::enrollment`, which links `decode_event_parameter` (§6.6) |
-| `cov-multiple` (#2320) | nothing more | the Multiple form (§5.6): `cov::subscribe_cov_property_multiple`, `cov::timed_capture`, `cov::timed`, `cov::multiple_reads`, `cov::multiple_items`, `cov::multiple_chunks` |
+| `cov-multiple` (#2320) | nothing more | the Multiple form (§5.6): `cov::subscribe_cov_property_multiple`, `cov::timed_capture`, `cov::timed`, `cov::multiple_report`, `cov::multiple_chunks`, and the private `cov::multiple_reads` and `cov::multiple_items`; SubscribeCOVPropertyMultiple in `SERVICES` and the facade, `NotifyService::CovMultiple` handed out |
 | `std` (default) | the four above, beside `structured-writes` | hosted builds unchanged |
 
 The linker drops what nothing calls, but the facade dispatches by service,
@@ -142,7 +142,7 @@ pub enum Destination {
     Subscriber(SubscriberEndpoint), // the route a subscription arrived on (cov/identity.rs:8-23, moved)
     Recipient(BACnetRecipient),     // a Notification Class destination
 }
-pub enum NotifyService { Cov, Event }         // CovMultiple with #2320
+pub enum NotifyService { Cov, CovMultiple, Event }  // CovMultiple since #2320 PR 2b
 pub struct Notification {
     pub token: Token,                         // its end comes back through `delivered`
     pub to: Destination,
@@ -532,14 +532,102 @@ included, where each step took it by itself. It is still taken last, the
 section is synchronous, and the core drops no claim guard, lodged claim or
 send turn. A capture still reads its objects before it locks.
 
-**Hosted until #2320 PR 2b:** the Multiple fanout
-(`cov_notifications/multiple.rs`): which references a report retains,
-what it drains and adopts, the send turn of an unconfirmed context, a
-confirmed context's first part and deferred rest, and the sends. PR 2b
-moves its decisions, gives the outbox `NotifyService::CovMultiple`, runs
-the service in the `Reporter`, adds the parity rows for both notification
-forms and the image's size row, and measures what the feature saves
-(#2215's rule).
+**Moved by #2320 PR 2b**, behind the same feature: the fanout's decisions,
+as `cov::multiple_report`. A host fans a change out context by context
+(`by_context`, in key order from the start `in_turn` picks), each in three steps, because
+the server reads its objects under one guard and its table under another:
+
+- `Reading::read(source, subscriptions, force)` reads the fanned-out
+  references from the database or a producer's snapshot, with no table.
+  Untimestamped references qualify here, against the observation their
+  snapshot last reported; timestamped ones only read their current state.
+- `Reading::gather(table, histories, now)` decides. A confirmed context
+  with a report outstanding, or holding off after a failed one, drains
+  nothing (`Busy`), and a hold-off moves the histories' backstop to its
+  end. One whose hold-off has passed hands every reference to one
+  follow-up (`FollowUp`). An unconfirmed context takes its send turn, or
+  stands back when a report is going out (`StoodBack`). Otherwise the step
+  issues the tickets, drains the pending changes of the whole context
+  into one plain claim, adopts a change no producer captured at the Device
+  clock, takes the owed marks and puts the owed references first
+  (`Gathered`).
+- `Gathered::split(histories, device, local_apdu)` splits the report and
+  tells the histories what the split gave up, where the server's fanout
+  did. It returns the `Report`: the parts with their claims, what each
+  reference's delivery establishes, whether the report needs its turn,
+  and the references left out, for the host's log.
+
+`Report::into_first` is a confirmed report's first part with its ticket,
+what its Ack completes and the deferred rest; `begin_confirmed` begins it
+in the table and, in the same step, tells the histories (the part going
+out, the deferred parts back and owed, the claim lodged at the report's
+deadline); `hold_off` moves the backstop past a failed report's hold-off;
+`carried` says what a delivered part completes.
+
+| On dev before PR 2b | In the core | The server |
+|---|---|---|
+| contexts grouped in a std hash map, sent in its order | `by_context`: a B-tree map, so key order | iterates it; the follow-up pass too |
+| Tokio guards around the decisions | three steps that borrow the objects, then the table and the histories | `db.read()`, then `cov_table.write()` for `gather`, released before `split` |
+| the store's mutex, one short section per call | none | locked once across `gather` and once across `split`; still last, both synchronous |
+| a clock read at each step | one `now` for `gather` | `runtime_clock::core_now()` once |
+| the claim guard's and the send turn's `Drop` | a plain claim in `Gathered` and in each `Part`; `take_turn` hands the turn over | `SendTurn::held` right after `gather`; `ClaimGuard::of` on every part before the first send |
+| `warn!` for a change with no valid clock, and for values left out | `unclocked`, `Report::left_out` | logs them |
+| three guard calls after the table released a begun report | `begin_confirmed`, under the table | `begin_confirmed_report` on the table wrapper; the worker gets a `LodgedClaim` over the lodged id |
+| the hold-off's end from the config and a clock read | `hold_off`, from the table's timing | one call in the worker's failure path |
+
+The order between contexts, and of a follow-up's references, is the one
+difference on the wire (decision 17). Contexts that share one input's
+budget take their turns in key order from a start that moves per fanout,
+so a spent budget, by count or by octets, keeps back different contexts
+each time: an even spread, as the hash order gave, and no promise to any
+one context. A list of the contexts kept back, served first next time,
+was tried and dropped: it was per context where a kept-back report is per
+object, it missed the octet budget, and the server could note a context
+just cancelled. The rest is as on dev: which references a report takes, its
+timestamps and chunking, the turn, what a failed send gives back and when
+the backstop retries. Four things differ off the wire. One instant serves
+a fanout's table step: the idle and hold-off checks, the lifetime each
+reference has left (which is the Time_Remaining it reports) and the
+capture instant of an adopted change, which anchors its
+Max_Notification_Delay wait. On dev each of those read the clock for
+itself, under the same table guard, so the readings were the same instant
+to the clock's resolution and no check can come out differently. The
+claims of a begun confirmed report are settled under the table guard, not
+just after it, so no capture or fanout runs in between. A fanout that
+takes a turn and finds nothing to report ends the turn under the table
+guard, so no other fanout stands back behind it. And between `gather` and
+the guards, the claim and the parts are plain data: nothing awaits or
+returns there except on a spent budget, which guards the parts to give
+them back, and a panic would lose the claim, as one inside the split
+already could.
+
+The sends stay hosted: the unconfirmed loop with its budget, DCC check
+and counters, the confirmed admission (in-flight slot, invoke ID), the
+worker with its retries, cutoff and outcome paths, and every guard.
+`ReportContent`, `Stamp` and the split's other inputs are private to the
+crate: `Gathered::split` is how a host reaches the split.
+
+**The `Reporter` runs the service** (PR 2b, `report/reporter_multiple.rs`,
+behind the feature). It holds its `TimedHistories` outright and does
+explicitly, around its outbox, what the server does around its sends with
+guards:
+
+| The server | The `Reporter` |
+|---|---|
+| `store_capture`: producers capture under the database write guard | `TimedWriteCapture` around each write request's attempts; `TimedCapture::object` or `exact` in `changed` |
+| the fanout's unconfirmed loop: send, commit, stop on a failure | all parts queued as `NotifyService::CovMultiple`, each under a `part_token`; `delivered(token, Sent)` commits the part's claim and records what it completes, any other outcome stops the report: the later parts leave the outbox and their claims go back, owing once a part went |
+| `SendTurn`'s `Drop` | the turn is held while a part is queued; `end_send` when the report ends, and a fanout that stood back is looked at again |
+| `send_confirmed_cov` and the worker's `LodgedClaim` | `begin_confirmed` when the first part is queued; the lodged claim settled in `end_confirmed` (delivered on the Ack, returned otherwise) and for a fenced token; `hold_off` after a failure |
+| the follow-up task over `HistoryStore::next_due` and the revisit queue | `next_deadline` merges `TimedHistories::next_deadline`; `on_deadline` fans out `take_due`'s references and the looks owed, each context under a budget of its own; a context whose failed report's hold-off has passed is fanned out whole in the same call |
+| the table wrapper's `sync` | `settle` runs `follow_table` after every mutation but the service's own, takes the histories' counts and drops, and ends an unconfirmed report whose reference left the table |
+
+Where the outbox makes a choice the server has none for, the `Reporter`
+keeps PR 2's (decision 13): a report that finds no room is looked at
+again as room frees, and a part that finds none stops its report like one
+that was not sent. Two differences from the server remain, neither in the
+parity corpus: an object's Single and COV-multiple reports each take a
+budget of their own, where the server shares one and alternates which
+kind goes first; and the `Reporter` has no DeviceCommunicationControl.
 
 ### 5.7 Active_COV_Subscriptions
 
@@ -770,8 +858,9 @@ in PR 2 to keep PR 1 under that line.
 - Addresses and receiving: `event_recipient_route.rs`,
   `event_awaited_recipients.rs`, the bindings, `event_forwarding*.rs`,
   `received_event_log.rs`, `server/clock.rs`; GetAlarmSummary and
-  GetEnrollmentSummary; until #2320 PR 2b, the Multiple fanout
-  (`cov_notifications/multiple.rs`). `cov/timed_store.rs` stays for good:
+  GetEnrollmentSummary. Of the Multiple fanout
+  (`cov_notifications/multiple.rs`) the sends stay: its decisions are the
+  core's since #2320 PR 2b (§5.6). `cov/timed_store.rs` stays for good:
   the lock, wake-up, counters, log lines and Drop guards around the core's
   histories; so does `cov/store_capture.rs`, the store around a capture
   (§5.6).
@@ -807,6 +896,7 @@ stops differing.
 | 2 | Active_COV_Subscriptions before and after an expiry; the initial notification; changes under and over COV_Increment; Status_Flags alone; a Table 13-1 trigger; a property subscription's own increment; a confirmed report acknowledged, refused and timed out (hold-off); a change in flight (revisit); a renewal that fences a flight; an abandoned flight (the server's worker aborted, the facade never told) ending at its deadline, after which the next change is reported; Time_Remaining after time passes |
 | 3 | OUT_OF_RANGE with Time_Delay 2 seeded by a write at 0.9 s (sent at 2.9 s) and back with Time_Delay_Normal; a value that reverts inside the delay; Event_Enable cleared (committed, not sent); recipients by day, window and transition; no clock (sequence numbers, fail-closed windows); AcknowledgeAlarm good, wrong state, wrong timestamp, local acknowledgement, and their notifications; GetEventInformation |
 | #2319 | Each algorithm both ways; a FAULT_OUT_OF_RANGE fault; the pass-count delay at two intervals |
+| #2320 PR 2b | SubscribeCOVPropertyMultiple, unconfirmed and confirmed: a timestamped reference; its history after a failed send, or held behind an outstanding report; an untimestamped reference; two contexts reporting one change; a report split across APDUs (all parts at once; one part per Ack); the Max_Notification_Delay backstop; a refused confirmed report and the follow-up at its hold-off's end; a cancellation with changes pending; Active_COV_Multiple_Subscriptions. On the fixture's fixed Device clock, so a capture at the wrong moment shows only in the core's own tests |
 
 Mutation checks: PR 1, drop the flight deadline (the aborted-worker tests
 must fail); PR 2, change the increment test's `>=` to `>`; PR 3, compare
@@ -863,7 +953,7 @@ image would link:
 | PR 2, measured | 171.4 KB (flash 189.7 KB) | the image through the `Reporter`, trimmed by #2363 (§8.3) |
 | + `event-reporting` (after PR 3) | 172-181 KB | ~2,200 lines, plus the measured objects and encoder share |
 | + `event-enrollment` (#2319) | 207-221 KB | ~2,700 lines, the Event Enrollment object, `decode_event_parameter` |
-| + the Multiple path (#2320) | +15-25 KB | ~3,300 lines, the COVNotificationMultiple codec |
+| + the Multiple path (#2320) | +15-25 KB estimated; +134 KB measured before any trim (decision 18) | ~3,300 lines, the COVNotificationMultiple codec |
 
 Flash runs about 18 KB above `.text`. So COV with intrinsic reporting fits
 a 256 KB part with room; with Event Enrollment it is tight there and easy
@@ -1262,6 +1352,161 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
     - Size (`check-firmware-link.sh`, Rust 1.99.0): no image's numbers
       moved; the feature is off in every one.
 
+**#2320 PR 2b, 2026-11-10:**
+
+17. The Multiple fanout's decisions are in the core (§5.6, Appendix A.5).
+    - The order between contexts. The fanout kept a change's contexts in a
+      std hash map and sent them in its order, which varied from run to
+      run. `by_context` keeps a B-tree map, so contexts report in key
+      order: by recipient (direct before routed, then by address), then
+      subscriber process identifier, the unconfirmed form before the
+      confirmed one. A subscriber's contexts differ in process identifier
+      and form, so that is the order it sees their reports in when one
+      change or one deadline reports to several: a wire difference of the
+      kind decision 15 accepted for the backstop's items, and named in
+      the changelog. When one change spends its notification budget, the
+      contexts left for later are the last in that order. Confirmed
+      reports start in it too, each on a worker of its own.
+    - Under a spent budget. Key order alone would make the last keys
+      wait every time one change spends its budget
+      (`CovPolicy::max_notifications_per_event`, 64 by default, or
+      `max_notification_bytes_per_event`), where the hash order changed
+      the loser per fanout. Timestamped changes are bounded by the
+      backstop, which gives each context a budget of its own; a context
+      with only untimestamped references has no history and no deadline
+      and would never report. So a fanout over several contexts takes
+      them in key order from a start that moves: `in_turn` rotates the
+      contexts by an index the histories draw from a xorshift32 sequence
+      (`TimedHistories::next_start`), advanced once per such fanout, with
+      a fixed seed, no division and no state per context. Both hosts
+      advance it through `in_turn` at the same point, so their turns
+      agree. It is not a counter: a counter falls into step with a
+      regular pattern of changes (two contexts, two objects changing in
+      alternation, and each context always loses the same object). It
+      promises an even spread, not a turn for any one context within a
+      given number of fanouts: over the sequence's first 60 fanouts of
+      three contexts under a budget of one, the three are served 18, 18
+      and 24 times and none waits more than ten changes; with two served
+      a change and two objects alternating, each context hears of each
+      object 17 to 23 times in 60 changes. A follow-up pass gives each
+      context a budget of its own and keeps plain key order.
+    - What was tried first, and dropped (the first fix round): a list of
+      the contexts a spent budget kept back, served first at their next
+      turn. It was per context, while a report kept back is per object,
+      so a context served in another object's fanout lost its place
+      without the object it waited for. The octet budget refuses without
+      ever counting as spent, so nobody was noted. And the server noted
+      the turn after the table guard dropped, so it could note a context
+      a cancellation had just removed. Fixing those meant waiters keyed
+      by context and object, noted on two kinds of refusal, with a
+      cleanup path per reference: too much state for a move.
+    - The follow-up pass. Its keys came out of a hash set (the revisit
+      queue), or timestamped before owed (the deadline), and a report
+      lists its untimestamped items in the order its references are
+      fanned out: one context's follow-up listed two changed references
+      either way round. `fire_cov_revisits` sorts and deduplicates its
+      keys, as the `Reporter`'s look does, so a follow-up's items, and
+      the follow-ups of one pass, are in key order. Named in the
+      changelog beside the context order.
+    - Three steps, not one call, for the reason the capture has three
+      (decision 16): the server reads its objects before it takes the
+      table, and holds the table only for the decision. One call would
+      have held the table's write guard across the split.
+    - The split is lent the histories through a `RefCell` inside
+      `Gathered::split`, for the field times it asks for while it sizes
+      notifications. That keeps `Stamp` a closure and the split as it
+      was, and makes both private: no host builds a `ReportContent`.
+    - The steps settle nothing by themselves. A claim in a `Gathered`, a
+      `Part` or a `FirstPart` is plain data, and the turn is the host's
+      from `take_turn`. The server keeps its Drop guards for both, and
+      for the worker's lodged claim: its sends can be cancelled, and its
+      fanout returns early. Only `Gathering::Nothing` ends a turn inside
+      a step.
+    - The server's send loop for an unconfirmed report and its worker's
+      outcome paths stay as they were, on the guards. What the core gives
+      them is `carried`, `into_first`, `begin_confirmed` and `hold_off`.
+      `hold_off` keeps dev's rule, one hold-off from the failure whatever
+      the table made of the outcome, with the table's timing in place of
+      a second reading of the config.
+    - The store's mutex is held across `gather` and across `split`. A
+      section that drops more than 64 repeats logs one debug line for the
+      rest (decision 15's log difference); the counters hold every drop.
+    - Narrowed with the move: `cov::multiple_items`, `cov::multiple_reads`
+      and `cov::multiple_chunks` are private modules, `Part` re-exported
+      from `cov::multiple_report`; the claim's splits and the histories'
+      `field_time`, `note_field`, `adopt`, `note_reserve`, `set_sizing`
+      and `lost_values` are private to the crate. The "unstable" notes
+      are gone. A host names `Source`, the three steps' types, `Report`,
+      `Part`, `Carried`, `FirstPart` and `Begun`.
+    - A panic inside `gather` or `split` loses the claim the step held
+      and leaves an unconfirmed context's send turn taken. Neither is
+      known to panic: a reference that is not a COV-multiple one is left
+      out, not unwrapped.
+    - Size (`check-firmware-link.sh`, Rust 1.99.0): the move changed no
+      image's numbers; the feature is off in every one (decision 18).
+
+18. The `Reporter` runs SubscribeCOVPropertyMultiple behind
+    `cov-multiple` (§5.6). The `reporting` image does not link the path
+    yet: it is too large as it stands.
+    - Measured with the image's scenario extended by one COV-multiple
+      context (a timestamped Present_Value, its initial report and one
+      change), the `firmware` profile, Rust 1.99.0, on a 512 KiB layout
+      (the `reporting-multiple` build, below). Flash, without the feature
+      and with it: 195,840 and 330,228 octets (thumbv7m), 196,652 and
+      331,144 (thumbv7em), 235,290 and 399,418 (riscv32imac). RAM: 24,680
+      and 36,968 on each, the arena from 24 to 36 KiB, for a heap peak of
+      31,848 octets on a 64-bit host where the scenario without the
+      context peaks at 19,136. No `core::fmt`; the same memmove routines;
+      three 64-bit division routines on the thumb targets and two on
+      riscv32imac, where the row allows none (the turn sequence adds
+      none: it scales and shifts).
+    - So the image passes the thumb targets' 256 KiB region by 68 KB and
+      fails a standing limit of its row. §8.2 had estimated 15-25 KB.
+    - Where it goes (thumbv7m `.text` by symbol, with LTO, so callers
+      hold what they inline; taken before the fix rounds, which added 1 KB): B-tree code 36 KB (the histories' six
+      maps, the read cache's two, the steps' maps and sets), sort
+      instantiations 27 KB, the histories 40 KB, the report steps with
+      the split 36 KB, the `Reporter` 44 KB (`handle`, with the service
+      and the write path inlined, 27 KB of it), the COV-multiple codec
+      9 KB. By crate: `bacnet-device-core` 52.5 to 108.8 KB, `core` 13.3
+      to 46.5 KB, `alloc` from under 7 to 37.5 KB.
+    - The feature stays (#2215's rule; decisions 12 and 15 left the
+      measurement to this PR): an image without it keeps all of that. The
+      `reporting` image leaves it off. Its rows still moved, by 152
+      octets of flash on thumbv7m (195,840), RAM unchanged, for what is
+      not behind the feature: the service an outbox entry and a
+      confirmed-table entry carry, the two matches that turn it into a
+      service choice when `pop` encodes, the second service `reply`
+      accepts, and the look's test for a COV-multiple key. Gating them
+      would put a `cfg` on the entry types, on `push` and `pop` and on
+      every place that builds a `Notification`, for 152 octets.
+    - To repeat the measurement: the firmware crate's `reporting-multiple`
+      feature, off by default and not built by `check-firmware-link.sh`,
+      turns the path on, adds the context to the scenario and gives the
+      image the 512 KiB layout. Per target, `cargo build -p firmware-link
+      --profile firmware --target <triple> --no-default-features
+      --features reporting-multiple --lib --bin reporting`, then
+      `python3 scripts/ci/firmware_size.py
+      target/<triple>/firmware/reporting firmware/link/size-budget.toml
+      <triple>.reporting`, which prints the sizes against the
+      `reporting` rows; `cargo nextest run
+      -p firmware-link --features reporting-multiple` checks the
+      scenario and its heap peak on the host.
+    - What the row needs first, as #2363 was for PR 2: the histories' and
+      the read cache's maps as `VecMap`s, as the table's are; the sorts
+      (`sort_by_key` on the retained references, `TimedClaim::in_order`,
+      `rejoin`, `split_values`) merged or avoided; the 64-bit division
+      found and removed. Then the scenario above and the row.
+    - The `Reporter` fans a `Gathering::FollowUp` out in the same call,
+      where it could have queued a look for the next `on_deadline`: the
+      server's follow-up task runs at once, and the parity rows compare
+      each instant's notifications.
+    - A part of an unconfirmed report has a token of its own
+      (`multiple_report::part_token`), a ticket the table issues and
+      otherwise ignores: `Token` stays the one name a host reports a
+      send's end by, and the `Reporter`'s numbering of tickets differs
+      from the server's, which nothing on the wire shows.
+
 ## 12. Evidence
 
 Code read at dev `c308eda25`. Sizes (§8): the `objects` image built with
@@ -1348,9 +1593,10 @@ Lines are non-test lines: on dev at `56a61f3f9` for PR 1's rows, and at
 | Split to the APDU size | `cov_notifications/multiple_chunks.rs:1-427` | 427 | 2a, moved |
 | Service checks | `handlers/cov.rs:5-28`, `:153-351` | ~225 | 2a, moved |
 | The histories follow the table | `cov.rs:527-554` (in `sync`) | ~30 | 2a, moved |
-| Multiple fanout: its decisions | `cov_notifications/multiple.rs` | 626 | 2b; the sends stay hosted |
-| New: `NotifyService::CovMultiple`, the `Reporter` running the service, parity, the size row | | ~600 | 2b |
-| **Total** | | **~1,810 moved in PR 1; ~1,275 in PR 2a; ~630 to move and ~600 new in PR 2b** | |
+| Multiple fanout: its decisions | `cov_notifications/multiple.rs` | 626 | 2b, moved as `cov::multiple_report` (553 lines without comments); the sends stay hosted (254) |
+| New: `NotifyService::CovMultiple`, the `Reporter` running the service, parity | | ~640 (522 in `report/reporter_multiple.rs`) | 2b |
+| The image's size row | | | not in 2b: the path needs trimming first (decision 18) |
+| **Total** | | **~1,810 moved in PR 1; ~1,275 in PR 2a; ~550 moved and ~640 new in PR 2b** | |
 
 PR 1's order differs from §7's rule. The read cache moved first, in one
 commit that also made its two maps B-tree maps, as the core has no hash
@@ -1375,7 +1621,7 @@ pure move commit after.
 | Split | the server's claim guard (the store's mutex, a `Drop` that gives back), a `warn!`, std hash sets, the server's timestamp helper | takes a plain claim and returns a `Split`; the helper moves beside it |
 | Capture | the store handle and its mutex, a clock read under it, entry points on the server's table wrapper | plain `TimedCapture`, `CaptureRead` and `CaptureQueue`; the store part moves to `cov/store_capture.rs` |
 | Service checks | a clock read, and the wrapper's `sync` between admission and capture | one function over the table, the histories and `now`; `follow_table` out of `sync` |
-| Multiple fanout (2b) | Tokio locks on the database and the table, the store's mutex, the claim guard's and the send turn's `Drop`, the transport sends, the invoke ID lease, `tracing`, the server's atomics, three std hash maps | not yet |
+| Multiple fanout (2b) | Tokio locks on the database and the table, the store's mutex, the claim guard's and the send turn's `Drop`, the transport sends, the invoke ID lease, `tracing`, the server's atomics, three std hash maps, a clock read per step | the decisions as plain steps in `cov/multiple_report.rs` over the table, the histories and one `now`; the sends, the lease, the logs, the atomics and the guards stay in the fanout |
 
 The two move commits changed imports, visibility, module declarations and
 feature gates, and added the field docs a public item needs. The first
@@ -1389,18 +1635,43 @@ names are `HistoryStore` and `ClaimGuard`; the capture reads the clock
 once (decision 16); `ITEM_FRAMING`, `value_len` and `request_header` are
 private to the crate.
 
-For PR 2b:
+PR 2b follows §7's rule too. Its logic commits, each with the server's
+suites as the proof, then one pure move and one commit of visibility:
 
-- The fanout groups a change's references by context in a std hash map
-  and sends the contexts in its order, which varies from run to run. A
-  B-tree map fixes the order between contexts: a wire difference of the
-  kind decision 15 accepted for the backstop, to name in its changelog.
-- The closure that times a carried field (`Stamp`) reads the histories
-  while the split runs. In the server it locks the store per call; a
-  `Reporter` holds the histories outright, so `Stamp` may become the
-  owners' map and a clock read that `split` applies itself. That changes
-  `ReportContent` and so `split`'s inputs: `cov::timed`, the split and
-  the items stay marked unstable until then.
-- The fanout's hosted parts are the claim guard, the send turn and the
-  lodged claim, all RAII. The `Reporter` needs their explicit forms:
-  `begin_send` and `end_send`, `lodge` and `settle`, `give_back`.
+| Commit | What changed |
+|---|---|
+| Contexts in key order | the fanout's and the follow-up pass's hash maps are B-tree maps: the wire-visible order (decision 17), with a wire test |
+| Plain steps | `Reading::read`, `Reading::gather`, `Gathered::split`, `Report::into_first`, `carried` and `by_context` in `cov/multiple_report.rs`; the fanout calls them and guards what they return; one instant per fanout |
+| A confirmed report's begin, the hold-off | `begin_confirmed` and `hold_off`; the table wrapper runs the first under the table guard with the store locked last |
+| Move | the file to `bacnet-device-core`: imports, `pub` for `pub(crate)`, the module declaration, five doc links |
+| Visibility | the split, its inputs and the calls only the steps need are private to the crate; the "unstable" notes go |
+
+The notes PR 2a left for 2b came out as follows. The contexts are in a
+B-tree map, named in the changelog. `Stamp` stays a closure: the split is
+lent the histories through a cell inside `Gathered::split`, so no host
+builds a `ReportContent` and the split's inputs are private rather than
+reshaped. The `Reporter` gets the explicit forms of the hosted guards
+with the steps: `take_turn` and `end_send`, `begin_confirmed` with
+`lodge` and `settle`, and `give_back`.
+
+The notes for the `Reporter` came out as planned: an outbox entry carries
+its service, and only a `NotifyService::Cov` entry replaces or is
+replaced; a part has its own token (`multiple_report::part_token`); a
+confirmed report begins when it is queued; `settle` runs `follow_table`;
+`next_deadline` merges the histories'. One thing was added: a
+`Gathering::FollowUp` is fanned out in the same call, as the server's
+follow-up task does at once, so a host needs one `on_deadline` at a
+hold-off's end, not two.
+
+Left for a follow-up, with the size row: the path's footprint (decision
+18). The scenario the `reporting` image would run is in the firmware
+crate behind `reporting-multiple` (a SubscribeCOVPropertyMultiple for
+one timestamped Present_Value, its initial report and one change, two
+58-octet notifications, the arena at 36 KiB).
+
+A host of the `Reporter` has one duty the server gets from a guard: it
+reports the end of every unconfirmed part it pops (`delivered`). Until
+then the report holds its context's send turn, and every later fanout of
+the context stands back; an outbox entry has no deadline that would end
+the turn for a host that never reports. Whether the turn should get one,
+as a confirmed entry has its cutoff, is open; this PR adds none.

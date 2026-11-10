@@ -14,11 +14,11 @@ use super::multiple_reads::MultipleReads;
 use super::timed::TimedChange;
 
 /// Object, property and index of a subscribed coordinate.
-pub type Coordinate = (ObjectIdentifier, Option<PropertyIdentifier>, Option<u32>);
+pub(crate) type Coordinate = (ObjectIdentifier, Option<PropertyIdentifier>, Option<u32>);
 
 /// Each retained reference with its prepared current values (empty for a
 /// timestamped reference, whose latest change in the report supplies them).
-pub type Retained<'a> = [(&'a CovSubscriptionSnapshot, &'a [COVNotificationValue])];
+pub(crate) type Retained<'a> = [(&'a CovSubscriptionSnapshot, &'a [COVNotificationValue])];
 
 /// Queued history conveyed as distinct timestamped values, in capture order.
 pub(crate) type History<'a> = [(&'a CovSubscriptionKey, &'a TimedChange)];
@@ -29,10 +29,10 @@ pub(crate) type History<'a> = [(&'a CovSubscriptionKey, &'a TimedChange)];
 pub(crate) type Latest<'a> = BTreeMap<&'a CovSubscriptionKey, &'a TimedChange>;
 
 /// Capture sequence and clock frame of a change whose time a value carries.
-pub type LastChange = (u64, ClockFrame);
+pub(crate) type LastChange = (u64, ClockFrame);
 
 /// How to time a current value that would otherwise go out untimed.
-pub enum FieldStamp {
+pub(crate) enum FieldStamp {
     /// No timestamped reference that conveys no change now owns its coordinate.
     Unowned,
     /// Its owner's field takes the time of this change.
@@ -43,7 +43,7 @@ pub enum FieldStamp {
 
 /// Times a current value of a coordinate whose timestamped reference conveys
 /// no change now, given the value's encoding.
-pub type Stamp<'a> = dyn Fn(&Coordinate, &[u8]) -> FieldStamp + 'a;
+pub(crate) type Stamp<'a> = dyn Fn(&Coordinate, &[u8]) -> FieldStamp + 'a;
 
 /// Build the items of one notification: `history`, then, unless `retained` is
 /// `None` (a notification carrying history only), the current state of the
