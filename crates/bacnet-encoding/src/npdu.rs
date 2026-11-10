@@ -4,12 +4,10 @@
 //! or a network-layer message, with optional source/destination routing
 //! information for multi-hop BACnet internetworks.
 //!
-//! [`Npdu`] holds its addresses and payload in owned buffers. It encodes
-//! through `bacnet-npdu`'s borrowed view, the one NPDU codec of the stack,
-//! and decodes to the view's rules: a frame the view accepts is read
-//! straight into the owned form (#2334), and the view names the fault of any
-//! other. So the router core, the non-router network layer and every layer
-//! above them accept and refuse the same frames. Both directions hold
+//! [`Npdu`] holds its addresses and payload in owned buffers. It decodes
+//! and encodes through `bacnet-npdu`'s borrowed view, the one NPDU codec of
+//! the stack, so the router core, the non-router network layer and every
+//! layer above them accept and refuse the same frames. Both directions hold
 //! DADR and SADR to [`MAX_MAC_LEN`] octets (#1141), so everything above the
 //! network layer only ever sees an address that some data link could carry.
 
@@ -208,15 +206,6 @@ fn encode_error(npdu: &Npdu, refused: EncodeError) -> Error {
 // Decoding
 // ---------------------------------------------------------------------------
 
-/// Control octet: a network-layer message, not an APDU.
-const NETWORK_MESSAGE: u8 = 0x80;
-/// Control octet: DNET, DLEN, DADR and the hop count are present.
-const DESTINATION: u8 = 0x20;
-/// Control octet: SNET, SLEN and SADR are present.
-const SOURCE: u8 = 0x08;
-/// Control octet: the sender expects a reply.
-const EXPECTING_REPLY: u8 = 0x04;
-
 /// Decode an NPDU from raw bytes.
 ///
 /// Returns the decoded [`Npdu`]. The `payload` field contains either the
@@ -239,133 +228,9 @@ pub fn decode_npdu(data: Bytes) -> Result<Npdu, NpduDecodeError> {
             "NPDU control byte has reserved bits set (bits 4 or 6)"
         );
     }
-    // A frame the view accepts is read straight into the owned header
-    // (#2334). Any other goes to the view, which names the fault, so a
-    // refused frame gets the same error as before, and the same one of
-    // several.
-    if let Some((mut npdu, offset)) = accepted_header(&data) {
-        npdu.payload = payload_of(data, offset);
-        return Ok(npdu);
-    }
-    decode_through_view(data)
-}
-
-/// The payload of `frame`, which starts at `offset`, in the frame's buffer.
-///
-/// Advanced, not sliced: a slice is a clone, and the first clone of a frame
-/// received into a plain buffer allocates its shared header (#1713).
-#[inline]
-fn payload_of(frame: Bytes, offset: usize) -> Bytes {
-    let mut payload = frame;
-    bytes::Buf::advance(&mut payload, offset);
-    payload
-}
-
-/// The owned header of a frame [`view::Npdu::decode`] accepts, with an
-/// empty payload, and where the payload starts; `None` for every frame the
-/// view refuses.
-///
-/// It makes the view's checks and no others, and names no fault: which one
-/// a frame has, and which of several comes first, is the view's to say
-/// ([`decode_through_view`]). `direct_decode_tests` holds the two to the
-/// same frames and the same headers.
-#[inline]
-fn accepted_header(frame: &[u8]) -> Option<(Npdu, usize)> {
-    let [version, control, ..] = *frame else {
-        return None;
-    };
-    if version != view::VERSION {
-        return None;
-    }
-    let mut at = 2;
-
-    let mut destination = None;
-    if control & DESTINATION != 0 {
-        let (address, next) = address_at(frame, at)?;
-        if address.network == 0 {
-            return None;
-        }
-        at = next;
-        destination = Some(address);
-    }
-
-    let mut source = None;
-    if control & SOURCE != 0 {
-        let (address, next) = address_at(frame, at)?;
-        if address.network == 0
-            || address.network == view::GLOBAL_NETWORK
-            || address.mac_address.is_empty()
-        {
-            return None;
-        }
-        at = next;
-        source = Some(address);
-    }
-
-    let mut hop_count = 255;
-    if destination.is_some() {
-        hop_count = *frame.get(at)?;
-        at += 1;
-    }
-
-    let mut message_type = None;
-    let mut vendor_id = None;
-    if control & NETWORK_MESSAGE != 0 {
-        let kind = NetworkMessageType::from_raw(*frame.get(at)?);
-        at += 1;
-        if kind.is_proprietary() {
-            let &[high, low] = frame.get(at..at + 2)? else {
-                return None;
-            };
-            vendor_id = Some(u16::from_be_bytes([high, low]));
-            at += 2;
-        }
-        message_type = Some(kind);
-    }
-
-    Some((
-        Npdu {
-            expecting_reply: control & EXPECTING_REPLY != 0,
-            priority: NetworkPriority::from_control(control),
-            destination,
-            source,
-            hop_count,
-            message_type,
-            vendor_id,
-            payload: Bytes::new(),
-        },
-        at,
-    ))
-}
-
-/// The network number, length octet and MAC at `at`, owned, and the offset
-/// behind them; `None` when the frame ends inside them or the length is
-/// past [`MAX_MAC_LEN`].
-#[inline]
-fn address_at(frame: &[u8], at: usize) -> Option<(NpduAddress, usize)> {
-    let &[high, low, length] = frame.get(at..at + 3)? else {
-        return None;
-    };
-    let length = usize::from(length);
-    if length > MAX_MAC_LEN {
-        return None;
-    }
-    let mac = frame.get(at + 3..at + 3 + length)?;
-    let address = NpduAddress {
-        network: u16::from_be_bytes([high, low]),
-        mac_address: MacAddr::from_slice(mac),
-    };
-    Some((address, at + 3 + length))
-}
-
-/// The whole decode through the view: the path every frame took before
-/// #2334, and the one a frame [`accepted_header`] turns down still takes,
-/// for the view's account of what is wrong with it.
-#[cold]
-fn decode_through_view(data: Bytes) -> Result<Npdu, NpduDecodeError> {
-    let view = match view::Npdu::decode(&data) {
+    let view = match bacnet_npdu::Npdu::decode(&data) {
         Ok(view) => view,
-        Err(view::DecodeError::AddressTooLong {
+        Err(bacnet_npdu::DecodeError::AddressTooLong {
             field,
             length,
             dnet,
@@ -378,13 +243,17 @@ fn decode_through_view(data: Bytes) -> Result<Npdu, NpduDecodeError> {
                 source: source.map(NpduAddress::from),
             });
         }
-        Err(view::DecodeError::Malformed(fault)) => {
+        Err(bacnet_npdu::DecodeError::Malformed(fault)) => {
             return Err(NpduDecodeError::Malformed(fault));
         }
     };
     let mut npdu = Npdu::header_from(&view);
+    // Advanced, not sliced: a slice is a clone, and the first clone of a
+    // frame received into a plain buffer allocates its shared header (#1713).
     let offset = view.payload_offset;
-    npdu.payload = payload_of(data, offset);
+    let mut payload = data;
+    bytes::Buf::advance(&mut payload, offset);
+    npdu.payload = payload;
     Ok(npdu)
 }
 
@@ -394,9 +263,6 @@ fn decode_through_view(data: Bytes) -> Result<Npdu, NpduDecodeError> {
 
 #[cfg(test)]
 mod address_bound_tests;
-
-#[cfg(test)]
-mod direct_decode_tests;
 
 #[cfg(test)]
 mod tests {
