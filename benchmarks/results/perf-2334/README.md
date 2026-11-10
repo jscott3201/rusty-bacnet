@@ -24,17 +24,32 @@ deleted from its `[profile.release]` and nothing else changed, as in
 perf-s1: what a downstream crate gets from `cargo build --release` unless
 it asks for more.
 
+**What ships (decision of 2026-11-10).** Only item 2, `#[inline]` on the
+`BytesMut` sink's `write`. Item 1 was measured and then dropped by the
+maintainer's decision, item 3 by the rule below. The sections for items 1
+and 3 stay as the evidence for that; [What ships](#what-ships) holds the
+final tree's counts.
+
 **The rule.** An item is kept when its workloads fall in at least one
 profile, nothing rises in the other, allocator calls don't rise, and the
 round trips are not higher. One that rises in either profile is dropped.
 
 | Item | Commits (A to B) | Release-like | Default profile | Verdict |
 | --- | --- | --- | --- | --- |
-| 1. Direct `decode_npdu` | `9e6bb0981` (dev) to `3b042d0e7` | NPDU decode 172 to 153 (-19) | 219 to 154 (-65) | **Kept** |
+| 1. Direct `decode_npdu` | `9e6bb0981` (dev) to `3b042d0e7` | NPDU decode 172 to 153 (-19) | 219 to 154 (-65) | Measured, then dropped by the maintainer's decision of 2026-11-10 (reverted in `78a2bffb2`) |
 | 2. The `BytesMut` sink's `write` inlined | `3b042d0e7` to `a13238fbb` | ReadProperty request encode 306 to 306 (0) | 705 to 611 (-94) | **Kept** |
 | 3. `encode_npdu` without the zero-fill | `a13238fbb` to `23906182f` | NPDU encode 384 to 359 (-25) | 446 to 447 (+1); whole request +10 | **Dropped** (reverted in `493b8647b`) |
 
-## 1. Direct `decode_npdu`: kept
+## 1. Direct `decode_npdu`: measured, then dropped
+
+The maintainer's decision of 2026-11-10 drops it. It did save instructions
+(172 to 153 with link-time optimization, 219 to 154 without), but
+`decode_npdu` is not on the stack's own request path (the network layer
+decodes through the borrowed view; only the TUI monitor and tests call the
+owned decode), and the saving costs a second NPDU parser of about 160
+lines and about 600 bytes of flash on the apdu firmware image. The commit
+`3b042d0e7` was reverted in `78a2bffb2`; what follows is the measurement
+as it was made.
 
 Since #1788, `decode_npdu` parsed every frame through
 `bacnet_npdu::Npdu::decode`, the borrowed view, and then copied the view's
@@ -117,7 +132,7 @@ every row.
 | ... with `#[inline]` on the `BytesMut` sink's `write` | 386 | +80 | 515 | -190 |
 | ... with `#[inline]` on both sinks' `write` | 308 | +2 | 330 | -375 |
 
-- **Kept: `#[inline]` on `<BytesMut as EncodeSink>::write`**
+- **Kept (this is what ships): `#[inline]` on `<BytesMut as EncodeSink>::write`**
   (`crates/bacnet-encoding/src/sink.rs`), `a13238fbb`. It is the only shape
   that leaves the release-like build where it was. In the default profile
   the request loses one call to that `write` (42 instructions), one call to
@@ -227,32 +242,66 @@ repository. perf-s1's estimate of about 36 instructions per round trip
 assumed one `decode_npdu` at each end. Item 2 changes nothing in a
 release-like build.
 
+## What ships
+
+The final tree is dev `c82533b7a` plus the one attribute (`git diff --stat
+origin/dev -- crates/` is `sink.rs`, 8 lines with its comment), head
+`78a2bffb2` merged with dev. Counted as the earlier runs were, in the same
+image, dev `2142f359e` (A) against `78a2bffb2` (B); the summaries are in
+`final/`. Both baseline builds were byte-identical and the noise floor of
+every codec row is 0.
+
+| Workload | Release-like A | B | Default profile A | B | B - A | Calls A / B |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| Encode ReadProperty request | 306 | 306 | 705 | 611 | **-94** | 1 / 1 |
+| Whole ReadProperty request (NPDU, APDU, service) | 1,412 | 1,412 | 2,157 | 2,063 | **-94** | 5 / 5 |
+| Decode NPDU, 100-octet payload | 172 | 172 | 219 | 219 | 0 | 0 / 0 |
+| Encode NPDU, 100-octet payload | 384 | 384 | 446 | 446 | 0 | 1 / 1 |
+| Decode ReadProperty request | 180 | 180 | 169 | 169 | 0 | 0 / 0 |
+| Encode confirmed-request APDU | 312 | 312 | 522 | 522 | 0 | 1 / 1 |
+| Decode confirmed-request APDU | 222 | 222 | 239 | 239 | 0 | 0 / 0 |
+
+Release-like, nothing moves (the "FAIL" in that summary is only the saving
+gate, which the attribute is not expected to meet there); in the default
+profile the two encode rows fall by 94 in six of six pairs.
+
+The round-trip no-regression check (`--aim none`, release-like), same
+meaning of columns as above:
+
+| Workload | Runtime | A | B | B - A | Floor | Calls A / B | Verdict |
+| --- | --- | ---: | ---: | ---: | ---: | --- | --- |
+| ReadProperty | ct | 31,011.9 | 31,012.7 | +0.7 | 17.6 | 18.0001 / 18.0001 | PASS |
+| ReadProperty | mt | 32,300.9 | 32,301.5 | +0.6 | 66.0 | 18.0002 / 18.0002 | PASS |
+| WriteProperty | ct | 39,919.7 | 39,915.5 | -4.2 | 12.1 | 25.0002 / 25.0002 | PASS |
+| WriteProperty | mt | 41,135.2 | 41,155.4 | +20.2 | 156.9 | 25.0002 / 25.0002 | PASS |
+| ReadPropertyMultiple | ct | 90,423.7 | 90,409.4 | -14.3 | 76.4 | 139.0004 / 139.0004 | PASS |
+| ReadPropertyMultiple | mt | 92,843.6 | 92,852.2 | +8.6 | 606.5 | 139.0004 / 139.0005 | PASS |
+
+No row rises above its floor and no allocator calls are added. The earlier
+round-trip table (above, `493b8647b`, with item 1) reached the same verdict.
+
 ## Firmware
 
-`check-no-std.sh` and `check-firmware-link.sh` pass on `493b8647b`, with
-every image inside its budget. Flash in bytes, before (dev `9e6bb0981`)
-and after. RAM is unchanged in every image, and the seven images without
-an allocator (mstp, mstp-extended, bip, node, bbmd, router and device) are
-the same size to the byte on every target.
+`check-no-std.sh` and `check-firmware-link.sh` pass on the final tree, with
+every image inside its budget. Flash in bytes of the apdu image, the one
+that calls the encoders: before is dev as of `9e6bb0981` (nothing under
+`bacnet-encoding`, `bacnet-services`, `bacnet-types`, `bacnet-npdu` or
+`firmware/link/src` has changed on dev since), after is the final tree.
+The seven images without an allocator are unchanged.
 
 | Image | Target | Flash before | After | Change | Budget |
 | --- | --- | ---: | ---: | ---: | ---: |
-| apdu | thumbv7m | 42,868 | 43,480 | +612 | 47,840 |
-| apdu | thumbv6m | 43,796 | 44,520 | +724 | 48,864 |
-| apdu | riscv32imc | 50,170 | 50,902 | +732 | 56,000 |
-| apdu | thumbv7em | 42,676 | 43,288 | +612 | 47,600 |
-| objects | thumbv7m | 144,868 | 144,800 | -68 | 160,816 |
-| objects | thumbv7em | 144,984 | 144,916 | -68 | 160,576 |
-| objects | riscv32imac | 174,262 | 174,190 | -72 | 193,232 |
-| reporting | thumbv7m | 195,840 | 195,776 | -64 | 212,528 |
-| reporting | thumbv7em | 196,652 | 196,588 | -64 | 213,088 |
-| reporting | riscv32imac | 235,290 | 235,218 | -72 | 255,040 |
+| apdu | thumbv7m | 42,868 | 42,924 | +56 | 47,840 |
+| apdu | thumbv6m | 43,796 | 43,872 | +76 | 48,864 |
+| apdu | riscv32imc | 50,170 | 50,262 | +92 | 56,000 |
+| apdu | thumbv7em | 42,676 | 42,732 | +56 | 47,600 |
 
-**Item 1 costs the apdu image about 560 bytes of flash.** It is the one
-image that calls `decode_npdu`, and it now holds the direct parser beside
-the view's decoder, which stays for the faults: on thumbv7m, 556 of its
-612 bytes come with item 1 (42,868 to 43,424) and 56 with item 2. Item 2
-is what makes the objects and reporting images smaller.
+The objects and reporting images (thumbv7m 144,936 and 195,832; thumbv7em
+and riscv32imac also inside their budgets) are measured on a dev that has
+since gained COV code, so they have no like-for-like before here; both fit
+their budgets. With item 1 dropped, the apdu image keeps only the 56 to 92
+bytes that the attribute costs it; the earlier 612 to 732 byte growth was
+item 1's second parser.
 
 ## Files
 
@@ -261,7 +310,9 @@ is what makes the objects and reporting images smaller.
   `summary.md` and `summary.json` from `perf_counts.py`, the per-function
   and per-line slopes of the workloads the item aims at (`profiles/`), and
   for the default profile the `attribute` output.
-- `round-trips/`: the no-regression check's `summary.md`, `summary.json`
+- `final/`: the final tree's three runs, one folder each (`release-like/`,
+  `default-profile/`, `round-trips/`), `summary.md` and `summary.json` only.
+- `round-trips/`: the earlier no-regression check's `summary.md`, `summary.json`
   and #1978 item shares (`items.md`).
 
 The summaries' "not acceptable as run" lines only say that a codec-only
@@ -281,4 +332,11 @@ python3 scripts/perf/perf_counts.py run --baseline a13238fbb --candidate 2390618
   --workloads codec --aim encode_npdu_100b_payload,full_stack_encode_rp --out /tmp/perf-2334-item3
 python3 scripts/perf/perf_counts.py run --baseline 9e6bb0981 --candidate 493b8647b \
   --workloads rp,wp,rpm --aim none --out /tmp/perf-2334-round-trips
+python3 scripts/perf/perf_counts.py run --baseline 2142f359e --candidate 78a2bffb2 \
+  --workloads codec --aim encode_read_property_request,full_stack_encode_rp --out /tmp/perf-2334-final-release
+python3 scripts/perf/perf_counts.py run --baseline 2142f359e --candidate 78a2bffb2 \
+  --workloads codec --aim encode_read_property_request,full_stack_encode_rp \
+  --harness /tmp/counts-default-profile --out /tmp/perf-2334-final-default
+python3 scripts/perf/perf_counts.py run --baseline 2142f359e --candidate 78a2bffb2 \
+  --workloads rp,wp,rpm --aim none --out /tmp/perf-2334-final-round-trips
 ```
