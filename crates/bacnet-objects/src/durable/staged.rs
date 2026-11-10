@@ -272,6 +272,8 @@ impl<S: Send + 'static, N> StagedSaves<S, N> {
     /// which the caller built with every step's state in it, and keeping
     /// `served` beside them: for steps that hold less than the state they
     /// leave, so a stage keeps one copy of it whatever the steps' number.
+    // event-reporting: only the reporting store stages this way.
+    #[cfg(feature = "event-reporting")]
     pub(crate) fn stage_built(
         &mut self,
         steps: Vec<Step<N>>,
