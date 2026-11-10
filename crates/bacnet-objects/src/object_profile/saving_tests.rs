@@ -14,11 +14,14 @@ fn saved_empty_is_distinct_from_no_write_and_provisioning_stays_independent() {
         None,
         Some(TagsSnapshot::default()),
         Some(snapshot("saved")),
-        Some(TagsSnapshot { tags: Some(vec![]) }),
+        Some(TagsSnapshot {
+            tags: Some(vec![]),
+            description: None,
+        }),
     ] {
         let store = Arc::new(Memory::default());
         *store.saved.lock().unwrap() = saved.clone();
-        let mut state = ProfileState::persistent(oid(), store.clone()).unwrap();
+        let mut state = ProfileState::persistent(oid(), store.clone(), false).unwrap();
         assert_code(
             state.read(P::TAGS, None).unwrap(),
             ErrorCode::UNKNOWN_PROPERTY,
@@ -86,12 +89,13 @@ fn failed_save_and_invalid_writes_leave_served_state_and_backend_unchanged() {
 fn load_errors_and_invalid_custom_snapshots_fail_before_a_writer_runs() {
     let store = Arc::new(Memory::default());
     store.fail_load.store(true, Ordering::SeqCst);
-    assert!(ProfileState::persistent(oid(), store.clone()).is_err());
+    assert!(ProfileState::persistent(oid(), store.clone(), false).is_err());
     store.fail_load.store(false, Ordering::SeqCst);
     for invalid in [
         snapshot("invalid;name"),
         TagsSnapshot {
             tags: Some(vec![BACnetNameValue::semantic(""); MAX_TAGS + 1]),
+            description: None,
         },
         snapshot(&"x".repeat(MAX_TAGS_SNAPSHOT_BYTES)),
         TagsSnapshot {
@@ -99,16 +103,18 @@ fn load_errors_and_invalid_custom_snapshots_fail_before_a_writer_runs() {
                 "array",
                 PropertyValue::List(vec![]),
             )]),
+            description: None,
         },
         TagsSnapshot {
             tags: Some(vec![BACnetNameValue::valued(
                 "raw",
                 PropertyValue::ApplicationData(vec![0xa4, 126, 10, 6, 2, 0xb4, 12, 30, 0, 0]),
             )]),
+            description: None,
         },
     ] {
         *store.saved.lock().unwrap() = Some(invalid);
-        assert!(ProfileState::persistent(oid(), store.clone()).is_err());
+        assert!(ProfileState::persistent(oid(), store.clone(), false).is_err());
     }
     assert_eq!(store.attempts(), 0);
 }
@@ -154,7 +160,8 @@ fn ordered_array_steps_save_once_and_each_claim_serves_its_prefix() {
     assert_eq!(
         store.saved(),
         Some(TagsSnapshot {
-            tags: Some(expected.clone())
+            tags: Some(expected.clone()),
+            description: None
         })
     );
     assert_eq!(state.profile().tags, Some(tags("configured")));

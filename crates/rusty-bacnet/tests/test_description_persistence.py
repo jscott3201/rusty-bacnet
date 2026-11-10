@@ -1,8 +1,10 @@
 """A written Description kept in the files of the builders whose objects
 have a snapshot format of their own (#2364): the three logs, Notification
-Class, Notification Forwarder and Access Rights. A server started on the same
-files serves it again; a log's ``clear_written_reporting=True`` drops it
-from the files; one past 16 KiB is refused only while it would be kept.
+Class, Notification Forwarder, Access Rights, Color and Color Temperature.
+A server started on the same files serves it again; a log's
+``clear_written_reporting=True`` drops it from the files, and a colour
+object's ``clear_written_default=True`` leaves it there; one past 16 KiB
+is refused only while it would be kept.
 """
 
 from __future__ import annotations
@@ -32,8 +34,10 @@ EVENT = ObjectIdentifier(ObjectType.EVENT_LOG, 1)
 CLASS = ObjectIdentifier(ObjectType.NOTIFICATION_CLASS, 1)
 FORWARDER = ObjectIdentifier(ObjectType.NOTIFICATION_FORWARDER, 1)
 RIGHTS = ObjectIdentifier(ObjectType.ACCESS_RIGHTS, 1)
+COLOR = ObjectIdentifier(ObjectType.COLOR, 1)
+TEMPERATURE = ObjectIdentifier(ObjectType.COLOR_TEMPERATURE, 1)
 LOGS = (TREND, MULTIPLE, EVENT)
-OBJECTS = LOGS + (CLASS, FORWARDER, RIGHTS)
+OBJECTS = LOGS + (CLASS, FORWARDER, RIGHTS, COLOR, TEMPERATURE)
 
 
 class KeptDescriptionTests(unittest.IsolatedAsyncioTestCase):
@@ -60,6 +64,12 @@ class KeptDescriptionTests(unittest.IsolatedAsyncioTestCase):
         server.add_notification_class(1, "NC-1", storage_path=path("nc-1"))
         server.add_notification_forwarder(1, "NF-1", storage_path=path("nf-1"))
         server.add_access_rights(1, "AR-1", storage_path=path("ar-1"))
+        server.add_color(
+            1, "CLR-1", storage_path=path("clr-1"), clear_written_default=clear
+        )
+        server.add_color_temperature(
+            1, "CT-1", storage_path=path("ct-1"), clear_written_default=clear
+        )
         await server.start()
         return server
 
@@ -86,7 +96,8 @@ class KeptDescriptionTests(unittest.IsolatedAsyncioTestCase):
 
         # Clearing a log's written settings drops its Description from the
         # files too; as for the other settings, the log serves it until the
-        # next start. The other three have no clear.
+        # next start. The others have no clearing keyword, and a colour
+        # object's ``clear_written_default`` drops only the default.
         server = await self.start(clear=True)
         try:
             for oid in OBJECTS:

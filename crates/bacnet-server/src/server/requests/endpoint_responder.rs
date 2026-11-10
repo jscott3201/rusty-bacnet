@@ -245,13 +245,41 @@ impl EndpointResponder {
         if !super::audit_notification::fail_closed_authorize(|| authorizer(&context)) {
             return Err(super::audit_notification::request_denied());
         }
-        let mut db = self.db().write().await;
-        // Close may win while this request waits for the database owner.
-        self.ensure_open()?;
         let MutationTarget::WriteProperty(write) = &context.target else {
             unreachable!("Device write context")
         };
-        let mut authority = device_write_target(&mut db, *device, write)?;
+        // A Description the Device keeps is saved here, without the guard,
+        // as the server saves one (#2364).
+        let staged = crate::server::durable_writes::stage(
+            self.db(),
+            crate::server::durable_writes::DurableTarget::local(
+                write.object_identifier,
+                write.property_identifier,
+                write.property_array_index,
+                &value,
+            ),
+        )
+        .await;
+        let mut db = self.db().write().await;
+        let result = self.commit_device_write(&mut db, *device, write, value, request, received);
+        staged.release(&mut db);
+        result
+    }
+
+    /// Make an authorized Device write under the database guard, after the
+    /// commit-time repeat of the preflight checks.
+    fn commit_device_write(
+        &self,
+        db: &mut ObjectDatabase,
+        device: ObjectIdentifier,
+        write: &WritePropertyRequest,
+        value: PropertyValue,
+        request: &ConfirmedRequestPdu,
+        received: &ReceivedApdu,
+    ) -> Result<(), Error> {
+        // Close may win while this request waits for the database owner.
+        self.ensure_open()?;
+        let mut authority = device_write_target(db, device, write)?;
         if write.property_identifier == PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT {
             let source = bacnet_objects::device::AuditWriteSource {
                 device: bacnet_types::constructed::BACnetRecipient::Address(

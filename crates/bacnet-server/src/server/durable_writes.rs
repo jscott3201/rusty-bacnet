@@ -10,7 +10,8 @@
 //! an analog, binary or multi-state object, Access Door, Access Zone,
 //! Event or Alert Enrollment a written reporting setting (#2331), and those
 //! objects, a Timer, a Channel, the three logs, a Notification Class or
-//! Forwarder and an Access Rights object a written Description (#2364),
+//! Forwarder, an Access Rights object, a Device, the two lighting outputs
+//! and the two colour objects a written Description (#2364),
 //! before serving it, and refuses the write if the save fails. So
 //! that the save never runs while the database guard is held, a request
 //! that makes such a write stages it first ([`DurableWrites`]): under the
@@ -100,8 +101,9 @@ enum TargetValue {
 /// those reporting settings beside their Tags, and Access Door, Access Zone,
 /// Event Enrollment and Alert Enrollment the same reporting settings
 /// (#2331). A Timer, a Channel, the thirteen types with a reporting store,
-/// the three logs, a Notification Class, a forwarder and an Access Rights
-/// object keep a written Description too (#2364).
+/// the three logs, a Notification Class, a forwarder, an Access Rights
+/// object, a Device, a Lighting Output, a Binary Lighting Output and the
+/// two colour objects keep a written Description too (#2364).
 /// Under a policy
 /// that decides mutations, only these attempts of a WritePropertyMultiple are decided
 /// ahead of the handler (#1321).
@@ -127,16 +129,19 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
             property,
             PropertyIdentifier::RECIPIENT_LIST | PropertyIdentifier::DESCRIPTION
         ),
-        // A colour object saves a written default with its output (#1956).
-        ObjectType::COLOR => {
-            matches!(
-                property,
-                PropertyIdentifier::TAGS | PropertyIdentifier::DEFAULT_COLOR
-            )
-        }
+        // A colour object saves a written default with its output (#1956),
+        // and a written Description (#2364).
+        ObjectType::COLOR => matches!(
+            property,
+            PropertyIdentifier::TAGS
+                | PropertyIdentifier::DEFAULT_COLOR
+                | PropertyIdentifier::DESCRIPTION
+        ),
         ObjectType::COLOR_TEMPERATURE => matches!(
             property,
-            PropertyIdentifier::TAGS | PropertyIdentifier::DEFAULT_COLOR_TEMPERATURE
+            PropertyIdentifier::TAGS
+                | PropertyIdentifier::DEFAULT_COLOR_TEMPERATURE
+                | PropertyIdentifier::DESCRIPTION
         ),
         ObjectType::ANALOG_VALUE
         | ObjectType::BINARY_VALUE
@@ -149,8 +154,12 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
         | ObjectType::MULTI_STATE_OUTPUT => {
             property == PropertyIdentifier::TAGS || kept_with_reporting(property)
         }
+        // These keep a written Description in their Tags storage (#2364).
         ObjectType::LIGHTING_OUTPUT | ObjectType::BINARY_LIGHTING_OUTPUT | ObjectType::DEVICE => {
-            property == PropertyIdentifier::TAGS
+            matches!(
+                property,
+                PropertyIdentifier::TAGS | PropertyIdentifier::DESCRIPTION
+            )
         }
         ObjectType::ACCESS_RIGHTS => matches!(
             property,

@@ -1,13 +1,16 @@
 //! A peer-written Description, kept in the storage the object already has
 //! (#2364): the write-configuration storage of a Timer, a Channel and an
-//! intrinsic reporter, and the snapshot formats of the three logs, a
+//! intrinsic reporter, the snapshot formats of the three logs, a
 //! Notification Class, a Notification Forwarder and an Access Rights
-//! object.
+//! object, the Tags storage of a Device, a Lighting Output and a Binary
+//! Lighting Output, and the output storage of a Color and a Color
+//! Temperature object.
 //!
 //! Clause 12 says nothing about restarts, so keeping Description is this
 //! stack's choice, as for the rest of that storage: a head end that labelled
-//! an object once expects the label to stay. Only these object types keep
-//! it; on every other type a written Description lasts until a restart.
+//! an object once expects the label to stay. Every type with storage keeps
+//! it; an object built without storage, and a type that has none, serves a
+//! written Description until a restart.
 //!
 //! A write of Description is kept as the object's other kept writes are:
 //! saved before it is answered, refused with DEVICE / OPERATIONAL_PROBLEM

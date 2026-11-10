@@ -231,7 +231,7 @@ impl BinaryInputObject {
         persistence: Arc<dyn TagsPersistence>,
     ) -> Result<Self, Error> {
         let mut object = Self::new(instance, name)?;
-        object.profile = ProfileState::persistent(object.oid, persistence)?;
+        object.profile = ProfileState::persistent(object.oid, persistence, false)?;
         Ok(object)
     }
 

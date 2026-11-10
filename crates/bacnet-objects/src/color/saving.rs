@@ -17,6 +17,10 @@
 //! the old default; the next save after the write, or the correcting one if
 //! the write never comes, carries them.
 //!
+//! A written Description is kept the same way, in the same file (#2364):
+//! staged with the request's default write, one save for both, refused when
+//! its save fails, and never saved for a NULL, which changes nothing.
+//!
 //! The server's `stop()` asks the object to settle
 //! (`settle_forgotten_writes`): it drops a forgotten staged default, queues
 //! the served state again if the last save failed, and hands back the wait
@@ -24,6 +28,7 @@
 //! Dropping the object does the same, and the writer's drop waits for those
 //! saves.
 
+use crate::prelude::*;
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, Ordering};
 use core::time::Duration;
@@ -38,13 +43,29 @@ use super::persistence::{ColorOutputPersistence, ColorOutputSnapshot, ColorOutpu
 use crate::common;
 use crate::durable::staged::{self, StagedSaves};
 use crate::durable::{PendingWrite, SaveWait, SaveWriter, StageStep};
+use crate::write_config::description;
 
-/// A colour object's output storage, if it has one.
+/// What a saved write leaves: the property it sets, as storage holds it.
+enum Next {
+    Default(ColorOutputValue),
+    Description(String),
+}
+
+/// Put what a write leaves into `snapshot`.
+fn apply(snapshot: &mut ColorOutputSnapshot, next: &Next) {
+    match next {
+        Next::Default(default) => snapshot.default = Some(*default),
+        Next::Description(text) => snapshot.description = Some(text.clone()),
+    }
+}
+
+/// A colour object's output storage, if it has one: boxed, so an object
+/// without storage pays one pointer for it.
 ///
 /// A clone, as an application clone or a COV snapshot makes, has none: the
 /// storage stays with the original, as its Tags storage does.
 #[derive(Default)]
-pub(super) struct OutputStorage(Option<OutputStore>);
+pub(super) struct OutputStorage(Option<Box<OutputStore>>);
 
 impl Clone for OutputStorage {
     fn clone(&self) -> Self {
@@ -82,8 +103,8 @@ impl ColorOutputSaveCounters {
 }
 
 struct OutputStore {
-    /// The writer, and a default write staged on it.
-    saves: StagedSaves<ColorOutputSnapshot, ColorOutputValue>,
+    /// The writer, and a default or Description write staged on it.
+    saves: StagedSaves<ColorOutputSnapshot, Next>,
     counters: ColorOutputSaveCounters,
     /// What the last save queued holds, or what was loaded.
     queued: Option<ColorOutputSnapshot>,
@@ -92,21 +113,26 @@ struct OutputStore {
     /// Whether the last save the writer ran failed. Its done hook sets it,
     /// so it tells the outcome of the latest save.
     last_failed: Arc<AtomicBool>,
-    /// Default writes taken, so a staged one can tell whether another came
-    /// between.
-    default_writes: u64,
+    /// Default and Description writes taken, so a staged one can tell
+    /// whether another came between.
+    kept_writes: u64,
 }
 
 impl OutputStorage {
     /// Take `persistence` for the object `oid` and load what it saved. The
     /// caller checks that the loaded values fit the object before taking
-    /// them.
+    /// them; a Description past 16 KiB is refused here.
     pub(super) fn open(
         &mut self,
         oid: ObjectIdentifier,
         persistence: Arc<dyn ColorOutputPersistence>,
     ) -> Result<Option<ColorOutputSnapshot>, Error> {
         let loaded = persistence.load(oid)?;
+        description::check_saved(
+            loaded
+                .as_ref()
+                .and_then(|saved| saved.description.as_deref()),
+        )?;
         let last_failed = Arc::new(AtomicBool::new(false));
         let failed = Arc::clone(&last_failed);
         let counters = ColorOutputSaveCounters::default();
@@ -130,16 +156,16 @@ impl OutputStorage {
                 }
             },
         );
-        self.0 = Some(OutputStore {
+        self.0 = Some(Box::new(OutputStore {
             saves: StagedSaves::new(writer),
             counters,
-            queued: loaded,
+            queued: loaded.clone(),
             // The object takes a loaded Present_Value (a Color Temperature
             // clamps it, and its next `note` saves the clamped one).
-            current: loaded.unwrap_or_default(),
+            current: loaded.clone().unwrap_or_default(),
             last_failed,
-            default_writes: 0,
-        });
+            kept_writes: 0,
+        }));
         Ok(loaded)
     }
 
@@ -166,30 +192,39 @@ impl OutputStorage {
     /// the last one queued, or the last save failed. While a default write
     /// is staged, the save waits for it.
     pub(super) fn note(&mut self, value: ColorOutputValue) {
-        let Some(store) = &mut self.0 else {
+        let Some(store) = self.0.as_deref_mut() else {
             return;
         };
         store.current.present_value = Some(value);
         if store.saves.is_staged() {
-            store.saves.correct(|| store.current);
-        } else if store.queued != Some(store.current) || store.last_failed.load(Ordering::Acquire) {
+            store.saves.correct(|| store.current.clone());
+        } else if store.queued.as_ref() != Some(&store.current)
+            || store.last_failed.load(Ordering::Acquire)
+        {
             store.queue();
         }
     }
 
-    /// Stage the default writes among a request's `writes` to `property`
-    /// (see [`DurableWrites::stage_writes`](crate::durable::DurableWrites::stage_writes)):
-    /// `decode` gives the default each leaves, or the object's refusal.
-    pub(super) fn stage_defaults(
+    /// Stage the writes storage keeps among a request's `writes` (see
+    /// [`DurableWrites::stage_writes`](crate::durable::DurableWrites::stage_writes)):
+    /// those to `property`, the object's default, for which `decode` gives
+    /// the default each leaves or the object's refusal, and those of a
+    /// Description other than a NULL (#2364).
+    pub(super) fn stage_kept(
         &mut self,
         writes: &[PendingWrite],
         property: PropertyIdentifier,
         decode: impl Fn(&PropertyValue) -> Result<ColorOutputValue, Error>,
     ) -> StageStep {
-        let Some(store) = &mut self.0 else {
+        let Some(store) = self.0.as_deref_mut() else {
             return StageStep::Skip;
         };
-        if !writes.iter().any(|write| write.property == property) {
+        let kept = |write: &PendingWrite| {
+            write.property == property
+                || (write.property == PropertyIdentifier::DESCRIPTION
+                    && !description::null_write(write.property, &write.value))
+        };
+        if !writes.iter().any(kept) {
             return StageStep::Skip;
         }
         let busy = store.saves.busy();
@@ -198,28 +233,24 @@ impl OutputStorage {
             return StageStep::Busy(wait);
         }
         let steps = staged::steps(writes, |_, write| {
-            if write.property != property {
+            if !kept(write) {
                 return Ok(None);
             }
             if write.array_index.is_some() {
                 return Err(common::property_is_not_an_array_error());
             }
-            decode(&write.value).map(Some)
+            if write.property == property {
+                return decode(&write.value).map(|default| Some(Next::Default(default)));
+            }
+            description::written(&write.value).map(|text| Some(Next::Description(text)))
         });
-        let saved = steps.last().map(|step| ColorOutputSnapshot {
-            default: Some(step.next),
-            ..store.current
-        });
-        let step = store.saves.stage(
-            steps,
-            store.default_writes,
-            store.current,
-            |snapshot, default| {
-                snapshot.default = Some(*default);
-            },
-        );
+        let mut saved = store.current.clone();
+        steps.iter().for_each(|step| apply(&mut saved, &step.next));
+        let step = store
+            .saves
+            .stage(steps, store.kept_writes, store.current.clone(), apply);
         if matches!(step, StageStep::Staged(_)) {
-            store.queued = saved;
+            store.queued = Some(saved);
         }
         step
     }
@@ -235,36 +266,35 @@ impl OutputStorage {
         value: &PropertyValue,
         decode: impl FnOnce() -> Result<ColorOutputValue, Error>,
     ) -> Result<ColorOutputValue, Error> {
-        let Some(store) = &mut self.0 else {
+        let Some(store) = self.0.as_deref_mut() else {
             return decode();
         };
-        let refused =
-            |_| common::protocol_error(ErrorClass::DEVICE, ErrorCode::OPERATIONAL_PROBLEM);
-        if let Some(claimed) = store
-            .saves
-            .claim(property, None, value, store.default_writes)
-        {
-            match claimed {
-                Ok(default) => store.take_default(default),
-                // Storage keeps what it held: save the Present_Value changes
-                // that waited for the refused default.
-                Err(_) => store.queue(),
-            }
-            store.after_staging();
-            return claimed.map_err(refused);
+        match store.write_kept(property, value, || decode().map(Next::Default))? {
+            Next::Default(default) => Ok(default),
+            Next::Description(_) => unreachable!("a default write leaves a default"),
         }
-        // A default the object refuses leaves a staged write alone (#1424).
-        let default = decode()?;
-        store.saves.drop_staged();
-        store.after_staging();
-        let saved = ColorOutputSnapshot {
-            default: Some(default),
-            ..store.current
-        };
-        store.saves.save_now(saved).map_err(refused)?;
-        store.queued = Some(saved);
-        store.take_default(default);
-        Ok(default)
+    }
+
+    /// A write of `value` to Description on an object with storage (#2364):
+    /// saved, as a default write is, before `served` takes it. `None`
+    /// without storage and for a NULL, which storage keeps nothing for: the
+    /// object then makes the write as it always has.
+    pub(super) fn write_description(
+        &mut self,
+        served: &mut String,
+        value: &PropertyValue,
+    ) -> Option<Result<(), Error>> {
+        let store = self.0.as_deref_mut()?;
+        if *value == PropertyValue::Null {
+            return None;
+        }
+        let written = || description::written(value).map(Next::Description);
+        let kept = store.write_kept(PropertyIdentifier::DESCRIPTION, value, written);
+        Some(kept.map(|next| {
+            if let Next::Description(text) = next {
+                *served = text;
+            }
+        }))
     }
 
     /// Drop a default a write saved, so storage keeps none and the object's
@@ -273,42 +303,52 @@ impl OutputStorage {
     /// save; one that fails keeps the written default and returns storage's
     /// error. Nothing to do without storage or a written default.
     pub(super) fn clear_written_default(&mut self) -> Result<(), Error> {
-        let Some(store) = &mut self.0 else {
+        self.clear(|saved| saved.default.take().is_some())
+    }
+
+    /// Drop a Description a write saved (#2364), as
+    /// [`clear_written_default`](Self::clear_written_default) drops a
+    /// default: storage keeps none, and the text served now stays.
+    pub(super) fn clear_written_description(&mut self) -> Result<(), Error> {
+        self.clear(|saved| saved.description.take().is_some())
+    }
+
+    /// Save what storage holds without what `drop` takes out of it, if it
+    /// takes anything.
+    fn clear(&mut self, drop: impl FnOnce(&mut ColorOutputSnapshot) -> bool) -> Result<(), Error> {
+        let Some(store) = self.0.as_deref_mut() else {
             return Ok(());
         };
-        if store.current.default.is_none() {
+        let mut cleared = store.current.clone();
+        if !drop(&mut cleared) {
             return Ok(());
         }
-        let cleared = ColorOutputSnapshot {
-            default: None,
-            ..store.current
-        };
-        store.saves.save_now(cleared)?;
-        store.queued = Some(cleared);
+        store.saves.save_now(cleared.clone())?;
+        store.queued = Some(cleared.clone());
         store.current = cleared;
-        // A staged default worked out before this gives way, and keeps the
-        // cleared state as what is served.
-        store.default_writes = store.default_writes.wrapping_add(1);
+        // A write staged before this gives way, and keeps the cleared state
+        // as what is served.
+        store.kept_writes = store.kept_writes.wrapping_add(1);
         store.after_staging();
         Ok(())
     }
 
     /// See [`DurableWrites::release_staged_write`](crate::durable::DurableWrites::release_staged_write).
     pub(super) fn release(&mut self, staged: &SaveWait) {
-        if let Some(store) = &mut self.0 {
+        if let Some(store) = self.0.as_deref_mut() {
             store.saves.release(staged);
             store.after_staging();
         }
     }
 
-    /// Whether a default write is staged.
+    /// Whether a default or Description write is staged.
     pub(super) fn has_staged(&self) -> bool {
         self.0.as_ref().is_some_and(|store| store.saves.is_staged())
     }
 
     /// See [`DurableWrites::expire_staged`](crate::durable::DurableWrites::expire_staged).
     pub(super) fn expire(&mut self, now: Duration) {
-        if let Some(store) = &mut self.0 {
+        if let Some(store) = self.0.as_deref_mut() {
             store.saves.expire(now);
             store.after_staging();
         }
@@ -318,7 +358,7 @@ impl OutputStorage {
     /// the served state again if the last save failed, and return the wait
     /// for every save queued so far. `None` without storage.
     pub(super) fn settle(&mut self) -> Option<SaveWait> {
-        let store = self.0.as_mut()?;
+        let store = self.0.as_deref_mut()?;
         store.saves.drop_staged();
         store.after_staging();
         store.retry_failed();
@@ -345,8 +385,8 @@ impl OutputStorage {
 
 impl OutputStore {
     fn queue(&mut self) {
-        self.saves.submit_coalescing(self.current);
-        self.queued = Some(self.current);
+        self.saves.submit_coalescing(self.current.clone());
+        self.queued = Some(self.current.clone());
     }
 
     fn retry_failed(&mut self) {
@@ -361,16 +401,52 @@ impl OutputStore {
         if self.saves.take_correction() {
             self.queue();
         } else {
-            self.saves.correct(|| self.current);
+            self.saves.correct(|| self.current.clone());
         }
     }
 
-    /// Serve a written `default`, and save the Present_Value changes that
-    /// waited for it.
-    fn take_default(&mut self, default: ColorOutputValue) {
-        self.current.default = Some(default);
-        self.default_writes = self.default_writes.wrapping_add(1);
-        if self.queued != Some(self.current) {
+    /// A kept write of `value` to `property`, the default or Description:
+    /// take its staged step if it is the next one, or else save what
+    /// `decode` gives with the rest of what is served now. Returns what the
+    /// write leaves, for the object to serve. A save that fails refuses the
+    /// write with DEVICE / OPERATIONAL_PROBLEM.
+    fn write_kept(
+        &mut self,
+        property: PropertyIdentifier,
+        value: &PropertyValue,
+        decode: impl FnOnce() -> Result<Next, Error>,
+    ) -> Result<Next, Error> {
+        let refused =
+            |_| common::protocol_error(ErrorClass::DEVICE, ErrorCode::OPERATIONAL_PROBLEM);
+        if let Some(claimed) = self.saves.claim(property, None, value, self.kept_writes) {
+            match &claimed {
+                Ok(next) => self.take(next),
+                // Storage keeps what it held: save the Present_Value changes
+                // that waited for the refused write.
+                Err(_) => self.queue(),
+            }
+            self.after_staging();
+            return claimed.map_err(refused);
+        }
+        // A write the object refuses leaves a staged one alone (#1424).
+        let next = decode()?;
+        self.saves.drop_staged();
+        self.after_staging();
+        let mut saved = self.current.clone();
+        apply(&mut saved, &next);
+        self.saves.save_now(saved.clone()).map_err(refused)?;
+        self.queued = Some(saved);
+        self.take(&next);
+        Ok(next)
+    }
+
+    /// Serve what a kept write leaves, and save the Present_Value changes
+    /// that waited for it. While the request has steps still to take, the
+    /// staged save holds them, so nothing is queued until the last.
+    fn take(&mut self, next: &Next) {
+        apply(&mut self.current, next);
+        self.kept_writes = self.kept_writes.wrapping_add(1);
+        if !self.saves.is_staged() && self.queued.as_ref() != Some(&self.current) {
             self.queue();
         }
     }
@@ -387,8 +463,8 @@ impl Drop for OutputStore {
 /// Implement [`DurableWrites`](crate::durable::DurableWrites) for a colour
 /// object with `profile: ProfileState` and `output: OutputStorage` fields
 /// and a `stage_default` method. Tags writes stage on the profile, default
-/// writes on the output storage; a request that writes both gets one wait
-/// for both saves. Present_Value never stages, and settling joins the
+/// and Description writes on the output storage; a request that writes to
+/// both gets one wait for both saves. Present_Value never stages, and settling joins the
 /// output's saves to the profile's.
 macro_rules! impl_color_durable {
     ($object:ty) => {

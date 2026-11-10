@@ -39,7 +39,7 @@ fn assert_pair_write_refused(index: Option<u32>) {
     case.store.save(oid(), &snapshot("old")).unwrap();
     let original = std::fs::read(case.store.path()).unwrap();
     let mut state =
-        ProfileState::persistent(oid(), std::sync::Arc::new(case.store.clone())).unwrap();
+        ProfileState::persistent(oid(), std::sync::Arc::new(case.store.clone()), false).unwrap();
     state.provision(profile("configured")).unwrap();
     // A valid first tag must not publish when a later tag is invalid.
     let bytes = if index.is_none() {
@@ -90,7 +90,10 @@ fn file_snapshot_presence_identity_and_independent_bytes() {
     assert_eq!(case.store.load(oid()).unwrap(), None);
     for saved in [
         TagsSnapshot::default(),
-        TagsSnapshot { tags: Some(vec![]) },
+        TagsSnapshot {
+            tags: Some(vec![]),
+            description: None,
+        },
         snapshot("floor"),
     ] {
         case.store.save(oid(), &saved).unwrap();
@@ -135,6 +138,7 @@ fn semantic_null_date_and_time_tags_round_trip_without_reinterpretation() {
                 }),
             ),
         ]),
+        description: None,
     };
     case.store.save(oid(), &saved).unwrap();
     // Independently authored body; absent value and explicit NULL differ.
@@ -145,7 +149,7 @@ fn semantic_null_date_and_time_tags_round_trip_without_reinterpretation() {
     assert_eq!(std::fs::read(case.store.path()).unwrap()[12..], expected);
     assert_eq!(case.store.load(oid()).unwrap(), Some(saved.clone()));
     let mut state =
-        ProfileState::persistent(oid(), std::sync::Arc::new(case.store.clone())).unwrap();
+        ProfileState::persistent(oid(), std::sync::Arc::new(case.store.clone()), false).unwrap();
     state.provision(profile("configured")).unwrap();
     apply(
         &mut state,
@@ -175,6 +179,7 @@ fn nonprimitive_file_saves_leave_existing_bytes_intact() {
     ] {
         let invalid = TagsSnapshot {
             tags: Some(vec![BACnetNameValue::valued("a", value)]),
+            description: None,
         };
         assert_code(
             case.store.save(oid(), &invalid),
@@ -214,8 +219,8 @@ fn exact_persisted_size_cap_succeeds_and_over_cap_never_replaces_old_file() {
     // A long UTF-8 name uses a 6-byte context header and one charset octet.
     let name_bytes = MAX_TAGS_SNAPSHOT_BYTES - 12 - 1 - 7;
     let exact = snapshot(&"x".repeat(name_bytes));
-    let encoded = persistence::encode_snapshot(&exact).unwrap();
-    assert_eq!(encoded.len() + 12, MAX_TAGS_SNAPSHOT_BYTES);
+    let encoded = crate::snapshot::tags::encode(oid(), &exact).unwrap();
+    assert_eq!(encoded.len(), MAX_TAGS_SNAPSHOT_BYTES);
     case.store.save(oid(), &exact).unwrap();
     assert_eq!(
         std::fs::metadata(case.store.path()).unwrap().len(),

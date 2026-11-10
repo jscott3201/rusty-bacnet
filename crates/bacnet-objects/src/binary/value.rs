@@ -110,7 +110,7 @@ impl BinaryValueObject {
         persistence: Arc<dyn TagsPersistence>,
     ) -> Result<Self, Error> {
         let mut object = Self::with_access(instance, name, access)?;
-        object.profile = ProfileState::persistent(object.oid, persistence)?;
+        object.profile = ProfileState::persistent(object.oid, persistence, false)?;
         Ok(object)
     }
 

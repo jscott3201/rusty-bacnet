@@ -43,6 +43,7 @@ use bacnet_objects::color::{
 };
 use bacnet_objects::event_enrollment::AlertEnrollmentObject;
 use bacnet_objects::event_log::EventLogObject;
+use bacnet_objects::lighting::LightingOutputObject;
 use bacnet_objects::log_persistence::{FileLogPersistence, LogPersistence};
 use bacnet_objects::notification_class::{
     FileNotificationClassPersistence, NotificationClass, NotificationClassPersistence,
@@ -86,6 +87,7 @@ enum Kind {
     NotificationForwarder,
     NotificationClass,
     Tags,
+    DescribedTags,
     Color,
     ColorTemperature,
     AccessRights,
@@ -311,6 +313,27 @@ pub const FORMATS: &[Format] = &[
         sample: samples::described_access_rights,
         kind: Kind::AccessRights,
     },
+    // And the formats that took a Description last (#2364): the Tags
+    // format's version 2, on a Lighting Output, which keeps one there, and
+    // the colour output's version 3.
+    Format {
+        name: "described_tags",
+        two_slot: false,
+        sample: samples::described_tags,
+        kind: Kind::DescribedTags,
+    },
+    Format {
+        name: "described_color",
+        two_slot: false,
+        sample: samples::described_color,
+        kind: Kind::Color,
+    },
+    Format {
+        name: "described_color_temperature",
+        two_slot: false,
+        sample: samples::described_color_temperature,
+        kind: Kind::ColorTemperature,
+    },
 ];
 
 impl Format {
@@ -350,6 +373,11 @@ impl Format {
                 let units = EngineeringUnits::DEGREES_CELSIUS;
                 AnalogInputObject::with_tags_persistence(1, "AI", units, store).map(drop)
             }),
+            Kind::DescribedTags => {
+                check_file(medium, oid(ObjectType::LIGHTING_OUTPUT), M::tags, |store| {
+                    LightingOutputObject::with_tags_persistence(1, "LO", store).map(drop)
+                })
+            }
             Kind::Color => check_file(medium, oid(ObjectType::COLOR), M::color, |store| {
                 ColorObject::new(1, "CLR")?
                     .with_output_persistence(store)

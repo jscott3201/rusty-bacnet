@@ -9,22 +9,41 @@ use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
-use super::persistence::encode_snapshot;
 use super::{ObjectProfile, TagsPersistence, TagsSnapshot, write_tags};
 use crate::common;
-use crate::durable::staged::{self, StagedSaves};
+use crate::durable::staged::{self, StagedSaves, Step};
 use crate::durable::{DurableWrites, PendingWrite, SaveWait, SaveWriter, StageStep};
 use crate::property_metadata::PropertyMetadata;
+use crate::snapshot::tags::fits;
+use crate::write_config::description;
 
-type Storage = StagedSaves<TagsSnapshot, Vec<BACnetNameValue>>;
+/// What a saved write leaves: the property it sets, as storage holds it.
+enum Next {
+    Tags(Vec<BACnetNameValue>),
+    Description(String),
+}
+
+type Storage = StagedSaves<TagsSnapshot, Next>;
 
 /// Provisioned served rows, independent saved override, and sole writer.
 #[derive(Default)]
 pub(crate) struct ProfileState {
     profile: ObjectProfile,
-    saved: Option<Vec<BACnetNameValue>>,
     writes: u64,
-    storage: Option<Storage>,
+    /// The storage, on an object built with one: boxed, so an object
+    /// without storage pays one pointer for it.
+    kept: Option<Box<Kept>>,
+}
+
+/// An object's storage and what it holds.
+struct Kept {
+    /// What storage holds for the state the object serves: the Tags a write
+    /// set, and the Description on an object that keeps it here.
+    saved: TagsSnapshot,
+    /// Whether the object keeps a written Description here (#2364): a
+    /// Device, a Lighting Output and a Binary Lighting Output do.
+    keeps_description: bool,
+    storage: Storage,
 }
 
 /// Both application clones and COV copies retain served data but have no
@@ -38,15 +57,34 @@ impl Clone for ProfileState {
     }
 }
 
+/// Put what a write leaves into `snapshot`.
+fn apply(snapshot: &mut TagsSnapshot, next: &Next) {
+    match next {
+        Next::Tags(tags) => snapshot.tags = Some(tags.clone()),
+        Next::Description(text) => snapshot.description = Some(text.clone()),
+    }
+}
+
 impl ProfileState {
+    /// A profile that keeps written Tags in `persistence`, and with
+    /// `keeps_description` a written Description too (#2364), starting from
+    /// what is saved there for `oid`. An object that doesn't keep its
+    /// Description here refuses storage holding one, and never saves one,
+    /// so its file stays version 1.
     pub(crate) fn persistent(
         oid: ObjectIdentifier,
         persistence: Arc<dyn TagsPersistence>,
+        keeps_description: bool,
     ) -> Result<Self, Error> {
         let snapshot = persistence.load(oid)?.unwrap_or_default();
         // As the file backend refuses the same Tags in a file.
         crate::snapshot::tags::check_loaded(&snapshot)
             .map_err(|error| Error::from(error.in_format("Tags snapshot")))?;
+        if !keeps_description && snapshot.description.is_some() {
+            return Err(Error::Encoding(
+                "saved Tags hold a Description, which this object type doesn't keep there".into(),
+            ));
+        }
         let writer = SaveWriter::new(
             format!("bacnet-tags-{oid}-save"),
             move |snapshot: &TagsSnapshot| persistence.save(oid, snapshot),
@@ -57,8 +95,11 @@ impl ProfileState {
             },
         );
         Ok(Self {
-            saved: snapshot.tags,
-            storage: Some(Storage::new(writer)),
+            kept: Some(Box::new(Kept {
+                saved: snapshot,
+                keeps_description,
+                storage: Storage::new(writer),
+            })),
             ..Self::default()
         })
     }
@@ -68,7 +109,7 @@ impl ProfileState {
         // Validate first: refusal must not release another request's stage.
         self.with_storage(Storage::drop_staged);
         if profile.tags.is_some()
-            && let Some(saved) = &self.saved
+            && let Some(saved) = self.kept.as_ref().and_then(|kept| kept.saved.tags.as_ref())
         {
             profile.tags = Some(saved.clone());
         }
@@ -95,47 +136,98 @@ impl ProfileState {
 
     #[cfg(feature = "durable-writes")]
     pub(crate) fn capability(&mut self) -> Option<&mut dyn DurableWrites> {
-        self.storage.is_some().then_some(self)
+        self.kept.is_some().then_some(self)
     }
 
     pub(crate) fn wait_for_saves(&self) {
-        if let Some(storage) = &self.storage {
-            storage.wait_idle();
+        if let Some(kept) = &self.kept {
+            kept.storage.wait_idle();
         }
     }
 
-    fn snapshot(&self) -> TagsSnapshot {
-        TagsSnapshot {
-            tags: self.saved.clone(),
+    /// The Description storage holds, one a write set now or before a
+    /// restart (#2364): the object serves it, and its setter leaves it
+    /// alone. `None` without storage, and on an object that doesn't keep
+    /// its Description here.
+    pub(crate) fn saved_description(&self) -> Option<&str> {
+        self.kept.as_ref()?.saved.description.as_deref()
+    }
+
+    /// Whether storage keeps a write of `value` to `property`: Tags while
+    /// the row is provisioned, and, on an object that keeps it here, a
+    /// Description other than a NULL, which changes nothing.
+    fn keeps(&self, property: P, value: &PropertyValue) -> bool {
+        let Some(kept) = &self.kept else {
+            return false;
+        };
+        match property {
+            P::TAGS => self.profile.tags.is_some(),
+            P::DESCRIPTION => kept.keeps_description && !description::null_write(property, value),
+            _ => false,
         }
     }
 
-    fn install(&mut self, tags: Vec<BACnetNameValue>) {
-        if self.storage.is_some() {
-            self.saved = Some(tags.clone());
+    fn install(&mut self, next: Next) {
+        match next {
+            Next::Tags(tags) => {
+                if let Some(kept) = &mut self.kept {
+                    kept.saved.tags = Some(tags.clone());
+                }
+                self.profile.tags = Some(tags);
+            }
+            // Only an object with storage keeps one.
+            Next::Description(text) => {
+                if let Some(kept) = &mut self.kept {
+                    kept.saved.description = Some(text);
+                }
+            }
         }
-        self.profile.tags = Some(tags);
         self.writes = self.writes.wrapping_add(1);
     }
 
+    /// What a write of `value` to `property`, Tags or a kept Description,
+    /// leaves on top of the `earlier` steps of its request, or its refusal.
+    /// With storage, what the write leaves must fit a save beside the rest
+    /// of what storage would then hold.
     fn next(
         &self,
-        current: &[BACnetNameValue],
+        earlier: &[Step<Next>],
+        property: P,
         index: Option<u32>,
         value: &PropertyValue,
-    ) -> Result<Vec<BACnetNameValue>, Error> {
-        let mut tags = if index.is_some() {
-            current.to_vec()
-        } else {
-            Vec::new()
-        };
-        write_tags(&mut tags, index, value)?;
-        if self.storage.is_some() {
-            encode_snapshot(&TagsSnapshot {
-                tags: Some(tags.clone()),
-            })?;
+    ) -> Result<Next, Error> {
+        let mut staged_tags = None;
+        let mut staged_text = None;
+        for step in earlier {
+            match &step.next {
+                Next::Tags(tags) => staged_tags = Some(tags.as_slice()),
+                Next::Description(text) => staged_text = Some(text.as_str()),
+            }
         }
-        Ok(tags)
+        let next = if property == P::DESCRIPTION {
+            Next::Description(description::written(value)?)
+        } else {
+            let current = staged_tags.or(self.profile.tags.as_deref());
+            let mut tags = match index {
+                Some(_) => current.unwrap_or_default().to_vec(),
+                None => Vec::new(),
+            };
+            write_tags(&mut tags, index, value)?;
+            Next::Tags(tags)
+        };
+        if let Some(kept) = &self.kept {
+            let saved = &kept.saved;
+            match &next {
+                Next::Tags(tags) => fits(
+                    staged_text.or(saved.description.as_deref()),
+                    Some(tags.as_slice()),
+                ),
+                Next::Description(text) => {
+                    fits(Some(text.as_str()), staged_tags.or(saved.tags.as_deref()))
+                }
+            }?;
+        }
+        Ok(next)
     }
 
     pub(crate) fn write(
@@ -147,47 +239,100 @@ impl ProfileState {
         if property != P::TAGS {
             return self.profile.write(property, index, value);
         }
-        Some(self.write_tags(index, value))
+        if self.profile.tags.is_none() {
+            return Some(Err(common::unknown_property_error()));
+        }
+        Some(self.write_kept(P::TAGS, index, value))
     }
 
-    fn write_tags(&mut self, index: Option<u32>, value: &PropertyValue) -> Result<(), Error> {
-        if self.profile.tags.is_none() {
-            return Err(common::unknown_property_error());
+    /// A write of `value` to Description on an object that keeps it here
+    /// (#2364): saved before `description` takes it, and refused with
+    /// DEVICE / OPERATIONAL_PROBLEM, the old text kept, when the save
+    /// fails. `None` when storage keeps nothing for the write (no storage,
+    /// another kind of object, or a NULL): the object then makes it as it
+    /// always has.
+    pub(crate) fn write_description(
+        &mut self,
+        description: &mut String,
+        value: &PropertyValue,
+    ) -> Option<Result<(), Error>> {
+        if !self.keeps(P::DESCRIPTION, value) {
+            return None;
         }
+        let result = self.write_kept(P::DESCRIPTION, None, value);
+        if result.is_ok()
+            && let Some(text) = self.saved_description()
+        {
+            *description = text.to_owned();
+        }
+        Some(result)
+    }
+
+    /// Make a kept write, saving it before the object serves it. A staged
+    /// write takes the state already saved; any other saves now, where it
+    /// is. A write that cannot be saved is refused with DEVICE /
+    /// OPERATIONAL_PROBLEM and the old value stays.
+    fn write_kept(
+        &mut self,
+        property: P,
+        index: Option<u32>,
+        value: &PropertyValue,
+    ) -> Result<(), Error> {
         let refused =
             |_| common::protocol_error(ErrorClass::DEVICE, ErrorCode::OPERATIONAL_PROBLEM);
-        if let Some(mut storage) = self.storage.take() {
-            let claimed = storage.claim(P::TAGS, index, value, self.writes);
-            // Restore attachment before install so it records saved precedence.
-            self.storage = Some(storage);
-            if let Some(claimed) = claimed {
-                let result = claimed.map(|tags| self.install(tags)).map_err(refused);
-                self.with_storage(|_| ());
-                return result;
-            }
+        let base = self.writes;
+        if let Some(kept) = &mut self.kept
+            && let Some(claimed) = kept.storage.claim(property, index, value, base)
+        {
+            // Install before correcting, so the steps the request has still
+            // to take keep the state served now.
+            let result = claimed.map(|next| self.install(next)).map_err(refused);
+            self.with_storage(|_| ());
+            return result;
         }
-        let next = self.next(
-            self.profile.tags.as_deref().expect("checked above"),
-            index,
-            value,
-        )?;
+        // A write the object refuses leaves a staged one alone (#1424).
+        let next = self.next(&[], property, index, value)?;
         self.with_storage(Storage::drop_staged);
-        if let Some(storage) = &mut self.storage {
-            storage
-                .save_now(TagsSnapshot {
-                    tags: Some(next.clone()),
-                })
-                .map_err(refused)?;
+        if let Some(kept) = &mut self.kept {
+            let mut snapshot = kept.saved.clone();
+            apply(&mut snapshot, &next);
+            kept.storage.save_now(snapshot).map_err(refused)?;
         }
         self.install(next);
         Ok(())
     }
 
+    /// Drop a Description a write saved (#2364), so storage keeps none and
+    /// the object's setter applies again; the object goes on serving the
+    /// text until then. Saves where it is and waits for the save; one that
+    /// fails keeps the written Description and returns storage's error.
+    /// Nothing to do without storage or a saved Description.
+    pub(crate) fn clear_written_description(&mut self) -> Result<(), Error> {
+        let Some(kept) = &mut self.kept else {
+            return Ok(());
+        };
+        if kept.saved.description.is_none() {
+            return Ok(());
+        }
+        kept.storage.save_now(TagsSnapshot {
+            tags: kept.saved.tags.clone(),
+            description: None,
+        })?;
+        kept.saved.description = None;
+        // A write staged before this gives way, and keeps the cleared state
+        // as what is served.
+        self.writes = self.writes.wrapping_add(1);
+        self.with_storage(|_| ());
+        Ok(())
+    }
+
+    /// Run `f` on storage; then, if `f` dropped a staged write, queue the
+    /// save that puts storage back to the served state. `None` without
+    /// storage.
     fn with_storage<R>(&mut self, f: impl FnOnce(&mut Storage) -> R) -> Option<R> {
-        let mut storage = self.storage.take()?;
-        let result = f(&mut storage);
-        storage.correct(|| self.snapshot());
-        self.storage = Some(storage);
+        let Kept { saved, storage, .. } = &mut **self.kept.as_mut()?;
+        let result = f(storage);
+        storage.correct(|| saved.clone());
         Some(result)
     }
 }
@@ -206,34 +351,29 @@ impl DurableWrites for ProfileState {
         }])
     }
 
+    /// Fold the request's Tags and kept Description writes into one staged
+    /// save; each leaves its property on top of the ones before it.
     fn stage_writes(&mut self, writes: &[PendingWrite]) -> StageStep {
-        if self.storage.is_none()
-            || self.profile.tags.is_none()
-            || !writes.iter().any(|write| write.property == P::TAGS)
-        {
+        let kept = |write: &PendingWrite| self.keeps(write.property, &write.value);
+        if !writes.iter().any(kept) {
             return StageStep::Skip;
         }
         if let Some(wait) = self.with_storage(Storage::busy).flatten() {
             return StageStep::Busy(wait);
         }
-        let steps = staged::steps::<Vec<BACnetNameValue>>(writes, |earlier, write| {
-            if write.property != P::TAGS {
+        let steps = staged::steps(writes, |earlier, write| {
+            if !self.keeps(write.property, &write.value) {
                 return Ok(None);
             }
-            let current = earlier
-                .last()
-                .map(|step| step.next.as_slice())
-                .unwrap_or_else(|| self.profile.tags.as_deref().expect("checked above"));
-            self.next(current, write.array_index, &write.value)
+            if write.property == P::DESCRIPTION && write.array_index.is_some() {
+                return Err(common::property_is_not_an_array_error());
+            }
+            self.next(earlier, write.property, write.array_index, &write.value)
                 .map(Some)
         });
-        let served = self.snapshot();
-        self.storage.as_mut().expect("checked above").stage(
-            steps,
-            self.writes,
-            served,
-            |snapshot, tags| snapshot.tags = Some(tags.clone()),
-        )
+        let base = self.writes;
+        let Kept { saved, storage, .. } = &mut **self.kept.as_mut().expect("checked above");
+        storage.stage(steps, base, saved.clone(), apply)
     }
 
     fn release_staged_write(&mut self, staged: &SaveWait) {
@@ -241,14 +381,14 @@ impl DurableWrites for ProfileState {
     }
 
     fn has_staged_write(&self) -> bool {
-        self.storage.as_ref().is_some_and(Storage::is_staged)
+        self.kept
+            .as_ref()
+            .is_some_and(|kept| kept.storage.is_staged())
     }
 
     fn settle_forgotten_writes(&mut self) -> Option<SaveWait> {
-        let mut storage = self.storage.take()?;
-        let wait = storage.drop_forgotten(|| self.snapshot());
-        self.storage = Some(storage);
-        Some(wait)
+        let Kept { saved, storage, .. } = &mut **self.kept.as_mut()?;
+        Some(storage.drop_forgotten(|| saved.clone()))
     }
 
     fn expire_staged(&mut self, now: Duration) {

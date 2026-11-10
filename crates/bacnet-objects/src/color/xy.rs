@@ -130,13 +130,15 @@ impl ColorObject {
     /// The object then saves each new Present_Value on its own writer
     /// thread; a change doesn't wait for its save, and a save that fails is
     /// logged and tried again (see [`ColorOutputPersistence`]). A
-    /// Default_Color write saves first and is refused when the save fails.
+    /// Default_Color write saves first and is refused when the save fails,
+    /// and so does a Description write (#2364), whose saved text is served
+    /// from the start.
     /// With Default_Color (0, 0), the device's start keeps the saved colour
     /// (Clause 12.X.8).
     ///
     /// Fails with storage's error when what it holds can't be loaded, and
-    /// when it holds a colour temperature or a coordinate outside 0.0 to
-    /// 1.0.
+    /// when it holds a colour temperature, a coordinate outside 0.0 to 1.0
+    /// or a Description past 16 KiB.
     pub fn with_output_persistence(
         mut self,
         persistence: Arc<dyn ColorOutputPersistence>,
@@ -158,6 +160,9 @@ impl ColorObject {
         }
         if let Some(color) = xy(saved.default)? {
             self.default_color = color;
+        }
+        if let Some(text) = saved.description {
+            self.description = text;
         }
         Ok(self)
     }
@@ -226,10 +231,24 @@ impl ColorObject {
         self.output.clear_written_default()
     }
 
-    /// Stage the request's Default_Color writes on the output storage.
+    /// Drop the Description a write saved (#2364): storage keeps none from
+    /// now on, and a rebuilt object starts without it. The text served now
+    /// stays until a write changes it. Saves before it returns; a save that
+    /// fails keeps the written Description and returns storage's error.
+    /// Does nothing without storage or a saved Description.
+    /// [`clear_written_default`](Self::clear_written_default) leaves a
+    /// saved Description alone.
+    /// Call it before the object joins the database, not under the database
+    /// guard: it waits for its save.
+    pub fn clear_written_description(&mut self) -> Result<(), Error> {
+        self.output.clear_written_description()
+    }
+
+    /// Stage the request's Default_Color and Description writes on the
+    /// output storage.
     fn stage_default(&mut self, writes: &[crate::durable::PendingWrite]) -> StageStep {
         self.output
-            .stage_defaults(writes, PropertyIdentifier::DEFAULT_COLOR, written_default)
+            .stage_kept(writes, PropertyIdentifier::DEFAULT_COLOR, written_default)
     }
 
     /// Drive the output as the device's start does (#1526); the server
@@ -299,7 +318,7 @@ impl ColorObject {
         persistence: Arc<dyn TagsPersistence>,
     ) -> Result<Self, Error> {
         let mut object = Self::new(instance, name)?;
-        object.profile = ProfileState::persistent(object.oid, persistence)?;
+        object.profile = ProfileState::persistent(object.oid, persistence, false)?;
         Ok(object)
     }
 
@@ -509,6 +528,11 @@ impl BACnetObject for ColorObject {
         priority: Option<u8>,
     ) -> Result<(), Error> {
         crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
+        if property == PropertyIdentifier::DESCRIPTION
+            && let Some(result) = self.output.write_description(&mut self.description, &value)
+        {
+            return result;
+        }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }

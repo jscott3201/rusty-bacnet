@@ -420,13 +420,37 @@ impl DeviceObject {
     /// Build with application-owned Tags storage. Saved Tags override configured
     /// Tags only while [`Self::set_profile`] provisions the row. Loaded data must
     /// satisfy the shared Tags rules and opt-in 1 MiB snapshot limit.
+    ///
+    /// The storage keeps a written Description too (#2364), at most 16 KiB:
+    /// it is saved before the write is answered, a write whose save fails
+    /// is refused with DEVICE / OPERATIONAL_PROBLEM, and the saved one is
+    /// served from the start and wins over
+    /// [`set_description`](Self::set_description).
     pub fn with_tags_persistence(
         config: DeviceConfig,
         persistence: Arc<dyn TagsPersistence>,
     ) -> Result<Self, Error> {
         let mut object = Self::new(config)?;
-        object.profile = ProfileState::persistent(object.oid, persistence)?;
+        object.profile = ProfileState::persistent(object.oid, persistence, true)?;
+        if let Some(text) = object.profile.saved_description() {
+            let saved = PropertyValue::CharacterString(text.to_owned());
+            object
+                .properties
+                .insert(PropertyIdentifier::DESCRIPTION, saved);
+        }
         Ok(object)
+    }
+
+    /// Drop the Description a write saved (#2364): storage keeps none from
+    /// now on, so [`set_description`](Self::set_description) applies again.
+    /// The text served now stays until it, or a write, changes it. Saves
+    /// before it returns; a save that fails keeps the written Description
+    /// and returns storage's error. Does nothing without storage or a
+    /// saved Description.
+    /// Call it before the object joins the database, as the setters are,
+    /// not under the database guard: it waits for its save.
+    pub fn clear_written_description(&mut self) -> Result<(), Error> {
+        self.profile.clear_written_description()
     }
 
     /// Provision independent optional Tags, Profile_Location and Profile_Name
@@ -544,8 +568,14 @@ impl DeviceObject {
         self.oid.instance_number()
     }
 
-    /// Set the description string.
+    /// Set the description string. Once storage holds a Description a
+    /// write set ([`with_tags_persistence`](Self::with_tags_persistence)),
+    /// that one wins and this leaves it alone (#2364), until
+    /// [`clear_written_description`](Self::clear_written_description).
     pub fn set_description(&mut self, desc: impl Into<String>) {
+        if self.profile.saved_description().is_some() {
+            return;
+        }
         self.properties.insert(
             PropertyIdentifier::DESCRIPTION,
             PropertyValue::CharacterString(desc.into()),
@@ -774,6 +804,14 @@ impl BACnetObject for DeviceObject {
             // Clause 15.9: relinquishing a non-commandable writable property
             // succeeds without changing its value when no other error exists.
             if value == PropertyValue::Null {
+                return Ok(());
+            }
+            // With storage the text is saved before it is served (#2364).
+            let mut kept = String::new();
+            if let Some(result) = self.profile.write_description(&mut kept, &value) {
+                result?;
+                self.properties
+                    .insert(property, PropertyValue::CharacterString(kept));
                 return Ok(());
             }
             if let PropertyValue::CharacterString(_) = &value {

@@ -5,6 +5,7 @@
 use crate::prelude::*;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
+use bytes::BufMut;
 
 use super::{SnapshotError, SnapshotErrorKind};
 use crate::write_config::description::MAX_OCTETS as MAX_DESCRIPTION_OCTETS;
@@ -117,14 +118,14 @@ pub(crate) fn open_described<'a>(
 
 /// Append a kept Description: its length in four big-endian octets, then
 /// its UTF-8, at most [`MAX_DESCRIPTION_OCTETS`].
-pub(crate) fn put_description(body: &mut Vec<u8>, text: &str) -> Result<(), SnapshotError> {
+pub(crate) fn put_description(body: &mut impl BufMut, text: &str) -> Result<(), SnapshotError> {
     if text.len() > MAX_DESCRIPTION_OCTETS {
         return Err(SnapshotError::out_of_range(
             "holds a Description past its cap",
         ));
     }
-    body.extend_from_slice(&(text.len() as u32).to_be_bytes());
-    body.extend_from_slice(text.as_bytes());
+    body.put_slice(&(text.len() as u32).to_be_bytes());
+    body.put_slice(text.as_bytes());
     Ok(())
 }
 

@@ -144,9 +144,14 @@ impl LightingOutputObject {
         })
     }
 
-    /// Set the description string.
+    /// Set the description string. Once storage holds a Description a
+    /// write set ([`with_tags_persistence`](Self::with_tags_persistence)),
+    /// that one wins and this leaves it alone (#2364), until
+    /// [`clear_written_description`](Self::clear_written_description).
     pub fn set_description(&mut self, desc: impl Into<String>) {
-        self.description = desc.into();
+        if self.profile.saved_description().is_none() {
+            self.description = desc.into();
+        }
     }
 
     /// Recalculate present-value from the priority array.
@@ -284,14 +289,35 @@ impl LightingOutputObject {
     /// Build with application-owned Tags storage. Saved Tags override configured
     /// Tags only while `set_profile` provisions the row. Loaded data must satisfy
     /// the normal Tags rules and the opt-in 1 MiB snapshot limit.
+    ///
+    /// The storage keeps a written Description too (#2364), at most 16 KiB:
+    /// it is saved before the write is answered, a write whose save fails
+    /// is refused with DEVICE / OPERATIONAL_PROBLEM, and the saved one is
+    /// served from the start and wins over
+    /// [`set_description`](Self::set_description).
     pub fn with_tags_persistence(
         instance: u32,
         name: impl Into<String>,
         persistence: Arc<dyn TagsPersistence>,
     ) -> Result<Self, Error> {
         let mut object = Self::new(instance, name)?;
-        object.profile = ProfileState::persistent(object.oid, persistence)?;
+        object.profile = ProfileState::persistent(object.oid, persistence, true)?;
+        if let Some(text) = object.profile.saved_description() {
+            object.description = text.to_owned();
+        }
         Ok(object)
+    }
+
+    /// Drop the Description a write saved (#2364): storage keeps none from
+    /// now on, so [`set_description`](Self::set_description) applies again.
+    /// The text served now stays until it, or a write, changes it. Saves
+    /// before it returns; a save that fails keeps the written Description
+    /// and returns storage's error. Does nothing without storage or a
+    /// saved Description.
+    /// Call it before the object joins the database, as the setters are,
+    /// not under the database guard: it waits for its save.
+    pub fn clear_written_description(&mut self) -> Result<(), Error> {
+        self.profile.clear_written_description()
     }
 
     /// Wait for queued save attempts to finish. This is not a success receipt;
@@ -607,6 +633,13 @@ impl BACnetObject for LightingOutputObject {
         }
         if let Some(result) =
             common::write_out_of_service(&mut self.out_of_service, property, &value)
+        {
+            return result;
+        }
+        if property == PropertyIdentifier::DESCRIPTION
+            && let Some(result) = self
+                .profile
+                .write_description(&mut self.description, &value)
         {
             return result;
         }

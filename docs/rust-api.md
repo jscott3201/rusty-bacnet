@@ -4648,7 +4648,11 @@ writes in the same file, with the same rules:
 - the Trend Log, Trend Log Multiple and Event Log, beside their written
   reporting settings, through their `with_persistence`;
 - Notification Class, Notification Forwarder and Access Rights, through
-  their `with_persistence`.
+  their `with_persistence`;
+- Device and the two lighting outputs (Lighting Output, Binary Lighting
+  Output), in their Tags storage, through `with_tags_persistence`;
+- Color and Color Temperature, with Present_Value and a written default,
+  through `with_output_persistence`.
 
 A write of Description is saved before it is answered, refused with DEVICE /
 OPERATIONAL_PROBLEM when the save fails, and staged by the server with the
@@ -4657,15 +4661,28 @@ request's other kept writes, one save for them all. A Description past
 anything is saved; a long one the object took before it had storage refuses
 no other write. A NULL succeeds, changes nothing and saves nothing. A saved
 Description wins over `set_description` (on the analog, binary and
-multi-state objects, Event Enrollment, the logs, Notification Class and
-Notification Forwarder; the others have no setter) until
-`clear_written_reporting`, or a Timer's or Channel's `clear_written_config`,
-drops it; Notification Class, Notification Forwarder and Access Rights have
-no clear, so a saved Description wins until the file goes. A log's
-`written_reporting().description`, and the `description` field of
-`TimerWriteConfig`, `ChannelWriteConfig`, `LogReportingSettings`,
-`NotificationClassSnapshot`, `ForwarderSnapshot` and `AccessRightsSnapshot`,
-show what is saved.
+multi-state objects, Event Enrollment, the logs, Notification Class,
+Notification Forwarder, Device and the two lighting outputs; the others have
+no setter) until the type's clear drops it:
+
+- `clear_written_reporting` on the thirteen reporting types and the logs,
+  with their written reporting settings;
+- `clear_written_config` on a Timer and a Channel, with the rest of what
+  they keep;
+- `clear_written_description` on Notification Class, Notification
+  Forwarder, Access Rights, Device, Lighting Output, Binary Lighting Output,
+  Color and Color Temperature, which drops the Description alone. A colour
+  object's `clear_written_default` leaves it in place.
+
+Each clear saves before it returns, keeps what was written when the save
+fails and returns storage's error, and does nothing without storage or a
+saved value. Call it before the object joins the database, as the setters
+are: it waits for its save. The text served stays until the setter or a
+write changes it. A log's `written_reporting().description`, and the
+`description` field of `TimerWriteConfig`, `ChannelWriteConfig`,
+`LogReportingSettings`, `NotificationClassSnapshot`, `ForwarderSnapshot`,
+`AccessRightsSnapshot`, `TagsSnapshot` and `ColorOutputSnapshot`, show what
+is saved.
 
 Storage holds it as kind 5 of `RBNWCF01`
 (`snapshot::write_config::KIND_WITH_DESCRIPTION`): the Description, then the
@@ -4684,10 +4701,29 @@ build refuses one with it as an unknown version:
   written reporting settings;
 - `RBNNCL02`, `RBNFWD02` and `RBNACR02` (each module's
   `MAGIC_WITH_DESCRIPTION`): the Description, its length in four octets and
-  its UTF-8, between the header and version 1's body.
+  its UTF-8, between the header and version 1's body;
+- `RBNTAG02` (`snapshot::tags::MAGIC_WITH_DESCRIPTION`), the same way,
+  inside the Tags file's 1 MiB: a Description or Tags write that would not
+  fit beside the other is refused with RESOURCES /
+  NO_SPACE_TO_WRITE_PROPERTY. Only a Device, a Lighting Output and a Binary
+  Lighting Output keep their Description there. Every other object with
+  Tags storage goes on writing `RBNTAG01` and fails to build on storage
+  that holds a Description;
+- `RBNCLR03` (`snapshot::color::MAGIC_WITH_DESCRIPTION`): the Description
+  between the header and version 2's body. Versions 1 to 3 all load, and
+  the file's cap rises from 64 octets to 16,452.
 
-Every other object type, Device, the colour and lighting objects included,
-keeps a written Description in memory only: it lasts until a restart.
+Once a clear leaves no Description saved, the next save writes the older
+version again.
+
+An endpoint session's own Device keeps a Description written through
+`with_device_writes` the same way, when it was built
+`with_tags_persistence`: the responder stages the save and awaits it with
+the database guard dropped before it answers.
+
+So every type with a store keeps a written Description. An object built
+without storage, and a type that has none, keeps it in memory only: it
+lasts until a restart.
 
 #### Creation and deletion
 
@@ -5388,11 +5424,11 @@ implements `From<SnapshotError>`, the mapping the file backends use.
 | `snapshot::log` | `LogSnapshot<R>` (Trend Log, Trend Log Multiple, Event Log) | `RBLOGS01`, version 2; version 1 still loads | `FileLogPersistence` (one slot of the two) |
 | `snapshot::audit_log` | `AuditLogSnapshot` | `RBALOG01`, version 3; versions 1 and 2 still load | `FileAuditLogPersistence` (one slot of the two) |
 | `snapshot::write_config` | `WriteConfigSnapshot` (Timer, Channel, an intrinsic reporter's reporting settings, each with a written Description) | `RBNWCF01`, kinds 2 to 5; kind 1 still loads | `FileWriteConfigPersistence` |
-| `snapshot::notification_class` | `NotificationClassSnapshot` | `RBNNCL01` | `FileNotificationClassPersistence` |
-| `snapshot::notification_forwarder` | `ForwarderSnapshot` | `RBNFWD01` | `FileNotificationForwarderPersistence` |
-| `snapshot::tags` | `TagsSnapshot` | `RBNTAG01` | `FileTagsPersistence` |
-| `snapshot::color` | `ColorOutputSnapshot` (Color, Color Temperature) | `RBNCLR02`; `RBNCLR01` still loads | `FileColorOutputPersistence` |
-| `snapshot::access_rights` | `AccessRightsSnapshot` | `RBNACR01` | `FileAccessRightsPersistence` |
+| `snapshot::notification_class` | `NotificationClassSnapshot` | `RBNNCL01`; `RBNNCL02` with a written Description | `FileNotificationClassPersistence` |
+| `snapshot::notification_forwarder` | `ForwarderSnapshot` | `RBNFWD01`; `RBNFWD02` with a written Description | `FileNotificationForwarderPersistence` |
+| `snapshot::tags` | `TagsSnapshot` | `RBNTAG01`; `RBNTAG02` with a written Description | `FileTagsPersistence` |
+| `snapshot::color` | `ColorOutputSnapshot` (Color, Color Temperature) | `RBNCLR02`; `RBNCLR03` with a written Description; `RBNCLR01` still loads | `FileColorOutputPersistence` |
+| `snapshot::access_rights` | `AccessRightsSnapshot` | `RBNACR01`; `RBNACR02` with a written Description | `FileAccessRightsPersistence` |
 
 ```rust
 use bacnet_objects::snapshot::write_config;
@@ -7046,13 +7082,19 @@ the one `set_default_color` or `set_default_color_temperature` configures at
 the next start (`default_color_saved` and `default_color_temperature_saved`
 say so) until `clear_written_default` drops it. In Python,
 `clear_written_default=True` on `add_color` and `add_color_temperature` does
-the same before `default_color` applies. A `ColorOutputSnapshot` holds both, each an `Option`: a
-Present_Value once something drove the output, a default once a write set it.
+the same before `default_color` applies. A Description a peer writes is kept
+with them (#2364, see [Keeping a written
+Description](#keeping-a-written-description-2364)); `clear_written_description`
+drops it, and `clear_written_default` leaves it alone. A `ColorOutputSnapshot`
+holds all three, each an `Option`: a Present_Value once something drove the
+output, a default and a Description once a write set them. It is no longer
+`Copy`.
 `FileColorOutputPersistence::new(path)` is the bundled backend: a tagged
 header with the object identifier, a kind octet, then Present_Value and the
 default, each behind a presence octet (two big-endian REALs, or a 32-bit
 kelvin), replaced whole through a synchronized temporary file. A file of the
-previous version, with Present_Value alone, still loads. A file of the wrong
+first version, with Present_Value alone, still loads, and a file holding a
+written Description takes the third. A file of the wrong
 size, kind or object, or holding a value out of range, fails
 `with_output_persistence` with an error.
 
@@ -11263,6 +11305,13 @@ Typed Device authority is revalidated under the commit lock, including when
 the lower-level responder is used directly. Other targets, properties and
 WritePropertyMultiple remain excluded, including source Reporter configuration.
 
+The Description lives in memory unless the Device was built with
+`DeviceObject::with_tags_persistence`. Then the responder saves a written
+one before it answers, with the database guard dropped, and refuses the
+write with DEVICE / OPERATIONAL_PROBLEM when the save fails; the restarted
+endpoint serves it over `set_description` (#2364, see [Keeping a written
+Description](#keeping-a-written-description-2364)).
+
 Deterministic request/reply tests cover authorization, framing, routing,
 reply channels, group silence, segmentation and shutdown; a B/IP loopback test
 covers an authorized write and service-profile readback. This is not general
@@ -11696,6 +11745,11 @@ The Output constructors likewise preserve their normal arguments:
 
 Device accepts `DeviceObject::with_tags_persistence(config, storage)`; the existing
 `DeviceConfig` and `DeviceObject::new(config)` keep their defaults.
+
+On a Device, a Lighting Output and a Binary Lighting Output, the same storage
+keeps a written Description (#2364, see [Keeping a written
+Description](#keeping-a-written-description-2364)), in a `TagsSnapshot`'s
+`description`. Every other object leaves that field `None`.
 
 For example, construct a writable Analog Value with
 `AnalogValueObject::with_tags_persistence(1, "Temperature", EngineeringUnits::DEGREES_CELSIUS, PresentValueAccess::Writable, storage)?`,

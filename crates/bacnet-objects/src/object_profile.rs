@@ -30,6 +30,11 @@
 //! application-owned storage:
 //! successful writes then override configured Tags across reconstruction.
 //! Saved Tags never provision an absent row. See [`TagsPersistence`].
+//!
+//! A Device, a Lighting Output and a Binary Lighting Output keep a written
+//! Description in the same storage (#2364), provisioned Tags or not. The
+//! other objects keep theirs in storage of another kind, or in none, and
+//! refuse Tags storage that holds one.
 
 use crate::prelude::*;
 use bacnet_encoding::constructed::{decode_name_value, encode_name_value};

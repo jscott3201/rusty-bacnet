@@ -75,6 +75,7 @@ pub(super) fn profile(name: &str) -> ObjectProfile {
 pub(super) fn snapshot(name: &str) -> TagsSnapshot {
     TagsSnapshot {
         tags: Some(tags(name)),
+        description: None,
     }
 }
 pub(super) fn framed(tags: &[BACnetNameValue]) -> PropertyValue {
@@ -95,7 +96,7 @@ pub(super) fn whole(name: &str) -> PendingWrite {
     write(None, framed(&tags(name)))
 }
 pub(super) fn state(store: &Arc<Memory>) -> ProfileState {
-    let mut state = ProfileState::persistent(oid(), store.clone()).unwrap();
+    let mut state = ProfileState::persistent(oid(), store.clone(), false).unwrap();
     state.provision(profile("configured")).unwrap();
     state
 }

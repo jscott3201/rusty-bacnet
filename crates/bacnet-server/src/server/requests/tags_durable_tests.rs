@@ -258,6 +258,7 @@ async fn all_profile_objects_combined_datetime_wire_writes_leave_served_and_save
         let storage = Arc::new(Storage::default());
         let saved = TagsSnapshot {
             tags: Some(vec![BACnetNameValue::semantic("exhaust")]),
+            description: None,
         };
         *storage.saved.lock().unwrap() = Some(saved.clone());
         let (fixture, oid) = served_by(kind, &storage).await;
@@ -360,6 +361,7 @@ async fn failed_save_refuses_wire_write_without_publishing_or_replacing_storage(
         let storage = Arc::new(Storage::default());
         let old = TagsSnapshot {
             tags: Some(vec![BACnetNameValue::semantic("exhaust")]),
+            description: None,
         };
         *storage.saved.lock().unwrap() = Some(old.clone());
         let (fixture, oid) = served_by(kind, &storage).await;
@@ -465,6 +467,7 @@ async fn all_profile_objects_stop_cancels_held_write_and_waits_for_successful_co
                 "floor",
                 PropertyValue::Unsigned(3),
             )]),
+            description: None,
         };
         *storage.saved.lock().unwrap() = Some(served.clone());
         let (server, inbound) = server(kind, &storage).await;

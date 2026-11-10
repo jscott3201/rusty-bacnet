@@ -120,6 +120,7 @@ fn storage() -> Arc<Storage> {
     let storage = Arc::new(Storage::default());
     *storage.saved.lock().unwrap() = Some(TagsSnapshot {
         tags: Some(vec![BACnetNameValue::semantic("exhaust")]),
+        description: None,
     });
     storage
 }
