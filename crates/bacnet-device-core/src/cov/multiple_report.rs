@@ -829,3 +829,10 @@ pub fn hold_off(
         now.saturating_add(table.flight_timing().hold_off()),
     );
 }
+
+#[cfg(test)]
+#[path = "multiple_report_tests.rs"]
+mod tests;
+#[cfg(test)]
+#[path = "multiple_report_told_tests.rs"]
+mod told_tests;
