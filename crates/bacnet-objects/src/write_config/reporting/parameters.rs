@@ -14,8 +14,10 @@
 //! was written: the state count and State_Text aren't kept, so a peer that
 //! added a state and listed it leaves such a file, and an object must still
 //! open on it. The object then holds what a local shrink of its states
-//! leaves it holding, and a Multi-state Value shows it as
-//! CONFIGURATION_ERROR until the list or the count is repaired.
+//! leaves it holding. A Multi-state Value shows it as CONFIGURATION_ERROR
+//! and stays in FAULT, with no OFFNORMAL on any listed state, until the
+//! list or the count is repaired; a Multi-state Input's other entries go on
+//! alarming.
 
 use bacnet_types::enums::{BinaryPV, ObjectType, PropertyIdentifier as P};
 use bacnet_types::error::Error;

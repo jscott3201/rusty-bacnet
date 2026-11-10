@@ -265,10 +265,13 @@ macro_rules! impl_reporting_persistence {
             /// Number_Of_States are restored as written. The state count
             /// and State_Text aren't kept, so a peer that added a state and
             /// listed it, or an application that now builds the object with
-            /// fewer states, leaves such a list. The object serves it; a
-            /// write of the same list is still refused; and a Multi-state
-            /// Value reports CONFIGURATION_ERROR until a list within its
-            /// states is written or the states are there again.
+            /// fewer states, leaves such a list. The object serves it, and
+            /// a write of the same list is still refused. A Multi-state
+            /// Input goes on alarming on the entries within its states. A
+            /// Multi-state Value reports CONFIGURATION_ERROR and is in
+            /// FAULT, raising no OFFNORMAL on any listed state, until a
+            /// list within its states is written or the states are there
+            /// again.
             pub fn with_reporting_persistence(
                 self,
                 persistence: alloc::sync::Arc<dyn $crate::write_config::WriteConfigPersistence>,

@@ -62,10 +62,14 @@
 //! application builds the object with fewer states. Such a list is restored
 //! as it was written, since two writes the device accepted mustn't stop it
 //! from starting. The object holds it as it holds a list a local
-//! `set_number_of_states` shrink leaves: it serves it, the entries within
-//! its states still alarm, a write of the same list is refused, and a
-//! Multi-state Value reports CONFIGURATION_ERROR until a list within its
-//! states is written or the states are there again.
+//! `set_number_of_states` shrink leaves: it serves it, and a write of the
+//! same list is refused. What follows differs by type, and is the cost of
+//! opening. A Multi-state Input reports no fault, and the entries within
+//! its states still alarm. A Multi-state Value reports CONFIGURATION_ERROR
+//! and goes to FAULT, and while it is there no listed state raises
+//! OFFNORMAL, the ones within its states included: it raises no alarm on
+//! its value until a list within its states is written or the states are
+//! there again.
 //!
 //! Each of these object types keeps a written Description in the same file
 //! too (#2364), as kind 5 of the format wrapped around the kind it writes,

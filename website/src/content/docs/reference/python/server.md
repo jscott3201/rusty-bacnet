@@ -287,7 +287,8 @@ file is read before it is cleared. One such value doesn't:
 saved Alarm\_Values naming a state past `number_of_states` are
 restored as written, since the state count and State\_Text aren't
 kept and a peer may have added the state before the restart. A
-Multi-state Value then reports CONFIGURATION\_ERROR until a list
+Multi-state Value then reports CONFIGURATION\_ERROR and is in
+FAULT, raising no OFFNORMAL on any listed state, until a list
 within its states is written. Every analog, binary and
 multi-state builder takes both, as do `add_access_door`,
 `add_access_zone`, `add_event_enrollment` and

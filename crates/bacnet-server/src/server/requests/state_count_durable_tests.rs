@@ -167,3 +167,63 @@ async fn a_request_that_adds_a_state_and_lists_it_saves_off_the_guard() {
         assert_eq!(fixture.read(object, P::NUMBER_OF_STATES).await, four);
     }
 }
+
+/// State_Text reaches the stage only where it can matter: in a
+/// WritePropertyMultiple, ahead of a write the same object saves. A lone
+/// State_Text write, by WriteProperty, by a local write or as a list edit,
+/// stages nothing, so it takes the database guard no extra time; nor does
+/// a WritePropertyMultiple where no saved write to the object follows it.
+#[test]
+fn state_text_is_staged_only_ahead_of_a_saved_write_to_its_object() {
+    use super::mutation_list_wire_tests::list_request;
+    use crate::server::durable_writes::DurableTarget;
+
+    let (index, count) = four_states();
+    for kind in LISTED {
+        let object = oid(kind, INSTANCE);
+        let lone = write_property(kind, P::STATE_TEXT, index, value(count.clone()));
+        assert!(DurableTarget::write_property(&lone).is_empty(), "{kind:?}");
+        assert!(DurableTarget::local(object, P::STATE_TEXT, index, &count).is_empty());
+        let edit = list_request(object, P::STATE_TEXT, None, &value(count.clone()));
+        assert!(DurableTarget::list_element(&edit, false).is_empty());
+        // The saved write itself still stages by every path.
+        let saved = write_property(kind, P::ALARM_VALUES, None, value(list()));
+        assert_eq!(DurableTarget::write_property(&saved).len(), 1, "{kind:?}");
+
+        let states = || attempt(P::STATE_TEXT, index, count.clone());
+        let listed = || attempt(P::ALARM_VALUES, None, list());
+        let delay = || attempt(P::TIME_DELAY, None, PropertyValue::Unsigned(7));
+        let other = oid(ObjectType::ANALOG_INPUT, INSTANCE);
+        let staged = |specs: Vec<(ObjectIdentifier, Vec<BACnetPropertyValue>)>| {
+            let specs = specs.into_iter();
+            let request = wpm(specs
+                .map(
+                    |(object_identifier, list_of_properties)| WriteAccessSpecification {
+                        object_identifier,
+                        list_of_properties,
+                    },
+                )
+                .collect());
+            DurableTarget::write_property_multiple(&request).len()
+        };
+        assert_eq!(staged(vec![(object, vec![states()])]), 0, "{kind:?}");
+        assert_eq!(staged(vec![(object, vec![states(), listed()])]), 2);
+        assert_eq!(staged(vec![(object, vec![listed(), states()])]), 1);
+        assert_eq!(staged(vec![(object, vec![states(), states(), delay()])]), 3);
+        // A saved write to another object doesn't bring it in.
+        assert_eq!(
+            staged(vec![(object, vec![states()]), (other, vec![delay()])]),
+            1,
+            "{kind:?}"
+        );
+        assert_eq!(
+            staged(vec![
+                (object, vec![states()]),
+                (other, vec![delay()]),
+                (object, vec![listed()])
+            ]),
+            3,
+            "{kind:?}"
+        );
+    }
+}

@@ -3069,12 +3069,15 @@ kept: after a restart the count is the builder's `number_of_states` again,
 whatever a peer made of it through State_Text. So if a peer added a state
 and listed it, or the application now passes a smaller `number_of_states`,
 the file names a state the object doesn't have. The builder doesn't raise.
-The list is restored as it was written and read back that way, its entries
-within the count still alarm, and a write of the same list is refused. A
-Multi-state Value reports Reliability CONFIGURATION_ERROR until a list
-within its states is written or the state is added again; a Multi-state
-Input reports nothing. `clear_written_reporting=True` drops the list like
-any other saved value.
+The list is restored as it was written and read back that way, and a write
+of the same list is refused. What follows differs by type, and is the cost
+of letting the object start. A Multi-state Input reports no fault and goes
+on alarming on the entries within its states. A Multi-state Value reports
+Reliability CONFIGURATION_ERROR and is in FAULT; while it is, no listed
+state raises OFFNORMAL, the ones within its states included, so the object
+raises no alarm on its value until a list within its states is written or
+the state is added again. `clear_written_reporting=True` drops the list
+like any other saved value.
 
 These builders take no keyword for the parameters, so an application sets
 its own limits, alarm values or delays with `write_property_local` once the

@@ -4742,8 +4742,12 @@ write of one lasts until a restart, as before.
 - **Validated on load.** Storage holding a value the object refuses on the
   wire, or a parameter the object's type doesn't keep, fails
   `with_reporting_persistence`; nothing reaches the detector. The one
-  exception is the Alarm_Values entry past Number_Of_States, below. In a
-  file, a
+  exception is the Alarm_Values entry past Number_Of_States, below.
+  `clear_written_reporting()` needs the object, so it can't drop storage
+  the builder call refuses; an application that would rather start from
+  nothing than delete the file replaces it without loading it:
+  `persistence.save(oid, &WriteConfigSnapshot::Reporting(Default::default()))`.
+  In a file, a
   bad value is damage, and a parameter this build doesn't keep for the
   object's type is an unknown kind (`SnapshotErrorKind::UnknownKind(6)`,
   `is_damage()` false): a later release may keep it, so a backend with two
@@ -4757,13 +4761,19 @@ write of one lasts until a restart, as before.
   State_Text and then listed it leaves such a list, and so does an
   application that rebuilds the object with fewer states; neither may stop
   the object from starting. The object then holds what a local
-  `set_number_of_states` shrink leaves it holding: it serves the list, the
-  entries within its states still alarm, and a write of the same list is
-  refused. A Multi-state Value reports CONFIGURATION_ERROR, and so FAULT,
-  from its first evaluation until a list within its states is written or
-  the states are there again; a Multi-state Input reports nothing. A peer
-  can't get there by removing states: a State_Text write that would strand
-  a listed state is refused.
+  `set_number_of_states` shrink leaves it holding: it serves the list, and
+  a write of the same list is refused. What follows differs by type, and
+  is the cost of letting the object start:
+  - a Multi-state Input reports no fault, and goes on alarming on the
+    entries within its states;
+  - a Multi-state Value reports CONFIGURATION_ERROR and is in FAULT from
+    its first evaluation. While it is, no listed state raises OFFNORMAL,
+    the ones within its states included: the object raises no alarm on
+    its value until a list within its states is written or the states are
+    there again.
+
+  A peer can't get there by removing states: a State_Text write that would
+  strand a listed state is refused.
 - **One request that adds a state and lists it.** A WritePropertyMultiple
   that writes State_Text and then Alarm_Values naming a state it adds
   saves once, off the database guard: the server hands a Multi-state Input

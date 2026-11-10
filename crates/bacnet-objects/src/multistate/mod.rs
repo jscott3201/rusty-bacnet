@@ -136,7 +136,9 @@ pub const MAX_NUMBER_OF_STATES: u32 = 1024;
 /// held state that names one of the `current` states. Both refusals are
 /// VALUE_OUT_OF_RANGE, the code WriteProperty gives a value the property
 /// can't take (Clause 15.9.1.3.1). A held state already past the current
-/// count, which only a local shrink can leave, doesn't block a new count.
+/// count doesn't block a new count. A local shrink can leave one, and so
+/// can an Alarm_Values list restored from storage (#2331), since the count
+/// isn't kept.
 fn check_state_count(
     current: u32,
     count: u64,

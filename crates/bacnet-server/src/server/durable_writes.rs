@@ -105,16 +105,14 @@ enum TargetValue {
 /// (#2331). The nine analog, binary and multi-state types save their event
 /// algorithm parameters too (the two time delays, an analog object's
 /// limits, Deadband and Limit_Enable, Alarm_Value and Alarm_Values;
-/// [`kept_parameter`]), and a Multi-state Input or Value stages State_Text
-/// beside them, though it saves nothing for it
-/// ([`sizes_listed_states`]). A Timer, a Channel, the thirteen types
+/// [`kept_parameter`]). A Timer, a Channel, the thirteen types
 /// with a reporting store,
 /// the three logs, a Notification Class, a forwarder, an Access Rights
 /// object, a Device, a Lighting Output, a Binary Lighting Output and the
 /// two colour objects keep a written Description too (#2364).
-/// Under a policy
-/// that decides mutations, only these attempts of a WritePropertyMultiple are decided
-/// ahead of the handler (#1321).
+/// Under a policy that decides mutations, every attempt of a
+/// WritePropertyMultiple is decided ahead of the handler (#2032); of
+/// those allowed, these are the ones staged (#1321).
 ///
 /// An object type that takes up [`DurableWrites`] is listed here too, or
 /// the server never stages its writes and they save in place under the
@@ -163,7 +161,6 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
             property == PropertyIdentifier::TAGS
                 || kept_with_reporting(property)
                 || kept_parameter(oid.object_type(), property)
-                || sizes_listed_states(oid.object_type(), property)
         }
         // These keep a written Description in their Tags storage (#2364).
         ObjectType::LIGHTING_OUTPUT | ObjectType::BINARY_LIGHTING_OUTPUT | ObjectType::DEVICE => {
@@ -232,11 +229,13 @@ fn kept_parameter(object_type: ObjectType, property: PropertyIdentifier) -> bool
 }
 
 /// State_Text on a Multi-state Input or Value. The object saves nothing
-/// for it, but it sets Number_Of_States, which bounds the Alarm_Values
-/// entries the object takes. Handed to the stage with the request's other
-/// writes, it lets a list naming a state the same request adds be checked
-/// against the count it will meet, so the request saves off the guard like
-/// any other (#2331). Alone it stages nothing.
+/// for it, so [`may_save`] leaves it out, but it sets Number_Of_States,
+/// which bounds the Alarm_Values entries the object takes. A
+/// WritePropertyMultiple hands it to the stage ahead of a write the object
+/// does save, so a list naming a state the same request adds is checked
+/// against the count it will meet, and the request saves off the guard
+/// like any other (#2331). Only that service writes two properties in one
+/// request, so no other path stages it.
 fn sizes_listed_states(object_type: ObjectType, property: PropertyIdentifier) -> bool {
     property == PropertyIdentifier::STATE_TEXT
         && bacnet_objects::snapshot::write_config::keeps_parameter(
@@ -315,7 +314,10 @@ impl DurableTarget {
     /// The attempts of a WritePropertyMultiple request on objects that may
     /// save them, in wire order, each with the write it makes. They end at
     /// the first such attempt whose value doesn't decode, since the request
-    /// stops there, as it does at an undecodable suffix.
+    /// stops there, as it does at an undecodable suffix. A State_Text write
+    /// that sizes an object's states ([`sizes_listed_states`]) goes with
+    /// them when a write the object saves follows it; otherwise it would
+    /// take the guard to stage nothing.
     pub(super) fn write_property_multiple(
         service_data: &[u8],
     ) -> Vec<(WritePropertyAttempt, Self)> {
@@ -328,7 +330,8 @@ impl DurableTarget {
             let reference = &attempt.reference;
             let oid = reference.object_identifier;
             let property = PropertyIdentifier::from_raw(reference.property_identifier);
-            if !may_save(oid, property) {
+            let saves = may_save(oid, property);
+            if !saves && !sizes_listed_states(oid.object_type(), property) {
                 continue;
             }
             let Ok(value) = bacnet_device_core::write::decode_write_property_value(
@@ -341,9 +344,22 @@ impl DurableTarget {
             };
             let index = reference.property_array_index;
             let target = Self::write(oid, property, index, TargetValue::Written(value));
-            attempts.push((attempt, target));
+            attempts.push((saves, attempt, target));
         }
-        attempts
+        // From the end, so each sizing write knows whether a saved write to
+        // its object follows.
+        let mut saved_later = Vec::new();
+        let mut staged = Vec::with_capacity(attempts.len());
+        for (saves, attempt, target) in attempts.into_iter().rev() {
+            if saves {
+                saved_later.push(target.oid);
+            } else if !saved_later.contains(&target.oid) {
+                continue;
+            }
+            staged.push((attempt, target));
+        }
+        staged.reverse();
+        staged
     }
 
     /// The writes of `attempts` to stage, in object order and then request

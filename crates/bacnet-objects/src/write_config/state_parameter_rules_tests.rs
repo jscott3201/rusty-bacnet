@@ -668,4 +668,46 @@ mod staged {
             }
         }
     }
+    /// State_Text written whole as one label, which arrives as that
+    /// CharacterString alone, leaves one state. A list naming state 2 after
+    /// it in the same request is checked against that one state: refused at
+    /// the stage, so nothing is saved ahead of a write the object refuses.
+    #[test]
+    fn a_single_label_leaves_one_state_for_the_staged_list() {
+        let label = pending(P::STATE_TEXT, PropertyValue::CharacterString("only".into()));
+        let request = [label, pending(P::ALARM_VALUES, states(&[2]))];
+        on_each_listed!(|new, Object| {
+            let storage = MemoryConfig::new();
+            // No alarm state configured, so the object takes the one label.
+            let mut object: Object = new(STATES)
+                .with_reporting_persistence(persistence(&storage))
+                .unwrap();
+            let durable = object.durable_writes().unwrap();
+            let step = durable.stage_writes(&request);
+            assert!(matches!(step, StageStep::Skip), "the list staged");
+            assert_eq!(storage.saves(), 0);
+            let [label, list] = request.clone().map(|write| write.value);
+            object
+                .write_property(P::STATE_TEXT, None, label, None)
+                .unwrap();
+            assert_eq!(
+                read(&object, P::NUMBER_OF_STATES),
+                PropertyValue::Unsigned(1)
+            );
+            assert!(
+                object
+                    .write_property(P::ALARM_VALUES, None, list, None)
+                    .is_err()
+            );
+            assert_eq!(storage.saves(), 0);
+            // One state does take a list naming it, staged with the label.
+            let one = [request[0].clone(), pending(P::ALARM_VALUES, states(&[1]))];
+            let durable = object.durable_writes().unwrap();
+            let StageStep::Staged(wait) = durable.stage_writes(&one) else {
+                panic!("a list within the one state stages");
+            };
+            wait.block();
+            object.durable_writes().unwrap().release_staged_write(&wait);
+        });
+    }
 }
