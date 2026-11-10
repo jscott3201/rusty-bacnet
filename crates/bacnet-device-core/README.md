@@ -16,13 +16,13 @@ the database guard, the transport, addressing and time.
   about 20 KB of flash smaller. The metadata rows still call those
   properties writable, so list them as read-only in such a build's PICS.
 - `cov-multiple`, which `std` turns on, has the SubscribeCOVPropertyMultiple
-  path but its fanout (#2320): the service with its checks
+  path (#2320): the service with its checks
   (`cov::subscribe_cov_property_multiple`), the capture of timestamped
   changes where a mutation commits (`cov::timed_capture`), the timestamped
-  histories with their claims and deadlines (`cov::timed`), the read cache
-  reports and captures share (`cov::multiple_reads`), and the split of a
-  report to the subscriber's APDU size (`cov::multiple_chunks`,
-  `cov::multiple_items`). A `Reporter` doesn't serve it yet.
+  histories with their claims and deadlines (`cov::timed`), and what a
+  fanout reports to each context, split to the subscriber's APDU size
+  (`cov::multiple_report`). A host sends what those decide; a `Reporter`
+  doesn't serve the service yet.
 - `bacnet-server` runs its ReadProperty, ReadPropertyMultiple,
   WriteProperty, WritePropertyMultiple, Who-Is and Who-Has on it, through
   the staged functions in `read`, `write` and `discovery`.

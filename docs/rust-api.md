@@ -8078,11 +8078,10 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   timing; `ReporterCounters` what it counted. Build the database with
   `report::SERVICES`, which adds the two subscribe services to the
   `Responder`'s. A `Reporter` doesn't serve the COV-multiple services
-  yet: their fanout is still `bacnet-server`'s (#2320).
-- `cov::timed` and `cov::multiple_reads` (#2320, behind the `cov-multiple`
-  feature, which `std` turns on): the SubscribeCOVPropertyMultiple
-  notification path's timestamped histories and the read cache a report
-  and a capture share. `TimedHistories` is plain state for a host to guard:
+  yet: `bacnet-server` runs them on the core's steps (#2320).
+- `cov::timed` (#2320, behind the `cov-multiple` feature, which `std`
+  turns on): the SubscribeCOVPropertyMultiple notification path's
+  timestamped histories. `TimedHistories` is plain state for a host to guard:
   `push` queues a `TimedChange` captured at `now`, `drain` hands a
   reference's pending changes to a `TimedClaim`, and the claim's holder
   calls `commit` once its notification is delivered or `give_back(claim,
@@ -8107,8 +8106,8 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   the histories in line with the table after a mutation: removed
   references lose their history, published ones are bound to their new
   generation, and a refreshed context takes its delay and sizing.
-- The rest of the SubscribeCOVPropertyMultiple path but its fanout (#2320,
-  behind `cov-multiple` too):
+- The rest of the SubscribeCOVPropertyMultiple path (#2320, behind
+  `cov-multiple` too); a host sends what it decides:
   - `cov::subscribe_cov_property_multiple(table, histories, db, peer,
     subscriber_max_apdu, request, now)` is the service: its checks, a
     cancellation, the admission of each reference in request order, the
@@ -8128,20 +8127,49 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
     as it commits, into a `CaptureQueue`: `(&mut TimedHistories, Instant)`
     for a host that holds its histories outright, or a host's own type
     that takes a lock.
-  - `cov::multiple_chunks::split(content, claim, limit)` splits one report
-    into notifications of at most `limit` service-request octets
-    (`request_limit` gives it from the local and the subscriber's maximum
-    APDU). It returns a `Split`: the `parts`, each a notification with the
-    `TimedClaim` its delivery retires and the references it finishes, and
-    what the host tells the histories: `lost` (`lost_values`), `forgone`
-    (`forgo_untimed`) and `rest` (`give_back`). `cov::multiple_items` has
-    the types a report is described with (`Coordinate`, `Retained`,
-    `Stamp`, `FieldStamp`).
+  - `cov::multiple_report` decides what one fanout reports to a context,
+    in three steps, because a host reads its objects under one guard and
+    its table under another. `by_context(subscriptions)` groups a fanout's
+    references, the contexts in the order they report: by recipient, then
+    subscriber process identifier, unconfirmed before confirmed.
+    `Reading::read(source, subscriptions, force)` reads one context's
+    fanned-out references from a `Source`: the database, or a producer's
+    snapshot of one object. `Reading::gather(table, histories, now)`
+    returns a `Gathering`: `Busy` (a confirmed context with a report
+    outstanding or holding off; nothing is drained), `FollowUp(keys)` (a
+    failed report's hold-off has passed: fan the whole context out once),
+    `StoodBack` (an unconfirmed context with a report going out),
+    `Nothing`, or `Ready` with what the report conveys: its tickets
+    issued, the context's pending changes drained into one claim, the
+    owed marks taken. `Gathered::split(histories, device, local_apdu)`
+    splits it to the subscriber's APDU size, tells the histories what the
+    split gave up, and returns the `Report`: the `parts`
+    (`multiple_chunks::Part`: a notification, the `TimedClaim` its
+    delivery retires and the references it finishes), the `observations`
+    from which `carried(finishes, claim, observations, every)` picks what
+    a delivered part completes, `needs_turn`, and the references
+    `left_out` because their values fit no notification.
+  - Sending is the host's. An unconfirmed context's send turn is its own
+    from `Gathered::take_turn()`: it ends the turn
+    (`TimedHistories::end_send`) after the last part, when the report
+    stops, or at once when `needs_turn` is false, and fans the context
+    out again if that says a fanout stood back. It sends every part,
+    commits each sent part's claim and completes what the part carried,
+    and gives the rest back when one is not sent, owing
+    (`TimedClaim::owing`) once a part went. For a confirmed context,
+    `Report::into_first()` is the one part that goes now, with its ticket,
+    what its Ack completes and the deferred rest;
+    `begin_confirmed(table, histories, completion, observations, claim,
+    deferred, now)` begins it and lodges its claim until the report's
+    deadline, or refuses it and gives everything back; the host settles
+    the lodged claim when the report ends, and after a failure calls
+    `hold_off(table, histories, context, now)` so the backstop waits out
+    the hold-off.
 
-  These are unstable until the fanout moves too: its decisions still run
-  in `bacnet-server`, and `split`'s inputs and the claim's settling calls
-  may change shape as a `Reporter` takes them over. The sizing helpers
-  `ITEM_FRAMING`, `value_len` and `request_header` are private again.
+  The split, its inputs and the read cache (`cov::multiple_items`,
+  `cov::multiple_reads`, and all of `cov::multiple_chunks` but `Part`) are
+  private to the crate, as are the calls of `cov::timed` only these steps
+  need.
 - `clock` (#2321): the Device's clock, for firmware with none of its own.
   `SyncedClock` holds a `bacnet_time::Instant`, the UTC date and time it
   stood for and the `Zone` (UTC_Offset, minutes west, and

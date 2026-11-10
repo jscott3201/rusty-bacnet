@@ -46,9 +46,8 @@ structured-writes = []
 # The SubscribeCOVPropertyMultiple path (#2320): the service and its checks
 # (`cov::subscribe_cov_property_multiple`), the capture of timestamped
 # changes (`cov::timed_capture`), the timestamped histories with their
-# claims and deadlines (`cov::timed`), the read cache its reports and
-# captures share (`cov::multiple_reads`) and the split of a report to the
-# subscriber's APDU size (`cov::multiple_chunks`, `cov::multiple_items`).
+# claims and deadlines (`cov::timed`), and what a fanout reports to each
+# context, split to the subscriber's APDU size (`cov::multiple_report`).
 # `std` turns it on, so bacnet-server has it; a firmware image built on
 # `alloc` leaves it off until it reports through that service. The last
 # part of #2320, which runs the service in the `Reporter`, measures what
