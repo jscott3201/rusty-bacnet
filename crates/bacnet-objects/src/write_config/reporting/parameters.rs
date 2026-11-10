@@ -12,7 +12,10 @@
 //! inside a `ChangeOfStateReporting`, which lends and restores through the
 //! same impl and checks a staged Alarm_Values against the type's own
 //! enumeration; a door's Fault_Values and Masked_Alarm_Values are beside
-//! it, in the door's `DoorAlarmLists`. The format's table isn't what these
+//! it, in the door's `DoorAlarmLists`. An Event Enrollment has no detector
+//! of this kind (the server's pass runs its algorithms off the object's
+//! properties), so it lends, restores and checks its three rows itself, in
+//! `event_enrollment::kept`. The format's table isn't what these
 //! impls are made from, so `parameter_table_tests` walks it: every row a
 //! type keeps has to come back through the type's object.
 //!

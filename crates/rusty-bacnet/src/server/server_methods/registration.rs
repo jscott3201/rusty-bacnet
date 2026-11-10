@@ -507,7 +507,16 @@ impl BACnetServer {
     ///
     /// `storage_path` and `clear_written_reporting` keep the reporting
     /// settings and Description a peer writes in that file, as on
-    /// `add_analog_input` (#2331, #2364).
+    /// `add_analog_input` (#2331, #2364). The file keeps a written
+    /// Event_Parameters, Fault_Parameters and Time_Delay_Normal too, and
+    /// the restarted enrollment is evaluated with them: Event_Type and
+    /// Fault_Type follow the restored parameters. Time_Delay is a member
+    /// of Event_Parameters and is kept with them. With `storage_path`,
+    /// Event_Parameters or Fault_Parameters whose encoding is past 64 KiB
+    /// are refused with NO_SPACE_TO_WRITE_PROPERTY; without it the
+    /// enrollment takes them as before. There is no keyword for the
+    /// parameters: an application sets its own with
+    /// `write_property_local`, and that write is kept like a peer's.
     #[pyo3(signature = (
         instance,
         name,

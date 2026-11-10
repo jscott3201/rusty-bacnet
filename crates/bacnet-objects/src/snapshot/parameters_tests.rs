@@ -3,9 +3,11 @@
 //! without a parameter keeps kind 4, which object types keep which
 //! parameter, and what it refuses. The list rows' own refusals, and the
 //! rule each object type holds a listed state to, are in
-//! `parameter_list_tests`.
+//! `parameter_list_tests`, and an Event Enrollment's two rows held in their
+//! BACnet encoding in `enrollment_parameters_tests`.
 
 use bacnet_types::bitstring::LimitEnable;
+use bacnet_types::constructed::{BACnetEventParameter, FaultParameters};
 use bacnet_types::enums::{BinaryPV, ObjectType, PropertyIdentifier as P};
 use bacnet_types::primitives::ObjectIdentifier;
 
@@ -46,22 +48,58 @@ pub(super) fn kept(kind: ObjectType) -> u32 {
         ObjectType::MULTI_STATE_INPUT | ObjectType::MULTI_STATE_VALUE => 0x83,
         ObjectType::ACCESS_DOOR => 0x383,
         ObjectType::ACCESS_ZONE => 0x83,
+        // Time_Delay_Normal, Event_Parameters and Fault_Parameters.
+        ObjectType::EVENT_ENROLLMENT => 0xC02,
         _ => 0,
     }
 }
 
-/// What the build before this one kept (#2331 PR 3): this build's rows on
-/// the analog, binary and multi-state types, nothing on an Access Door or
-/// an Access Zone.
+/// What the build before this one kept (#2331 PR 4): this build's rows on
+/// every type but Event Enrollment, and nothing on that.
 fn kept_before(kind: ObjectType) -> u32 {
     match kind {
-        ObjectType::ACCESS_DOOR | ObjectType::ACCESS_ZONE => 0,
+        ObjectType::EVENT_ENROLLMENT => 0,
         kind => kept(kind),
     }
 }
 
 /// Every row's bit.
-const ALL: u32 = 0x3FF;
+const ALL: u32 = 0xFFF;
+
+/// How many rows the table has.
+const ROWS: u32 = 12;
+
+/// The Event_Parameters [`holding`] gives an Event Enrollment.
+pub(super) fn event_parameters() -> BACnetEventParameter {
+    BACnetEventParameter::OutOfRange {
+        time_delay: 30,
+        low_limit: 10.0,
+        high_limit: 80.5,
+        deadband: 1.5,
+    }
+}
+
+/// The Fault_Parameters [`holding`] gives an Event Enrollment.
+pub(super) fn fault_parameters() -> FaultParameters {
+    FaultParameters::FaultOutOfRange {
+        min_normal: -5.0,
+        max_normal: 50.0,
+    }
+}
+
+/// The row of [`event_parameters`]: its length, then the out-of-range
+/// choice under tag 5 with its four members under tags 0 to 3.
+const EVENT_ROW: [u8; 23] = [
+    0, 0, 0, 19, 0x5E, 0x09, 30, 0x1C, 0x41, 0x20, 0, 0, 0x2C, 0x42, 0xA1, 0, 0, 0x3C, 0x3F, 0xC0,
+    0, 0, 0x5F,
+];
+
+/// The row of [`fault_parameters`]: its length, then the fault-out-of-range
+/// choice under tag 6, each bound a Double inside its own tag.
+const FAULT_ROW: [u8; 30] = [
+    0, 0, 0, 26, 0x6E, 0x0E, 0x55, 8, 0xC0, 0x14, 0, 0, 0, 0, 0, 0, 0x0F, 0x1E, 0x55, 8, 0x40,
+    0x49, 0, 0, 0, 0, 0, 0, 0x1F, 0x6F,
+];
 
 /// A list of states only `kind`'s rule takes whole: a multi-state object's
 /// goes past both enumerations, an Access Door's holds a named state an
@@ -90,7 +128,7 @@ fn list_row(states: &[u32]) -> Vec<u8> {
 
 /// Each parameter in bit order: its property and its octets in a file for
 /// an object of `kind`.
-fn rows(kind: ObjectType) -> [(P, Vec<u8>); 10] {
+fn rows(kind: ObjectType) -> [(P, Vec<u8>); ROWS as usize] {
     let list = list_row(&listed(kind));
     // What the build before this one wrote for a multi-state object.
     if !matches!(kind, ObjectType::ACCESS_DOOR | ObjectType::ACCESS_ZONE) {
@@ -110,6 +148,8 @@ fn rows(kind: ObjectType) -> [(P, Vec<u8>); 10] {
             P::MASKED_ALARM_VALUES,
             vec![0, 0, 0, 2, 0, 0, 0, 7, 0, 0, 0xFF, 0xFF],
         ),
+        (P::EVENT_PARAMETERS, EVENT_ROW.to_vec()),
+        (P::FAULT_PARAMETERS, FAULT_ROW.to_vec()),
     ]
 }
 
@@ -128,6 +168,8 @@ pub(super) fn holding(kind: ObjectType, mask: u32) -> AlgorithmWriteConfig {
         alarm_values: has(7).then(|| listed(kind)),
         fault_values: has(8).then(|| vec![5]),
         masked_alarm_values: has(9).then(|| vec![7, 0xFFFF]),
+        event_parameters: has(10).then(event_parameters),
+        fault_parameters: has(11).then(fault_parameters),
     }
 }
 
@@ -193,7 +235,7 @@ fn assert_a_newer_builds(object: ObjectIdentifier, octets: &[u8], what: &str) {
     }
 }
 
-/// The table names every parameter once: the bits are 0 to 9 in order,
+/// The table names every parameter once: the bits are 0 to 11 in order,
 /// each property has its own, and each type keeps what [`kept`] says and
 /// nothing else, a Timer nothing at all.
 #[test]
@@ -221,7 +263,9 @@ fn each_type_keeps_its_own_parameters() {
             P::DOOR_ALARM_STATE,
             P::OCCUPANCY_UPPER_LIMIT,
             P::OCCUPANCY_LOWER_LIMIT,
-            P::EVENT_PARAMETERS,
+            P::EVENT_TYPE,
+            P::FAULT_TYPE,
+            P::OBJECT_PROPERTY_REFERENCE,
         ];
         for property in never {
             assert!(!write_config::keeps_parameter(kind, property), "{kind}");
@@ -338,7 +382,7 @@ fn an_access_file_holds_its_delays_and_then_its_lists() {
 fn each_parameter_has_its_own_bit() {
     for kind in REPORTERS {
         let plain = encode(kind, AlgorithmWriteConfig::default()).unwrap();
-        for bit in (0..10).map(|bit| 1 << bit) {
+        for bit in (0..ROWS).map(|bit| 1 << bit) {
             if kept(kind) & bit == 0 {
                 continue;
             }
@@ -365,6 +409,7 @@ fn a_description_wraps_the_parameters_kind() {
         ObjectType::MULTI_STATE_VALUE,
         ObjectType::ACCESS_DOOR,
         ObjectType::ACCESS_ZONE,
+        ObjectType::EVENT_ENROLLMENT,
     ] {
         let object = oid(kind);
         let WriteConfigSnapshot::Reporting(mut config) = snapshot(holding(kind, kept(kind))) else {
@@ -406,7 +451,7 @@ fn cut_and_over_long_files_are_refused() {
 #[test]
 fn an_unknown_bit_is_an_unknown_kind_and_an_empty_mask_is_damage() {
     for kind in REPORTERS {
-        for mask in [1u32 << 10, 1 << 31, (1 << 10) | (kept(kind) & 1)] {
+        for mask in [1u32 << ROWS, 1 << 31, (1 << ROWS) | (kept(kind) & 2)] {
             let mut tail = mask.to_be_bytes().to_vec();
             tail.extend_from_slice(&[0; 8]);
             let file = with_tail(kind, &tail);
@@ -427,7 +472,7 @@ fn an_unknown_bit_is_an_unknown_kind_and_an_empty_mask_is_damage() {
 #[test]
 fn a_parameter_of_another_object_type_is_refused() {
     for kind in REPORTERS {
-        for bit in (0..10).map(|bit| 1u32 << bit) {
+        for bit in (0..ROWS).map(|bit| 1u32 << bit) {
             if kept(kind) & bit != 0 {
                 continue;
             }
@@ -437,31 +482,30 @@ fn a_parameter_of_another_object_type_is_refused() {
             assert_a_newer_builds(oid(kind), &with_tail(kind, &tail(kind, bit)), &what);
             let mask_only = with_tail(kind, &bit.to_be_bytes());
             assert_a_newer_builds(oid(kind), &mask_only, &what);
-            let beside = bit | (kept(kind) & 1);
+            let beside = bit | (kept(kind) & 2);
             let file = with_tail(kind, &tail(kind, beside));
             assert_a_newer_builds(oid(kind), &file, &what);
         }
     }
 }
 
-/// The build before this one (#2331 PR 3) refuses a file with a set bit
+/// The build before this one (#2331 PR 4) refuses a file with a set bit
 /// outside what it kept for the object's type as an unknown kind, at the
 /// mask. Every file this build writes that the older one couldn't have is
-/// such a file: kind 6 for an Access Door or an Access Zone, for which the
-/// older build kept no row, so any mask at all is outside its rows, a mask
-/// of the two delays included. This build's reader, standing where the
-/// older one stood (a type it keeps none of the rows for), refuses the same
-/// tail the same way, before a row is read: with the mask alone, too. An
-/// analog, binary or multi-state file, which the older build wrote too, has
-/// no such bit.
+/// such a file: kind 6 for an Event Enrollment, for which the older build
+/// kept no row, so any mask at all is outside its rows, a mask of
+/// Time_Delay_Normal alone included. This build's reader, standing where
+/// the older one stood (a type it keeps none of the rows for), refuses the
+/// same tail the same way, before a row is read: with the mask alone, too.
+/// A file of any other type, which the older build wrote too, has no such
+/// bit.
 #[test]
 fn the_build_before_refuses_what_only_this_build_writes_as_an_unknown_kind() {
     let stand_ins = REPORTERS.into_iter().filter(|kind| kept(*kind) == 0);
-    assert_eq!(stand_ins.clone().count(), 2, "the two enrollments");
+    assert_eq!(stand_ins.clone().count(), 1, "the Alert Enrollment");
     for kind in REPORTERS {
         let new = kept(kind) & !kept_before(kind);
-        let access = matches!(kind, ObjectType::ACCESS_DOOR | ObjectType::ACCESS_ZONE);
-        assert_eq!(new != 0, access, "{kind}");
+        assert_eq!(new != 0, kind == ObjectType::EVENT_ENROLLMENT, "{kind}");
         for mask in (1..=ALL).filter(|mask| mask & !kept(kind) == 0) {
             let octets = encode(kind, holding(kind, mask)).unwrap();
             let plain = encode(kind, AlgorithmWriteConfig::default()).unwrap();

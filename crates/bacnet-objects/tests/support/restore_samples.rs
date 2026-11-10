@@ -309,6 +309,53 @@ pub fn zone_alarm_values_reporting_write_config(path: &Path) {
     save_write_config(path, ObjectType::ACCESS_ZONE, &snapshot);
 }
 
+/// An Event Enrollment's written reporting settings, Time_Delay_Normal,
+/// Event_Parameters and Fault_Parameters (#2331 PR 5): kind 6 with the two
+/// rows that hold a value in its BACnet encoding.
+pub fn enrollment_parameters_reporting_write_config(path: &Path) {
+    let snapshot = with_enrollment_parameters(reporting_config(None));
+    save_write_config(path, ObjectType::EVENT_ENROLLMENT, &snapshot);
+}
+
+/// The same with a written Description: kind 5 around kind 6.
+pub fn described_enrollment_parameters_reporting_write_config(path: &Path) {
+    let snapshot = with_enrollment_parameters(reporting_config(Some("Lobby")));
+    save_write_config(path, ObjectType::EVENT_ENROLLMENT, &snapshot);
+}
+
+/// `snapshot`, reporting settings, with every parameter an Event
+/// Enrollment keeps written: change-of-state parameters with a list of
+/// states, and fault-life-safety ones with a list and a reference.
+fn with_enrollment_parameters(mut snapshot: WriteConfigSnapshot) -> WriteConfigSnapshot {
+    use bacnet_types::constructed::{
+        BACnetDeviceObjectPropertyReference, BACnetEventParameter, BACnetPropertyStates,
+        FaultParameters,
+    };
+    use bacnet_types::enums::LifeSafetyState;
+    let WriteConfigSnapshot::Reporting(settings) = &mut snapshot else {
+        unreachable!("reporting settings");
+    };
+    let mut algorithm = AlgorithmWriteConfig::default();
+    algorithm.time_delay_normal = Some(5);
+    algorithm.event_parameters = Some(BACnetEventParameter::ChangeOfState {
+        time_delay: 30,
+        list_of_values: vec![
+            BACnetPropertyStates::State(3),
+            BACnetPropertyStates::BooleanValue(true),
+            BACnetPropertyStates::UnsignedValue(70_000),
+        ],
+    });
+    algorithm.fault_parameters = Some(FaultParameters::FaultLifeSafety {
+        fault_values: vec![LifeSafetyState::FAULT, LifeSafetyState::from_raw(300)],
+        mode_property_reference: BACnetDeviceObjectPropertyReference::new_local(
+            ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, 2).unwrap(),
+            PropertyIdentifier::MODE.to_raw(),
+        ),
+    });
+    settings.algorithm = algorithm;
+    snapshot
+}
+
 /// `snapshot`, reporting settings, with every parameter an Access Door
 /// keeps written: named door alarm states and the two ends of the
 /// proprietary ones.

@@ -148,6 +148,8 @@ mod described_tests;
 #[cfg(test)]
 mod description_tests;
 #[cfg(test)]
+pub(crate) mod enrollment_parameters_tests;
+#[cfg(test)]
 mod one_file_tests;
 #[cfg(test)]
 mod parameter_list_tests;

@@ -8,8 +8,8 @@ Event_Message_Texts_Config or the Event_Algorithm_Inhibit pair is saved in
 that file before it is answered, and a server started on the same file
 serves it again, until ``clear_written_reporting=True`` drops it. A written
 Description is kept the same way (#2364), and so are an analog, binary or
-multi-state object's, an Access Door's and an Access Zone's event algorithm
-parameters (#2331).
+multi-state object's, an Access Door's, an Access Zone's and an Event
+Enrollment's event algorithm parameters (#2331).
 """
 
 from __future__ import annotations
@@ -499,6 +499,141 @@ class AccessParameterTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(await server.read_property(oid, prop), expected)
         finally:
             await server.stop()
+
+
+# OUT_OF_RANGE above 40 or below 20 after 30 seconds, and
+# FAULT_OUT_OF_RANGE outside -5 to 50, each in its BACnet encoding.
+OUT_OF_RANGE = bytes.fromhex("5e091e1c41a000002c422000003c3f8000005f")
+RANGE_FAULT = bytes.fromhex("6e0e5508c0140000000000000f1e550840490000000000001f6f")
+
+
+def enrollment_parameters_file(instance: int, bit: int, row: bytes) -> bytes:
+    """A written-configuration file of kind 6 for an Event Enrollment
+    holding one parameter in its BACnet encoding: no reporting setting, then
+    the presence mask (bit 10 for Event_Parameters, 11 for
+    Fault_Parameters), the row's length and its octets.
+    """
+    enrollment = ObjectType.EVENT_ENROLLMENT.to_raw()
+    identifier = struct.pack(">I", (enrollment << 22) | instance)
+    body = bytes([6, 0, 0, 0, 0, 0, 0, 0]) + struct.pack(">II", 1 << bit, len(row))
+    return b"RBNWCF01" + identifier + body + row
+
+
+class EnrollmentParameterTests(unittest.IsolatedAsyncioTestCase):
+    """An Event Enrollment's written Event_Parameters, Fault_Parameters and
+    Time_Delay_Normal."""
+
+    async def asyncSetUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.state = Path(directory.name)
+
+    async def start(self, clear: bool = False, storage: bool = True) -> BACnetServer:
+        server = BACnetServer(2_331_008, interface="127.0.0.1", port=0)
+        if storage:
+            server.add_event_enrollment(
+                1,
+                "EE-1",
+                storage_path=str(self.state / "ee-1"),
+                clear_written_reporting=clear,
+            )
+        else:
+            server.add_event_enrollment(1, "EE-1")
+        await server.start()
+        return server
+
+    async def served(self, server: BACnetServer) -> tuple:
+        """The three rows and the two types that follow them."""
+        event = await server.read_property(ENROLLMENT, P.EVENT_PARAMETERS)
+        fault = await server.read_property(ENROLLMENT, P.FAULT_PARAMETERS)
+        delay = await server.read_property(ENROLLMENT, P.TIME_DELAY_NORMAL)
+        event_type = await server.read_property(ENROLLMENT, P.EVENT_TYPE)
+        fault_type = await server.read_property(ENROLLMENT, P.FAULT_TYPE)
+        return event.octets, fault.octets, delay.value, event_type.value, fault_type.value
+
+    async def test_written_parameters_survive_a_restart_until_cleared(self) -> None:
+        # Unset: the none choice of each, no delay, and the types NONE.
+        unset = (bytes.fromhex("f814"), bytes.fromhex("08"), 0, 20, 0)
+        # Written: the delay of its own, and OUT_OF_RANGE (5) and
+        # FAULT_OUT_OF_RANGE (6) as the types.
+        written = (OUT_OF_RANGE, RANGE_FAULT, 9, 5, 6)
+        server = await self.start()
+        try:
+            self.assertEqual(await self.served(server), unset)
+            for prop, value in (
+                (P.EVENT_PARAMETERS, PropertyValue.application_data(OUT_OF_RANGE)),
+                (P.FAULT_PARAMETERS, PropertyValue.application_data(RANGE_FAULT)),
+                (P.TIME_DELAY_NORMAL, PropertyValue.unsigned(9)),
+            ):
+                await server.write_property_local(ENROLLMENT, prop, value, source_object=None)
+            self.assertEqual(await self.served(server), written)
+            # Parameters whose encoding passes 64 KiB aren't kept, so with
+            # storage they are refused, and the written ones stay.
+            long = PropertyValue.octet_string(bytes(65_533))
+            with self.assertRaises(BacnetError):
+                await server.write_property_local(
+                    ENROLLMENT, P.EVENT_PARAMETERS, long, source_object=None
+                )
+            self.assertEqual(await self.served(server), written)
+        finally:
+            await server.stop()
+
+        server = await self.start()
+        try:
+            self.assertEqual(await self.served(server), written)
+        finally:
+            await server.stop()
+
+        server = await self.start(clear=True)
+        try:
+            self.assertEqual(await self.served(server), unset)
+        finally:
+            await server.stop()
+
+    async def test_an_enrollment_without_storage_takes_longer_parameters(self) -> None:
+        server = await self.start(storage=False)
+        try:
+            long = PropertyValue.octet_string(bytes(65_533))
+            await server.write_property_local(
+                ENROLLMENT, P.EVENT_PARAMETERS, long, source_object=None
+            )
+            read = await server.read_property(ENROLLMENT, P.EVENT_PARAMETERS)
+            self.assertEqual(len(read.octets), 65_537)
+        finally:
+            await server.stop()
+
+
+class EnrollmentParameterFileTests(unittest.TestCase):
+    def test_a_stored_row_that_is_not_one_whole_value_fails_the_build(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            server = BACnetServer(2_331_009, interface="127.0.0.1", port=0)
+
+            def path(name: str, octets: bytes) -> str:
+                file = Path(directory) / name
+                file.write_bytes(octets)
+                return str(file)
+
+            refused = (
+                (10, b""),
+                (10, OUT_OF_RANGE[:-1]),
+                (10, OUT_OF_RANGE + b"\x00"),
+                (10, bytes.fromhex("6e6f")),
+                (11, RANGE_FAULT[:-1]),
+                (11, RANGE_FAULT + b"\x08"),
+                (11, bytes.fromhex("8e8f")),
+            )
+            for bit, row in refused:
+                file = path("ee-1", enrollment_parameters_file(1, bit, row))
+                with self.subTest(bit=bit, row=row.hex()), self.assertRaises(BacnetError):
+                    server.add_event_enrollment(1, "EE-1", storage_path=file)
+            # A length past the cap is refused though the file ends there.
+            cut = enrollment_parameters_file(1, 10, b"")[:-4] + struct.pack(">I", 65_537)
+            with self.assertRaises(BacnetError):
+                server.add_event_enrollment(1, "EE-1", storage_path=path("ee-1", cut))
+            # Whole values load.
+            for instance, (bit, row) in enumerate(((10, OUT_OF_RANGE), (11, RANGE_FAULT)), 2):
+                file = path(f"ee-{instance}", enrollment_parameters_file(instance, bit, row))
+                server.add_event_enrollment(instance, f"EE-{instance}", storage_path=file)
 
 
 def alarm_values_file(object_type: int, instance: int, *states: int) -> bytes:

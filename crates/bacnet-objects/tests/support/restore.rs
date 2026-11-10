@@ -52,7 +52,7 @@ use bacnet_objects::color::{
     ColorObject, ColorOutputPersistence, ColorOutputSnapshot, ColorTemperatureObject,
     FileColorOutputPersistence,
 };
-use bacnet_objects::event_enrollment::AlertEnrollmentObject;
+use bacnet_objects::event_enrollment::{AlertEnrollmentObject, EventEnrollmentObject};
 use bacnet_objects::event_log::EventLogObject;
 use bacnet_objects::lighting::LightingOutputObject;
 use bacnet_objects::log_persistence::{FileLogPersistence, LogPersistence};
@@ -72,7 +72,7 @@ use bacnet_objects::trend::{TrendLogMultipleObject, TrendLogObject};
 use bacnet_objects::write_config::{
     FileWriteConfigPersistence, WriteConfigPersistence, WriteConfigSnapshot,
 };
-use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{EngineeringUnits, EventType, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
@@ -110,6 +110,7 @@ enum Kind {
     MultiStateReportingWriteConfig,
     DoorReportingWriteConfig,
     ZoneReportingWriteConfig,
+    EnrollmentReportingWriteConfig,
 }
 
 /// Where a check's storage lives. Each method opens one backend on it; a
@@ -320,6 +321,18 @@ impl Format {
                 M::write_config,
                 |store| {
                     AccessZoneObject::new(1, "Zone")?
+                        .with_reporting_persistence(store)
+                        .map(drop)
+                },
+            ),
+            // An Event Enrollment decodes its two parameters from their
+            // stored octets with the decoders a write runs (#2331).
+            Kind::EnrollmentReportingWriteConfig => check_file(
+                medium,
+                oid(ObjectType::EVENT_ENROLLMENT),
+                M::write_config,
+                |store| {
+                    EventEnrollmentObject::new(1, "EE", EventType::OUT_OF_RANGE)?
                         .with_reporting_persistence(store)
                         .map(drop)
                 },

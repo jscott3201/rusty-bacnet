@@ -244,3 +244,95 @@ fn unwaited_saves_run_in_order_and_the_latest_lands_last() {
     assert!(staged.is_ready());
     assert_eq!(&store.saved()[saved.len()..], [5, 1, 6]);
 }
+
+/// The steps of writes of any value: each leaves the count of the writes
+/// so far.
+fn counted(writes: &[PendingWrite]) -> Vec<Step<u32>> {
+    steps(writes, |earlier, _| Ok(Some(earlier.len() as u32 + 1)))
+}
+
+/// A staged value is claimed by a write of the same bits, whatever it
+/// holds: a REAL or a Double that is no number, alone or inside lists,
+/// which `==` never finds again (#2331). The write then takes its step and
+/// nothing is saved a second time.
+#[test]
+fn a_write_claims_its_staged_value_though_it_is_not_equal_to_itself() {
+    let nan = f32::from_bits(0x7FC0_1234);
+    let values = [
+        PropertyValue::Real(f32::NAN),
+        PropertyValue::Real(nan),
+        PropertyValue::Double(f64::NAN),
+        PropertyValue::List(vec![
+            PropertyValue::Unsigned(5),
+            PropertyValue::Real(f32::NAN),
+            PropertyValue::List(vec![PropertyValue::Double(-f64::NAN)]),
+        ]),
+        PropertyValue::Real(-0.0),
+    ];
+    assert!(values[0] != values[0], "what `==` makes of it");
+    for value in values {
+        let store = Arc::new(Store::default());
+        let mut saves = staged_saves(&store);
+        let writes = [write(value.clone()), unsigned(9)];
+        let StageStep::Staged(wait) = saves.stage(counted(&writes), 0, 0, |state, next| {
+            *state = *next;
+        }) else {
+            panic!("{value:?} didn't stage");
+        };
+        saves.wait_idle();
+        assert_eq!(store.saved(), [2], "{value:?}");
+        assert!(matches!(saves.claim(P, None, &value, 0), Some(Ok(1))));
+        assert!(matches!(claim(&mut saves, 9, 1), Some(Ok(2))));
+        assert!(!saves.is_staged(), "{value:?}");
+        saves.wait_idle();
+        assert_eq!(store.saved(), [2], "{value:?}: saved again");
+        drop(wait);
+    }
+}
+
+/// A write of other bits than the staged ones is another write: a number
+/// with another payload or sign, the other zero, the other width, a list
+/// of another length or with one element changed. The staged write stays.
+#[test]
+fn a_write_of_other_bits_is_not_the_staged_one() {
+    let list = |last: f32| {
+        PropertyValue::List(vec![PropertyValue::Unsigned(5), PropertyValue::Real(last)])
+    };
+    let pairs = [
+        (
+            PropertyValue::Real(f32::NAN),
+            PropertyValue::Real(-f32::NAN),
+        ),
+        (
+            PropertyValue::Real(f32::NAN),
+            PropertyValue::Real(f32::from_bits(0x7FC0_1234)),
+        ),
+        (PropertyValue::Real(0.0), PropertyValue::Real(-0.0)),
+        (PropertyValue::Double(0.0), PropertyValue::Double(-0.0)),
+        (PropertyValue::Real(1.0), PropertyValue::Double(1.0)),
+        (PropertyValue::Real(1.0), PropertyValue::Real(2.0)),
+        (list(f32::NAN), list(1.0)),
+        (
+            list(1.0),
+            PropertyValue::List(vec![PropertyValue::Unsigned(5)]),
+        ),
+        (list(1.0), PropertyValue::Unsigned(5)),
+    ];
+    for (staged, written) in pairs {
+        let store = Arc::new(Store::default());
+        let mut saves = staged_saves(&store);
+        let writes = [write(staged.clone())];
+        let StageStep::Staged(_wait) = saves.stage(counted(&writes), 0, 0, |state, next| {
+            *state = *next;
+        }) else {
+            panic!("{staged:?} didn't stage");
+        };
+        saves.wait_idle();
+        assert!(
+            saves.claim(P, None, &written, 0).is_none(),
+            "{staged:?} was claimed by {written:?}"
+        );
+        assert!(saves.is_staged(), "{staged:?}");
+        assert!(matches!(saves.claim(P, None, &staged, 0), Some(Ok(1))));
+    }
+}

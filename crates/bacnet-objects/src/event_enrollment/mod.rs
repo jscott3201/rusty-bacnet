@@ -25,8 +25,17 @@ use crate::traits::BACnetObject;
 /// Implement `KeepsReporting` (`write_config::reporting`) for an Event or
 /// Alert Enrollment, which holds the kept rows in its own
 /// fields and a `ReportingStore` in `reporting_store` (#2331).
+///
+/// `parameters: lend, restore, after` names the object's own side of the
+/// event algorithm parameters its type keeps: the method that lends them,
+/// the one that takes saved ones back, and the function a staged write of
+/// one is checked by. An Alert Enrollment keeps none.
 macro_rules! keep_enrollment_reporting {
-    ($object:ty $(, takes_notify_type: $takes:path)?) => {
+    (
+        $object:ty
+        $(, takes_notify_type: $takes:path)?
+        $(, parameters: $lend:ident, $restore:ident, $after:path)?
+    ) => {
         #[cfg(feature = "event-reporting")]
         impl $crate::write_config::reporting::KeepsReporting for $object {
             fn reporting_store(&mut self) -> &mut $crate::write_config::reporting::ReportingStore {
@@ -38,7 +47,8 @@ macro_rules! keep_enrollment_reporting {
             }
 
             fn reporting_rows(&self) -> $crate::write_config::reporting::ReportingRows {
-                $crate::write_config::reporting::ReportingRows {
+                #[allow(unused_mut)]
+                let mut rows = $crate::write_config::reporting::ReportingRows {
                     notification_class: self.notification_class,
                     event_enable: self.event_enable,
                     notify_type: self.notify_type,
@@ -46,7 +56,9 @@ macro_rules! keep_enrollment_reporting {
                     options: self.event_history.options.clone(),
                     description: self.description.clone(),
                     algorithm: Default::default(),
-                }
+                };
+                $(rows.algorithm = self.$lend();)?
+                rows
             }
 
             fn restore_reporting_rows(
@@ -62,7 +74,19 @@ macro_rules! keep_enrollment_reporting {
                     description: &mut self.description,
                 }
                 .restore(saved);
+                $(self.$restore(&saved.algorithm);)?
             }
+
+            $(
+                fn parameter_after(
+                    &self,
+                    _states: Option<u32>,
+                    rows: &mut $crate::write_config::AlgorithmWriteConfig,
+                    write: &$crate::durable::PendingWrite,
+                ) -> Result<(), bacnet_types::error::Error> {
+                    $after(rows, write)
+                }
+            )?
 
             $(
                 fn takes_notify_type(&self, notify_type: bacnet_types::enums::NotifyType) -> bool {
@@ -75,8 +99,10 @@ macro_rules! keep_enrollment_reporting {
 
 mod alert;
 mod creation_only;
+#[cfg(feature = "event-reporting")]
+mod kept;
 mod metadata;
-mod parameters;
+pub(crate) mod parameters;
 mod state;
 mod transition;
 pub use alert::AlertEnrollmentObject;
@@ -243,15 +269,42 @@ impl EventEnrollmentObject {
         Ok(())
     }
 
-    /// Set the structured event parameters.
+    /// Set the structured event parameters. On an enrollment keeping its
+    /// reporting settings, Event_Parameters a write saved win until
+    /// `clear_written_reporting` (#2331), as for the next setter and
+    /// [`set_time_delay_normal`](Self::set_time_delay_normal).
     pub fn set_event_parameters(&mut self, params: BACnetEventParameter) {
-        self.event_parameters = params;
-        self.pending = None;
+        if !self.kept_over_setter(PropertyIdentifier::EVENT_PARAMETERS) {
+            self.install_event_parameters(params);
+        }
     }
 
     /// Set the fault parameters for this event enrollment.
     pub fn set_fault_parameters(&mut self, fp: Option<FaultParameters>) {
-        self.fault_parameters = fp;
+        if !self.kept_over_setter(PropertyIdentifier::FAULT_PARAMETERS) {
+            self.fault_parameters = fp;
+        }
+    }
+
+    /// Take `params` as Event_Parameters, as a write, a setter and a
+    /// restore do: a delay counting under the old parameters is dropped.
+    fn install_event_parameters(&mut self, params: BACnetEventParameter) {
+        self.event_parameters = params;
+        self.pending = None;
+    }
+
+    /// Take `parameters` as a write of Fault_Parameters and a restore do.
+    /// The `none` choice is the unset form (#1417).
+    fn install_fault_parameters(&mut self, parameters: FaultParameters) {
+        self.fault_parameters =
+            (!matches!(parameters, FaultParameters::FaultNone)).then_some(parameters);
+    }
+
+    /// Take `delay` as Time_Delay_Normal, as a write, a setter and a
+    /// restore do: a delay counting under the old value is dropped.
+    fn install_time_delay_normal(&mut self, delay: Option<u32>) {
+        self.time_delay_normal = delay;
+        self.pending = None;
     }
 
     /// Set the event state.
@@ -296,8 +349,9 @@ impl EventEnrollmentObject {
     /// restores the not-configured case, which takes on the
     /// `Event_Parameters` `Time_Delay` value (Clause 13.3 fallback).
     pub fn set_time_delay_normal(&mut self, delay: Option<u32>) {
-        self.time_delay_normal = delay;
-        self.pending = None;
+        if !self.kept_over_setter(PropertyIdentifier::TIME_DELAY_NORMAL) {
+            self.install_time_delay_normal(delay);
+        }
     }
 
     /// The pTimeDelay the stored `Event_Parameters` supply: the `time_delay`
@@ -519,14 +573,11 @@ impl BACnetObject for EventEnrollmentObject {
         // network route and the internal lifecycle path no longer share an
         // access path (issue #130).
         if property == PropertyIdentifier::EVENT_PARAMETERS {
-            self.set_event_parameters(parameters::decode_event_parameters(value)?);
+            self.install_event_parameters(parameters::decode_event_parameters(value)?);
             return Ok(());
         }
         if property == PropertyIdentifier::FAULT_PARAMETERS {
-            // The context-tagged `none` choice is the unset form (#1417).
-            let parameters = parameters::decode_fault_parameters(value)?;
-            self.fault_parameters =
-                (!matches!(parameters, FaultParameters::FaultNone)).then_some(parameters);
+            self.install_fault_parameters(parameters::decode_fault_parameters(value)?);
             return Ok(());
         }
         if property == PropertyIdentifier::TIME_DELAY_NORMAL {
@@ -534,11 +585,9 @@ impl BACnetObject for EventEnrollmentObject {
             // the Clause 12.1.2 implementor's option the intrinsic types
             // already exercise, and is what makes the Clause 13.3 delay
             // asymmetry commissionable on an enrollment at all.
-            if let PropertyValue::Unsigned(v) = value {
-                self.set_time_delay_normal(Some(common::u64_to_u32(v)?));
-                return Ok(());
-            }
-            return Err(common::invalid_data_type_error());
+            let delay = parameters::written_time_delay_normal(&value)?;
+            self.install_time_delay_normal(Some(delay));
+            return Ok(());
         }
         if let Some(result) =
             self.event_history
@@ -573,7 +622,10 @@ impl BACnetObject for EventEnrollmentObject {
 }
 
 crate::write_config::reporting::impl_reporting_persistence!(EventEnrollmentObject, without_tags);
-keep_enrollment_reporting!(EventEnrollmentObject);
+keep_enrollment_reporting!(
+    EventEnrollmentObject,
+    parameters: lent_parameters, restore_parameters, kept::parameter_after
+);
 
 impl crate::creation::Creatable for EventEnrollmentObject {
     const CREATION_ONLY_PROPERTIES: &'static [PropertyIdentifier] = creation_only::CREATION_ONLY;
