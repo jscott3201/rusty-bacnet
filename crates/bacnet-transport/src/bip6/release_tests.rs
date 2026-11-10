@@ -9,7 +9,9 @@ use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::time::{Instant, timeout};
 
-use super::foreign_retarget_tests::{address_of, bbmd, changes, next, registration, started};
+use super::foreign_retarget_tests::{
+    address_of, bbmd, changes, in_real_time, next, registration, started,
+};
 use super::frame::encoded;
 use super::*;
 use crate::port::TransportPort;
@@ -92,25 +94,6 @@ async fn a_move_releases_the_bbmd_left_and_counts_its_answer() {
     // The move went ahead: broadcasts go to C.
     assert_eq!(lent.bbmd(), address_of(&c));
     transport.stop().await.unwrap();
-}
-
-/// `wait`, with a paused clock held still while it runs.
-///
-/// A paused clock jumps to the next timer as soon as the runtime is idle,
-/// whether or not a datagram is still on its way, so a socket read under
-/// it can time out with the datagram a moment away. Tokio doesn't advance a
-/// paused clock while a blocking task runs, so one parked for as long as
-/// `wait` takes lets the datagram arrive in real time. After 5 real
-/// seconds it lets go, and the read's own deadline then fails the test.
-async fn in_real_time<T>(wait: impl Future<Output = T>) -> T {
-    let (done, parked) = std::sync::mpsc::channel::<()>();
-    let hold = tokio::task::spawn_blocking(move || {
-        let _ = parked.recv_timeout(Duration::from_secs(5));
-    });
-    let out = wait.await;
-    drop(done);
-    hold.await.unwrap();
-    out
 }
 
 /// An unanswered release is given up 3 s after it went.

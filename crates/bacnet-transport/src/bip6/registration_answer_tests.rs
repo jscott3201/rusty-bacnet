@@ -10,7 +10,7 @@ use tokio::net::UdpSocket;
 use tokio::time::timeout;
 
 use super::foreign_retarget_tests::{
-    address_of, bbmd, changes, next, next_within, registration, started,
+    address_of, bbmd, changes, in_real_time, next, next_within, registration, started,
 };
 use super::frame::encoded;
 use super::*;
@@ -162,13 +162,14 @@ async fn a_success_for_the_release_of_the_bbmd_left_is_not_counted() {
 /// unanswered until then is unanswered.
 ///
 /// Time is paused, and real sockets let the clock jump while a datagram is
-/// on its way, so the period is read at the gate, which a renewal reaches
-/// with no I/O in between, and the answers from the status, a millisecond
-/// at a time.
+/// on its way, so each read of the BBMD's socket holds the clock still
+/// ([`in_real_time`]); the period is read at the gate, which a renewal
+/// reaches with no I/O in between, and the answers from the status, a
+/// millisecond at a time.
 #[tokio::test(start_paused = true)]
 async fn a_refusal_keeps_the_schedule_and_silence_is_unanswered() {
     let peer = bbmd().await;
-    let (mut transport, _lent) = started(&peer, 60).await;
+    let (mut transport, _lent) = in_real_time(started(&peer, 60)).await;
     let target = Arc::clone(transport.foreign_target().unwrap());
     let reached = || target.reached.notified();
     result(
@@ -189,12 +190,11 @@ async fn a_refusal_keeps_the_schedule_and_silence_is_unanswered() {
         Some(Bip6RegistrationAnswer::Refused)
     );
     let long = Duration::from_secs(3600);
-    let ttl = next_within(&peer, long, |message| match message {
+    let renewal = next_within(&peer, long, |message| match message {
         Bvll6::RegisterForeignDevice { ttl, .. } => Some(ttl),
         _ => None,
-    })
-    .await;
-    assert_eq!(ttl, 60);
+    });
+    assert_eq!(in_real_time(renewal).await, 60);
     reached().await;
     assert_eq!(renewed.elapsed(), Duration::from_secs(30), "the usual 30 s");
     answered(&transport, Some(Bip6RegistrationAnswer::Unanswered)).await;
@@ -211,7 +211,7 @@ async fn a_refusal_keeps_the_schedule_and_silence_is_unanswered() {
 #[tokio::test(start_paused = true)]
 async fn activations_against_a_silent_bbmd_reach_no_answer() {
     let peer = bbmd().await;
-    let (mut transport, lent) = started(&peer, 300).await;
+    let (mut transport, lent) = in_real_time(started(&peer, 300)).await;
     let target = Arc::clone(transport.foreign_target().unwrap());
     for second in 1..=3 {
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -230,7 +230,7 @@ async fn activations_against_a_silent_bbmd_reach_no_answer() {
 #[tokio::test(start_paused = true)]
 async fn a_failed_send_counts_nothing_and_keeps_the_one_before() {
     let peer = bbmd().await;
-    let (mut transport, _lent) = started(&peer, 60).await;
+    let (mut transport, _lent) = in_real_time(started(&peer, 60)).await;
     let target = Arc::clone(transport.foreign_target().unwrap());
     target
         .fail_send
