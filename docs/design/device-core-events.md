@@ -85,7 +85,7 @@ for `HostClock`); `bacnet-objects` takes it too, for the delay instants of
 | `cov` | `dep:bacnet-time` | `cov`, `report`; SubscribeCOV and SubscribeCOVProperty in `SERVICES` and the facade |
 | `event-reporting` | `dep:bacnet-time`, `bacnet-objects/event-reporting` | `event`, `report`; AcknowledgeAlarm, GetEventInformation |
 | `event-enrollment` | `event-reporting` | `event::enrollment`, which links `decode_event_parameter` (§6.6) |
-| `cov-multiple` (#2320) | nothing more | the Multiple form (§5.6): `cov::subscribe_cov_property_multiple`, `cov::timed_capture`, `cov::timed`, `cov::multiple_report`, `cov::multiple_chunks`, and the private `cov::multiple_reads` and `cov::multiple_items` |
+| `cov-multiple` (#2320) | nothing more | the Multiple form (§5.6): `cov::subscribe_cov_property_multiple`, `cov::timed_capture`, `cov::timed`, `cov::multiple_report`, `cov::multiple_chunks`, and the private `cov::multiple_reads` and `cov::multiple_items`; SubscribeCOVPropertyMultiple in `SERVICES` and the facade, `NotifyService::CovMultiple` handed out |
 | `std` (default) | the four above, beside `structured-writes` | hosted builds unchanged |
 
 The linker drops what nothing calls, but the facade dispatches by service,
@@ -142,7 +142,7 @@ pub enum Destination {
     Subscriber(SubscriberEndpoint), // the route a subscription arrived on (cov/identity.rs:8-23, moved)
     Recipient(BACnetRecipient),     // a Notification Class destination
 }
-pub enum NotifyService { Cov, Event }         // CovMultiple with #2320
+pub enum NotifyService { Cov, CovMultiple, Event }  // CovMultiple since #2320 PR 2b
 pub struct Notification {
     pub token: Token,                         // its end comes back through `delivered`
     pub to: Destination,
@@ -596,11 +596,27 @@ worker with its retries, cutoff and outcome paths, and every guard.
 `ReportContent`, `Stamp` and the split's other inputs are private to the
 crate: `Gathered::split` is how a host reaches the split.
 
-**Still to come (#2320's last part):** `NotifyService::CovMultiple` on
-the outbox, the `Reporter` running the service with the explicit forms of
-the server's guards (`end_send`, `settle`, `give_back`), the parity rows
-for both notification forms, and the image's size row with what the
-feature saves (#2215's rule).
+**The `Reporter` runs the service** (PR 2b, `report/reporter_multiple.rs`,
+behind the feature). It holds its `TimedHistories` outright and does
+explicitly, around its outbox, what the server does around its sends with
+guards:
+
+| The server | The `Reporter` |
+|---|---|
+| `store_capture`: producers capture under the database write guard | `TimedWriteCapture` around each write request's attempts; `TimedCapture::object` or `exact` in `changed` |
+| the fanout's unconfirmed loop: send, commit, stop on a failure | all parts queued as `NotifyService::CovMultiple`, each under a `part_token`; `delivered(token, Sent)` commits the part's claim and records what it completes, any other outcome stops the report: the later parts leave the outbox and their claims go back, owing once a part went |
+| `SendTurn`'s `Drop` | the turn is held while a part is queued; `end_send` when the report ends, and a fanout that stood back is looked at again |
+| `send_confirmed_cov` and the worker's `LodgedClaim` | `begin_confirmed` when the first part is queued; the lodged claim settled in `end_confirmed` (delivered on the Ack, returned otherwise) and for a fenced token; `hold_off` after a failure |
+| the follow-up task over `HistoryStore::next_due` and the revisit queue | `next_deadline` merges `TimedHistories::next_deadline`; `on_deadline` fans out `take_due`'s references and the looks owed, each context under a budget of its own; a context whose failed report's hold-off has passed is fanned out whole in the same call |
+| the table wrapper's `sync` | `settle` runs `follow_table` after every mutation but the service's own, takes the histories' counts and drops, and ends an unconfirmed report whose reference left the table |
+
+Where the outbox makes a choice the server has none for, the `Reporter`
+keeps PR 2's (decision 13): a report that finds no room is looked at
+again as room frees, and a part that finds none stops its report like one
+that was not sent. Two differences from the server remain, neither in the
+parity corpus: an object's Single and COV-multiple reports each take a
+budget of their own, where the server shares one and alternates which
+kind goes first; and the `Reporter` has no DeviceCommunicationControl.
 
 ### 5.7 Active_COV_Subscriptions
 
@@ -869,6 +885,7 @@ stops differing.
 | 2 | Active_COV_Subscriptions before and after an expiry; the initial notification; changes under and over COV_Increment; Status_Flags alone; a Table 13-1 trigger; a property subscription's own increment; a confirmed report acknowledged, refused and timed out (hold-off); a change in flight (revisit); a renewal that fences a flight; an abandoned flight (the server's worker aborted, the facade never told) ending at its deadline, after which the next change is reported; Time_Remaining after time passes |
 | 3 | OUT_OF_RANGE with Time_Delay 2 seeded by a write at 0.9 s (sent at 2.9 s) and back with Time_Delay_Normal; a value that reverts inside the delay; Event_Enable cleared (committed, not sent); recipients by day, window and transition; no clock (sequence numbers, fail-closed windows); AcknowledgeAlarm good, wrong state, wrong timestamp, local acknowledgement, and their notifications; GetEventInformation |
 | #2319 | Each algorithm both ways; a FAULT_OUT_OF_RANGE fault; the pass-count delay at two intervals |
+| #2320 PR 2b | SubscribeCOVPropertyMultiple, unconfirmed and confirmed: a timestamped reference; its history after a failed send, or held behind an outstanding report; an untimestamped reference; two contexts reporting one change; a report split across APDUs (all parts at once; one part per Ack); the Max_Notification_Delay backstop; a refused confirmed report and the follow-up at its hold-off's end; a cancellation with changes pending; Active_COV_Multiple_Subscriptions. On the fixture's fixed Device clock, so a capture at the wrong moment shows only in the core's own tests |
 
 Mutation checks: PR 1, drop the flight deadline (the aborted-worker tests
 must fail); PR 2, change the increment test's `>=` to `>`; PR 3, compare
@@ -925,7 +942,7 @@ image would link:
 | PR 2, measured | 171.4 KB (flash 189.7 KB) | the image through the `Reporter`, trimmed by #2363 (§8.3) |
 | + `event-reporting` (after PR 3) | 172-181 KB | ~2,200 lines, plus the measured objects and encoder share |
 | + `event-enrollment` (#2319) | 207-221 KB | ~2,700 lines, the Event Enrollment object, `decode_event_parameter` |
-| + the Multiple path (#2320) | +15-25 KB | ~3,300 lines, the COVNotificationMultiple codec |
+| + the Multiple path (#2320) | +15-25 KB estimated; +133 KB measured before any trim (decision 18) | ~3,300 lines, the COVNotificationMultiple codec |
 
 Flash runs about 18 KB above `.text`. So COV with intrinsic reporting fits
 a 256 KB part with room; with Event Enrollment it is tight there and easy
@@ -1368,9 +1385,51 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
       `untimed_octets`, the claim's splits and the histories' `field_time`,
       `note_field`, `adopt`, `note_reserve`, `set_sizing` and `lost_values`
       are private to the crate. The "unstable" notes are gone.
-    - Size (`check-firmware-link.sh`, Rust 1.99.0): no image's numbers
-      moved; the feature is off in every one until the `Reporter` runs
-      the service.
+    - Size (`check-firmware-link.sh`, Rust 1.99.0): the move changed no
+      image's numbers; the feature is off in every one (decision 18).
+
+18. The `Reporter` runs SubscribeCOVPropertyMultiple behind
+    `cov-multiple` (§5.6). The `reporting` image does not link the path
+    yet: it is too large as it stands.
+    - Measured with the image's scenario extended by one COV-multiple
+      context (a timestamped Present_Value, its initial report and one
+      change), the `firmware` profile, Rust 1.99.0, and the thumb
+      targets' flash region widened for the measurement; not committed.
+      Flash: 195,688 to 329,168 octets (thumbv7m), 196,500 to 330,080
+      (thumbv7em), 235,082 to 398,334 (riscv32imac). RAM: 24,680 to
+      36,968 on each, the arena from 24 to 36 KiB, for a heap peak of
+      32,632 octets on a 64-bit host where it was 20,016. No
+      `core::fmt`; four memmove routines as before; three 64-bit
+      division routines, where the row allows none.
+    - So the image passes the thumb targets' 256 KiB region by 67 KB and
+      fails a standing limit of its row. §8.2 had estimated 15-25 KB.
+    - Where it goes (thumbv7m `.text` by symbol, with LTO, so callers
+      hold what they inline): B-tree code 36 KB (the histories' six
+      maps, the read cache's two, the steps' maps and sets), sort
+      instantiations 27 KB, the histories 40 KB, the report steps with
+      the split 36 KB, the `Reporter` 44 KB (`handle`, with the service
+      and the write path inlined, 27 KB of it), the COV-multiple codec
+      9 KB. By crate: `bacnet-device-core` 52.5 to 108.8 KB, `core` 13.3
+      to 46.5 KB, `alloc` from under 7 to 37.5 KB.
+    - The feature stays (#2215's rule; decisions 12 and 15 left the
+      measurement to this PR): an image without it keeps all of that. The
+      `reporting` image leaves it off, and its rows moved by the service
+      field an outbox entry now carries: 152 octets of flash on thumbv7m
+      (195,840), RAM unchanged.
+    - What the row needs first, as #2363 was for PR 2: the histories' and
+      the read cache's maps as `VecMap`s, as the table's are; the sorts
+      (`sort_by_key` on the retained references, `TimedClaim::in_order`,
+      `rejoin`, `split_values`) merged or avoided; the 64-bit division
+      found and removed. Then the scenario above and the row.
+    - The `Reporter` fans a `Gathering::FollowUp` out in the same call,
+      where it could have queued a look for the next `on_deadline`: the
+      server's follow-up task runs at once, and the parity rows compare
+      each instant's notifications.
+    - A part of an unconfirmed report has a token of its own
+      (`multiple_report::part_token`), a ticket the table issues and
+      otherwise ignores: `Token` stays the one name a host reports a
+      send's end by, and the `Reporter`'s numbering of tickets differs
+      from the server's, which nothing on the wire shows.
 
 ## 12. Evidence
 
@@ -1459,8 +1518,9 @@ Lines are non-test lines: on dev at `56a61f3f9` for PR 1's rows, and at
 | Service checks | `handlers/cov.rs:5-28`, `:153-351` | ~225 | 2a, moved |
 | The histories follow the table | `cov.rs:527-554` (in `sync`) | ~30 | 2a, moved |
 | Multiple fanout: its decisions | `cov_notifications/multiple.rs` | 626 | 2b, moved as `cov::multiple_report` (553 lines without comments); the sends stay hosted (254) |
-| New: `NotifyService::CovMultiple`, the `Reporter` running the service, parity, the size row | | ~600 | after 2b's move |
-| **Total** | | **~1,810 moved in PR 1; ~1,275 in PR 2a; ~550 moved in PR 2b, ~600 new to come** | |
+| New: `NotifyService::CovMultiple`, the `Reporter` running the service, parity | | ~640 (522 in `report/reporter_multiple.rs`) | 2b |
+| The image's size row | | | not in 2b: the path needs trimming first (decision 18) |
+| **Total** | | **~1,810 moved in PR 1; ~1,275 in PR 2a; ~550 moved and ~640 new in PR 2b** | |
 
 PR 1's order differs from §7's rule. The read cache moved first, in one
 commit that also made its two maps B-tree maps, as the core has no hash
@@ -1518,20 +1578,17 @@ reshaped. The `Reporter` gets the explicit forms of the hosted guards
 with the steps: `take_turn` and `end_send`, `begin_confirmed` with
 `lodge` and `settle`, and `give_back`.
 
-For the last part (the `Reporter`):
+The notes for the `Reporter` came out as planned: an outbox entry carries
+its service, and only a `NotifyService::Cov` entry replaces or is
+replaced; a part has its own token (`multiple_report::part_token`); a
+confirmed report begins when it is queued; `settle` runs `follow_table`;
+`next_deadline` merges the histories'. One thing was added: a
+`Gathering::FollowUp` is fanned out in the same call, as the server's
+follow-up task does at once, so a host needs one `on_deadline` at a
+hold-off's end, not two.
 
-- Its outbox replaces a subscription's queued unconfirmed notification
-  with a newer one. The parts of a Multiple report must not replace each
-  other: an entry needs its service, and a part its own token.
-- An unconfirmed report's parts are queued together and leave one by one.
-  The `Reporter` holds the context's turn while any is queued, commits
-  each part's claim when the host reports it sent, and on a part that was
-  not sent drops the rest from the outbox and gives their claims back,
-  owing once a part went: what the server's loop does around its sends.
-- A confirmed report begins when it is queued (`begin_confirmed`), as a
-  Single one does in `evaluate`, and its lodged claim is settled where
-  the `Reporter` ends the report; a fenced one returns it.
-- `Reporter::settle` has to run `timed::follow_table` after every table
-  mutation, and take the histories' counts and drops.
-- The deadline: `next_deadline` merges the histories', and `on_deadline`
-  fans out what `take_due` hands it, as the server's follow-up task does.
+Left for a follow-up, with the size row: the path's footprint (decision
+18). The scenario the `reporting` image would run is small (a
+SubscribeCOVPropertyMultiple for one timestamped Present_Value, its
+initial report and one change, two 58-octet notifications), and needs
+the arena at 36 KiB.

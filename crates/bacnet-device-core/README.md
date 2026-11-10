@@ -21,8 +21,10 @@ the database guard, the transport, addressing and time.
   changes where a mutation commits (`cov::timed_capture`), the timestamped
   histories with their claims and deadlines (`cov::timed`), and what a
   fanout reports to each context, split to the subscriber's APDU size
-  (`cov::multiple_report`). A host sends what those decide; a `Reporter`
-  doesn't serve the service yet.
+  (`cov::multiple_report`). A host sends what those decide, and with the
+  feature a `Reporter` answers the service and queues its reports as it
+  does the other COV notifications. A firmware image leaves it off unless
+  it serves the service: it adds about 133 KB of flash on a Cortex-M3.
 - `bacnet-server` runs its ReadProperty, ReadPropertyMultiple,
   WriteProperty, WritePropertyMultiple, Who-Is and Who-Has on it, through
   the staged functions in `read`, `write` and `discovery`.
@@ -59,7 +61,8 @@ the database guard, the transport, addressing and time.
   the counts (`take_counts`). `bacnet-server` runs its table and its
   ordinary and Single notifications on it.
 - `report`: `Reporter`, the `Responder` with COV reporting for a host with
-  nothing to await: it answers SubscribeCOV and SubscribeCOVProperty,
+  nothing to await: it answers SubscribeCOV and SubscribeCOVProperty (and
+  SubscribeCOVPropertyMultiple with `cov-multiple`),
   queues the notifications a request or the host's own change calls for in
   an outbox allocated once (`OutboxLimits`; one unconfirmed entry per
   subscription, the newest), hands them out through `pop`

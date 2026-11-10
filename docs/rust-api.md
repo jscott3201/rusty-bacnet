@@ -8076,9 +8076,19 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   under its identifier would report to the old subscriptions.
   `ReportConfig` holds the `CovPolicy`, the outbox and the confirmed
   timing; `ReporterCounters` what it counted. Build the database with
-  `report::SERVICES`, which adds the two subscribe services to the
-  `Responder`'s. A `Reporter` doesn't serve the COV-multiple services
-  yet: `bacnet-server` runs them on the core's steps (#2320).
+  `report::SERVICES`, which adds the subscribe services to the
+  `Responder`'s. With `cov-multiple` (#2320) the `Reporter` answers
+  SubscribeCOVPropertyMultiple too, on the steps `bacnet-server` runs
+  (`cov::multiple_report`, below): it captures each write attempt and
+  each change the host reports, queues a report's notifications as
+  `NotifyService::CovMultiple` (an unconfirmed report's parts together;
+  one the host reports not sent stops the rest, which goes back to its
+  references), begins a confirmed report when it queues its first part
+  and settles its claim where the report ends, and adds the earliest
+  Max_Notification_Delay deadline of a context with changes pending to
+  `next_deadline`. `SERVICES` then names the service and the overlay
+  serves Active_COV_Multiple_Subscriptions from the table. Without the
+  feature the service is rejected as unrecognized.
 - `cov::timed` (#2320, behind the `cov-multiple` feature, which `std`
   turns on): the SubscribeCOVPropertyMultiple notification path's
   timestamped histories. `TimedHistories` is plain state for a host to guard:
@@ -8164,7 +8174,9 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
     deadline, or refuses it and gives everything back; the host settles
     the lodged claim when the report ends, and after a failure calls
     `hold_off(table, histories, context, now)` so the backstop waits out
-    the hold-off.
+    the hold-off. `part_token(table, route)` gives a host that queues an
+    unconfirmed report's parts, as the `Reporter`'s outbox does, a token
+    to hear of each send by.
 
   The split, its inputs and the read cache (`cov::multiple_items`,
   `cov::multiple_reads`, and all of `cov::multiple_chunks` but `Part`) are
