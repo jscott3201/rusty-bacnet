@@ -20,7 +20,7 @@
 //! unconfirmed context's report. Each takes only this store's mutex, a leaf
 //! lock, for a synchronous section.
 
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -229,7 +229,7 @@ impl ClaimGuard {
     }
 
     /// See [`timed::TimedClaim::split_untimed`].
-    pub(crate) fn split_untimed(&mut self, keys: &HashSet<CovSubscriptionKey>) -> Self {
+    pub(crate) fn split_untimed(&mut self, keys: &BTreeSet<CovSubscriptionKey>) -> Self {
         let part = self.claim.split_untimed(|key| keys.contains(key));
         self.wrap(part)
     }

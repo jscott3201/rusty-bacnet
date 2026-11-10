@@ -25,7 +25,7 @@
 //! reference whose values fit no notification alone is left out, logged and
 //! counted in `CovCounters::untimed_references_oversized` (#1066); it is
 //! evaluated again at its next fanout.
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 
 use bacnet_services::cov_multiple::{
     COVNotificationItem, COVNotificationMultipleRequest, COVNotificationValue,
@@ -75,7 +75,7 @@ pub(super) struct Part {
     /// References whose observation this part's delivery completes: each
     /// timestamped reference whose latest drained change it carries, and each
     /// untimestamped reference whose values it carries.
-    pub(super) finishes: HashSet<CovSubscriptionKey>,
+    pub(super) finishes: BTreeSet<CovSubscriptionKey>,
 }
 
 /// Service-request octets one notification may take: the smaller of the local
@@ -89,7 +89,7 @@ pub(super) fn request_limit(local: u32, subscriber: Option<u16>, confirmed: bool
 /// Octets the untimestamped values among `retained` take, with one item's
 /// framing per object.
 pub(super) fn untimed_octets(retained: &Retained<'_>) -> usize {
-    let mut objects = HashSet::new();
+    let mut objects = BTreeSet::new();
     retained
         .iter()
         .filter(|(sub, _)| !sub.timestamped)
@@ -109,7 +109,7 @@ pub(super) struct ReportContent<'a> {
     pub(super) envelope: &'a Envelope,
     pub(super) retained: &'a Retained<'a>,
     pub(super) reads: &'a MultipleReads,
-    pub(super) untimed: &'a HashSet<Coordinate>,
+    pub(super) untimed: &'a BTreeSet<Coordinate>,
     /// Times a field of a timestamped reference that conveys no change in the
     /// last notification, carried by a sibling (#987). Only the last
     /// notification has such current values.
@@ -286,7 +286,7 @@ fn history_parts(parts: Vec<(COVNotificationMultipleRequest, ClaimGuard)>) -> Ve
         .map(|(notification, claim)| Part {
             notification,
             claim,
-            finishes: HashSet::new(),
+            finishes: BTreeSet::new(),
         })
         .collect()
 }
@@ -296,7 +296,7 @@ fn history_parts(parts: Vec<(COVNotificationMultipleRequest, ClaimGuard)>) -> Ve
 /// change, or the last value of it sent when that change went out one value
 /// per notification (#1090).
 fn finish_timed(parts: &mut [Part]) {
-    let mut later = HashSet::new();
+    let mut later = BTreeSet::new();
     for part in parts.iter_mut().rev() {
         for (key, _) in part.claim.last_changes() {
             if later.insert(key.clone()) {
@@ -363,7 +363,7 @@ fn untimed_parts(content: &ReportContent<'_>, mut claim: ClaimGuard, limit: usiz
     let parts = groups
         .into_iter()
         .map(|group| {
-            let keys: HashSet<_> = group.iter().map(|(sub, _)| sub.key().clone()).collect();
+            let keys: BTreeSet<_> = group.iter().map(|(sub, _)| sub.key().clone()).collect();
             Part {
                 notification: content.current(&[], &group),
                 claim: claim.split_untimed(&keys),

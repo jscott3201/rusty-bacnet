@@ -1,6 +1,6 @@
 //! Item assembly for one COV-multiple notification: queued timestamped history
 //! followed by one current value per coordinate.
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 use bacnet_objects::clock::ClockFrame;
 use bacnet_services::cov_multiple::{COVNotificationItem, COVNotificationValue};
@@ -25,7 +25,7 @@ pub(super) type History<'a> = [(&'a CovSubscriptionKey, &'a TimedChange)];
 /// The latest change a notification carries of each timestamped reference,
 /// conveyed as its current state. A reference without one conveys no change
 /// in that notification: its changes went out in an earlier one (#1008).
-pub(super) type Latest<'a> = HashMap<&'a CovSubscriptionKey, &'a TimedChange>;
+pub(super) type Latest<'a> = BTreeMap<&'a CovSubscriptionKey, &'a TimedChange>;
 
 /// Capture sequence and clock frame of a change whose time a value carries.
 pub(super) type LastChange = (u64, ClockFrame);
@@ -57,7 +57,7 @@ pub(super) fn build_items(
     retained: Option<&Retained<'_>>,
     latest: &Latest<'_>,
     reads: &MultipleReads,
-    untimed: &HashSet<Coordinate>,
+    untimed: &BTreeSet<Coordinate>,
     stamp: &Stamp<'_>,
 ) -> (Vec<COVNotificationItem>, Option<LastChange>) {
     let mut items: Vec<COVNotificationItem> = Vec::new();
@@ -95,7 +95,7 @@ pub(super) fn build_items(
         // Each history value keeps its own time; no current state follows.
         items.retain(|item| !item.list_of_values.is_empty());
         for item in &mut items {
-            let values = std::mem::take(&mut item.list_of_values);
+            let values = core::mem::take(&mut item.list_of_values);
             let rows = values.len();
             item.list_of_values = collapse_repeats(values, rows);
         }
@@ -184,7 +184,7 @@ pub(super) fn build_items(
         let oid = item.monitored_object_identifier;
         let from = start(index);
         let mut kept = Vec::with_capacity(item.list_of_values.len());
-        for (at, mut value) in std::mem::take(&mut item.list_of_values)
+        for (at, mut value) in core::mem::take(&mut item.list_of_values)
             .into_iter()
             .enumerate()
         {
@@ -226,7 +226,7 @@ pub(super) fn build_items(
     }
     for (index, item) in items.iter_mut().enumerate() {
         item.list_of_values =
-            collapse_repeats(std::mem::take(&mut item.list_of_values), start(index));
+            collapse_repeats(core::mem::take(&mut item.list_of_values), start(index));
     }
     // An object whose history rows were all explicitly untimestamped, or
     // whose only current value was withheld.

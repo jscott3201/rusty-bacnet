@@ -6,7 +6,7 @@ use super::*;
 use crate::cov::timed_store::{ClaimGuard, SendTurn};
 use bacnet_device_core::cov::multiple_reads::MultipleReads;
 use bacnet_device_core::cov::timed::{FieldTiming, TimedChange};
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Fire the initial COVNotificationMultiple for a newly accepted
@@ -327,7 +327,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 // of references on objects that did not change now. A confirmed
                 // context starts none while a report is outstanding, so this
                 // holds for it too. Captured values need no object read.
-                let mut untimed = HashSet::new();
+                let mut untimed = BTreeSet::new();
                 let mut others = Vec::new();
                 for other in table.multiple_context_references(&context) {
                     if !other.timestamped {
