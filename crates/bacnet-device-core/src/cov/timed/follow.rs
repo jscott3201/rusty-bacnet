@@ -16,6 +16,9 @@ use crate::cov::{CovSubscriptionSnapshot, CovTable, CovTimeRemaining, Fenced};
 /// changes:
 ///
 /// - a removed reference loses its history, or its owed mark;
+/// - a context whose hold-off went with a replaced flight loses the
+///   backstop's wait for it, so the histories wait only while the table
+///   holds off (#2419);
 /// - a published COV-multiple reference is bound to its new generation,
 ///   with its context's Max_Notification_Delay: a timestamped one keeps a
 ///   history, an untimestamped one only what it may come to be owed. Any
@@ -31,6 +34,9 @@ pub fn follow_table(
 ) {
     for key in &fenced.removed {
         histories.remove(key);
+    }
+    for context in &fenced.released {
+        histories.rearm_context(context);
     }
     for snapshot in published {
         let delay = snapshot.max_notification_delay().unwrap_or_default();

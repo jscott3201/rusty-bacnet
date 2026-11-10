@@ -326,9 +326,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     drop(claim);
                     let mut table = cov_table.write().await;
                     table.delivered(&flight, Delivery::Failed);
-                    // Its timestamped history goes out once the hold-off ends.
+                    // Its timestamped history goes out once the hold-off
+                    // ends. A report whose context was cancelled while it
+                    // was out, or which was fenced while this worker waited
+                    // for the table, holds nothing off: the table ignored
+                    // its failure, and the context's backstop may be a
+                    // newer subscription's (#2419).
                     if let Some(context) = route.key().multiple_context() {
-                        table.hold_off(context);
+                        table.hold_off(&flight, context);
                     }
                     Vec::new()
                 }
