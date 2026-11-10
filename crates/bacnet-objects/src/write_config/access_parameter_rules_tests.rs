@@ -196,6 +196,7 @@ fn the_clear_drops_parameters_reporting_rows_and_description_together() {
 /// holding it.
 fn uncovered(kind: ObjectType) -> Vec<(P, PropertyValue, AlgorithmWriteConfig)> {
     use bacnet_types::bitstring::LimitEnable;
+    use bacnet_types::constructed::{BACnetEventParameter, FaultParameters};
     use bacnet_types::enums::BinaryPV;
     let none = AlgorithmWriteConfig::default;
     let mut rows = vec![
@@ -239,6 +240,23 @@ fn uncovered(kind: ObjectType) -> Vec<(P, PropertyValue, AlgorithmWriteConfig)> 
             PropertyValue::Enumerated(0),
             AlgorithmWriteConfig {
                 alarm_value: Some(BinaryPV::INACTIVE),
+                ..none()
+            },
+        ),
+        // An Event Enrollment's two, each as its `none` choice.
+        (
+            P::EVENT_PARAMETERS,
+            PropertyValue::ApplicationData(vec![0xF8, 20]),
+            AlgorithmWriteConfig {
+                event_parameters: Some(BACnetEventParameter::None),
+                ..none()
+            },
+        ),
+        (
+            P::FAULT_PARAMETERS,
+            PropertyValue::ApplicationData(vec![0x08]),
+            AlgorithmWriteConfig {
+                fault_parameters: Some(FaultParameters::FaultNone),
                 ..none()
             },
         ),

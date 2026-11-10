@@ -9,8 +9,9 @@
 //! Trend Log Multiple or Event Log a written reporting setting (#1952),
 //! an analog, binary or multi-state object, Access Door, Access Zone,
 //! Event or Alert Enrollment a written reporting setting (#2331), an
-//! analog, binary or multi-state object, an Access Door or an Access Zone a
-//! written event algorithm parameter too (#2331), and those
+//! analog, binary or multi-state object, an Access Door, an Access Zone or
+//! an Event Enrollment a written event algorithm parameter too (#2331),
+//! and those
 //! objects, a Timer, a Channel, the three logs, a Notification Class or
 //! Forwarder, an Access Rights object, a Device, the two lighting outputs
 //! and the two colour objects a written Description (#2364),
@@ -102,11 +103,13 @@ enum TargetValue {
 /// settings too, the nine analog, binary and multi-state object types
 /// those reporting settings beside their Tags, and Access Door, Access Zone,
 /// Event Enrollment and Alert Enrollment the same reporting settings
-/// (#2331). The nine analog, binary and multi-state types, Access Door and
-/// Access Zone save their event algorithm parameters too (the two time
-/// delays, an analog object's limits, Deadband and Limit_Enable,
-/// Alarm_Value, Alarm_Values, and a door's Fault_Values and
-/// Masked_Alarm_Values; [`kept_parameter`]). A Timer, a Channel, the thirteen types
+/// (#2331). The nine analog, binary and multi-state types, Access Door,
+/// Access Zone and Event Enrollment save their event algorithm parameters
+/// too (the two time delays, an analog object's limits, Deadband and
+/// Limit_Enable, Alarm_Value, Alarm_Values, a door's Fault_Values and
+/// Masked_Alarm_Values, and an enrollment's Event_Parameters,
+/// Fault_Parameters and Time_Delay_Normal; [`kept_parameter`]). A Timer, a
+/// Channel, the thirteen types
 /// with a reporting store,
 /// the three logs, a Notification Class, a forwarder, an Access Rights
 /// object, a Device, a Lighting Output, a Binary Lighting Output and the
@@ -202,13 +205,12 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
                         | PropertyIdentifier::COV_RESUBSCRIPTION_INTERVAL
                 )
         }
-        ObjectType::ACCESS_DOOR | ObjectType::ACCESS_ZONE => {
+        ObjectType::ACCESS_DOOR | ObjectType::ACCESS_ZONE | ObjectType::EVENT_ENROLLMENT => {
             kept_with_reporting(property) || kept_parameter(oid.object_type(), property)
         }
-        ObjectType::TREND_LOG_MULTIPLE
-        | ObjectType::EVENT_LOG
-        | ObjectType::EVENT_ENROLLMENT
-        | ObjectType::ALERT_ENROLLMENT => kept_with_reporting(property),
+        ObjectType::TREND_LOG_MULTIPLE | ObjectType::EVENT_LOG | ObjectType::ALERT_ENROLLMENT => {
+            kept_with_reporting(property)
+        }
         _ => false,
     }
 }
@@ -225,7 +227,8 @@ fn kept_with_reporting(property: PropertyIdentifier) -> bool {
 /// Access Zone; High_Limit, Low_Limit, Deadband and Limit_Enable on the
 /// analog ones; Alarm_Value on a Binary Input or Value; Alarm_Values on a
 /// Multi-state Input or Value, an Access Door and an Access Zone;
-/// Fault_Values and Masked_Alarm_Values on an Access Door.
+/// Fault_Values and Masked_Alarm_Values on an Access Door; Event_Parameters,
+/// Fault_Parameters and Time_Delay_Normal on an Event Enrollment.
 /// The list is the object crate's, so the two can't drift: a parameter the
 /// object keeps and this left out would save in place under the guard.
 fn kept_parameter(object_type: ObjectType, property: PropertyIdentifier) -> bool {

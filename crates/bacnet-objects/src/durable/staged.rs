@@ -123,6 +123,34 @@ fn relinquishes_nothing(value: &PropertyValue, error: &Error) -> bool {
 
 /// Whether `value` encodes as one application NULL: `Null` itself, the raw
 /// octets a raw-octet property receives for one, or a list of one NULL.
+/// Whether `staged` and `written` are one written value: the same
+/// datatype holding the same bits, element by element through a list.
+///
+/// `==` isn't that test. A REAL or Double that is no number doesn't equal
+/// itself, so a request's own write would pass for another request's and
+/// be saved again where it stands, under the caller's lock (#2331); and
+/// the two zeros are equal, though a step worked out from one isn't the
+/// state a write of the other leaves.
+fn same_written(staged: &PropertyValue, written: &PropertyValue) -> bool {
+    match (staged, written) {
+        (PropertyValue::Real(staged), PropertyValue::Real(written)) => {
+            staged.to_bits() == written.to_bits()
+        }
+        (PropertyValue::Double(staged), PropertyValue::Double(written)) => {
+            staged.to_bits() == written.to_bits()
+        }
+        (PropertyValue::List(staged), PropertyValue::List(written)) => {
+            staged.len() == written.len()
+                && staged
+                    .iter()
+                    .zip(written)
+                    .all(|(staged, written)| same_written(staged, written))
+        }
+        // No other datatype holds a floating-point number.
+        _ => staged == written,
+    }
+}
+
 fn is_null(value: &PropertyValue) -> bool {
     match value {
         PropertyValue::Null => true,
@@ -317,6 +345,11 @@ impl<S: Send + 'static, N> StagedSaves<S, N> {
     /// this write; a staged write is left as it is then, for the object to
     /// [drop](Self::drop_staged) only once it knows the write will be made
     /// (#1424).
+    ///
+    /// The step is this write when its value is the staged one bit for bit
+    /// ([`same_written`]), so a value that isn't equal to itself, a REAL
+    /// that is no number, is still taken by the request that staged it
+    /// (#2331).
     pub(crate) fn claim(
         &mut self,
         property: PropertyIdentifier,
@@ -329,7 +362,7 @@ impl<S: Send + 'static, N> StagedSaves<S, N> {
         if next.property != property
             || next.array_index != array_index
             || staged.base.wrapping_add(staged.taken) != base
-            || next.value != *value
+            || !same_written(&next.value, value)
         {
             return None;
         }

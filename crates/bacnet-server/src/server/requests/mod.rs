@@ -44,6 +44,8 @@ mod durable_stop_tests;
 #[cfg(test)]
 mod durable_write_wire_tests;
 #[cfg(test)]
+mod enrollment_parameters_durable_tests;
+#[cfg(test)]
 mod executed;
 #[cfg(test)]
 mod lighting_command_wire_tests;

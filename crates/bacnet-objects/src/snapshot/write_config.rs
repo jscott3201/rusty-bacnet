@@ -47,7 +47,14 @@
 //!   refused before a state is read, and the count fixes the row's length,
 //!   so a row cut short or going on is refused too); bits 8 and 9 are an
 //!   Access Door's Fault_Values and Masked_Alarm_Values, in the form of
-//!   bit 7. What a listed state may be is the rule of the object type the
+//!   bit 7; bits 10 and 11 are an Event Enrollment's Event_Parameters and
+//!   Fault_Parameters, each a length of at most 64 KiB and then the value
+//!   in its BACnet encoding (a length past the cap is refused before the
+//!   value is read; the octets must be one whole value, in the encoding a
+//!   save writes, so a load followed by a save leaves them as they were).
+//!   An Event Enrollment keeps bit 1 without bit 0: its Time_Delay is a
+//!   member of its Event_Parameters. What a listed state may be is the
+//!   rule of the object type the
 //!   file's header names: on a multi-state object any state but zero, and
 //!   on an Access Door or an Access Zone a member of the type's
 //!   enumeration, named or proprietary, other than NORMAL. A file is
@@ -135,7 +142,8 @@ pub const MAX_LEN: usize = 1024 * 1024;
 /// members than the object keeps, delays that don't pair with the members,
 /// a Control_Groups size outside 1 to [`MAX_CONTROL_GROUPS`], reporting
 /// settings or an algorithm parameter no write leaves, a parameter the
-/// object's type doesn't keep, a Description past 16 KiB), and one past
+/// object's type doesn't keep, Event_Parameters or Fault_Parameters with no
+/// encoding or one past 64 KiB, a Description past 16 KiB), and one past
 /// [`MAX_LEN`].
 pub fn encode(
     object: ObjectIdentifier,

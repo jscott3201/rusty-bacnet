@@ -3042,9 +3042,9 @@ the two lighting outputs among them, which keep one only through the Rust
 API's `with_tags_persistence`, and the Network Port, whose transport keeps
 only its own tables in `bdt_persist_path`.
 
-The analog, binary and multi-state builders, `add_access_door` and
-`add_access_zone` keep the event algorithm parameters a peer writes in the
-same file (#2331):
+Every one of these builders but `add_alert_enrollment` keeps the event
+algorithm parameters a peer writes in the same file (#2331). An Alert
+Enrollment has none a peer writes.
 
 | Builders | Parameters kept |
 | --- | --- |
@@ -3054,6 +3054,7 @@ same file (#2331):
 | `add_binary_output`, `add_multistate_output` | Time_Delay, Time_Delay_Normal |
 | `add_access_door` | Time_Delay, Time_Delay_Normal, Alarm_Values, Fault_Values, Masked_Alarm_Values |
 | `add_access_zone` | Time_Delay, Time_Delay_Normal, Alarm_Values |
+| `add_event_enrollment` | Time_Delay_Normal, Event_Parameters, Fault_Parameters |
 
 The rules are the reporting settings': saved before the write
 is answered, refused with DEVICE / OPERATIONAL_PROBLEM when the save fails,
@@ -3061,9 +3062,35 @@ with the old value still served and still used by the object's event
 detection. After a restart the object detects with the saved parameters
 from its first evaluation. `clear_written_reporting=True` drops them with
 the rest. A file holding a value the object refuses on the wire raises
-`BacnetError`. No new keyword is needed. Event Enrollment doesn't keep its
-parameters yet: a written Event_Parameters or Fault_Parameters lasts until
-the server restarts.
+`BacnetError`. No new keyword is needed. The parameters still lost at a
+restart are the ones peers can't write: an Access Zone's occupancy limits
+and an Event Enrollment's Object_Property_Reference, which the application
+sets.
+
+An Event Enrollment's Time_Delay is a member of its Event_Parameters and is
+kept with them; Time_Delay_Normal is a property of its own and is kept once
+it is written itself. Event_Type and Fault_Type follow the restored
+parameters, as they follow written ones, and the server's first evaluation
+pass after the restart uses them. With `storage_path`, Event_Parameters or
+Fault_Parameters whose BACnet encoding is past 64 KiB are refused with
+RESOURCES / NO_SPACE_TO_WRITE_PROPERTY before anything is saved; 64 KiB
+holds a list of 10,000 states, the longest a write may carry. An
+enrollment without `storage_path` takes a longer value, as before.
+
+A write of an enrollment's parameters is checked against the written value
+alone, so a saved value always loads. What the file doesn't hold can still
+differ after a restart: the property the enrollment monitors, and the
+`event_type` keyword. That keyword is the Event_Type served while the
+enrollment holds legacy octet-string parameters or a proprietary
+alternative (context tag 64 and up), and the algorithm the legacy octets
+are evaluated by; a proprietary alternative is kept and served but never
+evaluated.
+Saved parameters that don't suit them show as they do on any enrollment
+configured that way: an event algorithm whose monitored value has another
+datatype raises nothing and reports no fault, and a fault algorithm that
+can't run on it reports Reliability CONFIGURATION_ERROR.
+`add_event_enrollment` takes no keyword for the parameters, so the note
+below on `write_property_local` applies to it too.
 
 `add_access_door` and `add_access_zone` do take keywords for their lists
 (`alarm_values`, and a door's `fault_values` and `masked_alarm_values`).

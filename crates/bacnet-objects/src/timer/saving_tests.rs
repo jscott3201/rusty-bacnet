@@ -158,6 +158,43 @@ fn a_staged_write_takes_the_saved_set() {
     assert_eq!(storage.saves(), 1);
 }
 
+/// A staged value that isn't equal to itself is still the request's own:
+/// a REAL that is no number, alone at an index and inside the whole array,
+/// takes the save its stage made and saves nothing more (#2331). A
+/// comparison by `==` took such a write for another request's and saved it
+/// again where it was.
+#[test]
+fn a_staged_value_that_is_not_a_number_takes_its_save() {
+    let nan = PropertyValue::Real(f32::NAN);
+    let mut array = vec![PropertyValue::Null; 7];
+    array[4] = PropertyValue::Double(f64::NAN);
+    array[6] = nan.clone();
+    for (array_index, value) in [(Some(2), nan), (None, PropertyValue::List(array))] {
+        let storage = MemoryConfig::new();
+        let mut timer = timer(&storage, 1.0);
+        let write = PendingWrite {
+            property: VALUES,
+            array_index,
+            value,
+        };
+        let StageStep::Staged(wait) = timer.stage_writes(core::slice::from_ref(&write)) else {
+            panic!("the write didn't stage");
+        };
+        wait.block();
+        assert_eq!(storage.saves(), 1, "{array_index:?}");
+        timer
+            .write_property(write.property, write.array_index, write.value, None)
+            .unwrap();
+        timer.release_staged_write(&wait);
+        timer.wait_for_saves();
+        assert_eq!(storage.saves(), 1, "{array_index:?}: saved again");
+        let PropertyValue::Real(served) = read(&timer, VALUES, array_index.or(Some(7))) else {
+            panic!("a REAL was written");
+        };
+        assert!(served.is_nan(), "{array_index:?}");
+    }
+}
+
 /// A staged set its request never makes is put back: storage then holds
 /// what the Timer serves, here nothing written.
 #[test]

@@ -5,7 +5,8 @@
 //! them with the rest, and a request's writes save once. The binary and
 //! multi-state objects' are in `state_parameters_tests` and
 //! `state_parameter_rules_tests`, and Access Door's and Access Zone's in
-//! `access_parameters_tests`.
+//! `access_parameters_tests`, and an Event Enrollment's in
+//! `enrollment_parameters_tests`.
 
 use alloc::sync::Arc;
 
@@ -489,97 +490,77 @@ fn a_stored_parameter_is_validated_as_a_write_of_it_is() {
     }
 }
 
-/// The two object types with a reporting store that keep no parameter in
-/// this build. Access Door's and Access Zone's are in
-/// `access_parameters_tests`.
-const OTHERS: [ObjectType; 2] = [ObjectType::EVENT_ENROLLMENT, ObjectType::ALERT_ENROLLMENT];
-
-/// Object 1 of `kind`, one of [`OTHERS`], keeping its reporting settings
-/// in `storage`.
-fn try_other(
-    kind: ObjectType,
-    storage: &Arc<MemoryConfig>,
-) -> Result<Box<dyn BACnetObject>, Error> {
-    let kept = persistence(storage);
-    macro_rules! build {
-        ($object:expr) => {
-            Ok(Box::new($object?.with_reporting_persistence(kept)?))
-        };
-    }
+/// Alert Enrollment 1, keeping its reporting settings in `storage`: the
+/// one type with a reporting store that keeps no parameter. It has none a
+/// peer writes.
+fn try_alert(storage: &Arc<MemoryConfig>) -> Result<AlertEnrollmentObject, Error> {
     let source = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1)?;
-    match kind {
-        ObjectType::EVENT_ENROLLMENT => build!(EventEnrollmentObject::new(
-            1,
-            "EE",
-            EventType::CHANGE_OF_STATE
-        )),
-        _ => build!(AlertEnrollmentObject::new(1, "AE", source)),
-    }
+    AlertEnrollmentObject::new(1, "AE", source)?.with_reporting_persistence(persistence(storage))
 }
 
-/// A type keeps only its own parameters. On each of the two enrollment
-/// types, storage holding any parameter fails the build, and a write of a
-/// time delay is answered as without storage, saves nothing and is gone
-/// after a rebuild: Time_Delay_Normal on an Event Enrollment, and neither
-/// delay on an Alert Enrollment, which refuses both.
+/// A type keeps only its own parameters. On an Alert Enrollment, storage
+/// holding any parameter fails the build, and a write of either time delay
+/// is refused as without storage and saves nothing. An Event Enrollment
+/// keeps three, and storage holding any other fails its build.
 #[test]
 fn a_type_keeps_only_its_own_parameters() {
-    for kind in OTHERS {
-        let more = [
-            AlgorithmWriteConfig {
-                alarm_value: Some(bacnet_types::enums::BinaryPV::ACTIVE),
-                ..Default::default()
-            },
-            AlgorithmWriteConfig {
-                alarm_values: Some(vec![1]),
-                ..Default::default()
-            },
-            AlgorithmWriteConfig {
-                fault_values: Some(vec![1]),
-                ..Default::default()
-            },
-            AlgorithmWriteConfig {
-                masked_alarm_values: Some(vec![1]),
-                ..Default::default()
-            },
-        ];
-        let stored = covered().into_iter().map(|(_, _, stored)| stored);
-        for stored in stored.chain(more) {
-            let built = try_other(kind, &holding(stored));
-            assert!(matches!(built, Err(Error::Encoding(_))), "{kind}");
+    let more = [
+        AlgorithmWriteConfig {
+            alarm_value: Some(bacnet_types::enums::BinaryPV::ACTIVE),
+            ..Default::default()
+        },
+        AlgorithmWriteConfig {
+            alarm_values: Some(vec![1]),
+            ..Default::default()
+        },
+        AlgorithmWriteConfig {
+            fault_values: Some(vec![1]),
+            ..Default::default()
+        },
+        AlgorithmWriteConfig {
+            masked_alarm_values: Some(vec![1]),
+            ..Default::default()
+        },
+        AlgorithmWriteConfig {
+            event_parameters: Some(bacnet_types::constructed::BACnetEventParameter::None),
+            ..Default::default()
+        },
+        AlgorithmWriteConfig {
+            fault_parameters: Some(bacnet_types::constructed::FaultParameters::FaultNone),
+            ..Default::default()
+        },
+    ];
+    let stored = covered().into_iter().map(|(_, _, stored)| stored);
+    let mut enrollment_takes = 0;
+    for stored in stored.chain(more) {
+        let built = try_alert(&holding(stored.clone()));
+        assert!(matches!(built, Err(Error::Encoding(_))), "{stored:?}");
+        let enrollment = EventEnrollmentObject::new(1, "EE", EventType::CHANGE_OF_STATE)
+            .and_then(|object| object.with_reporting_persistence(persistence(&holding(stored))));
+        match enrollment {
+            Ok(_) => enrollment_takes += 1,
+            Err(error) => assert!(matches!(error, Error::Encoding(_)), "{error:?}"),
         }
-        let storage = MemoryConfig::new();
-        let mut kept = try_other(kind, &storage).unwrap();
-        let mut plain = try_other(kind, &MemoryConfig::new()).unwrap();
-        // As built: an unwritten Time_Delay_Normal reads as Time_Delay, so
-        // both are read before either is written.
-        let delays = [P::TIME_DELAY, P::TIME_DELAY_NORMAL];
-        let built = delays.map(|property| read_ok(kept.as_ref(), property));
-        for (property, before) in delays.into_iter().zip(built) {
-            let value = PropertyValue::Unsigned(7);
-            let expected = plain.write_property(property, None, value.clone(), None);
-            let result = kept.write_property(property, None, value.clone(), None);
-            assert_eq!(result.is_ok(), expected.is_ok(), "{kind} {property:?}");
-            if result.is_ok() {
-                assert_eq!(read(kept.as_ref(), property), value, "{kind}");
-            }
-            assert_eq!(storage.saves(), 0, "{kind} {property:?}");
-            let rebuilt = try_other(kind, &storage).unwrap();
-            assert_eq!(
-                read_ok(rebuilt.as_ref(), property),
-                before,
-                "{kind} {property:?} after a rebuild"
-            );
-        }
-        let taken = delays
-            .into_iter()
-            .filter(|property| {
-                read_ok(kept.as_ref(), *property) == Some(PropertyValue::Unsigned(7))
-            })
-            .count();
-        let expected = usize::from(kind == ObjectType::EVENT_ENROLLMENT);
-        assert_eq!(taken, expected, "{kind}: the delays a write changed");
     }
+    // Time_Delay_Normal, Event_Parameters and Fault_Parameters.
+    assert_eq!(enrollment_takes, 3);
+
+    let storage = MemoryConfig::new();
+    let mut kept = try_alert(&storage).unwrap();
+    let mut plain = try_alert(&MemoryConfig::new()).unwrap();
+    for property in [P::TIME_DELAY, P::TIME_DELAY_NORMAL] {
+        let value = PropertyValue::Unsigned(7);
+        let expected = plain.write_property(property, None, value.clone(), None);
+        let result = kept.write_property(property, None, value, None);
+        assert!(expected.is_err(), "{property:?}");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            expected.unwrap_err().to_string(),
+            "{property:?}"
+        );
+        assert_eq!(read_ok(&kept, property), None, "{property:?}");
+    }
+    assert_eq!(storage.saves(), 0);
     let object = BinaryValueObject::new(1, "BV")
         .and_then(|object| object.with_reporting_persistence(persistence(&MemoryConfig::new())))
         .unwrap();

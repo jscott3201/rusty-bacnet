@@ -271,8 +271,8 @@ a peer writes there too, and the restarted object's event detection
 uses them: Time\_Delay and Time\_Delay\_Normal on all nine, High\_Limit,
 Low\_Limit, Deadband and Limit\_Enable on the analog ones, Alarm\_Value
 on a Binary Input or Value, and Alarm\_Values on a Multi-state Input
-or Value. `add_access_door` and `add_access_zone` keep theirs
-too, as each says; Event Enrollment doesn't keep its yet. The
+or Value. `add_access_door`, `add_access_zone` and
+`add_event_enrollment` keep theirs too, as each says. The
 analog, binary and multi-state builders take no keyword for these
 parameters, so an
 application sets its own with `write_property_local`, and that
@@ -1654,7 +1654,16 @@ it succeeds and changes nothing.
 
 `storage_path` and `clear_written_reporting` keep the reporting
 settings and Description a peer writes in that file, as on
-`add_analog_input`.
+`add_analog_input`. The file keeps a written Event\_Parameters,
+Fault\_Parameters and Time\_Delay\_Normal too, and the restarted
+enrollment is evaluated with them: Event\_Type and Fault\_Type follow
+the restored parameters. Time\_Delay is a member of
+Event\_Parameters and is kept with them. With `storage_path`,
+Event\_Parameters or Fault\_Parameters whose encoding is past 64 KiB
+are refused with NO\_SPACE\_TO\_WRITE\_PROPERTY; without it the
+enrollment takes them as before. There is no keyword for the
+parameters: an application sets its own with
+`write_property_local`, and that write is kept like a peer's.
 
 ### BACnetServer.add_elevator_group
 

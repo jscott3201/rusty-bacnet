@@ -252,7 +252,13 @@ macro_rules! impl_reporting_persistence {
             /// Alarm_Values on a Multi-state Input or Value, a door and a
             /// zone, and a door's Fault_Values and Masked_Alarm_Values. A
             /// door that takes saved lists sends a Door_Alarm_State they
-            /// don't admit back to NORMAL, as a write of one does.
+            /// don't admit back to NORMAL, as a write of one does. An Event
+            /// Enrollment keeps Event_Parameters, Fault_Parameters and
+            /// Time_Delay_Normal, each set of parameters up to 64 KiB of
+            /// its BACnet encoding: with storage a longer write is refused
+            /// with RESOURCES / NO_SPACE_TO_WRITE_PROPERTY. Taking saved
+            /// Event_Parameters or Time_Delay_Normal drops a delay that is
+            /// counting, as a write of either does, and nothing else.
             ///
             /// A write of one of them is then saved before the object serves
             /// it, and refused with DEVICE / OPERATIONAL_PROBLEM, the old

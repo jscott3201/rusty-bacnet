@@ -216,6 +216,23 @@ fn uncovered(kind: ObjectType) -> Vec<(P, PropertyValue, AlgorithmWriteConfig)> 
         let written = PropertyValue::List(vec![PropertyValue::Enumerated(1)]);
         rows.push((property, written, stored));
     }
+    // An Event Enrollment's two, each as its `none` choice.
+    rows.push((
+        P::EVENT_PARAMETERS,
+        PropertyValue::ApplicationData(vec![0xF8, 20]),
+        AlgorithmWriteConfig {
+            event_parameters: Some(bacnet_types::constructed::BACnetEventParameter::None),
+            ..none()
+        },
+    ));
+    rows.push((
+        P::FAULT_PARAMETERS,
+        PropertyValue::ApplicationData(vec![0x08]),
+        AlgorithmWriteConfig {
+            fault_parameters: Some(bacnet_types::constructed::FaultParameters::FaultNone),
+            ..none()
+        },
+    ));
     if is_binary(kind) || !has_alarm_values(kind) {
         rows.push((
             P::ALARM_VALUES,
