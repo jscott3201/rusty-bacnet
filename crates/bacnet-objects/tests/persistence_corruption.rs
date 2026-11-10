@@ -102,11 +102,13 @@ fn damaged_files_never_panic_and_refused_restores_write_nothing() {
 
 /// The samples cover every format the crate saves: one per file backend
 /// (the Color backend twice, once for each object type it serves, and the
-/// write configuration backend nine times: a Timer's, a Channel's, two
+/// write configuration backend fourteen times: a Timer's, a Channel's, two
 /// intrinsic reporters', an Analog Input's and an Alert Enrollment's, which
 /// takes fewer Notify_Types, kind 5 around the Timer's, the Channel's
-/// and the Analog Input's, #2364, and an Analog Input's written algorithm
-/// parameters, kind 6, plain and under kind 5, #2331), and a written
+/// and the Analog Input's, #2364, an Analog Input's written algorithm
+/// parameters, kind 6, plain and under kind 5, a Multi-state Input's,
+/// with the list row, the same two ways, an Access Door's, with its three
+/// list rows, the same two ways, and an Access Zone's, #2331), and a written
 /// Description in the log's, the forwarder's, the class's, Access Rights',
 /// the Tags and the colour output's formats (#2364).
 #[test]
@@ -141,6 +143,11 @@ fn every_format_has_a_sample() {
             "described_color_temperature",
             "parameters_reporting_write_config",
             "described_parameters_reporting_write_config",
+            "alarm_values_reporting_write_config",
+            "described_alarm_values_reporting_write_config",
+            "door_lists_reporting_write_config",
+            "described_door_lists_reporting_write_config",
+            "zone_alarm_values_reporting_write_config",
         ]
     );
 }

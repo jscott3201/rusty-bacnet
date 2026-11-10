@@ -157,19 +157,19 @@ fn enable(bits: EventTransitionBits) -> PropertyValue {
 /// One guarded setter: the row it sets, a value a write saves there, and
 /// the setter called with a value other than the saved one (`over`) and
 /// with one other than the starting value (`apply`, serving `applied`).
-struct Guarded<T> {
-    row: P,
-    written: PropertyValue,
-    over: fn(&mut T),
-    apply: fn(&mut T),
-    applied: PropertyValue,
+pub(super) struct Guarded<T> {
+    pub(super) row: P,
+    pub(super) written: PropertyValue,
+    pub(super) over: fn(&mut T),
+    pub(super) apply: fn(&mut T),
+    pub(super) applied: PropertyValue,
 }
 
 /// For each guarded row on its own: a write saves it, and on a rebuild its
 /// setter gives way while every other row's setter still applies; after
 /// the clear its setter applies again. A guard keyed on the wrong row fails
 /// one of the two.
-fn each_setter_gives_way_to_its_own_row<T: BACnetObject>(
+pub(super) fn each_setter_gives_way_to_its_own_row<T: BACnetObject>(
     open: fn(&Arc<MemoryConfig>) -> T,
     clear: fn(&mut T) -> Result<(), Error>,
     rows: &[Guarded<T>],
@@ -294,8 +294,9 @@ fn an_alert_enrollment_write_over_a_saved_row_lands() {
     );
 }
 
-/// The Access objects have no setters for these rows; their clear drops
-/// what was saved, so a rebuild serves the defaults again.
+/// The Access objects have no setters for the reporting rows (their list
+/// setters are in `access_parameters_tests`); their clear drops what was
+/// saved, so a rebuild serves the defaults again.
 #[test]
 fn an_access_object_clear_drops_what_was_saved() {
     let storage = MemoryConfig::new();

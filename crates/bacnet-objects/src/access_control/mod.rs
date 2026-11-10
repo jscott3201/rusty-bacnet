@@ -157,6 +157,21 @@ fn references_to(
 
 // ---------------------------------------------------------------------------
 
+/// The states a list of an object of `object_type` may hold, for the types
+/// whose lists are checked against a fixed enumeration: an Access Door's
+/// Alarm_Values, Fault_Values and Masked_Alarm_Values, and an Access Zone's
+/// Alarm_Values. A write, a setter and a stored list
+/// ([`crate::snapshot::write_config`]) are all held to it.
+pub(crate) fn listed_states(
+    object_type: ObjectType,
+) -> Option<crate::event::state_reporting::ListedStates> {
+    match object_type {
+        ObjectType::ACCESS_DOOR => Some(door_alarm::LISTED_STATES),
+        ObjectType::ACCESS_ZONE => Some(zone::ALARM_STATES),
+        _ => None,
+    }
+}
+
 mod accompaniment;
 mod accompaniment_types;
 mod authorization;

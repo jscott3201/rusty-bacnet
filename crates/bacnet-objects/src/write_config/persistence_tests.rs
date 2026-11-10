@@ -301,3 +301,41 @@ fn a_timer_file_from_before_default_timeout_still_loads() {
     assert_eq!(case.octets()[12], 3);
     assert_eq!(store.load(timer()).unwrap(), Some(without));
 }
+
+/// A file the builder call refuses can't be dropped by
+/// `clear_written_reporting`, which needs the object. An application
+/// replaces it without loading it, with a save of nothing written, and the
+/// object then opens on its configured values (docs/rust-api.md).
+#[cfg(feature = "event-reporting")]
+#[test]
+fn a_file_that_does_not_load_is_replaced_by_a_save_of_nothing_written() {
+    use crate::analog::AnalogInputObject;
+    use crate::traits::BACnetObject;
+    use alloc::sync::Arc;
+    use bacnet_types::enums::EngineeringUnits;
+
+    let case = FileCase::new();
+    let open = || {
+        let persistence: Arc<dyn WriteConfigPersistence> = Arc::new(case.store());
+        AnalogInputObject::new(3, "AI", EngineeringUnits::DEGREES_CELSIUS)
+            .and_then(|object| object.with_reporting_persistence(persistence))
+    };
+    let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 3).unwrap();
+    let files: [&[u8]; 3] = [
+        b"not a write configuration file",
+        // This object's header, then a kind no build knows.
+        &[b"RBNWCF01".as_slice(), &oid.encode(), &[200]].concat(),
+        &[],
+    ];
+    for octets in files {
+        case.put(octets);
+        assert!(open().is_err(), "{octets:?} opened");
+        assert_eq!(case.octets(), octets, "a refused build wrote");
+        let nothing = WriteConfigSnapshot::Reporting(ReportingWriteConfig::default());
+        case.store().save(oid, &nothing).unwrap();
+        let object = open().unwrap();
+        assert_eq!(object.written_reporting(), ReportingWriteConfig::default());
+        assert_eq!(object.object_identifier(), oid);
+        assert_eq!(case.store().load(oid).unwrap(), Some(nothing));
+    }
+}

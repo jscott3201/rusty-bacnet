@@ -192,8 +192,13 @@ impl MultiStateValueObject {
     ///
     /// Unlike a network write, which refuses a state past Number_Of_States
     /// (#1429), this takes any state; one past the count shows as
-    /// CONFIGURATION_ERROR.
+    /// CONFIGURATION_ERROR. On an object keeping its reporting settings,
+    /// Alarm_Values a write saved win, as for the other setters (#2331).
     pub fn set_alarm_values(&mut self, values: Vec<u32>) {
+        #[cfg(feature = "event-reporting")]
+        if self.kept_over_setter(PropertyIdentifier::ALARM_VALUES) {
+            return;
+        }
         self.event_detector.alarm_values = values;
         let _ = self.recompute_reliability();
     }
@@ -271,7 +276,10 @@ impl MultiStateValueObject {
     }
 }
 
-crate::write_config::reporting::impl_reporting_persistence!(MultiStateValueObject);
+crate::write_config::reporting::impl_reporting_persistence!(
+    MultiStateValueObject,
+    states: number_of_states
+);
 
 impl BACnetObject for MultiStateValueObject {
     fn object_identifier(&self) -> ObjectIdentifier {
@@ -461,8 +469,13 @@ impl BACnetObject for MultiStateValueObject {
             return Ok(());
         }
         if property == PropertyIdentifier::ALARM_VALUES {
-            let values = decode_alarm_values_write(array_index, value, self.number_of_states)?;
-            self.set_alarm_values(values);
+            write_alarm_values(
+                &mut self.event_detector,
+                array_index,
+                value,
+                self.number_of_states,
+            )?;
+            let _ = self.recompute_reliability();
             return Ok(());
         }
         if property == PropertyIdentifier::EVENT_DETECTION_ENABLE {

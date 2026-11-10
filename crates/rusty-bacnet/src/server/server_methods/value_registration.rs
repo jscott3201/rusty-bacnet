@@ -2,7 +2,7 @@
 //! `tags`, `profile_location` and `profile_name` keywords that provision the
 //! optional profile rows (#1553), and `storage_path` and
 //! `clear_written_reporting`, which keep the reporting settings a peer
-//! writes, and an analog object's event algorithm parameters (#2331); the
+//! writes, and each object's event algorithm parameters (#2331); the
 //! Value objects also take `present_value_access`,
 //! `value_source_tracking` (#1552) and the independently optional Audit
 //! policy.
@@ -19,10 +19,14 @@ impl BACnetServer {
     /// Event_Detection_Enable, Event_Message_Texts_Config and the
     /// Event_Algorithm_Inhibit pair) in that file (#2331), and a written
     /// Description (#2364): such a write is saved before it is answered,
-    /// refused if it can't be, and served again after a restart. The three
-    /// analog builders keep the event algorithm parameters a peer writes
-    /// there too (Time_Delay, Time_Delay_Normal, High_Limit, Low_Limit,
-    /// Deadband and Limit_Enable; #2331).
+    /// refused if it can't be, and served again after a restart. The
+    /// analog, binary and multi-state builders keep the event algorithm
+    /// parameters a peer writes there too (#2331): the two time delays on
+    /// all nine, High_Limit, Low_Limit, Deadband and Limit_Enable on the
+    /// analog ones, Alarm_Value on a Binary Input or Value, and
+    /// Alarm_Values on a Multi-state Input or Value. `add_access_door`
+    /// and `add_access_zone` keep theirs too, as each says; Event
+    /// Enrollment doesn't keep its yet.
     /// `clear_written_reporting` drops what was saved first, Description
     /// and parameters included.
     /// Every analog, binary and multi-state builder takes both, as do

@@ -84,9 +84,14 @@ impl ChangeOfStateReporting {
     }
 
     /// Replace Alarm_Values, checking each value as a network write would;
-    /// a refused list leaves the one held.
-    pub(crate) fn set_alarm_values(&mut self, values: Vec<u32>) -> Result<(), Error> {
-        self.event_detector.alarm_values = checked_raw_list(values, self.states)?;
+    /// a refused list leaves the one held. With `kept`, storage holds a
+    /// list a write saved: the argument is checked and the saved list stays
+    /// (#2331).
+    pub(crate) fn set_alarm_values(&mut self, values: Vec<u32>, kept: bool) -> Result<(), Error> {
+        let values = checked_raw_list(values, self.states)?;
+        if !kept {
+            self.event_detector.alarm_values = values;
+        }
         Ok(())
     }
 
@@ -242,12 +247,14 @@ impl ChangeOfStateReporting {
     }
 
     /// The rows an object keeping its reporting settings saves (#2331),
-    /// with the object's `description` (#2364).
+    /// with the object's `description` (#2364): the detector's two time
+    /// delays and Alarm_Values among them.
     #[cfg(feature = "event-reporting")]
     pub(crate) fn reporting_rows(
         &self,
         description: &str,
     ) -> crate::write_config::reporting::ReportingRows {
+        use crate::write_config::reporting::parameters::AlgorithmDetector;
         crate::write_config::reporting::ReportingRows {
             notification_class: self.event_detector.notification_class,
             event_enable: self.event_detector.event_enable,
@@ -255,19 +262,22 @@ impl ChangeOfStateReporting {
             event_detection_enable: self.event_detection_enable,
             options: self.event_history.options.clone(),
             description: description.into(),
-            algorithm: Default::default(),
+            algorithm: self.event_detector.parameters(),
         }
     }
 
     /// Serve the saved rows of an object keeping its reporting settings,
     /// as it is built (#2331), a saved Description into the object's
-    /// `description` (#2364).
+    /// `description` (#2364). A saved time delay or Alarm_Values goes into
+    /// the detector as a write of it does: the value is stored and nothing
+    /// is evaluated.
     #[cfg(feature = "event-reporting")]
     pub(crate) fn restore_reporting_rows(
         &mut self,
         saved: &crate::write_config::ReportingWriteConfig,
         description: &mut String,
     ) {
+        use crate::write_config::reporting::parameters::AlgorithmDetector;
         crate::write_config::reporting::RowFields {
             notification_class: &mut self.event_detector.notification_class,
             event_enable: &mut self.event_detector.event_enable,
@@ -277,16 +287,62 @@ impl ChangeOfStateReporting {
             description,
         }
         .restore(saved);
+        self.event_detector.restore_parameters(&saved.algorithm);
+    }
+
+    /// What `write`, of a time delay or of Alarm_Values, leaves of `rows`,
+    /// or the refusal [`Self::write`] gives it: the list by the check that
+    /// write runs, against this object's own states, and a delay on a
+    /// detector of this kind (#2331).
+    #[cfg(feature = "event-reporting")]
+    pub(crate) fn parameter_after(
+        &self,
+        rows: &mut crate::write_config::AlgorithmWriteConfig,
+        write: &crate::durable::PendingWrite,
+    ) -> Result<(), Error> {
+        if write.property == PropertyIdentifier::ALARM_VALUES {
+            let values = enumerated_list(write.array_index, &write.value, self.states)?;
+            rows.alarm_values = Some(values);
+            return Ok(());
+        }
+        crate::write_config::reporting::parameters::after(&self.event_detector, None, rows, write)
     }
 }
 
 /// Implement `KeepsReporting` (`write_config::reporting`) and reporting
 /// persistence for `$object`, which holds a
 /// [`ChangeOfStateReporting`] in `reporting` and a `ReportingStore` in
-/// `reporting_store` (#2331). Its rows have no setters to guard.
+/// `reporting_store` (#2331). The reporting rows have no setters to guard;
+/// the object's list setters ask `kept_over_setter`, which this gives it.
+///
+/// The detector's two time delays and Alarm_Values are kept as algorithm
+/// parameters. With `lists: field, settled_by: method`, the object holds
+/// more lists of states in `field` (an Access Door's Fault_Values and
+/// Masked_Alarm_Values), kept too, and `method` is what a write of any of
+/// its lists runs afterwards; a restore runs it once, after every saved
+/// list is in place.
 macro_rules! keep_change_of_state_reporting {
-    ($object:ty) => {
+    ($object:ty $(, lists: $lists:ident, settled_by: $settle:ident)?) => {
         $crate::write_config::reporting::impl_reporting_persistence!($object, without_tags);
+
+        impl $object {
+            /// Whether a setter of `property` leaves it alone: the object
+            /// keeps its reporting settings and a write saved the row.
+            fn kept_over_setter(&self, property: bacnet_types::enums::PropertyIdentifier) -> bool {
+                #[cfg(feature = "event-reporting")]
+                let kept = $crate::write_config::reporting::setter_gives_way(
+                    &self.reporting_store,
+                    self.oid,
+                    property,
+                );
+                #[cfg(not(feature = "event-reporting"))]
+                let kept = {
+                    let _ = property;
+                    false
+                };
+                kept
+            }
+        }
 
         #[cfg(feature = "event-reporting")]
         impl $crate::write_config::reporting::KeepsReporting for $object {
@@ -299,7 +355,10 @@ macro_rules! keep_change_of_state_reporting {
             }
 
             fn reporting_rows(&self) -> $crate::write_config::reporting::ReportingRows {
-                self.reporting.reporting_rows(&self.description)
+                #[allow(unused_mut)]
+                let mut rows = self.reporting.reporting_rows(&self.description);
+                $(self.$lists.lend_parameters(&mut rows.algorithm);)?
+                rows
             }
 
             fn restore_reporting_rows(
@@ -308,6 +367,26 @@ macro_rules! keep_change_of_state_reporting {
             ) {
                 self.reporting
                     .restore_reporting_rows(saved, &mut self.description);
+                $(
+                    self.$lists.restore_parameters(&saved.algorithm);
+                    // What a write of a list does next, once for them all:
+                    // a state the object held that the saved lists, taken
+                    // together, don't admit goes back to NORMAL. With no
+                    // list saved it changes nothing.
+                    self.$settle();
+                )?
+            }
+
+            fn parameter_after(
+                &self,
+                _states: Option<u32>,
+                rows: &mut $crate::write_config::AlgorithmWriteConfig,
+                write: &$crate::durable::PendingWrite,
+            ) -> Result<(), bacnet_types::error::Error> {
+                $(if let Some(result) = self.$lists.parameter_after(rows, write) {
+                    return result;
+                })?
+                self.reporting.parameter_after(rows, write)
             }
         }
     };

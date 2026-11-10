@@ -48,6 +48,8 @@ mod executed;
 #[cfg(test)]
 mod lighting_command_wire_tests;
 #[cfg(test)]
+mod list_parameters_durable_tests;
+#[cfg(test)]
 mod log_reporting_durable_tests;
 #[cfg(test)]
 mod mutation_boundary_tests;
@@ -79,6 +81,8 @@ mod policy_off_task_tests;
 mod reporting_durable_tests;
 #[cfg(test)]
 mod reporting_durable_types_tests;
+#[cfg(test)]
+mod state_count_durable_tests;
 
 #[cfg(test)]
 mod create_config_live_tests;

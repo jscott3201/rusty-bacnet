@@ -118,13 +118,16 @@ impl AccessZoneObject {
     /// the values set before are kept. Clients can write the list too, as
     /// they can the zone's other event configuration (Time_Delay,
     /// Notification_Class, Event_Enable and the rest), and meet the same
-    /// checks.
+    /// checks. On a zone keeping its reporting settings, a list a write
+    /// saved wins: the argument is checked and the saved list stays, until
+    /// `clear_written_reporting` (#2331).
     pub fn set_alarm_values(
         &mut self,
         states: impl IntoIterator<Item = AccessZoneOccupancyState>,
     ) -> Result<(), Error> {
-        self.reporting
-            .set_alarm_values(states.into_iter().map(|state| state.to_raw()).collect())
+        let kept = self.kept_over_setter(PropertyIdentifier::ALARM_VALUES);
+        let states = states.into_iter().map(|state| state.to_raw()).collect();
+        self.reporting.set_alarm_values(states, kept)
     }
 
     /// Record the zone's occupancy count, as the application's counting
@@ -368,7 +371,7 @@ crate::event::impl_change_of_state_reporting!(
 
 /// The states Alarm_Values can hold: a BACnetAccessZoneOccupancyState other
 /// than NORMAL.
-const ALARM_STATES: ListedStates = ListedStates {
+pub(super) const ALARM_STATES: ListedStates = ListedStates {
     normal: AccessZoneOccupancyState::NORMAL.to_raw(),
     in_range: occupancy_state_in_range,
 };

@@ -76,8 +76,14 @@ impl MultiStateInputObject {
     /// Set the alarm values (states that trigger OFFNORMAL).
     ///
     /// Unlike a network write, which refuses a state past Number_Of_States
-    /// (#1429), this takes any state.
+    /// (#1429), this takes any state. On an object keeping its reporting
+    /// settings, Alarm_Values a write saved win, as for the other setters
+    /// (#2331).
     pub fn set_alarm_values(&mut self, values: Vec<u32>) {
+        #[cfg(feature = "event-reporting")]
+        if self.kept_over_setter(PropertyIdentifier::ALARM_VALUES) {
+            return;
+        }
         self.event_detector.alarm_values = values;
     }
 
@@ -171,7 +177,10 @@ impl MultiStateInputObject {
     }
 }
 
-crate::write_config::reporting::impl_reporting_persistence!(MultiStateInputObject);
+crate::write_config::reporting::impl_reporting_persistence!(
+    MultiStateInputObject,
+    states: number_of_states
+);
 
 impl BACnetObject for MultiStateInputObject {
     fn object_identifier(&self) -> ObjectIdentifier {
@@ -284,9 +293,12 @@ impl BACnetObject for MultiStateInputObject {
             return Ok(());
         }
         if property == PropertyIdentifier::ALARM_VALUES {
-            let values = decode_alarm_values_write(array_index, value, self.number_of_states)?;
-            self.event_detector.alarm_values = values;
-            return Ok(());
+            return write_alarm_values(
+                &mut self.event_detector,
+                array_index,
+                value,
+                self.number_of_states,
+            );
         }
         if property == PropertyIdentifier::EVENT_DETECTION_ENABLE {
             if let PropertyValue::Boolean(v) = value {
