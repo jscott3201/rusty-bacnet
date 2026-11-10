@@ -10,6 +10,8 @@ use super::cov_wire_test_support::*;
 use super::*;
 use tokio::time::Instant as TokioInstant;
 
+mod hold_off;
+
 const DELAY: u32 = 10;
 
 /// Wait until just before `DELAY` seconds after `since`; nothing goes out yet.

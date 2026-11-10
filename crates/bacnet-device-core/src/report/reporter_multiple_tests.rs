@@ -18,6 +18,9 @@ use bacnet_types::constructed::PropertyReference;
 use bacnet_types::enums::{ErrorClass, ErrorCode, UnconfirmedServiceChoice};
 use bacnet_types::primitives::{Date, Time};
 
+#[path = "reporter_multiple_hold_off_tests.rs"]
+mod hold_off;
+
 /// Max_Notification_Delay of every context here, in seconds.
 const DELAY: u64 = 5;
 const MULTIPLE: ConfirmedServiceChoice = ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE;
@@ -80,13 +83,26 @@ impl Device {
         max_apdu: u16,
         now: Instant,
     ) -> Apdu {
+        self.subscribe_delayed(process, confirmed, objects, (max_apdu, DELAY as u32), now)
+    }
+
+    /// [`Self::subscribe_multiple`] with a Max_Notification_Delay of
+    /// `delay` seconds, given with the subscriber's `max_apdu`.
+    fn subscribe_delayed(
+        &mut self,
+        process: u32,
+        confirmed: bool,
+        objects: &[(ObjectIdentifier, bool)],
+        (max_apdu, delay): (u16, u32),
+        now: Instant,
+    ) -> Apdu {
         let cancel = objects.is_empty();
         let mut body = BytesMut::new();
         SubscribeCOVPropertyMultipleRequest {
             subscriber_process_identifier: process,
             issue_confirmed_notifications: confirmed,
             lifetime: (!cancel).then_some(300),
-            max_notification_delay: (!cancel).then_some(DELAY as u32),
+            max_notification_delay: (!cancel).then_some(delay),
             list_of_cov_subscription_specifications: objects
                 .iter()
                 .map(|&(object, timestamped)| COVSubscriptionSpecification {

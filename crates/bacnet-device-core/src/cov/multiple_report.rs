@@ -872,20 +872,26 @@ pub fn begin_confirmed(
     }
 }
 
-/// A confirmed report to `context` failed at `now` (its retries ran out, or
-/// the subscriber refused it): the histories' backstop waits one hold-off,
-/// the table's, before it hands the context out again, so the timestamped
-/// history the report returned goes out once the hold-off ends.
+/// The confirmed report `token` to `context` failed (its retries ran out,
+/// or the subscriber refused it) and the table was told so
+/// ([`CovTable::delivered`]): the histories' backstop waits for the end of
+/// the hold-off the table put on the context before it hands the context
+/// out again, so the timestamped history the report returned goes out once
+/// the hold-off ends.
+///
+/// The hold-off is the table's decision. A failure it ignored, because the
+/// report was fenced, went with a cancelled context or had passed its
+/// deadline, holds nothing off: the context may belong to a subscription
+/// made since, whose backstop stays where it was (#2419).
 pub fn hold_off(
     table: &CovTable,
     histories: &mut TimedHistories,
     context: &MultipleContextKey,
-    now: Instant,
+    token: Token,
 ) {
-    histories.hold_until(
-        context,
-        now.saturating_add(table.flight_timing().hold_off()),
-    );
+    if let Some(until) = table.failed_hold_until(token) {
+        histories.hold_until(context, until);
+    }
 }
 
 #[cfg(test)]

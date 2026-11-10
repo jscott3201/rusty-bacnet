@@ -57,6 +57,20 @@ impl Host {
         references: &[COVReference],
         max_apdu: Option<u16>,
     ) -> Vec<CovSubscriptionSnapshot> {
+        self.subscribe_at(process, confirmed, objects, references, max_apdu, T0)
+    }
+
+    /// [`Self::subscribe`] at `now`; with no object, a renewal that lists
+    /// no reference.
+    pub(super) fn subscribe_at(
+        &mut self,
+        process: u32,
+        confirmed: bool,
+        objects: u32,
+        references: &[COVReference],
+        max_apdu: Option<u16>,
+        now: Instant,
+    ) -> Vec<CovSubscriptionSnapshot> {
         let named: Vec<_> = (1..=objects)
             .map(|instance| (instance, references))
             .collect();
@@ -69,7 +83,7 @@ impl Host {
             &peer(),
             max_apdu,
             request,
-            T0,
+            now,
         )
         .unwrap()
     }
@@ -440,7 +454,8 @@ fn a_failed_report_holds_the_backstop_off_and_then_owes_one_follow_up() {
     host.histories
         .settle(begun.claim.unwrap(), Settlement::Returned, failed);
     host.table.delivered(begun.token, Delivery::Failed, failed);
-    hold_off(&host.table, &mut host.histories, &ctx(1, true), failed);
+    let (table, context) = (&host.table, ctx(1, true));
+    hold_off(table, &mut host.histories, &context, begun.token);
     let until = failed + hold_off_time;
 
     // The returned changes are overdue by their delay well before the
@@ -467,6 +482,107 @@ fn a_failed_report_holds_the_backstop_off_and_then_owes_one_follow_up() {
         reported,
         [(1, 0.0, Some(1)), (2, 0.0, Some(1)), (2, 2.0, Some(12))]
     );
+}
+
+/// A report fenced while it was out, by a re-subscription that lists its
+/// references: the table ignores its failure, so the backstop of the
+/// subscription made since stays where it was (#2419).
+#[test]
+fn a_fenced_reports_failure_leaves_the_backstop_alone() {
+    let (mut host, _, begun) = confirmed_with_a_report_out();
+    host.subscribe(1, true, 2, &[reference(PV, true)], None);
+    assert_eq!(host.table.take_fenced().tokens, [begun.token], "fenced");
+    // The host returns the fenced report's claim: its changes are pending
+    // for the new subscription, due by their delay.
+    let claim = begun.claim.unwrap();
+    assert!(host.histories.settle(claim, Settlement::Returned, T0));
+    let due = Some(T0 + seconds(u64::from(DELAY)));
+    assert_eq!(host.histories.next_deadline(), due);
+
+    // The old report's worker then reports it failed.
+    let failed = at(2);
+    host.table.delivered(begun.token, Delivery::Failed, failed);
+    let (table, context) = (&host.table, ctx(1, true));
+    hold_off(table, &mut host.histories, &context, begun.token);
+    assert_eq!(host.histories.next_deadline(), due, "no hold-off");
+    let all = host.all(&ctx(1, true));
+    assert!(matches!(
+        host.fan_out(&all, false, failed),
+        Outcome::Ready(..)
+    ));
+}
+
+/// Begin the report `subs`, a confirmed context's references, call for at
+/// `now`, and fail it there, the hosts' step done: the end of its hold-off.
+fn fail_a_report(host: &mut Host, subs: &[CovSubscriptionSnapshot], now: Instant) -> Instant {
+    let (report, _) = host.fan_out(subs, true, now).ready();
+    let first = report.into_first().expect("a part");
+    let (table, histories) = (&mut host.table, &mut host.histories);
+    let (completion, carried) = (first.completion, &first.observations);
+    let claim = Some(first.claim);
+    let begun = begin_confirmed(
+        table,
+        histories,
+        completion,
+        carried,
+        claim,
+        Vec::new(),
+        now,
+    )
+    .expect("an idle context");
+    histories.settle(begun.claim.unwrap(), Settlement::Returned, now);
+    table.delivered(begun.token, Delivery::Failed, now);
+    let context = subs[0].key().multiple_context().unwrap();
+    hold_off(table, histories, context, begun.token);
+    now + table.flight_timing().hold_off()
+}
+
+/// A confirmed context on two Analog Values whose initial report failed
+/// at second 2: the backstop waits for the hold-off's end, returned.
+fn confirmed_holding_off() -> (Host, Instant) {
+    let mut host = Host::new(2);
+    let subs = host.subscribe(1, true, 2, &[reference(PV, true)], None);
+    let until = fail_a_report(&mut host, &subs, at(2));
+    assert_eq!(host.histories.next_deadline(), Some(until));
+    (host, until)
+}
+
+/// The histories wait only while the table holds off (#2419): references
+/// listed again inside a hold-off get a new flight, which holds nothing
+/// off, and the backstop's wait goes with the old one.
+#[test]
+fn a_reference_listed_again_in_a_hold_off_drops_the_backstops_wait() {
+    let (mut host, _) = confirmed_holding_off();
+    host.subscribe_at(1, true, 2, &[reference(PV, true)], None, at(3));
+    assert_eq!(host.table.context_hold_until(&ctx(1, true), at(3)), None);
+    assert_eq!(host.histories.held().1, 0);
+    // The failed report's changes are due by their delay alone.
+    let due = T0 + seconds(u64::from(DELAY));
+    assert_eq!(host.histories.next_deadline(), Some(due));
+}
+
+/// A hold-off the table keeps is kept to its end: through a renewal that
+/// lists no reference, which keeps the flight, and through another
+/// context's hold-off going with its flight.
+#[test]
+fn a_hold_off_the_table_keeps_keeps_the_backstops_wait() {
+    let (mut host, until) = confirmed_holding_off();
+    host.subscribe_at(1, true, 0, &[], None, at(3));
+    assert_eq!(
+        host.table.context_hold_until(&ctx(1, true), at(3)),
+        Some(until)
+    );
+    assert_eq!(host.histories.next_deadline(), Some(until));
+    let other = host.subscribe_at(2, true, 2, &[reference(PV, true)], None, at(3));
+    fail_a_report(&mut host, &other, at(3));
+    assert_eq!(host.histories.held().1, 2);
+    host.subscribe_at(2, true, 2, &[reference(PV, true)], None, at(4));
+    assert_eq!(host.histories.held().1, 1, "the first context's wait");
+    // Only the other context's changes come due before the hold-off ends.
+    let (due, _) = host.histories.take_due(until - Duration::from_millis(1));
+    assert!(!due.is_empty());
+    let other = ctx(2, true);
+    assert!(due.iter().all(|key| key.multiple_context() == Some(&other)));
 }
 
 #[test]
