@@ -13,19 +13,16 @@
 //! An Event Enrollment's Event_Parameters and Fault_Parameters arrive as the
 //! `PropertyValue` a `write_property_local` takes, and go the way that
 //! write does: encoded, then decoded for the property as a peer's octets
-//! are, then written.
+//! are, then written. They follow the rules of an enrollment without
+//! storage, which has no size cap: a save keeps only the rows a write set,
+//! so a keyword value never reaches the file.
 
 use bacnet_objects::traits::BACnetObject;
-use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
+use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 
 use crate::types::PyBitString;
-
-/// The longest encoding of Event_Parameters or Fault_Parameters an Event
-/// Enrollment with storage takes: the cap `bacnet-objects` holds a written
-/// one to before saving it (#2331).
-const MAX_KEPT_OCTETS: usize = 64 * 1024;
 
 /// One keyword's value: typed, written as it is, or the encoding of a
 /// `PropertyValue` the application gave, decoded for the property first.
@@ -170,28 +167,6 @@ impl AlgorithmKeywords {
                 )?,
             };
             object.write_property(*property, None, value, None)?;
-        }
-        Ok(())
-    }
-
-    /// Refuse, as an enrollment with storage refuses the write, an
-    /// Event_Parameters or Fault_Parameters keyword whose encoding is past
-    /// the cap storage holds a written one to: RESOURCES /
-    /// NO_SPACE_TO_WRITE_PROPERTY. The object has no storage attached yet
-    /// when the keywords apply, so its own write doesn't check this.
-    pub(crate) fn check_kept_size(&self, object: &dyn BACnetObject) -> Result<(), Error> {
-        for (property, keyword) in &self.0 {
-            if !matches!(keyword, Keyword::Encoded(_)) {
-                continue;
-            }
-            if let PropertyValue::ApplicationData(octets) = object.read_property(*property, None)?
-                && octets.len() > MAX_KEPT_OCTETS
-            {
-                return Err(Error::protocol(
-                    ErrorClass::RESOURCES,
-                    ErrorCode::NO_SPACE_TO_WRITE_PROPERTY,
-                ));
-            }
         }
         Ok(())
     }

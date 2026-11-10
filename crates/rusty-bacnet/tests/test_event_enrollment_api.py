@@ -58,6 +58,7 @@ class EventEnrollmentApiTests(unittest.IsolatedAsyncioTestCase):
                 "instance",
                 "name",
                 "event_type",
+                "object_property_reference",
                 "event_parameters",
                 "fault_parameters",
                 "time_delay_normal",

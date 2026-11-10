@@ -177,16 +177,15 @@ fn encoded(hex: &str) -> PropertyValue {
 }
 
 /// The Event Enrollment keywords go the way a `write_property_local`
-/// does: a malformed value is refused with the code the write gets, and
-/// with storage an encoding past 64 KiB is refused as storage refuses it
-/// (#2426).
+/// does: a malformed value is refused with the code the write gets (#2426).
 #[test]
 fn enrollment_keywords_are_checked_as_their_writes_are() {
     let parameters = encoded(OUT_OF_RANGE);
     let mut ee = enrollment();
-    let keywords = AlgorithmKeywords::enrollment(Some(&parameters), None, Some(9)).unwrap();
-    keywords.apply(&mut ee).unwrap();
-    keywords.check_kept_size(&ee).unwrap();
+    AlgorithmKeywords::enrollment(Some(&parameters), None, Some(9))
+        .unwrap()
+        .apply(&mut ee)
+        .unwrap();
     assert_eq!(read(&ee, PropertyIdentifier::EVENT_PARAMETERS), parameters);
     assert_eq!(
         read(&ee, PropertyIdentifier::EVENT_TYPE),
@@ -207,53 +206,37 @@ fn enrollment_keywords_are_checked_as_their_writes_are() {
     ] {
         assert!(keywords.unwrap().apply(&mut enrollment()).is_err());
     }
-
-    // Legacy octets whose encoding passes the cap: taken, and refused
-    // only by the storage check.
-    let long = PropertyValue::OctetString(vec![0; 65_533]);
-    let keywords = AlgorithmKeywords::enrollment(Some(&long), None, None).unwrap();
-    let mut ee = enrollment();
-    keywords.apply(&mut ee).unwrap();
-    assert_eq!(
-        code(keywords.check_kept_size(&ee).unwrap_err()),
-        ErrorCode::NO_SPACE_TO_WRITE_PROPERTY
-    );
-    let fits = PropertyValue::OctetString(vec![0; 65_000]);
-    let keywords = AlgorithmKeywords::enrollment(Some(&fits), None, None).unwrap();
-    let mut ee = enrollment();
-    keywords.apply(&mut ee).unwrap();
-    keywords.check_kept_size(&ee).unwrap();
 }
 
 /// The enrollment pass evaluates with the keyword parameters: a value of
-/// 50 raises HIGH_LIMIT only under them (the default parameters are the
-/// `none` choice).
+/// 50 raises HIGH_LIMIT under them, and nothing under the default
+/// parameters (the `none` choice).
 #[test]
 fn the_enrollment_pass_uses_the_keyword_parameters() {
     use bacnet_objects::database::ObjectDatabase;
     use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
     use bacnet_types::enums::EventState;
 
-    let mut db = ObjectDatabase::new();
-    let mut ai = analog_input();
-    ai.set_present_value(50.0);
-    let ai_oid = ai.object_identifier();
-    db.add(Box::new(ai)).unwrap();
-    let mut ee = enrollment();
-    ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
-        ai_oid,
-        PropertyIdentifier::PRESENT_VALUE.to_raw(),
-    )))
-    .unwrap();
-    AlgorithmKeywords::enrollment(Some(&encoded(OUT_OF_RANGE)), None, None)
-        .unwrap()
-        .apply(&mut ee)
+    let pass = |keywords: AlgorithmKeywords| {
+        let mut db = ObjectDatabase::new();
+        let mut ai = analog_input();
+        ai.set_present_value(50.0);
+        let ai_oid = ai.object_identifier();
+        db.add(Box::new(ai)).unwrap();
+        let mut ee = enrollment();
+        ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+            ai_oid,
+            PropertyIdentifier::PRESENT_VALUE.to_raw(),
+        )))
         .unwrap();
-    let ee_oid = ee.object_identifier();
-    db.add(Box::new(ee)).unwrap();
+        keywords.apply(&mut ee).unwrap();
+        db.add(Box::new(ee)).unwrap();
+        bacnet_server::event_enrollment::evaluate_event_enrollments(&mut db, 1)
+    };
 
-    let transitions = bacnet_server::event_enrollment::evaluate_event_enrollments(&mut db, 1);
+    assert!(pass(AlgorithmKeywords::default()).is_empty());
+    let transitions =
+        pass(AlgorithmKeywords::enrollment(Some(&encoded(OUT_OF_RANGE)), None, None).unwrap());
     assert_eq!(transitions.len(), 1);
-    assert_eq!(transitions[0].enrollment_oid, ee_oid);
     assert_eq!(transitions[0].change.to, EventState::HIGH_LIMIT);
 }

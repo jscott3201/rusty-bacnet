@@ -516,6 +516,13 @@ impl BACnetServer {
     /// are refused with NO_SPACE_TO_WRITE_PROPERTY; without it the
     /// enrollment takes them as before.
     ///
+    /// `object_property_reference` names the property the enrollment
+    /// monitors, as an `(object, property)` or `(object, property,
+    /// array_index)` tuple or a `DeviceObjectPropertyReference` mapping,
+    /// the forms `add_trend_log` takes for `reference`. Peers can't write
+    /// it, so it applies at every start and is never saved; without it the
+    /// enrollment monitors nothing.
+    ///
     /// The parameter keywords configure those three (#2426):
     /// `event_parameters` and `fault_parameters`, each a `PropertyValue`
     /// in the form `write_property_local` takes for the property (the
@@ -523,9 +530,9 @@ impl BACnetServer {
     /// of the property returned), and `time_delay_normal` (seconds). None
     /// leaves the enrollment's default. Each value is checked as a write
     /// of the property is, and one the enrollment refuses raises
-    /// BacnetProtocolError: octets that aren't one whole parameter value,
-    /// and, with `storage_path`, an encoding past 64 KiB
-    /// (NO_SPACE_TO_WRITE_PROPERTY). A negative delay raises OverflowError.
+    /// BacnetProtocolError, such as octets that aren't one whole parameter
+    /// value. A negative delay raises OverflowError. A keyword value is
+    /// not held to the 64 KiB cap, which only a saved write meets.
     /// The keywords apply before storage attaches, so they are never saved:
     /// a value a peer wrote and the file holds is served over its keyword,
     /// and the keyword applies again on a start that passes
@@ -536,6 +543,7 @@ impl BACnetServer {
         name,
         event_type=PyEventType { inner: EventType::CHANGE_OF_BITSTRING },
         *,
+        object_property_reference=None,
         event_parameters=None,
         fault_parameters=None,
         time_delay_normal=None,
@@ -548,6 +556,7 @@ impl BACnetServer {
         instance: u32,
         name: &str,
         event_type: PyEventType,
+        object_property_reference: Option<&Bound<'_, PyAny>>,
         event_parameters: Option<PyPropertyValue>,
         fault_parameters: Option<PyPropertyValue>,
         time_delay_normal: Option<u32>,
@@ -560,13 +569,26 @@ impl BACnetServer {
             time_delay_normal,
         )
         .map_err(to_py_err)?;
+        let reference = object_property_reference
+            .map(|value| {
+                let mut reference = vec![crate::types::property_reference_from_py(
+                    value,
+                    "object_property_reference",
+                )?];
+                crate::types::localize(
+                    &mut reference,
+                    crate::types::local_device(self.device_instance),
+                );
+                PyResult::Ok(reference.remove(0))
+            })
+            .transpose()?;
         let obj = crate::object_options::keep_reporting(
             || {
                 let mut ee = EventEnrollmentObject::new(instance, name, event_type.to_rust())?;
-                parameters.apply(&mut ee)?;
-                if storage_path.is_some() {
-                    parameters.check_kept_size(&ee)?;
+                if reference.is_some() {
+                    ee.set_object_property_reference(reference.clone())?;
                 }
+                parameters.apply(&mut ee)?;
                 Ok(ee)
             },
             storage_path,

@@ -3066,7 +3066,7 @@ the rest. A file holding a value the object refuses on the wire raises
 `BacnetError`. Keeping them needs nothing beyond `storage_path`. The parameters still lost at a
 restart are the ones peers can't write: an Access Zone's occupancy limits
 and an Event Enrollment's Object_Property_Reference, which the application
-sets.
+sets with the builder's `object_property_reference` keyword.
 
 An Event Enrollment's Time_Delay is a member of its Event_Parameters and is
 kept with them; Time_Delay_Normal is a property of its own and is kept once
@@ -3176,12 +3176,19 @@ mapping whose `kind` names the algorithm, but nothing builds a value from
 that mapping. The
 keyword goes the way such a write does: encoded, decoded for the property as
 a peer's octets are, then written, so octets that aren't one whole parameter
-value raise `BacnetProtocolError` with the code that write gets. With
-`storage_path`, an encoding past 64 KiB raises RESOURCES /
-NO_SPACE_TO_WRITE_PROPERTY, as the write would; without it the enrollment
-takes the value. Event_Type and Fault_Type follow the keyword parameters,
+value raise `BacnetProtocolError` with the code that write gets. A keyword
+value follows the rules of an enrollment without storage, so it isn't held
+to the 64 KiB cap: a save keeps only the rows a write set, and a keyword
+value never reaches the file. Event_Type and Fault_Type follow the keyword parameters,
 and the server's enrollment pass evaluates with them. An Event Enrollment
 has no Time_Delay keyword: its Time_Delay is a member of Event_Parameters.
+
+`object_property_reference` names the property the enrollment monitors, in
+the forms `add_trend_log` takes for `reference`: an `(object, property)` or
+`(object, property, array_index)` tuple, or a `DeviceObjectPropertyReference`
+mapping. Peers can't write Object_Property_Reference, so the keyword is
+configuration: it applies at every start and is never saved. Without it the
+enrollment monitors nothing.
 
 ```python
 # OUT_OF_RANGE: above 40 or below 20 after 30 seconds, deadband 1.
@@ -3191,6 +3198,8 @@ out_of_range = PropertyValue.application_data(
 server.add_event_enrollment(
     instance=1,
     name="Supply Temp Range",
+    object_property_reference=(ObjectIdentifier(ObjectType.ANALOG_INPUT, 1),
+                               PropertyIdentifier.PRESENT_VALUE),
     event_parameters=out_of_range,
     time_delay_normal=60,
     storage_path="/application/state/ee-1",
@@ -4202,8 +4211,8 @@ null write cleared them. Treat a reference whose object instance is 4194303
 as unset, and write the unset form (for example the octets a fresh object
 reads) to clear one.
 
-An Event Enrollment's Object_Property_Reference, which peers can only read,
-reads as a `device_object_property_reference` mapping. It names Analog Input 4194303's Present_Value (`0c 00 3f ff ff 19 55`) while
+An Event Enrollment's Object_Property_Reference, which peers can only read
+and `add_event_enrollment` sets with `object_property_reference`, reads as a `device_object_property_reference` mapping. It names Analog Input 4194303's Present_Value (`0c 00 3f ff ff 19 55`) while
 the enrollment has no reference, instead of null (#1417). Its
 Fault_Parameters reads as the context-tagged `none` choice (`08`) while no
 fault algorithm is set, and writing that clears it; a null written to it,
