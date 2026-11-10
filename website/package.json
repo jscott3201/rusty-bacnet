@@ -13,7 +13,8 @@
     "preview": "astro preview",
     "test": "node --test tests/unit/*.test.mjs",
     "test:e2e": "playwright test",
-    "verify": "npm run check && npm test && npm run build && npm run test:e2e",
+    "check:references": "python3 scripts/reference-python.py --check && node scripts/reference-rust.mjs --check",
+    "verify": "npm run check:references && npm run check && npm test && npm run build && npm run test:e2e",
     "prepare:content": "node scripts/prepare.mjs"
   },
   "dependencies": {

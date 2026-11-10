@@ -22,7 +22,10 @@ test('docs run automatically only for relevant pull requests, and publish defaul
   assert.deepEqual(Object.keys(workflow.on).sort(), ['pull_request', 'workflow_dispatch']);
   assert.deepEqual(workflow.on.pull_request, {
     branches: ['dev', 'main'],
-    paths: ['website/**', '.github/workflows/docs-pages.yml', 'firmware/link/*-budget.toml'],
+    paths: [
+      'website/**', '.github/workflows/docs-pages.yml', 'firmware/link/*-budget.toml',
+      'crates/rusty-bacnet/rusty_bacnet.pyi', 'Cargo.toml', 'crates/*/Cargo.toml',
+    ],
   });
   // The website/** filter covers this guard as well as the lockfile and site.
   assert.deepEqual(workflow.on.workflow_dispatch.inputs, {
