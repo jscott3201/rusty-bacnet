@@ -247,8 +247,9 @@ fn holds_a_stranded_list(object: &mut dyn BACnetObject, list: &[u32]) {
 
 /// An object rebuilt with fewer states than a saved Alarm_Values entry
 /// names opens on that storage with the list as it was written, though a
-/// write of the list to it is refused: the state count isn't kept, and a
-/// saved list mustn't stop an object from starting. Storage is left as it
+/// write of the list to it is refused: with no State_Text saved, the count
+/// is the one the application builds the object with, and a saved list
+/// mustn't stop an object from starting. Storage is left as it
 /// was, and a later kept write saves the list with it, unchanged. A
 /// Multi-state Value shows the fault from the start, until its states are
 /// there again or a list within them is written.

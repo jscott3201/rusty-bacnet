@@ -202,14 +202,21 @@ impl MultiStateValueObject {
     /// 1,024 entries is RESOURCES / NO_SPACE_TO_WRITE_PROPERTY, and a zero
     /// or a state past Number_Of_States is VALUE_OUT_OF_RANGE, each naming
     /// its entry; the list held stays. On an object keeping its reporting
-    /// settings, Alarm_Values a write saved win: the argument is checked
-    /// and the saved list stays, until `clear_written_reporting` (#2331).
+    /// settings, Alarm_Values a write saved win, until
+    /// `clear_written_reporting` (#2331): the setter then refuses only what
+    /// is wrong whatever the count (a zero, an over-long list) and returns
+    /// `Ok`, leaving the saved list. Configure the list before
+    /// `with_reporting_persistence` where you can. After it, a restored
+    /// State_Text may have given the object fewer states than the list
+    /// names (#2414), and with no list saved that refusal is the answer:
+    /// handle it rather than treat it as fatal at start.
     pub fn set_alarm_values(&mut self, values: Vec<u32>) -> Result<(), Error> {
-        check_alarm_values(&values, self.number_of_states)?;
         #[cfg(feature = "event-reporting")]
         if self.kept_over_setter(PropertyIdentifier::ALARM_VALUES) {
-            return Ok(());
+            // The saved list wins, so the count it would meet doesn't matter.
+            return check_alarm_values(&values, u32::MAX);
         }
+        check_alarm_values(&values, self.number_of_states)?;
         self.event_detector.alarm_values = values;
         let _ = self.recompute_reliability();
         Ok(())
@@ -228,6 +235,13 @@ impl MultiStateValueObject {
     /// Table 12-23). An out-of-range retained value is a configuration decision
     /// for the application to resolve; the object-owned evaluator reports
     /// CONFIGURATION_ERROR while that condition remains.
+    ///
+    /// A restored State_Text may give the object fewer states than the
+    /// application builds it with (#2414). A default set before
+    /// `with_reporting_persistence` that the restored count lacks is held
+    /// and shows as CONFIGURATION_ERROR; one set after it is refused, as a
+    /// write of it is, since nothing saved stands in for it. Handle that
+    /// refusal rather than treat it as fatal at start.
     pub fn set_relinquish_default(&mut self, value: u32) -> Result<(), Error> {
         if self.access != PresentValueAccess::Commandable {
             return Err(common::unknown_property_error());

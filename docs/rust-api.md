@@ -4747,10 +4747,16 @@ application sets them at each start.
   `set_fault_parameters` and `set_time_delay_normal`). Like the
   reporting setters, each gives way to a value a write saved until
   `clear_written_reporting()`. Each checks its argument as a write is
-  checked and returns its error, kept list or not: a multi-state object's
-  since #2415, a door's and a zone's before it. A multi-state object's
-  `set_number_of_states` gives way to a saved State_Text the same way,
-  still refusing zero. The other
+  checked and returns its error, a door's and a zone's kept list or not. A
+  multi-state object's (#2415) gives way to a saved list before any check
+  on the state count, refusing only a zero or a list past 1,024; with no
+  list saved it checks the count the object has, which a restored
+  State_Text may have lowered. So set the list (and a Relinquish_Default)
+  before `with_reporting_persistence` where you can: there it is installed
+  as configured, and a value the restored count lacks shows as a local
+  shrink leaves it. After the call, handle a refusal rather than treat it
+  as fatal at start. A multi-state object's `set_number_of_states` gives
+  way to a saved State_Text the same way, still refusing zero. The other
   parameters have no setter. Set the
   application's own values with `write_property` before
   `with_reporting_persistence`: a saved write then goes over them, and they
@@ -4878,6 +4884,15 @@ application sets them at each start.
   that writes State_Text and then Alarm_Values naming a state it adds
   saves both once, off the database guard: State_Text is staged like any
   kept write, and the staged check of the list uses the count it leaves.
+  The stage judges a State_Text shrink against the states the object holds
+  before the request, so it takes one that a Present_Value,
+  Relinquish_Default or priority-array command written earlier in the same
+  request then strands. The object refuses that write, and the request's
+  release saves what it serves; until then storage holds labels the device
+  answered with an error, and a crash in that window leaves a file that
+  loads with them. A stage keeps the rows its writes leave once, not once
+  a write: a step holds only its write and which rows it leaves written,
+  and the rows are worked out again when the write is made.
 - **Format.** A snapshot holding a parameter is stored as kind 6 of
   `RBNWCF01` (`snapshot::write_config::KIND_REPORTING_PARAMETERS`): the kind 4
   body, then a presence mask and the parameters it names. One without keeps

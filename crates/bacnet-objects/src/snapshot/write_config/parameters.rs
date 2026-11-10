@@ -263,8 +263,8 @@ mod stored {
     /// A value held in its BACnet encoding: a length in four octets, at
     /// most the 64 KiB an enrollment with storage takes in a write
     /// ([`MAX_KEPT_OCTETS`](crate::event_enrollment::parameters::MAX_KEPT_OCTETS)),
-    /// then that many octets. The two modules after this one are made from
-    /// it.
+    /// then that many octets. The `event_parameters` and `fault_parameters`
+    /// modules below are made from it.
     ///
     /// The octets are one whole value in the encoding a save writes, by
     /// the decoder a write of the property runs

@@ -239,6 +239,48 @@ async fn a_request_that_adds_a_state_and_lists_it_saves_off_the_guard() {
     }
 }
 
+/// The stage judges a State_Text shrink against the states the object holds
+/// before the request; a Present_Value commanded earlier in the same
+/// request isn't one of them. So it takes a shrink the object then refuses,
+/// and its save briefly holds labels the device answered with an error.
+/// The request's release puts storage back to what the object serves: a
+/// server rebuilt on it has the configured three states. The same goes for
+/// a Relinquish_Default or a command the request writes first.
+#[tokio::test(start_paused = true)]
+async fn a_shrink_the_stage_took_and_the_object_refused_is_put_back() {
+    let kind = ObjectType::MULTI_STATE_VALUE;
+    let object = oid(kind, INSTANCE);
+    let storage = Arc::new(ConfigStorage::default());
+    let fixture = served_by(kind, &storage).await;
+    let request = wpm(vec![WriteAccessSpecification {
+        object_identifier: object,
+        list_of_properties: vec![
+            attempt(P::PRESENT_VALUE, None, PropertyValue::Unsigned(3)),
+            attempt(P::STATE_TEXT, Some(0), PropertyValue::Unsigned(2)),
+        ],
+    }]);
+    let response = wire(
+        &fixture,
+        ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE,
+        request,
+    )
+    .await;
+    assert_eq!(response[0], ERROR_PDU, "{response:?}");
+    let three = PropertyValue::Unsigned(3);
+    assert_eq!(fixture.read(object, P::NUMBER_OF_STATES).await, three);
+    assert_eq!(fixture.read(object, P::PRESENT_VALUE).await, three);
+    // The staged save, then the one that puts storage back.
+    drop(fixture);
+    assert_eq!(storage.saves.load(Ordering::SeqCst), 2);
+    let rebuilt = served_by(kind, &storage).await;
+    assert_eq!(rebuilt.read(object, P::NUMBER_OF_STATES).await, three);
+    let kept = storage.load_saved().flatten();
+    let Some(bacnet_objects::write_config::WriteConfigSnapshot::Reporting(kept)) = kept else {
+        panic!("reporting settings saved");
+    };
+    assert_eq!(kept.algorithm.state_text, None);
+}
+
 /// State_Text is a saved write like the others, so every path hands it to
 /// the stage: WriteProperty, a local write and each attempt of a
 /// WritePropertyMultiple. An Access Door and an Access Zone have no

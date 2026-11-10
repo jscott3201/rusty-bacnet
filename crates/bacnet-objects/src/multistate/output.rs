@@ -190,6 +190,13 @@ impl MultiStateOutputObject {
     /// NOT auto-adjust: out-of-range stored values are a configuration
     /// decision for the application to resolve; the object-owned evaluator
     /// reports CONFIGURATION_ERROR while that retained condition remains.
+    ///
+    /// A restored State_Text may give the object fewer states than the
+    /// application builds it with (#2414). A default set before
+    /// `with_reporting_persistence` that the restored count lacks is held
+    /// and shows as CONFIGURATION_ERROR; one set after it is refused, as a
+    /// write of it is, since nothing saved stands in for it. Handle that
+    /// refusal rather than treat it as fatal at start.
     pub fn set_relinquish_default(&mut self, value: u32) -> Result<(), Error> {
         if value < 1 || value > self.number_of_states {
             return Err(common::value_out_of_range_error());

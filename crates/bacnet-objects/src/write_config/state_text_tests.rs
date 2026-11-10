@@ -365,3 +365,104 @@ fn a_write_of_another_row_keeps_no_state_text() {
     let object: &dyn BACnetObject = &object;
     assert_eq!(read(object, P::NUMBER_OF_STATES), count(STATES));
 }
+
+/// Run `$body` on a Multi-state Input and a Multi-state Value: `$new`
+/// builds object 1 of the type with so many states.
+macro_rules! on_both_listed {
+    (|$new:ident| $body:block) => {{
+        {
+            let $new = |states: u32| MultiStateInputObject::new(1, "MSI", states).unwrap();
+            $body
+        }
+        {
+            let $new = |states: u32| MultiStateValueObject::new(1, "MSV", states).unwrap();
+            $body
+        }
+    }};
+}
+
+fn list(states: &[u32]) -> PropertyValue {
+    PropertyValue::List(states.iter().map(|state| count(*state)).collect())
+}
+
+/// The application configures `[5]` on five states. A peer writes an empty
+/// Alarm_Values and then shrinks State_Text to three states, both kept. At
+/// the next start the application's `set_alarm_values(vec![5])`, after the
+/// builder call, returns `Ok` and leaves the saved list: the saved list
+/// wins, so the count the argument would meet doesn't matter. A zero or an
+/// over-long list is still refused. Before the builder call, on the
+/// application's five states, the list is taken as configured.
+#[test]
+fn set_alarm_values_gives_way_to_a_saved_list_before_checking_the_count() {
+    on_both_listed!(|new| {
+        let storage = MemoryConfig::new();
+        let mut object = new(STATES);
+        object.set_alarm_values(vec![STATES]).unwrap();
+        let mut object = object
+            .with_reporting_persistence(persistence(&storage))
+            .unwrap();
+        write(&mut object, P::ALARM_VALUES, list(&[]));
+        write(&mut object, P::STATE_TEXT, labels(&defaults(3)));
+        drop(object);
+
+        let mut rebuilt = new(STATES);
+        rebuilt.set_alarm_values(vec![STATES]).unwrap();
+        let mut rebuilt = rebuilt
+            .with_reporting_persistence(persistence(&storage))
+            .unwrap();
+        assert_eq!(read(&rebuilt, P::NUMBER_OF_STATES), count(3));
+        rebuilt.set_alarm_values(vec![STATES]).unwrap();
+        assert_eq!(read(&rebuilt, P::ALARM_VALUES), list(&[]));
+        assert!(rebuilt.set_alarm_values(vec![0]).is_err());
+        let long = vec![1; crate::multistate::MAX_ALARM_VALUES + 1];
+        assert!(rebuilt.set_alarm_values(long).is_err());
+        assert_eq!(read(&rebuilt, P::ALARM_VALUES), list(&[]));
+    });
+}
+
+/// With no list saved, a restored State_Text that gave the object fewer
+/// states makes `set_alarm_values` after the builder call refuse a state
+/// past them, as a write of the list is refused: that answer is true, and
+/// the caller handles it. The same holds for `set_relinquish_default` on
+/// the Output and the Value, which nothing saved stands in for.
+#[test]
+fn after_a_restored_count_the_setters_check_against_it() {
+    let shrunk = || {
+        holding(AlgorithmWriteConfig {
+            state_text: Some(defaults(3)),
+            ..Default::default()
+        })
+    };
+    on_both_listed!(|new| {
+        let mut object = new(STATES)
+            .with_reporting_persistence(persistence(&shrunk()))
+            .unwrap();
+        let result = object.set_alarm_values(vec![STATES]);
+        assert!(
+            format!("{result:?}").contains("VALUE_OUT_OF_RANGE"),
+            "{result:?}"
+        );
+        object.set_alarm_values(vec![3]).unwrap();
+    });
+    let mut output = MultiStateOutputObject::new(1, "MSO", STATES)
+        .unwrap()
+        .with_reporting_persistence(persistence(&shrunk()))
+        .unwrap();
+    let result = output.set_relinquish_default(STATES);
+    assert!(refused_with(
+        &result,
+        ErrorClass::PROPERTY,
+        ErrorCode::VALUE_OUT_OF_RANGE
+    ));
+    output.set_relinquish_default(3).unwrap();
+    let mut value = MultiStateValueObject::new(1, "MSV", STATES)
+        .unwrap()
+        .with_reporting_persistence(persistence(&shrunk()))
+        .unwrap();
+    let result = value.set_relinquish_default(STATES);
+    assert!(refused_with(
+        &result,
+        ErrorClass::PROPERTY,
+        ErrorCode::VALUE_OUT_OF_RANGE
+    ));
+}

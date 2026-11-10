@@ -3,6 +3,7 @@ section: Migration notes
 ---
 - **Multi-state alarm values (Rust API, #2415):** `set_alarm_values` on
   `MultiStateInputObject` and `MultiStateValueObject` returns
-  `Result<(), Error>`: handle or `?` it. Set Number_Of_States before a list
-  that names a state it adds; a list a write would refuse now fails here
-  with the write's error instead of leaving a CONFIGURATION_ERROR.
+  `Result<(), Error>`. Set it, with any count it needs, before
+  `with_reporting_persistence`; after that call a restored State_Text may
+  leave fewer states than the list names, so handle that refusal rather
+  than end the start with `?`. A saved list wins without that check.
