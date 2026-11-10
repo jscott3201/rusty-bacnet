@@ -46,13 +46,17 @@ structured-writes = []
 # The SubscribeCOVPropertyMultiple path (#2320): the service and its checks
 # (`cov::subscribe_cov_property_multiple`), the capture of timestamped
 # changes (`cov::timed_capture`), the timestamped histories with their
-# claims and deadlines (`cov::timed`), the read cache its reports and
-# captures share (`cov::multiple_reads`) and the split of a report to the
-# subscriber's APDU size (`cov::multiple_chunks`, `cov::multiple_items`).
-# `std` turns it on, so bacnet-server has it; a firmware image built on
-# `alloc` leaves it off until it reports through that service. The last
-# part of #2320, which runs the service in the `Reporter`, measures what
-# the feature saves an image (#2215's rule for keeping one).
+# claims and deadlines (`cov::timed`), and what a fanout reports to each
+# context, split to the subscriber's APDU size (`cov::multiple_report`).
+# With it the `Reporter` answers the service and sends its reports
+# (`report::NotifyService::CovMultiple`). `std` turns it on, so
+# bacnet-server has it; a firmware image built on `alloc` leaves it off
+# unless it serves that service. The `Reporter` dispatches by service, so
+# the path links whether or not anyone subscribes through it: measured on
+# the `reporting` image it costs about 134 KB of flash on a Cortex-M3 and
+# 12 KiB of heap, with three 64-bit division routines, until its B-tree
+# maps and sorts are trimmed (#2215's rule for keeping a feature; design
+# note, decision 18).
 cov-multiple = []
 # Hidden hooks for hosts' own tests (the COV table's generation counter, so
 # bacnet-server's table tests reach generation exhaustion). bacnet-server

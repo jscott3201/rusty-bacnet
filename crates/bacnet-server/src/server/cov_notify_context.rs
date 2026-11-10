@@ -16,10 +16,15 @@ pub(super) struct CovNotifyContext<'a, T: TransportPort + 'static> {
     pub(super) config: &'a Arc<ServerConfig>,
 }
 
-/// A [`CovNotifyContext`] plus the subscription table's in-flight tracker and
-/// counters, both captured under the table lock before a fanout pass starts.
+/// A [`CovNotifyContext`] plus the subscription table's in-flight tracker,
+/// counters and handle to its COV-multiple histories, all captured under
+/// the table lock before a fanout pass starts.
 pub(super) struct CovFanoutHandles<'a, 'b, T: TransportPort + 'static> {
     pub(super) ctx: &'a CovNotifyContext<'b, T>,
     pub(super) in_flight_tracker: &'a Arc<CovInFlightTracker>,
     pub(super) counters: &'a Arc<AtomicCovCounters>,
+    /// The table's store of COV-multiple histories, which also keeps the
+    /// start a fanout over several contexts takes its turns from: reached
+    /// through its own mutex, with no table guard.
+    pub(super) timed: &'a crate::cov::timed_store::HistoryStore,
 }

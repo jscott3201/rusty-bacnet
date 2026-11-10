@@ -18,6 +18,9 @@ use bacnet_time::Duration;
 use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier as P};
 use bacnet_types::primitives::PropertyValue;
 
+#[cfg(feature = "cov-multiple")]
+#[path = "reporter_multiple_tests.rs"]
+mod multiple;
 #[path = "reporter_owed_tests.rs"]
 mod owed;
 #[path = "reporter_remove_tests.rs"]
@@ -365,6 +368,8 @@ fn reads_answer_the_device_list_from_the_table() {
 
 /// The Reporter runs no SubscribeCOVPropertyMultiple (#2320): it rejects
 /// the request as an unrecognized service, and subscribes nothing.
+// With `cov-multiple` the reporter serves it: `reporter_multiple_tests`.
+#[cfg(not(feature = "cov-multiple"))]
 #[test]
 fn subscribe_cov_property_multiple_is_rejected() {
     use bacnet_services::cov_multiple::{

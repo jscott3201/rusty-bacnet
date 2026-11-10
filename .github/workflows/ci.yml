@@ -82,7 +82,7 @@ env:
   # else in the workspace turns on (#906). bacnet-cli's `tui` is a default
   # feature (#974), so every workspace run has it. bacnet-benchmarks/console
   # is left out: it needs tokio_unstable.
-  LINUX_FEATURES: bacnet-types/serde,bacnet-encoding/heapless,bacnet-mstp-codec/bytes,bacnet-mstp-codec/heapless,bacnet-mstp-core/alloc,bacnet-bip-codec/bytes,bacnet-bip-codec/heapless,bacnet-router-core/bip,bacnet-router-core/mstp,bacnet-transport/ipv6,bacnet-transport/sc-tls,bacnet-transport/serial,bacnet-transport/serial-gpio,bacnet-transport/ethernet,bacnet-client/ipv6,bacnet-client/sc-tls,bacnet-server/sc-tls,bacnet-endpoint/sc-tls,bacnet-integration-tests/ipv6,bacnet-integration-tests/ethernet,bacnet-integration-tests/sc-tls,bacnet-cli/sc-tls,bacnet-cli/pcap,bacnet-cli/serial,bacnet-cli/mcp
+  LINUX_FEATURES: bacnet-types/serde,bacnet-encoding/heapless,bacnet-mstp-codec/bytes,bacnet-mstp-codec/heapless,bacnet-mstp-core/alloc,bacnet-bip-codec/bytes,bacnet-bip-codec/heapless,bacnet-router-core/bip,bacnet-router-core/mstp,bacnet-transport/ipv6,bacnet-transport/sc-tls,bacnet-transport/serial,bacnet-transport/serial-gpio,bacnet-transport/ethernet,bacnet-client/ipv6,bacnet-client/sc-tls,bacnet-server/sc-tls,bacnet-endpoint/sc-tls,bacnet-integration-tests/ipv6,bacnet-integration-tests/ethernet,bacnet-integration-tests/sc-tls,bacnet-cli/sc-tls,bacnet-cli/pcap,bacnet-cli/serial,bacnet-cli/mcp,firmware-link/reporting-multiple
 
 jobs:
   # Whether this push to dev can skip the Lean jobs (#1466): see

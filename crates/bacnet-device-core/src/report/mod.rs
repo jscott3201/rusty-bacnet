@@ -3,7 +3,8 @@
 //! staged functions of [`cov`](crate::cov) together the way `bacnet-server`
 //! runs them under its guards.
 //!
-//! The `Reporter` answers SubscribeCOV and SubscribeCOVProperty itself and
+//! The `Reporter` answers SubscribeCOV, SubscribeCOVProperty and, with the
+//! `cov-multiple` feature, SubscribeCOVPropertyMultiple itself and
 //! hands every other request to its [`Responder`](crate::responder::Responder),
 //! reading the Device's subscription lists through an
 //! [`ActiveCovOverlay`](crate::cov::active::ActiveCovOverlay). What a request
@@ -18,8 +19,11 @@
 //! so a host that serves it takes the request before
 //! [`Reporter::handle`]. All time is the host's monotonic `now`.
 //!
-//! The COV-multiple services stay with `bacnet-server` until #2320, and
-//! event notifications come with #2303's third part: the outbox and the
+//! With `cov-multiple` a report to a SubscribeCOVPropertyMultiple context
+//! leaves the same way, as one or more [`NotifyService::CovMultiple`]
+//! notifications; a context with changes pending adds its
+//! Max_Notification_Delay deadline to [`Reporter::next_deadline`] (#2320).
+//! Event notifications come with #2303's third part: the outbox and the
 //! confirmed table take them as further [`NotifyService`] and
 //! [`Destination`] variants.
 
@@ -38,8 +42,9 @@ pub use outbox::OutboxLimits;
 pub use reporter::Reporter;
 
 /// The services a [`Reporter`] runs, for the Device's
-/// Protocol_Services_Supported: the [`Responder`](crate::responder)'s, and
-/// SubscribeCOV and SubscribeCOVProperty. Build the database from
+/// Protocol_Services_Supported: the [`Responder`](crate::responder)'s,
+/// SubscribeCOV and SubscribeCOVProperty, and with the `cov-multiple`
+/// feature SubscribeCOVPropertyMultiple. Build the database from
 /// `DeviceIdentity::with_services(SERVICES)`, so the Device lists
 /// Active_COV_Subscriptions.
 pub const SERVICES: &[ServiceSupported] = &[
@@ -51,6 +56,8 @@ pub const SERVICES: &[ServiceSupported] = &[
     ServiceSupported::WHO_IS,
     ServiceSupported::SUBSCRIBE_COV,
     ServiceSupported::SUBSCRIBE_COV_PROPERTY,
+    #[cfg(feature = "cov-multiple")]
+    ServiceSupported::SUBSCRIBE_COV_PROPERTY_MULTIPLE,
 ];
 
 /// Where a notification goes.
@@ -68,6 +75,31 @@ pub enum Destination {
 pub enum NotifyService {
     /// ConfirmedCOVNotification or UnconfirmedCOVNotification.
     Cov,
+    /// ConfirmedCOVNotificationMultiple or
+    /// UnconfirmedCOVNotificationMultiple: one notification of a report to
+    /// a SubscribeCOVPropertyMultiple context. A build without the
+    /// `cov-multiple` feature hands none out.
+    CovMultiple,
+}
+
+impl NotifyService {
+    /// The confirmed service a notification of this kind goes out as.
+    pub(crate) fn confirmed(self) -> bacnet_types::enums::ConfirmedServiceChoice {
+        use bacnet_types::enums::ConfirmedServiceChoice as Choice;
+        match self {
+            Self::Cov => Choice::CONFIRMED_COV_NOTIFICATION,
+            Self::CovMultiple => Choice::CONFIRMED_COV_NOTIFICATION_MULTIPLE,
+        }
+    }
+
+    /// The unconfirmed service a notification of this kind goes out as.
+    pub(crate) fn unconfirmed(self) -> bacnet_types::enums::UnconfirmedServiceChoice {
+        use bacnet_types::enums::UnconfirmedServiceChoice as Choice;
+        match self {
+            Self::Cov => Choice::UNCONFIRMED_COV_NOTIFICATION,
+            Self::CovMultiple => Choice::UNCONFIRMED_COV_NOTIFICATION_MULTIPLE,
+        }
+    }
 }
 
 /// One notification [`Reporter::pop`] hands out, its APDU in the caller's

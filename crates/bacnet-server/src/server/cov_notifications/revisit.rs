@@ -22,7 +22,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         if ctx.comm_state.initiation_restricted() {
             return;
         }
-        let (subs, counters, in_flight_tracker) = {
+        // In key order, by monitored object first, whichever order they
+        // were queued or came due in. A follow-up report lists its
+        // untimestamped items in the order its references are fanned out, and
+        // the revisit queue is a hash set: that order, and the order between
+        // follow-ups, varied from run to run (#2320).
+        let keys: std::collections::BTreeSet<_> = keys.iter().collect();
+        let (subs, counters, in_flight_tracker, timed) = {
             let table = ctx.cov_table.read().await;
             (
                 keys.iter()
@@ -32,6 +38,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     .collect::<Vec<_>>(),
                 Arc::clone(table.counters()),
                 Arc::clone(table.in_flight_tracker()),
+                table.timed().clone(),
             )
         };
         if subs.is_empty() {
@@ -41,26 +48,28 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             ctx,
             in_flight_tracker: &in_flight_tracker,
             counters: &counters,
+            timed: &timed,
         };
         // One budget per object or context, as a natural event would have.
-        let mut single_by_object: HashMap<ObjectIdentifier, Vec<CovSubscriptionSnapshot>> =
-            HashMap::new();
-        let mut multiple_by_context: HashMap<
-            bacnet_device_core::cov::MultipleContextKey,
+        // Objects, like contexts, in key order.
+        let mut single_by_object: std::collections::BTreeMap<
+            ObjectIdentifier,
             Vec<CovSubscriptionSnapshot>,
-        > = HashMap::new();
+        > = std::collections::BTreeMap::new();
+        let mut multiple = Vec::new();
         for sub in subs {
-            match sub.key().multiple_context() {
-                Some(context) => multiple_by_context
-                    .entry(context.clone())
-                    .or_default()
-                    .push(sub),
-                None => single_by_object
+            if sub.key().multiple_context().is_some() {
+                multiple.push(sub);
+            } else {
+                single_by_object
                     .entry(sub.monitored_object_identifier)
                     .or_default()
-                    .push(sub),
+                    .push(sub);
             }
         }
+        // Contexts in the order of their keys, as every Multiple fanout
+        // takes them (#2320).
+        let multiple_by_context = bacnet_device_core::cov::multiple_report::by_context(multiple);
         for (oid, subs) in &single_by_object {
             Self::fire_cov_notifications_for_subscriptions(
                 &handles,

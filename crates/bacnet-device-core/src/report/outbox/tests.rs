@@ -37,7 +37,7 @@ fn push_for(outbox: &mut Outbox, ticket: u64, process: u32, params: &[u8]) -> Pu
         Token::for_test(ticket),
         key(process),
         endpoint,
-        false,
+        (false, crate::report::NotifyService::Cov),
         begun,
         params,
     )

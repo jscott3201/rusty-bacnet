@@ -104,11 +104,12 @@ impl Fixture {
 
     /// Offer one confirmed report of `sub` to the sender.
     async fn send(&self, sub: &CovSubscriptionSnapshot, budget: &mut EventBudget) {
-        let (counters, in_flight_tracker) = {
+        let (counters, in_flight_tracker, timed) = {
             let table = self.table.read().await;
             (
                 Arc::clone(table.counters()),
                 Arc::clone(table.in_flight_tracker()),
+                table.timed().clone(),
             )
         };
         let completion = self.table.write().await.prepare_completion(sub).unwrap();
@@ -120,6 +121,7 @@ impl Fixture {
                 ctx: &ctx,
                 in_flight_tracker: &in_flight_tracker,
                 counters: &counters,
+                timed: &timed,
             },
             budget,
             ConfirmedReport {
