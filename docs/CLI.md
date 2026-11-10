@@ -1487,15 +1487,24 @@ object by identifier and by name, and `present-value`.
 - Node names come from object identifiers, so they don't change when an
   object is renamed: `<BASE>device-1234/analog-input-3.present-value`. The
   default base, `http://example.org/bacnet/`, is a documentation domain;
-  pass your own with `--base-iri`.
-- `-o FILE` writes a new file and refuses one that exists. A summary goes
-  to stderr; `--format` and `--json` don't apply.
+  pass your own with `--base-iri`. The base must be ASCII, start with a
+  scheme (`http:`, `urn:` and so on), hold no space, control character,
+  backtick or any of `<>"{}|^\`, use `%` only in a two-digit hex escape,
+  hold at most one `#`, and end in `/` or `#`.
+- Stdout carries only the Turtle, or nothing with `-o FILE`, which writes a
+  new file and refuses one that exists. A summary goes to stderr either
+  way; `--format` and `--json` don't apply. When the device has no object
+  of the selected types, the model is empty, the header and stderr say so,
+  and the exit status is 0.
 - It costs the device name, its Object_List and one request per exported
-  object, by ReadPropertyMultiple where the device takes it, one at a time.
-  A target given by address costs one more: a read of its Device object
-  by the wildcard instance, to learn the device's instance number. If the
-  device stops answering partway, the export keeps what was read, says so
-  in its header, and exits 1.
+  object, by ReadPropertyMultiple, one at a time. A device that refuses
+  ReadPropertyMultiple costs one refused request, then a ReadProperty a
+  property: 2 per binary input or output, 3 per analog input or output or
+  binary value, 4 per analog value or multi-state input or output, and 5
+  per multi-state value. A target given by address costs one more: a read
+  of its Device object by the wildcard instance, to learn the device's
+  instance number. If the device stops answering partway, the export
+  writes what was read, says so in its header, and exits 1.
 
 **Limits.** The draft and this export can change between releases, which
 is why the command name says experimental.
@@ -1513,11 +1522,14 @@ is why the command name says experimental.
   quantity kind on every quantifiable property, plus a comment naming the
   BACnet unit. The header counts these points.
 - Device text (names, descriptions, state texts) is kept exactly, escaped
-  so the file stays ASCII.
+  so the file stays ASCII, except U+0000, which a string literal can't
+  hold: it becomes U+FFFD, and the header counts each one.
 
-The header comment names the Open223 ontology copy the output was checked
-against. A copy of it is in `testdata/open223/`, and
-`scripts/check-223.py` validates exports against its shapes with pySHACL.
+The header comment names the Open223 ontology copy the mapping was written
+against. The project's golden exports were validated against that copy,
+which is kept in `testdata/open223/`; `scripts/check-223.py` validates any
+export (`-o FILE`) against its shapes with pySHACL. A live export isn't
+validated as it is written.
 
 ### Writing Properties
 

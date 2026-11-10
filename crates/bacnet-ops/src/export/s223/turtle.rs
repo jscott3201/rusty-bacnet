@@ -26,6 +26,7 @@
 //! device numbered 0 loses that identifier string; its name still finds
 //! it, and a comment marks the gap.
 
+use std::cell::Cell;
 use std::fmt::{self, Write};
 
 use bacnet_types::enums::{EngineeringUnits, ObjectType};
@@ -64,6 +65,9 @@ pub struct Counts {
     pub unmapped_units: usize,
     /// Identifier strings left out because the instance is 0.
     pub instance_zero: usize,
+    /// NUL characters in device text, written as U+FFFD: a string literal
+    /// can't hold U+0000.
+    pub replaced: usize,
 }
 
 /// `inventory` as Turtle, the same text [`write_turtle`] writes.
@@ -80,22 +84,49 @@ pub fn write_turtle(
     options: &TurtleOptions,
     out: &mut impl Write,
 ) -> Result<Counts, fmt::Error> {
-    let counts = count(inventory);
-    header(inventory, options, counts, out)?;
+    let mut counts = count(inventory);
     let device_zero = inventory.device == 0;
+    let lit = Literals::default();
+    // The body first, so the header can count what it replaced.
+    let mut body = String::new();
     for object in &inventory.objects {
         let label = object_label(object.object);
         if object.error.is_some() {
-            writeln!(out, "# {label}: skipped, its read failed.\n")?;
+            writeln!(body, "# {label}: skipped, its read failed.\n")?;
             continue;
         }
         let Some(class) = Class::of(object) else {
-            writeln!(out, "# {label}: skipped, its type isn't mapped.\n")?;
+            writeln!(body, "# {label}: skipped, its type isn't mapped.\n")?;
             continue;
         };
-        point(inventory, object, class, options, device_zero, out)?;
+        point(
+            &lit,
+            inventory,
+            object,
+            class,
+            options,
+            device_zero,
+            &mut body,
+        )?;
     }
+    counts.replaced = lit.replaced.get();
+    header(inventory, options, counts, out)?;
+    out.write_str(&body)?;
     Ok(counts)
+}
+
+/// Writes string literals, counting the characters it had to replace.
+#[derive(Default)]
+struct Literals {
+    replaced: Cell<usize>,
+}
+
+impl Literals {
+    fn text(&self, text: &str) -> String {
+        let (literal, replaced) = escape(text);
+        self.replaced.set(self.replaced.get() + replaced);
+        literal
+    }
 }
 
 /// The counts the header gives, before any point is written.
@@ -139,7 +170,11 @@ fn header(
     )?;
     writeln!(
         out,
-        "# Checked against the Open223 ontology {ONTOLOGY_VERSION} from {ONTOLOGY_SOURCE}."
+        "# Mapping written against the Open223 ontology {ONTOLOGY_VERSION} from"
+    )?;
+    writeln!(
+        out,
+        "# {ONTOLOGY_SOURCE}; rusty-bacnet's golden exports were validated against it."
     )?;
     writeln!(
         out,
@@ -149,6 +184,19 @@ fn header(
         counts.unmapped_units,
         plural(counts.instance_zero, "identifier", "identifiers"),
     )?;
+    if counts.replaced > 0 {
+        writeln!(
+            out,
+            "# {} in device text written as U+FFFD.",
+            plural(counts.replaced, "NUL character", "NUL characters"),
+        )?;
+    }
+    if inventory.objects.is_empty() && inventory.stopped.is_none() {
+        writeln!(
+            out,
+            "# The device has no object of the selected types: the model is empty."
+        )?;
+    }
     if let Some(stopped) = &inventory.stopped {
         writeln!(
             out,
@@ -248,6 +296,7 @@ fn identifier(object_type: ObjectType, instance: u32) -> String {
 }
 
 fn point(
+    lit: &Literals,
     inventory: &Inventory,
     object: &InventoryObject,
     class: Class,
@@ -262,12 +311,12 @@ fn point(
         .unwrap_or_else(|| object_label(object.object));
     writeln!(out, "# {}", object_label(object.object))?;
     if is_multistate(object.object.object_type()) {
-        states(object, &label, out)?;
+        states(lit, object, &label, out)?;
     }
     writeln!(out, "{node} a {} ;", class.name())?;
-    writeln!(out, "    rdfs:label {} ;", literal(&label))?;
+    writeln!(out, "    rdfs:label {} ;", lit.text(&label))?;
     if let Some(description) = object.description.as_deref().filter(|d| !d.is_empty()) {
-        writeln!(out, "    rdfs:comment {} ;", literal(description))?;
+        writeln!(out, "    rdfs:comment {} ;", lit.text(description))?;
     }
     if class.quantifiable() {
         units(object.units, out)?;
@@ -290,10 +339,10 @@ fn point(
         )?;
     } else {
         let device = identifier(ObjectType::DEVICE, inventory.device);
-        writeln!(out, "    bacnet:device-identifier {} ;", literal(&device))?;
+        writeln!(out, "    bacnet:device-identifier {} ;", lit.text(&device))?;
     }
     if let Some(name) = &inventory.device_name {
-        writeln!(out, "    bacnet:device-name {} ;", literal(name))?;
+        writeln!(out, "    bacnet:device-name {} ;", lit.text(name))?;
     }
     let instance = object.object.instance_number();
     if instance == 0 {
@@ -303,10 +352,10 @@ fn point(
         )?;
     } else {
         let id = identifier(object.object.object_type(), instance);
-        writeln!(out, "    bacnet:object-identifier {} ;", literal(&id))?;
+        writeln!(out, "    bacnet:object-identifier {} ;", lit.text(&id))?;
     }
     if let Some(name) = &object.name {
-        writeln!(out, "    bacnet:object-name {} ;", literal(name))?;
+        writeln!(out, "    bacnet:object-name {} ;", lit.text(name))?;
     }
     match options.write_priority().filter(|_| class.actuatable()) {
         Some(priority) => {
@@ -346,7 +395,12 @@ fn units(units: Option<EngineeringUnits>, out: &mut impl Write) -> fmt::Result {
 
 /// A multi-state point's minted enumeration kind and its members. Each is
 /// a class and an instance of itself, as the ontology's own kinds are.
-fn states(object: &InventoryObject, label: &str, out: &mut impl Write) -> fmt::Result {
+fn states(
+    lit: &Literals,
+    object: &InventoryObject,
+    label: &str,
+    out: &mut impl Write,
+) -> fmt::Result {
     let kind = format!("d:{}.states", local(object.object));
     let listed = u32::try_from(object.state_texts.len()).unwrap_or(u32::MAX);
     let claimed = object.states.unwrap_or(listed);
@@ -355,7 +409,7 @@ fn states(object: &InventoryObject, label: &str, out: &mut impl Write) -> fmt::R
     writeln!(
         out,
         "    rdfs:label {} .",
-        literal(&format!("{label} states"))
+        lit.text(&format!("{label} states"))
     )?;
     if claimed > MAX_MINTED_STATES {
         writeln!(
@@ -372,20 +426,32 @@ fn states(object: &InventoryObject, label: &str, out: &mut impl Write) -> fmt::R
             .unwrap_or_else(|| format!("state {state}"));
         writeln!(out, "{kind}.{state} a s223:Class, {kind}.{state} ;")?;
         writeln!(out, "    rdfs:subClassOf {kind} ;")?;
-        writeln!(out, "    rdfs:label {} .", literal(&text))?;
+        writeln!(out, "    rdfs:label {} .", lit.text(&text))?;
     }
     writeln!(out)
+}
+
+/// `text` as a Turtle string literal, as [`escape`] writes it.
+#[cfg(test)]
+pub(super) fn literal(text: &str) -> String {
+    escape(text).0
 }
 
 /// `text` as a Turtle string literal: quotes, backslashes and the common
 /// controls escaped by name, every other character outside printable ASCII
 /// by its code point, so device text can't end the literal or the line,
-/// and the file stays ASCII.
-pub(super) fn literal(text: &str) -> String {
+/// and the file stays ASCII. U+0000, which a string literal's datatype
+/// doesn't allow, becomes U+FFFD; the count of those comes back too.
+fn escape(text: &str) -> (String, usize) {
     let mut out = String::with_capacity(text.len() + 2);
+    let mut replaced = 0;
     out.push('"');
     for ch in text.chars() {
         match ch {
+            '\0' => {
+                out.push_str("\\uFFFD");
+                replaced += 1;
+            }
             '"' => out.push_str("\\\""),
             '\\' => out.push_str("\\\\"),
             '\n' => out.push_str("\\n"),
@@ -401,7 +467,7 @@ pub(super) fn literal(text: &str) -> String {
         }
     }
     out.push('"');
-    out
+    (out, replaced)
 }
 
 /// Text of ours for a comment, kept to printable ASCII so nothing in it

@@ -1,8 +1,10 @@
 # EXPERIMENTAL: device 1234 as a proposed ASHRAE Standard 223 point list, written by
 # rusty-bacnet. The 223 draft and this mapping can change between releases.
 # A point list only: it holds no equipment, connections or sensors.
-# Checked against the Open223 ontology git:master@6fdc11c6 (2026-10-06) from https://open223.info/223p.ttl.
+# Mapping written against the Open223 ontology git:master@6fdc11c6 (2026-10-06) from
+# https://open223.info/223p.ttl; rusty-bacnet's golden exports were validated against it.
 # 2 objects exported, 0 skipped, 0 with an unmapped unit, 0 identifiers left out for instance 0.
+# 1 NUL character in device text written as U+FFFD.
 
 @prefix bacnet: <http://data.ashrae.org/bacnet/2020#> .
 @prefix qudt: <http://qudt.org/schema/qudt/> .
@@ -16,7 +18,7 @@
 # analog-input 9
 d:analog-input-9.present-value a s223:QuantifiableObservableProperty ;
     rdfs:label "Say \"hi\" \\ to\nRoom\t101\u0007\u001B[2J" ;
-    rdfs:comment "Temp\u00E9rature \u202Eevil\u2066 \U0001F525" ;
+    rdfs:comment "Temp\u00E9rature \u202Eevil\u2066 \U0001F525\uFFFD" ;
     qudt:hasUnit unit:DEG_C ;
     qudt:hasQuantityKind quantitykind:Temperature ;
     s223:hasExternalReference d:analog-input-9.present-value.ref .

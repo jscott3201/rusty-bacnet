@@ -8,8 +8,16 @@
 //! reads do. A device with N exported objects costs N + 2 requests by RPM.
 //!
 //! An object whose read fails is kept with its error, and the export skips
-//! it. A device that stops answering ends the reading; what was read is
-//! kept, and [`Inventory::stopped`] says why.
+//! it. A device that stops answering, or a caller that cancels, ends the
+//! reading once the Object_List is in; what was read is kept, and
+//! [`Inventory::stopped`] says why. Before that, either is an error.
+//! An Object_List read element by element that stops early ends the
+//! reading there: no object is asked for.
+//!
+//! A device that refuses ReadPropertyMultiple costs one refused request,
+//! then a ReadProperty a property: 2 for a binary input or output, 3 for
+//! an analog input or output or a binary value, 4 for an analog value or a
+//! multi-state input or output, and 5 for a multi-state value.
 
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
@@ -59,8 +67,13 @@ pub async fn read_inventory<T: TransportPort + 'static>(
         device: reader.device,
         device_name,
         objects: Vec::new(),
-        stopped: list.stopped,
+        stopped: list.stopped.map(|why| format!("Object_List, {why}")),
     };
+    // An element-by-element read that stopped means the device stopped
+    // answering: asking it for each object would only time out again.
+    if inventory.stopped.is_some() {
+        return Ok(inventory);
+    }
     let wanted = list
         .objects
         .into_iter()
@@ -77,7 +90,12 @@ pub async fn read_inventory<T: TransportPort + 'static>(
                 error: Some(error.to_string()),
                 ..InventoryObject::new(object)
             }),
-            Err(Halt::Cancelled) => return Err(Halt::Cancelled),
+            // A caller that stops partway (an MCP call out of budget, say)
+            // keeps what was read.
+            Err(Halt::Cancelled) => {
+                inventory.stopped = Some(format!("cancelled before {}", object_label(object)));
+                break;
+            }
         }
     }
     Ok(inventory)

@@ -12,12 +12,17 @@ network fetch (#2436).
 - **Licence:** the file's ontology header declares
   `dcterms:license <http://www.apache.org/licenses/LICENSE-2.0>` and
   `dcterms:rights "Copyright 2026 ASHRAE"`. It is third-party text under
-  the Apache License 2.0, not under this repository's MIT licence.
+  the Apache License 2.0, not under this repository's MIT licence; the
+  licence's text is in [`LICENSE`](LICENSE) beside it.
 - **SHA-256:** `08f80bd6e15052f28cdfd354bdf46ff96e5e1afdba36a4dbed5186fc1ea51c41`
 
 The file is kept unmodified. It sits outside every crate directory, so no
-published crate ships it, and the repository's own text checks (spec
-overlap, wording) leave it out.
+published crate ships it. Two repository tools read this directory:
+`scripts/check-223.py`, which loads the ontology, and the no-secret scan
+(`scripts/ci/check-no-secrets.sh`), which greps every tracked file. No other
+check reads it. The ASHRAE 135 overlap check (`spec_overlap.py`) is run on
+diffs that leave this directory out, by convention: the file is third-party
+text kept verbatim.
 
 ## Refreshing it
 

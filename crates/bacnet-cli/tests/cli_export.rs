@@ -35,9 +35,13 @@ async fn server() -> (BACnetServer<BipTransport>, SocketAddr) {
 }
 
 /// A B/IP relay on loopback in front of `device` that counts the distinct
-/// confirmed requests it passes on. Returns the CLI's target, the count
-/// and the relay's task.
-async fn relay(device: SocketAddr) -> (String, Arc<Mutex<HashSet<u8>>>, JoinHandle<()>) {
+/// confirmed requests it sees, and passes on the first `answered` of them
+/// (and their retries), dropping the rest, so the device goes silent after
+/// them. Returns the CLI's target, the count and the relay's task.
+async fn relay(
+    device: SocketAddr,
+    answered: usize,
+) -> (String, Arc<Mutex<HashSet<u8>>>, JoinHandle<()>) {
     let front = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let back = UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let target = front.local_addr().unwrap().to_string();
@@ -45,6 +49,7 @@ async fn relay(device: SocketAddr) -> (String, Arc<Mutex<HashSet<u8>>>, JoinHand
     let log = Arc::clone(&seen);
     let task = tokio::spawn(async move {
         let mut cli = None;
+        let mut passed = HashSet::new();
         let (mut up, mut down) = ([0u8; 1500], [0u8; 1500]);
         loop {
             tokio::select! {
@@ -56,6 +61,12 @@ async fn relay(device: SocketAddr) -> (String, Arc<Mutex<HashSet<u8>>>, JoinHand
                         && let Ok(Apdu::ConfirmedRequest(request)) = decode_apdu(npdu.payload)
                     {
                         log.lock().unwrap().insert(request.invoke_id);
+                        if !passed.contains(&request.invoke_id) {
+                            if passed.len() == answered {
+                                continue;
+                            }
+                            passed.insert(request.invoke_id);
+                        }
                     }
                     let _ = back.send_to(frame, device).await;
                 }
@@ -72,13 +83,18 @@ async fn relay(device: SocketAddr) -> (String, Arc<Mutex<HashSet<u8>>>, JoinHand
 }
 
 async fn export(args: &[&str]) -> Output {
+    export_within("2000", args).await
+}
+
+/// [`export`] with an APDU timeout of `timeout` ms.
+async fn export_within(timeout: &str, args: &[&str]) -> Output {
     let mut all = vec![
         "--interface",
         "127.0.0.1",
         "--port",
         "0",
         "--timeout",
-        "2000",
+        timeout,
         "export",
         "223-experimental",
     ];
@@ -102,8 +118,15 @@ fn stdout(output: &Output) -> String {
 #[tokio::test]
 async fn exports_the_lab_device_by_address() {
     let (mut server, device) = server().await;
-    let (target, seen, relay) = relay(device).await;
-    let text = stdout(&export(&[&target]).await);
+    let (target, seen, relay) = relay(device, usize::MAX).await;
+    let output = export(&[&target]).await;
+    let text = stdout(&output);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Wrote 8 points of device 1234 to stdout (0 skipped"),
+        "the summary goes to stderr: {stderr}"
+    );
+    assert!(!text.contains("Wrote "), "stdout carries only the Turtle");
     assert!(
         text.starts_with("# EXPERIMENTAL: device 1234 as a proposed"),
         "{text}"
@@ -158,7 +181,7 @@ async fn exports_the_lab_device_by_address() {
 #[tokio::test]
 async fn options_and_the_output_file() {
     let (mut server, device) = server().await;
-    let (target, seen, relay) = relay(device).await;
+    let (target, seen, relay) = relay(device, usize::MAX).await;
     let files = support::Files::new();
     let path = files.0.join("lab.ttl");
     let path_text = path.to_str().unwrap();
@@ -213,6 +236,63 @@ async fn options_and_the_output_file() {
         support::failure(&export(&args).await, says);
     }
     assert_eq!(seen.lock().unwrap().len(), 2 + 3, "refused before sending");
+    relay.abort();
+    server.stop().await.unwrap();
+}
+
+/// A device that stops answering partway: the Turtle read so far is still
+/// written, its header says it is incomplete, and the exit status is 1.
+#[tokio::test]
+async fn an_incomplete_export_exits_1() {
+    let (mut server, device) = server().await;
+    // The wildcard read, the name, the list and the first two objects.
+    let (target, seen, relay) = relay(device, 5).await;
+    let output = export_within("300", &[&target]).await;
+    assert_eq!(output.status.code(), Some(1));
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.contains("# Incomplete: the reading stopped early ("),
+        "{text}"
+    );
+    assert!(text.contains("# 2 objects exported"), "{text}");
+    assert_eq!(text.matches(" a s223:BACnetExternalReference ;").count(), 2);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Wrote 2 points of device 1234 to stdout"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("the export of device 1234 stopped early"),
+        "{stderr}"
+    );
+    assert_eq!(
+        seen.lock().unwrap().len(),
+        6,
+        "nothing after the silent object"
+    );
+    relay.abort();
+    server.stop().await.unwrap();
+}
+
+/// `--types` that the device has none of: a valid, empty model, exit 0,
+/// with the header and stderr saying so.
+#[tokio::test]
+async fn no_object_of_the_selected_types() {
+    let (mut server, device) = server().await;
+    let (target, seen, relay) = relay(device, usize::MAX).await;
+    let output = export(&[&target, "--types", "mso"]).await;
+    let text = stdout(&output);
+    assert!(
+        text.contains("# The device has no object of the selected types"),
+        "{text}"
+    );
+    assert!(text.contains("@prefix d: <http://example.org/bacnet/device-1234/> ."));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Device 1234 has no object of the selected types"),
+        "{stderr}"
+    );
+    assert_eq!(seen.lock().unwrap().len(), 3);
     relay.abort();
     server.stop().await.unwrap();
 }

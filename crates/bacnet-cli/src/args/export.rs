@@ -17,14 +17,16 @@ pub(crate) enum ExportFormat {
     /// connections or sensors. The 223 draft and this output can change
     /// between releases. Reads the device name, its object list, then one
     /// request per exported object; a target given by address costs one
-    /// more, a read of its Device object to learn the instance. --format
-    /// and --json don't apply.
+    /// more, a read of its Device object to learn the instance. Stdout
+    /// carries only the Turtle; a summary goes to stderr. --format and
+    /// --json don't apply.
     #[command(name = "223-experimental")]
     S223 {
         /// Target device (address, instance, or routed dnet:instance).
         target: String,
-        /// Base IRI of the generated nodes, ending in / or #; a device's
-        /// nodes go under the base followed by device-INSTANCE/.
+        /// Base IRI of the generated nodes: an ASCII absolute IRI ending in
+        /// / or #. A device's nodes go under the base followed by
+        /// device-INSTANCE/.
         #[arg(long, value_name = "IRI",
               default_value = bacnet_ops::export::s223::DEFAULT_BASE_IRI)]
         base_iri: String,

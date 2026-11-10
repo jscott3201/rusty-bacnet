@@ -68,7 +68,7 @@ fn cases() -> Vec<(&'static str, Inventory, TurtleOptions)> {
         9,
         "Say \"hi\" \\ to\nRoom\t101\u{7}\u{1b}[2J",
     );
-    hostile.description = Some("Temp\u{e9}rature \u{202E}evil\u{2066} \u{1F525}".into());
+    hostile.description = Some("Temp\u{e9}rature \u{202E}evil\u{2066} \u{1F525}\0".into());
     hostile.units = Some(EngineeringUnits::DEGREES_CELSIUS);
     let mut hostile_states = named(ObjectType::MULTI_STATE_INPUT, 4, "Mode \"A\"");
     hostile_states.states = Some(2);
@@ -204,6 +204,8 @@ fn golden_cases_hold_what_they_test() {
 
     let hostile = text("hostile-strings.ttl");
     assert!(hostile.is_ascii());
+    assert!(hostile.contains("\\U0001F525\\uFFFD\""), "NUL as U+FFFD");
+    assert!(hostile.contains("# 1 NUL character in device text written as U+FFFD."));
     assert!(hostile.contains(r#"rdfs:label "Say \"hi\" \\ to\nRoom\t101\u0007\u001B[2J" ;"#));
     assert!(hostile.contains("\\u202Eevil\\u2066 \\U0001F525"));
 

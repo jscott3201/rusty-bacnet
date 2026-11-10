@@ -75,26 +75,30 @@ pub async fn export_cmd<T: TransportPort + 'static>(
     };
     let mut text = String::new();
     let counts = write_turtle(&inventory, &turtle, &mut text)?;
-    match output {
+    let to = match output {
         Some(path) => {
             let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
             file.write_all(text.as_bytes())?;
             file.flush()?;
-            eprintln!(
-                "Wrote {} points of device {device} to {} ({} skipped, {} with an unmapped unit, \
-                 {} identifiers left out for instance 0).",
-                counts.exported,
-                path.display(),
-                counts.skipped,
-                counts.unmapped_units,
-                counts.instance_zero,
-            );
+            path.display().to_string()
         }
-        None => print!("{text}"),
+        None => {
+            print!("{text}");
+            "stdout".into()
+        }
+    };
+    // Stdout carries only the Turtle; the summary goes to stderr either way.
+    eprintln!(
+        "Wrote {} points of device {device} to {to} ({} skipped, {} with an unmapped unit, \
+         {} identifiers left out for instance 0).",
+        counts.exported, counts.skipped, counts.unmapped_units, counts.instance_zero,
+    );
+    if inventory.objects.is_empty() && inventory.stopped.is_none() {
+        eprintln!("Device {device} has no object of the selected types: the model is empty.");
     }
     match inventory.stopped {
         Some(why) => Err(format!(
-            "device {device} stopped answering ({}); the export holds what was read before",
+            "the export of device {device} stopped early ({}); it holds what was read before",
             screen(&why)
         )
         .into()),
@@ -104,9 +108,8 @@ pub async fn export_cmd<T: TransportPort + 'static>(
 
 /// The instance of the device at `mac`, from its Device object read by the
 /// wildcard instance, which a device answers as its own. The client's
-/// discovery table gets
-/// the device when it doesn't hold it yet, since the export reads by
-/// instance; one it holds at another address is refused.
+/// discovery table gets the device when it doesn't hold it yet, since the
+/// export reads by instance; one it holds at another address is refused.
 async fn device_at<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     mac: &[u8],

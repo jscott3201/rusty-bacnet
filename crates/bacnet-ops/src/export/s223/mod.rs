@@ -22,8 +22,8 @@
 //!
 //! The draft can change, and so can this export: its name says
 //! experimental in every front end. The output's header comment names the
-//! ontology copy it was checked against ([`ONTOLOGY_SOURCE`],
-//! [`ONTOLOGY_VERSION`]).
+//! ontology copy the mapping was written against and the golden files were
+//! validated against ([`ONTOLOGY_SOURCE`], [`ONTOLOGY_VERSION`]).
 
 mod inventory;
 mod turtle;
@@ -36,7 +36,8 @@ pub use self::units::qudt_unit;
 use bacnet_types::enums::{EngineeringUnits, ObjectType};
 use bacnet_types::primitives::ObjectIdentifier;
 
-/// Where the ontology copy the output was checked against came from.
+/// Where the ontology copy the mapping was written against came from; the
+/// golden exports were validated against it.
 pub const ONTOLOGY_SOURCE: &str = "https://open223.info/223p.ttl";
 
 /// That copy's `owl:versionInfo`, shortened to its commit and date.
@@ -105,8 +106,9 @@ pub struct Inventory {
     pub device_name: Option<String>,
     /// The objects read, in Object_List order.
     pub objects: Vec<InventoryObject>,
-    /// Why the reading stopped before the end of the list: the device
-    /// stopped answering. The objects after it are not in `objects`.
+    /// Why the reading stopped early: the device stopped answering (during
+    /// the Object_List or after it) or the caller cancelled. The first
+    /// reason is kept; the objects after it are not in `objects`.
     pub stopped: Option<String>,
 }
 
@@ -189,29 +191,16 @@ impl Default for TurtleOptions {
 }
 
 impl TurtleOptions {
-    /// Options under `base_iri`, which must be an absolute IRI ending in
-    /// `/` or `#` with no character Turtle refuses in an IRI; each device
-    /// gets the namespace `<base_iri>device-<instance>/`. `write_priority`
-    /// goes in each commandable point's reference.
+    /// Options under `base_iri`; each device gets the namespace
+    /// `<base_iri>device-<instance>/`. `write_priority` goes in each
+    /// commandable point's reference.
+    ///
+    /// The base must be ASCII, start with a scheme (`http:`, `urn:`, ...),
+    /// hold no space, control character, backtick or any of `<>"{}|^\`,
+    /// write `%` only as the start of a two-digit hex escape, hold at most one `#`,
+    /// and end in `/` or `#`. A refusal says which rule failed.
     pub fn new(base_iri: &str, write_priority: Option<WritePriority>) -> Result<Self, String> {
-        let scheme = base_iri.split_once(':').map(|(scheme, _)| scheme);
-        let scheme_ok = scheme.is_some_and(|s| {
-            s.starts_with(|c: char| c.is_ascii_alphabetic())
-                && s.chars()
-                    .all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
-        });
-        if !scheme_ok {
-            return Err(format!("base IRI {base_iri:?} is not an absolute IRI"));
-        }
-        if let Some(bad) = base_iri
-            .chars()
-            .find(|c| c.is_control() || c.is_whitespace() || "<>\"{}|^`\\".contains(*c))
-        {
-            return Err(format!("base IRI {base_iri:?} holds {bad:?}"));
-        }
-        if !base_iri.ends_with(['/', '#']) {
-            return Err(format!("base IRI {base_iri:?} must end in / or #"));
-        }
+        check_base_iri(base_iri).map_err(|why| format!("base IRI {base_iri:?} {why}"))?;
         Ok(Self {
             base_iri: base_iri.into(),
             write_priority,
@@ -227,6 +216,46 @@ impl TurtleOptions {
     pub fn write_priority(&self) -> Option<WritePriority> {
         self.write_priority
     }
+}
+
+/// Why `base` can't be a base IRI, per [`TurtleOptions::new`].
+fn check_base_iri(base: &str) -> Result<(), String> {
+    if let Some(bad) = base.chars().find(|c| !c.is_ascii()) {
+        return Err(format!(
+            "holds the non-ASCII character {bad:?}; percent-encode it"
+        ));
+    }
+    let scheme = base.split_once(':').map(|(scheme, _)| scheme);
+    let scheme_ok = scheme.is_some_and(|s| {
+        s.starts_with(|c: char| c.is_ascii_alphabetic())
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
+    });
+    if !scheme_ok {
+        return Err("is not an absolute IRI: it has no scheme such as http:".into());
+    }
+    if let Some(bad) = base
+        .chars()
+        .find(|c| c.is_ascii_control() || *c == ' ' || "<>\"{}|^`\\".contains(*c))
+    {
+        return Err(format!("holds {bad:?}, which an IRI can't"));
+    }
+    let bytes = base.as_bytes();
+    for (at, _) in base.match_indices('%') {
+        let hex = bytes.get(at + 1..at + 3);
+        if !hex.is_some_and(|hex| hex.iter().all(u8::is_ascii_hexdigit)) {
+            return Err(format!(
+                "has a malformed percent escape at byte {at}: % takes two hex digits"
+            ));
+        }
+    }
+    if base.matches('#').count() > 1 {
+        return Err("has more than one #".into());
+    }
+    if !base.ends_with(['/', '#']) {
+        return Err("must end in / or #".into());
+    }
+    Ok(())
 }
 
 #[cfg(test)]

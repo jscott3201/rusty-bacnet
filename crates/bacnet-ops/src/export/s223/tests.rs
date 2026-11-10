@@ -226,6 +226,49 @@ fn literals_escape_device_text() {
     assert_eq!(literal("\u{7f}"), r#""\u007F""#);
 }
 
+/// U+0000 can't be in a string literal: it is written as U+FFFD, and the
+/// header counts each one.
+#[test]
+fn nul_becomes_the_replacement_character() {
+    assert_eq!(literal("a\0b"), r#""a\uFFFDb""#);
+    let mut ai = InventoryObject::new(oid(ObjectType::ANALOG_INPUT, 1));
+    ai.name = Some("Zone\0Temp".into());
+    ai.description = Some("\0".into());
+    let inventory = Inventory {
+        device: 7,
+        objects: vec![ai],
+        ..Inventory::default()
+    };
+    let mut text = String::new();
+    let counts = write_turtle(&inventory, &TurtleOptions::default(), &mut text).unwrap();
+    // The name goes out twice (label and object-name), the description once.
+    assert_eq!(counts.replaced, 3);
+    assert!(
+        text.contains("# 3 NUL characters in device text written as U+FFFD."),
+        "{text}"
+    );
+    assert!(!text.contains('\0'));
+    check_structure(&text);
+}
+
+/// An inventory with no object (none of the selected types) is a valid,
+/// empty model whose header says so.
+#[test]
+fn no_object_of_the_selected_types() {
+    let inventory = Inventory {
+        device: 7,
+        ..Inventory::default()
+    };
+    let mut text = String::new();
+    let counts = write_turtle(&inventory, &TurtleOptions::default(), &mut text).unwrap();
+    assert_eq!(counts, Counts::default());
+    assert!(
+        text.contains("# The device has no object of the selected types"),
+        "{text}"
+    );
+    assert!(check_structure(&text).is_empty());
+}
+
 /// The shape's identifier pattern, as the test re-implements it.
 #[test]
 fn identifier_pattern() {
@@ -257,19 +300,28 @@ fn options_are_checked() {
         "http://example.org/bacnet/",
         "urn:x:site#",
         "https://a.b/c-d/",
+        "http://x/a%20b%2F/",
+        "http://x/site#",
     ] {
         assert!(TurtleOptions::new(good, None).is_ok(), "{good}");
     }
-    for bad in [
-        "example.org/bacnet/",
-        "http://example.org/bacnet",
-        "http://example.org/a b/",
-        "http://example.org/a>b/",
-        "http://example.org/\"/",
-        "1http://x/",
-        "",
+    for (bad, says) in [
+        ("example.org/bacnet/", "no scheme"),
+        ("1http://x/", "no scheme"),
+        ("", "no scheme"),
+        ("http://example.org/bacnet", "must end in / or #"),
+        ("http://example.org/a b/", "which an IRI can't"),
+        ("http://example.org/a>b/", "which an IRI can't"),
+        ("http://example.org/\"/", "which an IRI can't"),
+        ("http://example.org/a`b/", "which an IRI can't"),
+        ("http://x/a#b#", "more than one #"),
+        ("http://x/%zz/", "malformed percent escape at byte 9"),
+        ("http://x/%4/", "malformed percent escape"),
+        ("http://x/a%", "malformed percent escape"),
+        ("http://x/caf\u{e9}/", "non-ASCII character '\u{e9}'"),
     ] {
-        assert!(TurtleOptions::new(bad, None).is_err(), "{bad}");
+        let error = TurtleOptions::new(bad, None).unwrap_err();
+        assert!(error.contains(says), "{bad}: {error}");
     }
     assert_eq!(TurtleOptions::default().base_iri(), DEFAULT_BASE_IRI);
     assert!(InventoryOptions::new(vec![]).is_err());
@@ -321,6 +373,7 @@ fn counts_and_the_state_cap() {
             skipped: 2,
             unmapped_units: 1,
             instance_zero: 1,
+            replaced: 0,
         }
     );
     assert!(
