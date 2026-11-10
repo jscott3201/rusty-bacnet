@@ -24,6 +24,8 @@ use bacnet_services::object_mgmt::DeleteObjectRequest;
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::constructed::BACnetAddress;
 
+mod multiple;
+
 /// The core side's invoke IDs: the next free one in turn, so a late
 /// answer to an ended report doesn't match the one after it.
 #[derive(Default)]
@@ -61,6 +63,8 @@ pub(super) struct Outstanding {
     server: u8,
     core: u8,
     token: Token,
+    /// The confirmed service it went out as, which its answer names.
+    service: ConfirmedServiceChoice,
 }
 
 /// One notification as it went out: its link MAC, routed destination,
@@ -127,7 +131,7 @@ impl CovParity {
             core.iter().map(|(wire, _)| wire).collect::<Vec<_>>(),
             "{what}: the notifications, server then core"
         );
-        for ((_, server), (_, (core, token, peer))) in server.iter().zip(core.iter()) {
+        for ((wire, server), (_, (core, token, peer))) in server.iter().zip(core.iter()) {
             if let (Some(server), Some(core)) = (server, core) {
                 // A resend is the same report again: keep one record.
                 self.outstanding.retain(|out| out.token != *token);
@@ -136,6 +140,8 @@ impl CovParity {
                     server: *server,
                     core: *core,
                     token: *token,
+                    // A confirmed request names its service in its fourth octet.
+                    service: ConfirmedServiceChoice::from_raw(wire.3[3]),
                 });
             }
         }
@@ -175,7 +181,7 @@ impl CovParity {
     /// followed (the revisit an Ack owes).
     async fn answer(&mut self, what: &str, refuse: bool) -> usize {
         let out = self.outstanding.remove(0);
-        let service = ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION;
+        let service = out.service;
         let encode = |invoke_id| {
             let pdu = if refuse {
                 Apdu::Error(ErrorPdu {
