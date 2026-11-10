@@ -51,6 +51,8 @@ pub const SERVICES: &[ServiceSupported] = &[
     ServiceSupported::WHO_IS,
     ServiceSupported::SUBSCRIBE_COV,
     ServiceSupported::SUBSCRIBE_COV_PROPERTY,
+    #[cfg(feature = "cov-multiple")]
+    ServiceSupported::SUBSCRIBE_COV_PROPERTY_MULTIPLE,
 ];
 
 /// Where a notification goes.
@@ -68,6 +70,31 @@ pub enum Destination {
 pub enum NotifyService {
     /// ConfirmedCOVNotification or UnconfirmedCOVNotification.
     Cov,
+    /// ConfirmedCOVNotificationMultiple or
+    /// UnconfirmedCOVNotificationMultiple: one notification of a report to
+    /// a SubscribeCOVPropertyMultiple context. A build without the
+    /// `cov-multiple` feature hands none out.
+    CovMultiple,
+}
+
+impl NotifyService {
+    /// The confirmed service a notification of this kind goes out as.
+    pub(crate) fn confirmed(self) -> bacnet_types::enums::ConfirmedServiceChoice {
+        use bacnet_types::enums::ConfirmedServiceChoice as Choice;
+        match self {
+            Self::Cov => Choice::CONFIRMED_COV_NOTIFICATION,
+            Self::CovMultiple => Choice::CONFIRMED_COV_NOTIFICATION_MULTIPLE,
+        }
+    }
+
+    /// The unconfirmed service a notification of this kind goes out as.
+    pub(crate) fn unconfirmed(self) -> bacnet_types::enums::UnconfirmedServiceChoice {
+        use bacnet_types::enums::UnconfirmedServiceChoice as Choice;
+        match self {
+            Self::Cov => Choice::UNCONFIRMED_COV_NOTIFICATION,
+            Self::CovMultiple => Choice::UNCONFIRMED_COV_NOTIFICATION_MULTIPLE,
+        }
+    }
 }
 
 /// One notification [`Reporter::pop`] hands out, its APDU in the caller's

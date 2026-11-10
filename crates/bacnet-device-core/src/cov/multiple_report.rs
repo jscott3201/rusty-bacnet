@@ -691,6 +691,20 @@ pub fn carried(
         .collect()
 }
 
+/// A token for one part of an unconfirmed report to `route`'s context, for a
+/// host that queues a report's parts and hears of each send by its token,
+/// as a `Reporter`'s outbox does. It names no report of the table's:
+/// [`CovTable::delivered`] ignores it, and the host completes what the part
+/// carried itself ([`carried`], [`CovTable::complete_observation`]). `None`
+/// once the table's tickets are spent.
+pub fn part_token(table: &mut CovTable, route: &CovSubscriptionSnapshot) -> Option<Token> {
+    let ticket = table.prepare_completion(route)?.ticket();
+    Some(Token {
+        flight: route.flight,
+        ticket: ticket.get(),
+    })
+}
+
 /// The part of a confirmed report that goes out now, and the rest.
 pub struct FirstPart {
     /// The reference whose recipient and current route receive it.

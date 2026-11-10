@@ -19,6 +19,7 @@ use bacnet_time::{Duration, Instant};
 use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::primitives::ObjectIdentifier;
 
+use super::NotifyService;
 use crate::cov::{SubscriberEndpoint, Token};
 
 /// One confirmed notification out.
@@ -33,6 +34,8 @@ pub(super) struct Outstanding {
     pub(super) peer: BACnetAddress,
     pub(super) to: SubscriberEndpoint,
     pub(super) invoke_id: u8,
+    /// Which service it is.
+    pub(super) service: NotifyService,
     /// Its service parameters, for a resend.
     pub(super) params: Vec<u8>,
     /// When the current attempt's answer is overdue.
@@ -50,7 +53,7 @@ impl Outstanding {
         (token, object): (Token, ObjectIdentifier),
         peer: BACnetAddress,
         to: SubscriberEndpoint,
-        invoke_id: u8,
+        (invoke_id, service): (u8, NotifyService),
         params: Vec<u8>,
         (deadline, cutoff): (Instant, Instant),
         retries: u8,
@@ -61,6 +64,7 @@ impl Outstanding {
             peer,
             to,
             invoke_id,
+            service,
             params,
             deadline,
             cutoff,

@@ -11,7 +11,7 @@ use bacnet_encoding::npdu::view::NetworkPriority;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_time::Instant;
 use bacnet_types::constructed::BACnetAddress;
-use bacnet_types::enums::{ConfirmedServiceChoice, UnconfirmedServiceChoice};
+use bacnet_types::enums::ConfirmedServiceChoice;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 use bytes::{Bytes, BytesMut};
@@ -33,16 +33,19 @@ use crate::reply::{self, SEGMENTED, emit};
 use crate::responder::{Access, Inbound, Outcome, Responder, Written};
 use crate::write::{WriteCommitObserver, WriteTarget};
 
+#[cfg(feature = "cov-multiple")]
+#[path = "reporter_multiple.rs"]
+mod multiple;
 #[path = "reporter_tests.rs"]
 #[cfg(test)]
 mod tests;
 
-/// The [`Responder`] with COV reporting: SubscribeCOV and
-/// SubscribeCOVProperty, the notifications what a request or the host
-/// changes calls for, confirmed delivery with its retries, and the Device's
-/// subscription lists. It strings together the staged steps
-/// `bacnet-server` runs under its guards; the parity tests hold the two to
-/// the same notifications.
+/// The [`Responder`] with COV reporting: SubscribeCOV, SubscribeCOVProperty
+/// and, with the `cov-multiple` feature, SubscribeCOVPropertyMultiple, the
+/// notifications what a request or the host changes calls for, confirmed
+/// delivery with its retries, and the Device's subscription lists. It
+/// strings together the staged steps `bacnet-server` runs under its
+/// guards; the parity tests hold the two to the same notifications.
 ///
 /// The host hands it each request ([`handle`](Self::handle)), each answer to
 /// a confirmed notification ([`reply`](Self::reply)), the objects it changes
@@ -82,6 +85,10 @@ pub struct Reporter {
     counters: ReporterCounters,
     /// The latest `now` the host gave.
     last: Instant,
+    /// The COV-multiple path: its timestamped histories, and the reports
+    /// going out.
+    #[cfg(feature = "cov-multiple")]
+    multiple: multiple::Multiple,
 }
 
 impl Reporter {
@@ -91,6 +98,8 @@ impl Reporter {
         let identity = responder.identity();
         let device = identity.device_oid();
         let max_apdu = max_apdu_header_at_or_below(u32::from(identity.max_apdu_length()))?;
+        #[cfg(feature = "cov-multiple")]
+        let multiple = multiple::Multiple::new(usize::from(identity.max_apdu_length()));
         Ok(Self {
             responder,
             device,
@@ -108,6 +117,8 @@ impl Reporter {
             snapshots: LifeSafetyCovSnapshots::default(),
             counters: ReporterCounters::default(),
             last: Instant::ZERO,
+            #[cfg(feature = "cov-multiple")]
+            multiple,
         })
     }
 
@@ -151,7 +162,8 @@ impl Reporter {
     /// Run `request` from `peer` against `db`, writing any answer to `out`
     /// for the host to send before anything [`pop`](Self::pop) hands out.
     ///
-    /// SubscribeCOV and SubscribeCOVProperty are answered here, and an
+    /// SubscribeCOV, SubscribeCOVProperty and, with the `cov-multiple`
+    /// feature, SubscribeCOVPropertyMultiple are answered here, and an
     /// accepted subscription queues its first notification. Every other
     /// request is the `Responder`'s, as [`Responder::handle`] runs it, with
     /// its reads answering the Device's subscription lists from the table
@@ -170,11 +182,30 @@ impl Reporter {
         self.last = now;
         let apdu = request.apdu.clone();
         if let Some(service) = subscribe_service(&apdu) {
+            #[cfg(feature = "cov-multiple")]
+            if service == ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE {
+                return self.subscribe_multiple(db, peer, request, now, out);
+            }
             return self.subscribe(db, peer, service, request, now, out);
         }
         let handled = if Responder::classify(&apdu) == Access::Write {
             let mut capture = Capture::default();
+            #[cfg(not(feature = "cov-multiple"))]
             let written = self.responder.write(db, Some(&mut capture), request, out);
+            // Each attempt's timestamped changes are captured as it
+            // commits, around the Life Safety capture.
+            #[cfg(feature = "cov-multiple")]
+            let written = {
+                use crate::cov::timed_capture::{TimedCapture, TimedWriteCapture};
+                let queue = (&mut self.multiple.histories, now);
+                let all = TimedCapture::all(&self.table, now);
+                let mut timed = TimedWriteCapture::new(all, queue, Some(&mut capture));
+                let written = self.responder.write(db, Some(&mut timed), request, out);
+                // Changes the request's exact fanout may not select are
+                // looked at again, ahead of the backstop.
+                self.looks.extend_from_slice(timed.life_safety_queued());
+                written
+            };
             self.report_changes(db, &written.objects, &capture.0, now);
             written
         } else {
@@ -201,6 +232,8 @@ impl Reporter {
     pub fn changed(&mut self, db: &ObjectDatabase, objects: &[ObjectIdentifier], now: Instant) {
         self.last = now;
         let snapshots = core::mem::take(&mut self.snapshots);
+        #[cfg(feature = "cov-multiple")]
+        self.capture_changed(db, objects, &snapshots, now);
         self.report_changes(db, objects, &snapshots, now);
     }
 
@@ -247,12 +280,15 @@ impl Reporter {
     ) -> bool {
         self.last = now;
         self.release(ids);
-        let service = ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION;
+        let ours = |service| {
+            service == NotifyService::Cov.confirmed()
+                || service == NotifyService::CovMultiple.confirmed()
+        };
         let (invoke_id, outcome) = match decode_apdu(Bytes::copy_from_slice(apdu)) {
-            Ok(Apdu::SimpleAck(ack)) if ack.service_choice == service => {
+            Ok(Apdu::SimpleAck(ack)) if ours(ack.service_choice) => {
                 (ack.invoke_id, Delivery::Acknowledged)
             }
-            Ok(Apdu::Error(error)) if error.service_choice == service => {
+            Ok(Apdu::Error(error)) if ours(error.service_choice) => {
                 (error.invoke_id, Delivery::Failed)
             }
             Ok(Apdu::Reject(reject)) => (reject.invoke_id, Delivery::Failed),
@@ -268,8 +304,10 @@ impl Reporter {
     }
 
     /// When the host should call [`on_deadline`](Self::on_deadline): the
-    /// earliest lifetime, report deadline or overdue answer, or the latest
-    /// `now` it gave when references are owed a look.
+    /// earliest lifetime, report deadline or overdue answer, the earliest
+    /// Max_Notification_Delay deadline of a COV-multiple context with
+    /// changes pending, or the latest `now` it gave when references are owed
+    /// a look.
     pub fn next_deadline(&self) -> Option<Instant> {
         let looks = !self.looks.is_empty() || (!self.owed.is_empty() && self.room_freed);
         let resend = self.confirmed.resend_due();
@@ -277,6 +315,8 @@ impl Reporter {
             self.table.next_expiry(),
             self.confirmed.next_deadline(),
             (looks || resend).then_some(self.last),
+            #[cfg(feature = "cov-multiple")]
+            self.multiple_deadline(),
         ])
     }
 
@@ -293,6 +333,9 @@ impl Reporter {
             self.end_confirmed(out.token, Delivery::Failed, now);
         }
         let mut keys = core::mem::take(&mut self.looks);
+        // Contexts whose pending changes reached their deadline.
+        #[cfg(feature = "cov-multiple")]
+        keys.extend(self.multiple_due(now));
         let mut owed = 0;
         if core::mem::take(&mut self.room_freed) {
             // The oldest owed references, as many as there are free
@@ -332,26 +375,27 @@ impl Reporter {
             let notification = Notification {
                 token: resend.token,
                 to: Destination::Subscriber(resend.to.clone()),
-                service: NotifyService::Cov,
+                service: resend.service,
                 invoke_id: Some(resend.invoke_id),
                 priority: NetworkPriority::Normal,
             };
             let (invoke_id, params) = (resend.invoke_id, resend.params.clone());
-            self.encode_confirmed(invoke_id, &params, out);
+            self.encode_confirmed(invoke_id, notification.service, &params, out);
             self.counters.resent += 1;
             return Some(notification);
         }
         loop {
-            let (token, key, to, params, confirmed, begun) = self.outbox.pop(|entry, params| {
-                (
-                    entry.token,
-                    entry.key.clone(),
-                    entry.to.clone(),
-                    params.to_vec(),
-                    entry.confirmed,
-                    entry.begun,
-                )
-            })?;
+            let (token, key, to, params, (confirmed, service), begun) =
+                self.outbox.pop(|entry, params| {
+                    (
+                        entry.token,
+                        entry.key.clone(),
+                        entry.to.clone(),
+                        params.to_vec(),
+                        (entry.confirmed, entry.service),
+                        entry.begun,
+                    )
+                })?;
             self.room_freed = true;
             let start = out.len();
             let invoke_id = if confirmed {
@@ -368,11 +412,11 @@ impl Reporter {
                 let Some(invoke_id) = ids.take(&peer) else {
                     // No invoke ID to send it under: it ends unsent, and the
                     // change is looked at again later.
-                    self.table.delivered(token, Delivery::NotSent, now);
+                    self.end_confirmed(token, Delivery::NotSent, now);
                     self.owe(key);
                     continue;
                 };
-                self.encode_confirmed(invoke_id, &params, out);
+                self.encode_confirmed(invoke_id, service, &params, out);
                 let deadline = now.saturating_add(self.timing.timeout);
                 let retries = self.timing.retries;
                 let (to, params) = (to.clone(), params);
@@ -380,7 +424,7 @@ impl Reporter {
                     (token, key.object()),
                     peer,
                     to,
-                    invoke_id,
+                    (invoke_id, service),
                     params,
                     (deadline, cutoff),
                     retries,
@@ -388,7 +432,7 @@ impl Reporter {
                 Some(invoke_id)
             } else {
                 let pdu = Apdu::UnconfirmedRequest(UnconfirmedRequest {
-                    service_choice: UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION,
+                    service_choice: service.unconfirmed(),
                     service_request: Bytes::from(params),
                 });
                 encode_apdu(out, &pdu).expect("an UnconfirmedRequest always encodes");
@@ -405,7 +449,7 @@ impl Reporter {
             return Some(Notification {
                 token,
                 to: Destination::Subscriber(to),
-                service: NotifyService::Cov,
+                service,
                 invoke_id,
                 priority: NetworkPriority::Normal,
             });
@@ -414,7 +458,9 @@ impl Reporter {
 
     /// How the send of the notification `token` names ended. An
     /// unconfirmed one that was [`Sent`](Delivery::Sent) becomes its
-    /// subscription's baseline. A confirmed one ends through
+    /// subscription's baseline; one of a COV-multiple report that was not
+    /// sent stops that report, and the notifications queued after it are
+    /// not handed out. A confirmed one ends through
     /// [`reply`](Self::reply) or its timeout; the host reports one here
     /// only when it couldn't send it ([`NotSent`](Delivery::NotSent)), and
     /// it then ends with no hold-off.
@@ -436,19 +482,26 @@ impl Reporter {
             self.end_confirmed(token, outcome, now);
             return;
         }
+        // One part of an unconfirmed COV-multiple report.
+        #[cfg(feature = "cov-multiple")]
+        if self.part_delivered(token, outcome, now) {
+            self.settle();
+            return;
+        }
         self.table.delivered(token, outcome, now);
         self.settle();
     }
 
     /// The Device's subscription lists in `db`, live at `now`, for a read
-    /// the host runs itself. Active_COV_Multiple_Subscriptions is the
-    /// Device's own: the reporter runs no SubscribeCOVPropertyMultiple
-    /// (#2320), so its table holds no reference that list would show.
+    /// the host runs itself. Without the `cov-multiple` feature
+    /// Active_COV_Multiple_Subscriptions is the Device's own: the reporter
+    /// then runs no SubscribeCOVPropertyMultiple, so its table holds no
+    /// reference that list would show.
     pub fn overlay<'a>(
         &'a self,
         db: &'a ObjectDatabase,
         now: Instant,
-    ) -> ActiveCovOverlay<'a, false> {
+    ) -> ActiveCovOverlay<'a, { cfg!(feature = "cov-multiple") }> {
         ActiveCovOverlay::new(&self.table, db, self.device, now)
     }
 
@@ -511,6 +564,8 @@ impl Reporter {
             if let Some(stored) = db.get(&object).filter(|_| !subs.is_empty()) {
                 self.report(stored, &subs, false, now);
             }
+            #[cfg(feature = "cov-multiple")]
+            self.report_multiples(db, object, None, now);
         }
         for change in snapshots.changes(db, objects) {
             let subs: Vec<_> = self
@@ -524,6 +579,8 @@ impl Reporter {
             {
                 self.report(stored, &subs, change.status_changed(), now);
             }
+            #[cfg(feature = "cov-multiple")]
+            self.report_multiples(db, change.object_identifier, Some(&change), now);
         }
     }
 
@@ -547,14 +604,19 @@ impl Reporter {
     /// A reference whose subscription or object is gone can't be looked
     /// at, so it is owed nothing more.
     fn look(&mut self, db: &ObjectDatabase, keys: &[CovSubscriptionKey], now: Instant) {
-        for (at, key) in keys.iter().enumerate() {
+        // COV-multiple references are looked at by context.
+        #[cfg(feature = "cov-multiple")]
+        self.look_multiple(db, keys, now);
+        let single = |key: &CovSubscriptionKey| key.multiple_context().is_none();
+        for (at, key) in keys.iter().enumerate().filter(|(_, key)| single(key)) {
             let object = key.object();
-            if keys[..at].iter().any(|earlier| earlier.object() == object) {
+            let seen = |earlier: &CovSubscriptionKey| single(earlier) && earlier.object() == object;
+            if keys[..at].iter().any(seen) {
                 continue;
             }
             let mut subs = Vec::new();
             for (later, key) in keys.iter().enumerate().skip(at) {
-                if key.object() != object || keys[at..later].contains(key) {
+                if !single(key) || key.object() != object || keys[at..later].contains(key) {
                     continue;
                 }
                 let sub = self.table.get_subscription(key);
@@ -630,7 +692,7 @@ impl Reporter {
                 report.token,
                 sub.key().clone(),
                 sub.endpoint(),
-                sub.issue_confirmed_notifications,
+                (sub.issue_confirmed_notifications, NotifyService::Cov),
                 now,
                 &report.params,
             );
@@ -698,7 +760,15 @@ impl Reporter {
         if outcome == Delivery::Failed {
             self.counters.failed += 1;
         }
+        // A COV-multiple report's claim is settled before the table ends
+        // the report, so what it returns is back before the mark clears.
+        #[cfg(feature = "cov-multiple")]
+        let context = self.settle_lodged(token, outcome, now);
         let owed = self.table.delivered(token, outcome, now);
+        #[cfg(feature = "cov-multiple")]
+        if let Some(context) = context.filter(|_| outcome == Delivery::Failed) {
+            self.hold_off_multiple(&context, now);
+        }
         self.looks.extend(owed);
         self.settle();
     }
@@ -708,9 +778,20 @@ impl Reporter {
     /// removed reference's queued notifications die, and owed references
     /// get their look.
     fn settle(&mut self) {
+        self.settle_after(true);
+    }
+
+    /// [`settle`](Self::settle), with the timestamped histories brought in
+    /// line with the table when `follow`: every mutation but the
+    /// SubscribeCOVPropertyMultiple service, which does that itself.
+    fn settle_after(&mut self, follow: bool) {
         let counts = self.table.take_counts();
         add(&mut self.counters.cov, &counts);
         let fenced = self.table.take_fenced();
+        #[cfg(feature = "cov-multiple")]
+        self.settle_multiple(&fenced, follow);
+        #[cfg(not(feature = "cov-multiple"))]
+        let _ = follow;
         if fenced.is_empty() {
             return;
         }
@@ -735,7 +816,13 @@ impl Reporter {
         }
     }
 
-    fn encode_confirmed(&self, invoke_id: u8, params: &[u8], out: &mut BytesMut) {
+    fn encode_confirmed(
+        &self,
+        invoke_id: u8,
+        service: NotifyService,
+        params: &[u8],
+        out: &mut BytesMut,
+    ) {
         let pdu = Apdu::ConfirmedRequest(ConfirmedRequest {
             segmented: false,
             more_follows: false,
@@ -745,26 +832,28 @@ impl Reporter {
             invoke_id,
             sequence_number: None,
             proposed_window_size: None,
-            service_choice: ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION,
+            service_choice: service.confirmed(),
             service_request: Bytes::copy_from_slice(params),
         });
         encode_apdu(out, &pdu).expect("a validated Max-APDU always encodes");
     }
 }
 
-/// SubscribeCOV or SubscribeCOVProperty, read from an unsegmented confirmed
-/// request's header.
+/// A subscribe service the reporter runs, read from an unsegmented
+/// confirmed request's header.
 fn subscribe_service(apdu: &[u8]) -> Option<ConfirmedServiceChoice> {
     let (&first, service) = (apdu.first()?, apdu.get(3)?);
     if first >> 4 != 0 || first & SEGMENTED != 0 {
         return None;
     }
     let service = ConfirmedServiceChoice::from_raw(*service);
-    matches!(
+    let multiple = cfg!(feature = "cov-multiple")
+        && service == ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE;
+    let single = matches!(
         service,
         ConfirmedServiceChoice::SUBSCRIBE_COV | ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY
-    )
-    .then_some(service)
+    );
+    (single || multiple).then_some(service)
 }
 
 /// Add `counts`, one table mutation's, to the running `total`.

@@ -19,6 +19,7 @@ use alloc::vec::Vec;
 
 use bacnet_time::Instant;
 
+use super::NotifyService;
 use crate::cov::{CovSubscriptionKey, SubscriberEndpoint, Token};
 
 /// How much the outbox holds: entries, and octets of their service
@@ -50,12 +51,25 @@ pub(super) struct Entry {
     pub(super) key: CovSubscriptionKey,
     pub(super) to: SubscriberEndpoint,
     pub(super) confirmed: bool,
+    /// Which service it is. A report to a COV-multiple context may queue
+    /// several notifications under one reference, so only a
+    /// [`NotifyService::Cov`] one replaces, or is replaced.
+    pub(super) service: NotifyService,
     /// When the table began the report: a confirmed one's answers are cut
     /// off from it, as the server's worker's are.
     pub(super) begun: Instant,
     start: usize,
     len: usize,
     live: bool,
+}
+
+impl Entry {
+    /// Whether a new unconfirmed COVNotification for `key` takes this
+    /// entry's place: it is the one queued for that subscription.
+    fn replaces(&self, confirmed: bool, service: NotifyService, key: &CovSubscriptionKey) -> bool {
+        let single = service == NotifyService::Cov && self.service == NotifyService::Cov;
+        single && !confirmed && self.live && !self.confirmed && self.key == *key
+    }
 }
 
 /// Room for more entries, as an evaluation reserves it.
@@ -143,11 +157,12 @@ impl Outbox {
     pub(super) fn queued(&self, key: &CovSubscriptionKey) -> Option<usize> {
         self.entries
             .iter()
-            .find(|entry| entry.live && !entry.confirmed && entry.key == *key)
+            .find(|entry| entry.replaces(false, NotifyService::Cov, key))
             .map(|entry| entry.len)
     }
 
-    /// Queue a notification with service parameters `params`, if it fits.
+    /// Queue a notification of `service`, confirmed or not, with service
+    /// parameters `params`, if it fits.
     /// An unconfirmed one replaces, in its place, the one queued for its
     /// subscription, whose token it returns; a replaced one that no longer
     /// fits leaves too, and the new one isn't queued.
@@ -156,17 +171,14 @@ impl Outbox {
         token: Token,
         key: CovSubscriptionKey,
         to: SubscriberEndpoint,
-        confirmed: bool,
+        (confirmed, service): (bool, NotifyService),
         begun: Instant,
         params: &[u8],
     ) -> Pushed {
-        let at = (!confirmed)
-            .then(|| {
-                self.entries
-                    .iter()
-                    .position(|entry| entry.live && !entry.confirmed && entry.key == key)
-            })
-            .flatten();
+        let at = self
+            .entries
+            .iter()
+            .position(|entry| entry.replaces(confirmed, service, &key));
         let replaced = at.map(|at| {
             let old = &mut self.entries[at];
             old.live = false;
@@ -196,6 +208,7 @@ impl Outbox {
             key,
             to,
             confirmed,
+            service,
             begun,
             start,
             len: params.len(),
