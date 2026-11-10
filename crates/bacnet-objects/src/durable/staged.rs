@@ -269,6 +269,23 @@ impl<S: Send + 'static, N> StagedSaves<S, N> {
     }
 
     /// Stage `steps` as [`stage`](Self::stage) does, saving `snapshot`,
+    /// which the caller built with every step's state in it, and keeping
+    /// `served` beside them: for steps that hold less than the state they
+    /// leave, so a stage keeps one copy of it whatever the steps' number.
+    pub(crate) fn stage_built(
+        &mut self,
+        steps: Vec<Step<N>>,
+        base: u64,
+        snapshot: S,
+        served: S,
+    ) -> StageStep {
+        if steps.is_empty() {
+            return StageStep::Skip;
+        }
+        self.stage_saving(steps, base, snapshot, Some(served))
+    }
+
+    /// Stage `steps` as [`stage`](Self::stage) does, saving `snapshot`,
     /// which the caller built with every step's state in it, and keeping no
     /// served state beside them. The caller puts storage back itself once a
     /// dropped staged write leaves a correction due

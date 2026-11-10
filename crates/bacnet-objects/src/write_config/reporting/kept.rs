@@ -246,7 +246,11 @@ impl Kept {
     }
 }
 
-type Storage = StagedSaves<WriteConfigSnapshot, Kept>;
+/// A staged step keeps only which rows its write leaves written; the rows
+/// themselves are worked out again from the object when the write is made.
+/// So a request's stage holds the rows a constant number of times, however
+/// many writes it makes (#2414).
+type Storage = StagedSaves<WriteConfigSnapshot, Written>;
 
 /// An object's reporting storage: none until it opts in.
 #[derive(Default)]
@@ -453,34 +457,34 @@ fn admit_to(
     object: &dyn KeepsReporting,
 ) -> Result<(), Error> {
     let storage = store.storage.as_mut().expect("checked by the caller");
-    // A parameter's check can turn on the object itself (a State_Text
-    // shrink on Present_Value), which a write the store doesn't count may
-    // have changed since the stage. So the object's refusal comes first and
-    // takes no staged step: the request's release puts storage back.
-    if parameters::kept_bit(current.object_type, write.property).is_some() {
-        object.parameter_after(&mut current.rows.algorithm.clone(), write)?;
-    }
+    // What the write leaves, worked out from the rows the object serves
+    // now; the object's refusal comes first and takes no staged step. A
+    // check can turn on the object itself, which a write the store doesn't
+    // count may have changed since the stage: a State_Text shrink on a
+    // Present_Value, Relinquish_Default or command written earlier in the
+    // same request. The stage took such a shrink, so storage briefly holds
+    // labels the device then refuses; the request's release puts it back
+    // (a crash inside that window leaves a file that loads, with that
+    // State_Text). A write the object refuses also leaves another
+    // request's staged write alone (#1424).
+    let next = current.after(write, object)?;
     let claimed = storage.claim(
         write.property,
         write.array_index,
         &write.value,
         store.writes,
     );
-    let next = match claimed {
-        Some(Ok(next)) => {
+    match claimed {
+        Some(Ok(_)) => {
             // Steps the request has still to take keep, as the state served,
             // the rows this write leaves.
             storage.correct(|| next.snapshot());
-            next
         }
         Some(Err(_)) => {
             storage.correct(|| current.snapshot());
             return Err(operational_problem());
         }
         None => {
-            // A write the object refuses leaves another request's staged
-            // write alone (#1424).
-            let next = current.after(write, object)?;
             storage.drop_staged();
             // Storage goes back to the served rows first, should the save
             // below fail.
@@ -488,9 +492,8 @@ fn admit_to(
             storage
                 .save_now(next.snapshot())
                 .map_err(|_| operational_problem())?;
-            next
         }
-    };
+    }
     store.written = next.written;
     store.writes = store.writes.wrapping_add(1);
     Ok(())
@@ -514,7 +517,10 @@ pub(crate) fn stage_writes<T: KeepsReporting>(
             return StageStep::Busy(wait);
         }
         let current = kept(store.written, object);
-        let steps = staged::steps(writes, |earlier, write| {
+        // One working copy of the rows the steps so far leave; a step keeps
+        // only its write and the rows it leaves written.
+        let mut working: Option<Kept> = None;
+        let steps = staged::steps(writes, |_, write| {
             if !kept_one(write) {
                 return Ok(None);
             }
@@ -523,12 +529,16 @@ pub(crate) fn stage_writes<T: KeepsReporting>(
                 write.property,
                 write.array_index,
             )?;
-            let from = earlier.last().map_or(&current, |step| &step.next);
-            from.after(write, object).map(Some)
+            let next = working.as_ref().unwrap_or(&current).after(write, object)?;
+            let written = next.written;
+            working = Some(next);
+            Ok(Some(written))
         });
-        storage.stage(steps, store.writes, current.snapshot(), |snapshot, kept| {
-            *snapshot = kept.snapshot();
-        })
+        // A step was taken exactly when the working copy was set.
+        let Some(last) = working else {
+            return StageStep::Skip;
+        };
+        storage.stage_built(steps, store.writes, last.snapshot(), current.snapshot())
     })
 }
 
