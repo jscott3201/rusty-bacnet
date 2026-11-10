@@ -4698,24 +4698,36 @@ ai.set_notification_class(5); // a value a peer wrote and saved wins
 
 #### Keeping written event algorithm parameters (#2331)
 
-An Analog Input, Analog Output or Analog Value built
+An analog, binary or multi-state Input, Output or Value built
 `with_reporting_persistence` also keeps the event algorithm parameters a
-peer writes: Time_Delay, Time_Delay_Normal, High_Limit, Low_Limit, Deadband
-and Limit_Enable. The binary and multi-state objects, Access Door, Access
-Zone and Event Enrollment don't keep theirs yet; a write of one lasts until
-a restart, as before.
+peer writes:
+
+| Object types | Parameters kept |
+| --- | --- |
+| Analog Input, Output, Value | Time_Delay, Time_Delay_Normal, High_Limit, Low_Limit, Deadband, Limit_Enable |
+| Binary Input, Value | Time_Delay, Time_Delay_Normal, Alarm_Value |
+| Multi-state Input, Value | Time_Delay, Time_Delay_Normal, Alarm_Values |
+| Binary Output, Multi-state Output | Time_Delay, Time_Delay_Normal |
+
+Access Door, Access Zone and Event Enrollment don't keep theirs yet; a
+write of one lasts until a restart, as before.
 
 - **Same rules as the reporting settings.** A write is saved before it is
   answered and refused with DEVICE / OPERATIONAL_PROBLEM, the old value kept
   on the object and in its detector, when the save fails. The server stages
   it with the request's other kept writes, one save for them all. A write
-  the object refuses (a limit that isn't finite, a negative Deadband, the
-  wrong datatype, an array index) is refused as before and saves nothing.
+  the object refuses (a limit that isn't finite, a negative Deadband, an
+  Alarm_Value past ACTIVE, an Alarm_Values entry of zero or past
+  Number_Of_States, the wrong datatype, an array index) is refused as
+  before and saves nothing.
 - **Only what a write set.** `written_reporting().algorithm` is an
   `AlgorithmWriteConfig` with a `Some` for each written parameter.
   `clear_written_reporting()` drops them with the reporting settings and the
-  Description.
-- **No setters.** These objects have no setter for the parameters. Set the
+  Description. A written empty Alarm_Values list is kept as an empty list.
+- **Setters.** One parameter has a setter: `set_alarm_values` on a
+  Multi-state Input or Value. Like the reporting setters, it gives way to a
+  list a write saved until `clear_written_reporting()`; it still takes any
+  state, checked or not. The other parameters have no setter. Set the
   application's own values with `write_property` before
   `with_reporting_persistence`: a saved write then goes over them, and they
   apply again at the first start after a clear. A `write_property` after the
@@ -4723,24 +4735,65 @@ a restart, as before.
 - **At a restart.** A rebuilt object's detector starts with the saved
   parameters, as if each had been written before the first evaluation:
   Event_State starts NORMAL with no delay counting, and the first evaluation
-  uses the restored limits and delays. The values go in the way a write puts
-  them in, which never restarts a delay or changes Event_State.
+  uses the restored limits, alarm values and delays. The values go in the
+  way a write puts them in, which never restarts a delay or changes
+  Event_State. A Multi-state Value works out its Reliability again when
+  Alarm_Values is written, so it does when a saved list goes in.
 - **Validated on load.** Storage holding a value the object refuses on the
   wire, or a parameter the object's type doesn't keep, fails
-  `with_reporting_persistence`; nothing reaches the detector. In a file, a
+  `with_reporting_persistence`; nothing reaches the detector. The one
+  exception is the Alarm_Values entry past Number_Of_States, below.
+  `clear_written_reporting()` needs the object, so it can't drop storage
+  the builder call refuses; an application that would rather start from
+  nothing than delete the file replaces it without loading it:
+  `persistence.save(oid, &WriteConfigSnapshot::Reporting(Default::default()))`.
+  In a file, a
   bad value is damage, and a parameter this build doesn't keep for the
   object's type is an unknown kind (`SnapshotErrorKind::UnknownKind(6)`,
   `is_damage()` false): a later release may keep it, so a backend with two
   copies stops there instead of falling back to the older one.
+- **Alarm_Values and Number_Of_States.** A saved list holds at most the
+  1,024 entries a write may, none of them zero; a file breaking either is
+  damage. One wire rule isn't applied on load: a write refuses an entry
+  past Number_Of_States, but a saved list naming one is restored as it was
+  written. The state count and State_Text aren't kept, so the next start
+  has the application's count again. A peer that added a state through
+  State_Text and then listed it leaves such a list, and so does an
+  application that rebuilds the object with fewer states; neither may stop
+  the object from starting. The object then holds what a local
+  `set_number_of_states` shrink leaves it holding: it serves the list, and
+  a write of the same list is refused. What follows differs by type, and
+  is the cost of letting the object start:
+  - a Multi-state Input reports no fault, and goes on alarming on the
+    entries within its states;
+  - a Multi-state Value reports CONFIGURATION_ERROR and is in FAULT from
+    its first evaluation. While it is, no listed state raises OFFNORMAL,
+    the ones within its states included: the object raises no alarm on
+    its value until a list within its states is written or the states are
+    there again.
+
+  A peer can't get there by removing states: a State_Text write that would
+  strand a listed state is refused.
+- **One request that adds a state and lists it.** A WritePropertyMultiple
+  that writes State_Text and then Alarm_Values naming a state it adds
+  saves once, off the database guard: the server hands a Multi-state Input
+  or Value its State_Text writes with the rest, and the staged check uses
+  the count they leave.
 - **Format.** A snapshot holding a parameter is stored as kind 6 of
   `RBNWCF01` (`snapshot::write_config::KIND_REPORTING_PARAMETERS`): the kind 4
   body, then a presence mask and the parameters it names. One without keeps
   kind 4, octet for octet, so existing files are unchanged; an older release
   refuses a kind 6 file as an unknown kind. A later parameter takes a new
   mask bit, not a new kind, and a release that doesn't keep a set bit for
-  the object's type refuses the file the same way. `snapshot::write_config::keeps_parameter` names
-  the parameters each object type keeps. Every parameter here is a fixed
-  size, so the kind adds at most 25 octets to a file.
+  the object's type refuses the file the same way. So a release that keeps
+  only the analog parameters refuses a binary or multi-state object's file
+  with a parameter as an unknown kind, and reads an analog file as before:
+  bits 0 to 5 and their octets are unchanged. Bit 6 is Alarm_Value (one
+  octet) and bit 7 Alarm_Values (a four-octet count, then four octets a
+  state). `snapshot::write_config::keeps_parameter` names
+  the parameters each object type keeps. The kind adds at most 25 octets to
+  an analog object's file, 13 to a binary one's, and 16 plus four a listed
+  state to a multi-state one's.
 
 ```rust
 use bacnet_types::enums::PropertyIdentifier;
@@ -5550,7 +5603,7 @@ implements `From<SnapshotError>`, the mapping the file backends use.
 | --- | --- | --- | --- |
 | `snapshot::log` | `LogSnapshot<R>` (Trend Log, Trend Log Multiple, Event Log) | `RBLOGS01`, version 2; version 1 still loads | `FileLogPersistence` (one slot of the two) |
 | `snapshot::audit_log` | `AuditLogSnapshot` | `RBALOG01`, version 3; versions 1 and 2 still load | `FileAuditLogPersistence` (one slot of the two) |
-| `snapshot::write_config` | `WriteConfigSnapshot` (Timer, Channel, an intrinsic reporter's reporting settings and an analog object's event algorithm parameters, each with a written Description) | `RBNWCF01`, kinds 2 to 6; kind 1 still loads | `FileWriteConfigPersistence` |
+| `snapshot::write_config` | `WriteConfigSnapshot` (Timer, Channel, an intrinsic reporter's reporting settings and an analog, binary or multi-state object's event algorithm parameters, each with a written Description) | `RBNWCF01`, kinds 2 to 6; kind 1 still loads | `FileWriteConfigPersistence` |
 | `snapshot::notification_class` | `NotificationClassSnapshot` | `RBNNCL01`; `RBNNCL02` with a written Description | `FileNotificationClassPersistence` |
 | `snapshot::notification_forwarder` | `ForwarderSnapshot` | `RBNFWD01`; `RBNFWD02` with a written Description | `FileNotificationForwarderPersistence` |
 | `snapshot::tags` | `TagsSnapshot` | `RBNTAG01`; `RBNTAG02` with a written Description | `FileTagsPersistence` |

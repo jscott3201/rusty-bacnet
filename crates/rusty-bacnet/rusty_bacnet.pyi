@@ -5016,22 +5016,31 @@ class BACnetServer:
         Event_Algorithm_Inhibit pair) and a written Description in that
         file: such a write is saved before it is answered, refused when it
         can't be, and served again after a restart; a Description past
-        16 KiB is refused with NO_SPACE_TO_WRITE_PROPERTY. The three analog
-        builders keep the event algorithm parameters a peer writes there
-        too (Time_Delay, Time_Delay_Normal, High_Limit, Low_Limit, Deadband
-        and Limit_Enable), and the restarted object's event detection uses
-        them; the other builders' objects don't keep theirs yet. The
-        builders take no keyword for the six, so an application sets its own
-        with ``write_property_local``, and that write is kept like a peer's:
-        writing them at every start replaces what a peer wrote before the
-        restart. To keep a peer's values, write the application's own only
-        when the file doesn't exist yet (check before the builder call; the
-        first kept write creates it) or on a start that passes
-        ``clear_written_reporting=True``.
+        16 KiB is refused with NO_SPACE_TO_WRITE_PROPERTY. The analog,
+        binary and multi-state builders keep the event algorithm parameters
+        a peer writes there too, and the restarted object's event detection
+        uses them: Time_Delay and Time_Delay_Normal on all nine, High_Limit,
+        Low_Limit, Deadband and Limit_Enable on the analog ones, Alarm_Value
+        on a Binary Input or Value, and Alarm_Values on a Multi-state Input
+        or Value. Access Door, Access Zone and Event Enrollment don't keep
+        theirs yet. The builders take no keyword for these parameters, so an
+        application sets its own with ``write_property_local``, and that
+        write is kept like a peer's: writing them at every start replaces
+        what a peer wrote before the restart. To keep a peer's values, write
+        the application's own only when the file doesn't exist yet (check
+        before the builder call; the first kept write creates it) or on a
+        start that passes ``clear_written_reporting=True``.
         ``clear_written_reporting=True`` drops what was saved first,
         Description and parameters included, so the object starts from its
         defaults. A file that doesn't load, or holds a value the object
-        refuses on the wire, raises BacnetError. Every analog, binary and
+        refuses on the wire, raises BacnetError, with the clear too: the
+        file is read before it is cleared. One such value doesn't:
+        saved Alarm_Values naming a state past ``number_of_states`` are
+        restored as written, since the state count and State_Text aren't
+        kept and a peer may have added the state before the restart. A
+        Multi-state Value then reports CONFIGURATION_ERROR and is in
+        FAULT, raising no OFFNORMAL on any listed state, until a list
+        within its states is written. Every analog, binary and
         multi-state builder takes both, as do ``add_access_door``,
         ``add_access_zone``, ``add_event_enrollment`` and
         ``add_alert_enrollment``."""

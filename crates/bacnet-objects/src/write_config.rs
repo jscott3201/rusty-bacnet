@@ -38,18 +38,38 @@
 //! the format: a [`ReportingWriteConfig`], kept once an object opts in with
 //! its `with_reporting_persistence` builder call.
 //!
-//! The analog Input, Output and Value objects keep the event algorithm
-//! parameters a peer writes in that file too (#2331): Time_Delay,
-//! Time_Delay_Normal, High_Limit, Low_Limit, Deadband and Limit_Enable, an
-//! [`AlgorithmWriteConfig`] in the `algorithm` field of their
+//! The analog, binary and multi-state Input, Output and Value objects keep
+//! the event algorithm parameters a peer writes in that file too (#2331):
+//! Time_Delay and Time_Delay_Normal on all nine; High_Limit, Low_Limit,
+//! Deadband and Limit_Enable on the analog ones; Alarm_Value on a Binary
+//! Input or Value; Alarm_Values on a Multi-state Input or Value. They are
+//! an [`AlgorithmWriteConfig`] in the `algorithm` field of the object's
 //! [`ReportingWriteConfig`], stored as kind 6 of the format. They follow
 //! the reporting settings' rules, and a rebuilt object's detector starts
-//! with them. These objects have no setter for them: an application sets
-//! its own values with `write_property` before the builder call, and a
-//! saved write then goes over them. A `write_property` after the builder
-//! call is a write like a peer's, and is kept. Storage holding a value the
-//! object refuses on the wire, or a parameter its type doesn't keep, fails
-//! the builder call.
+//! with them. Only Alarm_Values has a setter (`set_alarm_values`), which
+//! gives way to a saved list like the other setters. For the rest an
+//! application sets its own values with `write_property` before the
+//! builder call, and a saved write then goes over them. A `write_property`
+//! after the builder call is a write like a peer's, and is kept. Storage
+//! holding a value the object refuses on the wire, or a parameter its type
+//! doesn't keep, fails the builder call.
+//!
+//! One wire rule doesn't fail the builder call: an Alarm_Values entry past
+//! Number_Of_States, which a write refuses (#1429). The state count and
+//! State_Text aren't kept. So a count a peer raised through State_Text is
+//! the application's again after a restart, and a list the peer then wrote
+//! may name a state the rebuilt object lacks; so may any saved list once an
+//! application builds the object with fewer states. Such a list is restored
+//! as it was written, since two writes the device accepted mustn't stop it
+//! from starting. The object holds it as it holds a list a local
+//! `set_number_of_states` shrink leaves: it serves it, and a write of the
+//! same list is refused. What follows differs by type, and is the cost of
+//! opening. A Multi-state Input reports no fault, and the entries within
+//! its states still alarm. A Multi-state Value reports CONFIGURATION_ERROR
+//! and goes to FAULT, and while it is there no listed state raises
+//! OFFNORMAL, the ones within its states included: it raises no alarm on
+//! its value until a list within its states is written or the states are
+//! there again.
 //!
 //! Each of these object types keeps a written Description in the same file
 //! too (#2364), as kind 5 of the format wrapped around the kind it writes,
@@ -92,6 +112,15 @@ mod parameters_tests;
 #[cfg(all(test, feature = "std"))]
 #[path = "write_config/persistence_tests.rs"]
 mod persistence_tests;
+// The binary and multi-state objects' parameters: the rules a request, a
+// restart and the object's own state hold them to.
+#[cfg(all(test, feature = "event-reporting"))]
+#[path = "write_config/state_parameter_rules_tests.rs"]
+mod state_parameter_rules_tests;
+// The binary and multi-state objects' parameters, kept as the analog ones.
+#[cfg(all(test, feature = "event-reporting"))]
+#[path = "write_config/state_parameters_tests.rs"]
+mod state_parameters_tests;
 // event-reporting: the reporting persistence these test is compiled with it.
 #[cfg(all(test, feature = "event-reporting"))]
 #[path = "write_config/reporting_tests.rs"]

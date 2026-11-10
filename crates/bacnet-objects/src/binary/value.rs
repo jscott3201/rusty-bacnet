@@ -383,14 +383,7 @@ impl BACnetObject for BinaryValueObject {
             return Err(common::invalid_data_type_error());
         }
         if property == PropertyIdentifier::ALARM_VALUE {
-            if let PropertyValue::Enumerated(v) = value {
-                if v > 1 {
-                    return Err(common::value_out_of_range_error());
-                }
-                self.event_detector.alarm_values = vec![v];
-                return Ok(());
-            }
-            return Err(common::invalid_data_type_error());
+            return super::write_alarm_value(&mut self.event_detector, value);
         }
         if property == PropertyIdentifier::EVENT_DETECTION_ENABLE {
             if let PropertyValue::Boolean(v) = value {

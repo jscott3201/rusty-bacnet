@@ -14,6 +14,23 @@ use crate::common::{
 use crate::event::{ChangeOfStateDetector, CommandFailureDetector, history::EventHistory};
 use crate::traits::BACnetObject;
 
+/// Take a write of Alarm_Value on a Binary Input or Value: INACTIVE or
+/// ACTIVE, which becomes the detector's one alarm value. A staged write is
+/// checked by the same code (`write_config::reporting`).
+pub(crate) fn write_alarm_value(
+    detector: &mut ChangeOfStateDetector,
+    value: PropertyValue,
+) -> Result<(), Error> {
+    let PropertyValue::Enumerated(state) = value else {
+        return Err(common::invalid_data_type_error());
+    };
+    if state > 1 {
+        return Err(common::value_out_of_range_error());
+    }
+    detector.alarm_values = vec![state];
+    Ok(())
+}
+
 mod input;
 mod output;
 mod value;

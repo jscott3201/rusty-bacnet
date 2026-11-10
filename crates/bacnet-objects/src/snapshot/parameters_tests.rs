@@ -1,234 +1,28 @@
 //! The written-configuration format's kind 6 (#2331): the event algorithm
 //! parameters after a kind 4 body. The octets it writes, that a file
-//! without a parameter keeps kind 4, and what it refuses.
+//! without a parameter keeps kind 4, which object types keep which
+//! parameter, and what it refuses. The list row's own refusals are in
+//! `parameter_list_tests`.
 
 use bacnet_types::bitstring::LimitEnable;
-use bacnet_types::enums::{ObjectType, PropertyIdentifier as P};
+use bacnet_types::enums::{BinaryPV, ObjectType, PropertyIdentifier as P};
 use bacnet_types::primitives::ObjectIdentifier;
 
 use super::write_config::{self, parameters};
 use super::{SnapshotError, SnapshotErrorKind};
 use crate::write_config::{AlgorithmWriteConfig, ReportingWriteConfig, WriteConfigSnapshot};
 
-const ANALOG: [ObjectType; 3] = [
+pub(super) const ANALOG: [ObjectType; 3] = [
     ObjectType::ANALOG_INPUT,
     ObjectType::ANALOG_OUTPUT,
     ObjectType::ANALOG_VALUE,
 ];
 
-fn oid(kind: ObjectType) -> ObjectIdentifier {
-    ObjectIdentifier::new(kind, 7).unwrap()
-}
-
-/// Every parameter an analog object keeps.
-fn every_parameter() -> AlgorithmWriteConfig {
-    AlgorithmWriteConfig {
-        time_delay: Some(30),
-        time_delay_normal: Some(0x0102_0304),
-        high_limit: Some(80.5),
-        low_limit: Some(-12.25),
-        deadband: Some(1.5),
-        limit_enable: Some(LimitEnable::HIGH_LIMIT_ENABLE),
-    }
-}
-
-/// A snapshot with a Notification_Class of 9 and `algorithm`.
-fn snapshot(algorithm: AlgorithmWriteConfig) -> WriteConfigSnapshot {
-    WriteConfigSnapshot::Reporting(ReportingWriteConfig {
-        notification_class: Some(9),
-        algorithm,
-        ..Default::default()
-    })
-}
-
-fn encode(kind: ObjectType, algorithm: AlgorithmWriteConfig) -> Result<Vec<u8>, SnapshotError> {
-    write_config::encode(oid(kind), &snapshot(algorithm))
-}
-
-/// Each parameter alone, with its mask bit and its octets.
-fn each_alone() -> Vec<(AlgorithmWriteConfig, u32, Vec<u8>)> {
-    let all = every_parameter();
-    let none = AlgorithmWriteConfig::default;
-    vec![
-        (
-            AlgorithmWriteConfig {
-                time_delay: all.time_delay,
-                ..none()
-            },
-            1 << 0,
-            vec![0, 0, 0, 30],
-        ),
-        (
-            AlgorithmWriteConfig {
-                time_delay_normal: all.time_delay_normal,
-                ..none()
-            },
-            1 << 1,
-            vec![1, 2, 3, 4],
-        ),
-        (
-            AlgorithmWriteConfig {
-                high_limit: all.high_limit,
-                ..none()
-            },
-            1 << 2,
-            80.5f32.to_be_bytes().to_vec(),
-        ),
-        (
-            AlgorithmWriteConfig {
-                low_limit: all.low_limit,
-                ..none()
-            },
-            1 << 3,
-            (-12.25f32).to_be_bytes().to_vec(),
-        ),
-        (
-            AlgorithmWriteConfig {
-                deadband: all.deadband,
-                ..none()
-            },
-            1 << 4,
-            1.5f32.to_be_bytes().to_vec(),
-        ),
-        (
-            AlgorithmWriteConfig {
-                limit_enable: all.limit_enable,
-                ..none()
-            },
-            1 << 5,
-            vec![0x02],
-        ),
-    ]
-}
-
-/// A snapshot without a parameter keeps kind 4 and the octets #2331 PR 1
-/// wrote; one with a parameter is the same body under kind 6, then the mask
-/// and the parameters in bit order.
-#[test]
-fn parameters_follow_the_kind_4_body_and_none_keeps_kind_4() {
-    for kind in ANALOG {
-        let plain = encode(kind, AlgorithmWriteConfig::default()).unwrap();
-        assert_eq!(
-            plain[12..],
-            [
-                write_config::KIND_REPORTING,
-                1,
-                0,
-                0,
-                0,
-                9,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0
-            ],
-            "{kind}"
-        );
-        let octets = encode(kind, every_parameter()).unwrap();
-        let mut expected = plain[..12].to_vec();
-        expected.push(write_config::KIND_REPORTING_PARAMETERS);
-        expected.extend_from_slice(&plain[13..]);
-        expected.extend_from_slice(&[0, 0, 0, 0x3F]);
-        for (_, _, row) in each_alone() {
-            expected.extend_from_slice(&row);
-        }
-        assert_eq!(octets, expected, "{kind}");
-        assert_eq!(
-            write_config::decode(oid(kind), &octets),
-            Ok(snapshot(every_parameter()))
-        );
-    }
-}
-
-/// Each parameter alone sets its own bit, takes its own octets and comes
-/// back as itself, so no row can stand in for another.
-#[test]
-fn each_parameter_has_its_own_bit() {
-    let kind = ObjectType::ANALOG_VALUE;
-    let plain = encode(kind, AlgorithmWriteConfig::default()).unwrap();
-    for (algorithm, bit, row) in each_alone() {
-        let octets = encode(kind, algorithm.clone()).unwrap();
-        let mut tail = bit.to_be_bytes().to_vec();
-        tail.extend_from_slice(&row);
-        assert_eq!(octets[plain.len()..], tail, "{algorithm:?}");
-        assert_eq!(parameters::mask(&algorithm), bit);
-        assert_eq!(
-            write_config::decode(oid(kind), &octets),
-            Ok(snapshot(algorithm))
-        );
-    }
-}
-
-/// Kind 5 wraps kind 6 as it wraps kind 4.
-#[test]
-fn a_description_wraps_the_parameters_kind() {
-    let object = oid(ObjectType::ANALOG_INPUT);
-    let WriteConfigSnapshot::Reporting(mut config) = snapshot(every_parameter()) else {
-        unreachable!()
-    };
-    let plain = write_config::encode(object, &WriteConfigSnapshot::Reporting(config.clone()));
-    let plain = plain.unwrap();
-    config.description = Some("Lobby".into());
-    let described = WriteConfigSnapshot::Reporting(config);
-    let octets = write_config::encode(object, &described).unwrap();
-    let mut expected = plain[..12].to_vec();
-    expected.extend_from_slice(&[write_config::KIND_WITH_DESCRIPTION, 0, 0, 0, 5]);
-    expected.extend_from_slice(b"Lobby");
-    expected.extend_from_slice(&plain[12..]);
-    assert_eq!(octets, expected);
-    assert_eq!(write_config::decode(object, &octets), Ok(described));
-}
-
-/// A file cut anywhere, or going on past its last parameter, is refused.
-#[test]
-fn cut_and_over_long_files_are_refused() {
-    let object = oid(ObjectType::ANALOG_INPUT);
-    let octets = encode(ObjectType::ANALOG_INPUT, every_parameter()).unwrap();
-    for cut in 12..octets.len() {
-        let error = write_config::decode(object, &octets[..cut]).unwrap_err();
-        assert!(error.is_damage(), "cut at {cut}: {error:?}");
-    }
-    let mut long = octets.clone();
-    long.push(0);
-    let error = write_config::decode(object, &long).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::Damaged);
-}
-
-/// The octets of a kind 6 file for `kind` whose tail after the kind 4 body
-/// is `tail`.
-fn with_tail(kind: ObjectType, tail: &[u8]) -> Vec<u8> {
-    let mut octets = encode(kind, AlgorithmWriteConfig::default()).unwrap();
-    octets[12] = write_config::KIND_REPORTING_PARAMETERS;
-    octets.extend_from_slice(tail);
-    octets
-}
-
-/// A mask bit this build doesn't know is a newer build's file, refused as
-/// an unknown kind and not as damage; an empty mask is damage, since a save
-/// without a parameter writes kind 4.
-#[test]
-fn an_unknown_bit_is_an_unknown_kind_and_an_empty_mask_is_damage() {
-    let kind = ObjectType::ANALOG_INPUT;
-    for mask in [1u32 << 6, 1 << 31, (1 << 6) | 1] {
-        let mut tail = mask.to_be_bytes().to_vec();
-        tail.extend_from_slice(&[0; 8]);
-        let error = write_config::decode(oid(kind), &with_tail(kind, &tail)).unwrap_err();
-        assert_eq!(
-            error.kind(),
-            SnapshotErrorKind::UnknownKind(write_config::KIND_REPORTING_PARAMETERS),
-            "mask {mask:#x}"
-        );
-        assert!(!error.is_damage());
-    }
-    let error = write_config::decode(oid(kind), &with_tail(kind, &[0; 4])).unwrap_err();
-    assert_eq!(error.kind(), SnapshotErrorKind::Damaged);
-}
-
-/// The ten object types with a reporting store that keep no parameter in
-/// this build.
-const OTHERS: [ObjectType; 10] = [
+/// The thirteen object types with a reporting store.
+pub(super) const REPORTERS: [ObjectType; 13] = [
+    ObjectType::ANALOG_INPUT,
+    ObjectType::ANALOG_OUTPUT,
+    ObjectType::ANALOG_VALUE,
     ObjectType::BINARY_INPUT,
     ObjectType::BINARY_OUTPUT,
     ObjectType::BINARY_VALUE,
@@ -240,6 +34,98 @@ const OTHERS: [ObjectType; 10] = [
     ObjectType::EVENT_ENROLLMENT,
     ObjectType::ALERT_ENROLLMENT,
 ];
+
+/// The mask of the parameters `kind` keeps, written out here by hand: the
+/// codec's own table is what these tests check.
+pub(super) fn kept(kind: ObjectType) -> u32 {
+    match kind {
+        ObjectType::ANALOG_INPUT | ObjectType::ANALOG_OUTPUT | ObjectType::ANALOG_VALUE => 0x3F,
+        ObjectType::BINARY_INPUT | ObjectType::BINARY_VALUE => 0x43,
+        ObjectType::BINARY_OUTPUT | ObjectType::MULTI_STATE_OUTPUT => 0x03,
+        ObjectType::MULTI_STATE_INPUT | ObjectType::MULTI_STATE_VALUE => 0x83,
+        _ => 0,
+    }
+}
+
+/// What the build before this one kept (#2331 PR 2): the first six rows on
+/// the analog types, nothing elsewhere.
+fn kept_before(kind: ObjectType) -> u32 {
+    if ANALOG.contains(&kind) { 0x3F } else { 0 }
+}
+
+pub(super) fn oid(kind: ObjectType) -> ObjectIdentifier {
+    ObjectIdentifier::new(kind, 7).unwrap()
+}
+
+/// Each parameter in bit order: its property and its octets in a file.
+fn rows() -> [(P, Vec<u8>); 8] {
+    [
+        (P::TIME_DELAY, vec![0, 0, 0, 30]),
+        (P::TIME_DELAY_NORMAL, vec![1, 2, 3, 4]),
+        (P::HIGH_LIMIT, 80.5f32.to_be_bytes().to_vec()),
+        (P::LOW_LIMIT, (-12.25f32).to_be_bytes().to_vec()),
+        (P::DEADBAND, 1.5f32.to_be_bytes().to_vec()),
+        (P::LIMIT_ENABLE, vec![0x02]),
+        (P::ALARM_VALUE, vec![1]),
+        (
+            P::ALARM_VALUES,
+            vec![0, 0, 0, 3, 0, 0, 0, 3, 0, 0, 0, 1, 1, 2, 3, 4],
+        ),
+    ]
+}
+
+/// The parameters whose bits are in `mask`, with the values [`rows`] gives
+/// their octets for.
+pub(super) fn holding(mask: u32) -> AlgorithmWriteConfig {
+    let has = |bit: u32| mask & (1 << bit) != 0;
+    AlgorithmWriteConfig {
+        time_delay: has(0).then_some(30),
+        time_delay_normal: has(1).then_some(0x0102_0304),
+        high_limit: has(2).then_some(80.5),
+        low_limit: has(3).then_some(-12.25),
+        deadband: has(4).then_some(1.5),
+        limit_enable: has(5).then_some(LimitEnable::HIGH_LIMIT_ENABLE),
+        alarm_value: has(6).then_some(BinaryPV::ACTIVE),
+        alarm_values: has(7).then(|| vec![3, 1, 0x0102_0304]),
+    }
+}
+
+/// The octets after a kind 4 body for the parameters in `mask`: the mask,
+/// then each row in bit order.
+fn tail(mask: u32) -> Vec<u8> {
+    let mut tail = mask.to_be_bytes().to_vec();
+    for (bit, (_, row)) in rows().into_iter().enumerate() {
+        if mask & (1 << bit) != 0 {
+            tail.extend_from_slice(&row);
+        }
+    }
+    tail
+}
+
+/// A snapshot with a Notification_Class of 9 and `algorithm`.
+pub(super) fn snapshot(algorithm: AlgorithmWriteConfig) -> WriteConfigSnapshot {
+    WriteConfigSnapshot::Reporting(ReportingWriteConfig {
+        notification_class: Some(9),
+        algorithm,
+        ..Default::default()
+    })
+}
+
+pub(super) fn encode(
+    kind: ObjectType,
+    algorithm: AlgorithmWriteConfig,
+) -> Result<Vec<u8>, SnapshotError> {
+    write_config::encode(oid(kind), &snapshot(algorithm))
+}
+
+/// The octets of a kind 6 file for `kind` whose tail after the kind 4 body
+/// is `tail`.
+pub(super) fn with_tail(kind: ObjectType, tail: &[u8]) -> Vec<u8> {
+    let mut octets = encode(kind, AlgorithmWriteConfig::default()).unwrap();
+    octets[12] = write_config::KIND_REPORTING_PARAMETERS;
+    octets.extend_from_slice(tail);
+    octets
+}
 
 /// `octets`, a kind 6 file, under kind 5 with a Description of "Lobby".
 fn described(octets: &[u8]) -> Vec<u8> {
@@ -266,62 +152,157 @@ fn assert_a_newer_builds(object: ObjectIdentifier, octets: &[u8], what: &str) {
     }
 }
 
-/// A Binary Value file with Time_Delay's bit, which the next build keeps
-/// for it, is that build's sound file: an unknown kind here, never damage,
-/// bare and under kind 5, with its row or cut before it.
+/// The table names every parameter once: the bits are 0 to 7 in order,
+/// each property has its own, and each type keeps what [`kept`] says and
+/// nothing else, a Timer nothing at all.
 #[test]
-fn a_known_bit_the_type_does_not_keep_is_an_unknown_kind_not_damage() {
-    let kind = ObjectType::BINARY_VALUE;
-    let with_row = with_tail(kind, &[0, 0, 0, 1, 0, 0, 0, 30]);
-    assert_a_newer_builds(oid(kind), &with_row, "with its row");
-    // Refused at the mask, before a row is read: the mask alone answers the
-    // same, where a kept row cut short is truncation.
-    let mask_only = with_tail(kind, &[0, 0, 0, 1]);
-    assert_a_newer_builds(oid(kind), &mask_only, "cut after the mask");
-    // An analog file with a kept bit beside one it doesn't keep, too.
-    let analog = ObjectType::ANALOG_INPUT;
-    let mixed = with_tail(analog, &[0, 0, 0, 0x41, 0, 0, 0, 30]);
-    assert_a_newer_builds(oid(analog), &mixed, "a kept bit and a later one");
-}
-
-/// A parameter is kept only for an object type that has it. For each of
-/// the ten other types with a reporting store: `keeps_parameter` names
-/// none, a snapshot never takes kind 6 (one without a parameter keeps kind
-/// 4 and one with a parameter is refused as it is encoded), a kind 6 file
-/// with any parameter is refused as an unknown kind, and one with an empty
-/// mask is damage.
-#[test]
-fn a_parameter_of_another_object_type_is_refused() {
-    let properties = [
-        P::TIME_DELAY,
-        P::TIME_DELAY_NORMAL,
-        P::HIGH_LIMIT,
-        P::LOW_LIMIT,
-        P::DEADBAND,
-        P::LIMIT_ENABLE,
-    ];
-    for kind in ANALOG {
-        for property in properties {
-            assert!(write_config::keeps_parameter(kind, property), "{kind}");
+fn each_type_keeps_its_own_parameters() {
+    for (bit, (property, _)) in rows().into_iter().enumerate() {
+        assert_eq!(parameters::bit_of(property), Some(1 << bit), "{property:?}");
+        assert_eq!(parameters::mask(&holding(1 << bit)), 1 << bit);
+        for kind in REPORTERS {
+            assert_eq!(
+                write_config::keeps_parameter(kind, property),
+                kept(kind) & (1 << bit) != 0,
+                "{kind} {property:?}"
+            );
         }
-        assert!(!write_config::keeps_parameter(kind, P::NOTIFICATION_CLASS));
-        assert!(!write_config::keeps_parameter(kind, P::ALARM_VALUES));
-    }
-    for property in properties {
         assert!(!write_config::keeps_parameter(ObjectType::TIMER, property));
     }
-    for kind in OTHERS {
-        for property in properties {
+    for kind in REPORTERS {
+        assert_eq!(parameters::kept(kind), kept(kind), "{kind}");
+        for property in [P::NOTIFICATION_CLASS, P::FAULT_VALUES, P::PRESENT_VALUE] {
             assert!(!write_config::keeps_parameter(kind, property), "{kind}");
         }
+    }
+    assert_eq!(parameters::mask(&holding(0xFF)), 0xFF);
+    assert_eq!(parameters::mask(&AlgorithmWriteConfig::default()), 0);
+}
+
+/// On every type, a snapshot without a parameter keeps kind 4 and the
+/// octets #2331 PR 1 wrote; one with every parameter the type keeps is the
+/// same body under kind 6, then the mask and the parameters in bit order.
+#[test]
+fn parameters_follow_the_kind_4_body_and_none_keeps_kind_4() {
+    for kind in REPORTERS {
         let plain = encode(kind, AlgorithmWriteConfig::default()).unwrap();
-        assert_eq!(plain[12], write_config::KIND_REPORTING, "{kind}");
-        for (algorithm, bit, row) in each_alone() {
-            let error = encode(kind, algorithm).unwrap_err();
-            assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange, "{kind}");
-            let mut tail = bit.to_be_bytes().to_vec();
-            tail.extend_from_slice(&row);
-            assert_a_newer_builds(oid(kind), &with_tail(kind, &tail), "one bit");
+        assert_eq!(
+            plain[12..],
+            [
+                write_config::KIND_REPORTING,
+                1,
+                0,
+                0,
+                0,
+                9,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+            ],
+            "{kind}"
+        );
+        if kept(kind) == 0 {
+            continue;
+        }
+        let octets = encode(kind, holding(kept(kind))).unwrap();
+        let mut expected = plain[..12].to_vec();
+        expected.push(write_config::KIND_REPORTING_PARAMETERS);
+        expected.extend_from_slice(&plain[13..]);
+        expected.extend_from_slice(&tail(kept(kind)));
+        assert_eq!(octets, expected, "{kind}");
+        assert_eq!(
+            write_config::decode(oid(kind), &octets),
+            Ok(snapshot(holding(kept(kind))))
+        );
+    }
+}
+
+/// An analog file is what #2331 PR 2 wrote, octet for octet: the mask of
+/// its six rows and their octets, spelled out.
+#[test]
+fn an_analog_file_keeps_the_octets_of_the_build_before() {
+    let mut expected = vec![0, 0, 0, 0x3F, 0, 0, 0, 30, 1, 2, 3, 4];
+    expected.extend_from_slice(&[0x42, 0xA1, 0, 0, 0xC1, 0x44, 0, 0, 0x3F, 0xC0, 0, 0, 0x02]);
+    for kind in ANALOG {
+        let plain = encode(kind, AlgorithmWriteConfig::default()).unwrap();
+        let octets = encode(kind, holding(0x3F)).unwrap();
+        assert_eq!(octets[plain.len()..], expected, "{kind}");
+    }
+}
+
+/// On each type, each parameter it keeps sets its own bit alone, takes its
+/// own octets and comes back as itself, so no row can stand in for another.
+#[test]
+fn each_parameter_has_its_own_bit() {
+    for kind in REPORTERS {
+        let plain = encode(kind, AlgorithmWriteConfig::default()).unwrap();
+        for bit in (0..8).map(|bit| 1 << bit) {
+            if kept(kind) & bit == 0 {
+                continue;
+            }
+            let algorithm = holding(bit);
+            let octets = encode(kind, algorithm.clone()).unwrap();
+            assert_eq!(octets[plain.len()..], tail(bit), "{kind} {algorithm:?}");
+            assert_eq!(
+                write_config::decode(oid(kind), &octets),
+                Ok(snapshot(algorithm))
+            );
+        }
+    }
+}
+
+/// Kind 5 wraps kind 6 as it wraps kind 4.
+#[test]
+fn a_description_wraps_the_parameters_kind() {
+    for kind in [ObjectType::ANALOG_INPUT, ObjectType::MULTI_STATE_VALUE] {
+        let object = oid(kind);
+        let WriteConfigSnapshot::Reporting(mut config) = snapshot(holding(kept(kind))) else {
+            unreachable!()
+        };
+        let plain = write_config::encode(object, &WriteConfigSnapshot::Reporting(config.clone()));
+        let plain = plain.unwrap();
+        config.description = Some("Lobby".into());
+        let wrapped = WriteConfigSnapshot::Reporting(config);
+        let octets = write_config::encode(object, &wrapped).unwrap();
+        assert_eq!(octets, described(&plain), "{kind}");
+        assert_eq!(write_config::decode(object, &octets), Ok(wrapped));
+    }
+}
+
+/// A file cut anywhere, or going on past its last parameter, is refused, on
+/// each type that keeps a parameter.
+#[test]
+fn cut_and_over_long_files_are_refused() {
+    for kind in REPORTERS {
+        if kept(kind) == 0 {
+            continue;
+        }
+        let octets = encode(kind, holding(kept(kind))).unwrap();
+        for cut in 12..octets.len() {
+            let error = write_config::decode(oid(kind), &octets[..cut]).unwrap_err();
+            assert!(error.is_damage(), "{kind} cut at {cut}: {error:?}");
+        }
+        let mut long = octets.clone();
+        long.push(0);
+        let error = write_config::decode(oid(kind), &long).unwrap_err();
+        assert_eq!(error.kind(), SnapshotErrorKind::Damaged, "{kind}");
+    }
+}
+
+/// A mask bit no build knows is a newer build's file, refused as an unknown
+/// kind and not as damage, on every type; an empty mask is damage, since a
+/// save without a parameter writes kind 4.
+#[test]
+fn an_unknown_bit_is_an_unknown_kind_and_an_empty_mask_is_damage() {
+    for kind in REPORTERS {
+        for mask in [1u32 << 8, 1 << 31, (1 << 8) | (kept(kind) & 1)] {
+            let mut tail = mask.to_be_bytes().to_vec();
+            tail.extend_from_slice(&[0; 8]);
+            let file = with_tail(kind, &tail);
+            assert_a_newer_builds(oid(kind), &file, &format!("mask {mask:#x}"));
         }
         let error = write_config::decode(oid(kind), &with_tail(kind, &[0; 4])).unwrap_err();
         assert_eq!(error.kind(), SnapshotErrorKind::Damaged, "{kind}");
@@ -329,58 +310,115 @@ fn a_parameter_of_another_object_type_is_refused() {
     }
 }
 
+/// A parameter is kept only for an object type that has it. On each of the
+/// thirteen types, each parameter the type doesn't keep is refused as it is
+/// encoded, and a kind 6 file with its bit is a newer build's: an unknown
+/// kind and never damage, bare and under kind 5, with its row, cut after
+/// the mask (so it is refused before a row is read), and beside a row the
+/// type does keep.
+#[test]
+fn a_parameter_of_another_object_type_is_refused() {
+    for kind in REPORTERS {
+        for bit in (0..8).map(|bit| 1u32 << bit) {
+            if kept(kind) & bit != 0 {
+                continue;
+            }
+            let error = encode(kind, holding(bit)).unwrap_err();
+            assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange, "{kind}");
+            let what = format!("bit {bit:#x}");
+            assert_a_newer_builds(oid(kind), &with_tail(kind, &tail(bit)), &what);
+            let mask_only = with_tail(kind, &bit.to_be_bytes());
+            assert_a_newer_builds(oid(kind), &mask_only, &what);
+            let beside = bit | (kept(kind) & 1);
+            assert_a_newer_builds(oid(kind), &with_tail(kind, &tail(beside)), &what);
+        }
+    }
+}
+
+/// The build before this one (#2331 PR 2) refuses a file with a set bit
+/// outside what it kept for the object's type as an unknown kind, at the
+/// mask. Every file this build writes that the older one couldn't have is
+/// such a file: kind 6 with a mask holding a bit the older build didn't
+/// keep for the type. This build's reader, standing where the older one
+/// stood (a type it keeps none of the rows for), refuses the same tail the
+/// same way. An analog file, which the older build wrote too, has no such
+/// bit.
+#[test]
+fn the_build_before_refuses_what_only_this_build_writes_as_an_unknown_kind() {
+    let stand_ins = REPORTERS.into_iter().filter(|kind| kept(*kind) == 0);
+    for kind in REPORTERS {
+        let new = kept(kind) & !kept_before(kind);
+        assert_eq!(
+            new == 0,
+            ANALOG.contains(&kind) || kept(kind) == 0,
+            "{kind}"
+        );
+        for mask in (1..=0xFFu32).filter(|mask| mask & !kept(kind) == 0) {
+            let octets = encode(kind, holding(mask)).unwrap();
+            let plain = encode(kind, AlgorithmWriteConfig::default()).unwrap();
+            assert_eq!(octets[12], write_config::KIND_REPORTING_PARAMETERS);
+            let written = u32::from_be_bytes(octets[plain.len()..][..4].try_into().unwrap());
+            assert_eq!(written, mask, "{kind}");
+            // Outside the older build's rows for the type whenever this
+            // build's rows for it go past them.
+            assert_eq!(written & !kept_before(kind) != 0, new != 0, "{kind}");
+            if new == 0 {
+                continue;
+            }
+            for stand_in in stand_ins.clone() {
+                let file = with_tail(stand_in, &octets[plain.len()..]);
+                assert_a_newer_builds(oid(stand_in), &file, &format!("{kind} {mask:#x}"));
+            }
+        }
+    }
+}
+
 /// A value the object refuses on the wire is refused as it is encoded and
 /// as damage in a file: a limit or deadband that isn't finite, a negative
-/// deadband, Limit_Enable bits past its two.
+/// deadband, Limit_Enable bits past its two, an Alarm_Value past ACTIVE.
 #[test]
 fn a_value_no_write_leaves_is_refused() {
-    let kind = ObjectType::ANALOG_INPUT;
     let none = AlgorithmWriteConfig::default;
-    let mut refused: Vec<(AlgorithmWriteConfig, u32, Vec<u8>)> = Vec::new();
+    let mut refused: Vec<(ObjectType, AlgorithmWriteConfig, u32, Vec<u8>)> = Vec::new();
+    let analog = ObjectType::ANALOG_INPUT;
     for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
         let row = value.to_be_bytes().to_vec();
-        refused.push((
-            AlgorithmWriteConfig {
-                high_limit: Some(value),
-                ..none()
-            },
-            1 << 2,
-            row.clone(),
-        ));
-        refused.push((
-            AlgorithmWriteConfig {
-                low_limit: Some(value),
-                ..none()
-            },
-            1 << 3,
-            row.clone(),
-        ));
-        refused.push((
-            AlgorithmWriteConfig {
-                deadband: Some(value),
-                ..none()
-            },
-            1 << 4,
-            row,
-        ));
+        let high = AlgorithmWriteConfig {
+            high_limit: Some(value),
+            ..none()
+        };
+        let low = AlgorithmWriteConfig {
+            low_limit: Some(value),
+            ..none()
+        };
+        let deadband = AlgorithmWriteConfig {
+            deadband: Some(value),
+            ..none()
+        };
+        refused.push((analog, high, 1 << 2, row.clone()));
+        refused.push((analog, low, 1 << 3, row.clone()));
+        refused.push((analog, deadband, 1 << 4, row));
     }
-    refused.push((
-        AlgorithmWriteConfig {
-            deadband: Some(-0.5),
-            ..none()
-        },
-        1 << 4,
-        (-0.5f32).to_be_bytes().to_vec(),
-    ));
-    refused.push((
-        AlgorithmWriteConfig {
-            limit_enable: Some(LimitEnable::from_bits_retain(0x04)),
-            ..none()
-        },
-        1 << 5,
-        vec![0x04],
-    ));
-    for (algorithm, bit, row) in refused {
+    let negative = AlgorithmWriteConfig {
+        deadband: Some(-0.5),
+        ..none()
+    };
+    refused.push((analog, negative, 1 << 4, (-0.5f32).to_be_bytes().to_vec()));
+    let bits = AlgorithmWriteConfig {
+        limit_enable: Some(LimitEnable::from_bits_retain(0x04)),
+        ..none()
+    };
+    refused.push((analog, bits, 1 << 5, vec![0x04]));
+    for kind in [ObjectType::BINARY_INPUT, ObjectType::BINARY_VALUE] {
+        for raw in [2u8, 255] {
+            let value = AlgorithmWriteConfig {
+                alarm_value: Some(BinaryPV::from_raw(u32::from(raw))),
+                ..none()
+            };
+            refused.push((kind, value, 1 << 6, vec![raw]));
+        }
+    }
+    for (kind, algorithm, bit, row) in refused {
         let error = encode(kind, algorithm.clone()).unwrap_err();
         assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange, "{algorithm:?}");
         let mut tail = bit.to_be_bytes().to_vec();
@@ -388,12 +426,32 @@ fn a_value_no_write_leaves_is_refused() {
         let error = write_config::decode(oid(kind), &with_tail(kind, &tail)).unwrap_err();
         assert_eq!(error.kind(), SnapshotErrorKind::Damaged, "{algorithm:?}");
     }
-    // The edges a write takes are kept: a deadband of zero, either sign.
+    // An Alarm_Value past one octet can't be written as one.
+    let wide = AlgorithmWriteConfig {
+        alarm_value: Some(BinaryPV::from_raw(0x100)),
+        ..none()
+    };
+    let error = encode(ObjectType::BINARY_VALUE, wide).unwrap_err();
+    assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange);
+    // The edges a write takes are kept: a deadband of zero, either sign,
+    // and both binary states.
     for deadband in [0.0, -0.0, f32::MAX] {
         let algorithm = AlgorithmWriteConfig {
             deadband: Some(deadband),
             ..none()
         };
+        let octets = encode(analog, algorithm.clone()).unwrap();
+        assert_eq!(
+            write_config::decode(oid(analog), &octets),
+            Ok(snapshot(algorithm))
+        );
+    }
+    for state in [BinaryPV::INACTIVE, BinaryPV::ACTIVE] {
+        let algorithm = AlgorithmWriteConfig {
+            alarm_value: Some(state),
+            ..none()
+        };
+        let kind = ObjectType::BINARY_INPUT;
         let octets = encode(kind, algorithm.clone()).unwrap();
         assert_eq!(
             write_config::decode(oid(kind), &octets),

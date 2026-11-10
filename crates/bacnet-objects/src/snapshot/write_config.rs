@@ -41,7 +41,12 @@
 //!   Time_Delay and bit 1 Time_Delay_Normal (four octets each); bits 2, 3
 //!   and 4 are High_Limit, Low_Limit and Deadband (the four octets of an
 //!   IEEE 754 single each); bit 5 is Limit_Enable (one octet, bit 0 the low
-//!   limit and bit 1 the high). [`keeps_parameter`] names the parameters
+//!   limit and bit 1 the high); bit 6 is a binary object's Alarm_Value (one
+//!   octet, 0 or 1); bit 7 is a multi-state object's Alarm_Values (a count
+//!   of at most 1,024, then each state in four octets, none of them zero;
+//!   a count past the cap is refused before a state is read, and the count
+//!   fixes the row's length, so a row cut short or going on is refused
+//!   too). [`keeps_parameter`] names the parameters
 //!   each object type keeps. [`encode`] writes this kind only for a
 //!   snapshot holding a parameter, so one without keeps kind 4, octet for
 //!   octet, and a build that predates kind 6 refuses a file with one as an
