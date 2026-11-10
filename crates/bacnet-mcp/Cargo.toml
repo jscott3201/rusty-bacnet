@@ -27,7 +27,7 @@ bacnet-services = { workspace = true, features = ["std"] }
 # The official MCP SDK, pinned (#2066): it has had three majors in 2026, and
 # a release counts here only once it is two weeks old. Server role only; the
 # stdio transport is the `stdio` feature.
-rmcp = { version = "=3.5.1", default-features = false, features = ["server"] }
+rmcp = { version = "=3.9.0", default-features = false, features = ["server"] }
 serde = { workspace = true, features = ["derive", "std"] }
 serde_json.workspace = true
 # `net`: the TUI-attached mode's local socket (#2185) and named pipe

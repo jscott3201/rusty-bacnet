@@ -24,7 +24,7 @@ page. Experimental in 0.15.
 | Writes | `crates/bacnet-mcp/src/writes/`, `tools/write.rs`, `tools/revert.rs` | The write session, the approvers (`ClientElicitation`, `PlanApprover`, `Deny`), the sealed confirmation state, and the two write tools |
 | Attached mode | `crates/bacnet-mcp/src/attach/`, `crates/bacnet-cli/src/tui/attach.rs` | The TUI's local socket or, on Windows, named pipe (`attach::Listener`), the peer checks, and `bacnet mcp connect`'s bridge (`attach::bridge`) (#2185, #2201) |
 
-The SDK is `rmcp` 3.5.1 (pinned, server role, stdio only). It answers both
+The SDK is `rmcp` 3.9.0 (pinned, server role, stdio only). It answers both
 the 2026-07-28 request form (`server/discover`, version and capabilities in
 each request's `_meta`) and the older `initialize` handshake.
 
@@ -93,7 +93,7 @@ all) is a -32603 with the same body.
 
 ## Subscriptions
 
-`rmcp` 3.5.1 implements `subscriptions/listen` (2026-07-28): the server
+`rmcp` 3.9.0 implements `subscriptions/listen` (2026-07-28): the server
 sends the acknowledgment, then `notifications/resources/updated` carrying
 only the URI; the client reads the resource. A legacy client (one that
 opens with the older `initialize` handshake, such as a 2025-06-18 host)

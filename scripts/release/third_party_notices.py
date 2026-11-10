@@ -67,8 +67,8 @@ EXTRA_LICENSES = {
 VENDORED_LICENSES = {
     # The MCP SDK, in the release CLI since 0.15 (#2068). Its LICENSE holds the
     # Apache-2.0 text and the MIT text that still covers some contributions.
-    "rmcp": ("3.5.1", "rmcp-3.5.1-LICENSE",
-             "LICENSE from github.com/modelcontextprotocol/rust-sdk at tag rmcp-v3.5.1"),
+    "rmcp": ("3.9.0", "rmcp-3.9.0-LICENSE",
+             "LICENSE from github.com/modelcontextprotocol/rust-sdk at tag rmcp-v3.9.0"),
     "tui-tree-widget": ("0.24.1", "tui-tree-widget-0.24.1-LICENSE",
                         "LICENSE from github.com/EdJoPaTo/tui-rs-tree-widget at tag v0.24.1"),
 }
