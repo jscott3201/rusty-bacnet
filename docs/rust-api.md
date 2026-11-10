@@ -4741,24 +4741,34 @@ write of one lasts until a restart, as before.
   Alarm_Values is written, so it does when a saved list goes in.
 - **Validated on load.** Storage holding a value the object refuses on the
   wire, or a parameter the object's type doesn't keep, fails
-  `with_reporting_persistence`; nothing reaches the detector. In a file, a
+  `with_reporting_persistence`; nothing reaches the detector. The one
+  exception is the Alarm_Values entry past Number_Of_States, below. In a
+  file, a
   bad value is damage, and a parameter this build doesn't keep for the
   object's type is an unknown kind (`SnapshotErrorKind::UnknownKind(6)`,
   `is_damage()` false): a later release may keep it, so a backend with two
   copies stops there instead of falling back to the older one.
 - **Alarm_Values and Number_Of_States.** A saved list holds at most the
   1,024 entries a write may, none of them zero; a file breaking either is
-  damage. Whether an entry is past Number_Of_States depends on the object,
-  so that is checked as the object is built: `with_reporting_persistence`
-  fails on a saved list naming a state the object doesn't have, as a write
-  of that list would be refused. A peer can't cause this by removing
-  states, since a State_Text write that would strand a listed state is
-  refused. It happens when the application rebuilds the object with fewer
-  states, or when a peer added states through State_Text and then listed
-  one: Number_Of_States and State_Text aren't kept, so the next start has
-  the application's count again. To recover, build the object with enough
-  states and call `clear_written_reporting()`, or remove what storage holds
-  for the object.
+  damage. One wire rule isn't applied on load: a write refuses an entry
+  past Number_Of_States, but a saved list naming one is restored as it was
+  written. The state count and State_Text aren't kept, so the next start
+  has the application's count again. A peer that added a state through
+  State_Text and then listed it leaves such a list, and so does an
+  application that rebuilds the object with fewer states; neither may stop
+  the object from starting. The object then holds what a local
+  `set_number_of_states` shrink leaves it holding: it serves the list, the
+  entries within its states still alarm, and a write of the same list is
+  refused. A Multi-state Value reports CONFIGURATION_ERROR, and so FAULT,
+  from its first evaluation until a list within its states is written or
+  the states are there again; a Multi-state Input reports nothing. A peer
+  can't get there by removing states: a State_Text write that would strand
+  a listed state is refused.
+- **One request that adds a state and lists it.** A WritePropertyMultiple
+  that writes State_Text and then Alarm_Values naming a state it adds
+  saves once, off the database guard: the server hands a Multi-state Input
+  or Value its State_Text writes with the rest, and the staged check uses
+  the count they leave.
 - **Format.** A snapshot holding a parameter is stored as kind 6 of
   `RBNWCF01` (`snapshot::write_config::KIND_REPORTING_PARAMETERS`): the kind 4
   body, then a presence mask and the parameters it names. One without keeps

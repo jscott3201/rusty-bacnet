@@ -7,9 +7,19 @@
 //! a write of one the way the objects holding that kind of detector do. A
 //! staged write is checked by [`after`] on a fresh detector of the object's
 //! own kind, so each family's step refuses exactly what its objects will.
+//!
+//! A saved parameter is checked as the file format checks it and no
+//! further. A multi-state object's write refuses an Alarm_Values entry past
+//! Number_Of_States (#1429), but a saved list naming one is installed as it
+//! was written: the state count and State_Text aren't kept, so a peer that
+//! added a state and listed it leaves such a file, and an object must still
+//! open on it. The object then holds what a local shrink of its states
+//! leaves it holding, and a Multi-state Value shows it as
+//! CONFIGURATION_ERROR until the list or the count is repaired.
 
 use bacnet_types::enums::{BinaryPV, ObjectType, PropertyIdentifier as P};
 use bacnet_types::error::Error;
+use bacnet_types::primitives::PropertyValue;
 
 use crate::common;
 use crate::durable::PendingWrite;
@@ -186,17 +196,22 @@ pub(crate) fn after<D: AlgorithmDetector>(
     Ok(())
 }
 
-/// Why an object with `states` states refuses the saved parameters: an
-/// Alarm_Values state past them, which a write of the list is refused for
-/// too (#1429). The count is the object's, so the file format can't check
-/// it.
-pub(super) fn past_states(
-    saved: &AlgorithmWriteConfig,
-    states: Option<u32>,
-) -> Option<&'static str> {
-    let (values, states) = (saved.alarm_values.as_ref()?, states?);
-    values
-        .iter()
-        .any(|state| *state > states)
-        .then_some("holds an Alarm_Values state past the object's Number_Of_States")
+/// The Number_Of_States `write` leaves an object that has `states` of them,
+/// if the object takes it: State_Text written whole has a state for each
+/// label, and its size written at index 0 is the new count (#1443). Any
+/// other write leaves the count as it is. A stage follows the count through
+/// a request with this, so a list naming a state the request itself adds is
+/// checked against the count it will meet. A State_Text write the object
+/// refuses ends the request, so what was staged past it is released.
+pub(super) fn states_after(states: Option<u32>, write: &PendingWrite) -> Option<u32> {
+    if write.property != P::STATE_TEXT {
+        return states;
+    }
+    let count = match (write.array_index, &write.value) {
+        (None, PropertyValue::List(labels)) => u32::try_from(labels.len()).ok(),
+        (None, PropertyValue::CharacterString(_)) => Some(1),
+        (Some(0), PropertyValue::Unsigned(count)) => u32::try_from(*count).ok(),
+        _ => None,
+    };
+    states.map(|states| count.unwrap_or(states))
 }

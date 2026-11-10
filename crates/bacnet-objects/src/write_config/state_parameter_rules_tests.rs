@@ -1,20 +1,21 @@
 //! The rules the binary and multi-state objects' kept parameters follow
 //! (#2331): the `set_alarm_values` setter gives way to a saved list until
 //! the clear, the clear drops the parameters with the rest, a list naming a
-//! state the rebuilt object lacks fails the build, a restored list is taken
-//! as a write of it is, a request's writes save once, and a staged step
-//! is checked by the family's own write path against the object as it is
-//! when the write is made.
+//! state the rebuilt object lacks is restored as written, a restored list
+//! is taken as a write of it is, a request's writes save once, and a staged
+//! step is checked by the family's own write path against the state count
+//! the write will meet.
 
 use bacnet_types::enums::{
-    ErrorClass, ErrorCode, ObjectType, PropertyIdentifier as P, Reliability,
+    ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier as P, Reliability,
 };
-use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 
-use super::parameters_tests::{read, saved, write};
+use super::parameters_tests::{evaluated, read, saved, write};
 use super::reporting_tests::{persistence, refused_with};
-use super::state_parameters_tests::{KINDS, STATES, has_alarm_values, is_binary, open, states};
+use super::state_parameters_tests::{
+    KINDS, STATES, has_alarm_values, is_binary, open, set_state, states,
+};
 use super::test_storage::MemoryConfig;
 use super::{AlgorithmWriteConfig, ReportingWriteConfig, WriteConfigSnapshot};
 use crate::multistate::{MultiStateInputObject, MultiStateValueObject};
@@ -195,67 +196,119 @@ fn holding_list(list: &[u32]) -> alloc::sync::Arc<MemoryConfig> {
     }))
 }
 
+fn reliability(reliability: Reliability) -> PropertyValue {
+    PropertyValue::Enumerated(reliability.to_raw())
+}
+
+/// The Reliability an object holding an Alarm_Values state past its count
+/// shows: a Multi-state Value's CONFIGURATION_ERROR, and no fault on a
+/// Multi-state Input, which doesn't look at its list.
+fn stranded(object: &dyn BACnetObject) -> PropertyValue {
+    let value = object.object_identifier().object_type() == ObjectType::MULTI_STATE_VALUE;
+    reliability(if value {
+        Reliability::CONFIGURATION_ERROR
+    } else {
+        Reliability::NO_FAULT_DETECTED
+    })
+}
+
+/// What an object holding a list with a state past its count does, the
+/// list being `list` and state 2 one of its entries within the count. It
+/// serves the list. The Input still alarms on state 2. The Value goes to
+/// FAULT at its first evaluation, and is sound again once the states are
+/// there again or a list within them is written. A write of the same list
+/// is refused, as without storage.
+fn holds_a_stranded_list(object: &mut dyn BACnetObject, list: &[u32]) {
+    let kind = object.object_identifier().object_type();
+    let sound = reliability(Reliability::NO_FAULT_DETECTED);
+    assert_eq!(read(object, P::ALARM_VALUES), states(list), "{kind}");
+    assert_eq!(read(object, P::RELIABILITY), stranded(object), "{kind}");
+    set_state(object, 2);
+    let expected = if stranded(object) == sound {
+        EventState::OFFNORMAL
+    } else {
+        EventState::FAULT
+    };
+    assert_eq!(evaluated(object), Some(expected), "{kind}");
+    let result = object.write_property(P::ALARM_VALUES, None, states(list), None);
+    // As an object with as many states and no storage refuses it.
+    let mut plain = open(kind, None);
+    let count = read(object, P::NUMBER_OF_STATES);
+    plain
+        .write_property(P::STATE_TEXT, Some(0), count, None)
+        .unwrap();
+    let refusal = plain
+        .write_property(P::ALARM_VALUES, None, states(list), None)
+        .unwrap_err();
+    assert_eq!(result.unwrap_err().to_string(), refusal.to_string());
+    assert_eq!(read(object, P::ALARM_VALUES), states(list), "{kind}");
+}
+
 /// An object rebuilt with fewer states than a saved Alarm_Values entry
-/// names doesn't open on that storage, as a write of the list to it would
-/// be refused, and the storage is left as it was. Opened with enough
-/// states, the object clears it, and the smaller one then opens on what the
-/// application configures.
+/// names opens on that storage with the list as it was written, though a
+/// write of the list to it is refused: the state count isn't kept, and a
+/// saved list mustn't stop an object from starting. Storage is left as it
+/// was, and a later kept write saves the list with it, unchanged. A
+/// Multi-state Value shows the fault from the start, until its states are
+/// there again or a list within them is written.
 #[test]
-fn a_saved_list_past_the_rebuilt_objects_states_fails_the_build() {
+fn a_saved_list_past_the_rebuilt_objects_states_is_restored_as_written() {
     on_each_listed!(|new, Object| {
         let _: fn(u32) -> Object = new;
+        let list = [2, STATES];
         let storage = MemoryConfig::new();
         let mut object = new(STATES)
             .with_reporting_persistence(persistence(&storage))
             .unwrap();
-        write(&mut object, P::ALARM_VALUES, states(&[2, STATES]));
+        write(&mut object, P::ALARM_VALUES, states(&list));
         drop(object);
         let kept = saved(&storage);
 
-        let fewer = new(STATES - 1).with_reporting_persistence(persistence(&storage));
-        let Err(error) = fewer else {
-            panic!(
-                "a list naming state {STATES} opened on {} states",
-                STATES - 1
-            );
-        };
-        assert!(matches!(error, Error::Encoding(_)), "{error:?}");
-        assert!(error.to_string().contains("Number_Of_States"), "{error}");
+        let mut fewer = new(STATES - 1)
+            .with_reporting_persistence(persistence(&storage))
+            .unwrap();
         assert_eq!(saved(&storage), kept);
         assert_eq!(storage.saves(), 1);
+        holds_a_stranded_list(&mut fewer, &list);
+        assert_eq!(storage.saves(), 1, "the refused write saved nothing");
 
-        let mut enough = new(STATES)
-            .with_reporting_persistence(persistence(&storage))
-            .unwrap();
-        enough.clear_written_reporting().unwrap();
-        drop(enough);
-        let mut fewer = new(STATES - 1);
-        fewer.set_alarm_values(vec![1]);
-        let fewer = fewer
-            .with_reporting_persistence(persistence(&storage))
-            .unwrap();
-        assert_eq!(read(&fewer, P::ALARM_VALUES), states(&[1]));
+        write(&mut fewer, P::TIME_DELAY, PropertyValue::Unsigned(7));
+        let later = saved(&storage).algorithm;
+        assert_eq!(later.alarm_values, Some(list.to_vec()));
+        assert_eq!(later.time_delay, Some(7));
+
+        let sound = reliability(Reliability::NO_FAULT_DETECTED);
+        fewer.set_number_of_states(STATES).unwrap();
+        assert_eq!(read(&fewer, P::RELIABILITY), sound);
+        fewer.set_number_of_states(STATES - 1).unwrap();
+        assert_eq!(read(&fewer, P::RELIABILITY), stranded(&fewer));
+        write(&mut fewer, P::ALARM_VALUES, states(&[2]));
+        assert_eq!(read(&fewer, P::RELIABILITY), sound);
+        assert_eq!(saved(&storage).algorithm.alarm_values, Some(vec![2]));
     });
 }
 
 /// Number_Of_States isn't kept. A peer that gives an object more states by
 /// writing State_Text, and then an Alarm_Values entry naming one of them,
-/// leaves a list the object as the application builds it doesn't open on.
-/// And the wire can't get there the other way: a State_Text write that
-/// would drop a state the held list names is refused.
+/// leaves a list naming a state the object as the application builds it
+/// lacks. That object still opens, holding the list, and the peer repairs a
+/// Multi-state Value by adding the state again. The wire can't get there
+/// the other way: a State_Text write that would drop a state the held list
+/// names is refused.
 #[test]
-fn a_list_naming_a_state_a_peer_added_fails_the_next_build() {
+fn a_list_naming_a_state_a_peer_added_is_restored_on_the_next_build() {
     on_each_listed!(|new, Object| {
         let _: fn(u32) -> Object = new;
+        let list = [2, STATES + 1];
         let storage = MemoryConfig::new();
         let mut object = new(STATES)
             .with_reporting_persistence(persistence(&storage))
             .unwrap();
         let grown = PropertyValue::Unsigned(u64::from(STATES + 1));
         object
-            .write_property(P::STATE_TEXT, Some(0), grown, None)
+            .write_property(P::STATE_TEXT, Some(0), grown.clone(), None)
             .unwrap();
-        write(&mut object, P::ALARM_VALUES, states(&[STATES + 1]));
+        write(&mut object, P::ALARM_VALUES, states(&list));
         let shrunk = PropertyValue::Unsigned(u64::from(STATES));
         let result = object.write_property(P::STATE_TEXT, Some(0), shrunk, None);
         assert!(
@@ -263,16 +316,19 @@ fn a_list_naming_a_state_a_peer_added_fails_the_next_build() {
             "{result:?}"
         );
         drop(object);
-        assert!(
-            new(STATES)
-                .with_reporting_persistence(persistence(&storage))
-                .is_err()
-        );
-        assert!(
-            new(STATES + 1)
-                .with_reporting_persistence(persistence(&storage))
-                .is_ok()
-        );
+
+        let mut rebuilt = new(STATES)
+            .with_reporting_persistence(persistence(&storage))
+            .unwrap();
+        let five = PropertyValue::Unsigned(u64::from(STATES));
+        assert_eq!(read(&rebuilt, P::NUMBER_OF_STATES), five);
+        holds_a_stranded_list(&mut rebuilt, &list);
+        rebuilt
+            .write_property(P::STATE_TEXT, Some(0), grown, None)
+            .unwrap();
+        let sound = reliability(Reliability::NO_FAULT_DETECTED);
+        assert_eq!(read(&rebuilt, P::RELIABILITY), sound);
+        assert_eq!(read(&rebuilt, P::ALARM_VALUES), states(&list));
     });
 }
 
@@ -313,7 +369,7 @@ mod staged {
 
     use super::super::parameters_tests::pending;
     use super::*;
-    use crate::durable::StageStep;
+    use crate::durable::{PendingWrite, StageStep};
 
     const LISTED: [ObjectType; 2] = [ObjectType::MULTI_STATE_INPUT, ObjectType::MULTI_STATE_VALUE];
 
@@ -522,9 +578,11 @@ mod staged {
         }
     }
 
-    /// The other way round: a list the stage refused, because it named a
-    /// state the object didn't have yet, is checked again when it is
-    /// written, and saved then.
+    /// The other way round, when the state comes from another request: a
+    /// list the stage refused, because it named a state the object didn't
+    /// have and the request didn't add, stages nothing. It is checked again
+    /// when it is written, against the count the object has by then, and
+    /// saved where it is written.
     #[test]
     fn a_list_refused_at_the_stage_is_checked_again_when_written() {
         for kind in LISTED {
@@ -546,6 +604,68 @@ mod staged {
                 saved(&storage).algorithm.alarm_values,
                 Some(vec![STATES + 1])
             );
+        }
+    }
+
+    /// When the request itself adds the state, by State_Text's size at
+    /// index 0 or by State_Text written whole, the stage checks the list
+    /// against the count that write leaves: the request stages one save,
+    /// ahead of its writes, and they take their steps without saving again.
+    /// A State_Text write that doesn't add the state leaves the list
+    /// refused at the stage.
+    #[test]
+    fn a_request_that_adds_a_state_and_lists_it_stages_one_save() {
+        let size = |count: u32| PendingWrite {
+            property: P::STATE_TEXT,
+            array_index: Some(0),
+            value: PropertyValue::Unsigned(u64::from(count)),
+        };
+        let whole = |count: u32| {
+            let labels = (1..=count).map(|state| format!("S{state}"));
+            let labels = labels.map(PropertyValue::CharacterString);
+            pending(P::STATE_TEXT, PropertyValue::List(labels.collect()))
+        };
+        let one_label = PendingWrite {
+            property: P::STATE_TEXT,
+            array_index: Some(2),
+            value: PropertyValue::CharacterString("two".into()),
+        };
+        let list = pending(P::ALARM_VALUES, states(&[STATES + 1]));
+        for kind in LISTED {
+            for grows in [size(STATES + 1), whole(STATES + 1)] {
+                let storage = MemoryConfig::new();
+                let mut object = open(kind, Some(&storage));
+                let request = [grows, list.clone()];
+                let durable = object.durable_writes().unwrap();
+                let StageStep::Staged(wait) = durable.stage_writes(&request) else {
+                    panic!("{kind}: the request stages");
+                };
+                wait.block();
+                assert_eq!(storage.saves(), 1, "{kind}");
+                assert_eq!(read(object.as_ref(), P::ALARM_VALUES), states(&[2]));
+                for write in &request {
+                    let (index, value) = (write.array_index, write.value.clone());
+                    object
+                        .write_property(write.property, index, value, None)
+                        .unwrap();
+                }
+                object.durable_writes().unwrap().release_staged_write(&wait);
+                assert_eq!(read(object.as_ref(), P::ALARM_VALUES), list.value);
+                drop(object);
+                assert_eq!(storage.saves(), 1, "{kind}: the writes saved again");
+                assert_eq!(
+                    saved(&storage).algorithm.alarm_values,
+                    Some(vec![STATES + 1])
+                );
+            }
+            for stays in [size(STATES), whole(STATES), one_label.clone()] {
+                let storage = MemoryConfig::new();
+                let mut object = open(kind, Some(&storage));
+                let durable = object.durable_writes().unwrap();
+                let step = durable.stage_writes(&[stays, list.clone()]);
+                assert!(matches!(step, StageStep::Skip), "{kind}");
+                assert_eq!(storage.saves(), 0, "{kind}");
+            }
         }
     }
 }

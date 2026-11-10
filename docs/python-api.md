@@ -3025,7 +3025,8 @@ save fails; an Event_Message_Texts_Config string or a Description past 16 KiB
 is refused with RESOURCES / NO_SPACE_TO_WRITE_PROPERTY. A NULL to Description
 succeeds and saves nothing. A server started on the same file serves the
 saved settings. `clear_written_reporting=True` drops what was saved first,
-Description included, so the object starts from its defaults. A file that doesn't load raises `BacnetError`.
+Description included, so the object starts from its defaults. A file that doesn't load raises `BacnetError`,
+with the clear too: the file is read before it is cleared, so delete a file that can't be read.
 An Alert Enrollment takes only ALARM and EVENT as Notify_Type, so a file
 holding another fails its build the same way.
 
@@ -3061,15 +3062,19 @@ the rest. A file holding a value the object refuses on the wire raises
 Event Enrollment don't keep their parameters yet: a written Alarm_Values,
 Fault_Values or Event_Parameters lasts until the server restarts.
 
-One refused value depends on the builder call: saved Alarm_Values naming a
+One value a write refuses is still restored: saved Alarm_Values naming a
 state past `number_of_states`. A peer can't write such a list, and can't
-remove a state a list names. But the state count isn't kept: after a
-restart it is the builder's `number_of_states` again, whatever a peer made
-of it through State_Text. So if a peer added states and listed one, or the
-application now passes a smaller `number_of_states`, the builder raises
-`BacnetError`, with `clear_written_reporting=True` too, since the file is
-read before it is cleared. Delete the file, or start once with the earlier
-`number_of_states` and `clear_written_reporting=True`.
+remove a state a list names. But the state count and State_Text aren't
+kept: after a restart the count is the builder's `number_of_states` again,
+whatever a peer made of it through State_Text. So if a peer added a state
+and listed it, or the application now passes a smaller `number_of_states`,
+the file names a state the object doesn't have. The builder doesn't raise.
+The list is restored as it was written and read back that way, its entries
+within the count still alarm, and a write of the same list is refused. A
+Multi-state Value reports Reliability CONFIGURATION_ERROR until a list
+within its states is written or the state is added again; a Multi-state
+Input reports nothing. `clear_written_reporting=True` drops the list like
+any other saved value.
 
 These builders take no keyword for the parameters, so an application sets
 its own limits, alarm values or delays with `write_property_local` once the

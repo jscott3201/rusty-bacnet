@@ -468,8 +468,9 @@ impl Format {
                         .map(drop)
                 },
             ),
-            // A Multi-state Input of eight states refuses an Alarm_Values
-            // state past them, which the format itself takes (#2331).
+            // A Multi-state Input of eight states: it opens on an
+            // Alarm_Values state past them too, which the format takes and
+            // only a write refuses (#2331).
             Kind::MultiStateReportingWriteConfig => check_file(
                 medium,
                 oid(ObjectType::MULTI_STATE_INPUT),

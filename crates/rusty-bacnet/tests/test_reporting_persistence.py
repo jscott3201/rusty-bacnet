@@ -225,39 +225,73 @@ class WrittenReportingTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(cleared_kind_of=name):
                 self.assertEqual((self.state / name).read_bytes()[12], 4)
 
-    async def test_saved_alarm_values_past_the_state_count_fail_the_builder(self) -> None:
+    async def test_saved_alarm_values_past_the_state_count_are_restored(self) -> None:
         """A saved Alarm_Values list naming a state the object is built
-        without raises BacnetError, with the clear too, since the file is
-        read first. The two ways out the docs give both work: deleting the
-        file, and one start with the earlier state count and the clear."""
-        file = self.state / "msv-1"
-        for way_out in ("delete", "clear"):
-            with self.subTest(way_out=way_out):
-                server = await self.start()
-                try:
-                    await server.write_property_local(
-                        MULTI_STATE, P.ALARM_VALUES, states(3), source_object=None
-                    )
-                finally:
-                    await server.stop()
-                for clear in (False, True):
-                    with self.assertRaises(BacnetError):
-                        self.build(clear, number_of_states=2)
-                if way_out == "delete":
-                    file.unlink()
-                else:
-                    server = await self.start(clear=True)
-                    await server.stop()
-                server = await self.start(number_of_states=2)
-                try:
-                    self.assertEqual(
-                        await self.read(server, MULTI_STATE, P.ALARM_VALUES), states()
-                    )
-                finally:
-                    await server.stop()
-                # Back to three states for the next way out.
-                server = await self.start()
-                await server.stop()
+        without doesn't stop the builder: the state count isn't kept, so a
+        peer may have added the state before the restart. The list is read
+        back as written, a write of it is refused, and the Multi-state Value
+        reports CONFIGURATION_ERROR (10) until a list within its states is
+        written. The clear drops it like any other saved value."""
+        fault = PropertyValue.enumerated(10)
+        sound = PropertyValue.enumerated(0)
+        server = await self.start()
+        try:
+            await server.write_property_local(
+                MULTI_STATE, P.ALARM_VALUES, states(3, 2), source_object=None
+            )
+            self.assertEqual(await self.read(server, MULTI_STATE, P.RELIABILITY), sound)
+        finally:
+            await server.stop()
+
+        server = await self.start(number_of_states=2)
+        try:
+            self.assertEqual(
+                await self.read(server, MULTI_STATE, P.NUMBER_OF_STATES),
+                PropertyValue.unsigned(2),
+            )
+            self.assertEqual(await self.read(server, MULTI_STATE, P.ALARM_VALUES), states(3, 2))
+            self.assertEqual(await self.read(server, MULTI_STATE, P.RELIABILITY), fault)
+            with self.assertRaises(BacnetError):
+                await server.write_property_local(
+                    MULTI_STATE, P.ALARM_VALUES, states(3, 2), source_object=None
+                )
+            # Another kept write saves the stored list with it, unchanged.
+            await server.write_property_local(
+                MULTI_STATE, P.TIME_DELAY, PropertyValue.unsigned(7), source_object=None
+            )
+        finally:
+            await server.stop()
+
+        server = await self.start(number_of_states=2)
+        try:
+            self.assertEqual(await self.read(server, MULTI_STATE, P.ALARM_VALUES), states(3, 2))
+            self.assertEqual(
+                await self.read(server, MULTI_STATE, P.TIME_DELAY), PropertyValue.unsigned(7)
+            )
+            await server.write_property_local(
+                MULTI_STATE, P.ALARM_VALUES, states(2), source_object=None
+            )
+            self.assertEqual(await self.read(server, MULTI_STATE, P.RELIABILITY), sound)
+            await server.write_property_local(
+                MULTI_STATE, P.ALARM_VALUES, states(1, 2), source_object=None
+            )
+        finally:
+            await server.stop()
+
+        # A stranded list written again from three states, then cleared.
+        server = await self.start()
+        try:
+            await server.write_property_local(
+                MULTI_STATE, P.ALARM_VALUES, states(3), source_object=None
+            )
+        finally:
+            await server.stop()
+        server = await self.start(clear=True, number_of_states=2)
+        try:
+            self.assertEqual(await self.read(server, MULTI_STATE, P.ALARM_VALUES), states())
+            self.assertEqual(await self.read(server, MULTI_STATE, P.RELIABILITY), sound)
+        finally:
+            await server.stop()
 
     async def test_an_applications_own_parameter_writes_are_kept_like_a_peers(self) -> None:
         """The analog builders have no limit keywords, so an application sets
@@ -410,6 +444,11 @@ class AlgorithmParameterFileTests(unittest.TestCase):
             refused.write_bytes(high_limit_file(analog, 1, float("nan")))
             with self.assertRaises(BacnetError):
                 server.add_analog_input(1, "AI-1", storage_path=str(refused))
+            # The clear doesn't help: the file is read before it is cleared.
+            with self.assertRaises(BacnetError):
+                server.add_analog_input(
+                    1, "AI-1", storage_path=str(refused), clear_written_reporting=True
+                )
             # A binary object keeps no High_Limit: the file isn't one it can
             # have written, though it keeps other parameters now.
             binary = Path(directory) / "bi-1"

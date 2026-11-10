@@ -105,7 +105,9 @@ enum TargetValue {
 /// (#2331). The nine analog, binary and multi-state types save their event
 /// algorithm parameters too (the two time delays, an analog object's
 /// limits, Deadband and Limit_Enable, Alarm_Value and Alarm_Values;
-/// [`kept_parameter`]). A Timer, a Channel, the thirteen types
+/// [`kept_parameter`]), and a Multi-state Input or Value stages State_Text
+/// beside them, though it saves nothing for it
+/// ([`sizes_listed_states`]). A Timer, a Channel, the thirteen types
 /// with a reporting store,
 /// the three logs, a Notification Class, a forwarder, an Access Rights
 /// object, a Device, a Lighting Output, a Binary Lighting Output and the
@@ -161,6 +163,7 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
             property == PropertyIdentifier::TAGS
                 || kept_with_reporting(property)
                 || kept_parameter(oid.object_type(), property)
+                || sizes_listed_states(oid.object_type(), property)
         }
         // These keep a written Description in their Tags storage (#2364).
         ObjectType::LIGHTING_OUTPUT | ObjectType::BINARY_LIGHTING_OUTPUT | ObjectType::DEVICE => {
@@ -226,6 +229,20 @@ fn kept_with_reporting(property: PropertyIdentifier) -> bool {
 /// object keeps and this left out would save in place under the guard.
 fn kept_parameter(object_type: ObjectType, property: PropertyIdentifier) -> bool {
     bacnet_objects::snapshot::write_config::keeps_parameter(object_type, property)
+}
+
+/// State_Text on a Multi-state Input or Value. The object saves nothing
+/// for it, but it sets Number_Of_States, which bounds the Alarm_Values
+/// entries the object takes. Handed to the stage with the request's other
+/// writes, it lets a list naming a state the same request adds be checked
+/// against the count it will meet, so the request saves off the guard like
+/// any other (#2331). Alone it stages nothing.
+fn sizes_listed_states(object_type: ObjectType, property: PropertyIdentifier) -> bool {
+    property == PropertyIdentifier::STATE_TEXT
+        && bacnet_objects::snapshot::write_config::keeps_parameter(
+            object_type,
+            PropertyIdentifier::ALARM_VALUES,
+        )
 }
 
 /// The reporting settings every intrinsic reporter keeps once written: the

@@ -167,11 +167,17 @@ impl Kept {
     /// What `write` leaves on top of this, or the object's refusal of it;
     /// `object` answers for what is its own: its Notify_Type rule
     /// ([`KeepsReporting::takes_notify_type`]) and its algorithm parameters
-    /// ([`KeepsReporting::parameter_after`]). A message text past what
+    /// ([`KeepsReporting::parameter_after`]), checked against `states`, the
+    /// Number_Of_States the write will meet. A message text past what
     /// storage keeps is refused with RESOURCES / NO_SPACE_TO_WRITE_PROPERTY,
     /// before anything is saved, so every backend gives that answer (#1952),
     /// once the texts are written and so kept.
-    fn after(&self, write: &PendingWrite, object: &dyn KeepsReporting) -> Result<Self, Error> {
+    fn after(
+        &self,
+        write: &PendingWrite,
+        object: &dyn KeepsReporting,
+        states: Option<u32>,
+    ) -> Result<Self, Error> {
         let mut next = self.clone();
         let rows = &mut next.rows;
         let value = &write.value;
@@ -194,7 +200,7 @@ impl Kept {
             // Past its cap it is refused before anything is saved (#2364).
             P::DESCRIPTION => rows.description = description::written(value)?,
             property if parameters::kept_bit(self.object_type, property).is_some() => {
-                object.parameter_after(&mut rows.algorithm, write)?;
+                object.parameter_after(states, &mut rows.algorithm, write)?;
             }
             property => rows
                 .options
@@ -312,16 +318,19 @@ pub(crate) trait KeepsReporting: BACnetObject {
     /// What `write`, of an algorithm parameter the object's type keeps,
     /// leaves of `rows`, or the object's refusal of it: the object's own
     /// write path, run on a detector of its kind
-    /// ([`parameters::after`]). The default is for a type that keeps none.
+    /// ([`parameters::after`]). `states` is the Number_Of_States the write
+    /// meets: the object's own, or at a stage the count the request's
+    /// earlier writes leave. The default is for a type that keeps none.
     fn parameter_after(
         &self,
+        _states: Option<u32>,
         _rows: &mut AlgorithmWriteConfig,
         _write: &PendingWrite,
     ) -> Result<(), Error> {
         Err(common::unknown_property_error())
     }
-    /// Number_Of_States, on an object with states: an Alarm_Values entry,
-    /// written or saved, names one of them.
+    /// Number_Of_States, on an object with states: a written Alarm_Values
+    /// entry names one of them.
     fn number_of_states(&self) -> Option<u32> {
         None
     }
@@ -380,10 +389,12 @@ pub(crate) fn attach<T: KeepsReporting>(
     description::check_saved(saved.description.as_deref())?;
     // A stored parameter the object would refuse on the wire, or doesn't
     // have, is refused here as the codec refuses it: a backend of the
-    // application's own may hand over anything.
+    // application's own may hand over anything. One wire rule is left out:
+    // an Alarm_Values entry past Number_Of_States is installed as stored
+    // (see `parameters`), so two writes a peer made can't stop the object
+    // from opening.
     let invalid = crate::snapshot::write_config::reporting_invalid(&saved)
-        .or_else(|| parameter_format::invalid(oid.object_type(), &saved.algorithm))
-        .or_else(|| parameters::past_states(&saved.algorithm, object.number_of_states()));
+        .or_else(|| parameter_format::invalid(oid.object_type(), &saved.algorithm));
     if let Some(reason) = invalid {
         return Err(Error::Encoding(format!(
             "saved reporting settings {reason}"
@@ -400,7 +411,9 @@ pub(crate) fn attach<T: KeepsReporting>(
     object.restore_reporting_rows(&saved);
     // A Multi-state Value works its Reliability out again when Alarm_Values
     // is written, so it does when a saved list goes over the configured
-    // one: a fault only the configured list raised doesn't outlive it.
+    // one: a fault only the configured list raised doesn't outlive it, and
+    // a saved entry past the object's states shows as CONFIGURATION_ERROR
+    // from the start.
     if saved.algorithm.alarm_values.is_some()
         && let Some(reliability) = object.reliability_eval()
     {
@@ -453,8 +466,9 @@ fn admit_to(
     // entry on Number_Of_States), which a write the store doesn't count may
     // have changed since the stage. So the object's refusal comes first and
     // takes no staged step: the request's release puts storage back.
+    let states = object.number_of_states();
     if parameters::kept_bit(current.object_type, write.property).is_some() {
-        object.parameter_after(&mut current.rows.algorithm.clone(), write)?;
+        object.parameter_after(states, &mut current.rows.algorithm.clone(), write)?;
     }
     let claimed = storage.claim(
         write.property,
@@ -476,7 +490,7 @@ fn admit_to(
         None => {
             // A write the object refuses leaves another request's staged
             // write alone (#1424).
-            let next = current.after(write, object)?;
+            let next = current.after(write, object, states)?;
             storage.drop_staged();
             // Storage goes back to the served rows first, should the save
             // below fail.
@@ -510,8 +524,12 @@ pub(crate) fn stage_writes<T: KeepsReporting>(
             return StageStep::Busy(wait);
         }
         let current = kept(store.written, object);
+        // The count each write will meet: a State_Text write earlier in the
+        // request changes it, though it is no step of the save.
+        let mut states = object.number_of_states();
         let steps = staged::steps(writes, |earlier, write| {
             if !kept_one(write) {
+                states = parameters::states_after(states, write);
                 return Ok(None);
             }
             crate::property_metadata::check_write_array_index(
@@ -520,7 +538,7 @@ pub(crate) fn stage_writes<T: KeepsReporting>(
                 write.array_index,
             )?;
             let from = earlier.last().map_or(&current, |step| &step.next);
-            from.after(write, object).map(Some)
+            from.after(write, object, states).map(Some)
         });
         storage.stage(steps, store.writes, current.snapshot(), |snapshot, kept| {
             *snapshot = kept.snapshot();

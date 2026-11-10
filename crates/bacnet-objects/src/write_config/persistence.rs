@@ -97,9 +97,10 @@ pub struct AlgorithmWriteConfig {
     /// Alarm_Value of a Binary Input or Value: INACTIVE or ACTIVE.
     pub alarm_value: Option<BinaryPV>,
     /// Alarm_Values of a Multi-state Input or Value, in list order: at most
-    /// 1,024 states, as a write is, none of them zero. An object refuses a
-    /// list naming a state past its Number_Of_States. A written empty list
-    /// is kept as one.
+    /// 1,024 states, as a write is, none of them zero. A state past the
+    /// object's Number_Of_States, which a write refuses, is restored as
+    /// stored: the state count isn't kept. A written empty list is kept as
+    /// one.
     pub alarm_values: Option<Vec<u32>>,
 }
 

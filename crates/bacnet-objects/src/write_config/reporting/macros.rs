@@ -114,13 +114,14 @@ macro_rules! impl_reporting_persistence {
 
             fn parameter_after(
                 &self,
+                states: Option<u32>,
                 rows: &mut $crate::write_config::AlgorithmWriteConfig,
                 write: &$crate::durable::PendingWrite,
             ) -> Result<(), bacnet_types::error::Error> {
                 // The detector's type picks the family's write path.
                 $crate::write_config::reporting::parameters::after(
                     &self.event_detector,
-                    $crate::write_config::reporting::KeepsReporting::number_of_states(self),
+                    states,
                     rows,
                     write,
                 )
@@ -259,13 +260,15 @@ macro_rules! impl_reporting_persistence {
             /// Fails when storage can't be loaded, holds another kind of
             /// configuration, or holds what no write leaves: a value the
             /// object refuses on the wire, or an algorithm parameter its
-            /// type doesn't keep. That includes saved Alarm_Values naming a
-            /// state past this object's Number_Of_States: a peer can't
-            /// write one, so an object rebuilt with fewer states than the
-            /// saved list names doesn't open on it. Open it with the
-            /// earlier state count and call
-            /// [`clear_written_reporting`](Self::clear_written_reporting),
-            /// or remove what storage holds for the object.
+            /// type doesn't keep. One wire rule doesn't fail it: saved
+            /// Alarm_Values naming a state past this object's
+            /// Number_Of_States are restored as written. The state count
+            /// and State_Text aren't kept, so a peer that added a state and
+            /// listed it, or an application that now builds the object with
+            /// fewer states, leaves such a list. The object serves it; a
+            /// write of the same list is still refused; and a Multi-state
+            /// Value reports CONFIGURATION_ERROR until a list within its
+            /// states is written or the states are there again.
             pub fn with_reporting_persistence(
                 self,
                 persistence: alloc::sync::Arc<dyn $crate::write_config::WriteConfigPersistence>,

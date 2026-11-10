@@ -282,10 +282,13 @@ start that passes `clear_written_reporting=True`.
 `clear_written_reporting=True` drops what was saved first,
 Description and parameters included, so the object starts from its
 defaults. A file that doesn't load, or holds a value the object
-refuses on the wire, raises BacnetError. That includes saved
-Alarm\_Values naming a state past `number_of_states`, with or
-without the clear: delete the file, or start once with the earlier
-`number_of_states` and the clear. Every analog, binary and
+refuses on the wire, raises BacnetError, with the clear too: the
+file is read before it is cleared. One such value doesn't:
+saved Alarm\_Values naming a state past `number_of_states` are
+restored as written, since the state count and State\_Text aren't
+kept and a peer may have added the state before the restart. A
+Multi-state Value then reports CONFIGURATION\_ERROR until a list
+within its states is written. Every analog, binary and
 multi-state builder takes both, as do `add_access_door`,
 `add_access_zone`, `add_event_enrollment` and
 `add_alert_enrollment`.

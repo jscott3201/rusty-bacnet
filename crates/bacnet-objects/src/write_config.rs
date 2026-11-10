@@ -54,15 +54,18 @@
 //! holding a value the object refuses on the wire, or a parameter its type
 //! doesn't keep, fails the builder call.
 //!
-//! One such value turns on the object and not on the file: an Alarm_Values
-//! entry past Number_Of_States, which a peer can't write (#1429). A peer
-//! can't shrink the states under a held entry either, but an application
-//! can rebuild the object with fewer states than a saved list names, and
-//! Number_Of_States itself isn't kept, so a count a peer raised through
-//! State_Text is the application's again after a restart. Either way the
-//! builder call fails rather than serve a list no write leaves. The
-//! application then opens the object with enough states and calls
-//! `clear_written_reporting`, or removes what storage holds for it.
+//! One wire rule doesn't fail the builder call: an Alarm_Values entry past
+//! Number_Of_States, which a write refuses (#1429). The state count and
+//! State_Text aren't kept. So a count a peer raised through State_Text is
+//! the application's again after a restart, and a list the peer then wrote
+//! may name a state the rebuilt object lacks; so may any saved list once an
+//! application builds the object with fewer states. Such a list is restored
+//! as it was written, since two writes the device accepted mustn't stop it
+//! from starting. The object holds it as it holds a list a local
+//! `set_number_of_states` shrink leaves: it serves it, the entries within
+//! its states still alarm, a write of the same list is refused, and a
+//! Multi-state Value reports CONFIGURATION_ERROR until a list within its
+//! states is written or the states are there again.
 //!
 //! Each of these object types keeps a written Description in the same file
 //! too (#2364), as kind 5 of the format wrapped around the kind it writes,

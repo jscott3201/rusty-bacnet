@@ -337,8 +337,9 @@ pub fn keeps_parameter(object_type: ObjectType, property: P) -> bool {
 /// a negative deadband, Limit_Enable bits past its two, an Alarm_Value past
 /// ACTIVE, or Alarm_Values past the 1,024 a write may hold or naming state
 /// zero. The object refuses each on the wire, so storage holding one is
-/// refused too. A state past the object's own Number_Of_States is the
-/// object's to refuse, as it is built.
+/// refused too. A state past the object's own Number_Of_States is no
+/// such value: the count isn't kept, so the object takes the list as it
+/// was written.
 pub(crate) fn invalid(
     object_type: ObjectType,
     config: &AlgorithmWriteConfig,

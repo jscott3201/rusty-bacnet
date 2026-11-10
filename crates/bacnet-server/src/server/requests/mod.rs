@@ -79,6 +79,8 @@ mod policy_off_task_tests;
 mod reporting_durable_tests;
 #[cfg(test)]
 mod reporting_durable_types_tests;
+#[cfg(test)]
+mod state_count_durable_tests;
 
 #[cfg(test)]
 mod create_config_live_tests;

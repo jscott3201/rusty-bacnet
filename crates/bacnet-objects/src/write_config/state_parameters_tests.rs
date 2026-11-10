@@ -518,9 +518,9 @@ fn a_refused_parameter_write_saves_nothing() {
 }
 
 /// A stored value is taken or refused as a write of it is: what the object
-/// refuses on the wire fails the build, and what it takes is served. A
-/// multi-state object's own count decides for a state the file format
-/// takes: one past Number_Of_States fails the build as it fails a write.
+/// refuses on the wire fails the build, and what it takes is served. One
+/// wire rule is left out on load: an Alarm_Values state past the object's
+/// Number_Of_States, which a write refuses, is served as it was stored.
 #[test]
 fn a_stored_parameter_is_validated_as_a_write_of_it_is() {
     let none = AlgorithmWriteConfig::default;
@@ -528,47 +528,51 @@ fn a_stored_parameter_is_validated_as_a_write_of_it_is() {
         if !has_alarm_values(kind) {
             continue;
         }
-        let mut cases: Vec<(P, PropertyValue, AlgorithmWriteConfig)> = Vec::new();
+        // Each case: the property, a write of the value, the value stored,
+        // and whether only the object's state count stands against it.
+        let mut cases: Vec<(P, PropertyValue, AlgorithmWriteConfig, bool)> = Vec::new();
         if is_binary(kind) {
             for raw in [0, 1, 2, 7, 256] {
                 let stored = AlgorithmWriteConfig {
                     alarm_value: Some(BinaryPV::from_raw(raw)),
                     ..none()
                 };
-                cases.push((P::ALARM_VALUE, PropertyValue::Enumerated(raw), stored));
+                let written = PropertyValue::Enumerated(raw);
+                cases.push((P::ALARM_VALUE, written, stored, false));
             }
         } else {
             let full: Vec<u32> = (0..1024).map(|at| at % STATES + 1).collect();
             let over: Vec<u32> = (0..1025).map(|_| 1).collect();
             let lists = [
-                vec![],
-                vec![1],
-                vec![STATES],
-                vec![3, 3, 1],
-                full,
-                vec![0],
-                vec![2, 0],
-                vec![STATES + 1],
-                vec![1, 2, u32::MAX],
-                over,
+                (vec![], false),
+                (vec![1], false),
+                (vec![STATES], false),
+                (vec![3, 3, 1], false),
+                (full, false),
+                (vec![0], false),
+                (vec![2, 0], false),
+                (over, false),
+                (vec![STATES + 1], true),
+                (vec![1, 2, u32::MAX], true),
             ];
-            for list in lists {
+            for (list, past_the_count) in lists {
                 let stored = AlgorithmWriteConfig {
                     alarm_values: Some(list.clone()),
                     ..none()
                 };
-                cases.push((P::ALARM_VALUES, states(&list), stored));
+                cases.push((P::ALARM_VALUES, states(&list), stored, past_the_count));
             }
         }
         let mut refused = 0;
-        for (property, value, stored) in cases {
+        for (property, value, stored, past_the_count) in cases {
             let written = open(kind, None).write_property(property, None, value.clone(), None);
             let built = try_open(kind, Some(&holding(stored)));
             assert_eq!(
                 built.is_ok(),
-                written.is_ok(),
+                written.is_ok() || past_the_count,
                 "{kind} {property:?} {value:?}: a write gives {written:?}"
             );
+            assert_eq!(written.is_err(), built.is_err() || past_the_count);
             match built {
                 Ok(object) => assert_eq!(read(object.as_ref(), property), value),
                 Err(error) => {
@@ -577,7 +581,7 @@ fn a_stored_parameter_is_validated_as_a_write_of_it_is() {
                 }
             }
         }
-        assert_eq!(refused, if is_binary(kind) { 3 } else { 5 }, "{kind}");
+        assert_eq!(refused, 3, "{kind}");
     }
 }
 
