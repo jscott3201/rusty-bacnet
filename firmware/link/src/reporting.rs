@@ -22,6 +22,14 @@
 //! Active_COV_Subscriptions ([`READ_LIST`]) lists them, and at
 //! [`EXPIRY_AT`] every lifetime left has run out.
 //!
+//! With the crate's `reporting-multiple` feature, which only a measurement
+//! build and the host test turn on (#2320), the scenario goes on once those
+//! six have lapsed: a SubscribeCOVPropertyMultiple (`MULTIPLE`) subscribes
+//! AI-1's Present_Value with timestamps, which reports it at once with the
+//! Device's time, and a WriteProperty takes AI-1 out of service
+//! (`MULTIPLE_CHANGE`), which that context hears of with the time of the
+//! change.
+//!
 //! The reporter's `Responder` has the core's Device clock (#2321), on a
 //! timer the scenario moves with each request, in UTC_Offset [`ZONE`]. A
 //! UTCTimeSynchronization ([`SYNC`]) at [`SYNC_AT`] sets it, and two
@@ -70,7 +78,16 @@ pub const CAP: usize = 8;
 /// ([`crate::objects::ARENA`]) and 8 KiB, which the subscriptions' baselines,
 /// the outbox and the confirmed table take (`tests/reporting.rs` prints the
 /// peak).
+#[cfg(not(feature = "reporting-multiple"))]
 pub const ARENA: usize = crate::objects::ARENA + 8 * 1024;
+
+/// The heap the scenario runs in with a COV-multiple context (#2320), in
+/// octets: 12 KiB more, for that report's histories, reads, claim and
+/// notification while it is built (`tests/reporting.rs` prints a peak of
+/// 31,920 octets on a 64-bit host, where the scenario without it peaks at
+/// 19,136).
+#[cfg(feature = "reporting-multiple")]
+pub const ARENA: usize = crate::objects::ARENA + 20 * 1024;
 
 /// The requests [`run`] hands the reporter, in this order.
 pub const STEPS: usize = 12;
@@ -220,6 +237,28 @@ pub const CHANGE_AT: u64 = 25;
 /// (152), a second after [`CHANGE`].
 pub const READ_LIST: &[u8] = &[0x0C, 0x02, 0x00, 0x04, 0xD2, 0x19, 0x98];
 
+#[cfg(feature = "reporting-multiple")]
+/// SubscribeCOVPropertyMultiple from station 7 at [`MULTIPLE_AT`]: `[0]`
+/// process 3, `[1]` unconfirmed, `[2]` a lifetime of 30 s, `[3]` a
+/// Max_Notification_Delay of 5 s, and in `[4]` one specification: `[0]`
+/// AI-1 and in `[1]` one reference, `[0]` Present_Value (85) with `[2]`
+/// timestamps.
+pub const MULTIPLE: &[u8] = &[
+    0x09, 0x03, 0x19, 0x00, 0x29, 0x1E, 0x39, 0x05, 0x4E, 0x0C, 0x00, 0x00, 0x00, 0x01, 0x1E, 0x0E,
+    0x09, 0x55, 0x0F, 0x29, 0x01, 0x1F, 0x4F,
+];
+
+#[cfg(feature = "reporting-multiple")]
+/// When [`MULTIPLE`] arrives, in seconds: after the subscriptions of AI-2
+/// have lapsed, so the table has room under its cap.
+pub const MULTIPLE_AT: u64 = 45;
+
+#[cfg(feature = "reporting-multiple")]
+/// WriteProperty of AI-1's Out_Of_Service, TRUE, from station 9, five
+/// seconds after [`MULTIPLE`]: as [`CHANGE`], for the object the
+/// COV-multiple context monitors.
+pub const MULTIPLE_CHANGE: &[u8] = &[0x0C, 0x00, 0x00, 0x00, 0x01, 0x19, 0x51, 0x3E, 0x11, 0x3F];
+
 /// When [`run`] runs the last deadlines, in seconds: after every lifetime
 /// the requests left.
 pub const EXPIRY_AT: u64 = 100;
@@ -270,6 +309,9 @@ pub struct Summary {
     /// change is the Local_Time the second read returned; a second window
     /// here would cost the RISC-V image flash.
     pub window: Option<(DaysOfWeek, Time)>,
+    /// The replies to [`MULTIPLE`] and to [`MULTIPLE_CHANGE`].
+    #[cfg(feature = "reporting-multiple")]
+    pub multiple: [Vec<u8>; 2],
     /// Subscriptions left at [`EXPIRY_AT`].
     pub left: usize,
     /// The reporter's counts: subscriptions created, cancelled, purged and
@@ -457,6 +499,8 @@ pub fn run(apdus: &[&[u8]; crate::objects::REQUESTS], requests: &[Request; STEPS
         list: Vec::new(),
         clock: (Outcome::Unhandled, [Vec::new(), Vec::new()]),
         window: None,
+        #[cfg(feature = "reporting-multiple")]
+        multiple: [Vec::new(), Vec::new()],
         left: 0,
         counts: [0; 10],
         errors: 0,
@@ -555,6 +599,21 @@ pub fn run(apdus: &[&[u8]; crate::objects::REQUESTS], requests: &[Request; STEPS
         .reporter
         .clock()
         .and_then(|clock| clock.clock().window(read_at));
+    // A COV-multiple context with a timestamped reference, its initial
+    // report, and a change it reports with the time it happened.
+    #[cfg(feature = "reporting-multiple")]
+    {
+        let subscribe = ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE;
+        let replies = [
+            device.request(7, subscribe, MULTIPLE, at(MULTIPLE_AT), &mut summary),
+            device.request(9, write, MULTIPLE_CHANGE, at(MULTIPLE_AT + 5), &mut summary),
+        ];
+        let [Some(subscribed), Some(changed)] = replies else {
+            summary.errors += 1;
+            return summary;
+        };
+        summary.multiple = [subscribed, changed];
+    }
     device.until(at(EXPIRY_AT), &mut summary);
     summary.left = device.reporter.table().len();
     let counters = device.reporter.counters();
@@ -611,6 +670,12 @@ pub fn expected() -> Summary {
             // The six subscriptions of AI-2 at 10 s, then each hearing of
             // its Status_Flags at 25 s.
             alloc::vec![(8, None, 34); 12],
+            // The COV-multiple context's initial report at 45 s, and
+            // AI-1's Status_Flags at 50 s: 58 octets each, with the
+            // envelope's timestamp, Present_Value and Status_Flags, each
+            // with its Time_Of_Change.
+            #[cfg(feature = "reporting-multiple")]
+            alloc::vec![(7, None, 58); 2],
         ]
         .concat(),
         // SimpleACK, invoke ID 13, WriteProperty (15).
@@ -662,11 +727,21 @@ pub fn expected() -> Summary {
                 hundredths: 50,
             },
         )),
-        // The six subscriptions of AI-2 lapsed at 40 s.
+        // SimpleACKs: invoke ID 17, SubscribeCOVPropertyMultiple (30), and
+        // invoke ID 18, WriteProperty.
+        #[cfg(feature = "reporting-multiple")]
+        multiple: [ack(17, 30), ack(18, 15)],
+        // The six subscriptions of AI-2 lapsed at 40 s, and with
+        // `reporting-multiple` the COV-multiple reference at 75 s.
         left: 0,
         // Created 8, cancelled 2, purged 6, refused 1; sent 15 (2
         // confirmed, 13 unconfirmed), resent 3, failed 1, owed none.
+        #[cfg(not(feature = "reporting-multiple"))]
         counts: [8, 2, 6, 1, 15, 2, 13, 3, 1, 0],
+        // With the COV-multiple context: one more created and purged, and
+        // two more unconfirmed notifications.
+        #[cfg(feature = "reporting-multiple")]
+        counts: [9, 2, 7, 1, 17, 2, 15, 3, 1, 0],
         errors: 0,
     }
 }

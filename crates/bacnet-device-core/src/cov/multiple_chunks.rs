@@ -31,10 +31,10 @@
 //! that lost a value (`Split::lost`), the references left out
 //! (`Split::forgone`) and whatever no part carries (`Split::rest`).
 //!
-//! The split and its inputs are private to the crate: a host reaches it
-//! through [`Gathered::split`](super::multiple_report::Gathered::split),
-//! which lends it the histories and tells them what it gave up. Of this
-//! module a host sees the [`Part`]s of a report.
+//! The module is private to the crate: a host reaches the split through
+//! [`Gathered::split`](super::multiple_report::Gathered::split), which
+//! lends it the histories and tells them what it gave up, and sees the
+//! [`Part`]s of a report as `multiple_report::Part`.
 use alloc::collections::BTreeSet;
 use alloc::vec;
 use alloc::vec::Vec;

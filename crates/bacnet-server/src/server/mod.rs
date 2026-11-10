@@ -671,8 +671,6 @@ mod cov_confirmed_context_tests;
 #[cfg(test)]
 mod cov_multiple_admission_tests;
 #[cfg(test)]
-mod cov_multiple_budget_tests;
-#[cfg(test)]
 mod cov_multiple_context_order_tests;
 #[cfg(test)]
 mod cov_notifications_tests;

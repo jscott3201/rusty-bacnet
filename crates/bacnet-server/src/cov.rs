@@ -419,21 +419,21 @@ impl CovSubscriptionTable {
             .complete_observation(snapshot, completion, value, runtime_clock::core_now())
     }
 
-    /// Mark the coordinate of one confirmed notification's references
-    /// outstanding, keeping the observation each carries for the Ack, and
-    /// register its worker's wake-up for a fence.
+    /// Test adapter: begin a confirmed report that holds nothing of the
+    /// histories, through [`Self::begin_confirmed_report`], the one way
+    /// production begins one.
     #[cfg(test)]
     pub(crate) fn begin_confirmed<S: std::borrow::Borrow<CovSubscriptionSnapshot>>(
         &mut self,
         completion: PreparedCovCompletion,
         references: impl IntoIterator<Item = (S, CovObservation)>,
     ) -> Result<ConfirmedFlight, BeginRefusal> {
-        let now = runtime_clock::core_now();
-        let token = self.core.begin_confirmed(completion, references, now)?;
-        // A report it replaced past its deadline is fenced: wake its worker,
-        // if one still runs, and drop its wake-up (#2303).
-        self.sync(&[]);
-        Ok(self.flight(token))
+        let observations: Vec<_> = references
+            .into_iter()
+            .map(|(snapshot, observation)| (snapshot.borrow().clone(), observation))
+            .collect();
+        self.begin_confirmed_report(completion, &observations, None, Vec::new())
+            .map(|(flight, _)| flight)
     }
 
     /// The worker's hold on the report `token`, which the table just
@@ -577,8 +577,9 @@ impl CovSubscriptionTable {
             .confirmed_idle(snapshot, runtime_clock::core_now())
     }
 
-    /// Whether a whole COV-multiple context may report now; see
-    /// [`CovTable::context_idle`].
+    /// Test probe: whether a whole COV-multiple context may report now; see
+    /// [`CovTable::context_idle`]. Production asks inside the core's
+    /// `Reading::gather`.
     #[cfg(test)]
     pub(crate) fn context_idle(
         &self,
@@ -587,14 +588,6 @@ impl CovSubscriptionTable {
     ) -> bool {
         self.core
             .context_idle(context, snapshots, runtime_clock::core_now())
-    }
-
-    /// Whether an idle context still owes the follow-up of a failed report;
-    /// see [`CovTable::take_owed_context`].
-    #[cfg(test)]
-    pub(crate) fn take_owed_context(&mut self, context: &MultipleContextKey) -> bool {
-        self.core
-            .take_owed_context(context, runtime_clock::core_now())
     }
 
     /// References owed a fresh evaluation after an acknowledgment.

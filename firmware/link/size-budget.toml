@@ -615,11 +615,12 @@
 # feature, which the reporting image leaves off. Its outbox entries carry
 # their service, 152 octets of .text more on thumbv7m (177160, 195840 of
 # flash); no budget moved. With the feature on and one COV-multiple
-# context in the scenario the image measured 329168 / 330080 / 398334
+# context in the scenario (the crate's `reporting-multiple` feature, which
+# this check doesn't build) the image measures 332576 / 333496 / 402354
 # octets of flash (thumbv7m / thumbv7em / riscv32imac) and 36968 of RAM,
-# with three 64-bit division routines: over the thumb targets' 256 KiB
-# region and this table's limits, so the row waits for the path to be
-# trimmed (docs/design/device-core-events.md, decision 18).
+# with three 64-bit division routines (two on riscv32imac): over the thumb
+# targets' 256 KiB region and this table's limits, so the row waits for
+# the path to be trimmed (docs/design/device-core-events.md, decision 18).
 
 [thumbv7m-none-eabi.mstp]
 text = 18320

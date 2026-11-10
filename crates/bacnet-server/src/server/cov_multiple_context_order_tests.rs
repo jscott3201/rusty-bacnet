@@ -9,6 +9,10 @@
 use super::cov_wire_test_support::*;
 use super::*;
 
+/// The same contexts under a spent notification budget.
+#[path = "cov_multiple_budget_tests.rs"]
+mod budget;
+
 /// Process identifiers in the order the contexts subscribe.
 const SUBSCRIBED: [u32; 8] = [5, 1, 7, 3, 8, 2, 6, 4];
 

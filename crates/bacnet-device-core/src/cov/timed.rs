@@ -137,7 +137,7 @@
 //! A host does not string these calls together itself. Its fanout runs on
 //! [`multiple_report`](super::multiple_report), which drains, adopts and
 //! times through this module and splits each report
-//! ([`multiple_chunks`](super::multiple_chunks)), and its producers on
+//! (`multiple_chunks`), and its producers on
 //! [`timed_capture`](super::timed_capture). What a host calls here is what
 //! those steps leave to it: the deadline ([`TimedHistories::take_due`]),
 //! the counts and drops, and the settling of what a report hands it:

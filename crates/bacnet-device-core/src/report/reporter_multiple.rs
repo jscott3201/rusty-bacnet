@@ -499,11 +499,13 @@ impl Reporter {
             *crowded = true;
             return None;
         }
+        // The token before the budget, so a part that gets none has spent
+        // nothing: there is no refund to forget.
+        let token = part_token(&mut self.table, route)?;
         if !budget.try_consume(params.len() + UNCONFIRMED_HEADER) {
             self.counters.cov.notifications_throttled_fanout += 1;
             return None;
         }
-        let token = part_token(&mut self.table, route)?;
         let pushed = self.outbox.push(
             token,
             route.key().clone(),
@@ -512,6 +514,8 @@ impl Reporter {
             now,
             &params,
         );
+        // The room was reserved above, so the push queues it.
+        debug_assert!(pushed.queued, "admission reserved the room");
         pushed.queued.then_some(token)
     }
 

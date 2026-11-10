@@ -437,9 +437,9 @@ async fn a_snapshot_report_times_a_timestamped_field_only_with_its_own_value() {
     let convey = |table: &CovSubscriptionTable| {
         let store = table.timed().clone();
         let (incarnation, drained) = store.lock().drain(flags.key(), flags.generation());
-        let mut claim = crate::cov::timed_store::ClaimGuard::new(store.clone());
+        let mut claim = bacnet_device_core::cov::timed::TimedClaim::new();
         claim.add(flags.key().clone(), incarnation, drained);
-        claim.commit();
+        store.lock().commit(claim);
     };
     {
         let db = server.db.read().await;

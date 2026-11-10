@@ -6,8 +6,8 @@
 //! back to its references, and it takes its next turn ahead of the
 //! contexts that were served, so the same ones don't wait every time. Time
 //! is paused.
-use super::cov_wire_test_support::*;
-use super::*;
+use super::super::cov_wire_test_support::*;
+use super::super::*;
 
 const DELAY: u32 = 10;
 

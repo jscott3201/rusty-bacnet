@@ -8088,7 +8088,11 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   Max_Notification_Delay deadline of a context with changes pending to
   `next_deadline`. `SERVICES` then names the service and the overlay
   serves Active_COV_Multiple_Subscriptions from the table. Without the
-  feature the service is rejected as unrecognized.
+  feature the service is rejected as unrecognized. One duty comes with
+  it: the host calls `delivered` for every unconfirmed notification it
+  pops, sent or not. A report holds its context's send turn until its
+  last part is reported, so one the host never reports on keeps every
+  later change of that context from being queued; nothing times it out.
 - `cov::timed` (#2320, behind the `cov-multiple` feature, which `std`
   turns on): the SubscribeCOVPropertyMultiple notification path's
   timestamped histories. `TimedHistories` is plain state for a host to guard:
@@ -8140,8 +8144,12 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   - `cov::multiple_report` decides what one fanout reports to a context,
     in three steps, because a host reads its objects under one guard and
     its table under another. `by_context(subscriptions)` groups a fanout's
-    references, the contexts in the order they report: by recipient, then
-    subscriber process identifier, unconfirmed before confirmed.
+    references, the contexts in key order: by recipient, then subscriber
+    process identifier, unconfirmed before confirmed.
+    `in_turn(histories, grouped)` gives the order they report in under
+    one shared budget: first the contexts a spent budget kept back last
+    time, which the host notes where it checks the budget
+    (`TimedHistories::note_turn(context, waited)`), then the rest.
     `Reading::read(source, subscriptions, force)` reads one context's
     fanned-out references from a `Source`: the database, or a producer's
     snapshot of one object. `Reading::gather(table, histories, now)`
@@ -8154,7 +8162,7 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
     owed marks taken. `Gathered::split(histories, device, local_apdu)`
     splits it to the subscriber's APDU size, tells the histories what the
     split gave up, and returns the `Report`: the `parts`
-    (`multiple_chunks::Part`: a notification, the `TimedClaim` its
+    (`Part`: a notification, the `TimedClaim` its
     delivery retires and the references it finishes), the `observations`
     from which `carried(finishes, claim, observations, every)` picks what
     a delivered part completes, `needs_turn`, and the references
@@ -8179,9 +8187,8 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
     to hear of each send by.
 
   The split, its inputs and the read cache (`cov::multiple_items`,
-  `cov::multiple_reads`, and all of `cov::multiple_chunks` but `Part`) are
-  private to the crate, as are the calls of `cov::timed` only these steps
-  need.
+  `cov::multiple_reads`, `cov::multiple_chunks`) are private to the
+  crate, as are the calls of `cov::timed` only these steps need.
 - `clock` (#2321): the Device's clock, for firmware with none of its own.
   `SyncedClock` holds a `bacnet_time::Instant`, the UTC date and time it
   stood for and the `Zone` (UTC_Offset, minutes west, and

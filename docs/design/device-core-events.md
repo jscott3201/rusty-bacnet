@@ -534,8 +534,8 @@ send turn. A capture still reads its objects before it locks.
 
 **Moved by #2320 PR 2b**, behind the same feature: the fanout's decisions,
 as `cov::multiple_report`. A host fans a change out context by context
-(`by_context`), each in three steps, because the server reads its objects
-under one guard and its table under another:
+(`by_context`, in the order `in_turn` gives), each in three steps, because
+the server reads its objects under one guard and its table under another:
 
 - `Reading::read(source, subscriptions, force)` reads the fanned-out
   references from the database or a producer's snapshot, with no table.
@@ -575,12 +575,16 @@ deadline); `hold_off` moves the backstop past a failed report's hold-off;
 | three guard calls after the table released a begun report | `begin_confirmed`, under the table | `begin_confirmed_report` on the table wrapper; the worker gets a `LodgedClaim` over the lodged id |
 | the hold-off's end from the config and a clock read | `hold_off`, from the table's timing | one call in the worker's failure path |
 
-The order between contexts is the one difference on the wire (decision
-17). The rest is as on dev: which references a report takes, its
+The order between contexts, and of a follow-up's references, is the one
+difference on the wire (decision 17). The rest is as on dev: which references a report takes, its
 timestamps and chunking, the turn, what a failed send gives back and when
 the backstop retries. Four things differ off the wire. One instant serves
-a fanout's table step, where each check and each adopted change read the
-clock: that instant only anchors the Max_Notification_Delay wait. The
+a fanout's table step: the idle and hold-off checks, the lifetime each
+reference has left (which is the Time_Remaining it reports) and the
+capture instant of an adopted change, which anchors its
+Max_Notification_Delay wait. On dev each of those read the clock for
+itself, under the same table guard, so the readings were the same instant
+to the clock's resolution and no check can come out differently. The
 claims of a begun confirmed report are settled under the table guard, not
 just after it, so no capture or fanout runs in between. A fanout that
 takes a turn and finds nothing to report ends the turn under the table
@@ -942,7 +946,7 @@ image would link:
 | PR 2, measured | 171.4 KB (flash 189.7 KB) | the image through the `Reporter`, trimmed by #2363 (§8.3) |
 | + `event-reporting` (after PR 3) | 172-181 KB | ~2,200 lines, plus the measured objects and encoder share |
 | + `event-enrollment` (#2319) | 207-221 KB | ~2,700 lines, the Event Enrollment object, `decode_event_parameter` |
-| + the Multiple path (#2320) | +15-25 KB estimated; +133 KB measured before any trim (decision 18) | ~3,300 lines, the COVNotificationMultiple codec |
+| + the Multiple path (#2320) | +15-25 KB estimated; +137 KB measured before any trim (decision 18) | ~3,300 lines, the COVNotificationMultiple codec |
 
 Flash runs about 18 KB above `.text`. So COV with intrinsic reporting fits
 a 256 KB part with room; with Event Enrollment it is tight there and easy
@@ -1356,6 +1360,30 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
       the changelog. When one change spends its notification budget, the
       contexts left for later are the last in that order. Confirmed
       reports start in it too, each on a worker of its own.
+    - Under a spent budget. Key order alone would make the last keys
+      wait every time one change spends its notification budget
+      (`CovPolicy::max_notifications_per_event`, 64 by default), where
+      the hash order changed the loser per fanout. Timestamped changes
+      are bounded by the backstop, which gives each context a budget of
+      its own; a context with only untimestamped references has no
+      history and no deadline and would never report. So the histories
+      keep the contexts whose report a spent budget kept back
+      (`TimedHistories::note_turn`), the one waiting longest first, and
+      `in_turn` puts them ahead of the rest. A context that has its turn,
+      in a fanout or a follow-up, waits no more. A list of waiters, not
+      a cursor after the last context served: an unrelated fanout between
+      two spent ones would move or clear a cursor. Not covered: a context
+      whose first notification the octet budget refuses while the budget
+      is not yet spent is not noted, and reports at its next fanout in
+      plain order.
+    - The follow-up pass. Its keys came out of a hash set (the revisit
+      queue), or timestamped before owed (the deadline), and a report
+      lists its untimestamped items in the order its references are
+      fanned out: one context's follow-up listed two changed references
+      either way round. `fire_cov_revisits` sorts and deduplicates its
+      keys, as the `Reporter`'s look does, so a follow-up's items, and
+      the follow-ups of one pass, are in key order. Named in the
+      changelog beside the context order.
     - Three steps, not one call, for the reason the capture has three
       (decision 16): the server reads its objects before it takes the
       table, and holds the table only for the decision. One call would
@@ -1379,12 +1407,17 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
     - The store's mutex is held across `gather` and across `split`. A
       section that drops more than 64 repeats logs one debug line for the
       rest (decision 15's log difference); the counters hold every drop.
-    - Narrowed with the move: `cov::multiple_items` and
-      `cov::multiple_reads` are private modules; `Envelope`,
-      `ReportContent`, `Split`, `split`, `request_limit` and
-      `untimed_octets`, the claim's splits and the histories' `field_time`,
-      `note_field`, `adopt`, `note_reserve`, `set_sizing` and `lost_values`
-      are private to the crate. The "unstable" notes are gone.
+    - Narrowed with the move: `cov::multiple_items`, `cov::multiple_reads`
+      and `cov::multiple_chunks` are private modules, `Part` re-exported
+      from `cov::multiple_report`; the claim's splits and the histories'
+      `field_time`, `note_field`, `adopt`, `note_reserve`, `set_sizing`
+      and `lost_values` are private to the crate. The "unstable" notes
+      are gone. A host names `Source`, the three steps' types, `Report`,
+      `Part`, `Carried`, `FirstPart` and `Begun`.
+    - A panic inside `gather` or `split` loses the claim the step held
+      and leaves an unconfirmed context's send turn taken. Neither is
+      known to panic: a reference that is not a COV-multiple one is left
+      out, not unwrapped.
     - Size (`check-firmware-link.sh`, Rust 1.99.0): the move changed no
       image's numbers; the feature is off in every one (decision 18).
 
@@ -1393,18 +1426,19 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
     yet: it is too large as it stands.
     - Measured with the image's scenario extended by one COV-multiple
       context (a timestamped Present_Value, its initial report and one
-      change), the `firmware` profile, Rust 1.99.0, and the thumb
-      targets' flash region widened for the measurement; not committed.
-      Flash: 195,688 to 329,168 octets (thumbv7m), 196,500 to 330,080
-      (thumbv7em), 235,082 to 398,334 (riscv32imac). RAM: 24,680 to
-      36,968 on each, the arena from 24 to 36 KiB, for a heap peak of
-      32,632 octets on a 64-bit host where it was 20,016. No
-      `core::fmt`; four memmove routines as before; three 64-bit
-      division routines, where the row allows none.
-    - So the image passes the thumb targets' 256 KiB region by 67 KB and
+      change), the `firmware` profile, Rust 1.99.0, on a 512 KiB layout
+      (the `reporting-multiple` build, below). Flash, without the feature
+      and with it: 195,840 and 332,576 octets (thumbv7m), 196,652 and
+      333,496 (thumbv7em), 235,282 and 402,354 (riscv32imac). RAM: 24,680
+      and 36,968 on each, the arena from 24 to 36 KiB, for a heap peak of
+      31,920 octets on a 64-bit host where the scenario without the
+      context peaks at 19,136. No `core::fmt`; the same memmove routines;
+      three 64-bit division routines on the thumb targets and two on
+      riscv32imac, where the row allows none.
+    - So the image passes the thumb targets' 256 KiB region by 70 KB and
       fails a standing limit of its row. §8.2 had estimated 15-25 KB.
     - Where it goes (thumbv7m `.text` by symbol, with LTO, so callers
-      hold what they inline): B-tree code 36 KB (the histories' six
+      hold what they inline; taken before the fix round added 3 KB): B-tree code 36 KB (the histories' six
       maps, the read cache's two, the steps' maps and sets), sort
       instantiations 27 KB, the histories 40 KB, the report steps with
       the split 36 KB, the `Reporter` 44 KB (`handle`, with the service
@@ -1413,9 +1447,26 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
       to 46.5 KB, `alloc` from under 7 to 37.5 KB.
     - The feature stays (#2215's rule; decisions 12 and 15 left the
       measurement to this PR): an image without it keeps all of that. The
-      `reporting` image leaves it off, and its rows moved by the service
-      field an outbox entry now carries: 152 octets of flash on thumbv7m
-      (195,840), RAM unchanged.
+      `reporting` image leaves it off. Its rows still moved, by 152
+      octets of flash on thumbv7m (195,840), RAM unchanged, for what is
+      not behind the feature: the service an outbox entry and a
+      confirmed-table entry carry, the two matches that turn it into a
+      service choice when `pop` encodes, the second service `reply`
+      accepts, and the look's test for a COV-multiple key. Gating them
+      would put a `cfg` on the entry types, on `push` and `pop` and on
+      every place that builds a `Notification`, for 152 octets.
+    - To repeat the measurement: the firmware crate's `reporting-multiple`
+      feature, off by default and not built by `check-firmware-link.sh`,
+      turns the path on, adds the context to the scenario and gives the
+      image the 512 KiB layout. Per target, `cargo build -p firmware-link
+      --profile firmware --target <triple> --no-default-features
+      --features reporting-multiple --lib --bin reporting`, then
+      `python3 scripts/ci/firmware_size.py
+      target/<triple>/firmware/reporting firmware/link/size-budget.toml
+      <triple>.reporting`, which prints the sizes against the
+      `reporting` rows; `cargo nextest run
+      -p firmware-link --features reporting-multiple` checks the
+      scenario and its heap peak on the host.
     - What the row needs first, as #2363 was for PR 2: the histories' and
       the read cache's maps as `VecMap`s, as the table's are; the sorts
       (`sort_by_key` on the retained references, `TimedClaim::in_order`,
@@ -1588,7 +1639,14 @@ follow-up task does at once, so a host needs one `on_deadline` at a
 hold-off's end, not two.
 
 Left for a follow-up, with the size row: the path's footprint (decision
-18). The scenario the `reporting` image would run is small (a
-SubscribeCOVPropertyMultiple for one timestamped Present_Value, its
-initial report and one change, two 58-octet notifications), and needs
-the arena at 36 KiB.
+18). The scenario the `reporting` image would run is in the firmware
+crate behind `reporting-multiple` (a SubscribeCOVPropertyMultiple for
+one timestamped Present_Value, its initial report and one change, two
+58-octet notifications, the arena at 36 KiB).
+
+A host of the `Reporter` has one duty the server gets from a guard: it
+reports the end of every unconfirmed part it pops (`delivered`). Until
+then the report holds its context's send turn, and every later fanout of
+the context stands back; an outbox entry has no deadline that would end
+the turn for a host that never reports. Whether the turn should get one,
+as a confirmed entry has its cutoff, is open; this PR adds none.

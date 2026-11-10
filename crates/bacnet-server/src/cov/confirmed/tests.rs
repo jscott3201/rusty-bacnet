@@ -427,21 +427,6 @@ async fn revisits_drain_once_and_forget_removed_references() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_passed_hold_off_is_owed_once_per_context() {
-    let mut table = holding_off(Duration::from_millis(30));
-    let (a, _) = context(&mut table);
-    let context = a.key().multiple_context().unwrap().clone();
-    assert!(!table.take_owed_context(&context), "nothing failed");
-    let flight = begin(&mut table, &a, &[&a]).unwrap();
-    table.delivered(&flight, Delivery::Failed);
-    assert!(!table.take_owed_context(&context), "still holding off");
-    tokio::time::advance(Duration::from_millis(30)).await;
-    assert!(table.take_owed_context(&context));
-    assert!(!table.take_owed_context(&context), "owed once");
-    assert!(table.context_idle(&context, &[]));
-}
-
-#[tokio::test(start_paused = true)]
 async fn a_replaced_marker_stops_its_flight() {
     let mut table = CovSubscriptionTable::new();
     let sub = table.subscribe(single()).unwrap();

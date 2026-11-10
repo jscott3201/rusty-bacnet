@@ -458,12 +458,22 @@ impl Reporter {
 
     /// How the send of the notification `token` names ended. An
     /// unconfirmed one that was [`Sent`](Delivery::Sent) becomes its
-    /// subscription's baseline; one of a COV-multiple report that was not
-    /// sent stops that report, and the notifications queued after it are
-    /// not handed out. A confirmed one ends through
+    /// subscription's baseline. A confirmed one ends through
     /// [`reply`](Self::reply) or its timeout; the host reports one here
     /// only when it couldn't send it ([`NotSent`](Delivery::NotSent)), and
     /// it then ends with no hold-off.
+    ///
+    /// With `cov-multiple`, call this for every unconfirmed notification
+    /// [`pop`](Self::pop) hands out, whichever way its send ended. A
+    /// report to a COV-multiple context holds the context's send turn
+    /// until the last of its notifications is reported here: one reported
+    /// sent retires the changes it carried, and one that was not sent
+    /// stops the report, so the notifications queued after it are not
+    /// handed out and their changes wait for the context's
+    /// Max_Notification_Delay. A notification the host never reports on
+    /// keeps the turn, and every later change of that context from being
+    /// queued, until its reference leaves the table: no deadline ends it,
+    /// as a confirmed notification's does.
     pub fn delivered(
         &mut self,
         token: Token,

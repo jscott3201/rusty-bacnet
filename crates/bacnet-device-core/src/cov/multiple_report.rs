@@ -33,6 +33,19 @@
 //! Nothing here locks, logs, sends or reads a monotonic clock: every claim
 //! handed out is plain data its holder must settle, and the send turn of an
 //! unconfirmed context ([`Gathered::take_turn`]) is the host's to end.
+//! Nothing settles either if a step is left by a panic: a panic inside
+//! [`Reading::gather`] or [`Gathered::split`] loses the claim the step held
+//! and, for an unconfirmed context, leaves its send turn taken, so the
+//! context sends no more until its references are admitted afresh. No step
+//! is known to panic: a reference that is not a COV-multiple one is left
+//! out ([`by_context`]) or reports nothing (`gather`), and the remaining
+//! `expect`s state what `gather` itself established.
+//!
+//! What a host names from here: [`Source`] to say where values are read;
+//! [`Reading`], [`Gathering`] and [`Gathered`] for the steps; the
+//! [`Report`] with its [`Part`]s, and [`Carried`], the type of what a part
+//! completes; [`FirstPart`] and [`Begun`] for a confirmed report. The
+//! split and its inputs are private to the crate.
 
 use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, BTreeSet};
@@ -46,8 +59,12 @@ use bacnet_services::cov_multiple::{COVNotificationMultipleRequest, COVNotificat
 use bacnet_time::Instant;
 use bacnet_types::primitives::ObjectIdentifier;
 
+pub use super::multiple_chunks::Part;
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub use super::multiple_chunks::cov_multiple_datetime;
 use super::multiple_chunks::{
-    Envelope, Part, ReportContent, Split, request_limit, split, untimed_octets,
+    Envelope, ReportContent, Split, request_limit, split, untimed_octets,
 };
 use super::multiple_items::{Coordinate, FieldStamp};
 use super::multiple_reads::{MultipleReads, PreparedReference};
@@ -68,15 +85,11 @@ pub fn by_context(
 ) -> BTreeMap<MultipleContextKey, Vec<CovSubscriptionSnapshot>> {
     let mut grouped: BTreeMap<MultipleContextKey, Vec<CovSubscriptionSnapshot>> = BTreeMap::new();
     for sub in subscriptions {
-        grouped
-            .entry(
-                sub.key()
-                    .multiple_context()
-                    .expect("Multiple snapshot")
-                    .clone(),
-            )
-            .or_default()
-            .push(sub);
+        // A snapshot of another kind has no context: it is left out.
+        let Some(context) = sub.key().multiple_context().cloned() else {
+            continue;
+        };
+        grouped.entry(context).or_default().push(sub);
     }
     grouped
 }
@@ -238,14 +251,14 @@ impl<'a> Reading<'a> {
             candidates,
             evaluated,
         } = self;
-        let Some(first) = subscriptions.first() else {
+        // No reference, or one that is not a COV-multiple reference: there
+        // is no context to report to.
+        let context = subscriptions
+            .first()
+            .and_then(|first| first.key().multiple_context().cloned());
+        let Some(context) = context else {
             return Gathering::Nothing { unclocked: 0 };
         };
-        let context = first
-            .key()
-            .multiple_context()
-            .expect("Multiple snapshot")
-            .clone();
         // A confirmed context has at most one outstanding report, and the
         // next one has to batch everything held meanwhile (#896). That
         // report's Ack, or the first fanout after a hold-off, sends it;

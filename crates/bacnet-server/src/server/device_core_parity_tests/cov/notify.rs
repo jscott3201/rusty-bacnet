@@ -5,11 +5,13 @@
 //! sends is compared with what the `Reporter`'s outbox hands out then:
 //! unconfirmed APDUs octet for octet, confirmed ones with the invoke ID
 //! left out (each side lends its own), with the link MAC and the routed
-//! destination, as multisets. Design §7.2 asks for their order too; a set
+//! destination. Ordinary and Single notifications are compared as
+//! multisets. Design §7.2 asks for their order too; a set
 //! it is, because the server starts a change's confirmed workers before
 //! it sends its unconfirmed notifications (PR 2a), so their order across
 //! subscriptions is its tasks' scheduling, not something the `Reporter`
-//! has to copy. The test answers both as the subscriber
+//! has to copy. COV-multiple notifications are compared in the order
+//! sent, each form by itself (`comparable`). The test answers both as the subscriber
 //! would, and between steps moves the clock to each of the `Reporter`'s
 //! deadlines, so the server's retry timers and the `Reporter`'s fire
 //! together. Each step also states how many notifications it calls for,
@@ -77,6 +79,31 @@ fn strip(apdu: &mut [u8]) -> Option<u8> {
     confirmed.then(|| core::mem::take(&mut apdu[2]))
 }
 
+/// How one step's notifications are lined up before the two sides are
+/// compared: equal keys leave notifications in the order they were sent.
+///
+/// COV-multiple notifications of one form keep their order: both hosts
+/// take contexts in key order and send a report's parts in order, so the
+/// unconfirmed ones must come out alike, and so must the confirmed ones,
+/// whose workers the server starts in that order. Between the two forms
+/// the server's order is its scheduling (a confirmed one leaves from a
+/// worker, an unconfirmed one from the fanout itself), so they are
+/// compared apart. Ordinary and Single notifications are compared as a
+/// set, for the reason the module gives.
+fn comparable(wire: &Wire) -> (u8, Option<&Wire>) {
+    let (confirmed, apdu) = (wire.2, &wire.3);
+    let multiple = if confirmed {
+        apdu[3] == ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION_MULTIPLE.to_raw()
+    } else {
+        apdu[1] == UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION_MULTIPLE.to_raw()
+    };
+    match (multiple, confirmed) {
+        (true, false) => (0, None),
+        (true, true) => (1, None),
+        (false, _) => (2, Some(wire)),
+    }
+}
+
 impl CovParity {
     /// Compare the notifications the server sent, `frames`, with all the
     /// `Reporter` hands out at `now`; unconfirmed ones are then sent on the
@@ -124,8 +151,10 @@ impl CovParity {
                 (id, sent.token, peer),
             ));
         }
-        server.sort_by(|a, b| a.0.cmp(&b.0));
-        core.sort_by(|a, b| a.0.cmp(&b.0));
+        // Stable: where `comparable` gives equal keys, the order is the
+        // one each side sent in, and has to agree.
+        server.sort_by(|a, b| comparable(&a.0).cmp(&comparable(&b.0)));
+        core.sort_by(|a, b| comparable(&a.0).cmp(&comparable(&b.0)));
         assert_eq!(
             server.iter().map(|(wire, _)| wire).collect::<Vec<_>>(),
             core.iter().map(|(wire, _)| wire).collect::<Vec<_>>(),
