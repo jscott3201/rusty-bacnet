@@ -291,7 +291,7 @@ impl<T: TransportPort + 'static> Engine<T> {
 }
 
 /// The device's error behind a halted read.
-fn device_error(halt: Halt) -> Error {
+pub(crate) fn device_error(halt: Halt) -> Error {
     match halt {
         Halt::Device(error) => error,
         // The engine's readers share NEVER_STOPPED, which nothing sets, and
