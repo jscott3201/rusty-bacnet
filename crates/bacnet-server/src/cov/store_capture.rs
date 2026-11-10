@@ -14,9 +14,9 @@ use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::primitives::ObjectIdentifier;
 
+use super::CovSubscriptionTable;
 use super::timed_capture::{CaptureQueue, CaptureRead, TimedCapture, TimedWriteCapture};
 use super::timed_store::HistoryStore;
-use super::{CovSubscriptionSnapshot, CovSubscriptionTable};
 use crate::runtime_clock;
 use bacnet_device_core::cov::CovSubscriptionKey;
 use bacnet_device_core::cov::life_safety::LifeSafetyCovChange;
@@ -60,10 +60,12 @@ impl CovSubscriptionTable {
         self.store_capture(TimedCapture::all(&self.core, runtime_clock::core_now()))
     }
 
-    /// See [`TimedCapture::initial`].
+    /// See [`TimedCapture::initial`]. The subscribe service captures
+    /// through the core; this is for tests that drive a capture by hand.
+    #[cfg(test)]
     pub(crate) fn initial_timed_capture(
         &self,
-        snapshots: &[CovSubscriptionSnapshot],
+        snapshots: &[super::CovSubscriptionSnapshot],
         frame: ClockFrame,
     ) -> StoreCapture {
         self.store_capture(TimedCapture::initial(

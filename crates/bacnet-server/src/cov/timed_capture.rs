@@ -17,7 +17,8 @@
 //!
 //! A host that locks takes the table only for the first step and the
 //! histories only for the third, in that order after the database, so no
-//! object is read under either.
+//! object is read under either. [`TimedCapture::run`] is the last two steps
+//! in one call, for a host with nothing to take between them.
 //!
 //! One capture has one instant on the host's monotonic timeline, the `now`
 //! its queueing is given: every change it queues counts its context's
@@ -218,6 +219,21 @@ impl TimedCapture {
             frame,
             reads,
             current,
+        }
+    }
+
+    /// Read and queue in one call ([`Self::read`], [`CaptureRead::queue`]):
+    /// each qualifying change of `db` joins `histories`, captured at `now`.
+    /// Returns the references that queued one.
+    pub fn run(
+        self,
+        db: &ObjectDatabase,
+        histories: &mut TimedHistories,
+        now: Instant,
+    ) -> Vec<CovSubscriptionKey> {
+        match self.read(db) {
+            Some(read) => read.queue(histories, now),
+            None => Vec::new(),
         }
     }
 }

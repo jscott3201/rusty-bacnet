@@ -28,7 +28,9 @@ use bacnet_objects::database::ObjectDatabase;
 mod confirmed;
 pub(crate) use confirmed::{ConfirmedFlight, CovRevisits};
 mod store_capture;
+mod subscribe_multiple;
 mod timed_capture;
+mod timed_follow;
 pub(crate) mod timed_store;
 
 mod policy;
@@ -328,8 +330,35 @@ impl CovSubscriptionTable {
         accepted
     }
 
+    /// SubscribeCOVPropertyMultiple from `peer`; see
+    /// [`subscribe_cov_property_multiple`](subscribe_multiple::subscribe_cov_property_multiple).
+    /// The store is locked for the call, last, under the database and table
+    /// guards its caller holds: the service keeps the histories in step
+    /// with the table itself, and nothing in it drops a claim or a turn of
+    /// this store.
+    pub(crate) fn subscribe_cov_property_multiple(
+        &mut self,
+        db: &ObjectDatabase,
+        peer: &SubscriberEndpoint,
+        subscriber_max_apdu: Option<u16>,
+        request: bacnet_services::cov_multiple::SubscribeCOVPropertyMultipleRequest,
+    ) -> Result<Vec<CovSubscriptionSnapshot>, MultipleRefusal> {
+        let accepted = subscribe_multiple::subscribe_cov_property_multiple(
+            &mut self.core,
+            &mut self.timed.lock(),
+            db,
+            peer,
+            subscriber_max_apdu,
+            request,
+            runtime_clock::core_now(),
+        );
+        self.settle();
+        accepted
+    }
+
     /// Accept Multiple references in request order and refresh their exact
     /// context; see [`CovTable::subscribe_multiple`].
+    #[cfg(test)]
     pub(crate) fn subscribe_multiple(
         &mut self,
         context: &MultipleContextKey,
@@ -526,34 +555,31 @@ impl CovSubscriptionTable {
             return;
         }
         self.counters.add(&counts);
-        {
-            let mut timed = self.timed.lock();
-            for key in &fenced.removed {
-                timed.remove(key);
-            }
-            for snapshot in published {
-                let delay = snapshot.max_notification_delay().unwrap_or_default();
-                let (key, generation) = (snapshot.key(), snapshot.generation());
-                match (key.multiple_context(), snapshot.timestamped) {
-                    (Some(_), true) => timed.reset(key, generation, delay),
-                    (Some(_), false) => timed.reset_untimed(key, generation, delay),
-                    (None, _) => timed.remove(key),
-                }
-            }
-            for context in &fenced.contexts {
-                let Some(entry) = self.core.multiple_context_references(context).next() else {
-                    continue;
-                };
-                timed.set_delay(context, entry.max_notification_delay().unwrap_or_default());
-                // Lifetime left now, rounded up as notifications report it; an
-                // expired one, which no notification reports, sizes as the longest.
-                let time_remaining =
-                    CovTimeRemaining::at(entry.expires_at, runtime_clock::core_now())
-                        .wire_seconds()
-                        .unwrap_or(u32::MAX);
-                timed.set_sizing(context, entry.subscriber_max_apdu(), time_remaining);
-            }
+        timed_follow::follow_table(
+            &mut self.timed.lock(),
+            &self.core,
+            &fenced,
+            published,
+            runtime_clock::core_now(),
+        );
+        self.wake(fenced);
+    }
+
+    /// The host's part of a mutation that kept the histories in step with
+    /// the table itself: the counters, and what [`Self::wake`] does.
+    fn settle(&mut self) {
+        let counts = self.core.take_counts();
+        let fenced = self.core.take_fenced();
+        if fenced.is_empty() && !counted(&counts) {
+            return;
         }
+        self.counters.add(&counts);
+        self.wake(fenced);
+    }
+
+    /// Forget the queued revisits of removed references, wake the workers
+    /// of fenced reports and request the revisits the table owes.
+    fn wake(&mut self, fenced: bacnet_device_core::cov::Fenced) {
         for key in &fenced.removed {
             self.revisits.forget(key);
         }
