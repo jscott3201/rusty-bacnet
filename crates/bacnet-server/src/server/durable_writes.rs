@@ -11,7 +11,7 @@
 //! Event or Alert Enrollment a written reporting setting (#2331), an
 //! analog, binary or multi-state object, an Access Door, an Access Zone or
 //! an Event Enrollment a written event algorithm parameter too (#2331),
-//! and those
+//! a multi-state object a written State_Text (#2414), and those
 //! objects, a Timer, a Channel, the three logs, a Notification Class or
 //! Forwarder, an Access Rights object, a Device, the two lighting outputs
 //! and the two colour objects a written Description (#2364),
@@ -108,7 +108,8 @@ enum TargetValue {
 /// too (the two time delays, an analog object's limits, Deadband and
 /// Limit_Enable, Alarm_Value, Alarm_Values, a door's Fault_Values and
 /// Masked_Alarm_Values, and an enrollment's Event_Parameters,
-/// Fault_Parameters and Time_Delay_Normal; [`kept_parameter`]). A Timer, a
+/// Fault_Parameters and Time_Delay_Normal; [`kept_parameter`]), and the
+/// three multi-state types a written State_Text (#2414). A Timer, a
 /// Channel, the thirteen types
 /// with a reporting store,
 /// the three logs, a Notification Class, a forwarder, an Access Rights
@@ -228,33 +229,16 @@ fn kept_with_reporting(property: PropertyIdentifier) -> bool {
 /// analog ones; Alarm_Value on a Binary Input or Value; Alarm_Values on a
 /// Multi-state Input or Value, an Access Door and an Access Zone;
 /// Fault_Values and Masked_Alarm_Values on an Access Door; Event_Parameters,
-/// Fault_Parameters and Time_Delay_Normal on an Event Enrollment.
+/// Fault_Parameters and Time_Delay_Normal on an Event Enrollment; and
+/// State_Text on a Multi-state Input, Output and Value (#2414), no event
+/// algorithm parameter but a row of the same table. Its count bounds the
+/// Alarm_Values entries the object takes, so a WritePropertyMultiple that
+/// adds a state and lists it stages both, and the list is checked against
+/// the count the request's own State_Text leaves.
 /// The list is the object crate's, so the two can't drift: a parameter the
 /// object keeps and this left out would save in place under the guard.
 fn kept_parameter(object_type: ObjectType, property: PropertyIdentifier) -> bool {
     bacnet_objects::snapshot::write_config::keeps_parameter(object_type, property)
-}
-
-/// State_Text on a Multi-state Input or Value. The object saves nothing
-/// for it, so [`may_save`] leaves it out, but it sets Number_Of_States,
-/// which bounds the Alarm_Values entries the object takes. A
-/// WritePropertyMultiple hands it to the stage ahead of a write the object
-/// does save, so a list naming a state the same request adds is checked
-/// against the count it will meet, and the request saves off the guard
-/// like any other (#2331). Only that service writes two properties in one
-/// request, so no other path stages it. An Access Door and an Access Zone
-/// keep Alarm_Values too, but check it against a fixed enumeration and
-/// have no State_Text: nothing sizes their lists.
-fn sizes_listed_states(object_type: ObjectType, property: PropertyIdentifier) -> bool {
-    property == PropertyIdentifier::STATE_TEXT
-        && matches!(
-            object_type,
-            ObjectType::MULTI_STATE_INPUT | ObjectType::MULTI_STATE_VALUE
-        )
-        && bacnet_objects::snapshot::write_config::keeps_parameter(
-            object_type,
-            PropertyIdentifier::ALARM_VALUES,
-        )
 }
 
 /// The reporting settings every intrinsic reporter keeps once written: the
@@ -327,10 +311,7 @@ impl DurableTarget {
     /// The attempts of a WritePropertyMultiple request on objects that may
     /// save them, in wire order, each with the write it makes. They end at
     /// the first such attempt whose value doesn't decode, since the request
-    /// stops there, as it does at an undecodable suffix. A State_Text write
-    /// that sizes an object's states ([`sizes_listed_states`]) goes with
-    /// them when a write the object saves follows it; otherwise it would
-    /// take the guard to stage nothing.
+    /// stops there, as it does at an undecodable suffix.
     pub(super) fn write_property_multiple(
         service_data: &[u8],
     ) -> Vec<(WritePropertyAttempt, Self)> {
@@ -343,8 +324,7 @@ impl DurableTarget {
             let reference = &attempt.reference;
             let oid = reference.object_identifier;
             let property = PropertyIdentifier::from_raw(reference.property_identifier);
-            let saves = may_save(oid, property);
-            if !saves && !sizes_listed_states(oid.object_type(), property) {
+            if !may_save(oid, property) {
                 continue;
             }
             let Ok(value) = bacnet_device_core::write::decode_write_property_value(
@@ -357,22 +337,9 @@ impl DurableTarget {
             };
             let index = reference.property_array_index;
             let target = Self::write(oid, property, index, TargetValue::Written(value));
-            attempts.push((saves, attempt, target));
+            attempts.push((attempt, target));
         }
-        // From the end, so each sizing write knows whether a saved write to
-        // its object follows.
-        let mut saved_later = Vec::new();
-        let mut staged = Vec::with_capacity(attempts.len());
-        for (saves, attempt, target) in attempts.into_iter().rev() {
-            if saves {
-                saved_later.push(target.oid);
-            } else if !saved_later.contains(&target.oid) {
-                continue;
-            }
-            staged.push((attempt, target));
-        }
-        staged.reverse();
-        staged
+        attempts
     }
 
     /// The writes of `attempts` to stage, in object order and then request

@@ -103,7 +103,8 @@ pub struct AlgorithmWriteConfig {
     ///
     /// On a Multi-state Input or Value none of them is zero. A state past
     /// the object's Number_Of_States, which a write refuses, is restored as
-    /// stored: the state count isn't kept.
+    /// stored: with no State_Text kept beside it, the count is the one the
+    /// application builds the object with.
     ///
     /// On an Access Door each is a BACnetDoorAlarmState and on an Access
     /// Zone a BACnetAccessZoneOccupancyState, as its raw value: a named
@@ -123,6 +124,15 @@ pub struct AlgorithmWriteConfig {
     /// Event_Parameters are. A written `none` choice is kept as
     /// `FaultNone`, and reopens as no fault algorithm.
     pub fault_parameters: Option<FaultParameters>,
+    /// State_Text of a Multi-state Input, Output or Value (#2414), and with
+    /// it Number_Of_States, which is its number of labels. No event
+    /// algorithm parameter, but a value a peer writes to the same objects,
+    /// kept in the same file. From 1 to 1,024 labels
+    /// ([`MAX_NUMBER_OF_STATES`](crate::multistate::MAX_NUMBER_OF_STATES)),
+    /// each at most 512 octets of UTF-8
+    /// ([`MAX_KEPT_STATE_TEXT_OCTETS`](crate::multistate::MAX_KEPT_STATE_TEXT_OCTETS)),
+    /// as an object with storage refuses a write that would leave more.
+    pub state_text: Option<Vec<String>>,
 }
 
 /// What a Timer keeps across a restart.

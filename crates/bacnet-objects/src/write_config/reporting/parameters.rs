@@ -19,20 +19,28 @@
 //! impls are made from, so `parameter_table_tests` walks it: every row a
 //! type keeps has to come back through the type's object.
 //!
+//! A multi-state object keeps a written State_Text, and with it the state
+//! count, beside these (#2414). It is no event algorithm parameter and no
+//! detector holds it, so the object lends and restores it itself (the
+//! `states:` form of `impl_reporting_persistence!`), and a staged write of
+//! it runs the object's own State_Text check on the texts the request's
+//! steps leave (`multistate::state_text_after`).
+//!
 //! A saved parameter is checked as the file format checks it and no
 //! further. A multi-state object's write refuses an Alarm_Values entry past
 //! Number_Of_States (#1429), but a saved list naming one is installed as it
-//! was written: the state count and State_Text aren't kept, so a peer that
-//! added a state and listed it leaves such a file, and an object must still
-//! open on it. The object then holds what a local shrink of its states
-//! leaves it holding. A Multi-state Value shows it as CONFIGURATION_ERROR
-//! and stays in FAULT, with no OFFNORMAL on any listed state, until the
-//! list or the count is repaired; a Multi-state Input's other entries go on
-//! alarming.
+//! was written. With State_Text kept, a peer's writes no longer leave such
+//! a file: a count a peer raised comes back with the list. The application
+//! still can (`write_config` names the ways: a shrink of the count, no
+//! State_Text in storage, or a configured list beside a restored
+//! State_Text with fewer states), and an object must still open on it. The object then holds what a local shrink of its
+//! states leaves it holding. A Multi-state Value shows it as
+//! CONFIGURATION_ERROR and stays in FAULT, with no OFFNORMAL on any listed
+//! state, until the list or the count is repaired; a Multi-state Input's
+//! other entries go on alarming.
 
 use bacnet_types::enums::{BinaryPV, ObjectType, PropertyIdentifier as P};
 use bacnet_types::error::Error;
-use bacnet_types::primitives::PropertyValue;
 
 use crate::common;
 use crate::durable::PendingWrite;
@@ -194,37 +202,23 @@ pub(super) fn kept_bit(object_type: ObjectType, property: P) -> Option<u32> {
 
 /// What `write`, of a kept parameter, leaves of `rows`, or the object's
 /// refusal of it. The write is made on a fresh detector of the object's own
-/// kind, `D`, that holds `rows`; `states` is the object's Number_Of_States,
-/// if it has states.
+/// kind, `D`, that holds `rows`. An Alarm_Values entry of a multi-state
+/// object meets the count of the State_Text `rows` hold (#2414): the
+/// object's own, or at a stage the one the request's earlier State_Text
+/// writes leave, so a list naming a state the request itself adds is
+/// checked against the count it will meet.
 pub(crate) fn after<D: AlgorithmDetector>(
     _kind: &D,
-    states: Option<u32>,
     rows: &mut AlgorithmWriteConfig,
     write: &PendingWrite,
 ) -> Result<(), Error> {
+    let states = rows
+        .state_text
+        .as_ref()
+        .map(|texts| u32::try_from(texts.len()).unwrap_or(u32::MAX));
     let mut scratch = D::default();
     scratch.restore_parameters(rows);
     scratch.write_parameter(write, states)?;
     format::overlay(rows, &scratch.parameters());
     Ok(())
-}
-
-/// The Number_Of_States `write` leaves an object that has `states` of them,
-/// if the object takes it: State_Text written whole has a state for each
-/// label, and its size written at index 0 is the new count (#1443). Any
-/// other write leaves the count as it is. A stage follows the count through
-/// a request with this, so a list naming a state the request itself adds is
-/// checked against the count it will meet. A State_Text write the object
-/// refuses ends the request, so what was staged past it is released.
-pub(super) fn states_after(states: Option<u32>, write: &PendingWrite) -> Option<u32> {
-    if write.property != P::STATE_TEXT {
-        return states;
-    }
-    let count = match (write.array_index, &write.value) {
-        (None, PropertyValue::List(labels)) => u32::try_from(labels.len()).ok(),
-        (None, PropertyValue::CharacterString(_)) => Some(1),
-        (Some(0), PropertyValue::Unsigned(count)) => u32::try_from(*count).ok(),
-        _ => None,
-    };
-    states.map(|states| count.unwrap_or(states))
 }

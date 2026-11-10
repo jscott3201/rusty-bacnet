@@ -5022,19 +5022,31 @@ class BACnetServer:
         uses them: Time_Delay and Time_Delay_Normal on all nine, High_Limit,
         Low_Limit, Deadband and Limit_Enable on the analog ones, Alarm_Value
         on a Binary Input or Value, and Alarm_Values on a Multi-state Input
-        or Value. ``add_access_door``, ``add_access_zone`` and
-        ``add_event_enrollment`` keep theirs too, as each says.
+        or Value. The three multi-state builders keep a written State_Text
+        there too, and with it the state count, which the restarted object
+        takes over ``number_of_states``; with ``storage_path`` a write
+        leaving more than 1,024 labels or a label past 512 octets of UTF-8
+        is refused with NO_SPACE_TO_WRITE_PROPERTY. ``add_access_door``,
+        ``add_access_zone`` and ``add_event_enrollment`` keep theirs too,
+        as each says.
         ``clear_written_reporting=True`` drops what was saved first,
         Description and parameters included, so the object starts from its
         defaults. A file that doesn't load, or holds a value the object
         refuses on the wire, raises BacnetError, with the clear too: the
         file is read before it is cleared. One such value doesn't:
-        saved Alarm_Values naming a state past ``number_of_states`` are
-        restored as written, since the state count and State_Text aren't
-        kept and a peer may have added the state before the restart. A
-        Multi-state Value then reports CONFIGURATION_ERROR and is in
-        FAULT, raising no OFFNORMAL on any listed state, until a list
-        within its states is written. Every analog, binary and
+        saved Alarm_Values naming a state past the object's count are
+        restored as written. A peer that added a state and listed it
+        leaves the State_Text that added it saved beside the list, so the
+        count comes back with it. A list naming a state past the count can
+        still arise two ways: a file holding no State_Text (one saved
+        before State_Text was kept among them) on an object now built with
+        a smaller ``number_of_states``, and an ``alarm_values`` keyword,
+        checked against ``number_of_states`` before the file is read,
+        beside a restored State_Text with fewer states. Either way the
+        object serves the list. A Multi-state Input reports no fault and
+        alarms on the states it has; a Multi-state Value reports
+        CONFIGURATION_ERROR and is in FAULT, raising no OFFNORMAL on any
+        listed state, until a list within its states is written. Every analog, binary and
         multi-state builder takes both, as do ``add_access_door``,
         ``add_access_zone``, ``add_event_enrollment`` and
         ``add_alert_enrollment``.
@@ -5059,7 +5071,11 @@ class BACnetServer:
         a value a peer wrote and the file holds is served over its keyword,
         and the keyword applies again on a start that passes
         ``clear_written_reporting=True``. A ``write_property_local`` of a
-        parameter after the builder call is kept like a peer's write."""
+        parameter after the builder call is kept like a peer's write. An
+        ``alarm_values`` keyword is checked against ``number_of_states``,
+        so a restored State_Text with fewer states (#2414) leaves it naming
+        a state past the count: a Multi-state Value then reports
+        CONFIGURATION_ERROR."""
         ...
     def add_analog_output(self, instance: int, name: str, units: EngineeringUnits | int = 62, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, high_limit: float | None = None, low_limit: float | None = None, deadband: float | None = None, limit_enable: BitString | None = None, time_delay: int | None = None, time_delay_normal: int | None = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
         """Profile and parameter keywords as on ``add_analog_input``."""

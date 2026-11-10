@@ -75,7 +75,7 @@ impl Fixture {
         db.add(Box::new(BinaryValueObject::new(2, "two").unwrap()))
             .unwrap();
         let mut msi = MultiStateInputObject::new(1, "msi", 3).unwrap();
-        msi.set_alarm_values(vec![1]);
+        msi.set_alarm_values(vec![1]).unwrap();
         db.add(Box::new(msi)).unwrap();
         let mut file = FileObject::new(1, "file", "binary").unwrap();
         file.set_data(b"sentinel".to_vec());

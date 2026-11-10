@@ -292,7 +292,8 @@ impl Format {
             ),
             // A Multi-state Input of eight states: it opens on an
             // Alarm_Values state past them too, which the format takes and
-            // only a write refuses (#2331).
+            // only a write refuses (#2331), and on a saved State_Text that
+            // gives it another count (#2414).
             Kind::MultiStateReportingWriteConfig => check_file(
                 medium,
                 oid(ObjectType::MULTI_STATE_INPUT),

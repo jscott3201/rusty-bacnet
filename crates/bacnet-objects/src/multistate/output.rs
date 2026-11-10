@@ -119,8 +119,9 @@ impl MultiStateOutputObject {
     /// may not strand: the commands in Priority_Array, Present_Value and
     /// Relinquish_Default. Feedback_Value is left out: it is sensed, and
     /// outside the states it is reported as CONFIGURATION_ERROR rather than
-    /// refused.
-    fn held_states(&self) -> impl Iterator<Item = u32> + '_ {
+    /// refused. An Output has no Alarm_Values, so `_alarm_values` is always
+    /// empty; the Input and Value take theirs the same way.
+    fn held_states(&self, _alarm_values: &[u32]) -> impl Iterator<Item = u32> + '_ {
         self.priority_array
             .iter()
             .flatten()
@@ -157,7 +158,15 @@ impl MultiStateOutputObject {
     /// The BACnet `Number_Of_States` property remains read-only. A successful
     /// local change resizes State_Text and immediately re-evaluates Reliability;
     /// retained commands, defaults, feedback, and Present_Value are not repaired.
+    /// On an object keeping its reporting settings, a State_Text a write
+    /// saved wins, and with it its count: zero is still refused, and the
+    /// saved texts stay, until `clear_written_reporting` (#2414).
     pub fn set_number_of_states(&mut self, number_of_states: u32) -> Result<(), Error> {
+        require_nonzero_states(number_of_states)?;
+        #[cfg(feature = "event-reporting")]
+        if self.kept_over_setter(PropertyIdentifier::STATE_TEXT) {
+            return Ok(());
+        }
         resize_state_text(
             &mut self.number_of_states,
             &mut self.state_text,
@@ -181,6 +190,13 @@ impl MultiStateOutputObject {
     /// NOT auto-adjust: out-of-range stored values are a configuration
     /// decision for the application to resolve; the object-owned evaluator
     /// reports CONFIGURATION_ERROR while that retained condition remains.
+    ///
+    /// A restored State_Text may give the object fewer states than the
+    /// application builds it with (#2414). A default set before
+    /// `with_reporting_persistence` that the restored count lacks is held
+    /// and shows as CONFIGURATION_ERROR; one set after it is refused, as a
+    /// write of it is, since nothing saved stands in for it. Handle that
+    /// refusal rather than treat it as fatal at start.
     pub fn set_relinquish_default(&mut self, value: u32) -> Result<(), Error> {
         if value < 1 || value > self.number_of_states {
             return Err(common::value_out_of_range_error());
@@ -191,7 +207,10 @@ impl MultiStateOutputObject {
     }
 }
 
-crate::write_config::reporting::impl_reporting_persistence!(MultiStateOutputObject);
+crate::write_config::reporting::impl_reporting_persistence!(
+    MultiStateOutputObject,
+    states: state_text
+);
 
 impl BACnetObject for MultiStateOutputObject {
     fn object_identifier(&self) -> ObjectIdentifier {
@@ -362,7 +381,7 @@ impl BACnetObject for MultiStateOutputObject {
         }
         if property == PropertyIdentifier::STATE_TEXT {
             // Written whole, State_Text sets Number_Of_States too (#1443).
-            let held: Vec<u32> = self.held_states().collect();
+            let held: Vec<u32> = self.held_states(&[]).collect();
             write_state_text(
                 &mut self.number_of_states,
                 &mut self.state_text,
@@ -474,7 +493,7 @@ impl crate::creation::Creatable for MultiStateOutputObject {
         property: PropertyIdentifier,
         value: PropertyValue,
     ) -> Result<(), Error> {
-        let held: Vec<u32> = self.held_states().collect();
+        let held: Vec<u32> = self.held_states(&[]).collect();
         initialize_states(
             &mut self.number_of_states,
             &mut self.state_text,

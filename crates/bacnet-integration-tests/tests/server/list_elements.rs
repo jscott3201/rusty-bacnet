@@ -16,7 +16,7 @@ async fn list_element_semantics_and_change_list_errors_reach_the_client() {
     let server_mac = server.local_mac().to_vec();
     let msi = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 1).unwrap();
     let mut object = MultiStateInputObject::new(1, "Mode", 3).unwrap();
-    object.set_alarm_values(vec![1]);
+    object.set_alarm_values(vec![1]).unwrap();
     server
         .database()
         .write()

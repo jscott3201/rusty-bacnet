@@ -160,4 +160,6 @@ mod reporting_tests;
 #[cfg(test)]
 mod slot_tests;
 #[cfg(test)]
+mod state_text_tests;
+#[cfg(test)]
 mod tests;

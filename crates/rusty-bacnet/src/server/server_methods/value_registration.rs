@@ -26,7 +26,10 @@ impl BACnetServer {
     /// parameters a peer writes there too (#2331): the two time delays on
     /// all nine, High_Limit, Low_Limit, Deadband and Limit_Enable on the
     /// analog ones, Alarm_Value on a Binary Input or Value, and
-    /// Alarm_Values on a Multi-state Input or Value. `add_access_door`,
+    /// Alarm_Values on a Multi-state Input or Value. The three
+    /// multi-state builders keep a written State_Text there too, and with
+    /// it the state count, which the restarted object takes over
+    /// `number_of_states` (#2414). `add_access_door`,
     /// `add_access_zone` and `add_event_enrollment` keep theirs too, as
     /// each says.
     /// `clear_written_reporting` drops what was saved first, Description
@@ -53,7 +56,11 @@ impl BACnetServer {
     /// are never saved: a value a peer wrote and the file holds is served
     /// over its keyword, and the keyword applies again on a start that
     /// passes `clear_written_reporting=True`. A `write_property_local` of a
-    /// parameter after the builder call is kept like a peer's write.
+    /// parameter after the builder call is kept like a peer's write. An
+    /// `alarm_values` keyword is checked against `number_of_states`, so a
+    /// restored State_Text with fewer states (#2414) leaves it naming a
+    /// state past the count: a Multi-state Value then reports
+    /// CONFIGURATION_ERROR.
     #[pyo3(signature = (
         instance, name, units=62, present_value=0.0, *,
         tags=None, profile_location=None, profile_name=None,

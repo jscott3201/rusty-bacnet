@@ -144,7 +144,10 @@ async fn fixture(storage: &Arc<HeldStorage>) -> (Arc<Fixture>, ObjectIdentifier)
 
 /// Send `request`, hold its save, and check that the database answers a
 /// reader and a writer while the save runs. Returns the response and whether
-/// the database answered both, each `within` the given time.
+/// the database answered both, each `within` the given time. Only the first
+/// save is held: a later one the request makes runs at once, so a request
+/// that saves twice ends and fails its test's count rather than hanging,
+/// and the response is awaited for at most [`WAIT`].
 pub(super) async fn while_saving<S: Clone>(
     fixture: &Arc<Fixture>,
     storage: &HeldStorage<S>,
@@ -168,7 +171,12 @@ pub(super) async fn while_saving<S: Clone>(
         .await
         .is_ok();
     go.send(()).unwrap();
-    (sending.await.unwrap(), readable && writable)
+    drop(go);
+    let response = tokio::time::timeout(WAIT, sending)
+        .await
+        .expect("the request answered")
+        .unwrap();
+    (response, readable && writable)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

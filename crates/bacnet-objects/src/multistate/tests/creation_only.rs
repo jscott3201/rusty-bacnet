@@ -155,7 +155,7 @@ fn a_count_that_would_strand_a_held_state_is_refused() {
     let mut default = MultiStateValueObject::new(2, "MSV-2", 5).unwrap();
     default.set_relinquish_default(5).unwrap();
     let mut alarms = MultiStateInputObject::new(2, "MSI-2", 5).unwrap();
-    alarms.set_alarm_values(vec![1, 5]);
+    alarms.set_alarm_values(vec![1, 5]).unwrap();
     let objects: [&mut (dyn BACnetObject + 'static); 5] = [
         &mut input,
         &mut output,

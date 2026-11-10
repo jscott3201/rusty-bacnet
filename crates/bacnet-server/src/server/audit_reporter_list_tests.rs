@@ -31,7 +31,7 @@ async fn list_server(initial: Vec<u32>) -> Fixture {
     // stays out of the alarm values these tests edit, so no transition takes
     // a sequence number from the source the audit time stamps share.
     object.set_present_value(3);
-    object.set_alarm_values(initial);
+    object.set_alarm_values(initial).unwrap();
     fixture
         .server
         .db
@@ -257,7 +257,7 @@ async fn audit_reporter_list_execution_failures_keep_response_state_and_known_fi
             fixture.server.stop().await.unwrap();
         }
     }
-    let mut fixture = list_server((0..1024).collect()).await;
+    let mut fixture = list_server((0..1024).map(|at| at % 3 + 1).collect()).await;
     let before = values(&fixture).await;
     // Unsigned 2000 is new, so it is the element that does not fit.
     let response = dispatch(
@@ -404,7 +404,7 @@ async fn audit_reporter_list_filters_selection_and_self_target_do_not_change_exe
             reporter.set_monitored_objects(selection).unwrap();
             let mut fixture = server(reporter).await;
             let mut object = MultiStateInputObject::new(1, "list", 3).unwrap();
-            object.set_alarm_values(vec![1]);
+            object.set_alarm_values(vec![1]).unwrap();
             fixture
                 .server
                 .db
@@ -574,7 +574,7 @@ async fn audit_reporter_list_unknown_outcomes_are_silent_and_errors_match_respon
             // The list itself must reach its write for the scripted error to fire.
             let mut fixture = server(reporter()).await;
             let mut list = MultiStateInputObject::new(1, "list", 3).unwrap();
-            list.set_alarm_values(vec![1]);
+            list.set_alarm_values(vec![1]).unwrap();
             let list = fixture.counting(list);
             fixture.server.db.write().await.add(list).unwrap();
             *fixture.execution_error.lock().unwrap() = Some(error);

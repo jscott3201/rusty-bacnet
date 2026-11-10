@@ -103,5 +103,11 @@ name = "write_property_clocked"
 path = "tests/write_property_clocked.rs"
 required-features = ["event-reporting"]
 
+# A staged request's memory, measured by an allocator of its own (#2414).
+[[test]]
+name = "staged_memory"
+path = "tests/staged_memory.rs"
+required-features = ["event-reporting", "durable-writes"]
+
 [lints]
 workspace = true

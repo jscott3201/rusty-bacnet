@@ -53,7 +53,12 @@
 //!   value is read; the octets must be one whole value, in the encoding a
 //!   save writes, so a load followed by a save leaves them as they were).
 //!   An Event Enrollment keeps bit 1 without bit 0: its Time_Delay is a
-//!   member of its Event_Parameters. What a listed state may be is the
+//!   member of its Event_Parameters. Bit 12 is a multi-state object's
+//!   State_Text (#2414), no event algorithm parameter but kept here beside
+//!   them: a count of 1 to 1,024 labels, then each label as a length of at
+//!   most 512 and its UTF-8 octets (a count the cap or the body's octets
+//!   can't hold, at four octets a label, is refused before anything is
+//!   allocated, and a length past the cap before its octets are read). What a listed state may be is the
 //!   rule of the object type the
 //!   file's header names: on a multi-state object any state but zero, and
 //!   on an Access Door or an Access Zone a member of the type's
@@ -143,8 +148,9 @@ pub const MAX_LEN: usize = 1024 * 1024;
 /// a Control_Groups size outside 1 to [`MAX_CONTROL_GROUPS`], reporting
 /// settings or an algorithm parameter no write leaves, a parameter the
 /// object's type doesn't keep, Event_Parameters or Fault_Parameters with no
-/// encoding or one past 64 KiB, a Description past 16 KiB), and one past
-/// [`MAX_LEN`].
+/// encoding or one past 64 KiB, a State_Text of no label, of more than
+/// 1,024 or with one past 512 octets, a Description past 16 KiB), and one
+/// past [`MAX_LEN`].
 pub fn encode(
     object: ObjectIdentifier,
     snapshot: &WriteConfigSnapshot,

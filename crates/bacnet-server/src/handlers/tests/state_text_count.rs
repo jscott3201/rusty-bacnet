@@ -114,7 +114,7 @@ fn db() -> (ObjectDatabase, [ObjectIdentifier; 3]) {
     let mut output = MultiStateOutputObject::new(1, "MSO-1", 4).unwrap();
     output.set_relinquish_default(3).unwrap();
     let mut value = MultiStateValueObject::new(1, "MSV-1", 4).unwrap();
-    value.set_alarm_values(vec![3]);
+    value.set_alarm_values(vec![3]).unwrap();
     let oids = [
         input.object_identifier(),
         output.object_identifier(),

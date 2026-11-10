@@ -167,7 +167,7 @@ async fn exercise(confirmed: bool, selected: bool, lists: bool, files: bool) {
     if lists {
         let mut list =
             bacnet_objects::multistate::MultiStateInputObject::new(1, "list", 3).unwrap();
-        list.set_alarm_values(vec![1]);
+        list.set_alarm_values(vec![1]).unwrap();
         target_db.add(Box::new(list)).unwrap();
     }
     target_db

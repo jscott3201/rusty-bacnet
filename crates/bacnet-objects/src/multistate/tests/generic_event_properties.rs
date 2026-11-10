@@ -54,7 +54,7 @@ fn msi_event_enable_bit_selects_which_transition_distributes() {
         (EventTransitionBits::all(), true),
     ] {
         let mut msi = MultiStateInputObject::new(1, "MSI-1", 3).unwrap();
-        msi.set_alarm_values(vec![2]);
+        msi.set_alarm_values(vec![2]).unwrap();
         write_event_enable(&mut msi, bits);
         msi.set_present_value(2);
 
@@ -85,7 +85,7 @@ fn msi_event_enable_bit_selects_whether_the_return_to_normal_distributes() {
         (EventTransitionBits::TO_OFFNORMAL, false),
     ] {
         let mut msi = MultiStateInputObject::new(1, "MSI-1", 3).unwrap();
-        msi.set_alarm_values(vec![2]);
+        msi.set_alarm_values(vec![2]).unwrap();
         write_event_enable(&mut msi, bits);
 
         msi.set_present_value(2);
@@ -657,7 +657,7 @@ fn unsupported_fault_and_output_alarm_surfaces_are_unknown() {
 #[test]
 fn recommissioning_alarm_values_while_offnormal_returns_to_normal() {
     let mut msi = MultiStateInputObject::new(1, "MSI-1", 3).unwrap();
-    msi.set_alarm_values(vec![2]);
+    msi.set_alarm_values(vec![2]).unwrap();
     msi.set_present_value(2);
     let proposal = msi.evaluate_intrinsic_reporting().unwrap();
     let entry = crate::event::commit_test_proposal(&mut msi, proposal);

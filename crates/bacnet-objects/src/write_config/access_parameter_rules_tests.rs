@@ -266,6 +266,8 @@ fn uncovered(kind: ObjectType) -> Vec<(P, PropertyValue, AlgorithmWriteConfig)> 
             rows.push((property, states(&[1]), list_row(property, vec![1])));
         }
     }
+    // A multi-state object's State_Text (#2414).
+    rows.push(super::state_parameters_tests::state_text_row());
     rows
 }
 

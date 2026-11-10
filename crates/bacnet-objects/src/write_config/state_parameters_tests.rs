@@ -78,7 +78,7 @@ pub(super) fn try_open(
         ObjectType::MULTI_STATE_INPUT => {
             build!(
                 MultiStateInputObject::new(1, "MSI", STATES).map(|mut object| {
-                    object.set_alarm_values(vec![2]);
+                    object.set_alarm_values(vec![2]).unwrap();
                     object
                 })
             )
@@ -88,7 +88,7 @@ pub(super) fn try_open(
         }
         _ => build!(
             MultiStateValueObject::new(1, "MSV", STATES).map(|mut object| {
-                object.set_alarm_values(vec![2]);
+                object.set_alarm_values(vec![2]).unwrap();
                 object
             })
         ),
@@ -154,7 +154,39 @@ pub(super) fn covered(kind: ObjectType) -> Vec<(P, PropertyValue, AlgorithmWrite
         )),
         _ => {}
     }
+    if !is_binary(kind) {
+        rows.push(state_text_row());
+    }
     rows
+}
+
+/// The labels a peer writes to State_Text in these tests: one more state
+/// than the application gives the object (#2414).
+pub(super) fn written_texts() -> Vec<String> {
+    ["Off", "Low", "Mid", "High", "Max", "Boost"]
+        .map(String::from)
+        .to_vec()
+}
+
+/// `texts` as State_Text is served and written whole.
+pub(super) fn labels(texts: &[String]) -> PropertyValue {
+    PropertyValue::List(
+        texts
+            .iter()
+            .cloned()
+            .map(PropertyValue::CharacterString)
+            .collect(),
+    )
+}
+
+/// A whole write of [`written_texts`], and what storage keeps of it.
+pub(super) fn state_text_row() -> (P, PropertyValue, AlgorithmWriteConfig) {
+    let texts = written_texts();
+    let stored = AlgorithmWriteConfig {
+        state_text: Some(texts.clone()),
+        ..Default::default()
+    };
+    (P::STATE_TEXT, labels(&texts), stored)
 }
 
 /// A write of each parameter some other type keeps and `kind` doesn't, and
@@ -242,6 +274,9 @@ fn uncovered(kind: ObjectType) -> Vec<(P, PropertyValue, AlgorithmWriteConfig)> 
                 ..none()
             },
         ));
+    }
+    if is_binary(kind) {
+        rows.push(state_text_row());
     }
     if !is_binary(kind) || !has_alarm_values(kind) {
         rows.push((
@@ -337,7 +372,8 @@ pub(super) fn commit(object: &mut dyn BACnetObject, from: EventState, to: EventS
 fn each_written_parameter_survives_a_rebuild_and_only_it_is_kept() {
     for kind in KINDS {
         let rows = covered(kind);
-        assert_eq!(rows.len(), if has_alarm_values(kind) { 3 } else { 2 });
+        let own = usize::from(has_alarm_values(kind)) + usize::from(!is_binary(kind));
+        assert_eq!(rows.len(), 2 + own, "{kind}");
         for (property, value, kept) in rows {
             let storage = MemoryConfig::new();
             let mut object = open(kind, Some(&storage));

@@ -49,7 +49,7 @@ fn alarm_values(elements: &[u8]) -> Bytes {
 /// list stays in range (#1429).
 pub(super) async fn fill_msi_alarm_values(fixture: &Fixture, values: std::ops::Range<u32>) {
     let mut msi = bacnet_objects::multistate::MultiStateInputObject::new(1, "msi", 2048).unwrap();
-    msi.set_alarm_values(values.collect());
+    msi.set_alarm_values(values.collect()).unwrap();
     let mut db = fixture.db.write().await;
     db.remove(&oid(ObjectType::MULTI_STATE_INPUT, 1)).unwrap();
     db.add(Box::new(msi)).unwrap();

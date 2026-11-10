@@ -373,3 +373,66 @@ class EndpointKeywordTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class KeywordBesideRestoredStateTextTests(unittest.IsolatedAsyncioTestCase):
+    """An ``alarm_values`` keyword is checked against ``number_of_states``
+    before the file is read. A State_Text a peer wrote, with fewer states,
+    is restored over that count (#2414), so the keyword list can name a
+    state the object no longer has: the Multi-state Value serves
+    CONFIGURATION_ERROR (10), and the Multi-state Input reports no fault and
+    still alarms on a listed state it has."""
+
+    async def asyncSetUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.state = Path(directory.name)
+
+    def build(self, alarm_values: list[int] | None = None) -> BACnetServer:
+        server = BACnetServer(2_414_001, interface="127.0.0.1", port=0)
+        server.add_notification_class(0, "NC")
+        for add, name in ((server.add_multistate_input, "msi"), (server.add_multistate_value, "msv")):
+            add(1, name.upper(), 4, alarm_values=alarm_values,
+                storage_path=str(self.state / name))
+        return server
+
+    async def test_a_keyword_list_past_a_restored_count(self) -> None:
+        msi = ObjectIdentifier(O.MULTI_STATE_INPUT, 1)
+        msv = ObjectIdentifier(O.MULTI_STATE_VALUE, 1)
+        three = PropertyValue.list(
+            [PropertyValue.character_string(label) for label in ("Off", "Low", "High")]
+        )
+        server = self.build()
+        await server.start()
+        try:
+            for oid in (msi, msv):
+                await server.write_property_local(oid, P.STATE_TEXT, three, source_object=None)
+        finally:
+            await server.stop()
+
+        server = self.build(alarm_values=[2, 4])
+        await server.start()
+        try:
+            for oid in (msi, msv):
+                with self.subTest(oid=oid):
+                    self.assertEqual(
+                        await server.read_property(oid, P.NUMBER_OF_STATES),
+                        PropertyValue.unsigned(3),
+                    )
+                    self.assertEqual(await server.read_property(oid, P.ALARM_VALUES), states(2, 4))
+            self.assertEqual(
+                await server.read_property(msv, P.RELIABILITY), PropertyValue.enumerated(10)
+            )
+            self.assertEqual(
+                await server.read_property(msi, P.RELIABILITY), PropertyValue.enumerated(0)
+            )
+            await server.set_present_value_local(msi, PropertyValue.unsigned(2))
+            expected = PropertyValue.enumerated(EventState.OFFNORMAL.to_raw())
+            for _ in range(100):
+                state = await server.read_property(msi, P.EVENT_STATE)
+                if state == expected:
+                    break
+                await asyncio.sleep(0.05)
+            self.assertEqual(state, expected)
+        finally:
+            await server.stop()
