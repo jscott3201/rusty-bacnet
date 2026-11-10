@@ -61,6 +61,7 @@ def __init__(
     *,
     read_work_limit: int = 256,
     share_port_by_address: bool = False,
+    share_wildcard_port: bool = False,
     min_request_interval_ms: int = 0,
     bbmd: Optional[Bbmd] = None,
     foreign_device: Optional[ForeignDevice] = None,
@@ -69,9 +70,27 @@ def __init__(
     after_reinitialize: Optional[AfterReinitialize] = None,
     reinit_password: Optional[str] = None,
     device_write_policy: Optional[MutationHandler] = None,
+    source_audit_reporter: Optional[ObjectIdentifier] = None,
+    audit_recipient: Optional[AuditRecipientInput] = None,
+    audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str]]] = None,
 ) -> None
 ```
 
+`source_audit_reporter` / `audit_recipient` /
+`audit_device_bindings` (#2348): the Audit Reporter, added with
+`add_audit_reporter`, through which the session reports the
+ReinitializeDevice resets, backups and restores it carries out,
+`report_device_reset_local()` calls and the client role's reads,
+each filtered by the Reporter's level and operations. It needs
+`device_write_policy` and `audit_recipient` (the Device's Audit
+recipient); the bindings are `(Device identifier, "ipv4:port")`
+routes to recipient Devices, or `"network:0xMAC"` for one behind a
+router on that network (#2371; network 1 to 65534, MAC 1 to 18
+octets). A Reporter identifier of another type and
+the other shapes construction can check raise ValueError; a Reporter
+that wasn't added raises BacnetError at start. `ScEndpoint` and
+`MstpEndpoint` take them too, each binding address in its link's
+format (#2357) or the routed form.
 `on_reinitialize` / `after_reinitialize`: execute
 ReinitializeDevice, as `BACnetServer`'s keywords do (#1566);
 `reinit_password` (needs `on_reinitialize`, else ValueError; 1 to
@@ -96,6 +115,11 @@ is aborted with OUT\_OF\_RESOURCES. Zero raises ValueError.
 itself, so endpoints on other addresses of this host can share the
 port. Needs an explicit interface and a nonzero port; broadcasts and
 unicast are still handled in the order they arrived.
+`share_wildcard_port` (default False): share an explicitly
+requested port with other sockets on this host that bind it the
+same way. By default the endpoint claims its port, and `start()`
+raises when another socket holds it; with sharing, each unicast
+reaches only one of the sockets on the port.
 `min_request_interval_ms` (default 0, no pacing; at most 3,600,000,
 else ValueError) paces the client role's confirmed requests to each
 destination exactly as `BACnetClient`'s keyword does (#1542). A
@@ -205,6 +229,28 @@ Optional BV Audit rows: None is absent; priority 'inherit' is present NULL.
 Access, Value\_Source and profile keywords as on `add_analog_value`,
 `alarm_value` and the delays as on `BACnetServer.add_binary_value`.
 
+### BipEndpoint.add_audit_reporter
+
+```python
+def add_audit_reporter(
+    self,
+    instance: int,
+    name: str,
+    *,
+    audit_level: Literal["none", "audit_config", "audit_all"],
+    auditable_operations: int,
+    issue_confirmed_notifications: bool = False,
+) -> None
+```
+
+Add an Audit Reporter for `source_audit_reporter` to select
+(#2348). `audit_level` and `auditable_operations` (bit n for
+AuditOperation n) are required, as on
+`BACnetServer.configure_audit_reporters`, and filter what the
+session reports. Peers can't change them through an endpoint. A
+Reporter that `source_audit_reporter` doesn't select records
+nothing.
+
 ### BipEndpoint.add_group
 
 ```python
@@ -306,6 +352,21 @@ def broadcast_i_am(self) -> Awaitable[None]
 
 Broadcast one I-Am consistent with the composed identity.
 
+### BipEndpoint.report_device_reset_local
+
+```python
+def report_device_reset_local(self) -> Awaitable[None]
+```
+
+Record a reset the application makes for its own reasons: a
+DEVICE\_RESET Audit record from this device, with no invoke ID, through
+the session's source Reporter when it has one, as
+`BACnetServer.report_device_reset_local` does (#1837): with
+`source_audit_reporter` set, a DEVICE\_RESET naming this device as
+source and target, filtered by that Reporter's level and operations;
+without one, nothing. A peer's accepted restart is recorded already.
+RuntimeError when the endpoint is not running.
+
 ## ScEndpoint
 
 SC endpoint: one hub connection that both initiates and executes.
@@ -349,12 +410,36 @@ def __init__(
     after_reinitialize: Optional[AfterReinitialize] = None,
     reinit_password: Optional[str] = None,
     device_write_policy: Optional[MutationHandler] = None,
+    source_audit_reporter: Optional[ObjectIdentifier] = None,
+    audit_recipient: Optional[AuditRecipientInput] = None,
+    audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str]]] = None,
+    reconnect: Optional[ScReconnect] = None,
+    sc_failover_hub: str | None = None,
+    sc_connect_timeout_ms: int | None = None,
 ) -> None
 ```
 
 `read_work_limit`, `min_request_interval_ms`,
 `on_reinitialize`, `after_reinitialize`, `reinit_password` and
 `device_write_policy` are as for `BipEndpoint`.
+
+`source_audit_reporter` / `audit_recipient` /
+`audit_device_bindings`: as on `BipEndpoint` (#2357), each
+binding address a VMAC as `local_address()` gives it
+(`"xx:xx:xx:xx:xx:xx"`) or as twelve hex digits, or a routed
+`"network:0xMAC"`. An address
+`audit_recipient` takes another node's VMAC: never the broadcast
+or all-zero VMAC or this endpoint's own.
+
+`reconnect`, `sc_failover_hub` and `sc_connect_timeout_ms`: as
+on `BACnetClient` (#1946). `reconnect` (an `ScReconnect`)
+redials a lost hub; `sc_failover_hub` (needs `reconnect`, else
+ValueError) is a second hub's `wss://` URL, dialled with the same
+TLS settings when the primary can't be reached, and the endpoint
+keeps trying the primary and returns to it. `sc_connect_timeout_ms`
+(at least 1, default 10000) bounds each hub dial and Connect-Request.
+Follow the link with `connection_events()` and
+`connection_status()`.
 
 ### ScEndpoint.add_analog_input
 
@@ -459,6 +544,28 @@ Optional BV Audit rows: None is absent; priority 'inherit' is present NULL.
 Access, Value\_Source and profile keywords as on `add_analog_value`,
 `alarm_value` and the delays as on `BACnetServer.add_binary_value`.
 
+### ScEndpoint.add_audit_reporter
+
+```python
+def add_audit_reporter(
+    self,
+    instance: int,
+    name: str,
+    *,
+    audit_level: Literal["none", "audit_config", "audit_all"],
+    auditable_operations: int,
+    issue_confirmed_notifications: bool = False,
+) -> None
+```
+
+Add an Audit Reporter for `source_audit_reporter` to select
+(#2348). `audit_level` and `auditable_operations` (bit n for
+AuditOperation n) are required, as on
+`BACnetServer.configure_audit_reporters`, and filter what the
+session reports. Peers can't change them through an endpoint. A
+Reporter that `source_audit_reporter` doesn't select records
+nothing.
+
 ### ScEndpoint.add_group
 
 ```python
@@ -551,6 +658,45 @@ def broadcast_i_am(self) -> Awaitable[None]
 
 Broadcast one I-Am via the hub relay.
 
+### ScEndpoint.connection_events
+
+```python
+def connection_events(self) -> Awaitable[ScEventIterator]
+```
+
+Subscribe to the SC hub-connector events (#1946), as
+`BACnetClient.connection_events()` does. The first call after a
+start gets the events since the session was built, starting with
+the first `connected` (#1908); a later call gets the events from
+that call on. A slow reader never holds up the connector: see
+`ScEventIterator.missed`. Iteration ends when the endpoint closes.
+RuntimeError before start or after close.
+
+### ScEndpoint.connection_status
+
+```python
+def connection_status(self) -> Awaitable[ScLinkStatus]
+```
+
+Snapshot the SC hub link without I/O (#1946), as
+`BACnetClient.connection_status()` does. RuntimeError before start
+or after close.
+
+### ScEndpoint.report_device_reset_local
+
+```python
+def report_device_reset_local(self) -> Awaitable[None]
+```
+
+Record a reset the application makes for its own reasons: a
+DEVICE\_RESET Audit record from this device, with no invoke ID, through
+the session's source Reporter when it has one, as
+`BACnetServer.report_device_reset_local` does (#1837): with
+`source_audit_reporter` set (#2357), a DEVICE\_RESET naming this
+device as source and target, filtered by that Reporter's level and
+operations; without one, nothing. A peer's accepted restart is
+recorded already. RuntimeError when the endpoint is not running.
+
 ## MstpEndpoint
 
 MS/TP endpoint: one serial owner that both initiates and executes.
@@ -598,6 +744,9 @@ def __init__(
     after_reinitialize: Optional[AfterReinitialize] = None,
     reinit_password: Optional[str] = None,
     device_write_policy: Optional[MutationHandler] = None,
+    source_audit_reporter: Optional[ObjectIdentifier] = None,
+    audit_recipient: Optional[AuditRecipientInput] = None,
+    audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str]]] = None,
 ) -> None
 ```
 
@@ -623,6 +772,13 @@ a negative grace, or one above 4294967295, raises OverflowError.
 `mstp_transmit_latency_pad_ms`, `mstp_usage_timeout_ms` and
 `mstp_reply_timeout_ms` are as for `BACnetClient`, but a value
 out of range raises ValueError here.
+
+`source_audit_reporter` / `audit_recipient` /
+`audit_device_bindings`: as on `BipEndpoint` (#2357), each
+binding address a station in decimal digits, as `local_address()`
+gives it (`"2"`), or a routed `"network:0xMAC"`. An address
+`audit_recipient` takes another station: never 255 or this
+endpoint's own.
 
 ### MstpEndpoint.add_analog_input
 
@@ -727,6 +883,28 @@ Optional BV Audit rows: None is absent; priority 'inherit' is present NULL.
 Access, Value\_Source and profile keywords as on `add_analog_value`,
 `alarm_value` and the delays as on `BACnetServer.add_binary_value`.
 
+### MstpEndpoint.add_audit_reporter
+
+```python
+def add_audit_reporter(
+    self,
+    instance: int,
+    name: str,
+    *,
+    audit_level: Literal["none", "audit_config", "audit_all"],
+    auditable_operations: int,
+    issue_confirmed_notifications: bool = False,
+) -> None
+```
+
+Add an Audit Reporter for `source_audit_reporter` to select
+(#2348). `audit_level` and `auditable_operations` (bit n for
+AuditOperation n) are required, as on
+`BACnetServer.configure_audit_reporters`, and filter what the
+session reports. Peers can't change them through an endpoint. A
+Reporter that `source_audit_reporter` doesn't select records
+nothing.
+
 ### MstpEndpoint.add_group
 
 ```python
@@ -818,6 +996,21 @@ def broadcast_i_am(self) -> Awaitable[None]
 ```
 
 Broadcast one I-Am (MS/TP local broadcast).
+
+### MstpEndpoint.report_device_reset_local
+
+```python
+def report_device_reset_local(self) -> Awaitable[None]
+```
+
+Record a reset the application makes for its own reasons: a
+DEVICE\_RESET Audit record from this device, with no invoke ID, through
+the session's source Reporter when it has one, as
+`BACnetServer.report_device_reset_local` does (#1837): with
+`source_audit_reporter` set (#2357), a DEVICE\_RESET naming this
+device as source and target, filtered by that Reporter's level and
+operations; without one, nothing. A peer's accepted restart is
+recorded already. RuntimeError when the endpoint is not running.
 
 ## EndpointClient
 
