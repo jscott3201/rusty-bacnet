@@ -242,3 +242,30 @@ async fn confirmed_multiple_reports_match() {
     assert_eq!(cov.advance("past the hold-off", 15).await, 0);
     cov.stop().await;
 }
+
+/// A follow-up report lists its untimestamped items in key order on both
+/// sides (#2320): two references of one confirmed context change while its
+/// initial report is out, and the Ack's follow-up carries both. The
+/// server's follow-up queue is a hash set, so before its keys were sorted
+/// the two items came out either way round.
+#[tokio::test(start_paused = true)]
+async fn a_follow_up_lists_its_items_in_key_order() {
+    for _ in 0..8 {
+        let mut cov = CovParity::start_multiple().await;
+        let a = direct(1);
+        let both = multiple(
+            1,
+            true,
+            &[(msv(), false), (ai(), false)],
+            Some((600, DELAY)),
+        );
+        assert_eq!(cov.exchange("confirmed", &a, MULTIPLE, &both).await.1, 1);
+        let oos = PropertyValue::Boolean(true);
+        assert_eq!(cov.write("AI-1 held", &a, ai(), OOS, oos).await, 0);
+        let state = PropertyValue::Unsigned(2);
+        assert_eq!(cov.write("MSV-1 held", &a, msv(), PV, state).await, 0);
+        assert_eq!(cov.answer("Ack, then both items", false).await, 1);
+        assert_eq!(cov.answer("Ack", false).await, 0);
+        cov.stop().await;
+    }
+}

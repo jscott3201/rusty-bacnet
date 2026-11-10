@@ -22,6 +22,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         if ctx.comm_state.initiation_restricted() {
             return;
         }
+        // In key order, by monitored object first, whichever order they
+        // were queued or came due in. A follow-up report lists its
+        // untimestamped items in the order its references are fanned out, and
+        // the revisit queue is a hash set: that order, and the order between
+        // follow-ups, varied from run to run (#2320).
+        let keys: std::collections::BTreeSet<_> = keys.iter().collect();
         let (subs, counters, in_flight_tracker) = {
             let table = ctx.cov_table.read().await;
             (
@@ -43,8 +49,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             counters: &counters,
         };
         // One budget per object or context, as a natural event would have.
-        let mut single_by_object: HashMap<ObjectIdentifier, Vec<CovSubscriptionSnapshot>> =
-            HashMap::new();
+        // Objects, like contexts, in key order.
+        let mut single_by_object: std::collections::BTreeMap<
+            ObjectIdentifier,
+            Vec<CovSubscriptionSnapshot>,
+        > = std::collections::BTreeMap::new();
         let mut multiple = Vec::new();
         for sub in subs {
             if sub.key().multiple_context().is_some() {
