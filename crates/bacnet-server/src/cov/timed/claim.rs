@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use tokio::time::Instant;
+use bacnet_time::Instant;
 
 use super::{CovSubscriptionKey, DropReason, MultipleContextKey, TimedChange, TimedStore};
 use crate::cov::CovRevisits;
@@ -279,7 +279,9 @@ impl Drop for TimedClaim {
             store.requeue(&key, incarnation, changes, self.evict);
         }
         for (key, generation, owed_since) in self.untimed.drain(..) {
-            if let Some(since) = owed_since.or_else(|| self.owing.then(Instant::now)) {
+            if let Some(since) =
+                owed_since.or_else(|| self.owing.then(crate::runtime_clock::core_now))
+            {
                 store.owe(&key, generation, since);
             }
         }

@@ -2,8 +2,8 @@
 //! maximum APDU (#986), owed untimestamped references (#1038), and changes
 //! sent one value per notification (#1090).
 use super::tests::{
-    LIFETIME, change, context, dropped, frame, histories, item_len, key, seconds, store,
-    subscriber_for, timed_reference,
+    LIFETIME, advance, change, context, dropped, frame, histories, item_len, key, now, seconds,
+    store, subscriber_for, timed_reference,
 };
 use super::*;
 
@@ -300,7 +300,7 @@ fn an_undelivered_untimestamped_reference_is_owed_once_its_report_began() {
     drop(claim_of(&[(&a, 1, None)]));
     assert_eq!(store.lock().take_owed(&a, 1), None);
     // A part deferred behind a delivered one owes its references.
-    let start = Instant::now();
+    let start = now();
     let mut claim = claim_of(&[(&a, 1, None), (&b, 1, None)]);
     let deferred = claim.split_untimed(&std::collections::HashSet::from([b.clone()]));
     claim.commit();
@@ -338,27 +338,24 @@ async fn an_owed_reference_makes_its_context_due_like_a_pending_change() {
     let (mut h, _) = histories(8, 4);
     let k = key(1, 1);
     h.reset_untimed(&k, 1, 10);
-    assert_eq!(h.take_due(Instant::now()), (Vec::new(), None));
-    let start = Instant::now();
+    assert_eq!(h.take_due(now()), (Vec::new(), None));
+    let start = now();
     h.owe(&k, 1, start);
     let delay = Duration::from_secs(10);
-    assert_eq!(
-        h.take_due(Instant::now()),
-        (Vec::new(), Some(start + delay))
-    );
-    tokio::time::advance(delay).await;
-    assert_eq!(h.take_due(Instant::now()).0, std::slice::from_ref(&k));
+    assert_eq!(h.take_due(now()), (Vec::new(), Some(start + delay)));
+    advance(delay).await;
+    assert_eq!(h.take_due(now()).0, std::slice::from_ref(&k));
     // Blocked again: a hold-off moves the next attempt, and re-enabled
     // communication ends the wait.
-    let until = Instant::now() + Duration::from_secs(3);
+    let until = now() + Duration::from_secs(3);
     h.hold_until(&context(1), until);
-    assert_eq!(h.take_due(Instant::now()), (Vec::new(), Some(until)));
+    assert_eq!(h.take_due(now()), (Vec::new(), Some(until)));
     h.rearm();
-    assert_eq!(h.take_due(Instant::now()).0, std::slice::from_ref(&k));
+    assert_eq!(h.take_due(now()).0, std::slice::from_ref(&k));
     // A later mark keeps the earlier one, and taking the mark settles it.
-    h.owe(&k, 1, Instant::now());
+    h.owe(&k, 1, now());
     assert_eq!(h.take_owed(&k, 1), Some(start));
-    assert_eq!(h.take_due(Instant::now()), (Vec::new(), None));
+    assert_eq!(h.take_due(now()), (Vec::new(), None));
     assert_eq!(h.held(), (1, 0), "a settled reference holds no wait");
     h.owe(&k, 1, start);
     h.remove(&k);
@@ -386,6 +383,7 @@ fn change_of(second: u8, payloads: &[usize]) -> TimedChange {
         frame(second),
         values,
         change(second, 0).observation().clone(),
+        now(),
     )
 }
 

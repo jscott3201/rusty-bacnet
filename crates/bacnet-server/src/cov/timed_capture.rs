@@ -191,6 +191,7 @@ impl TimedCapture {
             })
             .collect();
         let mut timed = self.store.lock();
+        let now = crate::runtime_clock::core_now();
         let mut queued = Vec::new();
         for (sub, prepared) in current {
             let key = sub.key();
@@ -211,7 +212,7 @@ impl TimedCapture {
             if timed.push(
                 key,
                 generation,
-                TimedChange::new(frame, values, prepared.observation),
+                TimedChange::new(frame, values, prepared.observation, now),
             ) {
                 queued.push(key.clone());
             }

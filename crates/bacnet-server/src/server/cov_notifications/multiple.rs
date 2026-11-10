@@ -300,7 +300,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             changes.push(timed.adopt(
                                 sub.key(),
                                 sub.generation(),
-                                TimedChange::new(frame, values, prepared.observation),
+                                TimedChange::new(
+                                    frame,
+                                    values,
+                                    prepared.observation,
+                                    runtime_clock::core_now(),
+                                ),
                             ));
                         }
                         (Some(_), None) => warn!(

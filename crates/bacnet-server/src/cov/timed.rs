@@ -119,14 +119,14 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
 
 use bacnet_objects::clock::ClockFrame;
 use bacnet_services::cov_multiple::COVNotificationValue;
+use bacnet_time::{Duration, Instant};
 use tokio::sync::Notify;
-use tokio::time::Instant;
 
 use super::{AtomicCovCounters, CovObservation, CovSubscriptionKey, MultipleContextKey};
+use crate::runtime_clock;
 
 /// Notifications' worth of pending history one context may hold.
 pub(crate) const HISTORY_NOTIFICATIONS: usize = 4;
@@ -134,9 +134,17 @@ pub(crate) const HISTORY_NOTIFICATIONS: usize = 4;
 /// the opening and closing tags of its value list (2).
 pub(crate) const ITEM_FRAMING: usize = 7;
 /// Bytes each pending change counts against its context's memory ceiling for
-/// itself, in its slot of the history's queue (#1357). The room for
-/// notification items does not count it (#1287).
-pub(crate) const CHANGE_MEMORY: usize = std::mem::size_of::<TimedChange>();
+/// itself, in its slot of the history's queue (#1357), and
+/// [`CAPTURE_ALLOWANCE`]. The room for notification items does not count it
+/// (#1287).
+pub(crate) const CHANGE_MEMORY: usize = std::mem::size_of::<TimedChange>() + CAPTURE_ALLOWANCE;
+/// Bytes a pending change still counts for the capture instant it held on
+/// the host's clock, 16 octets, before it took `bacnet-time`'s 8-octet one
+/// (#2320). Without it every change would count 8 bytes less, and a
+/// context's ceiling would hold more changes than it did (120 of the
+/// smallest for 116 at a 1476-octet local maximum): which change overflow
+/// drops is part of what a subscriber sees, so it stays as it was.
+const CAPTURE_ALLOWANCE: usize = 8;
 /// Bytes each value of a pending change counts against the memory ceiling
 /// besides its encoded octets: the value in the change's vector of values,
 /// and its slot in the vector of positions (#1357).
@@ -155,8 +163,9 @@ const DEADLINE_FLOOR: Duration = Duration::from_secs(1);
 pub(crate) struct TimedChange {
     seq: u64,
     frame: ClockFrame,
-    /// Monotonic instant of the capture: the Max_Notification_Delay origin,
-    /// unaffected by later Device clock adjustments.
+    /// Instant of the capture on the host's monotonic timeline: the
+    /// Max_Notification_Delay origin, unaffected by later Device clock
+    /// adjustments.
     captured_at: Instant,
     values: Vec<COVNotificationValue>,
     observation: CovObservation,
@@ -203,12 +212,14 @@ fn item_octets(values: &[COVNotificationValue]) -> usize {
 }
 
 impl TimedChange {
-    /// Pair prepared values with the Device clock frame of the change. Every
-    /// value carries the frame's local time as its Time_Of_Change.
+    /// Pair prepared values with the Device clock frame of the change,
+    /// captured at `now`. Every value carries the frame's local time as its
+    /// Time_Of_Change.
     pub(crate) fn new(
         frame: ClockFrame,
         mut values: Vec<COVNotificationValue>,
         observation: CovObservation,
+        now: Instant,
     ) -> Self {
         for value in &mut values {
             value.time_of_change = Some(frame.local_time);
@@ -216,7 +227,7 @@ impl TimedChange {
         Self {
             seq: 0,
             frame,
-            captured_at: Instant::now(),
+            captured_at: now,
             octets: item_octets(&values),
             positions: (0..values.len()).collect(),
             values,
@@ -1005,10 +1016,14 @@ impl TimedStore {
             let notified = wake.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            let (due, next) = self.lock().take_due(Instant::now());
+            let (due, next) = self.lock().take_due(runtime_clock::core_now());
             if !due.is_empty() {
                 return due;
             }
+            // A deadline past what the host's clock can hold never comes.
+            let next = next
+                .and_then(|deadline| runtime_clock::core_clock().to_std(deadline))
+                .map(tokio::time::Instant::from_std);
             match next {
                 Some(deadline) => {
                     tokio::select! {

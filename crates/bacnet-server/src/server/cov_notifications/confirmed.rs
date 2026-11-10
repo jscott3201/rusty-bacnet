@@ -333,7 +333,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     table.delivered(&flight, Delivery::Failed);
                     // Its timestamped history goes out once the hold-off ends.
                     if let Some(context) = route.key().multiple_context() {
-                        let until = tokio::time::Instant::now() + hold_off;
+                        let until = runtime_clock::core_now()
+                            + bacnet_time::Duration::saturating_from_core(hold_off);
                         table.timed().hold_until(context, until);
                     }
                     Vec::new()

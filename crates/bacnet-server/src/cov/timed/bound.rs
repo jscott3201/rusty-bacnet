@@ -235,6 +235,7 @@ mod tests {
                 time_of_change: None,
             }],
             CovObservation::new(sample, None).unwrap(),
+            super::super::tests::now(),
         )
     }
 
@@ -328,7 +329,9 @@ mod tests {
     #[cfg(target_pointer_width = "64")]
     #[test]
     fn the_memory_terms_are_the_measured_sizes() {
-        assert_eq!(std::mem::size_of::<TimedChange>(), 144);
+        // 136 as it is held, and the eight octets its capture instant no
+        // longer takes (#2320).
+        assert_eq!(std::mem::size_of::<TimedChange>(), 136);
         assert_eq!(std::mem::size_of::<COVNotificationValue>(), 48);
         assert_eq!((CHANGE_MEMORY, VALUE_MEMORY), (144, 56));
         // The smallest change, one empty value, and a REAL Present_Value,

@@ -53,7 +53,18 @@ pub(super) fn change(second: u8, payload: usize) -> TimedChange {
             time_of_change: None,
         }],
         CovObservation::new(sample, None).unwrap(),
+        now(),
     )
+}
+
+/// Now, on the timeline the histories' instants are on.
+pub(super) fn now() -> Instant {
+    crate::runtime_clock::core_now()
+}
+
+/// Step the paused clock, and so [`now`], by `by`.
+pub(super) async fn advance(by: Duration) {
+    tokio::time::advance(by.into()).await;
 }
 
 pub(super) fn seconds(changes: &[TimedChange]) -> Vec<u8> {
@@ -485,20 +496,20 @@ async fn a_context_is_due_at_its_delay_after_its_earliest_pending_change() {
     }
     h.set_delay(&context(1), 10);
     h.set_delay(&context(2), 10);
-    let start = Instant::now();
+    let start = now();
     h.push(&a, 1, change(1, 4));
-    tokio::time::advance(Duration::from_secs(4)).await;
+    advance(Duration::from_secs(4)).await;
     h.push(&b, 1, change(2, 4));
     h.push(&other, 1, change(3, 4));
-    let (due, next) = h.take_due(Instant::now());
+    let (due, next) = h.take_due(now());
     assert!(due.is_empty());
     assert_eq!(
         next,
         Some(start + Duration::from_secs(10)),
         "from the earliest"
     );
-    tokio::time::advance(Duration::from_secs(6)).await;
-    let (due, next) = h.take_due(Instant::now());
+    advance(Duration::from_secs(6)).await;
+    let (due, next) = h.take_due(now());
     assert_eq!(
         sorted(due),
         [a, b],
@@ -517,24 +528,24 @@ async fn a_blocked_context_comes_back_only_after_its_spacing() {
     let k = key(1, 1);
     h.reset(&k, 1, 0);
     h.set_delay(&context(1), 0);
-    let start = Instant::now();
+    let start = now();
     h.push(&k, 1, change(1, 4));
     // A zero delay still waits out the floor, leaving the producer's own
     // fanout to report the change.
     let (due, next) = h.take_due(start);
     assert!(due.is_empty());
     assert_eq!(next, Some(start + DEADLINE_FLOOR));
-    tokio::time::advance(DEADLINE_FLOOR).await;
-    assert_eq!(h.take_due(Instant::now()).0, std::slice::from_ref(&k));
+    advance(DEADLINE_FLOOR).await;
+    assert_eq!(h.take_due(now()).0, std::slice::from_ref(&k));
     // Still pending: not handed out again until the spacing has passed.
-    let (due, next) = h.take_due(Instant::now());
+    let (due, next) = h.take_due(now());
     assert!(due.is_empty());
-    assert_eq!(next, Some(start + DEADLINE_FLOOR * 2));
-    tokio::time::advance(DEADLINE_FLOOR).await;
-    assert_eq!(h.take_due(Instant::now()).0, std::slice::from_ref(&k));
+    assert_eq!(next, Some(start + DEADLINE_FLOOR + DEADLINE_FLOOR));
+    advance(DEADLINE_FLOOR).await;
+    assert_eq!(h.take_due(now()).0, std::slice::from_ref(&k));
     // Conveyed: nothing is owed and the spacing is forgotten.
     h.drain(&k, 1);
-    assert_eq!(h.take_due(Instant::now()), (Vec::new(), None));
+    assert_eq!(h.take_due(now()), (Vec::new(), None));
     assert_eq!(h.held(), (1, 0), "the wait went with the pending changes");
 }
 
@@ -544,11 +555,11 @@ async fn the_latest_admitted_delay_applies_until_the_context_goes() {
     let k = key(1, 1);
     h.reset(&k, 1, 30);
     h.set_delay(&context(1), 3); // a renewal changes the delay
-    let start = Instant::now();
+    let start = now();
     h.push(&k, 1, change(1, 4));
     assert_eq!(h.take_due(start).1, Some(start + Duration::from_secs(3)));
-    tokio::time::advance(Duration::from_secs(3)).await;
-    assert_eq!(h.take_due(Instant::now()).0, std::slice::from_ref(&k));
+    advance(Duration::from_secs(3)).await;
+    assert_eq!(h.take_due(now()).0, std::slice::from_ref(&k));
     assert_eq!(h.held(), (1, 1));
     h.remove(&k);
     assert_eq!(h.held(), (0, 0), "the last reference took its wait along");
@@ -603,7 +614,7 @@ async fn cancel_and_expiry_take_a_contexts_deadline_state_along() {
         let sub = table.admit_for_test(timed_reference(1, far), 10).unwrap();
         table
             .timed()
-            .hold_until(&context(1), Instant::now() + Duration::from_secs(5));
+            .hold_until(&context(1), now() + Duration::from_secs(5));
         assert_eq!(table.timed().lock().held(), (1, 1));
         if expire {
             table.expire_all_for_test();
@@ -620,7 +631,7 @@ async fn a_context_without_a_timestamped_history_holds_nothing() {
     let (mut h, _) = histories(8, 4);
     // An empty-list admission of an unknown context, and a hold-off on it.
     h.set_delay(&context(9), 10);
-    h.hold_until(&context(9), Instant::now() + Duration::from_secs(5));
+    h.hold_until(&context(9), now() + Duration::from_secs(5));
     h.rearm();
     assert_eq!(h.held(), (0, 0));
 }
@@ -630,18 +641,15 @@ async fn a_hold_off_moves_the_next_attempt_to_its_end() {
     let (mut h, _) = histories(8, 4);
     let k = key(1, 1);
     h.reset(&k, 1, 10);
-    let start = Instant::now();
+    let start = now();
     h.push(&k, 1, change(1, 4));
-    tokio::time::advance(Duration::from_secs(10)).await;
-    assert_eq!(h.take_due(Instant::now()).0, std::slice::from_ref(&k));
+    advance(Duration::from_secs(10)).await;
+    assert_eq!(h.take_due(now()).0, std::slice::from_ref(&k));
     // Blocked by a hold-off ending at +12: no need to wait the delay again.
     h.hold_until(&context(1), start + Duration::from_secs(12));
-    assert_eq!(
-        h.take_due(Instant::now()).1,
-        Some(start + Duration::from_secs(12))
-    );
-    tokio::time::advance(Duration::from_secs(2)).await;
-    assert_eq!(h.take_due(Instant::now()).0, std::slice::from_ref(&k));
+    assert_eq!(h.take_due(now()).1, Some(start + Duration::from_secs(12)));
+    advance(Duration::from_secs(2)).await;
+    assert_eq!(h.take_due(now()).0, std::slice::from_ref(&k));
 }
 
 #[tokio::test(start_paused = true)]
@@ -650,19 +658,19 @@ async fn rearming_or_a_shorter_delay_ends_the_wait_of_overdue_changes() {
     let k = key(1, 1);
     h.reset(&k, 1, 10);
     h.push(&k, 1, change(1, 4));
-    tokio::time::advance(Duration::from_secs(10)).await;
-    assert_eq!(h.take_due(Instant::now()).0, std::slice::from_ref(&k));
-    assert!(h.take_due(Instant::now()).0.is_empty(), "waiting the delay");
+    advance(Duration::from_secs(10)).await;
+    assert_eq!(h.take_due(now()).0, std::slice::from_ref(&k));
+    assert!(h.take_due(now()).0.is_empty(), "waiting the delay");
     // Communication came back: overdue changes go out at once.
     h.rearm();
-    assert_eq!(h.take_due(Instant::now()).0, std::slice::from_ref(&k));
+    assert_eq!(h.take_due(now()).0, std::slice::from_ref(&k));
     // A renewal shortens the delay: the wait it set no longer applies.
-    assert!(h.take_due(Instant::now()).0.is_empty());
+    assert!(h.take_due(now()).0.is_empty());
     h.set_delay(&context(1), 2);
-    assert_eq!(h.take_due(Instant::now()).0, std::slice::from_ref(&k));
+    assert_eq!(h.take_due(now()).0, std::slice::from_ref(&k));
     // A longer delay leaves the current wait alone.
     h.set_delay(&context(1), 20);
-    assert!(h.take_due(Instant::now()).0.is_empty());
+    assert!(h.take_due(now()).0.is_empty());
 }
 
 #[tokio::test(start_paused = true)]
@@ -676,8 +684,8 @@ async fn a_queued_change_wakes_the_deadline_wait() {
         async move { store.next_due().await }
     });
     tokio::task::yield_now().await;
-    let start = Instant::now();
+    let start = now();
     store.lock().push(&k, 1, change(1, 4));
     assert_eq!(waiter.await.unwrap(), [k]);
-    assert_eq!(start.elapsed(), Duration::from_secs(2));
+    assert_eq!(now() - start, Duration::from_secs(2));
 }

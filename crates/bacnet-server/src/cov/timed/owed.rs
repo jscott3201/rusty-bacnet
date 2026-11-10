@@ -11,9 +11,7 @@
 //! whether or not the reference still has anything to report, and owes it
 //! again only if that report does not deliver it either.
 
-use std::time::Duration;
-
-use tokio::time::Instant;
+use bacnet_time::{Duration, Instant};
 
 use super::{CovSubscriptionKey, MultipleContextKey, TimedHistories, UntimedReference};
 

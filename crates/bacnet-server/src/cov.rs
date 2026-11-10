@@ -482,18 +482,14 @@ impl CovSubscriptionTable {
             .context_idle(context, snapshots, runtime_clock::core_now())
     }
 
-    /// End of the hold-off a failed report put on a confirmed context, on
-    /// Tokio's clock, while it is in force.
+    /// End of the hold-off a failed report put on a confirmed context,
+    /// while it is in force; see [`CovTable::context_hold_until`].
     pub(crate) fn context_hold_until(
         &self,
         context: &MultipleContextKey,
-    ) -> Option<tokio::time::Instant> {
-        let until = self
-            .core
-            .context_hold_until(context, runtime_clock::core_now())?;
-        runtime_clock::core_clock()
-            .to_std(until)
-            .map(tokio::time::Instant::from_std)
+    ) -> Option<bacnet_time::Instant> {
+        self.core
+            .context_hold_until(context, runtime_clock::core_now())
     }
 
     /// Whether an idle context still owes the follow-up of a failed report;
