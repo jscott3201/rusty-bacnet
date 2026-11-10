@@ -1,6 +1,7 @@
 //! The event algorithm parameter keywords of the analog, binary and
-//! multi-state builders (#2410): the values the application configures for
-//! the parameters a peer may write and `storage_path` keeps (#2331).
+//! multi-state builders (#2410) and of `add_event_enrollment` (#2426): the
+//! values the application configures for the parameters a peer may write
+//! and `storage_path` keeps (#2331).
 //!
 //! The builder writes each given value into the object before storage
 //! attaches, through the object's own `write_property`, so it is checked as
@@ -8,6 +9,13 @@
 //! attaching afterwards puts a saved peer write over the keyword value, the
 //! keyword value itself is never saved, and on a clearing start the build
 //! runs again on the cleared file, so the keyword applies again.
+//!
+//! An Event Enrollment's Event_Parameters and Fault_Parameters arrive as the
+//! `PropertyValue` a `write_property_local` takes, and go the way that
+//! write does: encoded, then decoded for the property as a peer's octets
+//! are, then written. They follow the rules of an enrollment without
+//! storage, which has no size cap: a save keeps only the rows a write set,
+//! so a keyword value never reaches the file.
 
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::PropertyIdentifier;
@@ -16,10 +24,18 @@ use bacnet_types::primitives::PropertyValue;
 
 use crate::types::PyBitString;
 
+/// One keyword's value: typed, written as it is, or the encoding of a
+/// `PropertyValue` the application gave, decoded for the property first.
+#[derive(Clone, Debug)]
+enum Keyword {
+    Typed(PropertyValue),
+    Encoded(Vec<u8>),
+}
+
 /// The parameter values one builder call was given, in the order they are
 /// written; an absent keyword leaves the object's own default.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct AlgorithmKeywords(Vec<(PropertyIdentifier, PropertyValue)>);
+pub(crate) struct AlgorithmKeywords(Vec<(PropertyIdentifier, Keyword)>);
 
 impl AlgorithmKeywords {
     /// Time_Delay and Time_Delay_Normal, which every one of these builders
@@ -100,9 +116,34 @@ impl AlgorithmKeywords {
         keywords
     }
 
+    /// Event_Parameters, Fault_Parameters, then Time_Delay_Normal: the
+    /// Event Enrollment keywords. An Event Enrollment has no Time_Delay of
+    /// its own; it is a member of Event_Parameters.
+    pub(crate) fn enrollment(
+        event_parameters: Option<&PropertyValue>,
+        fault_parameters: Option<&PropertyValue>,
+        time_delay_normal: Option<u32>,
+    ) -> Result<Self, Error> {
+        let mut keywords = Self::default();
+        for (property, value) in [
+            (PropertyIdentifier::EVENT_PARAMETERS, event_parameters),
+            (PropertyIdentifier::FAULT_PARAMETERS, fault_parameters),
+        ] {
+            if let Some(value) = value {
+                let mut octets = bytes::BytesMut::new();
+                bacnet_encoding::primitives::encode_property_value(&mut octets, value)?;
+                keywords
+                    .0
+                    .push((property, Keyword::Encoded(octets.to_vec())));
+            }
+        }
+        keywords.add_delays(None, time_delay_normal);
+        Ok(keywords)
+    }
+
     fn add(&mut self, property: PropertyIdentifier, value: Option<PropertyValue>) {
         if let Some(value) = value {
-            self.0.push((property, value));
+            self.0.push((property, Keyword::Typed(value)));
         }
     }
 
@@ -118,8 +159,14 @@ impl AlgorithmKeywords {
     /// Write the values into `object`, which has no storage attached yet,
     /// stopping at the first the object refuses.
     pub(crate) fn apply(&self, object: &mut dyn BACnetObject) -> Result<(), Error> {
-        for (property, value) in &self.0 {
-            object.write_property(*property, None, value.clone(), None)?;
+        for (property, keyword) in &self.0 {
+            let value = match keyword {
+                Keyword::Typed(value) => value.clone(),
+                Keyword::Encoded(octets) => bacnet_device_core::write::gate_and_decode_write(
+                    object, *property, None, octets,
+                )?,
+            };
+            object.write_property(*property, None, value, None)?;
         }
         Ok(())
     }

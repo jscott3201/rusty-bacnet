@@ -1711,6 +1711,10 @@ def add_event_enrollment(
     name: str,
     event_type: EventType = ...,
     *,
+    object_property_reference: tuple[ObjectIdentifier, PropertyIdentifier] | tuple[ObjectIdentifier, PropertyIdentifier, Optional[int]] | DeviceObjectPropertyReference | None = None,
+    event_parameters: Optional[PropertyValue] = None,
+    fault_parameters: Optional[PropertyValue] = None,
+    time_delay_normal: Optional[int] = None,
     storage_path: Optional[str] = None,
     clear_written_reporting: bool = False,
 ) -> None
@@ -1740,9 +1744,30 @@ the restored parameters. Time\_Delay is a member of
 Event\_Parameters and is kept with them. With `storage_path`,
 Event\_Parameters or Fault\_Parameters whose encoding is past 64 KiB
 are refused with NO\_SPACE\_TO\_WRITE\_PROPERTY; without it the
-enrollment takes them as before. There is no keyword for the
-parameters: an application sets its own with
-`write_property_local`, and that write is kept like a peer's.
+enrollment takes them as before.
+
+`object_property_reference` names the property the enrollment
+monitors, as an `(object, property)` or `(object, property, array_index)` tuple or a `DeviceObjectPropertyReference` mapping,
+the forms `add_trend_log` takes for `reference`. Peers can't
+write it, so it applies at every start and is never saved; without
+it the enrollment monitors nothing.
+
+The parameter keywords configure those three (#2426):
+`event_parameters` and `fault_parameters`, each a
+`PropertyValue` in the form `write_property_local` takes for the
+property (the encoding through `PropertyValue.application_data`,
+or a value a read of the property returned), and
+`time_delay_normal` (seconds). None leaves the enrollment's
+default. Each value is checked as a write of the property is, and
+one the enrollment refuses raises BacnetProtocolError, such as
+octets that aren't one whole parameter value. A negative delay
+raises OverflowError. A keyword value is not held to the 64 KiB
+cap, which only a saved write meets. The keywords apply before storage attaches,
+so they are never saved: a value a peer wrote and the file holds is
+served over its keyword, and the keyword applies again on a start
+that passes `clear_written_reporting=True`. A
+`write_property_local` of a parameter after the builder call is
+kept like a peer's write.
 
 ### BACnetServer.add_elevator_group
 
