@@ -314,7 +314,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             db: Arc::clone(&self.db),
             network: Arc::clone(self.test_network()),
             config: Arc::clone(&self.config),
-            clock: self._clock.clone(),
+            clock: self.clock.clone(),
             comm_state: Arc::clone(&self.comm_state),
             device_bindings: Arc::clone(&self.device_bindings),
             discovery_limiter: Arc::clone(&self.discovery_limiter),
@@ -336,7 +336,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         DispatchContext {
             services: Arc::new(self.test_services()),
             confirmed_request_tracker: Arc::clone(&self.confirmed_request_tracker),
-            clock: self._clock.clone(),
+            clock: self.clock.clone(),
             discovery_limiter: Arc::clone(&self.discovery_limiter),
             time_sync_limiter: Arc::clone(&self.time_sync_limiter),
             request_tasks: Arc::clone(&self.request_tasks),

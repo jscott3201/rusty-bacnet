@@ -154,6 +154,9 @@ pub struct BACnetServer {
     get_event_information_budget: server::GetEventInformationBudget,
     cov_policy: bacnet_device_core::cov::CovPolicy,
     time_sync_policy: server::TimeSyncPolicy,
+    /// The zone the Device clock starts in (`utc_offset_minutes`,
+    /// `daylight_savings`).
+    clock_zone: server::ClockConfig,
     audit_notification_sink: Option<AuditNotificationSink>,
     audit_reporters: Option<server::AuditReportersConfig>,
     audit_recipient: std::sync::Mutex<Option<bacnet_types::constructed::BACnetRecipient>>,
@@ -231,6 +234,7 @@ mod server_methods {
     mod audit_log_methods;
     mod averaging_methods;
     mod channel_methods;
+    mod clock_zone;
     mod constructor;
     mod constructor_budgets;
     mod cov_counters;

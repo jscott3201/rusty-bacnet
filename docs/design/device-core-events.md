@@ -1012,6 +1012,13 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
       service; admission policy (sources, rate, step) is the host's, which
       hands over only what it accepts. A host's real-time clock sets it
       through `Responder::set_time`, and that counts as synchronized.
+    - The zone changes at run time (#2395): `Responder::set_zone` and
+      `Reporter::set_zone` move the clock and lend it again, as `set_time`
+      does. A synchronized clock keeps its UTC instant and stays
+      synchronized, so windows already open or closed are judged by the
+      new local time from the next look; one never set keeps its count of
+      local time from 1990. UTC_Offset and Daylight_Savings_Status stay
+      read-only to a peer.
     - Restricted Recipient_List entries: stored, not refused, on a build
       with a clock. The list survives restarts (Clause 12.21.8) and the
       clock restarts unsynchronized, so a refusal that lifted only once

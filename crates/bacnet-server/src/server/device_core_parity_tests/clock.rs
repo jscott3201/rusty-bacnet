@@ -164,6 +164,104 @@ async fn time_synchronization_rows_match() {
     }
 }
 
+impl Parity {
+    /// Move both sides' clocks to UTC_Offset `offset` and daylight-saving
+    /// state `summer`: the server through its handle, the core through its
+    /// `Reporter`.
+    async fn set_zone(&mut self, offset: i16, summer: bool) {
+        let server = ClockConfig::new(offset, summer).unwrap();
+        self.server.set_clock_zone(server).await.unwrap();
+        let core = Zone::new(offset, summer).unwrap();
+        self.reporter.set_zone(&mut self.db, core).unwrap();
+    }
+
+    /// The same synchronization to both sides.
+    async fn sync(&mut self, timer: &Timer, basis: Basis, date: Date, time: Time) {
+        let service = match basis {
+            Basis::Local => LOCAL,
+            Basis::Utc => UTC,
+        };
+        timer.pin();
+        let synced = self.same("sync", sync(service, date, time), 1476).await;
+        assert_eq!(synced, None);
+    }
+
+    /// Each of `properties` of the Device from both sides, which must
+    /// agree; the replies.
+    async fn clock_rows(&mut self, timer: &Timer, properties: &[P], what: &str) -> Vec<Apdu> {
+        let device = oid(ObjectType::DEVICE, DEVICE);
+        let mut rows = Vec::new();
+        for &property in properties {
+            timer.pin();
+            let read = read_property(2, device, property, None);
+            let what = format!("{property:?} after {what}");
+            rows.push(self.same(&what, read, 1476).await.unwrap());
+        }
+        rows
+    }
+}
+
+/// The same synchronizations and zone changes to both sides (#2395): the
+/// Device's four clock properties read the same from each after every
+/// step, as served and a second and a half later. A zone change comes
+/// before any synchronization, where only UTC_Offset and
+/// Daylight_Savings_Status can agree (the server then reads the system's
+/// clock, the core counts from 1990); the rest follow one, across midnight
+/// both ways, a year end and a whole day's offset.
+#[tokio::test(start_paused = true)]
+async fn zone_change_rows_match() {
+    let all = [
+        P::LOCAL_DATE,
+        P::LOCAL_TIME,
+        P::UTC_OFFSET,
+        P::DAYLIGHT_SAVINGS_STATUS,
+    ];
+    let timer = Timer::default();
+    let mut parity = Parity::start_clocked(0, false, &timer).await;
+    parity.set_zone(300, false).await;
+    let unsynced = parity
+        .clock_rows(&timer, &all[2..], "a change before any sync")
+        .await;
+    assert_eq!(unsynced.len(), 2);
+
+    // Thursday 2024-07-04, 13:15 UTC: 08:15 five hours west.
+    let (date_0, time_0) = (date(2024, 7, 4, 4), time(13, 15, 0, 0));
+    parity.sync(&timer, Basis::Utc, date_0, time_0).await;
+    let mut before = parity.clock_rows(&timer, &all, "the first sync").await;
+    // Each zone, and whether it moves Local_Date from the step before:
+    // 09:15, 08:15, Friday 00:00, Thursday 23:45, then, after a local
+    // synchronization at 23:30 on Tuesday 2024-12-31, 00:30 on New Year's
+    // Day, and a day west of UTC.
+    let steps = [
+        (300, true, false),
+        (360, true, false),
+        (-645, false, true),
+        (-630, false, true),
+        (-630, true, true),
+        (1440, false, true),
+    ];
+    for (step, (offset, summer, new_date)) in steps.into_iter().enumerate() {
+        if step == 4 {
+            let (date, time) = (date(2024, 12, 31, 2), time(23, 30, 0, 0));
+            parity.sync(&timer, Basis::Local, date, time).await;
+            before = parity.clock_rows(&timer, &all, "a local sync").await;
+        }
+        parity.set_zone(offset, summer).await;
+        let what = format!("a change to {offset}, {summer}");
+        let after = parity.clock_rows(&timer, &all, &what).await;
+        assert_eq!(after[0] != before[0], new_date, "{what}: Local_Date");
+        assert_ne!(after[1], before[1], "{what}: Local_Time");
+        tokio::time::sleep(Duration::from_millis(1_500)).await;
+        before = parity.clock_rows(&timer, &all, &what).await;
+    }
+    // A UTC synchronization in the zone the clocks are in now.
+    let (date, time) = (date(2024, 3, 1, 5), time(0, 30, 0, 25));
+    parity.sync(&timer, Basis::Utc, date, time).await;
+    parity.clock_rows(&timer, &all, "a UTC sync").await;
+    parity.set_zone(-1440, true).await;
+    parity.clock_rows(&timer, &all, "a day east").await;
+}
+
 /// The destinations the window rows judge, process identifiers 1 to 9.
 fn destinations() -> Vec<BACnetDestination> {
     let weekdays = DaysOfWeek::all() - DaysOfWeek::SATURDAY - DaysOfWeek::SUNDAY;

@@ -88,6 +88,7 @@ SERVER_KEYWORD_ONLY = ["mutation_policy", "dcc_policy", "dcc_source_restriction"
     "event_information_max_objects", "event_information_max_returned_summaries",
     "event_information_max_service_ack_bytes",
     "sc_device_uuid", "registered_network_port", "cov_policy", "time_sync_policy",
+    "utc_offset_minutes", "daylight_savings",
     "share_port_by_address", "share_wildcard_port", "segmentation_supported", "apdu_segment_timeout_ms",
     "bbmd", "foreign_device", "multicast", "sc_npdu_per_origin_limit", "sc_control_rate_limit",
     "on_reinitialize", "after_reinitialize", "router",

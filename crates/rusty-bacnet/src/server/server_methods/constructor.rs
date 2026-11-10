@@ -63,6 +63,8 @@ impl BACnetServer {
         registered_network_port=None,
         cov_policy=None,
         time_sync_policy=None,
+        utc_offset_minutes=0,
+        daylight_savings=false,
         share_port_by_address=false,
         share_wildcard_port=false,
         segmentation_supported=crate::types::PySegmentation { inner: bacnet_types::enums::Segmentation::NONE },
@@ -136,6 +138,8 @@ impl BACnetServer {
         registered_network_port: Option<u32>,
         cov_policy: Option<&Bound<'_, pyo3::types::PyDict>>,
         time_sync_policy: Option<&Bound<'_, pyo3::types::PyDict>>,
+        utc_offset_minutes: i16,
+        daylight_savings: bool,
         share_port_by_address: bool,
         share_wildcard_port: bool,
         segmentation_supported: crate::types::PySegmentation,
@@ -234,6 +238,8 @@ impl BACnetServer {
         })?;
         let cov_policy = super::cov_policy::cov_policy(cov_policy)?;
         let time_sync_policy = super::time_sync_policy::time_sync_policy(time_sync_policy)?;
+        let clock_zone = server::ClockConfig::new(utc_offset_minutes, daylight_savings)
+            .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
         if transport == "sc" {
             crate::tls::required_sc_credentials(
                 sc_ca_cert.as_deref(),
@@ -302,6 +308,7 @@ impl BACnetServer {
             get_event_information_budget,
             cov_policy,
             time_sync_policy,
+            clock_zone,
             audit_notification_sink: None,
             audit_reporters: None,
             audit_recipient: std::sync::Mutex::new(None),

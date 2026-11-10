@@ -82,7 +82,8 @@ pub enum Basis {
 /// It starts unsynchronized, at local midnight on 1990-01-01, and counts
 /// from there, as Clauses 12.11.23 and 12.11.24 have a device with no time
 /// source do after a restart. The first [`set`](Self::set) synchronizes it,
-/// for good: from then on [`window`](Self::window) answers.
+/// for good: from then on [`window`](Self::window) answers, and a change of
+/// zone ([`set_zone`](Self::set_zone)) keeps it synchronized.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SyncedClock {
     zone: Zone,
@@ -129,6 +130,30 @@ impl SyncedClock {
         set.frame(now)
             .ok_or(Error::range("the local date falls outside 1900 to 2154"))?;
         *self = set;
+        Ok(())
+    }
+
+    /// Move the clock to `zone` at `now`, as a host does when daylight
+    /// saving starts or ends, or to correct its UTC_Offset.
+    ///
+    /// A synchronized clock keeps the UTC instant it stands for and stays
+    /// synchronized, so Local_Date and Local_Time move by the difference
+    /// between the zones: an hour for daylight saving alone. A clock that
+    /// was never set has no such instant: it keeps its count of local time
+    /// from 1990-01-01, as one built in `zone` would read (Clauses 12.11.23,
+    /// 12.11.24). Refused, leaving the clock as it was, when the local date
+    /// at `now` would fall outside 1900 to 2154.
+    pub fn set_zone(&mut self, zone: Zone, now: Instant) -> Result<(), Error> {
+        let moved = if self.synced {
+            Self { zone, ..*self }
+        } else {
+            let local = self.hundredths as i32 + self.zone.to_local();
+            Self::anchored(zone, self.at, self.day, local - zone.to_local(), false)
+        };
+        moved
+            .frame(now)
+            .ok_or(Error::range("the local date falls outside 1900 to 2154"))?;
+        *self = moved;
         Ok(())
     }
 

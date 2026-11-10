@@ -111,6 +111,8 @@ def __init__(
     registered_network_port: Optional[int] = None,
     cov_policy: CovPolicy | None = None,
     time_sync_policy: TimeSyncPolicy | None = None,
+    utc_offset_minutes: int = 0,
+    daylight_savings: bool = False,
     share_port_by_address: bool = False,
     segmentation_supported: Segmentation = Segmentation.NONE,
     apdu_segment_timeout_ms: int = 5000,
@@ -175,6 +177,13 @@ at once can drop the reply; wait a short while first.
 interface address itself, so devices on other addresses of this host
 can share the port. Needs an explicit interface and a nonzero port;
 broadcasts and unicast are still handled in the order they arrived.
+
+`utc_offset_minutes` / `daylight_savings` (keyword-only,
+default 0 and False): the zone the Device clock starts in, as
+`set_clock_zone` takes them and checked the same way, at
+construction. Every `start()` begins in it, so the Schedule pass
+that runs as the server starts already judges local time there;
+`set_clock_zone` changes it while the server runs, until `stop()`.
 
 `bbmd` / `foreign_device` (at most one, else ValueError): run
 the device as a BBMD (B/IP only), or register it with a BBMD on
@@ -2313,6 +2322,38 @@ service puts back the Reliability held before.
 raises OverflowError. An unknown object raises
 UNKNOWN\_OBJECT and any object other than an Accumulator
 OPTIONAL\_FUNCTIONALITY\_NOT\_SUPPORTED.
+
+### BACnetServer.set_clock_zone
+
+```python
+def set_clock_zone(
+    self,
+    utc_offset_minutes: int,
+    daylight_savings: bool,
+) -> Awaitable[None]
+```
+
+Change the Device clock's zone while the server runs.
+
+`utc_offset_minutes` becomes the Device's UTC\_Offset: minutes west
+of UTC, east negative, a multiple of 15 within -1440..=1440.
+`daylight_savings` becomes its Daylight\_Savings\_Status, which puts
+local time an hour ahead. A server starts in the zone its
+constructor's keywords of the same names give, and the change lasts
+until `stop()`.
+
+The clock keeps its UTC instant, and one a TimeSynchronization set
+stays set, so Local\_Date and Local\_Time move by the difference
+between the zones. Schedules, calendars, Notification Class
+recipient windows and new timestamps follow at their next look at
+the clock; timestamps already recorded stay. A request sees the old
+pair or the new, never one of each. Both properties stay read-only
+to a peer.
+
+An offset outside that range or off the 15-minute grid raises
+ValueError when called, and an int past 16 bits OverflowError;
+nothing changes. The awaitable raises RuntimeError before start and
+after stop, and ValueError if the local date would leave 1900..=2154.
 
 ### BACnetServer.comm_state
 
