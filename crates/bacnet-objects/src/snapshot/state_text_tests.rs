@@ -124,8 +124,14 @@ fn a_state_text_past_its_caps_is_refused() {
             Err(SnapshotErrorKind::Damaged)
         );
         let long = vec![b'x'; MAX_KEPT_STATE_TEXT_OCTETS + 1];
-        let error = decoded(kind, &tail(1, &label(&long)));
-        assert_eq!(error, Err(SnapshotErrorKind::Damaged), "{kind}");
+        let file = with_tail(kind, &tail(1, &label(&long)));
+        let error = write_config::decode(oid(kind), &file).unwrap_err();
+        assert_eq!(error.kind(), SnapshotErrorKind::Damaged, "{kind}");
+        // Refused at the length, before the octets are read.
+        assert!(
+            error.to_string().contains("longer than its cap"),
+            "{kind}: {error}"
+        );
         let at_cap = vec![b'x'; MAX_KEPT_STATE_TEXT_OCTETS];
         assert!(decoded(kind, &tail(1, &label(&at_cap))).is_ok(), "{kind}");
     }
@@ -139,8 +145,11 @@ fn a_state_text_past_its_caps_is_refused() {
 fn a_row_the_file_doesnt_hold_is_refused() {
     for kind in KINDS {
         let one = label(b"Off");
-        let error = decoded(kind, &tail(MAX_NUMBER_OF_STATES, &one));
-        assert_eq!(error, Err(SnapshotErrorKind::Truncated), "{kind}");
+        let file = with_tail(kind, &tail(MAX_NUMBER_OF_STATES, &one));
+        let error = write_config::decode(oid(kind), &file).unwrap_err();
+        assert_eq!(error.kind(), SnapshotErrorKind::Truncated, "{kind}");
+        // Refused at the count, before a label is read or room made.
+        assert!(error.to_string().contains("count needs"), "{kind}: {error}");
         let mut past_the_file = 400u32.to_be_bytes().to_vec();
         past_the_file.extend_from_slice(b"Off");
         let error = decoded(kind, &tail(1, &past_the_file));

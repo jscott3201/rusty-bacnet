@@ -356,8 +356,11 @@ mod stored {
 
         pub(in super::super) fn get(reader: &mut Reader<'_>) -> Result<Vec<String>, SnapshotError> {
             let count = reader.count(MAX_NUMBER_OF_STATES as usize)?;
+            // Each label takes at least its four-octet length.
             if count * 4 > reader.body.len() - reader.at {
-                return Err(SnapshotError::truncated("is cut short"));
+                return Err(SnapshotError::truncated(
+                    "holds fewer octets than its State_Text count needs",
+                ));
             }
             let mut texts = Vec::with_capacity(count);
             for _ in 0..count {
