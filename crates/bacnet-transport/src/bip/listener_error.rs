@@ -1,6 +1,6 @@
 //! The error a B/IP receive-only listener's bind or group join fails with,
-//! or a wildcard socket's bind of a port another socket holds (#2366): it
-//! names the socket and keeps the OS error as its source (#2231).
+//! or a B/IP or B/IPv6 socket's bind of a port another socket holds (#2366,
+//! #2385): it names the socket and keeps the OS error as its source (#2231).
 //!
 //! An `io::Error` built from a message string keeps the kind but drops
 //! `raw_os_error()`, so a caller could tell a port held by another socket
@@ -34,7 +34,7 @@ impl std::error::Error for ListenerError {
 
 /// `os` as an I/O error of its kind whose message starts with `context` and
 /// whose `source()` is `os` itself, so its OS code survives.
-pub(super) fn listener_error(context: String, os: io::Error) -> io::Error {
+pub(crate) fn listener_error(context: String, os: io::Error) -> io::Error {
     io::Error::new(os.kind(), ListenerError { context, os })
 }
 

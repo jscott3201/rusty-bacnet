@@ -49,7 +49,7 @@ macOS and Windows ones don't yet (see [MS/TP](#mstp)).
 |------|---------|-------------|
 | `-i, --interface <IP>` | (see below) | Network interface IP to bind |
 | `-p, --port <PORT>` | `47808` | BACnet UDP port |
-| `--share-port` | off | Share `--port` with other programs on this host that bind it the same way; BACnet/IP only. See [Port sharing](#port-sharing) |
+| `--share-port` | off | Share `--port` with other programs on this host that bind it the same way; BACnet/IP and BACnet/IPv6 only. See [Port sharing](#port-sharing) |
 | `-b, --broadcast <IP>` | `255.255.255.255` | Broadcast address for WhoIs |
 | `-t, --timeout <MS>` | `6000` | APDU timeout in milliseconds |
 | `--min-interval-ms <MS>` | `0` | Least time from the latest confirmed request to a device finishing (or being sent, while it is still outstanding) to the next, at most 3600000, so paging or polling leaves a slow device room for others |
@@ -102,8 +102,9 @@ JSON string to a terminal should clean it first.
 
 **Interface selection:** A one-shot command without `--interface` binds `0.0.0.0`. The terminal UI on BACnet/IP without `-i` lists the available network interfaces in a dialog; named B/IP profiles use their saved interface.
 
-<a id="port-sharing"></a>**Port sharing:** on BACnet/IP the CLI claims its
-`--port` (#2366). When another program on this host already holds the port
+<a id="port-sharing"></a>**Port sharing:** on BACnet/IP and BACnet/IPv6 the
+CLI claims its `--port` (#2366, #2385). When another program on this host
+already holds the port
 (a BACnet device, a BMS, another `bacnet`), the CLI fails at once with an
 error naming the port, rather than binding beside it. Give the CLI another
 port (`-p 47809`, or `-p 0` for one the OS picks, which hears only the
@@ -112,8 +113,12 @@ to bind beside it as earlier releases did. With sharing, broadcasts reach
 both programs, but each unicast to the port reaches only one of them (on
 Linux the one that bound last), so either program's replies can go astray.
 The other program must share the port too, and macOS and the BSDs never let
-two programs share a port on `0.0.0.0` this way. `--share-port` has no
-effect with `-p 0`, nor on B/IPv6, BACnet/SC or MS/TP. A named B/IP profile
+two programs share a port on `0.0.0.0` this way. On BACnet/IPv6 (`--ipv6`)
+the port is claimed and shared the same way, with or without
+`--foreign-bbmd`: a second B/IPv6 program on the host and port, which earlier
+releases let in, now needs `--share-port` on both, and then both hear the
+multicast groups while each unicast reaches only one. `--share-port` has no
+effect with `-p 0`, nor on BACnet/SC or MS/TP. A named B/IP profile
 keeps the choice as `share_port = true` in its `[bip]` table; `bacnet tui
 --profile NAME --share-port` turns it on for that run, and `bacnet mcp serve
 --profile NAME` refuses the flag, as it refuses every transport flag, so set

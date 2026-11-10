@@ -1,4 +1,24 @@
 //! One socket/port, selected normal-mode source and receive authority.
+//!
+//! The socket claims its port, whether the OS picked it (#892) or it was
+//! requested (#2385): it sets no `SO_REUSEADDR`, and on Windows it sets
+//! `SO_EXCLUSIVEADDRUSE` (`port_ownership`, #950). A later bind of the port
+//! then fails, where with sharing it could take the unicast sent there.
+//! [`set_share_wildcard_port`](super::Bip6Transport::set_share_wildcard_port)
+//! opts a requested port back into `SO_REUSEADDR`.
+//!
+//! A normal node binds `[::]:port` and joins the BACnet groups on that one
+//! socket, so the claim costs it nothing: the groups' datagrams, its own
+//! looped back among them, arrive as before. What the claim refuses is a
+//! second stack on the host at the same port. On macOS and the BSDs a socket
+//! that sets `SO_REUSEADDR` may still bind a specific address on the port
+//! and then gets the unicast sent to that address; they have no option to
+//! stop it.
+//!
+//! A foreign device binds `address:port`. Its claim refuses another bind of
+//! that address and port on every OS, and of `[::]:port` on Linux and
+//! Windows. macOS and the BSDs let an `SO_REUSEADDR` socket bind `[::]:port`
+//! beside it, which gets none of the unicast sent to the device's address.
 
 use std::{
     io,
@@ -28,39 +48,103 @@ pub(super) struct Bip6Socket {
     tap: FrameTap,
 }
 
-/// The unbound B/IPv6 socket. Only an explicit port sets SO_REUSEADDR: Linux
-/// would otherwise hand an ephemeral bind a port another SO_REUSEADDR socket
-/// owns, and unicast to it would reach only one of them (#892). An ephemeral
-/// port claims exclusive use where the OS has a way to (`port_ownership`, #950).
-fn udp_socket(port: u16) -> io::Result<socket2::Socket> {
+/// How a socket holds the port it binds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PortUse {
+    /// Claimed where the OS has a way to (`port_ownership`, #950), with no
+    /// `SO_REUSEADDR`: the default for a requested port, so a later bind of
+    /// it fails (#2385).
+    Claimed,
+    /// A requested port opted into sharing: `SO_REUSEADDR`. A port the OS
+    /// picks is claimed all the same: Linux would otherwise hand an
+    /// ephemeral bind a port another `SO_REUSEADDR` socket owns, and unicast
+    /// to it would reach only one of them (#892).
+    Shared,
+}
+
+impl PortUse {
+    /// What a transport asks for: sharing only when it opted in.
+    pub(super) fn sharing(share: bool) -> Self {
+        if share { Self::Shared } else { Self::Claimed }
+    }
+
+    /// What a bind of `port` sets: `self`, but a port the OS picks is never
+    /// shared.
+    fn on(self, port: u16) -> Self {
+        if port == 0 { Self::Claimed } else { self }
+    }
+}
+
+/// The unbound B/IPv6 socket for `port`, held as `port_use` says.
+fn udp_socket(port: u16, port_use: PortUse) -> io::Result<socket2::Socket> {
     let socket = socket2::Socket::new(
         socket2::Domain::IPV6,
         socket2::Type::DGRAM,
         Some(socket2::Protocol::UDP),
     )?;
     socket.set_only_v6(true)?;
-    if port != 0 {
-        socket.set_reuse_address(true)?;
-    } else {
-        crate::port_ownership::claim_exclusive(&socket)?;
+    match port_use.on(port) {
+        PortUse::Claimed => crate::port_ownership::claim_exclusive(&socket)?,
+        PortUse::Shared => socket.set_reuse_address(true)?,
     }
     socket.set_nonblocking(true)?;
     socket.set_multicast_loop_v6(true)?;
     Ok(socket)
 }
 
+/// A bind's error. On a requested port that another socket holds it says
+/// so and names the opt-in, as B/IP's does (#2366), and keeps the OS error
+/// as its source, so its OS code survives (#2231).
+fn held(bound: SocketAddrV6, port_use: PortUse, e: io::Error) -> io::Error {
+    // Windows refuses a bind beside a socket that holds the port with
+    // `SO_EXCLUSIVEADDRUSE` as WSAEACCES.
+    let held = e.kind() == io::ErrorKind::AddrInUse
+        || (cfg!(windows) && e.kind() == io::ErrorKind::PermissionDenied);
+    let port = bound.port();
+    if port == 0 || !held {
+        return e;
+    }
+    // A foreign device binds its own address.
+    let place = if bound.ip().is_unspecified() {
+        format!("UDP port {port}")
+    } else {
+        format!("UDP port {port} on {}", bound.ip())
+    };
+    let context = match port_use {
+        PortUse::Shared => {
+            format!("{place} is in use on this host by a socket that refuses sharing")
+        }
+        PortUse::Claimed => format!(
+            "{place} is in use on this host, and a B/IPv6 transport doesn't share its port by \
+             default; stop the other program, use another port, or share the port \
+             (share_wildcard_port, or --share-port in the CLI), after which unicast reaches \
+             only one of the sockets on it"
+        ),
+    };
+    crate::bip::listener_error::listener_error(context, e)
+}
+
 impl Bip6Socket {
-    pub async fn bind(requested: Ipv6Addr, port: u16, role: Role) -> io::Result<Self> {
+    /// Bind `port` for `role`, held as `port_use` says. A requested port
+    /// that another socket holds fails with [`held`]'s error.
+    pub async fn bind(
+        requested: Ipv6Addr,
+        port: u16,
+        port_use: PortUse,
+        role: Role,
+    ) -> io::Result<Self> {
         let selection = match role {
             Role::Normal => Some(SelectedLink::resolve(requested).await?),
             Role::Foreign(_) => None,
         };
-        let socket = udp_socket(port)?;
+        let socket = udp_socket(port, port_use)?;
         let bound = match role {
             Role::Foreign(bbmd) => foreign_bind_address(requested, port, bbmd)?,
             Role::Normal => SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, port, 0, 0),
         };
-        socket.bind(&bound.into())?;
+        socket
+            .bind(&bound.into())
+            .map_err(|e| held(bound, port_use, e))?;
         let receiver = DestinationReceiver::configure(&socket, IpVersion::V6)?;
         let sender = if let Some(link) = selection {
             socket.set_multicast_if_v6(link.index)?;
@@ -236,22 +320,11 @@ fn admits(link: SelectedLink, datagram: &ReceivedDatagram) -> bool {
 }
 
 #[cfg(test)]
+mod claim_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn only_an_explicit_port_opts_into_address_reuse() {
-        assert!(!udp_socket(0).unwrap().reuse_address().unwrap());
-        assert!(udp_socket(0xBAC0).unwrap().reuse_address().unwrap());
-        let ephemeral = Bip6Socket::bind(Ipv6Addr::LOCALHOST, 0, Role::Normal)
-            .await
-            .unwrap();
-        assert!(
-            !socket2::SockRef::from(&ephemeral.udp)
-                .reuse_address()
-                .unwrap()
-        );
-    }
 
     #[test]
     fn arrival_interface_and_selected_destination_are_required_before_learning() {

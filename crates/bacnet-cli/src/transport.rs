@@ -12,7 +12,8 @@ use bacnet_types::error::Error;
 pub struct TransportArgs {
     pub interface: Ipv4Addr,
     pub port: u16,
-    /// `--share-port` (#2366): share the B/IP port instead of claiming it.
+    /// `--share-port` (#2366, #2385): share the B/IP or B/IPv6 port instead
+    /// of claiming it.
     pub share_port: bool,
     pub broadcast: Ipv4Addr,
     pub timeout_ms: u64,
@@ -381,6 +382,7 @@ pub async fn build_bip6_client(args: &TransportArgs) -> Result<BACnetClient<Bip6
     let mut builder = BACnetClient::bip6_builder()
         .interface(ipv6_addr)
         .port(args.port)
+        .share_wildcard_port(args.share_port)
         .apdu_timeout_ms(args.timeout_ms)
         .min_request_interval_ms(args.min_interval_ms);
 
@@ -423,6 +425,36 @@ mod tests {
             let args =
                 TransportArgs::from_cli(&cli, Ipv4Addr::LOCALHOST, Ipv4Addr::BROADCAST).unwrap();
             let Err(Error::Transport(refused)) = build_bip_client(&args).await else {
+                panic!("the client started on a held port (share: {share})");
+            };
+            assert!(refused.to_string().contains(says), "{refused}");
+        }
+    }
+
+    /// `--share-port` reaches the B/IPv6 client builder too (#2385), with
+    /// `--ipv6`: the same two errors on a held port, and the same Windows
+    /// exception.
+    #[tokio::test]
+    async fn the_share_port_flag_reaches_the_bip6_client() {
+        let holder = std::net::UdpSocket::bind((Ipv6Addr::UNSPECIFIED, 0)).unwrap();
+        let port = holder.local_addr().unwrap().port().to_string();
+        for (share, says) in [(false, "share_wildcard_port"), (true, "refuses sharing")] {
+            if share && cfg!(windows) {
+                continue;
+            }
+            let mut argv = vec!["bacnet".to_string(), "-p".into(), port.clone()];
+            argv.extend(["--ipv6", "--ipv6-interface", "::1"].map(String::from));
+            argv.extend(["--device-instance", "2385"].map(String::from));
+            argv.extend(share.then(|| "--share-port".to_string()));
+            argv.push("discover".into());
+            let cli = crate::parse_on_large_stack(move || {
+                <crate::args::Cli as clap::Parser>::try_parse_from(argv)
+            })
+            .unwrap();
+            assert_eq!((cli.ipv6, cli.share_port), (true, share));
+            let args =
+                TransportArgs::from_cli(&cli, Ipv4Addr::LOCALHOST, Ipv4Addr::BROADCAST).unwrap();
+            let Err(Error::Transport(refused)) = build_bip6_client(&args).await else {
                 panic!("the client started on a held port (share: {share})");
             };
             assert!(refused.to_string().contains(says), "{refused}");

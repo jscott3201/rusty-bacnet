@@ -1106,6 +1106,9 @@ macOS and the BSDs have no option to refuse the second row. A transport that
 binds after such a socket fails there, though, where before it bound beside
 it and lost that unicast without a word.
 
+A B/IPv6 transport claims its port the same way: see [Claiming the port
+(B/IPv6)](#claiming-the-port-bipv6).
+
 `BipTransport::set_share_wildcard_port(true)` (the B/IP builders'
 `.share_wildcard_port(true)`, `ClientConfig`'s and `ServerConfig`'s
 `share_wildcard_port`, Python's `share_wildcard_port=True` on
@@ -1446,6 +1449,60 @@ full channel warns at most once every 10 seconds, with the number dropped
 since the last warning, as on B/IP. A frame from another node using this
 node's VMAC (a collision) and a BVLC-Result NAK, which anyone can send, log
 above debug at most once every 10 seconds the same way.
+
+#### Claiming the port (B/IPv6)
+
+A B/IPv6 socket claims its port too, whether requested or picked by the OS
+(#2385): it sets no `SO_REUSEADDR`, and on Windows it sets
+`SO_EXCLUSIVEADDRUSE`. Another program that later binds the port fails at
+once, and a transport that finds the port already held fails its `start()`
+with an error naming the port and the opt-in below; the OS error is the
+error's `source()`. Through 0.15, an explicitly requested port set
+`SO_REUSEADDR`, and on Linux and Windows a later socket that set it too
+could bind the port beside the transport and take the unicast sent to it:
+confirmed requests, replies, address resolutions and a foreign device's
+registration results.
+
+The claim needs nothing more of the node. A normal node has one socket, on
+`[::]:port`, which joins the BACnet groups itself, so it takes the groups'
+datagrams, its own broadcasts coming back and its unicast as it did before;
+a port the OS picks was always bound this way. What changes is a second
+B/IPv6 stack on the same host and port: it used to bind, and both heard the
+groups, though only one got each unicast. Now it fails at start unless both
+share.
+
+What a later socket on the port gets once a normal node holds it:
+
+| Later bind | Linux | macOS, BSDs | Windows |
+| --- | --- | --- | --- |
+| `[::]:port`, any reuse option | refused | refused | refused |
+| a specific address or a group address on the port, with `SO_REUSEADDR` or `SO_REUSEPORT` | refused | **binds; on a local address it gets the unicast sent there** | refused |
+| a specific address on the port, with neither | refused | refused | refused |
+
+macOS and the BSDs have no option to refuse the second row, with or without
+the claim.
+
+A foreign device binds its own address, not `[::]`, and claims that address
+and port: another bind of the same address and port is refused on every OS,
+whatever options it sets. Linux refuses `[::]` on the port as well. macOS
+and the BSDs let a socket that sets `SO_REUSEADDR` or `SO_REUSEPORT` bind
+`[::]` there, and it gets none of the unicast sent to the device's address.
+
+`Bip6Transport::set_share_wildcard_port(true)` (the B/IPv6 client builder's
+`.share_wildcard_port(true)`, which sets `ClientConfig::share_wildcard_port`;
+Python's `share_wildcard_port=True` with `transport="ipv6"`; the CLI's
+`--share-port` with `--ipv6`) keeps the old sharing, in normal and in
+foreign mode: the socket sets `SO_REUSEADDR`, so on Linux and Windows other
+sockets that set it can bind the port too. A datagram sent to a BACnet
+group reaches every socket on the port that joined it, but each unicast
+reaches only one of them: on Linux the one that bound last, which then
+takes all of it. Two wildcard sockets, or two on one address, never shared
+a port on macOS and the BSDs, which also want `SO_REUSEPORT` on both; there
+the opt-in only lets the transport bind `[::]` beside a socket that already
+holds a specific address on the port, as it did before. Two stacks on one
+host are better served each on its own port. A port the OS picks is never
+shared, opt-in or not. The server has no B/IPv6 builder: set the option on
+the `Bip6Transport` it is given.
 
 #### Peers are named by VMAC
 

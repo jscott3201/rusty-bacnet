@@ -48,7 +48,7 @@ async fn two_links_explicit_selection_rejects_other_interface_and_local_destinat
     assert_eq!(ambiguous.local_mac(), &[0; 3]);
 
     let (observer, port) = observer(index, true);
-    let mut transport = Bip6Transport::new(selected, port, None);
+    let mut transport = sharing(selected, port, None);
     let mut incoming = transport.start().await.unwrap();
     let local = transport.local_address().unwrap();
     let (announced, published) = (*local.ip(), local.port());
