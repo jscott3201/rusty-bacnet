@@ -5545,7 +5545,7 @@ implements `From<SnapshotError>`, the mapping the file backends use.
 | --- | --- | --- | --- |
 | `snapshot::log` | `LogSnapshot<R>` (Trend Log, Trend Log Multiple, Event Log) | `RBLOGS01`, version 2; version 1 still loads | `FileLogPersistence` (one slot of the two) |
 | `snapshot::audit_log` | `AuditLogSnapshot` | `RBALOG01`, version 3; versions 1 and 2 still load | `FileAuditLogPersistence` (one slot of the two) |
-| `snapshot::write_config` | `WriteConfigSnapshot` (Timer, Channel, an intrinsic reporter's reporting settings, each with a written Description) | `RBNWCF01`, kinds 2 to 5; kind 1 still loads | `FileWriteConfigPersistence` |
+| `snapshot::write_config` | `WriteConfigSnapshot` (Timer, Channel, an intrinsic reporter's reporting settings and an analog object's event algorithm parameters, each with a written Description) | `RBNWCF01`, kinds 2 to 6; kind 1 still loads | `FileWriteConfigPersistence` |
 | `snapshot::notification_class` | `NotificationClassSnapshot` | `RBNNCL01`; `RBNNCL02` with a written Description | `FileNotificationClassPersistence` |
 | `snapshot::notification_forwarder` | `ForwarderSnapshot` | `RBNFWD01`; `RBNFWD02` with a written Description | `FileNotificationForwarderPersistence` |
 | `snapshot::tags` | `TagsSnapshot` | `RBNTAG01`; `RBNTAG02` with a written Description | `FileTagsPersistence` |
