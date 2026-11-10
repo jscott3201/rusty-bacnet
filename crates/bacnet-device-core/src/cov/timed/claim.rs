@@ -27,11 +27,11 @@ use super::{CovSubscriptionKey, DropReason, TimedChange, TimedHistories};
 ///
 /// A claim is only a set of changes. How a notification conveys them, as
 /// history or as a reference's current state, is decided by the report that
-/// builds it; [`TimedClaim::split_oldest`] moves the oldest of them into a
+/// builds it; `TimedClaim::split_oldest` moves the oldest of them into a
 /// claim of their own, for a notification that goes out first (#986, #1008),
-/// [`TimedClaim::split_values`] parts a change too large for any
+/// `TimedClaim::split_values` parts a change too large for any
 /// notification into one claim per value (#1090), and
-/// [`TimedClaim::split_untimed`] moves untimestamped references into a claim
+/// `TimedClaim::split_untimed` moves untimestamped references into a claim
 /// of their own.
 #[derive(Debug)]
 #[must_use = "a claim that is neither committed, given back nor lodged loses its changes"]
@@ -91,13 +91,13 @@ impl TimedClaim {
     }
 
     /// The untimestamped references whose prepared values the claim carries.
-    pub fn untimed(&self) -> impl Iterator<Item = &CovSubscriptionKey> {
+    pub(crate) fn untimed(&self) -> impl Iterator<Item = &CovSubscriptionKey> {
         self.untimed.iter().map(|(key, _, _)| key)
     }
 
     /// Move the untimestamped references `moves` selects into a claim of
     /// their own, for a notification that carries their values.
-    pub fn split_untimed(&mut self, moves: impl Fn(&CovSubscriptionKey) -> bool) -> Self {
+    pub(crate) fn split_untimed(&mut self, moves: impl Fn(&CovSubscriptionKey) -> bool) -> Self {
         let (moved, kept) = core::mem::take(&mut self.untimed)
             .into_iter()
             .partition(|(key, _, _)| moves(key));
@@ -111,7 +111,7 @@ impl TimedClaim {
     /// Return these changes without applying the context bound: a report
     /// planned to send them and only defers them, so the bound must not drop
     /// what it just drained (#986).
-    pub fn without_eviction(mut self) -> Self {
+    pub(crate) fn without_eviction(mut self) -> Self {
         self.evict = false;
         self
     }
@@ -134,7 +134,7 @@ impl TimedClaim {
     /// Move the `count` oldest claimed changes, across every reference and
     /// latest changes included (all of them, if fewer), into a claim of their
     /// own, for a notification that goes out before this one.
-    pub fn split_oldest(&mut self, count: usize) -> Self {
+    pub(crate) fn split_oldest(&mut self, count: usize) -> Self {
         let mut part = self.part();
         let cut = {
             let all = self.in_order();
@@ -167,7 +167,7 @@ impl TimedClaim {
     /// [`TimedHistories::lost_values`] to count. A value that would carry
     /// nothing is left out. Of the parts kept, only the one with a change's
     /// last value delivers the change when it is delivered.
-    pub fn split_values(
+    pub(crate) fn split_values(
         mut self,
         fit: impl Fn(&CovSubscriptionKey, &TimedChange) -> ValueFit,
     ) -> (Vec<Self>, Vec<CovSubscriptionKey>) {
@@ -218,7 +218,7 @@ impl TimedClaim {
     }
 
     /// Each claimed reference with its last claimed change.
-    pub fn last_changes(&self) -> impl Iterator<Item = (&CovSubscriptionKey, &TimedChange)> {
+    pub(crate) fn last_changes(&self) -> impl Iterator<Item = (&CovSubscriptionKey, &TimedChange)> {
         self.changes
             .iter()
             .filter_map(|(key, _, changes)| Some((key, changes.last()?)))
@@ -301,10 +301,10 @@ impl TimedHistories {
         self.counts.untimed_oversized += core::mem::take(&mut claim.untimed).len() as u64;
     }
 
-    /// Count the changes [`TimedClaim::split_values`] found to hold a value
+    /// Count the changes `TimedClaim::split_values` found to hold a value
     /// too large for any notification, one per entry of `lost`; each context
     /// reports its first (#1039).
-    pub fn lost_values(&mut self, lost: &[CovSubscriptionKey]) {
+    pub(crate) fn lost_values(&mut self, lost: &[CovSubscriptionKey]) {
         for key in lost {
             self.dropped(key, 1, DropReason::TooLarge);
         }
@@ -366,7 +366,7 @@ impl TimedHistories {
 /// How the notification of one value of an oversized change would go out
 /// (#1090).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ValueFit {
+pub(crate) enum ValueFit {
     /// Within the subscriber's limit.
     Fits,
     /// Over the limit even with that value alone.

@@ -39,11 +39,11 @@
 //! references, so a context with neither costs nothing here.
 //!
 //! Changes that one notification cannot carry go out in several (§13.1,
-//! §13.18.1.1), strictly in capture order: [`TimedClaim::split_oldest`] moves
+//! §13.18.1.1), strictly in capture order: `TimedClaim::split_oldest` moves
 //! the oldest changes, a reference's latest included, into earlier
 //! notifications (#1008). A change too large for a notification even alone
 //! goes out one value per notification instead, in its captured order
-//! ([`TimedClaim::split_values`]); only the part with its last value delivers
+//! (`TimedClaim::split_values`); only the part with its last value delivers
 //! the change, and parts that come back undelivered rejoin as one change
 //! (#1090). An unconfirmed context sends one such report at a time
 //! ([`TimedHistories::begin_send`]), so a later report cannot overtake the
@@ -134,13 +134,18 @@
 //! ([`TimedHistories::lodge`]), which is given back at its deadline if its
 //! holder never settled it. [`TimedHistories::take_due`] acts on both.
 //!
-//! **Unstable until #2320's last part.** The module is public so that
-//! `bacnet-server` can run on it while the fanout that strings its calls
-//! together is still the server's. The split of a report to the subscriber's
-//! APDU size is in the core now
-//! ([`multiple_chunks`](super::multiple_chunks)), so the sizing helpers it
-//! needs are private to the crate again. [`TimedClaim`]'s splits and the
-//! settling calls may still change shape as a `Reporter` takes them over.
+//! A host does not string these calls together itself. Its fanout runs on
+//! [`multiple_report`](super::multiple_report), which drains, adopts and
+//! times through this module and splits each report
+//! ([`multiple_chunks`](super::multiple_chunks)), and its producers on
+//! [`timed_capture`](super::timed_capture). What a host calls here is what
+//! those steps leave to it: the deadline ([`TimedHistories::take_due`]),
+//! the counts and drops, and the settling of what a report hands it:
+//! [`TimedHistories::commit`], [`TimedHistories::give_back`],
+//! [`TimedHistories::lodge`] and [`TimedHistories::settle`] for a claim,
+//! [`TimedHistories::end_send`] for a send turn. The calls only the steps
+//! need (a claim's splits, the field times, the reserve) are private to the
+//! crate.
 
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::vec;
@@ -443,7 +448,7 @@ fn own_value(key: &CovSubscriptionKey, values: &[COVNotificationValue]) -> Optio
 
 /// How [`TimedHistories::field_time`] times a carried field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FieldTiming {
+pub(crate) enum FieldTiming {
     /// The reference is no longer live: the field is an ordinary value.
     NotLive,
     /// No time belongs to this value: leave the field out.
@@ -564,7 +569,7 @@ impl TimedHistories {
     /// lifetime it has left size the envelope of each (#1197). The admission
     /// may have changed the context's references, so the reserve for its
     /// untimestamped values starts over and its next report notes it again.
-    pub fn set_sizing(
+    pub(crate) fn set_sizing(
         &mut self,
         context: &MultipleContextKey,
         subscriber: Option<u16>,
@@ -589,7 +594,7 @@ impl TimedHistories {
     /// The history bound keeps room for the most they have taken, at most one
     /// notification's worth, since they travel with the last notification of
     /// the next report too.
-    pub fn note_reserve(&mut self, context: &MultipleContextKey, octets: usize) {
+    pub(crate) fn note_reserve(&mut self, context: &MultipleContextKey, octets: usize) {
         if let Some(terms) = self.terms.get_mut(context) {
             terms.reserve = terms.reserve.max(octets.min(terms.notification()));
         }
@@ -873,7 +878,7 @@ impl TimedHistories {
     /// is untouched. Without a time, because the clock is invalid or because a
     /// producer snapshot may be older than the record, the field has none to
     /// give.
-    pub fn field_time(
+    pub(crate) fn field_time(
         &mut self,
         key: &CovSubscriptionKey,
         generation: u64,
@@ -902,7 +907,7 @@ impl TimedHistories {
     /// Record the own-field value a capture saw although it did not qualify
     /// (it moved less than the reference's increment), at `frame`, the time of
     /// the commit, so a sibling carrying it reports when it really changed.
-    pub fn note_field(
+    pub(crate) fn note_field(
         &mut self,
         key: &CovSubscriptionKey,
         generation: u64,
@@ -940,7 +945,7 @@ impl TimedHistories {
 
     /// Sequence a change and make it the reference's baseline without
     /// queueing it (the builder's current-state fallback).
-    pub fn adopt(
+    pub(crate) fn adopt(
         &mut self,
         key: &CovSubscriptionKey,
         generation: u64,
@@ -1106,7 +1111,8 @@ mod owed;
 use bound::Held;
 pub(crate) use bound::envelope_len;
 pub(crate) use bound::request_header;
-pub use claim::{ClaimId, Settlement, TimedClaim, ValueFit};
+pub(crate) use claim::ValueFit;
+pub use claim::{ClaimId, Settlement, TimedClaim};
 use drops::DropWarnings;
 pub use drops::{DropReason, Dropped};
 pub use follow::follow_table;

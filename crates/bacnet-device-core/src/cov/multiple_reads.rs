@@ -16,11 +16,11 @@ use super::{CovObservation, CovSubscription};
 
 /// One reference's current values and the observation they establish, read
 /// once; [`MultipleReads::reports`] later qualifies it without object reads.
-pub struct PreparedReference {
+pub(crate) struct PreparedReference {
     /// Conveyed values without Time_Of_Change.
-    pub values: Vec<COVNotificationValue>,
+    pub(crate) values: Vec<COVNotificationValue>,
     /// Baseline established by conveying these values.
-    pub observation: CovObservation,
+    pub(crate) observation: CovObservation,
     oid: ObjectIdentifier,
     criterion: Option<super::prepare::PreparedCovValue>,
 }
@@ -29,7 +29,7 @@ pub struct PreparedReference {
 /// Status_Flags and specialized Value_Source report are read once, so sibling
 /// selectors never observe two versions of the same object.
 #[derive(Default)]
-pub struct MultipleReads {
+pub(crate) struct MultipleReads {
     flags: BTreeMap<ObjectIdentifier, Result<PreparedFlags, Error>>,
     sources: BTreeMap<ObjectIdentifier, Result<PreparedValueSource, Error>>,
 }
@@ -37,7 +37,7 @@ pub struct MultipleReads {
 impl MultipleReads {
     /// Capture the specialized Value_Source report of `object` when `sub`
     /// selects it. Run for every reference before any [`Self::prepare`].
-    pub fn capture_source(&mut self, object: &dyn BACnetObject, sub: &CovSubscription) {
+    pub(crate) fn capture_source(&mut self, object: &dyn BACnetObject, sub: &CovSubscription) {
         if sub.monitored_property != Some(PropertyIdentifier::VALUE_SOURCE)
             || !value_source::applies(object, PropertyIdentifier::VALUE_SOURCE)
         {
@@ -57,7 +57,7 @@ impl MultipleReads {
 
     /// Prepare `sub` from `object` when it reports against `baseline` (or
     /// unconditionally when `force`). `None` when unreportable or unreadable.
-    pub fn prepare(
+    pub(crate) fn prepare(
         &mut self,
         object: &dyn BACnetObject,
         sub: &CovSubscription,
@@ -70,7 +70,7 @@ impl MultipleReads {
 
     /// Read `sub`'s current values from `object`. Every object read of a
     /// preparation happens here; `None` when unreadable.
-    pub fn read(
+    pub(crate) fn read(
         &mut self,
         object: &dyn BACnetObject,
         sub: &CovSubscription,
@@ -145,7 +145,11 @@ impl MultipleReads {
 
     /// Whether a read reference reports against `baseline`: its reporting
     /// criterion or a present Status_Flags change. Reads no object state.
-    pub fn reports(&self, prepared: &PreparedReference, baseline: Option<&CovObservation>) -> bool {
+    pub(crate) fn reports(
+        &self,
+        prepared: &PreparedReference,
+        baseline: Option<&CovObservation>,
+    ) -> bool {
         match &prepared.criterion {
             Some(value) => {
                 value.reports(baseline.map(|o| o.sample()))
@@ -160,13 +164,13 @@ impl MultipleReads {
     }
 
     /// Encoded Status_Flags of an object already read by this preparation.
-    pub fn encoded_flags(&self, oid: &ObjectIdentifier) -> Option<&[u8]> {
+    pub(crate) fn encoded_flags(&self, oid: &ObjectIdentifier) -> Option<&[u8]> {
         self.flags.get(oid)?.as_ref().ok()?.encoded.as_deref()
     }
 
     /// `values` plus the object's Status_Flags companion, captured in the same
     /// read, unless the reference already conveys Status_Flags.
-    pub fn with_flags_companion(
+    pub(crate) fn with_flags_companion(
         &self,
         oid: &ObjectIdentifier,
         mut values: Vec<COVNotificationValue>,

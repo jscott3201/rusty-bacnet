@@ -23,13 +23,18 @@
 //! notifications completes only the references it carries, and any value a
 //! sibling's time stamps there belongs to a change already conveyed. A
 //! reference whose values fit no notification alone is left out and handed
-//! back in [`Split::forgone`] for the host to count and log (#1066); it is
+//! back in `Split::forgone` for the host to count and log (#1066); it is
 //! evaluated again at its next fanout.
 //!
 //! The split holds no histories. It takes the claim as plain data and hands
 //! back, beside the parts, what the histories have to be told: the changes
-//! that lost a value ([`Split::lost`]), the references left out
-//! ([`Split::forgone`]) and whatever no part carries ([`Split::rest`]).
+//! that lost a value (`Split::lost`), the references left out
+//! (`Split::forgone`) and whatever no part carries (`Split::rest`).
+//!
+//! The split and its inputs are private to the crate: a host reaches it
+//! through [`Gathered::split`](super::multiple_report::Gathered::split),
+//! which lends it the histories and tells them what it gave up. Of this
+//! module a host sees the [`Part`]s of a report.
 use alloc::collections::BTreeSet;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -71,13 +76,13 @@ pub fn cov_multiple_datetime(
 }
 
 /// Envelope fields every notification of one report shares.
-pub struct Envelope {
+pub(crate) struct Envelope {
     /// The subscriber's process identifier.
-    pub subscriber_process_identifier: u32,
+    pub(crate) subscriber_process_identifier: u32,
     /// The Device sending the report.
-    pub initiating_device_identifier: ObjectIdentifier,
+    pub(crate) initiating_device_identifier: ObjectIdentifier,
     /// Seconds of lifetime the context has left.
-    pub time_remaining: u32,
+    pub(crate) time_remaining: u32,
 }
 
 impl Envelope {
@@ -98,21 +103,21 @@ impl Envelope {
 
 /// A report split into the notifications that convey it, with what the split
 /// gave up or left over.
-pub struct Split {
+pub(crate) struct Split {
     /// The notifications, in the order they go out.
-    pub parts: Vec<Part>,
+    pub(crate) parts: Vec<Part>,
     /// The reference of each change that lost a value too large for any
     /// notification to the subscriber, once per change and in capture order
     /// (#1090): `TimedHistories::lost_values` counts them.
-    pub lost: Vec<CovSubscriptionKey>,
+    pub(crate) lost: Vec<CovSubscriptionKey>,
     /// The untimestamped references whose values fit no notification on
     /// their own (#1066): `TimedHistories::forgo_untimed` counts them, and
     /// they are not owed.
-    pub forgone: TimedClaim,
+    pub(crate) forgone: TimedClaim,
     /// What no part carries: the changes of a last notification that would
     /// convey nothing. `TimedHistories::give_back` returns them to their
     /// references.
-    pub rest: TimedClaim,
+    pub(crate) rest: TimedClaim,
 }
 
 /// One notification of a report, with the changes and values it retires once
@@ -131,7 +136,7 @@ pub struct Part {
 
 /// Service-request octets one notification may take: the smaller of the local
 /// maximum APDU and the subscriber's, less the request header.
-pub fn request_limit(local: u32, subscriber: Option<u16>, confirmed: bool) -> usize {
+pub(crate) fn request_limit(local: u32, subscriber: Option<u16>, confirmed: bool) -> usize {
     let local = usize::try_from(local).unwrap_or(usize::MAX);
     let apdu = subscriber.map_or(local, |subscriber| local.min(usize::from(subscriber)));
     apdu.saturating_sub(request_header(confirmed))
@@ -139,7 +144,7 @@ pub fn request_limit(local: u32, subscriber: Option<u16>, confirmed: bool) -> us
 
 /// Octets the untimestamped values among `retained` take, with one item's
 /// framing per object.
-pub fn untimed_octets(retained: &Retained<'_>) -> usize {
+pub(crate) fn untimed_octets(retained: &Retained<'_>) -> usize {
     let mut objects = BTreeSet::new();
     retained
         .iter()
@@ -156,19 +161,19 @@ pub fn untimed_octets(retained: &Retained<'_>) -> usize {
 }
 
 /// What one report's notifications carry besides the claimed changes.
-pub struct ReportContent<'a> {
+pub(crate) struct ReportContent<'a> {
     /// The fields every notification of the report shares.
-    pub envelope: &'a Envelope,
+    pub(crate) envelope: &'a Envelope,
     /// Each reference the report carries, with its prepared current values.
-    pub retained: &'a Retained<'a>,
+    pub(crate) retained: &'a Retained<'a>,
     /// The reads the report's values came from.
-    pub reads: &'a MultipleReads,
+    pub(crate) reads: &'a MultipleReads,
     /// The coordinates the context subscribes without timestamps.
-    pub untimed: &'a BTreeSet<Coordinate>,
+    pub(crate) untimed: &'a BTreeSet<Coordinate>,
     /// Times a field of a timestamped reference that conveys no change in the
     /// last notification, carried by a sibling (#987). Only the last
     /// notification has such current values.
-    pub stamp: &'a Stamp<'a>,
+    pub(crate) stamp: &'a Stamp<'a>,
 }
 
 impl ReportContent<'_> {
@@ -246,7 +251,7 @@ fn fits(notification: &COVNotificationMultipleRequest, limit: usize) -> bool {
 /// goes out one value per notification (#1090). Untimestamped values that do
 /// not fit one notification alone go out after every change, in as many
 /// notifications as they need.
-pub fn split(content: &ReportContent<'_>, mut claim: TimedClaim, limit: usize) -> Split {
+pub(crate) fn split(content: &ReportContent<'_>, mut claim: TimedClaim, limit: usize) -> Split {
     // Each earlier part as its count of the oldest remaining changes, and
     // whether that one change cannot fit a notification on its own.
     let plan = {
