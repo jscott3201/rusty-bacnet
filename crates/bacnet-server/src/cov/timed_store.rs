@@ -4,9 +4,9 @@
 //! the log lines for dropped changes (#1039).
 //!
 //! The histories count, report and flag; the store publishes. Each
-//! [`TimedStore::lock`] hands out a guard that, when it drops, adds what the
+//! [`HistoryStore::lock`] hands out a guard that, when it drops, adds what the
 //! section counted to the atomics, logs what it dropped, and wakes
-//! [`TimedStore::next_due`] if a deadline may have moved earlier. So every
+//! [`HistoryStore::next_due`] if a deadline may have moved earlier. So every
 //! caller sees the counters and the warnings as it did when the histories
 //! held them, and nothing is published outside the lock. One thing differs
 //! in the log: the histories keep 64 repeat reports for one section, so a
@@ -14,7 +14,7 @@
 //!
 //! The histories settle a claim only when told. The server's fanout and
 //! workers return from many places, and a worker can be aborted, so here a
-//! claim settles itself when dropped: [`TimedClaim`] gives its changes back
+//! claim settles itself when dropped: [`ClaimGuard`] gives its changes back
 //! unless it was committed, [`LodgedClaim`] does the same for a claim the
 //! histories keep for a confirmed worker, and [`SendTurn`] ends an
 //! unconfirmed context's report. Each takes only this store's mutex, a leaf
@@ -41,17 +41,17 @@ use bacnet_device_core::cov::timed::{
 #[derive(Debug)]
 struct Shared {
     histories: Mutex<TimedHistories>,
-    /// Wakes [`TimedStore::next_due`] when a deadline may have moved earlier.
+    /// Wakes [`HistoryStore::next_due`] when a deadline may have moved earlier.
     wake: Notify,
     counters: Arc<AtomicCovCounters>,
 }
 
 /// Shared handle to the table's timestamped histories. Locked only for short
 /// synchronous sections; never held across an await, and never while a
-/// [`TimedClaim`], a [`LodgedClaim`] or a [`SendTurn`] of the same store is
+/// [`ClaimGuard`], a [`LodgedClaim`] or a [`SendTurn`] of the same store is
 /// dropped.
 #[derive(Debug, Clone)]
-pub(crate) struct TimedStore {
+pub(crate) struct HistoryStore {
     shared: Arc<Shared>,
 }
 
@@ -110,7 +110,7 @@ impl Drop for TimedGuard<'_> {
     }
 }
 
-impl TimedStore {
+impl HistoryStore {
     pub(super) fn new(max_apdu_length: usize, counters: Arc<AtomicCovCounters>) -> Self {
         Self {
             shared: Arc::new(Shared {
@@ -186,19 +186,19 @@ impl TimedStore {
 
 /// Changes drained into one notification, and the untimestamped references
 /// whose prepared values it carries: a [`timed::TimedClaim`] that settles
-/// itself. Unless [`TimedClaim::commit`] is called once the notification is
+/// itself. Unless [`ClaimGuard::commit`] is called once the notification is
 /// delivered, dropping it gives the claim back to the histories
 /// ([`TimedHistories::give_back`]), on any early return or failed send.
 ///
 /// Its methods are the plain claim's, which has the policy.
 #[derive(Debug)]
-pub(crate) struct TimedClaim {
-    store: TimedStore,
+pub(crate) struct ClaimGuard {
+    store: HistoryStore,
     claim: timed::TimedClaim,
 }
 
-impl TimedClaim {
-    pub(crate) fn new(store: TimedStore) -> Self {
+impl ClaimGuard {
+    pub(crate) fn new(store: HistoryStore) -> Self {
         Self {
             store,
             claim: timed::TimedClaim::new(),
@@ -316,7 +316,7 @@ impl TimedClaim {
     }
 }
 
-impl Drop for TimedClaim {
+impl Drop for ClaimGuard {
     fn drop(&mut self) {
         if self.claim.is_empty() {
             return;
@@ -336,7 +336,7 @@ impl Drop for TimedClaim {
 /// nothing.
 #[derive(Debug)]
 pub(crate) struct LodgedClaim {
-    store: TimedStore,
+    store: HistoryStore,
     id: Option<ClaimId>,
 }
 
@@ -370,7 +370,7 @@ impl Drop for LodgedClaim {
 /// follow-up if a fanout stood back.
 #[must_use = "dropping the turn ends the report"]
 pub(crate) struct SendTurn {
-    store: TimedStore,
+    store: HistoryStore,
     context: MultipleContextKey,
     revisits: Arc<CovRevisits>,
     keys: Vec<CovSubscriptionKey>,
@@ -380,7 +380,7 @@ impl SendTurn {
     /// Take the turn of `context`, unless a report of it is still going out.
     /// `keys` are the context's references, for the follow-up.
     pub(crate) fn begin(
-        store: &TimedStore,
+        store: &HistoryStore,
         context: &MultipleContextKey,
         revisits: &Arc<CovRevisits>,
         keys: Vec<CovSubscriptionKey>,

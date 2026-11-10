@@ -36,7 +36,7 @@ use tracing::warn;
 
 use super::cov_clock::cov_multiple_datetime;
 use super::multiple_items::{Coordinate, History, Latest, Retained, Stamp, build_items};
-use crate::cov::timed_store::TimedClaim;
+use crate::cov::timed_store::ClaimGuard;
 use bacnet_device_core::cov::CovSubscriptionKey;
 use bacnet_device_core::cov::CovSubscriptionSnapshot;
 use bacnet_device_core::cov::multiple_reads::MultipleReads;
@@ -71,7 +71,7 @@ impl Envelope {
 /// delivered.
 pub(super) struct Part {
     pub(super) notification: COVNotificationMultipleRequest,
-    pub(super) claim: TimedClaim,
+    pub(super) claim: ClaimGuard,
     /// References whose observation this part's delivery completes: each
     /// timestamped reference whose latest drained change it carries, and each
     /// untimestamped reference whose values it carries.
@@ -191,7 +191,7 @@ fn fits(notification: &COVNotificationMultipleRequest, limit: usize) -> bool {
 /// goes out one value per notification (#1090). Untimestamped values that do
 /// not fit one notification alone go out after every change, in as many
 /// notifications as they need.
-pub(super) fn split(content: &ReportContent<'_>, mut claim: TimedClaim, limit: usize) -> Vec<Part> {
+pub(super) fn split(content: &ReportContent<'_>, mut claim: ClaimGuard, limit: usize) -> Vec<Part> {
     // Each earlier part as its count of the oldest remaining changes, and
     // whether that one change cannot fit a notification on its own.
     let plan = {
@@ -258,9 +258,9 @@ pub(super) fn split(content: &ReportContent<'_>, mut claim: TimedClaim, limit: u
 /// claim, finishing every untimestamped reference, unless it carries nothing.
 fn finish(
     content: &ReportContent<'_>,
-    parts: Vec<(COVNotificationMultipleRequest, TimedClaim)>,
+    parts: Vec<(COVNotificationMultipleRequest, ClaimGuard)>,
     last: COVNotificationMultipleRequest,
-    claim: TimedClaim,
+    claim: ClaimGuard,
 ) -> Vec<Part> {
     let mut parts = history_parts(parts);
     if !last.list_of_cov_notifications.is_empty() {
@@ -280,7 +280,7 @@ fn finish(
 }
 
 /// Parts of history only, finishing nothing yet.
-fn history_parts(parts: Vec<(COVNotificationMultipleRequest, TimedClaim)>) -> Vec<Part> {
+fn history_parts(parts: Vec<(COVNotificationMultipleRequest, ClaimGuard)>) -> Vec<Part> {
     parts
         .into_iter()
         .map(|(notification, claim)| Part {
@@ -314,7 +314,7 @@ type Untimed<'a> = (&'a CovSubscriptionSnapshot, &'a [COVNotificationValue]);
 /// whole object items, and one object's references apart where its item does
 /// not fit alone. A reference whose values fit no notification alone is left
 /// out and counted, not owed (#1038, #1066).
-fn untimed_parts(content: &ReportContent<'_>, mut claim: TimedClaim, limit: usize) -> Vec<Part> {
+fn untimed_parts(content: &ReportContent<'_>, mut claim: ClaimGuard, limit: usize) -> Vec<Part> {
     // Untimestamped references by object, in the order they were retained.
     let mut objects: Vec<Vec<Untimed<'_>>> = Vec::new();
     for &(sub, values) in content.retained.iter().filter(|(sub, _)| !sub.timestamped) {

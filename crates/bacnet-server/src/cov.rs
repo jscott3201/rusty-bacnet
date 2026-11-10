@@ -58,7 +58,7 @@ pub struct CovSubscriptionTable {
     counters: Arc<AtomicCovCounters>,
     in_flight: Arc<CovInFlightTracker>,
     dispatch_turn: usize,
-    timed: timed_store::TimedStore,
+    timed: timed_store::HistoryStore,
     /// Live list samples taken for read requests, so tests can see which
     /// requests snapshot the table (#1213).
     #[cfg(test)]
@@ -79,7 +79,8 @@ impl CovSubscriptionTable {
 
     /// Create a new COV subscription table with a custom policy and counters.
     pub fn with_policy(policy: CovPolicy, counters: Arc<AtomicCovCounters>) -> Self {
-        let timed = timed_store::TimedStore::new(DEFAULT_TIMED_APDU_LENGTH, Arc::clone(&counters));
+        let timed =
+            timed_store::HistoryStore::new(DEFAULT_TIMED_APDU_LENGTH, Arc::clone(&counters));
         Self {
             core: CovTable::new(policy),
             wakes: BTreeMap::new(),
@@ -96,7 +97,7 @@ impl CovSubscriptionTable {
     /// Bound each Multiple context's pending timestamped changes by what one
     /// notification of this maximum APDU length can carry.
     pub fn with_max_apdu_length(mut self, max_apdu_length: usize) -> Self {
-        self.timed = timed_store::TimedStore::new(max_apdu_length, Arc::clone(&self.counters));
+        self.timed = timed_store::HistoryStore::new(max_apdu_length, Arc::clone(&self.counters));
         self
     }
 
@@ -128,7 +129,7 @@ impl CovSubscriptionTable {
     }
 
     /// Pending timestamped COV-multiple changes of this table's references.
-    pub(crate) fn timed(&self) -> &timed_store::TimedStore {
+    pub(crate) fn timed(&self) -> &timed_store::HistoryStore {
         &self.timed
     }
 

@@ -3,7 +3,7 @@ use super::confirmed::ConfirmedReport;
 use super::multiple_chunks::{Envelope, Part, ReportContent, request_limit, split, untimed_octets};
 use super::multiple_items::{Coordinate, FieldStamp};
 use super::*;
-use crate::cov::timed_store::{SendTurn, TimedClaim};
+use crate::cov::timed_store::{ClaimGuard, SendTurn};
 use bacnet_device_core::cov::multiple_reads::MultipleReads;
 use bacnet_device_core::cov::timed::{FieldTiming, TimedChange};
 use std::collections::HashSet;
@@ -109,7 +109,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let mut turn: Option<SendTurn> = None;
         // Timestamped changes drained for this notification; dropping the claim
         // without commit (any early return, failed send) requeues them.
-        let mut claim: Option<TimedClaim> = None;
+        let mut claim: Option<ClaimGuard> = None;
         let (parts, last_notified, representative) = {
             // One DB borrow, released before any send, supplies the clock
             // sample for any current-state fallback and every value; the
@@ -233,7 +233,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         None => return,
                     }
                 }
-                let claim = claim.insert(TimedClaim::new(store.clone()));
+                let claim = claim.insert(ClaimGuard::new(store.clone()));
                 // Since when each evaluated untimestamped reference is owed. A
                 // mark taken here without a report to carry it is settled: the
                 // reference had nothing left to report.

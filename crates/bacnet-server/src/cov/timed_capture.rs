@@ -20,7 +20,7 @@ use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
-use super::timed_store::TimedStore;
+use super::timed_store::HistoryStore;
 use super::{CovSubscriptionSnapshot, CovSubscriptionTable};
 use bacnet_device_core::cov::life_safety::{
     LifeSafetyCovChange, LifeSafetyCovSnapshots, is_life_safety_object,
@@ -32,7 +32,7 @@ use bacnet_device_core::write::{WriteCommitObserver, WriteTarget};
 
 /// Live timestamped references whose changes a producer must capture.
 pub(crate) struct TimedCapture {
-    store: TimedStore,
+    store: HistoryStore,
     refs: Vec<CovSubscriptionSnapshot>,
     force: bool,
     /// Device clock sample the caller already validated, instead of a read.

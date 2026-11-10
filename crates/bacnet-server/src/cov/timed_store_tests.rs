@@ -73,14 +73,14 @@ fn seconds(changes: &[TimedChange]) -> Vec<u8> {
         .collect()
 }
 
-fn store() -> (TimedStore, Arc<AtomicCovCounters>) {
+fn store() -> (HistoryStore, Arc<AtomicCovCounters>) {
     let counters = Arc::new(AtomicCovCounters::default());
-    (TimedStore::new(1476, Arc::clone(&counters)), counters)
+    (HistoryStore::new(1476, Arc::clone(&counters)), counters)
 }
 
 /// A claim of every pending change of `k`'s generation 1.
-fn claim_all(store: &TimedStore, k: &CovSubscriptionKey) -> TimedClaim {
-    let mut claim = TimedClaim::new(store.clone());
+fn claim_all(store: &HistoryStore, k: &CovSubscriptionKey) -> ClaimGuard {
+    let mut claim = ClaimGuard::new(store.clone());
     let (incarnation, drained) = store.lock().drain(k, 1);
     claim.add(k.clone(), incarnation, drained);
     claim
@@ -261,7 +261,7 @@ fn the_guard_publishes_what_a_section_counted() {
     store.lock().reset_untimed(&a, 1, 10);
     store.lock().reset(&b, 1, 0);
     // An untimestamped reference whose values fit no notification.
-    let mut claim = TimedClaim::new(store.clone());
+    let mut claim = ClaimGuard::new(store.clone());
     claim.add_untimed(a.clone(), 1, None);
     claim.forgo_untimed();
     assert_eq!(
@@ -325,7 +325,7 @@ async fn a_lodged_claim_is_settled_by_its_worker_or_at_its_deadline() {
 #[test]
 fn a_sections_drops_past_the_kept_reports_are_counted_for_one_line() {
     // A device so small that its ceiling holds two of these changes.
-    let small = TimedStore::new(60, Arc::new(AtomicCovCounters::default()));
+    let small = HistoryStore::new(60, Arc::new(AtomicCovCounters::default()));
     let k = key(1, 1);
     let mut histories = small.lock();
     histories.reset(&k, 1, 0);
