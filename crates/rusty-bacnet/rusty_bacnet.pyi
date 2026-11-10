@@ -2539,6 +2539,97 @@ class DiscoveredDevice:
     def __repr__(self) -> str: ...
 
 
+class Inventory223Experimental:
+    """A device's objects as the experimental Standard 223 export read them
+    (``BACnetClient.export_223_experimental``). Device text is kept exactly
+    as the device sent it. Refuses ``copy`` and ``pickle``."""
+
+    @property
+    def device_instance(self) -> int:
+        """The device instance."""
+        ...
+
+    @property
+    def device_name(self) -> Optional[str]:
+        """The Device object's Object_Name, exactly as the device sent it;
+        None when it couldn't be read."""
+        ...
+
+    @property
+    def objects(self) -> list[Object223Experimental]:
+        """The objects read, in Object_List order."""
+        ...
+
+    @property
+    def stopped(self) -> Optional[str]:
+        """Why the reading stopped early, None when it didn't: the device
+        stopped answering. The objects after that point are missing."""
+        ...
+
+    def to_turtle(
+        self, base_iri: Optional[str] = None, write_priority: Optional[int] = None
+    ) -> str:
+        """The inventory as Turtle. ``base_iri`` defaults to
+        ``http://example.org/bacnet/``; each device's nodes go under
+        ``<base_iri>device-<instance>/``. ``write_priority`` (1 to 16) goes in
+        the reference of every commandable point. A bad base IRI or
+        priority raises ValueError saying which rule failed."""
+        ...
+
+    def __repr__(self) -> str: ...
+
+
+class Object223Experimental:
+    """One object of an ``Inventory223Experimental``."""
+
+    @property
+    def object_identifier(self) -> ObjectIdentifier:
+        """The object."""
+        ...
+
+    @property
+    def name(self) -> Optional[str]:
+        """Its Object_Name; None when it couldn't be read."""
+        ...
+
+    @property
+    def description(self) -> Optional[str]:
+        """Its Description; None when it has none or couldn't be read."""
+        ...
+
+    @property
+    def units(self) -> Optional[EngineeringUnits]:
+        """An analog object's Units; None for other objects or when not read."""
+        ...
+
+    @property
+    def number_of_states(self) -> Optional[int]:
+        """A multi-state object's Number_Of_States; None for other objects or
+        when not read."""
+        ...
+
+    @property
+    def state_texts(self) -> list[str]:
+        """A multi-state object's State_Text, state 1 first; empty for other
+        objects or when not read. An entry that wasn't a string is ""."""
+        ...
+
+    @property
+    def commandable(self) -> bool:
+        """Whether it has a Priority_Array: always for an output, and for a
+        value when the device gave one. The Turtle makes such a point
+        actuatable."""
+        ...
+
+    @property
+    def error(self) -> Optional[str]:
+        """Why its read failed, None when it didn't; the Turtle skips such an
+        object."""
+        ...
+
+    def __repr__(self) -> str: ...
+
+
 class CovNotification:
     """A Change-of-Value notification received from a remote device."""
 
@@ -4102,6 +4193,23 @@ class BACnetClient:
         before discovery or dispatch: nonempty request/property lists, no special
         selectors, priority None or 1..16. Invalid u8 priorities/structure raise
         ValueError; priorities outside u8 raise OverflowError.
+        """
+        ...
+
+    def export_223_experimental(
+        self, device_instance: int, *, types: Optional[list[ObjectType]] = None
+    ) -> Awaitable[Inventory223Experimental]:
+        """Read a device's objects for the experimental Standard 223 export
+        (#2436): its name, its Object_List, then one request per object of
+        the selected types. ``to_turtle()`` on the result writes the Turtle.
+
+        The device is looked up in the discovery table, as the
+        ``_from_device`` methods look it up. ``types`` narrows the objects read
+        (analog, binary and multi-state inputs, outputs and values; all
+        nine by default). Another type or an empty list raises ValueError
+        before anything is sent. A failure before the Object_List is in
+        raises the usual error; a device that stops answering after it
+        gives an inventory with ``stopped`` set.
         """
         ...
 

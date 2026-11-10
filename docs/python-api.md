@@ -1981,6 +1981,57 @@ await client.write_property_multiple_to_device(1234, [
 ])
 ```
 
+### Standard 223 export (experimental)
+
+#### `export_223_experimental(device_instance, *, types=None) -> Inventory223Experimental`
+
+Reads one device's analog, binary and multi-state inputs, outputs and
+values for an experimental point list in the form of proposed ASHRAE
+Standard 223, the same export as the CLI's
+[`bacnet export 223-experimental`](CLI.md#standard-223-export-experimental).
+The result is plain data; `to_turtle()` writes the Turtle.
+
+```python
+await client.add_device(1234, "192.168.1.100:47808")   # or discover it
+inventory = await client.export_223_experimental(1234)
+for point in inventory.objects:
+    print(point.object_identifier, point.name, point.units, point.commandable)
+turtle = inventory.to_turtle(base_iri="https://example.com/site-a/", write_priority=8)
+```
+
+- The device is looked up in the discovery table, as the `_from_device`
+  methods look it up. `types=[ObjectType.ANALOG_INPUT, ...]` narrows the
+  objects read; another type, or an empty list, raises `ValueError` before
+  anything is sent.
+- It costs the device name, its Object_List and one ReadPropertyMultiple
+  per exported object, one at a time; a device that refuses
+  ReadPropertyMultiple is read a property at a time, as the CLI section
+  counts. Present_Value is never read.
+- A failure before the Object_List is in raises the usual error. A device
+  that stops answering after that gives an inventory with `stopped` set
+  (a reason string) and the objects read before it; the Turtle's header
+  says it is incomplete.
+- `Inventory223Experimental` has `device_instance`, `device_name`
+  (`str | None`), `objects` (a list of `Object223Experimental`, in
+  Object_List order) and `stopped`. Each object has `object_identifier`,
+  `name`, `description`, `units` (`EngineeringUnits | None`, analog
+  objects), `number_of_states` and `state_texts` (multi-state objects),
+  `commandable` (it has a Priority_Array) and `error` (its read failed, and
+  the Turtle skips it). Device text is kept exactly as the device sent it.
+- `to_turtle(base_iri=None, write_priority=None)` takes the base the CLI's
+  `--base-iri` takes (default `http://example.org/bacnet/`) and a command
+  priority, 1 to 16, for the reference of each commandable point. A bad
+  base or priority raises `ValueError` saying which rule failed. Give each
+  site or internetwork a base of its own: a device instance is unique only
+  within one internetwork.
+
+**Limits.** As in the CLI section: the draft and this export can change
+between releases, which is why the names say experimental. The output is a
+point list, not a building model (no equipment, connections or sensors);
+shape validation warns about the missing sensors and equipment; instance 0
+has no identifier string in its reference; a unit with no QUDT mapping gets
+QUDT's unknown quantity kind and a comment.
+
 ---
 
 ### Time Synchronization

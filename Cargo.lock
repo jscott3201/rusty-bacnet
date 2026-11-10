@@ -3329,6 +3329,7 @@ dependencies = [
  "bacnet-network",
  "bacnet-npdu",
  "bacnet-objects",
+ "bacnet-ops",
  "bacnet-server",
  "bacnet-services",
  "bacnet-transport",
