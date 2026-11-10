@@ -1,6 +1,6 @@
-use super::cov_clock::cov_multiple_datetime;
 use super::*;
 use crate::server::test_transport::{BIP_LOCAL_MAC, SendLog, SendMode, TestTransport};
+use bacnet_device_core::cov::multiple_chunks::cov_multiple_datetime;
 use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_objects::analog::AnalogOutputObject;

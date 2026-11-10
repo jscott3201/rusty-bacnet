@@ -211,6 +211,14 @@ impl CovTable {
         core::mem::take(&mut self.fenced)
     }
 
+    /// What [`Self::take_fenced`] would take, left in place: for the
+    /// crate's own steps that keep other state in line with the table
+    /// before the host takes the rest.
+    #[cfg(feature = "cov-multiple")]
+    pub(crate) fn fenced(&self) -> &Fenced {
+        &self.fenced
+    }
+
     /// Get the number of active subscriptions for a peer.
     pub fn peer_subscription_count(&self, peer: &CovRecipient) -> usize {
         self.peer_counts.get(peer).copied().unwrap_or(0)

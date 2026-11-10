@@ -1,12 +1,14 @@
 use super::super::cov_notify_context::{CovFanoutHandles, CovNotifyContext};
 use super::confirmed::ConfirmedReport;
-use super::multiple_chunks::{Envelope, Part, ReportContent, request_limit, split, untimed_octets};
-use super::multiple_items::{Coordinate, FieldStamp};
 use super::*;
-use crate::cov::timed_store::{SendTurn, TimedClaim};
+use crate::cov::timed_store::{ClaimGuard, SendTurn};
+use bacnet_device_core::cov::multiple_chunks::{
+    Envelope, ReportContent, Split, request_limit, split, untimed_octets,
+};
+use bacnet_device_core::cov::multiple_items::{Coordinate, FieldStamp};
 use bacnet_device_core::cov::multiple_reads::MultipleReads;
 use bacnet_device_core::cov::timed::{FieldTiming, TimedChange};
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Fire the initial COVNotificationMultiple for a newly accepted
@@ -109,7 +111,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let mut turn: Option<SendTurn> = None;
         // Timestamped changes drained for this notification; dropping the claim
         // without commit (any early return, failed send) requeues them.
-        let mut claim: Option<TimedClaim> = None;
+        let mut claim: Option<ClaimGuard> = None;
         let (parts, last_notified, representative) = {
             // One DB borrow, released before any send, supplies the clock
             // sample for any current-state fallback and every value; the
@@ -233,7 +235,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         None => return,
                     }
                 }
-                let claim = claim.insert(TimedClaim::new(store.clone()));
+                let claim = claim.insert(ClaimGuard::new(store.clone()));
                 // Since when each evaluated untimestamped reference is owed. A
                 // mark taken here without a report to carry it is settled: the
                 // reference had nothing left to report.
@@ -327,7 +329,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 // of references on objects that did not change now. A confirmed
                 // context starts none while a report is outstanding, so this
                 // holds for it too. Captured values need no object read.
-                let mut untimed = HashSet::new();
+                let mut untimed = BTreeSet::new();
                 let mut others = Vec::new();
                 for other in table.multiple_context_references(&context) {
                     if !other.timestamped {
@@ -454,7 +456,55 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 stamp: &stamp,
             };
             let claim = claim.take().expect("claim created under the table guard");
-            let parts = split(&content, claim, limit);
+            // The split works on the claim as plain data and holds no
+            // histories. What it gave up is told to them here, in the order
+            // and the locked sections the split took itself while it held
+            // the store: one for each change that lost a value, then one for
+            // the references left out. Nothing returns before every part is
+            // guarded again. A panic inside `split` is the one way out with
+            // no guard: the plain claim unwinds with its changes, where the
+            // guard the split used to hold gave them back. Nothing in the
+            // split is known to panic; the claimed changes would be lost,
+            // not sent twice.
+            let Split {
+                parts,
+                lost,
+                forgone,
+                rest,
+            } = split(&content, claim.into_plain(), limit);
+            for key in &lost {
+                store.lock().lost_values(std::slice::from_ref(key));
+            }
+            if !forgone.is_empty() {
+                let mut forgone = ClaimGuard::of(&store, forgone);
+                for key in forgone.untimed() {
+                    let property = match key {
+                        bacnet_device_core::cov::CovSubscriptionKey::Multiple {
+                            property, ..
+                        } => Some(*property),
+                        _ => None,
+                    };
+                    warn!(
+                        object = ?key.object(),
+                        property = ?property,
+                        limit,
+                        "Untimestamped COV-multiple values exceed the notification size on \
+                         their own; left out"
+                    );
+                }
+                forgone.forgo_untimed();
+            }
+            // A last notification that would convey nothing leaves its
+            // changes over: they go back to their references.
+            drop(ClaimGuard::of(&store, rest));
+            let parts: Vec<GuardedPart> = parts
+                .into_iter()
+                .map(|part| GuardedPart {
+                    notification: part.notification,
+                    claim: ClaimGuard::of(&store, part.claim),
+                    finishes: part.finishes,
+                })
+                .collect();
             // Untimestamped values a single notification carries need no
             // turn; reports of them may go out side by side, as before.
             if !any_timestamped && parts.len() < 2 {
@@ -596,6 +646,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     }
 }
 
+/// One notification of a report, its claim under the server's guard: the
+/// claim goes back to its references unless the part is delivered and the
+/// claim committed.
+struct GuardedPart {
+    notification: bacnet_services::cov_multiple::COVNotificationMultipleRequest,
+    claim: ClaimGuard,
+    /// References whose observation this part's delivery completes.
+    finishes: BTreeSet<bacnet_device_core::cov::CovSubscriptionKey>,
+}
+
 /// A reference a report carries, with the observation its delivery
 /// establishes and the ticket that completes it.
 type Carried = (
@@ -608,7 +668,7 @@ type Carried = (
 /// finishes, at their latest drained change or prepared state, and, when
 /// `every` (a confirmed part's Ack completes all it carries), each other
 /// timestamped reference at the last change of it the part carries.
-fn carried(part: &Part, last_notified: &[Carried], every: bool) -> Vec<Carried> {
+fn carried(part: &GuardedPart, last_notified: &[Carried], every: bool) -> Vec<Carried> {
     last_notified
         .iter()
         .filter_map(|(sub, baseline, completion)| {

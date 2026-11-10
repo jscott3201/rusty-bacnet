@@ -3,7 +3,7 @@
 //! (#896); see `crate::cov::confirmed` for the outstanding-report policy.
 use super::super::cov_notify_context::CovFanoutHandles;
 use super::*;
-use crate::cov::timed_store::{LodgedClaim, TimedClaim};
+use crate::cov::timed_store::{ClaimGuard, LodgedClaim};
 use bacnet_device_core::cov::{BeginRefusal, Delivery, PreparedCovCompletion};
 use bacnet_device_core::cov::{CovObservation, CovSubscriptionKey};
 
@@ -18,12 +18,12 @@ pub(in crate::server) struct ConfirmedReport {
     pub(in crate::server) observations: Vec<(CovSubscriptionSnapshot, CovObservation)>,
     /// Timestamped history conveyed; it retires on the Ack and otherwise
     /// returns to its references.
-    pub(in crate::server) claim: Option<TimedClaim>,
+    pub(in crate::server) claim: Option<ClaimGuard>,
     /// Later parts of a report too large for one notification (#986). They
     /// return to their queue, their untimestamped references owed (#1038),
     /// once this report holds its coordinate, so no other report can carry
     /// them first, and the Ack's follow-up sends them.
-    pub(in crate::server) deferred: Vec<TimedClaim>,
+    pub(in crate::server) deferred: Vec<ClaimGuard>,
 }
 
 impl ConfirmedReport {

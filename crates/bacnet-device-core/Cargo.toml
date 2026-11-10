@@ -43,13 +43,16 @@ alloc = [
 # it the event parameter decoder. The rows still call those properties
 # writable, so such a build's PICS lists them as read-only.
 structured-writes = []
-# The SubscribeCOVPropertyMultiple notification path (#2320): the
-# timestamped histories with their claims and deadlines (`cov::timed`) and
-# the read cache its reports and captures share (`cov::multiple_reads`).
+# The SubscribeCOVPropertyMultiple path (#2320): the service and its checks
+# (`cov::subscribe_cov_property_multiple`), the capture of timestamped
+# changes (`cov::timed_capture`), the timestamped histories with their
+# claims and deadlines (`cov::timed`), the read cache its reports and
+# captures share (`cov::multiple_reads`) and the split of a report to the
+# subscriber's APDU size (`cov::multiple_chunks`, `cov::multiple_items`).
 # `std` turns it on, so bacnet-server has it; a firmware image built on
-# `alloc` leaves it off until it reports through that service. PR 2 of
-# #2320 measures what the feature saves an image (#2215's rule for keeping
-# one).
+# `alloc` leaves it off until it reports through that service. The last
+# part of #2320, which runs the service in the `Reporter`, measures what
+# the feature saves an image (#2215's rule for keeping one).
 cov-multiple = []
 # Hidden hooks for hosts' own tests (the COV table's generation counter, so
 # bacnet-server's table tests reach generation exhaustion). bacnet-server

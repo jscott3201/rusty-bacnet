@@ -34,10 +34,10 @@ Foundations
                         (no_std + alloc where atomics allow, #1615)
   bacnet-device-core    Sans-IO request core over a borrowed ObjectDatabase: the read
                         and write paths, discovery, the COV subscription table, COV
-                        evaluation, the COV-multiple timestamped histories and the
-                        reply map the server runs on, and a Responder, a COV
-                        Reporter and a TimeSynchronization-set Device clock for
-                        firmware
+                        evaluation, the COV-multiple service, capture, histories
+                        and report split, and the reply map the server runs on,
+                        and a Responder, a COV Reporter and a
+                        TimeSynchronization-set Device clock for firmware
                         (no_std + alloc where atomics allow, #2178, #2303, #2321,
                         #2320)
 
@@ -410,7 +410,7 @@ free functions in `bacnet_objects::property_metadata` (#2197).
 
 The stack runs on a Tokio multi-threaded runtime.
 
-**Lock ordering** (server): always lock `db` (ObjectDatabase) before `cov_table` (COV subscriptions). The COV fanouts read an object under the database guard and take the table's write guard before releasing it: the Single fanout runs `bacnet-device-core`'s `cov::evaluate` there, which decides each notification and issues its completion ticket, and both guards drop before any send (#2303); no path holds the table guard and then waits for the database. The COV-multiple timestamped histories (`bacnet-device-core`'s `cov::timed`, #2320) sit behind a mutex of the server's that is taken last, after either guard or alone, and only for a synchronous section: the claims and send turns that settle themselves when dropped take nothing else. With target Audit configured, a DeviceCommunicationControl change and its timer's expiry take the DCC timer slot first and `db` second, to report the change under the slot (#1387); nothing takes the slot while holding `db`. Violating either order risks deadlock.
+**Lock ordering** (server): always lock `db` (ObjectDatabase) before `cov_table` (COV subscriptions). The COV fanouts read an object under the database guard and take the table's write guard before releasing it: the Single fanout runs `bacnet-device-core`'s `cov::evaluate` there, which decides each notification and issues its completion ticket, and both guards drop before any send (#2303); no path holds the table guard and then waits for the database. The COV-multiple timestamped histories (`bacnet-device-core`'s `cov::timed`, #2320) sit behind a mutex of the server's that is taken last, after either guard or alone, and only for a synchronous section: the claims and send turns that settle themselves when dropped take nothing else. A capture reads its objects before it takes that mutex and holds it only to queue what it read; SubscribeCOVPropertyMultiple holds it for the whole of its synchronous service call (`cov::subscribe_cov_property_multiple`), under the database and table guards, and drops no claim or send turn inside. With target Audit configured, a DeviceCommunicationControl change and its timer's expiry take the DCC timer slot first and `db` second, to report the change under the slot (#1387); nothing takes the slot while holding `db`. Violating either order risks deadlock.
 
 **Resource exhaustion caps**:
 - COV subscriptions: 1,024 max
