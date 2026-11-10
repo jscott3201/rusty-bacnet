@@ -24,6 +24,8 @@ pub mod life_safety;
 mod lifetime;
 #[cfg(feature = "cov-multiple")]
 pub mod multiple_chunks;
+#[cfg(all(test, feature = "cov-multiple"))]
+mod multiple_fixture;
 #[cfg(feature = "cov-multiple")]
 pub mod multiple_items;
 #[cfg(feature = "cov-multiple")]

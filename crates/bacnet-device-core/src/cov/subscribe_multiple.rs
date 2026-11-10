@@ -266,3 +266,7 @@ pub fn subscribe_cov_property_multiple(
         }),
     }
 }
+
+#[cfg(test)]
+#[path = "subscribe_multiple_tests.rs"]
+mod tests;

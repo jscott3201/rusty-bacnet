@@ -430,3 +430,7 @@ impl<Q: CaptureQueue> WriteCommitObserver for TimedWriteCapture<'_, Q> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "timed_capture_tests.rs"]
+mod tests;

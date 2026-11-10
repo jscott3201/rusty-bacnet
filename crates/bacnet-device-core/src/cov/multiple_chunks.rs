@@ -485,6 +485,10 @@ fn largest(first: usize, max: usize, fits: impl Fn(usize) -> bool) -> usize {
 }
 
 #[cfg(test)]
+#[path = "multiple_chunks_split_tests.rs"]
+mod split_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
