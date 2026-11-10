@@ -489,7 +489,6 @@ mod binary_lighting_lifecycle;
 #[cfg(test)]
 mod confirmed_issuance_tests;
 mod confirmed_request_tracker;
-mod cov_clock;
 mod cov_encoding;
 mod cov_fanout;
 mod cov_notifications;

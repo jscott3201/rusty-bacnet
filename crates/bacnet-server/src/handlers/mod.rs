@@ -21,23 +21,24 @@ use bacnet_services::rpm::{
 };
 #[cfg(test)]
 use bacnet_services::write_property::WritePropertyRequest;
+#[cfg(test)]
 use bacnet_types::MacAddr;
+#[cfg(test)]
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::{
     EnableDisable, ErrorClass, ErrorCode, EventState, EventType, ObjectType, PropertyIdentifier,
     RejectReason,
 };
-use bacnet_types::error::{Error, ErrorDetail, RemoteError};
+use bacnet_types::error::{Error, ErrorDetail};
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue};
 
 use bytes::BytesMut;
 
 use crate::cov::CovSubscriptionTable;
 use crate::device_view::DeviceReadContext;
-use bacnet_device_core::cov::{
-    CovNotificationKind, CovSubscriptionKey, MultipleContextKey, SubscriberEndpoint,
-};
-use bacnet_device_core::cov::{CovSubscription, CovSubscriptionSnapshot};
+#[cfg(test)]
+use bacnet_device_core::cov::{CovNotificationKind, CovSubscription};
+use bacnet_device_core::cov::{CovSubscriptionSnapshot, SubscriberEndpoint};
 
 mod alarm_event;
 mod audit_log_query;

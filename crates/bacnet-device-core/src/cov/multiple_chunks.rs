@@ -22,33 +22,62 @@
 //! references apart where its item alone does not fit (#1038). Each of those
 //! notifications completes only the references it carries, and any value a
 //! sibling's time stamps there belongs to a change already conveyed. A
-//! reference whose values fit no notification alone is left out, logged and
-//! counted in `CovCounters::untimed_references_oversized` (#1066); it is
+//! reference whose values fit no notification alone is left out and handed
+//! back in [`Split::forgone`] for the host to count and log (#1066); it is
 //! evaluated again at its next fanout.
-use std::collections::HashSet;
+//!
+//! The split holds no histories. It takes the claim as plain data and hands
+//! back, beside the parts, what the histories have to be told: the changes
+//! that lost a value ([`Split::lost`]), the references left out
+//! ([`Split::forgone`]) and whatever no part carries ([`Split::rest`]).
+use alloc::collections::BTreeSet;
+use alloc::vec;
+use alloc::vec::Vec;
 
 use bacnet_services::cov_multiple::{
     COVNotificationItem, COVNotificationMultipleRequest, COVNotificationValue,
 };
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
-use tracing::warn;
 
-use super::cov_clock::cov_multiple_datetime;
+use super::CovSubscriptionKey;
+use super::CovSubscriptionSnapshot;
 use super::multiple_items::{Coordinate, History, Latest, Retained, Stamp, build_items};
-use crate::cov::timed_store::TimedClaim;
-use bacnet_device_core::cov::CovSubscriptionKey;
-use bacnet_device_core::cov::CovSubscriptionSnapshot;
-use bacnet_device_core::cov::multiple_reads::MultipleReads;
-use bacnet_device_core::cov::timed::{
-    ITEM_FRAMING, TimedChange, ValueFit, request_header, value_len,
-};
+use super::multiple_reads::MultipleReads;
+use super::timed::{ITEM_FRAMING, TimedChange, TimedClaim, ValueFit, request_header, value_len};
+
+/// Project the request-level and per-value COV timestamps from one sample.
+fn datetime(
+    frame: bacnet_objects::clock::ClockFrame,
+) -> (
+    bacnet_types::primitives::Date,
+    bacnet_types::primitives::Time,
+) {
+    (frame.local_date, frame.local_time)
+}
+
+/// The timestamp a notification named after `frame` carries. A hook for a
+/// host's tests of what its clock projects, behind the `test-support`
+/// feature.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn cov_multiple_datetime(
+    frame: bacnet_objects::clock::ClockFrame,
+) -> (
+    bacnet_types::primitives::Date,
+    bacnet_types::primitives::Time,
+) {
+    datetime(frame)
+}
 
 /// Envelope fields every notification of one report shares.
-pub(super) struct Envelope {
-    pub(super) subscriber_process_identifier: u32,
-    pub(super) initiating_device_identifier: ObjectIdentifier,
-    pub(super) time_remaining: u32,
+pub struct Envelope {
+    /// The subscriber's process identifier.
+    pub subscriber_process_identifier: u32,
+    /// The Device sending the report.
+    pub initiating_device_identifier: ObjectIdentifier,
+    /// Seconds of lifetime the context has left.
+    pub time_remaining: u32,
 }
 
 impl Envelope {
@@ -61,26 +90,48 @@ impl Envelope {
             subscriber_process_identifier: self.subscriber_process_identifier,
             initiating_device_identifier: self.initiating_device_identifier,
             time_remaining: self.time_remaining,
-            timestamp: timestamp.map(cov_multiple_datetime),
+            timestamp: timestamp.map(datetime),
             list_of_cov_notifications: items,
         }
     }
 }
 
+/// A report split into the notifications that convey it, with what the split
+/// gave up or left over.
+pub struct Split {
+    /// The notifications, in the order they go out.
+    pub parts: Vec<Part>,
+    /// The reference of each change that lost a value too large for any
+    /// notification to the subscriber, once per change and in capture order
+    /// (#1090): `TimedHistories::lost_values` counts them.
+    pub lost: Vec<CovSubscriptionKey>,
+    /// The untimestamped references whose values fit no notification on
+    /// their own (#1066): `TimedHistories::forgo_untimed` counts them, and
+    /// they are not owed.
+    pub forgone: TimedClaim,
+    /// What no part carries: the changes of a last notification that would
+    /// convey nothing. `TimedHistories::give_back` returns them to their
+    /// references.
+    pub rest: TimedClaim,
+}
+
 /// One notification of a report, with the changes and values it retires once
 /// delivered.
-pub(super) struct Part {
-    pub(super) notification: COVNotificationMultipleRequest,
-    pub(super) claim: TimedClaim,
+pub struct Part {
+    /// The notification's service request.
+    pub notification: COVNotificationMultipleRequest,
+    /// What the part's delivery retires: its holder commits it once the
+    /// notification is delivered, and gives it back otherwise.
+    pub claim: TimedClaim,
     /// References whose observation this part's delivery completes: each
     /// timestamped reference whose latest drained change it carries, and each
     /// untimestamped reference whose values it carries.
-    pub(super) finishes: HashSet<CovSubscriptionKey>,
+    pub finishes: BTreeSet<CovSubscriptionKey>,
 }
 
 /// Service-request octets one notification may take: the smaller of the local
 /// maximum APDU and the subscriber's, less the request header.
-pub(super) fn request_limit(local: u32, subscriber: Option<u16>, confirmed: bool) -> usize {
+pub fn request_limit(local: u32, subscriber: Option<u16>, confirmed: bool) -> usize {
     let local = usize::try_from(local).unwrap_or(usize::MAX);
     let apdu = subscriber.map_or(local, |subscriber| local.min(usize::from(subscriber)));
     apdu.saturating_sub(request_header(confirmed))
@@ -88,8 +139,8 @@ pub(super) fn request_limit(local: u32, subscriber: Option<u16>, confirmed: bool
 
 /// Octets the untimestamped values among `retained` take, with one item's
 /// framing per object.
-pub(super) fn untimed_octets(retained: &Retained<'_>) -> usize {
-    let mut objects = HashSet::new();
+pub fn untimed_octets(retained: &Retained<'_>) -> usize {
+    let mut objects = BTreeSet::new();
     retained
         .iter()
         .filter(|(sub, _)| !sub.timestamped)
@@ -105,15 +156,19 @@ pub(super) fn untimed_octets(retained: &Retained<'_>) -> usize {
 }
 
 /// What one report's notifications carry besides the claimed changes.
-pub(super) struct ReportContent<'a> {
-    pub(super) envelope: &'a Envelope,
-    pub(super) retained: &'a Retained<'a>,
-    pub(super) reads: &'a MultipleReads,
-    pub(super) untimed: &'a HashSet<Coordinate>,
+pub struct ReportContent<'a> {
+    /// The fields every notification of the report shares.
+    pub envelope: &'a Envelope,
+    /// Each reference the report carries, with its prepared current values.
+    pub retained: &'a Retained<'a>,
+    /// The reads the report's values came from.
+    pub reads: &'a MultipleReads,
+    /// The coordinates the context subscribes without timestamps.
+    pub untimed: &'a BTreeSet<Coordinate>,
     /// Times a field of a timestamped reference that conveys no change in the
     /// last notification, carried by a sibling (#987). Only the last
     /// notification has such current values.
-    pub(super) stamp: &'a Stamp<'a>,
+    pub stamp: &'a Stamp<'a>,
 }
 
 impl ReportContent<'_> {
@@ -191,7 +246,7 @@ fn fits(notification: &COVNotificationMultipleRequest, limit: usize) -> bool {
 /// goes out one value per notification (#1090). Untimestamped values that do
 /// not fit one notification alone go out after every change, in as many
 /// notifications as they need.
-pub(super) fn split(content: &ReportContent<'_>, mut claim: TimedClaim, limit: usize) -> Vec<Part> {
+pub fn split(content: &ReportContent<'_>, mut claim: TimedClaim, limit: usize) -> Split {
     // Each earlier part as its count of the oldest remaining changes, and
     // whether that one change cannot fit a notification on its own.
     let plan = {
@@ -199,7 +254,7 @@ pub(super) fn split(content: &ReportContent<'_>, mut claim: TimedClaim, limit: u
         let whole = content.last(&changes);
         // A notification that does not encode is reported by its send.
         if encoded_len(&whole).is_none_or(|len| len <= limit) {
-            return finish(content, Vec::new(), whole, claim);
+            return finish(content, Vec::new(), whole, claim, Vec::new());
         }
         // Moving more of the oldest changes out never grows the rest, so the
         // fewest to move out can be found by bisection. Moving all of them
@@ -220,6 +275,7 @@ pub(super) fn split(content: &ReportContent<'_>, mut claim: TimedClaim, limit: u
         plan
     };
     let mut parts = Vec::new();
+    let mut lost = Vec::new();
     // How a notification of one value of a change too large for a
     // notification of its own would go out.
     let fit = |key: &CovSubscriptionKey, value: &TimedChange| {
@@ -238,7 +294,9 @@ pub(super) fn split(content: &ReportContent<'_>, mut claim: TimedClaim, limit: u
             parts.push((content.history(&part.in_order()), part));
             continue;
         }
-        for value in part.split_values(fit) {
+        let (values, gave_up) = part.split_values(fit);
+        lost.extend(gave_up);
+        for value in values {
             parts.push((content.history(&value.in_order()), value));
         }
     }
@@ -247,23 +305,34 @@ pub(super) fn split(content: &ReportContent<'_>, mut claim: TimedClaim, limit: u
         // The untimestamped values alone do not fit, so every change went
         // into the parts above.
         let mut parts = history_parts(parts);
-        parts.extend(untimed_parts(content, claim, limit));
+        let (untimed, forgone) = untimed_parts(content, &mut claim, limit);
+        parts.extend(untimed);
         finish_timed(&mut parts);
-        return parts;
+        return Split {
+            parts,
+            lost,
+            forgone,
+            rest: claim,
+        };
     }
-    finish(content, parts, last, claim)
+    finish(content, parts, last, claim, lost)
 }
 
 /// The report's parts: the earlier `parts`, then `last` with the rest of the
-/// claim, finishing every untimestamped reference, unless it carries nothing.
+/// claim, finishing every untimestamped reference, unless it carries nothing;
+/// the rest of the claim is then left over.
 fn finish(
     content: &ReportContent<'_>,
     parts: Vec<(COVNotificationMultipleRequest, TimedClaim)>,
     last: COVNotificationMultipleRequest,
     claim: TimedClaim,
-) -> Vec<Part> {
+    lost: Vec<CovSubscriptionKey>,
+) -> Split {
     let mut parts = history_parts(parts);
-    if !last.list_of_cov_notifications.is_empty() {
+    let mut rest = TimedClaim::new();
+    if last.list_of_cov_notifications.is_empty() {
+        rest = claim;
+    } else {
         let untimed = content
             .retained
             .iter()
@@ -276,7 +345,12 @@ fn finish(
         });
     }
     finish_timed(&mut parts);
-    parts
+    Split {
+        parts,
+        lost,
+        forgone: TimedClaim::new(),
+        rest,
+    }
 }
 
 /// Parts of history only, finishing nothing yet.
@@ -286,7 +360,7 @@ fn history_parts(parts: Vec<(COVNotificationMultipleRequest, TimedClaim)>) -> Ve
         .map(|(notification, claim)| Part {
             notification,
             claim,
-            finishes: HashSet::new(),
+            finishes: BTreeSet::new(),
         })
         .collect()
 }
@@ -296,7 +370,7 @@ fn history_parts(parts: Vec<(COVNotificationMultipleRequest, TimedClaim)>) -> Ve
 /// change, or the last value of it sent when that change went out one value
 /// per notification (#1090).
 fn finish_timed(parts: &mut [Part]) {
-    let mut later = HashSet::new();
+    let mut later = BTreeSet::new();
     for part in parts.iter_mut().rev() {
         for (key, _) in part.claim.last_changes() {
             if later.insert(key.clone()) {
@@ -313,8 +387,13 @@ type Untimed<'a> = (&'a CovSubscriptionSnapshot, &'a [COVNotificationValue]);
 /// left, in as few notifications of current state as fit `limit`: runs of
 /// whole object items, and one object's references apart where its item does
 /// not fit alone. A reference whose values fit no notification alone is left
-/// out and counted, not owed (#1038, #1066).
-fn untimed_parts(content: &ReportContent<'_>, mut claim: TimedClaim, limit: usize) -> Vec<Part> {
+/// out, not owed: the second claim holds those, for the host to count
+/// (#1038, #1066).
+fn untimed_parts(
+    content: &ReportContent<'_>,
+    claim: &mut TimedClaim,
+    limit: usize,
+) -> (Vec<Part>, TimedClaim) {
     // Untimestamped references by object, in the order they were retained.
     let mut objects: Vec<Vec<Untimed<'_>>> = Vec::new();
     for &(sub, values) in content.retained.iter().filter(|(sub, _)| !sub.timestamped) {
@@ -345,16 +424,10 @@ fn untimed_parts(content: &ReportContent<'_>, mut claim: TimedClaim, limit: usiz
         let mut first = 0;
         while first < refs.len() {
             let end = largest(first + 1, refs.len(), |end| alone(&refs[first..end]));
+            // A reference that fits no notification even alone joins no
+            // group, and so stays in the claim.
             if end > first + 1 || alone(&refs[first..end]) {
                 groups.push(refs[first..end].to_vec());
-            } else {
-                warn!(
-                    object = ?refs[first].0.monitored_object_identifier,
-                    property = ?refs[first].0.monitored_property,
-                    limit,
-                    "Untimestamped COV-multiple values exceed the notification size on \
-                     their own; left out"
-                );
             }
             first = end;
         }
@@ -363,18 +436,18 @@ fn untimed_parts(content: &ReportContent<'_>, mut claim: TimedClaim, limit: usiz
     let parts = groups
         .into_iter()
         .map(|group| {
-            let keys: HashSet<_> = group.iter().map(|(sub, _)| sub.key().clone()).collect();
+            let keys: BTreeSet<_> = group.iter().map(|(sub, _)| sub.key().clone()).collect();
             Part {
                 notification: content.current(&[], &group),
-                claim: claim.split_untimed(&keys),
+                claim: claim.split_untimed(|key| keys.contains(key)),
                 finishes: keys,
             }
         })
         .collect();
     // What is left fits no notification: owing it would retry it for good,
     // so it is counted and given up instead.
-    claim.forgo_untimed();
-    parts
+    let forgone = claim.split_untimed(|_| true);
+    (parts, forgone)
 }
 
 /// Smallest `count` in `1..=max` for which `fits` holds, knowing it fails at
@@ -424,6 +497,10 @@ fn largest(first: usize, max: usize, fits: impl Fn(usize) -> bool) -> usize {
     }
     fitting
 }
+
+#[cfg(test)]
+#[path = "multiple_chunks_split_tests.rs"]
+mod split_tests;
 
 #[cfg(test)]
 mod tests {

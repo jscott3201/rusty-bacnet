@@ -8130,8 +8130,8 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   `ReportConfig` holds the `CovPolicy`, the outbox and the confirmed
   timing; `ReporterCounters` what it counted. Build the database with
   `report::SERVICES`, which adds the two subscribe services to the
-  `Responder`'s. The COV-multiple services stay with `bacnet-server`
-  (#2320).
+  `Responder`'s. A `Reporter` doesn't serve the COV-multiple services
+  yet: their fanout is still `bacnet-server`'s (#2320).
 - `cov::timed` and `cov::multiple_reads` (#2320, behind the `cov-multiple`
   feature, which `std` turns on): the SubscribeCOVPropertyMultiple
   notification path's timestamped histories and the read cache a report
@@ -8153,14 +8153,48 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   its context's first for that cause, the one worth a warning. Pass every
   call the same monotonic timeline as the table's. `bacnet-server` keeps
   its mutex, wake-up, counters and log lines around them, and guards that
-  settle a claim when dropped. The service itself, its capture and its
-  reports' split to the subscriber's APDU size follow in #2320's second
-  part; until then a `Reporter` doesn't serve it, and this module's API is
-  unstable: `ITEM_FRAMING`, `value_len` and `request_header` are public
-  only for the server's split and leave the public surface when it moves,
-  and the claim's splits and settling calls may change shape. A host that
-  lodges a claim for a confirmed report's worker ends it with the report:
+  settle a claim when dropped. A host that lodges a claim for a confirmed
+  report's worker ends it with the report:
   `CovTable::report_deadline(token)` is the deadline the table gave it.
+  `timed::follow_table(histories, table, fenced, published, now)` keeps
+  the histories in line with the table after a mutation: removed
+  references lose their history, published ones are bound to their new
+  generation, and a refreshed context takes its delay and sizing.
+- The rest of the SubscribeCOVPropertyMultiple path but its fanout (#2320,
+  behind `cov-multiple` too):
+  - `cov::subscribe_cov_property_multiple(table, histories, db, peer,
+    subscriber_max_apdu, request, now)` is the service: its checks, a
+    cancellation, the admission of each reference in request order, the
+    histories brought in line, and the initial report of each accepted
+    timestamped reference captured at the Device time of admission. It
+    returns the accepted references, or a `MultipleRefusal` naming the
+    first reference that failed and carrying those kept before it. One
+    `now` serves the whole request.
+  - `cov::timed_capture` captures timestamped changes where a mutation
+    commits. `TimedCapture::object`, `exact`, `all` and `initial` collect
+    the references from the table; `read(db)` reads their values and one
+    Device clock frame, as a `CaptureRead`; `CaptureRead::queue(histories,
+    now)` decides which are changes and queues them, each counting its
+    context's Max_Notification_Delay from `now`. `run(db, histories, now)`
+    is the last two in one call. `TimedWriteCapture` is a
+    `WriteCommitObserver` that captures every attempt of a write request
+    as it commits, into a `CaptureQueue`: `(&mut TimedHistories, Instant)`
+    for a host that holds its histories outright, or a host's own type
+    that takes a lock.
+  - `cov::multiple_chunks::split(content, claim, limit)` splits one report
+    into notifications of at most `limit` service-request octets
+    (`request_limit` gives it from the local and the subscriber's maximum
+    APDU). It returns a `Split`: the `parts`, each a notification with the
+    `TimedClaim` its delivery retires and the references it finishes, and
+    what the host tells the histories: `lost` (`lost_values`), `forgone`
+    (`forgo_untimed`) and `rest` (`give_back`). `cov::multiple_items` has
+    the types a report is described with (`Coordinate`, `Retained`,
+    `Stamp`, `FieldStamp`).
+
+  These are unstable until the fanout moves too: its decisions still run
+  in `bacnet-server`, and `split`'s inputs and the claim's settling calls
+  may change shape as a `Reporter` takes them over. The sizing helpers
+  `ITEM_FRAMING`, `value_len` and `request_header` are private again.
 - `clock` (#2321): the Device's clock, for firmware with none of its own.
   `SyncedClock` holds a `bacnet_time::Instant`, the UTC date and time it
   stood for and the `Zone` (UTC_Offset, minutes west, and

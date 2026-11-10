@@ -85,7 +85,7 @@ for `HostClock`); `bacnet-objects` takes it too, for the delay instants of
 | `cov` | `dep:bacnet-time` | `cov`, `report`; SubscribeCOV and SubscribeCOVProperty in `SERVICES` and the facade |
 | `event-reporting` | `dep:bacnet-time`, `bacnet-objects/event-reporting` | `event`, `report`; AcknowledgeAlarm, GetEventInformation |
 | `event-enrollment` | `event-reporting` | `event::enrollment`, which links `decode_event_parameter` (§6.6) |
-| `cov-multiple` (#2320) | nothing more | `cov::timed`, `cov::multiple_reads`: the Multiple form's notification path (§5.6) |
+| `cov-multiple` (#2320) | nothing more | the Multiple form (§5.6): `cov::subscribe_cov_property_multiple`, `cov::timed_capture`, `cov::timed`, `cov::multiple_reads`, `cov::multiple_items`, `cov::multiple_chunks` |
 | `std` (default) | the four above, beside `structured-writes` | hosted builds unchanged |
 
 The linker drops what nothing calls, but the facade dispatches by service,
@@ -255,8 +255,8 @@ pub struct CovSubscriptionTable {
     wakes: BTreeMap<Token, Arc<Notify>>,      // wake-ups for workers to fence; no state
     revisits: Arc<CovRevisits>,               // the revisit task's wake-up
     counters: Arc<AtomicCovCounters>,         // lock-free metrics, fed from the core's counts
-    timed: TimedStore,                        // the server's lock, wake-up and guards around
-                                              // the core's TimedHistories (#2320 PR 1, §5.6)
+    timed: HistoryStore,                      // the server's lock, wake-up and guards around
+                                              // the core's TimedHistories (#2320, §5.6)
 }
 ```
 
@@ -286,7 +286,7 @@ The core adds no future, `select!`, `join` or `FuturesUnordered`. The
 `select!`s that exist stay hosted and hold no lock: `cov_fanout.rs:116`
 (guard dropped at 112), `cov_notifications/confirmed.rs:194` (delivery
 against the fence) and `cov/timed.rs:1014` (store mutex released; since
-#2320 PR 1 in `cov/timed_store.rs`, `TimedStore::next_due`, §5.6). PR 1
+#2320 PR 1 in `cov/timed_store.rs`, `HistoryStore::next_due`, §5.6). PR 1
 rewrites the second over the wake-up map; no sibling future may sit
 unpolled while an arm waits for the table lock.
 
@@ -298,7 +298,7 @@ unpolled while an arm waits for the table lock.
 |---|---|---|
 | SubscribeCOV | `CovTable::subscribe` | `handlers/cov.rs:62-143` |
 | SubscribeCOVProperty | `CovTable::subscribe_property` | `handlers/cov.rs:148-247`; `validate_cov_property`, `:34-56` |
-| SubscribeCOVPropertyMultiple | admission only, `CovTable::subscribe_multiple` (PR 1) | `handlers/cov.rs:252-496`, `cov/admission.rs:89-201` |
+| SubscribeCOVPropertyMultiple | `cov::subscribe_cov_property_multiple` (#2320 PR 2a), over `CovTable::subscribe_multiple` (PR 1) | `handlers/cov.rs:252-496`, `cov/admission.rs:89-201` |
 
 Each takes the service parameters, as phase 2's `write_property` does,
 decodes them with `bacnet-services` (a failure is a Reject), checks the
@@ -414,7 +414,8 @@ Clause 13.16's SubscribeCOVPropertyMultiple is the only Multiple form; its
 notifications are the COVNotificationMultiple services. PR 1 moves its
 admission (`cov/admission.rs:89-201`) and its per-context flights with the
 table, and PR 2 its active list, so the table is one type in both hosts.
-#2320 moves the rest of the path, in two PRs (Appendix A.5 has the table).
+#2320 moves the rest of the path, in three PRs (Appendix A.5 has the
+table): PR 1, then PR 2 in two parts, 2a and 2b.
 
 **Moved by #2320 PR 1**, into `bacnet-device-core` behind the `cov-multiple`
 feature, which `std` turns on and a firmware image leaves off:
@@ -448,11 +449,13 @@ references at the deadline. A holder that settles later finds it gone and
 changes nothing.
 
 The server's Drop guards stay, because its fanout returns early in many
-places and a worker can be aborted: `TimedClaim` (gives back unless
-committed), `LodgedClaim` (the worker's; returns unless committed) and
+places and a worker can be aborted: `ClaimGuard` (gives back unless
+committed; named `TimedClaim` until PR 2a, like the core's claim it
+holds), `LodgedClaim` (the worker's; returns unless committed) and
 `SendTurn`. Each takes only the store's mutex, a leaf after the database
 and the table, for a synchronous section, so none can invert the order or
-hold a lock across an await.
+hold a lock across an await. The store is `HistoryStore` since PR 2a
+(`TimedStore` before).
 
 A pending change still counts 144 bytes on a 64-bit host against its
 context's memory ceiling, though it takes 136 since its instant is
@@ -475,14 +478,68 @@ are as on dev. One log difference: past 64 repeat drops in one locked
 section the server writes one debug line for the rest, where it wrote one
 each; the counters hold every drop.
 
-**Hosted until #2320 PR 2:** the service checks (`handlers/cov.rs:100-351`),
-the capture at the mutation boundary (`cov/timed_capture.rs`), item
-assembly and the split to the subscriber's APDU size
-(`cov_notifications/multiple_items.rs`, `multiple_chunks.rs`) and the
-Multiple fanout (`cov_notifications/multiple.rs`). PR 2 also gives the
-outbox `NotifyService::CovMultiple`, runs the service in the `Reporter`,
-adds the parity rows for both notification forms and the image's size row,
-and measures what the feature saves (#2215's rule).
+**Moved by #2320 PR 2a**, behind the same feature. Nothing changes on the
+wire.
+
+- `cov::subscribe_cov_property_multiple`: the service. Its checks (Clause
+  13.16.1.1: a lifetime and a Max_Notification_Delay come together or not
+  at all, the lifetime is not zero, the delay is at most an hour and less
+  than the lifetime; then, per reference in request order, the object, the
+  property, and a valid Device clock for a reference that asks for
+  timestamps), the cancellation, the admission through
+  `CovTable::subscribe_multiple`, the histories brought in line, and the
+  initial capture of each accepted timestamped reference. It takes the
+  table and the histories together and one `now`.
+- `cov::timed::follow_table`: how the histories follow the table. The
+  server's wrapper did this in its `sync`, between the admission and the
+  capture; as a function it serves the wrapper after every mutation and
+  the service inside its one call. The service reads what the table
+  fenced through a crate-private accessor and leaves it for its host.
+- `cov::timed_capture`: the capture at the mutation boundary, in three
+  steps. `TimedCapture::object`, `exact`, `all` and `initial` take the
+  table and `now` and collect the references; `read` takes the database
+  and gives a `CaptureRead` of their values at one Device clock frame;
+  `CaptureRead::queue` takes the histories and `now`, decides which values
+  are changes and queues them. `TimedWriteCapture`, the write observer,
+  hands each attempt's read to a `CaptureQueue`, the host's way to its
+  histories.
+- `cov::multiple_items` and `cov::multiple_chunks`: item assembly and the
+  split to the subscriber's APDU size. `split` works on a plain
+  `TimedClaim` and returns a `Split`: the parts, each with the claim its
+  delivery retires, and what the histories have to be told, which the
+  server's claim guard used to tell them from inside the split under the
+  store's lock: `lost` (a change that lost a value too large for any
+  notification), `forgone` (untimestamped references whose values fit no
+  notification) and `rest` (changes no part conveys, to give back).
+
+| On dev before PR 2a | In the core | The server |
+|---|---|---|
+| the capture held the store and read the clock under its lock | `read(db)`, then `queue(histories, now)` | `cov/store_capture.rs`: a `StoreCapture` carries the store; it locks only to queue, after the objects are read, and reads the clock there |
+| capture entry points on the table wrapper | constructors over `&CovTable` and `now` | the wrapper keeps `timed_capture`, `timed_capture_exact` and `timed_capture_all`, which call them |
+| the service read the clock in the handler, the wrapper and the capture | one `now` for the request | the wrapper's `subscribe_cov_property_multiple` reads it once, locks the store for the call and then does the host's part (counters, revisits, wake-ups) |
+| the split locked the store to count and let a guard's drop give back | `Split { parts, lost, forgone, rest }` | the fanout tells the histories in the same order and sections, logs what was left out, and guards each part's claim again |
+| std hash sets and one hash map in the items and the split | B-tree sets and map; only looked up, so no order follows from them | |
+
+The clock (decision 16): a capture has one instant, the `now` its
+queueing is given. dev before PR 1 read the clock once per change; the
+branch since PR 1 once per capture. That instant only starts the
+context's Max_Notification_Delay wait (Clause 13.16.1.1.4). What a
+subscriber sees is the Device clock frame, which was one per capture
+before PR 1 and is now, so timestamps are as on dev.
+
+The store's mutex is held across the whole service call now, object reads
+included, where each step took it by itself. It is still taken last, the
+section is synchronous, and the core drops no claim guard, lodged claim or
+send turn. A capture still reads its objects before it locks.
+
+**Hosted until #2320 PR 2b:** the Multiple fanout
+(`cov_notifications/multiple.rs`): which references a report retains,
+what it drains and adopts, the send turn of an unconfirmed context, a
+confirmed context's first part and deferred rest, and the sends. PR 2b
+moves its decisions, gives the outbox `NotifyService::CovMultiple`, runs
+the service in the `Reporter`, adds the parity rows for both notification
+forms and the image's size row, and measures what the feature saves
+(#2215's rule).
 
 ### 5.7 Active_COV_Subscriptions
 
@@ -713,10 +770,11 @@ in PR 2 to keep PR 1 under that line.
 - Addresses and receiving: `event_recipient_route.rs`,
   `event_awaited_recipients.rs`, the bindings, `event_forwarding*.rs`,
   `received_event_log.rs`, `server/clock.rs`; GetAlarmSummary and
-  GetEnrollmentSummary; until #2320 PR 2, the rest of the Multiple path
-  (`cov/timed_capture.rs`, `cov_notifications/multiple*.rs`, the service
-  checks). `cov/timed_store.rs` stays for good: the lock, wake-up, counters,
-  log lines and Drop guards around the core's histories (§5.6).
+  GetEnrollmentSummary; until #2320 PR 2b, the Multiple fanout
+  (`cov_notifications/multiple.rs`). `cov/timed_store.rs` stays for good:
+  the lock, wake-up, counters, log lines and Drop guards around the core's
+  histories; so does `cov/store_capture.rs`, the store around a capture
+  (§5.6).
 
 ### 7.2 Parity tests
 
@@ -1167,6 +1225,43 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
       174,254 (riscv32imac); `reporting` 195,688, 196,500, 235,082; RAM
       16,480 and 24,680; no `core::fmt` or 64-bit division.
 
+**#2320 PR 2a, 2026-11-10:**
+
+16. The service, the capture, item assembly and the split are in the core
+    (§5.6, Appendix A.5); the fanout follows in PR 2b.
+    - The cut. A.5 gave about 1,890 lines to move and 600 new. The four
+      items here came to about 1,500 lines in the core and 250 changed in
+      the server. The fanout's decisions, the outbox variant, the
+      `Reporter` and the image would pass the 2,500-line split point, so
+      they are PR 2b.
+    - The capture's clock: one instant per capture, passed in. It anchors
+      only the Max_Notification_Delay wait, to the millisecond a timer
+      resolves; the times a subscriber sees come from the Device clock
+      frame, one per capture on dev too. Whether a reference is live is
+      asked at one instant per capture as well.
+    - The capture is three steps, not one call, so a host that locks reads
+      its objects before it takes the histories, as the server did. The
+      service is one call and holds them throughout: it runs once per
+      request, and one function serves the server and, in PR 2b, the
+      `Reporter`, so parity has less to prove.
+    - The split returns what it gave up as data. A trait for the split to
+      call the histories through would have kept the server's locked
+      sections with no change at the call site, but a `Reporter` holds
+      its histories outright and would have had to lend them twice, to the
+      split and to the closure that times a field.
+    - `follow_table` is a function of the histories module, not of the
+      table: the table doesn't know the histories, and a build without
+      `cov-multiple` has none.
+    - `ITEM_FRAMING`, `value_len` and `request_header` are private to the
+      crate again. `split`'s inputs (`ReportContent`, `Stamp`) and the
+      claim's settling calls stay unstable until PR 2b. The changelog
+      calls this Changed, not Breaking (lead, 2026-11-10): the three were
+      public for a few days on dev and in no release.
+    - The hosted names: the server's `TimedStore` is `HistoryStore` and
+      its `TimedClaim` is `ClaimGuard`.
+    - Size (`check-firmware-link.sh`, Rust 1.99.0): no image's numbers
+      moved; the feature is off in every one.
+
 ## 12. Evidence
 
 Code read at dev `c308eda25`. Sizes (§8): the `objects` image built with
@@ -1236,24 +1331,26 @@ core sends what it subscribes to.
 
 ### A.5 #2320: the Multiple notification path
 
-Lines are non-test lines on dev at `56a61f3f9`, before PR 1.
+Lines are non-test lines: on dev at `56a61f3f9` for PR 1's rows, and at
+`3ea4624a1`, after PR 1, for PR 2's.
 
 | Item | From | Lines | PR |
 |---|---|---|---|
 | Timestamped histories, the backstop | `cov/timed.rs:1-975` | 975 | 1, moved |
-| `TimedStore`: the mutex, `next_due` | `cov/timed.rs:977-1034` | 58 | hosted, in `cov/timed_store.rs` |
+| `TimedStore` (`HistoryStore` since 2a): the mutex, `next_due` | `cov/timed.rs:977-1034` | 58 | hosted, in `cov/timed_store.rs` |
 | History bound, envelope, eviction | `cov/timed/bound.rs:1-174` | 175 | 1, moved |
 | Claims, splits, settling | `cov/timed/claim.rs:1-299` | ~300 | 1, moved; the Drop guards stay hosted |
 | Drop accounting | `cov/timed/drops.rs:1-91` | 94 | 1, moved as counts and reports; the log lines stay hosted |
 | Owed untimestamped references | `cov/timed/owed.rs` | 80 | 1, moved |
 | Read cache | `cov/multiple_reads.rs` | 186 | 1, moved |
-| Capture at the mutation boundary | `cov/timed_capture.rs` | 328 | 2 |
-| Item assembly | `cov_notifications/multiple_items.rs` | 262 | 2 |
-| Split to the APDU size | `cov_notifications/multiple_chunks.rs:1-426` | 426 | 2 |
-| Multiple fanout: its decisions | `cov_notifications/multiple.rs` | 620 | 2; the sends stay hosted |
-| Service checks | `handlers/cov.rs:100-351` | 252 | 2 |
-| New: `NotifyService::CovMultiple`, the `Reporter` running the service, parity, the size row | | ~600 | 2 |
-| **Total** | | **~1,810 moved in PR 1; ~1,890 moved and ~600 new in PR 2** | |
+| Capture at the mutation boundary | `cov/timed_capture.rs` | 330 | 2a, moved; `cov/store_capture.rs` (124) stays hosted |
+| Item assembly | `cov_notifications/multiple_items.rs` | 262 | 2a, moved |
+| Split to the APDU size | `cov_notifications/multiple_chunks.rs:1-427` | 427 | 2a, moved |
+| Service checks | `handlers/cov.rs:5-28`, `:153-351` | ~225 | 2a, moved |
+| The histories follow the table | `cov.rs:527-554` (in `sync`) | ~30 | 2a, moved |
+| Multiple fanout: its decisions | `cov_notifications/multiple.rs` | 626 | 2b; the sends stay hosted |
+| New: `NotifyService::CovMultiple`, the `Reporter` running the service, parity, the size row | | ~600 | 2b |
+| **Total** | | **~1,810 moved in PR 1; ~1,275 in PR 2a; ~630 to move and ~600 new in PR 2b** | |
 
 PR 1's order differs from §7's rule. The read cache moved first, in one
 commit that also made its two maps B-tree maps, as the core has no hash
@@ -1268,12 +1365,42 @@ changes logic. The capture stays for PR 2 because its entry points are
 methods of the server's table wrapper and its write observer needs the
 table and the histories borrowed together, which the `Reporter` has.
 
-For PR 2, from PR 1's review:
+PR 2a follows §7's rule with no exception: none of its files was sans-IO
+as it stood, so each got its logic changes in place first and moved in a
+pure move commit after.
 
-- The server's `TimedStore` and `TimedClaim` share the names of what they
-  wrap; rename the hosted ones, or fold them away, when the split moves.
-- `cov/timed_capture.rs` reads the clock once for a whole capture, where
-  dev read it per change; decide which the core's capture does.
-- `cov::timed` is public but unstable until then: `ITEM_FRAMING`,
-  `value_len` and `request_header` leave the public surface with the
-  split, and the claim's splits and settling calls may change shape.
+| Item | What was not sans-IO | Changed in place |
+|---|---|---|
+| Item assembly | a std hash map and hash set | B-tree forms |
+| Split | the server's claim guard (the store's mutex, a `Drop` that gives back), a `warn!`, std hash sets, the server's timestamp helper | takes a plain claim and returns a `Split`; the helper moves beside it |
+| Capture | the store handle and its mutex, a clock read under it, entry points on the server's table wrapper | plain `TimedCapture`, `CaptureRead` and `CaptureQueue`; the store part moves to `cov/store_capture.rs` |
+| Service checks | a clock read, and the wrapper's `sync` between admission and capture | one function over the table, the histories and `now`; `follow_table` out of `sync` |
+| Multiple fanout (2b) | Tokio locks on the database and the table, the store's mutex, the claim guard's and the send turn's `Drop`, the transport sends, the invoke ID lease, `tracing`, the server's atomics, three std hash maps | not yet |
+
+The two move commits changed imports, visibility, module declarations and
+feature gates, and added the field docs a public item needs. The first
+did two things more, both because the split now lives beside the
+histories: it narrowed `cov::timed`'s `ITEM_FRAMING`, `value_len` and
+`request_header` to the crate, and rewrote that module's paragraph on
+what is unstable to match. No logic changed in either.
+
+PR 1's review left three notes for PR 2. All are done in 2a: the hosted
+names are `HistoryStore` and `ClaimGuard`; the capture reads the clock
+once (decision 16); `ITEM_FRAMING`, `value_len` and `request_header` are
+private to the crate.
+
+For PR 2b:
+
+- The fanout groups a change's references by context in a std hash map
+  and sends the contexts in its order, which varies from run to run. A
+  B-tree map fixes the order between contexts: a wire difference of the
+  kind decision 15 accepted for the backstop, to name in its changelog.
+- The closure that times a carried field (`Stamp`) reads the histories
+  while the split runs. In the server it locks the store per call; a
+  `Reporter` holds the histories outright, so `Stamp` may become the
+  owners' map and a clock read that `split` applies itself. That changes
+  `ReportContent` and so `split`'s inputs: `cov::timed`, the split and
+  the items stay marked unstable until then.
+- The fanout's hosted parts are the claim guard, the send turn and the
+  lodged claim, all RAII. The `Reporter` needs their explicit forms:
+  `begin_send` and `end_send`, `lodge` and `settle`, `give_back`.
