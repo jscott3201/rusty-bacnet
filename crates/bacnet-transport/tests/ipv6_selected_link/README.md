@@ -1,8 +1,8 @@
 # Isolated IPv6 selected-link qualification
 
-These are external network qualification targets, not normal CI tests. The eight
-single-link Rust cases and one two-link case carry explicit `#[ignore]` reasons;
-invoking them without the required environment fails. Ordinary selector and
+These are external network qualification targets, not normal CI tests. The ten
+single-link Rust cases (one of them Linux only) and one two-link case carry
+explicit `#[ignore]` reasons; invoking them without the required environment fails. Ordinary selector and
 packet-metadata unit tests run normally. Do not point these fixtures at a LAN.
 
 Use an isolated Linux environment with a task-owned internal IPv6 bridge and one
@@ -21,6 +21,13 @@ failure, cancel/restart/stop/drop, and foreign registration/DBTN/unicast source
 plus trusted/untrusted BBMD handling. Identical queued collision probes do not
 establish reseeding: a distinct next VMAC must appear within the original deadline.
 
+A transport claims a requested port by default (#2385). The cases that put a raw
+observer on the transport's own port turn on `set_share_wildcard_port` for it
+(`support::sharing`). `claim.rs` covers the default: a second socket on the port is
+refused, and the claimed socket still takes a group's datagram, its own broadcast
+coming back and its unicast. Its Linux-only case shows what sharing costs: a socket
+bound to the shared port after the transport gets the node's unicast.
+
 For the second-link negative, attach a second task-owned internal IPv6 bridge.
 Set `RB_IPV6_OTHER_ADDRESS` and `RB_IPV6_OTHER_INDEX` for its different ULA/index,
 then run this separate target (the automatic single-link cases are inapplicable):
@@ -34,9 +41,10 @@ That target requires ambiguous automatic startup to fail. An explicit link must
 ignore other-link multicast and a different local unicast destination before
 NPDU admission or VMAC learning; selected-link traffic still works.
 
-On macOS, only the dedicated own-port fixture is qualified on `lo0`. Supply its
-actual index, address `::1`, and `RB_IPV6_LOOPBACK_ONLY=1`, then add the filter
-`explicit_own_port_peer` to the first command. This proves multicast intake and
+On macOS, only the dedicated own-port fixture and the claimed-port case are
+qualified on `lo0`. Supply its actual index, address `::1`, and
+`RB_IPV6_LOOPBACK_ONLY=1`, then add the filter `explicit_own_port_peer` or
+`explicit_claimed_port` to the first command. This proves multicast intake and
 unicast/control source metadata. It does not capture multicast egress independently.
 The Linux shared-port raw observer is not a portable macOS socket-sharing oracle.
 

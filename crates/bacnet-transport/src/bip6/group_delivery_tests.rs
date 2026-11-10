@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 use super::frame::{encoded, raw_frame};
 use super::receive::Receiver;
 use super::resolver::Resolver;
-use super::socket::Bip6Socket;
+use super::socket::{Bip6Socket, PortUse, Role};
 use super::*;
 use crate::port::ReceivedNpdu;
 use crate::port::TransportPort;
@@ -42,7 +42,7 @@ fn sender() -> SocketAddrV6 {
 /// returned NPDU channel. The socket is only used for address-resolution
 /// replies, which these tests never draw.
 async fn receiver() -> (Receiver, mpsc::Receiver<ReceivedNpdu>) {
-    let socket = Bip6Socket::bind(Ipv6Addr::LOCALHOST, 0, super::socket::Role::Normal)
+    let socket = Bip6Socket::bind(Ipv6Addr::LOCALHOST, 0, PortUse::Claimed, Role::Normal)
         .await
         .unwrap();
     let (tx, rx) = mpsc::channel(4);

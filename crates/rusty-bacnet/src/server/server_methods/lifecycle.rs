@@ -188,6 +188,7 @@ impl BACnetServer {
                     // instance; startup fails if another node on the
                     // link already uses it.
                     let mut bip6 = Bip6Transport::new(interface, port, Some(device_instance));
+                    bip6.set_share_wildcard_port(share_wildcard_port);
                     if let Some(foreign) = bip6_foreign {
                         bip6.register_as_foreign_device(foreign);
                     }

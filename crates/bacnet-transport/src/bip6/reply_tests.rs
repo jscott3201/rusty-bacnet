@@ -18,7 +18,7 @@ use super::frame::encoded;
 use super::receive::{Receiver, Reply};
 use super::reply_limit::{REPLIES_PER_DESTINATION, REPLIES_PER_WINDOW, REPLY_WINDOW};
 use super::resolver::Resolver;
-use super::socket::Bip6Socket;
+use super::socket::{Bip6Socket, PortUse, Role};
 use super::*;
 use crate::port::TransportPort;
 use crate::udp_metadata::ReceivedDatagram;
@@ -75,7 +75,7 @@ fn unanswerable_sources() -> [SocketAddrV6; 4] {
 /// A receiver for `2001:db8::10`, a foreign device of [`bbmd`] when
 /// `foreign`. Its socket is never used: the tests read returned replies.
 async fn receiver(foreign: bool) -> Receiver {
-    let socket = Bip6Socket::bind(Ipv6Addr::LOCALHOST, 0, super::socket::Role::Normal)
+    let socket = Bip6Socket::bind(Ipv6Addr::LOCALHOST, 0, PortUse::Claimed, Role::Normal)
         .await
         .unwrap();
     let (tx, _) = mpsc::channel(4);

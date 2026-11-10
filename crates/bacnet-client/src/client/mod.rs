@@ -116,11 +116,13 @@ pub struct ClientConfig {
     /// `BipTransport::set_share_port_by_address` for what changes. Only the
     /// B/IP builder reads it; a transport passed to `start` has its own.
     pub share_port_by_address: bool,
-    /// B/IP only: share an explicitly requested port with other sockets on
-    /// this host, as before #2366. Off by default: the transport claims the
-    /// port, so a second bind of it fails. See
-    /// `BipTransport::set_share_wildcard_port` for what sharing costs. Only
-    /// the B/IP builder reads it; a transport passed to `start` has its own.
+    /// B/IP and B/IPv6: share an explicitly requested port with other
+    /// sockets on this host, as before #2366 (B/IP) and #2385 (B/IPv6). Off
+    /// by default: the transport claims the port, so a second bind of it
+    /// fails. See `BipTransport::set_share_wildcard_port` and
+    /// `Bip6Transport::set_share_wildcard_port` for what sharing costs. Only
+    /// the B/IP and B/IPv6 builders read it; a transport passed to `start`
+    /// has its own.
     pub share_wildcard_port: bool,
     /// APDU timeout in milliseconds.
     pub apdu_timeout_ms: u64,

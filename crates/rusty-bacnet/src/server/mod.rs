@@ -108,7 +108,8 @@ pub struct BACnetServer {
     broadcast_address: String,
     /// See `BipTransport::set_share_port_by_address` (#1538).
     share_port_by_address: bool,
-    /// See `BipTransport::set_share_wildcard_port` (#2366).
+    /// See `BipTransport::set_share_wildcard_port` (#2366) and
+    /// `Bip6Transport::set_share_wildcard_port` (#2385).
     share_wildcard_port: bool,
     /// The B/IP mode `bbmd=` or `foreign_device=` asked for (#938).
     bip_mode: bacnet_transport::bip::BipMode,

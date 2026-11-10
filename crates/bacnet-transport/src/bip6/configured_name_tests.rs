@@ -13,7 +13,9 @@ use bacnet_types::constructed::{BACnetHostAddress, BACnetHostNPort};
 use tokio::net::UdpSocket;
 use tokio::sync::Notify;
 
-use super::foreign_retarget_tests::{address_of, bbmd, changes, next_within, registration};
+use super::foreign_retarget_tests::{
+    address_of, bbmd, changes, in_real_time, next_within, registration,
+};
 use super::*;
 use crate::bbmd_lookup::table::{Answer, Names};
 use crate::port::TransportPort;
@@ -152,13 +154,14 @@ async fn a_failing_name_waits_and_registers_once_it_resolves() {
     names.answer(NAME, Answer::addresses([Ipv6Addr::LOCALHOST]));
     after(30_000).await;
     assert_eq!(names.calls(), 3);
+    // The clock is held while the datagram arrives: a jump to the renewal
+    // would send a second registration before the count below.
     let long = Duration::from_secs(3600);
-    let ttl = next_within(&peer, long, |message| match message {
+    let first = next_within(&peer, long, |message| match message {
         Bvll6::RegisterForeignDevice { ttl, .. } => Some(ttl),
         _ => None,
-    })
-    .await;
-    assert_eq!(ttl, 300);
+    });
+    assert_eq!(in_real_time(first).await, 300);
     let resolved = status(&transport);
     assert!(!resolved.waiting_for_bbmd);
     assert_eq!(

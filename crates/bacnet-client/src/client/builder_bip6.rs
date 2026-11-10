@@ -48,6 +48,16 @@ impl Bip6ClientBuilder {
         self
     }
 
+    /// Share an explicitly requested port with other sockets on this host
+    /// that bind it the same way (#2385). Off by default: the transport
+    /// claims the port, and `build` fails when another socket holds it. With
+    /// sharing on, unicast to the port reaches only one of the sockets on
+    /// it. See [`Bip6Transport::set_share_wildcard_port`].
+    pub fn share_wildcard_port(mut self, enabled: bool) -> Self {
+        self.config.share_wildcard_port = enabled;
+        self
+    }
+
     /// Set the device instance for VMAC derivation (Annex U.5).
     pub fn device_instance(mut self, instance: u32) -> Self {
         self.device_instance = Some(instance);

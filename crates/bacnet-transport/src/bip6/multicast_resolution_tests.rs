@@ -32,6 +32,11 @@ fn loopback_index() -> Option<u32> {
 /// A socket bound to FF02::BAC0 at `port` that joined it on interface
 /// `index`. Bound to the group, it gets the group's datagrams at that port
 /// but not the unicasts the transport's wildcard socket there is for.
+///
+/// The transport claims its port, as it does a requested one unless it is
+/// asked to share (#2385). macOS lets this socket, which sets SO_REUSEADDR,
+/// bind the group's address beside it all the same; Linux refuses, and the
+/// test skips there.
 fn group_listener(port: u16, index: u32) -> io::Result<UdpSocket> {
     let socket = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
     socket.set_only_v6(true)?;

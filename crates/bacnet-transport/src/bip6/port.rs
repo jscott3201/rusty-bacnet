@@ -20,7 +20,7 @@ use super::receive::Receiver;
 use super::receive_counters::{Bip6ReceiveCounters, ReceiveDrops};
 use super::reply_limit::ReplyLimiter;
 use super::resolver::{Driver, Resolver, UnresolvedSend};
-use super::socket::{Bip6Socket, Role};
+use super::socket::{Bip6Socket, PortUse, Role};
 use super::vmac_table::{generate_random_vmac, vmac_from_device_instance};
 use super::{Bip6Address, Bip6Vmac, Bvll6, MAX_VMAC_RETRIES, encode_bvll6};
 
@@ -56,6 +56,8 @@ pub const DEFAULT_BACNET6_PORT: u16 = 0xBAC0;
 pub struct Bip6Transport {
     interface: Ipv6Addr,
     port: u16,
+    /// See [`Self::set_share_wildcard_port`].
+    share_wildcard_port: bool,
     device_instance: Option<u32>,
     /// This node's VMAC as the network layer's MAC: zero before start and
     /// after stop.
@@ -146,6 +148,7 @@ impl Bip6Transport {
         Self {
             interface,
             port,
+            share_wildcard_port: false,
             device_instance,
             local_mac: [0; 3],
             local_address: None,
@@ -166,6 +169,41 @@ impl Bip6Transport {
             receive_drops: Arc::default(),
             frame_tap: crate::tap::FrameTap::new(),
         }
+    }
+
+    /// Share an explicitly requested port with other sockets on this host
+    /// that bind it the same way, as before #2385. Off by default: the
+    /// socket claims its port, so a second bind of it fails at once (on
+    /// Windows with `SO_EXCLUSIVEADDRUSE`), and a start that finds the port
+    /// held fails with an error that says so. Call it before `start()`.
+    ///
+    /// With sharing on, the socket sets `SO_REUSEADDR`. A datagram sent to
+    /// a BACnet group reaches every socket on the port that joined it, but
+    /// each unicast reaches only one of the sockets: on Linux the one that
+    /// bound last. That can be another program that takes this transport's
+    /// replies, address resolutions and registrations. Two stacks on one
+    /// host are better served each on its own port.
+    ///
+    /// It changes nothing for a port the OS picks, which is never shared
+    /// (#892). The claim needs no second socket: a normal node's one socket
+    /// on `[::]` joins the BACnet groups itself, and takes their datagrams
+    /// and its own broadcasts' echoes as before. A foreign device binds
+    /// its own address, and claims that address and port.
+    ///
+    /// By OS: Linux and Windows refuse every later bind of a normal
+    /// node's claimed port, and of a foreign device's claimed address and
+    /// port, and with sharing on let one in. Linux also refuses `[::]`
+    /// beside a foreign device's claimed address; what Windows does there
+    /// isn't verified. macOS and the BSDs refuse a second socket on `[::]`,
+    /// or on a foreign device's address, with or without sharing; but they
+    /// let a socket that sets `SO_REUSEADDR` bind a specific address beside
+    /// a normal node's `[::]`, claimed or not, and it then gets the unicast
+    /// sent there. They have no option to refuse it. So there a normal node
+    /// and a foreign device on one port, which both started before #2385,
+    /// now need sharing on whichever starts later. See `docs/rust-api.md`
+    /// (BIP6, Claiming the port).
+    pub fn set_share_wildcard_port(&mut self, enabled: bool) {
+        self.share_wildcard_port = enabled;
     }
 
     /// Set the broadcast scope for send_broadcast.
@@ -529,10 +567,12 @@ impl TransportPort for Bip6Transport {
             .as_ref()
             .map_or(Role::Normal, |start| Role::Foreign(start.bbmd));
 
+        let port_use = PortUse::sharing(self.share_wildcard_port);
+
         // Resolve and prepare privately. No identity, port, VMAC or socket is
         // published until joins and the required collision exchange succeed.
         let socket = Arc::new(
-            Bip6Socket::bind(self.interface, self.port, role)
+            Bip6Socket::bind(self.interface, self.port, port_use, role)
                 .await
                 .map_err(Error::Transport)?
                 .tapped(self.frame_tap.clone())

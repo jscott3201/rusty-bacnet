@@ -276,7 +276,7 @@ async fn bip_builder_shares_the_port_by_address_only_with_an_address() {
 
 /// The B/IP builder hands `share_wildcard_port` to its transport (#2366): on a
 /// port another socket holds, a claiming transport's error names the opt-in,
-/// and a sharing one's says the holder doesn't share. Windows decides a
+/// and a sharing one's says the port can't be shared. Windows decides a
 /// sharing bind beside a socket that set no options by the two sockets'
 /// accounts (Microsoft's SO_REUSEADDR table), so only the claiming case runs
 /// there.
@@ -284,13 +284,39 @@ async fn bip_builder_shares_the_port_by_address_only_with_an_address() {
 async fn bip_builder_hands_its_wildcard_sharing_choice_to_the_transport() {
     let holder = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).unwrap();
     let port = holder.local_addr().unwrap().port();
-    for (share, says) in [(false, "share_wildcard_port"), (true, "refuses sharing")] {
+    for (share, says) in [(false, "share_wildcard_port"), (true, "can't be shared")] {
         if share && cfg!(windows) {
             continue;
         }
         let built = BACnetClient::bip_builder()
             .interface(Ipv4Addr::LOCALHOST)
             .port(port)
+            .share_wildcard_port(share)
+            .build()
+            .await;
+        let Err(Error::Transport(refused)) = built else {
+            panic!("build must fail on a held port (share: {share})");
+        };
+        assert!(refused.to_string().contains(says), "{refused}");
+    }
+}
+
+/// The B/IPv6 builder hands `share_wildcard_port` to its transport too
+/// (#2385), with the same two errors on a held port, and the same Windows
+/// exception.
+#[cfg(feature = "ipv6")]
+#[tokio::test]
+async fn bip6_builder_hands_its_wildcard_sharing_choice_to_the_transport() {
+    let holder = std::net::UdpSocket::bind((Ipv6Addr::UNSPECIFIED, 0)).unwrap();
+    let port = holder.local_addr().unwrap().port();
+    for (share, says) in [(false, "share_wildcard_port"), (true, "can't be shared")] {
+        if share && cfg!(windows) {
+            continue;
+        }
+        let built = BACnetClient::bip6_builder()
+            .interface(Ipv6Addr::LOCALHOST)
+            .port(port)
+            .device_instance(0x12_3456)
             .share_wildcard_port(share)
             .build()
             .await;

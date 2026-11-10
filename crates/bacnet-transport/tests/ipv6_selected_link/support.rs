@@ -1,4 +1,5 @@
 use super::wire;
+use bacnet_transport::bip6::Bip6Transport;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::{
     net::{Ipv6Addr, SocketAddrV6},
@@ -34,11 +35,25 @@ pub(super) fn udp(address: Ipv6Addr, port: u16, index: u32, join: bool) -> UdpSo
 }
 
 /// An observer bound before the transport, which then starts on the returned
-/// port. Only an explicit port sets SO_REUSEADDR (#892); both sockets need it.
+/// port with [`sharing`]. Both sockets need SO_REUSEADDR: the observer sets
+/// it here, and the transport only when it is asked to share its port.
 pub(super) fn observer(index: u32, join: bool) -> (UdpSocket, u16) {
     let socket = bind(Ipv6Addr::UNSPECIFIED, 0, index, join, true);
     let port = socket.local_addr().unwrap().port();
     (socket, port)
+}
+
+/// A transport that shares `port` with the [`observer`] bound there. By
+/// default a transport claims a requested port (#2385), and its start
+/// beside the observer would fail.
+pub(super) fn sharing(
+    interface: Ipv6Addr,
+    port: u16,
+    device_instance: Option<u32>,
+) -> Bip6Transport {
+    let mut transport = Bip6Transport::new(interface, port, device_instance);
+    transport.set_share_wildcard_port(true);
+    transport
 }
 
 fn bind(address: Ipv6Addr, port: u16, index: u32, join: bool, reuse: bool) -> UdpSocket {
