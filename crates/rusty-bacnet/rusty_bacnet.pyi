@@ -4861,6 +4861,8 @@ class BACnetServer:
         registered_network_port: Optional[int] = None,
         cov_policy: CovPolicy | None = None,
         time_sync_policy: TimeSyncPolicy | None = None,
+        utc_offset_minutes: int = 0,
+        daylight_savings: bool = False,
         share_port_by_address: bool = False,
         share_wildcard_port: bool = False,
         segmentation_supported: Segmentation = Segmentation.NONE,
@@ -4932,6 +4934,13 @@ class BACnetServer:
         it. With sharing, broadcasts reach every socket on the port, but
         each unicast reaches only one of them; prefer
         ``share_port_by_address`` or separate ports.
+
+        ``utc_offset_minutes`` / ``daylight_savings`` (keyword-only,
+        default 0 and False): the zone the Device clock starts in, as
+        ``set_clock_zone`` takes them and checked the same way, at
+        construction. Every ``start()`` begins in it, so the Schedule pass
+        that runs as the server starts already judges local time there;
+        ``set_clock_zone`` changes it while the server runs, until ``stop()``.
 
         ``bbmd`` / ``foreign_device`` (at most one, else ValueError): run
         the device as a BBMD (B/IP only), or register it with a BBMD on
@@ -6581,8 +6590,9 @@ class BACnetServer:
         ``utc_offset_minutes`` becomes the Device's UTC_Offset: minutes west
         of UTC, east negative, a multiple of 15 within -1440..=1440.
         ``daylight_savings`` becomes its Daylight_Savings_Status, which puts
-        local time an hour ahead. A server starts at offset 0 without
-        daylight saving.
+        local time an hour ahead. A server starts in the zone its
+        constructor's keywords of the same names give, and the change lasts
+        until ``stop()``.
 
         The clock keeps its UTC instant, and one a TimeSynchronization set
         stays set, so Local_Date and Local_Time move by the difference

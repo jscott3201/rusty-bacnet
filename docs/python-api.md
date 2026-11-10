@@ -2941,6 +2941,8 @@ server = BACnetServer(
     after_reinitialize=None,     # keyword-only; runs after the SimpleACK
     cov_policy=None,             # keyword-only dict of COV limits; see COV policy below
     time_sync_policy=None,       # keyword-only dict of clock limits; see Time synchronization policy below
+    utc_offset_minutes=0,        # keyword-only; the Device's UTC_Offset at start, minutes west of UTC
+    daylight_savings=False,      # keyword-only; its Daylight_Savings_Status at start; see set_clock_zone
 )
 ```
 
@@ -5090,7 +5092,14 @@ await server.set_clock_zone(300, True)
 - `utc_offset_minutes` becomes the Device's UTC_Offset: minutes west of UTC,
   so east is negative. It is a multiple of 15 from -1440 to 1440.
   `daylight_savings` becomes its Daylight_Savings_Status, which puts local
-  time an hour ahead. A server starts at offset 0 without daylight saving.
+  time an hour ahead.
+- A server starts in the zone the constructor's keyword-only
+  `utc_offset_minutes` and `daylight_savings` give, offset 0 without daylight
+  saving by default. They are checked at construction as this method checks
+  them. Set them when the device isn't on UTC: the Schedule pass that runs as
+  the server starts then already judges local time in that zone. A change
+  made here lasts until `stop()`; the next `start()` begins in the
+  constructor's zone again.
 - The clock keeps its UTC instant, and a clock a TimeSynchronization set
   stays set, so Local_Date and Local_Time move by the difference between the
   zones.

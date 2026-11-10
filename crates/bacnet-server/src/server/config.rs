@@ -448,6 +448,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             db: None,
             transport: None,
             configured_device_bindings: Vec::new(),
+            clock_zone: super::ClockConfig::default(),
         }
     }
 }

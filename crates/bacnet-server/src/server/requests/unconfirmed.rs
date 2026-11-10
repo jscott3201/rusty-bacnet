@@ -8,7 +8,6 @@ use super::super::event_forwarding::{ForwardOrigin, Reception};
 use super::super::received_event_log::log_received_event_notification;
 use super::super::*;
 use bacnet_endpoint_core::coordinator::CanonicalPeer;
-use bacnet_objects::clock::ClockReader;
 use bacnet_services::alarm_event::ForwardedEventNotification;
 use bacnet_services::device_mgmt::TimeSynchronizationRequest;
 use bacnet_services::who_has::{WhoHasObject, WhoHasRequest};
@@ -379,7 +378,7 @@ pub(super) fn apply_time_sync_request(
     local_network: Option<u16>,
 ) -> Result<(), Error> {
     let request = TimeSynchronizationRequest::decode(&raw_service_data)?;
-    let supplied = clock::date_time_to_hundredths(request.date, request.time)?;
+    clock::date_time_to_hundredths(request.date, request.time)?;
     let policy = &config.time_sync_policy;
     if !policy.enabled {
         return Err(time_sync_policy::denied("disabled"));
@@ -399,12 +398,16 @@ pub(super) fn apply_time_sync_request(
     }
     let clock = clock.ok_or_else(|| Error::Encoding("Device clock is disabled".into()))?;
     let mut delta_hundredths = None;
+    // The step is judged and the clock set under one hold of its lock, so
+    // a zone change can't fall between the two (#2395).
     let result = limiter.apply_at(received, local_network, runtime_clock::now(), || {
-        delta_hundredths = clock
-            .read_clock()
-            .and_then(|frame| time_sync_policy::step_hundredths(supplied, is_utc, frame));
-        time_sync_policy::check_step(delta_hundredths, policy.max_step)?;
-        clock.synchronize(request.date, request.time, is_utc)
+        clock.synchronize_within(
+            request.date,
+            request.time,
+            is_utc,
+            policy.max_step,
+            &mut delta_hundredths,
+        )
     });
     debug!(
         accepted = result.is_ok(),

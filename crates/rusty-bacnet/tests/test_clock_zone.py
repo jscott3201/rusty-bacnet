@@ -4,7 +4,9 @@ A host changes the Device clock's zone while the server runs. The Device's
 UTC_Offset and Daylight_Savings_Status read the new pair, Local_Date and
 Local_Time move by the difference, and a clock a UTCTimeSynchronization set
 keeps the instant it was given. An offset the clock doesn't take is refused
-when the method is called, and changes nothing.
+when the method is called, and changes nothing. The constructor's
+utc_offset_minutes and daylight_savings keywords give the zone every start
+begins in.
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ import ast
 import asyncio
 import datetime
 import importlib.util
+import inspect
 import socket
 import unittest
 from pathlib import Path
@@ -109,6 +112,41 @@ class ClockZoneTests(unittest.IsolatedAsyncioTestCase):
                                                 P.DAYLIGHT_SAVINGS_STATUS)
             self.assertEqual((offset.value, summer.value), (-645, False))
 
+    async def test_a_server_starts_in_its_constructors_zone(self) -> None:
+        # Four hours behind UTC: five hours west, in daylight saving.
+        self.server = BACnetServer(DEVICE, interface="127.0.0.1", port=0,
+                                   broadcast_address="127.0.0.1",
+                                   utc_offset_minutes=300, daylight_savings=True)
+        await self.start()
+        self.assertEqual(await self.zone(), (300, True))
+        tolerance = datetime.timedelta(seconds=30)
+        behind = datetime.timedelta(hours=4)
+        now = datetime.datetime.now(UTC).replace(tzinfo=None)
+        self.assertLess(abs(await self.local() - (now - behind)), tolerance)
+        # A change lasts until stop; the next start is in the keywords' zone.
+        await self.server.set_clock_zone(0, False)
+        self.assertEqual(await self.zone(), (0, False))
+        await self.server.stop()
+        await self.server.start()
+        self.assertEqual(await self.zone(), (300, True))
+
+    def test_the_constructor_checks_its_zone(self) -> None:
+        def build(**zone: object) -> BACnetServer:
+            return BACnetServer(DEVICE, interface="127.0.0.1", port=0,
+                                broadcast_address="127.0.0.1", **zone)
+
+        for offset in (14, -1, 1441, -1455):
+            with self.subTest(offset=offset), self.assertRaises(ValueError):
+                build(utc_offset_minutes=offset)
+        with self.assertRaises(OverflowError):
+            build(utc_offset_minutes=1 << 20)
+        with self.assertRaises(TypeError):
+            build(daylight_savings="yes")
+        for name in ("utc_offset_minutes", "daylight_savings"):
+            parameter = inspect.signature(BACnetServer).parameters[name]
+            self.assertIs(parameter.kind, inspect.Parameter.KEYWORD_ONLY)
+        build(utc_offset_minutes=-1440, daylight_savings=True)
+
     async def test_a_refused_zone_changes_nothing(self) -> None:
         await self.start()
         await self.server.set_clock_zone(-345, True)
@@ -139,6 +177,13 @@ class ClockZoneTests(unittest.IsolatedAsyncioTestCase):
                          ["int", "bool"])
         assert method.returns is not None
         self.assertEqual(ast.unparse(method.returns), "Awaitable[None]")
+        init = next(node for node in classes["BACnetServer"].body
+                    if isinstance(node, ast.FunctionDef) and node.name == "__init__")
+        keywords = {arg.arg: (ast.unparse(arg.annotation), ast.unparse(default))
+                    for arg, default in zip(init.args.kwonlyargs, init.args.kw_defaults)
+                    if default is not None}
+        self.assertEqual(keywords["utc_offset_minutes"], ("int", "0"))
+        self.assertEqual(keywords["daylight_savings"], ("bool", "False"))
 
 
 if __name__ == "__main__":

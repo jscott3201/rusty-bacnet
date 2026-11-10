@@ -10371,15 +10371,22 @@ the expiry of its duration change the state, and every start begins at
 
 ### The Device clock's zone
 
-`BACnetServer::start_with_clock` takes a `ClockConfig`: the Device's
-UTC_Offset, in minutes west of UTC, and its Daylight_Savings_Status. The
-builders start at offset 0 without daylight saving.
+A `ClockConfig` is the Device's UTC_Offset, in minutes west of UTC, and its
+Daylight_Savings_Status. `BACnetServer::start_with_clock` takes one, and so
+does each builder's `clock_zone(ClockConfig)`; the default is offset 0
+without daylight saving. Start a device that isn't on UTC in its zone: the
+Schedule pass that runs as the server starts already judges local time in it.
 `BACnetServer::set_clock_zone(ClockConfig)` changes the pair while the server
 runs (#2395), when daylight saving starts or ends or the host corrects its
 offset, and `clock_zone()` returns the current one.
 
 ```rust
-// Five hours west of UTC, now in daylight-saving time.
+// Five hours west of UTC, in standard time.
+let server = BACnetServer::bip_builder()
+    .clock_zone(ClockConfig::new(300, false)?)
+    .build()
+    .await?;
+// Daylight saving begins.
 server.set_clock_zone(ClockConfig::new(300, true)?).await?;
 ```
 
@@ -10400,6 +10407,10 @@ server.set_clock_zone(ClockConfig::new(300, true)?).await?;
 - It is refused, changing nothing, on a server started with
   `start_clockless`, and when the local date in the new zone would fall
   outside 1900 to 2154.
+- A TimeSynchronization's step is judged against
+  `TimeSyncPolicy::max_step` and its value stored under one hold of the
+  clock's lock, so the zone a local value is judged in is the zone it is
+  stored under even while the zone changes.
 - Only the host changes the zone. UTC_Offset and Daylight_Savings_Status are
   read-only to a peer.
 

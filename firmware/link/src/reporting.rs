@@ -266,7 +266,9 @@ pub struct Summary {
     pub clock: (Outcome, [Vec<u8>; 2]),
     /// The clock's recipient window at the instant the reads were answered,
     /// once the host has moved the zone into daylight-saving time: the
-    /// local day and time, an hour on from the reads'.
+    /// local day and time, an hour on from the reads'. The time before the
+    /// change is the Local_Time the second read returned; a second window
+    /// here would cost the RISC-V image flash.
     pub window: Option<(DaysOfWeek, Time)>,
     /// Subscriptions left at [`EXPIRY_AT`].
     pub left: usize,

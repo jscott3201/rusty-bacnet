@@ -14,7 +14,7 @@ use bacnet_types::constructed::{BACnetCalendarEntry, BACnetTimeValue};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier as P};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::sync::RwLock;
 
 fn date(year: u16, month: u8, day: u8, day_of_week: u8) -> Date {
@@ -157,6 +157,145 @@ async fn a_refused_zone_changes_nothing() {
     // An hour west in daylight saving is still 00:30.
     first.set_zone(zone(60, true)).unwrap();
     assert_eq!(local(&first), (date(1900, 1, 1, 1), time(0, 30, 0, 0)));
+
+    // 2154-12-31 was a Tuesday: daylight saving at 23:30 would be 2155.
+    let last = Arc::new(ServerClock::new(zone(0, false)));
+    last.synchronize(date(2154, 12, 31, 2), time(23, 30, 0, 0), true)
+        .unwrap();
+    let before = *last.state.lock().unwrap();
+    assert!(last.set_zone(zone(0, true)).is_err());
+    // The range is judged at the instant of the change: a quarter-hour east
+    // is fine at 23:30, and refused once the clock has run 20 minutes on.
+    tokio::time::advance(Duration::from_secs(1_200)).await;
+    assert!(last.set_zone(zone(-15, false)).is_err());
+    let after = *last.state.lock().unwrap();
+    assert_eq!(after.config, before.config);
+    assert_eq!(after.synchronized_utc, before.synchronized_utc);
+    assert_eq!(local(&last), (date(2154, 12, 31, 2), time(23, 50, 0, 0)));
+    last.set_zone(zone(60, false)).unwrap();
+    assert_eq!(local(&last), (date(2154, 12, 31, 2), time(22, 50, 0, 0)));
+}
+
+/// The step a synchronization makes is judged against `max_step` in the
+/// zone its value is stored under, under one hold of the clock's lock: a
+/// local value 90 minutes ahead is refused, leaving the clock as it was,
+/// and the same value is taken once daylight saving has made it 30 minutes
+/// ahead. A UTC value's step is the same in any zone.
+#[tokio::test(start_paused = true)]
+async fn a_step_is_judged_in_the_zone_its_value_is_stored_under() {
+    let hour = Some(Duration::from_secs(3_600));
+    let thursday = date(2024, 7, 4, 4);
+    // 08:15 local, five hours west.
+    let clock = synced(zone(300, false), time(13, 15, 0, 0));
+    let holds = || clock.holds.load(Ordering::Relaxed);
+    let anchor = clock.state.lock().unwrap().synchronized_utc;
+    let mut step = None;
+
+    let before = holds();
+    let ahead = clock.synchronize_within(thursday, time(9, 45, 0, 0), false, hour, &mut step);
+    assert_eq!(holds() - before, 1);
+    assert!(ahead.unwrap_err().to_string().contains("step cap exceeded"));
+    assert_eq!(step, Some(90 * 6_000));
+    assert_eq!(clock.state.lock().unwrap().synchronized_utc, anchor);
+    assert_eq!(local(&clock), (thursday, time(8, 15, 0, 0)));
+
+    clock.set_zone(zone(300, true)).unwrap();
+    let before = holds();
+    clock
+        .synchronize_within(thursday, time(9, 45, 0, 0), false, hour, &mut step)
+        .unwrap();
+    assert_eq!(holds() - before, 1);
+    assert_eq!(step, Some(30 * 6_000));
+    assert_eq!(local(&clock), (thursday, time(9, 45, 0, 0)));
+    assert_eq!(clock.zone(), Some(zone(300, true)));
+
+    // 09:45 in daylight saving, five hours west, is 13:45 UTC. A UTC value
+    // of 14:45 is an hour ahead, the cap exactly, whatever the zone.
+    for (offset, summer) in [(300, true), (-645, false)] {
+        clock.set_zone(zone(offset, summer)).unwrap();
+        let mut step = None;
+        let late = clock.synchronize_within(thursday, time(14, 45, 0, 1), true, hour, &mut step);
+        assert!(late.is_err(), "{offset}, {summer}");
+        assert_eq!(step, Some(60 * 6_000 + 1));
+    }
+    clock
+        .synchronize_within(thursday, time(14, 45, 0, 0), true, hour, &mut step)
+        .unwrap();
+    assert_eq!(step, Some(60 * 6_000));
+    // With no cap any step is taken, and still reported.
+    clock
+        .synchronize_within(
+            date(2024, 7, 5, 5),
+            time(14, 45, 0, 0),
+            true,
+            None,
+            &mut step,
+        )
+        .unwrap();
+    assert_eq!(step, Some(24 * 60 * 6_000));
+}
+
+/// A builder starts the clock in the zone it is given: the Device's first
+/// reads are in it, and so is the Schedule pass that runs as the server
+/// starts. The Schedule holds the hour as its value, so its Present_Value
+/// after that pass is the local hour, five hours behind the system's UTC.
+#[tokio::test(start_paused = true)]
+async fn a_builder_starts_the_clock_in_its_zone() {
+    let west = zone(300, false);
+    let identity = bacnet_objects::DeviceIdentity::new(2395, 0x105).unwrap();
+    let mut db = identity
+        .clone()
+        .with_services(bacnet_objects::device::EXECUTED_SERVICES)
+        .build_database()
+        .unwrap();
+    let mut schedule = ScheduleObject::new(1, "Hour", PropertyValue::Real(-1.0)).unwrap();
+    let hours: Vec<_> = (0..24_u8)
+        .map(|hour| BACnetTimeValue {
+            time: time(hour, 0, 0, 0),
+            value: PropertyValue::Real(f32::from(hour)),
+        })
+        .collect();
+    for day in 0..7 {
+        schedule.set_weekly_schedule(day, hours.clone()).unwrap();
+    }
+    let schedule_oid = schedule.object_identifier();
+    db.add(Box::new(schedule)).unwrap();
+
+    // The local hour five hours west of the system's UTC, before the start
+    // and after the reads: the same, unless an hour turned in between.
+    let local_hour = || {
+        let utc = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap();
+        ((utc.as_secs() / 3_600 + 24 - 5) % 24) as u8
+    };
+    let earliest = local_hour();
+    let server = BACnetServer::generic_builder()
+        .device(identity.clone())
+        .database(db)
+        .transport(TestTransport::new())
+        .clock_zone(west)
+        .build()
+        .await
+        .unwrap();
+    assert_eq!(server.clock_zone(), Some(west));
+    let (_, now, offset, summer) =
+        device_clock(&*server.database().read().await, identity.device_oid());
+    // The Schedule task's first pass runs once the test lets it.
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    let scheduled = server
+        .database()
+        .read()
+        .await
+        .get(&schedule_oid)
+        .unwrap()
+        .read_property(P::PRESENT_VALUE, None)
+        .unwrap();
+    let hours = [earliest, local_hour()];
+    assert_eq!((offset, summer), (300, false));
+    assert!(hours.contains(&now.hour), "{now:?} isn't in {hours:?}");
+    let expected = hours.map(|hour| PropertyValue::Real(f32::from(hour)));
+    assert!(expected.contains(&scheduled), "{scheduled:?}, {hours:?}");
 }
 
 /// The running server's Device reads the new pair and the moved local time,
@@ -231,15 +370,19 @@ async fn a_request_reads_one_pair_across_a_change() {
 /// Readers on other threads, while the zone flips between two zones that
 /// differ in both fields, only ever see one zone's pair, with that zone's
 /// local time: 07:xx five hours west, 14:xx an hour east in daylight saving.
+/// The zone keeps flipping until every reader has seen both pairs, so each
+/// read through at least one change.
 #[test]
 fn concurrent_readers_see_the_old_pair_or_the_new() {
+    const READERS: usize = 4;
     const FLIPS: usize = 20_000;
     let (west, east) = (zone(300, false), zone(-60, true));
     let clock = synced(west, time(12, 0, 0, 0));
     let done = AtomicBool::new(false);
-    let start = std::sync::Barrier::new(5);
+    let saw_both = AtomicUsize::new(0);
+    let start = std::sync::Barrier::new(READERS + 1);
     let seen = std::thread::scope(|scope| {
-        let readers: Vec<_> = (0..4)
+        let readers: Vec<_> = (0..READERS)
             .map(|_| {
                 scope.spawn(|| {
                     start.wait();
@@ -247,10 +390,14 @@ fn concurrent_readers_see_the_old_pair_or_the_new() {
                     while !done.load(Ordering::Relaxed) {
                         let frame = clock.read_clock().unwrap();
                         let pair = (frame.utc_offset, frame.daylight_savings_status);
-                        match (pair, frame.local_time.hour) {
-                            ((300, false), 7) => seen[0] += 1,
-                            ((-60, true), 14) => seen[1] += 1,
+                        let which = match (pair, frame.local_time.hour) {
+                            ((300, false), 7) => 0,
+                            ((-60, true), 14) => 1,
                             torn => panic!("a torn frame: {torn:?}"),
+                        };
+                        seen[which] += 1;
+                        if seen[which] == 1 && seen[1 - which] > 0 {
+                            saw_both.fetch_add(1, Ordering::Relaxed);
                         }
                     }
                     seen
@@ -258,19 +405,30 @@ fn concurrent_readers_see_the_old_pair_or_the_new() {
             })
             .collect();
         start.wait();
-        for flip in 0..FLIPS {
-            let next = if flip % 2 == 0 { east } else { west };
-            clock.set_zone(next).unwrap();
+        // Bounded by the readers' progress, never by time. A reader that
+        // panicked on a torn frame never reports, so stop for it too.
+        let mut flips = 0;
+        while flips < FLIPS
+            || (saw_both.load(Ordering::Relaxed) < READERS
+                && !readers.iter().any(|reader| reader.is_finished()))
+        {
+            for next in [east, west] {
+                clock.set_zone(next).unwrap();
+            }
+            flips += 2;
+            std::thread::yield_now();
         }
         done.store(true, Ordering::Relaxed);
         readers
             .into_iter()
             .map(|reader| reader.join().unwrap())
-            .fold([0, 0], |total, seen| {
-                [total[0] + seen[0], total[1] + seen[1]]
-            })
+            .collect::<Vec<_>>()
     });
-    assert!(seen[0] + seen[1] > 0);
+    // Every read was one of the two pairs (a reader panics otherwise), and
+    // every reader saw each of them.
+    for (reader, seen) in seen.iter().enumerate() {
+        assert!(seen[0] > 0 && seen[1] > 0, "reader {reader}: {seen:?}");
+    }
     assert_eq!(clock.zone(), Some(west));
 }
 
