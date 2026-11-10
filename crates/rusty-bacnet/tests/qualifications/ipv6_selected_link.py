@@ -22,6 +22,12 @@ GROUP = "ff05::bac0"
 DEADLINE = 2
 
 
+# The observer binds the port first and the server or client then shares it.
+# A B/IPv6 transport claims a requested port by default (#2385), so each takes
+# share_wildcard_port=True here.
+SHARED = {"share_wildcard_port": True}
+
+
 def udp(address="::", port=0, join=False):
     sock = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
     sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
@@ -66,7 +72,7 @@ async def server_case(explicit):
     port = observer.getsockname()[1]
     peer = udp(ADDRESS)
     kwargs = {"ipv6_interface": ADDRESS} if explicit else {}
-    server = rusty_bacnet.BACnetServer(321, transport="ipv6", port=port, **kwargs)
+    server = rusty_bacnet.BACnetServer(321, transport="ipv6", port=port, **SHARED, **kwargs)
     try:
         await server.start()
         local = await server.local_address()
@@ -95,7 +101,7 @@ async def client_case(explicit):
     peer = udp(ADDRESS)
     kwargs = {"ipv6_interface": ADDRESS} if explicit else {}
     try:
-        async with rusty_bacnet.BACnetClient(transport="ipv6", port=port, **kwargs) as client:
+        async with rusty_bacnet.BACnetClient(transport="ipv6", port=port, **SHARED, **kwargs) as client:
             await client.who_is()
             data, source, destination = await asyncio.to_thread(
                 receive, observer, lambda b: b[:2] == b"\x82\x02" and b[7:] == b"\x01\x20\xff\xff\x00\xff\x10\x08")

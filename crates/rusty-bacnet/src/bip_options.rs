@@ -14,14 +14,25 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-/// `share_port_by_address` (#1538) binds a B/IP interface address, and
-/// `share_wildcard_port` (#2366) shares a B/IP port, so each means nothing on
-/// another transport: refuse the keyword `name` there rather than ignore it.
+/// `share_port_by_address` (#1538) binds a B/IP interface address, so it
+/// means nothing on another transport: refuse the keyword `name` there
+/// rather than ignore it.
 pub(crate) fn only_on_bip(name: &str, set: bool, transport: &str) -> PyResult<()> {
     if set && transport != "bip" {
         return Err(PyValueError::new_err(format!(
             "{name} applies only to transport='bip'"
         )));
+    }
+    Ok(())
+}
+
+/// `share_wildcard_port` shares a B/IP port (#2366) or a B/IPv6 one
+/// (#2385): refuse it on any other transport rather than ignore it.
+pub(crate) fn share_wildcard_port(set: bool, transport: &str) -> PyResult<()> {
+    if set && !matches!(transport, "bip" | "ipv6") {
+        return Err(PyValueError::new_err(
+            "share_wildcard_port applies only to transport='bip' and transport='ipv6'",
+        ));
     }
     Ok(())
 }

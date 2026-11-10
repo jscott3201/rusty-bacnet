@@ -1,9 +1,9 @@
 //! Keeping an unshared UDP port to its socket, as far as each OS allows.
 //!
 //! A B/IP or B/IPv6 socket on an ephemeral port binds the wildcard address
-//! without SO_REUSEADDR (#892), and so by default does a B/IP socket on a
-//! requested port (#2366). How private that leaves the port depends on the
-//! OS:
+//! without SO_REUSEADDR (#892), and so by default does one on a requested
+//! port (B/IP #2366, B/IPv6 #2385; a B/IPv6 foreign device binds its own
+//! address instead). How private that leaves the port depends on the OS:
 //!
 //! - Linux refuses any other bind to the port, whatever options it sets.
 //! - Windows lets another socket bind a more specific address on the same port

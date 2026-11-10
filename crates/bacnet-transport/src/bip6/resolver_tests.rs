@@ -17,7 +17,7 @@ use tokio::time::Instant;
 use super::receive::Receiver;
 use super::resolve::{Failure, Route};
 use super::resolver::{DatagramSender, Driver, Resolver};
-use super::socket::Bip6Socket;
+use super::socket::{Bip6Socket, PortUse, Role};
 use super::*;
 use crate::port::TransportPort;
 use crate::udp_metadata::ReceivedDatagram;
@@ -419,7 +419,7 @@ async fn receiver(
     resolver: Arc<Resolver>,
     foreign: bool,
 ) -> (Receiver, mpsc::Receiver<crate::port::ReceivedNpdu>) {
-    let socket = Bip6Socket::bind(Ipv6Addr::LOCALHOST, 0, super::socket::Role::Normal)
+    let socket = Bip6Socket::bind(Ipv6Addr::LOCALHOST, 0, PortUse::Claimed, Role::Normal)
         .await
         .unwrap();
     let local_ip = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x10);

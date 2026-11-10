@@ -259,7 +259,7 @@ async fn a_second_transport_on_a_requested_port_starts_only_when_both_share() {
             panic!("a second transport started on a claimed port");
         };
         assert!(lost_to_another_socket(&refused), "{refused}");
-        assert!(refused.to_string().contains("refuses sharing"), "{refused}");
+        assert!(refused.to_string().contains("can't be shared"), "{refused}");
         first.stop().await.unwrap();
 
         let mut first = transport(true);

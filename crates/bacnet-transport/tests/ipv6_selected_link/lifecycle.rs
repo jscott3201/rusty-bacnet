@@ -40,7 +40,7 @@ async fn explicit_random_collision_reseeds_and_configured_collision_is_transacti
     let (selected, index) = fixture();
     let (observer, port) = observer(index, true);
     let peer = udp(selected, 0, index, false);
-    let mut random = Bip6Transport::new(selected, port, None);
+    let mut random = sharing(selected, port, None);
     let exchange = async {
         let first = collide(&observer, &peer, None).await;
         let second = tokio::time::timeout(DEADLINE, async {
@@ -68,7 +68,7 @@ async fn explicit_random_collision_reseeds_and_configured_collision_is_transacti
     assert!(incoming.recv().await.is_none());
     assert_eq!(random.local_mac(), &[0; 3]);
 
-    let mut configured = Bip6Transport::new(selected, port, Some(0x12_3456));
+    let mut configured = sharing(selected, port, Some(0x12_3456));
     let (failed, _) = tokio::join!(
         configured.start(),
         collide(&observer, &peer, Some([0x12, 0x34, 0x56]))
@@ -97,7 +97,7 @@ async fn explicit_cancel_start_then_restart_stop_and_drop_reclaim_owner() {
     crate::port_retry::rerun_on_lost_port(async || {
         let (selected, index) = fixture();
         let (observer, port) = observer(index, true);
-        let mut transport = Bip6Transport::new(selected, port, None);
+        let mut transport = sharing(selected, port, None);
         {
             let startup = transport.start();
             tokio::pin!(startup);
@@ -132,7 +132,7 @@ async fn explicit_cancel_start_then_restart_stop_and_drop_reclaim_owner() {
 async fn explicit_all_broadcast_scopes_have_selected_source_destination_and_ingress() {
     let (selected, index) = fixture();
     let (observer, port) = observer(index, false);
-    let mut transport = Bip6Transport::new(selected, port, None);
+    let mut transport = sharing(selected, port, None);
     let mut incoming = transport.start().await.unwrap();
     let peer = udp(selected, 0, index, false);
     for (scope, nibble) in [
