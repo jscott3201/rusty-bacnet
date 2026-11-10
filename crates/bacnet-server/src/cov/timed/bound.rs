@@ -182,16 +182,13 @@ mod tests {
     use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
     use bytes::BytesMut;
 
-    use super::super::tests::{
-        change, context, dropped, frame, histories, key, seconds, timed_reference,
-    };
+    use super::super::tests::{change, context, dropped, frame, histories, key, seconds};
     use super::super::{
         CEILING_BYTES_PER_OCTET, CHANGE_MEMORY, HISTORY_NOTIFICATIONS, ITEM_FRAMING, TimedChange,
         VALUE_MEMORY, value_len,
     };
     use super::*;
-    use crate::cov::CovSubscriptionTable;
-    use bacnet_device_core::cov::{CovObservation, CovSample, SubscriberEndpoint};
+    use bacnet_device_core::cov::{CovObservation, CovSample};
 
     /// The local maximum APDU these tests' devices take: the largest B/IP one.
     const LOCAL: usize = 1476;
@@ -461,26 +458,6 @@ mod tests {
                 None => (116, ceiling / memory),
             };
             assert_eq!((held, fit), (expected, expected), "process {process}");
-        }
-    }
-
-    #[test]
-    fn admission_sizes_the_envelope_from_the_lifetime_left() {
-        let route = SubscriberEndpoint::new(&[10, 0, 0, 1, 0xBA, 0xC0], None);
-        for (lifetime, envelope) in [(120, 25), (300, 26), (70_000, 27)] {
-            let mut table = CovSubscriptionTable::new();
-            let expires =
-                crate::runtime_clock::core_now() + bacnet_time::Duration::from_secs(lifetime);
-            let reference = timed_reference(1, expires);
-            table
-                .subscribe_multiple(&context(1), &route, expires, 10, Some(50), vec![reference])
-                .unwrap();
-            let terms = table.timed().lock().terms[&context(1)];
-            assert_eq!(
-                (terms.envelope, terms.notification()),
-                (envelope, 50 - envelope),
-                "lifetime {lifetime}"
-            );
         }
     }
 }

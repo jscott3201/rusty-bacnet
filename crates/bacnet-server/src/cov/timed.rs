@@ -4,9 +4,10 @@
 //! change with the local time it happened, and keep those changes until a
 //! notification carrying them is sent. Producers capture each change under
 //! the database write guard; the notification builder drains the queue into a
-//! [`TimedClaim`] that requeues its entries unless the notification was
-//! delivered: transmitted when unconfirmed, acknowledged when confirmed. Keeping
-//! a confirmed report's changes until its Ack is local policy (#896).
+//! [`TimedClaim`], which is committed once the notification is delivered
+//! (transmitted when unconfirmed, acknowledged when confirmed) and given
+//! back otherwise, its entries requeued. Keeping a confirmed report's changes
+//! until its Ack is local policy (#896).
 //!
 //! Changes are normally reported as soon as they are captured. A change stays
 //! queued when its notification fails or is held back: a failed send, an
@@ -45,9 +46,9 @@
 //! ([`TimedClaim::split_values`]); only the part with its last value delivers
 //! the change, and parts that come back undelivered rejoin as one change
 //! (#1090). An unconfirmed context sends one such report at a time
-//! ([`SendTurn`]), so a later report cannot overtake the parts of an earlier
-//! one. Untimestamped values that one notification cannot carry go out after
-//! every timestamped change, split by object item (#1038).
+//! ([`TimedHistories::begin_send`]), so a later report cannot overtake the
+//! parts of an earlier one. Untimestamped values that one notification cannot
+//! carry go out after every timestamped change, split by object item (#1038).
 //!
 //! Local bound policy: the pending changes of one COV-multiple context are
 //! limited to an estimate of what [`HISTORY_NOTIFICATIONS`] notifications can
@@ -127,6 +128,11 @@
 //! have moved earlier ([`TimedHistories::take_moved`]); a host that sleeps
 //! until [`TimedHistories::take_due`]'s next deadline wakes and asks again
 //! when one has.
+//!
+//! Two things have a deadline, and [`TimedHistories::next_deadline`] is the
+//! earlier: a context's backstop, above, and a lodged claim
+//! ([`TimedHistories::lodge`]), which is given back at its deadline if its
+//! holder never settled it. [`TimedHistories::take_due`] acts on both.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -447,6 +453,10 @@ pub(crate) struct TimedHistories {
     /// Earliest the deadline backstop may hand a context out again. Only a
     /// context with a timestamped history has an entry.
     not_before: HashMap<MultipleContextKey, Instant>,
+    /// Claims kept until they are settled or their deadline passes, oldest
+    /// first.
+    lodged: Vec<claim::Lodged>,
+    next_claim: u64,
     /// Whether a deadline may have moved earlier since the host last asked
     /// ([`Self::take_moved`]).
     moved: bool,
@@ -485,6 +495,8 @@ impl TimedHistories {
             sending: HashMap::new(),
             context_held: HashMap::new(),
             not_before: HashMap::new(),
+            lodged: Vec::new(),
+            next_claim: 1,
             moved: false,
             next_seq: 1,
             next_incarnation: 1,
@@ -501,16 +513,11 @@ impl TimedHistories {
 
     /// Whether a deadline may have moved earlier since the last call: a
     /// change queued ahead of the others, a reference owed from earlier, a
-    /// shorter delay, a hold-off, a lifted block. A host sleeping until the
-    /// next deadline [`Self::take_due`] gave it asks again.
+    /// shorter delay, a hold-off, a lifted block, a claim lodged. A host
+    /// sleeping until the next deadline [`Self::take_due`] gave it asks
+    /// again.
     pub(crate) fn take_moved(&mut self) -> bool {
         std::mem::take(&mut self.moved)
-    }
-
-    /// Count `left_out` untimestamped references a report gave up: their
-    /// values fit no notification (#1066).
-    pub(crate) fn note_oversized(&mut self, left_out: usize) {
-        self.counts.untimed_oversized += left_out as u64;
     }
 
     /// Apply a context's admitted Max_Notification_Delay to its timestamped
@@ -574,8 +581,16 @@ impl TimedHistories {
     }
 
     /// Start sending a report to an unconfirmed `context`, unless one is
-    /// still going out; then note that this fanout stood back.
-    fn begin_send(&mut self, context: &MultipleContextKey) -> bool {
+    /// still going out; then note that this fanout stood back and return
+    /// `false`.
+    ///
+    /// The parts of a report go out one after another, and an unconfirmed
+    /// context has no outstanding-report mark, so another fanout could send
+    /// a newer change or value between them: the subscriber would see a
+    /// reference move back to older history, or to the older value a later
+    /// part carries. Between this and [`Self::end_send`] other fanouts of
+    /// the context stand back and leave their changes queued (#986, #1038).
+    pub(crate) fn begin_send(&mut self, context: &MultipleContextKey) -> bool {
         match self.sending.get_mut(context) {
             Some(owed) => {
                 *owed = true;
@@ -588,8 +603,11 @@ impl TimedHistories {
         }
     }
 
-    /// Finish sending to `context`; `true` if a fanout stood back meanwhile.
-    fn end_send(&mut self, context: &MultipleContextKey) -> bool {
+    /// Finish sending to `context`, after the last part or when the report
+    /// stops early; `true` if a fanout stood back meanwhile, which the host
+    /// then owes one follow-up over the context's references. The follow-up
+    /// reads the untimestamped values afresh.
+    pub(crate) fn end_send(&mut self, context: &MultipleContextKey) -> bool {
         self.sending.remove(context).unwrap_or(false)
     }
 
@@ -621,24 +639,17 @@ impl TimedHistories {
         }
     }
 
-    /// Take the references with pending changes, or owed values, of every
-    /// context whose deadline has passed at `now`, and the next deadline
-    /// still ahead.
-    ///
-    /// A context is due at its earliest pending change or owed reference plus
-    /// its delay, but no sooner than [`DEADLINE_FLOOR`] after it, nor before
-    /// its wait from a previous attempt or hold-off. Handing it out starts a
-    /// wait of its delay (the floor at least), in case the attempt is blocked
-    /// again.
-    pub(crate) fn take_due(&mut self, now: Instant) -> (Vec<CovSubscriptionKey>, Option<Instant>) {
-        // Earliest pending change or owed reference, and shortest delay, per
-        // context.
+    /// Earliest pending change or owed reference, and shortest delay, of
+    /// each context with either.
+    fn pending<'a>(
+        histories: &'a HashMap<CovSubscriptionKey, TimedHistory>,
+        untimed: &'a HashMap<CovSubscriptionKey, UntimedReference>,
+    ) -> HashMap<&'a MultipleContextKey, (Instant, Duration)> {
         let mut pending: HashMap<&MultipleContextKey, (Instant, Duration)> = HashMap::new();
-        let timed = self.histories.iter().filter_map(|(key, history)| {
+        let timed = histories.iter().filter_map(|(key, history)| {
             Some((key, history.entries.front()?.captured_at, history.delay))
         });
-        let owed = self
-            .untimed
+        let owed = untimed
             .iter()
             .filter_map(|(key, reference)| Some((key, reference.owed_since?, reference.delay)));
         for (key, since, delay) in timed.chain(owed) {
@@ -653,14 +664,53 @@ impl TimedHistories {
                 })
                 .or_insert((since, delay));
         }
+        pending
+    }
+
+    /// When a context whose earliest pending change or owed reference is
+    /// from `first` is due, and the wait an attempt at it starts: its delay
+    /// after `first`, but no sooner than [`DEADLINE_FLOOR`] after it, nor
+    /// before `wait`, the end of its wait from a previous attempt or
+    /// hold-off.
+    fn due_at(first: Instant, delay: Duration, wait: Option<Instant>) -> (Instant, Duration) {
+        let spacing = delay.max(DEADLINE_FLOOR);
+        let deadline = first + spacing;
+        (wait.map_or(deadline, |wait| deadline.max(wait)), spacing)
+    }
+
+    /// The earliest instant [`Self::take_due`] has something to do: a
+    /// context's Max_Notification_Delay deadline (Clause 13.16.1.1.4), or a
+    /// lodged claim's ([`Self::lodge`]). It may have passed already. `None`
+    /// while nothing is pending, owed or lodged.
+    pub(crate) fn next_deadline(&self) -> Option<Instant> {
+        let backstop = Self::pending(&self.histories, &self.untimed)
+            .into_iter()
+            .map(|(context, (first, delay))| {
+                Self::due_at(first, delay, self.not_before.get(context).copied()).0
+            })
+            .min();
+        bacnet_time::earliest([backstop, self.next_unsettled()])
+    }
+
+    /// Give back every lodged claim whose deadline has passed at `now`,
+    /// then take the references with pending changes, or owed values, of
+    /// every context whose deadline has passed at `now`, and the next
+    /// deadline still ahead, a context's or a lodged claim's.
+    ///
+    /// A context is due at its earliest pending change or owed reference plus
+    /// its delay, but no sooner than [`DEADLINE_FLOOR`] after it, nor before
+    /// its wait from a previous attempt or hold-off. Handing it out starts a
+    /// wait of its delay (the floor at least), in case the attempt is blocked
+    /// again.
+    pub(crate) fn take_due(&mut self, now: Instant) -> (Vec<CovSubscriptionKey>, Option<Instant>) {
+        // First, so a claim nobody settled is pending again for its context.
+        self.requeue_unsettled(now);
+        let pending = Self::pending(&self.histories, &self.untimed);
         let mut due = Vec::new();
-        let mut next: Option<Instant> = None;
+        let mut next = self.next_unsettled();
         for (&context, &(first, delay)) in &pending {
-            let spacing = delay.max(DEADLINE_FLOOR);
-            let mut deadline = first + spacing;
-            if let Some(&wait) = self.not_before.get(context) {
-                deadline = deadline.max(wait);
-            }
+            let (deadline, spacing) =
+                Self::due_at(first, delay, self.not_before.get(context).copied());
             if deadline <= now {
                 due.push((context.clone(), spacing));
             } else {
@@ -774,6 +824,16 @@ impl TimedHistories {
             .max(self.terms.len())
             .max(self.context_held.len());
         (timed + self.untimed.len(), self.not_before.len())
+    }
+
+    /// The octets a notification to `context` spends outside its items, and
+    /// those it has for items, as last admitted. A hook for a host's tests of
+    /// what its admissions size.
+    #[cfg(test)]
+    pub(crate) fn sizing_for_test(&self, context: &MultipleContextKey) -> Option<(usize, usize)> {
+        self.terms
+            .get(context)
+            .map(|terms| (terms.envelope, terms.notification()))
     }
 
     /// Latest captured or conveyed observation of a live generation.
@@ -919,7 +979,7 @@ impl TimedHistories {
 
     /// Record that changes up to `seq` were delivered; queued older changes
     /// are superseded by it.
-    fn commit(&mut self, key: &CovSubscriptionKey, incarnation: u64, seq: u64) {
+    fn commit_through(&mut self, key: &CovSubscriptionKey, incarnation: u64, seq: u64) {
         let Some(history) = self.incarnation_mut(key, incarnation) else {
             return;
         };
@@ -1039,10 +1099,16 @@ mod drops;
 mod owed;
 use bound::Held;
 pub(crate) use bound::{envelope_len, request_header};
-pub(crate) use claim::{SendTurn, TimedClaim, ValueFit};
+pub(crate) use claim::{ClaimId, Settlement, TimedClaim, ValueFit};
 use drops::DropWarnings;
 pub(crate) use drops::{DropReason, Dropped};
 
+#[cfg(test)]
+#[path = "timed_test_host.rs"]
+mod host;
+#[cfg(test)]
+#[path = "timed_settle_tests.rs"]
+mod settle_tests;
 #[cfg(test)]
 #[path = "timed_split_tests.rs"]
 mod split_tests;

@@ -2,12 +2,10 @@
 //! maximum APDU (#986), owed untimestamped references (#1038), and changes
 //! sent one value per notification (#1090).
 use super::tests::{
-    LIFETIME, advance, change, context, dropped, frame, histories, item_len, key, now, seconds,
-    store, subscriber_for, timed_reference,
+    LIFETIME, TimedClaim, TimedStore, advance, change, context, dropped, frame, histories,
+    item_len, key, now, seconds, store, subscriber_for,
 };
 use super::*;
-use crate::cov::timed_store::TimedStore;
-use std::sync::Arc;
 
 /// A claim of `a`'s changes at seconds 1, 2, 3 and `b`'s at 9 and 10, each
 /// sequenced by its second.
@@ -191,30 +189,19 @@ fn the_reserve_belongs_to_the_context_and_starts_over_when_it_loses_a_reference(
 }
 
 #[test]
-fn a_send_turn_holds_back_other_reports_and_owes_one_follow_up() {
-    let (store, _) = store(8, 4);
-    let revisits = Arc::new(crate::cov::CovRevisits::default());
-    let k = key(1, 1);
-    let begin = |context: MultipleContextKey, keys: Vec<CovSubscriptionKey>| {
-        SendTurn::begin(&store, &context, &revisits, keys)
-    };
-    let turn = begin(context(1), vec![k.clone()]).expect("free");
+fn a_context_sends_one_report_at_a_time_and_owes_one_follow_up() {
+    let mut h = histories(8, 4);
+    assert!(h.begin_send(&context(1)), "free");
+    assert!(!h.begin_send(&context(1)), "one at a time");
+    assert!(h.begin_send(&context(2)), "per context");
+    assert!(!h.end_send(&context(2)), "nobody stood back from context 2");
     assert!(
-        begin(context(1), vec![k.clone()]).is_none(),
-        "one at a time"
-    );
-    drop(begin(context(2), vec![key(2, 1)]).expect("per context"));
-    assert!(
-        revisits.queued().is_empty(),
-        "nobody stood back from context 2"
-    );
-    drop(turn);
-    assert_eq!(
-        revisits.queued(),
-        std::collections::HashSet::from([k.clone()]),
+        h.end_send(&context(1)),
         "the report that stood back gets one follow-up"
     );
-    drop(begin(context(1), vec![k.clone()]).expect("free again"));
+    assert!(h.begin_send(&context(1)), "free again");
+    assert!(!h.end_send(&context(1)));
+    assert!(!h.end_send(&context(1)), "ending no report owes nothing");
 }
 
 #[test]
@@ -244,45 +231,9 @@ fn deferred_parts_return_without_eviction_and_discarded_ones_are_counted() {
 }
 
 #[test]
-fn an_admission_without_a_known_maximum_apdu_keeps_the_one_advertised_before() {
-    let mut table = crate::cov::CovSubscriptionTable::new();
-    let route = bacnet_device_core::cov::SubscriberEndpoint::new(&[10, 0, 0, 1, 0xBA, 0xC0], None);
-    let expires = crate::runtime_clock::core_now() + bacnet_time::Duration::from_secs(300);
-    let sub = timed_reference(1, expires);
-    let advertised = |table: &crate::cov::CovSubscriptionTable| {
-        table
-            .get_subscription(&sub.key().unwrap())
-            .and_then(|entry| entry.subscriber_max_apdu())
-    };
-    table
-        .subscribe_multiple(
-            &context(1),
-            &route,
-            expires,
-            10,
-            Some(206),
-            vec![sub.clone()],
-        )
-        .unwrap();
-    assert_eq!(advertised(&table), Some(206));
-    table
-        .subscribe_multiple(&context(1), &route, expires, 10, None, Vec::new())
-        .unwrap();
-    assert_eq!(advertised(&table), Some(206), "an unknown one keeps it");
-    table
-        .subscribe_multiple(&context(1), &route, expires, 10, Some(480), Vec::new())
-        .unwrap();
-    assert_eq!(advertised(&table), Some(480), "a known one replaces it");
-}
-
-#[test]
 fn an_undelivered_untimestamped_reference_is_owed_once_its_report_began() {
     let (store, counters) = store(8, 4);
-    let oversized = || {
-        counters
-            .untimed_references_oversized
-            .load(std::sync::atomic::Ordering::Relaxed)
-    };
+    let oversized = || counters.lock().counts.untimed_oversized;
     let (a, b) = (key(1, 1), key(1, 2));
     store.lock().reset_untimed(&a, 1, 10);
     store.lock().reset_untimed(&b, 1, 10);
@@ -331,8 +282,8 @@ fn an_undelivered_untimestamped_reference_is_owed_once_its_report_began() {
     assert_eq!(store.lock().held(), (1, 0), "only the renewed reference");
 }
 
-#[tokio::test(start_paused = true)]
-async fn an_owed_reference_makes_its_context_due_like_a_pending_change() {
+#[test]
+fn an_owed_reference_makes_its_context_due_like_a_pending_change() {
     let mut h = histories(8, 4);
     let k = key(1, 1);
     h.reset_untimed(&k, 1, 10);
@@ -341,7 +292,7 @@ async fn an_owed_reference_makes_its_context_due_like_a_pending_change() {
     h.owe(&k, 1, start);
     let delay = Duration::from_secs(10);
     assert_eq!(h.take_due(now()), (Vec::new(), Some(start + delay)));
-    advance(delay).await;
+    advance(delay);
     assert_eq!(h.take_due(now()).0, std::slice::from_ref(&k));
     // Blocked again: a hold-off moves the next attempt, and re-enabled
     // communication ends the wait.

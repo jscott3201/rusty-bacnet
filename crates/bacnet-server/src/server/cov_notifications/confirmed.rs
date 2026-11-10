@@ -3,7 +3,7 @@
 //! (#896); see `crate::cov::confirmed` for the outstanding-report policy.
 use super::super::cov_notify_context::CovFanoutHandles;
 use super::*;
-use crate::cov::timed::TimedClaim;
+use crate::cov::timed_store::{LodgedClaim, TimedClaim};
 use bacnet_device_core::cov::{BeginRefusal, Delivery, PreparedCovCompletion};
 use bacnet_device_core::cov::{CovObservation, CovSubscriptionKey};
 
@@ -63,7 +63,10 @@ pub(in crate::server) struct ConfirmedSend {
     pub(in crate::server) buf: BytesMut,
     /// Reference whose recipient and current route receive the notification.
     pub(in crate::server) route: CovSubscriptionSnapshot,
-    pub(in crate::server) claim: Option<TimedClaim>,
+    /// Timestamped history conveyed, lodged with the histories until the
+    /// report's deadline: the worker commits it on the Ack, and it returns
+    /// to its references otherwise.
+    pub(in crate::server) claim: Option<LodgedClaim>,
     pub(in crate::server) label: &'static str,
     pub(in crate::server) revisits: Arc<crate::cov::CovRevisits>,
     /// When the table began the report: its deadline, and the worker's
@@ -153,7 +156,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 .fetch_add(1, Ordering::Relaxed);
             return;
         }
-        let (flight, revisits) = {
+        let (flight, revisits, deadline) = {
             let mut table = handles.ctx.cov_table.write().await;
             let flight = table.begin_confirmed(
                 report.completion,
@@ -162,7 +165,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     .iter()
                     .map(|(sub, observation)| (sub, observation.clone())),
             );
-            (flight, Arc::clone(table.revisits()))
+            (
+                flight,
+                Arc::clone(table.revisits()),
+                table.flight_deadline(),
+            )
         };
         // The instant the table began the report, near enough: its deadline
         // runs from it, and the worker's cutoff too.
@@ -203,7 +210,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 flight,
                 buf,
                 route: report.route,
-                claim: report.claim,
+                // The worker's claim ends with its report: the histories
+                // keep it until the report's deadline, which a live worker
+                // settles ahead of, as it does the report (its cutoff is
+                // half a timeout earlier).
+                claim: report.claim.map(|claim| claim.lodge(deadline)),
                 label,
                 revisits,
                 begun,

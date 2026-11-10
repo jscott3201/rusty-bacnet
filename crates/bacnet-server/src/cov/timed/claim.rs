@@ -1,23 +1,27 @@
-//! Claims on drained timestamped changes and prepared untimestamped values,
-//! and the one report an unconfirmed context sends at a time (#986, #1008,
-//! #1038, #1090).
-
-use std::collections::HashSet;
-use std::sync::Arc;
+//! Claims on drained timestamped changes and prepared untimestamped values
+//! (#986, #1008, #1038, #1090), and how one is settled.
+//!
+//! A claim is plain data: whoever holds it settles it, with
+//! [`TimedHistories::commit`] once its notification is delivered or
+//! [`TimedHistories::give_back`] when it is not. A host that hands a claim
+//! to something it may lose, a task that can be aborted, lodges it instead
+//! ([`TimedHistories::lodge`]) and settles it by its [`ClaimId`]: the
+//! histories keep a lodged claim and give it back themselves at its
+//! deadline if nobody settled it, as a confirmed report ends itself at its
+//! own.
 
 use bacnet_time::Instant;
 
-use super::{CovSubscriptionKey, DropReason, MultipleContextKey, TimedChange};
-use crate::cov::CovRevisits;
-use crate::cov::timed_store::TimedStore;
+use super::{CovSubscriptionKey, DropReason, TimedChange, TimedHistories};
 
 /// Changes drained into one notification, and the untimestamped references
-/// whose prepared values it carries. Unless [`TimedClaim::commit`] is called
-/// once the notification is delivered, dropping the claim returns the changes
-/// to their references. An untimestamped reference stays owed if it already
-/// was, and becomes owed if the claim is [`TimedClaim::owing`]: its report
-/// began going out without it (#1038). Otherwise an undelivered value is
-/// handled like any lost notification, by the reference's next fanout.
+/// whose prepared values it carries. It is settled once: committed when the
+/// notification is delivered, which retires them, or given back, which
+/// returns the changes to their references. An untimestamped reference given
+/// back stays owed if it already was, and becomes owed if the claim is
+/// [`TimedClaim::owing`]: its report began going out without it (#1038).
+/// Otherwise an undelivered value is handled like any lost notification, by
+/// the reference's next fanout.
 ///
 /// A claim is only a set of changes. How a notification conveys them, as
 /// history or as a reference's current state, is decided by the report that
@@ -28,8 +32,8 @@ use crate::cov::timed_store::TimedStore;
 /// [`TimedClaim::split_untimed`] moves untimestamped references into a claim
 /// of their own.
 #[derive(Debug)]
+#[must_use = "a claim that is neither committed, given back nor lodged loses its changes"]
 pub(crate) struct TimedClaim {
-    store: TimedStore,
     changes: Vec<(CovSubscriptionKey, u64, Vec<TimedChange>)>,
     /// Untimestamped references, each with its generation and, if it was
     /// owed when this report took it, since when.
@@ -40,14 +44,36 @@ pub(crate) struct TimedClaim {
     owing: bool,
 }
 
+impl Default for TimedClaim {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TimedClaim {
-    pub(crate) fn new(store: TimedStore) -> Self {
+    /// A claim of nothing yet.
+    pub(crate) fn new() -> Self {
         Self {
-            store,
             changes: Vec::new(),
             untimed: Vec::new(),
             evict: true,
             owing: false,
+        }
+    }
+
+    /// Whether the claim holds neither a change nor a reference, so
+    /// settling it changes nothing.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.changes.is_empty() && self.untimed.is_empty()
+    }
+
+    /// A claim of nothing with this one's settings.
+    fn part(&self) -> Self {
+        Self {
+            changes: Vec::new(),
+            untimed: Vec::new(),
+            evict: self.evict,
+            owing: self.owing,
         }
     }
 
@@ -62,31 +88,16 @@ impl TimedClaim {
         self.untimed.push((key, generation, owed_since));
     }
 
-    /// Move the untimestamped references among `keys` into a claim of their
-    /// own, for a notification that carries their values.
-    pub(crate) fn split_untimed(&mut self, keys: &HashSet<CovSubscriptionKey>) -> Self {
+    /// Move the untimestamped references `moves` selects into a claim of
+    /// their own, for a notification that carries their values.
+    pub(crate) fn split_untimed(&mut self, moves: impl Fn(&CovSubscriptionKey) -> bool) -> Self {
         let (moved, kept) = std::mem::take(&mut self.untimed)
             .into_iter()
-            .partition(|(key, _, _)| keys.contains(key));
+            .partition(|(key, _, _)| moves(key));
         self.untimed = kept;
         Self {
-            store: self.store.clone(),
-            changes: Vec::new(),
             untimed: moved,
-            evict: self.evict,
-            owing: self.owing,
-        }
-    }
-
-    /// Give up the untimestamped references left in this claim without owing
-    /// them, counting each
-    /// ([`TimedCounts::untimed_oversized`](super::TimedCounts::untimed_oversized)):
-    /// their values fit no notification, so a later attempt would only fail
-    /// again. They are evaluated again at their next fanout (#1066).
-    pub(crate) fn forgo_untimed(&mut self) {
-        let left_out = std::mem::take(&mut self.untimed).len();
-        if left_out > 0 {
-            self.store.lock().note_oversized(left_out);
+            ..self.part()
         }
     }
 
@@ -106,6 +117,7 @@ impl TimedClaim {
         self
     }
 
+    /// Carry `changes` of `key`, drained from the history `incarnation`.
     pub(crate) fn add(
         &mut self,
         key: CovSubscriptionKey,
@@ -121,13 +133,7 @@ impl TimedClaim {
     /// latest changes included (all of them, if fewer), into a claim of their
     /// own, for a notification that goes out before this one.
     pub(crate) fn split_oldest(&mut self, count: usize) -> Self {
-        let mut part = Self {
-            store: self.store.clone(),
-            changes: Vec::new(),
-            untimed: Vec::new(),
-            evict: self.evict,
-            owing: self.owing,
-        };
+        let mut part = self.part();
         let cut = {
             let all = self.in_order();
             let moved = count.min(all.len());
@@ -154,14 +160,15 @@ impl TimedClaim {
     /// changes; #1090). `fit` judges the notification of one part alone.
     ///
     /// A value too large even then is given up, since every attempt to send
-    /// it would fail; each change that loses one counts once as dropped, and
-    /// the context warns once until it is admitted afresh (#1039). A value
-    /// that would carry nothing is left out. Of the parts kept, only the one
-    /// with a change's last value delivers the change when it is delivered.
+    /// it would fail: the second list names the reference of each change
+    /// that lost one, once per change, for
+    /// [`TimedHistories::lost_values`] to count. A value that would carry
+    /// nothing is left out. Of the parts kept, only the one with a change's
+    /// last value delivers the change when it is delivered.
     pub(crate) fn split_values(
         mut self,
         fit: impl Fn(&CovSubscriptionKey, &TimedChange) -> ValueFit,
-    ) -> Vec<Self> {
+    ) -> (Vec<Self>, Vec<CovSubscriptionKey>) {
         let mut all: Vec<_> = std::mem::take(&mut self.changes)
             .into_iter()
             .flat_map(|(key, incarnation, changes)| {
@@ -190,20 +197,11 @@ impl TimedClaim {
                 last.continues = false;
             }
             parts.extend(kept.into_iter().map(|value| Self {
-                store: self.store.clone(),
                 changes: vec![(key.clone(), incarnation, vec![value])],
-                untimed: Vec::new(),
-                evict: self.evict,
-                owing: self.owing,
+                ..self.part()
             }));
         }
-        if !lost.is_empty() {
-            let mut store = self.store.lock();
-            for key in lost {
-                store.dropped(&key, 1, DropReason::TooLarge);
-            }
-        }
-        parts
+        (parts, lost)
     }
 
     /// Every claimed change, in capture order.
@@ -223,22 +221,59 @@ impl TimedClaim {
             .iter()
             .filter_map(|(key, _, changes)| Some((key, changes.last()?)))
     }
+}
 
+/// A lodged claim: what [`TimedHistories::settle`] takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct ClaimId(u64);
+
+/// How a lodged claim's notification ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Settlement {
+    /// Delivered: transmitted when unconfirmed, acknowledged when confirmed.
+    /// The claim is committed.
+    Delivered,
+    /// Not delivered, for whatever reason. The claim is given back.
+    Returned,
+}
+
+/// A claim the histories keep until it is settled or its deadline passes.
+#[derive(Debug)]
+pub(super) struct Lodged {
+    id: ClaimId,
+    deadline: Instant,
+    claim: TimedClaim,
+}
+
+impl TimedHistories {
     /// The notification carrying these changes and values was delivered:
     /// retire them. A part whose change continues in a later notification
     /// delivers nothing of that change by itself (#1090); the change is in
     /// delivery from then on (#1163).
-    pub(crate) fn commit(mut self) {
-        self.untimed.clear();
-        let mut store = self.store.lock();
-        for (key, incarnation, changes) in self.changes.drain(..) {
+    pub(crate) fn commit(&mut self, claim: TimedClaim) {
+        for (key, incarnation, changes) in claim.changes {
             match changes.iter().rev().find(|change| !change.continues) {
-                Some(last) => store.commit(&key, incarnation, last.seq),
+                Some(last) => self.commit_through(&key, incarnation, last.seq),
                 None => {
                     if let Some(part) = changes.last() {
-                        store.deliver_by_value(&key, incarnation, part.seq);
+                        self.deliver_by_value(&key, incarnation, part.seq);
                     }
                 }
+            }
+        }
+    }
+
+    /// The notification carrying these changes and values was not delivered:
+    /// return the changes to their references, and owe, since `now`, each
+    /// untimestamped reference of a claim that is [`TimedClaim::owing`]. One
+    /// that was owed already stays owed from when it first was.
+    pub(crate) fn give_back(&mut self, claim: TimedClaim, now: Instant) {
+        for (key, incarnation, changes) in claim.changes {
+            self.requeue(&key, incarnation, changes, claim.evict);
+        }
+        for (key, generation, owed_since) in claim.untimed {
+            if let Some(since) = owed_since.or(claim.owing.then_some(now)) {
+                self.owe(&key, generation, since);
             }
         }
     }
@@ -247,40 +282,82 @@ impl TimedClaim {
     /// later parts wait in the queue for its Ack. A change of which it
     /// carries only some values is in delivery from now on, so that the bound
     /// keeps the rest of it (#1163).
-    pub(crate) fn going_out(&self) {
-        let mut ahead = self
-            .changes
-            .iter()
-            .filter_map(|(key, incarnation, changes)| {
-                let part = changes.last().filter(|part| part.continues)?;
-                Some((key, *incarnation, part.seq))
-            })
-            .peekable();
-        if ahead.peek().is_some() {
-            let mut store = self.store.lock();
-            for (key, incarnation, seq) in ahead {
-                store.deliver_by_value(key, incarnation, seq);
+    pub(crate) fn going_out(&mut self, claim: &TimedClaim) {
+        for (key, incarnation, changes) in &claim.changes {
+            if let Some(part) = changes.last().filter(|part| part.continues) {
+                self.deliver_by_value(key, *incarnation, part.seq);
             }
         }
     }
-}
 
-impl Drop for TimedClaim {
-    fn drop(&mut self) {
-        if self.changes.is_empty() && self.untimed.is_empty() {
-            return;
+    /// Give up the untimestamped references left in `claim` without owing
+    /// them, counting each
+    /// ([`TimedCounts::untimed_oversized`](super::TimedCounts::untimed_oversized)):
+    /// their values fit no notification, so a later attempt would only fail
+    /// again. They are evaluated again at their next fanout (#1066).
+    pub(crate) fn forgo_untimed(&mut self, claim: &mut TimedClaim) {
+        self.counts.untimed_oversized += std::mem::take(&mut claim.untimed).len() as u64;
+    }
+
+    /// Count the changes [`TimedClaim::split_values`] found to hold a value
+    /// too large for any notification, one per entry of `lost`; each context
+    /// reports its first (#1039).
+    pub(crate) fn lost_values(&mut self, lost: &[CovSubscriptionKey]) {
+        for key in lost {
+            self.dropped(key, 1, DropReason::TooLarge);
         }
-        let mut store = self.store.lock();
-        for (key, incarnation, changes) in self.changes.drain(..) {
-            store.requeue(&key, incarnation, changes, self.evict);
+    }
+
+    /// Keep `claim` until [`Self::settle`] names it, or until `deadline`:
+    /// from then on [`Self::take_due`] gives it back, as if it had been
+    /// returned. For a holder that may be lost before it settles, such as a
+    /// task a host can abort. Pick a deadline a live holder always settles
+    /// before; one that settles later finds its claim gone.
+    pub(crate) fn lodge(&mut self, claim: TimedClaim, deadline: Instant) -> ClaimId {
+        let id = ClaimId(self.next_claim);
+        self.next_claim += 1;
+        self.lodged.push(Lodged {
+            id,
+            deadline,
+            claim,
+        });
+        // The new deadline may be the earliest.
+        self.moved = true;
+        id
+    }
+
+    /// Settle the lodged claim `id` as `outcome` says. `false`, and nothing
+    /// changes, when the claim is not lodged any more: it was settled, or
+    /// its deadline passed and it was given back.
+    pub(crate) fn settle(&mut self, id: ClaimId, outcome: Settlement, now: Instant) -> bool {
+        let Some(at) = self.lodged.iter().position(|lodged| lodged.id == id) else {
+            return false;
+        };
+        let claim = self.lodged.remove(at).claim;
+        match outcome {
+            Settlement::Delivered => self.commit(claim),
+            Settlement::Returned => self.give_back(claim, now),
         }
-        for (key, generation, owed_since) in self.untimed.drain(..) {
-            if let Some(since) =
-                owed_since.or_else(|| self.owing.then(crate::runtime_clock::core_now))
-            {
-                store.owe(&key, generation, since);
+        true
+    }
+
+    /// Give back every lodged claim whose deadline has passed at `now`,
+    /// oldest first.
+    pub(super) fn requeue_unsettled(&mut self, now: Instant) {
+        let mut at = 0;
+        while at < self.lodged.len() {
+            if self.lodged[at].deadline <= now {
+                let claim = self.lodged.remove(at).claim;
+                self.give_back(claim, now);
+            } else {
+                at += 1;
             }
         }
+    }
+
+    /// Earliest deadline of a lodged claim.
+    pub(super) fn next_unsettled(&self) -> Option<Instant> {
+        self.lodged.iter().map(|lodged| lodged.deadline).min()
     }
 }
 
@@ -294,49 +371,4 @@ pub(crate) enum ValueFit {
     TooLarge,
     /// With nothing in it: the context reports that coordinate untimestamped.
     Empty,
-}
-
-/// The one report an unconfirmed context is sending (#986, #1038).
-///
-/// Its parts go out one await apart, and an unconfirmed context has no
-/// outstanding-report mark, so another fanout could send a newer change or
-/// value between them: the subscriber would see a reference move back to
-/// older history, or to the older value a later part carries. While a turn is
-/// held, other fanouts of the context stand back and leave their changes
-/// queued. Dropping the turn, after the last part or on any early return,
-/// hands the context to one follow-up if a fanout stood back; the follow-up
-/// reads the untimestamped values afresh.
-#[must_use = "dropping the turn ends the report"]
-pub(crate) struct SendTurn {
-    store: TimedStore,
-    context: MultipleContextKey,
-    revisits: Arc<CovRevisits>,
-    keys: Vec<CovSubscriptionKey>,
-}
-
-impl SendTurn {
-    /// Take the turn of `context`, unless a report of it is still going out.
-    /// `keys` are the context's references, for the follow-up.
-    pub(crate) fn begin(
-        store: &TimedStore,
-        context: &MultipleContextKey,
-        revisits: &Arc<CovRevisits>,
-        keys: Vec<CovSubscriptionKey>,
-    ) -> Option<Self> {
-        store.lock().begin_send(context).then(|| Self {
-            store: store.clone(),
-            context: context.clone(),
-            revisits: Arc::clone(revisits),
-            keys,
-        })
-    }
-}
-
-impl Drop for SendTurn {
-    fn drop(&mut self) {
-        let owed = self.store.lock().end_send(&self.context);
-        if owed {
-            self.revisits.request(std::mem::take(&mut self.keys));
-        }
-    }
 }

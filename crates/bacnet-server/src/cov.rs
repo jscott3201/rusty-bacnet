@@ -493,6 +493,12 @@ impl CovSubscriptionTable {
             .context_hold_until(context, runtime_clock::core_now())
     }
 
+    /// When a confirmed report the table begins now ends itself, if nobody
+    /// settles it first; see [`FlightTiming::deadline`].
+    pub(crate) fn flight_deadline(&self) -> bacnet_time::Instant {
+        runtime_clock::core_now() + self.core.flight_timing().deadline()
+    }
+
     /// Whether an idle context still owes the follow-up of a failed report;
     /// see [`CovTable::take_owed_context`].
     pub(crate) fn take_owed_context(&mut self, context: &MultipleContextKey) -> bool {

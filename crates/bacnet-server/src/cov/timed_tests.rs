@@ -1,12 +1,9 @@
+pub(super) use super::host::{TimedClaim, TimedStore, advance, now};
 use super::*;
-use crate::cov::AtomicCovCounters;
-use crate::cov::timed_store::TimedStore;
 use bacnet_device_core::cov::{CovRecipient, CovSample};
 use bacnet_types::MacAddr;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 pub(super) fn context(process_id: u32) -> MultipleContextKey {
     MultipleContextKey {
@@ -60,16 +57,6 @@ pub(super) fn change(second: u8, payload: usize) -> TimedChange {
     )
 }
 
-/// Now, on the timeline the histories' instants are on.
-pub(super) fn now() -> Instant {
-    crate::runtime_clock::core_now()
-}
-
-/// Step the paused clock, and so [`now`], by `by`.
-pub(super) async fn advance(by: Duration) {
-    tokio::time::advance(by.into()).await;
-}
-
 pub(super) fn seconds(changes: &[TimedChange]) -> Vec<u8> {
     changes
         .iter()
@@ -120,16 +107,15 @@ pub(super) fn histories(n: usize, payload: usize) -> TimedHistories {
     TimedHistories::new(apdu_for(n, payload))
 }
 
-pub(super) fn store(n: usize, payload: usize) -> (TimedStore, Arc<AtomicCovCounters>) {
-    let counters = Arc::new(AtomicCovCounters::default());
-    (
-        TimedStore::new(apdu_for(n, payload), Arc::clone(&counters)),
-        counters,
-    )
+/// A host's store of such histories, and a second handle to read what it
+/// counted.
+pub(super) fn store(n: usize, payload: usize) -> (TimedStore, TimedStore) {
+    let store = TimedStore::new(apdu_for(n, payload));
+    (store.clone(), store)
 }
 
 /// Somewhere the count of dropped changes can be read: the histories
-/// themselves, whose counts these tests never take, or a store's counters.
+/// themselves, whose counts these tests never take, or a store of them.
 pub(super) trait DroppedCount {
     fn changes_dropped(&self) -> u64;
 }
@@ -140,9 +126,9 @@ impl DroppedCount for TimedHistories {
     }
 }
 
-impl DroppedCount for Arc<AtomicCovCounters> {
+impl DroppedCount for TimedStore {
     fn changes_dropped(&self) -> u64 {
-        self.timed_changes_dropped.load(Ordering::Relaxed)
+        self.lock().counts.changes_dropped
     }
 }
 
@@ -504,8 +490,8 @@ fn sorted(mut keys: Vec<CovSubscriptionKey>) -> Vec<CovSubscriptionKey> {
     keys
 }
 
-#[tokio::test(start_paused = true)]
-async fn a_context_is_due_at_its_delay_after_its_earliest_pending_change() {
+#[test]
+fn a_context_is_due_at_its_delay_after_its_earliest_pending_change() {
     let mut h = histories(8, 4);
     let (a, b, other) = (key(1, 1), key(1, 2), key(2, 1));
     for k in [&a, &b, &other] {
@@ -515,7 +501,7 @@ async fn a_context_is_due_at_its_delay_after_its_earliest_pending_change() {
     h.set_delay(&context(2), 10);
     let start = now();
     h.push(&a, 1, change(1, 4));
-    advance(Duration::from_secs(4)).await;
+    advance(Duration::from_secs(4));
     h.push(&b, 1, change(2, 4));
     h.push(&other, 1, change(3, 4));
     let (due, next) = h.take_due(now());
@@ -525,7 +511,7 @@ async fn a_context_is_due_at_its_delay_after_its_earliest_pending_change() {
         Some(start + Duration::from_secs(10)),
         "from the earliest"
     );
-    advance(Duration::from_secs(6)).await;
+    advance(Duration::from_secs(6));
     let (due, next) = h.take_due(now());
     assert_eq!(
         sorted(due),
@@ -539,8 +525,8 @@ async fn a_context_is_due_at_its_delay_after_its_earliest_pending_change() {
     );
 }
 
-#[tokio::test(start_paused = true)]
-async fn a_blocked_context_comes_back_only_after_its_spacing() {
+#[test]
+fn a_blocked_context_comes_back_only_after_its_spacing() {
     let mut h = histories(8, 4);
     let k = key(1, 1);
     h.reset(&k, 1, 0);
@@ -552,13 +538,13 @@ async fn a_blocked_context_comes_back_only_after_its_spacing() {
     let (due, next) = h.take_due(start);
     assert!(due.is_empty());
     assert_eq!(next, Some(start + DEADLINE_FLOOR));
-    advance(DEADLINE_FLOOR).await;
+    advance(DEADLINE_FLOOR);
     assert_eq!(h.take_due(now()).0, std::slice::from_ref(&k));
     // Still pending: not handed out again until the spacing has passed.
     let (due, next) = h.take_due(now());
     assert!(due.is_empty());
     assert_eq!(next, Some(start + DEADLINE_FLOOR + DEADLINE_FLOOR));
-    advance(DEADLINE_FLOOR).await;
+    advance(DEADLINE_FLOOR);
     assert_eq!(h.take_due(now()).0, std::slice::from_ref(&k));
     // Conveyed: nothing is owed and the spacing is forgotten.
     h.drain(&k, 1);
@@ -566,8 +552,8 @@ async fn a_blocked_context_comes_back_only_after_its_spacing() {
     assert_eq!(h.held(), (1, 0), "the wait went with the pending changes");
 }
 
-#[tokio::test(start_paused = true)]
-async fn the_latest_admitted_delay_applies_until_the_context_goes() {
+#[test]
+fn the_latest_admitted_delay_applies_until_the_context_goes() {
     let mut h = histories(8, 4);
     let k = key(1, 1);
     h.reset(&k, 1, 30);
@@ -575,76 +561,15 @@ async fn the_latest_admitted_delay_applies_until_the_context_goes() {
     let start = now();
     h.push(&k, 1, change(1, 4));
     assert_eq!(h.take_due(start).1, Some(start + Duration::from_secs(3)));
-    advance(Duration::from_secs(3)).await;
+    advance(Duration::from_secs(3));
     assert_eq!(h.take_due(now()).0, std::slice::from_ref(&k));
     assert_eq!(h.held(), (1, 1));
     h.remove(&k);
     assert_eq!(h.held(), (0, 0), "the last reference took its wait along");
 }
 
-pub(super) fn timed_reference(
-    process_id: u32,
-    expires_at: bacnet_time::Instant,
-) -> bacnet_device_core::cov::CovSubscription {
-    bacnet_device_core::cov::CovSubscription {
-        subscriber_mac: MacAddr::from_slice(&[10, 0, 0, 1, 0xBA, 0xC0]),
-        subscriber_network: None,
-        subscriber_process_identifier: process_id,
-        monitored_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 1).unwrap(),
-        issue_confirmed_notifications: false,
-        expires_at: Some(expires_at),
-        last_notified_observation: None,
-        monitored_property: Some(PropertyIdentifier::PRESENT_VALUE),
-        monitored_property_array_index: None,
-        cov_increment: None,
-        notification_kind: bacnet_device_core::cov::CovNotificationKind::Multiple,
-        timestamped: true,
-    }
-}
-
 #[test]
-fn empty_admissions_of_unknown_contexts_leave_no_deadline_state() {
-    let mut table = crate::cov::CovSubscriptionTable::new();
-    let route = bacnet_device_core::cov::SubscriberEndpoint::new(&[10, 0, 0, 1, 0xBA, 0xC0], None);
-    let expires = crate::runtime_clock::core_now() + bacnet_time::Duration::from_secs(300);
-    // A peer varying process and form across empty-list requests.
-    for process_id in 0..64 {
-        for confirmed in [false, true] {
-            let context = MultipleContextKey {
-                confirmed,
-                ..context(process_id)
-            };
-            let accepted = table
-                .subscribe_multiple(&context, &route, expires, 10, None, Vec::new())
-                .unwrap();
-            assert!(accepted.is_empty());
-        }
-    }
-    assert_eq!(table.timed().lock().held(), (0, 0));
-}
-
-#[tokio::test(start_paused = true)]
-async fn cancel_and_expiry_take_a_contexts_deadline_state_along() {
-    let far = crate::runtime_clock::core_now() + bacnet_time::Duration::from_secs(300);
-    for expire in [false, true] {
-        let mut table = crate::cov::CovSubscriptionTable::new();
-        let sub = table.admit_for_test(timed_reference(1, far), 10).unwrap();
-        table
-            .timed()
-            .hold_until(&context(1), now() + Duration::from_secs(5));
-        assert_eq!(table.timed().lock().held(), (1, 1));
-        if expire {
-            table.expire_all_for_test();
-            table.purge_expired();
-        } else {
-            assert!(table.unsubscribe(sub.key()));
-        }
-        assert_eq!(table.timed().lock().held(), (0, 0), "expire={expire}");
-    }
-}
-
-#[tokio::test(start_paused = true)]
-async fn a_context_without_a_timestamped_history_holds_nothing() {
+fn a_context_without_a_timestamped_history_holds_nothing() {
     let mut h = histories(8, 4);
     // An empty-list admission of an unknown context, and a hold-off on it.
     h.set_delay(&context(9), 10);
@@ -653,29 +578,29 @@ async fn a_context_without_a_timestamped_history_holds_nothing() {
     assert_eq!(h.held(), (0, 0));
 }
 
-#[tokio::test(start_paused = true)]
-async fn a_hold_off_moves_the_next_attempt_to_its_end() {
+#[test]
+fn a_hold_off_moves_the_next_attempt_to_its_end() {
     let mut h = histories(8, 4);
     let k = key(1, 1);
     h.reset(&k, 1, 10);
     let start = now();
     h.push(&k, 1, change(1, 4));
-    advance(Duration::from_secs(10)).await;
+    advance(Duration::from_secs(10));
     assert_eq!(h.take_due(now()).0, std::slice::from_ref(&k));
     // Blocked by a hold-off ending at +12: no need to wait the delay again.
     h.hold_until(&context(1), start + Duration::from_secs(12));
     assert_eq!(h.take_due(now()).1, Some(start + Duration::from_secs(12)));
-    advance(Duration::from_secs(2)).await;
+    advance(Duration::from_secs(2));
     assert_eq!(h.take_due(now()).0, std::slice::from_ref(&k));
 }
 
-#[tokio::test(start_paused = true)]
-async fn rearming_or_a_shorter_delay_ends_the_wait_of_overdue_changes() {
+#[test]
+fn rearming_or_a_shorter_delay_ends_the_wait_of_overdue_changes() {
     let mut h = histories(8, 4);
     let k = key(1, 1);
     h.reset(&k, 1, 10);
     h.push(&k, 1, change(1, 4));
-    advance(Duration::from_secs(10)).await;
+    advance(Duration::from_secs(10));
     assert_eq!(h.take_due(now()).0, std::slice::from_ref(&k));
     assert!(h.take_due(now()).0.is_empty(), "waiting the delay");
     // Communication came back: overdue changes go out at once.
@@ -688,21 +613,4 @@ async fn rearming_or_a_shorter_delay_ends_the_wait_of_overdue_changes() {
     // A longer delay leaves the current wait alone.
     h.set_delay(&context(1), 20);
     assert!(h.take_due(now()).0.is_empty());
-}
-
-#[tokio::test(start_paused = true)]
-async fn a_queued_change_wakes_the_deadline_wait() {
-    let (store, _) = store(8, 4);
-    let k = key(1, 1);
-    store.lock().reset(&k, 1, 0);
-    store.lock().set_delay(&context(1), 2);
-    let waiter = tokio::spawn({
-        let store = store.clone();
-        async move { store.next_due().await }
-    });
-    tokio::task::yield_now().await;
-    let start = now();
-    store.lock().push(&k, 1, change(1, 4));
-    assert_eq!(waiter.await.unwrap(), [k]);
-    assert_eq!(now() - start, Duration::from_secs(2));
 }
