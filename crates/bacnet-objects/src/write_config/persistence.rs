@@ -12,7 +12,7 @@ use bacnet_types::bitstring::{EventTransitionBits, LimitEnable};
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetObjectPropertyReference,
 };
-use bacnet_types::enums::NotifyType;
+use bacnet_types::enums::{BinaryPV, NotifyType};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 
@@ -94,6 +94,13 @@ pub struct AlgorithmWriteConfig {
     pub deadband: Option<f32>,
     /// Limit_Enable of an analog object.
     pub limit_enable: Option<LimitEnable>,
+    /// Alarm_Value of a Binary Input or Value: INACTIVE or ACTIVE.
+    pub alarm_value: Option<BinaryPV>,
+    /// Alarm_Values of a Multi-state Input or Value, in list order: at most
+    /// 1,024 states, as a write is, none of them zero. An object refuses a
+    /// list naming a state past its Number_Of_States. A written empty list
+    /// is kept as one.
+    pub alarm_values: Option<Vec<u32>>,
 }
 
 /// What a Timer keeps across a restart.

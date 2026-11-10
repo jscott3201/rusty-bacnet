@@ -7,8 +7,8 @@ Notification_Class, Event_Enable, Notify_Type, Event_Detection_Enable,
 Event_Message_Texts_Config or the Event_Algorithm_Inhibit pair is saved in
 that file before it is answered, and a server started on the same file
 serves it again, until ``clear_written_reporting=True`` drops it. A written
-Description is kept the same way (#2364), and so are an analog object's
-event algorithm parameters (#2331 PR 2).
+Description is kept the same way (#2364), and so are an analog, binary or
+multi-state object's event algorithm parameters (#2331).
 """
 
 from __future__ import annotations
@@ -51,7 +51,13 @@ BUILDERS = (
 # One object of each family.
 ANALOG = ObjectIdentifier(ObjectType.ANALOG_INPUT, 1)
 BINARY = ObjectIdentifier(ObjectType.BINARY_OUTPUT, 1)
+BINARY_VALUE = ObjectIdentifier(ObjectType.BINARY_VALUE, 1)
 MULTI_STATE = ObjectIdentifier(ObjectType.MULTI_STATE_VALUE, 1)
+
+
+def states(*raw: int) -> PropertyValue:
+    """An Alarm_Values list of a multi-state object."""
+    return PropertyValue.list([PropertyValue.unsigned(state) for state in raw])
 
 
 def installed_stub_method(name: str) -> ast.FunctionDef:
@@ -87,7 +93,7 @@ class WrittenReportingTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(directory.cleanup)
         self.state = Path(directory.name)
 
-    async def start(self, clear: bool = False) -> BACnetServer:
+    def build(self, clear: bool = False, number_of_states: int = 3) -> BACnetServer:
         server = BACnetServer(2_331_001, interface="127.0.0.1", port=0)
         server.add_analog_input(
             1, "AI-1", storage_path=str(self.state / "ai-1"), clear_written_reporting=clear
@@ -95,9 +101,20 @@ class WrittenReportingTests(unittest.IsolatedAsyncioTestCase):
         server.add_binary_output(
             1, "BO-1", storage_path=str(self.state / "bo-1"), clear_written_reporting=clear
         )
-        server.add_multistate_value(
-            1, "MSV-1", 3, storage_path=str(self.state / "msv-1"), clear_written_reporting=clear
+        server.add_binary_value(
+            1, "BV-1", storage_path=str(self.state / "bv-1"), clear_written_reporting=clear
         )
+        server.add_multistate_value(
+            1,
+            "MSV-1",
+            number_of_states,
+            storage_path=str(self.state / "msv-1"),
+            clear_written_reporting=clear,
+        )
+        return server
+
+    async def start(self, clear: bool = False, number_of_states: int = 3) -> BACnetServer:
+        server = self.build(clear, number_of_states)
         await server.start()
         return server
 
@@ -148,49 +165,99 @@ class WrittenReportingTests(unittest.IsolatedAsyncioTestCase):
             await server.stop()
         for name in ("ai-1", "bo-1", "msv-1"):
             self.assertTrue((self.state / name).exists())
+        # Nothing was written to the Binary Value, so it has no file.
+        self.assertFalse((self.state / "bv-1").exists())
 
     async def test_written_algorithm_parameters_survive_a_restart_until_cleared(self) -> None:
-        """An analog object keeps a written limit and time delay (#2331 PR 2);
-        the other families' parameters last until the restart, as before."""
+        """Each family keeps its written parameters (#2331): an analog
+        object a limit and a time delay, a Binary Output a time delay, a
+        Binary Value its Alarm_Value, a Multi-state Value its Alarm_Values.
+        Each row is the object, the property, the value written and the
+        value the object is built with."""
         written = (
-            (P.HIGH_LIMIT, PropertyValue.real(80.5), PropertyValue.real(100.0)),
-            (P.TIME_DELAY, PropertyValue.unsigned(7), PropertyValue.unsigned(0)),
+            (ANALOG, P.HIGH_LIMIT, PropertyValue.real(80.5), PropertyValue.real(100.0)),
+            (ANALOG, P.TIME_DELAY, PropertyValue.unsigned(7), PropertyValue.unsigned(0)),
+            (BINARY, P.TIME_DELAY, PropertyValue.unsigned(7), PropertyValue.unsigned(0)),
+            (
+                BINARY_VALUE,
+                P.ALARM_VALUE,
+                PropertyValue.enumerated(0),
+                PropertyValue.enumerated(1),
+            ),
+            (MULTI_STATE, P.ALARM_VALUES, states(3, 2), states()),
+            (
+                MULTI_STATE,
+                P.TIME_DELAY_NORMAL,
+                PropertyValue.unsigned(4),
+                PropertyValue.unsigned(0),
+            ),
         )
+        files = ("ai-1", "bo-1", "bv-1", "msv-1")
         server = await self.start()
         try:
-            for prop, value, default in written:
-                self.assertEqual(await self.read(server, ANALOG, prop), default)
-                await server.write_property_local(ANALOG, prop, value, source_object=None)
-            for oid in (BINARY, MULTI_STATE):
-                await server.write_property_local(
-                    oid, P.TIME_DELAY, PropertyValue.unsigned(7), source_object=None
-                )
+            for oid, prop, value, default in written:
+                with self.subTest(built=oid, prop=prop):
+                    self.assertEqual(await self.read(server, oid, prop), default)
+                await server.write_property_local(oid, prop, value, source_object=None)
         finally:
             await server.stop()
         # Kind 6 of the format: the reporting settings, then the parameters.
-        self.assertEqual((self.state / "ai-1").read_bytes()[12], 6)
+        for name in files:
+            with self.subTest(kind_of=name):
+                self.assertEqual((self.state / name).read_bytes()[12], 6)
 
         server = await self.start()
         try:
-            for prop, value, _ in written:
-                with self.subTest(prop=prop):
-                    self.assertEqual(await self.read(server, ANALOG, prop), value)
-            for oid in (BINARY, MULTI_STATE):
-                with self.subTest(not_kept=oid):
-                    self.assertEqual(
-                        await self.read(server, oid, P.TIME_DELAY), PropertyValue.unsigned(0)
-                    )
+            for oid, prop, value, _ in written:
+                with self.subTest(oid=oid, prop=prop):
+                    self.assertEqual(await self.read(server, oid, prop), value)
         finally:
             await server.stop()
 
         server = await self.start(clear=True)
         try:
-            for prop, _, default in written:
-                with self.subTest(cleared=prop):
-                    self.assertEqual(await self.read(server, ANALOG, prop), default)
+            for oid, prop, _, default in written:
+                with self.subTest(cleared=oid, prop=prop):
+                    self.assertEqual(await self.read(server, oid, prop), default)
         finally:
             await server.stop()
-        self.assertEqual((self.state / "ai-1").read_bytes()[12], 4)
+        for name in files:
+            with self.subTest(cleared_kind_of=name):
+                self.assertEqual((self.state / name).read_bytes()[12], 4)
+
+    async def test_saved_alarm_values_past_the_state_count_fail_the_builder(self) -> None:
+        """A saved Alarm_Values list naming a state the object is built
+        without raises BacnetError, with the clear too, since the file is
+        read first. The two ways out the docs give both work: deleting the
+        file, and one start with the earlier state count and the clear."""
+        file = self.state / "msv-1"
+        for way_out in ("delete", "clear"):
+            with self.subTest(way_out=way_out):
+                server = await self.start()
+                try:
+                    await server.write_property_local(
+                        MULTI_STATE, P.ALARM_VALUES, states(3), source_object=None
+                    )
+                finally:
+                    await server.stop()
+                for clear in (False, True):
+                    with self.assertRaises(BacnetError):
+                        self.build(clear, number_of_states=2)
+                if way_out == "delete":
+                    file.unlink()
+                else:
+                    server = await self.start(clear=True)
+                    await server.stop()
+                server = await self.start(number_of_states=2)
+                try:
+                    self.assertEqual(
+                        await self.read(server, MULTI_STATE, P.ALARM_VALUES), states()
+                    )
+                finally:
+                    await server.stop()
+                # Back to three states for the next way out.
+                server = await self.start()
+                await server.stop()
 
     async def test_an_applications_own_parameter_writes_are_kept_like_a_peers(self) -> None:
         """The analog builders have no limit keywords, so an application sets
@@ -343,7 +410,8 @@ class AlgorithmParameterFileTests(unittest.TestCase):
             refused.write_bytes(high_limit_file(analog, 1, float("nan")))
             with self.assertRaises(BacnetError):
                 server.add_analog_input(1, "AI-1", storage_path=str(refused))
-            # A binary object keeps no High_Limit: the file isn't one of its.
+            # A binary object keeps no High_Limit: the file isn't one it can
+            # have written, though it keeps other parameters now.
             binary = Path(directory) / "bi-1"
             binary.write_bytes(high_limit_file(ObjectType.BINARY_INPUT.to_raw(), 1, 80.5))
             with self.assertRaises(BacnetError):

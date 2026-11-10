@@ -3041,27 +3041,43 @@ the two lighting outputs among them, which keep one only through the Rust
 API's `with_tags_persistence`, and the Network Port, whose transport keeps
 only its own tables in `bdt_persist_path`.
 
-`add_analog_input`, `add_analog_output` and `add_analog_value` keep the
-event algorithm parameters a peer writes in the same file (#2331):
-Time_Delay, Time_Delay_Normal, High_Limit, Low_Limit, Deadband and
-Limit_Enable. The rules are the reporting settings': saved before the write
+The analog, binary and multi-state builders keep the event algorithm
+parameters a peer writes in the same file (#2331):
+
+| Builders | Parameters kept |
+| --- | --- |
+| `add_analog_input`, `add_analog_output`, `add_analog_value` | Time_Delay, Time_Delay_Normal, High_Limit, Low_Limit, Deadband, Limit_Enable |
+| `add_binary_input`, `add_binary_value` | Time_Delay, Time_Delay_Normal, Alarm_Value |
+| `add_multistate_input`, `add_multistate_value` | Time_Delay, Time_Delay_Normal, Alarm_Values |
+| `add_binary_output`, `add_multistate_output` | Time_Delay, Time_Delay_Normal |
+
+The rules are the reporting settings': saved before the write
 is answered, refused with DEVICE / OPERATIONAL_PROBLEM when the save fails,
 with the old value still served and still used by the object's event
 detection. After a restart the object detects with the saved parameters
 from its first evaluation. `clear_written_reporting=True` drops them with
 the rest. A file holding a value the object refuses on the wire raises
-`BacnetError`. No new keyword is needed. The binary and multi-state
-objects, Access Door, Access Zone and Event Enrollment don't keep their
-parameters yet: a written Alarm_Value, Alarm_Values or Event_Parameters
-lasts until the server restarts.
+`BacnetError`. No new keyword is needed. Access Door, Access Zone and
+Event Enrollment don't keep their parameters yet: a written Alarm_Values,
+Fault_Values or Event_Parameters lasts until the server restarts.
 
-The analog builders take no keyword for these six parameters, so an
-application sets its own limits with `write_property_local` once the server
-has started. With `storage_path`, that write is kept exactly like a peer's:
-it is saved in the file and served again after a restart. So an application
-that writes its limits at every start replaces whatever a peer wrote before
-the restart. To keep a peer's values, write the application's own only when
-there is nothing saved to lose:
+One refused value depends on the builder call: saved Alarm_Values naming a
+state past `number_of_states`. A peer can't write such a list, and can't
+remove a state a list names. But the state count isn't kept: after a
+restart it is the builder's `number_of_states` again, whatever a peer made
+of it through State_Text. So if a peer added states and listed one, or the
+application now passes a smaller `number_of_states`, the builder raises
+`BacnetError`, with `clear_written_reporting=True` too, since the file is
+read before it is cleared. Delete the file, or start once with the earlier
+`number_of_states` and `clear_written_reporting=True`.
+
+These builders take no keyword for the parameters, so an application sets
+its own limits, alarm values or delays with `write_property_local` once the
+server has started. With `storage_path`, that write is kept exactly like a
+peer's: it is saved in the file and served again after a restart. So an
+application that writes them at every start replaces whatever a peer wrote
+before the restart. To keep a peer's values, write the application's own
+only when there is nothing saved to lose:
 
 ```python
 import os

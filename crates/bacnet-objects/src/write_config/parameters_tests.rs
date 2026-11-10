@@ -2,7 +2,9 @@
 //! with its reporting settings (#2331): each comes back on a rebuild and its
 //! detector uses it, a write whose save fails is refused, storage holding
 //! what the object refuses on the wire fails the build, the clear drops
-//! them with the rest, and a request's writes save once.
+//! them with the rest, and a request's writes save once. The binary and
+//! multi-state objects' are in `state_parameters_tests` and
+//! `state_parameter_rules_tests`.
 
 use alloc::sync::Arc;
 
@@ -19,11 +21,10 @@ use super::test_storage::MemoryConfig;
 use super::{AlgorithmWriteConfig, ReportingWriteConfig, WriteConfigSnapshot};
 use crate::access_control::{AccessDoorObject, AccessZoneObject};
 use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
-use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
+use crate::binary::BinaryValueObject;
 #[cfg(feature = "durable-writes")]
 use crate::durable::{PendingWrite, StageStep};
 use crate::event_enrollment::{AlertEnrollmentObject, EventEnrollmentObject};
-use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject};
 use crate::traits::BACnetObject;
 
 const ANALOG: [ObjectType; 3] = [
@@ -125,18 +126,18 @@ fn covered() -> Vec<(P, PropertyValue, AlgorithmWriteConfig)> {
     ]
 }
 
-fn saved(storage: &MemoryConfig) -> ReportingWriteConfig {
+pub(super) fn saved(storage: &MemoryConfig) -> ReportingWriteConfig {
     match storage.saved() {
         Some(WriteConfigSnapshot::Reporting(saved)) => saved,
         other => panic!("expected reporting settings, got {other:?}"),
     }
 }
 
-fn read(object: &dyn BACnetObject, property: P) -> PropertyValue {
+pub(super) fn read(object: &dyn BACnetObject, property: P) -> PropertyValue {
     object.read_property(property, None).unwrap()
 }
 
-fn write(object: &mut dyn BACnetObject, property: P, value: PropertyValue) {
+pub(super) fn write(object: &mut dyn BACnetObject, property: P, value: PropertyValue) {
     object.write_property(property, None, value, None).unwrap();
 }
 
@@ -157,7 +158,7 @@ fn set_value(object: &mut dyn BACnetObject, value: f32) {
 
 /// The Event_State the object's detector proposes for its Present_Value
 /// now, if any.
-fn evaluated(object: &mut dyn BACnetObject) -> Option<EventState> {
+pub(super) fn evaluated(object: &mut dyn BACnetObject) -> Option<EventState> {
     let reporting = object.event_reporting_mut().unwrap();
     reporting
         .evaluate_intrinsic_reporting()
@@ -165,7 +166,7 @@ fn evaluated(object: &mut dyn BACnetObject) -> Option<EventState> {
 }
 
 /// One second passes on the detector's countdown.
-fn ticked(object: &mut dyn BACnetObject) -> Option<EventState> {
+pub(super) fn ticked(object: &mut dyn BACnetObject) -> Option<EventState> {
     let reporting = object.event_reporting_mut().unwrap();
     reporting
         .tick_intrinsic_reporting()
@@ -401,7 +402,7 @@ fn the_clear_drops_parameters_reporting_rows_and_description_together() {
 }
 
 /// Storage holding `algorithm` for an object of `kind`.
-fn holding(algorithm: AlgorithmWriteConfig) -> Arc<MemoryConfig> {
+pub(super) fn holding(algorithm: AlgorithmWriteConfig) -> Arc<MemoryConfig> {
     MemoryConfig::holding(WriteConfigSnapshot::Reporting(ReportingWriteConfig {
         algorithm,
         ..Default::default()
@@ -488,15 +489,9 @@ fn a_stored_parameter_is_validated_as_a_write_of_it_is() {
     }
 }
 
-/// The ten object types with a reporting store that keep no parameter in
+/// The four object types with a reporting store that keep no parameter in
 /// this build.
-const OTHERS: [ObjectType; 10] = [
-    ObjectType::BINARY_INPUT,
-    ObjectType::BINARY_OUTPUT,
-    ObjectType::BINARY_VALUE,
-    ObjectType::MULTI_STATE_INPUT,
-    ObjectType::MULTI_STATE_OUTPUT,
-    ObjectType::MULTI_STATE_VALUE,
+const OTHERS: [ObjectType; 4] = [
     ObjectType::ACCESS_DOOR,
     ObjectType::ACCESS_ZONE,
     ObjectType::EVENT_ENROLLMENT,
@@ -517,12 +512,6 @@ fn try_other(
     }
     let source = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1)?;
     match kind {
-        ObjectType::BINARY_INPUT => build!(BinaryInputObject::new(1, "BI")),
-        ObjectType::BINARY_OUTPUT => build!(BinaryOutputObject::new(1, "BO")),
-        ObjectType::BINARY_VALUE => build!(BinaryValueObject::new(1, "BV")),
-        ObjectType::MULTI_STATE_INPUT => build!(MultiStateInputObject::new(1, "MSI", 3)),
-        ObjectType::MULTI_STATE_OUTPUT => build!(MultiStateOutputObject::new(1, "MSO", 3)),
-        ObjectType::MULTI_STATE_VALUE => build!(MultiStateValueObject::new(1, "MSV", 3)),
         ObjectType::ACCESS_DOOR => build!(AccessDoorObject::new(1, "Door")),
         ObjectType::ACCESS_ZONE => build!(AccessZoneObject::new(1, "Zone")),
         ObjectType::EVENT_ENROLLMENT => build!(EventEnrollmentObject::new(
@@ -534,7 +523,7 @@ fn try_other(
     }
 }
 
-/// A type keeps only its own parameters. On each of the ten other types
+/// A type keeps only its own parameters. On each of the four other types
 /// with a reporting store, storage holding any parameter fails the build,
 /// and a write of a time delay is answered as without storage, saves
 /// nothing and is gone after a rebuild: Time_Delay where the type has it,
@@ -543,7 +532,18 @@ fn try_other(
 #[test]
 fn a_type_keeps_only_its_own_parameters() {
     for kind in OTHERS {
-        for (_, _, stored) in covered() {
+        let more = [
+            AlgorithmWriteConfig {
+                alarm_value: Some(bacnet_types::enums::BinaryPV::ACTIVE),
+                ..Default::default()
+            },
+            AlgorithmWriteConfig {
+                alarm_values: Some(vec![1]),
+                ..Default::default()
+            },
+        ];
+        let stored = covered().into_iter().map(|(_, _, stored)| stored);
+        for stored in stored.chain(more) {
             let built = try_other(kind, &holding(stored));
             assert!(matches!(built, Err(Error::Encoding(_))), "{kind}");
         }
@@ -594,7 +594,7 @@ fn read_ok(object: &dyn BACnetObject, property: P) -> Option<PropertyValue> {
 }
 
 #[cfg(feature = "durable-writes")]
-fn pending(property: P, value: PropertyValue) -> PendingWrite {
+pub(super) fn pending(property: P, value: PropertyValue) -> PendingWrite {
     PendingWrite {
         property,
         array_index: None,

@@ -25,6 +25,12 @@
 
 #[path = "restore_samples.rs"]
 mod samples;
+#[path = "restore_seal.rs"]
+mod sealing;
+
+// The corruption test seals; only the fuzz crate takes the checksum too.
+#[allow(unused_imports)]
+pub use sealing::{crc32, seal};
 
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
@@ -45,6 +51,7 @@ use bacnet_objects::event_enrollment::AlertEnrollmentObject;
 use bacnet_objects::event_log::EventLogObject;
 use bacnet_objects::lighting::LightingOutputObject;
 use bacnet_objects::log_persistence::{FileLogPersistence, LogPersistence};
+use bacnet_objects::multistate::MultiStateInputObject;
 use bacnet_objects::notification_class::{
     FileNotificationClassPersistence, NotificationClass, NotificationClassPersistence,
     NotificationClassSnapshot,
@@ -95,6 +102,7 @@ enum Kind {
     ChannelWriteConfig,
     ReportingWriteConfig,
     AlertReportingWriteConfig,
+    MultiStateReportingWriteConfig,
 }
 
 /// Where a check's storage lives. Each method opens one backend on it; a
@@ -349,6 +357,20 @@ pub const FORMATS: &[Format] = &[
         sample: samples::described_parameters_reporting_write_config,
         kind: Kind::ReportingWriteConfig,
     },
+    // Kind 6 with its list row, a Multi-state Input's written Alarm_Values
+    // (#2331 PR 3), plain and under kind 5; last for the same reason.
+    Format {
+        name: "alarm_values_reporting_write_config",
+        two_slot: false,
+        sample: samples::alarm_values_reporting_write_config,
+        kind: Kind::MultiStateReportingWriteConfig,
+    },
+    Format {
+        name: "described_alarm_values_reporting_write_config",
+        two_slot: false,
+        sample: samples::described_alarm_values_reporting_write_config,
+        kind: Kind::MultiStateReportingWriteConfig,
+    },
 ];
 
 impl Format {
@@ -446,6 +468,18 @@ impl Format {
                         .map(drop)
                 },
             ),
+            // A Multi-state Input of eight states refuses an Alarm_Values
+            // state past them, which the format itself takes (#2331).
+            Kind::MultiStateReportingWriteConfig => check_file(
+                medium,
+                oid(ObjectType::MULTI_STATE_INPUT),
+                M::write_config,
+                |store| {
+                    MultiStateInputObject::new(1, "MSI", samples::MULTI_STATE_SAMPLE_STATES)?
+                        .with_reporting_persistence(store)
+                        .map(drop)
+                },
+            ),
         }
     }
 
@@ -462,49 +496,6 @@ impl Format {
             vec![base.to_path_buf()]
         }
     }
-}
-
-/// The two-slot header the log and Audit Log formats share: magic tag,
-/// schema version, object identifier, generation, payload length.
-const SLOT_HEADER_LEN: usize = 8 + 2 + 4 + 8 + 4;
-const SLOT_TRAILER_LEN: usize = 4;
-
-/// The CRC-32 (IEEE 802.3, reflected) the slots end with, written here
-/// from its definition: the table holds each octet's eight shift steps, so
-/// the fuzz targets seal a slot with one lookup per octet (#2233).
-pub fn crc32(data: &[u8]) -> u32 {
-    static TABLE: [u32; 256] = {
-        let mut table = [0u32; 256];
-        let mut n = 0;
-        while n < 256 {
-            let mut crc = n as u32;
-            let mut bit = 0;
-            while bit < 8 {
-                crc = (crc >> 1) ^ (0xedb8_8320 & 0u32.wrapping_sub(crc & 1));
-                bit += 1;
-            }
-            table[n] = crc;
-            n += 1;
-        }
-        table
-    };
-    !data.iter().fold(!0u32, |crc, &byte| {
-        TABLE[usize::from(crc as u8 ^ byte)] ^ (crc >> 8)
-    })
-}
-
-/// Give a two-slot format's `slot` the length field and checksum of what
-/// it holds, if it is long enough to have them, so damage past the header
-/// reaches the payload decoders.
-pub fn seal(slot: &mut [u8]) {
-    if slot.len() < SLOT_HEADER_LEN + SLOT_TRAILER_LEN {
-        return;
-    }
-    let payload = (slot.len() - SLOT_HEADER_LEN - SLOT_TRAILER_LEN) as u32;
-    slot[22..26].copy_from_slice(&payload.to_be_bytes());
-    let at = slot.len() - SLOT_TRAILER_LEN;
-    let checksum = crc32(&slot[..at]);
-    slot[at..].copy_from_slice(&checksum.to_be_bytes());
 }
 
 /// The object every sample and check is for: instance 1 of `kind`.

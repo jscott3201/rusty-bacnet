@@ -165,16 +165,13 @@ impl DetectorFields {
 
 impl Kept {
     /// What `write` leaves on top of this, or the object's refusal of it;
-    /// `takes_notify_type` is the object type's own Notify_Type rule
-    /// ([`KeepsReporting::takes_notify_type`]). A message text past what
+    /// `object` answers for what is its own: its Notify_Type rule
+    /// ([`KeepsReporting::takes_notify_type`]) and its algorithm parameters
+    /// ([`KeepsReporting::parameter_after`]). A message text past what
     /// storage keeps is refused with RESOURCES / NO_SPACE_TO_WRITE_PROPERTY,
     /// before anything is saved, so every backend gives that answer (#1952),
     /// once the texts are written and so kept.
-    fn after(
-        &self,
-        write: &PendingWrite,
-        takes_notify_type: fn(NotifyType) -> bool,
-    ) -> Result<Self, Error> {
+    fn after(&self, write: &PendingWrite, object: &dyn KeepsReporting) -> Result<Self, Error> {
         let mut next = self.clone();
         let rows = &mut next.rows;
         let value = &write.value;
@@ -186,7 +183,7 @@ impl Kept {
                 common::write_generic_event_properties!(scratch, write.property, value.clone())
                     .unwrap_or_else(|| Err(common::unknown_property_error()))?;
                 scratch.event_detector.apply_to(rows);
-                if write.property == P::NOTIFY_TYPE && !takes_notify_type(rows.notify_type) {
+                if write.property == P::NOTIFY_TYPE && !object.takes_notify_type(rows.notify_type) {
                     return Err(common::value_out_of_range_error());
                 }
             }
@@ -197,7 +194,7 @@ impl Kept {
             // Past its cap it is refused before anything is saved (#2364).
             P::DESCRIPTION => rows.description = description::written(value)?,
             property if parameters::kept_bit(self.object_type, property).is_some() => {
-                parameters::after(&mut rows.algorithm, write)?;
+                object.parameter_after(&mut rows.algorithm, write)?;
             }
             property => rows
                 .options
@@ -309,8 +306,24 @@ pub(crate) trait KeepsReporting: BACnetObject {
     /// Notify_Type: most take every one, and an Alert Enrollment only ALARM
     /// and EVENT. A staged write is refused as the object refuses it, and
     /// storage holding another fails the build.
-    fn takes_notify_type(_notify_type: NotifyType) -> bool {
+    fn takes_notify_type(&self, _notify_type: NotifyType) -> bool {
         true
+    }
+    /// What `write`, of an algorithm parameter the object's type keeps,
+    /// leaves of `rows`, or the object's refusal of it: the object's own
+    /// write path, run on a detector of its kind
+    /// ([`parameters::after`]). The default is for a type that keeps none.
+    fn parameter_after(
+        &self,
+        _rows: &mut AlgorithmWriteConfig,
+        _write: &PendingWrite,
+    ) -> Result<(), Error> {
+        Err(common::unknown_property_error())
+    }
+    /// Number_Of_States, on an object with states: an Alarm_Values entry,
+    /// written or saved, names one of them.
+    fn number_of_states(&self) -> Option<u32> {
+        None
     }
 }
 
@@ -369,7 +382,8 @@ pub(crate) fn attach<T: KeepsReporting>(
     // have, is refused here as the codec refuses it: a backend of the
     // application's own may hand over anything.
     let invalid = crate::snapshot::write_config::reporting_invalid(&saved)
-        .or_else(|| parameter_format::invalid(oid.object_type(), &saved.algorithm));
+        .or_else(|| parameter_format::invalid(oid.object_type(), &saved.algorithm))
+        .or_else(|| parameters::past_states(&saved.algorithm, object.number_of_states()));
     if let Some(reason) = invalid {
         return Err(Error::Encoding(format!(
             "saved reporting settings {reason}"
@@ -377,13 +391,21 @@ pub(crate) fn attach<T: KeepsReporting>(
     }
     if saved
         .notify_type
-        .is_some_and(|notify_type| !T::takes_notify_type(notify_type))
+        .is_some_and(|notify_type| !object.takes_notify_type(notify_type))
     {
         return Err(Error::Encoding(
             "saved reporting settings hold a Notify_Type this object refuses".into(),
         ));
     }
     object.restore_reporting_rows(&saved);
+    // A Multi-state Value works its Reliability out again when Alarm_Values
+    // is written, so it does when a saved list goes over the configured
+    // one: a fault only the configured list raised doesn't outlive it.
+    if saved.algorithm.alarm_values.is_some()
+        && let Some(reliability) = object.reliability_eval()
+    {
+        let _ = reliability.evaluate_reliability();
+    }
     let store = object.reporting_store();
     store.written = Written::of(&saved);
     store.storage = Some(Box::new(StagedSaves::new(
@@ -414,7 +436,7 @@ pub(crate) fn admit<T: KeepsReporting>(
         array_index,
         value: value.clone(),
     };
-    let result = admit_to(&mut store, current, &write, T::takes_notify_type);
+    let result = admit_to(&mut store, current, &write, object);
     *object.reporting_store() = store;
     result
 }
@@ -424,9 +446,16 @@ fn admit_to(
     store: &mut ReportingStore,
     current: Kept,
     write: &PendingWrite,
-    takes_notify_type: fn(NotifyType) -> bool,
+    object: &dyn KeepsReporting,
 ) -> Result<(), Error> {
     let storage = store.storage.as_mut().expect("checked by the caller");
+    // A parameter's check can turn on the object itself (an Alarm_Values
+    // entry on Number_Of_States), which a write the store doesn't count may
+    // have changed since the stage. So the object's refusal comes first and
+    // takes no staged step: the request's release puts storage back.
+    if parameters::kept_bit(current.object_type, write.property).is_some() {
+        object.parameter_after(&mut current.rows.algorithm.clone(), write)?;
+    }
     let claimed = storage.claim(
         write.property,
         write.array_index,
@@ -447,7 +476,7 @@ fn admit_to(
         None => {
             // A write the object refuses leaves another request's staged
             // write alone (#1424).
-            let next = current.after(write, takes_notify_type)?;
+            let next = current.after(write, object)?;
             storage.drop_staged();
             // Storage goes back to the served rows first, should the save
             // below fail.
@@ -491,7 +520,7 @@ pub(crate) fn stage_writes<T: KeepsReporting>(
                 write.array_index,
             )?;
             let from = earlier.last().map_or(&current, |step| &step.next);
-            from.after(write, T::takes_notify_type).map(Some)
+            from.after(write, object).map(Some)
         });
         storage.stage(steps, store.writes, current.snapshot(), |snapshot, kept| {
             *snapshot = kept.snapshot();

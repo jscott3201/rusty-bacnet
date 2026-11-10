@@ -2,50 +2,220 @@
 //! [`KIND_REPORTING_PARAMETERS`] body
 //! (#2331). The parent module documents the layout.
 //!
-//! One table, `rows!`, names each parameter once: its field of
-//! [`AlgorithmWriteConfig`], its bit of the presence mask and its property.
-//! A parameter added later takes the next bit there, a line in [`kept`] for
-//! each object type that keeps it, and its octets in [`encode`] and
-//! [`Reader::parameters`]; the kind stays, and a build that doesn't keep
-//! the bit for the object's type refuses the file as an unknown kind.
+//! One table, `rows!`, is all there is to a parameter: its field of
+//! [`AlgorithmWriteConfig`], its bit of the presence mask (and with it its
+//! property), how its value is stored (a module of `stored`) and the object
+//! types that keep it (a list of `on`). The mask, the octets written, the
+//! octets read back, the values refused and [`kept`] all come from a row, so
+//! a parameter can't be written and not read, or read and not kept. A
+//! parameter added later is one more row with the next bit; the kind stays,
+//! and a build that doesn't keep the bit for the object's type refuses the
+//! file as an unknown kind.
 
-use bacnet_types::bitstring::LimitEnable;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier as P};
 use bytes::BytesMut;
 
 use super::{KIND_REPORTING_PARAMETERS, Reader, SnapshotError, SnapshotErrorKind};
 use crate::write_config::AlgorithmWriteConfig;
 
-/// Each parameter's bit of the presence mask. A bit keeps its meaning for
-/// good: files hold it.
-pub(crate) mod bit {
-    /// Time_Delay: four octets.
-    pub(crate) const TIME_DELAY: u32 = 1 << 0;
-    /// Time_Delay_Normal: four octets.
-    pub(crate) const TIME_DELAY_NORMAL: u32 = 1 << 1;
-    /// High_Limit: the four octets of an IEEE 754 single.
-    pub(crate) const HIGH_LIMIT: u32 = 1 << 2;
-    /// Low_Limit, as High_Limit.
-    pub(crate) const LOW_LIMIT: u32 = 1 << 3;
-    /// Deadband, as High_Limit.
-    pub(crate) const DEADBAND: u32 = 1 << 4;
-    /// Limit_Enable: one octet, bit 0 the low limit and bit 1 the high.
-    pub(crate) const LIMIT_ENABLE: u32 = 1 << 5;
-}
-
 /// What is wrong with a parameter outside [`kept`] for the object's type:
 /// one a later build keeps for it, or one no build does.
 const UNKEPT: &str = "holds an algorithm parameter this build doesn't keep for this object type";
 
-/// The parameter table: `field => BIT / PROPERTY` for each.
+/// The object types a row is kept for.
+mod on {
+    use bacnet_types::enums::ObjectType as T;
+
+    /// OUT_OF_RANGE's own parameters: the analog Input, Output and Value.
+    pub(super) const ANALOG: &[T] = &[T::ANALOG_INPUT, T::ANALOG_OUTPUT, T::ANALOG_VALUE];
+    /// The one alarm value of CHANGE_OF_STATE on a Binary Input or Value.
+    pub(super) const BINARY: &[T] = &[T::BINARY_INPUT, T::BINARY_VALUE];
+    /// The alarm states of CHANGE_OF_STATE on a Multi-state Input or Value.
+    pub(super) const MULTI_STATE: &[T] = &[T::MULTI_STATE_INPUT, T::MULTI_STATE_VALUE];
+    /// The types whose two time delays are properties of their own: those
+    /// above, and the Binary and Multi-state Output, which run
+    /// COMMAND_FAILURE.
+    pub(super) const DELAYED: &[T] = &[
+        T::ANALOG_INPUT,
+        T::ANALOG_OUTPUT,
+        T::ANALOG_VALUE,
+        T::BINARY_INPUT,
+        T::BINARY_OUTPUT,
+        T::BINARY_VALUE,
+        T::MULTI_STATE_INPUT,
+        T::MULTI_STATE_OUTPUT,
+        T::MULTI_STATE_VALUE,
+    ];
+}
+
+/// How a parameter's value is stored. Each module has `put`, which appends
+/// a value's octets, `get`, which reads them back, and `invalid`, which
+/// says why a value is one no write leaves.
+mod stored {
+    use bytes::BytesMut;
+
+    use super::{Reader, SnapshotError};
+
+    /// An Unsigned of 32 bits, as the objects hold a time delay: four
+    /// octets.
+    pub(super) mod unsigned {
+        use super::{BytesMut, Reader, SnapshotError};
+
+        pub(in super::super) fn put(value: &u32, body: &mut BytesMut) {
+            body.extend_from_slice(&value.to_be_bytes());
+        }
+
+        pub(in super::super) fn get(reader: &mut Reader<'_>) -> Result<u32, SnapshotError> {
+            reader.u32()
+        }
+
+        pub(in super::super) fn invalid(_: &u32) -> Option<&'static str> {
+            None
+        }
+    }
+
+    /// A limit: the four octets of an IEEE 754 single, finite.
+    pub(super) mod limit {
+        use super::{BytesMut, Reader, SnapshotError};
+
+        pub(in super::super) fn put(value: &f32, body: &mut BytesMut) {
+            body.extend_from_slice(&value.to_bits().to_be_bytes());
+        }
+
+        pub(in super::super) fn get(reader: &mut Reader<'_>) -> Result<f32, SnapshotError> {
+            Ok(f32::from_bits(reader.u32()?))
+        }
+
+        pub(in super::super) fn invalid(value: &f32) -> Option<&'static str> {
+            (!value.is_finite()).then_some("holds a limit or deadband that isn't finite")
+        }
+    }
+
+    /// Deadband: a limit that isn't negative either.
+    pub(super) mod deadband {
+        pub(in super::super) use super::limit::{get, put};
+
+        pub(in super::super) fn invalid(value: &f32) -> Option<&'static str> {
+            super::limit::invalid(value)
+                .or_else(|| (*value < 0.0).then_some("holds a negative Deadband"))
+        }
+    }
+
+    /// Limit_Enable: one octet, bit 0 the low limit and bit 1 the high.
+    pub(super) mod limit_enable {
+        use bacnet_types::bitstring::LimitEnable;
+
+        use super::{BytesMut, Reader, SnapshotError};
+
+        pub(in super::super) fn put(value: &LimitEnable, body: &mut BytesMut) {
+            body.extend_from_slice(&[value.bits()]);
+        }
+
+        pub(in super::super) fn get(reader: &mut Reader<'_>) -> Result<LimitEnable, SnapshotError> {
+            Ok(LimitEnable::from_bits_retain(reader.u8()?))
+        }
+
+        pub(in super::super) fn invalid(value: &LimitEnable) -> Option<&'static str> {
+            LimitEnable::from_bits(value.bits())
+                .is_none()
+                .then_some("holds unknown Limit_Enable bits")
+        }
+    }
+
+    /// A BACnetBinaryPV: one octet, 0 for INACTIVE or 1 for ACTIVE.
+    pub(super) mod binary_pv {
+        use bacnet_types::enums::BinaryPV;
+
+        use super::{BytesMut, Reader, SnapshotError};
+
+        pub(in super::super) fn put(value: &BinaryPV, body: &mut BytesMut) {
+            // `invalid` has refused a value past one octet.
+            body.extend_from_slice(&[value.to_raw() as u8]);
+        }
+
+        pub(in super::super) fn get(reader: &mut Reader<'_>) -> Result<BinaryPV, SnapshotError> {
+            Ok(BinaryPV::from_raw(u32::from(reader.u8()?)))
+        }
+
+        pub(in super::super) fn invalid(value: &BinaryPV) -> Option<&'static str> {
+            (value.to_raw() > BinaryPV::ACTIVE.to_raw())
+                .then_some("holds an Alarm_Value that is neither INACTIVE nor ACTIVE")
+        }
+    }
+
+    /// A list of a multi-state object's states: a count in four octets, at
+    /// most the 1,024 a write of Alarm_Values may hold
+    /// ([`MAX_ALARM_VALUES`](crate::multistate::MAX_ALARM_VALUES)), then
+    /// each state in four octets, none of them zero. The count says how
+    /// long the row is, so a row cut short doesn't read as a shorter list,
+    /// and one going on past its count leaves octets the body's end
+    /// refuses.
+    pub(super) mod states {
+        use super::{BytesMut, Reader, SnapshotError};
+        use crate::multistate::MAX_ALARM_VALUES;
+        use crate::prelude::Vec;
+
+        pub(in super::super) fn put(values: &[u32], body: &mut BytesMut) {
+            // `invalid` has refused a list past the cap.
+            body.extend_from_slice(&(values.len() as u32).to_be_bytes());
+            for state in values {
+                body.extend_from_slice(&state.to_be_bytes());
+            }
+        }
+
+        pub(in super::super) fn get(reader: &mut Reader<'_>) -> Result<Vec<u32>, SnapshotError> {
+            // Nothing is allocated until the count is within the cap and
+            // the body holds every state it promises.
+            let count = reader.count(MAX_ALARM_VALUES)?;
+            let octets = reader.take(count * 4)?;
+            let (states, _) = octets.as_chunks::<4>();
+            Ok(states
+                .iter()
+                .map(|state| u32::from_be_bytes(*state))
+                .collect())
+        }
+
+        pub(in super::super) fn invalid(values: &[u32]) -> Option<&'static str> {
+            if values.len() > MAX_ALARM_VALUES {
+                return Some("holds more Alarm_Values than an object takes");
+            }
+            values
+                .contains(&0)
+                .then_some("holds an Alarm_Values state of zero")
+        }
+    }
+}
+
+/// The parameter table. A row is
+/// `field: NAME = bit, how it is stored, the types that keep it;`, where
+/// `NAME` names both the bit and the property. Rows are in bit order,
+/// which is the order a file holds them in.
 macro_rules! rows {
-    ($($field:ident => $bit:ident / $property:ident),* $(,)?) => {
+    ($($(#[$doc:meta])* $field:ident: $name:ident = $bit:expr, $stored:ident, $on:expr;)*) => {
+        /// Each parameter's bit of the presence mask. A bit keeps its
+        /// meaning for good: files hold it.
+        pub(crate) mod bit {
+            $($(#[$doc])* pub(crate) const $name: u32 = $bit;)*
+        }
+
+        // A file holds the rows in bit order, and they are written and read
+        // in the table's: each row is one bit, above the row before.
+        const _: () = {
+            let bits = [$(bit::$name),*];
+            let mut row = 0;
+            while row < bits.len() {
+                assert!(bits[row].count_ones() == 1);
+                assert!(row == 0 || bits[row - 1] < bits[row]);
+                row += 1;
+            }
+        };
+
         /// The presence mask of `config`: the bits of the parameters it
         /// holds.
         pub(crate) fn mask(config: &AlgorithmWriteConfig) -> u32 {
             let mut mask = 0;
             $(if config.$field.is_some() {
-                mask |= bit::$bit;
+                mask |= bit::$name;
             })*
             mask
         }
@@ -55,7 +225,11 @@ macro_rules! rows {
         #[cfg(feature = "event-reporting")]
         pub(crate) fn only(config: &AlgorithmWriteConfig, mask: u32) -> AlgorithmWriteConfig {
             AlgorithmWriteConfig {
-                $($field: config.$field.filter(|_| mask & bit::$bit != 0),)*
+                $($field: if mask & bit::$name != 0 {
+                    config.$field.clone()
+                } else {
+                    None
+                },)*
             }
         }
 
@@ -63,7 +237,7 @@ macro_rules! rows {
         #[cfg(feature = "event-reporting")]
         pub(crate) fn overlay(onto: &mut AlgorithmWriteConfig, saved: &AlgorithmWriteConfig) {
             $(if saved.$field.is_some() {
-                onto.$field = saved.$field;
+                onto.$field.clone_from(&saved.$field);
             })*
         }
 
@@ -71,54 +245,100 @@ macro_rules! rows {
         /// keeps for some object type.
         pub(crate) fn bit_of(property: P) -> Option<u32> {
             match property {
-                $(P::$property => Some(bit::$bit),)*
+                $(P::$name => Some(bit::$name),)*
                 _ => None,
+            }
+        }
+
+        /// The parameters objects of `object_type` keep, as mask bits; no
+        /// bit for a type that keeps none.
+        pub(crate) fn kept(object_type: ObjectType) -> u32 {
+            let mut mask = 0;
+            $(if $on.contains(&object_type) {
+                mask |= bit::$name;
+            })*
+            mask
+        }
+
+        /// Why a parameter of `config` holds a value no write leaves.
+        fn invalid_value(config: &AlgorithmWriteConfig) -> Option<&'static str> {
+            $(if let Some(reason) = config
+                .$field
+                .as_ref()
+                .and_then(|value| stored::$stored::invalid(value))
+            {
+                return Some(reason);
+            })*
+            None
+        }
+
+        /// Append each parameter `config` holds, in bit order.
+        fn put(body: &mut BytesMut, config: &AlgorithmWriteConfig) {
+            $(if let Some(value) = &config.$field {
+                stored::$stored::put(value, body);
+            })*
+        }
+
+        impl Reader<'_> {
+            /// The parameters `mask` names, in bit order.
+            fn rows(&mut self, mask: u32) -> Result<AlgorithmWriteConfig, SnapshotError> {
+                Ok(AlgorithmWriteConfig {
+                    $($field: if mask & bit::$name != 0 {
+                        Some(stored::$stored::get(self)?)
+                    } else {
+                        None
+                    },)*
+                })
             }
         }
     };
 }
 
 rows! {
-    time_delay => TIME_DELAY / TIME_DELAY,
-    time_delay_normal => TIME_DELAY_NORMAL / TIME_DELAY_NORMAL,
-    high_limit => HIGH_LIMIT / HIGH_LIMIT,
-    low_limit => LOW_LIMIT / LOW_LIMIT,
-    deadband => DEADBAND / DEADBAND,
-    limit_enable => LIMIT_ENABLE / LIMIT_ENABLE,
-}
-
-/// The parameters objects of `object_type` keep, as mask bits: the two time
-/// delays and the four OUT_OF_RANGE parameters on the analog Input, Output
-/// and Value objects. No bit for a type that keeps none.
-pub(crate) fn kept(object_type: ObjectType) -> u32 {
-    match object_type {
-        ObjectType::ANALOG_INPUT | ObjectType::ANALOG_OUTPUT | ObjectType::ANALOG_VALUE => {
-            bit::TIME_DELAY
-                | bit::TIME_DELAY_NORMAL
-                | bit::HIGH_LIMIT
-                | bit::LOW_LIMIT
-                | bit::DEADBAND
-                | bit::LIMIT_ENABLE
-        }
-        _ => 0,
-    }
+    /// Time_Delay: four octets.
+    time_delay: TIME_DELAY = 1 << 0, unsigned, on::DELAYED;
+    /// Time_Delay_Normal: four octets.
+    time_delay_normal: TIME_DELAY_NORMAL = 1 << 1, unsigned, on::DELAYED;
+    /// High_Limit: the four octets of an IEEE 754 single.
+    high_limit: HIGH_LIMIT = 1 << 2, limit, on::ANALOG;
+    /// Low_Limit, as High_Limit.
+    low_limit: LOW_LIMIT = 1 << 3, limit, on::ANALOG;
+    /// Deadband, as High_Limit.
+    deadband: DEADBAND = 1 << 4, deadband, on::ANALOG;
+    /// Limit_Enable: one octet, bit 0 the low limit and bit 1 the high.
+    limit_enable: LIMIT_ENABLE = 1 << 5, limit_enable, on::ANALOG;
+    /// Alarm_Value of a binary object: one octet, 0 or 1.
+    alarm_value: ALARM_VALUE = 1 << 6, binary_pv, on::BINARY;
+    /// Alarm_Values of a multi-state object: a count in four octets, then
+    /// each state in four.
+    alarm_values: ALARM_VALUES = 1 << 7, states, on::MULTI_STATE;
 }
 
 /// Whether objects of `object_type` keep a written `property` as an event
 /// algorithm parameter in a
 /// [`KIND_REPORTING_PARAMETERS`] file
-/// (#2331): Time_Delay, Time_Delay_Normal, High_Limit, Low_Limit, Deadband
-/// and Limit_Enable on the analog Input, Output and Value objects. A file
-/// holding a parameter the object's type doesn't keep here is refused as an
-/// unknown kind: a later build may keep it.
+/// (#2331):
+///
+/// - Time_Delay and Time_Delay_Normal on the analog, binary and multi-state
+///   Input, Output and Value objects;
+/// - High_Limit, Low_Limit, Deadband and Limit_Enable on the three analog
+///   ones;
+/// - Alarm_Value on a Binary Input or Value;
+/// - Alarm_Values on a Multi-state Input or Value.
+///
+/// A file holding a parameter the object's type doesn't keep here is
+/// refused as an unknown kind: a later build may keep it.
 pub fn keeps_parameter(object_type: ObjectType, property: P) -> bool {
     bit_of(property).is_some_and(|bit| kept(object_type) & bit != 0)
 }
 
 /// Why `config` holds what no write to an object of `object_type` leaves: a
 /// parameter the type doesn't keep, a limit or deadband that isn't finite,
-/// a negative deadband, or Limit_Enable bits past its two. The object
-/// refuses each on the wire, so storage holding one is refused too.
+/// a negative deadband, Limit_Enable bits past its two, an Alarm_Value past
+/// ACTIVE, or Alarm_Values past the 1,024 a write may hold or naming state
+/// zero. The object refuses each on the wire, so storage holding one is
+/// refused too. A state past the object's own Number_Of_States is the
+/// object's to refuse, as it is built.
 pub(crate) fn invalid(
     object_type: ObjectType,
     config: &AlgorithmWriteConfig,
@@ -126,20 +346,7 @@ pub(crate) fn invalid(
     if mask(config) & !kept(object_type) != 0 {
         return Some(UNKEPT);
     }
-    let limits = [config.high_limit, config.low_limit, config.deadband];
-    if limits.iter().flatten().any(|limit| !limit.is_finite()) {
-        return Some("holds a limit or deadband that isn't finite");
-    }
-    if config.deadband.is_some_and(|deadband| deadband < 0.0) {
-        return Some("holds a negative Deadband");
-    }
-    if config
-        .limit_enable
-        .is_some_and(|enable| LimitEnable::from_bits(enable.bits()).is_none())
-    {
-        return Some("holds unknown Limit_Enable bits");
-    }
-    None
+    invalid_value(config)
 }
 
 /// Append `config`'s parameters for an object of `object_type`: the mask,
@@ -154,17 +361,7 @@ pub(super) fn encode(
         return Err(SnapshotError::out_of_range(reason));
     }
     body.extend_from_slice(&mask(config).to_be_bytes());
-    let unsigned = [config.time_delay, config.time_delay_normal];
-    for value in unsigned.into_iter().flatten() {
-        body.extend_from_slice(&value.to_be_bytes());
-    }
-    let reals = [config.high_limit, config.low_limit, config.deadband];
-    for value in reals.into_iter().flatten() {
-        body.extend_from_slice(&value.to_bits().to_be_bytes());
-    }
-    if let Some(enable) = config.limit_enable {
-        body.extend_from_slice(&[enable.bits()]);
-    }
+    put(body, config);
     Ok(())
 }
 
@@ -192,27 +389,8 @@ impl Reader<'_> {
                 "is of the kind with algorithm parameters and holds none",
             ));
         }
-        let mut config = AlgorithmWriteConfig::default();
-        let has = |bit: u32| mask & bit != 0;
-        if has(bit::TIME_DELAY) {
-            config.time_delay = Some(self.u32()?);
-        }
-        if has(bit::TIME_DELAY_NORMAL) {
-            config.time_delay_normal = Some(self.u32()?);
-        }
-        if has(bit::HIGH_LIMIT) {
-            config.high_limit = Some(f32::from_bits(self.u32()?));
-        }
-        if has(bit::LOW_LIMIT) {
-            config.low_limit = Some(f32::from_bits(self.u32()?));
-        }
-        if has(bit::DEADBAND) {
-            config.deadband = Some(f32::from_bits(self.u32()?));
-        }
-        if has(bit::LIMIT_ENABLE) {
-            config.limit_enable = Some(LimitEnable::from_bits_retain(self.u8()?));
-        }
-        match invalid(object_type, &config) {
+        let config = self.rows(mask)?;
+        match invalid_value(&config) {
             Some(reason) => Err(SnapshotError::damaged(reason)),
             None => Ok(config),
         }

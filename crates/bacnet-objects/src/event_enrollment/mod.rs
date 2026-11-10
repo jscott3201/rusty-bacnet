@@ -65,7 +65,7 @@ macro_rules! keep_enrollment_reporting {
             }
 
             $(
-                fn takes_notify_type(notify_type: bacnet_types::enums::NotifyType) -> bool {
+                fn takes_notify_type(&self, notify_type: bacnet_types::enums::NotifyType) -> bool {
                     $takes(notify_type)
                 }
             )?

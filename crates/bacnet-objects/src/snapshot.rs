@@ -150,6 +150,8 @@ mod description_tests;
 #[cfg(test)]
 mod one_file_tests;
 #[cfg(test)]
+mod parameter_list_tests;
+#[cfg(test)]
 mod parameters_tests;
 #[cfg(test)]
 mod reporting_tests;

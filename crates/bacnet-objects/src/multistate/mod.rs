@@ -65,6 +65,20 @@ fn decode_alarm_values_write(
         .collect()
 }
 
+/// Take a write of Alarm_Values on a Multi-state Input or Value with
+/// `number_of_states` states ([`decode_alarm_values_write`]); a refused
+/// list leaves the one held. A staged write is checked by the same code
+/// (`write_config::reporting`).
+pub(crate) fn write_alarm_values(
+    detector: &mut ChangeOfStateDetector,
+    array_index: Option<u32>,
+    value: PropertyValue,
+    number_of_states: u32,
+) -> Result<(), Error> {
+    detector.alarm_values = decode_alarm_values_write(array_index, value, number_of_states)?;
+    Ok(())
+}
+
 /// Reject a `number_of_states` of zero.
 ///
 /// Every multi-state object starts `PRESENT_VALUE` (and, for Output/Value, the

@@ -14,12 +14,18 @@
 ///   the usual fields (`event_detector`, `event_detection_enable`,
 ///   `event_history`) and its Tags storage in `profile`. It also gets the
 ///   three setters, [`KeepsReporting`](super::KeepsReporting), and staging
-///   of its Tags beside its reporting settings.
+///   of its Tags beside its reporting settings. Its algorithm parameters
+///   are its detector's
+///   ([`AlgorithmDetector`](super::parameters::AlgorithmDetector)), and a
+///   staged write of one is checked on a detector of that type.
+/// - `impl_reporting_persistence!(T, states: field)`: the same, for an
+///   object whose Number_Of_States is in `field`, which bounds the
+///   Alarm_Values entries it takes.
 /// - `impl_reporting_persistence!(T, without_tags)`: an object that
 ///   implements `KeepsReporting` itself, has no Tags storage, and guards
 ///   its own setters with [`setter_gives_way`](super::setter_gives_way).
 macro_rules! impl_reporting_persistence {
-    ($object:ty) => {
+    ($object:ty $(, states: $states:ident)?) => {
         $crate::write_config::reporting::impl_reporting_persistence!(@builder $object);
 
         impl $object {
@@ -105,6 +111,24 @@ macro_rules! impl_reporting_persistence {
                     &saved.algorithm,
                 );
             }
+
+            fn parameter_after(
+                &self,
+                rows: &mut $crate::write_config::AlgorithmWriteConfig,
+                write: &$crate::durable::PendingWrite,
+            ) -> Result<(), bacnet_types::error::Error> {
+                // The detector's type picks the family's write path.
+                $crate::write_config::reporting::parameters::after(
+                    &self.event_detector,
+                    $crate::write_config::reporting::KeepsReporting::number_of_states(self),
+                    rows,
+                    write,
+                )
+            }
+
+            $(fn number_of_states(&self) -> Option<u32> {
+                Some(self.$states)
+            })?
         }
 
         impl $crate::durable::DurableWrites for $object {
@@ -218,10 +242,13 @@ macro_rules! impl_reporting_persistence {
             /// Event_Message_Texts_Config and the Event_Algorithm_Inhibit
             /// pair) in `persistence`, and a written Description (#2364),
             /// serving what is saved there for this object, if anything
-            /// (#2331). An Analog Input, Output or Value keeps its event
-            /// algorithm parameters there too (Time_Delay,
-            /// Time_Delay_Normal, High_Limit, Low_Limit, Deadband and
-            /// Limit_Enable), and its detector starts with the saved ones.
+            /// (#2331). An analog, binary or multi-state Input, Output or
+            /// Value keeps its event algorithm parameters there too, and
+            /// its detector starts with the saved ones: Time_Delay and
+            /// Time_Delay_Normal on all nine, High_Limit, Low_Limit,
+            /// Deadband and Limit_Enable on the analog ones, Alarm_Value on
+            /// a Binary Input or Value, and Alarm_Values on a Multi-state
+            /// Input or Value.
             ///
             /// A write of one of them is then saved before the object serves
             /// it, and refused with DEVICE / OPERATIONAL_PROBLEM, the old
@@ -232,7 +259,13 @@ macro_rules! impl_reporting_persistence {
             /// Fails when storage can't be loaded, holds another kind of
             /// configuration, or holds what no write leaves: a value the
             /// object refuses on the wire, or an algorithm parameter its
-            /// type doesn't keep.
+            /// type doesn't keep. That includes saved Alarm_Values naming a
+            /// state past this object's Number_Of_States: a peer can't
+            /// write one, so an object rebuilt with fewer states than the
+            /// saved list names doesn't open on it. Open it with the
+            /// earlier state count and call
+            /// [`clear_written_reporting`](Self::clear_written_reporting),
+            /// or remove what storage holds for the object.
             pub fn with_reporting_persistence(
                 self,
                 persistence: alloc::sync::Arc<dyn $crate::write_config::WriteConfigPersistence>,

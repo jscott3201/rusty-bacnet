@@ -18,11 +18,15 @@
 //! (through their `ChangeOfStateReporting`), and Event and Alert
 //! Enrollment. The logs keep the same rows in their own files (#1952).
 //!
-//! The analog objects keep their event algorithm parameters as more rows
-//! (the `parameters` module here, compiled with `event-reporting` like the
-//! rest): the two time delays and the four OUT_OF_RANGE parameters, which
-//! stay in the detector. Which parameters a type keeps is
-//! one table, [`kept`](crate::snapshot::write_config::parameters::kept);
+//! The analog, binary and multi-state objects keep their event algorithm
+//! parameters as more rows (the `parameters` module here, compiled with
+//! `event-reporting` like the rest): the two time delays on all nine, the
+//! four OUT_OF_RANGE parameters on the analog ones, Alarm_Value on a Binary
+//! Input or Value and Alarm_Values on a Multi-state Input or Value. They
+//! stay in the detector, and a staged write of one is checked on a detector
+//! of the object's own type, by the code its objects write through. Which
+//! parameters a type keeps is one table,
+//! [`kept`](crate::snapshot::write_config::parameters::kept);
 //! a write of one the type doesn't keep is made as without storage.
 //!
 //! Storage is the object's
@@ -96,9 +100,10 @@ mod off {
     }
 
     /// The object lends only its Tags staging, if it has any; its
-    /// Description setter always applies.
+    /// Description setter always applies. A `states:` argument names a
+    /// field nothing here reads.
     macro_rules! impl_reporting_persistence {
-        ($object:ty) => {
+        ($object:ty $(, states: $states:ident)?) => {
             impl $object {
                 /// Set the description string.
                 pub fn set_description(&mut self, desc: impl Into<String>) {
