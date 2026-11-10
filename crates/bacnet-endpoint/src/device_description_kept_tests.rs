@@ -14,7 +14,8 @@ use std::sync::{Mutex, OnceLock, Weak};
 const DESCRIPTION: PropertyIdentifier = PropertyIdentifier::DESCRIPTION;
 
 /// Tags storage in memory. Each save notes whether the session's database
-/// was free to lock while it ran.
+/// stayed locked for as long as the save ran: whether something held the
+/// guard and waited for the save.
 #[derive(Default)]
 struct Storage {
     saved: Mutex<Option<TagsSnapshot>>,
@@ -23,6 +24,10 @@ struct Storage {
     database: OnceLock<Weak<RwLock<ObjectDatabase>>>,
     saved_under_the_guard: AtomicBool,
 }
+
+/// How long a save waits for the database lock to come free before it
+/// counts as made under the guard. Only a failing run waits this long.
+const HELD: Duration = Duration::from_secs(2);
 
 impl Storage {
     fn description(&self) -> Option<String> {
@@ -36,9 +41,21 @@ impl TagsPersistence for Storage {
     }
 
     fn save(&self, _: ObjectIdentifier, snapshot: &TagsSnapshot) -> Result<(), Error> {
-        let database = self.database.get().and_then(Weak::upgrade);
-        if database.is_some_and(|database| database.try_write().is_err()) {
-            self.saved_under_the_guard.store(true, Ordering::SeqCst);
+        // The save runs on the Device's writer thread. A lock held at one
+        // instant proves nothing: the request that staged this save may
+        // still hold the guard it staged under, and other tasks read the
+        // database, yet none of them waits for the save, so the lock comes
+        // free at once. A write that saves where it is holds the guard
+        // until this call returns, so for it the lock never comes free.
+        if let Some(database) = self.database.get().and_then(Weak::upgrade) {
+            let deadline = std::time::Instant::now() + HELD;
+            while database.try_write().is_err() {
+                if std::time::Instant::now() >= deadline {
+                    self.saved_under_the_guard.store(true, Ordering::SeqCst);
+                    break;
+                }
+                std::thread::yield_now();
+            }
         }
         if self.fail.load(Ordering::SeqCst) {
             return Err(Error::Encoding("storage unavailable".into()));
