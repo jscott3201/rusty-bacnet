@@ -1429,7 +1429,7 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
       change), the `firmware` profile, Rust 1.99.0, on a 512 KiB layout
       (the `reporting-multiple` build, below). Flash, without the feature
       and with it: 195,840 and 332,576 octets (thumbv7m), 196,652 and
-      333,496 (thumbv7em), 235,282 and 402,354 (riscv32imac). RAM: 24,680
+      333,496 (thumbv7em), 235,290 and 402,354 (riscv32imac). RAM: 24,680
       and 36,968 on each, the arena from 24 to 36 KiB, for a heap peak of
       31,920 octets on a 64-bit host where the scenario without the
       context peaks at 19,136. No `core::fmt`; the same memmove routines;
