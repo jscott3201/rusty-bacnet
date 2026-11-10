@@ -246,11 +246,11 @@ impl Kept {
     }
 }
 
-/// A staged step keeps only which rows its write leaves written; the rows
-/// themselves are worked out again from the object when the write is made.
-/// So a request's stage holds the rows a constant number of times, however
-/// many writes it makes (#2414).
-type Storage = StagedSaves<WriteConfigSnapshot, Written>;
+/// A staged step keeps nothing but its write: what the write leaves is
+/// worked out again from the object when the write is made. So a request's
+/// stage holds the rows a constant number of times, however many writes it
+/// makes (#2414).
+type Storage = StagedSaves<WriteConfigSnapshot, ()>;
 
 /// An object's reporting storage: none until it opts in.
 #[derive(Default)]
@@ -475,9 +475,10 @@ fn admit_to(
         store.writes,
     );
     match claimed {
-        Some(Ok(_)) => {
+        Some(Ok(())) => {
             // Steps the request has still to take keep, as the state served,
-            // the rows this write leaves.
+            // the rows this write leaves: should the object go away before
+            // the next one, storage goes back to them, this write included.
             storage.correct(|| next.snapshot());
         }
         Some(Err(_)) => {
@@ -518,7 +519,7 @@ pub(crate) fn stage_writes<T: KeepsReporting>(
         }
         let current = kept(store.written, object);
         // One working copy of the rows the steps so far leave; a step keeps
-        // only its write and the rows it leaves written.
+        // only its write.
         let mut working: Option<Kept> = None;
         let steps = staged::steps(writes, |_, write| {
             if !kept_one(write) {
@@ -529,10 +530,8 @@ pub(crate) fn stage_writes<T: KeepsReporting>(
                 write.property,
                 write.array_index,
             )?;
-            let next = working.as_ref().unwrap_or(&current).after(write, object)?;
-            let written = next.written;
-            working = Some(next);
-            Ok(Some(written))
+            working = Some(working.as_ref().unwrap_or(&current).after(write, object)?);
+            Ok(Some(()))
         });
         // A step was taken exactly when the working copy was set.
         let Some(last) = working else {

@@ -381,6 +381,17 @@ macro_rules! on_both_listed {
     }};
 }
 
+/// The class and code of a refusal, whether or not it names an element.
+fn class_and_code(result: &Result<(), Error>) -> Option<(ErrorClass, ErrorCode)> {
+    match result {
+        Err(Error::Structured { class, code, .. }) => Some((*class, *code)),
+        Err(Error::Remote(bacnet_types::error::RemoteError::Error { class, code })) => {
+            Some((*class, *code))
+        }
+        _ => None,
+    }
+}
+
 fn list(states: &[u32]) -> PropertyValue {
     PropertyValue::List(states.iter().map(|state| count(*state)).collect())
 }
@@ -413,9 +424,19 @@ fn set_alarm_values_gives_way_to_a_saved_list_before_checking_the_count() {
         assert_eq!(read(&rebuilt, P::NUMBER_OF_STATES), count(3));
         rebuilt.set_alarm_values(vec![STATES]).unwrap();
         assert_eq!(read(&rebuilt, P::ALARM_VALUES), list(&[]));
-        assert!(rebuilt.set_alarm_values(vec![0]).is_err());
+        let zero = rebuilt.set_alarm_values(vec![0]);
+        assert_eq!(
+            class_and_code(&zero),
+            Some((ErrorClass::PROPERTY, ErrorCode::VALUE_OUT_OF_RANGE)),
+            "{zero:?}"
+        );
         let long = vec![1; crate::multistate::MAX_ALARM_VALUES + 1];
-        assert!(rebuilt.set_alarm_values(long).is_err());
+        let long = rebuilt.set_alarm_values(long);
+        assert_eq!(
+            class_and_code(&long),
+            Some((ErrorClass::RESOURCES, ErrorCode::NO_SPACE_TO_WRITE_PROPERTY)),
+            "{long:?}"
+        );
         assert_eq!(read(&rebuilt, P::ALARM_VALUES), list(&[]));
     });
 }
@@ -465,4 +486,53 @@ fn after_a_restored_count_the_setters_check_against_it() {
         ErrorClass::PROPERTY,
         ErrorCode::VALUE_OUT_OF_RANGE
     ));
+}
+
+#[cfg(feature = "durable-writes")]
+mod staged {
+    use super::*;
+    use crate::durable::{PendingWrite, StageStep};
+
+    /// An object that goes away part way through a staged request, with
+    /// its first write made and its second not, leaves storage holding what
+    /// it served: the first write's labels, and not the second write's
+    /// list, which the staged save held.
+    #[test]
+    fn an_object_dropped_mid_request_leaves_storage_with_the_writes_it_made() {
+        on_both_listed!(|new| {
+            let storage = MemoryConfig::new();
+            let mut object = new(STATES)
+                .with_reporting_persistence(persistence(&storage))
+                .unwrap();
+            let grown = count(STATES + 1);
+            let request = [
+                PendingWrite {
+                    property: P::STATE_TEXT,
+                    array_index: Some(0),
+                    value: grown.clone(),
+                },
+                PendingWrite {
+                    property: P::ALARM_VALUES,
+                    array_index: None,
+                    value: list(&[STATES + 1]),
+                },
+            ];
+            let durable = object.durable_writes().unwrap();
+            let StageStep::Staged(wait) = durable.stage_writes(&request) else {
+                panic!("the request stages");
+            };
+            wait.block();
+            assert_eq!(
+                saved(&storage).algorithm.alarm_values,
+                Some(vec![STATES + 1])
+            );
+            object
+                .write_property(P::STATE_TEXT, Some(0), grown.clone(), None)
+                .unwrap();
+            drop(object);
+            let kept = saved(&storage).algorithm;
+            assert_eq!(kept.alarm_values, None, "the write never made is kept");
+            assert_eq!(kept.state_text, Some(defaults(STATES + 1)));
+        });
+    }
 }

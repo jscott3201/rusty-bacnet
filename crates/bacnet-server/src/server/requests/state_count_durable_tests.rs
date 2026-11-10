@@ -281,6 +281,48 @@ async fn a_shrink_the_stage_took_and_the_object_refused_is_put_back() {
     assert_eq!(kept.algorithm.state_text, None);
 }
 
+/// The same past a request's first kept step: Notification_Class, then a
+/// Present_Value the shrink would strand, then the shrink. Each kept write
+/// is worked out again from the object when it is made, so the shrink is
+/// refused there, takes no staged step, and the release puts storage back
+/// to the class alone.
+#[tokio::test(start_paused = true)]
+async fn a_shrink_refused_after_a_kept_step_is_put_back_too() {
+    let kind = ObjectType::MULTI_STATE_VALUE;
+    let object = oid(kind, INSTANCE);
+    let storage = Arc::new(ConfigStorage::default());
+    let fixture = served_by(kind, &storage).await;
+    let request = wpm(vec![WriteAccessSpecification {
+        object_identifier: object,
+        list_of_properties: vec![
+            attempt(P::NOTIFICATION_CLASS, None, PropertyValue::Unsigned(9)),
+            attempt(P::PRESENT_VALUE, None, PropertyValue::Unsigned(3)),
+            attempt(P::STATE_TEXT, Some(0), PropertyValue::Unsigned(2)),
+        ],
+    }]);
+    let response = wire(
+        &fixture,
+        ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE,
+        request,
+    )
+    .await;
+    assert_eq!(response[0], ERROR_PDU, "{response:?}");
+    let three = PropertyValue::Unsigned(3);
+    assert_eq!(fixture.read(object, P::NUMBER_OF_STATES).await, three);
+    drop(fixture);
+    let rebuilt = served_by(kind, &storage).await;
+    assert_eq!(rebuilt.read(object, P::NUMBER_OF_STATES).await, three);
+    let nine = PropertyValue::Unsigned(9);
+    assert_eq!(rebuilt.read(object, P::NOTIFICATION_CLASS).await, nine);
+    let Some(Some(bacnet_objects::write_config::WriteConfigSnapshot::Reporting(kept))) =
+        storage.load_saved()
+    else {
+        panic!("reporting settings saved");
+    };
+    assert_eq!(kept.algorithm.state_text, None);
+    assert_eq!(kept.notification_class, Some(9));
+}
+
 /// State_Text is a saved write like the others, so every path hands it to
 /// the stage: WriteProperty, a local write and each attempt of a
 /// WritePropertyMultiple. An Access Door and an Access Zone have no
