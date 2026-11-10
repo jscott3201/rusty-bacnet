@@ -8,6 +8,11 @@ on:
       - '.github/workflows/docs-pages.yml'
       # The embedded page's size test reads the firmware budgets (#1771).
       - 'firmware/link/*-budget.toml'
+      # The generated Python and Rust reference pages are checked against
+      # their sources (#2427).
+      - 'crates/rusty-bacnet/rusty_bacnet.pyi'
+      - 'Cargo.toml'
+      - 'crates/*/Cargo.toml'
   workflow_dispatch:
     inputs:
       publish:

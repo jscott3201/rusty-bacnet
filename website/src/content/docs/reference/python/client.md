@@ -100,6 +100,7 @@ def __init__(
     mstp_reply_timeout_ms: Optional[int] = None,
     sc_device_uuid: Optional[bytes | bytearray] = None,
     share_port_by_address: bool = False,
+    share_wildcard_port: bool = False,
     min_request_interval_ms: int = 0,
     ipv6_device_instance: Optional[int] = None,
     bbmd: Optional[Bbmd] = None,
@@ -196,6 +197,18 @@ interface address itself, so clients and devices on other addresses
 of this host can share the port. Needs an explicit interface and a
 nonzero port; broadcasts and unicast are still handled in the order
 they arrived.
+
+`share_wildcard_port` (B/IP and B/IPv6 only, default False): share
+an explicitly requested port with other sockets on this host that
+bind it the same way. By default the client claims its port, so a
+second bind of it fails, and `start()` raises when another socket
+holds it. With sharing, broadcasts reach every socket on the port,
+but each unicast reaches only one of them; prefer
+`share_port_by_address` (B/IP) or separate ports. macOS and the
+BSDs never let two sockets share one address and port this way, so
+there the keyword only lets a stack bound to `0.0.0.0` or `::`
+start beside one bound to a specific address (a B/IPv6 foreign
+device), or the reverse. Another transport raises ValueError.
 
 `min_request_interval_ms` (default 0, no pacing; at most
 3,600,000, else ValueError) paces the confirmed requests to each
@@ -1400,13 +1413,16 @@ stopped or non-SC client.
 ### BACnetClient.foreign_registration
 
 ```python
-def foreign_registration(self) -> Awaitable[ForeignRegistrationStatus]
+def foreign_registration(
+    self,
+) -> Awaitable[Union[ForeignRegistrationStatus, Bip6ForeignRegistrationStatus]]
 ```
 
 How the foreign-device registration is going (#938), a refusal
 included. Sends nothing. Outside `foreign_device=` only manual
-registrations show. RuntimeError before start and after stop; a
-non-B/IP client raises BacnetError.
+registrations show. A `transport="ipv6"` client returns a
+`Bip6ForeignRegistrationStatus` (#2365). RuntimeError before start
+and after stop; a client on another transport raises BacnetError.
 
 ### BACnetClient.stop
 
