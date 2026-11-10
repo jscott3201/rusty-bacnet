@@ -834,3 +834,5 @@ fn resolved_enum_name_is_the_constant_or_none() {
 mod access_production;
 mod enumeration;
 mod error_code;
+mod xd_allowlist;
+mod xd_crosscheck;
