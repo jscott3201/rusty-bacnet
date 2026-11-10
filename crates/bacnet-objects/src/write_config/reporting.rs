@@ -18,17 +18,25 @@
 //! (through their `ChangeOfStateReporting`), and Event and Alert
 //! Enrollment. The logs keep the same rows in their own files (#1952).
 //!
+//! The analog objects keep their event algorithm parameters as more rows
+//! ([`parameters`]): the two time delays and the four OUT_OF_RANGE
+//! parameters, which stay in the detector. Which parameters a type keeps is
+//! one table, [`kept`](crate::snapshot::write_config::parameters::kept);
+//! a write of one the type doesn't keep is made as without storage.
+//!
 //! Storage is the object's
 //! [`WriteConfigPersistence`](super::WriteConfigPersistence), one file per
 //! object, of kind
-//! [`KIND_REPORTING`](crate::snapshot::write_config::KIND_REPORTING).
+//! [`KIND_REPORTING`](crate::snapshot::write_config::KIND_REPORTING), or
+//! [`KIND_REPORTING_PARAMETERS`](crate::snapshot::write_config::KIND_REPORTING_PARAMETERS)
+//! once it holds an algorithm parameter.
 //! As for Timers and Channels ([`super::saving`]), a write of a kept row is
 //! saved before the object serves it, and refused with DEVICE /
 //! OPERATIONAL_PROBLEM, the old value kept, when the save fails. The server
 //! stages it, so the save runs off the database guard; a write nobody staged
 //! saves where it is. Only the rows a write set are kept, and a kept row
 //! wins over its setter until `clear_written_reporting` drops them all,
-//! Description included. A NULL to Description changes nothing, so it is
+//! Description and the algorithm parameters included. A NULL to Description changes nothing, so it is
 //! neither saved nor staged.
 //!
 //! An object CreateObject builds through the built-in constructors
@@ -45,6 +53,8 @@
 mod kept;
 #[cfg(feature = "event-reporting")]
 mod macros;
+#[cfg(feature = "event-reporting")]
+pub(crate) mod parameters;
 #[cfg(feature = "event-reporting")]
 pub(crate) use kept::*;
 #[cfg(feature = "event-reporting")]

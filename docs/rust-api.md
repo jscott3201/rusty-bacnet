@@ -4696,6 +4696,58 @@ ai.set_notification_class(5); // a value a peer wrote and saved wins
   Enrollment setters, and these objects' `set_description`, are there
   either way, and always apply without it.
 
+#### Keeping written event algorithm parameters (#2331)
+
+An Analog Input, Analog Output or Analog Value built
+`with_reporting_persistence` also keeps the event algorithm parameters a
+peer writes: Time_Delay, Time_Delay_Normal, High_Limit, Low_Limit, Deadband
+and Limit_Enable. The binary and multi-state objects, Access Door, Access
+Zone and Event Enrollment don't keep theirs yet; a write of one lasts until
+a restart, as before.
+
+- **Same rules as the reporting settings.** A write is saved before it is
+  answered and refused with DEVICE / OPERATIONAL_PROBLEM, the old value kept
+  on the object and in its detector, when the save fails. The server stages
+  it with the request's other kept writes, one save for them all. A write
+  the object refuses (a limit that isn't finite, a negative Deadband, the
+  wrong datatype, an array index) is refused as before and saves nothing.
+- **Only what a write set.** `written_reporting().algorithm` is an
+  `AlgorithmWriteConfig` with a `Some` for each written parameter.
+  `clear_written_reporting()` drops them with the reporting settings and the
+  Description.
+- **No setters.** These objects have no setter for the parameters. Set the
+  application's own values with `write_property` before
+  `with_reporting_persistence`: a saved write then goes over them, and they
+  apply again at the first start after a clear. A `write_property` after the
+  builder call, or a server local write, is kept like a peer's.
+- **At a restart.** A rebuilt object's detector starts with the saved
+  parameters, as if each had been written before the first evaluation:
+  Event_State starts NORMAL with no delay counting, and the first evaluation
+  uses the restored limits and delays. The values go in the way a write puts
+  them in, which never restarts a delay or changes Event_State.
+- **Validated on load.** Storage holding a value the object refuses on the
+  wire, or a parameter the object's type doesn't keep, fails
+  `with_reporting_persistence`; nothing reaches the detector.
+- **Format.** A snapshot holding a parameter is stored as kind 6 of
+  `RBNWCF01` (`snapshot::write_config::KIND_REPORTING_PARAMETERS`): the kind 4
+  body, then a presence mask and the parameters it names. One without keeps
+  kind 4, octet for octet, so existing files are unchanged; an older release
+  refuses a kind 6 file as an unknown kind. A later parameter takes a new
+  mask bit, not a new kind. `snapshot::write_config::keeps_parameter` names
+  the parameters each object type keeps. Every parameter here is a fixed
+  size, so the kind adds at most 25 octets to a file.
+
+```rust
+use bacnet_types::enums::PropertyIdentifier;
+use bacnet_types::primitives::PropertyValue;
+
+let mut ai = AnalogInputObject::new(1, "Zone temp", EngineeringUnits::DEGREES_CELSIUS)?;
+// The application's own limit, applied at each start...
+ai.write_property(PropertyIdentifier::HIGH_LIMIT, None, PropertyValue::Real(30.0), None)?;
+// ...until a peer writes one: the saved value then wins.
+let ai = ai.with_reporting_persistence(storage)?;
+```
+
 #### Keeping a written Description (#2364)
 
 The object types with a store of their own keep a Description a peer

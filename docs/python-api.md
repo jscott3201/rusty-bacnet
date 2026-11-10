@@ -3039,6 +3039,20 @@ the two lighting outputs among them, which keep one only through the Rust
 API's `with_tags_persistence`, and the Network Port, whose transport keeps
 only its own tables in `bdt_persist_path`.
 
+`add_analog_input`, `add_analog_output` and `add_analog_value` keep the
+event algorithm parameters a peer writes in the same file (#2331):
+Time_Delay, Time_Delay_Normal, High_Limit, Low_Limit, Deadband and
+Limit_Enable. The rules are the reporting settings': saved before the write
+is answered, refused with DEVICE / OPERATIONAL_PROBLEM when the save fails,
+with the old value still served and still used by the object's event
+detection. After a restart the object detects with the saved parameters
+from its first evaluation. `clear_written_reporting=True` drops them with
+the rest. A file holding a value the object refuses on the wire raises
+`BacnetError`. No new keyword is needed. The binary and multi-state
+objects, Access Door, Access Zone and Event Enrollment don't keep their
+parameters yet: a written Alarm_Value, Alarm_Values or Event_Parameters
+lasts until the server restarts.
+
 `clear_written_reporting=True`, and `clear_written_config=True` on
 `add_timer` and `add_channel`, drop a saved Description with the rest of
 what they clear. The other builders have no keyword for it:

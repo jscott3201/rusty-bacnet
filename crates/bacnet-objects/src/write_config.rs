@@ -38,6 +38,19 @@
 //! the format: a [`ReportingWriteConfig`], kept once an object opts in with
 //! its `with_reporting_persistence` builder call.
 //!
+//! The analog Input, Output and Value objects keep the event algorithm
+//! parameters a peer writes in that file too (#2331): Time_Delay,
+//! Time_Delay_Normal, High_Limit, Low_Limit, Deadband and Limit_Enable, an
+//! [`AlgorithmWriteConfig`] in the `algorithm` field of their
+//! [`ReportingWriteConfig`], stored as kind 6 of the format. They follow
+//! the reporting settings' rules, and a rebuilt object's detector starts
+//! with them. These objects have no setter for them: an application sets
+//! its own values with `write_property` before the builder call, and a
+//! saved write then goes over them. A `write_property` after the builder
+//! call is a write like a peer's, and is kept. Storage holding a value the
+//! object refuses on the wire, or a parameter its type doesn't keep, fails
+//! the builder call.
+//!
 //! Each of these object types keeps a written Description in the same file
 //! too (#2364), as kind 5 of the format wrapped around the kind it writes,
 //! with the same rules. A Timer and a Channel drop it with their
@@ -63,14 +76,18 @@ pub(crate) mod saving;
 #[cfg(feature = "std")]
 pub use persistence::FileWriteConfigPersistence;
 pub use persistence::{
-    ChannelMembers, ChannelWriteConfig, ReportingWriteConfig, TimerStateChange, TimerWriteConfig,
-    WriteConfigPersistence, WriteConfigSnapshot,
+    AlgorithmWriteConfig, ChannelMembers, ChannelWriteConfig, ReportingWriteConfig,
+    TimerStateChange, TimerWriteConfig, WriteConfigPersistence, WriteConfigSnapshot,
 };
 
 // A written Description kept beside the rest (#2364).
 #[cfg(test)]
 #[path = "write_config/description_tests.rs"]
 mod description_tests;
+// The event algorithm parameters kept beside the reporting settings.
+#[cfg(all(test, feature = "event-reporting"))]
+#[path = "write_config/parameters_tests.rs"]
+mod parameters_tests;
 // std: these load and save through the file backend.
 #[cfg(all(test, feature = "std"))]
 #[path = "write_config/persistence_tests.rs"]

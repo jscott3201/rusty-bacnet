@@ -7,7 +7,8 @@ Notification_Class, Event_Enable, Notify_Type, Event_Detection_Enable,
 Event_Message_Texts_Config or the Event_Algorithm_Inhibit pair is saved in
 that file before it is answered, and a server started on the same file
 serves it again, until ``clear_written_reporting=True`` drops it. A written
-Description is kept the same way (#2364).
+Description is kept the same way (#2364), and so are an analog object's
+event algorithm parameters (#2331 PR 2).
 """
 
 from __future__ import annotations
@@ -148,6 +149,49 @@ class WrittenReportingTests(unittest.IsolatedAsyncioTestCase):
         for name in ("ai-1", "bo-1", "msv-1"):
             self.assertTrue((self.state / name).exists())
 
+    async def test_written_algorithm_parameters_survive_a_restart_until_cleared(self) -> None:
+        """An analog object keeps a written limit and time delay (#2331 PR 2);
+        the other families' parameters last until the restart, as before."""
+        written = (
+            (P.HIGH_LIMIT, PropertyValue.real(80.5), PropertyValue.real(100.0)),
+            (P.TIME_DELAY, PropertyValue.unsigned(7), PropertyValue.unsigned(0)),
+        )
+        server = await self.start()
+        try:
+            for prop, value, default in written:
+                self.assertEqual(await self.read(server, ANALOG, prop), default)
+                await server.write_property_local(ANALOG, prop, value, source_object=None)
+            for oid in (BINARY, MULTI_STATE):
+                await server.write_property_local(
+                    oid, P.TIME_DELAY, PropertyValue.unsigned(7), source_object=None
+                )
+        finally:
+            await server.stop()
+        # Kind 6 of the format: the reporting settings, then the parameters.
+        self.assertEqual((self.state / "ai-1").read_bytes()[12], 6)
+
+        server = await self.start()
+        try:
+            for prop, value, _ in written:
+                with self.subTest(prop=prop):
+                    self.assertEqual(await self.read(server, ANALOG, prop), value)
+            for oid in (BINARY, MULTI_STATE):
+                with self.subTest(not_kept=oid):
+                    self.assertEqual(
+                        await self.read(server, oid, P.TIME_DELAY), PropertyValue.unsigned(0)
+                    )
+        finally:
+            await server.stop()
+
+        server = await self.start(clear=True)
+        try:
+            for prop, _, default in written:
+                with self.subTest(cleared=prop):
+                    self.assertEqual(await self.read(server, ANALOG, prop), default)
+        finally:
+            await server.stop()
+        self.assertEqual((self.state / "ai-1").read_bytes()[12], 4)
+
 
 # One object of each further family: the Access objects and the enrollments.
 DOOR = ObjectIdentifier(ObjectType.ACCESS_DOOR, 1)
@@ -230,6 +274,36 @@ def ack_notification_file(object_type: int, instance: int) -> bytes:
     identifier = struct.pack(">I", (object_type << 22) | instance)
     body = bytes([4, 0, 0, 1]) + struct.pack(">I", 2) + bytes([0, 0, 0, 0])
     return b"RBNWCF01" + identifier + body
+
+
+def high_limit_file(object_type: int, instance: int, limit: float) -> bytes:
+    """A written-configuration file of kind 6 holding only a High_Limit: no
+    reporting setting, then the presence mask (bit 2) and the limit as an
+    IEEE 754 single.
+    """
+    identifier = struct.pack(">I", (object_type << 22) | instance)
+    body = bytes([6, 0, 0, 0, 0, 0, 0, 0]) + struct.pack(">If", 1 << 2, limit)
+    return b"RBNWCF01" + identifier + body
+
+
+class AlgorithmParameterFileTests(unittest.TestCase):
+    def test_a_stored_limit_the_object_refuses_on_the_wire_fails_the_build(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            server = BACnetServer(2_331_005, interface="127.0.0.1", port=0)
+            analog = ObjectType.ANALOG_INPUT.to_raw()
+            refused = Path(directory) / "ai-1"
+            refused.write_bytes(high_limit_file(analog, 1, float("nan")))
+            with self.assertRaises(BacnetError):
+                server.add_analog_input(1, "AI-1", storage_path=str(refused))
+            # A binary object keeps no High_Limit: the file isn't one of its.
+            binary = Path(directory) / "bi-1"
+            binary.write_bytes(high_limit_file(ObjectType.BINARY_INPUT.to_raw(), 1, 80.5))
+            with self.assertRaises(BacnetError):
+                server.add_binary_input(1, "BI-1", storage_path=str(binary))
+            # The same file with a finite limit loads.
+            taken = Path(directory) / "ai-2"
+            taken.write_bytes(high_limit_file(analog, 2, 80.5))
+            server.add_analog_input(2, "AI-2", storage_path=str(taken))
 
 
 class NotifyTypeFileTests(unittest.TestCase):

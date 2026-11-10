@@ -5007,12 +5007,18 @@ class BACnetServer:
         Event_Algorithm_Inhibit pair) and a written Description in that
         file: such a write is saved before it is answered, refused when it
         can't be, and served again after a restart; a Description past
-        16 KiB is refused with NO_SPACE_TO_WRITE_PROPERTY.
+        16 KiB is refused with NO_SPACE_TO_WRITE_PROPERTY. The three analog
+        builders keep the event algorithm parameters a peer writes there
+        too (Time_Delay, Time_Delay_Normal, High_Limit, Low_Limit, Deadband
+        and Limit_Enable), and the restarted object's event detection uses
+        them; the other builders' objects don't keep theirs yet.
         ``clear_written_reporting=True`` drops what was saved first,
-        Description included, so the object starts from its defaults. A file that
-        doesn't load raises BacnetError. Every analog, binary and multi-state
-        builder takes both, as do ``add_access_door``, ``add_access_zone``,
-        ``add_event_enrollment`` and ``add_alert_enrollment``."""
+        Description and parameters included, so the object starts from its
+        defaults. A file that doesn't load, or holds a value the object
+        refuses on the wire, raises BacnetError. Every analog, binary and
+        multi-state builder takes both, as do ``add_access_door``,
+        ``add_access_zone``, ``add_event_enrollment`` and
+        ``add_alert_enrollment``."""
         ...
     def add_analog_output(self, instance: int, name: str, units: EngineeringUnits | int = 62, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
         """Profile keywords as on ``add_analog_input``."""

@@ -35,6 +35,7 @@ fn every_setting() -> ReportingWriteConfig {
         event_algorithm_inhibit_ref: Some(inhibit_reference()),
         event_algorithm_inhibit: Some(true),
         description: None,
+        algorithm: Default::default(),
     }
 }
 
