@@ -363,18 +363,24 @@ impl CovTable {
         self.flights.get(&entry.flight)?.holding_until(now)
     }
 
-    /// End of the hold-off the failed report `token` left on its coordinate,
-    /// as [`delivered`](Self::delivered) recorded it. `None` when the table
-    /// did not count that failure: the report was fenced, went with its
-    /// coordinate, or had passed its deadline, so its outcome changed
-    /// nothing. `None` too once the coordinate has its next report out at
-    /// `now`, or a context's owed follow-up was taken. A host that keeps
-    /// something waiting through the hold-off, as the timestamped histories
-    /// keep their backstop, asks here right after it reports the failure,
-    /// so it waits only when the table does.
-    pub fn failed_hold_until(&self, token: Token, now: Instant) -> Option<Instant> {
+    /// End of the hold-off on the coordinate of the failed report `token`,
+    /// for the step that asks right after it reported the failure
+    /// ([`hold_off`](super::multiple_report::hold_off)): the end
+    /// [`delivered`](Self::delivered) recorded if it counted the failure.
+    ///
+    /// `None` when the report's flight is gone (it was fenced, or went with
+    /// its coordinate), and while the flight has a report marked: this one
+    /// past its deadline and not yet ended, or a later one. Otherwise the
+    /// end of the flight's last counted hold-off, in force or passed, until
+    /// a context's owed follow-up is taken. That is this report's own after
+    /// a counted failure. After an ignored one it can be another report's:
+    /// the hold-off of the report that replaced this one past its deadline,
+    /// or, for an ordinary subscription, whose hold-off nothing takes, an
+    /// older one long passed.
+    #[cfg(feature = "cov-multiple")]
+    pub(crate) fn failed_hold_until(&self, token: Token) -> Option<Instant> {
         let state = self.flights.get(&token.flight)?;
-        state.hold_until.filter(|_| !state.outstanding(now))
+        state.hold_until.filter(|_| state.ticket == 0)
     }
 
     /// Whether an idle context still owes the follow-up of a failed report,
@@ -604,6 +610,12 @@ impl CovTable {
                 .map(|entry| entry.key().clone())
                 .collect();
             self.fenced.revisit.extend(keys);
+        }
+        // A hold-off in force goes with the flight: the context starts
+        // again without one.
+        let held = self.flights.get(&replaced);
+        if held.is_some_and(|state| state.holding_until(now).is_some()) {
+            self.fenced.released.push(context.clone());
         }
         self.fence_flight(replaced);
     }

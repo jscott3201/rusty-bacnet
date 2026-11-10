@@ -777,7 +777,7 @@ impl Reporter {
         let owed = self.table.delivered(token, outcome, now);
         #[cfg(feature = "cov-multiple")]
         if let Some(context) = context.filter(|_| outcome == Delivery::Failed) {
-            self.hold_off_multiple(&context, token, now);
+            self.hold_off_multiple(&context, token);
         }
         self.looks.extend(owed);
         self.settle();

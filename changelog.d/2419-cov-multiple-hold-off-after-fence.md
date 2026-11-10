@@ -1,7 +1,7 @@
 ---
 section: Fixed
 ---
-- **Wire:** A failed ConfirmedCOVNotificationMultiple of a subscription
-  that was replaced or cancelled meanwhile no longer holds off the
-  subscription made since. That one's timestamped changes could go out up
-  to one retry cycle late, 12 s by default (#2419).
+- **Wire:** A failed ConfirmedCOVNotificationMultiple no longer holds off
+  a subscription made after it: one that replaced or re-made the context
+  while the report was out, or listed its references again inside the
+  hold-off. Its timestamped changes could go out up to 12 s late (#2419).

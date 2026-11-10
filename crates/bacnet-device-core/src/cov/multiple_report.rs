@@ -888,9 +888,8 @@ pub fn hold_off(
     histories: &mut TimedHistories,
     context: &MultipleContextKey,
     token: Token,
-    now: Instant,
 ) {
-    if let Some(until) = table.failed_hold_until(token, now) {
+    if let Some(until) = table.failed_hold_until(token) {
         histories.hold_until(context, until);
     }
 }

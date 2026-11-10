@@ -3,7 +3,9 @@
 //! context's Max_Notification_Delay backstop off until the hold-off ends,
 //! no shorter and no longer. A failure the table ignored, because the
 //! report's subscription was replaced or cancelled meanwhile, leaves the
-//! backstop of the subscription made since where it was.
+//! backstop of the subscription made since where it was. And a hold-off
+//! that goes with its flight, when the references are listed again inside
+//! it, takes the backstop's wait with it.
 //!
 //! The reporter here retries once after 3 s, so a hold-off lasts 6 s and a
 //! report nobody answers fails 6 s after it began.
@@ -167,4 +169,67 @@ fn a_refused_backstop_report_goes_out_again_when_its_hold_off_ends() {
     assert!(device.answer(again.invoke_id.unwrap(), false, until));
     device.deadline();
     assert!(device.pop(until).is_none(), "delivered");
+}
+
+/// The backstop waits the reporter's histories hold.
+fn waits(device: &Device) -> usize {
+    device.reporter.multiple.histories.held().1
+}
+
+/// The other order: the report fails first and the table counts it, then
+/// the reference is listed again inside the hold-off. The new flight has
+/// no hold-off, so the backstop's wait goes with the old one.
+#[test]
+fn a_reference_listed_again_in_a_hold_off_starts_without_the_hold_off() {
+    let (mut device, clock) = device();
+    device.subscribe_multiple(1, true, &timed(), 1476, T0);
+    let (old, _) = device.pop_multiple(T0).expect("the initial report");
+    assert!(device.answer(old.invoke_id.unwrap(), true, T0));
+    assert_eq!(waits(&device), 1, "the hold-off");
+
+    clock.set(2);
+    device.subscribe_multiple(1, true, &timed(), 1476, secs(1));
+    assert_eq!(waits(&device), 0, "gone with the old flight");
+    device.deadline();
+    assert_eq!(device.pop_unsent(secs(1)).len(), 2);
+    let (at, _, sent) = device.next_report();
+    assert_eq!(at, secs(DELAY), "the backstop, on time");
+    assert_eq!(sent, [(1, 10.0, Some(1)), (1, 10.0, Some(2))]);
+}
+
+/// The same for a subscriber whose reports go out in several parts: the
+/// part after the one sent stays pending, so nothing but the table's
+/// change drops the wait.
+#[test]
+fn a_reference_listed_again_in_a_hold_off_with_parts_pending_is_due_on_time() {
+    let (mut device, clock) = device();
+    device.subscribe_multiple(1, true, &timed(), 50, T0);
+    let (old, _) = device.pop_multiple(T0).expect("the first part");
+    assert!(device.answer(old.invoke_id.unwrap(), true, T0));
+
+    clock.set(2);
+    device.subscribe_multiple(1, true, &timed(), 50, secs(1));
+    // The look the fence owes finds the new report out; its later parts
+    // are pending all the while.
+    device.deadline();
+    device.pop_unsent(secs(1));
+    let (at, _, _) = device.next_report();
+    assert_eq!(at, secs(DELAY), "the backstop, on time");
+}
+
+/// The context cancelled and made again inside the hold-off.
+#[test]
+fn a_context_made_again_in_a_hold_off_starts_without_the_hold_off() {
+    let (mut device, clock) = device();
+    device.subscribe_multiple(1, true, &timed(), 1476, T0);
+    let (old, _) = device.pop_multiple(T0).expect("the initial report");
+    assert!(device.answer(old.invoke_id.unwrap(), true, T0));
+
+    device.subscribe_multiple(1, true, &[], 1476, secs(1));
+    assert_eq!(waits(&device), 0, "gone with the context");
+    clock.set(2);
+    device.subscribe_multiple(1, true, &timed(), 1476, secs(1));
+    assert_eq!(device.pop_unsent(secs(1)), [(1, 10.0, Some(2))]);
+    let (at, _, _) = device.next_report();
+    assert_eq!(at, secs(1 + DELAY), "the backstop, on time");
 }

@@ -5,7 +5,9 @@
 //! backstop (Clause 13.16.1.1.4) off until the hold-off ends, no shorter and
 //! no longer. A failure the table ignored, because the report's
 //! subscription was replaced or cancelled meanwhile, leaves the backstop of
-//! the subscription made since where it was.
+//! the subscription made since where it was. And a hold-off that goes with
+//! its flight, when the references are listed again inside it, takes the
+//! backstop's wait with it.
 //!
 //! The context watches AV-1's timestamped Present_Value under the default
 //! timing: 3 s per attempt and three retries, so a report nobody answers
@@ -272,6 +274,75 @@ async fn a_cancelled_subscriptions_late_failure_adds_nothing_to_a_real_hold_off(
     tokio::time::sleep(Duration::from_secs(5)).await;
     refuse(&h, old).await;
     workers_done(&h).await;
+    let report = report_due(&h, failed, HOLD_OFF).await;
+    assert_eq!(pv_rows(&report), vec![(real(0.0), Some(time(0)))]);
+    h.server.stop().await.unwrap();
+}
+
+/// The other order: the report fails first, and the table counts it. The
+/// reference is then listed again inside the hold-off, which gives the
+/// context a new flight with no hold-off, so the backstop's wait for the
+/// old one goes with it.
+#[tokio::test(start_paused = true)]
+async fn a_reference_listed_again_in_a_hold_off_starts_without_the_hold_off() {
+    let mut h = Harness::start(ServerConfig::default()).await;
+    let began = TokioInstant::now();
+    subscribe(&mut h, DELAY).await;
+    h.notification().await;
+    h.reject().await;
+    workers_done(&h).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    // The new subscription's initial report waits for the backstop.
+    hold_back(&h, true);
+    h.set_clock(7);
+    subscribe(&mut h, DELAY).await;
+    assert_eq!(response(&h).await, Ok(()), "the re-subscription");
+    hold_back(&h, false);
+    // The earliest pending change is the failed report's.
+    let report = report_due(&h, began, DELAY).await;
+    assert_eq!(
+        pv_rows(&report),
+        vec![(real(0.0), Some(time(0))), (real(0.0), Some(time(7)))]
+    );
+    h.server.stop().await.unwrap();
+}
+
+/// The same with the context cancelled and made again inside the hold-off.
+#[tokio::test(start_paused = true)]
+async fn a_context_made_again_in_a_hold_off_starts_without_the_hold_off() {
+    let mut h = Harness::start(ServerConfig::default()).await;
+    subscribe(&mut h, DELAY).await;
+    h.notification().await;
+    h.reject().await;
+    workers_done(&h).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    hold_back(&h, true);
+    h.cancel_specs(true, Vec::new()).await;
+    assert_eq!(response(&h).await, Ok(()), "the cancellation");
+    h.set_clock(7);
+    let again = TokioInstant::now();
+    subscribe(&mut h, DELAY).await;
+    assert_eq!(response(&h).await, Ok(()), "the new subscription");
+    hold_back(&h, false);
+    let report = report_due(&h, again, DELAY).await;
+    assert_eq!(pv_rows(&report), vec![(real(0.0), Some(time(7)))]);
+    h.server.stop().await.unwrap();
+}
+
+/// A renewal that lists no reference keeps the context's flight, and with
+/// it a real failure's hold-off, to its end.
+#[tokio::test(start_paused = true)]
+async fn a_renewal_in_a_hold_off_keeps_the_hold_off() {
+    let mut h = Harness::start(ServerConfig::default()).await;
+    subscribe(&mut h, DELAY).await;
+    h.notification().await;
+    let failed = TokioInstant::now();
+    h.reject().await;
+    workers_done(&h).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    h.subscribe_with_delay(true, Vec::new(), DELAY.as_secs() as u32)
+        .await;
+    assert_eq!(response(&h).await, Ok(()), "the renewal");
     let report = report_due(&h, failed, HOLD_OFF).await;
     assert_eq!(pv_rows(&report), vec![(real(0.0), Some(time(0)))]);
     h.server.stop().await.unwrap();

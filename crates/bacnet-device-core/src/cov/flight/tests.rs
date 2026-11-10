@@ -139,8 +139,9 @@ fn a_report_names_its_deadline_until_it_is_settled() {
     assert_eq!(table.report_deadline(token), None, "not the old report's");
 }
 
-/// A host reads off the table whether a report's failure counted, and
-/// until when its coordinate then holds off (#2419).
+/// The table says whether a report's failure counted, and until when its
+/// coordinate then holds off (#2419).
+#[cfg(feature = "cov-multiple")]
 #[test]
 fn a_failure_names_its_hold_off_only_when_the_table_counted_it() {
     let mut table = table();
@@ -151,20 +152,19 @@ fn a_failure_names_its_hold_off_only_when_the_table_counted_it() {
     // Counted: the hold-off runs from the failure, and is still named once
     // it has passed, until the context's follow-up is taken.
     let (token, _) = begin(&mut table, &[&a], T0);
-    assert_eq!(table.failed_hold_until(token, failed), None, "outstanding");
+    assert_eq!(table.failed_hold_until(token), None, "outstanding");
     table.delivered(token, Delivery::Failed, failed);
-    assert_eq!(table.failed_hold_until(token, failed), Some(until));
-    assert_eq!(table.failed_hold_until(token, until), Some(until));
+    assert_eq!(table.failed_hold_until(token), Some(until));
     let context_key = a.key().multiple_context().unwrap().clone();
     assert!(table.take_owed_context(&context_key, until));
-    assert_eq!(table.failed_hold_until(token, until), None, "taken");
+    assert_eq!(table.failed_hold_until(token), None, "taken");
 
     // Acknowledged, or never sent: no hold-off.
     for outcome in [Delivery::Acknowledged, Delivery::NotSent] {
         let a = table.get_subscription(a.key()).unwrap().clone();
         let (token, _) = begin(&mut table, &[&a], until);
         table.delivered(token, outcome, until);
-        assert_eq!(table.failed_hold_until(token, until), None, "{outcome:?}");
+        assert_eq!(table.failed_hold_until(token), None, "{outcome:?}");
     }
 
     // Past its deadline the report's failure changes nothing.
@@ -172,37 +172,63 @@ fn a_failure_names_its_hold_off_only_when_the_table_counted_it() {
     let (late, _) = begin(&mut table, &[&a], until);
     let deadline = until + TIMING.deadline();
     table.delivered(late, Delivery::Failed, deadline);
-    assert_eq!(table.failed_hold_until(late, deadline), None, "abandoned");
+    assert_eq!(table.failed_hold_until(late), None, "abandoned");
 
     // Fenced by a route change, a report's failure changes nothing either,
     // nor is it taken for the failure of the report that replaced it.
     let (fenced, _) = begin(&mut table, &[&a], deadline);
     let (moved, _) = context(&mut table, 2);
     table.delivered(fenced, Delivery::Failed, deadline);
-    assert_eq!(table.failed_hold_until(fenced, deadline), None, "fenced");
+    assert_eq!(table.failed_hold_until(fenced), None, "fenced");
     let (next, _) = begin(&mut table, &[&moved], deadline);
     table.delivered(next, Delivery::Failed, deadline);
-    assert_eq!(table.failed_hold_until(fenced, deadline), None);
+    assert_eq!(table.failed_hold_until(fenced), None);
     let held = Some(deadline + TIMING.hold_off());
-    assert_eq!(table.failed_hold_until(next, deadline), held);
+    assert_eq!(table.failed_hold_until(next), held);
 
     // Cancelled with its context, it has no coordinate left.
     table.unsubscribe_cov_multiple_context(&context_key);
-    assert_eq!(table.failed_hold_until(next, deadline), None, "cancelled");
+    assert_eq!(table.failed_hold_until(next), None, "cancelled");
 
-    // An ordinary subscription's hold-off is over once its next report is
-    // out, though nothing took it.
+    // An ordinary subscription's hold-off is taken by nothing, so its end
+    // stays on the flight. It is not named while a later report is marked,
+    // out or past its deadline; that report's own late failure counts for
+    // nothing.
     let sub = single(&mut table);
     let (first, _) = begin(&mut table, &[&sub], T0);
     table.delivered(first, Delivery::Failed, T0);
     let over = T0 + TIMING.hold_off();
-    assert_eq!(table.failed_hold_until(first, over), Some(over));
-    begin(&mut table, &[&sub], over);
-    assert_eq!(
-        table.failed_hold_until(first, over),
-        None,
-        "reporting again"
-    );
+    assert_eq!(table.failed_hold_until(first), Some(over));
+    let (second, _) = begin(&mut table, &[&sub], over);
+    assert_eq!(table.failed_hold_until(first), None, "reporting again");
+    let abandoned = over + TIMING.deadline();
+    table.delivered(second, Delivery::Failed, abandoned);
+    assert_eq!(table.failed_hold_until(second), None, "past its deadline");
+}
+
+/// A hold-off in force goes with a replaced flight, and the table names
+/// its context, so a host stops waiting for it (#2419). A flight replaced
+/// with its report still out held nothing off.
+#[test]
+fn a_replaced_flight_names_the_context_whose_hold_off_went_with_it() {
+    let mut table = table();
+    let (a, _) = context(&mut table, 1);
+    let key = a.key().multiple_context().unwrap().clone();
+    let (out, _) = begin(&mut table, &[&a], T0);
+    table.take_fenced();
+    let (moved, _) = context(&mut table, 2);
+    let fenced = table.take_fenced();
+    assert_eq!(fenced.tokens, [out]);
+    assert!(fenced.released.is_empty(), "no hold-off to lose");
+
+    let (failed, _) = begin(&mut table, &[&moved], T0);
+    table.delivered(failed, Delivery::Failed, T0);
+    assert!(table.context_hold_until(&key, T0).is_some());
+    context(&mut table, 1);
+    let fenced = table.take_fenced();
+    assert!(fenced.tokens.is_empty(), "no report was out");
+    assert_eq!(fenced.released, core::slice::from_ref(&key));
+    assert_eq!(table.context_hold_until(&key, T0), None);
 }
 
 /// The table's expiry pass reports an abandoned report: its token, so the

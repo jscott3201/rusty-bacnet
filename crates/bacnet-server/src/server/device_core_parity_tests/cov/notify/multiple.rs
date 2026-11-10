@@ -303,6 +303,28 @@ async fn a_refused_backstop_report_follows_its_hold_off_on_both_sides() {
     cov.stop().await;
 }
 
+/// A refused report's references are listed again inside its hold-off
+/// (#2419): on both sides the new subscription reports at once, carrying
+/// the refused report's change, and nothing more goes out when the old
+/// hold-off would have ended.
+#[tokio::test(start_paused = true)]
+async fn a_context_listed_again_in_a_hold_off_starts_afresh_on_both_sides() {
+    let mut cov = CovParity::start_multiple().await;
+    let a = direct(1);
+    let timed = multiple(1, true, &[(ai(), true)], Some((600, DELAY)));
+    assert_eq!(cov.exchange("confirmed", &a, MULTIPLE, &timed).await.1, 1);
+    assert_eq!(cov.answer("refused", true).await, 0);
+    assert_eq!(cov.advance("into the hold-off", 1).await, 0);
+    assert_eq!(
+        cov.exchange("listed again", &a, MULTIPLE, &timed).await.1,
+        1
+    );
+    cov.same_tables("listed again").await;
+    assert_eq!(cov.answer("Ack", false).await, 0);
+    assert_eq!(cov.advance("past the old hold-off's end", 15).await, 0);
+    cov.stop().await;
+}
+
 /// A follow-up report lists its untimestamped items in key order on both
 /// sides (#2320): two references of one confirmed context change while its
 /// initial report is out, and the Ack's follow-up carries both. The

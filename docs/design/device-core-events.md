@@ -575,7 +575,7 @@ completes.
 | the claim guard's and the send turn's `Drop` | a plain claim in `Gathered` and in each `Part`; `take_turn` hands the turn over | `SendTurn::held` right after `gather`; `ClaimGuard::of` on every part before the first send |
 | `warn!` for a change with no valid clock, and for values left out | `unclocked`, `Report::left_out` | logs them |
 | three guard calls after the table released a begun report | `begin_confirmed`, under the table | `begin_confirmed_report` on the table wrapper; the worker gets a `LodgedClaim` over the lodged id |
-| the hold-off's end from the config and a clock read | `hold_off`, from what the table recorded for the failure (`CovTable::failed_hold_until`) | one call in the worker's failure path, with the report's token |
+| the hold-off's end from the config and a clock read | `hold_off`, from what the table recorded for the failure | one call in the worker's failure path, with the report's token |
 
 The order between contexts, and of a follow-up's references, is the one
 difference on the wire (decision 17). Contexts that share one input's
@@ -632,6 +632,25 @@ drops every backstop wait). The step now asks the table what the failure
 left on the report's own flight. A fenced or cancelled report's flight is
 gone and flights are never reused, so such a failure holds nothing off;
 a failure the table counted gives the instant it recorded, as before.
+One fence keeps the flight: a report past its deadline, which the next
+report on the same flight fences as it begins. Its late failure names no
+report the table marks, so the table ignores it, and the step reads the
+flight as it stands: nothing while the newer report is out, and that
+report's own hold-off if it has failed since, which the backstop is
+waiting for already.
+
+The other order needed its own change. A report fails, the table counts
+it, and the subscriber lists the context's references again inside the
+hold-off. The table gives the context a new flight, which holds nothing
+off, but the backstop's wait stayed. The server showed it whenever the
+new subscription's changes were kept back; the `Reporter` only when part
+of the new report stayed pending, since `take_due` drops a context's wait
+once nothing of it is pending. Now the table names a context whose
+hold-off in force went with a replaced flight (`Fenced::released`), and
+`follow_table` drops that context's wait, in both hosts. A context
+cancelled whole and made again already lost its wait with its last
+reference. A renewal that lists no reference keeps the flight, the
+hold-off and the wait.
 
 The sends stay hosted: the unconfirmed loop with its budget, DCC check
 and counters, the confirmed admission (in-flight slot, invoke ID), the

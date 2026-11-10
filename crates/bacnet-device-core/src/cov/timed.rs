@@ -670,8 +670,9 @@ impl TimedHistories {
         self.moved = true;
     }
 
-    /// A shorter delay moves the context's deadline earlier: drop its wait,
-    /// so the host works the deadline out again.
+    /// A shorter delay, or a hold-off that went with a replaced flight,
+    /// moves the context's deadline earlier: drop its wait, so the host
+    /// works the deadline out again.
     fn rearm_context(&mut self, context: &MultipleContextKey) {
         self.not_before.remove(context);
         self.moved = true;
