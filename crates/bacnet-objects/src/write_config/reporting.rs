@@ -19,8 +19,9 @@
 //! Enrollment. The logs keep the same rows in their own files (#1952).
 //!
 //! The analog objects keep their event algorithm parameters as more rows
-//! ([`parameters`]): the two time delays and the four OUT_OF_RANGE
-//! parameters, which stay in the detector. Which parameters a type keeps is
+//! (the `parameters` module here, compiled with `event-reporting` like the
+//! rest): the two time delays and the four OUT_OF_RANGE parameters, which
+//! stay in the detector. Which parameters a type keeps is
 //! one table, [`kept`](crate::snapshot::write_config::parameters::kept);
 //! a write of one the type doesn't keep is made as without storage.
 //!
