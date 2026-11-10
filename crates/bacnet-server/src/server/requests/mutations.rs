@@ -343,7 +343,7 @@ impl Request<'_> {
                 self.record(decision)
             };
             let source = audit.write_source();
-            let mut observer = crate::cov::TimedWriteCapture::new(capture, Some(audit));
+            let mut observer = capture.for_write(Some(audit));
             let outcome = write::write_property_multiple(
                 &mut db,
                 &self.req.service_request,

@@ -27,9 +27,9 @@ use bacnet_objects::database::ObjectDatabase;
 
 mod confirmed;
 pub(crate) use confirmed::{ConfirmedFlight, CovRevisits};
+mod store_capture;
 mod timed_capture;
 pub(crate) mod timed_store;
-pub(crate) use timed_capture::TimedWriteCapture;
 
 mod policy;
 pub use policy::*;
@@ -171,6 +171,7 @@ impl CovSubscriptionTable {
     }
 
     /// Every accepted entry, ordered by monitored object.
+    #[cfg(test)]
     pub(crate) fn entries(&self) -> impl Iterator<Item = &CovSubscriptionSnapshot> {
         self.core.entries()
     }

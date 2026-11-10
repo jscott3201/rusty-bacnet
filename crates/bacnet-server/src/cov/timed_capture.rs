@@ -1,38 +1,54 @@
 //! Capture of timestamped COV-multiple changes at the mutation boundary.
 //!
-//! Producers capture while still holding the database write guard that
+//! A producer captures while it still holds the database borrow that
 //! committed the change, so each captured value is paired with the Device
 //! clock frame of the commit rather than the later time of notification
-//! preparation. Producers collect the affected references under a short COV
-//! table read and read objects after releasing it; the admission capture runs
-//! inside the subscribe handler, which already holds the table. The timed
-//! store is always locked last (database, then table, then timed store).
+//! preparation.
+//!
+//! A capture takes the table and the histories apart, in three steps a host
+//! runs under its own guards:
+//!
+//! 1. [`TimedCapture::object`], [`TimedCapture::exact`], [`TimedCapture::all`]
+//!    or [`TimedCapture::initial`] collects the references from the table.
+//! 2. [`TimedCapture::read`] reads their current values from the database,
+//!    and one Device clock frame for all of them.
+//! 3. [`CaptureRead::queue`] decides, against the histories, which values
+//!    are changes, and queues those.
+//!
+//! A host that locks takes the table only for the first step and the
+//! histories only for the third, in that order after the database, so no
+//! object is read under either.
+//!
+//! One capture has one instant on the host's monotonic timeline, the `now`
+//! its queueing is given: every change it queues counts its context's
+//! Max_Notification_Delay from there. The time a subscriber sees is the
+//! clock frame's, which is one per capture too.
 //!
 //! Ordinary objects capture by each reference's reporting criterion. Life
 //! Safety objects report exactly the properties a mutation changed, so they
-//! capture through [`CovSubscriptionTable::timed_capture_exact`] with the same
-//! selection as their exact fanout. WritePropertyMultiple captures every
-//! successful attempt as it commits, through [`TimedWriteCapture`].
+//! capture through [`TimedCapture::exact`] with the same selection as their
+//! exact fanout. WritePropertyMultiple captures every successful attempt as
+//! it commits, through [`TimedWriteCapture`].
 use bacnet_objects::clock::ClockFrame;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::traits::BACnetObject;
+use bacnet_time::Instant;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
-use super::timed_store::HistoryStore;
-use super::{CovSubscriptionSnapshot, CovSubscriptionTable};
 use bacnet_device_core::cov::life_safety::{
     LifeSafetyCovChange, LifeSafetyCovSnapshots, is_life_safety_object,
 };
-use bacnet_device_core::cov::multiple_reads::MultipleReads;
-use bacnet_device_core::cov::timed::TimedChange;
-use bacnet_device_core::cov::{CovNotificationKind, CovSubscriptionKey};
+use bacnet_device_core::cov::multiple_reads::{MultipleReads, PreparedReference};
+use bacnet_device_core::cov::timed::{TimedChange, TimedHistories};
+use bacnet_device_core::cov::{
+    CovNotificationKind, CovSubscriptionKey, CovSubscriptionSnapshot, CovTable,
+};
 use bacnet_device_core::write::{WriteCommitObserver, WriteTarget};
 
 /// Live timestamped references whose changes a producer must capture.
-pub(crate) struct TimedCapture {
-    store: HistoryStore,
+pub struct TimedCapture {
     refs: Vec<CovSubscriptionSnapshot>,
     force: bool,
     /// Device clock sample the caller already validated, instead of a read.
@@ -51,17 +67,22 @@ fn exact_selects(sub: &CovSubscriptionSnapshot, change: &LifeSafetyCovChange) ->
                 .is_some_and(|property| change.changed_properties.contains(&property)))
 }
 
-impl CovSubscriptionTable {
-    fn timed_refs(&self, select: impl Fn(&CovSubscriptionSnapshot) -> bool) -> TimedCapture {
-        TimedCapture {
-            store: self.timed().clone(),
-            refs: self
+impl TimedCapture {
+    /// The timestamped Multiple references of `table`, live at `now`, that
+    /// `select` keeps.
+    fn of(
+        table: &CovTable,
+        now: Instant,
+        select: impl Fn(&CovSubscriptionSnapshot) -> bool,
+    ) -> Self {
+        Self {
+            refs: table
                 .entries()
                 .filter(|sub| {
                     sub.timestamped
                         && sub.notification_kind == CovNotificationKind::Multiple
                         && select(sub)
-                        && self.is_current(sub)
+                        && table.is_current(sub, now)
                 })
                 .cloned()
                 .collect(),
@@ -72,51 +93,52 @@ impl CovSubscriptionTable {
 
     /// References of `oid` an ordinary committing mutation must capture. A
     /// Life Safety object captures its exact changes instead.
-    pub(crate) fn timed_capture(&self, oid: ObjectIdentifier) -> TimedCapture {
+    pub fn object(table: &CovTable, oid: ObjectIdentifier, now: Instant) -> Self {
         let ordinary = !is_life_safety_object(oid);
-        self.timed_refs(|sub| ordinary && sub.monitored_object_identifier == oid)
+        Self::of(table, now, |sub| {
+            ordinary && sub.monitored_object_identifier == oid
+        })
     }
 
     /// References the exact Life Safety fanout of `changes` reports: Life
     /// Safety mutations, and LifeSafetyOperation changes on any object.
-    pub(crate) fn timed_capture_exact(&self, changes: &[LifeSafetyCovChange]) -> TimedCapture {
-        self.timed_refs(|sub| changes.iter().any(|change| exact_selects(sub, change)))
+    pub fn exact(table: &CovTable, changes: &[LifeSafetyCovChange], now: Instant) -> Self {
+        Self::of(table, now, |sub| {
+            changes.iter().any(|change| exact_selects(sub, change))
+        })
     }
 
     /// Every live timestamped reference, for a producer that commits several
     /// objects one after another under one guard.
-    pub(crate) fn timed_capture_all(&self) -> TimedCapture {
-        self.timed_refs(|_| true)
+    pub fn all(table: &CovTable, now: Instant) -> Self {
+        Self::of(table, now, |_| true)
     }
 
     /// Initial reports of newly (re)subscribed timestamped references. No
     /// change has been observed yet, so the local convention stamps the
     /// current value with the Device time of admission: `frame`, the sample
     /// the admission check validated.
-    pub(crate) fn initial_timed_capture(
-        &self,
+    pub fn initial(
+        table: &CovTable,
         snapshots: &[CovSubscriptionSnapshot],
         frame: ClockFrame,
-    ) -> TimedCapture {
-        TimedCapture {
-            store: self.timed().clone(),
+        now: Instant,
+    ) -> Self {
+        Self {
             refs: snapshots
                 .iter()
-                .filter(|sub| sub.timestamped && self.is_current(sub))
+                .filter(|sub| sub.timestamped && table.is_current(sub, now))
                 .cloned()
                 .collect(),
             force: true,
             frame: Some(frame),
         }
     }
-}
 
-impl TimedCapture {
     /// The kept references only: this runs per write attempt under the
     /// database guard, so nothing else is cloned.
     fn select(&self, keep: impl Fn(&CovSubscriptionSnapshot) -> bool) -> Self {
         Self {
-            store: self.store.clone(),
             refs: self.refs.iter().filter(|sub| keep(sub)).cloned().collect(),
             force: self.force,
             frame: self.frame,
@@ -124,13 +146,13 @@ impl TimedCapture {
     }
 
     /// The ordinary references of one written object.
-    fn object(&self, oid: ObjectIdentifier) -> Self {
+    fn of_object(&self, oid: ObjectIdentifier) -> Self {
         let ordinary = !is_life_safety_object(oid);
         self.select(|sub| ordinary && sub.monitored_object_identifier == oid)
     }
 
     /// The references one Life Safety exact change selects.
-    fn exact(&self, change: &LifeSafetyCovChange) -> Self {
+    fn of_exact(&self, change: &LifeSafetyCovChange) -> Self {
         self.select(|sub| exact_selects(sub, change))
     }
 
@@ -140,77 +162,109 @@ impl TimedCapture {
             .any(|sub| sub.monitored_object_identifier == oid)
     }
 
-    /// Queue each qualifying change under the committing mutation's database
-    /// guard, and return the references that queued one. A missing or invalid
-    /// Device clock captures nothing; the notification builder then applies
-    /// its clockless policy.
-    pub(crate) fn run(self, db: &ObjectDatabase) -> Vec<CovSubscriptionKey> {
+    /// Read each reference's current values under the committing mutation's
+    /// database borrow, with the Device clock frame they share. `None` when
+    /// there is nothing to queue: no reference, or a missing or invalid
+    /// Device clock, which captures nothing; the notification builder then
+    /// applies its clockless policy.
+    pub fn read(self, db: &ObjectDatabase) -> Option<CaptureRead> {
         if self.refs.is_empty() {
-            return Vec::new();
+            return None;
         }
-        let Some(frame) = self.frame.or_else(|| {
+        let frame = self.frame.or_else(|| {
             db.clock_frame()
                 .filter(|frame| frame.is_valid_actual_datetime())
-        }) else {
-            return Vec::new();
-        };
-        self.run_from_source(frame, |oid| db.get(&oid))
+        })?;
+        Some(self.read_source(frame, |oid| db.get(&oid)))
     }
 
-    /// Capture an intermediate event state and the exact Device-clock observation
-    /// retained with it. No clockless snapshot falls back to a later live read.
-    pub(crate) fn run_from_snapshot(
+    /// Read an intermediate event state and the exact Device-clock
+    /// observation retained with it. No clockless snapshot falls back to a
+    /// later live read.
+    pub fn read_snapshot(
         self,
         snapshot: &dyn BACnetObject,
         frame: Option<ClockFrame>,
-    ) -> Vec<CovSubscriptionKey> {
-        let Some(frame) = frame.filter(|frame| frame.is_valid_actual_datetime()) else {
-            return Vec::new();
-        };
-        self.run_from_source(frame, |oid| {
+    ) -> Option<CaptureRead> {
+        let frame = frame.filter(|frame| frame.is_valid_actual_datetime())?;
+        Some(self.read_source(frame, |oid| {
             (snapshot.object_identifier() == oid).then_some(snapshot)
-        })
+        }))
     }
 
-    fn run_from_source<'a>(
+    fn read_source<'a>(
         self,
         frame: ClockFrame,
         source: impl Fn(ObjectIdentifier) -> Option<&'a dyn BACnetObject>,
-    ) -> Vec<CovSubscriptionKey> {
+    ) -> CaptureRead {
         let mut reads = MultipleReads::default();
         for sub in &self.refs {
             if let Some(object) = source(sub.monitored_object_identifier) {
                 reads.capture_source(object, sub);
             }
         }
-        let current: Vec<_> = self
+        let current = self
             .refs
             .iter()
-            .filter_map(|sub| {
+            .enumerate()
+            .filter_map(|(at, sub)| {
                 let object = source(sub.monitored_object_identifier)?;
-                Some((sub, reads.read(object, sub)?))
+                Some((at, reads.read(object, sub)?))
             })
             .collect();
-        let mut timed = self.store.lock();
-        let now = crate::runtime_clock::core_now();
+        CaptureRead {
+            refs: self.refs,
+            force: self.force,
+            frame,
+            reads,
+            current,
+        }
+    }
+}
+
+/// What a capture read from the database: each readable reference's current
+/// values, all at one Device clock frame. Nothing is decided yet; see
+/// [`CaptureRead::queue`].
+pub struct CaptureRead {
+    refs: Vec<CovSubscriptionSnapshot>,
+    force: bool,
+    frame: ClockFrame,
+    reads: MultipleReads,
+    /// The position among `refs` of each reference that was read, with what
+    /// the read prepared.
+    current: Vec<(usize, PreparedReference)>,
+}
+
+impl CaptureRead {
+    /// Queue each qualifying change in `histories`, captured at `now` on the
+    /// host's monotonic timeline, and return the references that queued one.
+    pub fn queue(self, histories: &mut TimedHistories, now: Instant) -> Vec<CovSubscriptionKey> {
+        let Self {
+            refs,
+            force,
+            frame,
+            reads,
+            current,
+        } = self;
         let mut queued = Vec::new();
-        for (sub, prepared) in current {
+        for (at, prepared) in current {
+            let sub = &refs[at];
             let key = sub.key();
             let generation = sub.generation();
-            let baseline = timed
+            let baseline = histories
                 .baseline(key, generation)
                 .or(sub.last_notified_observation.as_ref())
                 .cloned();
-            if !self.force && !reads.reports(&prepared, baseline.as_ref()) {
+            if !force && !reads.reports(&prepared, baseline.as_ref()) {
                 // Below the reference's increment: nothing to report, but a
                 // sibling may carry the field, which then needs the time of
                 // this commit (#987).
-                timed.note_field(key, generation, &prepared.values, frame);
+                histories.note_field(key, generation, &prepared.values, frame);
                 continue;
             }
             let values =
                 reads.with_flags_companion(&sub.monitored_object_identifier, prepared.values);
-            if timed.push(
+            if histories.push(
                 key,
                 generation,
                 TimedChange::new(frame, values, prepared.observation, now),
@@ -222,6 +276,24 @@ impl TimedCapture {
     }
 }
 
+/// Where a write request's captures are queued: the host's histories, as it
+/// reaches them. [`TimedWriteCapture`] hands each attempt's read over as the
+/// attempt commits; the host queues it ([`CaptureRead::queue`]) with its
+/// histories and the time, behind whatever guards them. `Send`, as the
+/// write observer it serves is.
+pub trait CaptureQueue: Send {
+    /// Queue what `read` holds, and return the references that queued a
+    /// change.
+    fn queue(&mut self, read: CaptureRead) -> Vec<CovSubscriptionKey>;
+}
+
+/// Histories a host holds outright, with the instant its request runs at.
+impl CaptureQueue for (&mut TimedHistories, Instant) {
+    fn queue(&mut self, read: CaptureRead) -> Vec<CovSubscriptionKey> {
+        read.queue(self.0, self.1)
+    }
+}
+
 /// Per-attempt capture for a write request, composed around its Audit
 /// observer. Each successful attempt is captured as it commits, under the
 /// request's database guard, so a WritePropertyMultiple that goes A-B-A, or
@@ -229,9 +301,10 @@ impl TimedCapture {
 /// Safety object captures the exact changes of that one attempt, and keeps
 /// its state from before the request's first attempt on it, for the
 /// request's exact fanout.
-pub(crate) struct TimedWriteCapture<'a> {
+pub struct TimedWriteCapture<'a, Q> {
     inner: Option<&'a mut dyn WriteCommitObserver>,
     capture: TimedCapture,
+    queue: Q,
     /// Each Life Safety object's state from before the request's first
     /// attempt on it.
     request_life_safety: LifeSafetyCovSnapshots,
@@ -242,14 +315,19 @@ pub(crate) struct TimedWriteCapture<'a> {
     life_safety_queued: Vec<CovSubscriptionKey>,
 }
 
-impl<'a> TimedWriteCapture<'a> {
-    pub(crate) fn new(
+impl<'a, Q: CaptureQueue> TimedWriteCapture<'a, Q> {
+    /// Capture the attempts of one write request from `capture`, which
+    /// [`TimedCapture::all`] collected, into `queue`, around the request's
+    /// own observer `inner`.
+    pub fn new(
         capture: TimedCapture,
+        queue: Q,
         inner: Option<&'a mut dyn WriteCommitObserver>,
     ) -> Self {
         Self {
             inner,
             capture,
+            queue,
             request_life_safety: LifeSafetyCovSnapshots::default(),
             life_safety: None,
             life_safety_queued: Vec::new(),
@@ -261,23 +339,31 @@ impl<'a> TimedWriteCapture<'a> {
     /// a reference whose property went out and back, or that only one attempt
     /// selected. Revisiting these after that fanout conveys their changes
     /// without waiting for the Max_Notification_Delay backstop.
-    pub(crate) fn life_safety_queued(&self) -> &[CovSubscriptionKey] {
+    pub fn life_safety_queued(&self) -> &[CovSubscriptionKey] {
         &self.life_safety_queued
     }
 
     /// What the request changed on each Life Safety object among
     /// `committed`, against its state before the request's first attempt
     /// on it.
-    pub(crate) fn life_safety_changes(
+    pub fn life_safety_changes(
         &self,
         db: &ObjectDatabase,
         committed: &[ObjectIdentifier],
     ) -> Vec<LifeSafetyCovChange> {
         self.request_life_safety.changes(db, committed)
     }
+
+    /// Read and queue one attempt's capture.
+    fn run(&mut self, capture: TimedCapture, db: &ObjectDatabase) -> Vec<CovSubscriptionKey> {
+        match capture.read(db) {
+            Some(read) => self.queue.queue(read),
+            None => Vec::new(),
+        }
+    }
 }
 
-impl WriteCommitObserver for TimedWriteCapture<'_> {
+impl<Q: CaptureQueue> WriteCommitObserver for TimedWriteCapture<'_, Q> {
     fn before(&mut self, db: &ObjectDatabase, write: WriteTarget<'_>) {
         self.request_life_safety.capture_before_write(db, write.oid);
         self.life_safety = (is_life_safety_object(write.oid) && self.capture.watches(write.oid))
@@ -314,12 +400,14 @@ impl WriteCommitObserver for TimedWriteCapture<'_> {
             inner.applied(db, oid);
         }
         if !is_life_safety_object(oid) {
-            self.capture.object(oid).run(db);
+            let capture = self.capture.of_object(oid);
+            self.run(capture, db);
             return;
         }
         if let Some(before) = self.life_safety.take() {
-            for change in before.changes(db, std::slice::from_ref(&oid)) {
-                for key in self.capture.exact(&change).run(db) {
+            for change in before.changes(db, core::slice::from_ref(&oid)) {
+                let capture = self.capture.of_exact(&change);
+                for key in self.run(capture, db) {
                     if !self.life_safety_queued.contains(&key) {
                         self.life_safety_queued.push(key);
                     }
