@@ -530,11 +530,17 @@ A foreign-device registration, for the `foreign_device=` keyword of
 `BACnetClient`, `BACnetServer` and `BipEndpoint` (B/IP), and of
 `BACnetClient` and `BACnetServer` with `transport="ipv6"` (#1941).
 
-`bbmd` names a B/IP BBMD as `"ip"` or `"ip:port"`, or a B/IPv6 one
-as `"ip"`, `"[ip]"` or `"[ip]:port"` (port 47808 by default; an
-IPv6 port needs the brackets, since `"2001:db8::10:4780"` is read as a
-bare address); the owner's transport must match, else its constructor
-raises ValueError. A B/IPv6
+`bbmd` names a B/IP BBMD as `"ip"`, `"host"` or either with
+`":port"`, or a B/IPv6 one as `"ip"`, `"[ip]"` or `"[ip]:port"`
+(port 47808 by default; an IPv6 port needs the brackets, since
+`"2001:db8::10:4780"` is read as a bare address); the owner's
+transport must match, else its constructor raises ValueError. A host
+name (#2308) serves either transport (B/IPv6 since #2365): it is looked
+up when the owner starts and again alongside its registrations; one
+that doesn't resolve still starts the owner, whose registration waits,
+tried again every 30 seconds. A B/IPv6 owner bound to `::` picks its
+source address from the route to the BBMD, so its start fails instead;
+give it an interface to start and wait. A B/IPv6
 BBMD must be a unicast host: an unspecified, multicast, link-local,
 IPv4-mapped or IPv4-compatible address, a zone index or port 0 raises
 ValueError saying which. `ttl` is how many seconds the BBMD keeps the
@@ -548,9 +554,10 @@ OverflowError for an integer out of range.
 
 The owner registers at start and renews on its own. Its broadcasts go
 through the BBMD; on B/IP the first few wait for the first registration
-to be answered, and `foreign_registration()` reports how it goes (B/IP
-only). A B/IPv6 client needs `ipv6_device_instance`: a B/IPv6 foreign
-device uses its instance's VMAC.
+to be answered, and `foreign_registration()` reports how it goes. A
+B/IPv6 client needs `ipv6_device_instance`: a B/IPv6 foreign device
+uses its instance's VMAC. While a B/IPv6 one waits for its BBMD's name,
+its broadcasts raise BacnetError.
 
 Properties:
 
@@ -1167,7 +1174,16 @@ latest attempt was accepted, and can remain true during a pending,
 refused or timed-out renewal. The totals
 survive it: `lapses` counts leases that ran out with no newer success,
 and `renewal_hints` the BBMD's Distribute-Broadcast-To-Network NAKs,
-each of which brings the next attempt forward.
+each of which brings the next attempt forward. A BBMD named by host name
+(#2308) counts its lookups in `bbmd_lookups`, the failed ones in
+`bbmd_lookup_failures`, and names why the newest failed in
+`last_bbmd_lookup_failure` (`"not_resolved"`, `"timed_out"` after
+10 seconds, `"no_ipv4_address"`, `"unusable_address"`,
+`"abandoned"`, or `"other"` for a failure this version doesn't
+name), None once one succeeds and cleared when the owner
+stops. `waiting_for_bbmd` is true while that name hasn't resolved yet:
+no attempt is due, and it is tried again 30 seconds after each
+failure.
 
 Keys:
 
@@ -1182,6 +1198,61 @@ Keys:
 - `refused: int`
 - `lapses: int`
 - `renewal_hints: int`
+- `bbmd_lookups: int`
+- `bbmd_lookup_failures: int`
+- `last_bbmd_lookup_failure: Optional[Literal['not_resolved', 'timed_out', 'no_ipv4_address', 'unusable_address', 'abandoned', 'other']]`
+- `waiting_for_bbmd: bool`
+
+## Bip6ForeignRegistrationStatus
+
+`class Bip6ForeignRegistrationStatus(TypedDict)`
+
+A B/IPv6 foreign device's registration, as `foreign_registration()`
+reports it on a `transport="ipv6"` owner (#2365). `bbmd` is the
+address in use, `"[ip]:port"`, or
+None while a host name hasn't resolved yet, when `waiting_for_bbmd` is
+true. `bbmd_name` is the host name the BBMD is known by,
+`"host:port"` (configured, or written to FD\_BBMD\_Address), or None for
+a BBMD known by address; a waiting device waits for it. While waiting,
+nothing is registered, broadcasts are refused (counted in
+`broadcasts_refused`), and the name is tried again 30 seconds after
+each failure. `bbmd_lookups`, `bbmd_lookup_failures` and
+`last_bbmd_lookup_failure` are as in `ForeignRegistrationStatus`,
+with `"no_ipv6_address"` for a name with no IPv6 address. The
+`previous_release*` totals count the deletions asked of BBMDs the
+device moved away from, by `release_previous_bbmd`: released,
+refused, or unanswered. `registrations_sent` counts the
+Register-Foreign-Device messages sent. The BBMD's answer to the latest
+one (#2388) reads as on B/IP: `last_outcome` is `"accepted"` or
+`"refused"`, with `last_result` the BVLC result code (0x0090 for a
+refusal), or `"timed_out"` when its renewal went first, the BBMD
+silent, or an activation's registration did after 3 s of silence, with
+`last_result` None; both are None before the BBMD's first answer, and
+clear when the BBMD changes, while waiting, and when the owner stops.
+`last_outcome_age` is how many seconds ago that outcome came,
+`unanswered` how many registrations in a row the BBMD left unanswered,
+and `refused` counts its refusals. The totals survive a stop; outside
+`foreign_device=` they are 0.
+
+Keys:
+
+- `bbmd: Optional[str]`
+- `bbmd_name: Optional[str]`
+- `waiting_for_bbmd: bool`
+- `bbmd_lookups: int`
+- `bbmd_lookup_failures: int`
+- `last_bbmd_lookup_failure: Optional[Literal['not_resolved', 'timed_out', 'no_ipv6_address', 'unusable_address', 'abandoned', 'other']]`
+- `previous_releases: int`
+- `previous_released: int`
+- `previous_release_refused: int`
+- `previous_release_unanswered: int`
+- `broadcasts_refused: int`
+- `registrations_sent: int`
+- `last_outcome: Optional[Literal["accepted", "refused", "timed_out"]]`
+- `last_result: Optional[int]`
+- `last_outcome_age: Optional[float]`
+- `refused: int`
+- `unanswered: int`
 
 ## FdtEntry
 
