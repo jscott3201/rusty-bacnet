@@ -1,8 +1,11 @@
 use super::*;
+use crate::cov::AtomicCovCounters;
+use crate::cov::timed_store::TimedStore;
 use bacnet_device_core::cov::{CovRecipient, CovSample};
 use bacnet_types::MacAddr;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 pub(super) fn context(process_id: u32) -> MultipleContextKey {
@@ -113,12 +116,8 @@ pub(super) fn subscriber_for(n: usize, payload: usize) -> u16 {
 }
 
 /// Memory for exactly `n` changes of `payload` octets in one context.
-pub(super) fn histories(n: usize, payload: usize) -> (TimedHistories, Arc<AtomicCovCounters>) {
-    let counters = Arc::new(AtomicCovCounters::default());
-    (
-        TimedHistories::new(apdu_for(n, payload), Arc::clone(&counters)),
-        counters,
-    )
+pub(super) fn histories(n: usize, payload: usize) -> TimedHistories {
+    TimedHistories::new(apdu_for(n, payload))
 }
 
 pub(super) fn store(n: usize, payload: usize) -> (TimedStore, Arc<AtomicCovCounters>) {
@@ -129,13 +128,31 @@ pub(super) fn store(n: usize, payload: usize) -> (TimedStore, Arc<AtomicCovCount
     )
 }
 
-pub(super) fn dropped(counters: &AtomicCovCounters) -> u64 {
-    counters.timed_changes_dropped.load(Ordering::Relaxed)
+/// Somewhere the count of dropped changes can be read: the histories
+/// themselves, whose counts these tests never take, or a store's counters.
+pub(super) trait DroppedCount {
+    fn changes_dropped(&self) -> u64;
+}
+
+impl DroppedCount for TimedHistories {
+    fn changes_dropped(&self) -> u64 {
+        self.counts.changes_dropped
+    }
+}
+
+impl DroppedCount for Arc<AtomicCovCounters> {
+    fn changes_dropped(&self) -> u64 {
+        self.timed_changes_dropped.load(Ordering::Relaxed)
+    }
+}
+
+pub(super) fn dropped(counted: &impl DroppedCount) -> u64 {
+    counted.changes_dropped()
 }
 
 #[test]
 fn values_carry_their_own_change_time_and_queue_in_capture_order() {
-    let (mut h, _) = histories(8, 4);
+    let mut h = histories(8, 4);
     let k = key(1, 1);
     h.reset(&k, 7, 0);
     h.push(&k, 7, change(1, 4));
@@ -153,19 +170,19 @@ fn values_carry_their_own_change_time_and_queue_in_capture_order() {
 
 #[test]
 fn overflow_evicts_the_oldest_change_of_the_same_reference_and_counts_it() {
-    let (mut h, counters) = histories(2, 4);
+    let mut h = histories(2, 4);
     let k = key(1, 1);
     h.reset(&k, 1, 0);
     for second in 1..=3 {
         h.push(&k, 1, change(second, 4));
     }
     assert_eq!(seconds(&h.drain(&k, 1).1), [2, 3]);
-    assert_eq!(dropped(&counters), 1);
+    assert_eq!(dropped(&h), 1);
 }
 
 #[test]
 fn overflow_evicts_the_oldest_in_the_context_but_never_a_lone_newest_change() {
-    let (mut h, counters) = histories(2, 4);
+    let mut h = histories(2, 4);
     let (a, b, other) = (key(1, 1), key(1, 2), key(2, 1));
     for k in [&a, &b, &other] {
         h.reset(k, 1, 0);
@@ -177,14 +194,14 @@ fn overflow_evicts_the_oldest_in_the_context_but_never_a_lone_newest_change() {
     assert_eq!(seconds(&h.drain(&a, 1).1), [2]);
     assert_eq!(seconds(&h.drain(&b, 1).1), [3]);
     assert_eq!(seconds(&h.drain(&other, 1).1), [9]);
-    assert_eq!(dropped(&counters), 1);
+    assert_eq!(dropped(&h), 1);
 
     // A single change larger than the bound is still retained.
-    let (mut h, counters) = histories(1, 4);
+    let mut h = histories(1, 4);
     h.reset(&a, 1, 0);
     h.push(&a, 1, change(5, 64));
     assert_eq!(seconds(&h.drain(&a, 1).1), [5]);
-    assert_eq!(dropped(&counters), 0);
+    assert_eq!(dropped(&h), 0);
 }
 
 #[test]
@@ -270,7 +287,7 @@ fn a_failed_notification_returns_changes_across_renewal_but_not_recreation() {
 
 #[test]
 fn another_references_lone_newest_change_is_never_evicted() {
-    let (mut h, counters) = histories(1, 4);
+    let mut h = histories(1, 4);
     let (a, b) = (key(1, 1), key(1, 2));
     for k in [&a, &b] {
         h.reset(k, 1, 0);
@@ -279,12 +296,12 @@ fn another_references_lone_newest_change_is_never_evicted() {
     h.push(&b, 1, change(2, 4));
     assert_eq!(seconds(&h.drain(&a, 1).1), [1]);
     assert_eq!(seconds(&h.drain(&b, 1).1), [2]);
-    assert_eq!(dropped(&counters), 0);
+    assert_eq!(dropped(&h), 0);
 }
 
 #[test]
 fn renewal_keeps_pending_changes_and_recaptures_its_baseline() {
-    let (mut h, _) = histories(8, 4);
+    let mut h = histories(8, 4);
     let k = key(1, 1);
     h.reset(&k, 1, 0);
     h.push(&k, 1, change(1, 4));
@@ -322,7 +339,7 @@ fn at_frame(timing: FieldTiming) -> Option<ClockFrame> {
 
 #[test]
 fn a_field_keeps_its_captured_time_and_remembers_one_for_an_uncaptured_value() {
-    let (mut h, _) = histories(8, 4);
+    let mut h = histories(8, 4);
     let k = key(1, 1);
     h.reset(&k, 1, 0);
     assert_eq!(timing(&mut h, &k, 1, 1, None), FieldTiming::NoTime);
@@ -369,7 +386,7 @@ fn a_field_keeps_its_captured_time_and_remembers_one_for_an_uncaptured_value() {
 
 #[test]
 fn a_capture_below_the_increment_records_the_value_at_its_commit_time() {
-    let (mut h, _) = histories(8, 4);
+    let mut h = histories(8, 4);
     let k = key(1, 1);
     h.reset(&k, 1, 0);
     h.push(&k, 1, valued(3, 1)); // A, captured
@@ -390,7 +407,7 @@ fn a_capture_below_the_increment_records_the_value_at_its_commit_time() {
 
 #[test]
 fn a_field_time_follows_renewal_captures_and_a_recreated_reference_starts_fresh() {
-    let (mut h, _) = histories(8, 4);
+    let mut h = histories(8, 4);
     let k = key(1, 1);
     h.reset(&k, 1, 0);
     h.push(&k, 1, valued(3, 1));
@@ -431,7 +448,7 @@ fn failed_older_notification_cannot_requeue_behind_a_transmitted_newer_one() {
 
 #[test]
 fn a_reference_evicts_its_own_oldest_change_before_a_siblings() {
-    let (mut h, counters) = histories(3, 4);
+    let mut h = histories(3, 4);
     let (a, b) = (key(1, 1), key(1, 2));
     for k in [&a, &b] {
         h.reset(k, 1, 0);
@@ -442,7 +459,7 @@ fn a_reference_evicts_its_own_oldest_change_before_a_siblings() {
     h.push(&a, 1, change(4, 4)); // over the bound: a's own oldest goes
     assert_eq!(seconds(&h.drain(&a, 1).1), [4]);
     assert_eq!(seconds(&h.drain(&b, 1).1), [1, 2]);
-    assert_eq!(dropped(&counters), 1);
+    assert_eq!(dropped(&h), 1);
 }
 
 #[test]
@@ -489,7 +506,7 @@ fn sorted(mut keys: Vec<CovSubscriptionKey>) -> Vec<CovSubscriptionKey> {
 
 #[tokio::test(start_paused = true)]
 async fn a_context_is_due_at_its_delay_after_its_earliest_pending_change() {
-    let (mut h, _) = histories(8, 4);
+    let mut h = histories(8, 4);
     let (a, b, other) = (key(1, 1), key(1, 2), key(2, 1));
     for k in [&a, &b, &other] {
         h.reset(k, 1, 0);
@@ -524,7 +541,7 @@ async fn a_context_is_due_at_its_delay_after_its_earliest_pending_change() {
 
 #[tokio::test(start_paused = true)]
 async fn a_blocked_context_comes_back_only_after_its_spacing() {
-    let (mut h, _) = histories(8, 4);
+    let mut h = histories(8, 4);
     let k = key(1, 1);
     h.reset(&k, 1, 0);
     h.set_delay(&context(1), 0);
@@ -551,7 +568,7 @@ async fn a_blocked_context_comes_back_only_after_its_spacing() {
 
 #[tokio::test(start_paused = true)]
 async fn the_latest_admitted_delay_applies_until_the_context_goes() {
-    let (mut h, _) = histories(8, 4);
+    let mut h = histories(8, 4);
     let k = key(1, 1);
     h.reset(&k, 1, 30);
     h.set_delay(&context(1), 3); // a renewal changes the delay
@@ -628,7 +645,7 @@ async fn cancel_and_expiry_take_a_contexts_deadline_state_along() {
 
 #[tokio::test(start_paused = true)]
 async fn a_context_without_a_timestamped_history_holds_nothing() {
-    let (mut h, _) = histories(8, 4);
+    let mut h = histories(8, 4);
     // An empty-list admission of an unknown context, and a hold-off on it.
     h.set_delay(&context(9), 10);
     h.hold_until(&context(9), now() + Duration::from_secs(5));
@@ -638,7 +655,7 @@ async fn a_context_without_a_timestamped_history_holds_nothing() {
 
 #[tokio::test(start_paused = true)]
 async fn a_hold_off_moves_the_next_attempt_to_its_end() {
-    let (mut h, _) = histories(8, 4);
+    let mut h = histories(8, 4);
     let k = key(1, 1);
     h.reset(&k, 1, 10);
     let start = now();
@@ -654,7 +671,7 @@ async fn a_hold_off_moves_the_next_attempt_to_its_end() {
 
 #[tokio::test(start_paused = true)]
 async fn rearming_or_a_shorter_delay_ends_the_wait_of_overdue_changes() {
-    let (mut h, _) = histories(8, 4);
+    let mut h = histories(8, 4);
     let k = key(1, 1);
     h.reset(&k, 1, 10);
     h.push(&k, 1, change(1, 4));

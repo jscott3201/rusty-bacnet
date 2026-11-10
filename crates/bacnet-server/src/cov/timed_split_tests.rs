@@ -6,6 +6,8 @@ use super::tests::{
     store, subscriber_for, timed_reference,
 };
 use super::*;
+use crate::cov::timed_store::TimedStore;
+use std::sync::Arc;
 
 /// A claim of `a`'s changes at seconds 1, 2, 3 and `b`'s at 9 and 10, each
 /// sequenced by its second.
@@ -106,13 +108,13 @@ fn split_parts_retire_and_return_on_their_own_without_drops() {
 
 #[test]
 fn the_bound_spans_several_notifications_of_the_smaller_apdu_less_a_reserve() {
-    let (mut h, counters) = histories(8, 4);
+    let mut h = histories(8, 4);
     let k = key(1, 1);
     h.reset(&k, 1, 0);
     for second in 1..=8 {
         h.push(&k, 1, change(second, 4));
     }
-    assert_eq!(dropped(&counters), 0, "eight changes fit the local bound");
+    assert_eq!(dropped(&h), 0, "eight changes fit the local bound");
     h.drain(&k, 1);
 
     // A subscriber with a smaller APDU shrinks the room to two changes.
@@ -121,7 +123,7 @@ fn the_bound_spans_several_notifications_of_the_smaller_apdu_less_a_reserve() {
         h.push(&k, 1, change(second, 4));
     }
     assert_eq!(seconds(&h.drain(&k, 1).1), [12, 13]);
-    assert_eq!(dropped(&counters), 1);
+    assert_eq!(dropped(&h), 1);
 
     // A larger one cannot exceed the local maximum, nor can an unknown one.
     for subscriber in [Some(u16::MAX), None] {
@@ -131,7 +133,7 @@ fn the_bound_spans_several_notifications_of_the_smaller_apdu_less_a_reserve() {
         }
         assert_eq!(h.drain(&k, 1).1.len(), 8, "{subscriber:?}");
     }
-    assert_eq!(dropped(&counters), 3);
+    assert_eq!(dropped(&h), 3);
 
     // Room the untimestamped values took is kept for them.
     h.set_sizing(&context(1), Some(subscriber_for(8, 4)), LIFETIME);
@@ -140,21 +142,21 @@ fn the_bound_spans_several_notifications_of_the_smaller_apdu_less_a_reserve() {
         h.push(&k, 1, change(second, 4));
     }
     assert_eq!(seconds(&h.drain(&k, 1).1), [32, 33, 34, 35, 36, 37, 38]);
-    assert_eq!(dropped(&counters), 4);
+    assert_eq!(dropped(&h), 4);
     // At most one notification's worth: two changes here.
     h.note_reserve(&context(1), 10 * item_len(4));
     for second in 41..=47 {
         h.push(&k, 1, change(second, 4));
     }
     assert_eq!(h.drain(&k, 1).1.len(), 6);
-    assert_eq!(dropped(&counters), 5);
+    assert_eq!(dropped(&h), 5);
     // An admission starts the reserve over.
     h.set_sizing(&context(1), Some(subscriber_for(8, 4)), LIFETIME);
     for second in 51..=58 {
         h.push(&k, 1, change(second, 4));
     }
     assert_eq!(h.drain(&k, 1).1.len(), 8);
-    assert_eq!(dropped(&counters), 5);
+    assert_eq!(dropped(&h), 5);
     // The reserve keeps room in notifications, not memory: at the local
     // maximum, where the memory ceiling binds, it changes nothing (#1287).
     h.set_sizing(&context(1), None, LIFETIME);
@@ -163,12 +165,12 @@ fn the_bound_spans_several_notifications_of_the_smaller_apdu_less_a_reserve() {
         h.push(&k, 1, change(second, 4));
     }
     assert_eq!(h.drain(&k, 1).1.len(), 8);
-    assert_eq!(dropped(&counters), 5);
+    assert_eq!(dropped(&h), 5);
 }
 
 #[test]
 fn the_reserve_belongs_to_the_context_and_starts_over_when_it_loses_a_reference() {
-    let (mut h, counters) = histories(8, 4);
+    let mut h = histories(8, 4);
     let (a, b) = (key(1, 1), key(1, 2));
     h.reset(&a, 1, 0);
     h.set_sizing(&context(1), Some(subscriber_for(8, 4)), LIFETIME);
@@ -177,17 +179,13 @@ fn the_reserve_belongs_to_the_context_and_starts_over_when_it_loses_a_reference(
     for second in 1..=8 {
         h.push(&b, 1, change(second, 4));
     }
-    assert_eq!(
-        dropped(&counters),
-        1,
-        "seven changes fit beside the reserve"
-    );
+    assert_eq!(dropped(&h), 1, "seven changes fit beside the reserve");
     h.drain(&b, 1);
     h.remove(&a); // the context lost a reference: its reserve starts over
     for second in 11..=18 {
         h.push(&b, 1, change(second, 4));
     }
-    assert_eq!(dropped(&counters), 1);
+    assert_eq!(dropped(&h), 1);
     h.remove(&b);
     assert_eq!(h.held(), (0, 0), "the last reference took the terms along");
 }
@@ -335,7 +333,7 @@ fn an_undelivered_untimestamped_reference_is_owed_once_its_report_began() {
 
 #[tokio::test(start_paused = true)]
 async fn an_owed_reference_makes_its_context_due_like_a_pending_change() {
-    let (mut h, _) = histories(8, 4);
+    let mut h = histories(8, 4);
     let k = key(1, 1);
     h.reset_untimed(&k, 1, 10);
     assert_eq!(h.take_due(now()), (Vec::new(), None));

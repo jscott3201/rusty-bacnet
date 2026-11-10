@@ -13,8 +13,9 @@
 //! unanswered confirmed report, DISABLE_INITIATION, an exhausted budget. The
 //! context's Max_Notification_Delay, an upper bound, then limits the wait,
 //! measured from its earliest queued change (§13.1, §13.16.1.1.4):
-//! [`TimedStore::next_due`] hands the server each context whose deadline has
-//! passed, and the server fans it out again.
+//! [`TimedHistories::take_due`] hands the host each context whose deadline
+//! has passed, with the next deadline still ahead, and the host fans it out
+//! again.
 //!
 //! Local policy for that backstop:
 //! - it acts no sooner than one second after the earliest change;
@@ -22,7 +23,7 @@
 //!   next one, so a persistent failure cannot spin;
 //! - a confirmed hold-off moves the next attempt to the end of the hold-off,
 //!   and an outstanding confirmed report leaves the follow-up to its outcome;
-//! - [`TimedStore::rearm`] drops every wait when a block lifts
+//! - [`TimedHistories::rearm`] drops every wait when a block lifts
 //!   (communication re-enabled, a shorter delay admitted), so overdue changes
 //!   go out at once.
 //!
@@ -112,21 +113,28 @@
 //! or, beyond them, only changes eviction may not take, two per reference at
 //! most.
 //!
-//! Each discarded change is counted in
-//! [`AtomicCovCounters::timed_changes_dropped`]; the log gets one warning per
-//! context and cause until the context is admitted afresh (#1039), so a
-//! subscriber too small for any timestamped value does not flood it.
+//! Each discarded change is counted ([`TimedCounts::changes_dropped`]) and
+//! reported ([`Dropped`]); a report says whether it is its context's first
+//! for that cause since the context was admitted afresh (#1039), so a host
+//! can log one warning for a subscriber too small for any timestamped value
+//! instead of flooding its log.
+//!
+//! The histories are plain state: no lock, clock, wake-up or log. A host
+//! keeps them under its own guard and passes `now`, on one monotonic
+//! timeline, to every call that stores or compares an instant. After a call
+//! it takes what the call counted ([`TimedHistories::take_counts`]) and
+//! dropped ([`TimedHistories::take_drops`]), and asks whether a deadline may
+//! have moved earlier ([`TimedHistories::take_moved`]); a host that sleeps
+//! until [`TimedHistories::take_due`]'s next deadline wakes and asks again
+//! when one has.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex, MutexGuard};
 
 use bacnet_objects::clock::ClockFrame;
 use bacnet_services::cov_multiple::COVNotificationValue;
 use bacnet_time::{Duration, Instant};
-use tokio::sync::Notify;
 
-use super::{AtomicCovCounters, CovObservation, CovSubscriptionKey, MultipleContextKey};
-use crate::runtime_clock;
+use super::{CovObservation, CovSubscriptionKey, MultipleContextKey};
 
 /// Notifications' worth of pending history one context may hold.
 pub(crate) const HISTORY_NOTIFICATIONS: usize = 4;
@@ -439,17 +447,37 @@ pub(crate) struct TimedHistories {
     /// Earliest the deadline backstop may hand a context out again. Only a
     /// context with a timestamped history has an entry.
     not_before: HashMap<MultipleContextKey, Instant>,
-    /// Wakes [`TimedStore::next_due`] when a deadline may have moved earlier.
-    wake: Arc<Notify>,
+    /// Whether a deadline may have moved earlier since the host last asked
+    /// ([`Self::take_moved`]).
+    moved: bool,
     next_seq: u64,
     next_incarnation: u64,
     /// Local maximum APDU length.
     local_apdu: usize,
-    counters: Arc<AtomicCovCounters>,
+    /// What has been counted since the host last took the counts.
+    counts: TimedCounts,
+    /// Drops not yet taken by the host.
+    drops: Vec<Dropped>,
+}
+
+/// What the histories counted since their host last took the counts
+/// ([`TimedHistories::take_counts`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct TimedCounts {
+    /// Pending timestamped changes discarded while their reference stayed
+    /// subscribed: evicted on overflow of the context's bound, superseded by
+    /// a newer delivered change, or, once per change, losing a value too
+    /// large for any notification to the subscriber.
+    pub(crate) changes_dropped: u64,
+    /// Untimestamped references a report left out because their values alone
+    /// exceed one notification to the subscriber (#1066).
+    pub(crate) untimed_oversized: u64,
 }
 
 impl TimedHistories {
-    fn new(local_apdu: usize, counters: Arc<AtomicCovCounters>) -> Self {
+    /// Histories of a device whose local maximum APDU is `local_apdu`
+    /// octets, which bounds each context's pending changes.
+    pub(crate) fn new(local_apdu: usize) -> Self {
         Self {
             histories: HashMap::new(),
             untimed: HashMap::new(),
@@ -457,12 +485,32 @@ impl TimedHistories {
             sending: HashMap::new(),
             context_held: HashMap::new(),
             not_before: HashMap::new(),
-            wake: Arc::default(),
+            moved: false,
             next_seq: 1,
             next_incarnation: 1,
             local_apdu,
-            counters,
+            counts: TimedCounts::default(),
+            drops: Vec::new(),
         }
+    }
+
+    /// What was counted since the last call.
+    pub(crate) fn take_counts(&mut self) -> TimedCounts {
+        std::mem::take(&mut self.counts)
+    }
+
+    /// Whether a deadline may have moved earlier since the last call: a
+    /// change queued ahead of the others, a reference owed from earlier, a
+    /// shorter delay, a hold-off, a lifted block. A host sleeping until the
+    /// next deadline [`Self::take_due`] gave it asks again.
+    pub(crate) fn take_moved(&mut self) -> bool {
+        std::mem::take(&mut self.moved)
+    }
+
+    /// Count `left_out` untimestamped references a report gave up: their
+    /// values fit no notification (#1066).
+    pub(crate) fn note_oversized(&mut self, left_out: usize) {
+        self.counts.untimed_oversized += left_out as u64;
     }
 
     /// Apply a context's admitted Max_Notification_Delay to its timestamped
@@ -549,14 +597,14 @@ impl TimedHistories {
     /// at the next scan.
     pub(crate) fn rearm(&mut self) {
         self.not_before.clear();
-        self.wake.notify_one();
+        self.moved = true;
     }
 
-    /// A shorter delay moves the context's deadline earlier: drop its wait
-    /// and wake the backstop to recompute.
+    /// A shorter delay moves the context's deadline earlier: drop its wait,
+    /// so the host works the deadline out again.
     fn rearm_context(&mut self, context: &MultipleContextKey) {
         self.not_before.remove(context);
-        self.wake.notify_one();
+        self.moved = true;
     }
 
     /// A confirmed hold-off blocks `context` until `until`: the backstop's
@@ -569,7 +617,7 @@ impl TimedHistories {
             || self.owes(context)
         {
             self.not_before.insert(context.clone(), until);
-            self.wake.notify_one();
+            self.moved = true;
         }
     }
 
@@ -954,7 +1002,7 @@ impl TimedHistories {
             self.enforce_bound(key);
         }
         if new_front {
-            self.wake.notify_one();
+            self.moved = true;
         }
     }
 
@@ -985,69 +1033,6 @@ impl TimedHistories {
     }
 }
 
-/// Shared handle to the table's timestamped histories. Locked only for short
-/// synchronous sections; never held across an await, and never while a
-/// [`TimedClaim`] of the same store is dropped.
-#[derive(Debug, Clone)]
-pub(crate) struct TimedStore {
-    histories: Arc<Mutex<TimedHistories>>,
-}
-
-impl TimedStore {
-    pub(super) fn new(max_apdu_length: usize, counters: Arc<AtomicCovCounters>) -> Self {
-        Self {
-            histories: Arc::new(Mutex::new(TimedHistories::new(max_apdu_length, counters))),
-        }
-    }
-
-    pub(crate) fn lock(&self) -> MutexGuard<'_, TimedHistories> {
-        // A panic while holding this lock leaves only bounded queue state.
-        self.histories
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-    }
-
-    /// Wait until some context's pending changes reach their deadline, and
-    /// return that context's references with pending changes for the caller
-    /// to fan out. A context that stays blocked comes back after its spacing.
-    pub(crate) async fn next_due(&self) -> Vec<CovSubscriptionKey> {
-        let wake = Arc::clone(&self.lock().wake);
-        loop {
-            let notified = wake.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable();
-            let (due, next) = self.lock().take_due(runtime_clock::core_now());
-            if !due.is_empty() {
-                return due;
-            }
-            // A deadline past what the host's clock can hold never comes.
-            let next = next
-                .and_then(|deadline| runtime_clock::core_clock().to_std(deadline))
-                .map(tokio::time::Instant::from_std);
-            match next {
-                Some(deadline) => {
-                    tokio::select! {
-                        () = tokio::time::sleep_until(deadline) => {}
-                        () = notified => {}
-                    }
-                }
-                None => notified.await,
-            }
-        }
-    }
-
-    /// A block on notifications lifted (communication re-enabled): overdue
-    /// changes go out at the next scan instead of after a backstop wait.
-    pub(crate) fn rearm(&self) {
-        self.lock().rearm();
-    }
-
-    /// See [`TimedHistories::hold_until`].
-    pub(crate) fn hold_until(&self, context: &MultipleContextKey, until: Instant) {
-        self.lock().hold_until(context, until);
-    }
-}
-
 mod bound;
 mod claim;
 mod drops;
@@ -1055,9 +1040,8 @@ mod owed;
 use bound::Held;
 pub(crate) use bound::{envelope_len, request_header};
 pub(crate) use claim::{SendTurn, TimedClaim, ValueFit};
-#[cfg(test)]
-pub(crate) use drops::DropWarningCount;
-use drops::{DropReason, DropWarnings};
+use drops::DropWarnings;
+pub(crate) use drops::{DropReason, Dropped};
 
 #[cfg(test)]
 #[path = "timed_split_tests.rs"]

@@ -1,23 +1,24 @@
-//! Dropped timestamped COV-multiple changes: every one is counted, and the log
-//! gets one warning per context for each cause (#1039).
+//! Dropped timestamped COV-multiple changes: every one is counted, and each
+//! drop is reported with whether it is its context's first for that cause
+//! (#1039).
 //!
 //! A subscriber whose maximum APDU cannot hold one timestamped value of its
 //! references loses every such value, and a context blocked for long keeps
-//! evicting from its history bound. A warning per drop would flood the log
-//! in both cases, so after a context's first warning for a cause, later drops
-//! for that cause are only counted (and logged at debug level). The context
-//! warns again once it is admitted afresh: a timestamped reference of it is
-//! (re)published, or an admission changes the size of its notifications.
-
-use std::sync::atomic::Ordering;
-
-use tracing::{debug, warn};
+//! evicting from its history bound. A warning per drop would flood a log in
+//! both cases, so a report says whether it is the context's first for its
+//! cause: a host warns for those and only counts the rest. A context reports
+//! a first again once it is admitted afresh: a timestamped reference of it
+//! is (re)published, or an admission changes the size of its notifications.
 
 use super::{CovSubscriptionKey, TimedHistories};
 
+/// Reports of later drops that wait for the host at most; see
+/// [`TimedHistories::take_drops`].
+const REPEATS_KEPT: usize = 64;
+
 /// Why pending timestamped changes were dropped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum DropReason {
+pub(crate) enum DropReason {
     /// Evicted on overflow of the context's history bound.
     HistoryFull,
     /// A value of the change too large for any notification to the
@@ -29,19 +30,27 @@ pub(super) enum DropReason {
 }
 
 impl DropReason {
-    fn describe(self) -> &'static str {
-        match self {
-            Self::HistoryFull => "context history full",
-            Self::TooLarge => {
-                "a timestamped value exceeds every notification to the subscriber on its own"
-            }
-            Self::Superseded => "superseded by a delivered newer change",
-        }
-    }
-
     fn bit(self) -> u8 {
         1 << self as u8
     }
+}
+
+/// Pending timestamped changes of one reference dropped for one cause.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Dropped {
+    /// The reference that lost them.
+    pub(crate) key: CovSubscriptionKey,
+    /// How many changes.
+    pub(crate) count: usize,
+    /// Why.
+    pub(crate) reason: DropReason,
+    /// Octets one notification to the reference's context may take, while
+    /// the context still has a timestamped reference.
+    pub(crate) apdu: Option<usize>,
+    /// Whether this is the context's first drop for `reason` since it was
+    /// admitted afresh, the one worth a warning. A reference whose context
+    /// lost its last timestamped reference meanwhile always reports a first.
+    pub(crate) first: bool,
 }
 
 /// Causes a context has warned about since it was last admitted afresh.
@@ -58,138 +67,131 @@ impl DropWarnings {
 }
 
 impl TimedHistories {
-    /// Count `count` dropped changes of `key`, and warn unless its context
-    /// already did for `reason`. A reference whose context has no terms left
-    /// (it lost its last timestamped reference meanwhile) always warns.
+    /// Count `count` dropped changes of `key`, and report them: as a first
+    /// unless its context already reported one for `reason`. A reference
+    /// whose context has no terms left (it lost its last timestamped
+    /// reference meanwhile) always reports a first.
     pub(super) fn dropped(&mut self, key: &CovSubscriptionKey, count: usize, reason: DropReason) {
-        self.counters
-            .timed_changes_dropped
-            .fetch_add(count as u64, Ordering::Relaxed);
-        let context = key.multiple_context();
-        let terms = context.and_then(|context| self.terms.get_mut(context));
+        self.counts.changes_dropped += count as u64;
+        let terms = key
+            .multiple_context()
+            .and_then(|context| self.terms.get_mut(context));
         let apdu = terms.as_ref().map(|terms| terms.apdu);
-        if terms.is_none_or(|terms| terms.warned.first(reason)) {
-            warn!(
-                object = ?key.object(),
-                recipient = ?context.map(|context| &context.recipient),
-                process = context.map(|context| context.process_id),
+        let first = terms.is_none_or(|terms| terms.warned.first(reason));
+        // Every drop is counted above. Of the reports, every first waits
+        // for the host; later ones only while few wait, so a host that never
+        // takes them holds a bounded list.
+        if first || self.drops.len() < REPEATS_KEPT {
+            self.drops.push(Dropped {
+                key: key.clone(),
+                count,
+                reason,
                 apdu,
-                count,
-                reason = reason.describe(),
-                "Dropped pending timestamped COV-multiple changes; further drops in this \
-                 context for the same reason are only counted in timed_changes_dropped"
-            );
-        } else {
-            debug!(
-                object = ?key.object(),
-                count,
-                reason = reason.describe(),
-                "Dropped pending timestamped COV-multiple changes"
-            );
+                first,
+            });
         }
     }
-}
 
-/// Test hook: counts the drop warnings this module logs on the thread it is
-/// installed on, debug-level drops excluded.
-#[cfg(test)]
-#[derive(Clone, Default)]
-pub(crate) struct DropWarningCount(std::sync::Arc<std::sync::atomic::AtomicUsize>);
-
-#[cfg(test)]
-impl DropWarningCount {
-    /// Count on this thread until the returned guard drops. Under a
-    /// current-thread runtime that covers the server's tasks too.
-    pub(crate) fn install(&self) -> tracing::subscriber::DefaultGuard {
-        // As in the DCC trace tests: keep a second, disabled dispatcher alive
-        // so a callsite another test registered first, with no subscriber of
-        // its own, is not cached as never enabled.
-        static REGISTRATION_PEER: std::sync::OnceLock<tracing::Dispatch> =
-            std::sync::OnceLock::new();
-        REGISTRATION_PEER
-            .get_or_init(|| tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default()));
-        tracing::subscriber::set_default(self.clone())
+    /// The drops reported since the last call, oldest first. Take them after
+    /// each call that can drop a change: the counts
+    /// ([`Self::take_counts`]) always hold every drop, but once
+    /// [`REPEATS_KEPT`] reports wait, only a context's first for a cause
+    /// still joins them.
+    pub(crate) fn take_drops(&mut self) -> Vec<Dropped> {
+        std::mem::take(&mut self.drops)
     }
-
-    /// Drop warnings counted so far.
-    pub(crate) fn get(&self) -> usize {
-        self.0.load(Ordering::SeqCst)
-    }
-}
-
-#[cfg(test)]
-impl tracing::Subscriber for DropWarningCount {
-    fn register_callsite(
-        &self,
-        _: &'static tracing::Metadata<'static>,
-    ) -> tracing::subscriber::Interest {
-        tracing::subscriber::Interest::sometimes()
-    }
-    fn max_level_hint(&self) -> Option<tracing::metadata::LevelFilter> {
-        Some(tracing::metadata::LevelFilter::WARN)
-    }
-    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
-        metadata.target() == module_path!() && *metadata.level() == tracing::Level::WARN
-    }
-    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-        tracing::span::Id::from_u64(1)
-    }
-    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
-    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
-    fn event(&self, event: &tracing::Event<'_>) {
-        if self.enabled(event.metadata()) {
-            self.0.fetch_add(1, Ordering::SeqCst);
-        }
-    }
-    fn enter(&self, _: &tracing::span::Id) {}
-    fn exit(&self, _: &tracing::span::Id) {}
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::{histories, key};
+    use super::super::tests::{dropped, histories, key};
     use super::*;
 
     #[test]
     fn each_cause_warns_once_per_context_until_it_is_admitted_afresh() {
-        let warnings = DropWarningCount::default();
-        let _guard = warnings.install();
-        let (mut h, counters) = histories(8, 4);
+        let mut h = histories(8, 4);
+        // The firsts reported so far: the drops a host warns about.
+        let mut firsts = 0;
+        let mut warnings = |h: &mut TimedHistories| {
+            firsts += h.take_drops().iter().filter(|drop| drop.first).count();
+            firsts
+        };
         let (a, b, other) = (key(1, 1), key(1, 2), key(2, 1));
         for k in [&a, &b, &other] {
             h.reset(k, 1, 10);
         }
         let context = a.multiple_context().unwrap().clone();
         h.set_sizing(&context, Some(50), 60);
-        let dropped = || counters.timed_changes_dropped.load(Ordering::Relaxed);
         // Several drops of one cause, across the context's references, warn
         // once; every change is counted.
         h.dropped(&a, 1, DropReason::TooLarge);
         h.dropped(&b, 2, DropReason::TooLarge);
         h.dropped(&a, 1, DropReason::TooLarge);
-        assert_eq!((warnings.get(), dropped()), (1, 4));
+        assert_eq!((warnings(&mut h), dropped(&h)), (1, 4));
         // Another cause, or another context, warns for itself.
         h.dropped(&a, 1, DropReason::HistoryFull);
         h.dropped(&other, 1, DropReason::TooLarge);
-        assert_eq!((warnings.get(), dropped()), (3, 6));
+        assert_eq!((warnings(&mut h), dropped(&h)), (3, 6));
         // A renewal advertising the same maximum APDU changes nothing...
         h.set_sizing(&context, Some(50), 60);
         h.dropped(&a, 1, DropReason::TooLarge);
-        assert_eq!(warnings.get(), 3);
+        assert_eq!(warnings(&mut h), 3);
         // ...while one advertising another size warns afresh,
         h.set_sizing(&context, Some(128), 60);
         h.dropped(&a, 1, DropReason::TooLarge);
-        assert_eq!(warnings.get(), 4);
+        assert_eq!(warnings(&mut h), 4);
         // and so does a re-admitted reference of the context.
         h.dropped(&b, 1, DropReason::TooLarge);
-        assert_eq!(warnings.get(), 4);
+        assert_eq!(warnings(&mut h), 4);
         h.reset(&b, 2, 10);
         h.dropped(&a, 1, DropReason::TooLarge);
-        assert_eq!((warnings.get(), dropped()), (5, 10));
+        assert_eq!((warnings(&mut h), dropped(&h)), (5, 10));
         // A reference whose context has no terms left always warns.
         h.remove(&other);
         h.dropped(&other, 1, DropReason::Superseded);
         h.dropped(&other, 1, DropReason::Superseded);
-        assert_eq!((warnings.get(), dropped()), (7, 12));
+        assert_eq!((warnings(&mut h), dropped(&h)), (7, 12));
+    }
+
+    #[test]
+    fn a_report_names_the_reference_the_count_the_cause_and_the_size() {
+        let mut h = histories(8, 4);
+        let k = key(1, 1);
+        h.reset(&k, 1, 10);
+        h.set_sizing(k.multiple_context().unwrap(), Some(50), 60);
+        h.dropped(&k, 2, DropReason::HistoryFull);
+        h.dropped(&k, 1, DropReason::HistoryFull);
+        let report = |count, first| Dropped {
+            key: k.clone(),
+            count,
+            reason: DropReason::HistoryFull,
+            apdu: Some(50),
+            first,
+        };
+        assert_eq!(h.take_drops(), [report(2, true), report(1, false)]);
+        assert!(h.take_drops().is_empty(), "taken once");
+        assert_eq!(h.take_counts().changes_dropped, 3);
+        assert_eq!(h.take_counts().changes_dropped, 0, "taken once");
+    }
+
+    #[test]
+    fn a_host_that_never_takes_the_reports_holds_a_bounded_list() {
+        let mut h = histories(8, 4);
+        let k = key(1, 1);
+        h.reset(&k, 1, 10);
+        for _ in 0..3 * REPEATS_KEPT {
+            h.dropped(&k, 1, DropReason::HistoryFull);
+        }
+        // Another cause's first still joins the full list.
+        h.dropped(&k, 1, DropReason::TooLarge);
+        let drops = h.take_drops();
+        assert_eq!(drops.len(), REPEATS_KEPT + 1);
+        assert_eq!(
+            drops.iter().filter(|drop| drop.first).count(),
+            2,
+            "both causes' firsts"
+        );
+        assert_eq!(drops.last().unwrap().reason, DropReason::TooLarge);
+        assert_eq!(dropped(&h), 3 * REPEATS_KEPT as u64 + 1, "every drop");
     }
 }

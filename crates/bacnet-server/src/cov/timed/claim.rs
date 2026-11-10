@@ -4,12 +4,12 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 use bacnet_time::Instant;
 
-use super::{CovSubscriptionKey, DropReason, MultipleContextKey, TimedChange, TimedStore};
+use super::{CovSubscriptionKey, DropReason, MultipleContextKey, TimedChange};
 use crate::cov::CovRevisits;
+use crate::cov::timed_store::TimedStore;
 
 /// Changes drained into one notification, and the untimestamped references
 /// whose prepared values it carries. Unless [`TimedClaim::commit`] is called
@@ -79,18 +79,14 @@ impl TimedClaim {
     }
 
     /// Give up the untimestamped references left in this claim without owing
-    /// them, counting each in
-    /// [`untimed_references_oversized`](crate::cov::AtomicCovCounters::untimed_references_oversized):
+    /// them, counting each
+    /// ([`TimedCounts::untimed_oversized`](super::TimedCounts::untimed_oversized)):
     /// their values fit no notification, so a later attempt would only fail
     /// again. They are evaluated again at their next fanout (#1066).
     pub(crate) fn forgo_untimed(&mut self) {
         let left_out = std::mem::take(&mut self.untimed).len();
         if left_out > 0 {
-            self.store
-                .lock()
-                .counters
-                .untimed_references_oversized
-                .fetch_add(left_out as u64, Ordering::Relaxed);
+            self.store.lock().note_oversized(left_out);
         }
     }
 

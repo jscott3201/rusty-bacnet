@@ -190,9 +190,8 @@ mod tests {
         VALUE_MEMORY, value_len,
     };
     use super::*;
-    use crate::cov::{AtomicCovCounters, CovSubscriptionTable};
+    use crate::cov::CovSubscriptionTable;
     use bacnet_device_core::cov::{CovObservation, CovSample, SubscriberEndpoint};
-    use std::sync::Arc;
 
     /// The local maximum APDU these tests' devices take: the largest B/IP one.
     const LOCAL: usize = 1476;
@@ -277,7 +276,7 @@ mod tests {
     /// such notifications carry.
     #[test]
     fn at_a_50_octet_subscriber_a_change_that_fits_the_wire_fits_the_bound() {
-        let (mut h, counters) = histories(8, 4);
+        let mut h = histories(8, 4);
         let k = key(1, 1);
         let small = context(1);
         h.reset(&k, 1, 0);
@@ -305,7 +304,7 @@ mod tests {
             h.push(&k, 1, change(second, 4));
         }
         assert_eq!(seconds(&h.drain(&k, 1).1), [1, 2, 3, 4, 5]);
-        assert_eq!(dropped(&counters), 0);
+        assert_eq!(dropped(&h), 0);
         // A longer lifetime takes another octet in every notification, and
         // the room of four no longer holds the oldest change.
         h.set_sizing(&small, Some(50), 300);
@@ -313,7 +312,7 @@ mod tests {
             h.push(&k, 1, change(second, 4));
         }
         assert_eq!(seconds(&h.drain(&k, 1).1), [7, 8, 9, 10]);
-        assert_eq!(dropped(&counters), 1);
+        assert_eq!(dropped(&h), 1);
     }
 
     /// Changes of `payload` octets: the octets one takes as an item, and
@@ -346,8 +345,7 @@ mod tests {
     /// context this small never reaches, not against the room for items.
     #[test]
     fn at_a_50_octet_subscriber_the_bound_keeps_four_notifications_of_changes() {
-        let counters = Arc::new(AtomicCovCounters::default());
-        let mut h = TimedHistories::new(LOCAL, Arc::clone(&counters));
+        let mut h = TimedHistories::new(LOCAL);
         let k = key(1, 1);
         let small = context(1);
         h.reset(&k, 1, 0);
@@ -362,7 +360,7 @@ mod tests {
             h.push(&k, 1, real_present_value(second));
         }
         assert_eq!(seconds(&h.drain(&k, 1).1), [7, 8, 9, 10]);
-        assert_eq!(dropped(&counters), 6);
+        assert_eq!(dropped(&h), 6);
 
         // The estimate counts octets, not whole notifications: five Binary
         // Present_Value changes, 18 octets each, fit the 100 octets of four.
@@ -372,7 +370,7 @@ mod tests {
             h.push(&k, 1, change(second, 2));
         }
         assert_eq!(seconds(&h.drain(&k, 1).1), [16, 17, 18, 19, 20]);
-        assert_eq!(dropped(&counters), 11);
+        assert_eq!(dropped(&h), 11);
     }
 
     /// #1287: across subscriber and change sizes, a context keeps as many
@@ -400,8 +398,7 @@ mod tests {
                     let ceiling_binds = ceiling / memory < room / items;
                     assert_eq!(ceiling_binds, payload <= 40, "payload {payload}");
                 }
-                let counters = Arc::new(AtomicCovCounters::default());
-                let mut h = TimedHistories::new(LOCAL, Arc::clone(&counters));
+                let mut h = TimedHistories::new(LOCAL);
                 h.reset(&k, 1, 0);
                 h.set_sizing(&small, Some(subscriber), 120);
                 for n in 0..fit + 2 {
@@ -409,11 +406,7 @@ mod tests {
                 }
                 let kept = h.drain(&k, 1).1.len();
                 assert_eq!(kept, fit, "subscriber {subscriber}, payload {payload}");
-                assert_eq!(
-                    dropped(&counters),
-                    2,
-                    "subscriber {subscriber}, payload {payload}"
-                );
+                assert_eq!(dropped(&h), 2, "subscriber {subscriber}, payload {payload}");
             }
         }
     }
@@ -428,8 +421,7 @@ mod tests {
     #[cfg(target_pointer_width = "64")]
     #[test]
     fn the_memory_ceiling_caps_every_context_under_many_subscribers() {
-        let counters = Arc::new(AtomicCovCounters::default());
-        let mut h = TimedHistories::new(LOCAL, Arc::clone(&counters));
+        let mut h = TimedHistories::new(LOCAL);
         // The smallest timestamped change: one empty value, 16 octets as an
         // item and 200 bytes in memory.
         let (items, memory) = sizes(0);

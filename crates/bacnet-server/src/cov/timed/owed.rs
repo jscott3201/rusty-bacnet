@@ -65,7 +65,7 @@ impl TimedHistories {
         if reference.owed_since.is_none_or(|owed| since < owed) {
             reference.owed_since = Some(since);
             // The context's deadline may have moved earlier.
-            self.wake.notify_one();
+            self.moved = true;
         }
     }
 
