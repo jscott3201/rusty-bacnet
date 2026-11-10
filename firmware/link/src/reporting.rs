@@ -84,7 +84,7 @@ pub const ARENA: usize = crate::objects::ARENA + 8 * 1024;
 /// The heap the scenario runs in with a COV-multiple context (#2320), in
 /// octets: 12 KiB more, for that report's histories, reads, claim and
 /// notification while it is built (`tests/reporting.rs` prints a peak of
-/// 31,920 octets on a 64-bit host, where the scenario without it peaks at
+/// 31,848 octets on a 64-bit host, where the scenario without it peaks at
 /// 19,136).
 #[cfg(feature = "reporting-multiple")]
 pub const ARENA: usize = crate::objects::ARENA + 20 * 1024;

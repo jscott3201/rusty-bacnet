@@ -953,7 +953,7 @@ image would link:
 | PR 2, measured | 171.4 KB (flash 189.7 KB) | the image through the `Reporter`, trimmed by #2363 (§8.3) |
 | + `event-reporting` (after PR 3) | 172-181 KB | ~2,200 lines, plus the measured objects and encoder share |
 | + `event-enrollment` (#2319) | 207-221 KB | ~2,700 lines, the Event Enrollment object, `decode_event_parameter` |
-| + the Multiple path (#2320) | +15-25 KB estimated; +137 KB measured before any trim (decision 18) | ~3,300 lines, the COVNotificationMultiple codec |
+| + the Multiple path (#2320) | +15-25 KB estimated; +134 KB measured before any trim (decision 18) | ~3,300 lines, the COVNotificationMultiple codec |
 
 Flash runs about 18 KB above `.text`. So COV with intrinsic reporting fits
 a 256 KB part with room; with Event Enrollment it is tight there and easy
@@ -1452,17 +1452,18 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
       context (a timestamped Present_Value, its initial report and one
       change), the `firmware` profile, Rust 1.99.0, on a 512 KiB layout
       (the `reporting-multiple` build, below). Flash, without the feature
-      and with it: 195,840 and 332,576 octets (thumbv7m), 196,652 and
-      333,496 (thumbv7em), 235,290 and 402,354 (riscv32imac). RAM: 24,680
+      and with it: 195,840 and 330,228 octets (thumbv7m), 196,652 and
+      331,144 (thumbv7em), 235,290 and 399,418 (riscv32imac). RAM: 24,680
       and 36,968 on each, the arena from 24 to 36 KiB, for a heap peak of
-      31,920 octets on a 64-bit host where the scenario without the
+      31,848 octets on a 64-bit host where the scenario without the
       context peaks at 19,136. No `core::fmt`; the same memmove routines;
       three 64-bit division routines on the thumb targets and two on
-      riscv32imac, where the row allows none.
-    - So the image passes the thumb targets' 256 KiB region by 70 KB and
+      riscv32imac, where the row allows none (the turn sequence adds
+      none: it scales and shifts).
+    - So the image passes the thumb targets' 256 KiB region by 68 KB and
       fails a standing limit of its row. §8.2 had estimated 15-25 KB.
     - Where it goes (thumbv7m `.text` by symbol, with LTO, so callers
-      hold what they inline; taken before the fix round added 3 KB): B-tree code 36 KB (the histories' six
+      hold what they inline; taken before the fix rounds, which added 1 KB): B-tree code 36 KB (the histories' six
       maps, the read cache's two, the steps' maps and sets), sort
       instantiations 27 KB, the histories 40 KB, the report steps with
       the split 36 KB, the `Reporter` 44 KB (`handle`, with the service

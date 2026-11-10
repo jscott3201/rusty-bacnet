@@ -53,7 +53,7 @@ structured-writes = []
 # bacnet-server has it; a firmware image built on `alloc` leaves it off
 # unless it serves that service. The `Reporter` dispatches by service, so
 # the path links whether or not anyone subscribes through it: measured on
-# the `reporting` image it costs about 137 KB of flash on a Cortex-M3 and
+# the `reporting` image it costs about 134 KB of flash on a Cortex-M3 and
 # 12 KiB of heap, with three 64-bit division routines, until its B-tree
 # maps and sorts are trimmed (#2215's rule for keeping a feature; design
 # note, decision 18).

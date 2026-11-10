@@ -24,7 +24,7 @@ the database guard, the transport, addressing and time.
   (`cov::multiple_report`). A host sends what those decide, and with the
   feature a `Reporter` answers the service and queues its reports as it
   does the other COV notifications. A firmware image leaves it off unless
-  it serves the service: it adds about 137 KB of flash on a Cortex-M3.
+  it serves the service: it adds about 134 KB of flash on a Cortex-M3.
 - `bacnet-server` runs its ReadProperty, ReadPropertyMultiple,
   WriteProperty, WritePropertyMultiple, Who-Is and Who-Has on it, through
   the staged functions in `read`, `write` and `discovery`.
