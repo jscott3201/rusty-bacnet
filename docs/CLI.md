@@ -1459,6 +1459,65 @@ anything that doesn't decode ends the list as `[raw ..]`.
 
 **Aliases:** `rp` = read, `rpm` = readm, `rr` = read-range
 
+### Standard 223 export (experimental)
+
+```bash
+bacnet export 223-experimental 192.168.1.100 > ahu1.ttl
+bacnet export 223-experimental 1234 --base-iri https://example.com/site/ -o ahu1.ttl
+bacnet export 223-experimental 192.168.1.100 --types ai,ao,msv --write-priority 8
+```
+
+Proposed ASHRAE Standard 223 is a semantic model of a building: its
+equipment, how the equipment connects, and the properties it observes and
+actuates. Its draft ontology ties a model's property to a BACnet point with
+an external reference. `export 223-experimental` writes that part for one
+device, as Turtle: one 223 property for each analog, binary and multi-state
+input, output and value, each with a reference naming the device, the
+object by identifier and by name, and `present-value`.
+
+- Inputs become observable properties, outputs and values with a
+  Priority_Array actuatable ones, and values without one plain properties.
+  Analog points are quantifiable; binary points use the ontology's neutral
+  logical kind; each multi-state point gets an enumeration kind of its own,
+  one member a state, named by its State_Text.
+- Analog units go out as QUDT units and quantity kinds where the export's
+  table maps them (about 90 common HVAC, lighting and energy units).
+- `--write-priority N` (1 to 16) names a command priority in the reference
+  of every actuatable point. Present_Value itself is never read or written.
+- Node names come from object identifiers, so they don't change when an
+  object is renamed: `<BASE>device-1234/analog-input-3.present-value`. The
+  default base, `http://example.org/bacnet/`, is a documentation domain;
+  pass your own with `--base-iri`.
+- `-o FILE` writes a new file and refuses one that exists. A summary goes
+  to stderr; `--format` and `--json` don't apply.
+- It costs the device name, its Object_List and one request per exported
+  object, by ReadPropertyMultiple where the device takes it, one at a time.
+  A target given by address costs one more, to learn the instance. If the
+  device stops answering partway, the export keeps what was read, says so
+  in its header, and exits 1.
+
+**Limits.** The draft and this export can change between releases, which
+is why the command name says experimental.
+
+- It is a point list, not a building model: no equipment, connections or
+  sensors. An integrator adds them.
+- Shape validation warns that each observable property has no sensor
+  observing it, and that each actuatable property has no equipment it
+  actuates. Both are expected for a point list.
+- The draft's identifier pattern refuses instance 0. An object or a device
+  numbered 0 has no identifier string in its reference; its name still
+  identifies it, and a comment marks the gap.
+- A unit the table doesn't map gets no QUDT terms, only a comment naming
+  the BACnet unit, and the header counts them. The draft requires a
+  quantity kind on every quantifiable property, so shape validation
+  reports such points.
+- Device text (names, descriptions, state texts) is kept exactly, escaped
+  so the file stays ASCII.
+
+The header comment names the Open223 ontology copy the output was checked
+against. A copy of it is in `testdata/open223/`, and
+`scripts/check-223.py` validates exports against its shapes with pySHACL.
+
 ### Writing Properties
 
 ```bash

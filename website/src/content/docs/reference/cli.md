@@ -63,12 +63,14 @@ These options go before or after the command. Each command also takes `-h` or `-
 - `--yes`: Confirm communication control and reinitialize without typing the target; they need it when stdin is not a terminal.
 - `-i, --interface <INTERFACE>`: Network interface IP address to bind (omit to bind all of them; the TUI asks which).
 - `-p, --port <PORT>`: BACnet UDP port. Default: `47808`.
+- `--share-port`: Share --port with other programs on this host that bind it the same way. Without it the CLI claims the port and fails at once when another program holds it. With it, each unicast to the port reaches only one of the programs on it, so replies can go astray. BACnet/IP and BACnet/IPv6 (--ipv6) only.
 - `-b, --broadcast <BROADCAST>`: Broadcast address for WhoIs. Default: `255.255.255.255`.
 - `-t, --timeout <TIMEOUT>`: APDU timeout in milliseconds. Default: `6000`.
 - `--min-interval-ms <MIN_INTERVAL_MS>`: Least time in milliseconds from the latest request to a device finishing to the next being sent, or from its send while it is still outstanding (0: none, at most 3600000), so paging a log or polling leaves a slow device room for others. Default: `0`.
-- `--foreign-bbmd <ADDR>`: Run as a foreign device registered with this BBMD (IP or IP:port), so broadcasts such as discover reach its network. A one-shot command waits for the registration first; it is renewed while the CLI runs. BACnet/IP only.
+- `--foreign-bbmd <ADDR>`: Run as a foreign device registered with this BBMD (IP, host name, or either with :port), so broadcasts such as discover reach its network. A host name is looked up at start: until it first resolves, again 30 s after each failure, and from then on alongside the registrations, at most every 30 s. A one-shot command waits for the registration first, and fails when the name doesn't resolve; it is renewed while the CLI runs. With --ipv6: an IPv6 address (ip, or ip in brackets with :port) or a host name, and --device-instance; a host name with --ipv6 and no --ipv6-interface must resolve at start.
 - `--ttl <TTL>`: Time-to-live in seconds of a foreign-device registration: with --foreign-bbmd, register and discover --bbmd. Default: `300`.
 - `--renewal <SECS>`: Seconds between --foreign-bbmd registrations, less than --ttl (default: half the TTL). Behind NAT, renew often so the mapping the BBMD's replies use stays open.
+- `--nat-global-address <IP:PORT>`: Our address and port as the --foreign-bbmd BBMD sees them, when a NAT router translates the registration (IPv4 ip:port). The TUI's Network screen uses it to find our FDT entry; it changes nothing sent.
 - `--bip-multicast <GROUP>`: Join this IPv4 multicast group (class D) as a B/IP-M node (Annex J.8): broadcasts such as discover go to the group, and only the group's broadcasts are taken. Needs --interface. BACnet/IP only.
 - `--bip-multicast-ttl <TTL>`: Multicast TTL for --bip-multicast, 1 to 255 (default 1, the local network only); raise it for a group that spans IP routers. Default: `1`.
 - `--bip-multicast-port <PORT>`: UDP port of the --bip-multicast group (default: --port). Several stacks on one host at one address each need their own --port, and share this one.
@@ -112,6 +114,8 @@ These options go before or after the command. Each command also takes `-h` or `-
 | [`discover`](#bacnet-discover) | `whois` | Discover BACnet devices (WhoIs). |
 | [`find`](#bacnet-find) | `whohas` | Find objects by name (WhoHas). |
 | [`read`](#bacnet-read) | `rp` | Read a property. |
+| [`export`](#bacnet-export) | — | Export a device's objects in another model's terms (experimental). |
+| [`export 223-experimental`](#bacnet-export-223-experimental) | — | EXPERIMENTAL: the device's analog, binary and multi-state objects as a proposed ASHRAE Standard 223 point list, in Turtle. |
 | [`readm`](#bacnet-readm) | `rpm` | Read multiple properties. |
 | [`write`](#bacnet-write) | `wp` | Write a property. |
 | [`writem`](#bacnet-writem) | `wpm` | Write multiple properties (WritePropertyMultiple). |
@@ -287,6 +291,35 @@ Arguments:
 - `<TARGET>`: Target device (IP address or instance number). Required.
 - `<OBJECT>`: Object specifier (e.g., analog-input:1, ai:1). Required.
 - `<PROPERTY>`: Property (e.g., present-value, pv). Required.
+
+### bacnet export
+
+Export a device's objects in another model's terms (experimental).
+
+```text
+Usage: bacnet export [OPTIONS] <COMMAND>
+```
+
+### bacnet export 223-experimental
+
+EXPERIMENTAL: the device's analog, binary and multi-state objects as a proposed ASHRAE Standard 223 point list, in Turtle.
+
+One 223 property per object, each with a BACnet external reference (device, object, name, property), QUDT units where they map, and the states of multi-state objects. A point list only: no equipment, connections or sensors. The 223 draft and this output can change between releases. Reads the device name, its object list, then one request per exported object. --format and --json don't apply.
+
+```text
+Usage: bacnet export 223-experimental [OPTIONS] <TARGET>
+```
+
+Arguments:
+
+- `<TARGET>`: Target device (address, instance, or routed dnet:instance). Required.
+
+Options:
+
+- `--base-iri <IRI>`: Base IRI of the generated nodes, ending in / or #; a device's nodes go under the base followed by device-INSTANCE/. Default: `http://example.org/bacnet/`.
+- `--types <TYPES>`: Object types to export, comma-separated (default: ai, ao, av, bi, bo, bv, msi, mso and msv).
+- `--write-priority <N>`: Command priority (1-16) to name in each commandable point's reference.
+- `-o, --output <FILE>`: Write the Turtle to this new file instead of stdout; an existing file is refused.
 
 ### bacnet readm
 

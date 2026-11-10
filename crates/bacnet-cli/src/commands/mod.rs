@@ -3,6 +3,7 @@ pub mod alarms;
 pub mod capture;
 pub mod device;
 pub mod discover;
+pub mod export;
 pub mod file;
 pub mod read;
 pub mod read_range;

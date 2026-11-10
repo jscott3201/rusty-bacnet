@@ -14,8 +14,10 @@ use bacnet_types::primitives::BACnetTimeStamp;
 use clap::builder::{OsStringValueParser, TypedValueParser};
 use clap::{Parser, Subcommand, ValueEnum};
 
+mod export;
 mod mcp;
 
+pub(crate) use export::ExportFormat;
 pub(crate) use mcp::McpAction;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -407,6 +409,12 @@ pub(crate) enum Command {
         object: String,
         /// Property (e.g., present-value, pv).
         property: String,
+    },
+
+    /// Export a device's objects in another model's terms (experimental).
+    Export {
+        #[command(subcommand)]
+        format: ExportFormat,
     },
 
     /// Read multiple properties.

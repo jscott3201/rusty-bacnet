@@ -1,0 +1,29 @@
+# EXPERIMENTAL: device 0 as a proposed ASHRAE Standard 223 point list, written by
+# rusty-bacnet. The 223 draft and this mapping can change between releases.
+# A point list only: it holds no equipment, connections or sensors.
+# Checked against the Open223 ontology git:master@6fdc11c6 (2026-10-06) from https://open223.info/223p.ttl.
+# 1 object exported, 0 skipped, 0 with an unmapped unit, 2 identifiers left out for instance 0.
+
+@prefix bacnet: <http://data.ashrae.org/bacnet/2020#> .
+@prefix qudt: <http://qudt.org/schema/qudt/> .
+@prefix quantitykind: <http://qudt.org/vocab/quantitykind/> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix s223: <http://data.ashrae.org/standard223#> .
+@prefix unit: <http://qudt.org/vocab/unit/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix d: <http://example.org/bacnet/device-0/> .
+
+# analog-input 0
+d:analog-input-0.present-value a s223:QuantifiableObservableProperty ;
+    rdfs:label "Outside Air" ;
+    qudt:hasUnit unit:DEG_C ;
+    qudt:hasQuantityKind quantitykind:Temperature ;
+    s223:hasExternalReference d:analog-input-0.present-value.ref .
+
+d:analog-input-0.present-value.ref a s223:BACnetExternalReference ;
+    # device 0: no device-identifier, which the draft's pattern refuses
+    bacnet:device-name "AHU-1 Controller" ;
+    # instance 0: no object-identifier, which the draft's pattern refuses
+    bacnet:object-name "Outside Air" ;
+    bacnet:property-identifier "present-value" .
+

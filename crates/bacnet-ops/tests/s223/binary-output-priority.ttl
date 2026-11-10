@@ -1,0 +1,29 @@
+# EXPERIMENTAL: device 1234 as a proposed ASHRAE Standard 223 point list, written by
+# rusty-bacnet. The 223 draft and this mapping can change between releases.
+# A point list only: it holds no equipment, connections or sensors.
+# Checked against the Open223 ontology git:master@6fdc11c6 (2026-10-06) from https://open223.info/223p.ttl.
+# 1 object exported, 0 skipped, 0 with an unmapped unit, 0 identifiers left out for instance 0.
+
+@prefix bacnet: <http://data.ashrae.org/bacnet/2020#> .
+@prefix qudt: <http://qudt.org/schema/qudt/> .
+@prefix quantitykind: <http://qudt.org/vocab/quantitykind/> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix s223: <http://data.ashrae.org/standard223#> .
+@prefix unit: <http://qudt.org/vocab/unit/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix d: <http://example.org/bacnet/device-1234/> .
+
+# binary-output 1
+d:binary-output-1.present-value a s223:EnumeratedActuatableProperty ;
+    rdfs:label "Supply Fan Start" ;
+    s223:hasEnumerationKind s223:Binary-Logical ;
+    s223:hasExternalReference d:binary-output-1.present-value.ref .
+
+d:binary-output-1.present-value.ref a s223:BACnetExternalReference ;
+    bacnet:device-identifier "device,1234" ;
+    bacnet:device-name "AHU-1 Controller" ;
+    bacnet:object-identifier "binary-output,1" ;
+    bacnet:object-name "Supply Fan Start" ;
+    bacnet:property-identifier "present-value" ;
+    bacnet:priority-for-writing "8"^^xsd:nonNegativeInteger .
+

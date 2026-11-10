@@ -1,0 +1,342 @@
+//! The Turtle writer: escaping, options, and a small structural check of
+//! the text it writes, written here by hand so the crate needs no RDF
+//! library. `scripts/check-223.py` validates the golden files against the
+//! ontology's shapes.
+
+use std::collections::BTreeSet;
+
+use bacnet_types::enums::{EngineeringUnits, ObjectType};
+use bacnet_types::primitives::ObjectIdentifier;
+
+use super::turtle::literal;
+use super::*;
+
+pub(super) fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
+    ObjectIdentifier::new(object_type, instance).unwrap()
+}
+
+/// A token of Turtle as the check reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Token {
+    Prefix,
+    Iri(String),
+    Literal(String),
+    Name(String),
+    Datatype,
+    Punct(char),
+}
+
+/// The tokens of `text`, comments dropped. Panics on a literal that isn't
+/// escaped as the writer escapes (no raw control or non-ASCII character,
+/// only the escapes Turtle defines), or on a character outside printable
+/// ASCII anywhere else.
+fn tokens(text: &str) -> Vec<Token> {
+    let mut out = Vec::new();
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            ' ' | '\n' => {}
+            '#' => {
+                for ch in chars.by_ref() {
+                    if ch == '\n' {
+                        break;
+                    }
+                    assert!((' '..='~').contains(&ch), "comment holds {ch:?}");
+                }
+            }
+            '"' => {
+                let mut value = String::new();
+                loop {
+                    let ch = chars.next().expect("unterminated literal");
+                    assert!((' '..='~').contains(&ch), "raw {ch:?} in a literal");
+                    match ch {
+                        '"' => break,
+                        '\\' => {
+                            let escape = chars.next().expect("escape at the end");
+                            let digits = match escape {
+                                '"' | '\\' | 'n' | 'r' | 't' => 0,
+                                'u' => 4,
+                                'U' => 8,
+                                other => panic!("escape \\{other}"),
+                            };
+                            let hex: String = chars.by_ref().take(digits).collect();
+                            assert!(
+                                hex.len() == digits && hex.chars().all(|c| c.is_ascii_hexdigit()),
+                                "\\{escape}{hex}"
+                            );
+                            value.push(match escape {
+                                'n' => '\n',
+                                'r' => '\r',
+                                't' => '\t',
+                                'u' | 'U' => char::from_u32(u32::from_str_radix(&hex, 16).unwrap())
+                                    .expect("a character"),
+                                other => other,
+                            });
+                        }
+                        _ => value.push(ch),
+                    }
+                }
+                out.push(Token::Literal(value));
+            }
+            '<' => {
+                let iri: String = chars.by_ref().take_while(|c| *c != '>').collect();
+                assert!(!iri.contains([' ', '<', '"']), "{iri}");
+                out.push(Token::Iri(iri));
+            }
+            ';' | ',' => out.push(Token::Punct(ch)),
+            '^' => {
+                assert_eq!(chars.next(), Some('^'));
+                out.push(Token::Datatype);
+            }
+            '@' => {
+                let word: String =
+                    std::iter::from_fn(|| chars.next_if(|c| c.is_ascii_alphabetic())).collect();
+                assert_eq!(word, "prefix");
+                out.push(Token::Prefix);
+            }
+            _ => {
+                assert!((' '..='~').contains(&ch), "raw {ch:?}");
+                let mut name = String::from(ch);
+                name.extend(std::iter::from_fn(|| {
+                    chars.next_if(|c| !matches!(c, ' ' | '\n' | ';' | ',' | '"' | '<' | '^'))
+                }));
+                // A local name can't end in a dot: one there ends the
+                // statement.
+                let ends = name.len() > 1 && name.ends_with('.');
+                if ends {
+                    name.pop();
+                }
+                if name == "." {
+                    out.push(Token::Punct('.'));
+                } else {
+                    out.push(Token::Name(name));
+                    if ends {
+                        out.push(Token::Punct('.'));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The shape's pattern for an identifier string, re-implemented: a type
+/// name of letters, digits and hyphens, a comma, and an instance with no
+/// leading zero, so never 0.
+fn identifier_ok(text: &str) -> bool {
+    let Some((name, instance)) = text.split_once(',') else {
+        return false;
+    };
+    !name.is_empty()
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        && instance.starts_with(|c: char| ('1'..='9').contains(&c))
+        && instance.chars().all(|c| c.is_ascii_digit())
+}
+
+/// Check `text` as the writer should have written it: every prefix used
+/// is declared first, every statement is a subject, then predicate and
+/// object pairs split by `;`, ended by `.`, and every identifier string
+/// fits the shape's pattern. Returns the statements' subjects.
+pub(super) fn check_structure(text: &str) -> Vec<String> {
+    let tokens = tokens(text);
+    let mut declared = BTreeSet::new();
+    let mut subjects = Vec::new();
+    let mut at = 0;
+    let prefix_of = |name: &str| name.split_once(':').map(|(p, _)| p.to_string());
+    while at < tokens.len() {
+        if tokens[at] == Token::Prefix {
+            let [Token::Name(prefix), Token::Iri(_), Token::Punct('.')] = &tokens[at + 1..at + 4]
+            else {
+                panic!("bad prefix at {:?}", &tokens[at..]);
+            };
+            assert!(prefix.ends_with(':'), "{prefix}");
+            declared.insert(prefix.trim_end_matches(':').to_string());
+            at += 4;
+            continue;
+        }
+        let used = |name: &String| {
+            let prefix = prefix_of(name).unwrap_or_else(|| panic!("{name} has no prefix"));
+            assert!(declared.contains(&prefix), "{prefix}: not declared");
+        };
+        let Token::Name(subject) = &tokens[at] else {
+            panic!("no subject at {:?}", &tokens[at..]);
+        };
+        used(subject);
+        subjects.push(subject.clone());
+        at += 1;
+        loop {
+            let Some(Token::Name(predicate)) = tokens.get(at) else {
+                panic!("no predicate after {subject}");
+            };
+            if predicate != "a" {
+                used(predicate);
+            }
+            at += 1;
+            loop {
+                match tokens.get(at) {
+                    Some(Token::Name(object)) => used(object),
+                    Some(Token::Literal(value)) => {
+                        if predicate.ends_with("-identifier")
+                            && predicate != "bacnet:property-identifier"
+                        {
+                            assert!(identifier_ok(value), "{predicate} {value:?}");
+                        }
+                        if tokens.get(at + 1) == Some(&Token::Datatype) {
+                            let Some(Token::Name(datatype)) = tokens.get(at + 2) else {
+                                panic!("no datatype after {value:?}");
+                            };
+                            used(datatype);
+                            at += 2;
+                        }
+                    }
+                    other => panic!("no object after {predicate}: {other:?}"),
+                }
+                at += 1;
+                if tokens.get(at) == Some(&Token::Punct(',')) {
+                    at += 1;
+                    continue;
+                }
+                break;
+            }
+            match tokens.get(at) {
+                Some(Token::Punct(';')) => at += 1,
+                Some(Token::Punct('.')) => {
+                    at += 1;
+                    break;
+                }
+                other => panic!("statement on {subject} not ended: {other:?}"),
+            }
+        }
+    }
+    subjects
+}
+
+/// Device text can't end a literal or a line: quotes, backslashes and
+/// controls are escaped, and everything outside printable ASCII goes by
+/// its code point, astral characters by eight digits.
+#[test]
+fn literals_escape_device_text() {
+    assert_eq!(literal("Zone Temp"), "\"Zone Temp\"");
+    assert_eq!(literal(r#"a"b\c"#), r#""a\"b\\c""#);
+    assert_eq!(literal("l1\nl2\r\t"), r#""l1\nl2\r\t""#);
+    assert_eq!(literal("\u{7}\u{1b}[2J"), r#""\u0007\u001B[2J""#);
+    assert_eq!(literal("Temp\u{e9}rature"), r#""Temp\u00E9rature""#);
+    assert_eq!(literal("\u{202E}x"), r#""\u202Ex""#);
+    assert_eq!(literal("\u{1F525}"), r#""\U0001F525""#);
+    assert_eq!(literal("\u{7f}"), r#""\u007F""#);
+}
+
+/// The shape's identifier pattern, as the test re-implements it.
+#[test]
+fn identifier_pattern() {
+    for good in ["analog-input,3", "device,1234", "600,10"] {
+        assert!(identifier_ok(good), "{good}");
+    }
+    for bad in [
+        "analog-input,0",
+        "device,0",
+        "analog-input,03",
+        "a b,1",
+        ",1",
+        "x,",
+        "x",
+    ] {
+        assert!(!identifier_ok(bad), "{bad}");
+    }
+}
+
+/// A write priority is 1 to 16; a base IRI is absolute, ends in `/` or
+/// `#`, and holds nothing Turtle refuses inside `<...>`.
+#[test]
+fn options_are_checked() {
+    assert!(WritePriority::new(0).is_err());
+    assert!(WritePriority::new(17).is_err());
+    assert_eq!(WritePriority::new(1).unwrap().get(), 1);
+    assert_eq!(WritePriority::new(16).unwrap().get(), 16);
+    for good in [
+        "http://example.org/bacnet/",
+        "urn:x:site#",
+        "https://a.b/c-d/",
+    ] {
+        assert!(TurtleOptions::new(good, None).is_ok(), "{good}");
+    }
+    for bad in [
+        "example.org/bacnet/",
+        "http://example.org/bacnet",
+        "http://example.org/a b/",
+        "http://example.org/a>b/",
+        "http://example.org/\"/",
+        "1http://x/",
+        "",
+    ] {
+        assert!(TurtleOptions::new(bad, None).is_err(), "{bad}");
+    }
+    assert_eq!(TurtleOptions::default().base_iri(), DEFAULT_BASE_IRI);
+    assert!(InventoryOptions::new(vec![]).is_err());
+    assert!(InventoryOptions::new(vec![ObjectType::TREND_LOG]).is_err());
+    assert_eq!(InventoryOptions::default().types, EXPORTED_TYPES);
+}
+
+/// The checker itself refuses what it should: an unterminated statement,
+/// an undeclared prefix, a raw control character, instance 0.
+#[test]
+fn the_check_refuses_broken_text() {
+    let good = "@prefix d: <http://x/> .\nd:a d:b \"c\" ;\n    d:e d:f .\n";
+    assert_eq!(check_structure(good), ["d:a"]);
+    for bad in [
+        "@prefix d: <http://x/> .\nd:a d:b \"c\"\n",
+        "@prefix d: <http://x/> .\nd:a e:b \"c\" .\n",
+        "@prefix d: <http://x/> .\nd:a d:b \"c\u{7}\" .\n",
+        "@prefix bacnet: <http://x/> .\nbacnet:a bacnet:object-identifier \"ai,0\" .\n",
+        "@prefix d: <http://x/> .\nd:a d:b \"\\q\" .\n",
+    ] {
+        let result = std::panic::catch_unwind(|| check_structure(bad));
+        assert!(result.is_err(), "{bad}");
+    }
+}
+
+/// The counts in the header, and the minted kind capped for a device that
+/// claims far more states than it names.
+#[test]
+fn counts_and_the_state_cap() {
+    let mut huge = InventoryObject::new(oid(ObjectType::MULTI_STATE_INPUT, 1));
+    huge.states = Some(u32::MAX);
+    let mut unread = InventoryObject::new(oid(ObjectType::ANALOG_INPUT, 2));
+    unread.error = Some("timeout".into());
+    let trend = InventoryObject::new(oid(ObjectType::TREND_LOG, 1));
+    let mut mapped = InventoryObject::new(oid(ObjectType::ANALOG_VALUE, 0));
+    mapped.units = Some(EngineeringUnits::PERCENT);
+    let unmapped = InventoryObject::new(oid(ObjectType::ANALOG_OUTPUT, 4));
+    let inventory = Inventory {
+        device: 7,
+        objects: vec![huge, unread, trend, mapped, unmapped],
+        ..Inventory::default()
+    };
+    let mut text = String::new();
+    let counts = write_turtle(&inventory, &TurtleOptions::default(), &mut text).unwrap();
+    assert_eq!(
+        counts,
+        Counts {
+            exported: 3,
+            skipped: 2,
+            unmapped_units: 1,
+            instance_zero: 1,
+        }
+    );
+    assert!(
+        text.contains(
+            "# 3 objects exported, 2 skipped, 1 with an unmapped unit, 1 identifier left out"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("d:multi-state-input-1.states.1024 a"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("d:multi-state-input-1.states.1025 "),
+        "{text}"
+    );
+    check_structure(&text);
+    assert_eq!(to_turtle(&inventory, &TurtleOptions::default()), text);
+}
