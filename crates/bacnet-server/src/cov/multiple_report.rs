@@ -25,8 +25,8 @@
 //! changes first; each sent part's claim is committed and what it completes
 //! ([`carried`]) recorded, and a part that is not sent stops the rest,
 //! whose claims go back, owing once a part went. A confirmed report sends
-//! its first part only ([`Report::into_first`]) and begins it in the table;
-//! its later parts go back to their queue for the
+//! its first part only ([`Report::into_first`]) and begins it in the table
+//! ([`begin_confirmed`]); its later parts go back to their queue for the
 //! follow-up its Ack owes.
 //!
 //! Nothing here locks, logs, sends or reads a monotonic clock: every claim
@@ -41,10 +41,12 @@ use bacnet_device_core::cov::multiple_chunks::{
 };
 use bacnet_device_core::cov::multiple_items::{Coordinate, FieldStamp};
 use bacnet_device_core::cov::multiple_reads::{MultipleReads, PreparedReference};
-use bacnet_device_core::cov::timed::{FieldTiming, TimedChange, TimedClaim, TimedHistories};
+use bacnet_device_core::cov::timed::{
+    ClaimId, FieldTiming, TimedChange, TimedClaim, TimedHistories,
+};
 use bacnet_device_core::cov::{
-    CovObservation, CovSubscriptionKey, CovSubscriptionSnapshot, CovTable, CovTimeRemaining,
-    MultipleContextKey, PreparedCovCompletion,
+    BeginRefusal, CovObservation, CovSubscriptionKey, CovSubscriptionSnapshot, CovTable,
+    CovTimeRemaining, MultipleContextKey, PreparedCovCompletion, Token,
 };
 use bacnet_objects::clock::ClockFrame;
 use bacnet_objects::database::ObjectDatabase;
@@ -703,7 +705,7 @@ pub(crate) struct FirstPart {
     /// What the part's Ack retires.
     pub(crate) claim: TimedClaim,
     /// The later parts' claims. They return to their queue, uncounted,
-    /// once the report holds the context, and the
+    /// once the report holds the context ([`begin_confirmed`]), and the
     /// Ack's follow-up sends the next part (#986). Deferred, not dropped:
     /// requeueing them must not let the bound evict what this report
     /// planned to send. The values of a change sent one per notification
@@ -737,4 +739,92 @@ impl Report {
             deferred,
         })
     }
+}
+
+/// A confirmed report the table began.
+pub(crate) struct Begun {
+    /// The report: its outcome goes back with it (`CovTable::delivered`).
+    pub(crate) token: Token,
+    /// The claim on what the report conveys, lodged with the histories
+    /// until the report's own deadline: its holder settles it when the
+    /// report ends (`TimedHistories::settle`), delivered on the Ack and
+    /// returned otherwise, and the histories give it back at the deadline
+    /// if nobody did.
+    pub(crate) claim: Option<ClaimId>,
+}
+
+/// Begin one confirmed notification at `now`: mark its coordinate
+/// outstanding under `completion`, keeping the observation each reference
+/// carries for the Ack (`CovTable::begin_confirmed`), and settle what it
+/// holds of the histories.
+///
+/// Once the report holds its coordinate, a change `claim` sends only some
+/// values of keeps the rest queued until it is delivered (#1163), the
+/// `deferred` parts go back to their queue with their untimestamped
+/// references owed (#1038), and `claim` is lodged until the report's
+/// deadline, read off the table, so both end at one instant.
+///
+/// A refusal gives everything back, before any follow-up can drain the same
+/// references again, so the history stays in capture order.
+/// [`BeginRefusal::NotCurrent`] means a fence moved a reference since it
+/// was captured: the host looks at the references again. A busy coordinate
+/// needs nothing: its outstanding report, Ack or hold-off owns the
+/// follow-up.
+pub(crate) fn begin_confirmed(
+    table: &mut CovTable,
+    histories: &mut TimedHistories,
+    completion: PreparedCovCompletion,
+    observations: &[(CovSubscriptionSnapshot, CovObservation)],
+    claim: Option<TimedClaim>,
+    deferred: Vec<TimedClaim>,
+    now: Instant,
+) -> Result<Begun, BeginRefusal> {
+    let begun = table.begin_confirmed(
+        completion,
+        observations
+            .iter()
+            .map(|(sub, observation)| (sub, observation.clone())),
+        now,
+    );
+    match begun {
+        Ok(token) => {
+            if let Some(claim) = &claim {
+                histories.going_out(claim);
+            }
+            for deferred in deferred {
+                histories.give_back(deferred.owing(), now);
+            }
+            // Were the report gone already, its claim ends now.
+            let deadline = table.report_deadline(token).unwrap_or(now);
+            Ok(Begun {
+                token,
+                claim: claim.map(|claim| histories.lodge(claim, deadline)),
+            })
+        }
+        Err(refusal) => {
+            if let Some(claim) = claim {
+                histories.give_back(claim, now);
+            }
+            for deferred in deferred {
+                histories.give_back(deferred, now);
+            }
+            Err(refusal)
+        }
+    }
+}
+
+/// A confirmed report to `context` failed at `now` (its retries ran out, or
+/// the subscriber refused it): the histories' backstop waits one hold-off,
+/// the table's, before it hands the context out again, so the timestamped
+/// history the report returned goes out once the hold-off ends.
+pub(crate) fn hold_off(
+    table: &CovTable,
+    histories: &mut TimedHistories,
+    context: &MultipleContextKey,
+    now: Instant,
+) {
+    histories.hold_until(
+        context,
+        now.saturating_add(table.flight_timing().hold_off()),
+    );
 }

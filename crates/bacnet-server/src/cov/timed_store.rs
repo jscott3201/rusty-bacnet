@@ -25,6 +25,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use bacnet_device_core::cov::{CovSubscriptionKey, MultipleContextKey};
+#[cfg(test)]
 use bacnet_time::Instant;
 use tokio::sync::Notify;
 use tracing::{debug, warn};
@@ -179,6 +180,7 @@ impl HistoryStore {
     }
 
     /// See [`TimedHistories::hold_until`].
+    #[cfg(test)]
     pub(crate) fn hold_until(&self, context: &MultipleContextKey, until: Instant) {
         self.lock().hold_until(context, until);
     }
@@ -190,8 +192,10 @@ impl HistoryStore {
 /// delivered, dropping it gives the claim back to the histories
 /// ([`TimedHistories::give_back`]), on any early return or failed send.
 ///
-/// The fanout's steps work on plain claims, and each part they hand back is
-/// guarded here ([`ClaimGuard::of`]).
+/// Its methods are the plain claim's, which has the policy. The split of a
+/// report to the subscriber's APDU size works on the plain claim
+/// ([`ClaimGuard::into_plain`]), and each part it hands back is guarded
+/// again ([`ClaimGuard::of`]).
 #[derive(Debug)]
 pub(crate) struct ClaimGuard {
     store: HistoryStore,
@@ -219,6 +223,13 @@ impl ClaimGuard {
     /// Take the plain claim out, leaving nothing to give back.
     fn take(&mut self) -> timed::TimedClaim {
         std::mem::take(&mut self.claim)
+    }
+
+    /// The plain claim, for the split of its report. Nothing gives it back
+    /// until [`ClaimGuard::of`] holds its parts again, so no early return
+    /// may come between the two.
+    pub(crate) fn into_plain(mut self) -> timed::TimedClaim {
+        self.take()
     }
 
     /// See [`timed::TimedClaim::add_untimed`].
@@ -273,15 +284,11 @@ impl ClaimGuard {
         self.store.lock().commit(claim);
     }
 
-    /// See [`TimedHistories::going_out`].
-    pub(crate) fn going_out(&self) {
-        self.store.lock().going_out(&self.claim);
-    }
-
     /// Hand the claim to the histories for a confirmed worker, until
     /// `deadline`, its report's own ([`TimedHistories::lodge`]). The worker
     /// settles it through the handle returned; the histories give it back
     /// themselves if the worker has not by then.
+    #[cfg(test)]
     pub(crate) fn lodge(mut self, deadline: Instant) -> LodgedClaim {
         let claim = self.take();
         let id = self.store.lock().lodge(claim, deadline);
@@ -317,6 +324,15 @@ pub(crate) struct LodgedClaim {
 }
 
 impl LodgedClaim {
+    /// The claim `id`, which `store`'s histories keep lodged for a
+    /// confirmed worker, settling itself from here on.
+    pub(crate) fn of(store: &HistoryStore, id: ClaimId) -> Self {
+        Self {
+            store: store.clone(),
+            id: Some(id),
+        }
+    }
+
     fn settle(&mut self, outcome: Settlement) {
         if let Some(id) = self.id.take() {
             self.store

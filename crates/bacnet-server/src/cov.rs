@@ -422,6 +422,7 @@ impl CovSubscriptionTable {
     /// Mark the coordinate of one confirmed notification's references
     /// outstanding, keeping the observation each carries for the Ack, and
     /// register its worker's wake-up for a fence.
+    #[cfg(test)]
     pub(crate) fn begin_confirmed<S: std::borrow::Borrow<CovSubscriptionSnapshot>>(
         &mut self,
         completion: PreparedCovCompletion,
@@ -432,19 +433,19 @@ impl CovSubscriptionTable {
         // A report it replaced past its deadline is fenced: wake its worker,
         // if one still runs, and drop its wake-up (#2303).
         self.sync(&[]);
-        Ok(self.flight(token, now))
+        Ok(self.flight(token))
     }
 
-    /// The worker's hold on the report `token`, which the table began at
-    /// `now`: its wake-up, registered for a fence, and the report's own
-    /// deadline, read off the table.
-    fn flight(&mut self, token: Token, now: bacnet_time::Instant) -> ConfirmedFlight {
-        let deadline = self.core.report_deadline(token);
-        debug_assert!(deadline.is_some(), "a report just begun is outstanding");
+    /// The worker's hold on the report `token`, which the table just
+    /// began: its wake-up, registered for a fence.
+    fn flight(&mut self, token: Token) -> ConfirmedFlight {
+        debug_assert!(
+            self.core.report_deadline(token).is_some(),
+            "a report just begun is outstanding"
+        );
         let wake = Arc::new(Notify::new());
         self.wakes.insert(token, Arc::clone(&wake));
-        // Were the report gone already, whatever its worker holds ends now.
-        ConfirmedFlight::new(token, wake, deadline.unwrap_or(now))
+        ConfirmedFlight::new(token, wake)
     }
 
     /// Decide, now, what one fanout reports to a COV-multiple context, and
@@ -458,6 +459,58 @@ impl CovSubscriptionTable {
     ) -> multiple_report::Gathering<'a> {
         let mut histories = self.timed.lock();
         reading.gather(&mut self.core, &mut histories, runtime_clock::core_now())
+    }
+
+    /// Begin one confirmed notification and settle what it holds of the
+    /// histories, in one step; see
+    /// [`begin_confirmed`](multiple_report::begin_confirmed). The worker
+    /// gets the report's flight, its wake-up registered for a fence, and
+    /// its claim, lodged until the report's deadline. A refusal has given
+    /// `claim` and `deferred` back.
+    pub(crate) fn begin_confirmed_report(
+        &mut self,
+        completion: PreparedCovCompletion,
+        observations: &[(CovSubscriptionSnapshot, CovObservation)],
+        claim: Option<timed_store::ClaimGuard>,
+        deferred: Vec<timed_store::ClaimGuard>,
+    ) -> Result<(ConfirmedFlight, Option<timed_store::LodgedClaim>), BeginRefusal> {
+        let now = runtime_clock::core_now();
+        // Plain before the store is locked: an emptied guard's drop takes
+        // no lock, and nothing returns before the step settles each claim.
+        let claim = claim.map(timed_store::ClaimGuard::into_plain);
+        let deferred = deferred
+            .into_iter()
+            .map(timed_store::ClaimGuard::into_plain)
+            .collect();
+        let begun = multiple_report::begin_confirmed(
+            &mut self.core,
+            &mut self.timed.lock(),
+            completion,
+            observations,
+            claim,
+            deferred,
+            now,
+        );
+        // A report it replaced past its deadline is fenced: wake its worker,
+        // if one still runs, and drop its wake-up (#2303).
+        self.settle();
+        let begun = begun?;
+        let claim = begun
+            .claim
+            .map(|id| timed_store::LodgedClaim::of(&self.timed, id));
+        Ok((self.flight(begun.token), claim))
+    }
+
+    /// A confirmed report to `context` failed: its timestamped history goes
+    /// out once the hold-off ends; see
+    /// [`hold_off`](multiple_report::hold_off).
+    pub(crate) fn hold_off(&self, context: &MultipleContextKey) {
+        multiple_report::hold_off(
+            &self.core,
+            &mut self.timed.lock(),
+            context,
+            runtime_clock::core_now(),
+        );
     }
 
     /// End the report `flight` names, as `outcome` says; an Ack commits
@@ -503,7 +556,7 @@ impl CovSubscriptionTable {
             .into_iter()
             .map(|report| {
                 let confirmed = subscriptions[report.index].issue_confirmed_notifications;
-                let flight = confirmed.then(|| self.flight(report.token, now));
+                let flight = confirmed.then(|| self.flight(report.token));
                 (report, flight)
             })
             .collect()

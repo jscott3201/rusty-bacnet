@@ -156,54 +156,40 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 .fetch_add(1, Ordering::Relaxed);
             return;
         }
-        let (flight, revisits) = {
+        // The table begins the report and, in the same step, the histories
+        // settle what it holds: once it holds its coordinate, the later
+        // parts queue again, their untimestamped references owed (#1038),
+        // and its claim is lodged until the report's own deadline, the one
+        // instant the table gave it; a live worker settles ahead of that,
+        // as it does the report (its cutoff is half a timeout earlier). A
+        // refusal puts the drained history back before any follow-up can
+        // drain the same references again, so it stays in capture order.
+        let (begun, revisits) = {
             let mut table = handles.ctx.cov_table.write().await;
-            let flight = table.begin_confirmed(
+            let begun = table.begin_confirmed_report(
                 report.completion,
-                report
-                    .observations
-                    .iter()
-                    .map(|(sub, observation)| (sub, observation.clone())),
+                &report.observations,
+                report.claim.take(),
+                std::mem::take(&mut report.deferred),
             );
-            (flight, Arc::clone(table.revisits()))
+            (begun, Arc::clone(table.revisits()))
         };
         // The instant the table began the report, near enough: its deadline
         // runs from it, and the worker's cutoff too.
-        let begun = tokio::time::Instant::now();
-        let flight = match flight {
-            Ok(flight) => {
-                // The coordinate is marked busy: the later parts can queue,
-                // and their untimestamped references are owed (#1038). A
-                // change this part sends only some values of keeps the rest
-                // queued until it is delivered (#1163).
-                if let Some(claim) = &report.claim {
-                    claim.going_out();
-                }
-                for deferred in std::mem::take(&mut report.deferred) {
-                    drop(deferred.owing());
-                }
-                flight
-            }
+        let begun_at = tokio::time::Instant::now();
+        let (flight, claim) = match begun {
+            Ok(begun) => begun,
             Err(refusal) => {
                 budget.refund(buf.len());
-                let keys: Vec<_> = report.keys().collect();
-                // Put drained history back before any follow-up can drain the
-                // same references again, so it stays in capture order.
-                drop(report);
                 if refusal == BeginRefusal::NotCurrent {
                     // A fence moved a reference since it was captured; look at
                     // its live state again. A busy coordinate needs nothing: its
                     // outstanding report, Ack or hold-off owns the follow-up.
-                    revisits.request(keys);
+                    revisits.request(report.keys());
                 }
                 return;
             }
         };
-        // The worker's claim ends with its report, at the one instant the
-        // table gave the report: the histories keep it until then, and a
-        // live worker settles ahead of that, as it does the report (its
-        // cutoff is half a timeout earlier).
-        let claim = report.claim.map(|claim| claim.lodge(flight.deadline()));
         Self::spawn_confirmed(
             handles,
             ConfirmedSend {
@@ -214,7 +200,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 claim,
                 label,
                 revisits,
-                begun,
+                begun: begun_at,
             },
         );
     }
@@ -341,9 +327,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     table.delivered(&flight, Delivery::Failed);
                     // Its timestamped history goes out once the hold-off ends.
                     if let Some(context) = route.key().multiple_context() {
-                        let until = runtime_clock::core_now()
-                            + bacnet_time::Duration::saturating_from_core(hold_off);
-                        table.timed().hold_until(context, until);
+                        table.hold_off(context);
                     }
                     Vec::new()
                 }
