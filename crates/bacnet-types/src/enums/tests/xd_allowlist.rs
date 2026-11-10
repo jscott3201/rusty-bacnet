@@ -59,8 +59,8 @@ ours-only ObjectType 38 | network security, which 2020 already removed
 ours-only ObjectTypesSupported 38 | network security, which 2020 already removed
 ours-only PropertyIdentifier 327..337 | network security, which 2020 already removed
 
-file-error EngineeringUnits 47910 MILLISIEMENS_PER_CENTIMETER active-energy-pulse-value | the published file has this assignment wrong; we follow the corrected one
-ours-only EngineeringUnits 47918 | the published file has this assignment wrong (the name sits at 47910); we follow the corrected one
+file-error EngineeringUnits 47910 MILLISIEMENS_PER_CENTIMETER active-energy-pulse-value | the file lists the pulse-value name here as well; we keep that name at 47918
+ours-only EngineeringUnits 47918 | the file lists this name at 47910 and no name at 47918
 
 unmatched-type PduType 0 | the file describes PDUs as a choice of sequences, not an enumeration
 unmatched-type 0-BACnetAccumulatorRecord/accumulator-status 0 | no table of ours yet
