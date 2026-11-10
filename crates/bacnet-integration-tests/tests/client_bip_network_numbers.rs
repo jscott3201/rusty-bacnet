@@ -25,7 +25,7 @@ use support::*;
 use tokio::net::UdpSocket;
 
 type Client = BACnetClient<BipTransport>;
-async fn client(transport: BipTransport) -> (Client, SocketAddrV4) {
+async fn client(transport: BipTransport) -> std::io::Result<(Client, SocketAddrV4)> {
     assert!(transport.supports_local_nonrouter_number_controls());
     // A BBMD or foreign device; no Network Port is registered here.
     assert_ne!(
@@ -34,11 +34,11 @@ async fn client(transport: BipTransport) -> (Client, SocketAddrV4) {
     );
     let client = bounded(BACnetClient::start(ClientConfig::default(), transport))
         .await
-        .unwrap();
+        .map_err(port_retry::bind_error)?;
     let mac = client.local_mac();
     assert_eq!(&mac[..4], &[127, 0, 0, 1]);
     let local = SocketAddrV4::new(Ipv4Addr::LOCALHOST, u16::from_be_bytes([mac[4], mac[5]]));
-    (client, local)
+    Ok((client, local))
 }
 async fn forward(peer: &UdpSocket, local: SocketAddrV4, npdu: &[u8]) {
     let origin = SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 9), address(peer).port());
@@ -76,7 +76,7 @@ async fn client_number_bbmd_wire_admission_and_release() {
             broadcast_mask: [255; 4],
         }]);
         transport.enable_foreign_device_registration(ForeignDevicePolicy::default());
-        let (client, local) = client(transport).await;
+        let (client, local) = client(transport).await?;
         let group = SocketAddrV4::new(BROADCAST, local.port());
         // Prove actual wildcard production intake and broadcast observer coexistence.
         send(&peer, group, &frame(11, QUERY)).await;
@@ -143,7 +143,7 @@ async fn client_number_foreign_wire_alternate_sender_retry_and_progress() {
             renewal_interval: None,
             ttl: 60,
         });
-        let (client, local) = client(transport).await;
+        let (client, local) = client(transport).await.unwrap(); // port 0: nothing to lose
         assert_eq!(receive(&bbmd).await, (frame(5, &[0, 60]), local));
         send(&bbmd, local, &frame(0, &[0, 0])).await;
         send(&alternate, local, &frame(10, QUERY)).await;

@@ -25,7 +25,8 @@ async fn foreign() -> (Endpoint, SocketAddrV4, UdpSocket) {
                 ttl: 60,
             })),
     )
-    .await;
+    .await
+    .unwrap(); // port 0: nothing to lose
     assert!(endpoint.client().is_some());
     assert!(endpoint.server().is_none());
     let (registration, source) = receive(&bbmd).await;
@@ -179,7 +180,7 @@ async fn endpoint_number_bbmd_server_wire_admission() {
                 foreign_device_policy: Some(ForeignDevicePolicy::default()),
                 ..BbmdOptions::default()
             }));
-        let (server, local) = start(configured).await;
+        let (server, local) = start(configured).await?;
         assert!(server.server().is_some());
         assert!(server.client().is_none());
         let group = SocketAddrV4::new(BROADCAST, local.port());
@@ -228,4 +229,65 @@ async fn endpoint_number_bbmd_server_wire_admission() {
         stopped(server, local).await
     })
     .await;
+}
+
+/// A port taken between the observer's bind and the node's start reruns the
+/// test, and a start error that is not a lost port fails the first run
+/// (#2425).
+#[cfg(target_os = "linux")]
+mod start_loses_observer_port {
+    use super::*;
+    use std::cell::Cell;
+
+    #[tokio::test]
+    async fn taken_port_reruns_the_test() {
+        let attempts = Cell::new(0);
+        rerun_on_lost_port(async || {
+            attempts.set(attempts.get() + 1);
+            let (_observer, port) = observer();
+            // A plain bind of another address: the observer's socket doesn't
+            // conflict with it, but the node's wildcard bind does.
+            let held = (attempts.get() == 1)
+                .then(|| std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, port)).unwrap());
+            let result = start(
+                builder_on(port)
+                    .share_wildcard_port(true)
+                    .mode(BipMode::Bbmd(bacnet_transport::bip::BbmdOptions::default())),
+            )
+            .await;
+            if held.is_some() {
+                assert!(
+                    result
+                        .as_ref()
+                        .is_err_and(port_retry::lost_to_another_socket)
+                );
+            }
+            drop(held);
+            let (endpoint, local) = result?;
+            stopped(endpoint, local).await
+        })
+        .await;
+        assert_eq!(attempts.get(), 2, "the lost port reruns exactly once");
+    }
+
+    #[test]
+    fn other_start_errors_fail_the_first_run() {
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = attempts.clone();
+        // A thread of its own, so the panic is the run's outcome, not the test's.
+        let outcome = std::thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap()
+                .block_on(rerun_on_lost_port(async || {
+                    counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Err(port_retry::bind_error(
+                        bacnet_types::error::Error::Encoding("not a bind".into()),
+                    ))
+                }));
+        })
+        .join();
+        assert!(outcome.is_err());
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
 }
