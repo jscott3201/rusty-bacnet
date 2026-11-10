@@ -8025,15 +8025,20 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
 - `clock` (#2321): the Device's clock, for firmware with none of its own.
   `SyncedClock` holds a `bacnet_time::Instant`, the UTC date and time it
   stood for and the `Zone` (UTC_Offset, minutes west, and
-  Daylight_Savings_Status, fixed at build as the server's `ClockConfig`
-  is); it allocates nothing and divides nothing in 64 bits. Until the first
+  Daylight_Savings_Status, as the server's `ClockConfig` holds them); it
+  allocates nothing and divides nothing in 64 bits. Until the first
   `set` it is unsynchronized and counts from local midnight, 1990-01-01,
   at the instant it was built, as a device with no time source does after a
   restart. `set(Basis::Local, ..)`, a TimeSynchronization's, makes the
   date and time given the local ones; `set(Basis::Utc, ..)`, a
   UTCTimeSynchronization's, reads locally as less UTC_Offset, plus an hour
   in daylight-saving time; a value that isn't a specific date and time is
-  refused and changes nothing. `frame(now)` is the Device's four clock
+  refused and changes nothing. `set_zone(zone, now)` (#2395) changes the
+  zone while the device runs, for daylight saving or a corrected offset: a
+  synchronized clock keeps its UTC instant and stays synchronized, so local
+  time moves by the difference between the zones, and one never set keeps
+  its count of local time from 1990; a zone that would put the local date
+  outside 1900 to 2154 is refused. `frame(now)` is the Device's four clock
   properties; `window(now)` is the local day and time recipient windows are
   judged at, `None` until synchronized. `DeviceClock` pairs it with the
   host's timer (`MonotonicNow`, on the timeline it passes as `now`) and
@@ -8069,7 +8074,11 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   `Reporter::set_time` and `Reporter::clock` for the same, and its
   `clock().window(now)` is what recipient windows are judged by, never
   the database's clock frame, which reads a valid 1990 date before a
-  sync.
+  sync. `Responder::set_zone(db, zone)` and `Reporter::set_zone` (#2395)
+  change the clock's zone and lend it again, so the Device's UTC_Offset,
+  Daylight_Savings_Status, Local_Date and Local_Time and the window follow
+  from that call on; they are refused without a clock. Only the host
+  changes the zone: both properties are read-only to a peer.
 
 `Responder::new` refuses an identity that claims segmentation support, since
 the core aborts every segmented request and every reply too long for one APDU,
@@ -10471,6 +10480,51 @@ disables communication outright and the type has no variant for it.
 what it would start. Only an accepted DeviceCommunicationControl request and
 the expiry of its duration change the state, and every start begins at
 `Enable`.
+
+### The Device clock's zone
+
+A `ClockConfig` is the Device's UTC_Offset, in minutes west of UTC, and its
+Daylight_Savings_Status. `BACnetServer::start_with_clock` takes one, and so
+does each builder's `clock_zone(ClockConfig)`; the default is offset 0
+without daylight saving. Start a device that isn't on UTC in its zone: the
+Schedule pass that runs as the server starts already judges local time in it.
+`BACnetServer::set_clock_zone(ClockConfig)` changes the pair while the server
+runs (#2395), when daylight saving starts or ends or the host corrects its
+offset, and `clock_zone()` returns the current one.
+
+```rust
+// Five hours west of UTC, in standard time.
+let server = BACnetServer::bip_builder()
+    .clock_zone(ClockConfig::new(300, false)?)
+    .build()
+    .await?;
+// Daylight saving begins.
+server.set_clock_zone(ClockConfig::new(300, true)?).await?;
+```
+
+- The clock keeps its UTC instant, and a clock a TimeSynchronization set
+  stays set. Local_Date and Local_Time move by the difference between the
+  zones: an hour for daylight saving alone.
+- The pair is replaced as one value under the lock every clock read takes,
+  and the change waits for the database's write guard. So a clock read, and
+  a whole request such as a ReadPropertyMultiple of both properties, sees
+  the old pair or the new, never one of each. Don't call it while holding a
+  guard on `database()`.
+- Everything that judges local time reads the clock when it judges: the next
+  60-second Schedule pass, a Calendar's Present_Value, a Notification Class
+  recipient's days and window, an aligned trend log's interval and each new
+  timestamp. Nothing is recalculated at the change, and timestamps already
+  recorded stay as they were. A TimeSynchronization that moves local time by
+  the same amount behaves the same way.
+- It is refused, changing nothing, on a server started with
+  `start_clockless`, and when the local date in the new zone would fall
+  outside 1900 to 2154.
+- A TimeSynchronization's step is judged against
+  `TimeSyncPolicy::max_step` and its value stored under one hold of the
+  clock's lock, so the zone a local value is judged in is the zone it is
+  stored under even while the zone changes.
+- Only the host changes the zone. UTC_Offset and Daylight_Savings_Status are
+  read-only to a peer.
 
 ### Confirmed notifications under DeviceCommunicationControl
 

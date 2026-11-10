@@ -170,6 +170,7 @@ pub struct ServerBuilder<T: TransportPort = AnyTransport> {
     db: Option<ObjectDatabase>,
     transport: Option<T>,
     configured_device_bindings: Vec<DeviceBinding>,
+    clock_zone: ClockConfig,
 }
 
 impl<T: TransportPort + 'static> ServerBuilder<T> {
@@ -256,7 +257,7 @@ impl<T: TransportPort + 'static> ServerBuilder<T> {
             self.config,
             db,
             transport,
-            Some(ClockConfig::default()),
+            Some(self.clock_zone),
             self.configured_device_bindings,
         )
         .await
@@ -270,6 +271,7 @@ pub struct BipServerBuilder {
     configured_device_bindings: Vec<DeviceBinding>,
     mode: BipMode,
     multicast: Option<BipMulticast>,
+    clock_zone: ClockConfig,
 }
 
 impl BipServerBuilder {
@@ -354,7 +356,7 @@ impl BipServerBuilder {
             self.config,
             db,
             transport,
-            Some(ClockConfig::default()),
+            Some(self.clock_zone),
             self.configured_device_bindings,
         )
         .await
@@ -377,7 +379,7 @@ pub struct BACnetServer<T: TransportPort = AnyTransport> {
     #[allow(dead_code)] // Retained with the server, including direct dispatch tests.
     time_sync_limiter: Arc<TimeSyncLimiter>,
     /// Server-owned clock controller; absent in explicit clockless mode.
-    _clock: Option<Arc<ServerClock>>,
+    clock: Option<Arc<ServerClock>>,
     /// Shared network layer (also held by dispatch task; read by
     /// [`write_local`](Self::write_local) for post-write COV/event sends).
     network: Option<Arc<NetworkLayer<T>>>,
@@ -462,6 +464,7 @@ impl BACnetServer<BipTransport> {
             configured_device_bindings: Vec::new(),
             mode: BipMode::Normal,
             multicast: None,
+            clock_zone: ClockConfig::default(),
         }
     }
 }

@@ -69,7 +69,9 @@ device's boot and recovery can live with that.
    daylight saving. The bound is inclusive in both directions, and 0 allows
    only an exact match. With a cap set and no readable clock, the request is
    refused.
-8. The clock is set. Only then does the request spend its tokens and start
+8. The clock is set, under the same hold of its lock as the `max_step`
+   comparison, so a zone change by the host (`set_clock_zone`) can't fall
+   between the two. Only then does the request spend its tokens and start
    its coalescing windows, so a refused request never uses up budget meant for
    a valid one. The `on_time_sync` observer runs afterwards, outside the lock.
 

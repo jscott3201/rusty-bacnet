@@ -22,7 +22,7 @@ use super::{
     Bindings, Destination, InvokeIds, Notification, NotifyService, ReportConfig, ReporterCounters,
     peer_address,
 };
-use crate::clock::{Basis, DeviceClock};
+use crate::clock::{Basis, DeviceClock, Zone};
 use crate::cov::active::ActiveCovOverlay;
 use crate::cov::life_safety::{LifeSafetyCovSnapshots, is_life_safety_object};
 use crate::cov::{
@@ -137,6 +137,15 @@ impl Reporter {
         time: Time,
     ) -> Result<(), Error> {
         self.responder.set_time(db, basis, date, time)
+    }
+
+    /// Move the Device's clock to `zone`, as [`Responder::set_zone`] does:
+    /// lent to `db` again, and still synchronized if it was, so
+    /// [`clock`](Self::clock)'s window follows the new local time. Refused,
+    /// changing nothing, when the reporter's `Responder` has no clock or
+    /// the clock refuses the zone.
+    pub fn set_zone(&mut self, db: &mut ObjectDatabase, zone: Zone) -> Result<(), Error> {
+        self.responder.set_zone(db, zone)
     }
 
     /// Run `request` from `peer` against `db`, writing any answer to `out`

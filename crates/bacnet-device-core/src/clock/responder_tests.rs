@@ -310,3 +310,115 @@ fn a_reporter_takes_the_hosts_rtc_and_later_syncs() {
     let refused = clockless.set_time(&mut db, Basis::Utc, date(2026, 11, 4, 3), time(7, 0, 0, 0));
     assert!(refused.is_err());
 }
+
+/// A host moves the zone of a running responder's clock: the Device reads
+/// the new UTC_Offset and Daylight_Savings_Status and the moved Local_Date
+/// and Local_Time at once, the clock stays synchronized, and a later
+/// synchronization is read in the new zone. A responder with no clock
+/// refuses.
+#[test]
+fn a_host_changes_the_zone_and_the_device_reads_it() {
+    let timer = Timer::default();
+    let (mut responder, mut db) = device(clock::SERVICES, Some(&timer));
+    let zone = |offset, summer| Zone::new(offset, summer).unwrap();
+    let pair = |db: &ObjectDatabase| {
+        (
+            read(db, P::UTC_OFFSET).unwrap(),
+            read(db, P::DAYLIGHT_SAVINGS_STATUS).unwrap(),
+        )
+    };
+    let signed = PropertyValue::Signed;
+    let summer = PropertyValue::Boolean;
+
+    // Before any synchronization the count from 1990 goes on in the new
+    // zone, unsynchronized.
+    timer.advance(Duration::from_secs(61));
+    responder.set_zone(&mut db, zone(240, false)).unwrap();
+    assert_eq!(pair(&db), (signed(240), summer(false)));
+    assert_eq!(local(&db), (date(1990, 1, 1, 1), time(0, 1, 1, 0)));
+    assert!(!responder.clock().unwrap().clock().is_synced());
+
+    // 13:15 UTC, four hours west: 09:15.
+    let apdu = sync(UTC, date(2024, 7, 4, 4), time(13, 15, 0, 0));
+    assert_eq!(handle(&mut responder, &mut db, apdu), Outcome::Silent);
+    assert_eq!(local(&db), (date(2024, 7, 4, 4), time(9, 15, 0, 0)));
+
+    responder.set_zone(&mut db, zone(240, true)).unwrap();
+    assert_eq!(pair(&db), (signed(240), summer(true)));
+    assert_eq!(local(&db), (date(2024, 7, 4, 4), time(10, 15, 0, 0)));
+    let clock = *responder.clock().unwrap().clock();
+    assert!(clock.is_synced());
+    assert_eq!(clock.zone(), zone(240, true));
+
+    // 12:15 east, in daylight saving: 02:30 on Friday.
+    responder.set_zone(&mut db, zone(-735, true)).unwrap();
+    assert_eq!(pair(&db), (signed(-735), summer(true)));
+    assert_eq!(local(&db), (date(2024, 7, 5, 5), time(2, 30, 0, 0)));
+    timer.advance(Duration::from_millis(1_500));
+    assert_eq!(local(&db), (date(2024, 7, 5, 5), time(2, 30, 1, 50)));
+
+    // A local synchronization reads back as given, and a UTC one in the
+    // zone the clock is in now.
+    let apdu = sync(LOCAL, date(2024, 7, 5, 5), time(6, 0, 0, 0));
+    assert_eq!(handle(&mut responder, &mut db, apdu), Outcome::Silent);
+    assert_eq!(local(&db), (date(2024, 7, 5, 5), time(6, 0, 0, 0)));
+    let apdu = sync(UTC, date(2024, 7, 4, 4), time(13, 15, 0, 0));
+    assert_eq!(handle(&mut responder, &mut db, apdu), Outcome::Silent);
+    assert_eq!(local(&db), (date(2024, 7, 5, 5), time(2, 30, 0, 0)));
+
+    let (mut clockless, mut db) = device(&[], None);
+    assert!(clockless.set_zone(&mut db, zone(240, true)).is_err());
+    assert_eq!(read(&db, P::UTC_OFFSET), None);
+}
+
+/// A running `Reporter` takes the zone change through its responder: its
+/// clock's window, which recipient windows are judged by, and the Device's
+/// reads move together, and a zone the clock refuses changes neither.
+#[test]
+fn a_reporter_takes_a_zone_change() {
+    let timer = Timer::default();
+    let (responder, mut db) = device(clock::SERVICES, Some(&timer));
+    let mut reporter = Reporter::new(responder, ReportConfig::new(CovPolicy::default())).unwrap();
+    let zone = |offset, summer| Zone::new(offset, summer).unwrap();
+    let window = |reporter: &Reporter, timer: &Timer| {
+        let clock = reporter.clock().unwrap().clock();
+        clock.window(timer.now())
+    };
+    let thursday = bacnet_types::bitstring::DaysOfWeek::THURSDAY;
+
+    // Thursday 2024-07-04, 08:15 local, five hours west.
+    reporter
+        .set_time(&mut db, Basis::Utc, date(2024, 7, 4, 4), time(13, 15, 0, 0))
+        .unwrap();
+    assert_eq!(
+        window(&reporter, &timer),
+        Some((thursday, time(8, 15, 0, 0)))
+    );
+    reporter.set_zone(&mut db, zone(300, true)).unwrap();
+    assert_eq!(
+        window(&reporter, &timer),
+        Some((thursday, time(9, 15, 0, 0)))
+    );
+    assert_eq!(local(&db), (date(2024, 7, 4, 4), time(9, 15, 0, 0)));
+    assert_eq!(
+        read(&db, P::DAYLIGHT_SAVINGS_STATUS),
+        Some(PropertyValue::Boolean(true))
+    );
+
+    // Monday 1900-01-01, 04:30 UTC, is 00:30 local; standard time there
+    // would be 1899.
+    reporter
+        .set_time(&mut db, Basis::Utc, date(1900, 1, 1, 1), time(4, 30, 0, 0))
+        .unwrap();
+    assert!(reporter.set_zone(&mut db, zone(300, false)).is_err());
+    assert_eq!(local(&db), (date(1900, 1, 1, 1), time(0, 30, 0, 0)));
+    assert_eq!(read(&db, P::UTC_OFFSET), Some(PropertyValue::Signed(300)));
+    assert_eq!(
+        read(&db, P::DAYLIGHT_SAVINGS_STATUS),
+        Some(PropertyValue::Boolean(true))
+    );
+
+    let (clockless, mut db) = device(&[], None);
+    let mut clockless = Reporter::new(clockless, ReportConfig::new(CovPolicy::default())).unwrap();
+    assert!(clockless.set_zone(&mut db, zone(300, true)).is_err());
+}

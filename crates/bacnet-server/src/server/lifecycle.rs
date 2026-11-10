@@ -797,7 +797,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             config,
             discovery_limiter,
             time_sync_limiter,
-            _clock: clock,
+            clock,
             network: Some(network),
             broadcaster,
             transport_cleanup: None,

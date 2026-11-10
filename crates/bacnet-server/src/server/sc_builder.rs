@@ -19,6 +19,7 @@ impl BACnetServer<bacnet_transport::sc::ScTransport<bacnet_transport::sc_tls::Tl
             heartbeat_interval_ms: 30_000,
             heartbeat_timeout_ms: 60_000,
             reconnect: None,
+            clock_zone: ClockConfig::default(),
         }
     }
 }
@@ -40,6 +41,7 @@ pub struct ScServerBuilder {
     heartbeat_interval_ms: u64,
     heartbeat_timeout_ms: u64,
     reconnect: Option<bacnet_transport::sc::ScReconnectConfig>,
+    pub(super) clock_zone: ClockConfig,
 }
 
 impl ScServerBuilder {
@@ -259,7 +261,7 @@ impl ScServerBuilder {
             self.config,
             db,
             transport,
-            Some(ClockConfig::default()),
+            Some(self.clock_zone),
             self.configured_device_bindings,
         )
         .await

@@ -27,7 +27,9 @@
 //! UTCTimeSynchronization ([`SYNC`]) at [`SYNC_AT`] sets it, and two
 //! ReadProperty requests then read the Device's Local_Date and Local_Time
 //! ([`READ_CLOCK`]), so the image links the clock, and the size check's
-//! `core::fmt` and 64-bit division counts cover it.
+//! `core::fmt` and 64-bit division counts cover it. The host then moves the
+//! zone into daylight-saving time (#2395), which the clock's recipient
+//! window shows an hour on.
 //!
 //! The work lives on the heap, in an arena of [`ARENA`] octets.
 //! `tests/reporting.rs` runs the
@@ -262,8 +264,11 @@ pub struct Summary {
     /// What `handle` did with [`SYNC`], and the replies to
     /// [`READ_CLOCK`].
     pub clock: (Outcome, [Vec<u8>; 2]),
-    /// The clock's recipient window when the reads were answered: the local
-    /// day and time.
+    /// The clock's recipient window at the instant the reads were answered,
+    /// once the host has moved the zone into daylight-saving time: the
+    /// local day and time, an hour on from the reads'. The time before the
+    /// change is the Local_Time the second read returned; a second window
+    /// here would cost the RISC-V image flash.
     pub window: Option<(DaysOfWeek, Time)>,
     /// Subscriptions left at [`EXPIRY_AT`].
     pub left: usize,
@@ -538,6 +543,14 @@ pub fn run(apdus: &[&[u8]; crate::objects::REQUESTS], requests: &[Request; STEPS
         return summary;
     };
     summary.clock = (synced, [date, time]);
+    // The host's own change of zone: daylight saving begins.
+    let summer = Zone::new(ZONE, true);
+    if summer
+        .and_then(|zone| device.reporter.set_zone(&mut device.db, zone))
+        .is_err()
+    {
+        summary.errors += 1;
+    }
     summary.window = device
         .reporter
         .clock()
@@ -638,10 +651,12 @@ pub fn expected() -> Summary {
                 ],
             ],
         ),
+        // In daylight-saving time the same instant is 11:30:01.50, and the
+        // clock is still synchronized.
         window: Some((
             DaysOfWeek::WEDNESDAY,
             Time {
-                hour: 10,
+                hour: 11,
                 minute: 30,
                 second: 1,
                 hundredths: 50,
