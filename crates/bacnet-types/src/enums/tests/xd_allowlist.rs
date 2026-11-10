@@ -16,6 +16,8 @@
 //! - `later-rename`: our identifier is the 2020 name; the file carries a later rename (we keep ours).
 //! - `ours-only`: we name values the file doesn't.
 //! - `file-duplicate`: the file gives one value two names, so we leave it unnamed.
+//! - `file-error`: the file also gives `<value>` a name that belongs to another value; we name
+//!   both values as corrected, so the file's stray name is excused at its other value too.
 //! - `unmatched-type`: a table with no counterpart on the other side (value 0, no names).
 
 use core::ops::RangeInclusive;
@@ -57,7 +59,8 @@ ours-only ObjectType 38 | network security, which 2020 already removed
 ours-only ObjectTypesSupported 38 | network security, which 2020 already removed
 ours-only PropertyIdentifier 327..337 | network security, which 2020 already removed
 
-file-duplicate EngineeringUnits 47910 | the file names this value twice; we name it once the right assignment is confirmed
+file-error EngineeringUnits 47910 MILLISIEMENS_PER_CENTIMETER active-energy-pulse-value | the published file has this assignment wrong; we follow the corrected one
+ours-only EngineeringUnits 47918 | the published file has this assignment wrong (the name sits at 47910); we follow the corrected one
 
 unmatched-type PduType 0 | the file describes PDUs as a choice of sequences, not an enumeration
 unmatched-type 0-BACnetAccumulatorRecord/accumulator-status 0 | no table of ours yet
@@ -76,6 +79,7 @@ pub(super) enum Category {
     LaterRename,
     OursOnly,
     FileDuplicate,
+    FileError,
     UnmatchedType,
 }
 
@@ -105,10 +109,14 @@ pub(super) fn allowed() -> Vec<Allowed> {
             "later-rename" => Category::LaterRename,
             "ours-only" => Category::OursOnly,
             "file-duplicate" => Category::FileDuplicate,
+            "file-error" => Category::FileError,
             "unmatched-type" => Category::UnmatchedType,
             other => panic!("unknown category {other}: {line}"),
         };
-        let names = matches!(category, Category::OlderName | Category::LaterRename);
+        let names = matches!(
+            category,
+            Category::OlderName | Category::LaterRename | Category::FileError
+        );
         assert_eq!(
             fields.len(),
             if names { 5 } else { 3 },

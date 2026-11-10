@@ -1357,6 +1357,7 @@ class EngineeringUnits(enum.IntEnum):
     POUNDS_FORCE_PER_SQUARE_INCH_ABSOLUTE: EngineeringUnits
     POUNDS_FORCE_PER_SQUARE_INCH_GAUGE: EngineeringUnits
     MICROSIEMENS_PER_CENTIMETER: EngineeringUnits
+    MILLISIEMENS_PER_CENTIMETER: EngineeringUnits
     MILLISIEMENS_PER_METER: EngineeringUnits
     MILLIONS_OF_US_GALLONS: EngineeringUnits
     MILLIONS_OF_IMPERIAL_GALLONS: EngineeringUnits
@@ -1364,6 +1365,7 @@ class EngineeringUnits(enum.IntEnum):
     MILS_PER_YEAR: EngineeringUnits
     MILLIMETERS_PER_YEAR: EngineeringUnits
     PULSES_PER_MINUTE: EngineeringUnits
+    ACTIVE_ENERGY_PULSE_VALUE: EngineeringUnits
     REACTIVE_ENERGY_PULSE_VALUE: EngineeringUnits
     APPARENT_ENERGY_PULSE_VALUE: EngineeringUnits
     VOLT_SQUARED_HOUR_PULSE_VALUE: EngineeringUnits
