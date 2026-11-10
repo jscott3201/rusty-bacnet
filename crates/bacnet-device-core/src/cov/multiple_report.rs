@@ -80,6 +80,10 @@ use super::{
 /// before the confirmed one. They report in that order from a start that
 /// moves per fanout ([`in_turn`]). Each context keeps its references in
 /// the order given.
+///
+/// A reference that is not a COV-multiple one has no context and is left
+/// out; a debug build asserts there is none, so a host that passes one
+/// sees it in its own tests.
 pub fn by_context(
     subscriptions: impl IntoIterator<Item = CovSubscriptionSnapshot>,
 ) -> BTreeMap<MultipleContextKey, Vec<CovSubscriptionSnapshot>> {
@@ -87,6 +91,7 @@ pub fn by_context(
     for sub in subscriptions {
         // A snapshot of another kind has no context: it is left out.
         let Some(context) = sub.key().multiple_context().cloned() else {
+            debug_assert!(false, "by_context takes COV-multiple references only");
             continue;
         };
         grouped.entry(context).or_default().push(sub);
@@ -260,6 +265,10 @@ impl<'a> Reading<'a> {
             .first()
             .and_then(|first| first.key().multiple_context().cloned());
         let Some(context) = context else {
+            debug_assert!(
+                subscriptions.is_empty(),
+                "gather takes COV-multiple references only"
+            );
             return Gathering::Nothing { unclocked: 0 };
         };
         // A confirmed context has at most one outstanding report, and the

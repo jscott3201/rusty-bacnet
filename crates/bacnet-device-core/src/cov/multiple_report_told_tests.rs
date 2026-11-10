@@ -269,3 +269,55 @@ fn a_spent_budget_spreads_its_losses_over_contexts_and_objects() {
     let all = heard(3, 3, 10, true);
     assert!(all.iter().all(|(_, count)| *count == 5), "{all:?}");
 }
+
+/// An ordinary subscription to Analog Value 1: not a COV-multiple
+/// reference.
+fn ordinary(host: &mut Host) -> CovSubscriptionSnapshot {
+    use crate::cov::{CovNotificationKind, CovSubscription};
+    let route = peer();
+    let proposal = CovSubscription {
+        subscriber_mac: route.mac.clone(),
+        subscriber_network: route.network.clone(),
+        subscriber_process_identifier: 9,
+        monitored_object_identifier: crate::cov::multiple_fixture::av(1),
+        issue_confirmed_notifications: false,
+        expires_at: Some(T0 + seconds(300)),
+        last_notified_observation: None,
+        monitored_property: None,
+        monitored_property_array_index: None,
+        cov_increment: None,
+        notification_kind: CovNotificationKind::Single,
+        timestamped: false,
+    };
+    host.table.subscribe(proposal, T0).unwrap()
+}
+
+// A reference of another kind is a host's mistake. A debug build says so;
+// a release build, which must not panic in the field, leaves it out.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    should_panic(expected = "COV-multiple references only")
+)]
+fn by_context_leaves_out_a_reference_of_another_kind() {
+    let mut host = sharing(1);
+    let mut subs = host.on(1, T0);
+    subs.push(ordinary(&mut host));
+    let grouped = by_context(subs);
+    assert_eq!(grouped.len(), 1);
+    assert_eq!(grouped.values().next().unwrap().len(), 1);
+}
+
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    should_panic(expected = "COV-multiple references only")
+)]
+fn gather_reports_nothing_for_a_reference_of_another_kind() {
+    let mut host = sharing(1);
+    let subs = [ordinary(&mut host)];
+    let outcome = host.fan_out(&subs, true, T0);
+    assert!(matches!(outcome, Outcome::Nothing(0)));
+    // No send turn was taken, and nothing was drained.
+    assert_eq!(host.histories.next_deadline(), None);
+}

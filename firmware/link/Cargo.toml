@@ -149,7 +149,10 @@ reporting = ["objects", "dep:bacnet-time"]
 #     --no-default-features --features reporting-multiple --lib --bin reporting
 #   python3 scripts/ci/firmware_size.py target/<triple>/firmware/reporting \
 #     firmware/link/size-budget.toml <triple>.reporting
-# The host test runs its scenario with `--features reporting-multiple`.
+# CI's workspace clippy, rustdoc and test runs turn it on, on the host only
+# (their feature lists name it), so the scenario and its expected summary
+# are kept; the `--features alloc,firmware-link/reporting` test line runs
+# the scenario without it.
 reporting-multiple = ["reporting", "bacnet-device-core/cov-multiple"]
 
 # `emulate`: the emulation build, which scripts/emu/emulate-firmware.sh runs
