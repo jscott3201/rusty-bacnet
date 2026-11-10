@@ -508,7 +508,10 @@ fn a_request_writing_description_and_another_property_saves_once() {
         let staging = object.staging().expect("lent above");
         staging.release_staged_write(&wait);
         assert_eq!(case.saves(), 1, "{property:?}");
+        // Dropping the object waits for every save it queued: taking the
+        // steps queued none behind the staged one.
         drop(object);
+        assert_eq!(case.saves(), 1, "{property:?}, once its saves ran");
         let rebuilt = case.open();
         assert_eq!(description(rebuilt.object()), text("lobby"));
         let served = rebuilt.object().read_property(property, None).unwrap();

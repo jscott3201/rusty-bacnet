@@ -3018,10 +3018,13 @@ These builders, `add_timer`, `add_channel`, the three log builders,
 `add_notification_class`, `add_notification_forwarder`, `add_access_rights`,
 `add_color` and `add_color_temperature` keep a written Description in their
 `storage_path` file, with these rules: every builder that takes
-`storage_path` does. On an object built without it, and on a type whose
-builder has no `storage_path` (the Device and the two lighting outputs among
-them, which keep one only through the Rust API's `with_tags_persistence`), a
-Description a peer writes lasts until the server restarts.
+`storage_path` does, except `add_audit_log`. An Audit Log's files keep its
+records, Log_Enable and Buffer_Size, and a Description a peer writes to it
+lasts until the server restarts. So does one written to an object built
+without `storage_path`, or to a type whose builder has none: the Device and
+the two lighting outputs among them, which keep one only through the Rust
+API's `with_tags_persistence`, and the Network Port, whose transport keeps
+only its own tables in `bdt_persist_path`.
 
 `clear_written_reporting=True`, and `clear_written_config=True` on
 `add_timer` and `add_channel`, drop a saved Description with the rest of

@@ -425,7 +425,9 @@ impl DeviceObject {
     /// it is saved before the write is answered, a write whose save fails
     /// is refused with DEVICE / OPERATIONAL_PROBLEM, and the saved one is
     /// served from the start and wins over
-    /// [`set_description`](Self::set_description).
+    /// [`set_description`](Self::set_description). An endpoint session
+    /// waits for that save on its one dispatch task and handles nothing
+    /// else meanwhile, so its Device needs storage that returns promptly.
     pub fn with_tags_persistence(
         config: DeviceConfig,
         persistence: Arc<dyn TagsPersistence>,

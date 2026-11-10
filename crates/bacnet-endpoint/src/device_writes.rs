@@ -44,6 +44,15 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// be fast, nonblocking and side-effect-free; see [`DeviceWriteAuthorizer`].
     /// Other objects/properties and WritePropertyMultiple remain unsupported.
     /// An authorized NULL relinquishment succeeds without changing Description.
+    ///
+    /// A Device built with `DeviceObject::with_tags_persistence` keeps a
+    /// written Description in that storage (#2364): the save runs before the
+    /// write is answered, with the database guard dropped, and a failed one
+    /// refuses the write with DEVICE / OPERATIONAL_PROBLEM. The session's
+    /// one dispatch task waits for it, so until the save returns the session
+    /// handles no other request and no reply to its client role, and
+    /// [`stop`](Self::stop) waits as well. Storage that never returns holds
+    /// the whole session: use storage that answers quickly or fails.
     /// Recipient writes require the complete source runtime installed by source selection.
     ///
     /// Startup requires a server role and a concrete built-in local Device in

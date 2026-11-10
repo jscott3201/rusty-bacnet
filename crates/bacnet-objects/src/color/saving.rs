@@ -51,6 +51,13 @@ enum Next {
     Description(String),
 }
 
+/// A snapshot's Present_Value and default.
+type Values = (Option<ColorOutputValue>, Option<ColorOutputValue>);
+
+fn values(snapshot: &ColorOutputSnapshot) -> Values {
+    (snapshot.present_value, snapshot.default)
+}
+
 /// Put what a write leaves into `snapshot`.
 fn apply(snapshot: &mut ColorOutputSnapshot, next: &Next) {
     match next {
@@ -106,8 +113,11 @@ struct OutputStore {
     /// The writer, and a default or Description write staged on it.
     saves: StagedSaves<ColorOutputSnapshot, Next>,
     counters: ColorOutputSaveCounters,
-    /// What the last save queued holds, or what was loaded.
-    queued: Option<ColorOutputSnapshot>,
+    /// The Present_Value and default the last save queued holds, or those
+    /// loaded: what a change is compared with to tell whether it needs a
+    /// save. A Description changes only through a save of its own, so it
+    /// isn't copied here.
+    queued: Option<Values>,
     /// What the object serves now, as storage keeps it.
     current: ColorOutputSnapshot,
     /// Whether the last save the writer ran failed. Its done hook sets it,
@@ -159,7 +169,7 @@ impl OutputStorage {
         self.0 = Some(Box::new(OutputStore {
             saves: StagedSaves::new(writer),
             counters,
-            queued: loaded.clone(),
+            queued: loaded.as_ref().map(values),
             // The object takes a loaded Present_Value (a Color Temperature
             // clamps it, and its next `note` saves the clamped one).
             current: loaded.clone().unwrap_or_default(),
@@ -198,7 +208,7 @@ impl OutputStorage {
         store.current.present_value = Some(value);
         if store.saves.is_staged() {
             store.saves.correct(|| store.current.clone());
-        } else if store.queued.as_ref() != Some(&store.current)
+        } else if store.queued != Some(values(&store.current))
             || store.last_failed.load(Ordering::Acquire)
         {
             store.queue();
@@ -244,8 +254,13 @@ impl OutputStorage {
             }
             description::written(&write.value).map(|text| Some(Next::Description(text)))
         });
-        let mut saved = store.current.clone();
-        steps.iter().for_each(|step| apply(&mut saved, &step.next));
+        // The default the staged save holds: the last one written.
+        let mut saved = values(&store.current);
+        for step in &steps {
+            if let Next::Default(default) = step.next {
+                saved.1 = Some(default);
+            }
+        }
         let step = store
             .saves
             .stage(steps, store.kept_writes, store.current.clone(), apply);
@@ -324,7 +339,7 @@ impl OutputStorage {
             return Ok(());
         }
         store.saves.save_now(cleared.clone())?;
-        store.queued = Some(cleared.clone());
+        store.queued = Some(values(&cleared));
         store.current = cleared;
         // A write staged before this gives way, and keeps the cleared state
         // as what is served.
@@ -386,7 +401,7 @@ impl OutputStorage {
 impl OutputStore {
     fn queue(&mut self) {
         self.saves.submit_coalescing(self.current.clone());
-        self.queued = Some(self.current.clone());
+        self.queued = Some(values(&self.current));
     }
 
     fn retry_failed(&mut self) {
@@ -434,8 +449,9 @@ impl OutputStore {
         self.after_staging();
         let mut saved = self.current.clone();
         apply(&mut saved, &next);
-        self.saves.save_now(saved.clone()).map_err(refused)?;
-        self.queued = Some(saved);
+        let queued = values(&saved);
+        self.saves.save_now(saved).map_err(refused)?;
+        self.queued = Some(queued);
         self.take(&next);
         Ok(next)
     }
@@ -446,7 +462,7 @@ impl OutputStore {
     fn take(&mut self, next: &Next) {
         apply(&mut self.current, next);
         self.kept_writes = self.kept_writes.wrapping_add(1);
-        if !self.saves.is_staged() && self.queued.as_ref() != Some(&self.current) {
+        if !self.saves.is_staged() && self.queued != Some(values(&self.current)) {
             self.queue();
         }
     }

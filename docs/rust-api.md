@@ -4719,11 +4719,20 @@ version again.
 An endpoint session's own Device keeps a Description written through
 `with_device_writes` the same way, when it was built
 `with_tags_persistence`: the responder stages the save and awaits it with
-the database guard dropped before it answers.
+the database guard dropped before it answers. The session handles nothing
+else until the save returns (see [Authorized endpoint Device
+writes](#authorized-endpoint-device-writes)).
 
-So every type with a store keeps a written Description. An object built
-without storage, and a type that has none, keeps it in memory only: it
-lasts until a restart.
+So every type with a store keeps a written Description, with one
+exception: the Audit Log. Its `AuditLogPersistence` keeps the records,
+Log_Enable and Buffer_Size, and a Description a peer writes to it lasts
+until a restart. The store must also be the one that takes it: an analog,
+binary or multi-state object, a Color or a Color Temperature built with
+Tags storage alone keeps a written Description in memory, since its
+reporting or output store is the one that holds it. An object built
+without storage, and a type that has none, keeps it in memory only too. A
+File's `FileStorage` is its contents, and the files a B/IP transport
+persists for a Network Port hold its tables, so neither keeps one.
 
 #### Creation and deletion
 
@@ -11311,6 +11320,14 @@ one before it answers, with the database guard dropped, and refuses the
 write with DEVICE / OPERATIONAL_PROBLEM when the save fails; the restarted
 endpoint serves it over `set_description` (#2364, see [Keeping a written
 Description](#keeping-a-written-description-2364)).
+
+The session waits for that save. Its one dispatch task handles a request
+to the end before it takes the next event, so while storage is saving a
+Description the session answers no other request, delivers no reply to its
+client role, and `stop()` waits too. The bundled server holds up only the
+request that wrote. Storage that never returns from a save therefore holds
+the whole endpoint, so give an endpoint's Device storage that answers
+quickly or fails.
 
 Deterministic request/reply tests cover authorization, framing, routing,
 reply channels, group silence, segmentation and shutdown; a B/IP loopback test

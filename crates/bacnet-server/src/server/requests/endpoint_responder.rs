@@ -249,7 +249,9 @@ impl EndpointResponder {
             unreachable!("Device write context")
         };
         // A Description the Device keeps is saved here, without the guard,
-        // as the server saves one (#2364).
+        // as the server saves one (#2364). The session's dispatch task
+        // awaits this inline, so it handles nothing else until the save
+        // returns.
         let staged = crate::server::durable_writes::stage(
             self.db(),
             crate::server::durable_writes::DurableTarget::local(

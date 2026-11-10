@@ -11,6 +11,7 @@ use super::durable_write_wire_tests::{ERROR_PDU, HeldStorage, SIMPLE_ACK_WPM, SI
 use super::mutation_list_wire_tests::wire;
 use super::mutation_tests::{Fixture, oid, value, wpm};
 use super::*;
+use bacnet_encoding::apdu::decode_apdu;
 use bacnet_encoding::constructed::encode_name_value;
 use bacnet_objects::color::{
     ColorObject, ColorOutputPersistence, ColorOutputSnapshot, ColorTemperatureObject,
@@ -20,7 +21,7 @@ use bacnet_objects::lighting::{BinaryLightingOutputObject, LightingOutputObject}
 use bacnet_objects::object_profile::{ObjectProfile, TagsSnapshot};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::common::BACnetPropertyValue;
-use bacnet_services::wpm::WriteAccessSpecification;
+use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleError};
 use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::constructed::BACnetNameValue;
 use std::sync::atomic::Ordering;
@@ -238,5 +239,74 @@ async fn a_description_that_cannot_be_saved_is_refused_on_the_wire() {
             text("lobby"),
             "{kind:?}"
         );
+    }
+}
+
+/// A WritePropertyMultiple of Description and another kept property whose
+/// one staged save fails, in either order: the first of the two rows is
+/// refused with DEVICE / OPERATIONAL_PROBLEM, nothing is saved, and both
+/// old values stay served, here and after a rebuild.
+#[tokio::test(start_paused = true)]
+async fn a_write_property_multiple_whose_save_fails_changes_nothing() {
+    for kind in KINDS {
+        for description_first in [true, false] {
+            let storages = Storages::default();
+            let fixture = served_by(kind, &storages).await;
+            let (property, octets) = other(kind);
+            let old = (
+                fixture.read(oid(kind, 1), P::DESCRIPTION).await,
+                fixture.read(oid(kind, 1), property).await,
+            );
+            let mut rows = vec![
+                BACnetPropertyValue {
+                    property_identifier: P::DESCRIPTION,
+                    property_array_index: None,
+                    value: value(text("lobby")),
+                    priority: None,
+                },
+                BACnetPropertyValue {
+                    property_identifier: property,
+                    property_array_index: None,
+                    value: octets,
+                    priority: None,
+                },
+            ];
+            if !description_first {
+                rows.reverse();
+            }
+            let first = rows[0].property_identifier;
+            let request = wpm(vec![WriteAccessSpecification {
+                object_identifier: oid(kind, 1),
+                list_of_properties: rows,
+            }]);
+            storages.fail();
+            let service = ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE;
+            let response = wire(&fixture, service, request).await;
+            let what = format!("{kind:?}, Description first: {description_first}");
+            let Apdu::Error(error) = decode_apdu(Bytes::from(response)).unwrap() else {
+                panic!("{what}: expected a WritePropertyMultiple error");
+            };
+            let refused = WritePropertyMultipleError::from_error_pdu(&error).unwrap();
+            assert_eq!(
+                (refused.error_class, refused.error_code),
+                (ErrorClass::DEVICE, ErrorCode::OPERATIONAL_PROBLEM),
+                "{what}"
+            );
+            let failed = refused.first_failed_write_attempt;
+            assert_eq!(failed.object_identifier, oid(kind, 1), "{what}");
+            assert_eq!(failed.property_identifier, first.to_raw(), "{what}");
+            let served = |fixture: Arc<Fixture>| async move {
+                (
+                    fixture.read(oid(kind, 1), P::DESCRIPTION).await,
+                    fixture.read(oid(kind, 1), property).await,
+                )
+            };
+            assert_eq!(served(fixture).await, old, "{what}");
+            assert_eq!(storages.saves(), 0, "{what}");
+            assert_eq!(storages.tags.load_saved(), None, "{what}");
+            assert_eq!(storages.colour.load_saved(), None, "{what}");
+            let rebuilt = served_by(kind, &storages).await;
+            assert_eq!(served(rebuilt).await, old, "{what}, rebuilt");
+        }
     }
 }
