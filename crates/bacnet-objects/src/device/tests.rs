@@ -569,10 +569,10 @@ fn device_property_metadata_preserves_dynamic_list_and_write_dispatch() {
     use PropertyIdentifier as P;
 
     for segmentation_supported in [
-        Segmentation::NONE,
-        Segmentation::TRANSMIT,
-        Segmentation::RECEIVE,
-        Segmentation::BOTH,
+        Segmentation::NO_SEGMENTATION,
+        Segmentation::SEGMENTED_TRANSMIT,
+        Segmentation::SEGMENTED_RECEIVE,
+        Segmentation::SEGMENTED_BOTH,
     ] {
         let mut device = DeviceObject::new(DeviceConfig {
             identity: crate::DeviceIdentity::default().with_segmentation(segmentation_supported),

@@ -462,7 +462,7 @@ impl BACnetClient {
     /// Add a device to the discovery table manually.
     ///
     /// Useful when the device address is known without sending a WhoIs.
-    /// Default values are used for max_apdu_length (1476), segmentation (NONE),
+    /// Default values are used for max_apdu_length (1476), segmentation (NO_SEGMENTATION),
     /// and vendor_id (0).
     #[pyo3(signature = (device_instance, address))]
     fn add_device<'py>(

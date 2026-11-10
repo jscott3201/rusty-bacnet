@@ -506,15 +506,11 @@ fn rpm_access_rights_indexed_reads_and_bytes_are_unchanged() {
             ),
             // Enable, property 133 (#1332): an application BOOLEAN.
             (
-                P::LOG_ENABLE,
+                P::ENABLE,
                 None,
                 Ok(if configured { &[0x10] } else { &[0x11] }),
             ),
-            (
-                P::LOG_ENABLE,
-                Some(0),
-                Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-            ),
+            (P::ENABLE, Some(0), Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY)),
             (
                 P::GLOBAL_IDENTIFIER,
                 Some(0),

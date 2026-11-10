@@ -346,8 +346,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             // advertisement peers plan transfers around
                             // (#381).
                             let receives_segments = config_dispatch.device.segmentation()
-                                == Segmentation::BOTH
-                                || config_dispatch.device.segmentation() == Segmentation::RECEIVE;
+                                == Segmentation::SEGMENTED_BOTH
+                                || config_dispatch.device.segmentation()
+                                    == Segmentation::SEGMENTED_RECEIVE;
                             if !receives_segments {
                                 Self::send_server_abort(
                                     &network_dispatch,

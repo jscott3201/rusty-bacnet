@@ -691,7 +691,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 | EVENT_TIME_STAMPS | R |
 | LOG_BUFFER | R |
 | LOG_DEVICE_OBJECT_PROPERTY | RW |
-| LOG_ENABLE | RW |
+| ENABLE | RW |
 | LOG_INTERVAL | RW |
 | NOTIFICATION_THRESHOLD | RW |
 | RECORDS_SINCE_NOTIFICATION | R |
@@ -837,7 +837,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 | BUFFER_SIZE | R |
 | EVENT_TIME_STAMPS | R |
 | LOG_BUFFER | R |
-| LOG_ENABLE | RW |
+| ENABLE | RW |
 | NOTIFICATION_THRESHOLD | RW |
 | RECORDS_SINCE_NOTIFICATION | R |
 | RECORD_COUNT | RW |
@@ -896,7 +896,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 | EVENT_TIME_STAMPS | R |
 | LOG_BUFFER | R |
 | LOG_DEVICE_OBJECT_PROPERTY | RW |
-| LOG_ENABLE | RW |
+| ENABLE | RW |
 | LOG_INTERVAL | RW |
 | NOTIFICATION_THRESHOLD | RW |
 | RECORDS_SINCE_NOTIFICATION | R |
@@ -1092,7 +1092,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 | OBJECT_TYPE | R |
 | RELIABILITY | R |
 | STATUS_FLAGS | R |
-| LOG_ENABLE | RW |
+| ENABLE | RW |
 | NEGATIVE_ACCESS_RULES | RW |
 | POSITIVE_ACCESS_RULES | RW |
 | GLOBAL_IDENTIFIER | RW |
@@ -1705,7 +1705,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 | STATUS_FLAGS | R |
 | BUFFER_SIZE | RW |
 | LOG_BUFFER | R |
-| LOG_ENABLE | RW |
+| ENABLE | RW |
 | RECORD_COUNT | R |
 | TOTAL_RECORD_COUNT | R |
 | PROPERTY_LIST | R |

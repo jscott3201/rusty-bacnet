@@ -398,7 +398,7 @@ mod tests {
         let req = IAmRequest {
             object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap(),
             max_apdu_length: 1476,
-            segmentation_supported: Segmentation::NONE,
+            segmentation_supported: Segmentation::NO_SEGMENTATION,
             vendor_id: 999,
         };
         let mut buf = BytesMut::new();
@@ -412,7 +412,7 @@ mod tests {
         let req = IAmRequest {
             object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap(),
             max_apdu_length: 1476,
-            segmentation_supported: Segmentation::NONE,
+            segmentation_supported: Segmentation::NO_SEGMENTATION,
             vendor_id: 42,
         };
         let mut buf = BytesMut::new();
@@ -642,7 +642,7 @@ mod tests {
         let req = IAmRequest {
             object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap(),
             max_apdu_length: 1476,
-            segmentation_supported: Segmentation::NONE,
+            segmentation_supported: Segmentation::NO_SEGMENTATION,
             vendor_id: 999,
         };
         let mut buf = BytesMut::new();
@@ -655,7 +655,7 @@ mod tests {
         let req = IAmRequest {
             object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap(),
             max_apdu_length: 1476,
-            segmentation_supported: Segmentation::NONE,
+            segmentation_supported: Segmentation::NO_SEGMENTATION,
             vendor_id: 999,
         };
         let mut buf = BytesMut::new();
@@ -668,7 +668,7 @@ mod tests {
         let req = IAmRequest {
             object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap(),
             max_apdu_length: 1476,
-            segmentation_supported: Segmentation::NONE,
+            segmentation_supported: Segmentation::NO_SEGMENTATION,
             vendor_id: 999,
         };
         let mut buf = BytesMut::new();
@@ -681,7 +681,7 @@ mod tests {
         let req = IAmRequest {
             object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap(),
             max_apdu_length: 1476,
-            segmentation_supported: Segmentation::NONE,
+            segmentation_supported: Segmentation::NO_SEGMENTATION,
             vendor_id: 999,
         };
         let mut buf = BytesMut::new();

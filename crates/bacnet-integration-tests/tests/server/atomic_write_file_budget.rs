@@ -26,7 +26,8 @@ async fn atomic_write_file_segmented_request_budget_and_client_readback() {
                 .interface(Ipv4Addr::LOCALHOST)
                 .port(0)
                 .device(
-                    bacnet_objects::DeviceIdentity::default().with_segmentation(Segmentation::BOTH),
+                    bacnet_objects::DeviceIdentity::default()
+                        .with_segmentation(Segmentation::SEGMENTED_BOTH),
                 )
                 .database(db)
                 .atomic_write_file_budget(AtomicWriteFileBudget {

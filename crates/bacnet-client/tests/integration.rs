@@ -160,7 +160,7 @@ async fn device_discovery_via_iam() {
     let i_am = IAmRequest {
         object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 5678).unwrap(),
         max_apdu_length: 1476,
-        segmentation_supported: Segmentation::NONE,
+        segmentation_supported: Segmentation::NO_SEGMENTATION,
         vendor_id: 42,
     };
     let mut service_buf = BytesMut::new();

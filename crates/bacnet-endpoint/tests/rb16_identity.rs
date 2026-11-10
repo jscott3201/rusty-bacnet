@@ -57,7 +57,7 @@ fn identity_defaults_are_endpoint_composed_no_superset() {
     assert_eq!(id.instance(), 42);
     assert_eq!(id.vendor_id(), 7);
     assert_eq!(id.max_apdu_length(), 1476);
-    assert_eq!(id.segmentation(), Segmentation::NONE);
+    assert_eq!(id.segmentation(), Segmentation::NO_SEGMENTATION);
     assert_eq!(id.services(), &[ServiceSupported::READ_PROPERTY]);
     assert_eq!(id.device_uuid(), [0; 16]);
     assert!(id.network_ports().is_empty());
@@ -79,7 +79,7 @@ fn identity_builds_device_plus_ports_plus_uuid() {
         .unwrap()
         .with_max_apdu(480)
         .unwrap()
-        .with_segmentation(Segmentation::NONE)
+        .with_segmentation(Segmentation::NO_SEGMENTATION)
         .with_device_uuid(uuid)
         .with_bip_port(1, 10, Ipv4Addr::new(127, 0, 0, 1), 47808)
         .unwrap()
@@ -108,7 +108,7 @@ fn identity_builds_device_plus_ports_plus_uuid() {
     assert_eq!(
         dev.read_property(PropertyIdentifier::SEGMENTATION_SUPPORTED, None)
             .unwrap(),
-        PropertyValue::Enumerated(Segmentation::NONE.to_raw() as u32)
+        PropertyValue::Enumerated(Segmentation::NO_SEGMENTATION.to_raw() as u32)
     );
     assert_eq!(
         dev.read_property(PropertyIdentifier::DEVICE_UUID, None)
@@ -202,7 +202,10 @@ fn identity_iam_bytes_match_server_discovery_construction() {
         object_id(ObjectType::DEVICE, 1234)
     );
     assert_eq!(decoded.max_apdu_length, 1476);
-    assert_eq!(decoded.segmentation_supported, Segmentation::NONE);
+    assert_eq!(
+        decoded.segmentation_supported,
+        Segmentation::NO_SEGMENTATION
+    );
     assert_eq!(decoded.vendor_id, 99);
 
     // Server side builds the same four fields from the derived config.
@@ -213,7 +216,7 @@ fn identity_iam_bytes_match_server_discovery_construction() {
         bacnet_services::who_is::IAmRequest {
             object_identifier: id.device_oid(),
             max_apdu_length: 1476,
-            segmentation_supported: Segmentation::NONE,
+            segmentation_supported: Segmentation::NO_SEGMENTATION,
             vendor_id: 99,
         }
     );
@@ -277,7 +280,7 @@ async fn session_identity_overrides_480_and_iam_broadcasts() {
 async fn capability_matrix_services_and_segmentation_refuse() {
     // Services == reality: ReadProperty succeeds; WriteProperty (unexecuted)
     // draws Reject UNRECOGNIZED_SERVICE from the narrow responder.
-    // Segmentation NONE: segmented request draws server Abort; segmented
+    // Segmentation NO_SEGMENTATION: segmented request draws server Abort; segmented
     // ComplexAck draws client Abort (both directions refuse, Loopback here;
     // real-loopback proofs assert the same aborts on wire).
     use bacnet_encoding::apdu::{
@@ -623,7 +626,7 @@ fn identity_maps_its_segment_timeout_to_both_database_builders_and_full_server()
     for timeout in [5000, 7300] {
         let mut identity = DeviceIdentity::new(42, 7)
             .unwrap()
-            .with_segmentation(Segmentation::BOTH);
+            .with_segmentation(Segmentation::SEGMENTED_BOTH);
         if timeout != 5000 {
             identity = identity.with_apdu_segment_timeout_ms(timeout);
         }
@@ -673,9 +676,9 @@ async fn endpoint_roles_reject_non_none_identity_before_consuming_transport() {
         SessionRole::Both,
     ] {
         for mode in [
-            Segmentation::TRANSMIT,
-            Segmentation::RECEIVE,
-            Segmentation::BOTH,
+            Segmentation::SEGMENTED_TRANSMIT,
+            Segmentation::SEGMENTED_RECEIVE,
+            Segmentation::SEGMENTED_BOTH,
             Segmentation::from_raw(64),
         ] {
             let identity = DeviceIdentity::new(42, 7).unwrap();
@@ -688,7 +691,7 @@ async fn endpoint_roles_reject_non_none_identity_before_consuming_transport() {
                 .start()
                 .await
                 .expect_err("narrow role cannot claim segmentation");
-            assert!(error.to_string().contains("segmentation NONE"));
+            assert!(error.to_string().contains("segmentation NO_SEGMENTATION"));
             // Failed validation leaves configuration and the unstarted transport
             // reusable. A valid identity can start the exact same session.
             let mut endpoint = endpoint.device(identity);
@@ -712,7 +715,7 @@ async fn endpoint_roles_reject_segmented_database_without_identity_and_allow_cor
             .with_database(
                 identity
                     .clone()
-                    .with_segmentation(Segmentation::BOTH)
+                    .with_segmentation(Segmentation::SEGMENTED_BOTH)
                     .build_database()
                     .unwrap(),
             );
@@ -723,7 +726,7 @@ async fn endpoint_roles_reject_segmented_database_without_identity_and_allow_cor
         assert!(
             error
                 .to_string()
-                .contains("selected Device requires segmentation NONE")
+                .contains("selected Device requires segmentation NO_SEGMENTATION")
         );
         let mut endpoint = endpoint.with_database(identity.build_database().unwrap());
         endpoint.start().await.unwrap();

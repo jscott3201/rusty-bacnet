@@ -577,8 +577,7 @@ impl Scope<'_> {
             return Err(UnresolvedReason::NotAccessRights);
         }
         let object = self.db.get(&oid).ok_or(UnresolvedReason::Missing)?;
-        // Table 12-39's Enable is property 133, LOG_ENABLE in the enum.
-        match object.read_property(PropertyIdentifier::LOG_ENABLE, None) {
+        match object.read_property(PropertyIdentifier::ENABLE, None) {
             Ok(PropertyValue::Boolean(true)) => {}
             Ok(PropertyValue::Boolean(false)) => return Ok(None),
             _ => return Err(UnresolvedReason::Unreadable),

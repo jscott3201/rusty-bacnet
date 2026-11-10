@@ -22,7 +22,7 @@ impl BACnetServer {
     /// Access Zone, as an `ObjectIdentifier` or a `(device, object)` pair;
     /// left out or `None`, it covers every access point.
     ///
-    /// `enable` sets the object's Enable flag (property 133, `LOG_ENABLE`),
+    /// `enable` sets the object's Enable flag (property 133),
     /// TRUE when omitted; FALSE disables every rule in both arrays.
     ///
     /// `accompaniment` serves the optional Accompaniment row (#1393): the

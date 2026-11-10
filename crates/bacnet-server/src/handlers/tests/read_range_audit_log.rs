@@ -352,7 +352,7 @@ fn audit_log_buffer_shows_records_appended_after_a_read_and_matches_audit_log_qu
     // Disabling logging appends its own log-status record (Clause 12.64.10).
     object
         .write_property(
-            PropertyIdentifier::LOG_ENABLE,
+            PropertyIdentifier::ENABLE,
             None,
             PropertyValue::Boolean(false),
             None,

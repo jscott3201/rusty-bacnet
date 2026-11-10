@@ -48,8 +48,8 @@ bacnet_enum! {
     const OHM_METER_SQUARED_PER_METER = 237;
     const OHM_METERS = 172;
     const MILLIOHMS = 145;
-    const KILOHMS = 122;
-    const MEGOHMS = 123;
+    const KILOOHMS = 122;
+    const MEGAOHMS = 123;
     const MICROSIEMENS = 190;
     const MILLISIEMENS = 202;
     const SIEMENS = 173;

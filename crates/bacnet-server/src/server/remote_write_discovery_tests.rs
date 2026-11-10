@@ -99,7 +99,7 @@ pub(super) fn i_am(instance: u32) -> Apdu {
     IAmRequest {
         object_identifier: device(instance),
         max_apdu_length: 1476,
-        segmentation_supported: Segmentation::NONE,
+        segmentation_supported: Segmentation::NO_SEGMENTATION,
         vendor_id: 260,
     }
     .encode(&mut service);

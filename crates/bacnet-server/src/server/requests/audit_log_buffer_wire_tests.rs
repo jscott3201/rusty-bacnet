@@ -1,5 +1,5 @@
 //! An Audit Log's Buffer_Size on the wire (#1238). A write is refused while
-//! Log_Enable is TRUE; once logging is off it resizes the log, its commit
+//! Enable is TRUE; once logging is off it resizes the log, its commit
 //! running with the database guard dropped, and a commit that fails is
 //! refused with DEVICE / OPERATIONAL_PROBLEM. Record_Count stays read-only,
 //! so no write purges the log.
@@ -120,7 +120,7 @@ async fn install(fixture: &Fixture, storage: &Arc<HeldStorage>) {
         db.get_mut(&audit_log())
             .unwrap()
             .write_property(
-                PropertyIdentifier::LOG_ENABLE,
+                PropertyIdentifier::ENABLE,
                 None,
                 PropertyValue::Boolean(on),
                 None,
@@ -191,7 +191,7 @@ async fn buffer_size_is_written_only_while_logging_is_off() {
     assert_eq!(
         write(
             &fixture,
-            PropertyIdentifier::LOG_ENABLE,
+            PropertyIdentifier::ENABLE,
             PropertyValue::Boolean(true)
         )
         .await,
@@ -213,7 +213,7 @@ async fn buffer_size_is_written_only_while_logging_is_off() {
     assert_eq!(
         write(
             &fixture,
-            PropertyIdentifier::LOG_ENABLE,
+            PropertyIdentifier::ENABLE,
             PropertyValue::Boolean(false)
         )
         .await,
@@ -346,7 +346,7 @@ async fn a_write_property_multiple_turns_logging_off_then_resizes_in_one_commit_
     assert_eq!(
         write(
             &fixture,
-            PropertyIdentifier::LOG_ENABLE,
+            PropertyIdentifier::ENABLE,
             PropertyValue::Boolean(true)
         )
         .await,
@@ -357,10 +357,7 @@ async fn a_write_property_multiple_turns_logging_off_then_resizes_in_one_commit_
     let commits = storage.commits.load(Ordering::SeqCst);
     let request = log_attempts(
         attempt(PropertyIdentifier::BUFFER_SIZE, PropertyValue::Unsigned(2)),
-        attempt(
-            PropertyIdentifier::LOG_ENABLE,
-            PropertyValue::Boolean(false),
-        ),
+        attempt(PropertyIdentifier::ENABLE, PropertyValue::Boolean(false)),
     );
     let response = fixture
         .dispatch(ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE, request, 5)
@@ -377,9 +374,7 @@ async fn a_write_property_multiple_turns_logging_off_then_resizes_in_one_commit_
         PropertyIdentifier::BUFFER_SIZE.to_raw()
     );
     assert_eq!(
-        fixture
-            .read(audit_log(), PropertyIdentifier::LOG_ENABLE)
-            .await,
+        fixture.read(audit_log(), PropertyIdentifier::ENABLE).await,
         PropertyValue::Boolean(true)
     );
     assert_eq!(held(&fixture).await, [1, 2, 3, 4]);
@@ -392,10 +387,7 @@ async fn a_write_property_multiple_turns_logging_off_then_resizes_in_one_commit_
     let sending = tokio::spawn({
         let fixture = Arc::clone(&fixture);
         let request = log_attempts(
-            attempt(
-                PropertyIdentifier::LOG_ENABLE,
-                PropertyValue::Boolean(false),
-            ),
+            attempt(PropertyIdentifier::ENABLE, PropertyValue::Boolean(false)),
             attempt(PropertyIdentifier::BUFFER_SIZE, PropertyValue::Unsigned(2)),
         );
         async move {
@@ -411,11 +403,8 @@ async fn a_write_property_multiple_turns_logging_off_then_resizes_in_one_commit_
         .await
         .unwrap()
         .expect("the commit started");
-    let enabled = tokio::time::timeout(
-        WAIT,
-        fixture.read(audit_log(), PropertyIdentifier::LOG_ENABLE),
-    )
-    .await;
+    let enabled =
+        tokio::time::timeout(WAIT, fixture.read(audit_log(), PropertyIdentifier::ENABLE)).await;
     let writable = tokio::time::timeout(WAIT, fixture.db.write()).await.is_ok();
     let answered_early = sending.is_finished();
     go.send(()).unwrap();
@@ -438,16 +427,14 @@ async fn a_log_enable_write_that_cannot_be_committed_is_refused_and_changes_noth
     assert_eq!(
         write(
             &fixture,
-            PropertyIdentifier::LOG_ENABLE,
+            PropertyIdentifier::ENABLE,
             PropertyValue::Boolean(true)
         )
         .await,
         write_error(ErrorClass::DEVICE, ErrorCode::OPERATIONAL_PROBLEM)
     );
     assert_eq!(
-        fixture
-            .read(audit_log(), PropertyIdentifier::LOG_ENABLE)
-            .await,
+        fixture.read(audit_log(), PropertyIdentifier::ENABLE).await,
         PropertyValue::Boolean(false)
     );
     assert_eq!(held(&fixture).await, [1, 2, 3]);

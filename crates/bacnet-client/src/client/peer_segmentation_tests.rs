@@ -184,7 +184,7 @@ async fn authoritative_local_no_segmentation_refuses_segmented_request() {
         1234,
         &peer_mac,
         PEER_MAX_APDU,
-        Segmentation::NONE,
+        Segmentation::NO_SEGMENTATION,
     ));
 
     let service_data = oversized_data(OVERSIZED);
@@ -204,7 +204,7 @@ async fn authoritative_local_no_segmentation_refuses_segmented_request() {
         .expect("refusal must be immediate, not a timeout")
         .unwrap()
         .unwrap_err();
-    assert_segmentation_unsupported(err, "NONE");
+    assert_segmentation_unsupported(err, "NO_SEGMENTATION");
     assert_no_frame_reaches(&mut peer_rx).await;
     peer_transport.stop().await.unwrap();
 }
@@ -228,7 +228,7 @@ async fn authoritative_local_transmit_only_refuses_segmented_request() {
         1234,
         &peer_mac,
         PEER_MAX_APDU,
-        Segmentation::TRANSMIT,
+        Segmentation::SEGMENTED_TRANSMIT,
     ));
 
     let service_data = oversized_data(OVERSIZED);
@@ -248,7 +248,7 @@ async fn authoritative_local_transmit_only_refuses_segmented_request() {
         .expect("refusal must be immediate, not a timeout")
         .unwrap()
         .unwrap_err();
-    assert_segmentation_unsupported(err, "TRANSMIT");
+    assert_segmentation_unsupported(err, "SEGMENTED_TRANSMIT");
     assert_no_frame_reaches(&mut peer_rx).await;
     peer_transport.stop().await.unwrap();
 }
@@ -278,7 +278,7 @@ async fn authoritative_routed_no_segmentation_refuses_segmented_request() {
             remote_network,
             remote_mac: remote_mac.clone(),
             max_apdu_length: PEER_MAX_APDU,
-            segmentation_supported: Segmentation::NONE,
+            segmentation_supported: Segmentation::NO_SEGMENTATION,
             max_segments_accepted: None,
         })
         .await
@@ -304,7 +304,7 @@ async fn authoritative_routed_no_segmentation_refuses_segmented_request() {
         .expect("refusal must be immediate, not a timeout")
         .unwrap()
         .unwrap_err();
-    assert_segmentation_unsupported(err, "NONE");
+    assert_segmentation_unsupported(err, "NO_SEGMENTATION");
     assert_no_frame_reaches(&mut router_rx).await;
     router_transport.stop().await.unwrap();
 }
@@ -332,7 +332,7 @@ async fn authoritative_receive_peer_still_segments_successfully() {
         1234,
         &peer_mac,
         PEER_MAX_APDU,
-        Segmentation::RECEIVE,
+        Segmentation::SEGMENTED_RECEIVE,
     ));
 
     let expected = oversized_data(OVERSIZED);
@@ -360,7 +360,7 @@ async fn authoritative_receive_peer_still_segments_successfully() {
     assert_eq!(exchange.all_service_data, expected);
     assert!(
         exchange.every_apdu_segmented,
-        "an oversized request to a RECEIVE peer segments"
+        "an oversized request to a SEGMENTED_RECEIVE peer segments"
     );
 
     let result = request_task.await.unwrap();
@@ -387,7 +387,7 @@ async fn fitting_request_to_no_segmentation_peer_still_sends() {
         1234,
         &peer_mac,
         PEER_MAX_APDU,
-        Segmentation::NONE,
+        Segmentation::NO_SEGMENTATION,
     ));
 
     let service_data = oversized_data(10);
@@ -436,7 +436,7 @@ async fn fitting_request_to_no_segmentation_peer_still_sends() {
 // Provenance: legacy placeholder stays unknown; refresh becomes authoritative
 // ──────────────────────────────────────────────────────────────────────────
 
-/// Legacy `add_device` stores placeholder NONE/1476 that are NOT I-Am
+/// Legacy `add_device` stores placeholder NO_SEGMENTATION/1476 that are NOT I-Am
 /// evidence: an oversized request must still enter the segmented path rather
 /// than being locally refused on placeholder values (#371 constraint from
 /// the Round 3 review).
@@ -458,7 +458,7 @@ async fn legacy_add_device_placeholder_does_not_refuse_segmented_request() {
     client.add_device(1234, &peer_mac).await.unwrap();
 
     // 1600 octets exceed the placeholder Max APDU of 1476, so sizing already
-    // requires segmentation; the placeholder NONE must not refuse it.
+    // requires segmentation; the placeholder NO_SEGMENTATION must not refuse it.
     let expected = oversized_data(1600);
     let service_data = expected.clone();
     let peer_mac_for_request = peer_mac.clone();
@@ -514,13 +514,13 @@ async fn explicit_upsert_refresh_makes_placeholder_authoritative() {
     // Placeholder row via legacy add_device: oversized requests segment.
     client.add_device(1234, &peer_mac).await.unwrap();
 
-    // Authoritative replacement of the same instance: now NONE at a small
+    // Authoritative replacement of the same instance: now NO_SEGMENTATION at a small
     // Max APDU is real configuration, not a placeholder.
     client.device_table.lock().upsert(local_peer(
         1234,
         &peer_mac,
         PEER_MAX_APDU,
-        Segmentation::NONE,
+        Segmentation::NO_SEGMENTATION,
     ));
 
     let service_data = oversized_data(OVERSIZED);
@@ -540,7 +540,7 @@ async fn explicit_upsert_refresh_makes_placeholder_authoritative() {
         .expect("refusal must be immediate, not a timeout")
         .unwrap()
         .unwrap_err();
-    assert_segmentation_unsupported(err, "NONE");
+    assert_segmentation_unsupported(err, "NO_SEGMENTATION");
     assert_no_frame_reaches(&mut peer_rx).await;
     peer_transport.stop().await.unwrap();
 }

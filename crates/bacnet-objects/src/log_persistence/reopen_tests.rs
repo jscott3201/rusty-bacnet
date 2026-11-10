@@ -114,7 +114,7 @@ fn encoded_reference(instance: u32) -> Vec<u8> {
 /// Each property a reopened log must serve as before.
 const SETTINGS: [P; 13] = [
     P::BUFFER_SIZE,
-    P::LOG_ENABLE,
+    P::ENABLE,
     P::STOP_WHEN_FULL,
     P::START_TIME,
     P::STOP_TIME,

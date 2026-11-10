@@ -68,7 +68,7 @@ const STATE_REFUSED: &[(ObjectType, P, &str)] = &[
     (
         ObjectType::AUDIT_LOG,
         P::BUFFER_SIZE,
-        "Buffer_Size changes only while Log_Enable is FALSE, and a new Audit Log is enabled",
+        "Buffer_Size changes only while Enable is FALSE, and a new Audit Log is enabled",
     ),
 ];
 

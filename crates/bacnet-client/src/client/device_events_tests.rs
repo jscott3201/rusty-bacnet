@@ -8,7 +8,7 @@ use bacnet_types::enums::{ObjectType, Segmentation};
 use bacnet_types::primitives::ObjectIdentifier;
 
 fn i_am_npdu(instance: u32, vendor_id: u16) -> BytesMut {
-    i_am_npdu_with_capabilities(instance, vendor_id, 1476, Segmentation::NONE)
+    i_am_npdu_with_capabilities(instance, vendor_id, 1476, Segmentation::NO_SEGMENTATION)
 }
 
 fn i_am_npdu_with_capabilities(
@@ -75,7 +75,7 @@ async fn device_events_emit_discovered_and_updated_for_i_am() {
 
     sender_transport
         .send_unicast(
-            &i_am_npdu_with_capabilities(1001, 84, 480, Segmentation::BOTH),
+            &i_am_npdu_with_capabilities(1001, 84, 480, Segmentation::SEGMENTED_BOTH),
             client.local_mac(),
         )
         .await
@@ -88,11 +88,14 @@ async fn device_events_emit_discovered_and_updated_for_i_am() {
     assert_eq!(event.device.object_identifier.instance_number(), 1001);
     assert_eq!(event.device.vendor_id, 84);
     assert_eq!(event.device.max_apdu_length, 480);
-    assert_eq!(event.device.segmentation_supported, Segmentation::BOTH);
+    assert_eq!(
+        event.device.segmentation_supported,
+        Segmentation::SEGMENTED_BOTH
+    );
     let row = client.get_device(1001).await.unwrap();
     assert_eq!(row.vendor_id, 84);
     assert_eq!(row.max_apdu_length, 480);
-    assert_eq!(row.segmentation_supported, Segmentation::BOTH);
+    assert_eq!(row.segmentation_supported, Segmentation::SEGMENTED_BOTH);
     assert!(matches!(
         collisions.try_recv(),
         Err(broadcast::error::TryRecvError::Empty)
@@ -120,7 +123,7 @@ async fn collision_event_retains_authoritative_route_without_device_update() {
         object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 1001).unwrap(),
         mac_address: MacAddr::from_slice(&retained_mac),
         max_apdu_length: 1024,
-        segmentation_supported: Segmentation::RECEIVE,
+        segmentation_supported: Segmentation::SEGMENTED_RECEIVE,
         max_segments_accepted: Some(8),
         vendor_id: 42,
         last_seen: retained_seen,
@@ -132,7 +135,7 @@ async fn collision_event_retains_authoritative_route_without_device_update() {
     let before_send = Instant::now();
     sender_transport
         .send_unicast(
-            &i_am_npdu_with_capabilities(1001, 84, 480, Segmentation::BOTH),
+            &i_am_npdu_with_capabilities(1001, 84, 480, Segmentation::SEGMENTED_BOTH),
             client.local_mac(),
         )
         .await
@@ -149,7 +152,10 @@ async fn collision_event_retains_authoritative_route_without_device_update() {
         retained_mac.as_slice()
     );
     assert_eq!(event.retained.max_apdu_length, 1024);
-    assert_eq!(event.retained.segmentation_supported, Segmentation::RECEIVE);
+    assert_eq!(
+        event.retained.segmentation_supported,
+        Segmentation::SEGMENTED_RECEIVE
+    );
     assert_eq!(event.retained.max_segments_accepted, Some(8));
     assert_eq!(event.retained.vendor_id, 42);
     assert_eq!(event.retained.last_seen, retained_seen);
@@ -160,7 +166,10 @@ async fn collision_event_retains_authoritative_route_without_device_update() {
         incoming_mac.as_slice()
     );
     assert_eq!(event.incoming.max_apdu_length, 480);
-    assert_eq!(event.incoming.segmentation_supported, Segmentation::BOTH);
+    assert_eq!(
+        event.incoming.segmentation_supported,
+        Segmentation::SEGMENTED_BOTH
+    );
     assert_eq!(event.incoming.max_segments_accepted, None);
     assert_eq!(event.incoming.vendor_id, 84);
     assert!(event.incoming.last_seen >= before_send);
@@ -174,7 +183,7 @@ async fn collision_event_retains_authoritative_route_without_device_update() {
     let row = client.get_device(1001).await.unwrap();
     assert_eq!(row.mac_address.as_slice(), retained_mac.as_slice());
     assert_eq!(row.max_apdu_length, 1024);
-    assert_eq!(row.segmentation_supported, Segmentation::RECEIVE);
+    assert_eq!(row.segmentation_supported, Segmentation::SEGMENTED_RECEIVE);
     assert_eq!(row.max_segments_accepted, Some(8));
     assert_eq!(row.vendor_id, 42);
     assert_eq!(row.last_seen, retained_seen);
@@ -201,7 +210,7 @@ async fn device_events_emit_lost_when_purge_removes_stale_device() {
         object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 2001).unwrap(),
         mac_address: MacAddr::from_slice(&[192, 168, 1, 42, 0xBA, 0xC0]),
         max_apdu_length: 1476,
-        segmentation_supported: Segmentation::NONE,
+        segmentation_supported: Segmentation::NO_SEGMENTATION,
         max_segments_accepted: None,
         vendor_id: 42,
         last_seen: Instant::now()

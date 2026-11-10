@@ -223,7 +223,7 @@ fn a_discovered_device_is_routed_when_its_i_am_came_through_a_router() {
         object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 100).unwrap(),
         mac_address: MacAddr::from_slice(&ROUTER),
         max_apdu_length: 480,
-        segmentation_supported: Segmentation::NONE,
+        segmentation_supported: Segmentation::NO_SEGMENTATION,
         max_segments_accepted: None,
         vendor_id: 0,
         last_seen: std::time::Instant::now(),

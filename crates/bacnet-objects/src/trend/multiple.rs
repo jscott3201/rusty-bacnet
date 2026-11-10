@@ -373,7 +373,7 @@ impl BACnetObject for TrendLogMultipleObject {
             p if p == PropertyIdentifier::OBJECT_TYPE => Ok(PropertyValue::Enumerated(
                 ObjectType::TREND_LOG_MULTIPLE.to_raw(),
             )),
-            p if p == PropertyIdentifier::LOG_ENABLE => Ok(PropertyValue::Boolean(self.log_enable)),
+            p if p == PropertyIdentifier::ENABLE => Ok(PropertyValue::Boolean(self.log_enable)),
             p if p == PropertyIdentifier::STOP_WHEN_FULL => {
                 Ok(PropertyValue::Boolean(self.stop_when_full))
             }
@@ -430,7 +430,7 @@ impl BACnetObject for TrendLogMultipleObject {
         {
             return result;
         }
-        if property == PropertyIdentifier::LOG_ENABLE {
+        if property == PropertyIdentifier::ENABLE {
             if let PropertyValue::Boolean(v) = value {
                 return self.lifecycle().write_enable(v);
             }

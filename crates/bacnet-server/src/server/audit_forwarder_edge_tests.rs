@@ -183,7 +183,7 @@ async fn audit_forwarding_denial_disabled_and_malformed_batches_are_silent() {
         .get_mut(&oid(ObjectType::AUDIT_LOG, 7))
         .unwrap()
         .write_property(
-            PropertyIdentifier::LOG_ENABLE,
+            PropertyIdentifier::ENABLE,
             None,
             PropertyValue::Boolean(false),
             None,

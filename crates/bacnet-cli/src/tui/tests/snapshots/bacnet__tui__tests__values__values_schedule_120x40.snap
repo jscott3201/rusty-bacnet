@@ -15,7 +15,7 @@ expression: text
 "│ Services          33 supported             ││                                     Tue 07:00 = 1, 18:00 = 0;          │"
 "│ Object types      64 supported             ││                                     Wed 07:00 = 1, 18:00 = 0;          │"
 "│ Max APDU          1476                     ││                                     Thu 07:00 = 1, 18:00 = 0;          │"
-"│ Segmentation      none                     ││                                     Fri 07:00 = 1, 18:00 = 0;          │"
+"│ Segmentation      no-segmentation          ││                                     Fri 07:00 = 1, 18:00 = 0;          │"
 "│ Database revision 0                        ││                                     Sat none; Sun none]                │"
 "└────────────────────────────────────────────┘│ exception-schedule                  (empty)                            │"
 "┌ Objects (8) ───────────────────────────────┐│ effective-period                    any date                           │"

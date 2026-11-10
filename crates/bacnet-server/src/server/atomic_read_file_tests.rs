@@ -105,7 +105,8 @@ async fn atomic_read_file_within_budget_segmented_complete_ack() {
                 .port(0)
                 .database(database)
                 .device(
-                    bacnet_objects::DeviceIdentity::default().with_segmentation(Segmentation::BOTH),
+                    bacnet_objects::DeviceIdentity::default()
+                        .with_segmentation(Segmentation::SEGMENTED_BOTH),
                 )
                 .atomic_read_file_budget(AtomicReadFileBudget {
                     max_service_ack_bytes: size - usize::from(over),

@@ -113,12 +113,12 @@ fn reference() -> Vec<u8> {
     encoded(|buf| encode_device_object_property_reference(buf, &av_present_value()))
 }
 
-/// Two Log_Enable toggles: with the seeded record, a buffer of three is
+/// Two Enable toggles: with the seeded record, a buffer of three is
 /// full.
 fn fill_log() -> Vec<Step> {
     vec![
-        Step::new(P::LOG_ENABLE, boolean(false)),
-        Step::new(P::LOG_ENABLE, boolean(true)),
+        Step::new(P::ENABLE, boolean(false)),
+        Step::new(P::ENABLE, boolean(true)),
     ]
 }
 

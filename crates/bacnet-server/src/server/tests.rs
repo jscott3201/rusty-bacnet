@@ -232,20 +232,33 @@ fn all_builders_assign_segmentation_supported() {
     // one ServerConfig field among look-alikes, and the dispatch loop now
     // enforces it (Clause 5.4.5.1), so a mis-assignment silently turns
     // segmented reception off.
-    let generic = BACnetServer::<BipTransport>::generic_builder()
-        .device(bacnet_objects::DeviceIdentity::default().with_segmentation(Segmentation::RECEIVE));
-    assert_eq!(generic.config.device.segmentation(), Segmentation::RECEIVE);
+    let generic = BACnetServer::<BipTransport>::generic_builder().device(
+        bacnet_objects::DeviceIdentity::default()
+            .with_segmentation(Segmentation::SEGMENTED_RECEIVE),
+    );
+    assert_eq!(
+        generic.config.device.segmentation(),
+        Segmentation::SEGMENTED_RECEIVE
+    );
 
-    let bip = BACnetServer::<BipTransport>::bip_builder()
-        .device(bacnet_objects::DeviceIdentity::default().with_segmentation(Segmentation::BOTH));
-    assert_eq!(bip.config.device.segmentation(), Segmentation::BOTH);
+    let bip = BACnetServer::<BipTransport>::bip_builder().device(
+        bacnet_objects::DeviceIdentity::default().with_segmentation(Segmentation::SEGMENTED_BOTH),
+    );
+    assert_eq!(
+        bip.config.device.segmentation(),
+        Segmentation::SEGMENTED_BOTH
+    );
 
     #[cfg(feature = "sc-tls")]
     {
         let sc = BACnetServer::sc_builder().device(
-            bacnet_objects::DeviceIdentity::default().with_segmentation(Segmentation::RECEIVE),
+            bacnet_objects::DeviceIdentity::default()
+                .with_segmentation(Segmentation::SEGMENTED_RECEIVE),
         );
-        assert_eq!(sc.config.device.segmentation(), Segmentation::RECEIVE);
+        assert_eq!(
+            sc.config.device.segmentation(),
+            Segmentation::SEGMENTED_RECEIVE
+        );
     }
 }
 

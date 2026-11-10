@@ -359,7 +359,7 @@ impl Lab {
                     remote_network: 2001,
                     remote_mac: vec![u8::try_from(instance - 290).unwrap()],
                     max_apdu_length: 480,
-                    segmentation_supported: Segmentation::NONE,
+                    segmentation_supported: Segmentation::NO_SEGMENTATION,
                     max_segments_accepted: None,
                 })
                 .await

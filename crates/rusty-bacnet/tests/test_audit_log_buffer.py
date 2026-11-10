@@ -101,7 +101,7 @@ class AuditLogBufferTests(unittest.TestCase):
                     error = await refused(PropertyIdentifier.BUFFER_SIZE, PropertyValue.unsigned(2))
                     self.assertEqual(error.error_code, ErrorCode.WRITE_ACCESS_DENIED.to_raw())
                     await client.write_property(
-                        address, AUDIT_LOG, PropertyIdentifier.LOG_ENABLE, PropertyValue.boolean(False),
+                        address, AUDIT_LOG, PropertyIdentifier.ENABLE, PropertyValue.boolean(False),
                     )
                     await client.write_property(
                         address, AUDIT_LOG, PropertyIdentifier.BUFFER_SIZE, PropertyValue.unsigned(2),

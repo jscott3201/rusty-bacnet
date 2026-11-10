@@ -69,7 +69,7 @@ pub fn expected() -> Summary {
             parameters: IAmRequest {
                 object_identifier: object(ObjectType::DEVICE, 1234),
                 max_apdu_length: 480,
-                segmentation_supported: Segmentation::NONE,
+                segmentation_supported: Segmentation::NO_SEGMENTATION,
                 vendor_id: 261,
             },
         }),

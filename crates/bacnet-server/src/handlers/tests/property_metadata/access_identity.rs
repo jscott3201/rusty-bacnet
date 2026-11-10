@@ -127,7 +127,7 @@ fn expected_lists(kind: ObjectType) -> (Vec<P>, Vec<P>, Vec<P>) {
     }
     // So does Table 12-39's Enable row, property 133 (#1332).
     if kind == ObjectType::ACCESS_RIGHTS {
-        all.push(P::LOG_ENABLE);
+        all.push(P::ENABLE);
     }
     // And Table 12-38's optional Members and Member_Of (#1394), then its
     // Global_Identifier (#1463).

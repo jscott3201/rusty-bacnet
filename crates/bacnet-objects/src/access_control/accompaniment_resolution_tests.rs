@@ -209,12 +209,12 @@ fn accompaniment_unreadable_rights_criterion_enable_or_assignment_is_unresolved(
     for (object, property, read) in [
         (
             rights(3),
-            PropertyIdentifier::LOG_ENABLE,
+            PropertyIdentifier::ENABLE,
             Read::Value(PropertyValue::Unsigned(1)),
         ),
         (
             rights(3),
-            PropertyIdentifier::LOG_ENABLE,
+            PropertyIdentifier::ENABLE,
             Read::Failure(ErrorClass::PROPERTY, ErrorCode::READ_ACCESS_DENIED),
         ),
         (

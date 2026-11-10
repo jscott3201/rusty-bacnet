@@ -599,7 +599,7 @@ fn log_enable_commit_failure_preserves_persistent_generation_and_retries() {
     });
     let before = persistence.snapshot.lock().unwrap().clone().unwrap();
     log.write_property(
-        PropertyIdentifier::LOG_ENABLE,
+        PropertyIdentifier::ENABLE,
         None,
         PropertyValue::Boolean(true),
         None,
@@ -608,7 +608,7 @@ fn log_enable_commit_failure_preserves_persistent_generation_and_retries() {
     assert_matches_snapshot(&log, &before);
     assert!(
         log.write_property(
-            PropertyIdentifier::LOG_ENABLE,
+            PropertyIdentifier::ENABLE,
             None,
             PropertyValue::Unsigned(0),
             None
@@ -619,7 +619,7 @@ fn log_enable_commit_failure_preserves_persistent_generation_and_retries() {
     persistence.fail_sync.store(true, Ordering::Release);
     assert!(
         log.write_property(
-            PropertyIdentifier::LOG_ENABLE,
+            PropertyIdentifier::ENABLE,
             None,
             PropertyValue::Boolean(false),
             None
@@ -630,7 +630,7 @@ fn log_enable_commit_failure_preserves_persistent_generation_and_retries() {
     assert_eq!(persistence.snapshot.lock().unwrap().as_ref(), Some(&before));
     persistence.fail_sync.store(false, Ordering::Release);
     log.write_property(
-        PropertyIdentifier::LOG_ENABLE,
+        PropertyIdentifier::ENABLE,
         None,
         PropertyValue::Boolean(false),
         None,
@@ -640,8 +640,7 @@ fn log_enable_commit_failure_preserves_persistent_generation_and_retries() {
     assert_matches_snapshot(&log, &committed);
     assert_eq!(committed.generation, before.generation + 1);
     assert_eq!(
-        log.read_property(PropertyIdentifier::LOG_ENABLE, None)
-            .unwrap(),
+        log.read_property(PropertyIdentifier::ENABLE, None).unwrap(),
         PropertyValue::Boolean(false)
     );
     assert_eq!(log.records().len(), 2);
@@ -655,7 +654,7 @@ fn clocked_enable_and_purge_statuses_persist_and_record_count_is_read_only() {
 
     let error = log
         .write_property(
-            PropertyIdentifier::LOG_ENABLE,
+            PropertyIdentifier::ENABLE,
             None,
             PropertyValue::Boolean(false),
             None,
@@ -676,7 +675,7 @@ fn clocked_enable_and_purge_statuses_persist_and_record_count_is_read_only() {
     });
     let error = log
         .write_property(
-            PropertyIdentifier::LOG_ENABLE,
+            PropertyIdentifier::ENABLE,
             None,
             PropertyValue::Boolean(false),
             None,
@@ -694,7 +693,7 @@ fn clocked_enable_and_purge_statuses_persist_and_record_count_is_read_only() {
         ..crate::traits::Clocks::default()
     });
     log.write_property(
-        PropertyIdentifier::LOG_ENABLE,
+        PropertyIdentifier::ENABLE,
         None,
         PropertyValue::Boolean(false),
         None,

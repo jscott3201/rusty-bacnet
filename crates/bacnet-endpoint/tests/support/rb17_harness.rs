@@ -117,7 +117,7 @@ pub fn identity(frames: Frames) -> DeviceIdentity {
         .unwrap()
         .with_max_apdu(frames.max_apdu())
         .unwrap()
-        .with_segmentation(Segmentation::NONE)
+        .with_segmentation(Segmentation::NO_SEGMENTATION)
         .with_services(&[ServiceSupported::READ_PROPERTY])
 }
 

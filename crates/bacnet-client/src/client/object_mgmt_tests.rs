@@ -51,7 +51,7 @@ async fn site(routed: bool) -> (BACnetClient<LoopbackTransport>, Peer) {
                 remote_network: NETWORK,
                 remote_mac: STATION.to_vec(),
                 max_apdu_length: 1476,
-                segmentation_supported: Segmentation::NONE,
+                segmentation_supported: Segmentation::NO_SEGMENTATION,
                 max_segments_accepted: None,
             })
             .await
@@ -433,7 +433,7 @@ async fn object_mgmt_unknown_device_and_oversized_alarm_send_nothing() {
     assert!(matches!(
         result,
         Err(Error::Segmentation(SegmentationError::PeerCannotReceive {
-            capability: Segmentation::NONE
+            capability: Segmentation::NO_SEGMENTATION
         }))
     ));
     peer.empty();

@@ -131,7 +131,7 @@ fn rpm_network_port_configured_profile_wire_bytes_and_dns_indices() {
                 None,
                 Err(ErrorCode::UNKNOWN_PROPERTY),
             ),
-            (P::COMMAND_NP, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
+            (P::COMMAND, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (P::EVENT_STATE, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
             (
                 P::PROPERTY_LIST,

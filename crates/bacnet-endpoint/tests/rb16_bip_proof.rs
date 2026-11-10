@@ -67,7 +67,7 @@ fn identity() -> DeviceIdentity {
         .unwrap()
         .with_max_apdu(1476)
         .unwrap()
-        .with_segmentation(Segmentation::NONE)
+        .with_segmentation(Segmentation::NO_SEGMENTATION)
         .with_services(&[ServiceSupported::READ_PROPERTY])
 }
 

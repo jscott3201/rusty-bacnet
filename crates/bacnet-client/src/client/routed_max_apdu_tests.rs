@@ -34,7 +34,7 @@ fn routed_peer(
         object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 3003).unwrap(),
         mac_address: MacAddr::from_slice(router_mac),
         max_apdu_length,
-        segmentation_supported: Segmentation::BOTH,
+        segmentation_supported: Segmentation::SEGMENTED_BOTH,
         max_segments_accepted: None,
         vendor_id: 42,
         last_seen: Instant::now(),
@@ -235,7 +235,7 @@ async fn manual_routed_registration_honors_seeded_peer_limit() {
             remote_network,
             remote_mac: remote_mac.clone(),
             max_apdu_length: 128,
-            segmentation_supported: Segmentation::BOTH,
+            segmentation_supported: Segmentation::SEGMENTED_BOTH,
             max_segments_accepted: None,
         })
         .await
@@ -250,7 +250,7 @@ async fn manual_routed_registration_honors_seeded_peer_limit() {
         Some(remote_mac.clone())
     );
     assert_eq!(row.max_apdu_length, 128);
-    assert_eq!(row.segmentation_supported, Segmentation::BOTH);
+    assert_eq!(row.segmentation_supported, Segmentation::SEGMENTED_BOTH);
     assert_eq!(row.max_segments_accepted, None);
 
     // resolve_device yields the router next-hop plus the remote identity.
@@ -362,7 +362,7 @@ async fn manual_routed_registration_rejects_empty_addresses() {
                 remote_network: 100,
                 remote_mac,
                 max_apdu_length: 128,
-                segmentation_supported: Segmentation::BOTH,
+                segmentation_supported: Segmentation::SEGMENTED_BOTH,
                 max_segments_accepted: None,
             })
             .await;

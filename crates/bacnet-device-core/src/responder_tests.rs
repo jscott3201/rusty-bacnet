@@ -208,9 +208,9 @@ fn abort_of(reply: Option<Apdu>) -> AbortReason {
 #[test]
 fn new_refuses_segmentation_and_a_zero_work_limit() {
     for segmentation in [
-        bacnet_types::enums::Segmentation::BOTH,
-        bacnet_types::enums::Segmentation::TRANSMIT,
-        bacnet_types::enums::Segmentation::RECEIVE,
+        bacnet_types::enums::Segmentation::SEGMENTED_BOTH,
+        bacnet_types::enums::Segmentation::SEGMENTED_TRANSMIT,
+        bacnet_types::enums::Segmentation::SEGMENTED_RECEIVE,
     ] {
         let claims = identity().with_segmentation(segmentation);
         assert!(

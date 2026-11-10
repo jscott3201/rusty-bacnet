@@ -200,7 +200,7 @@ class AccessRightsRulesTests(unittest.TestCase):
         for prop in (positive, negative):
             self.assertEqual(await read(bare, prop, 0), 0)
         # Enable defaults to TRUE.
-        self.assertIs(await read(rights, PropertyIdentifier.LOG_ENABLE), True)
+        self.assertIs(await read(rights, PropertyIdentifier.ENABLE), True)
 
     def test_network_writes_reach_the_arrays_and_enable(self) -> None:
         asyncio.run(self._network_writes())
@@ -224,7 +224,7 @@ class AccessRightsRulesTests(unittest.TestCase):
         rights = ObjectIdentifier(ObjectType.ACCESS_RIGHTS, 1)
         positive = PropertyIdentifier.POSITIVE_ACCESS_RULES
         negative = PropertyIdentifier.NEGATIVE_ACCESS_RULES
-        enable = PropertyIdentifier.LOG_ENABLE
+        enable = PropertyIdentifier.ENABLE
 
         async def read(prop: PropertyIdentifier, index=None):
             value = await client.read_property(address, rights, prop, index)

@@ -252,7 +252,7 @@ mod card_tests {
         let card = card(&rows, ReadVia::Rpm);
         assert!(card.rows.contains(&("Name", "AHU-1".into())), "{card:?}");
         assert!(
-            card.rows.contains(&("Segmentation", "none".into())),
+            card.rows.contains(&("Segmentation", "no-segmentation".into())),
             "{card:?}"
         );
     }

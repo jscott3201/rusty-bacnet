@@ -199,13 +199,14 @@ pub(super) fn segmentation(
     apdu_segment_timeout_ms: u64,
 ) -> PyResult<bacnet_types::enums::Segmentation> {
     let segmentation_supported = segmentation_supported.inner;
-    if segmentation_supported.to_raw() > bacnet_types::enums::Segmentation::NONE.to_raw() {
+    if segmentation_supported.to_raw() > bacnet_types::enums::Segmentation::NO_SEGMENTATION.to_raw()
+    {
         return Err(pyo3::exceptions::PyValueError::new_err(
             "invalid segmentation_supported",
         ));
     }
     if apdu_segment_timeout_ms == 0
-        && segmentation_supported != bacnet_types::enums::Segmentation::NONE
+        && segmentation_supported != bacnet_types::enums::Segmentation::NO_SEGMENTATION
     {
         return Err(pyo3::exceptions::PyValueError::new_err(
             "apdu_segment_timeout_ms must be positive when segmentation is supported",

@@ -135,7 +135,9 @@ impl BACnetObject for CustomDevice {
         // service/COV properties below must still bypass the custom reader.
         if property == PropertyIdentifier::SEGMENTATION_SUPPORTED {
             return Ok(PropertyValue::Enumerated(
-                bacnet_types::enums::Segmentation::NONE.to_raw().into(),
+                bacnet_types::enums::Segmentation::NO_SEGMENTATION
+                    .to_raw()
+                    .into(),
             ));
         }
         panic!("execution-owned reads must not enter custom reader")

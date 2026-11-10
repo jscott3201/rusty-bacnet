@@ -64,15 +64,17 @@ fn declaration(identity: &DeviceIdentity) -> Vec<(P, PropertyValue)> {
             PropertyValue::Enumerated(identity.segmentation().to_raw().into()),
         ),
     ];
-    if identity.segmentation() != Segmentation::NONE {
+    if identity.segmentation() != Segmentation::NO_SEGMENTATION {
         rows.push((P::APDU_SEGMENT_TIMEOUT, PropertyValue::Unsigned(700)));
         rows.push((
             P::MAX_SEGMENTS_ACCEPTED,
-            PropertyValue::Unsigned(if identity.segmentation() == Segmentation::TRANSMIT {
-                1
-            } else {
-                65
-            }),
+            PropertyValue::Unsigned(
+                if identity.segmentation() == Segmentation::SEGMENTED_TRANSMIT {
+                    1
+                } else {
+                    65
+                },
+            ),
         ));
     }
     rows
@@ -141,9 +143,9 @@ async fn assert_views(
     for property in [P::APDU_SEGMENT_TIMEOUT, P::MAX_SEGMENTS_ACCEPTED] {
         assert_eq!(
             list.contains(&PropertyValue::Enumerated(property.to_raw())),
-            identity.segmentation() != Segmentation::NONE
+            identity.segmentation() != Segmentation::NO_SEGMENTATION
         );
-        if identity.segmentation() == Segmentation::NONE {
+        if identity.segmentation() == Segmentation::NO_SEGMENTATION {
             assert!(
                 client
                     .read_property(server.local_mac(), target, property, None)
@@ -157,10 +159,10 @@ async fn assert_views(
 #[tokio::test]
 async fn bip_identity_matches_discovery_reads_and_preserves_supplied_device_state() {
     for mode in [
-        Segmentation::NONE,
-        Segmentation::TRANSMIT,
-        Segmentation::RECEIVE,
-        Segmentation::BOTH,
+        Segmentation::NO_SEGMENTATION,
+        Segmentation::SEGMENTED_TRANSMIT,
+        Segmentation::SEGMENTED_RECEIVE,
+        Segmentation::SEGMENTED_BOTH,
     ] {
         let identity = DeviceIdentity::new(1720, 42)
             .unwrap()
@@ -244,10 +246,10 @@ async fn bip_identity_matches_discovery_reads_and_preserves_supplied_device_stat
                             .unwrap()
                             .with_max_apdu(480)
                             .unwrap()
-                            .with_segmentation(if mode == Segmentation::NONE {
-                                Segmentation::BOTH
+                            .with_segmentation(if mode == Segmentation::NO_SEGMENTATION {
+                                Segmentation::SEGMENTED_BOTH
                             } else {
-                                Segmentation::NONE
+                                Segmentation::NO_SEGMENTATION
                             }),
                         ..Default::default()
                     })

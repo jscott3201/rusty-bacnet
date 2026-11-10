@@ -1,6 +1,6 @@
 //! Resizing and purging an Audit Log (#1238).
 //!
-//! Buffer_Size is writable, but only while Log_Enable is FALSE (Clause
+//! Buffer_Size is writable, but only while Enable is FALSE (Clause
 //! 12.64.9). The clause leaves the records already held to the
 //! implementation. This log keeps the newest of them, as many as the new
 //! size holds: the records its ring would hold had it been that size all
@@ -14,7 +14,7 @@
 //! [`AuditLogObject::purge`] or the bundled server's `purge_audit_log`. The
 //! purge leaves one BUFFER_PURGED status record, which also carries
 //! LOG_DISABLED while logging is off; it is written either way, since a
-//! log-status record ignores Log_Enable (Clause 12.64.10). Total_Record_Count
+//! log-status record ignores Enable (Clause 12.64.10). Total_Record_Count
 //! and the completed receipts survive the purge, so sequence numbers
 //! keep counting and a confirmed notification sent again after it is still
 //! recognized as a duplicate.
@@ -63,7 +63,7 @@ impl AuditLogObject {
     }
 }
 
-/// The size a Buffer_Size write asks for, written while Log_Enable is
+/// The size a Buffer_Size write asks for, written while Enable is
 /// `log_enable`, or the reason it is refused: PROPERTY / WRITE_ACCESS_DENIED
 /// while logging is on, INVALID_DATA_TYPE for a value that is not Unsigned,
 /// and VALUE_OUT_OF_RANGE above [`MAX_AUDIT_RECORDS`]. That includes 2^32-1,
@@ -82,7 +82,7 @@ pub(super) fn written_buffer_size(log_enable: bool, value: &PropertyValue) -> Re
 }
 
 /// Make `change` to `snapshot`. A smaller size keeps the newest records
-/// that fit. A Log_Enable change and a purge append a status record stamped
+/// that fit. A Enable change and a purge append a status record stamped
 /// with `timestamp`, and fail with DEVICE / OPERATIONAL_PROBLEM without one.
 pub(super) fn apply_change(
     snapshot: &mut AuditLogSnapshot,

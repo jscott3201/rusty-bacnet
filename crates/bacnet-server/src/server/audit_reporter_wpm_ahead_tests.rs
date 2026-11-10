@@ -128,7 +128,7 @@ async fn deciding_attempts_ahead_counts_and_audits_only_the_attempts_reached() {
         list_of_write_access_specs: vec![WriteAccessSpecification {
             object_identifier: target,
             list_of_properties: vec![
-                attempt(PropertyIdentifier::LOG_ENABLE, None, vec![0x10]),
+                attempt(PropertyIdentifier::ENABLE, None, vec![0x10]),
                 attempt(PropertyIdentifier::from_raw(5555), Some(1), vec![0x10]),
                 attempt(
                     PropertyIdentifier::POSITIVE_ACCESS_RULES,
@@ -169,7 +169,7 @@ async fn deciding_attempts_ahead_counts_and_audits_only_the_attempts_reached() {
     assert_eq!(
         records[0].target_property,
         Some(AuditPropertyReference {
-            property_identifier: PropertyIdentifier::LOG_ENABLE,
+            property_identifier: PropertyIdentifier::ENABLE,
             property_array_index: None
         })
     );

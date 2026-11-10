@@ -333,10 +333,10 @@ fn matches(row: &DeviceRow, name: Option<&str>, needle: &str) -> bool {
 /// Short segmentation label.
 pub(crate) fn segmentation_label(segmentation: Segmentation) -> String {
     match segmentation {
-        Segmentation::BOTH => "both".into(),
-        Segmentation::TRANSMIT => "transmit".into(),
-        Segmentation::RECEIVE => "receive".into(),
-        Segmentation::NONE => "none".into(),
+        Segmentation::SEGMENTED_BOTH => "both".into(),
+        Segmentation::SEGMENTED_TRANSMIT => "transmit".into(),
+        Segmentation::SEGMENTED_RECEIVE => "receive".into(),
+        Segmentation::NO_SEGMENTATION => "none".into(),
         other => other.to_raw().to_string(),
     }
 }
@@ -482,7 +482,7 @@ mod tests {
             network: None,
             vendor_id: 1,
             max_apdu: 1476,
-            segmentation: Segmentation::NONE,
+            segmentation: Segmentation::NO_SEGMENTATION,
             last_seen: Instant::now(),
         }
     }

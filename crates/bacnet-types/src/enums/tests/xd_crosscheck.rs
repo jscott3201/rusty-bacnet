@@ -162,7 +162,6 @@ fn our_tables() -> Vec<(&'static str, Members)> {
         MessagePriority,
         NetworkNumberQuality,
         NetworkPortCommand,
-        NetworkReachability,
         NetworkType,
         NodeType,
         NotifyType,

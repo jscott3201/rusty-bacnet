@@ -83,7 +83,7 @@ pub(super) fn saved_write(property: PropertyIdentifier, value: &PropertyValue) -
         property,
         PropertyIdentifier::POSITIVE_ACCESS_RULES
             | PropertyIdentifier::NEGATIVE_ACCESS_RULES
-            | PropertyIdentifier::LOG_ENABLE
+            | PropertyIdentifier::ENABLE
             | PropertyIdentifier::ACCOMPANIMENT
     ) || (property == PropertyIdentifier::DESCRIPTION && !description::null_write(property, value))
 }
@@ -155,7 +155,7 @@ impl AccessRightsObject {
             && match property {
                 PropertyIdentifier::POSITIVE_ACCESS_RULES => self.written.positive,
                 PropertyIdentifier::NEGATIVE_ACCESS_RULES => self.written.negative,
-                PropertyIdentifier::LOG_ENABLE => self.written.enable,
+                PropertyIdentifier::ENABLE => self.written.enable,
                 PropertyIdentifier::ACCOMPANIMENT => self.written.accompaniment,
                 PropertyIdentifier::DESCRIPTION => self.written.description,
                 _ => false,

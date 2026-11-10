@@ -182,7 +182,7 @@ impl Site {
 async fn serve<T: TransportPort + 'static>(transport: T, instance: u32) -> BACnetServer<T> {
     let identity = bacnet_objects::DeviceIdentity::new(instance, 0)
         .unwrap()
-        .with_segmentation(Segmentation::BOTH);
+        .with_segmentation(Segmentation::SEGMENTED_BOTH);
     let mut db = ObjectDatabase::new();
     db.add(Box::new(
         DeviceObject::new(DeviceConfig {

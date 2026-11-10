@@ -131,7 +131,7 @@ fn a_trigger_is_served_without_members_and_while_disabled() {
     let log = triggered(vec![member(av(), P::PRESENT_VALUE, None, None)]);
     let oid = log.object_identifier();
     db.add(Box::new(log)).unwrap();
-    write(&mut db, oid, P::LOG_ENABLE, PropertyValue::Boolean(false));
+    write(&mut db, oid, P::ENABLE, PropertyValue::Boolean(false));
     write_trigger(&mut db, oid);
     db.poll_trend_logs();
     assert_eq!(data(&db, oid), [DISABLED]);

@@ -15,7 +15,7 @@ expression: text
 "│ Services          33 supported             ││ event-state                     normal                                 │"
 "│ Object types      64 supported             ││ event-detection-enable          false                                  │"
 "│ Max APDU          1476                     ││ event-enable                    none                                   │"
-"│ Segmentation      none                     ││ time-delay                      0                                      │"
+"│ Segmentation      no-segmentation          ││ time-delay                      0                                      │"
 "│ Database revision 0                        ││ time-delay-normal               0                                      │"
 "└────────────────────────────────────────────┘│ notify-type                     alarm                                  │"
 "┌ Objects (8) ───────────────────────────────┐│ notification-class              0                                      │"

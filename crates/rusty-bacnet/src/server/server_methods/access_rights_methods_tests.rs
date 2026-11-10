@@ -96,7 +96,7 @@ fn python_enable_reaches_the_enable_row() {
     .unwrap();
     assert_eq!(
         disabled
-            .read_property(PropertyIdentifier::LOG_ENABLE, None)
+            .read_property(PropertyIdentifier::ENABLE, None)
             .unwrap(),
         PropertyValue::Boolean(false)
     );
@@ -135,7 +135,7 @@ fn python_storage_path_keeps_written_values_over_the_keywords() {
         .unwrap();
     rights
         .write_property(
-            PropertyIdentifier::LOG_ENABLE,
+            PropertyIdentifier::ENABLE,
             None,
             PropertyValue::Boolean(false),
             None,

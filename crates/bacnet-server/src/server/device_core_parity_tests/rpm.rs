@@ -188,7 +188,7 @@ async fn rpm_work_limit_matches() {
         max_result_elements: 2,
         ..ReadPropertyMultipleBudget::default()
     };
-    let mut parity = Parity::start_with(budget, Segmentation::NONE).await;
+    let mut parity = Parity::start_with(budget, Segmentation::NO_SEGMENTATION).await;
     let ai = oid(ObjectType::ANALOG_INPUT, 1);
     let three = [
         (P::PRESENT_VALUE, None),
@@ -227,7 +227,7 @@ async fn rpm_byte_limit_matches() {
         max_service_ack_bytes: 40,
         ..ReadPropertyMultipleBudget::default()
     };
-    let mut parity = Parity::start_with(budget, Segmentation::NONE).await;
+    let mut parity = Parity::start_with(budget, Segmentation::NO_SEGMENTATION).await;
     let ai = oid(ObjectType::ANALOG_INPUT, 1);
     let reply = parity
         .same(

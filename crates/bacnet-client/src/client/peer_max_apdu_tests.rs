@@ -49,7 +49,7 @@ async fn client_with_peer_advertising(
         object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 2003).unwrap(),
         mac_address: MacAddr::from_slice(&remote_mac),
         max_apdu_length,
-        segmentation_supported: Segmentation::NONE,
+        segmentation_supported: Segmentation::NO_SEGMENTATION,
         max_segments_accepted: None,
         vendor_id: 42,
         last_seen: Instant::now(),

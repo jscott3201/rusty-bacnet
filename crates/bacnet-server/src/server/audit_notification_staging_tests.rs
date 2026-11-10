@@ -149,7 +149,7 @@ async fn a_confirmed_notification_whose_commit_fails_is_refused_and_stores_nothi
     .await
     .unwrap();
     // The storage error is the server's own trouble, not the sender's
-    // (#1366): DEVICE / OPERATIONAL_PROBLEM, as a failed Log_Enable commit.
+    // (#1366): DEVICE / OPERATIONAL_PROBLEM, as a failed Enable commit.
     let Apdu::Error(error) = response else {
         panic!("expected an Error, got {response:?}");
     };

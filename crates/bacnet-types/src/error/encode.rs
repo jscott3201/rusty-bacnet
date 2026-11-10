@@ -298,10 +298,10 @@ mod tests {
         );
         assert_eq!(
             SegmentationError::PeerCannotReceive {
-                capability: Segmentation::TRANSMIT
+                capability: Segmentation::SEGMENTED_TRANSMIT
             }
             .to_string(),
-            "request requires segmentation but the peer advertised Segmentation::TRANSMIT \
+            "request requires segmentation but the peer advertised Segmentation::SEGMENTED_TRANSMIT \
              and cannot receive segmented requests"
         );
     }

@@ -145,7 +145,11 @@ fn reporter(responder: Responder, config: &ServerConfig) -> Reporter {
 
 impl Parity {
     async fn start() -> Self {
-        Self::start_with(ReadPropertyMultipleBudget::default(), Segmentation::NONE).await
+        Self::start_with(
+            ReadPropertyMultipleBudget::default(),
+            Segmentation::NO_SEGMENTATION,
+        )
+        .await
     }
 
     /// Both sides within `budget`'s result-row limit, the server's Device
@@ -186,7 +190,7 @@ impl Parity {
             .config
             .device
             .clone()
-            .with_segmentation(Segmentation::NONE);
+            .with_segmentation(Segmentation::NO_SEGMENTATION);
         let responder = Responder::new(core_identity, limits).unwrap();
         let reporter = reporter(responder, &server.config);
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -644,8 +648,11 @@ async fn edge_rows_match_and_the_segmented_reply_differs() {
 
     // The requester takes a segmented response, and the server's Device
     // segments; only the server sends one.
-    let mut parity =
-        Parity::start_with(ReadPropertyMultipleBudget::default(), Segmentation::BOTH).await;
+    let mut parity = Parity::start_with(
+        ReadPropertyMultipleBudget::default(),
+        Segmentation::SEGMENTED_BOTH,
+    )
+    .await;
     let mut body = BytesMut::new();
     ReadPropertyRequest {
         object_identifier: oid(ObjectType::DEVICE, DEVICE),
@@ -686,7 +693,7 @@ async fn edge_rows_match_and_the_segmented_reply_differs() {
             max_result_elements: 2,
             ..ReadPropertyMultipleBudget::default()
         },
-        Segmentation::NONE,
+        Segmentation::NO_SEGMENTATION,
     )
     .await;
     let group = read(oid(ObjectType::GROUP, 1), P::PRESENT_VALUE);

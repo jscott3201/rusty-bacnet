@@ -220,7 +220,7 @@ async fn every_precommit_failure_is_silent_and_nonmutating() {
         .get_mut(&sink)
         .unwrap()
         .write_property(
-            PropertyIdentifier::LOG_ENABLE,
+            PropertyIdentifier::ENABLE,
             None,
             PropertyValue::Boolean(false),
             None,

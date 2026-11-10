@@ -4,7 +4,7 @@ use alloc::borrow::Cow;
 use bacnet_types::enums::PropertyIdentifier as P;
 
 use crate::log_buffer::{BUFFER_SIZE_METADATA, LOG_BUFFER_METADATA, TOTAL_RECORD_COUNT_METADATA};
-use crate::log_lifecycle::{LOG_ENABLE_METADATA, RECORD_COUNT_METADATA, STOP_WHEN_FULL_METADATA};
+use crate::log_lifecycle::{ENABLE_METADATA, RECORD_COUNT_METADATA, STOP_WHEN_FULL_METADATA};
 use crate::log_reporting::BUFFER_READY_METADATA;
 use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead},
@@ -56,7 +56,7 @@ const fn rows(log_interval: PropertyWriteCapability) -> [PropertyMetadata; 37] {
         PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
         PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
         PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
-        LOG_ENABLE_METADATA,
+        ENABLE_METADATA,
         PropertyMetadata::new(P::LOG_INTERVAL, Optional, Some(MONITORED), log_interval),
         STOP_WHEN_FULL_METADATA,
         BUFFER_SIZE_METADATA,
@@ -235,7 +235,7 @@ mod tests {
             P::OBJECT_NAME,
             P::DESCRIPTION,
             P::OBJECT_TYPE,
-            P::LOG_ENABLE,
+            P::ENABLE,
             P::LOG_INTERVAL,
             P::STOP_WHEN_FULL,
             P::BUFFER_SIZE,
@@ -250,7 +250,7 @@ mod tests {
             P::OBJECT_IDENTIFIER,
             P::OBJECT_NAME,
             P::OBJECT_TYPE,
-            P::LOG_ENABLE,
+            P::ENABLE,
             P::STOP_WHEN_FULL,
             P::BUFFER_SIZE,
             P::LOG_BUFFER,
@@ -341,10 +341,10 @@ mod tests {
                             None
                         };
                         assert_eq!(row.presence_condition, condition, "{kind:?} {p:?}");
-                        // Only Log_Enable and Record_Count are W in the
+                        // Only Enable and Record_Count are W in the
                         // tables; a writable R or O row says so in its
                         // capability.
-                        let conformance = if matches!(p, P::LOG_ENABLE | P::RECORD_COUNT) {
+                        let conformance = if matches!(p, P::ENABLE | P::RECORD_COUNT) {
                             RequiredWrite
                         } else if condition.is_some() {
                             Optional
@@ -415,7 +415,7 @@ mod tests {
                 for row in &metadata {
                     let p = row.property_identifier;
                     let capability = match p {
-                        P::LOG_ENABLE
+                        P::ENABLE
                         | P::STOP_WHEN_FULL
                         | P::RECORD_COUNT
                         | P::DESCRIPTION
@@ -451,7 +451,7 @@ mod tests {
                         continue;
                     }
                     let value = match p {
-                        P::LOG_ENABLE => PropertyValue::Boolean(false),
+                        P::ENABLE => PropertyValue::Boolean(false),
                         P::LOG_INTERVAL => PropertyValue::Unsigned(17),
                         P::STOP_WHEN_FULL => PropertyValue::Boolean(true),
                         P::RECORD_COUNT => PropertyValue::Unsigned(0),
@@ -551,7 +551,7 @@ mod tests {
         for mut object in objects(3, LoggingType::POLLED) {
             let metadata = object.property_metadata().into_owned();
             for (p, value) in [
-                (P::LOG_ENABLE, PropertyValue::Boolean(false)),
+                (P::ENABLE, PropertyValue::Boolean(false)),
                 (P::RECORD_COUNT, PropertyValue::Unsigned(0)),
             ] {
                 assert!(crate::property_metadata::is_writable_property(&*object, p));
@@ -561,7 +561,7 @@ mod tests {
                     ErrorCode::OPERATIONAL_PROBLEM,
                 );
                 assert_eq!(
-                    object.read_property(P::LOG_ENABLE, None).unwrap(),
+                    object.read_property(P::ENABLE, None).unwrap(),
                     PropertyValue::Boolean(true)
                 );
                 assert_eq!(

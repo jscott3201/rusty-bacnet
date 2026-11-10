@@ -166,10 +166,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
 
     pub(super) async fn validate_segmentation(&self) -> Result<(), Error> {
         if self.identity.as_ref().is_some_and(|identity| {
-            identity.segmentation() != bacnet_types::enums::Segmentation::NONE
+            identity.segmentation() != bacnet_types::enums::Segmentation::NO_SEGMENTATION
         }) {
             return Err(Error::Encoding(
-                "EndpointSession roles require segmentation NONE".into(),
+                "EndpointSession roles require segmentation NO_SEGMENTATION".into(),
             ));
         }
         if let Some(database) = self.database.as_ref() {
@@ -182,11 +182,11 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                     device.read_property(PropertyIdentifier::SEGMENTATION_SUPPORTED, None)?;
                 if mode
                     != PropertyValue::Enumerated(u32::from(
-                        bacnet_types::enums::Segmentation::NONE.to_raw(),
+                        bacnet_types::enums::Segmentation::NO_SEGMENTATION.to_raw(),
                     ))
                 {
                     return Err(Error::Encoding(
-                        "EndpointSession selected Device requires segmentation NONE".into(),
+                        "EndpointSession selected Device requires segmentation NO_SEGMENTATION".into(),
                     ));
                 }
             }

@@ -130,7 +130,7 @@ async fn reads(fixture: &Fixture, rights: ObjectIdentifier) -> Vec<PropertyValue
     for property in [
         P::POSITIVE_ACCESS_RULES,
         P::NEGATIVE_ACCESS_RULES,
-        P::LOG_ENABLE,
+        P::ENABLE,
     ] {
         values.push(fixture.read(rights, property).await);
     }
@@ -211,7 +211,7 @@ async fn each_saved_write_property_saves_off_the_lock_and_survives_a_rebuild() {
             },
         ),
         (
-            P::LOG_ENABLE,
+            P::ENABLE,
             None,
             value(PropertyValue::Boolean(false)),
             AccessRightsSnapshot {
@@ -251,7 +251,7 @@ async fn a_write_property_multiple_with_several_rights_writes_saves_once_and_sur
                 Some(0),
                 value(PropertyValue::Unsigned(1)),
             ),
-            attempt(P::LOG_ENABLE, None, value(PropertyValue::Boolean(false))),
+            attempt(P::ENABLE, None, value(PropertyValue::Boolean(false))),
         ],
     );
     let (started, go) = storage.hold();
@@ -387,7 +387,7 @@ async fn a_state_that_cannot_be_saved_is_refused_on_every_path_and_nothing_chang
             Some(0),
             value(PropertyValue::Unsigned(2)),
         ),
-        (P::LOG_ENABLE, None, value(PropertyValue::Boolean(false))),
+        (P::ENABLE, None, value(PropertyValue::Boolean(false))),
     ] {
         let request = write_property(rights, property, index, octets);
         assert_eq!(
@@ -399,7 +399,7 @@ async fn a_state_that_cannot_be_saved_is_refused_on_every_path_and_nothing_chang
     let request = write_property_multiple(
         rights,
         vec![attempt(
-            P::LOG_ENABLE,
+            P::ENABLE,
             None,
             value(PropertyValue::Boolean(false)),
         )],
@@ -430,7 +430,7 @@ async fn a_write_property_multiple_refused_at_its_first_rights_write_stages_noth
     let request = write_property_multiple(
         rights,
         vec![
-            attempt(P::LOG_ENABLE, None, value(PropertyValue::Unsigned(1))),
+            attempt(P::ENABLE, None, value(PropertyValue::Unsigned(1))),
             attempt(P::POSITIVE_ACCESS_RULES, None, encoded(&[zone_rule(9)])),
         ],
     );
@@ -483,7 +483,7 @@ async fn a_paused_clock_stands_still_while_a_rights_save_runs() {
     let start = tokio::time::Instant::now();
     let request = write_property(
         rights,
-        P::LOG_ENABLE,
+        P::ENABLE,
         None,
         value(PropertyValue::Boolean(false)),
     );
@@ -559,7 +559,7 @@ async fn a_null_succeeds_unchanged_and_saves_nothing() {
     let (fixture, rights) = served_by(&storage).await;
     let null = || value(PropertyValue::Null);
     for (property, index) in [
-        (P::LOG_ENABLE, None),
+        (P::ENABLE, None),
         (P::POSITIVE_ACCESS_RULES, None),
         (P::POSITIVE_ACCESS_RULES, Some(1)),
         (P::NEGATIVE_ACCESS_RULES, Some(0)),
@@ -571,7 +571,7 @@ async fn a_null_succeeds_unchanged_and_saves_nothing() {
             "{property:?} {index:?}"
         );
     }
-    let request = write_property_multiple(rights, vec![attempt(P::LOG_ENABLE, None, null())]);
+    let request = write_property_multiple(rights, vec![attempt(P::ENABLE, None, null())]);
     assert_eq!(
         wire(
             &fixture,

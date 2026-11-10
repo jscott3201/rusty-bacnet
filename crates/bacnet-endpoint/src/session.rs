@@ -444,7 +444,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// requests stock generation after receive-capacity resolution. Explicitly
     /// supplied databases, including empty ones, are preserved. Their selected
     /// Device must match the resolved identity and declare
-    /// segmentation NONE, matching the narrow endpoint roles.
+    /// segmentation NO_SEGMENTATION, matching the narrow endpoint roles.
     /// The session retains ownership even in `ClientOnly` mode and shares this
     /// same database with the responder in `Both` mode.
     ///

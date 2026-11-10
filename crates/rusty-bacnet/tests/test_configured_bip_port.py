@@ -58,7 +58,7 @@ class ConfiguredBipPortTests(unittest.IsolatedAsyncioTestCase):
                                         (2, V.octet_string(bytes([198, 51, 100, 53])))):
                     self.assertEqual(await client.read_property(address, oid, P.IP_DNS_SERVER, array_index=index), expected)
                 for prop, index in ((P.IP_DNS_SERVER, 3), (P.MAX_APDU_LENGTH_ACCEPTED, None),
-                                    (P.COMMAND_NP, None)):
+                                    (P.COMMAND, None)):
                     with self.assertRaises(BacnetProtocolError):
                         await client.read_property(address, oid, prop, array_index=index)
                 # The real socket never rewrites the configured port-zero snapshot.

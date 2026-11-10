@@ -38,7 +38,8 @@ async fn isolated_segments(same_leaf: bool, cancel_a: bool) {
     let seen = Arc::new(StdMutex::new(Vec::new()));
     let observer = seen.clone();
     let config = ServerConfig {
-        device: bacnet_objects::DeviceIdentity::default().with_segmentation(Segmentation::BOTH),
+        device: bacnet_objects::DeviceIdentity::default()
+            .with_segmentation(Segmentation::SEGMENTED_BOTH),
         policy: Some(Arc::new(crate::FnPolicy::new().mutation(move |context| {
             observer
                 .lock()
@@ -157,7 +158,8 @@ async fn direct_principal_two_admitted_contexts_finish_without_merging() {
     let mut f = Fixture::new(
         &ca,
         ServerConfig {
-            device: bacnet_objects::DeviceIdentity::default().with_segmentation(Segmentation::BOTH),
+            device: bacnet_objects::DeviceIdentity::default()
+                .with_segmentation(Segmentation::SEGMENTED_BOTH),
             policy: Some(Arc::new(crate::FnPolicy::new().mutation(move |c| {
                 observer
                     .lock()
@@ -223,7 +225,8 @@ async fn direct_principal_reconnect_does_not_expand_reassembly_peer_capacity() {
     let mut f = Fixture::new(
         &ca,
         ServerConfig {
-            device: bacnet_objects::DeviceIdentity::default().with_segmentation(Segmentation::BOTH),
+            device: bacnet_objects::DeviceIdentity::default()
+                .with_segmentation(Segmentation::SEGMENTED_BOTH),
             ..Default::default()
         },
         database(Arc::new(AtomicUsize::new(0))),
@@ -263,7 +266,8 @@ async fn direct_response_reassembly_uses_segment_zero_capability_not_final_metad
     let mut f = Fixture::new(
         &ca,
         ServerConfig {
-            device: bacnet_objects::DeviceIdentity::default().with_segmentation(Segmentation::BOTH),
+            device: bacnet_objects::DeviceIdentity::default()
+                .with_segmentation(Segmentation::SEGMENTED_BOTH),
             ..Default::default()
         },
         database(Arc::new(AtomicUsize::new(0))),
@@ -308,7 +312,8 @@ async fn direct_response_receive_segment_gap_nak_and_final_ack_use_original_sock
     let mut f = Fixture::new(
         &ca,
         ServerConfig {
-            device: bacnet_objects::DeviceIdentity::default().with_segmentation(Segmentation::BOTH),
+            device: bacnet_objects::DeviceIdentity::default()
+                .with_segmentation(Segmentation::SEGMENTED_BOTH),
             ..Default::default()
         },
         database(Arc::new(AtomicUsize::new(0))),

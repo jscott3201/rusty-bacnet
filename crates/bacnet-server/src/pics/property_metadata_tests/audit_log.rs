@@ -29,7 +29,7 @@ fn pics_audit_log_property_metadata_is_exact() {
         (P::OBJECT_NAME, false, false),
         (P::DESCRIPTION, true, true),
         (P::OBJECT_TYPE, false, false),
-        (P::LOG_ENABLE, false, true),
+        (P::ENABLE, false, true),
         // Writable while Enable is FALSE (Clause 12.64.9).
         (P::BUFFER_SIZE, false, true),
         (P::LOG_BUFFER, false, false),

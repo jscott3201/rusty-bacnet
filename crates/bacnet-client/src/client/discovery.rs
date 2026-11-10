@@ -110,7 +110,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Manually register a local device in the device table.
     ///
     /// Useful for adding known devices without requiring WhoIs/IAm exchange.
-    /// The metadata defaults below (max_apdu_length 1476, segmentation NONE,
+    /// The metadata defaults below (max_apdu_length 1476, segmentation NO_SEGMENTATION,
     /// vendor_id 0) are local/manual registration defaults, **not** values
     /// learned from an I-Am; requests to this device are bounded by them
     /// until a real I-Am refreshes the row. The row is unambiguously local:
@@ -124,14 +124,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             object_identifier: oid,
             mac_address: MacAddr::from_slice(mac),
             max_apdu_length: 1476,
-            segmentation_supported: bacnet_types::enums::Segmentation::NONE,
+            segmentation_supported: bacnet_types::enums::Segmentation::NO_SEGMENTATION,
             max_segments_accepted: None,
             vendor_id: 0,
             last_seen: std::time::Instant::now(),
             source_network: None,
             source_address: None,
         };
-        // Placeholder capability defaults (NONE, 1476) are not I-Am evidence;
+        // Placeholder capability defaults (NO_SEGMENTATION, 1476) are not I-Am evidence;
         // they must never drive a segmentation-capability decision (#371).
         self.device_table.lock().upsert_placeholder(device);
         Ok(())

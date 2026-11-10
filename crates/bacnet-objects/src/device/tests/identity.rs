@@ -5,10 +5,10 @@ use bacnet_types::error::RemoteError;
 #[test]
 fn mode_derived_max_segments_accepted() {
     let cases = [
-        ("none", Segmentation::NONE, None),
-        ("transmit", Segmentation::TRANSMIT, Some(1)),
-        ("receive", Segmentation::RECEIVE, Some(65)),
-        ("both", Segmentation::BOTH, Some(65)),
+        ("none", Segmentation::NO_SEGMENTATION, None),
+        ("transmit", Segmentation::SEGMENTED_TRANSMIT, Some(1)),
+        ("receive", Segmentation::SEGMENTED_RECEIVE, Some(65)),
+        ("both", Segmentation::SEGMENTED_BOTH, Some(65)),
     ];
 
     for (name, segmentation, expected_max_segments) in cases {
@@ -72,9 +72,9 @@ fn segment_timeout_absence_custom_value_and_zero_validation() {
         PropertyIdentifier::APDU_SEGMENT_TIMEOUT
     ));
     for mode in [
-        Segmentation::TRANSMIT,
-        Segmentation::RECEIVE,
-        Segmentation::BOTH,
+        Segmentation::SEGMENTED_TRANSMIT,
+        Segmentation::SEGMENTED_RECEIVE,
+        Segmentation::SEGMENTED_BOTH,
     ] {
         assert!(
             DeviceObject::new(DeviceConfig {
@@ -120,9 +120,9 @@ fn segment_timeout_absence_custom_value_and_zero_validation() {
 #[test]
 fn segment_timeout_is_present_for_segmented_devices() {
     for segmentation in [
-        Segmentation::TRANSMIT,
-        Segmentation::RECEIVE,
-        Segmentation::BOTH,
+        Segmentation::SEGMENTED_TRANSMIT,
+        Segmentation::SEGMENTED_RECEIVE,
+        Segmentation::SEGMENTED_BOTH,
     ] {
         let dev = DeviceObject::new(DeviceConfig {
             identity: crate::DeviceIdentity::default().with_segmentation(segmentation),

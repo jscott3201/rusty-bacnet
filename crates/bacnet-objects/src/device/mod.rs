@@ -374,7 +374,7 @@ impl DeviceObject {
         }
 
         // Max_Segments_Accepted — only included when segmentation is supported.
-        if config.identity.segmentation() != Segmentation::NONE {
+        if config.identity.segmentation() != Segmentation::NO_SEGMENTATION {
             if config.identity.apdu_segment_timeout_ms() == 0 {
                 return Err(Error::Encoding(
                     "APDU_Segment_Timeout must be positive when segmentation is supported".into(),
@@ -384,12 +384,12 @@ impl DeviceObject {
                 PropertyIdentifier::APDU_SEGMENT_TIMEOUT,
                 PropertyValue::Unsigned(config.identity.apdu_segment_timeout_ms()),
             );
-            let max_segments_accepted = if config.identity.segmentation() == Segmentation::TRANSMIT
-            {
-                1
-            } else {
-                65
-            };
+            let max_segments_accepted =
+                if config.identity.segmentation() == Segmentation::SEGMENTED_TRANSMIT {
+                    1
+                } else {
+                    65
+                };
             properties.insert(
                 PropertyIdentifier::MAX_SEGMENTS_ACCEPTED,
                 PropertyValue::Unsigned(max_segments_accepted),

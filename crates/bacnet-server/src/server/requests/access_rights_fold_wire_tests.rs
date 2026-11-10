@@ -23,7 +23,7 @@ async fn a_write_property_multiple_refused_at_its_second_write_puts_storage_back
                 None,
                 value(PropertyValue::CharacterString("x".into())),
             ),
-            attempt(P::LOG_ENABLE, None, value(PropertyValue::Boolean(false))),
+            attempt(P::ENABLE, None, value(PropertyValue::Boolean(false))),
         ],
     );
     let service = ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE;
@@ -68,7 +68,7 @@ async fn a_write_another_path_cannot_make_leaves_a_staged_save_to_its_request() 
         );
         assert!(
             object
-                .write_property(P::LOG_ENABLE, None, PropertyValue::Null, None)
+                .write_property(P::ENABLE, None, PropertyValue::Null, None)
                 .is_err()
         );
     }
@@ -110,7 +110,7 @@ async fn an_undecodable_rights_attempt_ends_what_is_decided_and_staged() {
         rights,
         vec![
             attempt(P::POSITIVE_ACCESS_RULES, Some(0), Vec::new()),
-            attempt(P::LOG_ENABLE, None, value(PropertyValue::Boolean(true))),
+            attempt(P::ENABLE, None, value(PropertyValue::Boolean(true))),
         ],
     );
     let service = ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE;

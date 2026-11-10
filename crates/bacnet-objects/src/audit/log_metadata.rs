@@ -26,7 +26,7 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
     PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::LOG_ENABLE, RequiredWrite, None, Always),
+    PropertyMetadata::new(P::ENABLE, RequiredWrite, None, Always),
     PropertyMetadata::new(P::BUFFER_SIZE, RequiredRead, None, Always),
     crate::log_buffer::LOG_BUFFER_METADATA,
     PropertyMetadata::new(P::RECORD_COUNT, RequiredRead, None, ReadOnly),
@@ -255,7 +255,7 @@ mod tests {
             P::OBJECT_NAME,
             P::DESCRIPTION,
             P::OBJECT_TYPE,
-            P::LOG_ENABLE,
+            P::ENABLE,
             P::BUFFER_SIZE,
             P::LOG_BUFFER,
             P::RECORD_COUNT,
@@ -267,7 +267,7 @@ mod tests {
             P::OBJECT_IDENTIFIER,
             P::OBJECT_NAME,
             P::OBJECT_TYPE,
-            P::LOG_ENABLE,
+            P::ENABLE,
             P::BUFFER_SIZE,
             P::LOG_BUFFER,
             P::RECORD_COUNT,
@@ -300,7 +300,7 @@ mod tests {
         ));
         assert!(!object.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
         for row in metadata.iter() {
-            let expected = if row.property_identifier == P::LOG_ENABLE {
+            let expected = if row.property_identifier == P::ENABLE {
                 RequiredWrite
             } else if required.contains(&row.property_identifier) {
                 RequiredRead
@@ -364,7 +364,7 @@ mod tests {
         let metadata = object.property_metadata().into_owned();
         for row in &metadata {
             let p = row.property_identifier;
-            let writable = matches!(p, P::LOG_ENABLE | P::DESCRIPTION | P::BUFFER_SIZE);
+            let writable = matches!(p, P::ENABLE | P::DESCRIPTION | P::BUFFER_SIZE);
             assert_eq!(
                 row.write_capability,
                 if writable { Always } else { ReadOnly },
@@ -399,7 +399,7 @@ mod tests {
         }
         for (property, value, error) in [
             (
-                P::LOG_ENABLE,
+                P::ENABLE,
                 PropertyValue::Unsigned(0),
                 ErrorCode::INVALID_DATA_TYPE,
             ),
@@ -424,7 +424,7 @@ mod tests {
         ));
         assert!(crate::property_metadata::is_writable_property(
             &object,
-            P::LOG_ENABLE
+            P::ENABLE
         ));
         for p in [
             P::OBJECT_NAME,
@@ -461,7 +461,7 @@ mod tests {
 
         let mut object = log();
         let error = object
-            .write_property(P::LOG_ENABLE, None, PropertyValue::Boolean(false), None)
+            .write_property(P::ENABLE, None, PropertyValue::Boolean(false), None)
             .unwrap_err();
         assert!(
             matches!(error, Error::Remote(RemoteError::Error { class, code })
@@ -479,11 +479,11 @@ mod tests {
             },
         );
         object
-            .write_property(P::LOG_ENABLE, None, PropertyValue::Boolean(false), None)
+            .write_property(P::ENABLE, None, PropertyValue::Boolean(false), None)
             .unwrap();
         assert!(!object.log_enable());
         object
-            .write_property(P::LOG_ENABLE, None, PropertyValue::Boolean(true), None)
+            .write_property(P::ENABLE, None, PropertyValue::Boolean(true), None)
             .unwrap();
         assert!(object.log_enable());
         assert_eq!(

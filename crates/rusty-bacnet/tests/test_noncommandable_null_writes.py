@@ -33,7 +33,7 @@ SCHED_1 = ObjectIdentifier(ObjectType.SCHEDULE, 1)
 # Rights Enable and a rule array, a Global_Identifier, raw-octet and plain
 # BACnetLIST properties, and scalars.
 UNCHANGED: list[tuple[ObjectIdentifier, PropertyIdentifier, int | None]] = [
-    (RIGHTS, P.LOG_ENABLE, None),
+    (RIGHTS, P.ENABLE, None),
     (RIGHTS, P.POSITIVE_ACCESS_RULES, None),
     (RIGHTS, P.POSITIVE_ACCESS_RULES, 1),
     (CREDENTIAL, P.GLOBAL_IDENTIFIER, None),

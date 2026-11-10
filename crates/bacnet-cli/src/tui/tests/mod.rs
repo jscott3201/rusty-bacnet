@@ -204,7 +204,7 @@ pub(super) fn row(instance: u32, address: &str, vendor_id: u16, seen: u64) -> De
         network: None,
         vendor_id,
         max_apdu: 1476,
-        segmentation: Segmentation::NONE,
+        segmentation: Segmentation::NO_SEGMENTATION,
         last_seen: at(seen),
     }
 }

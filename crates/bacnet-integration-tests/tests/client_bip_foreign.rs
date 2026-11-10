@@ -26,7 +26,7 @@ fn i_am() -> BytesMut {
     IAmRequest {
         object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 2201).unwrap(),
         max_apdu_length: 1476,
-        segmentation_supported: Segmentation::NONE,
+        segmentation_supported: Segmentation::NO_SEGMENTATION,
         vendor_id: 999,
     }
     .encode(&mut service);

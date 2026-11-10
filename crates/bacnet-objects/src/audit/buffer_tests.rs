@@ -42,12 +42,7 @@ fn resize(log: &mut AuditLogObject, size: u64) -> Result<(), Error> {
 }
 
 fn enable(log: &mut AuditLogObject, on: bool) {
-    write(
-        log,
-        PropertyIdentifier::LOG_ENABLE,
-        PropertyValue::Boolean(on),
-    )
-    .unwrap();
+    write(log, PropertyIdentifier::ENABLE, PropertyValue::Boolean(on)).unwrap();
 }
 
 fn read(log: &AuditLogObject, property: PropertyIdentifier) -> PropertyValue {
@@ -363,7 +358,7 @@ fn a_failing_store_refuses_a_resize_or_purge_and_leaves_the_log_unchanged() {
     assert_operational_problem(
         write(
             &mut log,
-            PropertyIdentifier::LOG_ENABLE,
+            PropertyIdentifier::ENABLE,
             PropertyValue::Boolean(true),
         )
         .unwrap_err(),
@@ -576,10 +571,7 @@ fn pending(property: PropertyIdentifier, value: PropertyValue) -> PendingWrite {
 /// then resizes.
 fn off_then_resize(size: u64) -> [PendingWrite; 3] {
     [
-        pending(
-            PropertyIdentifier::LOG_ENABLE,
-            PropertyValue::Boolean(false),
-        ),
+        pending(PropertyIdentifier::ENABLE, PropertyValue::Boolean(false)),
         pending(
             PropertyIdentifier::DESCRIPTION,
             PropertyValue::CharacterString("resized".into()),
@@ -663,10 +655,7 @@ fn a_request_that_resizes_before_turning_logging_off_stages_nothing() {
     // The resize is refused while logging is on, so the request ends there.
     let writes = [
         pending(PropertyIdentifier::BUFFER_SIZE, PropertyValue::Unsigned(2)),
-        pending(
-            PropertyIdentifier::LOG_ENABLE,
-            PropertyValue::Boolean(false),
-        ),
+        pending(PropertyIdentifier::ENABLE, PropertyValue::Boolean(false)),
     ];
     assert!(matches!(log.stage_writes(&writes), StageStep::Skip));
     log.wait_for_commits();
@@ -681,11 +670,8 @@ fn a_request_goes_on_past_a_null_the_log_leaves_unchanged() {
     // refusal either.
     let (mut log, storage) = log();
     let writes = [
-        null(PropertyIdentifier::LOG_ENABLE),
-        pending(
-            PropertyIdentifier::LOG_ENABLE,
-            PropertyValue::Boolean(false),
-        ),
+        null(PropertyIdentifier::ENABLE),
+        pending(PropertyIdentifier::ENABLE, PropertyValue::Boolean(false)),
         null(PropertyIdentifier::BUFFER_SIZE),
         pending(PropertyIdentifier::BUFFER_SIZE, PropertyValue::Unsigned(2)),
     ];
@@ -703,10 +689,7 @@ fn a_request_goes_on_past_a_null_the_log_leaves_unchanged() {
     let commits = storage.commits.load(Ordering::SeqCst);
     let writes = [
         null(PropertyIdentifier::BUFFER_SIZE),
-        pending(
-            PropertyIdentifier::LOG_ENABLE,
-            PropertyValue::Boolean(false),
-        ),
+        pending(PropertyIdentifier::ENABLE, PropertyValue::Boolean(false)),
     ];
     assert!(matches!(log.stage_writes(&writes), StageStep::Skip));
     log.wait_for_commits();

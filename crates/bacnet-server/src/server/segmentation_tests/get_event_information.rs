@@ -234,8 +234,13 @@ async fn dispatch_with_budget(
 async fn first_summary_over_unsegmented_budget_uses_buffer_overflow_abort() {
     assert!(unsegmented_apdu_len(full_service_ack()) > 50);
     for (client_max_apdu, local_max_apdu) in [(50, 1476), (480, 50)] {
-        let (sent, _, _, _owner) =
-            dispatch(Segmentation::NONE, false, client_max_apdu, local_max_apdu).await;
+        let (sent, _, _, _owner) = dispatch(
+            Segmentation::NO_SEGMENTATION,
+            false,
+            client_max_apdu,
+            local_max_apdu,
+        )
+        .await;
         wait_for_sent_len(&sent, 1).await;
         assert_eq!(sent_count(&sent), 1);
         assert_eq!(abort_reason(&sent, 0), AbortReason::BUFFER_OVERFLOW);
@@ -244,7 +249,7 @@ async fn first_summary_over_unsegmented_budget_uses_buffer_overflow_abort() {
 
 #[tokio::test]
 async fn get_event_information_configured_abort_independent_of_segmentation() {
-    for segmentation in [Segmentation::NONE, Segmentation::BOTH] {
+    for segmentation in [Segmentation::NO_SEGMENTATION, Segmentation::SEGMENTED_BOTH] {
         for (budget, expected) in [
             (
                 GetEventInformationBudget {
@@ -277,7 +282,7 @@ async fn segmentation_capable_dispatch_retains_the_complete_service_ack() {
     assert!(unsegmented_apdu_len(expected.clone()) > 50);
     let (sent, seg_ack_senders, source_mac, owner) = tokio::time::timeout(
         Duration::from_secs(1),
-        dispatch(Segmentation::BOTH, true, 50, 1476),
+        dispatch(Segmentation::SEGMENTED_BOTH, true, 50, 1476),
     )
     .await
     .expect("parent must return without awaiting segmented response ACKs");

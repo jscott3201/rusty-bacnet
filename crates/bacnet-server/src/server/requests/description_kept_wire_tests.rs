@@ -114,7 +114,7 @@ fn other(kind: ObjectType) -> (P, Vec<u8>) {
             encode_destination_list(&mut list, &[destination(3)]).unwrap();
             (P::RECIPIENT_LIST, list.to_vec())
         }
-        ObjectType::ACCESS_RIGHTS => (P::LOG_ENABLE, value(PropertyValue::Boolean(false))),
+        ObjectType::ACCESS_RIGHTS => (P::ENABLE, value(PropertyValue::Boolean(false))),
         _ => (P::NOTIFICATION_CLASS, value(PropertyValue::Unsigned(9))),
     }
 }

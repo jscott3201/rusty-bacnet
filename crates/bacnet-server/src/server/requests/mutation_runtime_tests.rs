@@ -9,7 +9,8 @@ async fn mutation_runtime_ingress_and_reassembly_share_retained_server_counters(
         let fixture = Fixture::new(Some(Arc::new(|_| true)));
         let (transport, tx) = TestTransport::inbound(2);
         let config = ServerConfig {
-            device: bacnet_objects::DeviceIdentity::default().with_segmentation(Segmentation::BOTH),
+            device: bacnet_objects::DeviceIdentity::default()
+                .with_segmentation(Segmentation::SEGMENTED_BOTH),
             mutation_policy: MutationPolicy::DenyAll,
             ..fixture.config
         };

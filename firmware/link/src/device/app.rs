@@ -268,7 +268,7 @@ fn who_is(objects: Objects, parameters: &[u8], out: &mut &mut [u8]) -> Result<Se
     let i_am = IAmRequest {
         object_identifier: objects.device,
         max_apdu_length: u32::from(MAX_APDU),
-        segmentation_supported: Segmentation::NONE,
+        segmentation_supported: Segmentation::NO_SEGMENTATION,
         vendor_id: VENDOR_ID,
     };
     ApduHeader::UnconfirmedRequest(UnconfirmedServiceChoice::I_AM).encode_to_sink(out)?;
@@ -466,7 +466,9 @@ fn device_property(
             encode_app_bit_string_to_sink(out, 7, &OBJECT_TYPES_SUPPORTED)?
         }
         P::MAX_APDU_LENGTH_ACCEPTED => encode_app_unsigned_to_sink(out, u64::from(MAX_APDU))?,
-        P::SEGMENTATION_SUPPORTED => enumerated(out, u32::from(Segmentation::NONE.to_raw()))?,
+        P::SEGMENTATION_SUPPORTED => {
+            enumerated(out, u32::from(Segmentation::NO_SEGMENTATION.to_raw()))?
+        }
         P::APDU_TIMEOUT => encode_app_unsigned_to_sink(out, 3000)?,
         P::NUMBER_OF_APDU_RETRIES => encode_app_unsigned_to_sink(out, 3)?,
         // An empty list: the device binds to no other device.

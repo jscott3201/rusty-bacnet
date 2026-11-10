@@ -43,7 +43,7 @@ fn routed_config() -> RoutedDeviceConfig {
         remote_network: DNET,
         remote_mac: DADR.to_vec(),
         max_apdu_length: 1476,
-        segmentation_supported: Segmentation::NONE,
+        segmentation_supported: Segmentation::NO_SEGMENTATION,
         max_segments_accepted: None,
     }
 }
