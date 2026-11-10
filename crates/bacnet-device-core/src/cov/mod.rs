@@ -33,6 +33,8 @@ mod sample;
 mod subscribe;
 mod subscription;
 mod table;
+#[cfg(feature = "cov-multiple")]
+pub mod timed;
 pub mod value_source;
 mod vec_map;
 

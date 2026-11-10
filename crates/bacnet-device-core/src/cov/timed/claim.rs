@@ -10,6 +10,8 @@
 //! deadline if nobody settled it, as a confirmed report ends itself at its
 //! own.
 
+use alloc::vec;
+use alloc::vec::Vec;
 use bacnet_time::Instant;
 
 use super::{CovSubscriptionKey, DropReason, TimedChange, TimedHistories};
@@ -33,7 +35,7 @@ use super::{CovSubscriptionKey, DropReason, TimedChange, TimedHistories};
 /// of their own.
 #[derive(Debug)]
 #[must_use = "a claim that is neither committed, given back nor lodged loses its changes"]
-pub(crate) struct TimedClaim {
+pub struct TimedClaim {
     changes: Vec<(CovSubscriptionKey, u64, Vec<TimedChange>)>,
     /// Untimestamped references, each with its generation and, if it was
     /// owed when this report took it, since when.
@@ -52,7 +54,7 @@ impl Default for TimedClaim {
 
 impl TimedClaim {
     /// A claim of nothing yet.
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             changes: Vec::new(),
             untimed: Vec::new(),
@@ -63,7 +65,7 @@ impl TimedClaim {
 
     /// Whether the claim holds neither a change nor a reference, so
     /// settling it changes nothing.
-    pub(crate) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.changes.is_empty() && self.untimed.is_empty()
     }
 
@@ -79,7 +81,7 @@ impl TimedClaim {
 
     /// Carry the prepared values of an untimestamped reference, owed since
     /// `owed_since` if it was owed.
-    pub(crate) fn add_untimed(
+    pub fn add_untimed(
         &mut self,
         key: CovSubscriptionKey,
         generation: u64,
@@ -90,7 +92,7 @@ impl TimedClaim {
 
     /// Move the untimestamped references `moves` selects into a claim of
     /// their own, for a notification that carries their values.
-    pub(crate) fn split_untimed(&mut self, moves: impl Fn(&CovSubscriptionKey) -> bool) -> Self {
+    pub fn split_untimed(&mut self, moves: impl Fn(&CovSubscriptionKey) -> bool) -> Self {
         let (moved, kept) = core::mem::take(&mut self.untimed)
             .into_iter()
             .partition(|(key, _, _)| moves(key));
@@ -104,7 +106,7 @@ impl TimedClaim {
     /// Return these changes without applying the context bound: a report
     /// planned to send them and only defers them, so the bound must not drop
     /// what it just drained (#986).
-    pub(crate) fn without_eviction(mut self) -> Self {
+    pub fn without_eviction(mut self) -> Self {
         self.evict = false;
         self
     }
@@ -112,18 +114,13 @@ impl TimedClaim {
     /// The report this part belongs to began going out without it, so its
     /// untimestamped references are owed until a later report delivers them
     /// or finds them settled (#1038).
-    pub(crate) fn owing(mut self) -> Self {
+    pub fn owing(mut self) -> Self {
         self.owing = true;
         self
     }
 
     /// Carry `changes` of `key`, drained from the history `incarnation`.
-    pub(crate) fn add(
-        &mut self,
-        key: CovSubscriptionKey,
-        incarnation: u64,
-        changes: Vec<TimedChange>,
-    ) {
+    pub fn add(&mut self, key: CovSubscriptionKey, incarnation: u64, changes: Vec<TimedChange>) {
         if !changes.is_empty() {
             self.changes.push((key, incarnation, changes));
         }
@@ -132,7 +129,7 @@ impl TimedClaim {
     /// Move the `count` oldest claimed changes, across every reference and
     /// latest changes included (all of them, if fewer), into a claim of their
     /// own, for a notification that goes out before this one.
-    pub(crate) fn split_oldest(&mut self, count: usize) -> Self {
+    pub fn split_oldest(&mut self, count: usize) -> Self {
         let mut part = self.part();
         let cut = {
             let all = self.in_order();
@@ -165,7 +162,7 @@ impl TimedClaim {
     /// [`TimedHistories::lost_values`] to count. A value that would carry
     /// nothing is left out. Of the parts kept, only the one with a change's
     /// last value delivers the change when it is delivered.
-    pub(crate) fn split_values(
+    pub fn split_values(
         mut self,
         fit: impl Fn(&CovSubscriptionKey, &TimedChange) -> ValueFit,
     ) -> (Vec<Self>, Vec<CovSubscriptionKey>) {
@@ -205,7 +202,7 @@ impl TimedClaim {
     }
 
     /// Every claimed change, in capture order.
-    pub(crate) fn in_order(&self) -> Vec<(&CovSubscriptionKey, &TimedChange)> {
+    pub fn in_order(&self) -> Vec<(&CovSubscriptionKey, &TimedChange)> {
         let mut all: Vec<_> = self
             .changes
             .iter()
@@ -216,7 +213,7 @@ impl TimedClaim {
     }
 
     /// Each claimed reference with its last claimed change.
-    pub(crate) fn last_changes(&self) -> impl Iterator<Item = (&CovSubscriptionKey, &TimedChange)> {
+    pub fn last_changes(&self) -> impl Iterator<Item = (&CovSubscriptionKey, &TimedChange)> {
         self.changes
             .iter()
             .filter_map(|(key, _, changes)| Some((key, changes.last()?)))
@@ -225,11 +222,11 @@ impl TimedClaim {
 
 /// A lodged claim: what [`TimedHistories::settle`] takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ClaimId(u64);
+pub struct ClaimId(u64);
 
 /// How a lodged claim's notification ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Settlement {
+pub enum Settlement {
     /// Delivered: transmitted when unconfirmed, acknowledged when confirmed.
     /// The claim is committed.
     Delivered,
@@ -250,7 +247,7 @@ impl TimedHistories {
     /// retire them. A part whose change continues in a later notification
     /// delivers nothing of that change by itself (#1090); the change is in
     /// delivery from then on (#1163).
-    pub(crate) fn commit(&mut self, claim: TimedClaim) {
+    pub fn commit(&mut self, claim: TimedClaim) {
         for (key, incarnation, changes) in claim.changes {
             match changes.iter().rev().find(|change| !change.continues) {
                 Some(last) => self.commit_through(&key, incarnation, last.seq),
@@ -267,7 +264,7 @@ impl TimedHistories {
     /// return the changes to their references, and owe, since `now`, each
     /// untimestamped reference of a claim that is [`TimedClaim::owing`]. One
     /// that was owed already stays owed from when it first was.
-    pub(crate) fn give_back(&mut self, claim: TimedClaim, now: Instant) {
+    pub fn give_back(&mut self, claim: TimedClaim, now: Instant) {
         for (key, incarnation, changes) in claim.changes {
             self.requeue(&key, incarnation, changes, claim.evict);
         }
@@ -282,7 +279,7 @@ impl TimedHistories {
     /// later parts wait in the queue for its Ack. A change of which it
     /// carries only some values is in delivery from now on, so that the bound
     /// keeps the rest of it (#1163).
-    pub(crate) fn going_out(&mut self, claim: &TimedClaim) {
+    pub fn going_out(&mut self, claim: &TimedClaim) {
         for (key, incarnation, changes) in &claim.changes {
             if let Some(part) = changes.last().filter(|part| part.continues) {
                 self.deliver_by_value(key, *incarnation, part.seq);
@@ -295,14 +292,14 @@ impl TimedHistories {
     /// ([`TimedCounts::untimed_oversized`](super::TimedCounts::untimed_oversized)):
     /// their values fit no notification, so a later attempt would only fail
     /// again. They are evaluated again at their next fanout (#1066).
-    pub(crate) fn forgo_untimed(&mut self, claim: &mut TimedClaim) {
+    pub fn forgo_untimed(&mut self, claim: &mut TimedClaim) {
         self.counts.untimed_oversized += core::mem::take(&mut claim.untimed).len() as u64;
     }
 
     /// Count the changes [`TimedClaim::split_values`] found to hold a value
     /// too large for any notification, one per entry of `lost`; each context
     /// reports its first (#1039).
-    pub(crate) fn lost_values(&mut self, lost: &[CovSubscriptionKey]) {
+    pub fn lost_values(&mut self, lost: &[CovSubscriptionKey]) {
         for key in lost {
             self.dropped(key, 1, DropReason::TooLarge);
         }
@@ -313,7 +310,7 @@ impl TimedHistories {
     /// returned. For a holder that may be lost before it settles, such as a
     /// task a host can abort. Pick a deadline a live holder always settles
     /// before; one that settles later finds its claim gone.
-    pub(crate) fn lodge(&mut self, claim: TimedClaim, deadline: Instant) -> ClaimId {
+    pub fn lodge(&mut self, claim: TimedClaim, deadline: Instant) -> ClaimId {
         let id = ClaimId(self.next_claim);
         self.next_claim += 1;
         self.lodged.push(Lodged {
@@ -329,7 +326,7 @@ impl TimedHistories {
     /// Settle the lodged claim `id` as `outcome` says. `false`, and nothing
     /// changes, when the claim is not lodged any more: it was settled, or
     /// its deadline passed and it was given back.
-    pub(crate) fn settle(&mut self, id: ClaimId, outcome: Settlement, now: Instant) -> bool {
+    pub fn settle(&mut self, id: ClaimId, outcome: Settlement, now: Instant) -> bool {
         let Some(at) = self.lodged.iter().position(|lodged| lodged.id == id) else {
             return false;
         };
@@ -364,7 +361,7 @@ impl TimedHistories {
 /// How the notification of one value of an oversized change would go out
 /// (#1090).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ValueFit {
+pub enum ValueFit {
     /// Within the subscriber's limit.
     Fits,
     /// Over the limit even with that value alone.

@@ -17,7 +17,9 @@ the database guard, the transport, addressing and time.
   properties writable, so list them as read-only in such a build's PICS.
 - `cov-multiple`, which `std` turns on, has what the
   SubscribeCOVPropertyMultiple notification path needs (#2320): so far the
-  read cache its reports and captures share (`cov::multiple_reads`).
+  timestamped histories, with their claims and deadlines (`cov::timed`),
+  and the read cache its reports and captures share
+  (`cov::multiple_reads`).
 - `bacnet-server` runs its ReadProperty, ReadPropertyMultiple,
   WriteProperty, WritePropertyMultiple, Who-Is and Who-Has on it, through
   the staged functions in `read`, `write` and `discovery`.

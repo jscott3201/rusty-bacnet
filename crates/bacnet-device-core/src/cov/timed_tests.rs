@@ -1,6 +1,6 @@
 pub(super) use super::host::{TimedClaim, TimedStore, advance, now};
 use super::*;
-use bacnet_device_core::cov::{CovRecipient, CovSample};
+use crate::cov::{CovRecipient, CovSample};
 use bacnet_types::MacAddr;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, Time};

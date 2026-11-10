@@ -27,7 +27,6 @@ use bacnet_objects::database::ObjectDatabase;
 
 mod confirmed;
 pub(crate) use confirmed::{ConfirmedFlight, CovRevisits};
-pub(crate) mod timed;
 mod timed_capture;
 pub(crate) mod timed_store;
 pub(crate) use timed_capture::TimedWriteCapture;

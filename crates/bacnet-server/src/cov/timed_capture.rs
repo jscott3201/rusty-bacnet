@@ -20,13 +20,13 @@ use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
-use super::timed::TimedChange;
 use super::timed_store::TimedStore;
 use super::{CovSubscriptionSnapshot, CovSubscriptionTable};
 use bacnet_device_core::cov::life_safety::{
     LifeSafetyCovChange, LifeSafetyCovSnapshots, is_life_safety_object,
 };
 use bacnet_device_core::cov::multiple_reads::MultipleReads;
+use bacnet_device_core::cov::timed::TimedChange;
 use bacnet_device_core::cov::{CovNotificationKind, CovSubscriptionKey};
 use bacnet_device_core::write::{WriteCommitObserver, WriteTarget};
 

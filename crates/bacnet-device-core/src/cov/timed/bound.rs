@@ -32,7 +32,7 @@ const LIST_TAGS: usize = 2;
 
 /// Octets of the APDU header before a COV-multiple notification's service
 /// request, confirmed or not; a notification is never segmented.
-pub(crate) fn request_header(confirmed: bool) -> usize {
+pub fn request_header(confirmed: bool) -> usize {
     if confirmed {
         CONFIRMED_HEADER
     } else {
@@ -51,7 +51,7 @@ pub(crate) fn request_header(confirmed: bool) -> usize {
 /// `time_remaining` is the lifetime in seconds the context had left when it
 /// was admitted. Its notifications report less as time passes, which never
 /// takes more octets, so the envelope never outgrows this size.
-pub(crate) fn envelope_len(context: &MultipleContextKey, time_remaining: u32) -> usize {
+pub fn envelope_len(context: &MultipleContextKey, time_remaining: u32) -> usize {
     request_header(context.confirmed)
         + unsigned_len(u64::from(context.process_id))
         + DEVICE_IDENTIFIER
@@ -188,7 +188,7 @@ mod tests {
         VALUE_MEMORY, value_len,
     };
     use super::*;
-    use bacnet_device_core::cov::{CovObservation, CovSample};
+    use crate::cov::{CovObservation, CovSample};
 
     /// The local maximum APDU these tests' devices take: the largest B/IP one.
     const LOCAL: usize = 1476;

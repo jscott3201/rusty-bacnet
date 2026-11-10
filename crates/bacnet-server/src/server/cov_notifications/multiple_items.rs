@@ -7,10 +7,10 @@ use bacnet_services::cov_multiple::{COVNotificationItem, COVNotificationValue};
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::ObjectIdentifier;
 
-use crate::cov::timed::TimedChange;
 use bacnet_device_core::cov::CovSubscriptionKey;
 use bacnet_device_core::cov::CovSubscriptionSnapshot;
 use bacnet_device_core::cov::multiple_reads::MultipleReads;
+use bacnet_device_core::cov::timed::TimedChange;
 
 /// Object, property and index of a subscribed coordinate.
 pub(super) type Coordinate = (ObjectIdentifier, Option<PropertyIdentifier>, Option<u32>);

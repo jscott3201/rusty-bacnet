@@ -134,7 +134,9 @@
 //! ([`TimedHistories::lodge`]), which is given back at its deadline if its
 //! holder never settled it. [`TimedHistories::take_due`] acts on both.
 
-use std::collections::{BTreeMap, VecDeque};
+use alloc::collections::{BTreeMap, VecDeque};
+use alloc::vec;
+use alloc::vec::Vec;
 
 use bacnet_objects::clock::ClockFrame;
 use bacnet_services::cov_multiple::COVNotificationValue;
@@ -143,38 +145,38 @@ use bacnet_time::{Duration, Instant};
 use super::{CovObservation, CovSubscriptionKey, MultipleContextKey};
 
 /// Notifications' worth of pending history one context may hold.
-pub(crate) const HISTORY_NOTIFICATIONS: usize = 4;
+pub const HISTORY_NOTIFICATIONS: usize = 4;
 /// Octets of one item's framing: its context-tagged object identifier (5) and
 /// the opening and closing tags of its value list (2).
-pub(crate) const ITEM_FRAMING: usize = 7;
+pub const ITEM_FRAMING: usize = 7;
 /// Bytes each pending change counts against its context's memory ceiling for
 /// itself, in its slot of the history's queue (#1357), and
 /// [`CAPTURE_ALLOWANCE`]. The room for notification items does not count it
 /// (#1287).
-pub(crate) const CHANGE_MEMORY: usize = core::mem::size_of::<TimedChange>() + CAPTURE_ALLOWANCE;
+pub const CHANGE_MEMORY: usize = core::mem::size_of::<TimedChange>() + CAPTURE_ALLOWANCE;
 /// Bytes a pending change still counts for the capture instant it held on
 /// the host's clock, 16 octets, before it took `bacnet-time`'s 8-octet one
 /// (#2320). Without it every change would count 8 bytes less, and a
 /// context's ceiling would hold more changes than it did (120 of the
 /// smallest for 116 at a 1476-octet local maximum): which change overflow
 /// drops is part of what a subscriber sees, so it stays as it was.
-const CAPTURE_ALLOWANCE: usize = 8;
+pub const CAPTURE_ALLOWANCE: usize = 8;
 /// Bytes each value of a pending change counts against the memory ceiling
 /// besides its encoded octets: the value in the change's vector of values,
 /// and its slot in the vector of positions (#1357).
-pub(crate) const VALUE_MEMORY: usize =
+pub const VALUE_MEMORY: usize =
     core::mem::size_of::<COVNotificationValue>() + core::mem::size_of::<usize>();
 /// Bytes of memory a context's pending changes may take for each octet of
 /// items [`HISTORY_NOTIFICATIONS`] notifications of the local maximum APDU
 /// have (#1357); see the module documentation.
-pub(crate) const CEILING_BYTES_PER_OCTET: usize = 4;
+pub const CEILING_BYTES_PER_OCTET: usize = 4;
 /// Earliest the deadline backstop acts after a change, and the least spacing
 /// between its attempts on one blocked context.
-const DEADLINE_FLOOR: Duration = Duration::from_secs(1);
+pub const DEADLINE_FLOOR: Duration = Duration::from_secs(1);
 
 /// One captured change of a timestamped reference, ready to be conveyed.
 #[derive(Debug, Clone)]
-pub(crate) struct TimedChange {
+pub struct TimedChange {
     seq: u64,
     frame: ClockFrame,
     /// Instant of the capture on the host's monotonic timeline: the
@@ -209,7 +211,7 @@ fn unsigned_len(value: u64) -> usize {
 /// Encoded octets of one entry of a COV-multiple value list: its property
 /// identifier, optional array index, the value between its opening and closing
 /// tags, and its Time_Of_Change when present.
-pub(crate) fn value_len(value: &COVNotificationValue) -> usize {
+pub fn value_len(value: &COVNotificationValue) -> usize {
     unsigned_len(u64::from(value.property_identifier.to_raw()))
         + value
             .property_array_index
@@ -229,7 +231,7 @@ impl TimedChange {
     /// Pair prepared values with the Device clock frame of the change,
     /// captured at `now`. Every value carries the frame's local time as its
     /// Time_Of_Change.
-    pub(crate) fn new(
+    pub fn new(
         frame: ClockFrame,
         mut values: Vec<COVNotificationValue>,
         observation: CovObservation,
@@ -288,7 +290,7 @@ impl TimedChange {
     /// Bytes the change counts against its context's memory ceiling:
     /// [`CHANGE_MEMORY`], and [`VALUE_MEMORY`] and the encoded octets for
     /// each of its values (#1357).
-    pub(crate) fn memory(&self) -> usize {
+    pub fn memory(&self) -> usize {
         CHANGE_MEMORY
             + self
                 .values
@@ -299,22 +301,22 @@ impl TimedChange {
 
     /// Capture sequence of the change: its place in capture order across the
     /// whole table.
-    pub(crate) fn seq(&self) -> u64 {
+    pub fn seq(&self) -> u64 {
         self.seq
     }
 
     /// Device clock frame of the change.
-    pub(crate) fn frame(&self) -> ClockFrame {
+    pub fn frame(&self) -> ClockFrame {
         self.frame
     }
 
     /// Conveyed values, each stamped with this change's local time.
-    pub(crate) fn values(&self) -> &[COVNotificationValue] {
+    pub fn values(&self) -> &[COVNotificationValue] {
         &self.values
     }
 
     /// Observation this change establishes as the reference's baseline.
-    pub(crate) fn observation(&self) -> &CovObservation {
+    pub fn observation(&self) -> &CovObservation {
         &self.observation
     }
 }
@@ -428,7 +430,7 @@ fn own_value(key: &CovSubscriptionKey, values: &[COVNotificationValue]) -> Optio
 
 /// How [`TimedHistories::field_time`] times a carried field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FieldTiming {
+pub enum FieldTiming {
     /// The reference is no longer live: the field is an ordinary value.
     NotLive,
     /// No time belongs to this value: leave the field out.
@@ -439,7 +441,7 @@ pub(crate) enum FieldTiming {
 
 /// Pending timestamped changes of every live timestamped Multiple reference.
 #[derive(Debug)]
-pub(crate) struct TimedHistories {
+pub struct TimedHistories {
     histories: BTreeMap<CovSubscriptionKey, TimedHistory>,
     /// Every live untimestamped COV-multiple reference (#1038).
     untimed: BTreeMap<CovSubscriptionKey, UntimedReference>,
@@ -473,21 +475,21 @@ pub(crate) struct TimedHistories {
 /// What the histories counted since their host last took the counts
 /// ([`TimedHistories::take_counts`]).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct TimedCounts {
+pub struct TimedCounts {
     /// Pending timestamped changes discarded while their reference stayed
     /// subscribed: evicted on overflow of the context's bound, superseded by
     /// a newer delivered change, or, once per change, losing a value too
     /// large for any notification to the subscriber.
-    pub(crate) changes_dropped: u64,
+    pub changes_dropped: u64,
     /// Untimestamped references a report left out because their values alone
     /// exceed one notification to the subscriber (#1066).
-    pub(crate) untimed_oversized: u64,
+    pub untimed_oversized: u64,
 }
 
 impl TimedHistories {
     /// Histories of a device whose local maximum APDU is `local_apdu`
     /// octets, which bounds each context's pending changes.
-    pub(crate) fn new(local_apdu: usize) -> Self {
+    pub fn new(local_apdu: usize) -> Self {
         Self {
             histories: BTreeMap::new(),
             untimed: BTreeMap::new(),
@@ -507,7 +509,7 @@ impl TimedHistories {
     }
 
     /// What was counted since the last call.
-    pub(crate) fn take_counts(&mut self) -> TimedCounts {
+    pub fn take_counts(&mut self) -> TimedCounts {
         core::mem::take(&mut self.counts)
     }
 
@@ -516,14 +518,14 @@ impl TimedHistories {
     /// shorter delay, a hold-off, a lifted block, a claim lodged. A host
     /// sleeping until the next deadline [`Self::take_due`] gave it asks
     /// again.
-    pub(crate) fn take_moved(&mut self) -> bool {
+    pub fn take_moved(&mut self) -> bool {
         core::mem::take(&mut self.moved)
     }
 
     /// Apply a context's admitted Max_Notification_Delay to its timestamped
     /// histories. Every admission of the context, renewals included, calls
     /// it; a context without one keeps nothing.
-    pub(super) fn set_delay(&mut self, context: &MultipleContextKey, seconds: u32) {
+    pub fn set_delay(&mut self, context: &MultipleContextKey, seconds: u32) {
         let delay = Duration::from_secs(u64::from(seconds));
         let mut shorter = false;
         for (key, history) in &mut self.histories {
@@ -549,7 +551,7 @@ impl TimedHistories {
     /// lifetime it has left size the envelope of each (#1197). The admission
     /// may have changed the context's references, so the reserve for its
     /// untimestamped values starts over and its next report notes it again.
-    pub(super) fn set_sizing(
+    pub fn set_sizing(
         &mut self,
         context: &MultipleContextKey,
         subscriber: Option<u16>,
@@ -574,7 +576,7 @@ impl TimedHistories {
     /// The history bound keeps room for the most they have taken, at most one
     /// notification's worth, since they travel with the last notification of
     /// the next report too.
-    pub(crate) fn note_reserve(&mut self, context: &MultipleContextKey, octets: usize) {
+    pub fn note_reserve(&mut self, context: &MultipleContextKey, octets: usize) {
         if let Some(terms) = self.terms.get_mut(context) {
             terms.reserve = terms.reserve.max(octets.min(terms.notification()));
         }
@@ -590,7 +592,7 @@ impl TimedHistories {
     /// reference move back to older history, or to the older value a later
     /// part carries. Between this and [`Self::end_send`] other fanouts of
     /// the context stand back and leave their changes queued (#986, #1038).
-    pub(crate) fn begin_send(&mut self, context: &MultipleContextKey) -> bool {
+    pub fn begin_send(&mut self, context: &MultipleContextKey) -> bool {
         match self.sending.get_mut(context) {
             Some(owed) => {
                 *owed = true;
@@ -607,13 +609,13 @@ impl TimedHistories {
     /// stops early; `true` if a fanout stood back meanwhile, which the host
     /// then owes one follow-up over the context's references. The follow-up
     /// reads the untimestamped values afresh.
-    pub(crate) fn end_send(&mut self, context: &MultipleContextKey) -> bool {
+    pub fn end_send(&mut self, context: &MultipleContextKey) -> bool {
         self.sending.remove(context).unwrap_or(false)
     }
 
     /// Drop every backstop wait: a block lifted, so overdue changes go out
     /// at the next scan.
-    pub(crate) fn rearm(&mut self) {
+    pub fn rearm(&mut self) {
         self.not_before.clear();
         self.moved = true;
     }
@@ -627,7 +629,7 @@ impl TimedHistories {
 
     /// A confirmed hold-off blocks `context` until `until`: the backstop's
     /// next attempt waits for exactly that, not for its usual spacing.
-    pub(crate) fn hold_until(&mut self, context: &MultipleContextKey, until: Instant) {
+    pub fn hold_until(&mut self, context: &MultipleContextKey, until: Instant) {
         if self
             .histories
             .keys()
@@ -682,7 +684,7 @@ impl TimedHistories {
     /// context's Max_Notification_Delay deadline (Clause 13.16.1.1.4), or a
     /// lodged claim's ([`Self::lodge`]). It may have passed already. `None`
     /// while nothing is pending, owed or lodged.
-    pub(crate) fn next_deadline(&self) -> Option<Instant> {
+    pub fn next_deadline(&self) -> Option<Instant> {
         let backstop = Self::pending(&self.histories, &self.untimed)
             .into_iter()
             .map(|(context, (first, delay))| {
@@ -702,7 +704,7 @@ impl TimedHistories {
     /// its wait from a previous attempt or hold-off. Handing it out starts a
     /// wait of its delay (the floor at least), in case the attempt is blocked
     /// again.
-    pub(crate) fn take_due(&mut self, now: Instant) -> (Vec<CovSubscriptionKey>, Option<Instant>) {
+    pub fn take_due(&mut self, now: Instant) -> (Vec<CovSubscriptionKey>, Option<Instant>) {
         // First, so a claim nobody settled is pending again for its context.
         self.requeue_unsettled(now);
         let pending = Self::pending(&self.histories, &self.untimed);
@@ -743,7 +745,7 @@ impl TimedHistories {
     /// Bind a (re)published reference generation with its context's admitted
     /// Max_Notification_Delay in seconds. A renewal keeps changes not yet
     /// conveyed; its initial report is captured afresh.
-    pub(super) fn reset(&mut self, key: &CovSubscriptionKey, generation: u64, delay: u32) {
+    pub fn reset(&mut self, key: &CovSubscriptionKey, generation: u64, delay: u32) {
         let delay = Duration::from_secs(u64::from(delay));
         let incarnation = self.next_incarnation;
         if let Some(context) = key.multiple_context() {
@@ -789,7 +791,7 @@ impl TimedHistories {
     /// Drop the history, or owed mark, of a removed reference, and its
     /// context's backstop wait once no timestamped reference or owed one of
     /// the context remains.
-    pub(super) fn remove(&mut self, key: &CovSubscriptionKey) {
+    pub fn remove(&mut self, key: &CovSubscriptionKey) {
         self.untimed.remove(key);
         if let Some(history) = self.histories.remove(key) {
             self.release(key, Held::of(&history.entries));
@@ -815,9 +817,11 @@ impl TimedHistories {
 
     /// Timestamped histories (or context terms or bound counts, should any
     /// outlive them) plus untimestamped references, and backstop waits held,
-    /// for leak tests.
-    #[cfg(test)]
-    pub(crate) fn held(&self) -> (usize, usize) {
+    /// for leak tests. A test hook, behind the `test-support` feature for a
+    /// host's own tests.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn held(&self) -> (usize, usize) {
         let timed = self
             .histories
             .len()
@@ -828,20 +832,17 @@ impl TimedHistories {
 
     /// The octets a notification to `context` spends outside its items, and
     /// those it has for items, as last admitted. A hook for a host's tests of
-    /// what its admissions size.
-    #[cfg(test)]
-    pub(crate) fn sizing_for_test(&self, context: &MultipleContextKey) -> Option<(usize, usize)> {
+    /// what its admissions size, behind the `test-support` feature.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn sizing_for_test(&self, context: &MultipleContextKey) -> Option<(usize, usize)> {
         self.terms
             .get(context)
             .map(|terms| (terms.envelope, terms.notification()))
     }
 
     /// Latest captured or conveyed observation of a live generation.
-    pub(crate) fn baseline(
-        &self,
-        key: &CovSubscriptionKey,
-        generation: u64,
-    ) -> Option<&CovObservation> {
+    pub fn baseline(&self, key: &CovSubscriptionKey, generation: u64) -> Option<&CovObservation> {
         self.history(key, generation)?.baseline.as_ref()
     }
 
@@ -859,7 +860,7 @@ impl TimedHistories {
     /// is untouched. Without a time, because the clock is invalid or because a
     /// producer snapshot may be older than the record, the field has none to
     /// give.
-    pub(crate) fn field_time(
+    pub fn field_time(
         &mut self,
         key: &CovSubscriptionKey,
         generation: u64,
@@ -888,7 +889,7 @@ impl TimedHistories {
     /// Record the own-field value a capture saw although it did not qualify
     /// (it moved less than the reference's increment), at `frame`, the time of
     /// the commit, so a sibling carrying it reports when it really changed.
-    pub(crate) fn note_field(
+    pub fn note_field(
         &mut self,
         key: &CovSubscriptionKey,
         generation: u64,
@@ -915,12 +916,7 @@ impl TimedHistories {
     /// Queue a captured change and make it the reference's baseline, evicting
     /// older pending changes if the context bound is exceeded. Returns `false`
     /// when the generation is no longer live and nothing was queued.
-    pub(crate) fn push(
-        &mut self,
-        key: &CovSubscriptionKey,
-        generation: u64,
-        change: TimedChange,
-    ) -> bool {
+    pub fn push(&mut self, key: &CovSubscriptionKey, generation: u64, change: TimedChange) -> bool {
         if self.history(key, generation).is_none() {
             return false;
         }
@@ -931,7 +927,7 @@ impl TimedHistories {
 
     /// Sequence a change and make it the reference's baseline without
     /// queueing it (the builder's current-state fallback).
-    pub(crate) fn adopt(
+    pub fn adopt(
         &mut self,
         key: &CovSubscriptionKey,
         generation: u64,
@@ -956,11 +952,7 @@ impl TimedHistories {
     /// returned by a failed notification stay queued while the reference's
     /// newest change is still in flight elsewhere, so they are never conveyed
     /// as its latest state; that change's outcome settles them.
-    pub(crate) fn drain(
-        &mut self,
-        key: &CovSubscriptionKey,
-        generation: u64,
-    ) -> (u64, Vec<TimedChange>) {
+    pub fn drain(&mut self, key: &CovSubscriptionKey, generation: u64) -> (u64, Vec<TimedChange>) {
         let Some(history) = self.history_mut(key, generation) else {
             return (0, Vec::new());
         };
@@ -1098,10 +1090,10 @@ mod claim;
 mod drops;
 mod owed;
 use bound::Held;
-pub(crate) use bound::{envelope_len, request_header};
-pub(crate) use claim::{ClaimId, Settlement, TimedClaim, ValueFit};
+pub use bound::{envelope_len, request_header};
+pub use claim::{ClaimId, Settlement, TimedClaim, ValueFit};
 use drops::DropWarnings;
-pub(crate) use drops::{DropReason, Dropped};
+pub use drops::{DropReason, Dropped, REPEATS_KEPT};
 
 #[cfg(test)]
 #[path = "timed_test_host.rs"]

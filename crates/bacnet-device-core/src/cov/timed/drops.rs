@@ -10,15 +10,17 @@
 //! a first again once it is admitted afresh: a timestamped reference of it
 //! is (re)published, or an admission changes the size of its notifications.
 
+use alloc::vec::Vec;
+
 use super::{CovSubscriptionKey, TimedHistories};
 
 /// Reports of later drops that wait for the host at most; see
 /// [`TimedHistories::take_drops`].
-const REPEATS_KEPT: usize = 64;
+pub const REPEATS_KEPT: usize = 64;
 
 /// Why pending timestamped changes were dropped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DropReason {
+pub enum DropReason {
     /// Evicted on overflow of the context's history bound.
     HistoryFull,
     /// A value of the change too large for any notification to the
@@ -37,20 +39,20 @@ impl DropReason {
 
 /// Pending timestamped changes of one reference dropped for one cause.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Dropped {
+pub struct Dropped {
     /// The reference that lost them.
-    pub(crate) key: CovSubscriptionKey,
+    pub key: CovSubscriptionKey,
     /// How many changes.
-    pub(crate) count: usize,
+    pub count: usize,
     /// Why.
-    pub(crate) reason: DropReason,
+    pub reason: DropReason,
     /// Octets one notification to the reference's context may take, while
     /// the context still has a timestamped reference.
-    pub(crate) apdu: Option<usize>,
+    pub apdu: Option<usize>,
     /// Whether this is the context's first drop for `reason` since it was
     /// admitted afresh, the one worth a warning. A reference whose context
     /// lost its last timestamped reference meanwhile always reports a first.
-    pub(crate) first: bool,
+    pub first: bool,
 }
 
 /// Causes a context has warned about since it was last admitted afresh.
@@ -97,7 +99,7 @@ impl TimedHistories {
     /// ([`Self::take_counts`]) always hold every drop, but once
     /// [`REPEATS_KEPT`] reports wait, only a context's first for a cause
     /// still joins them.
-    pub(crate) fn take_drops(&mut self) -> Vec<Dropped> {
+    pub fn take_drops(&mut self) -> Vec<Dropped> {
         core::mem::take(&mut self.drops)
     }
 }

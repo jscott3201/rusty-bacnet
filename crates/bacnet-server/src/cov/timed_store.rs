@@ -28,11 +28,11 @@ use bacnet_time::Instant;
 use tokio::sync::Notify;
 use tracing::{debug, warn};
 
-use super::timed::{
-    self, ClaimId, DropReason, Dropped, Settlement, TimedChange, TimedHistories, ValueFit,
-};
 use super::{AtomicCovCounters, CovRevisits};
 use crate::runtime_clock;
+use bacnet_device_core::cov::timed::{
+    self, ClaimId, DropReason, Dropped, Settlement, TimedChange, TimedHistories, ValueFit,
+};
 
 /// What a store's handles share.
 #[derive(Debug)]
