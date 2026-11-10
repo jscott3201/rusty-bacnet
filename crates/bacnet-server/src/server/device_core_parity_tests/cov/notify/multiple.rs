@@ -248,6 +248,61 @@ async fn confirmed_multiple_reports_match() {
     cov.stop().await;
 }
 
+/// A cancelled context's report runs on, on both sides, and its failure
+/// holds nothing off for the context made again meanwhile (#2419). The new
+/// subscription's own report is refused first, so its follow-up is due
+/// when that hold-off ends, 12 s on, and the old report's refusal 5 s
+/// later moves it on neither side.
+#[tokio::test(start_paused = true)]
+async fn a_cancelled_contexts_failed_report_holds_nothing_off_on_either_side() {
+    let mut cov = CovParity::start_multiple().await;
+    let a = direct(1);
+    let timed = multiple(1, true, &[(ai(), true)], Some((600, DELAY)));
+    assert_eq!(cov.exchange("confirmed", &a, MULTIPLE, &timed).await.1, 1);
+    let cancel = multiple(1, true, &[], None);
+    assert_eq!(cov.exchange("cancelled", &a, MULTIPLE, &cancel).await.1, 0);
+    assert_eq!(cov.exchange("made again", &a, MULTIPLE, &timed).await.1, 1);
+    cov.same_tables("made again").await;
+
+    // The newer of the two reports out is answered first.
+    cov.outstanding.rotate_left(1);
+    assert_eq!(cov.answer("the new report refused", true).await, 0);
+    // The cancelled subscription's report is sent again at 3 s.
+    assert_eq!(cov.advance("the old report, resent", 5).await, 1);
+    assert_eq!(cov.answer("the old report refused", true).await, 0);
+    assert_eq!(cov.advance("the new report's hold-off", 6).await, 0);
+    assert_eq!(cov.advance("its end", 2).await, 1);
+    assert_eq!(cov.answer("Ack of the follow-up", false).await, 0);
+    cov.stop().await;
+}
+
+/// A report the backstop sent is refused: its follow-up goes out when the
+/// hold-off ends on both sides, not before and not a whole
+/// Max_Notification_Delay later (#2419). The delay here is longer than
+/// the 12 s hold-off, so a refused report's change waits for the backstop.
+#[tokio::test(start_paused = true)]
+async fn a_refused_backstop_report_follows_its_hold_off_on_both_sides() {
+    const SLOW: u32 = 30;
+    let mut cov = CovParity::start_multiple().await;
+    let a = direct(1);
+    let timed = multiple(1, true, &[(ai(), true)], Some((600, SLOW)));
+    assert_eq!(cov.exchange("confirmed", &a, MULTIPLE, &timed).await.1, 1);
+    assert_eq!(cov.answer("Ack", false).await, 0);
+    let oos = PropertyValue::Boolean(true);
+    assert_eq!(cov.write("Status_Flags", &a, ai(), OOS, oos).await, 1);
+    assert_eq!(cov.answer("Ack", false).await, 0);
+    assert_eq!(cov.sample("to refuse", 40.0, false).await, 1);
+    assert_eq!(cov.answer("refused", true).await, 0);
+    assert_eq!(cov.advance("past its hold-off", 29).await, 0);
+    assert_eq!(cov.advance("the backstop", 2).await, 1);
+
+    assert_eq!(cov.answer("the backstop's report refused", true).await, 0);
+    assert_eq!(cov.advance("in its hold-off", 11).await, 0);
+    assert_eq!(cov.advance("the hold-off's end", 2).await, 1);
+    assert_eq!(cov.answer("Ack of the follow-up", false).await, 0);
+    cov.stop().await;
+}
+
 /// A follow-up report lists its untimestamped items in key order on both
 /// sides (#2320): two references of one confirmed context change while its
 /// initial report is out, and the Ack's follow-up carries both. The

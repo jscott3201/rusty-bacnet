@@ -440,7 +440,8 @@ fn a_failed_report_holds_the_backstop_off_and_then_owes_one_follow_up() {
     host.histories
         .settle(begun.claim.unwrap(), Settlement::Returned, failed);
     host.table.delivered(begun.token, Delivery::Failed, failed);
-    hold_off(&host.table, &mut host.histories, &ctx(1, true), failed);
+    let (table, context) = (&host.table, ctx(1, true));
+    hold_off(table, &mut host.histories, &context, begun.token, failed);
     let until = failed + hold_off_time;
 
     // The returned changes are overdue by their delay well before the
@@ -467,6 +468,34 @@ fn a_failed_report_holds_the_backstop_off_and_then_owes_one_follow_up() {
         reported,
         [(1, 0.0, Some(1)), (2, 0.0, Some(1)), (2, 2.0, Some(12))]
     );
+}
+
+/// A report fenced while it was out, by a re-subscription that lists its
+/// references: the table ignores its failure, so the backstop of the
+/// subscription made since stays where it was (#2419).
+#[test]
+fn a_fenced_reports_failure_leaves_the_backstop_alone() {
+    let (mut host, _, begun) = confirmed_with_a_report_out();
+    host.subscribe(1, true, 2, &[reference(PV, true)], None);
+    assert_eq!(host.table.take_fenced().tokens, [begun.token], "fenced");
+    // The host returns the fenced report's claim: its changes are pending
+    // for the new subscription, due by their delay.
+    let claim = begun.claim.unwrap();
+    assert!(host.histories.settle(claim, Settlement::Returned, T0));
+    let due = Some(T0 + seconds(u64::from(DELAY)));
+    assert_eq!(host.histories.next_deadline(), due);
+
+    // The old report's worker then reports it failed.
+    let failed = at(2);
+    host.table.delivered(begun.token, Delivery::Failed, failed);
+    let (table, context) = (&host.table, ctx(1, true));
+    hold_off(table, &mut host.histories, &context, begun.token, failed);
+    assert_eq!(host.histories.next_deadline(), due, "no hold-off");
+    let all = host.all(&ctx(1, true));
+    assert!(matches!(
+        host.fan_out(&all, false, failed),
+        Outcome::Ready(..)
+    ));
 }
 
 #[test]

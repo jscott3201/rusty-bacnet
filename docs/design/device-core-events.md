@@ -561,8 +561,10 @@ the server reads its objects under one guard and its table under another:
 what its Ack completes and the deferred rest; `begin_confirmed` begins it
 in the table and, in the same step, tells the histories (the part going
 out, the deferred parts back and owed, the claim lodged at the report's
-deadline); `hold_off` moves the backstop past a failed report's hold-off;
-`carried` says what a delivered part completes.
+deadline); `hold_off` moves the backstop to the end of the hold-off the
+table put on a failed report's context, and leaves it alone when the table
+ignored the failure (below); `carried` says what a delivered part
+completes.
 
 | On dev before PR 2b | In the core | The server |
 |---|---|---|
@@ -573,7 +575,7 @@ deadline); `hold_off` moves the backstop past a failed report's hold-off;
 | the claim guard's and the send turn's `Drop` | a plain claim in `Gathered` and in each `Part`; `take_turn` hands the turn over | `SendTurn::held` right after `gather`; `ClaimGuard::of` on every part before the first send |
 | `warn!` for a change with no valid clock, and for values left out | `unclocked`, `Report::left_out` | logs them |
 | three guard calls after the table released a begun report | `begin_confirmed`, under the table | `begin_confirmed_report` on the table wrapper; the worker gets a `LodgedClaim` over the lodged id |
-| the hold-off's end from the config and a clock read | `hold_off`, from the table's timing | one call in the worker's failure path |
+| the hold-off's end from the config and a clock read | `hold_off`, from what the table recorded for the failure (`CovTable::failed_hold_until`) | one call in the worker's failure path, with the report's token |
 
 The order between contexts, and of a follow-up's references, is the one
 difference on the wire (decision 17). Contexts that share one input's
@@ -601,6 +603,36 @@ returns there except on a spent budget, which guards the parts to give
 them back, and a panic would lose the claim, as one inside the split
 already could.
 
+**The hold-off follows the table (#2419).** Two things move the backstop
+to a hold-off's end. `gather` does it for any fanout that finds the
+context holding off, which covers a failed report whose changes come due
+inside the hold-off. The hosts' `hold_off` step, right after they report
+the failure, covers the rest: a report the backstop itself sent, whose
+next attempt would otherwise wait a whole Max_Notification_Delay. The
+`Reporter` needs the step whenever that delay is longer than the
+hold-off. The server needs it when part of such a report stayed pending
+(a report in several parts), because its deadline task otherwise drops
+the backstop's wait as soon as the report has drained the context.
+
+Until #2419 the step computed the hold-off's end itself, for the context
+by its key, whatever the table made of the failure. A context's key
+outlives its subscription, so the failure of a report the table no longer
+knew held off whatever subscription the context had since. Two sequences
+reach that. A context cancelled and made again while its report is out:
+the report runs on in both hosts, and fails later. And, in the server
+only, a report fenced by a re-subscription while its worker has the
+outcome and waits for the table; the `Reporter` ends a fenced report's
+entry in the same call, so no outcome can follow. The new subscription's
+changes then waited for the old report's hold-off wherever they waited
+for the backstop: the follow-up of the new subscription's own failed
+report, and changes whose report was kept back (the tests keep one back
+with the DISABLE_INITIATION test hook; a report the in-flight limit or
+the event budget refuses waits the same way, while a request's ENABLE
+drops every backstop wait). The step now asks the table what the failure
+left on the report's own flight. A fenced or cancelled report's flight is
+gone and flights are never reused, so such a failure holds nothing off;
+a failure the table counted gives the instant it recorded, as before.
+
 The sends stay hosted: the unconfirmed loop with its budget, DCC check
 and counters, the confirmed admission (in-flight slot, invoke ID), the
 worker with its retries, cutoff and outcome paths, and every guard.
@@ -617,7 +649,7 @@ guards:
 | `store_capture`: producers capture under the database write guard | `TimedWriteCapture` around each write request's attempts; `TimedCapture::object` or `exact` in `changed` |
 | the fanout's unconfirmed loop: send, commit, stop on a failure | all parts queued as `NotifyService::CovMultiple`, each under a `part_token`; `delivered(token, Sent)` commits the part's claim and records what it completes, any other outcome stops the report: the later parts leave the outbox and their claims go back, owing once a part went |
 | `SendTurn`'s `Drop` | the turn is held while a part is queued; `end_send` when the report ends, and a fanout that stood back is looked at again |
-| `send_confirmed_cov` and the worker's `LodgedClaim` | `begin_confirmed` when the first part is queued; the lodged claim settled in `end_confirmed` (delivered on the Ack, returned otherwise) and for a fenced token; `hold_off` after a failure |
+| `send_confirmed_cov` and the worker's `LodgedClaim` | `begin_confirmed` when the first part is queued; the lodged claim settled in `end_confirmed` (delivered on the Ack, returned otherwise) and for a fenced token; `hold_off` after a failure the table counted |
 | the follow-up task over `HistoryStore::next_due` and the revisit queue | `next_deadline` merges `TimedHistories::next_deadline`; `on_deadline` fans out `take_due`'s references and the looks owed, each context under a budget of its own; a context whose failed report's hold-off has passed is fanned out whole in the same call |
 | the table wrapper's `sync` | `settle` runs `follow_table` after every mutation but the service's own, takes the histories' counts and drops, and ends an unconfirmed report whose reference left the table |
 
