@@ -186,7 +186,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                     ))
                 {
                     return Err(Error::Encoding(
-                        "EndpointSession selected Device requires segmentation NO_SEGMENTATION".into(),
+                        "EndpointSession selected Device requires segmentation NO_SEGMENTATION"
+                            .into(),
                     ));
                 }
             }
