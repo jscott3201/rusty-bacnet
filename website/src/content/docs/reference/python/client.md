@@ -705,9 +705,15 @@ The device is looked up in the discovery table, as the
 `_from_device` methods look it up. `types` narrows the objects read
 (analog, binary and multi-state inputs, outputs and values; all
 nine by default). Another type or an empty list raises ValueError
-before anything is sent. A failure before the Object\_List is in
-raises the usual error; a device that stops answering after it
-gives an inventory with `stopped` set.
+before anything is sent.
+
+A device that doesn't answer the name read, or a failed read of the
+whole Object\_List, raises the usual error. A device that can't send
+the list whole is read element by element; an element that fails
+there ends the reading with `stopped` set and no objects. A device
+that stops answering once the list is in gives an inventory with
+`stopped` set and the objects read before it. `stop()`, and leaving
+`async with`, wait for a running export to finish.
 
 ### BACnetClient.add_device
 

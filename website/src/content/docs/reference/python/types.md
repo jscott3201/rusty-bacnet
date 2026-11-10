@@ -396,8 +396,8 @@ Properties:
 
 - `device_instance: int`: The device instance.
 - `device_name: Optional[str]`: The Device object's Object\_Name, exactly as the device sent it; None when it couldn't be read.
-- `objects: list[Object223Experimental]`: The objects read, in Object\_List order.
-- `stopped: Optional[str]`: Why the reading stopped early, None when it didn't: the device stopped answering. The objects after that point are missing.
+- `objects: tuple[Object223Experimental, ...]`: The objects read, in Object\_List order, as a tuple.
+- `stopped: Optional[str]`: Why the reading stopped early, None when it didn't. A request to the device timed out or its link failed, so the objects after that point are missing; or a read of the Object\_List element by element failed partway (an error or no answer), and then `objects` is empty.
 
 ### Inventory223Experimental.to_turtle
 
@@ -412,8 +412,9 @@ def to_turtle(
 The inventory as Turtle. `base_iri` defaults to
 `http://example.org/bacnet/`; each device's nodes go under
 `<base_iri>device-<instance>/`. `write_priority` (1 to 16) goes in
-the reference of every commandable point. A bad base IRI or
-priority raises ValueError saying which rule failed.
+the reference of every commandable point. A bad base IRI or a
+priority outside 1 to 16 raises ValueError saying which rule failed;
+a priority outside 0 to 255 raises OverflowError.
 
 ## Object223Experimental
 

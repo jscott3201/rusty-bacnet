@@ -14,6 +14,7 @@ use bacnet_ops::limits::RequestLimits;
 use bacnet_types::enums::EngineeringUnits;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::PyTuple;
 
 use crate::app_transport::AppTransport;
 use crate::errors::to_py_err;
@@ -31,8 +32,9 @@ pub(crate) fn options(types: Option<Vec<PyObjectType>>) -> PyResult<InventoryOpt
 
 /// `device`'s inventory over `client`, one request at a time with no rate
 /// cap beyond the client's own `min_request_interval_ms`, as the CLI reads
-/// it. A failure before the Object_List is in raises the client's usual
-/// error; one after it ends the reading with `stopped` set.
+/// it. A device that doesn't answer the name read, or a failed read of
+/// the whole Object_List, raises the client's usual error; a failure after
+/// that ends the reading with `stopped` set.
 pub(crate) async fn read(
     client: &BACnetClient<AppTransport>,
     device: u32,
@@ -50,7 +52,19 @@ pub(crate) async fn read(
         rpm: true,
     };
     match read_inventory(&mut reader, options).await {
-        Ok(inventory) => Ok(PyInventory223(inventory)),
+        // The objects' Python copies are built once, so indexing
+        // `objects` in a loop doesn't copy the list each time.
+        Ok(inventory) => crate::py_async::attach(|py| {
+            let objects = inventory
+                .objects
+                .iter()
+                .map(|object| Py::new(py, PyObject223(object.clone())))
+                .collect::<PyResult<Vec<_>>>()?;
+            Ok(PyInventory223 {
+                objects: PyTuple::new(py, objects)?.unbind(),
+                inventory,
+            })
+        }),
         Err(Halt::Device(error)) => Err(to_py_err(error)),
         Err(Halt::Cancelled) => unreachable!("nothing sets the export's stop flag"),
     }
@@ -60,41 +74,48 @@ pub(crate) async fn read(
 /// (`BACnetClient.export_223_experimental`). Device text is kept exactly
 /// as the device sent it. Refuses `copy` and `pickle`.
 #[pyclass(name = "Inventory223Experimental", module = "rusty_bacnet", frozen)]
-pub(crate) struct PyInventory223(Inventory);
+pub(crate) struct PyInventory223 {
+    inventory: Inventory,
+    /// `inventory.objects` as Python objects, built once.
+    objects: Py<PyTuple>,
+}
 
 #[pymethods]
 impl PyInventory223 {
     /// The device instance.
     #[getter]
     fn device_instance(&self) -> u32 {
-        self.0.device
+        self.inventory.device
     }
 
     /// The Device object's Object_Name, exactly as the device sent it;
     /// None when it couldn't be read.
     #[getter]
     fn device_name(&self) -> Option<&str> {
-        self.0.device_name.as_deref()
+        self.inventory.device_name.as_deref()
     }
 
-    /// The objects read, in Object_List order.
+    /// The objects read, in Object_List order, as a tuple.
     #[getter]
-    fn objects(&self) -> Vec<PyObject223> {
-        self.0.objects.iter().cloned().map(PyObject223).collect()
+    fn objects(&self, py: Python<'_>) -> Py<PyTuple> {
+        self.objects.clone_ref(py)
     }
 
-    /// Why the reading stopped early, None when it didn't: the device
-    /// stopped answering. The objects after that point are missing.
+    /// Why the reading stopped early, None when it didn't. A request to the
+    /// device timed out or its link failed, so the objects after that point
+    /// are missing; or a read of the Object_List element by element failed
+    /// partway (an error or no answer), and then `objects` is empty.
     #[getter]
     fn stopped(&self) -> Option<&str> {
-        self.0.stopped.as_deref()
+        self.inventory.stopped.as_deref()
     }
 
     /// The inventory as Turtle. `base_iri` defaults to
     /// `http://example.org/bacnet/`; each device's nodes go under
     /// `<base_iri>device-<instance>/`. `write_priority` (1 to 16) goes in
-    /// the reference of every commandable point. A bad base IRI or
-    /// priority raises ValueError saying which rule failed.
+    /// the reference of every commandable point. A bad base IRI or a
+    /// priority outside 1 to 16 raises ValueError saying which rule failed;
+    /// a priority outside 0 to 255 raises OverflowError.
     #[pyo3(signature = (base_iri=None, write_priority=None))]
     fn to_turtle(&self, base_iri: Option<&str>, write_priority: Option<u8>) -> PyResult<String> {
         let priority = write_priority
@@ -103,19 +124,19 @@ impl PyInventory223 {
             .map_err(PyValueError::new_err)?;
         let options = TurtleOptions::new(base_iri.unwrap_or(DEFAULT_BASE_IRI), priority)
             .map_err(PyValueError::new_err)?;
-        Ok(to_turtle(&self.0, &options))
+        Ok(to_turtle(&self.inventory, &options))
     }
 
     fn __repr__(&self) -> String {
-        let stopped = if self.0.stopped.is_some() {
+        let stopped = if self.inventory.stopped.is_some() {
             ", stopped"
         } else {
             ""
         };
         format!(
             "Inventory223Experimental(device={}, objects={}{stopped})",
-            self.0.device,
-            self.0.objects.len()
+            self.inventory.device,
+            self.inventory.objects.len()
         )
     }
 

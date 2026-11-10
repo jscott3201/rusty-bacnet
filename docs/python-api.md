@@ -2007,12 +2007,17 @@ turtle = inventory.to_turtle(base_iri="https://example.com/site-a/", write_prior
   per exported object, one at a time; a device that refuses
   ReadPropertyMultiple is read a property at a time, as the CLI section
   counts. Present_Value is never read.
-- A failure before the Object_List is in raises the usual error. A device
-  that stops answering after that gives an inventory with `stopped` set
-  (a reason string) and the objects read before it; the Turtle's header
-  says it is incomplete.
+- A device that doesn't answer the name read, or a failed read of the
+  whole Object_List, raises the usual error. A device that can't send the
+  list whole is read element by element; an element that fails there (an
+  error or no answer) ends the reading with `stopped` set (a reason string)
+  and no objects. A device that stops answering once the list is in gives
+  an inventory with `stopped` set and the objects read before it. Either
+  way the Turtle's header says it is incomplete.
+- `stop()`, and leaving `async with`, wait for a running export to finish;
+  cancelling the awaitable stops it before its next request.
 - `Inventory223Experimental` has `device_instance`, `device_name`
-  (`str | None`), `objects` (a list of `Object223Experimental`, in
+  (`str | None`), `objects` (a tuple of `Object223Experimental`, in
   Object_List order) and `stopped`. Each object has `object_identifier`,
   `name`, `description`, `units` (`EngineeringUnits | None`, analog
   objects), `number_of_states` and `state_texts` (multi-state objects),
@@ -2021,7 +2026,8 @@ turtle = inventory.to_turtle(base_iri="https://example.com/site-a/", write_prior
 - `to_turtle(base_iri=None, write_priority=None)` takes the base the CLI's
   `--base-iri` takes (default `http://example.org/bacnet/`) and a command
   priority, 1 to 16, for the reference of each commandable point. A bad
-  base or priority raises `ValueError` saying which rule failed. Give each
+  base or a priority outside 1 to 16 raises `ValueError` saying which rule
+  failed; a priority outside 0 to 255 raises `OverflowError`. Give each
   site or internetwork a base of its own: a device instance is unique only
   within one internetwork.
 

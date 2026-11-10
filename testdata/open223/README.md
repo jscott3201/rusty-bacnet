@@ -21,9 +21,9 @@ published crate ships it. Three repository tools read this directory:
 `scripts/check-223.py`, which loads the ontology; one `bacnet-ops` unit test,
 which searches the file's text for the namespaces the export writes (see
 step 3 below); and the no-secret scan (`scripts/ci/check-no-secrets.sh`),
-which greps every tracked file. No other check reads it. The ASHRAE 135 overlap check (`spec_overlap.py`) is run on
-diffs that leave this directory out, by convention: the file is third-party
-text kept verbatim.
+which greps every tracked file. No other check reads it. The ASHRAE 135
+overlap check (`spec_overlap.py`) is run on diffs that leave this directory
+out, by convention: the file is third-party text kept verbatim.
 
 ## Refreshing it
 

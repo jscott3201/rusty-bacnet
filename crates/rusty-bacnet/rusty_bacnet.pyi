@@ -2556,14 +2556,16 @@ class Inventory223Experimental:
         ...
 
     @property
-    def objects(self) -> list[Object223Experimental]:
-        """The objects read, in Object_List order."""
+    def objects(self) -> tuple[Object223Experimental, ...]:
+        """The objects read, in Object_List order, as a tuple."""
         ...
 
     @property
     def stopped(self) -> Optional[str]:
-        """Why the reading stopped early, None when it didn't: the device
-        stopped answering. The objects after that point are missing."""
+        """Why the reading stopped early, None when it didn't. A request to the
+        device timed out or its link failed, so the objects after that point
+        are missing; or a read of the Object_List element by element failed
+        partway (an error or no answer), and then ``objects`` is empty."""
         ...
 
     def to_turtle(
@@ -2572,8 +2574,9 @@ class Inventory223Experimental:
         """The inventory as Turtle. ``base_iri`` defaults to
         ``http://example.org/bacnet/``; each device's nodes go under
         ``<base_iri>device-<instance>/``. ``write_priority`` (1 to 16) goes in
-        the reference of every commandable point. A bad base IRI or
-        priority raises ValueError saying which rule failed."""
+        the reference of every commandable point. A bad base IRI or a
+        priority outside 1 to 16 raises ValueError saying which rule failed;
+        a priority outside 0 to 255 raises OverflowError."""
         ...
 
     def __repr__(self) -> str: ...
@@ -4207,9 +4210,15 @@ class BACnetClient:
         ``_from_device`` methods look it up. ``types`` narrows the objects read
         (analog, binary and multi-state inputs, outputs and values; all
         nine by default). Another type or an empty list raises ValueError
-        before anything is sent. A failure before the Object_List is in
-        raises the usual error; a device that stops answering after it
-        gives an inventory with ``stopped`` set.
+        before anything is sent.
+
+        A device that doesn't answer the name read, or a failed read of the
+        whole Object_List, raises the usual error. A device that can't send
+        the list whole is read element by element; an element that fails
+        there ends the reading with ``stopped`` set and no objects. A device
+        that stops answering once the list is in gives an inventory with
+        ``stopped`` set and the objects read before it. ``stop()``, and leaving
+        ``async with``, wait for a running export to finish.
         """
         ...
 

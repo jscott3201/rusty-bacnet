@@ -38,26 +38,42 @@ MSV = ObjectIdentifier(ObjectType.MULTI_STATE_VALUE, 2)
 
 class Relay(asyncio.DatagramProtocol):
     """Passes datagrams between one client and the server, counting the
-    client's confirmed requests and dropping those after ``passing``."""
+    client's confirmed requests and dropping those after ``passing``.
+
+    A request is counted by its invoke ID, which the client gives each
+    request to a peer in turn: a retransmission of a request already
+    passed is passed again and not counted, so a slow reply can't shift
+    the count or the point where the relay goes silent."""
 
     def __init__(self, server: tuple[str, int], passing: int) -> None:
         self.server = server
         self.passing = passing
-        self.requests = 0
+        self.passed: set[int] = set()
+        self.dropped: set[int] = set()
         self.client: tuple[str, int] | None = None
         self.front: asyncio.DatagramTransport | None = None
         self.back: asyncio.DatagramTransport | None = None
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
         self.client = addr
-        # BVLL (4 octets), NPDU version and control, then the APDU type:
-        # a local confirmed request has no NPDU addresses.
-        if len(data) > 6 and data[5] & 0x28 == 0 and data[6] >> 4 == 0:
-            self.requests += 1
-            if self.requests > self.passing:
-                return
+        # BVLL (4 octets), NPDU version and control, then the APDU: a local
+        # confirmed request has no NPDU addresses, and its invoke ID is the
+        # APDU's third octet.
+        if len(data) > 8 and data[5] & 0x28 == 0 and data[6] >> 4 == 0:
+            invoke_id = data[8]
+            if invoke_id not in self.passed:
+                if len(self.passed) >= self.passing:
+                    self.dropped.add(invoke_id)
+                    return
+                self.passed.add(invoke_id)
         assert self.back is not None
         self.back.sendto(data, self.server)
+
+
+    @property
+    def requests(self) -> int:
+        """Distinct confirmed requests seen, passed or dropped."""
+        return len(self.passed | self.dropped)
 
 
 class Back(asyncio.DatagramProtocol):
@@ -293,6 +309,33 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
         turtle = inventory.to_turtle()
         check_structure(turtle)
         self.assertIn("# Incomplete: the reading stopped early", turtle)
+
+    async def test_cancelling_stops_the_export(self) -> None:
+        # The fourth request (the binary output) goes unanswered, with a
+        # long timeout, so the export is still waiting when it is cancelled.
+        relay = await relay_to(self.address, passing=3)
+        try:
+            async with BACnetClient(
+                interface="127.0.0.1", port=0, apdu_timeout_ms=10_000
+            ) as client:
+                await client.add_device(DEVICE, relay_address(relay))
+                export = asyncio.ensure_future(client.export_223_experimental(DEVICE))
+                async with asyncio.timeout(10):
+                    while relay.requests < 4:
+                        await asyncio.sleep(0.01)
+                export.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await export
+                # No new request follows; the client still works.
+                await asyncio.sleep(0.5)
+                self.assertEqual(relay.requests, 4)
+                relay.passing = 1_000_000
+                inventory = await client.export_223_experimental(
+                    DEVICE, types=[ObjectType.ANALOG_INPUT]
+                )
+                self.assertEqual([o.object_identifier for o in inventory.objects], [AI])
+        finally:
+            close(relay)
 
     async def test_a_failure_before_the_object_list_raises(self) -> None:
         relay = await relay_to(self.address, passing=1)
