@@ -51,7 +51,7 @@ pub fn request_header(confirmed: bool) -> usize {
 /// `time_remaining` is the lifetime in seconds the context had left when it
 /// was admitted. Its notifications report less as time passes, which never
 /// takes more octets, so the envelope never outgrows this size.
-pub fn envelope_len(context: &MultipleContextKey, time_remaining: u32) -> usize {
+pub(crate) fn envelope_len(context: &MultipleContextKey, time_remaining: u32) -> usize {
     request_header(context.confirmed)
         + unsigned_len(u64::from(context.process_id))
         + DEVICE_IDENTIFIER

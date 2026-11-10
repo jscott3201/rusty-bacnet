@@ -393,15 +393,24 @@ impl CovSubscriptionTable {
         completion: PreparedCovCompletion,
         references: impl IntoIterator<Item = (S, CovObservation)>,
     ) -> Result<ConfirmedFlight, BeginRefusal> {
-        let token = self
-            .core
-            .begin_confirmed(completion, references, runtime_clock::core_now())?;
+        let now = runtime_clock::core_now();
+        let token = self.core.begin_confirmed(completion, references, now)?;
         // A report it replaced past its deadline is fenced: wake its worker,
         // if one still runs, and drop its wake-up (#2303).
         self.sync(&[]);
+        Ok(self.flight(token, now))
+    }
+
+    /// The worker's hold on the report `token`, which the table began at
+    /// `now`: its wake-up, registered for a fence, and the report's own
+    /// deadline, read off the table.
+    fn flight(&mut self, token: Token, now: bacnet_time::Instant) -> ConfirmedFlight {
+        let deadline = self.core.report_deadline(token);
+        debug_assert!(deadline.is_some(), "a report just begun is outstanding");
         let wake = Arc::new(Notify::new());
         self.wakes.insert(token, Arc::clone(&wake));
-        Ok(ConfirmedFlight::new(token, wake))
+        // Were the report gone already, whatever its worker holds ends now.
+        ConfirmedFlight::new(token, wake, deadline.unwrap_or(now))
     }
 
     /// End the report `flight` names, as `outcome` says; an Ack commits
@@ -430,13 +439,14 @@ impl CovSubscriptionTable {
         budget: &mut EventBudget,
         admit: impl FnMut(&CovSubscriptionSnapshot, usize) -> Option<L>,
     ) -> Vec<(CovReport<L>, Option<ConfirmedFlight>)> {
+        let now = runtime_clock::core_now();
         let reports = bacnet_device_core::cov::evaluate(
             &mut self.core,
             object,
             subscriptions,
             evaluation,
             budget,
-            runtime_clock::core_now(),
+            now,
             admit,
         );
         // Budget refusals counted, and a report a new one replaced past its
@@ -446,11 +456,7 @@ impl CovSubscriptionTable {
             .into_iter()
             .map(|report| {
                 let confirmed = subscriptions[report.index].issue_confirmed_notifications;
-                let flight = confirmed.then(|| {
-                    let wake = Arc::new(Notify::new());
-                    self.wakes.insert(report.token, Arc::clone(&wake));
-                    ConfirmedFlight::new(report.token, wake)
-                });
+                let flight = confirmed.then(|| self.flight(report.token, now));
                 (report, flight)
             })
             .collect()
@@ -490,12 +496,6 @@ impl CovSubscriptionTable {
     ) -> Option<bacnet_time::Instant> {
         self.core
             .context_hold_until(context, runtime_clock::core_now())
-    }
-
-    /// When a confirmed report the table begins now ends itself, if nobody
-    /// settles it first; see [`FlightTiming::deadline`].
-    pub(crate) fn flight_deadline(&self) -> bacnet_time::Instant {
-        runtime_clock::core_now() + self.core.flight_timing().deadline()
     }
 
     /// Whether an idle context still owes the follow-up of a failed report;

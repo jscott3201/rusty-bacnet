@@ -51,10 +51,10 @@
 //! carry go out after every timestamped change, split by object item (#1038).
 //!
 //! Local bound policy: the pending changes of one COV-multiple context are
-//! limited to an estimate of what [`HISTORY_NOTIFICATIONS`] notifications can
+//! limited to an estimate of what `HISTORY_NOTIFICATIONS` notifications can
 //! carry, each sized to the lesser of the local and the subscriber's maximum
 //! APDU, less the envelope the encoder puts around a notification's items for
-//! that context ([`envelope_len`], #1197). The envelope is sized from the
+//! that context (`envelope_len`, #1197). The envelope is sized from the
 //! context itself: its confirmed or unconfirmed header, its process
 //! identifier, and the lifetime it had left when last admitted, which later
 //! notifications report as less, never in more octets. This room for items
@@ -65,11 +65,11 @@
 //! with the last notification.
 //!
 //! Memory has a ceiling of its own (#1287), counted in the bytes a pending
-//! change really takes (#1357): [`CHANGE_MEMORY`] for the change itself, in
+//! change really takes (#1357): `CHANGE_MEMORY` for the change itself, in
 //! its slot of the history's queue, and for each of its values
-//! [`VALUE_MEMORY`], the value's slots in the change's vectors, plus its
+//! `VALUE_MEMORY`, the value's slots in the change's vectors, plus its
 //! encoded octets on the heap. A context's changes take no more than
-//! [`CEILING_BYTES_PER_OCTET`] bytes for each octet [`HISTORY_NOTIFICATIONS`]
+//! `CEILING_BYTES_PER_OCTET` bytes for each octet `HISTORY_NOTIFICATIONS`
 //! notifications of the local maximum APDU have for items, whatever its
 //! subscriber's size, so many tiny changes cannot outgrow it: 23,216 bytes at
 //! a 1476-octet local maximum, about 116 of the smallest changes (one empty
@@ -133,6 +133,13 @@
 //! earlier: a context's backstop, above, and a lodged claim
 //! ([`TimedHistories::lodge`]), which is given back at its deadline if its
 //! holder never settled it. [`TimedHistories::take_due`] acts on both.
+//!
+//! **Unstable until #2320's second part.** The module is public so that
+//! `bacnet-server` can run on it while the rest of the path is still the
+//! server's. That part moves the split of a report to the subscriber's APDU
+//! size in here, and with it [`ITEM_FRAMING`], [`value_len`] and
+//! [`request_header`] leave the public surface; [`TimedClaim`]'s splits and
+//! the settling calls may change shape as a `Reporter` takes them over.
 
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::vec;
@@ -145,7 +152,7 @@ use bacnet_time::{Duration, Instant};
 use super::{CovObservation, CovSubscriptionKey, MultipleContextKey};
 
 /// Notifications' worth of pending history one context may hold.
-pub const HISTORY_NOTIFICATIONS: usize = 4;
+pub(crate) const HISTORY_NOTIFICATIONS: usize = 4;
 /// Octets of one item's framing: its context-tagged object identifier (5) and
 /// the opening and closing tags of its value list (2).
 pub const ITEM_FRAMING: usize = 7;
@@ -153,26 +160,31 @@ pub const ITEM_FRAMING: usize = 7;
 /// itself, in its slot of the history's queue (#1357), and
 /// [`CAPTURE_ALLOWANCE`]. The room for notification items does not count it
 /// (#1287).
-pub const CHANGE_MEMORY: usize = core::mem::size_of::<TimedChange>() + CAPTURE_ALLOWANCE;
+pub(crate) const CHANGE_MEMORY: usize = core::mem::size_of::<TimedChange>() + CAPTURE_ALLOWANCE;
 /// Bytes a pending change still counts for the capture instant it held on
-/// the host's clock, 16 octets, before it took `bacnet-time`'s 8-octet one
-/// (#2320). Without it every change would count 8 bytes less, and a
-/// context's ceiling would hold more changes than it did (120 of the
+/// the host's clock before it took `bacnet-time`'s 8-octet one (#2320).
+/// That instant took 16 octets on the 64-bit hosts the histories ran on,
+/// the only ones there were, so the allowance is the 8 they saved, on every
+/// target. Without it a change would count 8 bytes less on such a host, and
+/// a context's ceiling would hold more changes than it did (120 of the
 /// smallest for 116 at a 1476-octet local maximum): which change overflow
-/// drops is part of what a subscriber sees, so it stays as it was.
-pub const CAPTURE_ALLOWANCE: usize = 8;
+/// drops is part of what a subscriber sees, so it stays as it was. The
+/// sizes behind it are pinned for 64-bit hosts only
+/// (`the_memory_terms_are_the_measured_sizes`); a 32-bit build's changes are
+/// smaller and it has no earlier behaviour to keep.
+pub(crate) const CAPTURE_ALLOWANCE: usize = 8;
 /// Bytes each value of a pending change counts against the memory ceiling
 /// besides its encoded octets: the value in the change's vector of values,
 /// and its slot in the vector of positions (#1357).
-pub const VALUE_MEMORY: usize =
+pub(crate) const VALUE_MEMORY: usize =
     core::mem::size_of::<COVNotificationValue>() + core::mem::size_of::<usize>();
 /// Bytes of memory a context's pending changes may take for each octet of
 /// items [`HISTORY_NOTIFICATIONS`] notifications of the local maximum APDU
 /// have (#1357); see the module documentation.
-pub const CEILING_BYTES_PER_OCTET: usize = 4;
+pub(crate) const CEILING_BYTES_PER_OCTET: usize = 4;
 /// Earliest the deadline backstop acts after a change, and the least spacing
 /// between its attempts on one blocked context.
-pub const DEADLINE_FLOOR: Duration = Duration::from_secs(1);
+pub(crate) const DEADLINE_FLOOR: Duration = Duration::from_secs(1);
 
 /// One captured change of a timestamped reference, ready to be conveyed.
 #[derive(Debug, Clone)]
@@ -290,7 +302,7 @@ impl TimedChange {
     /// Bytes the change counts against its context's memory ceiling:
     /// [`CHANGE_MEMORY`], and [`VALUE_MEMORY`] and the encoded octets for
     /// each of its values (#1357).
-    pub fn memory(&self) -> usize {
+    pub(crate) fn memory(&self) -> usize {
         CHANGE_MEMORY
             + self
                 .values
@@ -700,8 +712,8 @@ impl TimedHistories {
     /// deadline still ahead, a context's or a lodged claim's.
     ///
     /// A context is due at its earliest pending change or owed reference plus
-    /// its delay, but no sooner than [`DEADLINE_FLOOR`] after it, nor before
-    /// its wait from a previous attempt or hold-off. Handing it out starts a
+    /// its delay, but no sooner than one second after it (`DEADLINE_FLOOR`),
+    /// nor before its wait from a previous attempt or hold-off. Handing it out starts a
     /// wait of its delay (the floor at least), in case the attempt is blocked
     /// again.
     pub fn take_due(&mut self, now: Instant) -> (Vec<CovSubscriptionKey>, Option<Instant>) {
@@ -1090,10 +1102,11 @@ mod claim;
 mod drops;
 mod owed;
 use bound::Held;
-pub use bound::{envelope_len, request_header};
+pub(crate) use bound::envelope_len;
+pub use bound::request_header;
 pub use claim::{ClaimId, Settlement, TimedClaim, ValueFit};
 use drops::DropWarnings;
-pub use drops::{DropReason, Dropped, REPEATS_KEPT};
+pub use drops::{DropReason, Dropped};
 
 #[cfg(test)]
 #[path = "timed_test_host.rs"]

@@ -440,10 +440,12 @@ explicit:
 Clause 13.16.1.1.4's Max_Notification_Delay backstop was a deadline
 already (`take_due`); it is now one of two kinds `next_deadline` merges,
 the other a lodged claim's. A lodged claim follows §5.5: a confirmed
-worker's claim is lodged until its flight's deadline, the worker settles
-it when it ends the flight (half a timeout earlier), and a claim nobody
-settled goes back to its references at the deadline. A holder that settles
-later finds it gone and changes nothing.
+worker's claim is lodged until its flight's own deadline, which the server
+reads off the table (`CovTable::report_deadline`) so the two end at one
+instant from one clock read. The worker settles it when it ends the flight
+(half a timeout earlier), and a claim nobody settled goes back to its
+references at the deadline. A holder that settles later finds it gone and
+changes nothing.
 
 The server's Drop guards stay, because its fanout returns early in many
 places and a worker can be aborted: `TimedClaim` (gives back unless
@@ -455,7 +457,23 @@ hold a lock across an await.
 A pending change still counts 144 bytes on a 64-bit host against its
 context's memory ceiling, though it takes 136 since its instant is
 `bacnet-time`'s (`CAPTURE_ALLOWANCE`): which change overflow drops is
-visible to a subscriber, and PR 1 changes nothing on the wire.
+visible to a subscriber, so it stays as it was.
+
+**Two things do change on the wire**, both accepted (decision 15):
+
+- A confirmed report whose worker is still alive past the report's
+  deadline no longer has its timestamped changes retired by a late Ack.
+  The table already ignored that Ack; now the changes went back to their
+  references at the deadline too, and go out again with the next report.
+  It takes an Ack followed by half a timeout's wait for the table.
+- The items of a report the Max_Notification_Delay backstop sends come out
+  in one fixed order, by monitored object. The backstop's references came
+  out of a hash map before, in an order that varied from run to run.
+
+Nothing else differs: timing, timestamps, chunking and what overflow drops
+are as on dev. One log difference: past 64 repeat drops in one locked
+section the server writes one debug line for the rest, where it wrote one
+each; the counters hold every drop.
 
 **Hosted until #2320 PR 2:** the service checks (`handlers/cov.rs:100-351`),
 the capture at the mutation boundary (`cov/timed_capture.rs`), item
@@ -1138,6 +1156,11 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
       clock, and a claim that gives itself back when dropped), so the
       assertions that held the server's store hold the core's explicit
       calls.
+    - From the review: the server lodges the claim with the deadline it
+      reads off the table (`CovTable::report_deadline`), never a second
+      clock read, so claim and report end at one instant. The sizing
+      constants and `envelope_len` are private to the crate; the module is
+      public but unstable until PR 2 (Appendix A.5).
     - Size (`check-firmware-link.sh`, Rust 1.99.0): no image's numbers
       moved, since the feature is off in every one. Flash before and
       after, in octets: `objects` 144,868 (thumbv7m), 144,984 (thumbv7em),
@@ -1232,12 +1255,25 @@ Lines are non-test lines on dev at `56a61f3f9`, before PR 1.
 | New: `NotifyService::CovMultiple`, the `Reporter` running the service, parity, the size row | | ~600 | 2 |
 | **Total** | | **~1,810 moved in PR 1; ~1,890 moved and ~600 new in PR 2** | |
 
-PR 1's order differs from §7's rule in one way. The read cache moved first,
-a pure move. The histories could not: they held Tokio instants and a Tokio
-`Notify`, the server's atomics, `tracing` and std hash maps. So their four
-logic changes (time, plain state, claims, collections) were made in place
-in the server, one commit each with the server's suites as the proof, and
-the histories then moved in a pure move commit. No commit both moves and
+PR 1's order differs from §7's rule. The read cache moved first, in one
+commit that also made its two maps B-tree maps, as the core has no hash
+map; they are only looked up by object, never walked, so no order follows
+from them. The histories could not move as they were: they held Tokio
+instants and a Tokio `Notify`, the server's atomics, `tracing` and std
+hash maps. So their four logic changes (time, plain state, claims,
+collections) were made in place in the server, one commit each with the
+server's suites as the proof, and the histories then moved in a pure move
+commit. Apart from the read cache's two maps, no commit both moves and
 changes logic. The capture stays for PR 2 because its entry points are
 methods of the server's table wrapper and its write observer needs the
 table and the histories borrowed together, which the `Reporter` has.
+
+For PR 2, from PR 1's review:
+
+- The server's `TimedStore` and `TimedClaim` share the names of what they
+  wrap; rename the hosted ones, or fold them away, when the split moves.
+- `cov/timed_capture.rs` reads the clock once for a whole capture, where
+  dev read it per change; decide which the core's capture does.
+- `cov::timed` is public but unstable until then: `ITEM_FRAMING`,
+  `value_len` and `request_header` leave the public surface with the
+  split, and the claim's splits and settling calls may change shape.

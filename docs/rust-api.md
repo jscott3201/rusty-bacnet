@@ -8045,7 +8045,12 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   its mutex, wake-up, counters and log lines around them, and guards that
   settle a claim when dropped. The service itself, its capture and its
   reports' split to the subscriber's APDU size follow in #2320's second
-  part; until then a `Reporter` doesn't serve it.
+  part; until then a `Reporter` doesn't serve it, and this module's API is
+  unstable: `ITEM_FRAMING`, `value_len` and `request_header` are public
+  only for the server's split and leave the public surface when it moves,
+  and the claim's splits and settling calls may change shape. A host that
+  lodges a claim for a confirmed report's worker ends it with the report:
+  `CovTable::report_deadline(token)` is the deadline the table gave it.
 - `clock` (#2321): the Device's clock, for firmware with none of its own.
   `SyncedClock` holds a `bacnet_time::Instant`, the UTC date and time it
   stood for and the `Zone` (UTC_Offset, minutes west, and

@@ -7,8 +7,10 @@
 //! [`TimedStore::lock`] hands out a guard that, when it drops, adds what the
 //! section counted to the atomics, logs what it dropped, and wakes
 //! [`TimedStore::next_due`] if a deadline may have moved earlier. So every
-//! caller sees the counters and the log as it did when the histories held
-//! them, and nothing is published outside the lock.
+//! caller sees the counters and the warnings as it did when the histories
+//! held them, and nothing is published outside the lock. One thing differs
+//! in the log: the histories keep 64 repeat reports for one section, so a
+//! section that drops more gets one debug line for the rest, not one each.
 //!
 //! The histories settle a claim only when told. The server's fanout and
 //! workers return from many places, and a worker can be aborted, so here a
@@ -31,7 +33,8 @@ use tracing::{debug, warn};
 use super::{AtomicCovCounters, CovRevisits};
 use crate::runtime_clock;
 use bacnet_device_core::cov::timed::{
-    self, ClaimId, DropReason, Dropped, Settlement, TimedChange, TimedHistories, ValueFit,
+    self, ClaimId, DropReason, Dropped, Settlement, TimedChange, TimedCounts, TimedHistories,
+    ValueFit,
 };
 
 /// What a store's handles share.
@@ -87,8 +90,19 @@ impl Drop for TimedGuard<'_> {
                 .untimed_references_oversized
                 .fetch_add(counts.untimed_oversized, Ordering::Relaxed);
         }
-        for dropped in self.histories.take_drops() {
-            log_dropped(&dropped);
+        let drops = self.histories.take_drops();
+        for dropped in &drops {
+            log_dropped(dropped);
+        }
+        // The histories keep only so many repeat reports for one section;
+        // one line stands for the drops past them.
+        let more = unreported(&counts, &drops);
+        if more != 0 {
+            debug!(
+                count = more,
+                "Dropped further pending timestamped COV-multiple changes in the same step; \
+                 counted in timed_changes_dropped"
+            );
         }
         if self.histories.take_moved() {
             self.shared.wake.notify_one();
@@ -387,6 +401,14 @@ impl Drop for SendTurn {
             self.revisits.request(std::mem::take(&mut self.keys));
         }
     }
+}
+
+/// The changes a locked section dropped that none of its reports names:
+/// past a number of repeats the histories count a drop without reporting it
+/// (#2320). Both come from one section, so the counts hold every report's.
+fn unreported(counts: &TimedCounts, drops: &[Dropped]) -> u64 {
+    let reported: u64 = drops.iter().map(|dropped| dropped.count as u64).sum();
+    counts.changes_dropped.saturating_sub(reported)
 }
 
 fn describe(reason: DropReason) -> &'static str {

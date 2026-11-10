@@ -15,8 +15,12 @@ use alloc::vec::Vec;
 use super::{CovSubscriptionKey, TimedHistories};
 
 /// Reports of later drops that wait for the host at most; see
-/// [`TimedHistories::take_drops`].
-pub const REPEATS_KEPT: usize = 64;
+/// [`TimedHistories::take_drops`]. Past it a repeat drop is counted and not
+/// reported, so a host that logs one line per report logs fewer lines than
+/// there were drops: `bacnet-server`, which takes the reports after every
+/// locked section, logged each repeat at debug level before the histories
+/// moved here, and now logs one more line for a section's remainder.
+pub(crate) const REPEATS_KEPT: usize = 64;
 
 /// Why pending timestamped changes were dropped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,9 +100,10 @@ impl TimedHistories {
 
     /// The drops reported since the last call, oldest first. Take them after
     /// each call that can drop a change: the counts
-    /// ([`Self::take_counts`]) always hold every drop, but once
-    /// [`REPEATS_KEPT`] reports wait, only a context's first for a cause
-    /// still joins them.
+    /// ([`Self::take_counts`]) always hold every drop, but once 64 reports
+    /// wait (`REPEATS_KEPT`), only a context's first for a cause still joins
+    /// them. A host that takes both together finds how many changes went
+    /// unreported: those counted less those the reports name.
     pub fn take_drops(&mut self) -> Vec<Dropped> {
         core::mem::take(&mut self.drops)
     }

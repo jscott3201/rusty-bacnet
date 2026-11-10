@@ -156,7 +156,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 .fetch_add(1, Ordering::Relaxed);
             return;
         }
-        let (flight, revisits, deadline) = {
+        let (flight, revisits) = {
             let mut table = handles.ctx.cov_table.write().await;
             let flight = table.begin_confirmed(
                 report.completion,
@@ -165,11 +165,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     .iter()
                     .map(|(sub, observation)| (sub, observation.clone())),
             );
-            (
-                flight,
-                Arc::clone(table.revisits()),
-                table.flight_deadline(),
-            )
+            (flight, Arc::clone(table.revisits()))
         };
         // The instant the table began the report, near enough: its deadline
         // runs from it, and the worker's cutoff too.
@@ -203,6 +199,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 return;
             }
         };
+        // The worker's claim ends with its report, at the one instant the
+        // table gave the report: the histories keep it until then, and a
+        // live worker settles ahead of that, as it does the report (its
+        // cutoff is half a timeout earlier).
+        let claim = report.claim.map(|claim| claim.lodge(flight.deadline()));
         Self::spawn_confirmed(
             handles,
             ConfirmedSend {
@@ -210,11 +211,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 flight,
                 buf,
                 route: report.route,
-                // The worker's claim ends with its report: the histories
-                // keep it until the report's deadline, which a live worker
-                // settles ahead of, as it does the report (its cutoff is
-                // half a timeout earlier).
-                claim: report.claim.map(|claim| claim.lodge(deadline)),
+                claim,
                 label,
                 revisits,
                 begun,

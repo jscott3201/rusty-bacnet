@@ -318,3 +318,28 @@ async fn a_lodged_claim_is_settled_by_its_worker_or_at_its_deadline() {
     assert_eq!(seconds(&store.lock().drain(&k, 1).1), [3], "given back");
     waiter.abort();
 }
+
+/// The histories report a context's first drop for a cause and 64 repeats in
+/// all for one section; the guard's one line for the rest counts exactly the
+/// changes no report names.
+#[test]
+fn a_sections_drops_past_the_kept_reports_are_counted_for_one_line() {
+    // A device so small that its ceiling holds two of these changes.
+    let small = TimedStore::new(60, Arc::new(AtomicCovCounters::default()));
+    let k = key(1, 1);
+    let mut histories = small.lock();
+    histories.reset(&k, 1, 0);
+    for second in 0..200 {
+        histories.push(&k, 1, change(second % 60));
+    }
+    let (counts, drops) = (histories.take_counts(), histories.take_drops());
+    assert_eq!(counts.changes_dropped, 198, "all but the two it holds");
+    assert_eq!(drops.len(), 64, "the first and the repeats kept");
+    assert!(drops.iter().all(|dropped| dropped.count == 1));
+    assert_eq!(unreported(&counts, &drops), 198 - 64);
+    // A section whose reports name every drop has no such line.
+    histories.push(&k, 1, change(1));
+    let (counts, drops) = (histories.take_counts(), histories.take_drops());
+    assert_eq!((counts.changes_dropped, drops.len()), (1, 1));
+    assert_eq!(unreported(&counts, &drops), 0);
+}

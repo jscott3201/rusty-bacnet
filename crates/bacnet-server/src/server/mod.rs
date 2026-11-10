@@ -682,6 +682,8 @@ mod cov_timed_capture_order_tests;
 #[cfg(test)]
 mod cov_timed_chunk_tests;
 #[cfg(test)]
+mod cov_timed_claim_return_tests;
+#[cfg(test)]
 mod cov_timed_deadline_tests;
 #[cfg(test)]
 mod cov_timed_multiple_tests;
