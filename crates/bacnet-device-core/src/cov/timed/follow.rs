@@ -8,8 +8,8 @@
 //! mutation published, before anything else reads the histories.
 use bacnet_time::Instant;
 
-use bacnet_device_core::cov::timed::TimedHistories;
-use bacnet_device_core::cov::{CovSubscriptionSnapshot, CovTable, CovTimeRemaining, Fenced};
+use super::TimedHistories;
+use crate::cov::{CovSubscriptionSnapshot, CovTable, CovTimeRemaining, Fenced};
 
 /// Apply to `histories` what `table`'s mutations report in `fenced`, after
 /// they `published` those snapshots, in the order the table made the

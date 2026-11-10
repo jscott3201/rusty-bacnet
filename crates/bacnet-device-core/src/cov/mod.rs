@@ -35,10 +35,14 @@ pub mod prepare;
 pub mod reported;
 mod sample;
 mod subscribe;
+#[cfg(feature = "cov-multiple")]
+mod subscribe_multiple;
 mod subscription;
 mod table;
 #[cfg(feature = "cov-multiple")]
 pub mod timed;
+#[cfg(feature = "cov-multiple")]
+pub mod timed_capture;
 pub mod value_source;
 mod vec_map;
 
@@ -56,5 +60,7 @@ pub use policy::{CovCounters, CovPolicy};
 pub use prepare::validate_sample;
 pub use sample::CovSample;
 pub use subscribe::validate_cov_property;
+#[cfg(feature = "cov-multiple")]
+pub use subscribe_multiple::subscribe_cov_property_multiple;
 pub use subscription::{CovSubscription, CovSubscriptionSnapshot};
 pub use table::{CovTable, Fenced};

@@ -2,6 +2,8 @@
 //! cancel, renew or add each reference it names, keep the timestamped
 //! histories in step with the table, and capture the initial report of
 //! every timestamped reference it accepted.
+use alloc::vec::Vec;
+
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_services::cov_multiple::SubscribeCOVPropertyMultipleRequest;
 use bacnet_time::{Duration, Instant};
@@ -10,10 +12,9 @@ use bacnet_types::enums::{ErrorClass, ErrorCode, RejectReason};
 use bacnet_types::error::{Error, ErrorDetail, RemoteError};
 use bacnet_types::primitives::ObjectIdentifier;
 
+use super::timed::{TimedHistories, follow_table};
 use super::timed_capture::TimedCapture;
-use super::timed_follow::follow_table;
-use bacnet_device_core::cov::timed::TimedHistories;
-use bacnet_device_core::cov::{
+use super::{
     CovNotificationKind, CovRecipient, CovSubscription, CovSubscriptionKey,
     CovSubscriptionSnapshot, CovTable, MultipleContextKey, MultipleRefusal, SubscriberEndpoint,
     validate_cov_property,

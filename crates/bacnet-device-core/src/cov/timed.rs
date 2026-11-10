@@ -1101,6 +1101,7 @@ impl TimedHistories {
 mod bound;
 mod claim;
 mod drops;
+mod follow;
 mod owed;
 use bound::Held;
 pub(crate) use bound::envelope_len;
@@ -1108,6 +1109,7 @@ pub(crate) use bound::request_header;
 pub use claim::{ClaimId, Settlement, TimedClaim, ValueFit};
 use drops::DropWarnings;
 pub use drops::{DropReason, Dropped};
+pub use follow::follow_table;
 
 #[cfg(test)]
 #[path = "timed_test_host.rs"]

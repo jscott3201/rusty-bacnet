@@ -15,11 +15,13 @@ use bacnet_objects::traits::BACnetObject;
 use bacnet_types::primitives::ObjectIdentifier;
 
 use super::CovSubscriptionTable;
-use super::timed_capture::{CaptureQueue, CaptureRead, TimedCapture, TimedWriteCapture};
 use super::timed_store::HistoryStore;
 use crate::runtime_clock;
 use bacnet_device_core::cov::CovSubscriptionKey;
 use bacnet_device_core::cov::life_safety::LifeSafetyCovChange;
+use bacnet_device_core::cov::timed_capture::{
+    CaptureQueue, CaptureRead, TimedCapture, TimedWriteCapture,
+};
 use bacnet_device_core::write::WriteCommitObserver;
 
 /// References a producer must capture, with the store that takes their

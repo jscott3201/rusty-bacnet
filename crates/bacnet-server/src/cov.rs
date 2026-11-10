@@ -28,9 +28,6 @@ use bacnet_objects::database::ObjectDatabase;
 mod confirmed;
 pub(crate) use confirmed::{ConfirmedFlight, CovRevisits};
 mod store_capture;
-mod subscribe_multiple;
-mod timed_capture;
-mod timed_follow;
 pub(crate) mod timed_store;
 
 mod policy;
@@ -331,7 +328,7 @@ impl CovSubscriptionTable {
     }
 
     /// SubscribeCOVPropertyMultiple from `peer`; see
-    /// [`subscribe_cov_property_multiple`](subscribe_multiple::subscribe_cov_property_multiple).
+    /// [`subscribe_cov_property_multiple`](bacnet_device_core::cov::subscribe_cov_property_multiple).
     /// The store is locked for the call, last, under the database and table
     /// guards its caller holds: the service keeps the histories in step
     /// with the table itself, and nothing in it drops a claim or a turn of
@@ -343,7 +340,7 @@ impl CovSubscriptionTable {
         subscriber_max_apdu: Option<u16>,
         request: bacnet_services::cov_multiple::SubscribeCOVPropertyMultipleRequest,
     ) -> Result<Vec<CovSubscriptionSnapshot>, MultipleRefusal> {
-        let accepted = subscribe_multiple::subscribe_cov_property_multiple(
+        let accepted = bacnet_device_core::cov::subscribe_cov_property_multiple(
             &mut self.core,
             &mut self.timed.lock(),
             db,
@@ -555,7 +552,7 @@ impl CovSubscriptionTable {
             return;
         }
         self.counters.add(&counts);
-        timed_follow::follow_table(
+        bacnet_device_core::cov::timed::follow_table(
             &mut self.timed.lock(),
             &self.core,
             &fenced,

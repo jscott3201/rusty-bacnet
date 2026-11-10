@@ -30,6 +30,8 @@
 //! capture through [`TimedCapture::exact`] with the same selection as their
 //! exact fanout. WritePropertyMultiple captures every successful attempt as
 //! it commits, through [`TimedWriteCapture`].
+use alloc::vec::Vec;
+
 use bacnet_objects::clock::ClockFrame;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::traits::BACnetObject;
@@ -38,15 +40,11 @@ use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
-use bacnet_device_core::cov::life_safety::{
-    LifeSafetyCovChange, LifeSafetyCovSnapshots, is_life_safety_object,
-};
-use bacnet_device_core::cov::multiple_reads::{MultipleReads, PreparedReference};
-use bacnet_device_core::cov::timed::{TimedChange, TimedHistories};
-use bacnet_device_core::cov::{
-    CovNotificationKind, CovSubscriptionKey, CovSubscriptionSnapshot, CovTable,
-};
-use bacnet_device_core::write::{WriteCommitObserver, WriteTarget};
+use super::life_safety::{LifeSafetyCovChange, LifeSafetyCovSnapshots, is_life_safety_object};
+use super::multiple_reads::{MultipleReads, PreparedReference};
+use super::timed::{TimedChange, TimedHistories};
+use super::{CovNotificationKind, CovSubscriptionKey, CovSubscriptionSnapshot, CovTable};
+use crate::write::{WriteCommitObserver, WriteTarget};
 
 /// Live timestamped references whose changes a producer must capture.
 pub struct TimedCapture {
