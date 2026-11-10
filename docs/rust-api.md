@@ -4698,9 +4698,9 @@ ai.set_notification_class(5); // a value a peer wrote and saved wins
 
 #### Keeping written event algorithm parameters (#2331)
 
-An analog, binary or multi-state Input, Output or Value built
-`with_reporting_persistence` also keeps the event algorithm parameters a
-peer writes:
+An analog, binary or multi-state Input, Output or Value, an Access Door or
+an Access Zone built `with_reporting_persistence` also keeps the event
+algorithm parameters a peer writes:
 
 | Object types | Parameters kept |
 | --- | --- |
@@ -4708,9 +4708,12 @@ peer writes:
 | Binary Input, Value | Time_Delay, Time_Delay_Normal, Alarm_Value |
 | Multi-state Input, Value | Time_Delay, Time_Delay_Normal, Alarm_Values |
 | Binary Output, Multi-state Output | Time_Delay, Time_Delay_Normal |
+| Access Door | Time_Delay, Time_Delay_Normal, Alarm_Values, Fault_Values, Masked_Alarm_Values |
+| Access Zone | Time_Delay, Time_Delay_Normal, Alarm_Values |
 
-Access Door, Access Zone and Event Enrollment don't keep theirs yet; a
-write of one lasts until a restart, as before.
+Event Enrollment doesn't keep its parameters yet; a write of one lasts
+until a restart, as before. An Access Zone's occupancy limits are read-only
+over the network, so there is nothing of them to keep.
 
 - **Same rules as the reporting settings.** A write is saved before it is
   answered and refused with DEVICE / OPERATIONAL_PROBLEM, the old value kept
@@ -4718,16 +4721,21 @@ write of one lasts until a restart, as before.
   it with the request's other kept writes, one save for them all. A write
   the object refuses (a limit that isn't finite, a negative Deadband, an
   Alarm_Value past ACTIVE, an Alarm_Values entry of zero or past
-  Number_Of_States, the wrong datatype, an array index) is refused as
-  before and saves nothing.
+  Number_Of_States, a door's or a zone's listed state that is NORMAL or
+  outside its enumeration, the wrong datatype, an array index) is refused
+  as before and saves nothing.
 - **Only what a write set.** `written_reporting().algorithm` is an
   `AlgorithmWriteConfig` with a `Some` for each written parameter.
   `clear_written_reporting()` drops them with the reporting settings and the
   Description. A written empty Alarm_Values list is kept as an empty list.
-- **Setters.** One parameter has a setter: `set_alarm_values` on a
-  Multi-state Input or Value. Like the reporting setters, it gives way to a
-  list a write saved until `clear_written_reporting()`; it still takes any
-  state, checked or not. The other parameters have no setter. Set the
+- **Setters.** Only the lists have setters: `set_alarm_values` on a
+  Multi-state Input or Value, an Access Door and an Access Zone, and a
+  door's `set_fault_values` and `set_masked_alarm_values`. Like the
+  reporting setters, each gives way to a list a write saved until
+  `clear_written_reporting()`. A multi-state object's still takes any state,
+  checked or not; a door's and a zone's still check their argument as a
+  write is checked and return its error, kept list or not. The other
+  parameters have no setter. Set the
   application's own values with `write_property` before
   `with_reporting_persistence`: a saved write then goes over them, and they
   apply again at the first start after a clear. A `write_property` after the
@@ -4739,6 +4747,22 @@ write of one lasts until a restart, as before.
   way a write puts them in, which never restarts a delay or changes
   Event_State. A Multi-state Value works out its Reliability again when
   Alarm_Values is written, so it does when a saved list goes in.
+- **An Access Door at a restart.** A write of one of a door's three lists
+  sends a Door_Alarm_State the lists no longer admit back to NORMAL, so a
+  door that takes saved lists does the same, once, with every saved list in
+  place, for the state it serves and the one put aside out of service. It
+  can only move a state to NORMAL, and only one a write of the same lists
+  would have moved. Door_Alarm_State itself isn't kept: the application
+  reports it again, and `set_door_alarm_state` checks it against the lists
+  the door now serves, so it refuses a state only the application's own
+  lists name. An Access Zone that takes a saved list changes nothing else.
+- **Door and zone lists.** Alarm_Values, Fault_Values and
+  Masked_Alarm_Values hold at most 1,024 states, each a member of the
+  type's enumeration, named or proprietary, and never NORMAL: what a write
+  is held to (#1149, #1401). The check turns on nothing the object holds,
+  so it is the same on load, and no saved list is one the rebuilt object
+  would refuse. Nothing a request writes changes it either, so a
+  WritePropertyMultiple of several lists is staged as written.
 - **Validated on load.** Storage holding a value the object refuses on the
   wire, or a parameter the object's type doesn't keep, fails
   `with_reporting_persistence`; nothing reaches the detector. The one
@@ -4790,10 +4814,20 @@ write of one lasts until a restart, as before.
   with a parameter as an unknown kind, and reads an analog file as before:
   bits 0 to 5 and their octets are unchanged. Bit 6 is Alarm_Value (one
   octet) and bit 7 Alarm_Values (a four-octet count, then four octets a
-  state). `snapshot::write_config::keeps_parameter` names
+  state); bits 8 and 9 are an Access Door's Fault_Values and
+  Masked_Alarm_Values, in the form of bit 7. Alarm_Values is one row on
+  every type that keeps it, and what a listed state may be is the rule of
+  the object type the file's header names: any state but zero on a
+  multi-state object, a state of the enumeration other than NORMAL on a
+  door or a zone. A file opens for one object and is refused for any other,
+  so a list is never read under another type's rule. A release that keeps
+  no parameter for a door or a zone refuses its kind 6 file as an unknown
+  kind, at the mask, whichever rows it holds.
+  `snapshot::write_config::keeps_parameter` names
   the parameters each object type keeps. The kind adds at most 25 octets to
-  an analog object's file, 13 to a binary one's, and 16 plus four a listed
-  state to a multi-state one's.
+  an analog object's file, 13 to a binary one's, 16 plus four a listed
+  state to a multi-state one's or a zone's, and 24 plus four a listed state
+  to a door's.
 
 ```rust
 use bacnet_types::enums::PropertyIdentifier;
@@ -5603,7 +5637,7 @@ implements `From<SnapshotError>`, the mapping the file backends use.
 | --- | --- | --- | --- |
 | `snapshot::log` | `LogSnapshot<R>` (Trend Log, Trend Log Multiple, Event Log) | `RBLOGS01`, version 2; version 1 still loads | `FileLogPersistence` (one slot of the two) |
 | `snapshot::audit_log` | `AuditLogSnapshot` | `RBALOG01`, version 3; versions 1 and 2 still load | `FileAuditLogPersistence` (one slot of the two) |
-| `snapshot::write_config` | `WriteConfigSnapshot` (Timer, Channel, an intrinsic reporter's reporting settings and an analog, binary or multi-state object's event algorithm parameters, each with a written Description) | `RBNWCF01`, kinds 2 to 6; kind 1 still loads | `FileWriteConfigPersistence` |
+| `snapshot::write_config` | `WriteConfigSnapshot` (Timer, Channel, an intrinsic reporter's reporting settings and an analog, binary or multi-state object's, an Access Door's or an Access Zone's event algorithm parameters, each with a written Description) | `RBNWCF01`, kinds 2 to 6; kind 1 still loads | `FileWriteConfigPersistence` |
 | `snapshot::notification_class` | `NotificationClassSnapshot` | `RBNNCL01`; `RBNNCL02` with a written Description | `FileNotificationClassPersistence` |
 | `snapshot::notification_forwarder` | `ForwarderSnapshot` | `RBNFWD01`; `RBNFWD02` with a written Description | `FileNotificationForwarderPersistence` |
 | `snapshot::tags` | `TagsSnapshot` | `RBNTAG01`; `RBNTAG02` with a written Description | `FileTagsPersistence` |
@@ -7675,7 +7709,9 @@ CHANGE_OF_RELIABILITY one lists Door_Alarm_State, then Present_Value (Table
 13-5). The application decides when the door is in alarm, DOOR_OPEN_TOO_LONG
 included: the door serves Door_Open_Too_Long_Time but runs no timer, and a
 state the application sets directly on the object reaches the algorithm at the
-one-second tick.
+one-second tick. A door or zone built `with_reporting_persistence` keeps the
+lists and the two time delays a peer writes, and its list setters then give
+way to a saved list: see "Keeping written event algorithm parameters".
 
 Over the network the Access Point event values stay read-only, but writing
 its Out_Of_Service records an event on each edge (Clause 12.31.8):

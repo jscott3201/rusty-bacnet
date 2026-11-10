@@ -231,11 +231,16 @@ impl AccessDoorObject {
     /// are kept. A Door_Alarm_State the lists no longer admit drops to
     /// NORMAL. Clients can write the list too, as they can the door's other
     /// event configuration.
+    ///
+    /// On a door keeping its reporting settings, a list a write saved
+    /// wins, here and on the next two setters: the argument is checked and
+    /// the saved list stays, until `clear_written_reporting` (#2331).
     pub fn set_alarm_values(
         &mut self,
         states: impl IntoIterator<Item = DoorAlarmState>,
     ) -> Result<(), Error> {
-        self.reporting.set_alarm_values(raw_states(states))?;
+        let kept = self.kept_over_setter(PropertyIdentifier::ALARM_VALUES);
+        self.reporting.set_alarm_values(raw_states(states), kept)?;
         self.settle_door_alarm_state();
         Ok(())
     }
@@ -247,7 +252,9 @@ impl AccessDoorObject {
         &mut self,
         states: impl IntoIterator<Item = DoorAlarmState>,
     ) -> Result<(), Error> {
-        self.alarm_lists.set_fault_values(raw_states(states))?;
+        let kept = self.kept_over_setter(PropertyIdentifier::FAULT_VALUES);
+        self.alarm_lists
+            .set_fault_values(raw_states(states), kept)?;
         self.settle_door_alarm_state();
         Ok(())
     }
@@ -259,8 +266,9 @@ impl AccessDoorObject {
         &mut self,
         states: impl IntoIterator<Item = DoorAlarmState>,
     ) -> Result<(), Error> {
+        let kept = self.kept_over_setter(PropertyIdentifier::MASKED_ALARM_VALUES);
         self.alarm_lists
-            .set_masked_alarm_values(raw_states(states))?;
+            .set_masked_alarm_values(raw_states(states), kept)?;
         self.settle_door_alarm_state();
         Ok(())
     }
@@ -453,7 +461,11 @@ fn checked_tenths(value: PropertyValue) -> Result<u32, Error> {
     common::u64_to_u32(raw)
 }
 
-crate::event::state_reporting::keep_change_of_state_reporting!(AccessDoorObject);
+crate::event::state_reporting::keep_change_of_state_reporting!(
+    AccessDoorObject,
+    lists: alarm_lists,
+    settled_by: settle_door_alarm_state
+);
 
 impl BACnetObject for AccessDoorObject {
     fn object_identifier(&self) -> ObjectIdentifier {

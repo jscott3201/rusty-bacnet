@@ -8,7 +8,8 @@ Event_Message_Texts_Config or the Event_Algorithm_Inhibit pair is saved in
 that file before it is answered, and a server started on the same file
 serves it again, until ``clear_written_reporting=True`` drops it. A written
 Description is kept the same way (#2364), and so are an analog, binary or
-multi-state object's event algorithm parameters (#2331).
+multi-state object's, an Access Door's and an Access Zone's event algorithm
+parameters (#2331).
 """
 
 from __future__ import annotations
@@ -412,6 +413,144 @@ class FurtherTypesTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await server.stop()
 
+
+
+def listed(*raw: int) -> PropertyValue:
+    """A list of an Access Door's or Access Zone's states."""
+    return PropertyValue.list([PropertyValue.enumerated(state) for state in raw])
+
+
+class AccessParameterTests(unittest.IsolatedAsyncioTestCase):
+    """An Access Door's and an Access Zone's written lists and delays."""
+
+    async def asyncSetUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.state = Path(directory.name)
+
+    async def start(self, clear: bool = False) -> BACnetServer:
+        server = BACnetServer(2_331_006, interface="127.0.0.1", port=0)
+        # The application's own lists, given at every start: FORCED_OPEN
+        # and DOOR_FAULT on the door, ABOVE_UPPER_LIMIT on the zone.
+        server.add_access_door(
+            1,
+            "Door-1",
+            alarm_values=[3],
+            fault_values=[5],
+            storage_path=str(self.state / "door-1"),
+            clear_written_reporting=clear,
+        )
+        server.add_access_zone(
+            1,
+            "Zone-1",
+            alarm_values=[4],
+            storage_path=str(self.state / "zone-1"),
+            clear_written_reporting=clear,
+        )
+        await server.start()
+        return server
+
+    async def test_written_lists_and_delays_go_over_the_keywords_until_cleared(self) -> None:
+        written = [
+            (DOOR, P.ALARM_VALUES, listed(4, 300)),
+            (DOOR, P.FAULT_VALUES, listed(6)),
+            (DOOR, P.MASKED_ALARM_VALUES, listed(7)),
+            (DOOR, P.TIME_DELAY, PropertyValue.unsigned(7)),
+            (DOOR, P.TIME_DELAY_NORMAL, PropertyValue.unsigned(3)),
+            (ZONE, P.ALARM_VALUES, listed(3, 100)),
+            (ZONE, P.TIME_DELAY, PropertyValue.unsigned(7)),
+            (ZONE, P.TIME_DELAY_NORMAL, PropertyValue.unsigned(3)),
+        ]
+        configured = {
+            (DOOR, P.ALARM_VALUES): listed(3),
+            (DOOR, P.FAULT_VALUES): listed(5),
+            (DOOR, P.MASKED_ALARM_VALUES): listed(),
+            (ZONE, P.ALARM_VALUES): listed(4),
+        }
+        server = await self.start()
+        try:
+            for (oid, prop), value in configured.items():
+                self.assertEqual(await server.read_property(oid, prop), value)
+            for oid, prop, value in written:
+                await server.write_property_local(oid, prop, value, source_object=None)
+            # A list a write refuses is refused with storage too.
+            for refused in (listed(0), listed(9)):
+                with self.assertRaises(BacnetError):
+                    await server.write_property_local(
+                        DOOR, P.FAULT_VALUES, refused, source_object=None
+                    )
+        finally:
+            await server.stop()
+
+        # The keywords are given again, and the written lists are served.
+        server = await self.start()
+        try:
+            for oid, prop, value in written:
+                with self.subTest(oid=oid, prop=prop):
+                    self.assertEqual(await server.read_property(oid, prop), value)
+        finally:
+            await server.stop()
+
+        server = await self.start(clear=True)
+        try:
+            for oid, prop, _ in written:
+                expected = configured.get((oid, prop), PropertyValue.unsigned(0))
+                with self.subTest(cleared=oid, prop=prop):
+                    self.assertEqual(await server.read_property(oid, prop), expected)
+        finally:
+            await server.stop()
+
+
+def alarm_values_file(object_type: int, instance: int, *states: int) -> bytes:
+    """A written-configuration file of kind 6 holding only Alarm_Values: no
+    reporting setting, then the presence mask (bit 7), the count and each
+    state in four octets.
+    """
+    identifier = struct.pack(">I", (object_type << 22) | instance)
+    body = bytes([6, 0, 0, 0, 0, 0, 0, 0]) + struct.pack(">II", 1 << 7, len(states))
+    return b"RBNWCF01" + identifier + body + b"".join(struct.pack(">I", s) for s in states)
+
+
+class AccessListFileTests(unittest.TestCase):
+    def test_a_stored_list_is_held_to_its_own_types_states(self) -> None:
+        door = ObjectType.ACCESS_DOOR.to_raw()
+        zone = ObjectType.ACCESS_ZONE.to_raw()
+        with tempfile.TemporaryDirectory() as directory:
+            server = BACnetServer(2_331_007, interface="127.0.0.1", port=0)
+
+            def path(name: str, octets: bytes) -> str:
+                file = Path(directory) / name
+                file.write_bytes(octets)
+                return str(file)
+
+            # NORMAL, and a number past the named states and short of the
+            # proprietary ones, on each type: 8 is a door's EGRESS_OPEN and
+            # no occupancy state.
+            for states in ((0,), (3, 0), (9,), (65_536,)):
+                with self.subTest(door=states), self.assertRaises(BacnetError):
+                    server.add_access_door(
+                        1, "Door-1", storage_path=path("door", alarm_values_file(door, 1, *states))
+                    )
+            for states in ((0,), (8,), (63,), (65_536,)):
+                with self.subTest(zone=states), self.assertRaises(BacnetError):
+                    server.add_access_zone(
+                        1, "Zone-1", storage_path=path("zone", alarm_values_file(zone, 1, *states))
+                    )
+            # The clear doesn't help: the file is read before it is cleared.
+            with self.assertRaises(BacnetError):
+                server.add_access_door(
+                    1,
+                    "Door-1",
+                    storage_path=path("door", alarm_values_file(door, 1, 0)),
+                    clear_written_reporting=True,
+                )
+            # What each takes loads.
+            server.add_access_door(
+                2, "Door-2", storage_path=path("door-2", alarm_values_file(door, 2, 8, 256))
+            )
+            server.add_access_zone(
+                2, "Zone-2", storage_path=path("zone-2", alarm_values_file(zone, 2, 6, 64))
+            )
 
 
 def ack_notification_file(object_type: int, instance: int) -> bytes:

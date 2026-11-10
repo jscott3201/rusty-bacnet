@@ -8,6 +8,14 @@
 //! staged write is checked by [`after`] on a fresh detector of the object's
 //! own kind, so each family's step refuses exactly what its objects will.
 //!
+//! An Access Door and an Access Zone hold the CHANGE_OF_STATE detector
+//! inside a `ChangeOfStateReporting`, which lends and restores through the
+//! same impl and checks a staged Alarm_Values against the type's own
+//! enumeration; a door's Fault_Values and Masked_Alarm_Values are beside
+//! it, in the door's `DoorAlarmLists`. The format's table isn't what these
+//! impls are made from, so `parameter_table_tests` walks it: every row a
+//! type keeps has to come back through the type's object.
+//!
 //! A saved parameter is checked as the file format checks it and no
 //! further. A multi-state object's write refuses an Alarm_Values entry past
 //! Number_Of_States (#1429), but a saved list naming one is installed as it
@@ -105,10 +113,10 @@ impl AlgorithmDetector for OutOfRangeDetector {
     }
 }
 
-/// The binary and multi-state Input and Value objects' detector. Its one
-/// list serves a binary object's Alarm_Value, as a list of that value, and
-/// a multi-state object's Alarm_Values; storage keeps whichever the
-/// object's type has.
+/// The binary and multi-state Input and Value objects' detector, and an
+/// Access Door's and Access Zone's. Its one list serves a binary object's
+/// Alarm_Value, as a list of that value, and the others' Alarm_Values;
+/// storage keeps whichever the object's type has.
 impl AlgorithmDetector for ChangeOfStateDetector {
     fn parameters(&self) -> AlgorithmWriteConfig {
         AlgorithmWriteConfig {

@@ -44,7 +44,8 @@ std = [
 # the reporting settings peers write on the analog, binary and multi-state
 # objects, Access Door and Zone, and Event and Alert Enrollment (#2331), and
 # their written Description (#2364), and the analog, binary and multi-state
-# objects' written event algorithm parameters (#2331):
+# objects', Access Door's and Access Zone's written event algorithm
+# parameters (#2331):
 # `with_reporting_persistence`, the
 # analog, binary and multi-state objects' three setters
 # (`set_notification_class`, `set_event_enable`, `set_notify_type`),

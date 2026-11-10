@@ -279,6 +279,53 @@ fn with_alarm_values(mut snapshot: WriteConfigSnapshot) -> WriteConfigSnapshot {
     snapshot
 }
 
+/// An Access Door's written reporting settings, time delays and its three
+/// lists of door alarm states (#2331 PR 4): kind 6 with all three list
+/// rows.
+pub fn door_lists_reporting_write_config(path: &Path) {
+    let snapshot = with_door_lists(reporting_config(None));
+    save_write_config(path, ObjectType::ACCESS_DOOR, &snapshot);
+}
+
+/// The same with a written Description: kind 5 around kind 6.
+pub fn described_door_lists_reporting_write_config(path: &Path) {
+    let snapshot = with_door_lists(reporting_config(Some("Lobby")));
+    save_write_config(path, ObjectType::ACCESS_DOOR, &snapshot);
+}
+
+/// An Access Zone's written reporting settings, time delays and
+/// Alarm_Values (#2331 PR 4): the list row under a zone's rule.
+pub fn zone_alarm_values_reporting_write_config(path: &Path) {
+    let mut snapshot = reporting_config(None);
+    let WriteConfigSnapshot::Reporting(settings) = &mut snapshot else {
+        unreachable!("reporting settings");
+    };
+    let mut algorithm = AlgorithmWriteConfig::default();
+    algorithm.time_delay = Some(30);
+    algorithm.time_delay_normal = Some(5);
+    // A named occupancy state and the two ends of the proprietary ones.
+    algorithm.alarm_values = Some(vec![4, 64, 65_535]);
+    settings.algorithm = algorithm;
+    save_write_config(path, ObjectType::ACCESS_ZONE, &snapshot);
+}
+
+/// `snapshot`, reporting settings, with every parameter an Access Door
+/// keeps written: named door alarm states and the two ends of the
+/// proprietary ones.
+fn with_door_lists(mut snapshot: WriteConfigSnapshot) -> WriteConfigSnapshot {
+    let WriteConfigSnapshot::Reporting(settings) = &mut snapshot else {
+        unreachable!("reporting settings");
+    };
+    let mut algorithm = AlgorithmWriteConfig::default();
+    algorithm.time_delay = Some(30);
+    algorithm.time_delay_normal = Some(5);
+    algorithm.alarm_values = Some(vec![3, 4, 256]);
+    algorithm.fault_values = Some(vec![5]);
+    algorithm.masked_alarm_values = Some(vec![7, 65_535]);
+    settings.algorithm = algorithm;
+    snapshot
+}
+
 /// `snapshot`, reporting settings, with every parameter an analog object
 /// keeps written.
 fn with_parameters(mut snapshot: WriteConfigSnapshot) -> WriteConfigSnapshot {

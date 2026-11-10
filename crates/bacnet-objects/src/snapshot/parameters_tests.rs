@@ -1,7 +1,8 @@
 //! The written-configuration format's kind 6 (#2331): the event algorithm
 //! parameters after a kind 4 body. The octets it writes, that a file
 //! without a parameter keeps kind 4, which object types keep which
-//! parameter, and what it refuses. The list row's own refusals are in
+//! parameter, and what it refuses. The list rows' own refusals, and the
+//! rule each object type holds a listed state to, are in
 //! `parameter_list_tests`.
 
 use bacnet_types::bitstring::LimitEnable;
@@ -43,22 +44,58 @@ pub(super) fn kept(kind: ObjectType) -> u32 {
         ObjectType::BINARY_INPUT | ObjectType::BINARY_VALUE => 0x43,
         ObjectType::BINARY_OUTPUT | ObjectType::MULTI_STATE_OUTPUT => 0x03,
         ObjectType::MULTI_STATE_INPUT | ObjectType::MULTI_STATE_VALUE => 0x83,
+        ObjectType::ACCESS_DOOR => 0x383,
+        ObjectType::ACCESS_ZONE => 0x83,
         _ => 0,
     }
 }
 
-/// What the build before this one kept (#2331 PR 2): the first six rows on
-/// the analog types, nothing elsewhere.
+/// What the build before this one kept (#2331 PR 3): this build's rows on
+/// the analog, binary and multi-state types, nothing on an Access Door or
+/// an Access Zone.
 fn kept_before(kind: ObjectType) -> u32 {
-    if ANALOG.contains(&kind) { 0x3F } else { 0 }
+    match kind {
+        ObjectType::ACCESS_DOOR | ObjectType::ACCESS_ZONE => 0,
+        kind => kept(kind),
+    }
+}
+
+/// Every row's bit.
+const ALL: u32 = 0x3FF;
+
+/// A list of states only `kind`'s rule takes whole: a multi-state object's
+/// goes past both enumerations, an Access Door's holds a named state an
+/// Access Zone has none for, and an Access Zone's a proprietary state
+/// below where an Access Door's begin.
+pub(super) fn listed(kind: ObjectType) -> Vec<u32> {
+    match kind {
+        ObjectType::ACCESS_DOOR => vec![3, 8, 0x0102],
+        ObjectType::ACCESS_ZONE => vec![3, 1, 100],
+        _ => vec![3, 1, 0x0102_0304],
+    }
 }
 
 pub(super) fn oid(kind: ObjectType) -> ObjectIdentifier {
     ObjectIdentifier::new(kind, 7).unwrap()
 }
 
-/// Each parameter in bit order: its property and its octets in a file.
-fn rows() -> [(P, Vec<u8>); 8] {
+/// A list row's octets: the count, then each state.
+fn list_row(states: &[u32]) -> Vec<u8> {
+    let mut row = (states.len() as u32).to_be_bytes().to_vec();
+    for state in states {
+        row.extend_from_slice(&state.to_be_bytes());
+    }
+    row
+}
+
+/// Each parameter in bit order: its property and its octets in a file for
+/// an object of `kind`.
+fn rows(kind: ObjectType) -> [(P, Vec<u8>); 10] {
+    let list = list_row(&listed(kind));
+    // What the build before this one wrote for a multi-state object.
+    if !matches!(kind, ObjectType::ACCESS_DOOR | ObjectType::ACCESS_ZONE) {
+        assert_eq!(list, [0, 0, 0, 3, 0, 0, 0, 3, 0, 0, 0, 1, 1, 2, 3, 4]);
+    }
     [
         (P::TIME_DELAY, vec![0, 0, 0, 30]),
         (P::TIME_DELAY_NORMAL, vec![1, 2, 3, 4]),
@@ -67,16 +104,18 @@ fn rows() -> [(P, Vec<u8>); 8] {
         (P::DEADBAND, 1.5f32.to_be_bytes().to_vec()),
         (P::LIMIT_ENABLE, vec![0x02]),
         (P::ALARM_VALUE, vec![1]),
+        (P::ALARM_VALUES, list),
+        (P::FAULT_VALUES, vec![0, 0, 0, 1, 0, 0, 0, 5]),
         (
-            P::ALARM_VALUES,
-            vec![0, 0, 0, 3, 0, 0, 0, 3, 0, 0, 0, 1, 1, 2, 3, 4],
+            P::MASKED_ALARM_VALUES,
+            vec![0, 0, 0, 2, 0, 0, 0, 7, 0, 0, 0xFF, 0xFF],
         ),
     ]
 }
 
 /// The parameters whose bits are in `mask`, with the values [`rows`] gives
-/// their octets for.
-pub(super) fn holding(mask: u32) -> AlgorithmWriteConfig {
+/// their octets for on an object of `kind`.
+pub(super) fn holding(kind: ObjectType, mask: u32) -> AlgorithmWriteConfig {
     let has = |bit: u32| mask & (1 << bit) != 0;
     AlgorithmWriteConfig {
         time_delay: has(0).then_some(30),
@@ -86,15 +125,17 @@ pub(super) fn holding(mask: u32) -> AlgorithmWriteConfig {
         deadband: has(4).then_some(1.5),
         limit_enable: has(5).then_some(LimitEnable::HIGH_LIMIT_ENABLE),
         alarm_value: has(6).then_some(BinaryPV::ACTIVE),
-        alarm_values: has(7).then(|| vec![3, 1, 0x0102_0304]),
+        alarm_values: has(7).then(|| listed(kind)),
+        fault_values: has(8).then(|| vec![5]),
+        masked_alarm_values: has(9).then(|| vec![7, 0xFFFF]),
     }
 }
 
-/// The octets after a kind 4 body for the parameters in `mask`: the mask,
-/// then each row in bit order.
-fn tail(mask: u32) -> Vec<u8> {
+/// The octets after a kind 4 body for the parameters in `mask` on an
+/// object of `kind`: the mask, then each row in bit order.
+fn tail(kind: ObjectType, mask: u32) -> Vec<u8> {
     let mut tail = mask.to_be_bytes().to_vec();
-    for (bit, (_, row)) in rows().into_iter().enumerate() {
+    for (bit, (_, row)) in rows(kind).into_iter().enumerate() {
         if mask & (1 << bit) != 0 {
             tail.extend_from_slice(&row);
         }
@@ -152,14 +193,17 @@ fn assert_a_newer_builds(object: ObjectIdentifier, octets: &[u8], what: &str) {
     }
 }
 
-/// The table names every parameter once: the bits are 0 to 7 in order,
+/// The table names every parameter once: the bits are 0 to 9 in order,
 /// each property has its own, and each type keeps what [`kept`] says and
 /// nothing else, a Timer nothing at all.
 #[test]
 fn each_type_keeps_its_own_parameters() {
-    for (bit, (property, _)) in rows().into_iter().enumerate() {
+    let analog = ObjectType::ANALOG_INPUT;
+    assert_eq!(parameters::ROWS.len(), rows(analog).len());
+    for (bit, (property, _)) in rows(analog).into_iter().enumerate() {
+        assert_eq!(parameters::ROWS[bit], (1 << bit, property));
         assert_eq!(parameters::bit_of(property), Some(1 << bit), "{property:?}");
-        assert_eq!(parameters::mask(&holding(1 << bit)), 1 << bit);
+        assert_eq!(parameters::mask(&holding(analog, 1 << bit)), 1 << bit);
         for kind in REPORTERS {
             assert_eq!(
                 write_config::keeps_parameter(kind, property),
@@ -171,11 +215,19 @@ fn each_type_keeps_its_own_parameters() {
     }
     for kind in REPORTERS {
         assert_eq!(parameters::kept(kind), kept(kind), "{kind}");
-        for property in [P::NOTIFICATION_CLASS, P::FAULT_VALUES, P::PRESENT_VALUE] {
+        let never = [
+            P::NOTIFICATION_CLASS,
+            P::PRESENT_VALUE,
+            P::DOOR_ALARM_STATE,
+            P::OCCUPANCY_UPPER_LIMIT,
+            P::OCCUPANCY_LOWER_LIMIT,
+            P::EVENT_PARAMETERS,
+        ];
+        for property in never {
             assert!(!write_config::keeps_parameter(kind, property), "{kind}");
         }
     }
-    assert_eq!(parameters::mask(&holding(0xFF)), 0xFF);
+    assert_eq!(parameters::mask(&holding(analog, ALL)), ALL);
     assert_eq!(parameters::mask(&AlgorithmWriteConfig::default()), 0);
 }
 
@@ -207,15 +259,15 @@ fn parameters_follow_the_kind_4_body_and_none_keeps_kind_4() {
         if kept(kind) == 0 {
             continue;
         }
-        let octets = encode(kind, holding(kept(kind))).unwrap();
+        let octets = encode(kind, holding(kind, kept(kind))).unwrap();
         let mut expected = plain[..12].to_vec();
         expected.push(write_config::KIND_REPORTING_PARAMETERS);
         expected.extend_from_slice(&plain[13..]);
-        expected.extend_from_slice(&tail(kept(kind)));
+        expected.extend_from_slice(&tail(kind, kept(kind)));
         assert_eq!(octets, expected, "{kind}");
         assert_eq!(
             write_config::decode(oid(kind), &octets),
-            Ok(snapshot(holding(kept(kind))))
+            Ok(snapshot(holding(kind, kept(kind))))
         );
     }
 }
@@ -228,7 +280,54 @@ fn an_analog_file_keeps_the_octets_of_the_build_before() {
     expected.extend_from_slice(&[0x42, 0xA1, 0, 0, 0xC1, 0x44, 0, 0, 0x3F, 0xC0, 0, 0, 0x02]);
     for kind in ANALOG {
         let plain = encode(kind, AlgorithmWriteConfig::default()).unwrap();
-        let octets = encode(kind, holding(0x3F)).unwrap();
+        let octets = encode(kind, holding(kind, 0x3F)).unwrap();
+        assert_eq!(octets[plain.len()..], expected, "{kind}");
+    }
+}
+
+/// A binary or multi-state file is what #2331 PR 3 wrote, octet for octet:
+/// the mask of its rows and their octets, spelled out.
+#[test]
+fn a_state_file_keeps_the_octets_of_the_build_before() {
+    let delays = [0, 0, 0, 30, 1, 2, 3, 4];
+    let list = [0, 0, 0, 3, 0, 0, 0, 3, 0, 0, 0, 1, 1, 2, 3, 4];
+    let files: [(ObjectType, u8, &[u8]); 6] = [
+        (ObjectType::BINARY_INPUT, 0x43, &[1]),
+        (ObjectType::BINARY_VALUE, 0x43, &[1]),
+        (ObjectType::BINARY_OUTPUT, 0x03, &[]),
+        (ObjectType::MULTI_STATE_OUTPUT, 0x03, &[]),
+        (ObjectType::MULTI_STATE_INPUT, 0x83, &list),
+        (ObjectType::MULTI_STATE_VALUE, 0x83, &list),
+    ];
+    for (kind, mask, own) in files {
+        let mut expected = vec![0, 0, 0, mask];
+        expected.extend_from_slice(&delays);
+        expected.extend_from_slice(own);
+        let plain = encode(kind, AlgorithmWriteConfig::default()).unwrap();
+        let octets = encode(kind, holding(kind, u32::from(mask))).unwrap();
+        assert_eq!(octets[plain.len()..], expected, "{kind}");
+    }
+}
+
+/// An Access Door's and an Access Zone's file, spelled out: the two delays,
+/// then each list as its count and its states, in bit order.
+#[test]
+fn an_access_file_holds_its_delays_and_then_its_lists() {
+    let delays = [0, 0, 0, 30, 1, 2, 3, 4];
+    let mut door = vec![0, 0, 0x03, 0x83];
+    door.extend_from_slice(&delays);
+    door.extend_from_slice(&[0, 0, 0, 3, 0, 0, 0, 3, 0, 0, 0, 8, 0, 0, 1, 2]);
+    door.extend_from_slice(&[0, 0, 0, 1, 0, 0, 0, 5]);
+    door.extend_from_slice(&[0, 0, 0, 2, 0, 0, 0, 7, 0, 0, 0xFF, 0xFF]);
+    let mut zone = vec![0, 0, 0, 0x83];
+    zone.extend_from_slice(&delays);
+    zone.extend_from_slice(&[0, 0, 0, 3, 0, 0, 0, 3, 0, 0, 0, 1, 0, 0, 0, 100]);
+    for (kind, expected) in [
+        (ObjectType::ACCESS_DOOR, door),
+        (ObjectType::ACCESS_ZONE, zone),
+    ] {
+        let plain = encode(kind, AlgorithmWriteConfig::default()).unwrap();
+        let octets = encode(kind, holding(kind, kept(kind))).unwrap();
         assert_eq!(octets[plain.len()..], expected, "{kind}");
     }
 }
@@ -239,13 +338,17 @@ fn an_analog_file_keeps_the_octets_of_the_build_before() {
 fn each_parameter_has_its_own_bit() {
     for kind in REPORTERS {
         let plain = encode(kind, AlgorithmWriteConfig::default()).unwrap();
-        for bit in (0..8).map(|bit| 1 << bit) {
+        for bit in (0..10).map(|bit| 1 << bit) {
             if kept(kind) & bit == 0 {
                 continue;
             }
-            let algorithm = holding(bit);
+            let algorithm = holding(kind, bit);
             let octets = encode(kind, algorithm.clone()).unwrap();
-            assert_eq!(octets[plain.len()..], tail(bit), "{kind} {algorithm:?}");
+            assert_eq!(
+                octets[plain.len()..],
+                tail(kind, bit),
+                "{kind} {algorithm:?}"
+            );
             assert_eq!(
                 write_config::decode(oid(kind), &octets),
                 Ok(snapshot(algorithm))
@@ -257,9 +360,14 @@ fn each_parameter_has_its_own_bit() {
 /// Kind 5 wraps kind 6 as it wraps kind 4.
 #[test]
 fn a_description_wraps_the_parameters_kind() {
-    for kind in [ObjectType::ANALOG_INPUT, ObjectType::MULTI_STATE_VALUE] {
+    for kind in [
+        ObjectType::ANALOG_INPUT,
+        ObjectType::MULTI_STATE_VALUE,
+        ObjectType::ACCESS_DOOR,
+        ObjectType::ACCESS_ZONE,
+    ] {
         let object = oid(kind);
-        let WriteConfigSnapshot::Reporting(mut config) = snapshot(holding(kept(kind))) else {
+        let WriteConfigSnapshot::Reporting(mut config) = snapshot(holding(kind, kept(kind))) else {
             unreachable!()
         };
         let plain = write_config::encode(object, &WriteConfigSnapshot::Reporting(config.clone()));
@@ -280,7 +388,7 @@ fn cut_and_over_long_files_are_refused() {
         if kept(kind) == 0 {
             continue;
         }
-        let octets = encode(kind, holding(kept(kind))).unwrap();
+        let octets = encode(kind, holding(kind, kept(kind))).unwrap();
         for cut in 12..octets.len() {
             let error = write_config::decode(oid(kind), &octets[..cut]).unwrap_err();
             assert!(error.is_damage(), "{kind} cut at {cut}: {error:?}");
@@ -298,7 +406,7 @@ fn cut_and_over_long_files_are_refused() {
 #[test]
 fn an_unknown_bit_is_an_unknown_kind_and_an_empty_mask_is_damage() {
     for kind in REPORTERS {
-        for mask in [1u32 << 8, 1 << 31, (1 << 8) | (kept(kind) & 1)] {
+        for mask in [1u32 << 10, 1 << 31, (1 << 10) | (kept(kind) & 1)] {
             let mut tail = mask.to_be_bytes().to_vec();
             tail.extend_from_slice(&[0; 8]);
             let file = with_tail(kind, &tail);
@@ -319,42 +427,43 @@ fn an_unknown_bit_is_an_unknown_kind_and_an_empty_mask_is_damage() {
 #[test]
 fn a_parameter_of_another_object_type_is_refused() {
     for kind in REPORTERS {
-        for bit in (0..8).map(|bit| 1u32 << bit) {
+        for bit in (0..10).map(|bit| 1u32 << bit) {
             if kept(kind) & bit != 0 {
                 continue;
             }
-            let error = encode(kind, holding(bit)).unwrap_err();
+            let error = encode(kind, holding(kind, bit)).unwrap_err();
             assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange, "{kind}");
             let what = format!("bit {bit:#x}");
-            assert_a_newer_builds(oid(kind), &with_tail(kind, &tail(bit)), &what);
+            assert_a_newer_builds(oid(kind), &with_tail(kind, &tail(kind, bit)), &what);
             let mask_only = with_tail(kind, &bit.to_be_bytes());
             assert_a_newer_builds(oid(kind), &mask_only, &what);
             let beside = bit | (kept(kind) & 1);
-            assert_a_newer_builds(oid(kind), &with_tail(kind, &tail(beside)), &what);
+            let file = with_tail(kind, &tail(kind, beside));
+            assert_a_newer_builds(oid(kind), &file, &what);
         }
     }
 }
 
-/// The build before this one (#2331 PR 2) refuses a file with a set bit
+/// The build before this one (#2331 PR 3) refuses a file with a set bit
 /// outside what it kept for the object's type as an unknown kind, at the
 /// mask. Every file this build writes that the older one couldn't have is
-/// such a file: kind 6 with a mask holding a bit the older build didn't
-/// keep for the type. This build's reader, standing where the older one
-/// stood (a type it keeps none of the rows for), refuses the same tail the
-/// same way. An analog file, which the older build wrote too, has no such
-/// bit.
+/// such a file: kind 6 for an Access Door or an Access Zone, for which the
+/// older build kept no row, so any mask at all is outside its rows, a mask
+/// of the two delays included. This build's reader, standing where the
+/// older one stood (a type it keeps none of the rows for), refuses the same
+/// tail the same way, before a row is read: with the mask alone, too. An
+/// analog, binary or multi-state file, which the older build wrote too, has
+/// no such bit.
 #[test]
 fn the_build_before_refuses_what_only_this_build_writes_as_an_unknown_kind() {
     let stand_ins = REPORTERS.into_iter().filter(|kind| kept(*kind) == 0);
+    assert_eq!(stand_ins.clone().count(), 2, "the two enrollments");
     for kind in REPORTERS {
         let new = kept(kind) & !kept_before(kind);
-        assert_eq!(
-            new == 0,
-            ANALOG.contains(&kind) || kept(kind) == 0,
-            "{kind}"
-        );
-        for mask in (1..=0xFFu32).filter(|mask| mask & !kept(kind) == 0) {
-            let octets = encode(kind, holding(mask)).unwrap();
+        let access = matches!(kind, ObjectType::ACCESS_DOOR | ObjectType::ACCESS_ZONE);
+        assert_eq!(new != 0, access, "{kind}");
+        for mask in (1..=ALL).filter(|mask| mask & !kept(kind) == 0) {
+            let octets = encode(kind, holding(kind, mask)).unwrap();
             let plain = encode(kind, AlgorithmWriteConfig::default()).unwrap();
             assert_eq!(octets[12], write_config::KIND_REPORTING_PARAMETERS);
             let written = u32::from_be_bytes(octets[plain.len()..][..4].try_into().unwrap());
@@ -366,8 +475,11 @@ fn the_build_before_refuses_what_only_this_build_writes_as_an_unknown_kind() {
                 continue;
             }
             for stand_in in stand_ins.clone() {
+                let what = format!("{kind} {mask:#x}");
                 let file = with_tail(stand_in, &octets[plain.len()..]);
-                assert_a_newer_builds(oid(stand_in), &file, &format!("{kind} {mask:#x}"));
+                assert_a_newer_builds(oid(stand_in), &file, &what);
+                let mask_only = with_tail(stand_in, &mask.to_be_bytes());
+                assert_a_newer_builds(oid(stand_in), &mask_only, &what);
             }
         }
     }

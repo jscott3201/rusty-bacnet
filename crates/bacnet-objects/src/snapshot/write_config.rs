@@ -42,12 +42,18 @@
 //!   and 4 are High_Limit, Low_Limit and Deadband (the four octets of an
 //!   IEEE 754 single each); bit 5 is Limit_Enable (one octet, bit 0 the low
 //!   limit and bit 1 the high); bit 6 is a binary object's Alarm_Value (one
-//!   octet, 0 or 1); bit 7 is a multi-state object's Alarm_Values (a count
-//!   of at most 1,024, then each state in four octets, none of them zero;
-//!   a count past the cap is refused before a state is read, and the count
-//!   fixes the row's length, so a row cut short or going on is refused
-//!   too). [`keeps_parameter`] names the parameters
-//!   each object type keeps. [`encode`] writes this kind only for a
+//!   octet, 0 or 1); bit 7 is Alarm_Values as a list of states (a count of
+//!   at most 1,024, then each state in four octets; a count past the cap is
+//!   refused before a state is read, and the count fixes the row's length,
+//!   so a row cut short or going on is refused too); bits 8 and 9 are an
+//!   Access Door's Fault_Values and Masked_Alarm_Values, in the form of
+//!   bit 7. What a listed state may be is the rule of the object type the
+//!   file's header names: on a multi-state object any state but zero, and
+//!   on an Access Door or an Access Zone a member of the type's
+//!   enumeration, named or proprietary, other than NORMAL. A file is
+//!   opened for one object and refused for another, so its lists are
+//!   never read under another type's rule. [`keeps_parameter`] names the
+//!   parameters each object type keeps. [`encode`] writes this kind only for a
 //!   snapshot holding a parameter, so one without keeps kind 4, octet for
 //!   octet, and a build that predates kind 6 refuses a file with one as an
 //!   unknown kind. A later parameter takes the next bit, and a later build

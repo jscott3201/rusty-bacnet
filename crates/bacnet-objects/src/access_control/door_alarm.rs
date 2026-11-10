@@ -80,15 +80,28 @@ impl DoorAlarmLists {
         !self.masked_alarm_values.is_empty()
     }
 
-    /// Replace Fault_Values, checked as a network write would be.
-    pub(super) fn set_fault_values(&mut self, values: Vec<u32>) -> Result<(), Error> {
-        self.fault_values = checked_raw_list(values, LISTED_STATES)?;
+    /// Replace Fault_Values, checked as a network write would be. With
+    /// `kept`, storage holds a list a write saved: the argument is checked
+    /// and the saved list stays (#2331).
+    pub(super) fn set_fault_values(&mut self, values: Vec<u32>, kept: bool) -> Result<(), Error> {
+        let values = checked_raw_list(values, LISTED_STATES)?;
+        if !kept {
+            self.fault_values = values;
+        }
         Ok(())
     }
 
-    /// Replace Masked_Alarm_Values, checked as a network write would be.
-    pub(super) fn set_masked_alarm_values(&mut self, values: Vec<u32>) -> Result<(), Error> {
-        self.masked_alarm_values = checked_raw_list(values, LISTED_STATES)?;
+    /// Replace Masked_Alarm_Values, as [`Self::set_fault_values`] does its
+    /// list.
+    pub(super) fn set_masked_alarm_values(
+        &mut self,
+        values: Vec<u32>,
+        kept: bool,
+    ) -> Result<(), Error> {
+        let values = checked_raw_list(values, LISTED_STATES)?;
+        if !kept {
+            self.masked_alarm_values = values;
+        }
         Ok(())
     }
 
@@ -120,6 +133,44 @@ impl DoorAlarmLists {
             _ => return None,
         };
         Some(enumerated_list(array_index, value, LISTED_STATES).map(|values| *list = values))
+    }
+}
+
+/// The two lists as event algorithm parameters a door keeping its reporting
+/// settings saves (#2331), beside the Alarm_Values its
+/// `ChangeOfStateReporting` holds.
+#[cfg(feature = "event-reporting")]
+impl DoorAlarmLists {
+    /// Lend both lists to `rows`.
+    pub(super) fn lend_parameters(&self, rows: &mut crate::write_config::AlgorithmWriteConfig) {
+        rows.fault_values = Some(self.fault_values.clone());
+        rows.masked_alarm_values = Some(self.masked_alarm_values.clone());
+    }
+
+    /// Take the lists `saved` holds, as a write of each stores it. The
+    /// door settles its Door_Alarm_State afterwards, as it does after such
+    /// a write.
+    pub(super) fn restore_parameters(&mut self, saved: &crate::write_config::AlgorithmWriteConfig) {
+        if let Some(values) = &saved.fault_values {
+            self.fault_values.clone_from(values);
+        }
+        if let Some(values) = &saved.masked_alarm_values {
+            self.masked_alarm_values.clone_from(values);
+        }
+    }
+
+    /// What `write`, of Fault_Values or Masked_Alarm_Values, leaves of
+    /// `rows`, or the refusal [`Self::write`] gives it: that write, made on
+    /// lists holding `rows`. `None` for any other property.
+    pub(super) fn parameter_after(
+        &self,
+        rows: &mut crate::write_config::AlgorithmWriteConfig,
+        write: &crate::durable::PendingWrite,
+    ) -> Option<Result<(), Error>> {
+        let mut scratch = Self::default();
+        scratch.restore_parameters(rows);
+        let result = scratch.write(write.property, write.array_index, &write.value)?;
+        Some(result.map(|()| scratch.lend_parameters(rows)))
     }
 }
 

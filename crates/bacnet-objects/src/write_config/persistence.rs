@@ -96,12 +96,22 @@ pub struct AlgorithmWriteConfig {
     pub limit_enable: Option<LimitEnable>,
     /// Alarm_Value of a Binary Input or Value: INACTIVE or ACTIVE.
     pub alarm_value: Option<BinaryPV>,
-    /// Alarm_Values of a Multi-state Input or Value, in list order: at most
-    /// 1,024 states, as a write is, none of them zero. A state past the
-    /// object's Number_Of_States, which a write refuses, is restored as
-    /// stored: the state count isn't kept. A written empty list is kept as
-    /// one.
+    /// Alarm_Values, in list order: at most 1,024 states, as a write is. A
+    /// written empty list is kept as one.
+    ///
+    /// On a Multi-state Input or Value none of them is zero. A state past
+    /// the object's Number_Of_States, which a write refuses, is restored as
+    /// stored: the state count isn't kept.
+    ///
+    /// On an Access Door each is a BACnetDoorAlarmState and on an Access
+    /// Zone a BACnetAccessZoneOccupancyState, as its raw value: a named
+    /// state or a proprietary one, and never NORMAL, as a write is held to.
     pub alarm_values: Option<Vec<u32>>,
+    /// Fault_Values of an Access Door, held to what its Alarm_Values is.
+    pub fault_values: Option<Vec<u32>>,
+    /// Masked_Alarm_Values of an Access Door, held to what its
+    /// Alarm_Values is.
+    pub masked_alarm_values: Option<Vec<u32>>,
 }
 
 /// What a Timer keeps across a restart.

@@ -30,8 +30,19 @@ mod on {
     pub(super) const ANALOG: &[T] = &[T::ANALOG_INPUT, T::ANALOG_OUTPUT, T::ANALOG_VALUE];
     /// The one alarm value of CHANGE_OF_STATE on a Binary Input or Value.
     pub(super) const BINARY: &[T] = &[T::BINARY_INPUT, T::BINARY_VALUE];
-    /// The alarm states of CHANGE_OF_STATE on a Multi-state Input or Value.
-    pub(super) const MULTI_STATE: &[T] = &[T::MULTI_STATE_INPUT, T::MULTI_STATE_VALUE];
+    /// The two lists only an Access Door has: Fault_Values and
+    /// Masked_Alarm_Values.
+    pub(super) const DOOR: &[T] = &[T::ACCESS_DOOR];
+    /// Alarm_Values as a list of states: a Multi-state Input or Value's
+    /// state numbers, an Access Door's door alarm states and an Access
+    /// Zone's occupancy states. One property and one row; what an entry
+    /// may be is the type's own rule (`stored::states`).
+    pub(super) const LISTED: &[T] = &[
+        T::MULTI_STATE_INPUT,
+        T::MULTI_STATE_VALUE,
+        T::ACCESS_DOOR,
+        T::ACCESS_ZONE,
+    ];
     /// The types whose two time delays are properties of their own: those
     /// above, and the Binary and Multi-state Output, which run
     /// COMMAND_FAILURE.
@@ -45,13 +56,16 @@ mod on {
         T::MULTI_STATE_INPUT,
         T::MULTI_STATE_OUTPUT,
         T::MULTI_STATE_VALUE,
+        T::ACCESS_DOOR,
+        T::ACCESS_ZONE,
     ];
 }
 
 /// How a parameter's value is stored. Each module has `put`, which appends
 /// a value's octets, `get`, which reads them back, and `invalid`, which
-/// says why a value is one no write leaves.
+/// says why a value is one no write to an object of the given type leaves.
 mod stored {
+    use bacnet_types::enums::ObjectType;
     use bytes::BytesMut;
 
     use super::{Reader, SnapshotError};
@@ -59,7 +73,7 @@ mod stored {
     /// An Unsigned of 32 bits, as the objects hold a time delay: four
     /// octets.
     pub(super) mod unsigned {
-        use super::{BytesMut, Reader, SnapshotError};
+        use super::{BytesMut, ObjectType, Reader, SnapshotError};
 
         pub(in super::super) fn put(value: &u32, body: &mut BytesMut) {
             body.extend_from_slice(&value.to_be_bytes());
@@ -69,14 +83,14 @@ mod stored {
             reader.u32()
         }
 
-        pub(in super::super) fn invalid(_: &u32) -> Option<&'static str> {
+        pub(in super::super) fn invalid(_: &u32, _: ObjectType) -> Option<&'static str> {
             None
         }
     }
 
     /// A limit: the four octets of an IEEE 754 single, finite.
     pub(super) mod limit {
-        use super::{BytesMut, Reader, SnapshotError};
+        use super::{BytesMut, ObjectType, Reader, SnapshotError};
 
         pub(in super::super) fn put(value: &f32, body: &mut BytesMut) {
             body.extend_from_slice(&value.to_bits().to_be_bytes());
@@ -86,17 +100,18 @@ mod stored {
             Ok(f32::from_bits(reader.u32()?))
         }
 
-        pub(in super::super) fn invalid(value: &f32) -> Option<&'static str> {
+        pub(in super::super) fn invalid(value: &f32, _: ObjectType) -> Option<&'static str> {
             (!value.is_finite()).then_some("holds a limit or deadband that isn't finite")
         }
     }
 
     /// Deadband: a limit that isn't negative either.
     pub(super) mod deadband {
+        use super::ObjectType;
         pub(in super::super) use super::limit::{get, put};
 
-        pub(in super::super) fn invalid(value: &f32) -> Option<&'static str> {
-            super::limit::invalid(value)
+        pub(in super::super) fn invalid(value: &f32, kind: ObjectType) -> Option<&'static str> {
+            super::limit::invalid(value, kind)
                 .or_else(|| (*value < 0.0).then_some("holds a negative Deadband"))
         }
     }
@@ -105,7 +120,7 @@ mod stored {
     pub(super) mod limit_enable {
         use bacnet_types::bitstring::LimitEnable;
 
-        use super::{BytesMut, Reader, SnapshotError};
+        use super::{BytesMut, ObjectType, Reader, SnapshotError};
 
         pub(in super::super) fn put(value: &LimitEnable, body: &mut BytesMut) {
             body.extend_from_slice(&[value.bits()]);
@@ -115,7 +130,10 @@ mod stored {
             Ok(LimitEnable::from_bits_retain(reader.u8()?))
         }
 
-        pub(in super::super) fn invalid(value: &LimitEnable) -> Option<&'static str> {
+        pub(in super::super) fn invalid(
+            value: &LimitEnable,
+            _: ObjectType,
+        ) -> Option<&'static str> {
             LimitEnable::from_bits(value.bits())
                 .is_none()
                 .then_some("holds unknown Limit_Enable bits")
@@ -126,7 +144,7 @@ mod stored {
     pub(super) mod binary_pv {
         use bacnet_types::enums::BinaryPV;
 
-        use super::{BytesMut, Reader, SnapshotError};
+        use super::{BytesMut, ObjectType, Reader, SnapshotError};
 
         pub(in super::super) fn put(value: &BinaryPV, body: &mut BytesMut) {
             // `invalid` has refused a value past one octet.
@@ -137,21 +155,35 @@ mod stored {
             Ok(BinaryPV::from_raw(u32::from(reader.u8()?)))
         }
 
-        pub(in super::super) fn invalid(value: &BinaryPV) -> Option<&'static str> {
+        pub(in super::super) fn invalid(value: &BinaryPV, _: ObjectType) -> Option<&'static str> {
             (value.to_raw() > BinaryPV::ACTIVE.to_raw())
                 .then_some("holds an Alarm_Value that is neither INACTIVE nor ACTIVE")
         }
     }
 
-    /// A list of a multi-state object's states: a count in four octets, at
-    /// most the 1,024 a write of Alarm_Values may hold
-    /// ([`MAX_ALARM_VALUES`](crate::multistate::MAX_ALARM_VALUES)), then
-    /// each state in four octets, none of them zero. The count says how
-    /// long the row is, so a row cut short doesn't read as a shorter list,
-    /// and one going on past its count leaves octets the body's end
-    /// refuses.
+    /// A list of states: a count in four octets, at most the 1,024 a write
+    /// of such a list may hold
+    /// ([`MAX_ALARM_VALUES`](crate::multistate::MAX_ALARM_VALUES), the cap
+    /// of every object type that has one), then each state in four octets.
+    /// The count says how long the row is, so a row cut short doesn't read
+    /// as a shorter list, and one going on past its count leaves octets the
+    /// body's end refuses.
+    ///
+    /// The octets are the same on every type; what a state may be is the
+    /// rule of the object's type, which [`invalid`](states::invalid) is
+    /// handed:
+    ///
+    /// - a multi-state object's state number is any but zero (the object's
+    ///   own Number_Of_States isn't kept, so it is no part of the rule);
+    /// - an Access Door's or Access Zone's is a member of its enumeration,
+    ///   named or proprietary, other than NORMAL, by the check its writes
+    ///   run ([`listed_states`](crate::access_control::listed_states)).
+    ///
+    /// The type is the one in the file's header: a file is opened for one
+    /// object identifier and refused for any other, so a list is never
+    /// read under another type's rule.
     pub(super) mod states {
-        use super::{BytesMut, Reader, SnapshotError};
+        use super::{BytesMut, ObjectType, Reader, SnapshotError};
         use crate::multistate::MAX_ALARM_VALUES;
         use crate::prelude::Vec;
 
@@ -175,13 +207,19 @@ mod stored {
                 .collect())
         }
 
-        pub(in super::super) fn invalid(values: &[u32]) -> Option<&'static str> {
+        pub(in super::super) fn invalid(values: &[u32], kind: ObjectType) -> Option<&'static str> {
             if values.len() > MAX_ALARM_VALUES {
-                return Some("holds more Alarm_Values than an object takes");
+                return Some("holds a longer list of states than an object takes");
             }
-            values
-                .contains(&0)
-                .then_some("holds an Alarm_Values state of zero")
+            match crate::access_control::listed_states(kind) {
+                Some(listed) => values
+                    .iter()
+                    .any(|state| !listed.admits(*state))
+                    .then_some("holds a state its list doesn't take on this object type"),
+                None => values
+                    .contains(&0)
+                    .then_some("holds an Alarm_Values state of zero"),
+            }
         }
     }
 }
@@ -241,8 +279,16 @@ macro_rules! rows {
             })*
         }
 
+        /// Every row: its bit and its property, in bit order. A test that
+        /// walks the table (the detector side isn't made from it) reads it
+        /// here.
+        #[cfg(test)]
+        pub(crate) const ROWS: &[(u32, P)] = &[$((bit::$name, P::$name)),*];
+
         /// The mask bit of `property`, if it is a parameter this build
-        /// keeps for some object type.
+        /// keeps for some object type. A property has one bit on every
+        /// type that keeps it; where the types differ in what its value
+        /// may be, the row's `stored` module is handed the type.
         pub(crate) fn bit_of(property: P) -> Option<u32> {
             match property {
                 $(P::$name => Some(bit::$name),)*
@@ -260,12 +306,16 @@ macro_rules! rows {
             mask
         }
 
-        /// Why a parameter of `config` holds a value no write leaves.
-        fn invalid_value(config: &AlgorithmWriteConfig) -> Option<&'static str> {
+        /// Why a parameter of `config` holds a value no write to an object
+        /// of `object_type` leaves.
+        fn invalid_value(
+            config: &AlgorithmWriteConfig,
+            object_type: ObjectType,
+        ) -> Option<&'static str> {
             $(if let Some(reason) = config
                 .$field
                 .as_ref()
-                .and_then(|value| stored::$stored::invalid(value))
+                .and_then(|value| stored::$stored::invalid(value, object_type))
             {
                 return Some(reason);
             })*
@@ -309,9 +359,13 @@ rows! {
     limit_enable: LIMIT_ENABLE = 1 << 5, limit_enable, on::ANALOG;
     /// Alarm_Value of a binary object: one octet, 0 or 1.
     alarm_value: ALARM_VALUE = 1 << 6, binary_pv, on::BINARY;
-    /// Alarm_Values of a multi-state object: a count in four octets, then
-    /// each state in four.
-    alarm_values: ALARM_VALUES = 1 << 7, states, on::MULTI_STATE;
+    /// Alarm_Values of a multi-state object, an Access Door or an Access
+    /// Zone: a count in four octets, then each state in four.
+    alarm_values: ALARM_VALUES = 1 << 7, states, on::LISTED;
+    /// Fault_Values of an Access Door, as Alarm_Values.
+    fault_values: FAULT_VALUES = 1 << 8, states, on::DOOR;
+    /// Masked_Alarm_Values of an Access Door, as Alarm_Values.
+    masked_alarm_values: MASKED_ALARM_VALUES = 1 << 9, states, on::DOOR;
 }
 
 /// Whether objects of `object_type` keep a written `property` as an event
@@ -320,11 +374,13 @@ rows! {
 /// (#2331):
 ///
 /// - Time_Delay and Time_Delay_Normal on the analog, binary and multi-state
-///   Input, Output and Value objects;
+///   Input, Output and Value objects, Access Door and Access Zone;
 /// - High_Limit, Low_Limit, Deadband and Limit_Enable on the three analog
 ///   ones;
 /// - Alarm_Value on a Binary Input or Value;
-/// - Alarm_Values on a Multi-state Input or Value.
+/// - Alarm_Values on a Multi-state Input or Value, an Access Door and an
+///   Access Zone;
+/// - Fault_Values and Masked_Alarm_Values on an Access Door.
 ///
 /// A file holding a parameter the object's type doesn't keep here is
 /// refused as an unknown kind: a later build may keep it.
@@ -335,11 +391,13 @@ pub fn keeps_parameter(object_type: ObjectType, property: P) -> bool {
 /// Why `config` holds what no write to an object of `object_type` leaves: a
 /// parameter the type doesn't keep, a limit or deadband that isn't finite,
 /// a negative deadband, Limit_Enable bits past its two, an Alarm_Value past
-/// ACTIVE, or Alarm_Values past the 1,024 a write may hold or naming state
-/// zero. The object refuses each on the wire, so storage holding one is
-/// refused too. A state past the object's own Number_Of_States is no
-/// such value: the count isn't kept, so the object takes the list as it
-/// was written.
+/// ACTIVE, or a list of states past the 1,024 a write may hold or naming a
+/// state the type's lists don't take (zero on a multi-state object; NORMAL
+/// or a value outside the enumeration on an Access Door or Zone). The
+/// object refuses each on the wire, so storage holding one is refused too.
+/// A state past a multi-state object's own Number_Of_States is no such
+/// value: the count isn't kept, so the object takes the list as it was
+/// written.
 pub(crate) fn invalid(
     object_type: ObjectType,
     config: &AlgorithmWriteConfig,
@@ -347,7 +405,7 @@ pub(crate) fn invalid(
     if mask(config) & !kept(object_type) != 0 {
         return Some(UNKEPT);
     }
-    invalid_value(config)
+    invalid_value(config, object_type)
 }
 
 /// Append `config`'s parameters for an object of `object_type`: the mask,
@@ -391,7 +449,7 @@ impl Reader<'_> {
             ));
         }
         let config = self.rows(mask)?;
-        match invalid_value(&config) {
+        match invalid_value(&config, object_type) {
             Some(reason) => Err(SnapshotError::damaged(reason)),
             None => Ok(config),
         }
