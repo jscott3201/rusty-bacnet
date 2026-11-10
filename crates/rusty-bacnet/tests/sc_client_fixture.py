@@ -72,8 +72,12 @@ class TcpRelay:
         pumps = []
         try:
             await connection.gate.wait()
+            # The hubs under test listen on 127.0.0.1 only. Resolving
+            # "localhost" tries ::1 first, and on Windows that refused
+            # connect costs about 2 s before IPv4 is tried (#2397).
+            host = self.target.hostname
             other, connection.upstream = await asyncio.open_connection(
-                self.target.hostname, self.target.port)
+                "127.0.0.1" if host == "localhost" else host, self.target.port)
 
             async def copy(source, destination):
                 while data := await source.read(65536):
