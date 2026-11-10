@@ -161,17 +161,29 @@ impl Default for Npdu {
 /// DNET of 0, an SNET of 0 or 0xFFFF, an empty SADR, or a DADR or SADR past
 /// [`MAX_MAC_LEN`].
 pub fn encode_npdu(buf: &mut BytesMut, npdu: &Npdu) -> Result<(), Error> {
-    let view = npdu.view();
-    let start = buf.len();
-    buf.resize(start + view.encoded_len(), 0);
-    match view.encode_into(&mut buf[start..]) {
-        Ok(_) => Ok(()),
-        Err(refused) => {
-            buf.truncate(start);
-            Err(encode_error(npdu, refused))
+    // The view's encoder writes into a slice, and `buf` can only offer one
+    // by first filling the whole NPDU's length with zeros. So the view
+    // encodes the control information alone, into a buffer on the stack,
+    // and `buf` takes that and the payload as two appends (#2334).
+    let mut header = npdu.view();
+    header.payload = &[];
+    let mut staged = [0; MAX_HEADER_LEN];
+    match header.encode_into(&mut staged) {
+        Ok(length) => {
+            // One reservation for both appends, as one resize made.
+            buf.reserve(length + npdu.payload.len());
+            buf.extend_from_slice(&staged[..length]);
+            buf.extend_from_slice(&npdu.payload);
+            Ok(())
         }
+        Err(refused) => Err(encode_error(npdu, refused)),
     }
 }
+
+/// The longest control information an NPDU has: the version and control
+/// octets, a DNET, DLEN and DADR, an SNET, SLEN and SADR, the hop count, and
+/// a proprietary message type with its vendor ID.
+const MAX_HEADER_LEN: usize = 2 + 2 * (3 + MAX_MAC_LEN) + 1 + 3;
 
 /// An encoder refusal as a static [`Error::Range`] naming the field it
 /// concerns, formatted only when displayed (#1777).
@@ -198,7 +210,8 @@ fn encode_error(npdu: &Npdu, refused: EncodeError) -> Error {
             };
             RangeError::new(label).with_values(address.mac_address.len() as u64, MAX_MAC_LEN as u64)
         }
-        // The buffer is sized to the NPDU, so nothing else is refused.
+        // The staging buffer holds the longest control information, so
+        // nothing else is refused.
         _ => RangeError::new("NPDU encoding refused"),
     }
     .into()
@@ -397,6 +410,9 @@ mod address_bound_tests;
 
 #[cfg(test)]
 mod direct_decode_tests;
+
+#[cfg(test)]
+mod encode_append_tests;
 
 #[cfg(test)]
 mod tests {
