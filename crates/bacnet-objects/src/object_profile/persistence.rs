@@ -13,21 +13,24 @@ use crate::durable::file::ObjectFile;
 #[cfg(feature = "std")]
 use crate::snapshot::tags as format;
 
-/// The body after the header, checked as a write is ([`crate::snapshot::tags`]).
-pub(super) use crate::snapshot::tags::encode_body as encode_snapshot;
-
 /// Maximum complete persisted Tags representation, including its 12-byte
 /// identity/version header and presence octet: 1 MiB. This opt-in storage
 /// bound does not apply to memory-only objects and is not a BACnet limit.
 pub const MAX_TAGS_SNAPSHOT_BYTES: usize = 1024 * 1024;
 
 /// The last successfully written Tags array, independent of whether the
-/// application currently provisions the row.
+/// application currently provisions the row, and, on the object types that
+/// keep it here, the last written Description.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TagsSnapshot {
     /// `None` means no saved write. `Some([])` is a saved empty array and
     /// overrides configured Tags when the application provisions the row.
     pub tags: Option<Vec<BACnetNameValue>>,
+    /// Description, once a write has set it (#2364), at most 16 KiB of
+    /// UTF-8; `None` until then. A Device, a Lighting Output and a Binary
+    /// Lighting Output keep theirs here. Every other object saves `None`
+    /// and refuses storage that holds one.
+    pub description: Option<String>,
 }
 
 /// Application-owned storage shared by all objects supporting durable Tags.

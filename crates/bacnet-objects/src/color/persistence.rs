@@ -19,6 +19,11 @@
 //! next start (`set_default_color` and `set_default_color_temperature` then
 //! check their argument without taking it).
 //!
+//! A Description a peer writes is kept with them (#2364), saved before it
+//! is answered and refused when the save fails, as a default write is. Its
+//! `clear_written_description` drops the saved one;
+//! `clear_written_default` leaves it alone.
+//!
 //! Unlike a Notification Class's Recipient_List, a Present_Value change
 //! doesn't wait for its save, and a save that fails doesn't refuse it: the
 //! value is a live output, which a command, a fade's STOP or the start of
@@ -32,6 +37,7 @@
 #[cfg(feature = "std")]
 use std::path::Path;
 
+use crate::prelude::*;
 use bacnet_types::constructed::BACnetXyColor;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
@@ -69,7 +75,7 @@ impl ColorOutputValue {
 }
 
 /// What a Color or Color Temperature object keeps across a restart.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ColorOutputSnapshot {
     /// The last Present_Value the object held, once something drove the
     /// output; `None` before that.
@@ -78,6 +84,9 @@ pub struct ColorOutputSnapshot {
     /// (#1956). `None` until then: the configured default applies at each
     /// start.
     pub default: Option<ColorOutputValue>,
+    /// Description, once a write has set it (#2364), at most 16 KiB of
+    /// UTF-8; `None` until then.
+    pub description: Option<String>,
 }
 
 /// Application-owned storage for one colour object's Present_Value.
@@ -97,11 +106,12 @@ pub trait ColorOutputPersistence: Send + Sync {
     fn save(&self, object: ObjectIdentifier, snapshot: &ColorOutputSnapshot) -> Result<(), Error>;
 }
 
-/// A file holding one colour object's Present_Value and written default,
-/// replaced whole on each save the same way as
+/// A file holding one colour object's Present_Value, written default and
+/// written Description, replaced whole on each save the same way as
 /// [`FileNotificationClassPersistence`]: a failed save leaves the previous
 /// file in place, and a completed one survives a power loss. A file of the
-/// previous version (`RBNCLR01`) loads with no default. It does not
+/// first version (`RBNCLR01`) loads with no default, and only a file
+/// holding a Description takes the newest (`RBNCLR03`). It does not
 /// coordinate between processes.
 ///
 /// [`FileNotificationClassPersistence`]: crate::notification_class::FileNotificationClassPersistence

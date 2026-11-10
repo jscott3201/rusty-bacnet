@@ -28,21 +28,26 @@ impl Memory {
         Arc::new(Self(Mutex::new(Some(ColorOutputSnapshot {
             present_value: Some(value),
             default: None,
+            description: None,
         }))))
     }
 
     fn held(&self) -> Option<ColorOutputValue> {
-        self.0.lock().unwrap().and_then(|saved| saved.present_value)
+        self.0
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|saved| saved.present_value)
     }
 }
 
 impl ColorOutputPersistence for Memory {
     fn load(&self, _object: ObjectIdentifier) -> Result<Option<ColorOutputSnapshot>, Error> {
-        Ok(*self.0.lock().unwrap())
+        Ok(self.0.lock().unwrap().clone())
     }
 
     fn save(&self, _object: ObjectIdentifier, snapshot: &ColorOutputSnapshot) -> Result<(), Error> {
-        *self.0.lock().unwrap() = Some(*snapshot);
+        *self.0.lock().unwrap() = Some(snapshot.clone());
         Ok(())
     }
 }

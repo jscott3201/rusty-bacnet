@@ -1,5 +1,6 @@
-//! A colour output's Present_Value and written default, for the Color and
-//! Color Temperature objects (`RBNCLR02`; `RBNCLR01` still loads), as
+//! A colour output's Present_Value, written default and written
+//! Description, for the Color and Color Temperature objects (`RBNCLR02`,
+//! and `RBNCLR03` with a Description; `RBNCLR01` still loads), as
 //! `FileColorOutputPersistence` (with std) writes its file.
 //!
 //! After the magic tag and the four-octet object identifier, one octet
@@ -10,6 +11,13 @@
 //! ([`MAGIC_V1`]) holds the kind octet and Present_Value alone, with no
 //! presence octet, and loads with no default. Every value must be one the
 //! object could hold (a default may also be a temperature of 0).
+//!
+//! A file holding a written Description (#2364) takes version 3's tag,
+//! [`MAGIC_WITH_DESCRIPTION`]: the Description, its length in four
+//! big-endian octets and then at most 16 KiB of UTF-8, comes between the
+//! header and version 2's body. [`encode`] writes version 2 for a snapshot
+//! without one, so its octets don't change, and a build that reads only
+//! versions 1 and 2 refuses version 3 as an unknown version.
 
 use crate::prelude::*;
 use bacnet_types::constructed::BACnetXyColor;
@@ -19,9 +27,13 @@ use bacnet_types::primitives::ObjectIdentifier;
 use super::framing;
 use super::{SnapshotError, SnapshotErrorKind};
 use crate::color::{ColorOutputSnapshot, ColorOutputValue};
+use crate::write_config::description::MAX_OCTETS as MAX_DESCRIPTION_OCTETS;
 
-/// The format's tag: version 2, which keeps a written default too (#1956).
+/// The format's tag: version 2, which keeps a written default too (#1956),
+/// for a snapshot without a written Description.
 pub const MAGIC: [u8; 8] = *b"RBNCLR02";
+/// Version 3's tag, for a snapshot with a written Description (#2364).
+pub const MAGIC_WITH_DESCRIPTION: [u8; 8] = *b"RBNCLR03";
 /// Version 1's tag, which [`decode`] still reads and [`encode`] never
 /// writes.
 pub const MAGIC_V1: [u8; 8] = *b"RBNCLR01";
@@ -30,15 +42,16 @@ pub const KIND_XY: u8 = 1;
 /// The kind octet of a colour temperature.
 pub const KIND_KELVIN: u8 = 2;
 /// The most octets a file may take: a kind octet and two values of two
-/// REALs each, with their presence octets, come to well under it.
-pub const MAX_LEN: usize = 64;
+/// REALs each, with their presence octets, come to well under 64, and a
+/// Description takes its four length octets and at most 16 KiB.
+pub const MAX_LEN: usize = 64 + 4 + MAX_DESCRIPTION_OCTETS;
 
 /// The file octets for `snapshot`, saved for `object`.
 ///
 /// The kind follows the values, or with neither, the object's type.
 /// Refuses ([`OutOfRange`](super::SnapshotErrorKind::OutOfRange)) a colour
-/// and a temperature in one snapshot, and a value the object couldn't hold:
-/// what [`decode`] would refuse.
+/// and a temperature in one snapshot, a value the object couldn't hold and
+/// a Description past 16 KiB: what [`decode`] would refuse.
 pub fn encode(
     object: ObjectIdentifier,
     snapshot: &ColorOutputSnapshot,
@@ -48,9 +61,10 @@ pub fn encode(
 
 /// The snapshot a file's `octets` hold for `object`.
 ///
-/// Refuses octets past [`MAX_LEN`], without either version's tag, saved for
-/// another object, of an unknown kind, of the wrong size, or holding a value
-/// the object couldn't hold.
+/// Refuses octets past [`MAX_LEN`], without a tag of versions 1 to 3, saved
+/// for another object, of an unknown kind, of the wrong size, holding a
+/// value the object couldn't hold, or with a Description cut short, past
+/// 16 KiB or not UTF-8.
 pub fn decode(
     object: ObjectIdentifier,
     octets: &[u8],
@@ -92,7 +106,12 @@ fn encode_file(
             }
         }
     }
-    Ok(framing::seal(&MAGIC, object, &body))
+    framing::seal_described(
+        (&MAGIC, &MAGIC_WITH_DESCRIPTION),
+        object,
+        snapshot.description.as_deref(),
+        &body,
+    )
 }
 
 fn in_range(snapshot: &ColorOutputSnapshot) -> bool {
@@ -106,7 +125,15 @@ fn decode_file(
     object: ObjectIdentifier,
     octets: &[u8],
 ) -> Result<ColorOutputSnapshot, SnapshotError> {
-    let (previous, body) = framing::open(octets, &MAGIC, Some(&MAGIC_V1), MAX_LEN, object)?;
+    // Version 3 is version 2's body behind a Description.
+    let (description, previous, body) = if octets.starts_with(&MAGIC_WITH_DESCRIPTION) {
+        let tags = (&MAGIC, &MAGIC_WITH_DESCRIPTION);
+        let (description, body) = framing::open_described(octets, tags, MAX_LEN, object)?;
+        (description, false, body)
+    } else {
+        let (previous, body) = framing::open(octets, &MAGIC, Some(&MAGIC_V1), MAX_LEN, object)?;
+        (None, previous, body)
+    };
     let no_value = SnapshotError::damaged("holds no valid value");
     let Some((&kind, rest)) = body.split_first() else {
         return Err(SnapshotError::truncated("holds no valid value"));
@@ -135,6 +162,7 @@ fn decode_file(
         ColorOutputSnapshot {
             present_value: Some(value(rest)),
             default: None,
+            description,
         }
     } else {
         // Each value behind its presence octet, and nothing after them.
@@ -159,6 +187,7 @@ fn decode_file(
         ColorOutputSnapshot {
             present_value,
             default,
+            description,
         }
     };
     if !in_range(&snapshot) {

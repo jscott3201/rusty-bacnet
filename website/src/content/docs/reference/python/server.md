@@ -1119,8 +1119,13 @@ In\_Progress reads NOT\_CONTROLLED until a write drives the output.
 The file keeps a Default\_Color written over the network too, which
 wins over `default_color` at the next start; such a write is
 refused when it can't be saved. `clear_written_default=True` drops
-a saved one first, so `default_color` applies again. A file that
-doesn't load raises BacnetError.
+a saved one first, so `default_color` applies again. The file
+keeps a Description a client writes as well, across restarts: it is
+saved before the write is answered, refused with DEVICE /
+OPERATIONAL\_PROBLEM when it can't be, and refused with RESOURCES /
+NO\_SPACE\_TO\_WRITE\_PROPERTY past 16 KiB. `clear_written_default`
+leaves a saved Description in place. A file that doesn't load
+raises BacnetError.
 
 ### BACnetServer.add_color_temperature
 
@@ -1152,7 +1157,7 @@ clamped to them. A value out of range raises BacnetProtocolError.
 `default_color_temperature` (4000 unless given, clamped to the
 limits), `storage_path` and `clear_written_default` work as on
 `add_color`, with 0 keeping the temperature from before the
-restart.
+restart; the file keeps a written Description the same way.
 
 ### BACnetServer.add_channel
 

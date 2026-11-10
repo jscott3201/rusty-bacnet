@@ -33,20 +33,21 @@ impl Memory {
         self.held
             .lock()
             .unwrap()
+            .as_ref()
             .and_then(|saved| saved.present_value)
     }
 }
 
 impl ColorOutputPersistence for Memory {
     fn load(&self, _object: ObjectIdentifier) -> Result<Option<ColorOutputSnapshot>, Error> {
-        Ok(*self.held.lock().unwrap())
+        Ok(self.held.lock().unwrap().clone())
     }
 
     fn save(&self, _object: ObjectIdentifier, snapshot: &ColorOutputSnapshot) -> Result<(), Error> {
         if self.refuse.load(std::sync::atomic::Ordering::SeqCst) {
             return Err(Error::Encoding("refused".into()));
         }
-        *self.held.lock().unwrap() = Some(*snapshot);
+        *self.held.lock().unwrap() = Some(snapshot.clone());
         Ok(())
     }
 }

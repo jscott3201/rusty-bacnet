@@ -38,6 +38,8 @@ mod description_durable_tests;
 #[cfg(test)]
 mod description_kept_wire_tests;
 #[cfg(test)]
+mod description_tags_colour_wire_tests;
+#[cfg(test)]
 mod durable_stop_tests;
 #[cfg(test)]
 mod durable_write_wire_tests;

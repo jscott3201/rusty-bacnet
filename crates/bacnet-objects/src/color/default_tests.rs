@@ -27,7 +27,7 @@ struct Memory {
 
 impl Memory {
     fn held(&self) -> Option<ColorOutputSnapshot> {
-        *self.held.lock().unwrap()
+        self.held.lock().unwrap().clone()
     }
 }
 
@@ -41,7 +41,7 @@ impl ColorOutputPersistence for Memory {
             return Err(Error::Encoding("refused".into()));
         }
         self.saves.fetch_add(1, Ordering::SeqCst);
-        *self.held.lock().unwrap() = Some(*snapshot);
+        *self.held.lock().unwrap() = Some(snapshot.clone());
         Ok(())
     }
 }
@@ -159,6 +159,7 @@ fn a_written_default_survives_a_restart() {
         Some(ColorOutputSnapshot {
             present_value: None,
             default: Some(ColorOutputValue::Xy(blue)),
+            description: None
         })
     );
     let mut color = color(&storage);
@@ -253,6 +254,7 @@ fn a_staged_default_is_taken_and_a_waiting_present_value_follows_it() {
         Some(ColorOutputSnapshot {
             present_value: Some(ColorOutputValue::Xy(red())),
             default: Some(ColorOutputValue::Xy(BACnetXyColor::new(0.0, 0.0))),
+            description: None
         })
     );
 }
@@ -280,6 +282,7 @@ fn a_staged_default_never_made_puts_the_served_state_back() {
         Some(ColorOutputSnapshot {
             present_value: Some(ColorOutputValue::Kelvin(3000)),
             default: None,
+            description: None
         })
     );
     assert_eq!(ct.default_color_temperature(), 4000);
@@ -455,6 +458,7 @@ fn a_refused_staged_default_saves_the_present_value_that_waited() {
         Some(ColorOutputSnapshot {
             present_value: Some(ColorOutputValue::Xy(red())),
             default: None,
+            description: None
         })
     );
 }
@@ -487,4 +491,12 @@ fn many_idle_colour_objects_hold_no_writer_threads() {
         objects.iter().all(|(color, _)| color.writer_thread_ended()),
         "an idle object still holds a writer thread"
     );
+}
+
+/// A colour object without output storage pays one pointer for it, however
+/// much a snapshot holds (#2364).
+#[test]
+fn an_object_without_output_storage_pays_one_pointer_for_it() {
+    use core::mem::size_of;
+    assert_eq!(size_of::<saving::OutputStorage>(), size_of::<usize>());
 }

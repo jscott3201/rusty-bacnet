@@ -28,13 +28,14 @@
 //! | [`write_config`] | [`WriteConfigSnapshot`] | `RBNWCF01` | kinds 1 to 5 (2 to 5) | `FileWriteConfigPersistence` |
 //! | [`notification_class`] | [`NotificationClassSnapshot`] | `RBNNCL01` | 1, 2 (1, 2) | `FileNotificationClassPersistence` |
 //! | [`notification_forwarder`] | [`ForwarderSnapshot`] | `RBNFWD01` | 1, 2 (1, 2) | `FileNotificationForwarderPersistence` |
-//! | [`tags`] | [`TagsSnapshot`] | `RBNTAG01` | 1 (1) | `FileTagsPersistence` |
-//! | [`color`] | [`ColorOutputSnapshot`] | `RBNCLR02` | 1 (`RBNCLR01`), 2 (2) | `FileColorOutputPersistence` |
+//! | [`tags`] | [`TagsSnapshot`] | `RBNTAG01` | 1, 2 (1, 2) | `FileTagsPersistence` |
+//! | [`color`] | [`ColorOutputSnapshot`] | `RBNCLR02` | 1 (`RBNCLR01`), 2, 3 (2, 3) | `FileColorOutputPersistence` |
 //! | [`access_rights`] | [`AccessRightsSnapshot`] | `RBNACR01` | 1, 2 (1, 2) | `FileAccessRightsPersistence` |
 //!
 //! A written Description (#2364) takes the newest version (or kind) in each
-//! row it changed: log schema version 3, write configuration kind 5 and the
-//! one-file formats' version 2. Only a snapshot holding one is written that
+//! row it changed: log schema version 3, write configuration kind 5, the
+//! colour output's version 3 and the other one-file formats' version 2.
+//! Only a snapshot holding one is written that
 //! way, so a snapshot without one keeps the octets an earlier release wrote,
 //! and a release that predates the version refuses one with it as
 //! [`UnknownVersion`](SnapshotErrorKind::UnknownVersion) or

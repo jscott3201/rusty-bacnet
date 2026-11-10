@@ -16,12 +16,14 @@ fn floor() -> TagsSnapshot {
             "floor",
             PropertyValue::Unsigned(3),
         )]),
+        description: None,
     }
 }
 
 fn exhaust() -> TagsSnapshot {
     TagsSnapshot {
         tags: Some(vec![BACnetNameValue::semantic("exhaust")]),
+        description: None,
     }
 }
 
