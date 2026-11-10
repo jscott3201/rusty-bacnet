@@ -45,10 +45,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // One budget per object or context, as a natural event would have.
         let mut single_by_object: HashMap<ObjectIdentifier, Vec<CovSubscriptionSnapshot>> =
             HashMap::new();
-        let mut multiple_by_context: HashMap<
+        // Contexts in the order of their keys, as every Multiple fanout
+        // takes them (#2320).
+        let mut multiple_by_context: std::collections::BTreeMap<
             bacnet_device_core::cov::MultipleContextKey,
             Vec<CovSubscriptionSnapshot>,
-        > = HashMap::new();
+        > = std::collections::BTreeMap::new();
         for sub in subs {
             match sub.key().multiple_context() {
                 Some(context) => multiple_by_context

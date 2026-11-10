@@ -8,7 +8,7 @@ use bacnet_device_core::cov::multiple_chunks::{
 use bacnet_device_core::cov::multiple_items::{Coordinate, FieldStamp};
 use bacnet_device_core::cov::multiple_reads::MultipleReads;
 use bacnet_device_core::cov::timed::{FieldTiming, TimedChange};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Fire the initial COVNotificationMultiple for a newly accepted
@@ -59,10 +59,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             return;
         }
 
-        let mut grouped: HashMap<
+        // Contexts report in the order of their keys: by recipient, then
+        // process identifier, unconfirmed before confirmed. A hash map
+        // gave an order that varied from run to run (#2320).
+        let mut grouped: BTreeMap<
             bacnet_device_core::cov::MultipleContextKey,
             Vec<CovSubscriptionSnapshot>,
-        > = HashMap::new();
+        > = BTreeMap::new();
 
         for sub in subscriptions {
             grouped
@@ -239,7 +242,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 // Since when each evaluated untimestamped reference is owed. A
                 // mark taken here without a report to carry it is settled: the
                 // reference had nothing left to report.
-                let owed: HashMap<_, _> = {
+                let owed: BTreeMap<_, _> = {
                     let mut timed = store.lock();
                     evaluated
                         .iter()
@@ -373,7 +376,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 // earlier part (#1008), so every live one is an owner; one
                 // whose latest change the last notification carries times
                 // its field itself.
-                let owners: HashMap<
+                let owners: BTreeMap<
                     Coordinate,
                     (bacnet_device_core::cov::CovSubscriptionKey, u64),
                 > = table
