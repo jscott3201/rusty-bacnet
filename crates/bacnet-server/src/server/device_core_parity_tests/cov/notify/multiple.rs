@@ -64,7 +64,12 @@ impl CovParity {
     /// Both sides under the default policy, the server's database reading
     /// the fixed clock the core's reads.
     async fn start_multiple() -> Self {
-        let cov = Self::start(CovPolicy::default()).await;
+        Self::start_multiple_under(CovPolicy::default()).await
+    }
+
+    /// [`Self::start_multiple`] under `policy`.
+    async fn start_multiple_under(policy: CovPolicy) -> Self {
+        let cov = Self::start(policy).await;
         // Start installs the system clock; serve the fixed one.
         cov.parity
             .server
@@ -268,4 +273,30 @@ async fn a_follow_up_lists_its_items_in_key_order() {
         assert_eq!(cov.answer("Ack", false).await, 0);
         cov.stop().await;
     }
+}
+
+/// Under a spent budget both sides keep back the same contexts and send
+/// the rest in the same order (#2320): two notifications a change for
+/// three contexts, whose turns start from a place that moves per fanout,
+/// by one sequence in the core that both hosts advance.
+#[tokio::test(start_paused = true)]
+async fn a_spent_budget_keeps_back_the_same_contexts_on_both_sides() {
+    let policy = CovPolicy {
+        max_notifications_per_event: 2,
+        ..CovPolicy::default()
+    };
+    let mut cov = CovParity::start_multiple_under(policy).await;
+    let a = direct(1);
+    for process in [2, 3, 1] {
+        let body = multiple(process, false, &[(ai(), false)], Some((300, DELAY)));
+        assert_eq!(cov.exchange("subscribed", &a, MULTIPLE, &body).await.1, 1);
+    }
+    let oos = PropertyValue::Boolean(true);
+    assert_eq!(cov.write("Status_Flags", &a, ai(), OOS, oos).await, 2);
+    for change in 0..8u8 {
+        let value = 30.0 + f32::from(change);
+        assert_eq!(cov.sample("two of three", value, false).await, 2);
+    }
+    cov.same_tables("at the end").await;
+    cov.stop().await;
 }

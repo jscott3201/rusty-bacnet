@@ -188,6 +188,9 @@ pub(crate) const VALUE_MEMORY: usize =
 /// items [`HISTORY_NOTIFICATIONS`] notifications of the local maximum APDU
 /// have (#1357); see the module documentation.
 pub(crate) const CEILING_BYTES_PER_OCTET: usize = 4;
+/// Where [`TimedHistories::next_start`]'s sequence begins: any value but
+/// zero, the one state xorshift never leaves.
+const TURN_SEED: u32 = 0x9E37_79B9;
 /// Earliest the deadline backstop acts after a change, and the least spacing
 /// between its attempts on one blocked context.
 pub(crate) const DEADLINE_FLOOR: Duration = Duration::from_secs(1);
@@ -473,9 +476,9 @@ pub struct TimedHistories {
     /// Earliest the deadline backstop may hand a context out again. Only a
     /// context with a timestamped history has an entry.
     not_before: BTreeMap<MultipleContextKey, Instant>,
-    /// Contexts whose report a spent budget kept back at their last turn,
-    /// the one waiting longest first ([`Self::note_turn`]).
-    waiting: Vec<MultipleContextKey>,
+    /// Where the next fanout over several contexts starts its turns: the
+    /// state of [`Self::next_start`]'s sequence.
+    turn: u32,
     /// Claims kept until they are settled or their deadline passes, oldest
     /// first.
     lodged: Vec<claim::Lodged>,
@@ -518,7 +521,7 @@ impl TimedHistories {
             sending: BTreeMap::new(),
             context_held: BTreeMap::new(),
             not_before: BTreeMap::new(),
-            waiting: Vec::new(),
+            turn: TURN_SEED,
             lodged: Vec::new(),
             next_claim: 1,
             moved: false,
@@ -635,26 +638,29 @@ impl TimedHistories {
         self.sending.remove(context).unwrap_or(false)
     }
 
-    /// Note how a fanout treated `context`'s report: `waited` when the
-    /// input's notification budget was spent before its turn, so the report
-    /// went back to its references unsent. A context that waited takes its
-    /// next turn ahead of those that did not
-    /// ([`in_turn`](super::multiple_report::in_turn)), so the same contexts
-    /// don't lose every time a budget runs out; one that is served waits no
-    /// more.
-    pub fn note_turn(&mut self, context: &MultipleContextKey, waited: bool) {
-        let at = self.waiting.iter().position(|waiting| waiting == context);
-        match (waited, at) {
-            (true, None) => self.waiting.push(context.clone()),
-            (false, Some(at)) => drop(self.waiting.remove(at)),
-            _ => {}
-        }
-    }
-
-    /// The contexts a spent budget kept back, the one waiting longest
-    /// first.
-    pub fn waiting(&self) -> &[MultipleContextKey] {
-        &self.waiting
+    /// Where a fanout over `contexts` contexts starts its turns: an index
+    /// below `contexts`, from a sequence that moves on at every call.
+    ///
+    /// One input may send only so many notifications, and the contexts
+    /// whose turn comes after its budget is spent report nothing. From a
+    /// fixed start the same ones would lose every time. A counter would
+    /// share the loss out only until changes fall into step with it: with
+    /// two contexts and two objects changing in alternation, each context
+    /// would always lose the same object. So the start comes from a small
+    /// generator (xorshift32) whose steps follow no such pattern. It
+    /// promises an even spread over many fanouts, not a turn for any one
+    /// context within a given number of them. The seed is fixed, so two
+    /// hosts given the same fanouts take the same turns.
+    pub(crate) fn next_start(&mut self, contexts: usize) -> usize {
+        let mut x = self.turn;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        self.turn = x;
+        // The upper half scaled by the count: no division, and no bias
+        // that matters for the few contexts one fanout has.
+        let count = contexts.min(0xFFFF) as u32;
+        (((x >> 16) * count) >> 16) as usize
     }
 
     /// Drop every backstop wait: a block lifted, so overdue changes go out
@@ -855,11 +861,6 @@ impl TimedHistories {
                     self.not_before.remove(context);
                 }
                 self.terms.remove(context);
-                // A context with no reference left waits for nothing.
-                let same = |key: &CovSubscriptionKey| key.multiple_context() == Some(context);
-                if !self.untimed.keys().any(same) {
-                    self.waiting.retain(|waiting| waiting != context);
-                }
             }
         }
     }

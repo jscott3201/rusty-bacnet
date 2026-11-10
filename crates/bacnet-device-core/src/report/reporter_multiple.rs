@@ -272,7 +272,7 @@ impl Reporter {
         if subs.is_empty() || budget.is_exhausted() {
             return;
         }
-        for subs in in_turn(&self.multiple.histories, by_context(subs)) {
+        for subs in in_turn(&mut self.multiple.histories, by_context(subs)) {
             self.report_context(db, &subs, force, now, budget);
         }
         self.multiple_counts();
@@ -315,11 +315,7 @@ impl Reporter {
         if !report.needs_turn {
             self.end_turn(&context, turn.take());
         }
-        // A context the spent budget keeps back goes first at its next
-        // fanout; one that has its turn waits no more.
-        let spent = budget.is_exhausted();
-        self.multiple.histories.note_turn(&context, spent);
-        if spent {
+        if budget.is_exhausted() {
             self.counters.cov.notifications_throttled_fanout += 1;
             for part in report.parts {
                 self.multiple.histories.give_back(part.claim, now);

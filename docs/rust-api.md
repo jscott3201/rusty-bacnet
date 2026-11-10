@@ -8236,9 +8236,10 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
     references, the contexts in key order: by recipient, then subscriber
     process identifier, unconfirmed before confirmed.
     `in_turn(histories, grouped)` gives the order they report in under
-    one shared budget: first the contexts a spent budget kept back last
-    time, which the host notes where it checks the budget
-    (`TimedHistories::note_turn(context, waited)`), then the rest.
+    one shared budget: key order from a start that moves with every
+    fanout over several contexts, drawn from a fixed sequence the
+    histories keep, so a spent budget keeps back different contexts each
+    time. A follow-up pass, with a budget per context, uses key order.
     `Reading::read(source, subscriptions, force)` reads one context's
     fanned-out references from a `Source`: the database, or a producer's
     snapshot of one object. `Reading::gather(table, histories, now)`

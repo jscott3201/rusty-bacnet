@@ -1,11 +1,15 @@
-//! COV-multiple contexts that report at once go out in one fixed order
-//! (#2320): by recipient, then subscriber process identifier, the
+//! COV-multiple contexts that report at once take their turns in key
+//! order (#2320): by recipient, then subscriber process identifier, the
 //! unconfirmed form before the confirmed one.
 //!
 //! One subscriber's contexts differ in their process identifier, so that is
-//! the order it sees its reports in, whichever order it subscribed in. The
-//! fanout kept its contexts in a hash map before, and their order changed
-//! from run to run. Time is paused.
+//! the order it sees its reports in, whichever order it subscribed in. A
+//! change that reports to several contexts starts that order from a place
+//! that moves with every such fanout (the `budget` tests say why), so its
+//! reports are a rotation of the key order; a follow-up pass, which gives
+//! each context a budget of its own, starts from the first. The fanout
+//! kept its contexts in a hash map before, and their order changed from
+//! run to run. Time is paused.
 use super::cov_wire_test_support::*;
 use super::*;
 
@@ -41,11 +45,13 @@ async fn reported(h: &Harness) -> Vec<u32> {
 }
 
 #[tokio::test(start_paused = true)]
-async fn one_change_reports_to_its_contexts_in_key_order() {
+async fn one_change_reports_to_its_contexts_in_key_order_from_a_moving_start() {
     let mut h = contexts(10).await;
     h.set_clock(11);
     h.write_local(5.0).await;
-    assert_eq!(reported(&h).await, [1, 2, 3, 4, 5, 6, 7, 8]);
+    assert_eq!(reported(&h).await, [3, 4, 5, 6, 7, 8, 1, 2]);
+    h.write_local(6.0).await;
+    assert_eq!(reported(&h).await, [8, 1, 2, 3, 4, 5, 6, 7]);
     h.no_notification().await;
     h.server.stop().await.unwrap();
 }

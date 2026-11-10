@@ -178,36 +178,94 @@ fn a_reference_past_its_lifetime_reports_nothing() {
     assert_eq!(report.parts[0].notification.time_remaining, 1);
 }
 
-#[test]
-fn contexts_a_spent_budget_kept_back_take_their_turns_first() {
-    let mut host = Host::new(1);
-    for process in [3, 1, 2] {
-        host.subscribe(process, false, 1, &[reference(PV, false)], None);
+/// `contexts` unconfirmed contexts, processes 1 to `contexts`, each with an
+/// untimestamped Present_Value reference on Analog Values 1 and 2.
+fn sharing(contexts: u32) -> Host {
+    let mut host = Host::new(2);
+    for process in (1..=contexts).rev() {
+        host.subscribe(process, false, 2, &[reference(PV, false)], None);
     }
-    let turns = |host: &mut Host| -> Vec<u32> {
-        let grouped = by_context(host.on(1, T0));
-        in_turn(&host.histories, grouped)
-            .iter()
-            .map(|subs| subs[0].subscriber_process_identifier)
-            .collect()
-    };
-    assert_eq!(turns(&mut host), [1, 2, 3], "key order with nobody waiting");
+    host
+}
 
-    // The one waiting longest goes first, then the other waiter, then the
-    // rest; waiting again changes nobody's place.
-    host.histories.note_turn(&ctx(3, false), true);
-    host.histories.note_turn(&ctx(1, false), true);
-    host.histories.note_turn(&ctx(3, false), true);
-    assert_eq!(turns(&mut host), [3, 1, 2]);
-    // A context that has its turn waits no more.
-    host.histories.note_turn(&ctx(3, false), false);
-    assert_eq!(turns(&mut host), [1, 2, 3]);
-    assert_eq!(host.histories.waiting(), [ctx(1, false)]);
+/// The processes of one fanout over Analog Value `object`'s references,
+/// in the order they take their turns.
+fn turns(host: &mut Host, object: u32) -> Vec<u32> {
+    let grouped = by_context(host.on(object, T0));
+    in_turn(&mut host.histories, grouped)
+        .iter()
+        .map(|subs| subs[0].subscriber_process_identifier)
+        .collect()
+}
 
-    // A cancelled context waits for nothing.
-    host.table.unsubscribe_cov_multiple_context(&ctx(1, false));
-    let fenced = host.table.take_fenced();
-    crate::cov::timed::follow_table(&mut host.histories, &host.table, &fenced, &[], T0);
-    assert!(host.histories.waiting().is_empty());
-    assert_eq!(turns(&mut host), [2, 3]);
+#[test]
+fn turns_are_key_order_from_a_start_that_moves_per_fanout() {
+    let mut host = sharing(3);
+    let firsts: Vec<_> = (0..12)
+        .map(|_| {
+            let order = turns(&mut host, 1);
+            // Always a rotation of the key order.
+            let from = order[0];
+            let rotation: Vec<_> = (0..3).map(|at| (from - 1 + at) % 3 + 1).collect();
+            assert_eq!(order, rotation);
+            from
+        })
+        .collect();
+    assert_eq!(firsts, [1, 3, 2, 1, 3, 3, 3, 3, 2, 3, 1, 3]);
+
+    // A fanout with one context has no order to choose and leaves the
+    // sequence where it was: a second host that saw none of them takes
+    // the same next turn.
+    let mut other = sharing(3);
+    for _ in 0..12 {
+        turns(&mut other, 1);
+    }
+    let mut single = sharing(1);
+    for _ in 0..5 {
+        assert_eq!(turns(&mut single, 1), [1]);
+        let lone = by_context(host.on(1, T0).into_iter().take(1));
+        assert_eq!(in_turn(&mut host.histories, lone).len(), 1);
+    }
+    assert_eq!(turns(&mut host, 1), turns(&mut other, 1));
+}
+
+/// Run `changes` fanouts, Analog Values 1 and 2 changing in alternation
+/// (or only the first, when not `alternating`), each serving the first
+/// `budget` contexts in turn: how often each process heard of each object.
+fn heard(contexts: u32, budget: usize, changes: u32, alternating: bool) -> Vec<((u32, u32), u32)> {
+    let mut host = sharing(contexts);
+    let mut heard = alloc::collections::BTreeMap::new();
+    for change in 0..changes {
+        let object = if alternating { change % 2 + 1 } else { 1 };
+        for process in turns(&mut host, object).into_iter().take(budget) {
+            *heard.entry((process, object)).or_insert(0) += 1;
+        }
+    }
+    heard.into_iter().collect()
+}
+
+#[test]
+fn a_spent_budget_spreads_its_losses_over_contexts_and_objects() {
+    // Three contexts, two served a change, two objects changing in turn:
+    // every context hears of both, about as often.
+    let three = heard(3, 2, 60, true);
+    let expected = [
+        ((1, 1), 23),
+        ((1, 2), 19),
+        ((2, 1), 17),
+        ((2, 2), 19),
+        ((3, 1), 20),
+        ((3, 2), 22),
+    ];
+    assert_eq!(three, expected);
+    // Two contexts, one served a change, two objects in turn: a start that
+    // moved by one each fanout would give each context one object only.
+    let two = heard(2, 1, 40, true);
+    assert_eq!(two, [((1, 1), 9), ((1, 2), 9), ((2, 1), 11), ((2, 2), 11)]);
+    // One object, one served a change: every context in a run.
+    let one = heard(3, 1, 60, false);
+    assert_eq!(one, [((1, 1), 18), ((2, 1), 18), ((3, 1), 24)]);
+    // An ample budget serves everyone every time, whatever the start.
+    let all = heard(3, 3, 10, true);
+    assert!(all.iter().all(|(_, count)| *count == 5), "{all:?}");
 }

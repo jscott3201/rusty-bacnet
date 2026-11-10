@@ -534,7 +534,7 @@ send turn. A capture still reads its objects before it locks.
 
 **Moved by #2320 PR 2b**, behind the same feature: the fanout's decisions,
 as `cov::multiple_report`. A host fans a change out context by context
-(`by_context`, in the order `in_turn` gives), each in three steps, because
+(`by_context`, in key order from the start `in_turn` picks), each in three steps, because
 the server reads its objects under one guard and its table under another:
 
 - `Reading::read(source, subscriptions, force)` reads the fanned-out
@@ -576,7 +576,14 @@ deadline); `hold_off` moves the backstop past a failed report's hold-off;
 | the hold-off's end from the config and a clock read | `hold_off`, from the table's timing | one call in the worker's failure path |
 
 The order between contexts, and of a follow-up's references, is the one
-difference on the wire (decision 17). The rest is as on dev: which references a report takes, its
+difference on the wire (decision 17). Contexts that share one input's
+budget take their turns in key order from a start that moves per fanout,
+so a spent budget, by count or by octets, keeps back different contexts
+each time: an even spread, as the hash order gave, and no promise to any
+one context. A list of the contexts kept back, served first next time,
+was tried and dropped: it was per context where a kept-back report is per
+object, it missed the octet budget, and the server could note a context
+just cancelled. The rest is as on dev: which references a report takes, its
 timestamps and chunking, the turn, what a failed send gives back and when
 the backstop retries. Four things differ off the wire. One instant serves
 a fanout's table step: the idle and hold-off checks, the lifetime each
@@ -1361,21 +1368,38 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
       contexts left for later are the last in that order. Confirmed
       reports start in it too, each on a worker of its own.
     - Under a spent budget. Key order alone would make the last keys
-      wait every time one change spends its notification budget
-      (`CovPolicy::max_notifications_per_event`, 64 by default), where
-      the hash order changed the loser per fanout. Timestamped changes
-      are bounded by the backstop, which gives each context a budget of
-      its own; a context with only untimestamped references has no
-      history and no deadline and would never report. So the histories
-      keep the contexts whose report a spent budget kept back
-      (`TimedHistories::note_turn`), the one waiting longest first, and
-      `in_turn` puts them ahead of the rest. A context that has its turn,
-      in a fanout or a follow-up, waits no more. A list of waiters, not
-      a cursor after the last context served: an unrelated fanout between
-      two spent ones would move or clear a cursor. Not covered: a context
-      whose first notification the octet budget refuses while the budget
-      is not yet spent is not noted, and reports at its next fanout in
-      plain order.
+      wait every time one change spends its budget
+      (`CovPolicy::max_notifications_per_event`, 64 by default, or
+      `max_notification_bytes_per_event`), where the hash order changed
+      the loser per fanout. Timestamped changes are bounded by the
+      backstop, which gives each context a budget of its own; a context
+      with only untimestamped references has no history and no deadline
+      and would never report. So a fanout over several contexts takes
+      them in key order from a start that moves: `in_turn` rotates the
+      contexts by an index the histories draw from a xorshift32 sequence
+      (`TimedHistories::next_start`), advanced once per such fanout, with
+      a fixed seed, no division and no state per context. Both hosts
+      advance it through `in_turn` at the same point, so their turns
+      agree. It is not a counter: a counter falls into step with a
+      regular pattern of changes (two contexts, two objects changing in
+      alternation, and each context always loses the same object). It
+      promises an even spread, not a turn for any one context within a
+      given number of fanouts: over the sequence's first 60 fanouts of
+      three contexts under a budget of one, the three are served 18, 18
+      and 24 times and none waits more than ten changes; with two served
+      a change and two objects alternating, each context hears of each
+      object 17 to 23 times in 60 changes. A follow-up pass gives each
+      context a budget of its own and keeps plain key order.
+    - What was tried first, and dropped (the first fix round): a list of
+      the contexts a spent budget kept back, served first at their next
+      turn. It was per context, while a report kept back is per object,
+      so a context served in another object's fanout lost its place
+      without the object it waited for. The octet budget refuses without
+      ever counting as spent, so nobody was noted. And the server noted
+      the turn after the table guard dropped, so it could note a context
+      a cancellation had just removed. Fixing those meant waiters keyed
+      by context and object, noted on two kinds of refusal, with a
+      cleanup path per reference: too much state for a move.
     - The follow-up pass. Its keys came out of a hash set (the revisit
       queue), or timestamped before owed (the deadline), and a report
       lists its untimestamped items in the order its references are

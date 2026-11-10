@@ -28,7 +28,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // the revisit queue is a hash set: that order, and the order between
         // follow-ups, varied from run to run (#2320).
         let keys: std::collections::BTreeSet<_> = keys.iter().collect();
-        let (subs, counters, in_flight_tracker) = {
+        let (subs, counters, in_flight_tracker, timed) = {
             let table = ctx.cov_table.read().await;
             (
                 keys.iter()
@@ -38,6 +38,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     .collect::<Vec<_>>(),
                 Arc::clone(table.counters()),
                 Arc::clone(table.in_flight_tracker()),
+                table.timed().clone(),
             )
         };
         if subs.is_empty() {
@@ -47,6 +48,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             ctx,
             in_flight_tracker: &in_flight_tracker,
             counters: &counters,
+            timed: &timed,
         };
         // One budget per object or context, as a natural event would have.
         // Objects, like contexts, in key order.

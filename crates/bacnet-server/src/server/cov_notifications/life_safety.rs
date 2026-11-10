@@ -20,7 +20,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             object_identifier: *oid,
             changed_properties: changed_properties.to_vec(),
         };
-        let (subs, counters, in_flight_tracker, dispatch_turn) = {
+        let (subs, counters, in_flight_tracker, dispatch_turn, timed) = {
             let mut table = ctx.cov_table.write().await;
             (
                 table
@@ -32,6 +32,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 Arc::clone(table.counters()),
                 Arc::clone(table.in_flight_tracker()),
                 table.next_dispatch_turn(),
+                table.timed().clone(),
             )
         };
         if subs.is_empty() {
@@ -41,6 +42,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             ctx,
             in_flight_tracker: &in_flight_tracker,
             counters: &counters,
+            timed: &timed,
         };
         let force = change.status_changed();
         Self::fire_cov_by_kind(&handles, dispatch_turn, oid, subs, None, force).await;

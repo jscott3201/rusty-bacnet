@@ -14,11 +14,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         ctx: &CovNotifyContext<'_, T>,
         subscriptions: &[CovSubscriptionSnapshot],
     ) {
-        let (counters, in_flight_tracker, subscriptions) = {
+        let (counters, in_flight_tracker, timed, subscriptions) = {
             let table = ctx.cov_table.read().await;
             (
                 Arc::clone(table.counters()),
                 Arc::clone(table.in_flight_tracker()),
+                table.timed().clone(),
                 subscriptions
                     .iter()
                     .filter(|sub| table.is_current(sub))
@@ -32,6 +33,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 ctx,
                 in_flight_tracker: &in_flight_tracker,
                 counters: &counters,
+                timed: &timed,
             },
             &subscriptions,
             None,
@@ -56,19 +58,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             return;
         }
 
-        // Contexts report in the order of their keys: by recipient, then
-        // process identifier, unconfirmed before confirmed. A hash map
-        // gave an order that varied from run to run (#2320). Ahead of that
-        // order go the contexts a spent budget kept back at their last
-        // turn, which the histories remember; only a fanout over several
-        // contexts has an order to ask them for.
+        // Contexts take their turns in key order (recipient, then process
+        // identifier, unconfirmed before confirmed) from a start that moves
+        // with each fanout over several of them, so a spent budget keeps
+        // back a different one each time (#2320). The start is the
+        // histories'; their store is a leaf mutex, held for this one call.
+        // A hash map gave an order that varied from run to run.
         let grouped = by_context(subscriptions.iter().cloned());
-        let turns: Vec<_> = if grouped.len() > 1 {
-            let store = handles.ctx.cov_table.read().await.timed().clone();
-            in_turn(&store.lock(), grouped)
-        } else {
-            grouped.into_values().collect()
-        };
+        let turns = in_turn(&mut handles.timed.lock(), grouped);
         for subs in &turns {
             Self::send_cov_notification_multiple(handles, subs, snapshot, force, budget).await;
         }
@@ -183,13 +180,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         };
 
         // From the final live decision through fresh admission there is no await.
-        // A context the spent budget keeps back goes first at its next
-        // fanout; one that has its turn waits no more.
-        let spent = budget.is_exhausted();
-        if let Some(context) = report.route.key().multiple_context() {
-            store.lock().note_turn(context, spent);
-        }
-        if spent {
+        if budget.is_exhausted() {
             counters
                 .notifications_throttled_fanout
                 .fetch_add(1, Ordering::Relaxed);

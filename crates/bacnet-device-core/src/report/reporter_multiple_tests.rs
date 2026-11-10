@@ -281,23 +281,24 @@ fn a_timestamped_context_reports_each_change_with_its_time() {
 }
 
 #[test]
-fn contexts_that_report_at_once_are_queued_in_key_order() {
+fn contexts_that_report_at_once_are_queued_in_key_order_from_a_moving_start() {
     let (mut device, _) = device();
     for process in [3, 1, 2] {
         device.subscribe_multiple(process, false, &[(ai(), false)], 1476, T0);
     }
     device.drain(T0);
-    device.sample(ai(), 11.0, secs(1));
-    let mut order = Vec::new();
-    while let Some((notification, apdu)) = device.pop(secs(1)) {
-        let Apdu::UnconfirmedRequest(request) = apdu else {
-            panic!("unconfirmed contexts");
-        };
-        let request = COVNotificationMultipleRequest::decode(&request.service_request).unwrap();
-        order.push(request.subscriber_process_identifier);
-        device.sent(&notification, secs(1));
+    let mut orders = Vec::new();
+    for change in 1..=3u8 {
+        let now = secs(u64::from(change));
+        device.sample(ai(), 10.0 + f32::from(change), now);
+        let order: Vec<_> = drain_by_process(&mut device, now)
+            .into_iter()
+            .map(|(process, _)| process)
+            .collect();
+        orders.push(order);
     }
-    assert_eq!(order, [1, 2, 3]);
+    // Every context each time, in key order from where the start fell.
+    assert_eq!(orders, [[1, 2, 3], [3, 1, 2], [2, 3, 1]]);
 }
 
 #[test]
@@ -510,19 +511,27 @@ fn a_deleted_objects_pending_changes_go_with_its_references() {
     assert!(device.pop(secs(1 + DELAY)).is_none());
 }
 
-/// A device whose changes may each send one notification, with one
-/// unconfirmed context per process identifier, 1 to 3, on AI-1's
-/// Present_Value, their initial reports sent.
-fn one_notification_a_change(timestamped: bool) -> (Device, Arc<Clock>) {
-    let (mut device, clock) = device_under(crate::cov::CovPolicy {
-        max_notifications_per_event: 1,
-        ..Default::default()
-    });
+/// A device under `policy` with one unconfirmed context per process
+/// identifier, 1 to 3, on the Present_Value of AI-1 and AI-2, their
+/// initial reports sent.
+fn three_contexts(policy: crate::cov::CovPolicy, timestamped: bool) -> (Device, Arc<Clock>) {
+    let (mut device, clock) = device_under(policy);
     for process in 1..=3 {
-        device.subscribe_multiple(process, false, &[(ai(), timestamped)], 1476, T0);
-        assert_eq!(device.drain(T0).len(), 1);
+        // One request per object, so each initial report is one
+        // notification whatever the budget.
+        for object in [ai(), ai2()] {
+            device.subscribe_multiple(process, false, &[(object, timestamped)], 1476, T0);
+            assert_eq!(device.drain(T0).len(), 1);
+        }
     }
     (device, clock)
+}
+
+fn notifications(max: usize) -> crate::cov::CovPolicy {
+    crate::cov::CovPolicy {
+        max_notifications_per_event: max,
+        ..Default::default()
+    }
 }
 
 /// The process identifier and rows of each notification queued, all sent.
@@ -539,36 +548,91 @@ fn drain_by_process(device: &mut Device, now: Instant) -> Vec<(u32, Vec<Row>)> {
     all
 }
 
+/// Change AI-1 `changes` times; the processes each change reported to.
+fn run(device: &mut Device, changes: u8) -> Vec<Vec<u32>> {
+    (1..=changes)
+        .map(|change| {
+            let now = secs(u64::from(change));
+            device.sample(ai(), 10.0 + f32::from(change), now);
+            let sent = drain_by_process(device, now);
+            sent.into_iter().map(|(process, _)| process).collect()
+        })
+        .collect()
+}
+
 #[test]
-fn an_untimestamped_context_behind_a_spent_budget_has_the_next_turn() {
-    let (mut device, _) = one_notification_a_change(false);
-    // Each change reports to one context. Those the spent budget kept back
-    // have no history and no deadline; they go first at the next change,
-    // the one waiting longest ahead.
-    let mut served = Vec::new();
-    for change in 1..=6u8 {
-        let now = secs(u64::from(change));
-        device.sample(ai(), 10.0 + f32::from(change), now);
-        let sent = drain_by_process(&mut device, now);
-        assert_eq!(sent.len(), 1, "one notification a change");
-        assert_eq!(sent[0].1, [(1, 10.0 + f32::from(change), None)]);
-        served.push(sent[0].0);
-    }
-    assert_eq!(served, [1, 2, 3, 1, 2, 3]);
+fn a_budget_of_one_serves_every_context_in_a_run() {
+    let (mut device, _) = three_contexts(notifications(1), false);
+    // One notification a change, to the context the start falls on. An
+    // untimestamped reference has no history and no deadline, so one that
+    // always came last would never report.
+    let served = run(&mut device, 20).concat();
     assert_eq!(
-        device
-            .reporter
-            .counters()
-            .cov
-            .notifications_throttled_fanout,
-        12
+        served,
+        [1, 3, 2, 1, 3, 3, 3, 3, 2, 3, 1, 3, 2, 1, 1, 1, 1, 2, 1, 3]
     );
+    let counters = device.reporter.counters();
+    assert_eq!(counters.cov.notifications_throttled_fanout, 40);
     assert_eq!(device.reporter.next_deadline(), lifetime_end(), "none owed");
 }
 
 #[test]
+fn three_contexts_on_two_objects_changing_in_turn_all_hear_of_both() {
+    // Two notifications a change for three contexts, the two objects
+    // changing in alternation: a start that came round in step with the
+    // changes would keep one context from one object for good.
+    let (mut device, _) = three_contexts(notifications(2), false);
+    let mut heard = alloc::collections::BTreeMap::new();
+    for change in 0..60u8 {
+        let object = if change % 2 == 0 { ai() } else { ai2() };
+        let now = secs(u64::from(change) + 1);
+        device.sample(object, 20.0 + f32::from(change), now);
+        let sent = drain_by_process(&mut device, now);
+        assert_eq!(sent.len(), 2, "change {change}");
+        for (process, rows) in sent {
+            assert_eq!(rows[0].0, object.instance_number());
+            *heard.entry((process, rows[0].0)).or_insert(0) += 1;
+        }
+    }
+    let expected = [
+        ((1, 1), 23),
+        ((1, 2), 19),
+        ((2, 1), 17),
+        ((2, 2), 19),
+        ((3, 1), 20),
+        ((3, 2), 22),
+    ];
+    assert_eq!(heard.into_iter().collect::<Vec<_>>(), expected);
+}
+
+#[test]
+fn an_octet_budget_serves_every_context_in_a_run() {
+    // Each notification here takes 37 octets: a budget of 50 fits one, and
+    // one of 100 two. The octet budget refuses without ever counting as
+    // spent, and the moving start shares that out the same way.
+    for (octets, each) in [(50, 1), (100, 2)] {
+        let policy = crate::cov::CovPolicy {
+            max_notification_bytes_per_event: octets,
+            ..Default::default()
+        };
+        let (mut device, _) = three_contexts(policy, false);
+        let served = run(&mut device, 12);
+        assert!(
+            served.iter().all(|change| change.len() == each),
+            "{served:?}"
+        );
+        let firsts: Vec<_> = served.iter().map(|change| change[0]).collect();
+        assert_eq!(
+            firsts,
+            [1, 3, 2, 1, 3, 3, 3, 3, 2, 3, 1, 3],
+            "{octets} octets"
+        );
+    }
+}
+
+#[test]
 fn what_a_spent_budget_kept_back_is_in_the_next_report() {
-    let (mut device, clock) = one_notification_a_change(true);
+    let (mut device, clock) = three_contexts(notifications(1), true);
     clock.set(11);
     device.sample(ai(), 11.0, secs(1));
     let first = drain_by_process(&mut device, secs(1));
@@ -576,18 +640,18 @@ fn what_a_spent_budget_kept_back_is_in_the_next_report() {
 
     // The other two drained the change into their reports before the
     // budget stopped them. It is back in their histories: the next change
-    // reports to the one waiting longest, with both changes.
+    // reports to the third context, with both changes.
     clock.set(12);
     device.sample(ai(), 12.0, secs(2));
     let second = drain_by_process(&mut device, secs(2));
     let both = vec![(1, 11.0, Some(11)), (1, 12.0, Some(12))];
-    assert_eq!(second, [(2, both.clone())]);
+    assert_eq!(second, [(3, both.clone())]);
 
-    // The third context's changes go out at their delay, then the first's
+    // The second context's changes go out at their delay, then the first's
     // newer one at its own, each under a budget of its own.
     assert_eq!(device.reporter.next_deadline(), Some(secs(1 + DELAY)));
     device.deadline();
-    assert_eq!(drain_by_process(&mut device, secs(1 + DELAY)), [(3, both)]);
+    assert_eq!(drain_by_process(&mut device, secs(1 + DELAY)), [(2, both)]);
     assert_eq!(device.reporter.next_deadline(), Some(secs(2 + DELAY)));
     device.deadline();
     let last = drain_by_process(&mut device, secs(2 + DELAY));
