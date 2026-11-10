@@ -5077,6 +5077,35 @@ then left as it was. A server that is not running raises `RuntimeError`.
 await server.purge_audit_log(ObjectIdentifier(ObjectType.AUDIT_LOG, 1))
 ```
 
+#### `set_clock_zone(utc_offset_minutes, daylight_savings) -> None`
+
+Change the Device clock's zone while the server runs: when daylight saving
+starts or ends, or to correct the offset.
+
+```python
+# Five hours west of UTC, now in daylight-saving time.
+await server.set_clock_zone(300, True)
+```
+
+- `utc_offset_minutes` becomes the Device's UTC_Offset: minutes west of UTC,
+  so east is negative. It is a multiple of 15 from -1440 to 1440.
+  `daylight_savings` becomes its Daylight_Savings_Status, which puts local
+  time an hour ahead. A server starts at offset 0 without daylight saving.
+- The clock keeps its UTC instant, and a clock a TimeSynchronization set
+  stays set, so Local_Date and Local_Time move by the difference between the
+  zones.
+- Schedules, calendars, Notification Class recipient windows and new
+  timestamps follow at their next look at the clock. Timestamps already
+  recorded stay as they were.
+- A request sees the old pair or the new, never one of each. Both properties
+  stay read-only to a peer.
+
+An offset outside that range or off the 15-minute grid raises `ValueError`
+when the method is called, and an int that doesn't fit 16 bits
+`OverflowError`; nothing changes. The awaitable raises `RuntimeError` before
+start and after stop, and `ValueError` if the local date in the new zone
+would fall outside 1900 to 2154.
+
 #### `comm_state() -> EnableDisable`
 
 Get the server's current DeviceCommunicationControl state.

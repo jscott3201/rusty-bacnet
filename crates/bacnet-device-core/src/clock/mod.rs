@@ -37,7 +37,14 @@
 //!   own test once the clock is synchronized, and failing closed before,
 //!   when only a destination open every day, all day, is.
 //!
-//! The zone is fixed when the clock is built, as the server's is.
+//! - The zone can change while the device runs: daylight saving starts or
+//!   ends, or the host corrects its UTC_Offset. [`DeviceClock::set_zone`]
+//!   before lending, [`Responder::set_zone`](crate::responder::Responder::set_zone)
+//!   or [`Reporter::set_zone`](crate::report::Reporter::set_zone) after. A
+//!   synchronized clock keeps its UTC instant and stays synchronized, so
+//!   local time, and with it the recipient windows, moves by the difference
+//!   ([`SyncedClock::set_zone`]). Only the host changes it: UTC_Offset and
+//!   Daylight_Savings_Status are read-only to a peer.
 
 mod synced;
 
@@ -111,6 +118,14 @@ impl DeviceClock {
     pub fn set(&mut self, basis: Basis, date: Date, time: Time) -> Result<(), Error> {
         let now = self.now();
         self.clock.set(basis, date, time, now)
+    }
+
+    /// Move the clock to `zone`, now, as [`SyncedClock::set_zone`] does. A
+    /// database this clock was lent to before still reads the old zone: lend
+    /// it again.
+    pub fn set_zone(&mut self, zone: Zone) -> Result<(), Error> {
+        let now = self.now();
+        self.clock.set_zone(zone, now)
     }
 
     /// Bind a copy of this clock to `db` and every object in it, in place

@@ -1,4 +1,4 @@
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bacnet_objects::clock::{ClockFrame, ClockReader};
@@ -83,6 +83,49 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ) -> Result<Self, Error> {
         Self::start_with_clock_mode(config, db, transport, None).await
     }
+
+    /// The zone the Device clock keeps local time in: the Device's
+    /// UTC_Offset and Daylight_Savings_Status. `None` on a clockless server.
+    pub fn clock_zone(&self) -> Option<ClockConfig> {
+        self.clock.as_ref().and_then(|clock| clock.zone())
+    }
+
+    /// Change the Device clock's zone while the server runs: daylight saving
+    /// starts or ends, or the host corrects its UTC offset.
+    ///
+    /// The clock keeps its UTC instant, and a clock a TimeSynchronization
+    /// set stays set. So Local_Date and Local_Time move by the difference
+    /// between the zones, an hour for daylight saving alone, and the
+    /// Device's UTC_Offset and Daylight_Savings_Status read the new pair.
+    /// Only the host changes the zone: both properties are read-only to a
+    /// peer.
+    ///
+    /// The pair is replaced as one value under the clock's lock, which every
+    /// clock read takes, so a read sees the old offset with the old
+    /// daylight-saving status or the new with the new. The change waits for
+    /// the database's write guard too, so no request sees it part-way: a
+    /// ReadPropertyMultiple of both properties answers with one pair. Don't
+    /// call it while holding a guard on [`database`](Self::database).
+    ///
+    /// Everything that judges local time reads this clock when it judges:
+    /// the next Schedule pass, a Calendar's Present_Value, a Notification
+    /// Class recipient's days and time window, a trend log's aligned
+    /// interval and each new timestamp. Nothing is recalculated at the
+    /// change, and timestamps already recorded stay as they were, as after a
+    /// TimeSynchronization that moved local time by the same amount.
+    ///
+    /// Refused, changing nothing, on a clockless server, and when the local
+    /// date in `zone` would fall outside 1900 to 2154. It changes the clock
+    /// the server installed at start: a database whose clock reader the
+    /// application replaced keeps reading that reader.
+    pub async fn set_clock_zone(&self, zone: ClockConfig) -> Result<(), Error> {
+        let clock = self
+            .clock
+            .as_ref()
+            .ok_or_else(|| Error::Encoding("Device clock is disabled".into()))?;
+        let _requests = self.db.write().await;
+        clock.set_zone(zone)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -106,17 +149,26 @@ impl ServerClock {
         }
     }
 
+    fn lock(&self) -> Result<MutexGuard<'_, ClockState>, Error> {
+        self.state
+            .lock()
+            .map_err(|_| Error::Encoding("Device clock lock poisoned".into()))
+    }
+
+    /// The zone local time is kept in; `None` if the lock is poisoned.
+    pub(super) fn zone(&self) -> Option<ClockConfig> {
+        Some(self.state.lock().ok()?.config)
+    }
+
     /// Apply a fully specified local or UTC synchronization value.
     ///
-    /// Validation and conversion finish before the controller is mutated.
+    /// Validation and conversion finish before the controller is mutated,
+    /// and run under one hold of the lock, so the zone a local value is
+    /// read in is the zone it is stored under.
     pub(super) fn synchronize(&self, date: Date, time: Time, is_utc: bool) -> Result<(), Error> {
         let supplied_hundredths = date_time_to_hundredths(date, time)?;
-        let config = self
-            .state
-            .lock()
-            .map_err(|_| Error::Encoding("Device clock lock poisoned".into()))?
-            .config;
-
+        let mut state = self.lock()?;
+        let config = state.config;
         let utc_hundredths = if is_utc {
             supplied_hundredths
         } else {
@@ -132,27 +184,47 @@ impl ServerClock {
             Error::Encoding("synchronized time is outside the BACnet Date range".into())
         })?;
 
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| Error::Encoding("Device clock lock poisoned".into()))?;
         state.synchronized_utc = Some((utc_hundredths, crate::runtime_clock::now()));
         Ok(())
+    }
+
+    /// Replace the zone, keeping the UTC instant and whether a
+    /// synchronization set it. The offset and the daylight-saving status
+    /// change as one value under the lock every read takes, so no read
+    /// pairs one zone's offset with the other's status. A zone whose local
+    /// date falls outside the BACnet Date range now is refused, and changes
+    /// nothing.
+    pub(super) fn set_zone(&self, config: ClockConfig) -> Result<(), Error> {
+        let mut state = self.lock()?;
+        state
+            .utc_hundredths()
+            .and_then(|utc| frame_from_utc_hundredths(utc, config))
+            .ok_or_else(|| {
+                Error::Encoding("local time in that zone is outside the BACnet Date range".into())
+            })?;
+        state.config = config;
+        Ok(())
+    }
+}
+
+impl ClockState {
+    /// UTC now: the synchronized instant run on, or the system's.
+    fn utc_hundredths(&self) -> Option<i128> {
+        match self.synchronized_utc {
+            Some((anchor, monotonic_anchor)) => {
+                let elapsed = crate::runtime_clock::now().duration_since(monotonic_anchor);
+                let elapsed_hundredths = i128::try_from(elapsed.as_millis() / 10).ok()?;
+                Some(anchor + elapsed_hundredths)
+            }
+            None => Some(system_utc_hundredths()),
+        }
     }
 }
 
 impl ClockReader for ServerClock {
     fn read_clock(&self) -> Option<ClockFrame> {
         let state = *self.state.lock().ok()?;
-        let utc_hundredths = match state.synchronized_utc {
-            Some((anchor, monotonic_anchor)) => {
-                let elapsed = crate::runtime_clock::now().duration_since(monotonic_anchor);
-                let elapsed_hundredths = i128::try_from(elapsed.as_millis() / 10).ok()?;
-                anchor + elapsed_hundredths
-            }
-            None => system_utc_hundredths(),
-        };
-        frame_from_utc_hundredths(utc_hundredths, state.config)
+        frame_from_utc_hundredths(state.utc_hundredths()?, state.config)
     }
 }
 
@@ -462,3 +534,7 @@ mod tests {
 #[cfg(test)]
 #[path = "clock_vectors.rs"]
 mod vectors;
+
+#[cfg(test)]
+#[path = "clock_zone_tests.rs"]
+mod zone_tests;

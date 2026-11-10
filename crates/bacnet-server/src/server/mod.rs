@@ -377,7 +377,7 @@ pub struct BACnetServer<T: TransportPort = AnyTransport> {
     #[allow(dead_code)] // Retained with the server, including direct dispatch tests.
     time_sync_limiter: Arc<TimeSyncLimiter>,
     /// Server-owned clock controller; absent in explicit clockless mode.
-    _clock: Option<Arc<ServerClock>>,
+    clock: Option<Arc<ServerClock>>,
     /// Shared network layer (also held by dispatch task; read by
     /// [`write_local`](Self::write_local) for post-write COV/event sends).
     network: Option<Arc<NetworkLayer<T>>>,

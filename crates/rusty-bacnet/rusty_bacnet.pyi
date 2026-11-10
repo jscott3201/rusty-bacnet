@@ -6573,6 +6573,32 @@ class BACnetServer:
         """
         ...
 
+    def set_clock_zone(
+        self, utc_offset_minutes: int, daylight_savings: bool
+    ) -> Awaitable[None]:
+        """Change the Device clock's zone while the server runs.
+
+        ``utc_offset_minutes`` becomes the Device's UTC_Offset: minutes west
+        of UTC, east negative, a multiple of 15 within -1440..=1440.
+        ``daylight_savings`` becomes its Daylight_Savings_Status, which puts
+        local time an hour ahead. A server starts at offset 0 without
+        daylight saving.
+
+        The clock keeps its UTC instant, and one a TimeSynchronization set
+        stays set, so Local_Date and Local_Time move by the difference
+        between the zones. Schedules, calendars, Notification Class
+        recipient windows and new timestamps follow at their next look at
+        the clock; timestamps already recorded stay. A request sees the old
+        pair or the new, never one of each. Both properties stay read-only
+        to a peer.
+
+        An offset outside that range or off the 15-minute grid raises
+        ValueError when called, and an int past 16 bits OverflowError;
+        nothing changes. The awaitable raises RuntimeError before start and
+        after stop, and ValueError if the local date would leave 1900..=2154.
+        """
+        ...
+
     def comm_state(self) -> Awaitable[EnableDisable]:
         """Get the DeviceCommunicationControl state.
 

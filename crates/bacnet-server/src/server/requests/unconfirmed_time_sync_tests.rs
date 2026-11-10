@@ -312,7 +312,7 @@ async fn time_sync_panicking_observer_keeps_change_and_live_ingress_continues() 
         assert_eq!(event.is_utc, is_utc);
         assert_eq!(
             server
-                ._clock
+                .clock
                 .as_ref()
                 .unwrap()
                 .read_clock()

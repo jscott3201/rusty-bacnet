@@ -230,6 +230,7 @@ mod server_methods {
     mod audit_log_methods;
     mod averaging_methods;
     mod channel_methods;
+    mod clock_zone;
     mod constructor;
     mod constructor_budgets;
     mod cov_counters;

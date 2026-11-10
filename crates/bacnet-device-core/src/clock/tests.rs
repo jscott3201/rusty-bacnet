@@ -8,6 +8,8 @@ use bacnet_types::primitives::ObjectIdentifier;
 
 #[path = "responder_tests.rs"]
 mod responder;
+#[path = "zone_tests.rs"]
+mod zone_changes;
 
 pub(super) fn date(year: u16, month: u8, day: u8, day_of_week: u8) -> Date {
     Date {
