@@ -173,11 +173,14 @@ mod stored {
     /// rule of the object's type, which [`invalid`](states::invalid) is
     /// handed:
     ///
-    /// - a multi-state object's state number is any but zero (the object's
-    ///   own Number_Of_States isn't kept, so it is no part of the rule);
+    /// - a Multi-state Input's or Value's state number is any but zero
+    ///   (the object's own Number_Of_States isn't kept, so it is no part of
+    ///   the rule);
     /// - an Access Door's or Access Zone's is a member of its enumeration,
     ///   named or proprietary, other than NORMAL, by the check its writes
-    ///   run ([`listed_states`](crate::access_control::listed_states)).
+    ///   run ([`listed_states`](crate::access_control::listed_states));
+    /// - any other type has no rule, and every list is refused for it. No
+    ///   such type keeps a list row.
     ///
     /// The type is the one in the file's header: a file is opened for one
     /// object identifier and refused for any other, so a list is never
@@ -211,14 +214,23 @@ mod stored {
             if values.len() > MAX_ALARM_VALUES {
                 return Some("holds a longer list of states than an object takes");
             }
+            if matches!(
+                kind,
+                ObjectType::MULTI_STATE_INPUT | ObjectType::MULTI_STATE_VALUE
+            ) {
+                return values
+                    .contains(&0)
+                    .then_some("holds an Alarm_Values state of zero");
+            }
             match crate::access_control::listed_states(kind) {
                 Some(listed) => values
                     .iter()
                     .any(|state| !listed.admits(*state))
                     .then_some("holds a state its list doesn't take on this object type"),
-                None => values
-                    .contains(&0)
-                    .then_some("holds an Alarm_Values state of zero"),
+                // No type gets here: every type a list row is kept for has
+                // a rule above. One given a row without one has every list
+                // refused, an empty one too, rather than taken unchecked.
+                None => Some("holds a list of states for an object type with no rule for one"),
             }
         }
     }
@@ -366,6 +378,13 @@ rows! {
     fault_values: FAULT_VALUES = 1 << 8, states, on::DOOR;
     /// Masked_Alarm_Values of an Access Door, as Alarm_Values.
     masked_alarm_values: MASKED_ALARM_VALUES = 1 << 9, states, on::DOOR;
+}
+
+/// Why a list row holding `values` is one no write to an object of
+/// `object_type` leaves: the rule itself, for its tests.
+#[cfg(test)]
+pub(crate) fn invalid_list(values: &[u32], object_type: ObjectType) -> Option<&'static str> {
+    stored::states::invalid(values, object_type)
 }
 
 /// Whether objects of `object_type` keep a written `property` as an event

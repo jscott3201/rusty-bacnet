@@ -121,7 +121,14 @@ impl BACnetServer {
     ///
     /// `storage_path` and `clear_written_reporting` keep the reporting
     /// settings and Description a peer writes in that file, as on
-    /// `add_analog_input` (#2331, #2364).
+    /// `add_analog_input` (#2331, #2364), and the door's event algorithm
+    /// parameters (#2331): Time_Delay, Time_Delay_Normal, Alarm_Values,
+    /// Fault_Values and Masked_Alarm_Values. A list a peer wrote is served
+    /// again after a restart, over its keyword here, and the door's event
+    /// detection uses it; `clear_written_reporting=True` drops it, so the
+    /// keyword applies again. A saved list is held to what a write is, so
+    /// a file naming NORMAL or a number outside the enumeration raises
+    /// BacnetError.
     #[pyo3(signature = (
         instance,
         name,
@@ -246,7 +253,13 @@ impl BACnetServer {
     ///
     /// `storage_path` and `clear_written_reporting` keep the reporting
     /// settings and Description a peer writes in that file, as on
-    /// `add_analog_input` (#2331, #2364).
+    /// `add_analog_input` (#2331, #2364), and the zone's event algorithm
+    /// parameters (#2331): Time_Delay, Time_Delay_Normal and Alarm_Values.
+    /// A list a peer wrote is served again after a restart, over
+    /// `alarm_values` here, and the zone's event detection uses it;
+    /// `clear_written_reporting=True` drops it, so the keyword applies
+    /// again. A saved list is held to what a write is, so a file naming
+    /// NORMAL or a number outside the enumeration raises BacnetError.
     #[pyo3(signature = (
         instance,
         name,

@@ -321,3 +321,29 @@ fn a_list_is_read_under_its_own_types_rule() {
         }
     }
 }
+
+/// Every type a list row is kept for has a rule of its own: the two
+/// multi-state types, and the two `listed_states` names. A type with
+/// neither, which no row is kept for, has every list refused, the empty one
+/// included, so a type given a list row later can't take a list unchecked.
+#[test]
+fn a_type_with_no_rule_for_a_list_has_every_list_refused() {
+    let lists = 0x380;
+    let mut keepers = 0;
+    for raw in 0..1024 {
+        let kind = ObjectType::from_raw(raw);
+        let multi_state = matches!(
+            kind,
+            ObjectType::MULTI_STATE_INPUT | ObjectType::MULTI_STATE_VALUE
+        );
+        let ruled = multi_state || crate::access_control::listed_states(kind).is_some();
+        let keeps = write_config::parameters::kept(kind) & lists != 0;
+        assert_eq!(keeps, ruled, "{kind}");
+        keepers += usize::from(keeps);
+        for list in [&[][..], &[1], &[3, 1]] {
+            let refusal = write_config::parameters::invalid_list(list, kind);
+            assert_eq!(refusal.is_none(), ruled, "{kind} {list:?}");
+        }
+    }
+    assert_eq!(keepers, 4);
+}
