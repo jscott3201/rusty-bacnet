@@ -133,7 +133,11 @@ pub fn observer() -> (UdpSocket, u16) {
     let port = socket.local_addr().unwrap().port();
     (socket, port)
 }
-pub async fn start(builder: BipEndpointBuilder) -> (Endpoint, SocketAddrV4) {
+/// Starts the endpoint and returns its start error as the I/O error
+/// [`rerun_on_lost_port`](crate::port_retry::rerun_on_lost_port) judges: a
+/// start on an [`observer`] port can lose it to another process after the
+/// observer's bind (#2425). A start on port 0 cannot, so its callers unwrap.
+pub async fn start(builder: BipEndpointBuilder) -> std::io::Result<(Endpoint, SocketAddrV4)> {
     let mut db = ObjectDatabase::new();
     db.add(Box::new(
         NetworkPortObject::new_bip(
@@ -152,9 +156,11 @@ pub async fn start(builder: BipEndpointBuilder) -> (Endpoint, SocketAddrV4) {
     analog.set_present_value(42.0);
     db.add(Box::new(analog)).unwrap();
     let mut endpoint = builder.database(db).build_session().unwrap();
-    bounded(endpoint.start()).await.unwrap();
+    bounded(endpoint.start())
+        .await
+        .map_err(crate::port_retry::bind_error)?;
     let local = endpoint.bip_local_address().unwrap();
-    (endpoint, local)
+    Ok((endpoint, local))
 }
 pub fn builder() -> BipEndpointBuilder {
     builder_on(0)

@@ -217,6 +217,14 @@ impl EncodeSink for bytes::BytesMut {
         None
     }
 
+    // The sink encoders are generic, so each crate that calls one compiles
+    // its own copy, and this isn't: without `#[inline]`, a build without
+    // link-time optimization calls it across the crate boundary for every
+    // write (#2334). The slice sink's `write` stays as it is: inlining it
+    // as well saves more in such a build, but a build with link-time
+    // optimization then runs more instructions per ReadProperty request,
+    // not fewer (benchmarks/results/perf-2334).
+    #[inline]
     fn write(&mut self, bytes: &[u8]) -> Result<(), SinkFull> {
         self.extend_from_slice(bytes);
         Ok(())

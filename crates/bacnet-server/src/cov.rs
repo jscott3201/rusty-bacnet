@@ -501,16 +501,12 @@ impl CovSubscriptionTable {
         Ok((self.flight(begun.token), claim))
     }
 
-    /// A confirmed report to `context` failed: its timestamped history goes
-    /// out once the hold-off ends; see
+    /// The confirmed report `flight` names, to `context`, failed, and
+    /// [`Self::delivered`] said so: its timestamped history goes out once
+    /// the hold-off ends, if the table counted the failure; see
     /// [`hold_off`](multiple_report::hold_off).
-    pub(crate) fn hold_off(&self, context: &MultipleContextKey) {
-        multiple_report::hold_off(
-            &self.core,
-            &mut self.timed.lock(),
-            context,
-            runtime_clock::core_now(),
-        );
+    pub(crate) fn hold_off(&self, flight: &ConfirmedFlight, context: &MultipleContextKey) {
+        multiple_report::hold_off(&self.core, &mut self.timed.lock(), context, flight.token());
     }
 
     /// End the report `flight` names, as `outcome` says; an Ack commits

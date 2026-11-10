@@ -1469,6 +1469,56 @@ counted the harness's way from one build
   branch, and its count is within 0.15% of the official WriteProperty
   count after section 10.10.
 
+### 10.12 Codec savings for builds without link-time optimization (#2334)
+
+One small change ships from this work: the write into the output buffer
+is now inlined into the crates that call the encoders. In a build without
+link-time optimization, encoding a ReadProperty request falls from 705 to
+611 instructions, and a whole ReadProperty request (network layer,
+application layer and service) from 2,157 to 2,063. Built like the
+release, with link-time optimization, nothing changes: 306 and 1,412
+instructions before and after. No other codec workload moves in either
+profile, and allocations are unchanged.
+
+Section 10.5's counts pointed at three places where the codecs spend
+instructions they needn't, mostly in builds without link-time
+optimization. Each was changed on its own and counted in two build
+profiles
+([benchmarks/results/perf-2334](benchmarks/results/perf-2334/README.md)):
+built like the release, and with Cargo's default release profile, which is
+what a crate that depends on the stack gets unless it turns link-time
+optimization on. Codec counts are exact: two builds of one commit give the
+same count to the instruction, so any change counts. A change was kept
+only if its workloads fell in one profile and nothing rose in the other.
+
+- **ReadProperty request encode: kept.** Two larger changes were counted
+  and not taken. Inlining the write into the encoders' stack buffer as well
+  reaches 395 instructions in the default profile, and encoding the
+  request straight into the output reaches 330; but built like the release
+  they cost 22 and 2 instructions more, not fewer. About 280 instructions
+  per request are still there for a build without link-time optimization.
+- **NPDU decode: measured and dropped.** Reading a frame straight into the
+  owned NPDU, instead of through the borrowed view, took decoding an NPDU
+  that carries 100 bytes from 219 to 154 instructions in the default
+  profile and from 172 to 153 built like the release. The maintainer
+  decided on 2026-11-10 not to ship it: the stack's own network layer does
+  not call `decode_npdu`, the change added a second NPDU parser of about
+  160 lines, and it grew the one firmware image that calls `decode_npdu`
+  by about 600 bytes of flash.
+- **NPDU encode: not kept.** `encode_npdu` fills its output with zeros
+  before it writes the NPDU over them. Appending the header and the
+  payload instead saves 25 instructions per NPDU of 100 bytes built like
+  the release (384 to 359). In the default profile it costs 1 more (446 to
+  447), and 10 more for a whole ReadProperty request: there the extra copy
+  of the header costs what the fill did. The change was reverted.
+
+The shipped change does not show in a round trip. ReadProperty,
+WriteProperty and ten-object ReadPropertyMultiple, built like the
+release, moved by at most 0.3 times their run-to-run floors on both
+runtimes, with allocations unchanged. The firmware image that encodes
+with the allocator-using profile (apdu) grows by 56 bytes of flash on a
+Cortex-M3, to 42,924 of its budget of 47,840.
+
 ## 11. How to reproduce
 
 Run one suite at a time on an idle machine. Each Criterion suite takes 1 to

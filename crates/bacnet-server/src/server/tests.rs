@@ -7,6 +7,49 @@ fn server_config_cov_retry_timeout_default() {
 }
 
 #[test]
+fn cov_retry_timeout_zero_is_refused_naming_the_field() {
+    let zero = ServerConfig {
+        cov_retry_timeout_ms: 0,
+        ..Default::default()
+    };
+    let err = zero.validate_cov_retry_timeout().unwrap_err().to_string();
+    assert!(err.contains("cov_retry_timeout_ms"), "{err}");
+    for accepted in [1, 10, 3000] {
+        let config = ServerConfig {
+            cov_retry_timeout_ms: accepted,
+            ..Default::default()
+        };
+        config.validate_cov_retry_timeout().unwrap();
+    }
+    ServerConfig::default()
+        .validate_cov_retry_timeout()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn starting_with_cov_retry_timeout_zero_fails_and_one_starts() {
+    use bacnet_transport::bip::BipTransport;
+    for (timeout, ok) in [(0, false), (1, true)] {
+        let config = ServerConfig {
+            cov_retry_timeout_ms: timeout,
+            ..Default::default()
+        };
+        let transport = BipTransport::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST);
+        let started = BACnetServer::start_clockless(config, ObjectDatabase::new(), transport).await;
+        match started {
+            Ok(mut server) => {
+                assert!(ok, "0 must not start");
+                server.stop().await.unwrap();
+            }
+            Err(err) => {
+                assert!(!ok, "1 must start: {err}");
+                assert!(err.to_string().contains("cov_retry_timeout_ms"), "{err}");
+            }
+        }
+    }
+}
+
+#[test]
 fn server_config_time_sync_callback_default_is_none() {
     let config = ServerConfig::default();
     assert!(config.on_time_sync.is_none());

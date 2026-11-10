@@ -611,10 +611,11 @@ impl Reporter {
         Some(lodged.context)
     }
 
-    /// A confirmed report to `context` failed: its history goes out once
-    /// the hold-off ends.
-    pub(super) fn hold_off_multiple(&mut self, context: &MultipleContextKey, now: Instant) {
-        hold_off(&self.table, &mut self.multiple.histories, context, now);
+    /// The confirmed report `token` to `context` failed, and the table was
+    /// told: its history goes out once the hold-off ends, if the table
+    /// counted the failure.
+    pub(super) fn hold_off_multiple(&mut self, context: &MultipleContextKey, token: Token) {
+        hold_off(&self.table, &mut self.multiple.histories, context, token);
     }
 
     /// The histories' part of [`settle`](Self::settle), for what the table
