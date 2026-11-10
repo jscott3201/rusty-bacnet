@@ -255,6 +255,7 @@ impl ChangeOfStateReporting {
             event_detection_enable: self.event_detection_enable,
             options: self.event_history.options.clone(),
             description: description.into(),
+            algorithm: Default::default(),
         }
     }
 

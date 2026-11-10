@@ -84,6 +84,9 @@ macro_rules! impl_reporting_persistence {
                     event_detection_enable: self.event_detection_enable,
                     options: self.event_history.options.clone(),
                     description: self.description.clone(),
+                    algorithm: $crate::write_config::reporting::parameters::AlgorithmDetector::parameters(
+                        &self.event_detector,
+                    ),
                 }
             }
 
@@ -97,6 +100,10 @@ macro_rules! impl_reporting_persistence {
                     description: &mut self.description,
                 }
                 .restore(saved);
+                $crate::write_config::reporting::parameters::AlgorithmDetector::restore_parameters(
+                    &mut self.event_detector,
+                    &saved.algorithm,
+                );
             }
         }
 
@@ -211,7 +218,10 @@ macro_rules! impl_reporting_persistence {
             /// Event_Message_Texts_Config and the Event_Algorithm_Inhibit
             /// pair) in `persistence`, and a written Description (#2364),
             /// serving what is saved there for this object, if anything
-            /// (#2331).
+            /// (#2331). An Analog Input, Output or Value keeps its event
+            /// algorithm parameters there too (Time_Delay,
+            /// Time_Delay_Normal, High_Limit, Low_Limit, Deadband and
+            /// Limit_Enable), and its detector starts with the saved ones.
             ///
             /// A write of one of them is then saved before the object serves
             /// it, and refused with DEVICE / OPERATIONAL_PROBLEM, the old
@@ -220,7 +230,9 @@ macro_rules! impl_reporting_persistence {
             /// write saved wins over its setter until
             /// [`clear_written_reporting`](Self::clear_written_reporting).
             /// Fails when storage can't be loaded, holds another kind of
-            /// configuration, or holds what no write leaves.
+            /// configuration, or holds what no write leaves: a value the
+            /// object refuses on the wire, or an algorithm parameter its
+            /// type doesn't keep.
             pub fn with_reporting_persistence(
                 self,
                 persistence: alloc::sync::Arc<dyn $crate::write_config::WriteConfigPersistence>,
@@ -228,19 +240,22 @@ macro_rules! impl_reporting_persistence {
                 $crate::write_config::reporting::attach(self, persistence)
             }
 
-            /// The reporting settings, and Description, storage keeps because
-            /// a write set them, now or before a restart; all `None` without
-            /// storage.
+            /// The reporting settings, Description and event algorithm
+            /// parameters storage keeps because a write set them, now or
+            /// before a restart; all `None` without storage.
             pub fn written_reporting(&self) -> $crate::write_config::ReportingWriteConfig {
                 $crate::write_config::reporting::written(self)
             }
 
-            /// Drop every reporting setting a write saved, and a saved
-            /// Description, so the setters apply again. The values served stay until a setter or a write
-            /// changes them. Saves before it returns; a save that fails keeps
-            /// the written settings and returns storage's error. Does nothing
-            /// without storage. Call it before the object joins the database,
-            /// as the setters are: it waits for its save.
+            /// Drop every reporting setting a write saved, a saved
+            /// Description and every saved event algorithm parameter, so
+            /// the setters apply again, and at the next start what the
+            /// application configures. The values served stay until a
+            /// setter or a write changes them. Saves before it returns; a
+            /// save that fails keeps the written settings and returns
+            /// storage's error. Does nothing without storage. Call it before
+            /// the object joins the database, as the setters are: it waits
+            /// for its save.
             pub fn clear_written_reporting(&mut self) -> Result<(), bacnet_types::error::Error> {
                 $crate::write_config::reporting::clear(self)
             }

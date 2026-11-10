@@ -8,7 +8,7 @@ use crate::prelude::*;
 #[cfg(feature = "std")]
 use std::path::Path;
 
-use bacnet_types::bitstring::EventTransitionBits;
+use bacnet_types::bitstring::{EventTransitionBits, LimitEnable};
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetObjectPropertyReference,
 };
@@ -67,6 +67,33 @@ pub struct ReportingWriteConfig {
     /// (#2364); at most 16 KiB of UTF-8, as a durable object refuses a
     /// longer write.
     pub description: Option<String>,
+    /// The event algorithm parameters a write set (#2331).
+    pub algorithm: AlgorithmWriteConfig,
+}
+
+/// The event algorithm parameters an intrinsic reporter keeps once a write
+/// sets them (#2331), beside its reporting settings. Each is `None` until
+/// then: what the application configures applies at each start until then.
+///
+/// An object type keeps only the parameters it has; storage holding another
+/// is refused. `snapshot::write_config::keeps_parameter` names them per type.
+/// More parameters will join it, so outside the crate it is built from
+/// [`Default`] with its fields then set.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct AlgorithmWriteConfig {
+    /// Time_Delay, in seconds.
+    pub time_delay: Option<u32>,
+    /// Time_Delay_Normal, in seconds.
+    pub time_delay_normal: Option<u32>,
+    /// High_Limit of an analog object; finite, as a write is.
+    pub high_limit: Option<f32>,
+    /// Low_Limit of an analog object; finite.
+    pub low_limit: Option<f32>,
+    /// Deadband of an analog object; finite and not negative.
+    pub deadband: Option<f32>,
+    /// Limit_Enable of an analog object.
+    pub limit_enable: Option<LimitEnable>,
 }
 
 /// What a Timer keeps across a restart.

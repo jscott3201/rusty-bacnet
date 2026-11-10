@@ -5,18 +5,22 @@ use alloc::sync::Arc;
 use core::time::Duration;
 
 use bacnet_types::bitstring::EventTransitionBits;
-use bacnet_types::enums::{ErrorClass, ErrorCode, NotifyType, PropertyIdentifier as P};
+use bacnet_types::enums::{ErrorClass, ErrorCode, NotifyType, ObjectType, PropertyIdentifier as P};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
+use super::parameters;
 use crate::common;
 use crate::durable::staged::{self, StagedSaves};
 use crate::durable::{PendingWrite, SaveWait, StageStep};
 use crate::event::options::{MAX_KEPT_TEXT_OCTETS, ReportingOptions};
 use crate::prelude::{Box, String};
+use crate::snapshot::write_config::parameters as parameter_format;
 use crate::traits::BACnetObject;
 use crate::write_config::description;
-use crate::write_config::{ReportingWriteConfig, WriteConfigPersistence, WriteConfigSnapshot};
+use crate::write_config::{
+    AlgorithmWriteConfig, ReportingWriteConfig, WriteConfigPersistence, WriteConfigSnapshot,
+};
 
 /// The kept rows' values as an object serves them.
 #[derive(Clone, Debug, PartialEq)]
@@ -28,6 +32,9 @@ pub(crate) struct ReportingRows {
     pub(crate) options: ReportingOptions,
     /// Description, kept beside the reporting settings (#2364).
     pub(crate) description: String,
+    /// The event algorithm parameters the object holds, whichever of them
+    /// its type keeps (#2331).
+    pub(crate) algorithm: AlgorithmWriteConfig,
 }
 
 /// The rows a write has set, now or before a restart.
@@ -41,10 +48,13 @@ pub(crate) struct Written {
     inhibit_ref: bool,
     inhibit: bool,
     description: bool,
+    /// The written algorithm parameters, as the bits of the file's presence
+    /// mask.
+    parameters: u32,
 }
 
 impl Written {
-    /// The flag of `property`, if it is a kept row.
+    /// The flag of `property`, if it is a row every reporter keeps.
     fn flag(&mut self, property: P) -> Option<&mut bool> {
         Some(match property {
             P::NOTIFICATION_CLASS => &mut self.class,
@@ -70,19 +80,42 @@ impl Written {
             inhibit_ref: saved.event_algorithm_inhibit_ref.is_some(),
             inhibit: saved.event_algorithm_inhibit.is_some(),
             description: saved.description.is_some(),
+            parameters: parameter_format::mask(&saved.algorithm),
+        }
+    }
+
+    /// Whether a write set `property` on an object of `object_type`.
+    fn has(mut self, object_type: ObjectType, property: P) -> bool {
+        match self.flag(property) {
+            Some(flag) => *flag,
+            None => parameters::kept_bit(object_type, property)
+                .is_some_and(|bit| self.parameters & bit != 0),
+        }
+    }
+
+    /// Note a write of `property`, a kept row of an object of
+    /// `object_type`.
+    fn set(&mut self, object_type: ObjectType, property: P) {
+        if let Some(flag) = self.flag(property) {
+            *flag = true;
+        } else if let Some(bit) = parameters::kept_bit(object_type, property) {
+            self.parameters |= bit;
         }
     }
 }
 
-/// Whether `property` is one of the kept rows.
-pub(crate) fn kept_row(property: P) -> bool {
+/// Whether `property` is one of the rows an object of `object_type` keeps:
+/// the reporting rows, Description, and the type's algorithm parameters.
+pub(crate) fn kept_row(object_type: ObjectType, property: P) -> bool {
     Written::default().flag(property).is_some()
+        || parameters::kept_bit(object_type, property).is_some()
 }
 
-/// Whether storage keeps a write of `value` to `property`: one of a kept
-/// row, but not a NULL to Description, which changes nothing (#2364).
-fn kept_write(property: P, value: &PropertyValue) -> bool {
-    kept_row(property) && !description::null_write(property, value)
+/// Whether storage keeps a write of `value` to `property` of an object of
+/// `object_type`: one of a kept row, but not a NULL to Description, which
+/// changes nothing (#2364).
+fn kept_write(object_type: ObjectType, property: P, value: &PropertyValue) -> bool {
+    kept_row(object_type, property) && !description::null_write(property, value)
 }
 
 /// The rows and which of them a write set: what one staged write leaves.
@@ -90,6 +123,8 @@ fn kept_write(property: P, value: &PropertyValue) -> bool {
 pub(crate) struct Kept {
     rows: ReportingRows,
     written: Written,
+    /// The object's type: which algorithm parameters it keeps.
+    object_type: ObjectType,
 }
 
 /// The detector fields `write_generic_event_properties!` writes, around
@@ -161,6 +196,9 @@ impl Kept {
             },
             // Past its cap it is refused before anything is saved (#2364).
             P::DESCRIPTION => rows.description = description::written(value)?,
+            property if parameters::kept_bit(self.object_type, property).is_some() => {
+                parameters::after(&mut rows.algorithm, write)?;
+            }
             property => rows
                 .options
                 .write(
@@ -171,9 +209,7 @@ impl Kept {
                 )
                 .unwrap_or_else(|| Err(common::unknown_property_error()))?,
         }
-        if let Some(flag) = next.written.flag(write.property) {
-            *flag = true;
-        }
+        next.written.set(self.object_type, write.property);
         // Only texts storage will keep count: a long one the object took
         // before it had storage is no reason to refuse another row.
         let texts = next.rows.options.message_texts_config();
@@ -203,6 +239,7 @@ impl Kept {
                 .flatten(),
             event_algorithm_inhibit: written.inhibit.then(|| rows.options.inhibited()),
             description: written.description.then(|| rows.description.clone()),
+            algorithm: parameter_format::only(&rows.algorithm, written.parameters),
         }
     }
 
@@ -247,22 +284,14 @@ impl ReportingStore {
 
     /// Whether a setter of `property` leaves it alone: the object has
     /// storage and a write has set the row.
-    pub(crate) fn kept_over_setter(&self, property: P) -> bool {
-        let mut written = self.written;
-        self.attached() && written.flag(property).is_some_and(|flag| *flag)
+    pub(crate) fn kept_over_setter(&self, object_type: ObjectType, property: P) -> bool {
+        self.attached() && self.written.has(object_type, property)
     }
 
     /// Block until the saves queued so far have run.
     pub(crate) fn wait_idle(&self) {
         if let Some(storage) = &self.storage {
             storage.wait_idle();
-        }
-    }
-
-    fn kept(&self, rows: ReportingRows) -> Kept {
-        Kept {
-            rows,
-            written: self.written,
         }
     }
 }
@@ -302,11 +331,16 @@ fn with_store<T: KeepsReporting, R>(
 }
 
 fn store_snapshot<T: KeepsReporting>(written: &Written, object: &T) -> WriteConfigSnapshot {
+    kept(*written, object).snapshot()
+}
+
+/// `object`'s rows as it serves them, `written` those a write set.
+fn kept<T: KeepsReporting>(written: Written, object: &T) -> Kept {
     Kept {
         rows: object.reporting_rows(),
-        written: *written,
+        written,
+        object_type: object.object_identifier().object_type(),
     }
-    .snapshot()
 }
 
 fn operational_problem() -> Error {
@@ -331,7 +365,12 @@ pub(crate) fn attach<T: KeepsReporting>(
         }
     };
     description::check_saved(saved.description.as_deref())?;
-    if let Some(reason) = crate::snapshot::write_config::reporting_invalid(&saved) {
+    // A stored parameter the object would refuse on the wire, or doesn't
+    // have, is refused here as the codec refuses it: a backend of the
+    // application's own may hand over anything.
+    let invalid = crate::snapshot::write_config::reporting_invalid(&saved)
+        .or_else(|| parameter_format::invalid(oid.object_type(), &saved.algorithm));
+    if let Some(reason) = invalid {
         return Err(Error::Encoding(format!(
             "saved reporting settings {reason}"
         )));
@@ -364,11 +403,12 @@ pub(crate) fn admit<T: KeepsReporting>(
     array_index: Option<u32>,
     value: &PropertyValue,
 ) -> Result<(), Error> {
-    if !kept_write(property, value) || !object.reporting_store_ref().attached() {
+    let object_type = object.object_identifier().object_type();
+    if !kept_write(object_type, property, value) || !object.reporting_store_ref().attached() {
         return Ok(());
     }
     let mut store = core::mem::take(object.reporting_store());
-    let current = store.kept(object.reporting_rows());
+    let current = kept(store.written, object);
     let write = PendingWrite {
         property,
         array_index,
@@ -430,8 +470,9 @@ pub(crate) fn stage_writes<T: KeepsReporting>(
     object: &mut T,
     writes: &[PendingWrite],
 ) -> StageStep {
-    let kept = |write: &PendingWrite| kept_write(write.property, &write.value);
-    if !object.reporting_store_ref().attached() || !writes.iter().any(kept) {
+    let object_type = object.object_identifier().object_type();
+    let kept_one = |write: &PendingWrite| kept_write(object_type, write.property, &write.value);
+    if !object.reporting_store_ref().attached() || !writes.iter().any(kept_one) {
         return StageStep::Skip;
     }
     with_store(object, |store, object| {
@@ -439,12 +480,9 @@ pub(crate) fn stage_writes<T: KeepsReporting>(
         if let Some(wait) = storage.busy() {
             return StageStep::Busy(wait);
         }
-        let current = Kept {
-            rows: object.reporting_rows(),
-            written: store.written,
-        };
+        let current = kept(store.written, object);
         let steps = staged::steps(writes, |earlier, write| {
-            if !kept(write) {
+            if !kept_one(write) {
                 return Ok(None);
             }
             crate::property_metadata::check_write_array_index(
@@ -496,8 +534,9 @@ pub(crate) fn expire<T: KeepsReporting>(object: &mut T, now: Duration) {
     });
 }
 
-/// Drop every kept row: save the rows with none written and wait for the
-/// save, then let the setters apply again. The values served stay until a
+/// Drop every kept row, the algorithm parameters with the rest: save the
+/// rows with none written and wait for the save, then let the setters apply
+/// again. The values served stay until a
 /// setter or a write changes them. A save that fails keeps the rows written
 /// and returns storage's error. Does nothing without storage.
 pub(crate) fn clear<T: KeepsReporting>(object: &mut T) -> Result<(), Error> {
@@ -508,13 +547,10 @@ pub(crate) fn clear<T: KeepsReporting>(object: &mut T) -> Result<(), Error> {
         if store.written == Written::default() {
             return Ok(());
         }
-        let current = Kept {
-            rows: object.reporting_rows(),
-            written: store.written,
-        };
+        let current = kept(store.written, object);
         let cleared = Kept {
-            rows: current.rows.clone(),
             written: Written::default(),
+            ..current.clone()
         };
         // A staged step worked out from the written rows gives way.
         storage.drop_staged();
@@ -533,7 +569,7 @@ pub(crate) fn written<T: KeepsReporting>(object: &T) -> ReportingWriteConfig {
     if !store.attached() {
         return ReportingWriteConfig::default();
     }
-    store.kept(object.reporting_rows()).saved()
+    kept(store.written, object).saved()
 }
 
 /// Two stages of one request joined, as the colour objects join Tags and
@@ -564,7 +600,7 @@ pub(crate) fn setter_gives_way(
     object: ObjectIdentifier,
     property: P,
 ) -> bool {
-    let kept = store.kept_over_setter(property);
+    let kept = store.kept_over_setter(object.object_type(), property);
     if kept {
         log_debug!(object = %object, ?property, "A written reporting setting kept over a setter");
     }

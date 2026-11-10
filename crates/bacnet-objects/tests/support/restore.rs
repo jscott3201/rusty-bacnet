@@ -334,6 +334,21 @@ pub const FORMATS: &[Format] = &[
         sample: samples::described_color_temperature,
         kind: Kind::ColorTemperature,
     },
+    // Kind 6, an Analog Input's written event algorithm parameters after
+    // its reporting settings (#2331 PR 2), plain and under kind 5; last for
+    // the same reason.
+    Format {
+        name: "parameters_reporting_write_config",
+        two_slot: false,
+        sample: samples::parameters_reporting_write_config,
+        kind: Kind::ReportingWriteConfig,
+    },
+    Format {
+        name: "described_parameters_reporting_write_config",
+        two_slot: false,
+        sample: samples::described_parameters_reporting_write_config,
+        kind: Kind::ReportingWriteConfig,
+    },
 ];
 
 impl Format {
