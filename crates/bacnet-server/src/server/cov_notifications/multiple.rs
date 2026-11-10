@@ -461,7 +461,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             // and the locked sections the split took itself while it held
             // the store: one for each change that lost a value, then one for
             // the references left out. Nothing returns before every part is
-            // guarded again.
+            // guarded again. A panic inside `split` is the one way out with
+            // no guard: the plain claim unwinds with its changes, where the
+            // guard the split used to hold gave them back. Nothing in the
+            // split is known to panic; the claimed changes would be lost,
+            // not sent twice.
             let Split {
                 parts,
                 lost,

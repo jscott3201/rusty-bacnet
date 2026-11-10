@@ -493,8 +493,8 @@ wire.
 - `cov::timed::follow_table`: how the histories follow the table. The
   server's wrapper did this in its `sync`, between the admission and the
   capture; as a function it serves the wrapper after every mutation and
-  the service inside its one call. `CovTable::fenced` lets the service
-  read what the table fenced and leave it for its host.
+  the service inside its one call. The service reads what the table
+  fenced through a crate-private accessor and leaves it for its host.
 - `cov::timed_capture`: the capture at the mutation boundary, in three
   steps. `TimedCapture::object`, `exact`, `all` and `initial` take the
   table and `now` and collect the references; `read` takes the database
@@ -1254,7 +1254,9 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
       `cov-multiple` has none.
     - `ITEM_FRAMING`, `value_len` and `request_header` are private to the
       crate again. `split`'s inputs (`ReportContent`, `Stamp`) and the
-      claim's settling calls stay unstable until PR 2b.
+      claim's settling calls stay unstable until PR 2b. The changelog
+      calls this Changed, not Breaking (lead, 2026-11-10): the three were
+      public for a few days on dev and in no release.
     - The hosted names: the server's `TimedStore` is `HistoryStore` and
       its `TimedClaim` is `ClaimGuard`.
     - Size (`check-firmware-link.sh`, Rust 1.99.0): no image's numbers
@@ -1376,7 +1378,11 @@ pure move commit after.
 | Multiple fanout (2b) | Tokio locks on the database and the table, the store's mutex, the claim guard's and the send turn's `Drop`, the transport sends, the invoke ID lease, `tracing`, the server's atomics, three std hash maps | not yet |
 
 The two move commits changed imports, visibility, module declarations and
-feature gates, and added the field docs a public item needs.
+feature gates, and added the field docs a public item needs. The first
+did two things more, both because the split now lives beside the
+histories: it narrowed `cov::timed`'s `ITEM_FRAMING`, `value_len` and
+`request_header` to the crate, and rewrote that module's paragraph on
+what is unstable to match. No logic changed in either.
 
 PR 1's review left three notes for PR 2. All are done in 2a: the hosted
 names are `HistoryStore` and `ClaimGuard`; the capture reads the clock
@@ -1392,7 +1398,9 @@ For PR 2b:
 - The closure that times a carried field (`Stamp`) reads the histories
   while the split runs. In the server it locks the store per call; a
   `Reporter` holds the histories outright, so `Stamp` may become the
-  owners' map and a clock read that `split` applies itself.
+  owners' map and a clock read that `split` applies itself. That changes
+  `ReportContent` and so `split`'s inputs: `cov::timed`, the split and
+  the items stay marked unstable until then.
 - The fanout's hosted parts are the claim guard, the send turn and the
   lodged claim, all RAII. The `Reporter` needs their explicit forms:
   `begin_send` and `end_send`, `lodge` and `settle`, `give_back`.

@@ -47,13 +47,27 @@ use super::multiple_reads::MultipleReads;
 use super::timed::{ITEM_FRAMING, TimedChange, TimedClaim, ValueFit, request_header, value_len};
 
 /// Project the request-level and per-value COV timestamps from one sample.
-pub fn cov_multiple_datetime(
+fn datetime(
     frame: bacnet_objects::clock::ClockFrame,
 ) -> (
     bacnet_types::primitives::Date,
     bacnet_types::primitives::Time,
 ) {
     (frame.local_date, frame.local_time)
+}
+
+/// The timestamp a notification named after `frame` carries. A hook for a
+/// host's tests of what its clock projects, behind the `test-support`
+/// feature.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn cov_multiple_datetime(
+    frame: bacnet_objects::clock::ClockFrame,
+) -> (
+    bacnet_types::primitives::Date,
+    bacnet_types::primitives::Time,
+) {
+    datetime(frame)
 }
 
 /// Envelope fields every notification of one report shares.
@@ -76,7 +90,7 @@ impl Envelope {
             subscriber_process_identifier: self.subscriber_process_identifier,
             initiating_device_identifier: self.initiating_device_identifier,
             time_remaining: self.time_remaining,
-            timestamp: timestamp.map(cov_multiple_datetime),
+            timestamp: timestamp.map(datetime),
             list_of_cov_notifications: items,
         }
     }

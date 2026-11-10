@@ -8107,8 +8107,6 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   the histories in line with the table after a mutation: removed
   references lose their history, published ones are bound to their new
   generation, and a refreshed context takes its delay and sizing.
-  `CovTable::fenced()` reads what `take_fenced()` would take and leaves
-  it, for a step that runs before the host's own.
 - The rest of the SubscribeCOVPropertyMultiple path but its fanout (#2320,
   behind `cov-multiple` too):
   - `cov::subscribe_cov_property_multiple(table, histories, db, peer,

@@ -17,16 +17,16 @@ use super::timed::TimedChange;
 pub type Coordinate = (ObjectIdentifier, Option<PropertyIdentifier>, Option<u32>);
 
 /// Each retained reference with its prepared current values (empty for a
-/// timestamped reference, whose latest change in [`Latest`] supplies them).
+/// timestamped reference, whose latest change in the report supplies them).
 pub type Retained<'a> = [(&'a CovSubscriptionSnapshot, &'a [COVNotificationValue])];
 
 /// Queued history conveyed as distinct timestamped values, in capture order.
-pub type History<'a> = [(&'a CovSubscriptionKey, &'a TimedChange)];
+pub(crate) type History<'a> = [(&'a CovSubscriptionKey, &'a TimedChange)];
 
 /// The latest change a notification carries of each timestamped reference,
 /// conveyed as its current state. A reference without one conveys no change
 /// in that notification: its changes went out in an earlier one (#1008).
-pub type Latest<'a> = BTreeMap<&'a CovSubscriptionKey, &'a TimedChange>;
+pub(crate) type Latest<'a> = BTreeMap<&'a CovSubscriptionKey, &'a TimedChange>;
 
 /// Capture sequence and clock frame of a change whose time a value carries.
 pub type LastChange = (u64, ClockFrame);

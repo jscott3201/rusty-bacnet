@@ -3,11 +3,15 @@
 //!
 //! Producers collect the affected references under a short COV table read
 //! and read objects after releasing it, still under the database write
-//! guard that committed the change; the admission capture runs inside the
-//! subscribe service, which already holds the table. The store is locked
-//! last (database, then table, then store), only to queue what was read:
-//! no object is read under it. Its lock is where the server reads the
-//! capture's instant, once for all the changes one capture queues.
+//! guard that committed the change. The store is locked last (database,
+//! then table, then store). A producer's capture locks it only to queue
+//! what was read, so it reads no object under it, and reads its instant
+//! there, once for all the changes it queues.
+//!
+//! The admission capture is not one of these. It runs inside the core's
+//! subscribe service, for which the table wrapper holds the store through
+//! the whole call: that capture does read its objects under the store's
+//! lock, and takes the request's instant.
 
 use bacnet_objects::clock::ClockFrame;
 use bacnet_objects::database::ObjectDatabase;

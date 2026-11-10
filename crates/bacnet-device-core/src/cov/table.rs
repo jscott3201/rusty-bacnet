@@ -211,10 +211,11 @@ impl CovTable {
         core::mem::take(&mut self.fenced)
     }
 
-    /// What [`Self::take_fenced`] would take, left in place: for a step
-    /// that keeps other state in line with the table before its host takes
-    /// the rest.
-    pub fn fenced(&self) -> &Fenced {
+    /// What [`Self::take_fenced`] would take, left in place: for the
+    /// crate's own steps that keep other state in line with the table
+    /// before the host takes the rest.
+    #[cfg(feature = "cov-multiple")]
+    pub(crate) fn fenced(&self) -> &Fenced {
         &self.fenced
     }
 

@@ -4,11 +4,11 @@ use bacnet_services::cov_multiple::COVReference;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 
 use super::*;
-use crate::cov::CovTimeRemaining;
 use crate::cov::multiple_fixture::{
     HandClock, PV, T0, at, av, context, database, deliver, frame, key, reference, request,
     seconds_and_values, set, subscribe,
 };
+use crate::cov::{CovPolicy, CovTimeRemaining};
 
 /// A property an Analog Value does not have.
 const MISSING: PropertyIdentifier = PropertyIdentifier::FEEDBACK_VALUE;
@@ -220,6 +220,242 @@ fn a_reference_that_fails_is_named_and_the_ones_before_it_are_kept() {
             .next()
             .is_none()
     );
+}
+
+/// A table whose policy lets one recipient hold `per_peer` subscriptions
+/// and all of them together `global`.
+fn capped(per_peer: usize, global: usize) -> (CovTable, TimedHistories) {
+    let policy = CovPolicy {
+        max_subscriptions_per_peer: per_peer,
+        max_subscriptions_global: global,
+        ..CovPolicy::default()
+    };
+    (CovTable::new(policy), TimedHistories::new(1476))
+}
+
+fn no_space(refusal: &MultipleRefusal) {
+    assert_eq!(
+        class_and_code(&refusal.error),
+        (
+            ErrorClass::RESOURCES,
+            ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT
+        )
+    );
+}
+
+/// Present_Value of Analog Values 1 to 3, then their Status_Flags: six
+/// references, each naming a different object and property pair.
+fn six() -> [(u32, [COVReference; 1]); 6] {
+    [
+        (1, [reference(PV, true)]),
+        (2, [reference(PV, true)]),
+        (3, [reference(PV, true)]),
+        (1, [reference(PropertyIdentifier::STATUS_FLAGS, false)]),
+        (2, [reference(PropertyIdentifier::STATUS_FLAGS, false)]),
+        (3, [reference(PropertyIdentifier::STATUS_FLAGS, false)]),
+    ]
+}
+
+/// A request of process `process` for the first `count` of [`six`].
+fn first(process: u32, count: usize) -> SubscribeCOVPropertyMultipleRequest {
+    let six = six();
+    let objects: Vec<_> = six[..count]
+        .iter()
+        .map(|(instance, references)| (*instance, &references[..]))
+        .collect();
+    request(process, Some(300), Some(30), &objects)
+}
+
+#[test]
+fn the_recipients_quota_refuses_the_first_reference_past_it_by_name() {
+    let clock = HandClock::showing(1);
+    let db = database(Some(&clock), 3);
+    // Exactly the quota fits.
+    let (mut table, mut histories) = capped(4, 100);
+    let accepted = subscribe(&mut table, &mut histories, &db, first(1, 4), T0).unwrap();
+    assert_eq!(accepted.len(), 4);
+    assert_eq!(table.take_counts().subscriptions_rejected_quota, 0);
+
+    // One more does not: the fifth reference in request order is named, and
+    // the four before it are kept and owed their initial reports.
+    let (mut table, mut histories) = capped(4, 100);
+    let refusal = subscribe(&mut table, &mut histories, &db, first(1, 5), T0).unwrap_err();
+    no_space(&refusal);
+    assert_eq!(
+        named(&refusal.error),
+        Some((av(2), PropertyIdentifier::STATUS_FLAGS.to_raw()))
+    );
+    assert_eq!((refusal.refused, refusal.committed.len()), (Some(4), 4));
+    assert_eq!(table.len(), 4);
+    assert_eq!(histories.next_deadline(), Some(at(30)), "initial captures");
+    let counts = table.take_counts();
+    assert_eq!(
+        (
+            counts.subscriptions_rejected_quota,
+            counts.subscriptions_rejected_capacity
+        ),
+        (1, 0)
+    );
+    table.take_fenced();
+
+    // The quota is the recipient's, across its contexts: a second process
+    // finds no room for its first reference, and nothing changes.
+    let refusal = subscribe(&mut table, &mut histories, &db, first(2, 2), at(1)).unwrap_err();
+    no_space(&refusal);
+    assert_eq!(named(&refusal.error), Some((av(1), PV.to_raw())));
+    assert_eq!((refusal.refused, refusal.committed.len()), (Some(0), 0));
+    assert_eq!(table.len(), 4);
+    assert!(table.fenced().is_empty());
+
+    // A renewal adds nothing, so a full recipient can still renew.
+    let renewed = subscribe(&mut table, &mut histories, &db, first(1, 4), at(2)).unwrap();
+    assert_eq!(renewed.len(), 4);
+}
+
+#[test]
+fn the_tables_capacity_refuses_the_first_reference_past_it_by_name() {
+    let clock = HandClock::showing(1);
+    let db = database(Some(&clock), 3);
+    let (mut table, mut histories) = capped(100, 3);
+    assert_eq!(
+        subscribe(&mut table, &mut histories, &db, first(1, 3), T0)
+            .unwrap()
+            .len(),
+        3
+    );
+
+    let (mut table, mut histories) = capped(100, 3);
+    let refusal = subscribe(&mut table, &mut histories, &db, first(1, 6), T0).unwrap_err();
+    no_space(&refusal);
+    assert_eq!(
+        named(&refusal.error),
+        Some((av(1), PropertyIdentifier::STATUS_FLAGS.to_raw()))
+    );
+    assert_eq!((refusal.refused, refusal.committed.len()), (Some(3), 3));
+    assert_eq!(table.len(), 3);
+    let counts = table.take_counts();
+    assert_eq!(
+        (
+            counts.subscriptions_rejected_quota,
+            counts.subscriptions_rejected_capacity
+        ),
+        (0, 1)
+    );
+}
+
+#[test]
+fn the_unreserved_share_refuses_a_recipient_without_a_reservation() {
+    let clock = HandClock::showing(1);
+    let db = database(Some(&clock), 3);
+    let share = |reserved: CovRecipient| {
+        let policy = CovPolicy {
+            max_subscriptions_per_peer: 100,
+            max_subscriptions_global: 5,
+            reserved_capacity: 3,
+            reserved_recipients: vec![reserved],
+            ..CovPolicy::default()
+        };
+        (CovTable::new(policy), TimedHistories::new(1476))
+    };
+    let other = CovRecipient::Direct(bacnet_types::MacAddr::from_slice(&[
+        10, 0, 0, 9, 0xBA, 0xC0,
+    ]));
+
+    // Three of the five slots are another recipient's: two are left.
+    let (mut table, mut histories) = share(other.clone());
+    assert_eq!(
+        subscribe(&mut table, &mut histories, &db, first(1, 2), T0)
+            .unwrap()
+            .len(),
+        2
+    );
+    let (mut table, mut histories) = share(other);
+    let refusal = subscribe(&mut table, &mut histories, &db, first(1, 3), T0).unwrap_err();
+    no_space(&refusal);
+    assert_eq!(named(&refusal.error), Some((av(3), PV.to_raw())));
+    assert_eq!((refusal.refused, refusal.committed.len()), (Some(2), 2));
+    assert_eq!(table.take_counts().subscriptions_rejected_capacity, 1);
+
+    // The recipient the reservation names has the whole table.
+    let (mut table, mut histories) = share(context(1).recipient);
+    assert_eq!(
+        subscribe(&mut table, &mut histories, &db, first(1, 5), T0)
+            .unwrap()
+            .len(),
+        5
+    );
+    let (mut table, mut histories) = share(context(1).recipient);
+    let refusal = subscribe(&mut table, &mut histories, &db, first(1, 6), T0).unwrap_err();
+    no_space(&refusal);
+    assert_eq!(
+        named(&refusal.error),
+        Some((av(3), PropertyIdentifier::STATUS_FLAGS.to_raw()))
+    );
+    assert_eq!((refusal.refused, refusal.committed.len()), (Some(5), 5));
+}
+
+#[test]
+fn whichever_comes_first_in_the_request_is_the_refusal_a_cap_or_a_bad_reference() {
+    let clock = HandClock::showing(1);
+    let db = database(Some(&clock), 3);
+    let good = |instance: u32| (instance, [reference(PV, true)]);
+    let bad = (1, [reference(MISSING, true)]);
+
+    // The cap is met at the third reference, ahead of the bad fourth.
+    let order = [good(1), good(2), good(3), bad.clone()];
+    let objects: Vec<_> = order.iter().map(|(i, r)| (*i, &r[..])).collect();
+    let (mut table, mut histories) = capped(2, 100);
+    let refusal = subscribe(
+        &mut table,
+        &mut histories,
+        &db,
+        request(1, Some(300), Some(30), &objects),
+        T0,
+    )
+    .unwrap_err();
+    no_space(&refusal);
+    assert_eq!(named(&refusal.error), Some((av(3), PV.to_raw())));
+    assert_eq!((refusal.refused, refusal.committed.len()), (Some(2), 2));
+
+    // The bad reference is second, ahead of where the cap would be met.
+    let order = [good(1), bad, good(2), good(3)];
+    let objects: Vec<_> = order.iter().map(|(i, r)| (*i, &r[..])).collect();
+    let (mut table, mut histories) = capped(2, 100);
+    let refusal = subscribe(
+        &mut table,
+        &mut histories,
+        &db,
+        request(1, Some(300), Some(30), &objects),
+        T0,
+    )
+    .unwrap_err();
+    assert_eq!(
+        class_and_code(&refusal.error),
+        (ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY)
+    );
+    assert_eq!(named(&refusal.error), Some((av(1), MISSING.to_raw())));
+    assert_eq!((refusal.refused, refusal.committed.len()), (Some(1), 1));
+    assert_eq!(table.take_counts().subscriptions_rejected_quota, 0);
+}
+
+#[test]
+fn running_out_of_generations_refuses_the_whole_request() {
+    let clock = HandClock::showing(1);
+    let db = database(Some(&clock), 3);
+    let (mut table, mut histories) = capped(100, 100);
+    subscribe(&mut table, &mut histories, &db, first(1, 1), T0).unwrap();
+    table.take_counts();
+    table.take_fenced();
+    // One generation left, and the request needs two.
+    table.generation = u64::MAX - 1;
+    let refusal = subscribe(&mut table, &mut histories, &db, first(1, 3), at(1)).unwrap_err();
+    no_space(&refusal);
+    // No reference is at fault: the general form, and nothing is kept.
+    assert_eq!(named(&refusal.error), None);
+    assert_eq!((refusal.refused, refusal.committed.len()), (None, 0));
+    assert_eq!(table.len(), 1);
+    assert_eq!(table.take_counts().subscriptions_rejected_capacity, 1);
+    assert_eq!(histories.held().0, 1);
 }
 
 #[test]
