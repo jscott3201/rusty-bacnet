@@ -46,7 +46,7 @@ fn msi_db_with_states(
     alarm_values: Vec<u32>,
 ) -> (ObjectDatabase, ObjectIdentifier) {
     let mut msi = MultiStateInputObject::new(1, "MSI-1", number_of_states).unwrap();
-    msi.set_alarm_values(alarm_values);
+    msi.set_alarm_values(alarm_values).unwrap();
     let oid = msi.object_identifier();
     let mut db = ObjectDatabase::new();
     db.add(Box::new(msi)).unwrap();

@@ -80,7 +80,7 @@ fn assert_not_a_list(
 fn msv_db() -> (ObjectDatabase, ObjectIdentifier) {
     let mut db = ObjectDatabase::new();
     let mut msv = MultiStateValueObject::new(1, "MSV-1", 3).unwrap();
-    msv.set_alarm_values(vec![1, 2, 3]);
+    msv.set_alarm_values(vec![1, 2, 3]).unwrap();
     let oid = add(&mut db, msv);
     (db, oid)
 }

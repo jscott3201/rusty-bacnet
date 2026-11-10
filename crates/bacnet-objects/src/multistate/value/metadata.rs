@@ -251,7 +251,7 @@ mod tests {
             )
             .unwrap();
         object.set_relinquish_default(3).unwrap();
-        object.set_alarm_values(vec![3]);
+        object.set_alarm_values(vec![3]).unwrap();
         object
             .write_property(
                 P::STATE_TEXT,

@@ -178,7 +178,15 @@ impl MultiStateValueObject {
     /// The BACnet `Number_Of_States` property remains read-only. A successful
     /// local change resizes State_Text and immediately re-evaluates Reliability;
     /// retained commands, defaults, alarms, and Present_Value are not repaired.
+    /// On an object keeping its reporting settings, a State_Text a write
+    /// saved wins, and with it its count: zero is still refused, and the
+    /// saved texts stay, until `clear_written_reporting` (#2414).
     pub fn set_number_of_states(&mut self, number_of_states: u32) -> Result<(), Error> {
+        require_nonzero_states(number_of_states)?;
+        #[cfg(feature = "event-reporting")]
+        if self.kept_over_setter(PropertyIdentifier::STATE_TEXT) {
+            return Ok(());
+        }
         resize_state_text(
             &mut self.number_of_states,
             &mut self.state_text,
@@ -190,17 +198,21 @@ impl MultiStateValueObject {
 
     /// Set the alarm values and synchronously re-evaluate configuration Reliability.
     ///
-    /// Unlike a network write, which refuses a state past Number_Of_States
-    /// (#1429), this takes any state; one past the count shows as
-    /// CONFIGURATION_ERROR. On an object keeping its reporting settings,
-    /// Alarm_Values a write saved win, as for the other setters (#2331).
-    pub fn set_alarm_values(&mut self, values: Vec<u32>) {
+    /// The list is checked as a network write of it is (#2415): more than
+    /// 1,024 entries is RESOURCES / NO_SPACE_TO_WRITE_PROPERTY, and a zero
+    /// or a state past Number_Of_States is VALUE_OUT_OF_RANGE, each naming
+    /// its entry; the list held stays. On an object keeping its reporting
+    /// settings, Alarm_Values a write saved win: the argument is checked
+    /// and the saved list stays, until `clear_written_reporting` (#2331).
+    pub fn set_alarm_values(&mut self, values: Vec<u32>) -> Result<(), Error> {
+        check_alarm_values(&values, self.number_of_states)?;
         #[cfg(feature = "event-reporting")]
         if self.kept_over_setter(PropertyIdentifier::ALARM_VALUES) {
-            return;
+            return Ok(());
         }
         self.event_detector.alarm_values = values;
         let _ = self.recompute_reliability();
+        Ok(())
     }
 
     /// Set the Relinquish_Default (#270).
@@ -240,14 +252,15 @@ impl MultiStateValueObject {
 
     /// The values the object keeps that name a state, which a new count
     /// may not strand: the commands in Priority_Array, Present_Value,
-    /// Relinquish_Default and Alarm_Values.
-    fn held_states(&self) -> impl Iterator<Item = u32> + '_ {
+    /// Relinquish_Default and `alarm_values`, the Alarm_Values the count
+    /// will meet.
+    fn held_states<'a>(&'a self, alarm_values: &'a [u32]) -> impl Iterator<Item = u32> + 'a {
         self.priority_array
             .iter()
             .flatten()
             .copied()
             .chain([self.present_value, self.relinquish_default])
-            .chain(self.event_detector.alarm_values.iter().copied())
+            .chain(alarm_values.iter().copied())
     }
 
     /// A noncommandable Present_Value write, network-equivalent.
@@ -278,7 +291,7 @@ impl MultiStateValueObject {
 
 crate::write_config::reporting::impl_reporting_persistence!(
     MultiStateValueObject,
-    states: number_of_states
+    states: state_text
 );
 
 impl BACnetObject for MultiStateValueObject {
@@ -457,7 +470,9 @@ impl BACnetObject for MultiStateValueObject {
         }
         if property == PropertyIdentifier::STATE_TEXT {
             // Written whole, State_Text sets Number_Of_States too (#1443).
-            let held: Vec<u32> = self.held_states().collect();
+            let held: Vec<u32> = self
+                .held_states(&self.event_detector.alarm_values)
+                .collect();
             write_state_text(
                 &mut self.number_of_states,
                 &mut self.state_text,
@@ -580,7 +595,9 @@ impl crate::creation::Creatable for MultiStateValueObject {
         property: PropertyIdentifier,
         value: PropertyValue,
     ) -> Result<(), Error> {
-        let held: Vec<u32> = self.held_states().collect();
+        let held: Vec<u32> = self
+            .held_states(&self.event_detector.alarm_values)
+            .collect();
         initialize_states(
             &mut self.number_of_states,
             &mut self.state_text,

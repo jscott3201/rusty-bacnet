@@ -44,8 +44,11 @@ pub(super) fn kept(kind: ObjectType) -> u32 {
     match kind {
         ObjectType::ANALOG_INPUT | ObjectType::ANALOG_OUTPUT | ObjectType::ANALOG_VALUE => 0x3F,
         ObjectType::BINARY_INPUT | ObjectType::BINARY_VALUE => 0x43,
-        ObjectType::BINARY_OUTPUT | ObjectType::MULTI_STATE_OUTPUT => 0x03,
-        ObjectType::MULTI_STATE_INPUT | ObjectType::MULTI_STATE_VALUE => 0x83,
+        ObjectType::BINARY_OUTPUT => 0x03,
+        // The two delays and State_Text (#2414).
+        ObjectType::MULTI_STATE_OUTPUT => 0x1003,
+        // The two delays, Alarm_Values and State_Text.
+        ObjectType::MULTI_STATE_INPUT | ObjectType::MULTI_STATE_VALUE => 0x1083,
         ObjectType::ACCESS_DOOR => 0x383,
         ObjectType::ACCESS_ZONE => 0x83,
         // Time_Delay_Normal, Event_Parameters and Fault_Parameters.
@@ -54,20 +57,32 @@ pub(super) fn kept(kind: ObjectType) -> u32 {
     }
 }
 
-/// What the build before this one kept (#2331 PR 4): this build's rows on
-/// every type but Event Enrollment, and nothing on that.
+/// The bit of State_Text (#2414).
+pub(super) const STATE_TEXT: u32 = 1 << 12;
+
+/// What the build before this one kept (#2331 PR 5): this build's rows on
+/// every type, State_Text on none.
 fn kept_before(kind: ObjectType) -> u32 {
-    match kind {
-        ObjectType::EVENT_ENROLLMENT => 0,
-        kind => kept(kind),
-    }
+    kept(kind) & !STATE_TEXT
 }
 
 /// Every row's bit.
-const ALL: u32 = 0xFFF;
+const ALL: u32 = 0x1FFF;
 
 /// How many rows the table has.
-const ROWS: u32 = 12;
+const ROWS: u32 = 13;
+
+/// The State_Text [`holding`] gives a multi-state object: an empty label
+/// and one past ASCII among them.
+pub(super) fn state_text() -> Vec<String> {
+    vec!["Off".into(), String::new(), "Hô".into()]
+}
+
+/// The row of [`state_text`]: the count, then each label's length and its
+/// UTF-8.
+const STATE_TEXT_ROW: [u8; 22] = [
+    0, 0, 0, 3, 0, 0, 0, 3, b'O', b'f', b'f', 0, 0, 0, 0, 0, 0, 0, 3, b'H', 0xC3, 0xB4,
+];
 
 /// The Event_Parameters [`holding`] gives an Event Enrollment.
 pub(super) fn event_parameters() -> BACnetEventParameter {
@@ -150,6 +165,7 @@ fn rows(kind: ObjectType) -> [(P, Vec<u8>); ROWS as usize] {
         ),
         (P::EVENT_PARAMETERS, EVENT_ROW.to_vec()),
         (P::FAULT_PARAMETERS, FAULT_ROW.to_vec()),
+        (P::STATE_TEXT, STATE_TEXT_ROW.to_vec()),
     ]
 }
 
@@ -170,6 +186,7 @@ pub(super) fn holding(kind: ObjectType, mask: u32) -> AlgorithmWriteConfig {
         masked_alarm_values: has(9).then(|| vec![7, 0xFFFF]),
         event_parameters: has(10).then(event_parameters),
         fault_parameters: has(11).then(fault_parameters),
+        state_text: has(12).then(state_text),
     }
 }
 
@@ -235,7 +252,7 @@ fn assert_a_newer_builds(object: ObjectIdentifier, octets: &[u8], what: &str) {
     }
 }
 
-/// The table names every parameter once: the bits are 0 to 11 in order,
+/// The table names every parameter once: the bits are 0 to 12 in order,
 /// each property has its own, and each type keeps what [`kept`] says and
 /// nothing else, a Timer nothing at all.
 #[test]
@@ -489,33 +506,37 @@ fn a_parameter_of_another_object_type_is_refused() {
     }
 }
 
-/// The build before this one (#2331 PR 4) refuses a file with a set bit
+/// The build before this one (#2331 PR 5) refuses a file with a set bit
 /// outside what it kept for the object's type as an unknown kind, at the
 /// mask. Every file this build writes that the older one couldn't have is
-/// such a file: kind 6 for an Event Enrollment, for which the older build
-/// kept no row, so any mask at all is outside its rows, a mask of
-/// Time_Delay_Normal alone included. This build's reader, standing where
-/// the older one stood (a type it keeps none of the rows for), refuses the
-/// same tail the same way, before a row is read: with the mask alone, too.
-/// A file of any other type, which the older build wrote too, has no such
-/// bit.
+/// such a file: a multi-state object's holding State_Text (#2414), whose
+/// bit the older build kept for no type. This build's reader, standing
+/// where the older one stood (a type it keeps none of the rows for),
+/// refuses the same tail the same way, before a row is read: with the mask
+/// alone, too. A file without State_Text, which the older build wrote too,
+/// has no such bit.
 #[test]
 fn the_build_before_refuses_what_only_this_build_writes_as_an_unknown_kind() {
     let stand_ins = REPORTERS.into_iter().filter(|kind| kept(*kind) == 0);
     assert_eq!(stand_ins.clone().count(), 1, "the Alert Enrollment");
     for kind in REPORTERS {
         let new = kept(kind) & !kept_before(kind);
-        assert_eq!(new != 0, kind == ObjectType::EVENT_ENROLLMENT, "{kind}");
+        let multi_state = [
+            ObjectType::MULTI_STATE_INPUT,
+            ObjectType::MULTI_STATE_OUTPUT,
+            ObjectType::MULTI_STATE_VALUE,
+        ];
+        assert_eq!(new != 0, multi_state.contains(&kind), "{kind}");
         for mask in (1..=ALL).filter(|mask| mask & !kept(kind) == 0) {
             let octets = encode(kind, holding(kind, mask)).unwrap();
             let plain = encode(kind, AlgorithmWriteConfig::default()).unwrap();
             assert_eq!(octets[12], write_config::KIND_REPORTING_PARAMETERS);
             let written = u32::from_be_bytes(octets[plain.len()..][..4].try_into().unwrap());
             assert_eq!(written, mask, "{kind}");
-            // Outside the older build's rows for the type whenever this
-            // build's rows for it go past them.
-            assert_eq!(written & !kept_before(kind) != 0, new != 0, "{kind}");
-            if new == 0 {
+            // Outside the older build's rows for the type exactly when it
+            // holds State_Text.
+            assert_eq!(written & !kept_before(kind) != 0, written & STATE_TEXT != 0);
+            if written & STATE_TEXT == 0 {
                 continue;
             }
             for stand_in in stand_ins.clone() {

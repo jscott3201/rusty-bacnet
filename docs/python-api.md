@@ -3050,8 +3050,9 @@ Enrollment has none a peer writes.
 | --- | --- |
 | `add_analog_input`, `add_analog_output`, `add_analog_value` | Time_Delay, Time_Delay_Normal, High_Limit, Low_Limit, Deadband, Limit_Enable |
 | `add_binary_input`, `add_binary_value` | Time_Delay, Time_Delay_Normal, Alarm_Value |
-| `add_multistate_input`, `add_multistate_value` | Time_Delay, Time_Delay_Normal, Alarm_Values |
-| `add_binary_output`, `add_multistate_output` | Time_Delay, Time_Delay_Normal |
+| `add_multistate_input`, `add_multistate_value` | Time_Delay, Time_Delay_Normal, Alarm_Values, State_Text |
+| `add_binary_output` | Time_Delay, Time_Delay_Normal |
+| `add_multistate_output` | Time_Delay, Time_Delay_Normal, State_Text |
 | `add_access_door` | Time_Delay, Time_Delay_Normal, Alarm_Values, Fault_Values, Masked_Alarm_Values |
 | `add_access_zone` | Time_Delay, Time_Delay_Normal, Alarm_Values |
 | `add_event_enrollment` | Time_Delay_Normal, Event_Parameters, Fault_Parameters |
@@ -3103,13 +3104,23 @@ a saved one always loads. Door_Alarm_State is checked against the lists the
 door serves, so after such a restart `report_door_state_local` refuses a
 state only the keyword lists name.
 
+State_Text isn't an event algorithm parameter, but the three multi-state
+builders keep a written State_Text in the same file (#2414), whether it is
+written whole, as its size at index 0 or one label at a time, and with it
+the state count: after a restart the object has the labels and the count a
+peer gave it, over the builder's `number_of_states`. With `storage_path` a
+write that would leave more than 1,024 labels, or a label past 512 octets
+of UTF-8, is refused with RESOURCES / NO_SPACE_TO_WRITE_PROPERTY before
+anything is saved; without it a write takes what it always took.
+
 One value a write refuses is still restored: saved Alarm_Values naming a
-state past `number_of_states`. A peer can't write such a list, and can't
-remove a state a list names. But the state count and State_Text aren't
-kept: after a restart the count is the builder's `number_of_states` again,
-whatever a peer made of it through State_Text. So if a peer added a state
-and listed it, or the application now passes a smaller `number_of_states`,
-the file names a state the object doesn't have. The builder doesn't raise.
+state past the object's count. A peer can't write such a list, and can't
+remove a state a list names; a peer that added a state and listed it
+leaves the State_Text that added it in the file, so the restarted object
+has the state. What can still leave such a list is a file holding no
+State_Text (one saved before State_Text was kept among them) on an object
+the application now builds with a smaller `number_of_states` than the list
+needs. The builder doesn't raise.
 The list is restored as it was written and read back that way, and a write
 of the same list is refused. What follows differs by type, and is the cost
 of letting the object start. A Multi-state Input reports no fault and goes

@@ -226,13 +226,55 @@ class WrittenReportingTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(cleared_kind_of=name):
                 self.assertEqual((self.state / name).read_bytes()[12], 4)
 
+    async def test_a_written_state_text_keeps_the_count_its_list_names(self) -> None:
+        """A State_Text written with one more label, and then Alarm_Values
+        naming the added state, are both kept (#2414): after a restart on
+        the builder's three states the Multi-state Value has four, serves
+        the labels and the list, and reports no fault. The clear gives the
+        builder's count back."""
+        labels = PropertyValue.list(
+            [PropertyValue.character_string(text) for text in ("Off", "Low", "High", "Boost")]
+        )
+        server = await self.start()
+        try:
+            await server.write_property_local(
+                MULTI_STATE, P.STATE_TEXT, labels, source_object=None
+            )
+            await server.write_property_local(
+                MULTI_STATE, P.ALARM_VALUES, states(4, 2), source_object=None
+            )
+        finally:
+            await server.stop()
+
+        server = await self.start()
+        try:
+            self.assertEqual(
+                await self.read(server, MULTI_STATE, P.NUMBER_OF_STATES),
+                PropertyValue.unsigned(4),
+            )
+            self.assertEqual(await self.read(server, MULTI_STATE, P.STATE_TEXT), labels)
+            self.assertEqual(await self.read(server, MULTI_STATE, P.ALARM_VALUES), states(4, 2))
+            sound = PropertyValue.enumerated(0)
+            self.assertEqual(await self.read(server, MULTI_STATE, P.RELIABILITY), sound)
+        finally:
+            await server.stop()
+
+        server = await self.start(clear=True)
+        try:
+            self.assertEqual(
+                await self.read(server, MULTI_STATE, P.NUMBER_OF_STATES),
+                PropertyValue.unsigned(3),
+            )
+        finally:
+            await server.stop()
+
     async def test_saved_alarm_values_past_the_state_count_are_restored(self) -> None:
         """A saved Alarm_Values list naming a state the object is built
-        without doesn't stop the builder: the state count isn't kept, so a
-        peer may have added the state before the restart. The list is read
-        back as written, a write of it is refused, and the Multi-state Value
-        reports CONFIGURATION_ERROR (10) until a list within its states is
-        written. The clear drops it like any other saved value."""
+        without doesn't stop the builder: with no State_Text written the
+        count is the builder's, which an application may lower. The list is
+        read back as written, a write of it is refused, and the Multi-state
+        Value reports CONFIGURATION_ERROR (10) until a list within its
+        states is written. The clear drops it like any other saved value."""
         fault = PropertyValue.enumerated(10)
         sound = PropertyValue.enumerated(0)
         server = await self.start()

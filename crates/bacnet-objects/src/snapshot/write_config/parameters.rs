@@ -45,6 +45,12 @@ mod on {
     ];
     /// An Event Enrollment's own: Event_Parameters and Fault_Parameters.
     pub(super) const ENROLLMENT: &[T] = &[T::EVENT_ENROLLMENT];
+    /// State_Text: the multi-state Input, Output and Value (#2414).
+    pub(super) const MULTI_STATE: &[T] = &[
+        T::MULTI_STATE_INPUT,
+        T::MULTI_STATE_OUTPUT,
+        T::MULTI_STATE_VALUE,
+    ];
     /// The types with a Time_Delay_Normal property: those of [`DELAYED`],
     /// and an Event Enrollment, whose Time_Delay is a member of its
     /// Event_Parameters and so no row of its own.
@@ -193,8 +199,8 @@ mod stored {
     /// handed:
     ///
     /// - a Multi-state Input's or Value's state number is any but zero
-    ///   (the object's own Number_Of_States isn't kept, so it is no part of
-    ///   the rule);
+    ///   (the object's Number_Of_States is no part of the rule: a list
+    ///   opens on an object built with fewer states);
     /// - an Access Door's or Access Zone's is a member of its enumeration,
     ///   named or proprietary, other than NORMAL, by the check its writes
     ///   run ([`listed_states`](crate::access_control::listed_states));
@@ -323,6 +329,53 @@ mod stored {
         crate::event_enrollment::parameters::event_parameter_octets,
         "Event_Parameters"
     );
+    /// State_Text: a count in four octets, from 1 to the 1,024 states an
+    /// object takes
+    /// ([`MAX_NUMBER_OF_STATES`](crate::multistate::MAX_NUMBER_OF_STATES)),
+    /// then each label as a length in four octets, at most
+    /// [`MAX_KEPT_STATE_TEXT_OCTETS`](crate::multistate::MAX_KEPT_STATE_TEXT_OCTETS),
+    /// and that many octets of UTF-8. A count past the cap, or one the
+    /// body's octets can't hold at four octets a label, is refused before
+    /// anything is allocated, and a length past the cap before its octets
+    /// are read. What a write leaves storage holding is one rule
+    /// ([`state_text_fits`](crate::multistate::state_text_fits)), for a
+    /// write and for a load.
+    pub(super) mod texts {
+        use super::{BytesMut, ObjectType, Reader, SnapshotError};
+        use crate::multistate::{MAX_KEPT_STATE_TEXT_OCTETS, MAX_NUMBER_OF_STATES};
+        use crate::prelude::{String, Vec};
+
+        pub(in super::super) fn put(texts: &[String], body: &mut BytesMut) {
+            // `invalid` has refused a count or a label past its cap.
+            body.extend_from_slice(&(texts.len() as u32).to_be_bytes());
+            for text in texts {
+                body.extend_from_slice(&(text.len() as u32).to_be_bytes());
+                body.extend_from_slice(text.as_bytes());
+            }
+        }
+
+        pub(in super::super) fn get(reader: &mut Reader<'_>) -> Result<Vec<String>, SnapshotError> {
+            let count = reader.count(MAX_NUMBER_OF_STATES as usize)?;
+            if count * 4 > reader.body.len() - reader.at {
+                return Err(SnapshotError::truncated("is cut short"));
+            }
+            let mut texts = Vec::with_capacity(count);
+            for _ in 0..count {
+                let octets = reader.octets(MAX_KEPT_STATE_TEXT_OCTETS)?;
+                let text = core::str::from_utf8(octets).map_err(|_| {
+                    SnapshotError::damaged("holds a State_Text label that isn't UTF-8")
+                })?;
+                texts.push(String::from(text));
+            }
+            Ok(texts)
+        }
+
+        pub(in super::super) fn invalid(texts: &[String], _: ObjectType) -> Option<&'static str> {
+            (!crate::multistate::state_text_fits(texts))
+                .then_some("holds a State_Text no write leaves storage holding")
+        }
+    }
+
     encoded!(
         fault_parameters,
         bacnet_types::constructed::FaultParameters,
@@ -479,7 +532,21 @@ rows! {
     event_parameters: EVENT_PARAMETERS = 1 << 10, event_parameters, on::ENROLLMENT;
     /// Fault_Parameters of an Event Enrollment, as Event_Parameters.
     fault_parameters: FAULT_PARAMETERS = 1 << 11, fault_parameters, on::ENROLLMENT;
+    /// State_Text of a multi-state object, no event algorithm parameter
+    /// but kept beside them (#2414): a count in four octets, then each
+    /// label as its length in four octets and its UTF-8.
+    state_text: STATE_TEXT = 1 << 12, texts, on::MULTI_STATE;
 }
+
+// The largest file a multi-state object can save fits the format's cap:
+// every label at its cap, beside a Description and three message texts at
+// theirs, a full Alarm_Values list, and room to spare for the rest.
+const _: () = {
+    use crate::multistate::{MAX_ALARM_VALUES, MAX_KEPT_STATE_TEXT_OCTETS, MAX_NUMBER_OF_STATES};
+    let texts = 4 + MAX_NUMBER_OF_STATES as usize * (4 + MAX_KEPT_STATE_TEXT_OCTETS);
+    let others = 4 * (4 + crate::event::options::MAX_KEPT_TEXT_OCTETS) + 4 + 4 * MAX_ALARM_VALUES;
+    assert!(texts + others + 64 * 1024 <= super::MAX_LEN);
+};
 
 /// Why a list row holding `values` is one no write to an object of
 /// `object_type` leaves: the rule itself, for its tests.
@@ -502,7 +569,10 @@ pub(crate) fn invalid_list(values: &[u32], object_type: ObjectType) -> Option<&'
 /// - Alarm_Value on a Binary Input or Value;
 /// - Alarm_Values on a Multi-state Input or Value, an Access Door and an
 ///   Access Zone;
-/// - Fault_Values and Masked_Alarm_Values on an Access Door.
+/// - Fault_Values and Masked_Alarm_Values on an Access Door;
+/// - State_Text on a Multi-state Input, Output or Value (#2414), which is
+///   no event algorithm parameter but is kept in the same table, and with
+///   it Number_Of_States.
 ///
 /// An Alert Enrollment keeps none: it has no algorithm parameter a peer
 /// writes. A file holding a parameter the object's type doesn't keep here is
@@ -518,11 +588,13 @@ pub fn keeps_parameter(object_type: ObjectType, property: P) -> bool {
 /// state the type's lists don't take (zero on a multi-state object; NORMAL
 /// or a value outside the enumeration on an Access Door or Zone), or
 /// Event_Parameters or Fault_Parameters with no encoding or one past the
-/// 64 KiB an enrollment with storage takes. The
+/// 64 KiB an enrollment with storage takes, or a State_Text of no label,
+/// of more than 1,024 or with a label past 512 octets. The
 /// object refuses each on the wire, so storage holding one is refused too.
 /// A state past a multi-state object's own Number_Of_States is no such
-/// value: the count isn't kept, so the object takes the list as it was
-/// written.
+/// value: on storage holding no State_Text the count is the one the
+/// application builds the object with, so the object takes the list as it
+/// was written.
 pub(crate) fn invalid(
     object_type: ObjectType,
     config: &AlgorithmWriteConfig,

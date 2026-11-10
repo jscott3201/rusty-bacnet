@@ -279,6 +279,35 @@ fn with_alarm_values(mut snapshot: WriteConfigSnapshot) -> WriteConfigSnapshot {
     snapshot
 }
 
+/// A Multi-state Input's written reporting settings, time delays,
+/// Alarm_Values and State_Text (#2414): kind 6 with the list row and the
+/// labels row. The labels give the object one state more than the eight it
+/// is built with, and the list names it, as a peer that adds a state and
+/// lists it leaves storage.
+pub fn state_text_reporting_write_config(path: &Path) {
+    let snapshot = with_state_text(reporting_config(None));
+    save_write_config(path, ObjectType::MULTI_STATE_INPUT, &snapshot);
+}
+
+/// The same with a written Description: kind 5 around kind 6.
+pub fn described_state_text_reporting_write_config(path: &Path) {
+    let snapshot = with_state_text(reporting_config(Some("Lobby")));
+    save_write_config(path, ObjectType::MULTI_STATE_INPUT, &snapshot);
+}
+
+fn with_state_text(snapshot: WriteConfigSnapshot) -> WriteConfigSnapshot {
+    let mut snapshot = with_alarm_values(snapshot);
+    let WriteConfigSnapshot::Reporting(settings) = &mut snapshot else {
+        unreachable!("reporting settings");
+    };
+    let states = MULTI_STATE_SAMPLE_STATES + 1;
+    settings.algorithm.alarm_values = Some(vec![3, 1, states]);
+    // Labels past ASCII, and the added state's left empty.
+    let labels = (1..states).map(|state| format!("Stufe {state} ä"));
+    settings.algorithm.state_text = Some(labels.chain([String::new()]).collect());
+    snapshot
+}
+
 /// An Access Door's written reporting settings, time delays and its three
 /// lists of door alarm states (#2331 PR 4): kind 6 with all three list
 /// rows.

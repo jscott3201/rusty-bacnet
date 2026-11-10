@@ -1,0 +1,367 @@
+//! A multi-state object's written State_Text, and with it its state count,
+//! kept with its reporting settings (#2414). Each way of writing it is
+//! kept and comes back on a rebuild over the application's count; the
+//! setters that size the states give way to it until the clear; storage
+//! refuses a label or a count past its caps with the write; storage holding
+//! one no write leaves fails the build; and a restore leaves the object as
+//! a write of the same labels would.
+
+use alloc::sync::Arc;
+
+use bacnet_types::enums::{
+    ErrorClass, ErrorCode, ObjectType, PropertyIdentifier as P, Reliability,
+};
+use bacnet_types::error::Error;
+use bacnet_types::primitives::PropertyValue;
+
+use super::parameters_tests::{holding, read, saved, write};
+use super::reporting_tests::{persistence, refused_with};
+use super::state_parameters_tests::{STATES, labels, written_texts};
+use super::test_storage::MemoryConfig;
+use super::{AlgorithmWriteConfig, ReportingWriteConfig};
+use crate::multistate::{
+    MAX_KEPT_STATE_TEXT_OCTETS, MAX_NUMBER_OF_STATES, MultiStateInputObject,
+    MultiStateOutputObject, MultiStateValueObject,
+};
+use crate::traits::BACnetObject;
+
+/// Run `$body` on each multi-state type: `$new` builds object 1 of it with
+/// so many states, `$Object` names the type.
+macro_rules! on_each {
+    (|$new:ident, $Object:ident| $body:block) => {{
+        {
+            type $Object = MultiStateInputObject;
+            let $new = |states: u32| $Object::new(1, "MSI", states).unwrap();
+            $body
+        }
+        {
+            type $Object = MultiStateOutputObject;
+            let $new = |states: u32| $Object::new(1, "MSO", states).unwrap();
+            $body
+        }
+        {
+            type $Object = MultiStateValueObject;
+            let $new = |states: u32| $Object::new(1, "MSV", states).unwrap();
+            $body
+        }
+    }};
+}
+
+fn text(label: &str) -> PropertyValue {
+    PropertyValue::CharacterString(label.into())
+}
+
+fn count(states: u32) -> PropertyValue {
+    PropertyValue::Unsigned(u64::from(states))
+}
+
+/// The default labels of states 1 to `states`, as a new object has them.
+fn defaults(states: u32) -> Vec<String> {
+    (1..=states).map(|state| format!("State {state}")).collect()
+}
+
+/// State_Text written whole, its size at index 0 and one label are each
+/// saved once, before the write is answered, and an object built on the
+/// storage at the next start, with the application's count, serves the
+/// labels and the count they give it. A Multi-state Output keeps them as
+/// the Input and the Value do.
+#[test]
+fn each_way_of_writing_state_text_is_kept_over_the_configured_count() {
+    let grown = defaults(STATES + 2);
+    let mut relabelled = defaults(STATES);
+    relabelled[1] = "Low".into();
+    let writes = [
+        (None, labels(&written_texts()), written_texts()),
+        (Some(0), count(STATES + 2), grown),
+        (Some(2), text("Low"), relabelled),
+    ];
+    on_each!(|new, Object| {
+        for (index, value, kept) in writes.clone() {
+            let storage = MemoryConfig::new();
+            let mut object: Object = new(STATES)
+                .with_reporting_persistence(persistence(&storage))
+                .unwrap();
+            object
+                .write_property(P::STATE_TEXT, index, value, None)
+                .unwrap();
+            assert_eq!(storage.saves(), 1, "{index:?}");
+            assert_eq!(saved(&storage).algorithm.state_text, Some(kept.clone()));
+            drop(object);
+            let rebuilt = new(STATES)
+                .with_reporting_persistence(persistence(&storage))
+                .unwrap();
+            assert_eq!(read(&rebuilt, P::STATE_TEXT), labels(&kept), "{index:?}");
+            let states = u32::try_from(kept.len()).unwrap();
+            assert_eq!(read(&rebuilt, P::NUMBER_OF_STATES), count(states));
+            assert_eq!(rebuilt.written_reporting().algorithm.state_text, Some(kept));
+        }
+    });
+}
+
+/// A saved State_Text wins over `set_number_of_states`, on the object that
+/// took the write and on one rebuilt on its storage: the setter still
+/// refuses zero, and otherwise leaves the labels and the count. A failed
+/// clear keeps it so. Once the clear has saved, the setter applies again,
+/// and the next start has the application's count and labels. Without
+/// storage, or before a write, the setter applies as it always has.
+#[test]
+fn a_saved_state_text_wins_over_the_count_setter_until_the_clear() {
+    on_each!(|new, Object| {
+        let storage = MemoryConfig::new();
+        let attach = |object: Object| {
+            object
+                .with_reporting_persistence(persistence(&storage))
+                .unwrap()
+        };
+        let mut plain = new(STATES);
+        plain.set_number_of_states(2).unwrap();
+        assert_eq!(read(&plain, P::NUMBER_OF_STATES), count(2));
+
+        let mut object = attach(new(STATES));
+        object.set_number_of_states(STATES + 1).unwrap();
+        assert_eq!(read(&object, P::NUMBER_OF_STATES), count(STATES + 1));
+        assert_eq!(storage.saves(), 0, "a setter saves nothing");
+        write(&mut object, P::STATE_TEXT, labels(&written_texts()));
+        object.set_number_of_states(2).unwrap();
+        assert!(object.set_number_of_states(0).is_err());
+        assert_eq!(read(&object, P::STATE_TEXT), labels(&written_texts()));
+        drop(object);
+
+        let mut rebuilt = attach(new(STATES));
+        rebuilt.set_number_of_states(2).unwrap();
+        assert_eq!(read(&rebuilt, P::STATE_TEXT), labels(&written_texts()));
+        storage.fail(true);
+        assert!(rebuilt.clear_written_reporting().is_err());
+        rebuilt.set_number_of_states(2).unwrap();
+        let kept = count(STATES + 1);
+        assert_eq!(read(&rebuilt, P::NUMBER_OF_STATES), kept, "kept on");
+        storage.fail(false);
+        rebuilt.clear_written_reporting().unwrap();
+        assert_eq!(rebuilt.written_reporting(), ReportingWriteConfig::default());
+        // The labels served stay until a setter or a write changes them.
+        assert_eq!(read(&rebuilt, P::STATE_TEXT), labels(&written_texts()));
+        rebuilt.set_number_of_states(2).unwrap();
+        assert_eq!(read(&rebuilt, P::NUMBER_OF_STATES), count(2));
+        drop(rebuilt);
+        let restarted = attach(new(STATES));
+        assert_eq!(read(&restarted, P::STATE_TEXT), labels(&defaults(STATES)));
+        assert_eq!(read(&restarted, P::NUMBER_OF_STATES), count(STATES));
+    });
+}
+
+/// With storage, a write that would leave a label past 512 octets, or more
+/// than 1,024 states, is refused with RESOURCES /
+/// NO_SPACE_TO_WRITE_PROPERTY before anything is saved: a label written
+/// whole or alone, and any write to an object the application built with
+/// more states than storage keeps. A label at the cap is taken, in octets
+/// of UTF-8, not characters. Without storage the same writes are taken.
+#[test]
+fn storage_refuses_a_state_text_past_its_caps_with_the_write() {
+    let long = "é".repeat(MAX_KEPT_STATE_TEXT_OCTETS / 2) + "x";
+    let at_cap = "é".repeat(MAX_KEPT_STATE_TEXT_OCTETS / 2);
+    on_each!(|new, Object| {
+        let past: [(u32, Option<u32>, PropertyValue); 4] = [
+            (STATES, Some(1), text(&long)),
+            (STATES, None, labels(&[long.clone(), "b".into()])),
+            (MAX_NUMBER_OF_STATES + 1, Some(1), text("one")),
+            (
+                MAX_NUMBER_OF_STATES + 1,
+                None,
+                labels(&defaults(MAX_NUMBER_OF_STATES + 1)),
+            ),
+        ];
+        for (states, index, value) in past {
+            let storage = MemoryConfig::new();
+            let mut object: Object = new(states)
+                .with_reporting_persistence(persistence(&storage))
+                .unwrap();
+            let before = read(&object, P::STATE_TEXT);
+            let result = object.write_property(P::STATE_TEXT, index, value.clone(), None);
+            assert!(
+                refused_with(
+                    &result,
+                    ErrorClass::RESOURCES,
+                    ErrorCode::NO_SPACE_TO_WRITE_PROPERTY
+                ),
+                "{states} {index:?}: {result:?}"
+            );
+            assert_eq!(read(&object, P::STATE_TEXT), before);
+            assert_eq!(storage.saves(), 0);
+            let mut plain = new(states);
+            plain
+                .write_property(P::STATE_TEXT, index, value, None)
+                .unwrap();
+        }
+        let storage = MemoryConfig::new();
+        let mut object: Object = new(STATES)
+            .with_reporting_persistence(persistence(&storage))
+            .unwrap();
+        write(
+            &mut object,
+            P::STATE_TEXT,
+            labels(core::slice::from_ref(&at_cap)),
+        );
+        drop(object);
+        let rebuilt = new(STATES)
+            .with_reporting_persistence(persistence(&storage))
+            .unwrap();
+        assert_eq!(
+            read(&rebuilt, P::STATE_TEXT),
+            labels(core::slice::from_ref(&at_cap))
+        );
+    });
+}
+
+/// What a write leaves storage holding always reopens, at the edges of what
+/// a write takes: one state, every state an object has with each label at
+/// its cap, labels past ASCII and empty ones.
+#[test]
+fn every_state_text_a_write_saves_reopens() {
+    let full: Vec<String> = (0..MAX_NUMBER_OF_STATES)
+        .map(|state| format!("{state:04}").repeat(MAX_KEPT_STATE_TEXT_OCTETS / 4))
+        .collect();
+    let cases = [
+        vec![String::new()],
+        vec!["Ein".into(), String::new(), "ζ ✓ 🌡".into()],
+        full,
+    ];
+    on_each!(|new, Object| {
+        for texts in &cases {
+            let storage = MemoryConfig::new();
+            let mut object: Object = new(STATES)
+                .with_reporting_persistence(persistence(&storage))
+                .unwrap();
+            write(&mut object, P::STATE_TEXT, labels(texts));
+            drop(object);
+            let rebuilt = new(STATES)
+                .with_reporting_persistence(persistence(&storage))
+                .unwrap();
+            assert_eq!(read(&rebuilt, P::STATE_TEXT), labels(texts));
+        }
+    });
+}
+
+/// Storage holding a State_Text no write leaves (no label, more than 1,024
+/// labels, a label past its cap) fails the build, on each type; a
+/// non-multi-state type holding one at all does too.
+#[test]
+fn a_stored_state_text_no_write_leaves_fails_the_build() {
+    let stored = |texts: Vec<String>| {
+        holding(AlgorithmWriteConfig {
+            state_text: Some(texts),
+            ..Default::default()
+        })
+    };
+    let refused = [
+        vec![],
+        vec!["x".into(); MAX_NUMBER_OF_STATES as usize + 1],
+        vec!["x".repeat(MAX_KEPT_STATE_TEXT_OCTETS + 1)],
+    ];
+    on_each!(|new, Object| {
+        let _: fn(u32) -> Object = new;
+        for texts in &refused {
+            let built = new(STATES).with_reporting_persistence(persistence(&stored(texts.clone())));
+            assert!(matches!(built, Err(Error::Encoding(_))), "{}", texts.len());
+        }
+    });
+    let binary = crate::binary::BinaryValueObject::new(1, "BV")
+        .unwrap()
+        .with_reporting_persistence(persistence(&stored(written_texts())));
+    assert!(matches!(binary, Err(Error::Encoding(_))));
+}
+
+/// A restore goes on a fresh object, whose Present_Value, Relinquish_Default
+/// and commands are state 1, so no restored count strands them and the
+/// object reports no fault. What the application set before the builder
+/// call is held as a local shrink leaves it, and Reliability is worked out
+/// again, as after a write: a Multi-state Value whose default names a state
+/// past the restored count reports CONFIGURATION_ERROR, and a Multi-state
+/// Input whose value is past it MULTI_STATE_OUT_OF_RANGE.
+#[test]
+fn a_restore_strands_nothing_on_a_fresh_object() {
+    let one_label = || {
+        MemoryConfig::holding(super::WriteConfigSnapshot::Reporting(
+            ReportingWriteConfig {
+                algorithm: AlgorithmWriteConfig {
+                    state_text: Some(vec!["Only".into()]),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        ))
+    };
+    let sound = PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw());
+    on_each!(|new, Object| {
+        let fresh: Object = new(STATES)
+            .with_reporting_persistence(persistence(&one_label()))
+            .unwrap();
+        assert_eq!(read(&fresh, P::NUMBER_OF_STATES), count(1));
+        assert_eq!(read(&fresh, P::PRESENT_VALUE), count(1));
+        assert_eq!(read(&fresh, P::RELIABILITY), sound);
+    });
+    let mut value = MultiStateValueObject::new(1, "MSV", STATES).unwrap();
+    value.set_relinquish_default(3).unwrap();
+    let value = value
+        .with_reporting_persistence(persistence(&one_label()))
+        .unwrap();
+    let fault = PropertyValue::Enumerated(Reliability::CONFIGURATION_ERROR.to_raw());
+    assert_eq!(read(&value, P::RELIABILITY), fault);
+    let mut input = MultiStateInputObject::new(1, "MSI", STATES).unwrap();
+    input.set_present_value(3);
+    let input = input
+        .with_reporting_persistence(persistence(&one_label()))
+        .unwrap();
+    let out = PropertyValue::Enumerated(Reliability::MULTI_STATE_OUT_OF_RANGE.to_raw());
+    assert_eq!(read(&input, P::RELIABILITY), out);
+}
+
+/// A State_Text write whose save fails is refused with DEVICE /
+/// OPERATIONAL_PROBLEM on each way of writing it, and the labels and count
+/// stay; so does the state count an Alarm_Values entry is checked against.
+#[test]
+fn a_state_text_write_whose_save_fails_keeps_the_labels_and_count() {
+    on_each!(|new, Object| {
+        let storage = MemoryConfig::new();
+        let mut object: Object = new(STATES)
+            .with_reporting_persistence(persistence(&storage))
+            .unwrap();
+        storage.fail(true);
+        for (index, value) in [
+            (None, labels(&written_texts())),
+            (Some(0), count(STATES + 1)),
+            (Some(1), text("Off")),
+        ] {
+            let result = object.write_property(P::STATE_TEXT, index, value, None);
+            assert!(
+                refused_with(&result, ErrorClass::DEVICE, ErrorCode::OPERATIONAL_PROBLEM),
+                "{index:?}: {result:?}"
+            );
+        }
+        assert_eq!(read(&object, P::STATE_TEXT), labels(&defaults(STATES)));
+        assert_eq!(read(&object, P::NUMBER_OF_STATES), count(STATES));
+        assert_eq!(storage.saved(), None);
+        let kind = object.object_identifier().object_type();
+        if kind != ObjectType::MULTI_STATE_OUTPUT {
+            let list = PropertyValue::List(vec![count(STATES + 1)]);
+            storage.fail(false);
+            let result = object.write_property(P::ALARM_VALUES, None, list, None);
+            let refusal = format!("{result:?}");
+            assert!(refusal.contains("VALUE_OUT_OF_RANGE"), "{kind}: {refusal}");
+        }
+    });
+}
+
+/// Only what a write set is kept: an object whose other rows a write saved
+/// keeps no State_Text, and its count stays the application's.
+#[test]
+fn a_write_of_another_row_keeps_no_state_text() {
+    let storage: Arc<MemoryConfig> = MemoryConfig::new();
+    let mut object = MultiStateInputObject::new(1, "MSI", STATES)
+        .unwrap()
+        .with_reporting_persistence(persistence(&storage))
+        .unwrap();
+    write(&mut object, P::TIME_DELAY, PropertyValue::Unsigned(4));
+    assert_eq!(saved(&storage).algorithm.state_text, None);
+    let object: &dyn BACnetObject = &object;
+    assert_eq!(read(object, P::NUMBER_OF_STATES), count(STATES));
+}

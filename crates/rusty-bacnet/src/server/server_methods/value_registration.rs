@@ -24,7 +24,10 @@ impl BACnetServer {
     /// parameters a peer writes there too (#2331): the two time delays on
     /// all nine, High_Limit, Low_Limit, Deadband and Limit_Enable on the
     /// analog ones, Alarm_Value on a Binary Input or Value, and
-    /// Alarm_Values on a Multi-state Input or Value. `add_access_door`,
+    /// Alarm_Values on a Multi-state Input or Value. The three
+    /// multi-state builders keep a written State_Text there too, and with
+    /// it the state count, which the restarted object takes over
+    /// `number_of_states` (#2414). `add_access_door`,
     /// `add_access_zone` and `add_event_enrollment` keep theirs too, as
     /// each says.
     /// `clear_written_reporting` drops what was saved first, Description

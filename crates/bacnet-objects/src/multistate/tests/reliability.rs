@@ -374,7 +374,7 @@ fn msv_configuration_sources_recompute_immediately_and_fault_values_stays_absent
     );
 
     let mut alarms = MultiStateValueObject::new(3, "MSV-alarms", 3).unwrap();
-    alarms.set_alarm_values(vec![3]);
+    alarms.set_alarm_values(vec![3]).unwrap();
     assert_eq!(
         read_reliability(&alarms),
         Reliability::NO_FAULT_DETECTED.to_raw()

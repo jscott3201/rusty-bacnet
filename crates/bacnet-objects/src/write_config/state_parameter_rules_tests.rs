@@ -1,8 +1,9 @@
 //! The rules the binary and multi-state objects' kept parameters follow
 //! (#2331): the `set_alarm_values` setter gives way to a saved list until
 //! the clear, the clear drops the parameters with the rest, a list naming a
-//! state the rebuilt object lacks is restored as written, a restored list
-//! is taken as a write of it is, a request's writes save once, and a staged
+//! state the rebuilt object lacks is restored as written, a count a peer
+//! raised comes back with the list naming it (#2414), a restored list is
+//! taken as a write of it is, a request's writes save once, and a staged
 //! step is checked by the family's own write path against the state count
 //! the write will meet.
 
@@ -49,36 +50,36 @@ fn a_saved_list_wins_over_its_setter_until_the_clear() {
         let storage = MemoryConfig::new();
         let attach = |mut object: Object| {
             // What the application configures at each start.
-            object.set_alarm_values(vec![2]);
+            object.set_alarm_values(vec![2]).unwrap();
             object
                 .with_reporting_persistence(persistence(&storage))
                 .unwrap()
         };
         let mut plain = new(STATES);
-        plain.set_alarm_values(vec![2]);
-        plain.set_alarm_values(vec![3]);
+        plain.set_alarm_values(vec![2]).unwrap();
+        plain.set_alarm_values(vec![3]).unwrap();
         assert_eq!(read(&plain, P::ALARM_VALUES), states(&[3]));
 
         let mut object = attach(new(STATES));
         // Nothing written yet: the setter applies, and saves nothing.
-        object.set_alarm_values(vec![3]);
+        object.set_alarm_values(vec![3]).unwrap();
         assert_eq!(read(&object, P::ALARM_VALUES), states(&[3]));
         assert_eq!(storage.saves(), 0);
         write(&mut object, P::ALARM_VALUES, states(&[4, 5]));
-        object.set_alarm_values(vec![1]);
+        object.set_alarm_values(vec![1]).unwrap();
         assert_eq!(read(&object, P::ALARM_VALUES), states(&[4, 5]));
         drop(object);
 
         let mut rebuilt = attach(new(STATES));
         assert_eq!(read(&rebuilt, P::ALARM_VALUES), states(&[4, 5]));
-        rebuilt.set_alarm_values(vec![1]);
+        rebuilt.set_alarm_values(vec![1]).unwrap();
         assert_eq!(read(&rebuilt, P::ALARM_VALUES), states(&[4, 5]));
         let kept = rebuilt.written_reporting();
         assert_eq!(kept.algorithm.alarm_values, Some(vec![4, 5]));
 
         storage.fail(true);
         assert!(rebuilt.clear_written_reporting().is_err());
-        rebuilt.set_alarm_values(vec![1]);
+        rebuilt.set_alarm_values(vec![1]).unwrap();
         assert_eq!(
             read(&rebuilt, P::ALARM_VALUES),
             states(&[4, 5]),
@@ -89,7 +90,7 @@ fn a_saved_list_wins_over_its_setter_until_the_clear() {
         assert_eq!(rebuilt.written_reporting(), ReportingWriteConfig::default());
         // The value served stays until a setter or a write changes it.
         assert_eq!(read(&rebuilt, P::ALARM_VALUES), states(&[4, 5]));
-        rebuilt.set_alarm_values(vec![1]);
+        rebuilt.set_alarm_values(vec![1]).unwrap();
         assert_eq!(read(&rebuilt, P::ALARM_VALUES), states(&[1]));
         drop(rebuilt);
         assert_eq!(saved(&storage), ReportingWriteConfig::default());
@@ -288,15 +289,15 @@ fn a_saved_list_past_the_rebuilt_objects_states_is_restored_as_written() {
     });
 }
 
-/// Number_Of_States isn't kept. A peer that gives an object more states by
-/// writing State_Text, and then an Alarm_Values entry naming one of them,
-/// leaves a list naming a state the object as the application builds it
-/// lacks. That object still opens, holding the list, and the peer repairs a
-/// Multi-state Value by adding the state again. The wire can't get there
-/// the other way: a State_Text write that would drop a state the held list
-/// names is refused.
+/// A peer that gives an object more states by writing State_Text, and
+/// then an Alarm_Values entry naming one of them, leaves storage holding
+/// both (#2414). The object built on it at the next start has the count
+/// the peer gave it, over the application's, serves the labels and the
+/// list, and alarms on the added state; the peer can write the list back.
+/// The wire can't strand the list the other way: a State_Text write that
+/// would drop a state the held list names is refused.
 #[test]
-fn a_list_naming_a_state_a_peer_added_is_restored_on_the_next_build() {
+fn a_count_a_peer_raised_comes_back_with_the_list_naming_it() {
     on_each_listed!(|new, Object| {
         let _: fn(u32) -> Object = new;
         let list = [2, STATES + 1];
@@ -315,20 +316,20 @@ fn a_list_naming_a_state_a_peer_added_is_restored_on_the_next_build() {
             refused_with(&result, ErrorClass::PROPERTY, ErrorCode::VALUE_OUT_OF_RANGE),
             "{result:?}"
         );
+        let texts = read(&object, P::STATE_TEXT);
         drop(object);
 
         let mut rebuilt = new(STATES)
             .with_reporting_persistence(persistence(&storage))
             .unwrap();
-        let five = PropertyValue::Unsigned(u64::from(STATES));
-        assert_eq!(read(&rebuilt, P::NUMBER_OF_STATES), five);
-        holds_a_stranded_list(&mut rebuilt, &list);
-        rebuilt
-            .write_property(P::STATE_TEXT, Some(0), grown, None)
-            .unwrap();
+        assert_eq!(read(&rebuilt, P::NUMBER_OF_STATES), grown);
+        assert_eq!(read(&rebuilt, P::STATE_TEXT), texts);
+        assert_eq!(read(&rebuilt, P::ALARM_VALUES), states(&list));
         let sound = reliability(Reliability::NO_FAULT_DETECTED);
         assert_eq!(read(&rebuilt, P::RELIABILITY), sound);
-        assert_eq!(read(&rebuilt, P::ALARM_VALUES), states(&list));
+        set_state(&mut rebuilt, STATES + 1);
+        assert_eq!(evaluated(&mut rebuilt), Some(EventState::OFFNORMAL));
+        write(&mut rebuilt, P::ALARM_VALUES, states(&list));
     });
 }
 
@@ -338,16 +339,22 @@ fn a_list_naming_a_state_a_peer_added_is_restored_on_the_next_build() {
 /// outlive that list.
 #[test]
 fn a_restored_list_is_taken_as_a_write_of_it_is() {
-    let mut written = MultiStateValueObject::new(1, "MSV", STATES).unwrap();
-    written.set_alarm_values(vec![STATES + 4]);
+    // A configured list naming a state the count no longer has: only a
+    // local shrink under a held list leaves one (#2415).
+    let stranding = || {
+        let mut object = MultiStateValueObject::new(1, "MSV", STATES).unwrap();
+        object.set_alarm_values(vec![STATES]).unwrap();
+        object.set_number_of_states(STATES - 1).unwrap();
+        object
+    };
+    let mut written = stranding();
     let fault = PropertyValue::Enumerated(Reliability::CONFIGURATION_ERROR.to_raw());
     assert_eq!(read(&written, P::RELIABILITY), fault);
     write(&mut written, P::ALARM_VALUES, states(&[2]));
     let sound = PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw());
     assert_eq!(read(&written, P::RELIABILITY), sound);
 
-    let mut restored = MultiStateValueObject::new(1, "MSV", STATES).unwrap();
-    restored.set_alarm_values(vec![STATES + 4]);
+    let restored = stranding();
     assert_eq!(read(&restored, P::RELIABILITY), fault);
     let restored = restored
         .with_reporting_persistence(persistence(&holding_list(&[2])))
@@ -355,9 +362,7 @@ fn a_restored_list_is_taken_as_a_write_of_it_is() {
     assert_eq!(read(&restored, P::ALARM_VALUES), states(&[2]));
     assert_eq!(read(&restored, P::RELIABILITY), sound);
     // Storage without a list leaves the configured one, and its fault.
-    let mut unwritten = MultiStateValueObject::new(1, "MSV", STATES).unwrap();
-    unwritten.set_alarm_values(vec![STATES + 4]);
-    let unwritten = unwritten
+    let unwritten = stranding()
         .with_reporting_persistence(persistence(&MemoryConfig::new()))
         .unwrap();
     assert_eq!(read(&unwritten, P::RELIABILITY), fault);
@@ -523,12 +528,12 @@ mod staged {
     }
 
     /// A multi-state object's check of Alarm_Values turns on its
-    /// Number_Of_States, which a State_Text write changes without the store
-    /// counting it. A list staged against five states and written after
-    /// the object has four is refused as the object refuses it and takes no
-    /// staged step, although it is the request's last: once the request
+    /// Number_Of_States. A list staged against five states and written
+    /// after another request's State_Text write leaves four (a kept write
+    /// of its own, which drops the staged steps) is refused as the object
+    /// refuses it, although it is the request's last: once the request
     /// releases, storage holds what the object serves, the list neither
-    /// served nor kept, and the write made before it kept.
+    /// served nor kept, and the writes made before it kept.
     #[test]
     fn a_staged_list_the_object_no_longer_takes_is_refused_and_not_kept() {
         for kind in LISTED {
@@ -572,9 +577,11 @@ mod staged {
             let kept = saved(&storage).algorithm;
             assert_eq!(kept.alarm_values, None, "{kind}: the refused list is kept");
             assert_eq!(kept.time_delay, Some(7), "{kind}");
+            let four = PropertyValue::Unsigned(u64::from(STATES - 1));
             let rebuilt = open(kind, Some(&storage));
             assert_eq!(read(rebuilt.as_ref(), P::ALARM_VALUES), states(&[2]));
             assert_eq!(read(rebuilt.as_ref(), P::TIME_DELAY), delay, "{kind}");
+            assert_eq!(read(rebuilt.as_ref(), P::NUMBER_OF_STATES), four);
         }
     }
 
@@ -582,7 +589,8 @@ mod staged {
     /// list the stage refused, because it named a state the object didn't
     /// have and the request didn't add, stages nothing. It is checked again
     /// when it is written, against the count the object has by then, and
-    /// saved where it is written.
+    /// saved where it is written, beside the State_Text the other request
+    /// saved.
     #[test]
     fn a_list_refused_at_the_stage_is_checked_again_when_written() {
         for kind in LISTED {
@@ -599,20 +607,19 @@ mod staged {
                 .write_property(P::STATE_TEXT, Some(0), more, None)
                 .unwrap();
             write(object.as_mut(), P::ALARM_VALUES, request[0].value.clone());
-            assert_eq!(storage.saves(), 1, "{kind}");
-            assert_eq!(
-                saved(&storage).algorithm.alarm_values,
-                Some(vec![STATES + 1])
-            );
+            assert_eq!(storage.saves(), 2, "{kind}");
+            let kept = saved(&storage).algorithm;
+            assert_eq!(kept.alarm_values, Some(vec![STATES + 1]));
+            assert_eq!(kept.state_text.map(|texts| texts.len()), Some(6));
         }
     }
 
     /// When the request itself adds the state, by State_Text's size at
     /// index 0 or by State_Text written whole, the stage checks the list
-    /// against the count that write leaves: the request stages one save,
-    /// ahead of its writes, and they take their steps without saving again.
-    /// A State_Text write that doesn't add the state leaves the list
-    /// refused at the stage.
+    /// against the count that write leaves: the request stages one save of
+    /// both, ahead of its writes, and they take their steps without saving
+    /// again. A State_Text write that doesn't add the state is staged
+    /// alone, and the list refused at the stage.
     #[test]
     fn a_request_that_adds_a_state_and_lists_it_stages_one_save() {
         let size = |count: u32| PendingWrite {
@@ -653,25 +660,31 @@ mod staged {
                 assert_eq!(read(object.as_ref(), P::ALARM_VALUES), list.value);
                 drop(object);
                 assert_eq!(storage.saves(), 1, "{kind}: the writes saved again");
-                assert_eq!(
-                    saved(&storage).algorithm.alarm_values,
-                    Some(vec![STATES + 1])
-                );
+                let kept = saved(&storage).algorithm;
+                assert_eq!(kept.alarm_values, Some(vec![STATES + 1]));
+                assert_eq!(kept.state_text.map(|texts| texts.len()), Some(6));
             }
             for stays in [size(STATES), whole(STATES), one_label.clone()] {
                 let storage = MemoryConfig::new();
                 let mut object = open(kind, Some(&storage));
                 let durable = object.durable_writes().unwrap();
-                let step = durable.stage_writes(&[stays, list.clone()]);
-                assert!(matches!(step, StageStep::Skip), "{kind}");
-                assert_eq!(storage.saves(), 0, "{kind}");
+                let StageStep::Staged(wait) = durable.stage_writes(&[stays, list.clone()]) else {
+                    panic!("{kind}: the State_Text write stages");
+                };
+                wait.block();
+                assert_eq!(storage.saves(), 1, "{kind}");
+                let kept = saved(&storage).algorithm;
+                assert_eq!(kept.alarm_values, None, "{kind}: the list staged");
+                assert_eq!(kept.state_text.map(|texts| texts.len()), Some(5));
+                object.durable_writes().unwrap().release_staged_write(&wait);
             }
         }
     }
     /// State_Text written whole as one label, which arrives as that
     /// CharacterString alone, leaves one state. A list naming state 2 after
     /// it in the same request is checked against that one state: refused at
-    /// the stage, so nothing is saved ahead of a write the object refuses.
+    /// the stage, so the save ahead of the writes holds the label alone,
+    /// and once the object refuses the list, storage holds what it serves.
     #[test]
     fn a_single_label_leaves_one_state_for_the_staged_list() {
         let label = pending(P::STATE_TEXT, PropertyValue::CharacterString("only".into()));
@@ -683,9 +696,14 @@ mod staged {
                 .with_reporting_persistence(persistence(&storage))
                 .unwrap();
             let durable = object.durable_writes().unwrap();
-            let step = durable.stage_writes(&request);
-            assert!(matches!(step, StageStep::Skip), "the list staged");
-            assert_eq!(storage.saves(), 0);
+            let StageStep::Staged(wait) = durable.stage_writes(&request) else {
+                panic!("the label stages");
+            };
+            wait.block();
+            assert_eq!(storage.saves(), 1);
+            let only = Some(vec![String::from("only")]);
+            assert_eq!(saved(&storage).algorithm.state_text, only);
+            assert_eq!(saved(&storage).algorithm.alarm_values, None);
             let [label, list] = request.clone().map(|write| write.value);
             object
                 .write_property(P::STATE_TEXT, None, label, None)
@@ -699,7 +717,9 @@ mod staged {
                     .write_property(P::ALARM_VALUES, None, list, None)
                     .is_err()
             );
-            assert_eq!(storage.saves(), 0);
+            object.durable_writes().unwrap().release_staged_write(&wait);
+            assert_eq!(storage.saves(), 1);
+            assert_eq!(saved(&storage).algorithm.alarm_values, None);
             // One state does take a list naming it, staged with the label.
             let one = [request[0].clone(), pending(P::ALARM_VALUES, states(&[1]))];
             let durable = object.durable_writes().unwrap();

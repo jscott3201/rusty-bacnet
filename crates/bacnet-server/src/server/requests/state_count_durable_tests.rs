@@ -1,10 +1,14 @@
-//! A multi-state object's kept Alarm_Values and its state count, which
-//! isn't kept (#2331). A peer adds a state through State_Text and lists it:
-//! one request doing both saves off the database guard, and a server
-//! rebuilt on the storage with the configured count still starts, serving
-//! the list as it was written.
+//! A multi-state object's written State_Text, and with it its state count,
+//! kept with its Alarm_Values (#2414). A peer adds a state through
+//! State_Text and lists it: the device restarts on the application's count
+//! and the rebuilt object has the peer's, serves its labels and alarms on
+//! the added state. One request doing both saves once, off the database
+//! guard. Each way of writing State_Text saves, on the three types; a write
+//! that can't be saved is refused and the old texts stay; a label past what
+//! storage keeps is refused before anything is saved.
 //!
-//! PROPERTY 2; VALUE_OUT_OF_RANGE 37.
+//! DEVICE 0, PROPERTY 2, RESOURCES 3; NO_SPACE_TO_WRITE_PROPERTY 20,
+//! OPERATIONAL_PROBLEM 25, VALUE_OUT_OF_RANGE 37.
 
 use super::durable_write_wire_tests::{
     ERROR_PDU, SIMPLE_ACK_WPM, SIMPLE_ACK_WRITE, WAIT, while_saving,
@@ -16,7 +20,7 @@ use super::write_config_durable_tests::ConfigStorage;
 use super::*;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::wpm::WriteAccessSpecification;
-use bacnet_types::enums::Reliability;
+use bacnet_types::enums::{EventState, Reliability};
 use std::sync::atomic::Ordering;
 
 use PropertyIdentifier as P;
@@ -25,9 +29,21 @@ use PropertyIdentifier as P;
 /// three states.
 const LISTED: [ObjectType; 2] = [ObjectType::MULTI_STATE_INPUT, ObjectType::MULTI_STATE_VALUE];
 
-/// A fourth state, by State_Text's size at index 0.
-fn four_states() -> (Option<u32>, PropertyValue) {
-    (Some(0), PropertyValue::Unsigned(4))
+/// The three types that keep State_Text.
+const MULTI_STATE: [ObjectType; 3] = [
+    ObjectType::MULTI_STATE_INPUT,
+    ObjectType::MULTI_STATE_OUTPUT,
+    ObjectType::MULTI_STATE_VALUE,
+];
+
+fn text(label: &str) -> PropertyValue {
+    PropertyValue::CharacterString(label.into())
+}
+
+/// State_Text written whole with one more label than the fixture's three
+/// states.
+fn four_labels() -> PropertyValue {
+    PropertyValue::List(["Off", "Low", "High", "Boost"].map(text).to_vec())
 }
 
 /// A list naming the fourth state and one the object is built with.
@@ -35,88 +51,137 @@ fn list() -> PropertyValue {
     PropertyValue::List([4, 2].map(PropertyValue::Unsigned).to_vec())
 }
 
-fn reliability(reliability: Reliability) -> PropertyValue {
-    PropertyValue::Enumerated(reliability.to_raw())
-}
-
 async fn write(
     fixture: &Fixture,
     kind: ObjectType,
     property: P,
+    index: Option<u32>,
     written: PropertyValue,
 ) -> Vec<u8> {
-    let (index, written) = match property {
-        P::STATE_TEXT => four_states(),
-        _ => (None, written),
-    };
     let request = write_property(kind, property, index, value(written));
     wire(fixture, ConfirmedServiceChoice::WRITE_PROPERTY, request).await
 }
 
-/// The peer's two writes, each accepted, leave a list naming a state the
-/// object as the application builds it doesn't have. The rebuilt server
-/// starts and serves that list. The Input reports no fault; the Value
-/// reports CONFIGURATION_ERROR until a list within its states is written.
-/// A write of the stored list is refused as any list past the states is,
-/// and a later kept write keeps the stored list as it is.
+/// The error a WriteProperty answer carries, as its class and code octets.
+fn refusal(response: &[u8]) -> (u8, u8) {
+    assert_eq!(response[0], ERROR_PDU, "{response:?}");
+    (response[4], response[6])
+}
+
+/// The Event_State the object takes once it holds `state`, written over
+/// the wire: out of service on the Input, by command on the Value. The
+/// server evaluates the object's intrinsic reporting after the write, and
+/// the detector runs with no delay, so no time has to pass.
+async fn alarm_on(fixture: &Fixture, kind: ObjectType, state: u64) -> PropertyValue {
+    if kind == ObjectType::MULTI_STATE_INPUT {
+        let out = PropertyValue::Boolean(true);
+        let answer = write(fixture, kind, P::OUT_OF_SERVICE, None, out).await;
+        assert_eq!(answer, SIMPLE_ACK_WRITE);
+    }
+    let state = PropertyValue::Unsigned(state);
+    let answer = write(fixture, kind, P::PRESENT_VALUE, None, state).await;
+    assert_eq!(answer, SIMPLE_ACK_WRITE);
+    fixture.read(oid(kind, INSTANCE), P::EVENT_STATE).await
+}
+
+/// The peer sequence from #2414. A peer writes State_Text with one more
+/// label, and then Alarm_Values naming the new state, each saved once.
+/// The device restarts and the application builds the object with three
+/// states again: the rebuilt object has the peer's four, serves its labels
+/// and the list, reports no fault, and alarms on the fourth state. The
+/// peer can write the list it reads back.
 #[tokio::test(start_paused = true)]
-async fn a_list_naming_a_state_a_peer_added_is_served_after_a_rebuild() {
+async fn a_count_a_peer_raised_comes_back_with_the_list_naming_it() {
     for kind in LISTED {
         let object = oid(kind, INSTANCE);
         let storage = Arc::new(ConfigStorage::default());
         let fixture = served_by(kind, &storage).await;
-        let grown = write(&fixture, kind, P::STATE_TEXT, PropertyValue::Null).await;
+        let grown = write(&fixture, kind, P::STATE_TEXT, None, four_labels()).await;
         assert_eq!(grown, SIMPLE_ACK_WRITE, "{kind:?}");
-        assert_eq!(
-            write(&fixture, kind, P::ALARM_VALUES, list()).await,
-            SIMPLE_ACK_WRITE,
-            "{kind:?}"
-        );
-        assert_eq!(storage.saves.load(Ordering::SeqCst), 1, "{kind:?}");
+        let listed = write(&fixture, kind, P::ALARM_VALUES, None, list()).await;
+        assert_eq!(listed, SIMPLE_ACK_WRITE, "{kind:?}");
+        assert_eq!(storage.saves.load(Ordering::SeqCst), 2, "{kind:?}");
         drop(fixture);
 
         let rebuilt = served_by(kind, &storage).await;
-        let three = PropertyValue::Unsigned(3);
-        assert_eq!(rebuilt.read(object, P::NUMBER_OF_STATES).await, three);
+        let four = PropertyValue::Unsigned(4);
+        assert_eq!(rebuilt.read(object, P::NUMBER_OF_STATES).await, four);
+        assert_eq!(rebuilt.read(object, P::STATE_TEXT).await, four_labels());
         assert_eq!(rebuilt.read(object, P::ALARM_VALUES).await, list());
-        let value_object = kind == ObjectType::MULTI_STATE_VALUE;
-        let expected = if value_object {
-            Reliability::CONFIGURATION_ERROR
-        } else {
-            Reliability::NO_FAULT_DETECTED
-        };
+        let sound = PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw());
         assert_eq!(
             rebuilt.read(object, P::RELIABILITY).await,
-            reliability(expected),
+            sound,
             "{kind:?}"
         );
-        // The wire rule stands: the same list written back is refused.
-        let refused = write(&rebuilt, kind, P::ALARM_VALUES, list()).await;
-        assert_eq!(refused[0], ERROR_PDU, "{kind:?}");
-        assert_eq!(refused[3..7], [0x91, 2, 0x91, 37], "{kind:?}");
-        assert_eq!(rebuilt.read(object, P::ALARM_VALUES).await, list());
-        // Another kept write saves the stored list with it, unchanged.
-        let delay = PropertyValue::Unsigned(7);
-        assert_eq!(
-            write(&rebuilt, kind, P::TIME_DELAY, delay.clone()).await,
-            SIMPLE_ACK_WRITE
-        );
-        drop(rebuilt);
-        let again = served_by(kind, &storage).await;
-        assert_eq!(again.read(object, P::ALARM_VALUES).await, list());
-        assert_eq!(again.read(object, P::TIME_DELAY).await, delay);
-        // A list within the states repairs the Value.
-        let within = PropertyValue::List([3, 2].map(PropertyValue::Unsigned).to_vec());
-        assert_eq!(
-            write(&again, kind, P::ALARM_VALUES, within.clone()).await,
-            SIMPLE_ACK_WRITE
-        );
-        assert_eq!(again.read(object, P::ALARM_VALUES).await, within);
-        assert_eq!(
-            again.read(object, P::RELIABILITY).await,
-            reliability(Reliability::NO_FAULT_DETECTED),
-            "{kind:?}"
-        );
+        let again = write(&rebuilt, kind, P::ALARM_VALUES, None, list()).await;
+        assert_eq!(again, SIMPLE_ACK_WRITE, "{kind:?}");
+        let offnormal = PropertyValue::Enumerated(EventState::OFFNORMAL.to_raw());
+        assert_eq!(alarm_on(&rebuilt, kind, 4).await, offnormal, "{kind:?}");
+    }
+}
+
+/// State_Text written whole, its size at index 0 and one label at a time
+/// each save once, off the guard on WriteProperty too, on the three types,
+/// and an object rebuilt on the storage serves them with their count.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn each_state_text_write_saves_and_survives_a_rebuild() {
+    let writes = [
+        (None, four_labels(), 4),
+        (Some(0), PropertyValue::Unsigned(5), 5),
+        (Some(2), text("Low"), 3),
+    ];
+    for kind in MULTI_STATE {
+        for (index, written, count) in writes.clone() {
+            let object = oid(kind, INSTANCE);
+            let storage = Arc::new(ConfigStorage::default());
+            let fixture = served_by(kind, &storage).await;
+            let request = write_property(kind, P::STATE_TEXT, index, value(written));
+            let service = ConfirmedServiceChoice::WRITE_PROPERTY;
+            let (response, available) =
+                while_saving(&fixture, &storage, service, request, WAIT).await;
+            assert_eq!(response, SIMPLE_ACK_WRITE, "{kind:?} {index:?}");
+            assert!(available, "{kind:?} {index:?}: saved under the guard");
+            assert_eq!(storage.saves.load(Ordering::SeqCst), 1, "{kind:?}");
+            let served = fixture.read(object, P::STATE_TEXT).await;
+            drop(fixture);
+            let rebuilt = served_by(kind, &storage).await;
+            assert_eq!(rebuilt.read(object, P::STATE_TEXT).await, served);
+            let count = PropertyValue::Unsigned(count);
+            assert_eq!(rebuilt.read(object, P::NUMBER_OF_STATES).await, count);
+        }
+    }
+}
+
+/// A State_Text write whose save fails is answered with DEVICE /
+/// OPERATIONAL_PROBLEM, and the object keeps its labels and count. A label
+/// past the 512 octets storage keeps is refused with RESOURCES /
+/// NO_SPACE_TO_WRITE_PROPERTY before anything is saved, and a count the
+/// object refuses is refused as without storage.
+#[tokio::test(start_paused = true)]
+async fn a_state_text_write_storage_can_t_keep_is_refused_and_the_texts_stay() {
+    for kind in MULTI_STATE {
+        let object = oid(kind, INSTANCE);
+        let storage = Arc::new(ConfigStorage::default());
+        let fixture = served_by(kind, &storage).await;
+        let before = fixture.read(object, P::STATE_TEXT).await;
+        storage.fail.store(true, Ordering::SeqCst);
+        let failed = write(&fixture, kind, P::STATE_TEXT, None, four_labels()).await;
+        assert_eq!(refusal(&failed), (0, 25), "{kind:?}");
+        storage.fail.store(false, Ordering::SeqCst);
+        let long = text(&"x".repeat(513));
+        let refused = write(&fixture, kind, P::STATE_TEXT, Some(1), long).await;
+        assert_eq!(refusal(&refused), (3, 20), "{kind:?}");
+        let many = PropertyValue::Unsigned(1025);
+        let refused = write(&fixture, kind, P::STATE_TEXT, Some(0), many).await;
+        assert_eq!(refusal(&refused), (2, 37), "{kind:?}");
+        assert_eq!(fixture.read(object, P::STATE_TEXT).await, before);
+        let three = PropertyValue::Unsigned(3);
+        assert_eq!(fixture.read(object, P::NUMBER_OF_STATES).await, three);
+        assert_eq!(storage.saves.load(Ordering::SeqCst), 0, "{kind:?}");
+        let fits = text(&"x".repeat(512));
+        let taken = write(&fixture, kind, P::STATE_TEXT, Some(1), fits).await;
+        assert_eq!(taken, SIMPLE_ACK_WRITE, "{kind:?}");
     }
 }
 
@@ -131,113 +196,73 @@ fn attempt(property: P, index: Option<u32>, written: PropertyValue) -> BACnetPro
 
 /// One WritePropertyMultiple that adds a state and then lists it saves
 /// once, with the database guard dropped: the stage checks the list against
-/// the count the request's own State_Text write leaves. Checked against the
-/// count from before the request, the list would be refused at the stage
-/// and saved where it is written, under the guard.
+/// the count the request's own State_Text write leaves. A server rebuilt on
+/// the storage has the four states and serves the list.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_request_that_adds_a_state_and_lists_it_saves_off_the_guard() {
     for kind in LISTED {
+        for grows in [
+            attempt(P::STATE_TEXT, Some(0), PropertyValue::Unsigned(4)),
+            attempt(P::STATE_TEXT, None, four_labels()),
+        ] {
+            let object = oid(kind, INSTANCE);
+            let storage = Arc::new(ConfigStorage::default());
+            let fixture = served_by(kind, &storage).await;
+            let request = wpm(vec![WriteAccessSpecification {
+                object_identifier: object,
+                list_of_properties: vec![grows, attempt(P::ALARM_VALUES, None, list())],
+            }]);
+            let (response, available) = while_saving(
+                &fixture,
+                &storage,
+                ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE,
+                request,
+                WAIT,
+            )
+            .await;
+            assert_eq!(response, SIMPLE_ACK_WPM, "{kind:?}");
+            assert!(
+                available,
+                "the database was held while the {kind:?} saved its list"
+            );
+            assert_eq!(storage.saves.load(Ordering::SeqCst), 1, "{kind:?}");
+            assert_eq!(fixture.read(object, P::ALARM_VALUES).await, list());
+            let four = PropertyValue::Unsigned(4);
+            assert_eq!(fixture.read(object, P::NUMBER_OF_STATES).await, four);
+            let texts = fixture.read(object, P::STATE_TEXT).await;
+            drop(fixture);
+            let rebuilt = served_by(kind, &storage).await;
+            assert_eq!(rebuilt.read(object, P::NUMBER_OF_STATES).await, four);
+            assert_eq!(rebuilt.read(object, P::STATE_TEXT).await, texts);
+            assert_eq!(rebuilt.read(object, P::ALARM_VALUES).await, list());
+        }
+    }
+}
+
+/// State_Text is a saved write like the others, so every path hands it to
+/// the stage: WriteProperty, a local write and each attempt of a
+/// WritePropertyMultiple. An Access Door and an Access Zone have no
+/// State_Text, so on them only the list, which they save, is staged.
+#[test]
+fn state_text_is_staged_by_every_path_on_the_multi_state_types() {
+    use crate::server::durable_writes::DurableTarget;
+
+    let (index, count) = (Some(0), PropertyValue::Unsigned(4));
+    for kind in MULTI_STATE {
         let object = oid(kind, INSTANCE);
-        let storage = Arc::new(ConfigStorage::default());
-        let fixture = served_by(kind, &storage).await;
-        let (index, states) = four_states();
+        let lone = write_property(kind, P::STATE_TEXT, index, value(count.clone()));
+        assert_eq!(DurableTarget::write_property(&lone).len(), 1, "{kind:?}");
+        let local = DurableTarget::local(object, P::STATE_TEXT, index, &count);
+        assert_eq!(local.len(), 1, "{kind:?}");
         let request = wpm(vec![WriteAccessSpecification {
             object_identifier: object,
             list_of_properties: vec![
-                attempt(P::STATE_TEXT, index, states),
-                attempt(P::ALARM_VALUES, None, list()),
+                attempt(P::STATE_TEXT, index, count.clone()),
+                attempt(P::STATE_TEXT, Some(1), text("Off")),
             ],
         }]);
-        let (response, available) = while_saving(
-            &fixture,
-            &storage,
-            ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE,
-            request,
-            WAIT,
-        )
-        .await;
-        assert_eq!(response, SIMPLE_ACK_WPM, "{kind:?}");
-        assert!(
-            available,
-            "the database was held while the {kind:?} saved its list"
-        );
-        assert_eq!(storage.saves.load(Ordering::SeqCst), 1, "{kind:?}");
-        assert_eq!(fixture.read(object, P::ALARM_VALUES).await, list());
-        let four = PropertyValue::Unsigned(4);
-        assert_eq!(fixture.read(object, P::NUMBER_OF_STATES).await, four);
+        assert_eq!(DurableTarget::write_property_multiple(&request).len(), 2);
     }
-}
-
-/// State_Text reaches the stage only where it can matter: in a
-/// WritePropertyMultiple, ahead of a write the same object saves. A lone
-/// State_Text write, by WriteProperty, by a local write or as a list edit,
-/// stages nothing, so it takes the database guard no extra time; nor does
-/// a WritePropertyMultiple where no saved write to the object follows it.
-#[test]
-fn state_text_is_staged_only_ahead_of_a_saved_write_to_its_object() {
-    use super::mutation_list_wire_tests::list_request;
-    use crate::server::durable_writes::DurableTarget;
-
-    let (index, count) = four_states();
-    for kind in LISTED {
-        let object = oid(kind, INSTANCE);
-        let lone = write_property(kind, P::STATE_TEXT, index, value(count.clone()));
-        assert!(DurableTarget::write_property(&lone).is_empty(), "{kind:?}");
-        assert!(DurableTarget::local(object, P::STATE_TEXT, index, &count).is_empty());
-        let edit = list_request(object, P::STATE_TEXT, None, &value(count.clone()));
-        assert!(DurableTarget::list_element(&edit, false).is_empty());
-        // The saved write itself still stages by every path.
-        let saved = write_property(kind, P::ALARM_VALUES, None, value(list()));
-        assert_eq!(DurableTarget::write_property(&saved).len(), 1, "{kind:?}");
-
-        let states = || attempt(P::STATE_TEXT, index, count.clone());
-        let listed = || attempt(P::ALARM_VALUES, None, list());
-        let delay = || attempt(P::TIME_DELAY, None, PropertyValue::Unsigned(7));
-        let other = oid(ObjectType::ANALOG_INPUT, INSTANCE);
-        let staged = |specs: Vec<(ObjectIdentifier, Vec<BACnetPropertyValue>)>| {
-            let specs = specs.into_iter();
-            let request = wpm(specs
-                .map(
-                    |(object_identifier, list_of_properties)| WriteAccessSpecification {
-                        object_identifier,
-                        list_of_properties,
-                    },
-                )
-                .collect());
-            DurableTarget::write_property_multiple(&request).len()
-        };
-        assert_eq!(staged(vec![(object, vec![states()])]), 0, "{kind:?}");
-        assert_eq!(staged(vec![(object, vec![states(), listed()])]), 2);
-        assert_eq!(staged(vec![(object, vec![listed(), states()])]), 1);
-        assert_eq!(staged(vec![(object, vec![states(), states(), delay()])]), 3);
-        // A saved write to another object doesn't bring it in.
-        assert_eq!(
-            staged(vec![(object, vec![states()]), (other, vec![delay()])]),
-            1,
-            "{kind:?}"
-        );
-        assert_eq!(
-            staged(vec![
-                (object, vec![states()]),
-                (other, vec![delay()]),
-                (object, vec![listed()])
-            ]),
-            3,
-            "{kind:?}"
-        );
-    }
-}
-
-/// An Access Door and an Access Zone keep Alarm_Values too, but their lists
-/// are checked against a fixed enumeration and they have no State_Text:
-/// nothing a request writes sizes them. A State_Text attempt ahead of
-/// their Alarm_Values isn't handed to the stage, and the list, which the
-/// object saves, is.
-#[test]
-fn state_text_sizes_no_list_of_an_access_object() {
-    use crate::server::durable_writes::DurableTarget;
-
-    let (index, count) = four_states();
     let tamper = PropertyValue::List(vec![PropertyValue::Enumerated(4)]);
     for kind in [ObjectType::ACCESS_DOOR, ObjectType::ACCESS_ZONE] {
         let request = wpm(vec![WriteAccessSpecification {

@@ -133,9 +133,9 @@ fn holders() -> Vec<(&'static str, Box<dyn BACnetObject>)> {
     let mut simulated = MultiStateInputObject::new(1, "MSI-1", 4).unwrap();
     simulated.set_present_value(3);
     let mut input_alarms = MultiStateInputObject::new(2, "MSI-2", 4).unwrap();
-    input_alarms.set_alarm_values(vec![1, 3]);
+    input_alarms.set_alarm_values(vec![1, 3]).unwrap();
     let mut value_alarms = MultiStateValueObject::new(2, "MSV-2", 4).unwrap();
-    value_alarms.set_alarm_values(vec![3]);
+    value_alarms.set_alarm_values(vec![3]).unwrap();
     let mut output_default = MultiStateOutputObject::new(2, "MSO-2", 4).unwrap();
     output_default.set_relinquish_default(3).unwrap();
     let mut value_default = MultiStateValueObject::new(3, "MSV-3", 4).unwrap();

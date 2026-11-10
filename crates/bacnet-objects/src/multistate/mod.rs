@@ -20,11 +20,47 @@ use crate::traits::{BACnetObject, ReliabilityEvaluation};
 /// `MAX_COV_SUBSCRIPTIONS`.
 pub(crate) const MAX_ALARM_VALUES: usize = 1024;
 
-/// Decode an Alarm_Values write on a Multi-state Input or Value. Each entry
-/// is an Unsigned naming one of the object's `number_of_states` states; one
-/// past them could never match Present_Value, so it is VALUE_OUT_OF_RANGE,
-/// naming the element, rather than stored for Reliability to report as
-/// CONFIGURATION_ERROR (#1429). The local `set_alarm_values` stays unchecked.
+/// The refusal of an Alarm_Values list `len` entries long: past
+/// [`MAX_ALARM_VALUES`] it is RESOURCES / NO_SPACE_TO_WRITE_PROPERTY, naming
+/// the first entry that doesn't fit (#1048).
+fn alarm_values_fit(len: usize) -> Result<(), Error> {
+    if len > MAX_ALARM_VALUES {
+        return Err(common::at_list_element(
+            Error::protocol(ErrorClass::RESOURCES, ErrorCode::NO_SPACE_TO_WRITE_PROPERTY),
+            MAX_ALARM_VALUES,
+        ));
+    }
+    Ok(())
+}
+
+/// An Alarm_Values entry names one of the object's `number_of_states`
+/// states; one past them could never match Present_Value, so it is
+/// VALUE_OUT_OF_RANGE rather than held for Reliability to report as
+/// CONFIGURATION_ERROR (#1429).
+fn alarm_state(state: u64, number_of_states: u32) -> Result<u32, Error> {
+    if (1..=u64::from(number_of_states)).contains(&state) {
+        Ok(state as u32)
+    } else {
+        Err(common::value_out_of_range_error())
+    }
+}
+
+/// Check a list `set_alarm_values` is given as a write of it is checked
+/// (#2415): at most [`MAX_ALARM_VALUES`] entries, each one of the object's
+/// `number_of_states` states. A refusal names its entry.
+fn check_alarm_values(values: &[u32], number_of_states: u32) -> Result<(), Error> {
+    alarm_values_fit(values.len())?;
+    for (index, state) in values.iter().enumerate() {
+        alarm_state(u64::from(*state), number_of_states)
+            .map_err(|error| common::at_list_element(error, index))?;
+    }
+    Ok(())
+}
+
+/// Decode an Alarm_Values write on a Multi-state Input or Value with
+/// `number_of_states` states: a list of Unsigned states, checked as
+/// [`check_alarm_values`] checks a local one, each refusal naming its
+/// element.
 fn decode_alarm_values_write(
     array_index: Option<u32>,
     value: PropertyValue,
@@ -39,25 +75,13 @@ fn decode_alarm_values_write(
     let PropertyValue::List(values) = value else {
         return Err(common::invalid_data_type_error());
     };
-    // A refusal names its element (#1048); the first one past the cap is the
-    // element that does not fit.
-    if values.len() > MAX_ALARM_VALUES {
-        return Err(common::at_list_element(
-            Error::protocol(ErrorClass::RESOURCES, ErrorCode::NO_SPACE_TO_WRITE_PROPERTY),
-            MAX_ALARM_VALUES,
-        ));
-    }
+    alarm_values_fit(values.len())?;
     values
         .into_iter()
         .enumerate()
         .map(|(index, value)| {
             match value {
-                PropertyValue::Unsigned(state)
-                    if (1..=u64::from(number_of_states)).contains(&state) =>
-                {
-                    Ok(state as u32)
-                }
-                PropertyValue::Unsigned(_) => Err(common::value_out_of_range_error()),
+                PropertyValue::Unsigned(state) => alarm_state(state, number_of_states),
                 _ => Err(common::invalid_data_type_error()),
             }
             .map_err(|error| common::at_list_element(error, index))
@@ -137,8 +161,8 @@ pub const MAX_NUMBER_OF_STATES: u32 = 1024;
 /// VALUE_OUT_OF_RANGE, the code WriteProperty gives a value the property
 /// can't take (Clause 15.9.1.3.1). A held state already past the current
 /// count doesn't block a new count. A local shrink can leave one, and so
-/// can an Alarm_Values list restored from storage (#2331), since the count
-/// isn't kept.
+/// can an Alarm_Values list restored from storage (#2331) on an object
+/// whose storage holds no written State_Text.
 fn check_state_count(
     current: u32,
     count: u64,
@@ -247,6 +271,76 @@ fn write_state_text(
         }
         Some(_) => Err(common::invalid_array_index_error()),
     }
+}
+
+/// The most octets of UTF-8 a label of State_Text may hold on an object
+/// that keeps it in storage (#2414). A write takes any label, but storage
+/// keeps the whole array, up to [`MAX_NUMBER_OF_STATES`] labels, in a file
+/// of at most 1 MiB beside the object's other kept rows: 512 octets a
+/// label, which leaves room for them, is far past any label a head end
+/// gives a state.
+pub const MAX_KEPT_STATE_TEXT_OCTETS: usize = 512;
+
+/// Whether storage keeps `texts` as a State_Text a write leaves: 1 to
+/// [`MAX_NUMBER_OF_STATES`] labels, each at most
+/// [`MAX_KEPT_STATE_TEXT_OCTETS`] octets. A write to an object with storage
+/// that would leave other texts is refused, and a file holding them is
+/// damage: this one rule is both checks, so what a write saves reopens.
+pub(crate) fn state_text_fits(texts: &[String]) -> bool {
+    (1..=MAX_NUMBER_OF_STATES as usize).contains(&texts.len())
+        && texts
+            .iter()
+            .all(|text| text.len() <= MAX_KEPT_STATE_TEXT_OCTETS)
+}
+
+/// What a write of State_Text leaves the kept `rows` of an object with
+/// storage (#2414), or the object's refusal of it: [`write_state_text`] on
+/// the texts `rows` hold (`served`, the object's own, until a step of the
+/// request changes them), with `held` the states the object keeps besides
+/// Alarm_Values and the Alarm_Values `rows` hold. A write the object takes
+/// that would leave texts [`state_text_fits`] refuses is RESOURCES /
+/// NO_SPACE_TO_WRITE_PROPERTY, before anything is saved, as a Description
+/// past its cap is (#2364).
+#[cfg(feature = "event-reporting")]
+pub(crate) fn state_text_after(
+    served: &[String],
+    held: impl IntoIterator<Item = u32>,
+    rows: &mut crate::write_config::AlgorithmWriteConfig,
+    write: &crate::durable::PendingWrite,
+) -> Result<(), Error> {
+    let mut texts = rows.state_text.clone().unwrap_or_else(|| served.to_vec());
+    let mut count = u32::try_from(texts.len()).unwrap_or(u32::MAX);
+    let alarm_values = rows.alarm_values.iter().flatten().copied();
+    let held = held.into_iter().chain(alarm_values);
+    write_state_text(
+        &mut count,
+        &mut texts,
+        held,
+        write.array_index,
+        write.value.clone(),
+    )?;
+    if !state_text_fits(&texts) {
+        return Err(common::protocol_error(
+            ErrorClass::RESOURCES,
+            ErrorCode::NO_SPACE_TO_WRITE_PROPERTY,
+        ));
+    }
+    rows.state_text = Some(texts);
+    Ok(())
+}
+
+/// Take a saved State_Text (#2414) as a write of it would: the labels, and
+/// as many states. Nothing that names a state is repaired, as a local
+/// `set_number_of_states` repairs nothing; the caller works Reliability
+/// out again. `saved` has passed [`state_text_fits`].
+#[cfg(feature = "event-reporting")]
+pub(crate) fn restore_state_text(
+    number_of_states: &mut u32,
+    state_text: &mut Vec<String>,
+    saved: &[String],
+) {
+    saved.clone_into(state_text);
+    *number_of_states = saved.len() as u32;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

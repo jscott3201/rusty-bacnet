@@ -4532,11 +4532,15 @@ sets the states.
 A Multi-state Input or Value refuses an Alarm_Values entry past its
 Number_Of_States with `PROPERTY/VALUE_OUT_OF_RANGE` naming the element, over
 WriteProperty, WritePropertyMultiple, the list services and CreateObject
-alike (#1429). `set_alarm_values` stays unchecked for local configuration;
-on a Multi-state Value an entry past the count shows as CONFIGURATION_ERROR.
-A list holding such an entry has to lose it before AddListElement or
-RemoveListElement can change anything else, since each writes the whole list
-back.
+alike (#1429). `set_alarm_values` checks its list the same way and
+returns the write's error (#2415): more than 1,024 entries is
+`RESOURCES/NO_SPACE_TO_WRITE_PROPERTY`, and a zero or a state past the
+count is `PROPERTY/VALUE_OUT_OF_RANGE`, each naming its entry, with the list
+held kept. Only a local `set_number_of_states` shrink can still leave an
+entry past the count: it keeps the list, and on a Multi-state Value the
+entry shows as CONFIGURATION_ERROR. A list holding such an entry has to
+lose it before AddListElement or RemoveListElement can change anything
+else, since each writes the whole list back.
 
 AddListElement and RemoveListElement edit only properties that
 `property_metadata::is_list_property` reports as a BACnetLIST. It follows the
@@ -4706,11 +4710,17 @@ parameters a peer writes, once built `with_reporting_persistence`:
 | --- | --- |
 | Analog Input, Output, Value | Time_Delay, Time_Delay_Normal, High_Limit, Low_Limit, Deadband, Limit_Enable |
 | Binary Input, Value | Time_Delay, Time_Delay_Normal, Alarm_Value |
-| Multi-state Input, Value | Time_Delay, Time_Delay_Normal, Alarm_Values |
-| Binary Output, Multi-state Output | Time_Delay, Time_Delay_Normal |
+| Multi-state Input, Value | Time_Delay, Time_Delay_Normal, Alarm_Values, State_Text |
+| Binary Output | Time_Delay, Time_Delay_Normal |
+| Multi-state Output | Time_Delay, Time_Delay_Normal, State_Text |
 | Access Door | Time_Delay, Time_Delay_Normal, Alarm_Values, Fault_Values, Masked_Alarm_Values |
 | Access Zone | Time_Delay, Time_Delay_Normal, Alarm_Values |
 | Event Enrollment | Time_Delay_Normal, Event_Parameters, Fault_Parameters |
+
+State_Text isn't an event algorithm parameter, but a peer writes it to
+the same objects and it sets their Number_Of_States, which bounds the
+Alarm_Values entries they take, so the three multi-state types keep it in
+the same file (#2414); see "State_Text and Number_Of_States" below.
 
 What is still lost at a restart is what peers can't write: an Access
 Zone's occupancy limits and an Event Enrollment's
@@ -4736,9 +4746,11 @@ application sets them at each start.
   Event Enrollment's three rows (`set_event_parameters`,
   `set_fault_parameters` and `set_time_delay_normal`). Like the
   reporting setters, each gives way to a value a write saved until
-  `clear_written_reporting()`. A multi-state object's still takes any state,
-  checked or not; a door's and a zone's still check their argument as a
-  write is checked and return its error, kept list or not. The other
+  `clear_written_reporting()`. Each checks its argument as a write is
+  checked and returns its error, kept list or not: a multi-state object's
+  since #2415, a door's and a zone's before it. A multi-state object's
+  `set_number_of_states` gives way to a saved State_Text the same way,
+  still refusing zero. The other
   parameters have no setter. Set the
   application's own values with `write_property` before
   `with_reporting_persistence`: a saved write then goes over them, and they
@@ -4819,15 +4831,36 @@ application sets them at each start.
   object's type is an unknown kind (`SnapshotErrorKind::UnknownKind(6)`,
   `is_damage()` false): a later release may keep it, so a backend with two
   copies stops there instead of falling back to the older one.
+- **State_Text and Number_Of_States.** A Multi-state Input, Output or Value
+  with storage keeps a written State_Text, whether written whole, at index
+  0 (the count) or one label at a time, as
+  `written_reporting().algorithm.state_text`; its Number_Of_States is the
+  number of labels. A rebuilt object serves the saved labels and their
+  count over the count the application builds it with. With storage a
+  write that would leave more than 1,024 labels
+  (`multistate::MAX_NUMBER_OF_STATES`) or a label past 512 octets of UTF-8
+  (`multistate::MAX_KEPT_STATE_TEXT_OCTETS`) is refused with
+  RESOURCES / NO_SPACE_TO_WRITE_PROPERTY before anything is saved: any
+  label write to an object the application built with more than 1,024
+  states among them. Without storage a write takes what it took before. A
+  restore takes the labels as a write would and repairs nothing that names
+  a state. A fresh object's Present_Value, Relinquish_Default and commands
+  are state 1, which every count has, and the object works out its
+  Reliability again as after a write; a value the application set before
+  the builder call that the restored count lacks shows as a local shrink
+  leaves it, as MULTI_STATE_OUT_OF_RANGE or CONFIGURATION_ERROR. A file
+  holding no label, more than 1,024, a label past 512 octets or octets
+  that aren't UTF-8 is damage.
 - **Alarm_Values and Number_Of_States.** A saved list holds at most the
   1,024 entries a write may, none of them zero; a file breaking either is
   damage. One wire rule isn't applied on load: a write refuses an entry
   past Number_Of_States, but a saved list naming one is restored as it was
-  written. The state count and State_Text aren't kept, so the next start
-  has the application's count again. A peer that added a state through
-  State_Text and then listed it leaves such a list, and so does an
-  application that rebuilds the object with fewer states; neither may stop
-  the object from starting. The object then holds what a local
+  written. A peer can't leave such a list: the State_Text that added the
+  state is saved beside it, so the count comes back with the list. An
+  application can, by building the object with fewer states than a saved
+  list names on storage holding no State_Text (a file saved before #2414
+  among them); that may not stop the object from starting. The object then
+  holds what a local
   `set_number_of_states` shrink leaves it holding: it serves the list, and
   a write of the same list is refused. What follows differs by type, and
   is the cost of letting the object start:
@@ -4843,9 +4876,8 @@ application sets them at each start.
   strand a listed state is refused.
 - **One request that adds a state and lists it.** A WritePropertyMultiple
   that writes State_Text and then Alarm_Values naming a state it adds
-  saves once, off the database guard: the server hands a Multi-state Input
-  or Value its State_Text writes with the rest, and the staged check uses
-  the count they leave.
+  saves both once, off the database guard: State_Text is staged like any
+  kept write, and the staged check of the list uses the count it leaves.
 - **Format.** A snapshot holding a parameter is stored as kind 6 of
   `RBNWCF01` (`snapshot::write_config::KIND_REPORTING_PARAMETERS`): the kind 4
   body, then a presence mask and the parameters it names. One without keeps
@@ -4865,12 +4897,17 @@ application sets them at each start.
   door or a zone. A file opens for one object and is refused for any other,
   so a list is never read under another type's rule. A release that keeps
   no parameter for a door or a zone refuses its kind 6 file as an unknown
-  kind, at the mask, whichever rows it holds.
+  kind, at the mask, whichever rows it holds. Bits 10 and 11 are an Event
+  Enrollment's two parameter sets. Bit 12 is State_Text (#2414): a
+  four-octet count of 1 to 1,024, then each label as a four-octet length
+  of at most 512 and its UTF-8. A release before it refuses a multi-state
+  object's file holding State_Text as an unknown kind, before a row is
+  read, and reads one without as before.
   `snapshot::write_config::keeps_parameter` names
   the parameters each object type keeps. The kind adds at most 25 octets to
   an analog object's file, 13 to a binary one's, 16 plus four a listed
   state to a multi-state one's or a zone's, and 24 plus four a listed state
-  to a door's.
+  to a door's; State_Text adds four, and four plus its octets a label.
 
 ```rust
 use bacnet_types::enums::PropertyIdentifier;

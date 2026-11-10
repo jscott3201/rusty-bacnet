@@ -80,7 +80,6 @@ macro_rules! keep_enrollment_reporting {
             $(
                 fn parameter_after(
                     &self,
-                    _states: Option<u32>,
                     rows: &mut $crate::write_config::AlgorithmWriteConfig,
                     write: &$crate::durable::PendingWrite,
                 ) -> Result<(), bacnet_types::error::Error> {

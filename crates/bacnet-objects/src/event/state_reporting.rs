@@ -305,7 +305,7 @@ impl ChangeOfStateReporting {
             rows.alarm_values = Some(values);
             return Ok(());
         }
-        crate::write_config::reporting::parameters::after(&self.event_detector, None, rows, write)
+        crate::write_config::reporting::parameters::after(&self.event_detector, rows, write)
     }
 }
 
@@ -379,7 +379,6 @@ macro_rules! keep_change_of_state_reporting {
 
             fn parameter_after(
                 &self,
-                _states: Option<u32>,
                 rows: &mut $crate::write_config::AlgorithmWriteConfig,
                 write: &$crate::durable::PendingWrite,
             ) -> Result<(), bacnet_types::error::Error> {

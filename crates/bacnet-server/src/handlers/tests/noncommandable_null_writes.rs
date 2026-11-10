@@ -87,7 +87,7 @@ fn db() -> ObjectDatabase {
     db.add(Box::new(NotificationClass::new(1, "NC-1").unwrap()))
         .unwrap();
     let mut states = MultiStateInputObject::new(1, "MSI-1", 3).unwrap();
-    states.set_alarm_values(vec![2]);
+    states.set_alarm_values(vec![2]).unwrap();
     db.add(Box::new(states)).unwrap();
     let mut forwarder = NotificationForwarderObject::new(1, "NF-1").unwrap();
     forwarder.set_port_filter(Some(vec![

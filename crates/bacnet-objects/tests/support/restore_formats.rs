@@ -224,4 +224,18 @@ pub const FORMATS: &[Format] = &[
         sample: samples::described_enrollment_parameters_reporting_write_config,
         kind: Kind::EnrollmentReportingWriteConfig,
     },
+    // Kind 6 with a Multi-state Input's State_Text beside its Alarm_Values
+    // (#2414), plain and under kind 5. Last for the same reason.
+    Format {
+        name: "state_text_reporting_write_config",
+        two_slot: false,
+        sample: samples::state_text_reporting_write_config,
+        kind: Kind::MultiStateReportingWriteConfig,
+    },
+    Format {
+        name: "described_state_text_reporting_write_config",
+        two_slot: false,
+        sample: samples::described_state_text_reporting_write_config,
+        kind: Kind::MultiStateReportingWriteConfig,
+    },
 ];

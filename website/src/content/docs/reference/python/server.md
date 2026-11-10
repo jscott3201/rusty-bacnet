@@ -271,8 +271,13 @@ a peer writes there too, and the restarted object's event detection
 uses them: Time\_Delay and Time\_Delay\_Normal on all nine, High\_Limit,
 Low\_Limit, Deadband and Limit\_Enable on the analog ones, Alarm\_Value
 on a Binary Input or Value, and Alarm\_Values on a Multi-state Input
-or Value. `add_access_door`, `add_access_zone` and
-`add_event_enrollment` keep theirs too, as each says. The
+or Value. The three multi-state builders keep a written State\_Text
+there too, and with it the state count, which the restarted object
+takes over `number_of_states`; with `storage_path` a write
+leaving more than 1,024 labels or a label past 512 octets of UTF-8
+is refused with NO\_SPACE\_TO\_WRITE\_PROPERTY. `add_access_door`,
+`add_access_zone` and `add_event_enrollment` keep theirs too,
+as each says. The
 analog, binary and multi-state builders take no keyword for these
 parameters, so an
 application sets its own with `write_property_local`, and that
@@ -286,12 +291,15 @@ Description and parameters included, so the object starts from its
 defaults. A file that doesn't load, or holds a value the object
 refuses on the wire, raises BacnetError, with the clear too: the
 file is read before it is cleared. One such value doesn't:
-saved Alarm\_Values naming a state past `number_of_states` are
-restored as written, since the state count and State\_Text aren't
-kept and a peer may have added the state before the restart. A
-Multi-state Value then reports CONFIGURATION\_ERROR and is in
-FAULT, raising no OFFNORMAL on any listed state, until a list
-within its states is written. Every analog, binary and
+saved Alarm\_Values naming a state past the object's count are
+restored as written. A peer that added a state and listed it
+leaves the State\_Text that added it saved beside the list, so such
+a list comes only from a file holding no State\_Text (one saved
+before State\_Text was kept among them) on an object the
+application now builds with fewer states than the list names. A
+Multi-state Value then reports CONFIGURATION\_ERROR
+and is in FAULT, raising no OFFNORMAL on any listed state, until a
+list within its states is written. Every analog, binary and
 multi-state builder takes both, as do `add_access_door`,
 `add_access_zone`, `add_event_enrollment` and
 `add_alert_enrollment`.

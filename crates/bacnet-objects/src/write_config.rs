@@ -103,22 +103,37 @@
 //! CONFIGURATION_ERROR. An Alert Enrollment keeps no parameter: it has
 //! none a peer writes.
 //!
+//! A Multi-state Input, Output or Value keeps a written State_Text there
+//! too (#2414), the `state_text` of its [`AlgorithmWriteConfig`], and with
+//! it Number_Of_States, which is the number of labels: written whole, at
+//! index 0 (the count) or one label at a time, the whole array is kept. A
+//! rebuilt object serves the saved labels and their count over the
+//! application's. With storage, a write that would leave more than 1,024
+//! labels or a label past 512 octets of UTF-8 is refused with RESOURCES /
+//! NO_SPACE_TO_WRITE_PROPERTY before anything is saved; without storage a
+//! write takes what it always took. `set_number_of_states` gives way to a
+//! saved State_Text like the other setters, still refusing zero. A restore
+//! takes the labels as a write would and repairs nothing that names a
+//! state; on a fresh object everything that does is state 1, and the
+//! object works its Reliability out again, as after a write.
+//!
 //! One wire rule doesn't fail the builder call: an Alarm_Values entry past
-//! Number_Of_States, which a write refuses (#1429). The state count and
-//! State_Text aren't kept. So a count a peer raised through State_Text is
-//! the application's again after a restart, and a list the peer then wrote
-//! may name a state the rebuilt object lacks; so may any saved list once an
-//! application builds the object with fewer states. Such a list is restored
-//! as it was written, since two writes the device accepted mustn't stop it
-//! from starting. The object holds it as it holds a list a local
-//! `set_number_of_states` shrink leaves: it serves it, and a write of the
-//! same list is refused. What follows differs by type, and is the cost of
-//! opening. A Multi-state Input reports no fault, and the entries within
-//! its states still alarm. A Multi-state Value reports CONFIGURATION_ERROR
-//! and goes to FAULT, and while it is there no listed state raises
-//! OFFNORMAL, the ones within its states included: it raises no alarm on
-//! its value until a list within its states is written or the states are
-//! there again.
+//! Number_Of_States, which a write refuses (#1429). With State_Text kept,
+//! a peer that raises the count and lists a new state leaves both in
+//! storage, and the rebuilt object has the count the list needs. What can
+//! still leave such a list is the application: building the object with
+//! fewer states than a saved list names, on storage holding no State_Text
+//! (a file saved before #2414 among them), or shrinking the count with
+//! `set_number_of_states` before anything wrote State_Text. Such a list is
+//! restored as it was written, since a saved list mustn't stop the object
+//! from starting. The object holds it as it holds a list a local shrink
+//! leaves: it serves it, and a write of the same list is refused. What
+//! follows differs by type, and is the cost of opening. A Multi-state
+//! Input reports no fault, and the entries within its states still alarm.
+//! A Multi-state Value reports CONFIGURATION_ERROR and goes to FAULT, and
+//! while it is there no listed state raises OFFNORMAL, the ones within its
+//! states included: it raises no alarm on its value until a list within
+//! its states is written or the states are there again.
 //!
 //! Each of these object types keeps a written Description in the same file
 //! too (#2364), as kind 5 of the format wrapped around the kind it writes,
@@ -198,6 +213,11 @@ mod state_parameter_rules_tests;
 #[cfg(all(test, feature = "event-reporting"))]
 #[path = "write_config/state_parameters_tests.rs"]
 mod state_parameters_tests;
+// A multi-state object's State_Text and count, kept beside its parameters
+// (#2414).
+#[cfg(all(test, feature = "event-reporting"))]
+#[path = "write_config/state_text_tests.rs"]
+mod state_text_tests;
 // event-reporting: the reporting persistence these test is compiled with it.
 #[cfg(all(test, feature = "event-reporting"))]
 #[path = "write_config/reporting_tests.rs"]

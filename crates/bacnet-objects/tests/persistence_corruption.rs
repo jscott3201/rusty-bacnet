@@ -152,6 +152,8 @@ fn every_format_has_a_sample() {
             "zone_alarm_values_reporting_write_config",
             "enrollment_parameters_reporting_write_config",
             "described_enrollment_parameters_reporting_write_config",
+            "state_text_reporting_write_config",
+            "described_state_text_reporting_write_config",
         ]
     );
 }

@@ -130,6 +130,11 @@ fn sample(kind: ObjectType, property: P) -> (AlgorithmWriteConfig, PropertyValue
             stored.fault_parameters = Some(parameters);
             served
         }
+        P::STATE_TEXT => {
+            let (_, served, kept) = state_parameters_tests::state_text_row();
+            stored = kept;
+            served
+        }
         other => panic!("the table's row for {other:?} has no sample here"),
     };
     (stored, served)
@@ -177,10 +182,11 @@ fn every_row_the_table_keeps_goes_through_its_objects() {
             assert_eq!(read(object.as_ref(), property), value, "{what}: written");
         }
     }
-    // Six rows on the three analog types, three on the binary and
-    // multi-state Inputs and Values, two on the Outputs, five on a door,
+    // Six rows on the three analog types, three on the binary Input and
+    // Value, four on the multi-state ones (State_Text, #2414), two on the
+    // Binary Output and three on the Multi-state Output, five on a door,
     // three on a zone and three on an Event Enrollment.
-    assert_eq!(pairs, 3 * 6 + 4 * 3 + 2 * 2 + 5 + 3 + 3);
+    assert_eq!(pairs, 3 * 6 + 2 * 3 + 2 * 4 + 2 + 3 + 5 + 3 + 3);
 }
 
 /// The one reporter the table keeps nothing for is the Alert Enrollment,
