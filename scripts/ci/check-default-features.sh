@@ -97,6 +97,12 @@ echo "==> bacnet-device-core (no_std with alloc and test-support$label)"
 cargo_for clippy -p bacnet-device-core --all-targets --no-default-features --features alloc,test-support --locked -- -D warnings
 cargo_for doc -p bacnet-device-core --no-default-features --features alloc,test-support --no-deps --locked --document-private-items
 
+# Its COV-multiple path (#2320) alone with alloc, which `std` turns on: a doc
+# link into the gated modules, or out of them, fails here.
+echo "==> bacnet-device-core (no_std with alloc and cov-multiple$label)"
+cargo_for clippy -p bacnet-device-core --all-targets --no-default-features --features alloc,cov-multiple --locked -- -D warnings
+cargo_for doc -p bacnet-device-core --no-default-features --features alloc,cov-multiple --no-deps --locked --document-private-items
+
 # The rustdoc of the MS/TP and B/IP crates with each storage feature alone,
 # and of the router core with each glue feature alone. Their defaults have
 # none, and the workspace runs turn on all of them, so an intra-doc link to

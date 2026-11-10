@@ -441,7 +441,7 @@ async fn a_partly_admitted_request_warns_afresh_about_dropped_changes() {
     // and only the change's Status_Flags go out.
     use bacnet_objects::value_types::CharacterStringValueObject;
     let csv = ObjectIdentifier::new(ObjectType::CHARACTERSTRING_VALUE, 1).unwrap();
-    let warnings = crate::cov::timed::DropWarningCount::default();
+    let warnings = crate::cov::timed_store::DropWarningCount::default();
     let _guard = warnings.install();
     let mut h = Harness::start_with(ServerConfig::default(), |db| {
         db.add(Box::new(

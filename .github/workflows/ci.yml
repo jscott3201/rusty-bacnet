@@ -293,11 +293,11 @@ jobs:
       # bacnet-device-core with alloc and without std, tests included: Test
       # runs those tests, and no run above lints them (#1613, #1615, #2178).
       # bacnet-objects' capability features and bacnet-device-core's
-      # structured-writes on, as std has them (#2215, #2210);
-      # check-default-features.sh lints them off.
+      # structured-writes and cov-multiple on, as std has them (#2215, #2210,
+      # #2320); check-default-features.sh lints them off.
       - name: Clippy (no_std crates with alloc, all targets)
         if: ${{ !cancelled() }}
-        run: cargo clippy -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc,bacnet-objects/event-reporting,bacnet-objects/durable-writes,bacnet-device-core/structured-writes --all-targets --locked -- -D warnings
+        run: cargo clippy -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc,bacnet-objects/event-reporting,bacnet-objects/durable-writes,bacnet-device-core/structured-writes,bacnet-device-core/cov-multiple --all-targets --locked -- -D warnings
       # And without alloc either, the allocation-free profile (#1614).
       - name: Clippy (no_std crates without alloc, all targets)
         if: ${{ !cancelled() }}
@@ -390,11 +390,11 @@ jobs:
       # hashbrown's maps (#1615).
       # The tests themselves still link std; check-no-std.sh shows the code
       # needs none. bacnet-objects' capability features and
-      # bacnet-device-core's structured-writes are on, as std has them
-      # (#2215, #2210).
+      # bacnet-device-core's structured-writes and cov-multiple are on, as
+      # std has them (#2215, #2210, #2320).
       - name: no_std crates' tests (alloc, without std)
         if: ${{ !cancelled() }}
-        run: cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc,bacnet-objects/event-reporting,bacnet-objects/durable-writes,bacnet-device-core/structured-writes --locked --profile ci
+        run: cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc,bacnet-objects/event-reporting,bacnet-objects/durable-writes,bacnet-device-core/structured-writes,bacnet-device-core/cov-multiple --locked --profile ci
       # And with them all off, as the objects firmware image builds it: the
       # tests that need a capability compile out, and
       # capability_features_tests checks no object lends one (#2215). With
@@ -406,7 +406,7 @@ jobs:
         run: cargo nextest run -p bacnet-objects -p bacnet-device-core -p firmware-link --no-default-features --features alloc,firmware-link/reporting --locked --profile ci
       - name: no_std crates' doctests (alloc, without std)
         if: ${{ !cancelled() }}
-        run: cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc,bacnet-objects/event-reporting,bacnet-objects/durable-writes,bacnet-device-core/structured-writes --locked
+        run: cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc,bacnet-objects/event-reporting,bacnet-objects/durable-writes,bacnet-device-core/structured-writes,bacnet-device-core/cov-multiple --locked
       # Without alloc either (#1614): the allocation-free profile's code, and
       # tests/no_alloc_subset.rs, which counts the subset's allocations: none.
       - name: no_std crates' tests (without alloc)

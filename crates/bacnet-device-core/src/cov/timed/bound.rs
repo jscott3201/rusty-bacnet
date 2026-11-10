@@ -32,7 +32,7 @@ const LIST_TAGS: usize = 2;
 
 /// Octets of the APDU header before a COV-multiple notification's service
 /// request, confirmed or not; a notification is never segmented.
-pub(crate) fn request_header(confirmed: bool) -> usize {
+pub fn request_header(confirmed: bool) -> usize {
     if confirmed {
         CONFIRMED_HEADER
     } else {
@@ -182,17 +182,13 @@ mod tests {
     use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
     use bytes::BytesMut;
 
-    use super::super::tests::{
-        change, context, dropped, frame, histories, key, seconds, timed_reference,
-    };
+    use super::super::tests::{change, context, dropped, frame, histories, key, seconds};
     use super::super::{
         CEILING_BYTES_PER_OCTET, CHANGE_MEMORY, HISTORY_NOTIFICATIONS, ITEM_FRAMING, TimedChange,
         VALUE_MEMORY, value_len,
     };
     use super::*;
-    use crate::cov::{AtomicCovCounters, CovSubscriptionTable};
-    use bacnet_device_core::cov::{CovObservation, CovSample, SubscriberEndpoint};
-    use std::sync::Arc;
+    use crate::cov::{CovObservation, CovSample};
 
     /// The local maximum APDU these tests' devices take: the largest B/IP one.
     const LOCAL: usize = 1476;
@@ -235,6 +231,7 @@ mod tests {
                 time_of_change: None,
             }],
             CovObservation::new(sample, None).unwrap(),
+            super::super::tests::now(),
         )
     }
 
@@ -276,7 +273,7 @@ mod tests {
     /// such notifications carry.
     #[test]
     fn at_a_50_octet_subscriber_a_change_that_fits_the_wire_fits_the_bound() {
-        let (mut h, counters) = histories(8, 4);
+        let mut h = histories(8, 4);
         let k = key(1, 1);
         let small = context(1);
         h.reset(&k, 1, 0);
@@ -304,7 +301,7 @@ mod tests {
             h.push(&k, 1, change(second, 4));
         }
         assert_eq!(seconds(&h.drain(&k, 1).1), [1, 2, 3, 4, 5]);
-        assert_eq!(dropped(&counters), 0);
+        assert_eq!(dropped(&h), 0);
         // A longer lifetime takes another octet in every notification, and
         // the room of four no longer holds the oldest change.
         h.set_sizing(&small, Some(50), 300);
@@ -312,7 +309,7 @@ mod tests {
             h.push(&k, 1, change(second, 4));
         }
         assert_eq!(seconds(&h.drain(&k, 1).1), [7, 8, 9, 10]);
-        assert_eq!(dropped(&counters), 1);
+        assert_eq!(dropped(&h), 1);
     }
 
     /// Changes of `payload` octets: the octets one takes as an item, and
@@ -328,7 +325,9 @@ mod tests {
     #[cfg(target_pointer_width = "64")]
     #[test]
     fn the_memory_terms_are_the_measured_sizes() {
-        assert_eq!(std::mem::size_of::<TimedChange>(), 144);
+        // 136 as it is held, and the eight octets its capture instant no
+        // longer takes (#2320).
+        assert_eq!(std::mem::size_of::<TimedChange>(), 136);
         assert_eq!(std::mem::size_of::<COVNotificationValue>(), 48);
         assert_eq!((CHANGE_MEMORY, VALUE_MEMORY), (144, 56));
         // The smallest change, one empty value, and a REAL Present_Value,
@@ -343,8 +342,7 @@ mod tests {
     /// context this small never reaches, not against the room for items.
     #[test]
     fn at_a_50_octet_subscriber_the_bound_keeps_four_notifications_of_changes() {
-        let counters = Arc::new(AtomicCovCounters::default());
-        let mut h = TimedHistories::new(LOCAL, Arc::clone(&counters));
+        let mut h = TimedHistories::new(LOCAL);
         let k = key(1, 1);
         let small = context(1);
         h.reset(&k, 1, 0);
@@ -359,7 +357,7 @@ mod tests {
             h.push(&k, 1, real_present_value(second));
         }
         assert_eq!(seconds(&h.drain(&k, 1).1), [7, 8, 9, 10]);
-        assert_eq!(dropped(&counters), 6);
+        assert_eq!(dropped(&h), 6);
 
         // The estimate counts octets, not whole notifications: five Binary
         // Present_Value changes, 18 octets each, fit the 100 octets of four.
@@ -369,7 +367,7 @@ mod tests {
             h.push(&k, 1, change(second, 2));
         }
         assert_eq!(seconds(&h.drain(&k, 1).1), [16, 17, 18, 19, 20]);
-        assert_eq!(dropped(&counters), 11);
+        assert_eq!(dropped(&h), 11);
     }
 
     /// #1287: across subscriber and change sizes, a context keeps as many
@@ -397,8 +395,7 @@ mod tests {
                     let ceiling_binds = ceiling / memory < room / items;
                     assert_eq!(ceiling_binds, payload <= 40, "payload {payload}");
                 }
-                let counters = Arc::new(AtomicCovCounters::default());
-                let mut h = TimedHistories::new(LOCAL, Arc::clone(&counters));
+                let mut h = TimedHistories::new(LOCAL);
                 h.reset(&k, 1, 0);
                 h.set_sizing(&small, Some(subscriber), 120);
                 for n in 0..fit + 2 {
@@ -406,11 +403,7 @@ mod tests {
                 }
                 let kept = h.drain(&k, 1).1.len();
                 assert_eq!(kept, fit, "subscriber {subscriber}, payload {payload}");
-                assert_eq!(
-                    dropped(&counters),
-                    2,
-                    "subscriber {subscriber}, payload {payload}"
-                );
+                assert_eq!(dropped(&h), 2, "subscriber {subscriber}, payload {payload}");
             }
         }
     }
@@ -425,8 +418,7 @@ mod tests {
     #[cfg(target_pointer_width = "64")]
     #[test]
     fn the_memory_ceiling_caps_every_context_under_many_subscribers() {
-        let counters = Arc::new(AtomicCovCounters::default());
-        let mut h = TimedHistories::new(LOCAL, Arc::clone(&counters));
+        let mut h = TimedHistories::new(LOCAL);
         // The smallest timestamped change: one empty value, 16 octets as an
         // item and 200 bytes in memory.
         let (items, memory) = sizes(0);
@@ -466,26 +458,6 @@ mod tests {
                 None => (116, ceiling / memory),
             };
             assert_eq!((held, fit), (expected, expected), "process {process}");
-        }
-    }
-
-    #[test]
-    fn admission_sizes_the_envelope_from_the_lifetime_left() {
-        let route = SubscriberEndpoint::new(&[10, 0, 0, 1, 0xBA, 0xC0], None);
-        for (lifetime, envelope) in [(120, 25), (300, 26), (70_000, 27)] {
-            let mut table = CovSubscriptionTable::new();
-            let expires =
-                crate::runtime_clock::core_now() + bacnet_time::Duration::from_secs(lifetime);
-            let reference = timed_reference(1, expires);
-            table
-                .subscribe_multiple(&context(1), &route, expires, 10, Some(50), vec![reference])
-                .unwrap();
-            let terms = table.timed().lock().terms[&context(1)];
-            assert_eq!(
-                (terms.envelope, terms.notification()),
-                (envelope, 50 - envelope),
-                "lifetime {lifetime}"
-            );
         }
     }
 }

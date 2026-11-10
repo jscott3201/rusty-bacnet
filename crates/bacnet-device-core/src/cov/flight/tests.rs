@@ -122,6 +122,23 @@ fn an_unsettled_report_ends_itself_at_its_deadline() {
     ));
 }
 
+/// A host reads a report's deadline off the table, to end what the report's
+/// worker holds at the same instant.
+#[test]
+fn a_report_names_its_deadline_until_it_is_settled() {
+    let mut table = table();
+    let sub = single(&mut table);
+    let (token, _) = begin(&mut table, &[&sub], T0);
+    assert_eq!(table.report_deadline(token), Some(T0 + TIMING.deadline()));
+    table.delivered(token, Delivery::Failed, T0);
+    assert_eq!(table.report_deadline(token), None, "settled");
+    // The next report on the coordinate has its own, from when it began.
+    let later = T0 + TIMING.hold_off();
+    let (next, _) = begin(&mut table, &[&sub], later);
+    assert_eq!(table.report_deadline(next), Some(later + TIMING.deadline()));
+    assert_eq!(table.report_deadline(token), None, "not the old report's");
+}
+
 /// The table's expiry pass reports an abandoned report: its token, so the
 /// host drops the worker's wake-up, and its references, owed a fresh look.
 #[test]

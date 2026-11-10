@@ -47,7 +47,7 @@ pub(super) async fn cancel(slot: &mut Option<JoinHandle<()>>) {
 pub(super) fn enable_for_restart(
     slot: &Option<JoinHandle<()>>,
     comm: &CommState,
-    cov_resume: &crate::cov::timed::TimedStore,
+    cov_resume: &crate::cov::timed_store::TimedStore,
 ) {
     if let Some(task) = slot {
         task.abort();
@@ -86,7 +86,7 @@ pub(super) async fn replace<T: TransportPort + 'static>(
     services: &super::request_services::RequestServices<T>,
     request: DccRequest<'_>,
     request_tasks: &super::request_tasks::RequestTaskSpawner,
-    cov_resume: &crate::cov::timed::TimedStore,
+    cov_resume: &crate::cov::timed_store::TimedStore,
     audit: &mut super::audit_reporter::WriteAudit<'_, T>,
 ) -> Result<dcc_outcomes::DccMetadata, handlers::device_mgmt::DccFailure> {
     let super::request_services::RequestServices {

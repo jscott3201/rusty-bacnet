@@ -452,6 +452,19 @@ impl CovTable {
         })
     }
 
+    /// When the confirmed report `token` names ends itself if no outcome
+    /// arrives: the deadline [`begin_confirmed`](Self::begin_confirmed) gave
+    /// it. `None` once the report was settled, fenced or removed; one nobody
+    /// settled keeps its deadline, by then past, until a later call ends it.
+    /// A host that keeps something for the report's worker, as it lodges a
+    /// claim on timestamped changes, ends it at this same instant.
+    pub fn report_deadline(&self, token: Token) -> Option<Instant> {
+        self.flights
+            .get(&token.flight)
+            .filter(|state| state.ticket == token.ticket)
+            .and_then(FlightState::outstanding_deadline)
+    }
+
     /// End the report `token` names, as `outcome` says, at `now`. A report
     /// that was fenced, removed with its coordinate, or that passed its
     /// deadline is no longer known, and its outcome changes nothing.

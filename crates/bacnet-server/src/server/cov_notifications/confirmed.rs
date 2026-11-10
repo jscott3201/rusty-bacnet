@@ -3,7 +3,7 @@
 //! (#896); see `crate::cov::confirmed` for the outstanding-report policy.
 use super::super::cov_notify_context::CovFanoutHandles;
 use super::*;
-use crate::cov::timed::TimedClaim;
+use crate::cov::timed_store::{LodgedClaim, TimedClaim};
 use bacnet_device_core::cov::{BeginRefusal, Delivery, PreparedCovCompletion};
 use bacnet_device_core::cov::{CovObservation, CovSubscriptionKey};
 
@@ -63,7 +63,10 @@ pub(in crate::server) struct ConfirmedSend {
     pub(in crate::server) buf: BytesMut,
     /// Reference whose recipient and current route receive the notification.
     pub(in crate::server) route: CovSubscriptionSnapshot,
-    pub(in crate::server) claim: Option<TimedClaim>,
+    /// Timestamped history conveyed, lodged with the histories until the
+    /// report's deadline: the worker commits it on the Ack, and it returns
+    /// to its references otherwise.
+    pub(in crate::server) claim: Option<LodgedClaim>,
     pub(in crate::server) label: &'static str,
     pub(in crate::server) revisits: Arc<crate::cov::CovRevisits>,
     /// When the table began the report: its deadline, and the worker's
@@ -196,6 +199,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 return;
             }
         };
+        // The worker's claim ends with its report, at the one instant the
+        // table gave the report: the histories keep it until then, and a
+        // live worker settles ahead of that, as it does the report (its
+        // cutoff is half a timeout earlier).
+        let claim = report.claim.map(|claim| claim.lodge(flight.deadline()));
         Self::spawn_confirmed(
             handles,
             ConfirmedSend {
@@ -203,7 +211,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 flight,
                 buf,
                 route: report.route,
-                claim: report.claim,
+                claim,
                 label,
                 revisits,
                 begun,
@@ -333,7 +341,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     table.delivered(&flight, Delivery::Failed);
                     // Its timestamped history goes out once the hold-off ends.
                     if let Some(context) = route.key().multiple_context() {
-                        let until = tokio::time::Instant::now() + hold_off;
+                        let until = runtime_clock::core_now()
+                            + bacnet_time::Duration::saturating_from_core(hold_off);
                         table.timed().hold_until(context, until);
                     }
                     Vec::new()

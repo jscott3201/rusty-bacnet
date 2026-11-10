@@ -11,9 +11,7 @@
 //! whether or not the reference still has anything to report, and owes it
 //! again only if that report does not deliver it either.
 
-use std::time::Duration;
-
-use tokio::time::Instant;
+use bacnet_time::{Duration, Instant};
 
 use super::{CovSubscriptionKey, MultipleContextKey, TimedHistories, UntimedReference};
 
@@ -22,12 +20,7 @@ impl TimedHistories {
     /// context's admitted Max_Notification_Delay in seconds. Whatever an
     /// earlier generation owed goes with it: the admission's initial report
     /// conveys the reference afresh.
-    pub(in crate::cov) fn reset_untimed(
-        &mut self,
-        key: &CovSubscriptionKey,
-        generation: u64,
-        delay: u32,
-    ) {
+    pub fn reset_untimed(&mut self, key: &CovSubscriptionKey, generation: u64, delay: u32) {
         self.remove(key);
         self.untimed.insert(
             key.clone(),
@@ -41,11 +34,7 @@ impl TimedHistories {
 
     /// Take the mark of a live untimestamped reference that a report is
     /// evaluating now: since when it is owed, if it is.
-    pub(crate) fn take_owed(
-        &mut self,
-        key: &CovSubscriptionKey,
-        generation: u64,
-    ) -> Option<Instant> {
+    pub fn take_owed(&mut self, key: &CovSubscriptionKey, generation: u64) -> Option<Instant> {
         self.untimed
             .get_mut(key)
             .filter(|reference| reference.generation == generation)?
@@ -67,7 +56,7 @@ impl TimedHistories {
         if reference.owed_since.is_none_or(|owed| since < owed) {
             reference.owed_since = Some(since);
             // The context's deadline may have moved earlier.
-            self.wake.notify_one();
+            self.moved = true;
         }
     }
 

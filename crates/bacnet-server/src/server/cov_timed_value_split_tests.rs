@@ -136,7 +136,7 @@ async fn tiny_harness(config: ServerConfig, confirmed: bool, delay: u32) -> Harn
 #[tokio::test(start_paused = true)]
 async fn a_50_octet_subscriber_gets_each_timestamped_change_one_value_per_notification() {
     for confirmed in [false, true] {
-        let warnings = crate::cov::timed::DropWarningCount::default();
+        let warnings = crate::cov::timed_store::DropWarningCount::default();
         let _guard = warnings.install();
         // Even the initial report's change does not fit one notification:
         // its Present_Value goes first, then its Status_Flags, both with the
@@ -370,7 +370,7 @@ async fn a_value_dcc_withdraws_goes_out_again_with_the_rest_of_its_change() {
 #[tokio::test(start_paused = true)]
 async fn an_oversized_value_is_counted_each_time_and_warned_once_per_admission() {
     for confirmed in [false, true] {
-        let warnings = crate::cov::timed::DropWarningCount::default();
+        let warnings = crate::cov::timed_store::DropWarningCount::default();
         let _guard = warnings.install();
         let (mut h, csv) = string_harness(confirmed).await;
         let seen = |h: &Harness| {
@@ -424,7 +424,7 @@ async fn hold_back_flags(h: &Harness, confirmed: bool, second: u8) {
 #[tokio::test(start_paused = true)]
 async fn a_held_back_value_still_goes_out_after_a_newer_change() {
     for confirmed in [false, true] {
-        let warnings = crate::cov::timed::DropWarningCount::default();
+        let warnings = crate::cov::timed_store::DropWarningCount::default();
         let _guard = warnings.install();
         // The bound at a 50-octet subscriber holds two or three changes.
         // Newer changes that overflow it must not evict the value their

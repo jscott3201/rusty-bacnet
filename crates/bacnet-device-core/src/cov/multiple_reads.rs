@@ -1,6 +1,8 @@
 //! COV-multiple reference preparation shared by notification building and
 //! timestamped change capture, so both apply one reporting criterion.
-use std::collections::HashMap;
+use alloc::collections::BTreeMap;
+use alloc::vec;
+use alloc::vec::Vec;
 
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::cov_multiple::COVNotificationValue;
@@ -8,28 +10,28 @@ use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 
+use super::flags::PreparedFlags;
+use super::value_source::{self, PreparedValueSource};
 use super::{CovObservation, CovSubscription};
-use bacnet_device_core::cov::flags::PreparedFlags;
-use bacnet_device_core::cov::value_source::{self, PreparedValueSource};
 
 /// One reference's current values and the observation they establish, read
 /// once; [`MultipleReads::reports`] later qualifies it without object reads.
-pub(crate) struct PreparedReference {
+pub struct PreparedReference {
     /// Conveyed values without Time_Of_Change.
     pub values: Vec<COVNotificationValue>,
     /// Baseline established by conveying these values.
     pub observation: CovObservation,
     oid: ObjectIdentifier,
-    criterion: Option<bacnet_device_core::cov::prepare::PreparedCovValue>,
+    criterion: Option<super::prepare::PreparedCovValue>,
 }
 
 /// Per-object reads shared by every reference in one preparation. Each object's
 /// Status_Flags and specialized Value_Source report are read once, so sibling
 /// selectors never observe two versions of the same object.
 #[derive(Default)]
-pub(crate) struct MultipleReads {
-    flags: HashMap<ObjectIdentifier, Result<PreparedFlags, Error>>,
-    sources: HashMap<ObjectIdentifier, Result<PreparedValueSource, Error>>,
+pub struct MultipleReads {
+    flags: BTreeMap<ObjectIdentifier, Result<PreparedFlags, Error>>,
+    sources: BTreeMap<ObjectIdentifier, Result<PreparedValueSource, Error>>,
 }
 
 impl MultipleReads {
@@ -118,7 +120,7 @@ impl MultipleReads {
                     object.read_property(property_identifier, sub.monitored_property_array_index)
                 })
                 .and_then(|value| {
-                    bacnet_device_core::cov::prepare::prepare_value(
+                    super::prepare::prepare_value(
                         object,
                         property_identifier,
                         sub.monitored_property_array_index,
