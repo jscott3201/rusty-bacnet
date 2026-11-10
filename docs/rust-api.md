@@ -1653,7 +1653,13 @@ dialler reports it), `ConnectAcceptTimeout` (no Connect-Accept in time),
 `UpgradeRefused { http_status }` (a server, often a proxy, answered the
 upgrade with that HTTP status), a malformed result, an unexpected connect
 reply, rejection expiry, or `Other` with diagnostic text that is not stable to
-match (#1839). A dial timeout is `ScConnectError::DialTimeout` inside
+match (#1839). `ScDisconnectCause::error_code()` names the cause with a
+BACnet `ErrorCode` where one applies (#2434): a NAK's own code, or one of the
+BACnet/SC connection codes 152-199 (`DNS_ERROR`, `TCP_CONNECT_TIMEOUT`,
+`TLS_SERVER_CERTIFICATE_EXPIRED`, `HTTP_TEMPORARY_UNAVAILABLE` and so on,
+Annex AB.7.5) for a DNS, TCP, TLS, HTTP-upgrade or WebSocket failure; `None`
+for a local or orderly close and the timeouts with no code of their own.
+A dial timeout is `ScConnectError::DialTimeout` inside
 `Error::Transport`; `bacnet_transport::sc::dial_within` bounds a dial the same
 way. A Connect-Request with no answer stays `Error::Timeout`.
 Events are sent without waiting: a receiver more than `SC_EVENT_CAPACITY` (64)

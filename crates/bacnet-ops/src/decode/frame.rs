@@ -15,6 +15,7 @@ use bacnet_transport::mstp::codec::{FrameType, decode_frame, decode_frame_in_pla
 use bacnet_transport::sc_frame::{
     ScBvlcResult, ScFunction, decode_sc_bvlc_result, decode_sc_message, is_broadcast_vmac,
 };
+use bacnet_types::enums::ErrorCode;
 use bytes::Bytes;
 
 use super::decode_npdu_layer;
@@ -232,7 +233,10 @@ fn sc(frame: &[u8], link: &mut Link) -> Result<(), String> {
         }
         ScFunction::Result => {
             if let Ok(ScBvlcResult::Nak { error_code, .. }) = decode_sc_bvlc_result(&message) {
-                link.problem = Some(format!("NAK {error_code}"));
+                // Named in kebab case like the B/IP NAKs; an unnamed code
+                // stays a number.
+                let code = ErrorCode::from_raw(error_code);
+                link.problem = Some(format!("NAK {}", kebab(code)));
             }
         }
         _ => {}

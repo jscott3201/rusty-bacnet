@@ -626,5 +626,16 @@ mod tests {
             reseeded: false,
         });
         assert_eq!(other.summary, "the hub refused the Connect-Request");
+        // A BACnet/SC connection code read off the wire shows by name (#2434).
+        let named = diagnose(&Fault::Nak {
+            class: ErrorClass::COMMUNICATION,
+            code: ErrorCode::from_raw(163),
+            reseeded: false,
+        });
+        assert!(
+            named.hint.contains("HTTP_TEMPORARY_UNAVAILABLE") && !named.hint.contains("163"),
+            "{}",
+            named.hint
+        );
     }
 }
