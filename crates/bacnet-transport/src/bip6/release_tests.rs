@@ -9,9 +9,7 @@ use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::time::{Instant, timeout};
 
-use super::foreign_retarget_tests::{
-    address_of, bbmd, changes, next, next_within, registration, started,
-};
+use super::foreign_retarget_tests::{address_of, bbmd, changes, next, registration, started};
 use super::frame::encoded;
 use super::*;
 use crate::port::TransportPort;
@@ -96,15 +94,35 @@ async fn a_move_releases_the_bbmd_left_and_counts_its_answer() {
     transport.stop().await.unwrap();
 }
 
+/// `wait`, with a paused clock held still while it runs.
+///
+/// A paused clock jumps to the next timer as soon as the runtime is idle,
+/// whether or not a datagram is still on its way, so a socket read under
+/// it can time out with the datagram a moment away. Tokio doesn't advance a
+/// paused clock while a blocking task runs, so one parked for as long as
+/// `wait` takes lets the datagram arrive in real time. After 5 real
+/// seconds it lets go, and the read's own deadline then fails the test.
+async fn in_real_time<T>(wait: impl Future<Output = T>) -> T {
+    let (done, parked) = std::sync::mpsc::channel::<()>();
+    let hold = tokio::task::spawn_blocking(move || {
+        let _ = parked.recv_timeout(Duration::from_secs(5));
+    });
+    let out = wait.await;
+    drop(done);
+    hold.await.unwrap();
+    out
+}
+
 /// An unanswered release is given up 3 s after it went.
 ///
-/// Time is paused, and real sockets let the clock jump while a datagram is
-/// on its way, so the wait is read from the counters, a millisecond at a
-/// time, and the request only after.
+/// Time is paused, so the two reads of a real socket, the start's
+/// registration and the release, hold the clock still
+/// ([`in_real_time`]). Between them nothing waits on a socket: the 3 s are
+/// read from the counters, a millisecond at a time.
 #[tokio::test(start_paused = true)]
 async fn an_unanswered_release_is_given_up_after_3_s() {
     let (a, b) = (bbmd().await, bbmd().await);
-    let (mut transport, lent) = started(&a, 300).await;
+    let (mut transport, lent) = in_real_time(started(&a, 300)).await;
     transport.set_release_previous_bbmd(true);
     let moved = Instant::now();
     lent.activate(&changes(Some(address_of(&b)), None)).unwrap();
@@ -114,12 +132,7 @@ async fn an_unanswered_release_is_given_up_after_3_s() {
         (Duration::from_secs(3)..Duration::from_millis(3_002)).contains(&waited),
         "{waited:?}"
     );
-    let long = Duration::from_secs(3600);
-    let entry = next_within(&a, long, |message| match message {
-        Bvll6::DeleteForeignDeviceTableEntry { entry, .. } => Some(entry),
-        _ => None,
-    })
-    .await;
+    let entry = in_real_time(release(&a)).await;
     assert_eq!(entry.port, transport.local_address().unwrap().port());
     transport.stop().await.unwrap();
 }
