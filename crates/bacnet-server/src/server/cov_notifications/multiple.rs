@@ -3,8 +3,9 @@ use super::confirmed::ConfirmedReport;
 use super::multiple_chunks::{Envelope, Part, ReportContent, request_limit, split, untimed_octets};
 use super::multiple_items::{Coordinate, FieldStamp};
 use super::*;
-use crate::cov::multiple_reads::MultipleReads;
-use crate::cov::timed::{FieldTiming, SendTurn, TimedChange, TimedClaim};
+use crate::cov::timed_store::{SendTurn, TimedClaim};
+use bacnet_device_core::cov::multiple_reads::MultipleReads;
+use bacnet_device_core::cov::timed::{FieldTiming, TimedChange};
 use std::collections::HashSet;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
@@ -300,7 +301,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                             changes.push(timed.adopt(
                                 sub.key(),
                                 sub.generation(),
-                                TimedChange::new(frame, values, prepared.observation),
+                                TimedChange::new(
+                                    frame,
+                                    values,
+                                    prepared.observation,
+                                    runtime_clock::core_now(),
+                                ),
                             ));
                         }
                         (Some(_), None) => warn!(

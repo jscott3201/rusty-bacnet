@@ -20,12 +20,13 @@ use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
-use super::multiple_reads::MultipleReads;
-use super::timed::{TimedChange, TimedStore};
+use super::timed_store::TimedStore;
 use super::{CovSubscriptionSnapshot, CovSubscriptionTable};
 use bacnet_device_core::cov::life_safety::{
     LifeSafetyCovChange, LifeSafetyCovSnapshots, is_life_safety_object,
 };
+use bacnet_device_core::cov::multiple_reads::MultipleReads;
+use bacnet_device_core::cov::timed::TimedChange;
 use bacnet_device_core::cov::{CovNotificationKind, CovSubscriptionKey};
 use bacnet_device_core::write::{WriteCommitObserver, WriteTarget};
 
@@ -191,6 +192,7 @@ impl TimedCapture {
             })
             .collect();
         let mut timed = self.store.lock();
+        let now = crate::runtime_clock::core_now();
         let mut queued = Vec::new();
         for (sub, prepared) in current {
             let key = sub.key();
@@ -211,7 +213,7 @@ impl TimedCapture {
             if timed.push(
                 key,
                 generation,
-                TimedChange::new(frame, values, prepared.observation),
+                TimedChange::new(frame, values, prepared.observation, now),
             ) {
                 queued.push(key.clone());
             }

@@ -8079,6 +8079,35 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   `report::SERVICES`, which adds the two subscribe services to the
   `Responder`'s. The COV-multiple services stay with `bacnet-server`
   (#2320).
+- `cov::timed` and `cov::multiple_reads` (#2320, behind the `cov-multiple`
+  feature, which `std` turns on): the SubscribeCOVPropertyMultiple
+  notification path's timestamped histories and the read cache a report
+  and a capture share. `TimedHistories` is plain state for a host to guard:
+  `push` queues a `TimedChange` captured at `now`, `drain` hands a
+  reference's pending changes to a `TimedClaim`, and the claim's holder
+  calls `commit` once its notification is delivered or `give_back(claim,
+  now)` when it isn't. A holder that can be lost (a task a host may abort)
+  lodges its claim instead, `lodge(claim, deadline)`, and settles it by the
+  `ClaimId` returned, `settle(id, Settlement::Delivered | Returned, now)`;
+  a lodged claim nobody settled is given back at its deadline, and a later
+  settle changes nothing. `take_due(now)` does that, hands out the
+  references of each context whose Max_Notification_Delay deadline has
+  passed and returns the next deadline still ahead; `next_deadline()` asks
+  for the earliest without acting, and `take_moved()` says whether one may
+  have moved earlier, for a host that sleeps until it. The histories log
+  nothing: `take_counts()` gives what was dropped or left out, and
+  `take_drops()` a `Dropped` report per drop, each saying whether it is
+  its context's first for that cause, the one worth a warning. Pass every
+  call the same monotonic timeline as the table's. `bacnet-server` keeps
+  its mutex, wake-up, counters and log lines around them, and guards that
+  settle a claim when dropped. The service itself, its capture and its
+  reports' split to the subscriber's APDU size follow in #2320's second
+  part; until then a `Reporter` doesn't serve it, and this module's API is
+  unstable: `ITEM_FRAMING`, `value_len` and `request_header` are public
+  only for the server's split and leave the public surface when it moves,
+  and the claim's splits and settling calls may change shape. A host that
+  lodges a claim for a confirmed report's worker ends it with the report:
+  `CovTable::report_deadline(token)` is the deadline the table gave it.
 - `clock` (#2321): the Device's clock, for firmware with none of its own.
   `SyncedClock` holds a `bacnet_time::Instant`, the UTC date and time it
   stood for and the `Zone` (UTC_Offset, minutes west, and
