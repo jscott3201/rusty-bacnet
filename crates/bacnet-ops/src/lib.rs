@@ -24,6 +24,8 @@
 //! - [`engine`]: the read operations (properties, the object list, a device
 //!   summary, trend log pages and alarms), Who-Is and the BBMD table reads
 //!   over those limits;
+//! - [`export`]: a device's objects in another model's terms, so far an
+//!   experimental Standard 223 point list in Turtle (#2436);
 //! - [`watch`]: the watch hub, one managed COV subscription or poller per
 //!   point however many listeners share it, holding the latest values;
 //! - [`safety`]: the write-safety core the TUI and the MCP server share:
@@ -35,6 +37,7 @@ pub mod class;
 pub mod decode;
 pub mod destination;
 pub mod engine;
+pub mod export;
 pub mod format;
 pub mod label;
 pub mod limits;

@@ -189,6 +189,7 @@ async fn execute_command<T: TransportPort + 'static>(
             )
             .await?;
         }
+        Command::Export { format } => commands::export::export_cmd(client, format).await?,
         Command::Readm { target, specs } => {
             let to = resolve_destination(client, target).await?;
             commands::read::read_multiple_cmd(client, &to, specs, format).await?;

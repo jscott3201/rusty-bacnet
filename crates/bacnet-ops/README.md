@@ -26,6 +26,10 @@ targets, values and devices the same way and obey the same request limits.
   device summary, trend log pages, alarms and the alarm and enrollment
   summaries, Who-Is and Who-Is-Router-To-Network with the discovery
   table, and the BBMD table reads.
+- `export`: a device's objects in another model's terms. So far
+  `export::s223`, an experimental point list in the terms of proposed
+  ASHRAE Standard 223, as Turtle: an inventory read through the engine,
+  then a writer with no I/O.
 - `bbmd`: B/IP broadcast management tables as plain data, the survey that
   follows each BDT to the BBMDs it lists, and the consistency matrix over
   them (one-way entries, missing own entries, mismatched masks).
