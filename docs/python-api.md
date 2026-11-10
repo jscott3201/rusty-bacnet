@@ -3080,7 +3080,11 @@ enrollment without `storage_path` takes a longer value, as before.
 A write of an enrollment's parameters is checked against the written value
 alone, so a saved value always loads. What the file doesn't hold can still
 differ after a restart: the property the enrollment monitors, and the
-`event_type` keyword, which the legacy octet-string parameters run under.
+`event_type` keyword. That keyword is the Event_Type served while the
+enrollment holds legacy octet-string parameters or a proprietary
+alternative (context tag 64 and up), and the algorithm the legacy octets
+are evaluated by; a proprietary alternative is kept and served but never
+evaluated.
 Saved parameters that don't suit them show as they do on any enrollment
 configured that way: an event algorithm whose monitored value has another
 datatype raises nothing and reports no fault, and a fault algorithm that

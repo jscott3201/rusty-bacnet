@@ -261,10 +261,12 @@ mod stored {
     /// it.
     ///
     /// The octets are one whole value in the encoding a save writes, by
-    /// the decoder a write of the property runs: a row that doesn't decode,
-    /// goes on past its value, or decodes to a value that encodes otherwise
-    /// (a limit in another numeric form, say) is damage. So a file a load
-    /// took is the file the next save writes.
+    /// the decoder a write of the property runs
+    /// ([`reloaded`](crate::event_enrollment::parameters::reloaded), the
+    /// rule a write to an enrollment with storage is held to as well): a
+    /// row that doesn't decode, goes on past its value, or decodes to a
+    /// value that encodes otherwise (a limit in another numeric form, say)
+    /// is damage. So a file a load took is the file the next save writes.
     ///
     /// The length is held to the cap and to the body before an octet is
     /// read. The decoder then walks those octets once: it nests at most 32
@@ -274,7 +276,7 @@ mod stored {
         ($name:ident, $value:ty, $decode:path, $encode:path, $what:literal) => {
             pub(super) mod $name {
                 use super::{BytesMut, ObjectType, Reader, SnapshotError};
-                use crate::event_enrollment::parameters::MAX_KEPT_OCTETS;
+                use crate::event_enrollment::parameters::{MAX_KEPT_OCTETS, NotKept, reloaded};
 
                 pub(in super::super) fn put(value: &$value, body: &mut BytesMut) {
                     // `invalid` has refused a value with no encoding, and
@@ -288,17 +290,16 @@ mod stored {
                     reader: &mut Reader<'_>,
                 ) -> Result<$value, SnapshotError> {
                     let octets = reader.octets(MAX_KEPT_OCTETS)?;
-                    let value = $decode(octets).map_err(|_| {
-                        SnapshotError::damaged(concat!("holds ", $what, " that don't decode"))
-                    })?;
-                    if $encode(&value).ok().as_deref() != Some(octets) {
-                        return Err(SnapshotError::damaged(concat!(
+                    reloaded(octets, $decode, $encode).map_err(|why| match why {
+                        NotKept::Undecodable(_) => {
+                            SnapshotError::damaged(concat!("holds ", $what, " that don't decode"))
+                        }
+                        NotKept::Recoded => SnapshotError::damaged(concat!(
                             "holds ",
                             $what,
                             " in an encoding no save writes"
-                        )));
-                    }
-                    Ok(value)
+                        )),
+                    })
                 }
 
                 pub(in super::super) fn invalid(

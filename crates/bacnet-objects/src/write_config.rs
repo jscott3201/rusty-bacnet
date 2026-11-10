@@ -86,10 +86,17 @@
 //! A write of the enrollment's parameters is checked against the written
 //! value alone, so every saved value is one the rebuilt enrollment takes
 //! on the wire, and none fails the builder call or is restored unchecked.
+//! With storage the check is the load's own: the value's encoding has to
+//! read back through the framed decoder, which the flat list form an
+//! in-process `write_property` may hand over doesn't always do, so nothing
+//! is saved that wouldn't reopen. Without storage that form is taken as
+//! before.
 //! What isn't kept can still differ on the rebuilt enrollment:
 //! Object_Property_Reference, which peers can't write, and the event type
-//! given to `new`, which the legacy octet layout and a proprietary
-//! alternative run under. Saved parameters that don't suit them show as
+//! given to `new`. That type is the Event_Type served for the legacy octet
+//! layout and for a proprietary alternative (tag 64 and up), and the
+//! algorithm the legacy layout is evaluated by; a proprietary alternative
+//! is never evaluated. Saved parameters that don't suit them show as
 //! they do on any enrollment configured that way: an event algorithm whose
 //! monitored value has another datatype raises nothing and reports no
 //! fault, and a fault algorithm that can't run on it reports

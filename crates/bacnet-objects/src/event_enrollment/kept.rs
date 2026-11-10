@@ -23,13 +23,22 @@
 //! the same reason no write earlier in a request changes what a later one
 //! of these is checked against, and a request's stage follows nothing
 //! through it.
+//!
+//! A value a peer writes arrives in the framed encoding and has been
+//! through the framed decoder. An in-process caller can hand
+//! `write_property` the flat list form instead, which is only checked to
+//! have an encoding, and some such encodings the framed decoder refuses (a
+//! bit string claiming more than seven unused bits). An enrollment with
+//! storage holds every form to what a load will hold its row to
+//! ([`keeps`]), so nothing is saved that wouldn't reopen; one without
+//! storage takes the flat form as it always has.
 
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
 use bacnet_types::error::Error;
 use bytes::BytesMut;
 
 use super::EventEnrollmentObject;
-use super::parameters::{self, MAX_KEPT_OCTETS};
+use super::parameters::{self, MAX_KEPT_OCTETS, NotKept};
 use crate::common;
 use crate::durable::PendingWrite;
 use crate::write_config::AlgorithmWriteConfig;
@@ -67,10 +76,8 @@ impl EventEnrollmentObject {
 
 /// What `write`, of one of the three kept parameters, leaves of `rows`, or
 /// the enrollment's refusal of it, by the decoders its `write_property`
-/// runs. Event_Parameters or Fault_Parameters past what storage keeps
-/// ([`MAX_KEPT_OCTETS`]) are refused with RESOURCES /
-/// NO_SPACE_TO_WRITE_PROPERTY, as a message text past its cap is: only an
-/// enrollment with storage is asked.
+/// runs. Only an enrollment with storage is asked, so Event_Parameters and
+/// Fault_Parameters are also held to what storage hands back ([`keeps`]).
 pub(super) fn parameter_after(
     rows: &mut AlgorithmWriteConfig,
     write: &PendingWrite,
@@ -78,12 +85,20 @@ pub(super) fn parameter_after(
     match write.property {
         P::EVENT_PARAMETERS => {
             let value = parameters::decode_event_parameters(write.value.clone())?;
-            fits(parameters::event_parameter_octets(&value))?;
+            keeps(
+                &value,
+                parameters::event_parameter_octets,
+                parameters::framed_event_parameters,
+            )?;
             rows.event_parameters = Some(value);
         }
         P::FAULT_PARAMETERS => {
             let value = parameters::decode_fault_parameters(write.value.clone())?;
-            fits(parameters::fault_parameter_octets(&value))?;
+            keeps(
+                &value,
+                parameters::fault_parameter_octets,
+                parameters::framed_fault_parameters,
+            )?;
             rows.fault_parameters = Some(value);
         }
         P::TIME_DELAY_NORMAL => {
@@ -95,14 +110,30 @@ pub(super) fn parameter_after(
     Ok(())
 }
 
-/// Refuse a value whose encoding storage doesn't keep. The decoders have
-/// encoded it once already, so it has an encoding.
-fn fits(octets: Result<BytesMut, Error>) -> Result<(), Error> {
-    match octets {
-        Ok(octets) if octets.len() <= MAX_KEPT_OCTETS => Ok(()),
-        _ => Err(common::protocol_error(
+/// Refuse a value storage wouldn't hand back: one whose encoding doesn't
+/// read back by the rule a load holds a file's row to
+/// ([`parameters::reloaded`]). It is refused as the wire refuses octets that
+/// are no value of the property (INVALID_DATA_TYPE, or the decoder's own
+/// refusal). One whose encoding is past [`MAX_KEPT_OCTETS`] is refused with
+/// RESOURCES / NO_SPACE_TO_WRITE_PROPERTY, as a message text past its cap
+/// is.
+fn keeps<T>(
+    value: &T,
+    octets_of: fn(&T) -> Result<BytesMut, Error>,
+    framed: fn(&[u8]) -> Result<T, Error>,
+) -> Result<(), Error> {
+    // The write's decoder has encoded the value once, so it has an
+    // encoding.
+    let octets = octets_of(value).map_err(|_| common::invalid_data_type_error())?;
+    parameters::reloaded(&octets, framed, octets_of).map_err(|why| match why {
+        NotKept::Undecodable(refusal) => refusal,
+        NotKept::Recoded => common::invalid_data_type_error(),
+    })?;
+    if octets.len() > MAX_KEPT_OCTETS {
+        return Err(common::protocol_error(
             ErrorClass::RESOURCES,
             ErrorCode::NO_SPACE_TO_WRITE_PROPERTY,
-        )),
+        ));
     }
+    Ok(())
 }

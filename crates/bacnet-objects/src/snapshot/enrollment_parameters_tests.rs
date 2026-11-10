@@ -434,6 +434,13 @@ fn a_row_that_is_not_one_whole_value_is_damage() {
                 SnapshotErrorKind::Damaged,
                 "{bit:#x} {what} {octets:02x?}"
             );
+            // Refused by the decoder itself, octets after a value too. The
+            // comparison with what a save writes would refuse those as
+            // well; this holds the decoder to it on its own.
+            assert!(
+                error.to_string().contains("that don't decode"),
+                "{bit:#x} {what}: {error}"
+            );
         }
     }
 }
@@ -615,17 +622,17 @@ fn a_value_with_no_encoding_is_not_saved() {
 
 /// A small deterministic generator, so a failure names the same input on
 /// every run.
-struct XorShift(u64);
+pub(crate) struct XorShift(pub(crate) u64);
 
 impl XorShift {
-    fn next(&mut self) -> u64 {
+    pub(crate) fn next(&mut self) -> u64 {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 7;
         self.0 ^= self.0 << 17;
         self.0
     }
 
-    fn below(&mut self, bound: usize) -> usize {
+    pub(crate) fn below(&mut self, bound: usize) -> usize {
         (self.next() % bound as u64) as usize
     }
 }

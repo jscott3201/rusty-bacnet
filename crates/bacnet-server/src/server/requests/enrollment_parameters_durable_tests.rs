@@ -437,6 +437,137 @@ async fn saved_parameters_the_rebuilt_reference_does_not_suit_show_as_misconfigu
     );
 }
 
+/// `items`, the flat form of a parameter set, as a write carries it: each
+/// value application tagged, one after another.
+fn flat(items: PropertyValue) -> Vec<u8> {
+    let PropertyValue::List(items) = items else {
+        panic!("the flat form is a list");
+    };
+    items.into_iter().flat_map(value).collect()
+}
+
+/// OUT_OF_RANGE with `low_limit` as its lower limit.
+fn range_from(low_limit: f32) -> BACnetEventParameter {
+    BACnetEventParameter::OutOfRange {
+        time_delay: 20,
+        low_limit,
+        high_limit: 50.0,
+        deadband: 0.0,
+    }
+}
+
+/// A write whose value isn't equal to itself still takes the save its
+/// stage made: parameters holding a limit that is no number, which the
+/// enrollment takes, save once and off the database guard in the flat form
+/// as in the framed one, like a flat form of plain numbers, and so do
+/// flat Fault_Parameters with such a bound. Compared with `==`, the staged
+/// flat value was never found again, and the write saved twice more where
+/// it stood, with the database held.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parameters_that_are_not_numbers_save_once_off_the_guard() {
+    let nan_bound = FaultParameters::FaultOutOfRange {
+        min_normal: f64::NAN,
+        max_normal: 55.0,
+    };
+    let cases = [
+        (
+            "a flat number",
+            P::EVENT_PARAMETERS,
+            flat(range_from(5.0).encode()),
+        ),
+        (
+            "a framed NaN",
+            P::EVENT_PARAMETERS,
+            event_octets(&range_from(f32::NAN)),
+        ),
+        (
+            "a flat NaN",
+            P::EVENT_PARAMETERS,
+            flat(range_from(f32::NAN).encode()),
+        ),
+        (
+            "a framed NaN bound",
+            P::FAULT_PARAMETERS,
+            fault_octets(&nan_bound),
+        ),
+        (
+            "a flat NaN bound",
+            P::FAULT_PARAMETERS,
+            flat(nan_bound.encode_property_value()),
+        ),
+    ];
+    for (what, property, octets) in cases {
+        // One save, counted first with nothing held: a write that saved
+        // again where it stood would wait on a held save below for good.
+        let storage = Arc::new(ConfigStorage::default());
+        let fixture = served(analog(), wide_range(), Some(&storage)).await;
+        let response = write(&fixture, property, octets.clone()).await;
+        assert_eq!(response, SIMPLE_ACK_WRITE, "{what}");
+        assert_eq!(storage.saves.load(Ordering::SeqCst), 1, "{what}");
+        // The written value is served, and a rebuild serves it too.
+        let written = fixture.read(enrollment(), property).await;
+        drop(fixture);
+        let rebuilt = served(analog(), wide_range(), Some(&storage)).await;
+        assert_eq!(
+            rebuilt.read(enrollment(), property).await,
+            written,
+            "{what}"
+        );
+        assert_eq!(storage.saves.load(Ordering::SeqCst), 1, "{what}");
+
+        // And that save runs with the database guard dropped.
+        let storage = Arc::new(ConfigStorage::default());
+        let fixture = served(analog(), wide_range(), Some(&storage)).await;
+        let (response, available) = while_saving(
+            &fixture,
+            &storage,
+            ConfirmedServiceChoice::WRITE_PROPERTY,
+            write_request(property, octets),
+            WAIT,
+        )
+        .await;
+        assert_eq!(response, SIMPLE_ACK_WRITE, "{what}");
+        assert!(available, "the database was held while {what} was saved");
+        assert_eq!(storage.saves.load(Ordering::SeqCst), 1, "{what}");
+    }
+}
+
+/// An Event Enrollment a peer creates with CreateObject has no storage, as
+/// every created object: its parameter writes are answered as on an
+/// enrollment built without any, one past the cap included, and nothing is
+/// staged or saved for them.
+#[tokio::test(start_paused = true)]
+async fn a_created_enrollment_keeps_nothing() {
+    use super::create_object_types_wire_tests::{created, request, send};
+    use bacnet_services::object_mgmt::ObjectSpecifier;
+    let fixture = Fixture::new(None);
+    let specifier = ObjectSpecifier::Type(ObjectType::EVENT_ENROLLMENT);
+    let made = created(&send(&fixture, request(specifier, Vec::new())).await);
+    assert_eq!(made.object_type(), ObjectType::EVENT_ENROLLMENT);
+    let mut writes = rows()
+        .map(|(property, octets, _)| (property, octets))
+        .to_vec();
+    writes.push((P::EVENT_PARAMETERS, legacy(64 * 1024 + 1)));
+    for (property, octets) in writes {
+        let mut request = BytesMut::new();
+        WritePropertyRequest {
+            object_identifier: made,
+            property_identifier: property,
+            property_array_index: None,
+            property_value: octets,
+            priority: None,
+        }
+        .encode(&mut request)
+        .unwrap();
+        let service = ConfirmedServiceChoice::WRITE_PROPERTY;
+        let response = wire(&fixture, service, request.freeze()).await;
+        assert_eq!(response, SIMPLE_ACK_WRITE, "{property:?}");
+        let mut db = fixture.db.write().await;
+        let object = db.get_mut(&made).unwrap();
+        assert!(object.durable_writes().is_none(), "{property:?}");
+    }
+}
+
 fn attempt(property: P, octets: Vec<u8>) -> BACnetPropertyValue {
     BACnetPropertyValue {
         property_identifier: property,

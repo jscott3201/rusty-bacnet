@@ -4789,12 +4789,20 @@ application sets them at each start.
     against the written value alone, by the decoder a load runs on the
     stored octets, so no saved value is one the rebuilt enrollment would
     refuse. A file's row has to hold one whole value in the encoding a save
-    writes; anything else is damage.
+    writes; anything else is damage. An in-process `write_property` can
+    hand over the flat list form, which the enrollment only checks for an
+    encoding. With storage that encoding must also read back as a load
+    reads it, or the write is refused with INVALID_DATA_TYPE and nothing
+    is saved (a bit string claiming more than seven unused bits, for one).
+    Without storage the enrollment takes such a value, as before.
   - **What can still differ.** Object_Property_Reference and the event type
-    given to `EventEnrollmentObject::new`, which the legacy octet layout
-    and a proprietary alternative run under, are the application's and
-    aren't kept. Saved parameters that don't suit the rebuilt enrollment's
-    show as on any enrollment configured that way: an event algorithm
+    given to `EventEnrollmentObject::new` are the application's and aren't
+    kept. That type is the Event_Type served for the legacy octet layout
+    and for a proprietary alternative (tag 64 and up), and the algorithm
+    the legacy layout is evaluated by; the pass never evaluates a
+    proprietary alternative. Saved parameters that don't suit the rebuilt
+    enrollment's show as on any enrollment configured that way: an event
+    algorithm
     whose monitored value has another datatype raises nothing and reports
     no fault, and a fault algorithm that can't run on it reports
     CONFIGURATION_ERROR.
