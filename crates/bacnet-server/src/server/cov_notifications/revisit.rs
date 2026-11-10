@@ -45,24 +45,20 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // One budget per object or context, as a natural event would have.
         let mut single_by_object: HashMap<ObjectIdentifier, Vec<CovSubscriptionSnapshot>> =
             HashMap::new();
-        // Contexts in the order of their keys, as every Multiple fanout
-        // takes them (#2320).
-        let mut multiple_by_context: std::collections::BTreeMap<
-            bacnet_device_core::cov::MultipleContextKey,
-            Vec<CovSubscriptionSnapshot>,
-        > = std::collections::BTreeMap::new();
+        let mut multiple = Vec::new();
         for sub in subs {
-            match sub.key().multiple_context() {
-                Some(context) => multiple_by_context
-                    .entry(context.clone())
-                    .or_default()
-                    .push(sub),
-                None => single_by_object
+            if sub.key().multiple_context().is_some() {
+                multiple.push(sub);
+            } else {
+                single_by_object
                     .entry(sub.monitored_object_identifier)
                     .or_default()
-                    .push(sub),
+                    .push(sub);
             }
         }
+        // Contexts in the order of their keys, as every Multiple fanout
+        // takes them (#2320).
+        let multiple_by_context = crate::cov::multiple_report::by_context(multiple);
         for (oid, subs) in &single_by_object {
             Self::fire_cov_notifications_for_subscriptions(
                 &handles,

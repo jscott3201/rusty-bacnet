@@ -31,8 +31,10 @@ use tracing::{debug, warn};
 
 use super::{AtomicCovCounters, CovRevisits};
 use crate::runtime_clock;
+#[cfg(test)]
+use bacnet_device_core::cov::timed::TimedChange;
 use bacnet_device_core::cov::timed::{
-    self, ClaimId, DropReason, Dropped, Settlement, TimedChange, TimedCounts, TimedHistories,
+    self, ClaimId, DropReason, Dropped, Settlement, TimedCounts, TimedHistories,
 };
 
 /// What a store's handles share.
@@ -188,10 +190,8 @@ impl HistoryStore {
 /// delivered, dropping it gives the claim back to the histories
 /// ([`TimedHistories::give_back`]), on any early return or failed send.
 ///
-/// Its methods are the plain claim's, which has the policy. The split of a
-/// report to the subscriber's APDU size works on the plain claim
-/// ([`ClaimGuard::into_plain`]), and each part it hands back is guarded
-/// again ([`ClaimGuard::of`]).
+/// The fanout's steps work on plain claims, and each part they hand back is
+/// guarded here ([`ClaimGuard::of`]).
 #[derive(Debug)]
 pub(crate) struct ClaimGuard {
     store: HistoryStore,
@@ -199,6 +199,7 @@ pub(crate) struct ClaimGuard {
 }
 
 impl ClaimGuard {
+    #[cfg(test)]
     pub(crate) fn new(store: HistoryStore) -> Self {
         Self {
             store,
@@ -220,14 +221,8 @@ impl ClaimGuard {
         std::mem::take(&mut self.claim)
     }
 
-    /// The plain claim, for the split of its report. Nothing gives it back
-    /// until [`ClaimGuard::of`] holds its parts again, so no early return
-    /// may come between the two.
-    pub(crate) fn into_plain(mut self) -> timed::TimedClaim {
-        self.take()
-    }
-
     /// See [`timed::TimedClaim::add_untimed`].
+    #[cfg(test)]
     pub(crate) fn add_untimed(
         &mut self,
         key: CovSubscriptionKey,
@@ -238,14 +233,9 @@ impl ClaimGuard {
     }
 
     /// See [`TimedHistories::forgo_untimed`].
+    #[cfg(test)]
     pub(crate) fn forgo_untimed(&mut self) {
         self.store.lock().forgo_untimed(&mut self.claim);
-    }
-
-    /// See [`timed::TimedClaim::without_eviction`].
-    pub(crate) fn without_eviction(mut self) -> Self {
-        self.claim = self.take().without_eviction();
-        self
     }
 
     /// See [`timed::TimedClaim::owing`].
@@ -255,6 +245,7 @@ impl ClaimGuard {
     }
 
     /// See [`timed::TimedClaim::add`].
+    #[cfg(test)]
     pub(crate) fn add(
         &mut self,
         key: CovSubscriptionKey,
@@ -264,20 +255,15 @@ impl ClaimGuard {
         self.claim.add(key, incarnation, changes);
     }
 
-    /// See [`timed::TimedClaim::untimed`].
-    pub(crate) fn untimed(&self) -> impl Iterator<Item = &CovSubscriptionKey> {
-        self.claim.untimed()
+    /// The plain claim, to look at.
+    pub(crate) fn plain(&self) -> &timed::TimedClaim {
+        &self.claim
     }
 
     /// See [`timed::TimedClaim::in_order`].
     #[cfg(test)]
     pub(crate) fn in_order(&self) -> Vec<(&CovSubscriptionKey, &TimedChange)> {
         self.claim.in_order()
-    }
-
-    /// See [`timed::TimedClaim::last_changes`].
-    pub(crate) fn last_changes(&self) -> impl Iterator<Item = (&CovSubscriptionKey, &TimedChange)> {
-        self.claim.last_changes()
     }
 
     /// The notification carrying these changes and values was delivered; see
@@ -369,6 +355,7 @@ pub(crate) struct SendTurn {
 impl SendTurn {
     /// Take the turn of `context`, unless a report of it is still going out.
     /// `keys` are the context's references, for the follow-up.
+    #[cfg(test)]
     pub(crate) fn begin(
         store: &HistoryStore,
         context: &MultipleContextKey,
@@ -381,6 +368,25 @@ impl SendTurn {
             revisits: Arc::clone(revisits),
             keys,
         })
+    }
+}
+
+impl SendTurn {
+    /// The turn of `context` that a report already took from the histories
+    /// (`Reading::gather`), held from here on. `keys` are the context's
+    /// references, for the follow-up.
+    pub(crate) fn held(
+        store: &HistoryStore,
+        context: &MultipleContextKey,
+        revisits: &Arc<CovRevisits>,
+        keys: Vec<CovSubscriptionKey>,
+    ) -> Self {
+        Self {
+            store: store.clone(),
+            context: context.clone(),
+            revisits: Arc::clone(revisits),
+            keys,
+        }
     }
 }
 
