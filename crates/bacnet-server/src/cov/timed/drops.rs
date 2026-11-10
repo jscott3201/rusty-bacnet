@@ -98,7 +98,7 @@ impl TimedHistories {
     /// [`REPEATS_KEPT`] reports wait, only a context's first for a cause
     /// still joins them.
     pub(crate) fn take_drops(&mut self) -> Vec<Dropped> {
-        std::mem::take(&mut self.drops)
+        core::mem::take(&mut self.drops)
     }
 }
 

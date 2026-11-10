@@ -526,6 +526,23 @@ fn a_context_is_due_at_its_delay_after_its_earliest_pending_change() {
 }
 
 #[test]
+fn due_references_come_out_in_key_order_timestamped_ones_first() {
+    let mut h = histories(8, 4);
+    // Admitted and changed in no particular order.
+    let (owed, c, a, b) = (key(1, 1), key(1, 4), key(1, 2), key(1, 3));
+    h.reset_untimed(&owed, 1, 0);
+    for k in [&c, &a, &b] {
+        h.reset(k, 1, 0);
+        h.push(k, 1, change(1, 4));
+    }
+    h.owe(&owed, 1, now());
+    advance(DEADLINE_FLOOR);
+    // By monitored object, the references with pending changes ahead of
+    // the owed ones: the same order every time, where a hash map's varied.
+    assert_eq!(h.take_due(now()).0, [a, b, c, owed]);
+}
+
+#[test]
 fn a_blocked_context_comes_back_only_after_its_spacing() {
     let mut h = histories(8, 4);
     let k = key(1, 1);

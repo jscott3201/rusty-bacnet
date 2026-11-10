@@ -91,7 +91,7 @@ impl TimedClaim {
     /// Move the untimestamped references `moves` selects into a claim of
     /// their own, for a notification that carries their values.
     pub(crate) fn split_untimed(&mut self, moves: impl Fn(&CovSubscriptionKey) -> bool) -> Self {
-        let (moved, kept) = std::mem::take(&mut self.untimed)
+        let (moved, kept) = core::mem::take(&mut self.untimed)
             .into_iter()
             .partition(|(key, _, _)| moves(key));
         self.untimed = kept;
@@ -169,7 +169,7 @@ impl TimedClaim {
         mut self,
         fit: impl Fn(&CovSubscriptionKey, &TimedChange) -> ValueFit,
     ) -> (Vec<Self>, Vec<CovSubscriptionKey>) {
-        let mut all: Vec<_> = std::mem::take(&mut self.changes)
+        let mut all: Vec<_> = core::mem::take(&mut self.changes)
             .into_iter()
             .flat_map(|(key, incarnation, changes)| {
                 changes
@@ -296,7 +296,7 @@ impl TimedHistories {
     /// their values fit no notification, so a later attempt would only fail
     /// again. They are evaluated again at their next fanout (#1066).
     pub(crate) fn forgo_untimed(&mut self, claim: &mut TimedClaim) {
-        self.counts.untimed_oversized += std::mem::take(&mut claim.untimed).len() as u64;
+        self.counts.untimed_oversized += core::mem::take(&mut claim.untimed).len() as u64;
     }
 
     /// Count the changes [`TimedClaim::split_values`] found to hold a value

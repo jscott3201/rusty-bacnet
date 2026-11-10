@@ -134,7 +134,7 @@
 //! ([`TimedHistories::lodge`]), which is given back at its deadline if its
 //! holder never settled it. [`TimedHistories::take_due`] acts on both.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 
 use bacnet_objects::clock::ClockFrame;
 use bacnet_services::cov_multiple::COVNotificationValue;
@@ -151,7 +151,7 @@ pub(crate) const ITEM_FRAMING: usize = 7;
 /// itself, in its slot of the history's queue (#1357), and
 /// [`CAPTURE_ALLOWANCE`]. The room for notification items does not count it
 /// (#1287).
-pub(crate) const CHANGE_MEMORY: usize = std::mem::size_of::<TimedChange>() + CAPTURE_ALLOWANCE;
+pub(crate) const CHANGE_MEMORY: usize = core::mem::size_of::<TimedChange>() + CAPTURE_ALLOWANCE;
 /// Bytes a pending change still counts for the capture instant it held on
 /// the host's clock, 16 octets, before it took `bacnet-time`'s 8-octet one
 /// (#2320). Without it every change would count 8 bytes less, and a
@@ -163,7 +163,7 @@ const CAPTURE_ALLOWANCE: usize = 8;
 /// besides its encoded octets: the value in the change's vector of values,
 /// and its slot in the vector of positions (#1357).
 pub(crate) const VALUE_MEMORY: usize =
-    std::mem::size_of::<COVNotificationValue>() + std::mem::size_of::<usize>();
+    core::mem::size_of::<COVNotificationValue>() + core::mem::size_of::<usize>();
 /// Bytes of memory a context's pending changes may take for each octet of
 /// items [`HISTORY_NOTIFICATIONS`] notifications of the local maximum APDU
 /// have (#1357); see the module documentation.
@@ -261,7 +261,7 @@ impl TimedChange {
                 seq: self.seq,
                 frame: self.frame,
                 captured_at: self.captured_at,
-                octets: item_octets(std::slice::from_ref(&value)),
+                octets: item_octets(core::slice::from_ref(&value)),
                 values: vec![value],
                 observation: self.observation.clone(),
                 positions: vec![position],
@@ -273,9 +273,9 @@ impl TimedChange {
     /// by their captured positions again, whichever parts came back before.
     /// Returns the octets this adds to the context's room for items.
     fn rejoin(&mut self, other: TimedChange) -> usize {
-        let mut merged: Vec<_> = std::mem::take(&mut self.positions)
+        let mut merged: Vec<_> = core::mem::take(&mut self.positions)
             .into_iter()
-            .zip(std::mem::take(&mut self.values))
+            .zip(core::mem::take(&mut self.values))
             .chain(other.positions.into_iter().zip(other.values))
             .collect();
         merged.sort_by_key(|(position, _)| *position);
@@ -440,19 +440,19 @@ pub(crate) enum FieldTiming {
 /// Pending timestamped changes of every live timestamped Multiple reference.
 #[derive(Debug)]
 pub(crate) struct TimedHistories {
-    histories: HashMap<CovSubscriptionKey, TimedHistory>,
+    histories: BTreeMap<CovSubscriptionKey, TimedHistory>,
     /// Every live untimestamped COV-multiple reference (#1038).
-    untimed: HashMap<CovSubscriptionKey, UntimedReference>,
+    untimed: BTreeMap<CovSubscriptionKey, UntimedReference>,
     /// Sizing terms of every context with a timestamped history.
-    terms: HashMap<MultipleContextKey, ContextTerms>,
+    terms: BTreeMap<MultipleContextKey, ContextTerms>,
     /// Unconfirmed contexts with a report going out, and whether another
     /// fanout stood back meanwhile and is owed a follow-up.
-    sending: HashMap<MultipleContextKey, bool>,
+    sending: BTreeMap<MultipleContextKey, bool>,
     /// Pending changes of every context with any, as its bound counts them.
-    context_held: HashMap<MultipleContextKey, Held>,
+    context_held: BTreeMap<MultipleContextKey, Held>,
     /// Earliest the deadline backstop may hand a context out again. Only a
     /// context with a timestamped history has an entry.
-    not_before: HashMap<MultipleContextKey, Instant>,
+    not_before: BTreeMap<MultipleContextKey, Instant>,
     /// Claims kept until they are settled or their deadline passes, oldest
     /// first.
     lodged: Vec<claim::Lodged>,
@@ -489,12 +489,12 @@ impl TimedHistories {
     /// octets, which bounds each context's pending changes.
     pub(crate) fn new(local_apdu: usize) -> Self {
         Self {
-            histories: HashMap::new(),
-            untimed: HashMap::new(),
-            terms: HashMap::new(),
-            sending: HashMap::new(),
-            context_held: HashMap::new(),
-            not_before: HashMap::new(),
+            histories: BTreeMap::new(),
+            untimed: BTreeMap::new(),
+            terms: BTreeMap::new(),
+            sending: BTreeMap::new(),
+            context_held: BTreeMap::new(),
+            not_before: BTreeMap::new(),
             lodged: Vec::new(),
             next_claim: 1,
             moved: false,
@@ -508,7 +508,7 @@ impl TimedHistories {
 
     /// What was counted since the last call.
     pub(crate) fn take_counts(&mut self) -> TimedCounts {
-        std::mem::take(&mut self.counts)
+        core::mem::take(&mut self.counts)
     }
 
     /// Whether a deadline may have moved earlier since the last call: a
@@ -517,7 +517,7 @@ impl TimedHistories {
     /// sleeping until the next deadline [`Self::take_due`] gave it asks
     /// again.
     pub(crate) fn take_moved(&mut self) -> bool {
-        std::mem::take(&mut self.moved)
+        core::mem::take(&mut self.moved)
     }
 
     /// Apply a context's admitted Max_Notification_Delay to its timestamped
@@ -642,10 +642,10 @@ impl TimedHistories {
     /// Earliest pending change or owed reference, and shortest delay, of
     /// each context with either.
     fn pending<'a>(
-        histories: &'a HashMap<CovSubscriptionKey, TimedHistory>,
-        untimed: &'a HashMap<CovSubscriptionKey, UntimedReference>,
-    ) -> HashMap<&'a MultipleContextKey, (Instant, Duration)> {
-        let mut pending: HashMap<&MultipleContextKey, (Instant, Duration)> = HashMap::new();
+        histories: &'a BTreeMap<CovSubscriptionKey, TimedHistory>,
+        untimed: &'a BTreeMap<CovSubscriptionKey, UntimedReference>,
+    ) -> BTreeMap<&'a MultipleContextKey, (Instant, Duration)> {
+        let mut pending: BTreeMap<&MultipleContextKey, (Instant, Duration)> = BTreeMap::new();
         let timed = histories.iter().filter_map(|(key, history)| {
             Some((key, history.entries.front()?.captured_at, history.delay))
         });
