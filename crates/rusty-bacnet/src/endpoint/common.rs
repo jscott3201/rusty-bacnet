@@ -23,6 +23,7 @@ use bacnet_types::enums::{
 use pyo3::exceptions::PyValueError;
 use pyo3::{PyErr, PyResult};
 
+use crate::algorithm_keywords::AlgorithmKeywords;
 use crate::errors::to_py_err;
 use crate::group_members;
 use crate::object_options::apply_profile;
@@ -203,7 +204,8 @@ pub(crate) struct ValueKeywords {
 /// `Clone` so a failed/cancelled start restores the exact registration set
 /// for retry. Built into boxes at start time; the `add_*` call builds one
 /// first, so a bad registration fails there. `profile` is the parsed
-/// `tags`/`profile_location`/`profile_name` keywords (#1867).
+/// `tags`/`profile_location`/`profile_name` keywords (#1867), and
+/// `parameters` the event algorithm parameter keywords (#2410).
 #[derive(Clone, Debug)]
 pub(crate) enum PendingObject {
     AnalogInput {
@@ -212,6 +214,7 @@ pub(crate) enum PendingObject {
         units: u32,
         present_value: f32,
         profile: Option<ObjectProfile>,
+        parameters: AlgorithmKeywords,
     },
     AnalogValue {
         instance: u32,
@@ -219,17 +222,20 @@ pub(crate) enum PendingObject {
         units: u32,
         value: ValueKeywords,
         profile: Option<ObjectProfile>,
+        parameters: AlgorithmKeywords,
     },
     BinaryInput {
         instance: u32,
         name: String,
         profile: Option<ObjectProfile>,
+        parameters: AlgorithmKeywords,
     },
     BinaryValue {
         instance: u32,
         name: String,
         value: ValueKeywords,
         profile: Option<ObjectProfile>,
+        parameters: AlgorithmKeywords,
     },
     Group {
         instance: u32,
@@ -257,11 +263,13 @@ impl PendingObject {
                 units,
                 present_value,
                 profile,
+                parameters,
             } => {
                 let mut object =
                     AnalogInputObject::new(*instance, name, EngineeringUnits::from_raw(*units))
                         .map_err(to_py_err)?;
                 object.set_present_value(*present_value);
+                parameters.apply(&mut object).map_err(to_py_err)?;
                 apply_profile(profile.clone(), |p| object.set_profile(p))?;
                 Ok(Box::new(object))
             }
@@ -271,6 +279,7 @@ impl PendingObject {
                 units,
                 value,
                 profile,
+                parameters,
             } => {
                 let mut object = AnalogValueObject::with_access(
                     *instance,
@@ -281,6 +290,7 @@ impl PendingObject {
                 .map_err(to_py_err)?;
                 object.set_audit_policy(value.audit_policy);
                 object.set_value_source_tracking(value.value_source_tracking);
+                parameters.apply(&mut object).map_err(to_py_err)?;
                 apply_profile(profile.clone(), |p| object.set_profile(p))?;
                 Ok(Box::new(object))
             }
@@ -288,8 +298,10 @@ impl PendingObject {
                 instance,
                 name,
                 profile,
+                parameters,
             } => {
                 let mut object = BinaryInputObject::new(*instance, name).map_err(to_py_err)?;
+                parameters.apply(&mut object).map_err(to_py_err)?;
                 apply_profile(profile.clone(), |p| object.set_profile(p))?;
                 Ok(Box::new(object))
             }
@@ -298,11 +310,13 @@ impl PendingObject {
                 name,
                 value,
                 profile,
+                parameters,
             } => {
                 let mut object = BinaryValueObject::with_access(*instance, name, value.access)
                     .map_err(to_py_err)?;
                 object.set_audit_policy(value.audit_policy);
                 object.set_value_source_tracking(value.value_source_tracking);
+                parameters.apply(&mut object).map_err(to_py_err)?;
                 apply_profile(profile.clone(), |p| object.set_profile(p))?;
                 Ok(Box::new(object))
             }

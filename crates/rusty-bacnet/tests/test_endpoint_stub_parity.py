@@ -178,17 +178,21 @@ class EndpointStubParityTests(unittest.TestCase):
                         runtime_arg_kinds(getattr(cls, name)), stub_arg_kinds(method)
                     )
         # The object builders take the server builders' keywords (#1867),
-        # keyword-only.
+        # and their event algorithm parameter keywords (#2410), keyword-only.
         value_keywords = ["present_value_access", "value_source_tracking", "audit_level",
                           "auditable_operations", "audit_priority_filter"]
         profile_keywords = ["tags", "profile_location", "profile_name"]
+        delays = ["time_delay", "time_delay_normal"]
+        analog = ["high_limit", "low_limit", "deadband", "limit_enable"] + delays
+        binary = ["alarm_value"] + delays
         builders = {
             "add_analog_input": (["instance", "name", "units", "present_value"],
-                                 profile_keywords),
+                                 profile_keywords + analog),
             "add_analog_value": (["instance", "name", "units"],
-                                 value_keywords + profile_keywords),
-            "add_binary_input": (["instance", "name"], profile_keywords),
-            "add_binary_value": (["instance", "name"], value_keywords + profile_keywords),
+                                 value_keywords + profile_keywords + analog),
+            "add_binary_input": (["instance", "name"], profile_keywords + binary),
+            "add_binary_value": (["instance", "name"],
+                                 value_keywords + profile_keywords + binary),
         }
         positional = inspect.Parameter.POSITIONAL_OR_KEYWORD
         keyword = inspect.Parameter.KEYWORD_ONLY
