@@ -5,7 +5,8 @@
 //! write takes it, and a server rebuilt on the storage serves what was
 //! written. A WritePropertyMultiple of two parameters and a reporting
 //! setting saves once, and a write that cannot be saved is refused on the
-//! wire with the old values kept.
+//! wire with the old values kept. An Event Enrollment's parameters are in
+//! `enrollment_parameters_durable_tests`.
 //!
 //! DEVICE 0; OPERATIONAL_PROBLEM 25.
 
@@ -23,9 +24,9 @@ use std::sync::atomic::Ordering;
 
 use PropertyIdentifier as P;
 
-/// The eleven object types that keep a parameter: the analog family, the
-/// binary one and the multi-state one, an Input, an Output and a Value
-/// each, Access Door and Access Zone.
+/// The eleven object types that keep a parameter in a detector: the analog
+/// family, the binary one and the multi-state one, an Input, an Output and
+/// a Value each, Access Door and Access Zone.
 const KEEPERS: [ObjectType; 11] = [
     ObjectType::ANALOG_INPUT,
     ObjectType::ANALOG_OUTPUT,

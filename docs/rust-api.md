@@ -4698,9 +4698,9 @@ ai.set_notification_class(5); // a value a peer wrote and saved wins
 
 #### Keeping written event algorithm parameters (#2331)
 
-An analog, binary or multi-state Input, Output or Value, an Access Door or
-an Access Zone built `with_reporting_persistence` also keeps the event
-algorithm parameters a peer writes:
+Every object type with a reporting store but the Alert Enrollment, which
+has no algorithm parameter a peer writes, also keeps the event algorithm
+parameters a peer writes, once built `with_reporting_persistence`:
 
 | Object types | Parameters kept |
 | --- | --- |
@@ -4710,10 +4710,12 @@ algorithm parameters a peer writes:
 | Binary Output, Multi-state Output | Time_Delay, Time_Delay_Normal |
 | Access Door | Time_Delay, Time_Delay_Normal, Alarm_Values, Fault_Values, Masked_Alarm_Values |
 | Access Zone | Time_Delay, Time_Delay_Normal, Alarm_Values |
+| Event Enrollment | Time_Delay_Normal, Event_Parameters, Fault_Parameters |
 
-Event Enrollment doesn't keep its parameters yet; a write of one lasts
-until a restart, as before. An Access Zone's occupancy limits are read-only
-over the network, so there is nothing of them to keep.
+What is still lost at a restart is what peers can't write: an Access
+Zone's occupancy limits and an Event Enrollment's
+Object_Property_Reference are read-only over the network, so the
+application sets them at each start.
 
 - **Same rules as the reporting settings.** A write is saved before it is
   answered and refused with DEVICE / OPERATIONAL_PROBLEM, the old value kept
@@ -4728,10 +4730,12 @@ over the network, so there is nothing of them to keep.
   `AlgorithmWriteConfig` with a `Some` for each written parameter.
   `clear_written_reporting()` drops them with the reporting settings and the
   Description. A written empty Alarm_Values list is kept as an empty list.
-- **Setters.** Only the lists have setters: `set_alarm_values` on a
+- **Setters.** The lists have setters (`set_alarm_values` on a
   Multi-state Input or Value, an Access Door and an Access Zone, and a
-  door's `set_fault_values` and `set_masked_alarm_values`. Like the
-  reporting setters, each gives way to a list a write saved until
+  door's `set_fault_values` and `set_masked_alarm_values`), and so have an
+  Event Enrollment's three rows (`set_event_parameters`,
+  `set_fault_parameters` and `set_time_delay_normal`). Like the
+  reporting setters, each gives way to a value a write saved until
   `clear_written_reporting()`. A multi-state object's still takes any state,
   checked or not; a door's and a zone's still check their argument as a
   write is checked and return its error, kept list or not. The other
@@ -4763,6 +4767,37 @@ over the network, so there is nothing of them to keep.
   so it is the same on load, and no saved list is one the rebuilt object
   would refuse. Nothing a request writes changes it either, so a
   WritePropertyMultiple of several lists is staged as written.
+- **Event Enrollment.** Its Time_Delay is a member of Event_Parameters
+  (Table 12-15) and kept with them; Time_Delay_Normal is its own property
+  and row, so neither delay is kept twice. Event_Type and Fault_Type are
+  worked out from the two parameter sets, so they follow the restored
+  ones. A restore puts each value where a write puts it: like a write of
+  Event_Parameters or Time_Delay_Normal it drops a delay that is counting,
+  and it leaves Event_State, Reliability, the acknowledgments and the
+  algorithms' baselines alone. The server's pass reads the parameters off
+  the object each time, so its next pass evaluates with the restored ones.
+  `written_reporting().algorithm` holds the three as `event_parameters`,
+  `fault_parameters` (a written `none` choice as `FaultNone`) and
+  `time_delay_normal`.
+  - **The cap.** The file holds each parameter set in its BACnet encoding,
+    at most 64 KiB of it, which takes a list of 10,000 states, the longest
+    the decoder takes, with each state in its longest form. An enrollment
+    with storage refuses a longer write with RESOURCES /
+    NO_SPACE_TO_WRITE_PROPERTY before anything is saved; one without takes
+    what it took before.
+  - **A saved value always loads.** A write of the parameters is checked
+    against the written value alone, by the decoder a load runs on the
+    stored octets, so no saved value is one the rebuilt enrollment would
+    refuse. A file's row has to hold one whole value in the encoding a save
+    writes; anything else is damage.
+  - **What can still differ.** Object_Property_Reference and the event type
+    given to `EventEnrollmentObject::new`, which the legacy octet layout
+    and a proprietary alternative run under, are the application's and
+    aren't kept. Saved parameters that don't suit the rebuilt enrollment's
+    show as on any enrollment configured that way: an event algorithm
+    whose monitored value has another datatype raises nothing and reports
+    no fault, and a fault algorithm that can't run on it reports
+    CONFIGURATION_ERROR.
 - **Validated on load.** Storage holding a value the object refuses on the
   wire, or a parameter the object's type doesn't keep, fails
   `with_reporting_persistence`; nothing reaches the detector. The one

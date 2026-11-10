@@ -15,7 +15,10 @@ use bacnet_types::primitives::PropertyValue;
 
 use super::parameters_tests::{holding, read, saved, write};
 use super::test_storage::MemoryConfig;
-use super::{AlgorithmWriteConfig, access_parameters_tests, state_parameters_tests};
+use super::{
+    AlgorithmWriteConfig, access_parameters_tests, enrollment_parameters_tests,
+    state_parameters_tests,
+};
 use crate::snapshot::write_config::parameters as format;
 use crate::traits::BACnetObject;
 
@@ -49,6 +52,8 @@ fn try_open(
         ObjectType::ACCESS_DOOR | ObjectType::ACCESS_ZONE => {
             access_parameters_tests::try_open(kind, storage)
         }
+        ObjectType::EVENT_ENROLLMENT => enrollment_parameters_tests::try_open(storage)
+            .map(|enrollment| Box::new(enrollment) as Box<dyn BACnetObject>),
         _ => state_parameters_tests::try_open(kind, storage),
     }
 }
@@ -113,6 +118,18 @@ fn sample(kind: ObjectType, property: P) -> (AlgorithmWriteConfig, PropertyValue
             stored.masked_alarm_values = Some(vec![7]);
             access_parameters_tests::states(&[7])
         }
+        P::EVENT_PARAMETERS => {
+            let parameters = enrollment_parameters_tests::state_parameters();
+            let served = enrollment_parameters_tests::event_value(&parameters);
+            stored.event_parameters = Some(parameters);
+            served
+        }
+        P::FAULT_PARAMETERS => {
+            let parameters = enrollment_parameters_tests::range_fault();
+            let served = enrollment_parameters_tests::fault_value(&parameters);
+            stored.fault_parameters = Some(parameters);
+            served
+        }
         other => panic!("the table's row for {other:?} has no sample here"),
     };
     (stored, served)
@@ -161,22 +178,21 @@ fn every_row_the_table_keeps_goes_through_its_objects() {
         }
     }
     // Six rows on the three analog types, three on the binary and
-    // multi-state Inputs and Values, two on the Outputs, five on a door
-    // and three on a zone.
-    assert_eq!(pairs, 3 * 6 + 4 * 3 + 2 * 2 + 5 + 3);
+    // multi-state Inputs and Values, two on the Outputs, five on a door,
+    // three on a zone and three on an Event Enrollment.
+    assert_eq!(pairs, 3 * 6 + 4 * 3 + 2 * 2 + 5 + 3 + 3);
 }
 
-/// The types the table keeps nothing for are the two enrollments, and no
-/// other type keeps a row at all.
+/// The one reporter the table keeps nothing for is the Alert Enrollment,
+/// which has no algorithm parameter a peer writes, and no other type keeps
+/// a row at all.
 #[test]
-fn the_table_keeps_rows_for_eleven_types() {
+fn the_table_keeps_rows_for_twelve_types() {
     let keepers = REPORTERS
         .into_iter()
         .filter(|kind| format::kept(*kind) != 0);
-    assert_eq!(keepers.count(), 11);
-    for kind in [ObjectType::EVENT_ENROLLMENT, ObjectType::ALERT_ENROLLMENT] {
-        assert_eq!(format::kept(kind), 0, "{kind}");
-    }
+    assert_eq!(keepers.count(), 12);
+    assert_eq!(format::kept(ObjectType::ALERT_ENROLLMENT), 0);
     for raw in 0..1024 {
         let kind = ObjectType::from_raw(raw);
         if !REPORTERS.contains(&kind) {

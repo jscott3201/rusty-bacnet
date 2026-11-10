@@ -43,6 +43,25 @@ mod on {
         T::ACCESS_DOOR,
         T::ACCESS_ZONE,
     ];
+    /// An Event Enrollment's own: Event_Parameters and Fault_Parameters.
+    pub(super) const ENROLLMENT: &[T] = &[T::EVENT_ENROLLMENT];
+    /// The types with a Time_Delay_Normal property: those of [`DELAYED`],
+    /// and an Event Enrollment, whose Time_Delay is a member of its
+    /// Event_Parameters and so no row of its own.
+    pub(super) const DELAYED_NORMAL: &[T] = &[
+        T::ANALOG_INPUT,
+        T::ANALOG_OUTPUT,
+        T::ANALOG_VALUE,
+        T::BINARY_INPUT,
+        T::BINARY_OUTPUT,
+        T::BINARY_VALUE,
+        T::MULTI_STATE_INPUT,
+        T::MULTI_STATE_OUTPUT,
+        T::MULTI_STATE_VALUE,
+        T::ACCESS_DOOR,
+        T::ACCESS_ZONE,
+        T::EVENT_ENROLLMENT,
+    ];
     /// The types whose two time delays are properties of their own: those
     /// above, and the Binary and Multi-state Output, which run
     /// COMMAND_FAILURE.
@@ -234,6 +253,82 @@ mod stored {
             }
         }
     }
+
+    /// A value held in its BACnet encoding: a length in four octets, at
+    /// most the 64 KiB an enrollment with storage takes in a write
+    /// ([`MAX_KEPT_OCTETS`](crate::event_enrollment::parameters::MAX_KEPT_OCTETS)),
+    /// then that many octets. The two modules after this one are made from
+    /// it.
+    ///
+    /// The octets are one whole value in the encoding a save writes, by
+    /// the decoder a write of the property runs: a row that doesn't decode,
+    /// goes on past its value, or decodes to a value that encodes otherwise
+    /// (a limit in another numeric form, say) is damage. So a file a load
+    /// took is the file the next save writes.
+    ///
+    /// The length is held to the cap and to the body before an octet is
+    /// read. The decoder then walks those octets once: it nests at most 32
+    /// tags deep, takes at most 10,000 entries in a list, and allocates
+    /// only for what the octets hold.
+    macro_rules! encoded {
+        ($name:ident, $value:ty, $decode:path, $encode:path, $what:literal) => {
+            pub(super) mod $name {
+                use super::{BytesMut, ObjectType, Reader, SnapshotError};
+                use crate::event_enrollment::parameters::MAX_KEPT_OCTETS;
+
+                pub(in super::super) fn put(value: &$value, body: &mut BytesMut) {
+                    // `invalid` has refused a value with no encoding, and
+                    // one past the cap.
+                    let octets = $encode(value).unwrap_or_default();
+                    body.extend_from_slice(&(octets.len() as u32).to_be_bytes());
+                    body.extend_from_slice(&octets);
+                }
+
+                pub(in super::super) fn get(
+                    reader: &mut Reader<'_>,
+                ) -> Result<$value, SnapshotError> {
+                    let octets = reader.octets(MAX_KEPT_OCTETS)?;
+                    let value = $decode(octets).map_err(|_| {
+                        SnapshotError::damaged(concat!("holds ", $what, " that don't decode"))
+                    })?;
+                    if $encode(&value).ok().as_deref() != Some(octets) {
+                        return Err(SnapshotError::damaged(concat!(
+                            "holds ",
+                            $what,
+                            " in an encoding no save writes"
+                        )));
+                    }
+                    Ok(value)
+                }
+
+                pub(in super::super) fn invalid(
+                    value: &$value,
+                    _: ObjectType,
+                ) -> Option<&'static str> {
+                    match $encode(value) {
+                        Ok(octets) if octets.len() <= MAX_KEPT_OCTETS => None,
+                        Ok(_) => Some(concat!("holds ", $what, " past their cap")),
+                        Err(_) => Some(concat!("holds ", $what, " with no encoding")),
+                    }
+                }
+            }
+        };
+    }
+
+    encoded!(
+        event_parameters,
+        bacnet_types::constructed::BACnetEventParameter,
+        crate::event_enrollment::parameters::framed_event_parameters,
+        crate::event_enrollment::parameters::event_parameter_octets,
+        "Event_Parameters"
+    );
+    encoded!(
+        fault_parameters,
+        bacnet_types::constructed::FaultParameters,
+        crate::event_enrollment::parameters::framed_fault_parameters,
+        crate::event_enrollment::parameters::fault_parameter_octets,
+        "Fault_Parameters"
+    );
 }
 
 /// The parameter table. A row is
@@ -360,7 +455,7 @@ rows! {
     /// Time_Delay: four octets.
     time_delay: TIME_DELAY = 1 << 0, unsigned, on::DELAYED;
     /// Time_Delay_Normal: four octets.
-    time_delay_normal: TIME_DELAY_NORMAL = 1 << 1, unsigned, on::DELAYED;
+    time_delay_normal: TIME_DELAY_NORMAL = 1 << 1, unsigned, on::DELAYED_NORMAL;
     /// High_Limit: the four octets of an IEEE 754 single.
     high_limit: HIGH_LIMIT = 1 << 2, limit, on::ANALOG;
     /// Low_Limit, as High_Limit.
@@ -378,6 +473,11 @@ rows! {
     fault_values: FAULT_VALUES = 1 << 8, states, on::DOOR;
     /// Masked_Alarm_Values of an Access Door, as Alarm_Values.
     masked_alarm_values: MASKED_ALARM_VALUES = 1 << 9, states, on::DOOR;
+    /// Event_Parameters of an Event Enrollment: a length in four octets,
+    /// then the value's BACnet encoding.
+    event_parameters: EVENT_PARAMETERS = 1 << 10, event_parameters, on::ENROLLMENT;
+    /// Fault_Parameters of an Event Enrollment, as Event_Parameters.
+    fault_parameters: FAULT_PARAMETERS = 1 << 11, fault_parameters, on::ENROLLMENT;
 }
 
 /// Why a list row holding `values` is one no write to an object of
@@ -394,6 +494,8 @@ pub(crate) fn invalid_list(values: &[u32], object_type: ObjectType) -> Option<&'
 ///
 /// - Time_Delay and Time_Delay_Normal on the analog, binary and multi-state
 ///   Input, Output and Value objects, Access Door and Access Zone;
+/// - Time_Delay_Normal, Event_Parameters and Fault_Parameters on an Event
+///   Enrollment, whose Time_Delay is a member of its Event_Parameters;
 /// - High_Limit, Low_Limit, Deadband and Limit_Enable on the three analog
 ///   ones;
 /// - Alarm_Value on a Binary Input or Value;
@@ -401,7 +503,8 @@ pub(crate) fn invalid_list(values: &[u32], object_type: ObjectType) -> Option<&'
 ///   Access Zone;
 /// - Fault_Values and Masked_Alarm_Values on an Access Door.
 ///
-/// A file holding a parameter the object's type doesn't keep here is
+/// An Alert Enrollment keeps none: it has no algorithm parameter a peer
+/// writes. A file holding a parameter the object's type doesn't keep here is
 /// refused as an unknown kind: a later build may keep it.
 pub fn keeps_parameter(object_type: ObjectType, property: P) -> bool {
     bit_of(property).is_some_and(|bit| kept(object_type) & bit != 0)
@@ -412,7 +515,9 @@ pub fn keeps_parameter(object_type: ObjectType, property: P) -> bool {
 /// a negative deadband, Limit_Enable bits past its two, an Alarm_Value past
 /// ACTIVE, or a list of states past the 1,024 a write may hold or naming a
 /// state the type's lists don't take (zero on a multi-state object; NORMAL
-/// or a value outside the enumeration on an Access Door or Zone). The
+/// or a value outside the enumeration on an Access Door or Zone), or
+/// Event_Parameters or Fault_Parameters with no encoding or one past the
+/// 64 KiB an enrollment with storage takes. The
 /// object refuses each on the wire, so storage holding one is refused too.
 /// A state past a multi-state object's own Number_Of_States is no such
 /// value: the count isn't kept, so the object takes the list as it was

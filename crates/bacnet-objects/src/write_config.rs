@@ -38,19 +38,20 @@
 //! the format: a [`ReportingWriteConfig`], kept once an object opts in with
 //! its `with_reporting_persistence` builder call.
 //!
-//! The analog, binary and multi-state Input, Output and Value objects,
-//! Access Door and Access Zone keep the event algorithm parameters a peer
-//! writes in that file too (#2331): Time_Delay and Time_Delay_Normal on all
-//! eleven; High_Limit, Low_Limit, Deadband and Limit_Enable on the analog
+//! Twelve of them keep the event algorithm parameters a peer writes in
+//! that file too (#2331), every one but the Alert Enrollment. The analog,
+//! binary and multi-state Input, Output and Value objects, Access Door and
+//! Access Zone keep Time_Delay and Time_Delay_Normal, all eleven;
+//! High_Limit, Low_Limit, Deadband and Limit_Enable on the analog
 //! ones; Alarm_Value on a Binary Input or Value; Alarm_Values on a
 //! Multi-state Input or Value, an Access Door and an Access Zone;
 //! Fault_Values and Masked_Alarm_Values on an Access Door. They are
 //! an [`AlgorithmWriteConfig`] in the `algorithm` field of the object's
 //! [`ReportingWriteConfig`], stored as kind 6 of the format. They follow
 //! the reporting settings' rules, and a rebuilt object's detector starts
-//! with them. Only the lists have setters (`set_alarm_values`, and a
-//! door's `set_fault_values` and `set_masked_alarm_values`), which give way
-//! to a saved list like the other setters. For the rest an
+//! with them. Of these only the lists have setters (`set_alarm_values`,
+//! and a door's `set_fault_values` and `set_masked_alarm_values`), which
+//! give way to a saved list like the other setters. For the rest an
 //! application sets its own values with `write_property` before the
 //! builder call, and a saved write then goes over them. A `write_property`
 //! after the builder call is a write like a peer's, and is kept. Storage
@@ -62,8 +63,38 @@
 //! a write and on a load alike, so no saved list is one the rebuilt object
 //! would refuse. A door that has taken its saved lists settles
 //! Door_Alarm_State as it does after a write of one: a state the lists no
-//! longer admit goes back to NORMAL. An Event Enrollment keeps no
-//! parameter yet.
+//! longer admit goes back to NORMAL.
+//!
+//! An Event Enrollment keeps Event_Parameters, Fault_Parameters and
+//! Time_Delay_Normal there (#2331), as the `event_parameters`,
+//! `fault_parameters` and `time_delay_normal` of its
+//! [`AlgorithmWriteConfig`]. Its Time_Delay is a member of
+//! Event_Parameters (Table 12-15) and kept with them, so nothing is kept
+//! twice, and Event_Type and Fault_Type follow the two parameter sets
+//! (Clauses 12.12.5 and 12.12.22), so they follow the restored ones. The
+//! file holds each set in its BACnet encoding, at most 64 KiB of it: an
+//! enrollment with storage refuses a longer write with RESOURCES /
+//! NO_SPACE_TO_WRITE_PROPERTY before anything is saved, and one without
+//! takes what it always took. `set_event_parameters`,
+//! `set_fault_parameters` and `set_time_delay_normal` give way to a saved
+//! row like the other setters. A restore puts each value where a write
+//! puts it, and like a write of Event_Parameters or Time_Delay_Normal it
+//! drops a delay counting under the old value; Event_State, Reliability and
+//! the algorithms' baselines stay, and the server's next pass evaluates
+//! with the restored values.
+//!
+//! A write of the enrollment's parameters is checked against the written
+//! value alone, so every saved value is one the rebuilt enrollment takes
+//! on the wire, and none fails the builder call or is restored unchecked.
+//! What isn't kept can still differ on the rebuilt enrollment:
+//! Object_Property_Reference, which peers can't write, and the event type
+//! given to `new`, which the legacy octet layout and a proprietary
+//! alternative run under. Saved parameters that don't suit them show as
+//! they do on any enrollment configured that way: an event algorithm whose
+//! monitored value has another datatype raises nothing and reports no
+//! fault, and a fault algorithm that can't run on it reports
+//! CONFIGURATION_ERROR. An Alert Enrollment keeps no parameter: it has
+//! none a peer writes.
 //!
 //! One wire rule doesn't fail the builder call: an Alarm_Values entry past
 //! Number_Of_States, which a write refuses (#1429). The state count and
@@ -128,6 +159,16 @@ mod access_restore_tests;
 #[cfg(test)]
 #[path = "write_config/description_tests.rs"]
 mod description_tests;
+// An Event Enrollment's parameters: what is kept, the setters, the clear
+// and a request's staged writes.
+#[cfg(all(test, feature = "event-reporting"))]
+#[path = "write_config/enrollment_parameters_tests.rs"]
+mod enrollment_parameters_tests;
+// An Event Enrollment's parameters across a rebuild: the cap, the file's
+// octets and what a restore does.
+#[cfg(all(test, feature = "event-reporting"))]
+#[path = "write_config/enrollment_restore_tests.rs"]
+mod enrollment_restore_tests;
 // Every row of the format's table, through the object of each type that
 // keeps it.
 #[cfg(all(test, feature = "event-reporting"))]

@@ -10,7 +10,8 @@ use std::path::Path;
 
 use bacnet_types::bitstring::{EventTransitionBits, LimitEnable};
 use bacnet_types::constructed::{
-    BACnetDeviceObjectPropertyReference, BACnetObjectPropertyReference,
+    BACnetDeviceObjectPropertyReference, BACnetEventParameter, BACnetObjectPropertyReference,
+    FaultParameters,
 };
 use bacnet_types::enums::{BinaryPV, NotifyType};
 use bacnet_types::error::Error;
@@ -84,7 +85,8 @@ pub struct ReportingWriteConfig {
 pub struct AlgorithmWriteConfig {
     /// Time_Delay, in seconds.
     pub time_delay: Option<u32>,
-    /// Time_Delay_Normal, in seconds.
+    /// Time_Delay_Normal, in seconds. An Event Enrollment keeps it without
+    /// Time_Delay, which on that type is a member of Event_Parameters.
     pub time_delay_normal: Option<u32>,
     /// High_Limit of an analog object; finite, as a write is.
     pub high_limit: Option<f32>,
@@ -112,6 +114,15 @@ pub struct AlgorithmWriteConfig {
     /// Masked_Alarm_Values of an Access Door, held to what its
     /// Alarm_Values is.
     pub masked_alarm_values: Option<Vec<u32>>,
+    /// Event_Parameters of an Event Enrollment: any value a write of the
+    /// property leaves, whose BACnet encoding is at most 64 KiB, as an
+    /// enrollment with storage refuses a longer write. The legacy octet
+    /// layout is the `Opaque` alternative under tag 255.
+    pub event_parameters: Option<BACnetEventParameter>,
+    /// Fault_Parameters of an Event Enrollment, held to what its
+    /// Event_Parameters are. A written `none` choice is kept as
+    /// `FaultNone`, and reopens as no fault algorithm.
+    pub fault_parameters: Option<FaultParameters>,
 }
 
 /// What a Timer keeps across a restart.

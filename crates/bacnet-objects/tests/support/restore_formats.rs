@@ -209,4 +209,19 @@ pub const FORMATS: &[Format] = &[
         sample: samples::zone_alarm_values_reporting_write_config,
         kind: Kind::ZoneReportingWriteConfig,
     },
+    // Kind 6 with an Event Enrollment's Event_Parameters and
+    // Fault_Parameters, the two rows held in their BACnet encoding, plain
+    // and under kind 5 (#2331 PR 5). Last for the same reason.
+    Format {
+        name: "enrollment_parameters_reporting_write_config",
+        two_slot: false,
+        sample: samples::enrollment_parameters_reporting_write_config,
+        kind: Kind::EnrollmentReportingWriteConfig,
+    },
+    Format {
+        name: "described_enrollment_parameters_reporting_write_config",
+        two_slot: false,
+        sample: samples::described_enrollment_parameters_reporting_write_config,
+        kind: Kind::EnrollmentReportingWriteConfig,
+    },
 ];

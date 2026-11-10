@@ -24,8 +24,11 @@
 //! time delays on all eleven, the four OUT_OF_RANGE parameters on the
 //! analog ones, Alarm_Value on a Binary Input or Value, Alarm_Values on a
 //! Multi-state Input or Value, a door and a zone, and a door's Fault_Values
-//! and Masked_Alarm_Values. They stay where the object holds them (the
-//! detector; a door's two other lists beside it), and a staged write of one
+//! and Masked_Alarm_Values. An Event Enrollment keeps Event_Parameters,
+//! Fault_Parameters and Time_Delay_Normal the same way
+//! (`event_enrollment::kept`). They stay where the object holds them (the
+//! detector; a door's two other lists beside it; an enrollment's own
+//! fields), and a staged write of one
 //! is checked by the code the object writes it through. Which
 //! parameters a type keeps is one table,
 //! [`kept`](crate::snapshot::write_config::parameters::kept);
