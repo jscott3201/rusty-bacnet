@@ -33,21 +33,11 @@
 //! handed out is plain data its holder must settle, and the send turn of an
 //! unconfirmed context ([`Gathered::take_turn`]) is the host's to end.
 
-use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
+use alloc::boxed::Box;
+use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::vec::Vec;
+use core::cell::RefCell;
 
-use bacnet_device_core::cov::multiple_chunks::{
-    Envelope, Part, ReportContent, Split, request_limit, split, untimed_octets,
-};
-use bacnet_device_core::cov::multiple_items::{Coordinate, FieldStamp};
-use bacnet_device_core::cov::multiple_reads::{MultipleReads, PreparedReference};
-use bacnet_device_core::cov::timed::{
-    ClaimId, FieldTiming, TimedChange, TimedClaim, TimedHistories,
-};
-use bacnet_device_core::cov::{
-    BeginRefusal, CovObservation, CovSubscriptionKey, CovSubscriptionSnapshot, CovTable,
-    CovTimeRemaining, MultipleContextKey, PreparedCovCompletion, Token,
-};
 use bacnet_objects::clock::ClockFrame;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::traits::BACnetObject;
@@ -55,12 +45,23 @@ use bacnet_services::cov_multiple::{COVNotificationMultipleRequest, COVNotificat
 use bacnet_time::Instant;
 use bacnet_types::primitives::ObjectIdentifier;
 
+use super::multiple_chunks::{
+    Envelope, Part, ReportContent, Split, request_limit, split, untimed_octets,
+};
+use super::multiple_items::{Coordinate, FieldStamp};
+use super::multiple_reads::{MultipleReads, PreparedReference};
+use super::timed::{ClaimId, FieldTiming, TimedChange, TimedClaim, TimedHistories};
+use super::{
+    BeginRefusal, CovObservation, CovSubscriptionKey, CovSubscriptionSnapshot, CovTable,
+    CovTimeRemaining, MultipleContextKey, PreparedCovCompletion, Token,
+};
+
 /// The COV-multiple references of one fanout by context, the contexts in
 /// the order they report: that of their keys, so by recipient (direct
 /// before routed, then by address), then by subscriber process identifier,
 /// the unconfirmed form before the confirmed one. Each context keeps its
 /// references in the order given.
-pub(crate) fn by_context(
+pub fn by_context(
     subscriptions: impl IntoIterator<Item = CovSubscriptionSnapshot>,
 ) -> BTreeMap<MultipleContextKey, Vec<CovSubscriptionSnapshot>> {
     let mut grouped: BTreeMap<MultipleContextKey, Vec<CovSubscriptionSnapshot>> = BTreeMap::new();
@@ -80,7 +81,7 @@ pub(crate) fn by_context(
 
 /// Where a report reads its values.
 #[derive(Clone, Copy)]
-pub(crate) enum Source<'a> {
+pub enum Source<'a> {
     /// The database, borrowed under the host's guard. Producers capture
     /// under its write guard, so while it is borrowed no capture can move a
     /// field record past the values read here. It supplies every value, and
@@ -122,7 +123,7 @@ enum Candidate {
 }
 
 /// Step one: the current values of one context's fanned-out references.
-pub(crate) struct Reading<'a> {
+pub struct Reading<'a> {
     source: Source<'a>,
     subscriptions: &'a [CovSubscriptionSnapshot],
     force: bool,
@@ -143,7 +144,7 @@ impl<'a> Reading<'a> {
     /// the observation their snapshot last reported (all of them when
     /// `force`, for an initial report); timestamped ones are decided in
     /// [`gather`](Self::gather), against their captured history.
-    pub(crate) fn read(
+    pub fn read(
         source: Source<'a>,
         subscriptions: &'a [CovSubscriptionSnapshot],
         force: bool,
@@ -203,7 +204,7 @@ impl<'a> Reading<'a> {
     /// issued here follow the order of the observations (#826). No object
     /// is read. Each prepared value owns its own check; a live sibling with
     /// a failed read cannot authorize a stale value.
-    pub(crate) fn gather(
+    pub fn gather(
         self,
         table: &mut CovTable,
         histories: &mut TimedHistories,
@@ -438,7 +439,7 @@ fn context_keys(table: &CovTable, context: &MultipleContextKey) -> Vec<CovSubscr
 }
 
 /// What [`Reading::gather`] decided.
-pub(crate) enum Gathering<'a> {
+pub enum Gathering<'a> {
     /// A confirmed context whose report is outstanding, or which holds off
     /// after a failed one: nothing is drained. That report's Ack, or the
     /// first fanout after the hold-off, reports what is held; while it
@@ -479,7 +480,7 @@ type RetainedReference = (
 /// an unconfirmed context, the context's send turn: until
 /// [`split`](Self::split) returns and the host has taken the turn
 /// ([`take_turn`](Self::take_turn)), nothing gives either back.
-pub(crate) struct Gathered<'a> {
+pub struct Gathered<'a> {
     source: Source<'a>,
     context: MultipleContextKey,
     /// The context's references, while this report holds its send turn.
@@ -498,26 +499,26 @@ pub(crate) struct Gathered<'a> {
 
 impl Gathered<'_> {
     /// The context the report goes to.
-    pub(crate) fn context(&self) -> &MultipleContextKey {
+    pub fn context(&self) -> &MultipleContextKey {
         &self.context
     }
 
     /// Timestamped current-state changes skipped for want of a valid Device
     /// clock, for the host to log.
-    pub(crate) fn unclocked(&self) -> usize {
+    pub fn unclocked(&self) -> usize {
         self.unclocked
     }
 
     /// Take over the send turn of an unconfirmed context, which this report
-    /// holds since [`Reading::gather`] (`TimedHistories::begin_send`): the
+    /// holds since [`Reading::gather`] ([`TimedHistories::begin_send`]): the
     /// context's references, for the follow-up. `None` for a confirmed
     /// context, which has no turn, or once taken.
     ///
-    /// The host ends the turn (`TimedHistories::end_send`) after the
+    /// The host ends the turn ([`TimedHistories::end_send`]) after the
     /// report's last part, when the report stops early, or at once when
     /// the report turns out not to need it ([`Report::needs_turn`]); if a
     /// fanout stood back meanwhile, it fans these references out again.
-    pub(crate) fn take_turn(&mut self) -> Option<Vec<CovSubscriptionKey>> {
+    pub fn take_turn(&mut self) -> Option<Vec<CovSubscriptionKey>> {
         self.turn.take()
     }
 
@@ -532,7 +533,7 @@ impl Gathered<'_> {
     /// a sibling carries for a timestamped reference that conveys no change
     /// are timed from the histories, and from the Device clock for a value
     /// no capture recorded (#987).
-    pub(crate) fn split(
+    pub fn split(
         self,
         histories: &mut TimedHistories,
         device: ObjectIdentifier,
@@ -631,7 +632,7 @@ impl Gathered<'_> {
 
 /// A reference a report carries, with the observation its delivery
 /// establishes and the ticket that completes it.
-pub(crate) type Carried = (
+pub type Carried = (
     CovSubscriptionSnapshot,
     CovObservation,
     PreparedCovCompletion,
@@ -640,28 +641,28 @@ pub(crate) type Carried = (
 /// One report, split into the notifications that convey it. Each part's
 /// claim is plain data: its holder commits it once the part is delivered
 /// and gives it back otherwise.
-pub(crate) struct Report {
+pub struct Report {
     /// The reference whose recipient and current route receive the report.
     /// Its `issue_confirmed_notifications` is the context's form.
-    pub(crate) route: CovSubscriptionSnapshot,
+    pub route: CovSubscriptionSnapshot,
     /// The notifications, in the order they go out. None when every
     /// timestamped value was too large to send and nothing else changed.
-    pub(crate) parts: Vec<Part>,
+    pub parts: Vec<Part>,
     /// Every reference the report retains; [`carried`] picks those a part
     /// completes.
-    pub(crate) observations: Vec<Carried>,
+    pub observations: Vec<Carried>,
     /// Whether an unconfirmed context's report has to keep the send turn
     /// until its last part is sent: one with timestamped references, or of
     /// several parts. Untimestamped values that one notification carries
     /// need none, and the host ends a turn it took at once. Always false
     /// for a confirmed context.
-    pub(crate) needs_turn: bool,
+    pub needs_turn: bool,
     /// Untimestamped references left out because their values exceed the
     /// notification size on their own (#1066), for the host to log. The
     /// histories counted them; they are not owed.
-    pub(crate) left_out: Vec<CovSubscriptionKey>,
+    pub left_out: Vec<CovSubscriptionKey>,
     /// Service-request octets one notification of the report may take.
-    pub(crate) limit: usize,
+    pub limit: usize,
 }
 
 /// The references a part completes, each with its observation: those it
@@ -669,7 +670,7 @@ pub(crate) struct Report {
 /// and, when `every` (a confirmed part's Ack completes all it carries),
 /// each other timestamped reference at the last change of it in the part's
 /// `claim`.
-pub(crate) fn carried(
+pub fn carried(
     finishes: &BTreeSet<CovSubscriptionKey>,
     claim: &TimedClaim,
     observations: &[Carried],
@@ -691,19 +692,19 @@ pub(crate) fn carried(
 }
 
 /// The part of a confirmed report that goes out now, and the rest.
-pub(crate) struct FirstPart {
+pub struct FirstPart {
     /// The reference whose recipient and current route receive it.
-    pub(crate) route: CovSubscriptionSnapshot,
+    pub route: CovSubscriptionSnapshot,
     /// The notification's service request.
-    pub(crate) notification: COVNotificationMultipleRequest,
+    pub notification: COVNotificationMultipleRequest,
     /// The report's one ticket: the newest prepared one, which postdates
     /// every carried reference's baseline, so it completes them all.
-    pub(crate) completion: PreparedCovCompletion,
+    pub completion: PreparedCovCompletion,
     /// Each reference the part carries, with the observation its Ack
     /// completes.
-    pub(crate) observations: Vec<(CovSubscriptionSnapshot, CovObservation)>,
+    pub observations: Vec<(CovSubscriptionSnapshot, CovObservation)>,
     /// What the part's Ack retires.
-    pub(crate) claim: TimedClaim,
+    pub claim: TimedClaim,
     /// The later parts' claims. They return to their queue, uncounted,
     /// once the report holds the context ([`begin_confirmed`]), and the
     /// Ack's follow-up sends the next part (#986). Deferred, not dropped:
@@ -712,13 +713,13 @@ pub(crate) struct FirstPart {
     /// rejoin there as one change (#1090). Untimestamped references of
     /// later parts are owed meanwhile, and the follow-up reads their values
     /// afresh, so a newer change to one goes in their place (#1038).
-    pub(crate) deferred: Vec<TimedClaim>,
+    pub deferred: Vec<TimedClaim>,
 }
 
 impl Report {
     /// For a confirmed context: only the oldest part goes now. `None` when
     /// the report has no part.
-    pub(crate) fn into_first(self) -> Option<FirstPart> {
+    pub fn into_first(self) -> Option<FirstPart> {
         let mut parts = self.parts.into_iter();
         let first = parts.next()?;
         let deferred = parts.map(|part| part.claim.without_eviction()).collect();
@@ -742,20 +743,20 @@ impl Report {
 }
 
 /// A confirmed report the table began.
-pub(crate) struct Begun {
-    /// The report: its outcome goes back with it (`CovTable::delivered`).
-    pub(crate) token: Token,
+pub struct Begun {
+    /// The report: its outcome goes back with it ([`CovTable::delivered`]).
+    pub token: Token,
     /// The claim on what the report conveys, lodged with the histories
     /// until the report's own deadline: its holder settles it when the
-    /// report ends (`TimedHistories::settle`), delivered on the Ack and
+    /// report ends ([`TimedHistories::settle`]), delivered on the Ack and
     /// returned otherwise, and the histories give it back at the deadline
     /// if nobody did.
-    pub(crate) claim: Option<ClaimId>,
+    pub claim: Option<ClaimId>,
 }
 
 /// Begin one confirmed notification at `now`: mark its coordinate
 /// outstanding under `completion`, keeping the observation each reference
-/// carries for the Ack (`CovTable::begin_confirmed`), and settle what it
+/// carries for the Ack ([`CovTable::begin_confirmed`]), and settle what it
 /// holds of the histories.
 ///
 /// Once the report holds its coordinate, a change `claim` sends only some
@@ -770,7 +771,7 @@ pub(crate) struct Begun {
 /// was captured: the host looks at the references again. A busy coordinate
 /// needs nothing: its outstanding report, Ack or hold-off owns the
 /// follow-up.
-pub(crate) fn begin_confirmed(
+pub fn begin_confirmed(
     table: &mut CovTable,
     histories: &mut TimedHistories,
     completion: PreparedCovCompletion,
@@ -817,7 +818,7 @@ pub(crate) fn begin_confirmed(
 /// the subscriber refused it): the histories' backstop waits one hold-off,
 /// the table's, before it hands the context out again, so the timestamped
 /// history the report returned goes out once the hold-off ends.
-pub(crate) fn hold_off(
+pub fn hold_off(
     table: &CovTable,
     histories: &mut TimedHistories,
     context: &MultipleContextKey,

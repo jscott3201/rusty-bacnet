@@ -30,6 +30,8 @@ mod multiple_fixture;
 pub mod multiple_items;
 #[cfg(feature = "cov-multiple")]
 pub mod multiple_reads;
+#[cfg(feature = "cov-multiple")]
+pub mod multiple_report;
 mod observation;
 mod observation_order;
 mod policy;

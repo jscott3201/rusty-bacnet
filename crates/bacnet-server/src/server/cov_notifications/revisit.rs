@@ -58,7 +58,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }
         // Contexts in the order of their keys, as every Multiple fanout
         // takes them (#2320).
-        let multiple_by_context = crate::cov::multiple_report::by_context(multiple);
+        let multiple_by_context = bacnet_device_core::cov::multiple_report::by_context(multiple);
         for (oid, subs) in &single_by_object {
             Self::fire_cov_notifications_for_subscriptions(
                 &handles,

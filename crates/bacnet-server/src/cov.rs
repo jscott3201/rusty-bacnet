@@ -19,6 +19,7 @@ use tokio::sync::Notify;
 use crate::runtime_clock;
 #[cfg(test)]
 use bacnet_device_core::cov::CovTimeRemaining;
+use bacnet_device_core::cov::multiple_report;
 use bacnet_device_core::cov::{
     BeginRefusal, CovObservation, CovPolicy, CovRecipient, CovReport, CovSample, CovSubscription,
     CovSubscriptionKey, CovSubscriptionSnapshot, CovTable, Delivery, Evaluation, EventBudget,
@@ -29,7 +30,6 @@ use bacnet_objects::database::ObjectDatabase;
 
 mod confirmed;
 pub(crate) use confirmed::{ConfirmedFlight, CovRevisits};
-pub(crate) mod multiple_report;
 mod store_capture;
 pub(crate) mod timed_store;
 
