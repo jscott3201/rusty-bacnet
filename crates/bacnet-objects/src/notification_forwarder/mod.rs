@@ -294,6 +294,29 @@ impl NotificationForwarderObject {
         }
     }
 
+    /// Drop the Description a write saved (#2364): storage keeps none from
+    /// now on, so [`set_description`](Self::set_description) applies again.
+    /// The text served now stays until it, or a write, changes it. Saves before it
+    /// returns; a save that fails keeps the written Description and returns
+    /// storage's error. Does nothing without storage or a saved Description.
+    /// Call it before the object joins the database, as the setters are,
+    /// not under the database guard: it waits for its save.
+    pub fn clear_written_description(&mut self) -> Result<(), Error> {
+        if !(self.storage.is_some() && self.description_written) {
+            return Ok(());
+        }
+        let mut cleared = self.snapshot();
+        cleared.description = None;
+        let storage = self.storage.as_mut().expect("checked above");
+        storage.save_now(cleared)?;
+        self.description_written = false;
+        // A write staged before this gives way, and keeps the cleared state
+        // as what is served.
+        self.kept_writes = self.kept_writes.wrapping_add(1);
+        self.with_storage(|_, _| ());
+        Ok(())
+    }
+
     /// What storage holds for the lists the forwarder serves.
     fn snapshot(&self) -> ForwarderSnapshot {
         ForwarderSnapshot {

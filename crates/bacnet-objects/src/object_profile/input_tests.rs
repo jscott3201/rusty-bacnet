@@ -354,7 +354,10 @@ fn input_saved_overrides_need_provisioning_and_invalid_replacement_preserves_sta
             None,
             Some(TagsSnapshot::default()),
             Some(snapshot("saved")),
-            Some(TagsSnapshot { tags: Some(vec![]) }),
+            Some(TagsSnapshot {
+                tags: Some(vec![]),
+                description: None,
+            }),
         ] {
             let store = Arc::new(Memory::default());
             *store.saved.lock().unwrap() = saved.clone();

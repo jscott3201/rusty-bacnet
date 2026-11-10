@@ -339,7 +339,9 @@ async fn device_profiles_read_but_tags_never_enter_endpoint_mutation_authority()
                 services(primitive(&served.property_value)),
                 expected_services
             );
-            assert_eq!(store.0.load(Ordering::SeqCst), 0);
+            // The one save is the authorized Description's, which the
+            // Device keeps in its Tags storage (#2364).
+            assert_eq!(store.0.load(Ordering::SeqCst), usize::from(writes));
             client.stop().await.unwrap();
             endpoint.stop().await.unwrap();
         }

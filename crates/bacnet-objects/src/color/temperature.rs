@@ -197,7 +197,7 @@ impl ColorTemperatureObject {
         persistence: Arc<dyn TagsPersistence>,
     ) -> Result<Self, Error> {
         let mut object = Self::new(instance, name)?;
-        object.profile = ProfileState::persistent(object.oid, persistence)?;
+        object.profile = ProfileState::persistent(object.oid, persistence, false)?;
         Ok(object)
     }
 
@@ -477,6 +477,11 @@ impl BACnetObject for ColorTemperatureObject {
         priority: Option<u8>,
     ) -> Result<(), Error> {
         crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
+        if property == PropertyIdentifier::DESCRIPTION
+            && let Some(result) = self.output.write_description(&mut self.description, &value)
+        {
+            return result;
+        }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }

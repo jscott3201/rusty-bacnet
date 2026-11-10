@@ -40,7 +40,8 @@ impl ColorTemperatureObject {
     /// saved temperature (Clause 12.Y.4).
     ///
     /// Fails with storage's error when what it holds can't be loaded, and
-    /// when it holds an xy colour or a temperature outside 1000 to 30000 K.
+    /// when it holds an xy colour, a temperature outside 1000 to 30000 K or
+    /// a Description past 16 KiB.
     pub fn with_output_persistence(
         mut self,
         persistence: Arc<dyn ColorOutputPersistence>,
@@ -70,6 +71,9 @@ impl ColorTemperatureObject {
                 0 => 0,
                 default => self.clamped(default),
             };
+        }
+        if let Some(text) = saved.description {
+            self.description = text;
         }
         Ok(self)
     }
@@ -135,6 +139,15 @@ impl ColorTemperatureObject {
         self.output.clear_written_default()
     }
 
+    /// Drop the Description a write saved (#2364), as a Color object's
+    /// [`clear_written_description`](super::super::ColorObject::clear_written_description)
+    /// does.
+    /// Call it before the object joins the database, not under the database
+    /// guard: it waits for its save.
+    pub fn clear_written_description(&mut self) -> Result<(), Error> {
+        self.output.clear_written_description()
+    }
+
     /// A Default_Color_Temperature write. Clause 12.Y.8 clamps it as
     /// Present_Value's is, except 0, which the restart rule of Clause 12.Y.4
     /// gives a meaning of its own: bring back the temperature from before
@@ -154,11 +167,11 @@ impl ColorTemperatureObject {
         Ok(())
     }
 
-    /// Stage the request's Default_Color_Temperature writes on the output
-    /// storage.
+    /// Stage the request's Default_Color_Temperature and Description writes
+    /// on the output storage.
     pub(super) fn stage_default(&mut self, writes: &[PendingWrite]) -> StageStep {
         let (min, max) = (self.min_pres_value, self.max_pres_value);
-        self.output.stage_defaults(
+        self.output.stage_kept(
             writes,
             PropertyIdentifier::DEFAULT_COLOR_TEMPERATURE,
             |value| written_default(value, min, max),

@@ -3028,10 +3028,23 @@ An Alert Enrollment takes only ALARM and EVENT as Notify_Type, so a file
 holding another fails its build the same way.
 
 These builders, `add_timer`, `add_channel`, the three log builders,
-`add_notification_class`, `add_notification_forwarder` and
-`add_access_rights` keep a written Description in their `storage_path` file,
-with these rules. On every other object type, a Description a peer writes
-lasts until the server restarts.
+`add_notification_class`, `add_notification_forwarder`, `add_access_rights`,
+`add_color` and `add_color_temperature` keep a written Description in their
+`storage_path` file, with these rules: every builder that takes
+`storage_path` does, except `add_audit_log`. An Audit Log's files keep its
+records, Log_Enable and Buffer_Size, and a Description a peer writes to it
+lasts until the server restarts. So does one written to an object built
+without `storage_path`, or to a type whose builder has none: the Device and
+the two lighting outputs among them, which keep one only through the Rust
+API's `with_tags_persistence`, and the Network Port, whose transport keeps
+only its own tables in `bdt_persist_path`.
+
+`clear_written_reporting=True`, and `clear_written_config=True` on
+`add_timer` and `add_channel`, drop a saved Description with the rest of
+what they clear. The other builders have no keyword for it:
+`clear_written_default=True` on the colour builders drops only the default.
+The Rust API's `clear_written_description` drops a saved Description on
+those types.
 
 The endpoints' object builders (`BipEndpoint.add_analog_input` and the rest)
 don't take these keywords: an endpoint executes WriteProperty only on its own
@@ -4155,8 +4168,10 @@ until a Present_Value or Color_Command write drives the output. The object
 saves each new Present_Value off the database lock; a change never waits for
 its save, and a failed save is logged and tried again only at the next
 change, at `stop()` and as the object goes. A file that doesn't load raises
-`BacnetError`. `lighting_color` returns None while the colour object it
-follows reads NOT_CONTROLLED.
+`BacnetError`. The same file keeps a Description a peer writes (#2364),
+saved before the write is answered and refused when it can't be;
+`clear_written_default=True` leaves it in place. `lighting_color` returns
+None while the colour object it follows reads NOT_CONTROLLED.
 
 A Lighting Output's Present_Value and Relinquish_Default take a REAL level
 from 0.0 to 100.0. A level above 0.0 and below 1.0, written locally or over the

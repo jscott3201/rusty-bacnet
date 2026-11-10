@@ -114,6 +114,7 @@ fn temperature_round_trip_through_a_file() {
         Some(ColorOutputSnapshot {
             present_value: Some(ColorOutputValue::Kelvin(2700)),
             default: None,
+            description: None
         })
     );
     let ct = ColorTemperatureObject::new(1, "ct")
@@ -198,6 +199,7 @@ fn version_2_files_are_strict_and_version_1_still_loads() {
     let saved = ColorOutputSnapshot {
         present_value: Some(ColorOutputValue::Kelvin(3000)),
         default: Some(ColorOutputValue::Kelvin(0)),
+        description: None,
     };
     case.store().save(ct_oid(), &saved).unwrap();
     let whole = std::fs::read(&case.path).unwrap();
@@ -234,6 +236,7 @@ fn version_2_files_are_strict_and_version_1_still_loads() {
         Some(ColorOutputSnapshot {
             present_value: Some(ColorOutputValue::Kelvin(3000)),
             default: None,
+            description: None
         })
     );
 }
@@ -253,6 +256,7 @@ fn a_version_1_file_saves_back_as_version_2() {
         ColorOutputSnapshot {
             present_value: Some(ColorOutputValue::Xy(BACnetXyColor::new(0.5, 0.5))),
             default: None,
+            description: None
         }
     );
     case.store().save(color_oid(), &loaded).unwrap();
@@ -297,6 +301,7 @@ impl Memory {
         *memory.held.lock().unwrap() = Some(ColorOutputSnapshot {
             present_value: Some(value),
             default: None,
+            description: None,
         });
         Arc::new(memory)
     }
@@ -305,13 +310,14 @@ impl Memory {
         self.held
             .lock()
             .unwrap()
+            .as_ref()
             .and_then(|saved| saved.present_value)
     }
 }
 
 impl ColorOutputPersistence for Memory {
     fn load(&self, _object: ObjectIdentifier) -> Result<Option<ColorOutputSnapshot>, Error> {
-        Ok(*self.held.lock().unwrap())
+        Ok(self.held.lock().unwrap().clone())
     }
 
     fn save(&self, _object: ObjectIdentifier, snapshot: &ColorOutputSnapshot) -> Result<(), Error> {
@@ -323,7 +329,7 @@ impl ColorOutputPersistence for Memory {
                 return Err(Error::Encoding("refused".into()));
             }
         }
-        *self.held.lock().unwrap() = Some(*snapshot);
+        *self.held.lock().unwrap() = Some(snapshot.clone());
         Ok(())
     }
 }

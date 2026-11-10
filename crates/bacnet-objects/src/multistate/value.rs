@@ -112,7 +112,7 @@ impl MultiStateValueObject {
         persistence: Arc<dyn TagsPersistence>,
     ) -> Result<Self, Error> {
         let mut object = Self::with_access(instance, name, number_of_states, access)?;
-        object.profile = ProfileState::persistent(object.oid, persistence)?;
+        object.profile = ProfileState::persistent(object.oid, persistence, false)?;
         Ok(object)
     }
 

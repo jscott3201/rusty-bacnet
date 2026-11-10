@@ -122,6 +122,8 @@ impl BACnetServer {
     /// The file keeps a Default_Color written over the network too, which
     /// wins over `default_color` at the next start (#1956);
     /// `clear_written_default` drops it first, so `default_color` applies.
+    /// It keeps a written Description as well (#2364), which
+    /// `clear_written_default` leaves in place.
     #[pyo3(signature = (
         instance, name, *, present_value=None, default_color=None, storage_path=None,
         clear_written_default=false, value_source_tracking=false, tags=None,
@@ -166,7 +168,7 @@ impl BACnetServer {
     /// limits), `storage_path` and `clear_written_default` work as
     /// `default_color`, `storage_path` and `clear_written_default` on
     /// `add_color`, with 0 keeping the temperature from before the restart
-    /// (#1526).
+    /// (#1526). The file keeps a written Description the same way (#2364).
     #[pyo3(signature = (
         instance, name, *, present_value=None, min_pres_value=None, max_pres_value=None,
         default_color_temperature=None, storage_path=None, clear_written_default=false,

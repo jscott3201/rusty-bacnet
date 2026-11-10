@@ -706,3 +706,6 @@ async fn endpoint_refuses_a_channel_present_value_write_and_starts_no_distributi
     );
     ingress.stop().await.unwrap();
 }
+
+#[path = "endpoint_description_close_tests.rs"]
+mod description_close;

@@ -105,33 +105,63 @@ fn save_class(path: &Path, description: Option<&str>) {
 }
 
 pub fn tags(path: &Path) {
+    save_tags(path, ObjectType::ANALOG_INPUT, None);
+}
+
+/// A Lighting Output's Tags with a written Description: `RBNTAG02` (#2364).
+pub fn described_tags(path: &Path) {
+    save_tags(path, ObjectType::LIGHTING_OUTPUT, Some("Lobby"));
+}
+
+fn save_tags(path: &Path, kind: ObjectType, description: Option<&str>) {
     let snapshot = TagsSnapshot {
         tags: Some(vec![
             BACnetNameValue::semantic("exhaust"),
             BACnetNameValue::valued("floor", PropertyValue::Unsigned(3)),
             BACnetNameValue::valued("gain", PropertyValue::Real(0.5)),
         ]),
+        description: description.map(Into::into),
     };
     FileTagsPersistence::new(path)
         .unwrap()
-        .save(oid(ObjectType::ANALOG_INPUT), &snapshot)
+        .save(oid(kind), &snapshot)
         .expect("the sample saves");
 }
 
 pub fn color(path: &Path) {
-    let snapshot = ColorOutputSnapshot {
+    save_color(path, ObjectType::COLOR, &color_snapshot(None));
+}
+
+/// A Color object's output with a written Description: `RBNCLR03` (#2364).
+pub fn described_color(path: &Path) {
+    save_color(path, ObjectType::COLOR, &color_snapshot(Some("Lobby")));
+}
+
+fn color_snapshot(description: Option<&str>) -> ColorOutputSnapshot {
+    ColorOutputSnapshot {
         present_value: Some(ColorOutputValue::Xy(BACnetXyColor::new(0.25, 0.5))),
         default: Some(ColorOutputValue::Xy(BACnetXyColor::new(0.0, 0.0))),
-    };
-    save_color(path, ObjectType::COLOR, &snapshot);
+        description: description.map(Into::into),
+    }
 }
 
 pub fn color_temperature(path: &Path) {
-    let snapshot = ColorOutputSnapshot {
+    let snapshot = temperature_snapshot(None);
+    save_color(path, ObjectType::COLOR_TEMPERATURE, &snapshot);
+}
+
+/// A Color Temperature object's output with a written Description (#2364).
+pub fn described_color_temperature(path: &Path) {
+    let snapshot = temperature_snapshot(Some("Lobby"));
+    save_color(path, ObjectType::COLOR_TEMPERATURE, &snapshot);
+}
+
+fn temperature_snapshot(description: Option<&str>) -> ColorOutputSnapshot {
+    ColorOutputSnapshot {
         present_value: Some(ColorOutputValue::Kelvin(4_000)),
         default: Some(ColorOutputValue::Kelvin(2_700)),
-    };
-    save_color(path, ObjectType::COLOR_TEMPERATURE, &snapshot);
+        description: description.map(Into::into),
+    }
 }
 
 fn save_color(path: &Path, kind: ObjectType, snapshot: &ColorOutputSnapshot) {

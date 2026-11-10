@@ -1,6 +1,8 @@
 //! A written Description kept in the snapshot formats of their own (#2364):
 //! the three logs, Notification Class, Notification Forwarder and Access
-//! Rights. Each comes back on a rebuild; a write whose save fails is refused
+//! Rights, and (in `tags_and_colour`) the Device and the two lighting
+//! outputs in the Tags format and the two colour objects in theirs. Each
+//! comes back on a rebuild; a write whose save fails is refused
 //! with the old value kept; a NULL changes nothing and saves nothing; one
 //! past the cap is refused before anything is saved, but only while it
 //! would be kept; a request writing it beside another kept property saves
@@ -27,6 +29,9 @@ use crate::notification_forwarder::{
 };
 use crate::traits::BACnetObject;
 use crate::trend::{TrendLogMultipleObject, TrendLogObject};
+
+mod clear;
+mod tags_and_colour;
 
 /// One snapshot in memory, saves counted, and a switch that fails them.
 pub(crate) struct Memory<S> {
@@ -95,15 +100,23 @@ impl<R: Clone + Send + Sync + 'static> LogPersistence<R> for Memory<LogSnapshot<
 }
 
 /// An object with storage, as the server reaches it.
-pub(crate) trait KeptObject: BACnetObject + DurableWrites {
+pub(crate) trait KeptObject: BACnetObject {
     fn object(&self) -> &dyn BACnetObject;
     fn object_mut(&mut self) -> &mut dyn BACnetObject;
-    /// The application's `set_description`.
+    /// The staging the server reaches. `None` on an object that lends it
+    /// only through `durable_writes()`, in a build without that feature.
+    fn staging(&mut self) -> Option<&mut dyn DurableWrites>;
+    /// The application's `set_description`, on a type that has one.
     fn configure(&mut self, text: &str);
+    /// The type's `clear_written_description`. `None` on a log, whose
+    /// `clear_written_reporting` drops a saved Description.
+    fn clear(&mut self) -> Option<Result<(), Error>>;
 }
 
+/// [`KeptObject`] for a type, from how it lends its staging, takes a
+/// configured Description and clears a saved one.
 macro_rules! kept_object {
-    ($($object:ty),*) => {$(
+    ($object:ty, |$staged:ident| $staging:expr, |$set:ident, $text:ident| $configure:expr, |$cleared:ident| $clear:expr) => {
         impl KeptObject for $object {
             fn object(&self) -> &dyn BACnetObject {
                 self
@@ -111,31 +124,60 @@ macro_rules! kept_object {
             fn object_mut(&mut self) -> &mut dyn BACnetObject {
                 self
             }
-            fn configure(&mut self, text: &str) {
-                self.set_description(text);
+            fn staging(&mut self) -> Option<&mut dyn DurableWrites> {
+                let $staged = self;
+                $staging
+            }
+            fn configure(&mut self, $text: &str) {
+                let $set = self;
+                $configure
+            }
+            fn clear(&mut self) -> Option<Result<(), Error>> {
+                let $cleared = self;
+                $clear
             }
         }
-    )*};
+    };
 }
+pub(crate) use kept_object;
 
 kept_object!(
     NotificationClass,
-    NotificationForwarderObject,
-    TrendLogObject,
-    TrendLogMultipleObject,
-    EventLogObject
+    |class| Some(class),
+    |class, text| class.set_description(text),
+    |class| Some(class.clear_written_description())
 );
-
-impl KeptObject for AccessRightsObject {
-    fn object(&self) -> &dyn BACnetObject {
-        self
-    }
-    fn object_mut(&mut self) -> &mut dyn BACnetObject {
-        self
-    }
-    // It has no Description setter.
-    fn configure(&mut self, _: &str) {}
-}
+kept_object!(
+    NotificationForwarderObject,
+    |forwarder| Some(forwarder),
+    |forwarder, text| forwarder.set_description(text),
+    |forwarder| Some(forwarder.clear_written_description())
+);
+// It has no Description setter.
+kept_object!(
+    AccessRightsObject,
+    |rights| Some(rights),
+    |_rights, _text| (),
+    |rights| Some(rights.clear_written_description())
+);
+kept_object!(
+    TrendLogObject,
+    |log| Some(log),
+    |log, text| log.set_description(text),
+    |_log| None
+);
+kept_object!(
+    TrendLogMultipleObject,
+    |log| Some(log),
+    |log, text| log.set_description(text),
+    |_log| None
+);
+kept_object!(
+    EventLogObject,
+    |log| Some(log),
+    |log, text| log.set_description(text),
+    |_log| None
+);
 
 /// Build an object on storage holding snapshots `S`.
 type Open<S> = fn(Arc<Memory<S>>) -> Result<Box<dyn KeptObject>, Error>;
@@ -147,6 +189,9 @@ struct Case<S> {
     description: fn(&S) -> Option<&String>,
     /// Another property the type keeps, and a value a write gives it.
     other: (P, PropertyValue),
+    /// The tag of the file a snapshot saves as, on a type whose saved
+    /// Description `clear_written_description` drops.
+    tag: Option<fn(&S) -> [u8; 8]>,
 }
 
 /// What the checks need of a [`Case`], whatever its snapshot.
@@ -158,6 +203,10 @@ trait Kept {
     fn saved_description(&self) -> Option<String>;
     fn other(&self) -> (P, PropertyValue);
     fn has_setter(&self) -> bool;
+    /// Whether the type has `clear_written_description`.
+    fn clears(&self) -> bool;
+    /// The tag of the file storage's snapshot saves as, on such a type.
+    fn saved_tag(&self) -> Option<[u8; 8]>;
 }
 
 impl<S: Clone + 'static> Kept for Case<S> {
@@ -182,8 +231,27 @@ impl<S: Clone + 'static> Kept for Case<S> {
         self.other.clone()
     }
     fn has_setter(&self) -> bool {
-        self.other.0 != P::LOG_ENABLE
+        !matches!(
+            self.other.0,
+            P::LOG_ENABLE | P::DEFAULT_COLOR | P::DEFAULT_COLOR_TEMPERATURE
+        )
     }
+    fn clears(&self) -> bool {
+        self.tag.is_some()
+    }
+    fn saved_tag(&self) -> Option<[u8; 8]> {
+        let saved = self.storage.saved()?;
+        self.tag.map(|tag| tag(&saved))
+    }
+}
+
+/// The eight octets a format's `encode` result opens with.
+fn tag_of(octets: Result<Vec<u8>, crate::snapshot::SnapshotError>) -> [u8; 8] {
+    octets.unwrap()[..8].try_into().unwrap()
+}
+
+fn oid(kind: bacnet_types::enums::ObjectType) -> ObjectIdentifier {
+    ObjectIdentifier::new(kind, 1).unwrap()
 }
 
 /// Every covered type on fresh storage, or on storage holding a snapshot
@@ -195,7 +263,7 @@ fn cases(saved: Option<&str>) -> Vec<Box<dyn Kept>> {
         P::RECIPIENT_LIST,
         PropertyValue::ApplicationData(Vec::new()),
     );
-    vec![
+    let mut cases: Vec<Box<dyn Kept>> = vec![
         Box::new(Case {
             storage: Memory::holding(saved.clone().map(|text| NotificationClassSnapshot {
                 recipient_list: None,
@@ -206,6 +274,10 @@ fn cases(saved: Option<&str>) -> Vec<Box<dyn Kept>> {
             },
             description: |saved: &NotificationClassSnapshot| saved.description.as_ref(),
             other: empty_list.clone(),
+            tag: Some(|saved| {
+                let class = oid(bacnet_types::enums::ObjectType::NOTIFICATION_CLASS);
+                tag_of(crate::snapshot::notification_class::encode(class, saved))
+            }),
         }),
         Box::new(Case {
             storage: Memory::holding(saved.clone().map(|text| ForwarderSnapshot {
@@ -219,6 +291,12 @@ fn cases(saved: Option<&str>) -> Vec<Box<dyn Kept>> {
             },
             description: |saved: &ForwarderSnapshot| saved.description.as_ref(),
             other: empty_list,
+            tag: Some(|saved| {
+                let forwarder = oid(bacnet_types::enums::ObjectType::NOTIFICATION_FORWARDER);
+                tag_of(crate::snapshot::notification_forwarder::encode(
+                    forwarder, saved,
+                ))
+            }),
         }),
         Box::new(Case {
             storage: Memory::holding(saved.clone().map(|text| AccessRightsSnapshot {
@@ -230,12 +308,17 @@ fn cases(saved: Option<&str>) -> Vec<Box<dyn Kept>> {
             },
             description: |saved: &AccessRightsSnapshot| saved.description.as_ref(),
             other: (P::LOG_ENABLE, PropertyValue::Boolean(false)),
+            tag: Some(|saved| {
+                let rights = oid(bacnet_types::enums::ObjectType::ACCESS_RIGHTS);
+                tag_of(crate::snapshot::access_rights::encode(rights, saved))
+            }),
         }),
         Box::new(Case::<LogSnapshot<BACnetLogRecord>> {
             storage: Memory::holding(saved.clone().map(|text| log_holding(text, trend_log))),
             open: trend_log,
             description: |saved| saved.reporting.description.as_ref(),
             other: class.clone(),
+            tag: None,
         }),
         Box::new(Case::<LogSnapshot<BACnetLogMultipleRecord>> {
             storage: Memory::holding(
@@ -246,14 +329,18 @@ fn cases(saved: Option<&str>) -> Vec<Box<dyn Kept>> {
             open: trend_log_multiple,
             description: |saved| saved.reporting.description.as_ref(),
             other: class.clone(),
+            tag: None,
         }),
         Box::new(Case::<LogSnapshot<BACnetEventLogRecord>> {
-            storage: Memory::holding(saved.map(|text| log_holding(text, event_log))),
+            storage: Memory::holding(saved.clone().map(|text| log_holding(text, event_log))),
             open: event_log,
             description: |saved| saved.reporting.description.as_ref(),
             other: class,
+            tag: None,
         }),
-    ]
+    ];
+    cases.extend(tags_and_colour::cases(saved.as_deref()));
+    cases
 }
 
 /// A snapshot of a log that `fresh` builds and commits, with `saved` as its
@@ -366,10 +453,12 @@ fn a_null_or_a_refused_description_saves_nothing() {
         write(object.object_mut(), P::DESCRIPTION, text("lobby")).unwrap();
         write(object.object_mut(), P::DESCRIPTION, PropertyValue::Null).unwrap();
         assert_eq!(description(object.object()), text("lobby"));
-        let null = pending(P::DESCRIPTION, PropertyValue::Null);
-        assert!(matches!(object.stage_writes(&[null]), StageStep::Skip));
-        let long = object.stage_writes(&[pending(P::DESCRIPTION, too_long())]);
-        assert!(matches!(long, StageStep::Skip));
+        if let Some(staging) = object.staging() {
+            let null = pending(P::DESCRIPTION, PropertyValue::Null);
+            assert!(matches!(staging.stage_writes(&[null]), StageStep::Skip));
+            let long = staging.stage_writes(&[pending(P::DESCRIPTION, too_long())]);
+            assert!(matches!(long, StageStep::Skip));
+        }
         let result = write(object.object_mut(), P::DESCRIPTION, too_long());
         assert!(refused_with(
             &result,
@@ -402,7 +491,10 @@ fn a_request_writing_description_and_another_property_saves_once() {
             pending(P::DESCRIPTION, text("lobby")),
             pending(property, value.clone()),
         ];
-        let StageStep::Staged(wait) = object.stage_writes(&writes) else {
+        let Some(staging) = object.staging() else {
+            continue;
+        };
+        let StageStep::Staged(wait) = staging.stage_writes(&writes) else {
             panic!("{property:?}: expected a staged write");
         };
         wait.block();
@@ -413,14 +505,21 @@ fn a_request_writing_description_and_another_property_saves_once() {
                 .write_property(write.property, None, write.value, None)
                 .unwrap();
         }
-        object.release_staged_write(&wait);
+        let staging = object.staging().expect("lent above");
+        staging.release_staged_write(&wait);
         assert_eq!(case.saves(), 1, "{property:?}");
+        // Dropping the object waits for every save it queued: taking the
+        // steps queued none behind the staged one.
         drop(object);
+        assert_eq!(case.saves(), 1, "{property:?}, once its saves ran");
         let rebuilt = case.open();
         assert_eq!(description(rebuilt.object()), text("lobby"));
         let served = rebuilt.object().read_property(property, None).unwrap();
         if property == P::RECIPIENT_LIST {
             assert_eq!(served, PropertyValue::ApplicationData(Vec::new()));
+        } else if property == P::TAGS {
+            // The written empty array, over the configured tag.
+            assert_eq!(served, PropertyValue::List(Vec::new()));
         } else {
             assert_eq!(served, value);
         }
@@ -460,6 +559,11 @@ fn a_saved_description_past_its_cap_fails_the_build() {
 #[test]
 fn without_storage_nothing_is_kept_or_capped() {
     let mut objects: Vec<Box<dyn BACnetObject>> = vec![
+        Box::new(crate::device::DeviceObject::new(Default::default()).unwrap()),
+        Box::new(crate::lighting::LightingOutputObject::new(1, "LO").unwrap()),
+        Box::new(crate::lighting::BinaryLightingOutputObject::new(1, "BLO").unwrap()),
+        Box::new(crate::color::ColorObject::new(1, "CLR").unwrap()),
+        Box::new(crate::color::ColorTemperatureObject::new(1, "CT").unwrap()),
         Box::new(NotificationClass::new(1, "NC").unwrap()),
         Box::new(NotificationForwarderObject::new(1, "NF").unwrap()),
         Box::new(AccessRightsObject::new(1, "AR").unwrap()),

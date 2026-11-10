@@ -543,3 +543,6 @@ mod reinitialize;
 
 #[path = "device_profile_tests.rs"]
 mod device_profiles;
+
+#[path = "device_description_kept_tests.rs"]
+mod device_description;

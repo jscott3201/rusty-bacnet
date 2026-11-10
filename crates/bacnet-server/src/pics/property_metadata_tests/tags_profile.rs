@@ -84,7 +84,10 @@ impl TagsPersistence for SavedEmpty {
         &self,
         _: ObjectIdentifier,
     ) -> Result<Option<TagsSnapshot>, bacnet_types::error::Error> {
-        Ok(Some(TagsSnapshot { tags: Some(vec![]) }))
+        Ok(Some(TagsSnapshot {
+            tags: Some(vec![]),
+            description: None,
+        }))
     }
 
     fn save(

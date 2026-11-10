@@ -74,6 +74,7 @@ pub(super) fn tagged() -> (ObjectIdentifier, TagsSnapshot) {
             BACnetNameValue::semantic("site"),
             BACnetNameValue::valued("floor", PropertyValue::Unsigned(3)),
         ]),
+        description: None,
     };
     (oid(ObjectType::ANALOG_VALUE, 1), snapshot)
 }
@@ -82,6 +83,7 @@ pub(super) fn colour() -> (ObjectIdentifier, ColorOutputSnapshot) {
     let snapshot = ColorOutputSnapshot {
         present_value: Some(ColorOutputValue::Xy(BACnetXyColor::new(0.25, 0.5))),
         default: Some(ColorOutputValue::Xy(BACnetXyColor::new(0.3, 0.3))),
+        description: None,
     };
     (oid(ObjectType::COLOR, 1), snapshot)
 }
@@ -285,6 +287,7 @@ fn values_out_of_range_are_damage_in_and_refused_out() {
     let bad = ColorOutputSnapshot {
         present_value: Some(ColorOutputValue::Kelvin(5)),
         default: None,
+        description: None,
     };
     let mixed = ColorOutputSnapshot {
         default: Some(ColorOutputValue::Kelvin(2_700)),
@@ -299,6 +302,7 @@ fn values_out_of_range_are_damage_in_and_refused_out() {
     let (object, _) = tagged();
     let semicolon = TagsSnapshot {
         tags: Some(vec![BACnetNameValue::semantic("a;b")]),
+        description: None,
     };
     let error = tags::encode(object, &semicolon).unwrap_err();
     assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange);
@@ -307,6 +311,7 @@ fn values_out_of_range_are_damage_in_and_refused_out() {
         object,
         &TagsSnapshot {
             tags: Some(vec![BACnetNameValue::semantic("a:b")]),
+            description: None,
         },
     )
     .unwrap();
@@ -406,7 +411,8 @@ mod file_backends {
             }
         );
         same_octets!(FileTagsPersistence, tags, tagged(), |_| TagsSnapshot {
-            tags: Some(Vec::new())
+            tags: Some(Vec::new()),
+            description: None
         });
         same_octets!(
             FileColorOutputPersistence,
@@ -441,6 +447,7 @@ mod file_backends {
         let bad = ColorOutputSnapshot {
             present_value: Some(ColorOutputValue::Xy(BACnetXyColor::new(1.5, 0.0))),
             default: None,
+            description: None,
         };
         let error = store.save(object, &bad).unwrap_err();
         assert!(
