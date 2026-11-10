@@ -16,6 +16,8 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::print_stderr)] // opt-in checks report skipped setups outside a test function
 
+#[path = "ipv6_selected_link/claim.rs"]
+mod claim;
 #[path = "ipv6_selected_link/controls.rs"]
 mod controls;
 #[path = "ipv6_selected_link/foreign.rs"]
@@ -47,7 +49,7 @@ async fn actual_transport_selected_link(automatic: bool) {
     // Random startup exercises the production collision probe; no configured
     // Device instance or foreign-device mode is used to bypass that exchange.
     let (observer, port) = observer(index, true);
-    let mut transport = Bip6Transport::new(requested, port, None);
+    let mut transport = sharing(requested, port, None);
     let mut incoming = tokio::time::timeout(DEADLINE, transport.start())
         .await
         .expect("actual transport startup exceeded its bounded probe")

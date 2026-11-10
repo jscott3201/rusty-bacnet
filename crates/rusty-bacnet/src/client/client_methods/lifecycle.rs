@@ -105,7 +105,7 @@ impl BACnetClient {
             sc_connect_timeout_ms,
         )?;
         crate::bip_options::only_on_bip("share_port_by_address", share_port_by_address, transport)?;
-        crate::bip_options::only_on_bip("share_wildcard_port", share_wildcard_port, transport)?;
+        crate::bip_options::share_wildcard_port(share_wildcard_port, transport)?;
         let crate::bip_options::IpModes {
             bip: bip_mode,
             bip6_foreign,
@@ -249,6 +249,7 @@ impl BACnetClient {
                     let mut builder = client::BACnetClient::bip6_builder()
                         .interface(interface)
                         .port(port)
+                        .share_wildcard_port(share_wildcard_port)
                         .apdu_timeout_ms(timeout_ms)
                         .min_request_interval_ms(min_request_interval_ms);
                     if let Some(instance) = ipv6_device_instance {

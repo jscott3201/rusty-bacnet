@@ -169,7 +169,7 @@ impl BACnetServer {
             apdu_segment_timeout_ms,
         )?;
         crate::bip_options::only_on_bip("share_port_by_address", share_port_by_address, transport)?;
-        crate::bip_options::only_on_bip("share_wildcard_port", share_wildcard_port, transport)?;
+        crate::bip_options::share_wildcard_port(share_wildcard_port, transport)?;
         let crate::bip_options::IpModes {
             bip: bip_mode,
             bip6_foreign,

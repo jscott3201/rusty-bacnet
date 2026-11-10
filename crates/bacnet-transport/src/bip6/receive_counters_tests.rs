@@ -20,7 +20,7 @@ use super::receive::{Receiver, Reply, receive_failed};
 use super::receive_counters::ReceiveDrops;
 use super::reply_limit::REPLIES_PER_DESTINATION;
 use super::resolver::Resolver;
-use super::socket::{Bip6Socket, Inbound};
+use super::socket::{Bip6Socket, Inbound, PortUse, Role};
 use super::*;
 use crate::log_capture::LogCapture;
 use crate::port::{ReceivedNpdu, TransportPort};
@@ -94,7 +94,7 @@ impl Node {
         target: Option<Arc<super::foreign_target::ForeignTarget>>,
         capacity: usize,
     ) -> Self {
-        let socket = Bip6Socket::bind(Ipv6Addr::LOCALHOST, 0, super::socket::Role::Normal)
+        let socket = Bip6Socket::bind(Ipv6Addr::LOCALHOST, 0, PortUse::Claimed, Role::Normal)
             .await
             .unwrap();
         let (tx, rx) = mpsc::channel(capacity);

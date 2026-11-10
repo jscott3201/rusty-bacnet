@@ -75,6 +75,7 @@ impl Bip6ClientBuilder {
     fn prepare(self) -> (ClientConfig, Bip6Transport, ClientOptions) {
         let mut transport =
             Bip6Transport::new(self.interface, self.config.port, self.device_instance);
+        transport.set_share_wildcard_port(self.config.share_wildcard_port);
         if self.release_previous_bbmd && self.foreign_device.is_none() {
             warn!("release_previous_bbmd set without foreign_device(); it will be ignored");
         }

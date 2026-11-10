@@ -3433,13 +3433,17 @@ class BACnetClient:
         nonzero port; broadcasts and unicast are still handled in the order
         they arrived.
 
-        ``share_wildcard_port`` (B/IP only, default False): share an
-        explicitly requested port with other sockets on this host that bind
-        it the same way. By default the client claims its port, so a second
-        bind of it fails, and ``start()`` raises when another socket holds
-        it. With sharing, broadcasts reach every socket on the port, but
-        each unicast reaches only one of them; prefer
-        ``share_port_by_address`` or separate ports.
+        ``share_wildcard_port`` (B/IP and B/IPv6 only, default False): share
+        an explicitly requested port with other sockets on this host that
+        bind it the same way. By default the client claims its port, so a
+        second bind of it fails, and ``start()`` raises when another socket
+        holds it. With sharing, broadcasts reach every socket on the port,
+        but each unicast reaches only one of them; prefer
+        ``share_port_by_address`` (B/IP) or separate ports. macOS and the
+        BSDs never let two sockets share one address and port this way, so
+        there the keyword only lets a stack bound to ``0.0.0.0`` or ``::``
+        start beside one bound to a specific address (a B/IPv6 foreign
+        device), or the reverse. Another transport raises ValueError.
 
         ``min_request_interval_ms`` (default 0, no pacing; at most
         3,600,000, else ValueError) paces the confirmed requests to each
@@ -4925,13 +4929,17 @@ class BACnetServer:
         can share the port. Needs an explicit interface and a nonzero port;
         broadcasts and unicast are still handled in the order they arrived.
 
-        ``share_wildcard_port`` (B/IP only, default False): share an
-        explicitly requested port with other sockets on this host that bind
-        it the same way. By default the server claims its port, so a second
-        bind of it fails, and ``start()`` raises when another socket holds
-        it. With sharing, broadcasts reach every socket on the port, but
-        each unicast reaches only one of them; prefer
-        ``share_port_by_address`` or separate ports.
+        ``share_wildcard_port`` (B/IP and B/IPv6 only, default False): share
+        an explicitly requested port with other sockets on this host that
+        bind it the same way. By default the server claims its port, so a
+        second bind of it fails, and ``start()`` raises when another socket
+        holds it. With sharing, broadcasts reach every socket on the port,
+        but each unicast reaches only one of them; prefer
+        ``share_port_by_address`` (B/IP) or separate ports. macOS and the
+        BSDs never let two sockets share one address and port this way, so
+        there the keyword only lets a stack bound to ``0.0.0.0`` or ``::``
+        start beside one bound to a specific address (a B/IPv6 foreign
+        device), or the reverse. Another transport raises ValueError.
 
         ``bbmd`` / ``foreign_device`` (at most one, else ValueError): run
         the device as a BBMD (B/IP only), or register it with a BBMD on

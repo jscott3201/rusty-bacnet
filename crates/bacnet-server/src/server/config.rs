@@ -44,7 +44,8 @@ pub struct ServerConfig {
     /// this host, as before #2366. Off by default: the transport claims the
     /// port, so a second bind of it fails. See
     /// `BipTransport::set_share_wildcard_port` for what sharing costs. Only
-    /// the B/IP builder reads it; a transport passed to `start` has its own.
+    /// the B/IP builder reads it; a transport passed to `start` has its own
+    /// (on B/IPv6, `Bip6Transport::set_share_wildcard_port`, #2385).
     pub share_wildcard_port: bool,
     /// Device declarations shared by stock objects, discovery and active limits.
     /// Startup resolves its receive ceiling against the owned transport. An

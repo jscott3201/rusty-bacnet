@@ -61,7 +61,7 @@ pub(crate) struct Cli {
     /// way. Without it the CLI claims the port and fails at once when
     /// another program holds it. With it, each unicast to the port reaches
     /// only one of the programs on it, so replies can go astray. BACnet/IP
-    /// only.
+    /// and BACnet/IPv6 (--ipv6) only.
     #[arg(long, global = true)]
     pub(crate) share_port: bool,
 

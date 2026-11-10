@@ -809,7 +809,7 @@ client = BACnetClient(
     apdu_timeout_ms=6000,
     transport="bip",             # "bip", "ipv6", "sc", "mstp" or "router"
     share_port_by_address=False, # Keyword-only; B/IP, see "Sharing a port by address"
-    share_wildcard_port=False,   # Keyword-only; B/IP, see "Claiming the port"
+    share_wildcard_port=False,   # Keyword-only; B/IP or B/IPv6, see "Claiming the port"
     bbmd=None,                   # Keyword-only; B/IP, a Bbmd: see "BBMD and foreign-device modes"
     foreign_device=None,         # Keyword-only; B/IP or B/IPv6, a ForeignDevice; not with bbmd
     multicast=None,              # Keyword-only; B/IP, a Multicast: see "B/IP multicast"
@@ -869,9 +869,22 @@ setup that runs two stacks on one port of one host. Broadcasts then reach
 both, but each unicast reaches only one of them (on Linux the one that
 bound last), so replies can go astray; prefer `share_port_by_address=True`
 on separate addresses, or separate ports. It has no effect with `port=0`,
-which is never shared, and another transport raises `ValueError`. Two B/IP
-multicast members on one host at one unicast port need it too. See
-[Claiming the port](rust-api.md#claiming-the-port) for each OS.
+which is never shared. Two B/IP multicast members on one host at one unicast
+port need it too. See [Claiming the port](rust-api.md#claiming-the-port) for
+each OS.
+
+A client or server with `transport="ipv6"` claims its port the same way
+(#2385), in normal and in foreign-device mode, and takes
+`share_wildcard_port=True` too. Its one socket joins the BACnet multicast
+groups itself, so the claim loses it nothing; but a second B/IPv6 stack on
+the same host and port, which earlier releases let bind, now fails at start
+unless both share. With sharing, both hear the groups and each unicast
+reaches only one of them. On macOS and the BSDs two normal stacks on one
+port never both started, with or without the keyword; what changed there is
+that a normal stack and a foreign device on one port, which used to both
+start in either order, now need the keyword on whichever starts later. See
+[Claiming the port (B/IPv6)](rust-api.md#claiming-the-port-bipv6). On any
+other transport the keyword raises `ValueError`.
 
 ### Sharing a port by address
 
@@ -2919,7 +2932,7 @@ server = BACnetServer(
     broadcast_address="255.255.255.255",
     transport="bip",             # "bip", "ipv6", "sc", "mstp" or "router"
     share_port_by_address=False, # keyword-only; B/IP, see "Sharing a port by address"
-    share_wildcard_port=False,   # keyword-only; B/IP, see "Claiming the port"
+    share_wildcard_port=False,   # keyword-only; B/IP or B/IPv6, see "Claiming the port"
     bbmd=None,                   # keyword-only; B/IP, see "BBMD and foreign-device modes"
     foreign_device=None,         # keyword-only; B/IP or B/IPv6; not with bbmd
     multicast=None,              # keyword-only; B/IP, see "B/IP multicast"
