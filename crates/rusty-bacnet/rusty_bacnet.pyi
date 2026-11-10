@@ -5020,7 +5020,14 @@ class BACnetServer:
         builders keep the event algorithm parameters a peer writes there
         too (Time_Delay, Time_Delay_Normal, High_Limit, Low_Limit, Deadband
         and Limit_Enable), and the restarted object's event detection uses
-        them; the other builders' objects don't keep theirs yet.
+        them; the other builders' objects don't keep theirs yet. The
+        builders take no keyword for the six, so an application sets its own
+        with ``write_property_local``, and that write is kept like a peer's:
+        writing them at every start replaces what a peer wrote before the
+        restart. To keep a peer's values, write the application's own only
+        when the file doesn't exist yet (check before the builder call; the
+        first kept write creates it) or on a start that passes
+        ``clear_written_reporting=True``.
         ``clear_written_reporting=True`` drops what was saved first,
         Description and parameters included, so the object starts from its
         defaults. A file that doesn't load, or holds a value the object

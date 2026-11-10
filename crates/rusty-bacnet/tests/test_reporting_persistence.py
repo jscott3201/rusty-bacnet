@@ -192,6 +192,54 @@ class WrittenReportingTests(unittest.IsolatedAsyncioTestCase):
             await server.stop()
         self.assertEqual((self.state / "ai-1").read_bytes()[12], 4)
 
+    async def test_an_applications_own_parameter_writes_are_kept_like_a_peers(self) -> None:
+        """The analog builders have no limit keywords, so an application sets
+        its limits with ``write_property_local``, which is kept like a
+        peer's write. Writing them at every start replaces what a peer
+        wrote; writing them only when the storage file is new, or on a
+        start that clears, keeps a peer's values (docs/python-api.md)."""
+        file = self.state / "ai-1"
+        own = PropertyValue.real(30.0)
+        peers = PropertyValue.real(80.5)
+
+        async def run(*, seed: bool, clear: bool = False, write=None) -> PropertyValue:
+            server = await self.start(clear=clear)
+            try:
+                if seed:
+                    await server.write_property_local(
+                        ANALOG, P.HIGH_LIMIT, own, source_object=None
+                    )
+                if write is not None:
+                    await server.write_property_local(
+                        ANALOG, P.HIGH_LIMIT, write, source_object=None
+                    )
+                return await self.read(server, ANALOG, P.HIGH_LIMIT)
+            finally:
+                await server.stop()
+
+        # The guidance: seed only when the file is new. The check comes
+        # before the builder call, which doesn't create the file.
+        new = not file.exists()
+        self.assertTrue(new)
+        self.assertEqual(await run(seed=new), own)
+        self.assertTrue(file.exists())
+        # Later starts find the file and leave the limit alone: the
+        # application's value is served from it, and then a peer's.
+        self.assertEqual(await run(seed=not file.exists()), own)
+        self.assertEqual(await run(seed=not file.exists(), write=peers), peers)
+        self.assertEqual(await run(seed=not file.exists()), peers)
+
+        # Writing at every start instead replaces the peer's value for good.
+        self.assertEqual(await run(seed=True), own)
+        self.assertEqual(await run(seed=False), own)
+
+        # A clear leaves the file in place, holding nothing, and the object
+        # at its default: the application seeds again on that start.
+        self.assertEqual(await run(seed=False, clear=True), PropertyValue.real(100.0))
+        self.assertTrue(file.exists())
+        self.assertEqual(await run(seed=True, clear=True), own)
+        self.assertEqual(await run(seed=False), own)
+
 
 # One object of each further family: the Access objects and the enrollments.
 DOOR = ObjectIdentifier(ObjectType.ACCESS_DOOR, 1)

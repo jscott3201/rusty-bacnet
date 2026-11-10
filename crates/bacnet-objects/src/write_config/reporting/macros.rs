@@ -251,10 +251,11 @@ macro_rules! impl_reporting_persistence {
             /// Description and every saved event algorithm parameter, so
             /// the setters apply again, and at the next start what the
             /// application configures. The values served stay until a
-            /// setter or a write changes them. Saves before it returns; a save that fails keeps
-            /// the written settings and returns storage's error. Does nothing
-            /// without storage. Call it before the object joins the database,
-            /// as the setters are: it waits for its save.
+            /// setter or a write changes them. Saves before it returns; a
+            /// save that fails keeps the written settings and returns
+            /// storage's error. Does nothing without storage. Call it before
+            /// the object joins the database, as the setters are: it waits
+            /// for its save.
             pub fn clear_written_reporting(&mut self) -> Result<(), bacnet_types::error::Error> {
                 $crate::write_config::reporting::clear(self)
             }

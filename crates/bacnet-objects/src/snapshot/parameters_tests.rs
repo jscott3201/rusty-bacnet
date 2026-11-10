@@ -226,9 +226,70 @@ fn an_unknown_bit_is_an_unknown_kind_and_an_empty_mask_is_damage() {
     assert_eq!(error.kind(), SnapshotErrorKind::Damaged);
 }
 
-/// A parameter is kept only for an object type that has it: encoding one
-/// for another type is refused, a file holding one is damage, and
-/// `keeps_parameter` names the same set.
+/// The ten object types with a reporting store that keep no parameter in
+/// this build.
+const OTHERS: [ObjectType; 10] = [
+    ObjectType::BINARY_INPUT,
+    ObjectType::BINARY_OUTPUT,
+    ObjectType::BINARY_VALUE,
+    ObjectType::MULTI_STATE_INPUT,
+    ObjectType::MULTI_STATE_OUTPUT,
+    ObjectType::MULTI_STATE_VALUE,
+    ObjectType::ACCESS_DOOR,
+    ObjectType::ACCESS_ZONE,
+    ObjectType::EVENT_ENROLLMENT,
+    ObjectType::ALERT_ENROLLMENT,
+];
+
+/// `octets`, a kind 6 file, under kind 5 with a Description of "Lobby".
+fn described(octets: &[u8]) -> Vec<u8> {
+    let mut wrapped = octets[..12].to_vec();
+    wrapped.extend_from_slice(&[write_config::KIND_WITH_DESCRIPTION, 0, 0, 0, 5]);
+    wrapped.extend_from_slice(b"Lobby");
+    wrapped.extend_from_slice(&octets[12..]);
+    wrapped
+}
+
+/// That decoding `octets` for `object` is refused as a sound file of a
+/// newer build, an unknown kind 6, and not as damage, bare and under kind
+/// 5: a backend with two copies must stop there, not fall back to the older
+/// one.
+fn assert_a_newer_builds(object: ObjectIdentifier, octets: &[u8], what: &str) {
+    for file in [octets.to_vec(), described(octets)] {
+        let error = write_config::decode(object, &file).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            SnapshotErrorKind::UnknownKind(write_config::KIND_REPORTING_PARAMETERS),
+            "{object} {what}"
+        );
+        assert!(!error.is_damage(), "{object} {what}");
+    }
+}
+
+/// A Binary Value file with Time_Delay's bit, which the next build keeps
+/// for it, is that build's sound file: an unknown kind here, never damage,
+/// bare and under kind 5, with its row or cut before it.
+#[test]
+fn a_known_bit_the_type_does_not_keep_is_an_unknown_kind_not_damage() {
+    let kind = ObjectType::BINARY_VALUE;
+    let with_row = with_tail(kind, &[0, 0, 0, 1, 0, 0, 0, 30]);
+    assert_a_newer_builds(oid(kind), &with_row, "with its row");
+    // Refused at the mask, before a row is read: the mask alone answers the
+    // same, where a kept row cut short is truncation.
+    let mask_only = with_tail(kind, &[0, 0, 0, 1]);
+    assert_a_newer_builds(oid(kind), &mask_only, "cut after the mask");
+    // An analog file with a kept bit beside one it doesn't keep, too.
+    let analog = ObjectType::ANALOG_INPUT;
+    let mixed = with_tail(analog, &[0, 0, 0, 0x41, 0, 0, 0, 30]);
+    assert_a_newer_builds(oid(analog), &mixed, "a kept bit and a later one");
+}
+
+/// A parameter is kept only for an object type that has it. For each of
+/// the ten other types with a reporting store: `keeps_parameter` names
+/// none, a snapshot never takes kind 6 (one without a parameter keeps kind
+/// 4 and one with a parameter is refused as it is encoded), a kind 6 file
+/// with any parameter is refused as an unknown kind, and one with an empty
+/// mask is damage.
 #[test]
 fn a_parameter_of_another_object_type_is_refused() {
     let properties = [
@@ -246,19 +307,25 @@ fn a_parameter_of_another_object_type_is_refused() {
         assert!(!write_config::keeps_parameter(kind, P::NOTIFICATION_CLASS));
         assert!(!write_config::keeps_parameter(kind, P::ALARM_VALUES));
     }
-    for kind in [ObjectType::ALERT_ENROLLMENT, ObjectType::TIMER] {
+    for property in properties {
+        assert!(!write_config::keeps_parameter(ObjectType::TIMER, property));
+    }
+    for kind in OTHERS {
         for property in properties {
             assert!(!write_config::keeps_parameter(kind, property), "{kind}");
         }
-    }
-    let kind = ObjectType::ALERT_ENROLLMENT;
-    for (algorithm, bit, row) in each_alone() {
-        let error = encode(kind, algorithm).unwrap_err();
-        assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange);
-        let mut tail = bit.to_be_bytes().to_vec();
-        tail.extend_from_slice(&row);
-        let error = write_config::decode(oid(kind), &with_tail(kind, &tail)).unwrap_err();
-        assert_eq!(error.kind(), SnapshotErrorKind::Damaged, "bit {bit:#x}");
+        let plain = encode(kind, AlgorithmWriteConfig::default()).unwrap();
+        assert_eq!(plain[12], write_config::KIND_REPORTING, "{kind}");
+        for (algorithm, bit, row) in each_alone() {
+            let error = encode(kind, algorithm).unwrap_err();
+            assert_eq!(error.kind(), SnapshotErrorKind::OutOfRange, "{kind}");
+            let mut tail = bit.to_be_bytes().to_vec();
+            tail.extend_from_slice(&row);
+            assert_a_newer_builds(oid(kind), &with_tail(kind, &tail), "one bit");
+        }
+        let error = write_config::decode(oid(kind), &with_tail(kind, &[0; 4])).unwrap_err();
+        assert_eq!(error.kind(), SnapshotErrorKind::Damaged, "{kind}");
+        assert!(error.is_damage(), "{kind}");
     }
 }
 

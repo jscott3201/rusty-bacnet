@@ -45,10 +45,12 @@
 //!   each object type keeps. [`encode`] writes this kind only for a
 //!   snapshot holding a parameter, so one without keeps kind 4, octet for
 //!   octet, and a build that predates kind 6 refuses a file with one as an
-//!   unknown kind. A later parameter takes the next bit: a build that
-//!   doesn't know a set bit refuses the file as an unknown kind too, and a
-//!   set bit for a parameter the object's type doesn't keep, or no set bit
-//!   at all, is damage. Kind 5 wraps this kind as it wraps kind 4.
+//!   unknown kind. A later parameter takes the next bit, and a later build
+//!   may keep a known one for more object types: a set bit this build
+//!   doesn't keep for the object's type, known to it or not, refuses the
+//!   file as an unknown kind too, before a parameter is read, and is never
+//!   damage. No set bit at all is damage, as is a kept parameter holding a
+//!   value no write leaves. Kind 5 wraps this kind as it wraps kind 4.
 //!
 //! Every length and count above is four octets, big-endian.
 //!

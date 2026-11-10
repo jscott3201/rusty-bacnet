@@ -6,8 +6,8 @@
 //! [`AlgorithmWriteConfig`], its bit of the presence mask and its property.
 //! A parameter added later takes the next bit there, a line in [`kept`] for
 //! each object type that keeps it, and its octets in [`encode`] and
-//! [`Reader::parameters`]; the kind stays, and a build that predates the
-//! bit refuses the file.
+//! [`Reader::parameters`]; the kind stays, and a build that doesn't keep
+//! the bit for the object's type refuses the file as an unknown kind.
 
 use bacnet_types::bitstring::LimitEnable;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier as P};
@@ -31,9 +31,11 @@ pub(crate) mod bit {
     pub(crate) const DEADBAND: u32 = 1 << 4;
     /// Limit_Enable: one octet, bit 0 the low limit and bit 1 the high.
     pub(crate) const LIMIT_ENABLE: u32 = 1 << 5;
-    /// Every bit this build reads.
-    pub(crate) const KNOWN: u32 = (1 << 6) - 1;
 }
+
+/// What is wrong with a parameter outside [`kept`] for the object's type:
+/// one a later build keeps for it, or one no build does.
+const UNKEPT: &str = "holds an algorithm parameter this build doesn't keep for this object type";
 
 /// The parameter table: `field => BIT / PROPERTY` for each.
 macro_rules! rows {
@@ -107,7 +109,8 @@ pub(crate) fn kept(object_type: ObjectType) -> u32 {
 /// [`KIND_REPORTING_PARAMETERS`] file
 /// (#2331): Time_Delay, Time_Delay_Normal, High_Limit, Low_Limit, Deadband
 /// and Limit_Enable on the analog Input, Output and Value objects. A file
-/// holding a parameter for any other object type is refused.
+/// holding a parameter the object's type doesn't keep here is refused as an
+/// unknown kind: a later build may keep it.
 pub fn keeps_parameter(object_type: ObjectType, property: P) -> bool {
     bit_of(property).is_some_and(|bit| kept(object_type) & bit != 0)
 }
@@ -121,7 +124,7 @@ pub(crate) fn invalid(
     config: &AlgorithmWriteConfig,
 ) -> Option<&'static str> {
     if mask(config) & !kept(object_type) != 0 {
-        return Some("holds an algorithm parameter this object type doesn't keep");
+        return Some(UNKEPT);
     }
     let limits = [config.high_limit, config.low_limit, config.deadband];
     if limits.iter().flatten().any(|limit| !limit.is_finite()) {
@@ -167,18 +170,21 @@ pub(super) fn encode(
 
 impl Reader<'_> {
     /// The parameters after a reporting body, for an object of
-    /// `object_type`. A bit this build doesn't know is a newer build's
-    /// ([`UnknownKind`](SnapshotErrorKind::UnknownKind)); no bit at all, or
-    /// what [`invalid`] names, is damage.
+    /// `object_type`. A bit outside [`kept`] for that type, whether this
+    /// build knows it for another type or not at all, is a newer build's
+    /// sound file ([`UnknownKind`](SnapshotErrorKind::UnknownKind)), refused
+    /// before a row is read, and never damage: a backend with two copies
+    /// mustn't pass it over for an older one. No bit at all, or a kept
+    /// parameter holding what [`invalid`] names, is damage.
     pub(super) fn parameters(
         &mut self,
         object_type: ObjectType,
     ) -> Result<AlgorithmWriteConfig, SnapshotError> {
         let mask = self.u32()?;
-        if mask & !bit::KNOWN != 0 {
+        if mask & !kept(object_type) != 0 {
             return Err(SnapshotError::new(
                 SnapshotErrorKind::UnknownKind(KIND_REPORTING_PARAMETERS),
-                "holds an algorithm parameter this build doesn't know",
+                UNKEPT,
             ));
         }
         if mask == 0 {

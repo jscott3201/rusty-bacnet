@@ -8,18 +8,22 @@ use alloc::sync::Arc;
 
 use bacnet_types::bitstring::LimitEnable;
 use bacnet_types::enums::{
-    EngineeringUnits, ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier as P,
+    EngineeringUnits, ErrorClass, ErrorCode, EventState, EventType, ObjectType,
+    PropertyIdentifier as P,
 };
 use bacnet_types::error::Error;
-use bacnet_types::primitives::PropertyValue;
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::reporting_tests::{persistence, refused_with};
 use super::test_storage::MemoryConfig;
 use super::{AlgorithmWriteConfig, ReportingWriteConfig, WriteConfigSnapshot};
+use crate::access_control::{AccessDoorObject, AccessZoneObject};
 use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
-use crate::binary::BinaryValueObject;
+use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 #[cfg(feature = "durable-writes")]
 use crate::durable::{PendingWrite, StageStep};
+use crate::event_enrollment::{AlertEnrollmentObject, EventEnrollmentObject};
+use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject};
 use crate::traits::BACnetObject;
 
 const ANALOG: [ObjectType; 3] = [
@@ -484,24 +488,109 @@ fn a_stored_parameter_is_validated_as_a_write_of_it_is() {
     }
 }
 
-/// A type keeps only its own parameters: storage holding another's fails
-/// the build, and a write of a parameter the type doesn't keep is made as
-/// without storage, saving nothing.
+/// The ten object types with a reporting store that keep no parameter in
+/// this build.
+const OTHERS: [ObjectType; 10] = [
+    ObjectType::BINARY_INPUT,
+    ObjectType::BINARY_OUTPUT,
+    ObjectType::BINARY_VALUE,
+    ObjectType::MULTI_STATE_INPUT,
+    ObjectType::MULTI_STATE_OUTPUT,
+    ObjectType::MULTI_STATE_VALUE,
+    ObjectType::ACCESS_DOOR,
+    ObjectType::ACCESS_ZONE,
+    ObjectType::EVENT_ENROLLMENT,
+    ObjectType::ALERT_ENROLLMENT,
+];
+
+/// Object 1 of `kind`, one of [`OTHERS`], keeping its reporting settings
+/// in `storage`.
+fn try_other(
+    kind: ObjectType,
+    storage: &Arc<MemoryConfig>,
+) -> Result<Box<dyn BACnetObject>, Error> {
+    let kept = persistence(storage);
+    macro_rules! build {
+        ($object:expr) => {
+            Ok(Box::new($object?.with_reporting_persistence(kept)?))
+        };
+    }
+    let source = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1)?;
+    match kind {
+        ObjectType::BINARY_INPUT => build!(BinaryInputObject::new(1, "BI")),
+        ObjectType::BINARY_OUTPUT => build!(BinaryOutputObject::new(1, "BO")),
+        ObjectType::BINARY_VALUE => build!(BinaryValueObject::new(1, "BV")),
+        ObjectType::MULTI_STATE_INPUT => build!(MultiStateInputObject::new(1, "MSI", 3)),
+        ObjectType::MULTI_STATE_OUTPUT => build!(MultiStateOutputObject::new(1, "MSO", 3)),
+        ObjectType::MULTI_STATE_VALUE => build!(MultiStateValueObject::new(1, "MSV", 3)),
+        ObjectType::ACCESS_DOOR => build!(AccessDoorObject::new(1, "Door")),
+        ObjectType::ACCESS_ZONE => build!(AccessZoneObject::new(1, "Zone")),
+        ObjectType::EVENT_ENROLLMENT => build!(EventEnrollmentObject::new(
+            1,
+            "EE",
+            EventType::CHANGE_OF_STATE
+        )),
+        _ => build!(AlertEnrollmentObject::new(1, "AE", source)),
+    }
+}
+
+/// A type keeps only its own parameters. On each of the ten other types
+/// with a reporting store, storage holding any parameter fails the build,
+/// and a write of a time delay is answered as without storage, saves
+/// nothing and is gone after a rebuild: Time_Delay where the type has it,
+/// Time_Delay_Normal on an Event Enrollment, and neither on an Alert
+/// Enrollment, which refuses both.
 #[test]
 fn a_type_keeps_only_its_own_parameters() {
-    for (_, _, stored) in covered() {
-        let built = BinaryValueObject::new(1, "BV")
-            .and_then(|object| object.with_reporting_persistence(persistence(&holding(stored))));
-        assert!(matches!(built, Err(Error::Encoding(_))));
+    for kind in OTHERS {
+        for (_, _, stored) in covered() {
+            let built = try_other(kind, &holding(stored));
+            assert!(matches!(built, Err(Error::Encoding(_))), "{kind}");
+        }
+        let storage = MemoryConfig::new();
+        let mut kept = try_other(kind, &storage).unwrap();
+        let mut plain = try_other(kind, &MemoryConfig::new()).unwrap();
+        // As built: an unwritten Time_Delay_Normal reads as Time_Delay, so
+        // both are read before either is written.
+        let delays = [P::TIME_DELAY, P::TIME_DELAY_NORMAL];
+        let built = delays.map(|property| read_ok(kept.as_ref(), property));
+        for (property, before) in delays.into_iter().zip(built) {
+            let value = PropertyValue::Unsigned(7);
+            let expected = plain.write_property(property, None, value.clone(), None);
+            let result = kept.write_property(property, None, value.clone(), None);
+            assert_eq!(result.is_ok(), expected.is_ok(), "{kind} {property:?}");
+            if result.is_ok() {
+                assert_eq!(read(kept.as_ref(), property), value, "{kind}");
+            }
+            assert_eq!(storage.saves(), 0, "{kind} {property:?}");
+            let rebuilt = try_other(kind, &storage).unwrap();
+            assert_eq!(
+                read_ok(rebuilt.as_ref(), property),
+                before,
+                "{kind} {property:?} after a rebuild"
+            );
+        }
+        let taken = delays
+            .into_iter()
+            .filter(|property| {
+                read_ok(kept.as_ref(), *property) == Some(PropertyValue::Unsigned(7))
+            })
+            .count();
+        let expected = match kind {
+            ObjectType::ALERT_ENROLLMENT => 0,
+            ObjectType::EVENT_ENROLLMENT => 1,
+            _ => 2,
+        };
+        assert_eq!(taken, expected, "{kind}: the delays a write changed");
     }
-    let storage = MemoryConfig::new();
-    let mut object = BinaryValueObject::new(1, "BV")
-        .and_then(|object| object.with_reporting_persistence(persistence(&storage)))
+    let object = BinaryValueObject::new(1, "BV")
+        .and_then(|object| object.with_reporting_persistence(persistence(&MemoryConfig::new())))
         .unwrap();
-    write(&mut object, P::TIME_DELAY, PropertyValue::Unsigned(7));
-    assert_eq!(read(&object, P::TIME_DELAY), PropertyValue::Unsigned(7));
-    assert_eq!(storage.saves(), 0);
     assert_eq!(object.written_reporting(), ReportingWriteConfig::default());
+}
+
+fn read_ok(object: &dyn BACnetObject, property: P) -> Option<PropertyValue> {
+    object.read_property(property, None).ok()
 }
 
 #[cfg(feature = "durable-writes")]

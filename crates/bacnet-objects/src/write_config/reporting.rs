@@ -36,8 +36,8 @@
 //! stages it, so the save runs off the database guard; a write nobody staged
 //! saves where it is. Only the rows a write set are kept, and a kept row
 //! wins over its setter until `clear_written_reporting` drops them all,
-//! Description and the algorithm parameters included. A NULL to Description changes nothing, so it is
-//! neither saved nor staged.
+//! Description and the algorithm parameters included. A NULL to Description
+//! changes nothing, so it is neither saved nor staged.
 //!
 //! An object CreateObject builds through the built-in constructors
 //! ([`crate::creation::builtin_constructor`]) keeps nothing: an application

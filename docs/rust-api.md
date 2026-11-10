@@ -4727,13 +4727,18 @@ a restart, as before.
   them in, which never restarts a delay or changes Event_State.
 - **Validated on load.** Storage holding a value the object refuses on the
   wire, or a parameter the object's type doesn't keep, fails
-  `with_reporting_persistence`; nothing reaches the detector.
+  `with_reporting_persistence`; nothing reaches the detector. In a file, a
+  bad value is damage, and a parameter this build doesn't keep for the
+  object's type is an unknown kind (`SnapshotErrorKind::UnknownKind(6)`,
+  `is_damage()` false): a later release may keep it, so a backend with two
+  copies stops there instead of falling back to the older one.
 - **Format.** A snapshot holding a parameter is stored as kind 6 of
   `RBNWCF01` (`snapshot::write_config::KIND_REPORTING_PARAMETERS`): the kind 4
   body, then a presence mask and the parameters it names. One without keeps
   kind 4, octet for octet, so existing files are unchanged; an older release
   refuses a kind 6 file as an unknown kind. A later parameter takes a new
-  mask bit, not a new kind. `snapshot::write_config::keeps_parameter` names
+  mask bit, not a new kind, and a release that doesn't keep a set bit for
+  the object's type refuses the file the same way. `snapshot::write_config::keeps_parameter` names
   the parameters each object type keeps. Every parameter here is a fixed
   size, so the kind adds at most 25 octets to a file.
 
