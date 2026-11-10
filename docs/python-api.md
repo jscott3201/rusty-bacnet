@@ -3041,6 +3041,51 @@ the two lighting outputs among them, which keep one only through the Rust
 API's `with_tags_persistence`, and the Network Port, whose transport keeps
 only its own tables in `bdt_persist_path`.
 
+`add_analog_input`, `add_analog_output` and `add_analog_value` keep the
+event algorithm parameters a peer writes in the same file (#2331):
+Time_Delay, Time_Delay_Normal, High_Limit, Low_Limit, Deadband and
+Limit_Enable. The rules are the reporting settings': saved before the write
+is answered, refused with DEVICE / OPERATIONAL_PROBLEM when the save fails,
+with the old value still served and still used by the object's event
+detection. After a restart the object detects with the saved parameters
+from its first evaluation. `clear_written_reporting=True` drops them with
+the rest. A file holding a value the object refuses on the wire raises
+`BacnetError`. No new keyword is needed. The binary and multi-state
+objects, Access Door, Access Zone and Event Enrollment don't keep their
+parameters yet: a written Alarm_Value, Alarm_Values or Event_Parameters
+lasts until the server restarts.
+
+The analog builders take no keyword for these six parameters, so an
+application sets its own limits with `write_property_local` once the server
+has started. With `storage_path`, that write is kept exactly like a peer's:
+it is saved in the file and served again after a restart. So an application
+that writes its limits at every start replaces whatever a peer wrote before
+the restart. To keep a peer's values, write the application's own only when
+there is nothing saved to lose:
+
+```python
+import os
+
+path = "/application/state/ai-1"
+first_start = not os.path.exists(path)  # check before the builder call
+server.add_analog_input(instance=1, name="Zone Temp", units=62, storage_path=path)
+await server.start()
+if first_start:
+    await server.write_property_local(
+        ObjectIdentifier(ObjectType.ANALOG_INPUT, 1),
+        PropertyIdentifier.HIGH_LIMIT,
+        PropertyValue.real(30.0),
+        source_object=None,
+    )
+```
+
+The builder call doesn't create the file; the first kept write does. A
+start with `clear_written_reporting=True` leaves the file in place, holding
+nothing, with the object at its defaults, so write the application's values
+again on that start too. Values written this way stay in the file like any
+other written value: a changed default in a later version of the
+application takes effect only after a clear.
+
 `clear_written_reporting=True`, and `clear_written_config=True` on
 `add_timer` and `add_channel`, drop a saved Description with the rest of
 what they clear. The other builders have no keyword for it:

@@ -177,6 +177,7 @@ impl Reader<'_> {
             event_algorithm_inhibit_ref,
             event_algorithm_inhibit,
             description: None,
+            algorithm: Default::default(),
         };
         match invalid(&config) {
             Some(reason) => Err(SnapshotError::damaged(reason)),

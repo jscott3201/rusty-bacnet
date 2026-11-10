@@ -7,7 +7,8 @@ Notification_Class, Event_Enable, Notify_Type, Event_Detection_Enable,
 Event_Message_Texts_Config or the Event_Algorithm_Inhibit pair is saved in
 that file before it is answered, and a server started on the same file
 serves it again, until ``clear_written_reporting=True`` drops it. A written
-Description is kept the same way (#2364).
+Description is kept the same way (#2364), and so are an analog object's
+event algorithm parameters (#2331 PR 2).
 """
 
 from __future__ import annotations
@@ -148,6 +149,97 @@ class WrittenReportingTests(unittest.IsolatedAsyncioTestCase):
         for name in ("ai-1", "bo-1", "msv-1"):
             self.assertTrue((self.state / name).exists())
 
+    async def test_written_algorithm_parameters_survive_a_restart_until_cleared(self) -> None:
+        """An analog object keeps a written limit and time delay (#2331 PR 2);
+        the other families' parameters last until the restart, as before."""
+        written = (
+            (P.HIGH_LIMIT, PropertyValue.real(80.5), PropertyValue.real(100.0)),
+            (P.TIME_DELAY, PropertyValue.unsigned(7), PropertyValue.unsigned(0)),
+        )
+        server = await self.start()
+        try:
+            for prop, value, default in written:
+                self.assertEqual(await self.read(server, ANALOG, prop), default)
+                await server.write_property_local(ANALOG, prop, value, source_object=None)
+            for oid in (BINARY, MULTI_STATE):
+                await server.write_property_local(
+                    oid, P.TIME_DELAY, PropertyValue.unsigned(7), source_object=None
+                )
+        finally:
+            await server.stop()
+        # Kind 6 of the format: the reporting settings, then the parameters.
+        self.assertEqual((self.state / "ai-1").read_bytes()[12], 6)
+
+        server = await self.start()
+        try:
+            for prop, value, _ in written:
+                with self.subTest(prop=prop):
+                    self.assertEqual(await self.read(server, ANALOG, prop), value)
+            for oid in (BINARY, MULTI_STATE):
+                with self.subTest(not_kept=oid):
+                    self.assertEqual(
+                        await self.read(server, oid, P.TIME_DELAY), PropertyValue.unsigned(0)
+                    )
+        finally:
+            await server.stop()
+
+        server = await self.start(clear=True)
+        try:
+            for prop, _, default in written:
+                with self.subTest(cleared=prop):
+                    self.assertEqual(await self.read(server, ANALOG, prop), default)
+        finally:
+            await server.stop()
+        self.assertEqual((self.state / "ai-1").read_bytes()[12], 4)
+
+    async def test_an_applications_own_parameter_writes_are_kept_like_a_peers(self) -> None:
+        """The analog builders have no limit keywords, so an application sets
+        its limits with ``write_property_local``, which is kept like a
+        peer's write. Writing them at every start replaces what a peer
+        wrote; writing them only when the storage file is new, or on a
+        start that clears, keeps a peer's values (docs/python-api.md)."""
+        file = self.state / "ai-1"
+        own = PropertyValue.real(30.0)
+        peers = PropertyValue.real(80.5)
+
+        async def run(*, seed: bool, clear: bool = False, write=None) -> PropertyValue:
+            server = await self.start(clear=clear)
+            try:
+                if seed:
+                    await server.write_property_local(
+                        ANALOG, P.HIGH_LIMIT, own, source_object=None
+                    )
+                if write is not None:
+                    await server.write_property_local(
+                        ANALOG, P.HIGH_LIMIT, write, source_object=None
+                    )
+                return await self.read(server, ANALOG, P.HIGH_LIMIT)
+            finally:
+                await server.stop()
+
+        # The guidance: seed only when the file is new. The check comes
+        # before the builder call, which doesn't create the file.
+        new = not file.exists()
+        self.assertTrue(new)
+        self.assertEqual(await run(seed=new), own)
+        self.assertTrue(file.exists())
+        # Later starts find the file and leave the limit alone: the
+        # application's value is served from it, and then a peer's.
+        self.assertEqual(await run(seed=not file.exists()), own)
+        self.assertEqual(await run(seed=not file.exists(), write=peers), peers)
+        self.assertEqual(await run(seed=not file.exists()), peers)
+
+        # Writing at every start instead replaces the peer's value for good.
+        self.assertEqual(await run(seed=True), own)
+        self.assertEqual(await run(seed=False), own)
+
+        # A clear leaves the file in place, holding nothing, and the object
+        # at its default: the application seeds again on that start.
+        self.assertEqual(await run(seed=False, clear=True), PropertyValue.real(100.0))
+        self.assertTrue(file.exists())
+        self.assertEqual(await run(seed=True, clear=True), own)
+        self.assertEqual(await run(seed=False), own)
+
 
 # One object of each further family: the Access objects and the enrollments.
 DOOR = ObjectIdentifier(ObjectType.ACCESS_DOOR, 1)
@@ -230,6 +322,36 @@ def ack_notification_file(object_type: int, instance: int) -> bytes:
     identifier = struct.pack(">I", (object_type << 22) | instance)
     body = bytes([4, 0, 0, 1]) + struct.pack(">I", 2) + bytes([0, 0, 0, 0])
     return b"RBNWCF01" + identifier + body
+
+
+def high_limit_file(object_type: int, instance: int, limit: float) -> bytes:
+    """A written-configuration file of kind 6 holding only a High_Limit: no
+    reporting setting, then the presence mask (bit 2) and the limit as an
+    IEEE 754 single.
+    """
+    identifier = struct.pack(">I", (object_type << 22) | instance)
+    body = bytes([6, 0, 0, 0, 0, 0, 0, 0]) + struct.pack(">If", 1 << 2, limit)
+    return b"RBNWCF01" + identifier + body
+
+
+class AlgorithmParameterFileTests(unittest.TestCase):
+    def test_a_stored_limit_the_object_refuses_on_the_wire_fails_the_build(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            server = BACnetServer(2_331_005, interface="127.0.0.1", port=0)
+            analog = ObjectType.ANALOG_INPUT.to_raw()
+            refused = Path(directory) / "ai-1"
+            refused.write_bytes(high_limit_file(analog, 1, float("nan")))
+            with self.assertRaises(BacnetError):
+                server.add_analog_input(1, "AI-1", storage_path=str(refused))
+            # A binary object keeps no High_Limit: the file isn't one of its.
+            binary = Path(directory) / "bi-1"
+            binary.write_bytes(high_limit_file(ObjectType.BINARY_INPUT.to_raw(), 1, 80.5))
+            with self.assertRaises(BacnetError):
+                server.add_binary_input(1, "BI-1", storage_path=str(binary))
+            # The same file with a finite limit loads.
+            taken = Path(directory) / "ai-2"
+            taken.write_bytes(high_limit_file(analog, 2, 80.5))
+            server.add_analog_input(2, "AI-2", storage_path=str(taken))
 
 
 class NotifyTypeFileTests(unittest.TestCase):

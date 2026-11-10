@@ -538,12 +538,13 @@ fn a_write_nobody_staged_supersedes_a_staged_one() {
 fn only_kept_rows_stage() {
     let storage = MemoryConfig::new();
     let mut object = ai(&storage);
-    let limit = PendingWrite {
-        property: P::HIGH_LIMIT,
+    // High_Limit is kept now (#2331 PR 2); COV_Increment isn't.
+    let increment = PendingWrite {
+        property: P::COV_INCREMENT,
         array_index: None,
-        value: PropertyValue::Real(50.0),
+        value: PropertyValue::Real(0.5),
     };
-    assert!(matches!(object.stage_writes(&[limit]), StageStep::Skip));
+    assert!(matches!(object.stage_writes(&[increment]), StageStep::Skip));
     let indexed = PendingWrite {
         array_index: Some(1),
         ..class_write(3)

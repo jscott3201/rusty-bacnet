@@ -24,10 +24,11 @@ use bacnet_objects::notification_forwarder::{
 };
 use bacnet_objects::object_profile::{FileTagsPersistence, TagsPersistence, TagsSnapshot};
 use bacnet_objects::write_config::{
-    ChannelMembers, ChannelWriteConfig, FileWriteConfigPersistence, ReportingWriteConfig,
-    TimerStateChange, TimerWriteConfig, WriteConfigPersistence, WriteConfigSnapshot,
+    AlgorithmWriteConfig, ChannelMembers, ChannelWriteConfig, FileWriteConfigPersistence,
+    ReportingWriteConfig, TimerStateChange, TimerWriteConfig, WriteConfigPersistence,
+    WriteConfigSnapshot,
 };
-use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits, LogStatus};
+use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits, LimitEnable, LogStatus};
 use bacnet_types::constructed::{
     BACnetAccessRule, BACnetAuditLogDatum, BACnetAuditLogRecord, BACnetAuditLogRecordResult,
     BACnetDestination, BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference,
@@ -233,6 +234,36 @@ pub fn reporting_write_config(path: &Path) {
 pub fn described_reporting_write_config(path: &Path) {
     let snapshot = reporting_config(Some("Lobby"));
     save_write_config(path, ObjectType::ANALOG_INPUT, &snapshot);
+}
+
+/// An Analog Input's written reporting settings and every event algorithm
+/// parameter it keeps (#2331 PR 2): kind 6.
+pub fn parameters_reporting_write_config(path: &Path) {
+    let snapshot = with_parameters(reporting_config(None));
+    save_write_config(path, ObjectType::ANALOG_INPUT, &snapshot);
+}
+
+/// The same with a written Description: kind 5 around kind 6.
+pub fn described_parameters_reporting_write_config(path: &Path) {
+    let snapshot = with_parameters(reporting_config(Some("Lobby")));
+    save_write_config(path, ObjectType::ANALOG_INPUT, &snapshot);
+}
+
+/// `snapshot`, reporting settings, with every parameter an analog object
+/// keeps written.
+fn with_parameters(mut snapshot: WriteConfigSnapshot) -> WriteConfigSnapshot {
+    let WriteConfigSnapshot::Reporting(settings) = &mut snapshot else {
+        unreachable!("reporting settings");
+    };
+    let mut algorithm = AlgorithmWriteConfig::default();
+    algorithm.time_delay = Some(30);
+    algorithm.time_delay_normal = Some(5);
+    algorithm.high_limit = Some(80.5);
+    algorithm.low_limit = Some(-12.25);
+    algorithm.deadband = Some(1.5);
+    algorithm.limit_enable = Some(LimitEnable::HIGH_LIMIT_ENABLE);
+    settings.algorithm = algorithm;
+    snapshot
 }
 
 fn reporting_config(description: Option<&str>) -> WriteConfigSnapshot {

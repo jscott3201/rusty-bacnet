@@ -25,7 +25,7 @@
 //! | --- | --- | --- | --- | --- |
 //! | [`log`] | [`LogSnapshot`] | `RBLOGS01` | 1, 2, 3 (2, 3) | `FileLogPersistence`, one slot of two |
 //! | [`audit_log`] | [`AuditLogSnapshot`] | `RBALOG01` | 1, 2, 3 (3) | `FileAuditLogPersistence`, one slot of two |
-//! | [`write_config`] | [`WriteConfigSnapshot`] | `RBNWCF01` | kinds 1 to 5 (2 to 5) | `FileWriteConfigPersistence` |
+//! | [`write_config`] | [`WriteConfigSnapshot`] | `RBNWCF01` | kinds 1 to 6 (2 to 6) | `FileWriteConfigPersistence` |
 //! | [`notification_class`] | [`NotificationClassSnapshot`] | `RBNNCL01` | 1, 2 (1, 2) | `FileNotificationClassPersistence` |
 //! | [`notification_forwarder`] | [`ForwarderSnapshot`] | `RBNFWD01` | 1, 2 (1, 2) | `FileNotificationForwarderPersistence` |
 //! | [`tags`] | [`TagsSnapshot`] | `RBNTAG01` | 1, 2 (1, 2) | `FileTagsPersistence` |
@@ -39,7 +39,9 @@
 //! way, so a snapshot without one keeps the octets an earlier release wrote,
 //! and a release that predates the version refuses one with it as
 //! [`UnknownVersion`](SnapshotErrorKind::UnknownVersion) or
-//! [`UnknownKind`](SnapshotErrorKind::UnknownKind).
+//! [`UnknownKind`](SnapshotErrorKind::UnknownKind). A written event
+//! algorithm parameter (#2331) takes write configuration kind 6 the same
+//! way.
 //!
 //! The one-file formats share a header: the eight-octet tag, which names the
 //! format and its version, then the four-octet identifier of the object the
@@ -147,6 +149,8 @@ mod described_tests;
 mod description_tests;
 #[cfg(test)]
 mod one_file_tests;
+#[cfg(test)]
+mod parameters_tests;
 #[cfg(test)]
 mod reporting_tests;
 #[cfg(test)]

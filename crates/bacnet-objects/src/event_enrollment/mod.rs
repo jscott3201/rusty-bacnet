@@ -45,6 +45,7 @@ macro_rules! keep_enrollment_reporting {
                     event_detection_enable: self.event_detection_enable,
                     options: self.event_history.options.clone(),
                     description: self.description.clone(),
+                    algorithm: Default::default(),
                 }
             }
 
