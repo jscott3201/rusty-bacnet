@@ -134,12 +134,13 @@
 //! ([`TimedHistories::lodge`]), which is given back at its deadline if its
 //! holder never settled it. [`TimedHistories::take_due`] acts on both.
 //!
-//! **Unstable until #2320's second part.** The module is public so that
-//! `bacnet-server` can run on it while the rest of the path is still the
-//! server's. That part moves the split of a report to the subscriber's APDU
-//! size in here, and with it [`ITEM_FRAMING`], [`value_len`] and
-//! [`request_header`] leave the public surface; [`TimedClaim`]'s splits and
-//! the settling calls may change shape as a `Reporter` takes them over.
+//! **Unstable until #2320's last part.** The module is public so that
+//! `bacnet-server` can run on it while the fanout that strings its calls
+//! together is still the server's. The split of a report to the subscriber's
+//! APDU size is in the core now
+//! ([`multiple_chunks`](super::multiple_chunks)), so the sizing helpers it
+//! needs are private to the crate again. [`TimedClaim`]'s splits and the
+//! settling calls may still change shape as a `Reporter` takes them over.
 
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::vec;
@@ -155,7 +156,7 @@ use super::{CovObservation, CovSubscriptionKey, MultipleContextKey};
 pub(crate) const HISTORY_NOTIFICATIONS: usize = 4;
 /// Octets of one item's framing: its context-tagged object identifier (5) and
 /// the opening and closing tags of its value list (2).
-pub const ITEM_FRAMING: usize = 7;
+pub(crate) const ITEM_FRAMING: usize = 7;
 /// Bytes each pending change counts against its context's memory ceiling for
 /// itself, in its slot of the history's queue (#1357), and
 /// [`CAPTURE_ALLOWANCE`]. The room for notification items does not count it
@@ -223,7 +224,7 @@ fn unsigned_len(value: u64) -> usize {
 /// Encoded octets of one entry of a COV-multiple value list: its property
 /// identifier, optional array index, the value between its opening and closing
 /// tags, and its Time_Of_Change when present.
-pub fn value_len(value: &COVNotificationValue) -> usize {
+pub(crate) fn value_len(value: &COVNotificationValue) -> usize {
     unsigned_len(u64::from(value.property_identifier.to_raw()))
         + value
             .property_array_index
@@ -1103,7 +1104,7 @@ mod drops;
 mod owed;
 use bound::Held;
 pub(crate) use bound::envelope_len;
-pub use bound::request_header;
+pub(crate) use bound::request_header;
 pub use claim::{ClaimId, Settlement, TimedClaim, ValueFit};
 use drops::DropWarnings;
 pub use drops::{DropReason, Dropped};

@@ -32,7 +32,7 @@ const LIST_TAGS: usize = 2;
 
 /// Octets of the APDU header before a COV-multiple notification's service
 /// request, confirmed or not; a notification is never segmented.
-pub fn request_header(confirmed: bool) -> usize {
+pub(crate) fn request_header(confirmed: bool) -> usize {
     if confirmed {
         CONFIRMED_HEADER
     } else {

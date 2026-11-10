@@ -1,37 +1,38 @@
 //! Item assembly for one COV-multiple notification: queued timestamped history
 //! followed by one current value per coordinate.
-use std::collections::{BTreeMap, BTreeSet};
+use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::vec::Vec;
 
 use bacnet_objects::clock::ClockFrame;
 use bacnet_services::cov_multiple::{COVNotificationItem, COVNotificationValue};
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::ObjectIdentifier;
 
-use bacnet_device_core::cov::CovSubscriptionKey;
-use bacnet_device_core::cov::CovSubscriptionSnapshot;
-use bacnet_device_core::cov::multiple_reads::MultipleReads;
-use bacnet_device_core::cov::timed::TimedChange;
+use super::CovSubscriptionKey;
+use super::CovSubscriptionSnapshot;
+use super::multiple_reads::MultipleReads;
+use super::timed::TimedChange;
 
 /// Object, property and index of a subscribed coordinate.
-pub(super) type Coordinate = (ObjectIdentifier, Option<PropertyIdentifier>, Option<u32>);
+pub type Coordinate = (ObjectIdentifier, Option<PropertyIdentifier>, Option<u32>);
 
 /// Each retained reference with its prepared current values (empty for a
 /// timestamped reference, whose latest change in [`Latest`] supplies them).
-pub(super) type Retained<'a> = [(&'a CovSubscriptionSnapshot, &'a [COVNotificationValue])];
+pub type Retained<'a> = [(&'a CovSubscriptionSnapshot, &'a [COVNotificationValue])];
 
 /// Queued history conveyed as distinct timestamped values, in capture order.
-pub(super) type History<'a> = [(&'a CovSubscriptionKey, &'a TimedChange)];
+pub type History<'a> = [(&'a CovSubscriptionKey, &'a TimedChange)];
 
 /// The latest change a notification carries of each timestamped reference,
 /// conveyed as its current state. A reference without one conveys no change
 /// in that notification: its changes went out in an earlier one (#1008).
-pub(super) type Latest<'a> = BTreeMap<&'a CovSubscriptionKey, &'a TimedChange>;
+pub type Latest<'a> = BTreeMap<&'a CovSubscriptionKey, &'a TimedChange>;
 
 /// Capture sequence and clock frame of a change whose time a value carries.
-pub(super) type LastChange = (u64, ClockFrame);
+pub type LastChange = (u64, ClockFrame);
 
 /// How to time a current value that would otherwise go out untimed.
-pub(super) enum FieldStamp {
+pub enum FieldStamp {
     /// No timestamped reference that conveys no change now owns its coordinate.
     Unowned,
     /// Its owner's field takes the time of this change.
@@ -42,7 +43,7 @@ pub(super) enum FieldStamp {
 
 /// Times a current value of a coordinate whose timestamped reference conveys
 /// no change now, given the value's encoding.
-pub(super) type Stamp<'a> = dyn Fn(&Coordinate, &[u8]) -> FieldStamp + 'a;
+pub type Stamp<'a> = dyn Fn(&Coordinate, &[u8]) -> FieldStamp + 'a;
 
 /// Build the items of one notification: `history`, then, unless `retained` is
 /// `None` (a notification carrying history only), the current state of the
@@ -52,7 +53,7 @@ pub(super) type Stamp<'a> = dyn Fn(&Coordinate, &[u8]) -> FieldStamp + 'a;
 /// subscribes without timestamps, and `stamp` times the current values
 /// described above. Returns the items and the newest change whose time `stamp`
 /// gave them.
-pub(super) fn build_items(
+pub(crate) fn build_items(
     history: &History<'_>,
     retained: Option<&Retained<'_>>,
     latest: &Latest<'_>,

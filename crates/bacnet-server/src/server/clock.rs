@@ -584,7 +584,7 @@ mod tests {
             Some(bacnet_types::bitstring::DaysOfWeek::THURSDAY)
         );
         assert_eq!(
-            crate::server::cov_notifications::multiple_chunks::cov_multiple_datetime(frame),
+            bacnet_device_core::cov::multiple_chunks::cov_multiple_datetime(frame),
             (frame.local_date, frame.local_time)
         );
     }

@@ -23,6 +23,10 @@ mod identity;
 pub mod life_safety;
 mod lifetime;
 #[cfg(feature = "cov-multiple")]
+pub mod multiple_chunks;
+#[cfg(feature = "cov-multiple")]
+pub mod multiple_items;
+#[cfg(feature = "cov-multiple")]
 pub mod multiple_reads;
 mod observation;
 mod observation_order;

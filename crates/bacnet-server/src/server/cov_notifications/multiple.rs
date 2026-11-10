@@ -1,11 +1,11 @@
 use super::super::cov_notify_context::{CovFanoutHandles, CovNotifyContext};
 use super::confirmed::ConfirmedReport;
-use super::multiple_chunks::{
-    Envelope, ReportContent, Split, request_limit, split, untimed_octets,
-};
-use super::multiple_items::{Coordinate, FieldStamp};
 use super::*;
 use crate::cov::timed_store::{ClaimGuard, SendTurn};
+use bacnet_device_core::cov::multiple_chunks::{
+    Envelope, ReportContent, Split, request_limit, split, untimed_octets,
+};
+use bacnet_device_core::cov::multiple_items::{Coordinate, FieldStamp};
 use bacnet_device_core::cov::multiple_reads::MultipleReads;
 use bacnet_device_core::cov::timed::{FieldTiming, TimedChange};
 use std::collections::BTreeSet;
