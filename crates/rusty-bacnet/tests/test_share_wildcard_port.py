@@ -54,12 +54,12 @@ class ShareWildcardPortTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_held_port_fails_the_start_and_says_why(self):
         # A claiming owner's error names the keyword; a sharing one's says
-        # the holder doesn't share. Windows decides a sharing bind beside a
+        # the port can't be shared. Windows decides a sharing bind beside a
         # socket that set no options by the two sockets' accounts (Microsoft's
         # SO_REUSEADDR table), so only the claiming case runs there.
         cases = [(False, "share_wildcard_port")]
         if sys.platform != "win32":
-            cases.append((True, "refuses sharing"))
+            cases.append((True, "can't be shared"))
         for family, make in [(socket.AF_INET, owners), (socket.AF_INET6, ipv6_owners)]:
             with holder(family) as held:
                 port = held.getsockname()[1]
@@ -84,15 +84,21 @@ class ShareWildcardPortTests(unittest.IsolatedAsyncioTestCase):
                 second = ipv6_owners(port, True)[0]
                 # Another process can take the probed port: rerun then.
                 await asyncio.wait_for(first.start(), 10)
+                started = False
                 try:
                     if first_shares and sys.platform != "darwin":
                         await asyncio.wait_for(second.__aenter__(), 10)
-                        await second.__aexit__(None, None, None)
+                        started = True
                     else:
+                        # On macOS the first may have asked to share too:
+                        # the message blames no one.
                         with self.assertRaises(Exception) as raised:
                             await asyncio.wait_for(second.__aenter__(), 10)
-                        self.assertIn("refuses sharing", str(raised.exception))
+                            started = True
+                        self.assertIn("can't be shared", str(raised.exception))
                 finally:
+                    if started:
+                        await second.__aexit__(None, None, None)
                     await first.stop()
 
         await rerun_on_lost_port(run)

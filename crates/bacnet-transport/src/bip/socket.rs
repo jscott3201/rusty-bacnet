@@ -500,9 +500,7 @@ pub(super) fn group_shape_listener_failed(
     port: u16,
     error: io::Error,
 ) -> io::Result<()> {
-    let held = error.kind() == io::ErrorKind::AddrInUse
-        || (cfg!(windows) && error.kind() == io::ErrorKind::PermissionDenied);
-    if held {
+    if super::listener_error::port_held(&error) {
         let context = format!("UDP port {port} on {ip} is in use on this host");
         return Err(super::listener_error::listener_error(context, error));
     }
@@ -563,30 +561,23 @@ pub(super) fn wildcard_role(plan: &BindPlan) -> SocketRole {
 
 /// A primary bind's error: on a requested port that another socket holds,
 /// it says so and names the opt-in, and keeps the OS error as its source,
-/// so its OS code survives (#2231).
+/// so its OS code survives (#2231). B/IPv6 words it the same way
+/// (`listener_error::held_port_error`).
 fn held(plan: &BindPlan, role: SocketRole, e: io::Error) -> io::Error {
-    // Windows refuses a bind beside a socket that holds the port with
-    // `SO_EXCLUSIVEADDRUSE` as WSAEACCES.
-    let held = e.kind() == io::ErrorKind::AddrInUse
-        || (cfg!(windows) && e.kind() == io::ErrorKind::PermissionDenied);
-    if !plan.requested_port || !held {
+    use super::listener_error::{HeldBind, HeldTransport, held_port_error, port_held};
+    if !plan.requested_port || !port_held(&e) {
         return e;
     }
     let port = plan.port;
-    let context = if role == SocketRole::SharedWildcard {
-        format!("UDP port {port} is in use on this host by a socket that refuses sharing")
-    } else if role == SocketRole::Address {
-        let ip = plan.interface;
-        format!("UDP port {port} on {ip} is in use on this host")
-    } else {
-        format!(
-            "UDP port {port} is in use on this host, and a B/IP transport doesn't share its \
-             port by default; stop the other program, use another port, or share the port \
-             (share_wildcard_port, or --share-port in the CLI), after which unicast reaches \
-             only one of the sockets on it"
-        )
+    let (place, bind) = match role {
+        SocketRole::SharedWildcard => (format!("UDP port {port}"), HeldBind::Sharing),
+        SocketRole::Address => {
+            let ip = plan.interface;
+            (format!("UDP port {port} on {ip}"), HeldBind::Address)
+        }
+        _ => (format!("UDP port {port}"), HeldBind::Claiming),
     };
-    super::listener_error::listener_error(context, e)
+    held_port_error(HeldTransport::Bip, &place, bind, e)
 }
 
 /// Set up a B/IP-M node's group, if it has one (multicast.rs): the primary

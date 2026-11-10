@@ -190,13 +190,17 @@ impl Bip6Transport {
     /// and its own broadcasts' echoes as before. A foreign device binds
     /// its own address, and claims that address and port.
     ///
-    /// By OS: Linux and Windows refuse every later bind of a claimed port
-    /// that could take its unicast, and with sharing on let one in. macOS
-    /// and the BSDs refuse a second socket on `[::]`, or on a foreign
-    /// device's address, with or without sharing; but they let a socket
-    /// that sets `SO_REUSEADDR` bind a specific address beside a normal
-    /// node's `[::]`, claimed or not, and it then gets the unicast sent
-    /// there. They have no option to refuse it. See `docs/rust-api.md`
+    /// By OS: Linux and Windows refuse every later bind of a normal
+    /// node's claimed port, and of a foreign device's claimed address and
+    /// port, and with sharing on let one in. Linux also refuses `[::]`
+    /// beside a foreign device's claimed address; what Windows does there
+    /// isn't verified. macOS and the BSDs refuse a second socket on `[::]`,
+    /// or on a foreign device's address, with or without sharing; but they
+    /// let a socket that sets `SO_REUSEADDR` bind a specific address beside
+    /// a normal node's `[::]`, claimed or not, and it then gets the unicast
+    /// sent there. They have no option to refuse it. So there a normal node
+    /// and a foreign device on one port, which both started before #2385,
+    /// now need sharing on whichever starts later. See `docs/rust-api.md`
     /// (BIP6, Claiming the port).
     pub fn set_share_wildcard_port(&mut self, enabled: bool) {
         self.share_wildcard_port = enabled;

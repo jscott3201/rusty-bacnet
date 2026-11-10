@@ -402,7 +402,7 @@ mod tests {
 
     /// `--share-port` reaches the B/IP client builder (#2366): on a port
     /// another socket holds, the claiming client's error names the opt-in,
-    /// and a sharing one's says the holder doesn't share. Windows decides a
+    /// and a sharing one's says the port can't be shared. Windows decides a
     /// sharing bind beside a socket that set no options by the two sockets'
     /// accounts (Microsoft's SO_REUSEADDR table), so only the claiming case
     /// runs there.
@@ -410,7 +410,7 @@ mod tests {
     async fn the_share_port_flag_reaches_the_bip_client() {
         let holder = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).unwrap();
         let port = holder.local_addr().unwrap().port().to_string();
-        for (share, says) in [(false, "share_wildcard_port"), (true, "refuses sharing")] {
+        for (share, says) in [(false, "share_wildcard_port"), (true, "can't be shared")] {
             if share && cfg!(windows) {
                 continue;
             }
@@ -438,7 +438,7 @@ mod tests {
     async fn the_share_port_flag_reaches_the_bip6_client() {
         let holder = std::net::UdpSocket::bind((Ipv6Addr::UNSPECIFIED, 0)).unwrap();
         let port = holder.local_addr().unwrap().port().to_string();
-        for (share, says) in [(false, "share_wildcard_port"), (true, "refuses sharing")] {
+        for (share, says) in [(false, "share_wildcard_port"), (true, "can't be shared")] {
             if share && cfg!(windows) {
                 continue;
             }

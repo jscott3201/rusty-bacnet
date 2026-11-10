@@ -165,7 +165,7 @@ async fn a_requested_port_refuses_a_second_bind_by_default() {
     // One that asks to share is told the holder doesn't.
     let sharing = second_bind(port, PortUse::Shared, Role::Normal).await;
     assert!(lost_to_another_socket(&sharing), "{sharing}");
-    assert!(sharing.to_string().contains("refuses sharing"), "{sharing}");
+    assert!(sharing.to_string().contains("can't be shared"), "{sharing}");
 }
 
 #[tokio::test]
@@ -279,7 +279,7 @@ async fn a_second_transport_on_a_requested_port_starts_only_when_both_share() {
             };
             assert!(lost_to_another_socket(&refused), "{refused}");
             let shown = refused.to_string();
-            assert!(shown.contains("refuses sharing"), "{shown}");
+            assert!(shown.contains("can't be shared"), "{shown}");
             assert!(shown.contains(&place), "{shown}");
             first.stop().await.unwrap();
 
@@ -298,6 +298,100 @@ async fn a_second_transport_on_a_requested_port_starts_only_when_both_share() {
             assert!(shown.contains("share_wildcard_port"), "{shown}");
             assert!(shown.contains(&place), "{shown}");
             first.stop().await.unwrap();
+            Ok(())
+        })
+        .await;
+    }
+}
+
+/// A normal node and a foreign device on one port of one host, which both
+/// set `SO_REUSEADDR` and both started before #2385, in either order: `[::]`
+/// and a specific address. Claiming, the later one is refused on every OS.
+/// macOS and the BSDs let the later one in once it alone shares (their
+/// specific-address gap); Linux wants both to share.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_normal_node_and_a_foreign_device_on_one_port_need_the_opt_in() {
+    let bbmd = std::net::UdpSocket::bind((LOCAL, 0)).unwrap();
+    let bbmd = (LOCAL, bbmd.local_addr().unwrap().port());
+    for foreign_first in [false, true] {
+        rerun_on_lost_port(async || {
+            let port = free_port();
+            // `later` is the second to start: the foreign device, or the
+            // normal node when the foreign device goes first.
+            let transport = |later: bool, share| {
+                let foreign = later != foreign_first;
+                let instance = if foreign { 11 } else { 10 };
+                let mut transport = Bip6Transport::new(LOCAL, port, Some(instance));
+                if foreign {
+                    transport.register_as_foreign_device(Bip6ForeignDeviceConfig {
+                        bbmd: bbmd.into(),
+                        ttl: 300,
+                    });
+                }
+                transport.set_share_wildcard_port(share);
+                transport
+            };
+            for (first_shares, later_shares, starts) in [
+                (false, false, false),
+                (false, true, SPECIFIC_ADDRESS_GAP),
+                (true, true, true),
+            ] {
+                let mut first = transport(false, first_shares);
+                let _rx = first.start().await.map_err(bind_error)?;
+                let mut later = transport(true, later_shares);
+                let started = later.start().await;
+                assert_eq!(
+                    started.is_ok(),
+                    starts,
+                    "foreign first: {foreign_first}, shares: {first_shares} {later_shares}: {:?}",
+                    started.err()
+                );
+                if starts {
+                    later.stop().await.unwrap();
+                }
+                first.stop().await.unwrap();
+            }
+            Ok(())
+        })
+        .await;
+    }
+}
+
+/// A claimed B/IP transport and a claimed B/IPv6 one take the same port
+/// number on one host, as a router between the two does on 47808, whichever
+/// starts first: the B/IPv6 socket is IPv6 only, so the two never meet.
+#[tokio::test]
+async fn a_claimed_bip_and_a_claimed_bip6_transport_take_one_port_number() {
+    use crate::bip::BipTransport;
+    use std::net::Ipv4Addr;
+
+    /// A port number free on IPv4 and IPv6 alike.
+    fn free_on_both() -> u16 {
+        loop {
+            let port = free_port();
+            if std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port)).is_ok() {
+                return port;
+            }
+        }
+    }
+    for bip_first in [true, false] {
+        rerun_on_lost_port(async || {
+            let port = free_on_both();
+            let mut bip = BipTransport::new(Ipv4Addr::LOCALHOST, port, Ipv4Addr::BROADCAST);
+            let mut bip6 = Bip6Transport::new(LOCAL, port, Some(10));
+            let (_rx, _rx6) = if bip_first {
+                let rx = bip.start().await.map_err(bind_error)?;
+                (rx, bip6.start().await.map_err(bind_error)?)
+            } else {
+                let rx6 = bip6.start().await.map_err(bind_error)?;
+                (bip.start().await.map_err(bind_error)?, rx6)
+            };
+            // A B/IP MAC is the address and then the port.
+            assert_eq!(bip.local_mac()[4..], port.to_be_bytes());
+            assert_eq!(bip6.local_address().map(|bound| bound.port()), Some(port));
+            bip.stop().await.unwrap();
+            bip6.stop().await.unwrap();
             Ok(())
         })
         .await;

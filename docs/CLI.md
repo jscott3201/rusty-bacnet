@@ -117,7 +117,11 @@ two programs share a port on `0.0.0.0` this way. On BACnet/IPv6 (`--ipv6`)
 the port is claimed and shared the same way, with or without
 `--foreign-bbmd`: a second B/IPv6 program on the host and port, which earlier
 releases let in, now needs `--share-port` on both, and then both hear the
-multicast groups while each unicast reaches only one. `--share-port` has no
+multicast groups while each unicast reaches only one. On macOS and the BSDs
+two normal B/IPv6 programs on one port never both started, with or without
+the flag; what changed there is that a normal one and a foreign device
+(`--foreign-bbmd`) on one port, which used to both start in either order, now
+need `--share-port` on whichever starts later. `--share-port` has no
 effect with `-p 0`, nor on BACnet/SC or MS/TP. A named B/IP profile
 keeps the choice as `share_port = true` in its `[bip]` table; `bacnet tui
 --profile NAME --share-port` turns it on for that run, and `bacnet mcp serve

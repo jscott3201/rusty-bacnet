@@ -3439,8 +3439,11 @@ class BACnetClient:
         second bind of it fails, and ``start()`` raises when another socket
         holds it. With sharing, broadcasts reach every socket on the port,
         but each unicast reaches only one of them; prefer
-        ``share_port_by_address`` (B/IP) or separate ports. Another
-        transport raises ValueError.
+        ``share_port_by_address`` (B/IP) or separate ports. macOS and the
+        BSDs never let two sockets share one address and port this way, so
+        there the keyword only lets a stack bound to ``0.0.0.0`` or ``::``
+        start beside one bound to a specific address (a B/IPv6 foreign
+        device), or the reverse. Another transport raises ValueError.
 
         ``min_request_interval_ms`` (default 0, no pacing; at most
         3,600,000, else ValueError) paces the confirmed requests to each
@@ -4932,8 +4935,11 @@ class BACnetServer:
         second bind of it fails, and ``start()`` raises when another socket
         holds it. With sharing, broadcasts reach every socket on the port,
         but each unicast reaches only one of them; prefer
-        ``share_port_by_address`` (B/IP) or separate ports. Another
-        transport raises ValueError.
+        ``share_port_by_address`` (B/IP) or separate ports. macOS and the
+        BSDs never let two sockets share one address and port this way, so
+        there the keyword only lets a stack bound to ``0.0.0.0`` or ``::``
+        start beside one bound to a specific address (a B/IPv6 foreign
+        device), or the reverse. Another transport raises ValueError.
 
         ``bbmd`` / ``foreign_device`` (at most one, else ValueError): run
         the device as a BBMD (B/IP only), or register it with a BBMD on

@@ -879,9 +879,12 @@ A client or server with `transport="ipv6"` claims its port the same way
 groups itself, so the claim loses it nothing; but a second B/IPv6 stack on
 the same host and port, which earlier releases let bind, now fails at start
 unless both share. With sharing, both hear the groups and each unicast
-reaches only one of them. See [Claiming the port
-(B/IPv6)](rust-api.md#claiming-the-port-bipv6). On any other transport the
-keyword raises `ValueError`.
+reaches only one of them. On macOS and the BSDs two normal stacks on one
+port never both started, with or without the keyword; what changed there is
+that a normal stack and a foreign device on one port, which used to both
+start in either order, now need the keyword on whichever starts later. See
+[Claiming the port (B/IPv6)](rust-api.md#claiming-the-port-bipv6). On any
+other transport the keyword raises `ValueError`.
 
 ### Sharing a port by address
 

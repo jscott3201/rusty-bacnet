@@ -49,6 +49,9 @@ async fn explicit_claimed_port_refuses_a_second_bind_and_keeps_group_echo_and_un
         let mut incoming = transport.start().await.map_err(bind_error)?;
         let local = transport.local_address().unwrap();
         assert_eq!((*local.ip(), local.port()), (selected, port));
+        // This fixture builds for Linux, Android, FreeBSD and Apple targets
+        // only (see the crate attribute), so Windows, which refuses each of
+        // these with its own error code, is not a case here.
         for address in [Ipv6Addr::UNSPECIFIED, selected, GROUP] {
             let refused =
                 address.is_unspecified() || cfg!(any(target_os = "linux", target_os = "android"));

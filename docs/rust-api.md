@@ -1487,6 +1487,10 @@ and port: another bind of the same address and port is refused on every OS,
 whatever options it sets. Linux refuses `[::]` on the port as well. macOS
 and the BSDs let a socket that sets `SO_REUSEADDR` or `SO_REUSEPORT` bind
 `[::]` there, and it gets none of the unicast sent to the device's address.
+So on macOS and the BSDs a normal node and a foreign device on one port,
+which both started in either order through 0.15, now need the opt-in on
+whichever starts later. What Windows does with `[::]` beside a foreign
+device's address isn't verified.
 
 `Bip6Transport::set_share_wildcard_port(true)` (the B/IPv6 client builder's
 `.share_wildcard_port(true)`, which sets `ClientConfig::share_wildcard_port`;

@@ -276,7 +276,7 @@ async fn bip_builder_shares_the_port_by_address_only_with_an_address() {
 
 /// The B/IP builder hands `share_wildcard_port` to its transport (#2366): on a
 /// port another socket holds, a claiming transport's error names the opt-in,
-/// and a sharing one's says the holder doesn't share. Windows decides a
+/// and a sharing one's says the port can't be shared. Windows decides a
 /// sharing bind beside a socket that set no options by the two sockets'
 /// accounts (Microsoft's SO_REUSEADDR table), so only the claiming case runs
 /// there.
@@ -284,7 +284,7 @@ async fn bip_builder_shares_the_port_by_address_only_with_an_address() {
 async fn bip_builder_hands_its_wildcard_sharing_choice_to_the_transport() {
     let holder = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).unwrap();
     let port = holder.local_addr().unwrap().port();
-    for (share, says) in [(false, "share_wildcard_port"), (true, "refuses sharing")] {
+    for (share, says) in [(false, "share_wildcard_port"), (true, "can't be shared")] {
         if share && cfg!(windows) {
             continue;
         }
@@ -309,7 +309,7 @@ async fn bip_builder_hands_its_wildcard_sharing_choice_to_the_transport() {
 async fn bip6_builder_hands_its_wildcard_sharing_choice_to_the_transport() {
     let holder = std::net::UdpSocket::bind((Ipv6Addr::UNSPECIFIED, 0)).unwrap();
     let port = holder.local_addr().unwrap().port();
-    for (share, says) in [(false, "share_wildcard_port"), (true, "refuses sharing")] {
+    for (share, says) in [(false, "share_wildcard_port"), (true, "can't be shared")] {
         if share && cfg!(windows) {
             continue;
         }

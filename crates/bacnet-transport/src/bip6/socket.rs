@@ -16,9 +16,10 @@
 //! stop it.
 //!
 //! A foreign device binds `address:port`. Its claim refuses another bind of
-//! that address and port on every OS, and of `[::]:port` on Linux and
-//! Windows. macOS and the BSDs let an `SO_REUSEADDR` socket bind `[::]:port`
-//! beside it, which gets none of the unicast sent to the device's address.
+//! that address and port on every OS, and of `[::]:port` on Linux. macOS and
+//! the BSDs let an `SO_REUSEADDR` socket bind `[::]:port` beside it, which
+//! gets none of the unicast sent to the device's address. What Windows does
+//! with `[::]:port` there isn't verified.
 
 use std::{
     io,
@@ -93,15 +94,13 @@ fn udp_socket(port: u16, port_use: PortUse) -> io::Result<socket2::Socket> {
 }
 
 /// A bind's error. On a requested port that another socket holds it says
-/// so and names the opt-in, as B/IP's does (#2366), and keeps the OS error
-/// as its source, so its OS code survives (#2231).
+/// so and names the opt-in, in B/IP's words (#2366,
+/// `listener_error::held_port_error`), and keeps the OS error as its
+/// source, so its OS code survives (#2231).
 fn held(bound: SocketAddrV6, port_use: PortUse, e: io::Error) -> io::Error {
-    // Windows refuses a bind beside a socket that holds the port with
-    // `SO_EXCLUSIVEADDRUSE` as WSAEACCES.
-    let held = e.kind() == io::ErrorKind::AddrInUse
-        || (cfg!(windows) && e.kind() == io::ErrorKind::PermissionDenied);
+    use crate::bip::listener_error::{HeldBind, HeldTransport, held_port_error, port_held};
     let port = bound.port();
-    if port == 0 || !held {
+    if port == 0 || !port_held(&e) {
         return e;
     }
     // A foreign device binds its own address.
@@ -110,18 +109,11 @@ fn held(bound: SocketAddrV6, port_use: PortUse, e: io::Error) -> io::Error {
     } else {
         format!("UDP port {port} on {}", bound.ip())
     };
-    let context = match port_use {
-        PortUse::Shared => {
-            format!("{place} is in use on this host by a socket that refuses sharing")
-        }
-        PortUse::Claimed => format!(
-            "{place} is in use on this host, and a B/IPv6 transport doesn't share its port by \
-             default; stop the other program, use another port, or share the port \
-             (share_wildcard_port, or --share-port in the CLI), after which unicast reaches \
-             only one of the sockets on it"
-        ),
+    let bind = match port_use {
+        PortUse::Shared => HeldBind::Sharing,
+        PortUse::Claimed => HeldBind::Claiming,
     };
-    crate::bip::listener_error::listener_error(context, e)
+    held_port_error(HeldTransport::Bip6, &place, bind, e)
 }
 
 impl Bip6Socket {
