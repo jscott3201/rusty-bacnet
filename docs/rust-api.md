@@ -6793,7 +6793,8 @@ the network numbered as this device's own, once the server knows that number
 device on the local network: the WriteProperty goes to its final MAC with no
 DNET, not through its router, and the answer is awaited from that MAC
 (#1358). Each attempt waits `ServerConfig::cov_retry_timeout_ms` (3
-seconds by default) for the answer, and only silence earns another attempt,
+seconds by default; 0 is refused when the server starts, and a very small
+value makes the report deadlines and hold-offs tight, #2412) for the answer, and only silence earns another attempt,
 up to three retries under the one invoke ID. An Error (BUSY included), Reject
 or Abort fails the command at once. Nothing is sent while
 DeviceCommunicationControl restricts initiation, a Who-Is included, and the

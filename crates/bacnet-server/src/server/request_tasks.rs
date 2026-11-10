@@ -127,6 +127,7 @@ impl RequestTasks {
         config.read_range_budget.validate()?;
         config.get_event_information_budget.validate()?;
         config.cov_policy.validate()?;
+        config.validate_cov_retry_timeout()?;
         tasks.2 = config
             .dcc_disable_rate_limit
             .map(super::dcc_disable_rate::Bucket::new)
