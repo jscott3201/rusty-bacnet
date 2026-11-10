@@ -58,6 +58,16 @@ pub struct ServerConfig {
     /// completed, before the next retry. The transport bounds the send itself.
     /// It is also the base of the COV hold-off after a failed confirmed report,
     /// one full retry cycle: this timeout times the attempts (#896).
+    ///
+    /// Starting a server with 0 fails, with an error naming this field:
+    /// every report's deadline would be the instant it begins. Any other
+    /// value is accepted, but a very small one makes the timing tight. A
+    /// report's deadline, the hold-off after a failed one and the cutoff
+    /// at which its worker ends all shrink with the timeout, and a worker
+    /// delayed on a loaded host, by the COV table's lock for example, can
+    /// outlive its deadline, so the table treats a report still being sent
+    /// as abandoned (#2412). Keep it well above how long a loaded host
+    /// takes to answer.
     pub cov_retry_timeout_ms: u64,
     /// Opt-in inbound time-sync restrictions; default allows all, with no step cap.
     pub time_sync_policy: TimeSyncPolicy,
@@ -238,6 +248,18 @@ impl std::fmt::Debug for ServerConfig {
 }
 
 impl ServerConfig {
+    /// Refuse a zero `cov_retry_timeout_ms`, whose confirmed reports would
+    /// have a deadline equal to their start (#2412). No other value is
+    /// refused.
+    pub(crate) fn validate_cov_retry_timeout(&self) -> Result<(), bacnet_types::error::Error> {
+        if self.cov_retry_timeout_ms == 0 {
+            return Err(bacnet_types::error::Error::Encoding(
+                "cov_retry_timeout_ms is 0; it must be at least 1 millisecond".into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// The installed policy, if it decides mutations
     /// ([`ServerPolicy::decides_mutations`]). `None` takes the no-policy
     /// path: allowed without decoding for authorization.
