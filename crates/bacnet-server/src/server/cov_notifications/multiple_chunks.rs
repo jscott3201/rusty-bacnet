@@ -36,12 +36,12 @@ use tracing::warn;
 
 use super::cov_clock::cov_multiple_datetime;
 use super::multiple_items::{Coordinate, History, Latest, Retained, Stamp, build_items};
-use crate::cov::multiple_reads::MultipleReads;
 use crate::cov::timed::{
     ITEM_FRAMING, TimedChange, TimedClaim, ValueFit, request_header, value_len,
 };
 use bacnet_device_core::cov::CovSubscriptionKey;
 use bacnet_device_core::cov::CovSubscriptionSnapshot;
+use bacnet_device_core::cov::multiple_reads::MultipleReads;
 
 /// Envelope fields every notification of one report shares.
 pub(super) struct Envelope {

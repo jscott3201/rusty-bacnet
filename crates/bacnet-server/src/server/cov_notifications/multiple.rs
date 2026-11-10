@@ -3,8 +3,8 @@ use super::confirmed::ConfirmedReport;
 use super::multiple_chunks::{Envelope, Part, ReportContent, request_limit, split, untimed_octets};
 use super::multiple_items::{Coordinate, FieldStamp};
 use super::*;
-use crate::cov::multiple_reads::MultipleReads;
 use crate::cov::timed::{FieldTiming, SendTurn, TimedChange, TimedClaim};
+use bacnet_device_core::cov::multiple_reads::MultipleReads;
 use std::collections::HashSet;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {

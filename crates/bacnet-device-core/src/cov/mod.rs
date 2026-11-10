@@ -22,6 +22,8 @@ mod flight;
 mod identity;
 pub mod life_safety;
 mod lifetime;
+#[cfg(feature = "cov-multiple")]
+pub mod multiple_reads;
 mod observation;
 mod observation_order;
 mod policy;
