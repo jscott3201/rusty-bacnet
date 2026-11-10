@@ -5000,7 +5000,7 @@ class BACnetServer:
         ...
 
     # --- Analog objects ---
-    def add_analog_input(self, instance: int, name: str, units: EngineeringUnits | int = 62, present_value: float = 0.0, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
+    def add_analog_input(self, instance: int, name: str, units: EngineeringUnits | int = 62, present_value: float = 0.0, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, high_limit: float | None = None, low_limit: float | None = None, deadband: float | None = None, limit_enable: BitString | None = None, time_delay: int | None = None, time_delay_normal: int | None = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
         """``tags``, ``profile_location`` and ``profile_name`` provision the
         optional Tags, Profile_Location and Profile_Name rows; each is served
         only when given. Tags takes writes over the network, the other two
@@ -5023,15 +5023,7 @@ class BACnetServer:
         Low_Limit, Deadband and Limit_Enable on the analog ones, Alarm_Value
         on a Binary Input or Value, and Alarm_Values on a Multi-state Input
         or Value. ``add_access_door``, ``add_access_zone`` and
-        ``add_event_enrollment`` keep theirs too, as each says. The
-        analog, binary and multi-state builders take no keyword for these
-        parameters, so an
-        application sets its own with ``write_property_local``, and that
-        write is kept like a peer's: writing them at every start replaces
-        what a peer wrote before the restart. To keep a peer's values, write
-        the application's own only when the file doesn't exist yet (check
-        before the builder call; the first kept write creates it) or on a
-        start that passes ``clear_written_reporting=True``.
+        ``add_event_enrollment`` keep theirs too, as each says.
         ``clear_written_reporting=True`` drops what was saved first,
         Description and parameters included, so the object starts from its
         defaults. A file that doesn't load, or holds a value the object
@@ -5045,12 +5037,32 @@ class BACnetServer:
         within its states is written. Every analog, binary and
         multi-state builder takes both, as do ``add_access_door``,
         ``add_access_zone``, ``add_event_enrollment`` and
-        ``add_alert_enrollment``."""
+        ``add_alert_enrollment``.
+
+        The parameter keywords configure those parameters (#2410):
+        ``high_limit``, ``low_limit`` and ``deadband`` (floats),
+        ``limit_enable`` (a ``BitString`` of two bits, low limit first, the
+        form a read of Limit_Enable gives: ``BitString(6, b"\x40")`` enables
+        the high limit alone), and ``time_delay`` and ``time_delay_normal``
+        (seconds) on the analog builders; ``alarm_value`` (0 for INACTIVE, 1
+        for ACTIVE) and the delays on a Binary Input or Value;
+        ``alarm_values`` (a list of states) and the delays on a Multi-state
+        Input or Value; the delays alone on a Binary or Multi-state Output.
+        None leaves the object's default. Each value is checked as a write
+        of the property is, and one the object refuses raises
+        BacnetProtocolError: VALUE_OUT_OF_RANGE for a non-finite limit, a
+        negative deadband, an ``alarm_value`` past 1 or a state of 0 or
+        past ``number_of_states``. A negative delay raises OverflowError.
+        The keywords apply before storage attaches, so they are never saved:
+        a value a peer wrote and the file holds is served over its keyword,
+        and the keyword applies again on a start that passes
+        ``clear_written_reporting=True``. A ``write_property_local`` of a
+        parameter after the builder call is kept like a peer's write."""
         ...
-    def add_analog_output(self, instance: int, name: str, units: EngineeringUnits | int = 62, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
-        """Profile keywords as on ``add_analog_input``."""
+    def add_analog_output(self, instance: int, name: str, units: EngineeringUnits | int = 62, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, high_limit: float | None = None, low_limit: float | None = None, deadband: float | None = None, limit_enable: BitString | None = None, time_delay: int | None = None, time_delay_normal: int | None = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
+        """Profile and parameter keywords as on ``add_analog_input``."""
         ...
-    def add_analog_value(self, instance: int, name: str, units: EngineeringUnits | int = 62, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
+    def add_analog_value(self, instance: int, name: str, units: EngineeringUnits | int = 62, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, high_limit: float | None = None, low_limit: float | None = None, deadband: float | None = None, limit_enable: BitString | None = None, time_delay: int | None = None, time_delay_normal: int | None = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
         """Optional AV Audit rows: None is absent; priority 'inherit' is present NULL.
 
         ``present_value_access`` is ``"commandable"`` (writes go through
@@ -5060,30 +5072,32 @@ class BACnetServer:
         object: the writer of the last Present_Value write, who alone may
         then correct it. A commandable object tracks its sources through
         Priority_Array already, so asking it to track raises ValueError.
-        Profile keywords as on ``add_analog_input``."""
+        Profile and parameter keywords as on ``add_analog_input``."""
         ...
 
     # --- Binary objects ---
-    def add_binary_input(self, instance: int, name: str, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
-        """Profile keywords as on ``add_analog_input``."""
+    def add_binary_input(self, instance: int, name: str, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
+        """Profile and parameter keywords as on ``add_analog_input``."""
         ...
-    def add_binary_output(self, instance: int, name: str, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
-        """Profile keywords as on ``add_analog_input``."""
+    def add_binary_output(self, instance: int, name: str, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, time_delay: int | None = None, time_delay_normal: int | None = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
+        """Profile and parameter keywords as on ``add_analog_input``."""
         ...
-    def add_binary_value(self, instance: int, name: str, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
+    def add_binary_value(self, instance: int, name: str, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
         """Optional BV Audit rows: None is absent; priority 'inherit' is present NULL.
-        Access, Value_Source and profile keywords as on ``add_analog_value``."""
+        Access, Value_Source and profile keywords as on ``add_analog_value``,
+        parameter keywords as on ``add_analog_input``."""
         ...
 
     # --- Multi-state objects ---
-    def add_multistate_input(self, instance: int, name: str, number_of_states: int, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
-        """Profile keywords as on ``add_analog_input``."""
+    def add_multistate_input(self, instance: int, name: str, number_of_states: int, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_values: list[int] | None = None, time_delay: int | None = None, time_delay_normal: int | None = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
+        """Profile and parameter keywords as on ``add_analog_input``."""
         ...
-    def add_multistate_output(self, instance: int, name: str, number_of_states: int, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
-        """Profile keywords as on ``add_analog_input``."""
+    def add_multistate_output(self, instance: int, name: str, number_of_states: int, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, time_delay: int | None = None, time_delay_normal: int | None = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
+        """Profile and parameter keywords as on ``add_analog_input``."""
         ...
-    def add_multistate_value(self, instance: int, name: str, number_of_states: int, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
-        """Access, Value_Source and profile keywords as on ``add_analog_value``."""
+    def add_multistate_value(self, instance: int, name: str, number_of_states: int, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_values: list[int] | None = None, time_delay: int | None = None, time_delay_normal: int | None = None, storage_path: Optional[str] = None, clear_written_reporting: bool = False) -> None:
+        """Access, Value_Source and profile keywords as on ``add_analog_value``,
+        parameter keywords as on ``add_analog_input``."""
         ...
 
     # --- Date/time/pattern objects ---
@@ -7284,22 +7298,25 @@ class BipEndpoint:
         unconfirmed requests aren't paced."""
         ...
 
-    def add_analog_input(self, instance: int, name: str, units: EngineeringUnits | int = 62, present_value: float = 0.0, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
+    def add_analog_input(self, instance: int, name: str, units: EngineeringUnits | int = 62, present_value: float = 0.0, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, high_limit: float | None = None, low_limit: float | None = None, deadband: float | None = None, limit_enable: BitString | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
         """Profile keywords as on ``BACnetServer.add_analog_input``: each
-        provisions its optional row, served only when given."""
+        provisions its optional row, served only when given. The parameter
+        keywords set those parameters as there, with the same checks."""
         ...
-    def add_analog_value(self, instance: int, name: str, units: EngineeringUnits | int = 62, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
+    def add_analog_value(self, instance: int, name: str, units: EngineeringUnits | int = 62, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, high_limit: float | None = None, low_limit: float | None = None, deadband: float | None = None, limit_enable: BitString | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
         """Optional AV Audit rows: None is absent; priority 'inherit' is present NULL.
-        Access, Value_Source and profile keywords as on
+        Access, Value_Source, profile and parameter keywords as on
         ``BACnetServer.add_analog_value``; tracking on a commandable object
         raises ValueError."""
         ...
-    def add_binary_input(self, instance: int, name: str, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
-        """Profile keywords as on ``add_analog_input``."""
+    def add_binary_input(self, instance: int, name: str, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
+        """Profile keywords as on ``add_analog_input``, ``alarm_value`` and
+        the delays as on ``BACnetServer.add_binary_input``."""
         ...
-    def add_binary_value(self, instance: int, name: str, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
+    def add_binary_value(self, instance: int, name: str, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
         """Optional BV Audit rows: None is absent; priority 'inherit' is present NULL.
-        Access, Value_Source and profile keywords as on ``add_analog_value``."""
+        Access, Value_Source and profile keywords as on ``add_analog_value``,
+        ``alarm_value`` and the delays as on ``BACnetServer.add_binary_value``."""
         ...
     def add_audit_reporter(self, instance: int, name: str, *, audit_level: Literal["none", "audit_config", "audit_all"], auditable_operations: int, issue_confirmed_notifications: bool = False) -> None:
         """Add an Audit Reporter for ``source_audit_reporter`` to select
@@ -7450,22 +7467,25 @@ class ScEndpoint:
         ``connection_status()``."""
         ...
 
-    def add_analog_input(self, instance: int, name: str, units: EngineeringUnits | int = 62, present_value: float = 0.0, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
+    def add_analog_input(self, instance: int, name: str, units: EngineeringUnits | int = 62, present_value: float = 0.0, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, high_limit: float | None = None, low_limit: float | None = None, deadband: float | None = None, limit_enable: BitString | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
         """Profile keywords as on ``BACnetServer.add_analog_input``: each
-        provisions its optional row, served only when given."""
+        provisions its optional row, served only when given. The parameter
+        keywords set those parameters as there, with the same checks."""
         ...
-    def add_analog_value(self, instance: int, name: str, units: EngineeringUnits | int = 62, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
+    def add_analog_value(self, instance: int, name: str, units: EngineeringUnits | int = 62, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, high_limit: float | None = None, low_limit: float | None = None, deadband: float | None = None, limit_enable: BitString | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
         """Optional AV Audit rows: None is absent; priority 'inherit' is present NULL.
-        Access, Value_Source and profile keywords as on
+        Access, Value_Source, profile and parameter keywords as on
         ``BACnetServer.add_analog_value``; tracking on a commandable object
         raises ValueError."""
         ...
-    def add_binary_input(self, instance: int, name: str, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
-        """Profile keywords as on ``add_analog_input``."""
+    def add_binary_input(self, instance: int, name: str, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
+        """Profile keywords as on ``add_analog_input``, ``alarm_value`` and
+        the delays as on ``BACnetServer.add_binary_input``."""
         ...
-    def add_binary_value(self, instance: int, name: str, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
+    def add_binary_value(self, instance: int, name: str, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
         """Optional BV Audit rows: None is absent; priority 'inherit' is present NULL.
-        Access, Value_Source and profile keywords as on ``add_analog_value``."""
+        Access, Value_Source and profile keywords as on ``add_analog_value``,
+        ``alarm_value`` and the delays as on ``BACnetServer.add_binary_value``."""
         ...
     def add_audit_reporter(self, instance: int, name: str, *, audit_level: Literal["none", "audit_config", "audit_all"], auditable_operations: int, issue_confirmed_notifications: bool = False) -> None:
         """Add an Audit Reporter for ``source_audit_reporter`` to select
@@ -7636,22 +7656,25 @@ class MstpEndpoint:
         endpoint's own."""
         ...
 
-    def add_analog_input(self, instance: int, name: str, units: EngineeringUnits | int = 62, present_value: float = 0.0, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
+    def add_analog_input(self, instance: int, name: str, units: EngineeringUnits | int = 62, present_value: float = 0.0, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, high_limit: float | None = None, low_limit: float | None = None, deadband: float | None = None, limit_enable: BitString | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
         """Profile keywords as on ``BACnetServer.add_analog_input``: each
-        provisions its optional row, served only when given."""
+        provisions its optional row, served only when given. The parameter
+        keywords set those parameters as there, with the same checks."""
         ...
-    def add_analog_value(self, instance: int, name: str, units: EngineeringUnits | int = 62, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
+    def add_analog_value(self, instance: int, name: str, units: EngineeringUnits | int = 62, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, high_limit: float | None = None, low_limit: float | None = None, deadband: float | None = None, limit_enable: BitString | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
         """Optional AV Audit rows: None is absent; priority 'inherit' is present NULL.
-        Access, Value_Source and profile keywords as on
+        Access, Value_Source, profile and parameter keywords as on
         ``BACnetServer.add_analog_value``; tracking on a commandable object
         raises ValueError."""
         ...
-    def add_binary_input(self, instance: int, name: str, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
-        """Profile keywords as on ``add_analog_input``."""
+    def add_binary_input(self, instance: int, name: str, *, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
+        """Profile keywords as on ``add_analog_input``, ``alarm_value`` and
+        the delays as on ``BACnetServer.add_binary_input``."""
         ...
-    def add_binary_value(self, instance: int, name: str, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None) -> None:
+    def add_binary_value(self, instance: int, name: str, *, present_value_access: Literal["commandable", "writable", "read_only"] = "commandable", value_source_tracking: bool = False, audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None, auditable_operations: int | None = None, audit_priority_filter: int | Literal["inherit"] | None = None, tags: Optional[list[NameValue]] = None, profile_location: Optional[str] = None, profile_name: Optional[str] = None, alarm_value: int | None = None, time_delay: int | None = None, time_delay_normal: int | None = None) -> None:
         """Optional BV Audit rows: None is absent; priority 'inherit' is present NULL.
-        Access, Value_Source and profile keywords as on ``add_analog_value``."""
+        Access, Value_Source and profile keywords as on ``add_analog_value``,
+        ``alarm_value`` and the delays as on ``BACnetServer.add_binary_value``."""
         ...
     def add_audit_reporter(self, instance: int, name: str, *, audit_level: Literal["none", "audit_config", "audit_all"], auditable_operations: int, issue_confirmed_notifications: bool = False) -> None:
         """Add an Audit Reporter for ``source_audit_reporter`` to select

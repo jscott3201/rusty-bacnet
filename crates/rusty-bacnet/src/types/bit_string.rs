@@ -104,6 +104,14 @@ impl PyBitString {
         }
     }
 
+    /// The bit string as a property value, in its wire form (#2410).
+    pub(crate) fn to_value(&self) -> bacnet_types::primitives::PropertyValue {
+        bacnet_types::primitives::PropertyValue::BitString {
+            unused_bits: self.unused_bits,
+            data: self.data.clone(),
+        }
+    }
+
     fn bit_count(&self) -> usize {
         (self.data.len() * 8).saturating_sub(usize::from(self.unused_bits))
     }
