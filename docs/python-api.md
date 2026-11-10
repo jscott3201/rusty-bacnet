@@ -3144,12 +3144,13 @@ server.add_analog_input(
 
 The limits and the deadband are floats; `limit_enable` is a `BitString` of
 two bits, low limit first, the form a read of Limit_Enable gives; the delays
-are seconds; `alarm_value` is 0 for INACTIVE or 1 for ACTIVE; and
+are seconds; `alarm_value` takes 0 or 1 (INACTIVE or ACTIVE); and
 `alarm_values` is a list of states. `None`, the default, leaves the object's
 own value. Each value is checked as a write of the property is, so one the
 object refuses raises `BacnetProtocolError` from the builder: a non-finite
 limit, a negative deadband, an `alarm_value` past 1 or a state of 0 or past
-`number_of_states` with VALUE_OUT_OF_RANGE. A negative delay raises
+`number_of_states` with VALUE_OUT_OF_RANGE, and a `limit_enable` that isn't
+two bits wide with INVALID_DATA_ENCODING. A negative delay raises
 `OverflowError`.
 
 The keywords are the application's configuration. They are applied before

@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import math
+import struct
 import tempfile
 import unittest
 from pathlib import Path
@@ -204,6 +205,64 @@ class KeywordStorageTests(unittest.IsolatedAsyncioTestCase):
             await server.stop()
 
 
+def saved_parameters(file: Path) -> int:
+    """The presence mask of a kind-6 file whose object saved no reporting
+    setting: bit 0 Time_Delay, 2 High_Limit, 4 Deadband, 7 Alarm_Values."""
+    octets = file.read_bytes()
+    assert octets[12] == 6, octets[12]
+    return struct.unpack(">I", octets[20:24])[0]
+
+
+class MixedRestoreTests(unittest.IsolatedAsyncioTestCase):
+    """A peer's write of one parameter is kept; the keywords for the others
+    stay the application's, so a changed keyword takes effect at the next
+    start (#2410)."""
+
+    async def asyncSetUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.state = Path(directory.name)
+
+    async def start(self, deadband: float, alarm_values: list[int]) -> BACnetServer:
+        server = BACnetServer(2_410_005, interface="127.0.0.1", port=0)
+        server.add_analog_input(1, "AI", high_limit=30.0, deadband=deadband, time_delay=5,
+                                storage_path=str(self.state / "ai"))
+        server.add_multistate_value(1, "MSV", 3, alarm_values=alarm_values, time_delay=5,
+                                    storage_path=str(self.state / "msv"))
+        await server.start()
+        return server
+
+    async def test_a_peers_write_is_kept_and_a_changed_keyword_applies(self) -> None:
+        ai = ObjectIdentifier(O.ANALOG_INPUT, 1)
+        msv = ObjectIdentifier(O.MULTI_STATE_VALUE, 1)
+        server = await self.start(deadband=1.0, alarm_values=[2])
+        try:
+            await server.write_property_local(ai, P.HIGH_LIMIT, PropertyValue.real(80.5),
+                                              source_object=None)
+            await server.write_property_local(msv, P.TIME_DELAY, PropertyValue.unsigned(9),
+                                              source_object=None)
+        finally:
+            await server.stop()
+
+        server = await self.start(deadband=2.5, alarm_values=[1, 3])
+        try:
+            served = (
+                (ai, P.HIGH_LIMIT, PropertyValue.real(80.5)),
+                (ai, P.DEADBAND, PropertyValue.real(2.5)),
+                (ai, P.TIME_DELAY, PropertyValue.unsigned(5)),
+                (msv, P.TIME_DELAY, PropertyValue.unsigned(9)),
+                (msv, P.ALARM_VALUES, states(1, 3)),
+            )
+            for oid, prop, value in served:
+                with self.subTest(oid=oid, prop=prop):
+                    self.assertEqual(await server.read_property(oid, prop), value)
+        finally:
+            await server.stop()
+        # Each file holds the peer's parameter alone.
+        self.assertEqual(saved_parameters(self.state / "ai"), 1 << 2)
+        self.assertEqual(saved_parameters(self.state / "msv"), 1 << 0)
+
+
 class KeywordDetectionTests(unittest.IsolatedAsyncioTestCase):
     async def test_event_detection_uses_the_keyword_values(self) -> None:
         """Each family raises an alarm only its keyword value causes: the
@@ -256,8 +315,10 @@ class KeywordRefusalTests(unittest.TestCase):
                 with self.subTest(keywords=keywords):
                     self.assert_refused(lambda: server.add_analog_value(
                         1, "AV", storage_path=path, **keywords))
-            with self.assertRaises(BacnetProtocolError):
-                server.add_analog_input(1, "AI", limit_enable=BitString(5, b"\x40"))
+            # Limit_Enable is two bits wide; three are a malformed encoding.
+            self.assert_refused(
+                lambda: server.add_analog_input(1, "AI", limit_enable=BitString(5, b"\x40")),
+                ErrorCode.INVALID_DATA_ENCODING)
             self.assert_refused(lambda: server.add_binary_value(1, "BV", alarm_value=2))
             for refused in ([0], [1, 4]):
                 with self.subTest(alarm_values=refused):

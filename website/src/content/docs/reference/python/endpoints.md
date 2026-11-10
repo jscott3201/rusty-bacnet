@@ -111,8 +111,22 @@ def add_analog_input(
     name: str,
     units: EngineeringUnits | int = 62,
     present_value: float = 0.0,
+    *,
+    tags: Optional[list[NameValue]] = None,
+    profile_location: Optional[str] = None,
+    profile_name: Optional[str] = None,
+    high_limit: float | None = None,
+    low_limit: float | None = None,
+    deadband: float | None = None,
+    limit_enable: BitString | None = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
 ) -> None
 ```
+
+Profile keywords as on `BACnetServer.add_analog_input`: each
+provisions its optional row, served only when given. The parameter
+keywords set those parameters as there, with the same checks.
 
 ### BipEndpoint.add_analog_value
 
@@ -123,19 +137,47 @@ def add_analog_value(
     name: str,
     units: EngineeringUnits | int = 62,
     *,
+    present_value_access: Literal["commandable", "writable", "read_only"] = "commandable",
+    value_source_tracking: bool = False,
     audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None,
     auditable_operations: int | None = None,
     audit_priority_filter: int | Literal["inherit"] | None = None,
+    tags: Optional[list[NameValue]] = None,
+    profile_location: Optional[str] = None,
+    profile_name: Optional[str] = None,
+    high_limit: float | None = None,
+    low_limit: float | None = None,
+    deadband: float | None = None,
+    limit_enable: BitString | None = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
 ) -> None
 ```
 
 Optional AV Audit rows: None is absent; priority 'inherit' is present NULL.
+Access, Value\_Source, profile and parameter keywords as on
+`BACnetServer.add_analog_value`; tracking on a commandable object
+raises ValueError.
 
 ### BipEndpoint.add_binary_input
 
 ```python
-def add_binary_input(self, instance: int, name: str) -> None
+def add_binary_input(
+    self,
+    instance: int,
+    name: str,
+    *,
+    tags: Optional[list[NameValue]] = None,
+    profile_location: Optional[str] = None,
+    profile_name: Optional[str] = None,
+    alarm_value: int | None = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
+) -> None
 ```
+
+Profile keywords as on `add_analog_input`, `alarm_value` and
+the delays as on `BACnetServer.add_binary_input`.
 
 ### BipEndpoint.add_binary_value
 
@@ -145,13 +187,23 @@ def add_binary_value(
     instance: int,
     name: str,
     *,
+    present_value_access: Literal["commandable", "writable", "read_only"] = "commandable",
+    value_source_tracking: bool = False,
     audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None,
     auditable_operations: int | None = None,
     audit_priority_filter: int | Literal["inherit"] | None = None,
+    tags: Optional[list[NameValue]] = None,
+    profile_location: Optional[str] = None,
+    profile_name: Optional[str] = None,
+    alarm_value: int | None = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
 ) -> None
 ```
 
 Optional BV Audit rows: None is absent; priority 'inherit' is present NULL.
+Access, Value\_Source and profile keywords as on `add_analog_value`,
+`alarm_value` and the delays as on `BACnetServer.add_binary_value`.
 
 ### BipEndpoint.add_group
 
@@ -313,8 +365,22 @@ def add_analog_input(
     name: str,
     units: EngineeringUnits | int = 62,
     present_value: float = 0.0,
+    *,
+    tags: Optional[list[NameValue]] = None,
+    profile_location: Optional[str] = None,
+    profile_name: Optional[str] = None,
+    high_limit: float | None = None,
+    low_limit: float | None = None,
+    deadband: float | None = None,
+    limit_enable: BitString | None = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
 ) -> None
 ```
+
+Profile keywords as on `BACnetServer.add_analog_input`: each
+provisions its optional row, served only when given. The parameter
+keywords set those parameters as there, with the same checks.
 
 ### ScEndpoint.add_analog_value
 
@@ -325,19 +391,47 @@ def add_analog_value(
     name: str,
     units: EngineeringUnits | int = 62,
     *,
+    present_value_access: Literal["commandable", "writable", "read_only"] = "commandable",
+    value_source_tracking: bool = False,
     audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None,
     auditable_operations: int | None = None,
     audit_priority_filter: int | Literal["inherit"] | None = None,
+    tags: Optional[list[NameValue]] = None,
+    profile_location: Optional[str] = None,
+    profile_name: Optional[str] = None,
+    high_limit: float | None = None,
+    low_limit: float | None = None,
+    deadband: float | None = None,
+    limit_enable: BitString | None = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
 ) -> None
 ```
 
 Optional AV Audit rows: None is absent; priority 'inherit' is present NULL.
+Access, Value\_Source, profile and parameter keywords as on
+`BACnetServer.add_analog_value`; tracking on a commandable object
+raises ValueError.
 
 ### ScEndpoint.add_binary_input
 
 ```python
-def add_binary_input(self, instance: int, name: str) -> None
+def add_binary_input(
+    self,
+    instance: int,
+    name: str,
+    *,
+    tags: Optional[list[NameValue]] = None,
+    profile_location: Optional[str] = None,
+    profile_name: Optional[str] = None,
+    alarm_value: int | None = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
+) -> None
 ```
+
+Profile keywords as on `add_analog_input`, `alarm_value` and
+the delays as on `BACnetServer.add_binary_input`.
 
 ### ScEndpoint.add_binary_value
 
@@ -347,13 +441,23 @@ def add_binary_value(
     instance: int,
     name: str,
     *,
+    present_value_access: Literal["commandable", "writable", "read_only"] = "commandable",
+    value_source_tracking: bool = False,
     audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None,
     auditable_operations: int | None = None,
     audit_priority_filter: int | Literal["inherit"] | None = None,
+    tags: Optional[list[NameValue]] = None,
+    profile_location: Optional[str] = None,
+    profile_name: Optional[str] = None,
+    alarm_value: int | None = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
 ) -> None
 ```
 
 Optional BV Audit rows: None is absent; priority 'inherit' is present NULL.
+Access, Value\_Source and profile keywords as on `add_analog_value`,
+`alarm_value` and the delays as on `BACnetServer.add_binary_value`.
 
 ### ScEndpoint.add_group
 
@@ -529,8 +633,22 @@ def add_analog_input(
     name: str,
     units: EngineeringUnits | int = 62,
     present_value: float = 0.0,
+    *,
+    tags: Optional[list[NameValue]] = None,
+    profile_location: Optional[str] = None,
+    profile_name: Optional[str] = None,
+    high_limit: float | None = None,
+    low_limit: float | None = None,
+    deadband: float | None = None,
+    limit_enable: BitString | None = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
 ) -> None
 ```
+
+Profile keywords as on `BACnetServer.add_analog_input`: each
+provisions its optional row, served only when given. The parameter
+keywords set those parameters as there, with the same checks.
 
 ### MstpEndpoint.add_analog_value
 
@@ -541,19 +659,47 @@ def add_analog_value(
     name: str,
     units: EngineeringUnits | int = 62,
     *,
+    present_value_access: Literal["commandable", "writable", "read_only"] = "commandable",
+    value_source_tracking: bool = False,
     audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None,
     auditable_operations: int | None = None,
     audit_priority_filter: int | Literal["inherit"] | None = None,
+    tags: Optional[list[NameValue]] = None,
+    profile_location: Optional[str] = None,
+    profile_name: Optional[str] = None,
+    high_limit: float | None = None,
+    low_limit: float | None = None,
+    deadband: float | None = None,
+    limit_enable: BitString | None = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
 ) -> None
 ```
 
 Optional AV Audit rows: None is absent; priority 'inherit' is present NULL.
+Access, Value\_Source, profile and parameter keywords as on
+`BACnetServer.add_analog_value`; tracking on a commandable object
+raises ValueError.
 
 ### MstpEndpoint.add_binary_input
 
 ```python
-def add_binary_input(self, instance: int, name: str) -> None
+def add_binary_input(
+    self,
+    instance: int,
+    name: str,
+    *,
+    tags: Optional[list[NameValue]] = None,
+    profile_location: Optional[str] = None,
+    profile_name: Optional[str] = None,
+    alarm_value: int | None = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
+) -> None
 ```
+
+Profile keywords as on `add_analog_input`, `alarm_value` and
+the delays as on `BACnetServer.add_binary_input`.
 
 ### MstpEndpoint.add_binary_value
 
@@ -563,13 +709,23 @@ def add_binary_value(
     instance: int,
     name: str,
     *,
+    present_value_access: Literal["commandable", "writable", "read_only"] = "commandable",
+    value_source_tracking: bool = False,
     audit_level: Literal["default", "none", "audit_config", "audit_all"] | None = None,
     auditable_operations: int | None = None,
     audit_priority_filter: int | Literal["inherit"] | None = None,
+    tags: Optional[list[NameValue]] = None,
+    profile_location: Optional[str] = None,
+    profile_name: Optional[str] = None,
+    alarm_value: int | None = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
 ) -> None
 ```
 
 Optional BV Audit rows: None is absent; priority 'inherit' is present NULL.
+Access, Value\_Source and profile keywords as on `add_analog_value`,
+`alarm_value` and the delays as on `BACnetServer.add_binary_value`.
 
 ### MstpEndpoint.add_group
 

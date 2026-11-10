@@ -2,8 +2,9 @@
 //! the server builders' keywords, parsed by the same `object_options` code:
 //! `tags`, `profile_location` and `profile_name` on all four, plus
 //! `present_value_access`, `value_source_tracking` and the Audit policy on
-//! the Value objects, and the event algorithm parameter keywords (#2410). Each call builds its object once, so a bad keyword
-//! fails there, and keeps the parsed parameters for the rebuild at start.
+//! the Value objects, and the event algorithm parameter keywords (#2410).
+//! Each call builds its object once, so a bad keyword fails there, and
+//! keeps the parsed parameters for the rebuild at start.
 //! The same generated block carries `report_device_reset_local` (#1837).
 
 use pyo3::prelude::*;

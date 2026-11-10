@@ -297,17 +297,19 @@ multi-state builder takes both, as do `add_access_door`,
 The parameter keywords configure those parameters (#2410):
 `high_limit`, `low_limit` and `deadband` (floats),
 `limit_enable` (a `BitString` of two bits, low limit first, the
-form a read of Limit\_Enable gives: `BitString(6, b"@")` enables
+form a read of Limit\_Enable gives: `BitString(6, b"\x40")` enables
 the high limit alone), and `time_delay` and `time_delay_normal`
-(seconds) on the analog builders; `alarm_value` (0 for INACTIVE, 1
-for ACTIVE) and the delays on a Binary Input or Value;
+(seconds) on the analog builders; `alarm_value` (0 or 1, for
+INACTIVE or ACTIVE) and the delays on a Binary Input or Value;
 `alarm_values` (a list of states) and the delays on a Multi-state
 Input or Value; the delays alone on a Binary or Multi-state Output.
 None leaves the object's default. Each value is checked as a write
 of the property is, and one the object refuses raises
 BacnetProtocolError: VALUE\_OUT\_OF\_RANGE for a non-finite limit, a
 negative deadband, an `alarm_value` past 1 or a state of 0 or
-past `number_of_states`. A negative delay raises OverflowError.
+past `number_of_states`, and INVALID\_DATA\_ENCODING for a
+`limit_enable` that isn't two bits wide. A negative delay raises
+OverflowError.
 The keywords apply before storage attaches, so they are never saved:
 a value a peer wrote and the file holds is served over its keyword,
 and the keyword applies again on a start that passes
