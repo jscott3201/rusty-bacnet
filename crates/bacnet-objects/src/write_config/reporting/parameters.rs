@@ -30,10 +30,10 @@
 //! further. A multi-state object's write refuses an Alarm_Values entry past
 //! Number_Of_States (#1429), but a saved list naming one is installed as it
 //! was written. With State_Text kept, a peer's writes no longer leave such
-//! a file: a count a peer raised comes back with the list. An application
-//! can still: it may build the object with fewer states than a saved list
-//! names, on storage holding no State_Text (a file saved before #2414
-//! among them), and an object must still open on it. The object then holds what a local shrink of its
+//! a file: a count a peer raised comes back with the list. The application
+//! still can (`write_config` names the ways: a shrink of the count, no
+//! State_Text in storage, or a configured list beside a restored
+//! State_Text with fewer states), and an object must still open on it. The object then holds what a local shrink of its
 //! states leaves it holding. A Multi-state Value shows it as
 //! CONFIGURATION_ERROR and stays in FAULT, with no OFFNORMAL on any listed
 //! state, until the list or the count is repaired; a Multi-state Input's

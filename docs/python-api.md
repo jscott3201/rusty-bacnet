@@ -3063,7 +3063,7 @@ with the old value still served and still used by the object's event
 detection. After a restart the object detects with the saved parameters
 from its first evaluation. `clear_written_reporting=True` drops them with
 the rest. A file holding a value the object refuses on the wire raises
-`BacnetError`. No new keyword is needed. The parameters still lost at a
+`BacnetError`. Keeping them needs nothing beyond `storage_path`. The parameters still lost at a
 restart are the ones peers can't write: an Access Zone's occupancy limits
 and an Event Enrollment's Object_Property_Reference, which the application
 sets.
@@ -3117,12 +3117,14 @@ One value a write refuses is still restored: saved Alarm_Values naming a
 state past the object's count. A peer can't write such a list, and can't
 remove a state a list names; a peer that added a state and listed it
 leaves the State_Text that added it in the file, so the restarted object
-has the state. What can still leave such a list is a file holding no
-State_Text (one saved before State_Text was kept among them) on an object
-the application now builds with a smaller `number_of_states` than the list
-needs. The builder doesn't raise.
-The list is restored as it was written and read back that way, and a write
-of the same list is refused. What follows differs by type, and is the cost
+has the state. A list naming a state past the count can still arise two
+ways: a file holding no State_Text (one saved before State_Text was kept
+among them) on an object the application now builds with a smaller
+`number_of_states` than the list needs, and an `alarm_values` keyword,
+checked against `number_of_states` before the file is read, beside a
+restored State_Text with fewer states. The builder doesn't raise.
+The list is served as it was written or configured, and a write of the
+same list is refused. What follows differs by type, and is the cost
 of letting the object start. A Multi-state Input reports no fault and goes
 on alarming on the entries within its states. A Multi-state Value reports
 Reliability CONFIGURATION_ERROR and is in FAULT; while it is, no listed
@@ -3131,37 +3133,56 @@ raises no alarm on its value until a list within its states is written or
 the state is added again. `clear_written_reporting=True` drops the list
 like any other saved value.
 
-The analog, binary and multi-state builders take no keyword for the
-parameters, and no builder takes one for the two delays, so an application sets
-its own limits, alarm values or delays with `write_property_local` once the
-server has started. With `storage_path`, that write is kept exactly like a
-peer's: it is saved in the file and served again after a restart. So an
-application that writes them at every start replaces whatever a peer wrote
-before the restart. To keep a peer's values, write the application's own
-only when there is nothing saved to lose:
+The analog, binary and multi-state builders take keyword-only parameter
+keywords for the parameters they keep (#2410):
+
+| Builders | Parameter keywords |
+| --- | --- |
+| `add_analog_input`, `add_analog_output`, `add_analog_value` | `high_limit`, `low_limit`, `deadband`, `limit_enable`, `time_delay`, `time_delay_normal` |
+| `add_binary_input`, `add_binary_value` | `alarm_value`, `time_delay`, `time_delay_normal` |
+| `add_multistate_input`, `add_multistate_value` | `alarm_values`, `time_delay`, `time_delay_normal` |
+| `add_binary_output`, `add_multistate_output` | `time_delay`, `time_delay_normal` |
 
 ```python
-import os
-
-path = "/application/state/ai-1"
-first_start = not os.path.exists(path)  # check before the builder call
-server.add_analog_input(instance=1, name="Zone Temp", units=62, storage_path=path)
-await server.start()
-if first_start:
-    await server.write_property_local(
-        ObjectIdentifier(ObjectType.ANALOG_INPUT, 1),
-        PropertyIdentifier.HIGH_LIMIT,
-        PropertyValue.real(30.0),
-        source_object=None,
-    )
+server.add_analog_input(
+    instance=1,
+    name="Zone Temp",
+    units=62,
+    high_limit=30.0,
+    limit_enable=BitString(6, b"\x40"),  # the high limit alone
+    time_delay=60,
+    storage_path="/application/state/ai-1",
+)
 ```
 
-The builder call doesn't create the file; the first kept write does. A
-start with `clear_written_reporting=True` leaves the file in place, holding
-nothing, with the object at its defaults, so write the application's values
-again on that start too. Values written this way stay in the file like any
-other written value: a changed default in a later version of the
-application takes effect only after a clear.
+The limits and the deadband are floats; `limit_enable` is a `BitString` of
+two bits, low limit first, the form a read of Limit_Enable gives; the delays
+are seconds; `alarm_value` takes 0 or 1 (INACTIVE or ACTIVE); and
+`alarm_values` is a list of states. `None`, the default, leaves the object's
+own value. Each value is checked as a write of the property is, so one the
+object refuses raises `BacnetProtocolError` from the builder: a non-finite
+limit, a negative deadband, an `alarm_value` past 1 or a state of 0 or past
+`number_of_states` with VALUE_OUT_OF_RANGE, and a `limit_enable` that isn't
+two bits wide with INVALID_DATA_ENCODING. A negative delay raises
+`OverflowError`.
+
+The keywords are the application's configuration. They are applied before
+storage attaches, so they are never saved: the file doesn't exist, or holds
+no parameter, until a peer writes one. A value a peer wrote and the file
+holds is served after a restart over its keyword, and the keyword applies
+again on a start that passes `clear_written_reporting=True`. A changed
+keyword in a later version of the application takes effect at once for
+every parameter no peer has written. Without `storage_path` the keywords
+set the values at every start. The shared endpoints' `add_analog_input`,
+`add_analog_value`, `add_binary_input` and `add_binary_value` take the same
+keywords, with the same checks.
+
+A `write_property_local` of a parameter after the builder call is still
+kept exactly like a peer's write: it is saved in the file and served again
+after a restart. `add_event_enrollment` has no keywords for its parameters,
+so an application that writes them at every start that way replaces what a
+peer wrote; to keep a peer's values, write them only when the file doesn't
+exist yet (check before the builder call) or on a start that clears.
 
 `clear_written_reporting=True`, and `clear_written_config=True` on
 `add_timer` and `add_channel`, drop a saved Description with the rest of

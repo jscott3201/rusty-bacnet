@@ -8,6 +8,7 @@
 
 use pyo3::prelude::*;
 
+mod algorithm_keywords;
 mod app_transport;
 mod bip_options;
 mod client;

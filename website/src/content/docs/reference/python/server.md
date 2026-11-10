@@ -245,6 +245,12 @@ def add_analog_input(
     tags: Optional[list[NameValue]] = None,
     profile_location: Optional[str] = None,
     profile_name: Optional[str] = None,
+    high_limit: float | None = None,
+    low_limit: float | None = None,
+    deadband: float | None = None,
+    limit_enable: BitString | None = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
     storage_path: Optional[str] = None,
     clear_written_reporting: bool = False,
 ) -> None
@@ -277,15 +283,7 @@ takes over `number_of_states`; with `storage_path` a write
 leaving more than 1,024 labels or a label past 512 octets of UTF-8
 is refused with NO\_SPACE\_TO\_WRITE\_PROPERTY. `add_access_door`,
 `add_access_zone` and `add_event_enrollment` keep theirs too,
-as each says. The
-analog, binary and multi-state builders take no keyword for these
-parameters, so an
-application sets its own with `write_property_local`, and that
-write is kept like a peer's: writing them at every start replaces
-what a peer wrote before the restart. To keep a peer's values, write
-the application's own only when the file doesn't exist yet (check
-before the builder call; the first kept write creates it) or on a
-start that passes `clear_written_reporting=True`.
+as each says.
 `clear_written_reporting=True` drops what was saved first,
 Description and parameters included, so the object starts from its
 defaults. A file that doesn't load, or holds a value the object
@@ -293,16 +291,46 @@ refuses on the wire, raises BacnetError, with the clear too: the
 file is read before it is cleared. One such value doesn't:
 saved Alarm\_Values naming a state past the object's count are
 restored as written. A peer that added a state and listed it
-leaves the State\_Text that added it saved beside the list, so such
-a list comes only from a file holding no State\_Text (one saved
-before State\_Text was kept among them) on an object the
-application now builds with fewer states than the list names. A
-Multi-state Value then reports CONFIGURATION\_ERROR
-and is in FAULT, raising no OFFNORMAL on any listed state, until a
-list within its states is written. Every analog, binary and
+leaves the State\_Text that added it saved beside the list, so the
+count comes back with it. A list naming a state past the count can
+still arise two ways: a file holding no State\_Text (one saved
+before State\_Text was kept among them) on an object now built with
+a smaller `number_of_states`, and an `alarm_values` keyword,
+checked against `number_of_states` before the file is read,
+beside a restored State\_Text with fewer states. Either way the
+object serves the list. A Multi-state Input reports no fault and
+alarms on the states it has; a Multi-state Value reports
+CONFIGURATION\_ERROR and is in FAULT, raising no OFFNORMAL on any
+listed state, until a list within its states is written. Every analog, binary and
 multi-state builder takes both, as do `add_access_door`,
 `add_access_zone`, `add_event_enrollment` and
 `add_alert_enrollment`.
+
+The parameter keywords configure those parameters (#2410):
+`high_limit`, `low_limit` and `deadband` (floats),
+`limit_enable` (a `BitString` of two bits, low limit first, the
+form a read of Limit\_Enable gives: `BitString(6, b"\x40")` enables
+the high limit alone), and `time_delay` and `time_delay_normal`
+(seconds) on the analog builders; `alarm_value` (0 or 1, for
+INACTIVE or ACTIVE) and the delays on a Binary Input or Value;
+`alarm_values` (a list of states) and the delays on a Multi-state
+Input or Value; the delays alone on a Binary or Multi-state Output.
+None leaves the object's default. Each value is checked as a write
+of the property is, and one the object refuses raises
+BacnetProtocolError: VALUE\_OUT\_OF\_RANGE for a non-finite limit, a
+negative deadband, an `alarm_value` past 1 or a state of 0 or
+past `number_of_states`, and INVALID\_DATA\_ENCODING for a
+`limit_enable` that isn't two bits wide. A negative delay raises
+OverflowError.
+The keywords apply before storage attaches, so they are never saved:
+a value a peer wrote and the file holds is served over its keyword,
+and the keyword applies again on a start that passes
+`clear_written_reporting=True`. A `write_property_local` of a
+parameter after the builder call is kept like a peer's write. An
+`alarm_values` keyword is checked against `number_of_states`,
+so a restored State\_Text with fewer states (#2414) leaves it naming
+a state past the count: a Multi-state Value then reports
+CONFIGURATION\_ERROR.
 
 ### BACnetServer.add_analog_output
 
@@ -316,12 +344,18 @@ def add_analog_output(
     tags: Optional[list[NameValue]] = None,
     profile_location: Optional[str] = None,
     profile_name: Optional[str] = None,
+    high_limit: float | None = None,
+    low_limit: float | None = None,
+    deadband: float | None = None,
+    limit_enable: BitString | None = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
     storage_path: Optional[str] = None,
     clear_written_reporting: bool = False,
 ) -> None
 ```
 
-Profile keywords as on `add_analog_input`.
+Profile and parameter keywords as on `add_analog_input`.
 
 ### BACnetServer.add_analog_value
 
@@ -340,6 +374,12 @@ def add_analog_value(
     tags: Optional[list[NameValue]] = None,
     profile_location: Optional[str] = None,
     profile_name: Optional[str] = None,
+    high_limit: float | None = None,
+    low_limit: float | None = None,
+    deadband: float | None = None,
+    limit_enable: BitString | None = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
     storage_path: Optional[str] = None,
     clear_written_reporting: bool = False,
 ) -> None
@@ -354,7 +394,7 @@ Priority\_Array), `"writable"` (a write replaces Present\_Value) or
 object: the writer of the last Present\_Value write, who alone may
 then correct it. A commandable object tracks its sources through
 Priority\_Array already, so asking it to track raises ValueError.
-Profile keywords as on `add_analog_input`.
+Profile and parameter keywords as on `add_analog_input`.
 
 ### BACnetServer.add_binary_input
 
@@ -367,12 +407,15 @@ def add_binary_input(
     tags: Optional[list[NameValue]] = None,
     profile_location: Optional[str] = None,
     profile_name: Optional[str] = None,
+    alarm_value: int | None = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
     storage_path: Optional[str] = None,
     clear_written_reporting: bool = False,
 ) -> None
 ```
 
-Profile keywords as on `add_analog_input`.
+Profile and parameter keywords as on `add_analog_input`.
 
 ### BACnetServer.add_binary_output
 
@@ -385,12 +428,14 @@ def add_binary_output(
     tags: Optional[list[NameValue]] = None,
     profile_location: Optional[str] = None,
     profile_name: Optional[str] = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
     storage_path: Optional[str] = None,
     clear_written_reporting: bool = False,
 ) -> None
 ```
 
-Profile keywords as on `add_analog_input`.
+Profile and parameter keywords as on `add_analog_input`.
 
 ### BACnetServer.add_binary_value
 
@@ -408,13 +453,17 @@ def add_binary_value(
     tags: Optional[list[NameValue]] = None,
     profile_location: Optional[str] = None,
     profile_name: Optional[str] = None,
+    alarm_value: int | None = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
     storage_path: Optional[str] = None,
     clear_written_reporting: bool = False,
 ) -> None
 ```
 
 Optional BV Audit rows: None is absent; priority 'inherit' is present NULL.
-Access, Value\_Source and profile keywords as on `add_analog_value`.
+Access, Value\_Source and profile keywords as on `add_analog_value`,
+parameter keywords as on `add_analog_input`.
 
 ### BACnetServer.add_multistate_input
 
@@ -428,12 +477,15 @@ def add_multistate_input(
     tags: Optional[list[NameValue]] = None,
     profile_location: Optional[str] = None,
     profile_name: Optional[str] = None,
+    alarm_values: list[int] | None = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
     storage_path: Optional[str] = None,
     clear_written_reporting: bool = False,
 ) -> None
 ```
 
-Profile keywords as on `add_analog_input`.
+Profile and parameter keywords as on `add_analog_input`.
 
 ### BACnetServer.add_multistate_output
 
@@ -447,12 +499,14 @@ def add_multistate_output(
     tags: Optional[list[NameValue]] = None,
     profile_location: Optional[str] = None,
     profile_name: Optional[str] = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
     storage_path: Optional[str] = None,
     clear_written_reporting: bool = False,
 ) -> None
 ```
 
-Profile keywords as on `add_analog_input`.
+Profile and parameter keywords as on `add_analog_input`.
 
 ### BACnetServer.add_multistate_value
 
@@ -468,12 +522,16 @@ def add_multistate_value(
     tags: Optional[list[NameValue]] = None,
     profile_location: Optional[str] = None,
     profile_name: Optional[str] = None,
+    alarm_values: list[int] | None = None,
+    time_delay: int | None = None,
+    time_delay_normal: int | None = None,
     storage_path: Optional[str] = None,
     clear_written_reporting: bool = False,
 ) -> None
 ```
 
-Access, Value\_Source and profile keywords as on `add_analog_value`.
+Access, Value\_Source and profile keywords as on `add_analog_value`,
+parameter keywords as on `add_analog_input`.
 
 ### BACnetServer.add_calendar
 

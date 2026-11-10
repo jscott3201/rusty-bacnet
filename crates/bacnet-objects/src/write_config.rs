@@ -120,13 +120,14 @@
 //! One wire rule doesn't fail the builder call: an Alarm_Values entry past
 //! Number_Of_States, which a write refuses (#1429). With State_Text kept,
 //! a peer that raises the count and lists a new state leaves both in
-//! storage, and the rebuilt object has the count the list needs. What can
-//! still leave such a list is the application: building the object with
-//! fewer states than a saved list names, on storage holding no State_Text
-//! (a file saved before #2414 among them), or shrinking the count with
-//! `set_number_of_states` before anything wrote State_Text. Such a list is
-//! restored as it was written, since a saved list mustn't stop the object
-//! from starting. The object holds it as it holds a list a local shrink
+//! storage, and the rebuilt object has the count the list needs. Such a
+//! list can still arise three ways: the application shrinks the count
+//! (`set_number_of_states`, or a build with fewer states than a saved list
+//! names); the object has no storage for State_Text (none attached, or a
+//! file saved before #2414 holding none); or a list configured before the
+//! builder call meets a restored State_Text with fewer states. A saved list
+//! is restored as it was written, since it mustn't stop the object from
+//! starting. The object holds it as it holds a list a local shrink
 //! leaves: it serves it, and a write of the same list is refused. What
 //! follows differs by type, and is the cost of opening. A Multi-state
 //! Input reports no fault, and the entries within its states still alarm.

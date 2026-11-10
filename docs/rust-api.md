@@ -4862,10 +4862,14 @@ application sets them at each start.
   damage. One wire rule isn't applied on load: a write refuses an entry
   past Number_Of_States, but a saved list naming one is restored as it was
   written. A peer can't leave such a list: the State_Text that added the
-  state is saved beside it, so the count comes back with the list. An
-  application can, by building the object with fewer states than a saved
-  list names on storage holding no State_Text (a file saved before #2414
-  among them); that may not stop the object from starting. The object then
+  state is saved beside it, so the count comes back with the list. It can
+  still arise three ways: the application shrinks the count, by
+  `set_number_of_states` or by building the object with fewer states than
+  a saved list names; the object has no storage for State_Text (none
+  attached, or a file saved before #2414 holding none); or a list the
+  application configured before `with_reporting_persistence` (or Python's
+  `alarm_values` keyword) meets a restored State_Text with fewer states.
+  None of these may stop the object from starting. The object then
   holds what a local
   `set_number_of_states` shrink leaves it holding: it serves the list, and
   a write of the same list is refused. What follows differs by type, and
