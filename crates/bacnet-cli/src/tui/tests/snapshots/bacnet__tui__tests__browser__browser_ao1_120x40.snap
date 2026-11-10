@@ -15,7 +15,7 @@ expression: text
 "│ Services          33 supported             ││ event-detection-enable          true                                   │"
 "│ Object types      64 supported             ││ out-of-service                  false                                  │"
 "│ Max APDU          1476                     ││ units                           percent                                │"
-"│ Segmentation      none                     ││ priority-array                  priority 10 in control                 │"
+"│ Segmentation      no-segmentation          ││ priority-array                  priority 10 in control                 │"
 "│ Database revision 0                        ││ relinquish-default              0                                      │"
 "└────────────────────────────────────────────┘│ current-command-priority        10                                     │"
 "┌ Objects (11) ──────────────────────────────┐│ cov-increment                   0                                      │"

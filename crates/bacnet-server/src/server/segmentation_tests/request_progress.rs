@@ -155,7 +155,7 @@ async fn request_progress_reclaims_128_stalled_slots_before_admission() {
 #[tokio::test(start_paused = true)]
 async fn request_progress_new_in_order_saves_sustain_transfer_beyond_16_seconds() {
     timeout(Duration::from_secs(25), async {
-        let (server, client, mut rx) = start_reassembly_server(Segmentation::BOTH).await;
+        let (server, client, mut rx) = start_reassembly_server(Segmentation::SEGMENTED_BOTH).await;
         let text = "progress-is-not-total-age";
         let chunks = split_into(&write_property_payload(text), 3);
         send_segment_with_window(&client, 42, 0, 1, true, &chunks[0]).await;
@@ -198,7 +198,7 @@ async fn request_progress_new_in_order_saves_sustain_transfer_beyond_16_seconds(
 
 #[tokio::test]
 async fn request_progress_failed_initial_or_next_save_leaves_no_incarnation() {
-    let (server, client, mut rx) = start_reassembly_server(Segmentation::BOTH).await;
+    let (server, client, mut rx) = start_reassembly_server(Segmentation::SEGMENTED_BOTH).await;
     let initial_value = present_value(&server).await;
     let chunks = split_into(&write_property_payload("only-successful-saves"), 2);
     for failed_seq in [0, 1] {

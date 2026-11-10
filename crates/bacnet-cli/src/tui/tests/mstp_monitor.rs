@@ -42,7 +42,7 @@ fn i_am(instance: u32) -> Vec<u8> {
     let request = IAmRequest {
         object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap(),
         max_apdu_length: 480,
-        segmentation_supported: Segmentation::NONE,
+        segmentation_supported: Segmentation::NO_SEGMENTATION,
         vendor_id: 260,
     };
     let mut apdu = bytes::BytesMut::new();

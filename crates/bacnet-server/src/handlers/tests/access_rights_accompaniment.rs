@@ -38,7 +38,7 @@ const BASE_ALL: [P; 10] = [
     P::NEGATIVE_ACCESS_RULES,
     P::STATUS_FLAGS,
     P::RELIABILITY,
-    P::LOG_ENABLE,
+    P::ENABLE,
 ];
 
 /// Access Rights 7 with Accompaniment set to Access User 3.
@@ -174,14 +174,11 @@ fn a_configured_accompaniment_is_served_listed_and_written() {
     write_multiple(
         &mut db,
         rights,
-        vec![
-            (P::ACCOMPANIMENT, USER.to_vec()),
-            (P::LOG_ENABLE, vec![0x10]),
-        ],
+        vec![(P::ACCOMPANIMENT, USER.to_vec()), (P::ENABLE, vec![0x10])],
     )
     .unwrap();
     let mut cases = served(USER);
-    cases.push((P::LOG_ENABLE, None, Ok(vec![0x10])));
+    cases.push((P::ENABLE, None, Ok(vec![0x10])));
     assert_reads(&db, rights, &cases);
     // An unspecified Access Credential asks for no accompaniment; the row
     // stays.
@@ -243,14 +240,14 @@ fn refused_accompaniment_writes_leave_it_unchanged() {
             &mut db,
             rights,
             vec![
-                (P::LOG_ENABLE, vec![0x10]),
+                (P::ENABLE, vec![0x10]),
                 (P::ACCOMPANIMENT, vec![0x1C, 0x08, 0x40, 0x00, 0x01]),
             ],
         ),
         ErrorCode::VALUE_OUT_OF_RANGE,
     );
     let mut cases = served(USER);
-    cases.push((P::LOG_ENABLE, None, Ok(vec![0x10])));
+    cases.push((P::ENABLE, None, Ok(vec![0x10])));
     assert_reads(&db, rights, &cases);
     // NULL is no value of a BACnetDeviceObjectReference, so the write
     // succeeds and changes nothing (#1396).

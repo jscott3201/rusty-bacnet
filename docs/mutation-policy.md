@@ -262,7 +262,7 @@ suit the property), up to the first that fails them. It drops the guard, asks th
 policy about each kept element in wire order up to the first denial, stages the
 allowed elements an object saves first (a Notification Forwarder's or Notification
 Class's list, an Access Rights object's rule arrays, Enable or Accompaniment, an
-Audit Log's Log_Enable or Buffer_Size) so their saves run with no guard held, and
+Audit Log's Enable or Buffer_Size) so their saves run with no guard held, and
 only then takes the write lock and applies the elements. The handler checks each
 element again under the lock and applies the recorded decision when it reaches it
 instead of asking again. The policy is still asked once per element, but it can be

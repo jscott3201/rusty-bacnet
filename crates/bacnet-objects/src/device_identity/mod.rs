@@ -47,7 +47,7 @@ pub struct DeviceIdentity {
 impl DeviceIdentity {
     /// Creates an identity with endpoint-composed defaults.
     ///
-    /// Defaults: `max_apdu = 1476`, `segmentation = NONE`,
+    /// Defaults: `max_apdu = 1476`, `segmentation = NO_SEGMENTATION`,
     /// `services = [READ_PROPERTY]` (narrow endpoint reality, no superset),
     /// no ports, zero UUID (B/IP-only may keep zeros; SC dial requires
     /// [`with_device_uuid`](Self::with_device_uuid)). Returns
@@ -59,7 +59,7 @@ impl DeviceIdentity {
             instance,
             vendor_id,
             max_apdu_length: 1476,
-            segmentation_supported: Segmentation::NONE,
+            segmentation_supported: Segmentation::NO_SEGMENTATION,
             apdu_segment_timeout_ms: 5000,
             services: vec![ServiceSupported::READ_PROPERTY],
             network_ports: Vec::new(),
@@ -94,7 +94,7 @@ impl DeviceIdentity {
     }
 
     /// Sets the Device and full-server segment timeout. EndpointSession roles
-    /// require segmentation NONE; client timers remain caller-owned.
+    /// require segmentation NO_SEGMENTATION; client timers remain caller-owned.
     pub fn with_apdu_segment_timeout_ms(mut self, timeout_ms: u64) -> Self {
         self.apdu_segment_timeout_ms = timeout_ms;
         self
@@ -333,12 +333,14 @@ impl DeviceIdentity {
                 "Device max-APDU must be at least 50".into(),
             ));
         }
-        if self.segmentation_supported.to_raw() > Segmentation::NONE.to_raw() {
+        if self.segmentation_supported.to_raw() > Segmentation::NO_SEGMENTATION.to_raw() {
             return Err(Error::Encoding(
                 "invalid Device segmentation support".into(),
             ));
         }
-        if self.segmentation_supported != Segmentation::NONE && self.apdu_segment_timeout_ms == 0 {
+        if self.segmentation_supported != Segmentation::NO_SEGMENTATION
+            && self.apdu_segment_timeout_ms == 0
+        {
             return Err(Error::Encoding(
                 "APDU_Segment_Timeout must be positive when segmentation is supported".into(),
             ));
@@ -378,7 +380,7 @@ impl DeviceIdentity {
                 )));
             }
         }
-        if self.segmentation_supported != Segmentation::NONE
+        if self.segmentation_supported != Segmentation::NO_SEGMENTATION
             && device.read_property(P::APDU_SEGMENT_TIMEOUT, None)?
                 != PropertyValue::Unsigned(self.apdu_segment_timeout_ms)
         {

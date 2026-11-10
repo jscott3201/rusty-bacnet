@@ -123,7 +123,7 @@ impl Parity {
     pub(super) async fn start_writes() -> Self {
         Self::start_from(
             ReadPropertyMultipleBudget::default(),
-            Segmentation::NONE,
+            Segmentation::NO_SEGMENTATION,
             writes,
         )
         .await

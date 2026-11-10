@@ -186,7 +186,7 @@ async fn a_device_added_as_routed_on_this_network_is_written_locally() {
                 remote_network: network,
                 remote_mac: PEER.to_vec(),
                 max_apdu_length: 480,
-                segmentation_supported: Segmentation::NONE,
+                segmentation_supported: Segmentation::NO_SEGMENTATION,
                 max_segments_accepted: None,
             })
             .await
@@ -266,7 +266,8 @@ async fn client_with_routed_row(
 /// gets nothing too long for it.
 #[tokio::test]
 async fn a_routed_row_on_this_network_still_bounds_a_local_request() {
-    let (mut client, _inbound, mut outbound) = client_with_routed_row(Segmentation::NONE).await;
+    let (mut client, _inbound, mut outbound) =
+        client_with_routed_row(Segmentation::NO_SEGMENTATION).await;
     let result = bounded(client.confirmed_request_routed(
         &ROUTER,
         THIS_NETWORK,
@@ -285,7 +286,8 @@ async fn a_routed_row_on_this_network_still_bounds_a_local_request() {
 /// with no SNET, carry it through.
 #[tokio::test]
 async fn a_long_request_to_this_network_is_segmented_to_the_peer() {
-    let (mut client, inbound, mut outbound) = client_with_routed_row(Segmentation::BOTH).await;
+    let (mut client, inbound, mut outbound) =
+        client_with_routed_row(Segmentation::SEGMENTED_BOTH).await;
     let peer = async {
         let mut segments = 0;
         loop {

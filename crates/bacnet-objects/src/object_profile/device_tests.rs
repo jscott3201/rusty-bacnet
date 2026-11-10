@@ -69,9 +69,9 @@ fn configured(clock: bool, segmented: bool, cov: bool, audit: u8) -> (DeviceObje
             .expect("valid Device identity")
             .with_name("Profile Device")
             .with_segmentation(if segmented {
-                Segmentation::BOTH
+                Segmentation::SEGMENTED_BOTH
             } else {
-                Segmentation::NONE
+                Segmentation::NO_SEGMENTATION
             }),
         ..Default::default()
     })
@@ -413,7 +413,7 @@ fn device_persistence_constructor_keeps_validation_before_loading() {
     assert!(crate::DeviceIdentity::new(ObjectIdentifier::MAX_INSTANCE + 1, 0).is_err());
     let config = DeviceConfig {
         identity: crate::DeviceIdentity::default()
-            .with_segmentation(Segmentation::BOTH)
+            .with_segmentation(Segmentation::SEGMENTED_BOTH)
             .with_apdu_segment_timeout_ms(0),
         ..Default::default()
     };

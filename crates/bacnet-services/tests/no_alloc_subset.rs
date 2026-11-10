@@ -54,7 +54,7 @@ fn exchange() -> Result<(), Error> {
     let i_am = IAmRequest {
         object_identifier: device,
         max_apdu_length: 480,
-        segmentation_supported: Segmentation::NONE,
+        segmentation_supported: Segmentation::NO_SEGMENTATION,
         vendor_id: 261,
     };
     let mut out = &mut storage[..];

@@ -32,7 +32,8 @@ async fn fixture(npdu_limit: u16, bvlc_limit: u16, name: &str) -> (Fixture, Peer
     let mut f = Fixture::new(
         &ca,
         ServerConfig {
-            device: bacnet_objects::DeviceIdentity::default().with_segmentation(Segmentation::BOTH),
+            device: bacnet_objects::DeviceIdentity::default()
+                .with_segmentation(Segmentation::SEGMENTED_BOTH),
             ..Default::default()
         },
         db,

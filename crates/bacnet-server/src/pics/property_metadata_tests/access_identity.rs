@@ -62,7 +62,7 @@ fn expected_rows(kind: ObjectType) -> Vec<PropertyRow> {
             (P::STATUS_FLAGS, false, false),
             (P::RELIABILITY, false, false),
             // Enable, property 133: required, and writable (#1332).
-            (P::LOG_ENABLE, false, true),
+            (P::ENABLE, false, true),
             (P::PROPERTY_LIST, false, false),
         ],
         _ => vec![

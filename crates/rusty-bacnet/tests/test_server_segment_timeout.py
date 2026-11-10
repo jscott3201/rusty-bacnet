@@ -16,10 +16,10 @@ class SegmentConstructorTests(unittest.TestCase):
             self.assertEqual(signature.parameters[name].kind, inspect.Parameter.KEYWORD_ONLY)
         self.assertEqual(signature.parameters["apdu_segment_timeout_ms"].default, 5000)
         stub = Path(rusty_bacnet.__file__).with_suffix(".pyi").read_text()
-        self.assertIn("segmentation_supported: Segmentation = Segmentation.NONE", stub)
+        self.assertIn("segmentation_supported: Segmentation = Segmentation.NO_SEGMENTATION", stub)
         self.assertIn("apdu_segment_timeout_ms: int = 5000", stub)
         for transport in ("bip", "ipv6", "sc", "mstp"):
-            for mode in (Segmentation.TRANSMIT, Segmentation.RECEIVE, Segmentation.BOTH):
+            for mode in (Segmentation.SEGMENTED_TRANSMIT, Segmentation.SEGMENTED_RECEIVE, Segmentation.SEGMENTED_BOTH):
                 with self.subTest(transport=transport, mode=mode):
                     with self.assertRaisesRegex(ValueError, "must be positive"):
                         BACnetServer(123, transport=transport, segmentation_supported=mode,
@@ -31,10 +31,10 @@ class SegmentConstructorTests(unittest.TestCase):
                 with self.subTest(transport=transport, value=value):
                     with self.assertRaises(error):
                         BACnetServer(123, transport=transport, apdu_segment_timeout_ms=value)
-        for invalid in (None, 0, "BOTH"):
+        for invalid in (None, 0, "SEGMENTED_BOTH"):
             with self.assertRaises(TypeError):
                 BACnetServer(123, segmentation_supported=invalid)
-        BACnetServer(123, apdu_segment_timeout_ms=0)  # Inactive under NONE.
+        BACnetServer(123, apdu_segment_timeout_ms=0)  # Inactive under NO_SEGMENTATION.
 
 
 def read_property(property_id):
@@ -65,7 +65,7 @@ class SegmentWireTests(unittest.IsolatedAsyncioTestCase):
         return apdu
 
     async def test_four_modes_property_and_runtime_directions(self):
-        for mode in (Segmentation.NONE, Segmentation.TRANSMIT, Segmentation.RECEIVE, Segmentation.BOTH):
+        for mode in (Segmentation.NO_SEGMENTATION, Segmentation.SEGMENTED_TRANSMIT, Segmentation.SEGMENTED_RECEIVE, Segmentation.SEGMENTED_BOTH):
             with self.subTest(mode=mode):
                 server = BACnetServer(123, device_name="long-device-name-" * 10,
                                       interface="127.0.0.1", port=0,
@@ -81,14 +81,14 @@ class SegmentWireTests(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(reply, b"\x30\x01\x0c" + service + b"\x3e" + encoded + b"\x3f")
                     service = read_property(10)
                     reply = await self.exchange(address, b"\x00\x05\x02\x0c" + service)
-                    if mode == Segmentation.NONE:
+                    if mode == Segmentation.NO_SEGMENTATION:
                         self.assertEqual(reply, b"\x50\x02\x0c\x91\x02\x91\x20")
                     else:
                         self.assertEqual(reply, b"\x30\x02\x0c" + service + b"\x3e\x22\x1c\x84\x3f")
-                    # Request reassembly is real in RECEIVE/BOTH only.
+                    # Request reassembly is real in SEGMENTED_RECEIVE/SEGMENTED_BOTH only.
                     service = read_property(11)
                     reply = await self.exchange(address, b"\x0e\x05\x03\x00\x01\x0c" + service[:4])
-                    if mode in (Segmentation.RECEIVE, Segmentation.BOTH):
+                    if mode in (Segmentation.SEGMENTED_RECEIVE, Segmentation.SEGMENTED_BOTH):
                         self.assertEqual(reply, b"\x41\x03\x00\x01")
                         reply = await self.exchange(address, b"\x0a\x05\x03\x01\x01\x0c" + service[4:])
                         self.assertEqual(reply, b"\x41\x03\x01\x01")
@@ -97,9 +97,9 @@ class SegmentWireTests(unittest.IsolatedAsyncioTestCase):
                     else:
                         self.assertEqual(reply, b"\x71\x03\x04")
                     # A name too large for the peer's 50-byte APDU must segment
-                    # only in TRANSMIT/BOTH, even though the client accepts it.
+                    # only in SEGMENTED_TRANSMIT/SEGMENTED_BOTH, even though the client accepts it.
                     reply = await self.exchange(address, b"\x02\x00\x04\x0c" + read_property(77))
-                    if mode in (Segmentation.TRANSMIT, Segmentation.BOTH):
+                    if mode in (Segmentation.SEGMENTED_TRANSMIT, Segmentation.SEGMENTED_BOTH):
                         self.assertEqual(reply[:5], b"\x3c\x04\x00\x01\x0c")
                     else:
                         self.assertEqual(reply, b"\x71\x04\x04")

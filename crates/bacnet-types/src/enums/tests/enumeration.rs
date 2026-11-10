@@ -14,6 +14,6 @@ fn a_resolved_enum_lists_its_enumeration() {
         .enumeration()
         .unwrap();
     assert_eq!(name, "Segmentation");
-    assert!(values.contains(&("NONE", 3)));
+    assert!(values.contains(&("NO_SEGMENTATION", 3)));
     assert_eq!(ResolvedEnum::Unknown(4).enumeration(), None);
 }

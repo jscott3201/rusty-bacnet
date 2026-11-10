@@ -26,7 +26,7 @@ fn routed_device(
         object_identifier: device_object(instance),
         mac_address: MacAddr::from_slice(router_mac),
         max_apdu_length: 1476,
-        segmentation_supported: Segmentation::NONE,
+        segmentation_supported: Segmentation::NO_SEGMENTATION,
         max_segments_accepted: None,
         vendor_id: 42,
         last_seen: Instant::now(),

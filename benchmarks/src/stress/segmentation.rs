@@ -24,7 +24,9 @@ pub async fn run(_transport: &str, steps: &[u64]) -> Vec<DegradationPoint> {
         // The server and its Device both segment, so a reply longer than
         // the client's 1,476-octet APDU goes out in segments.
         let mut config = stress_device_config(1234);
-        config.identity = config.identity.with_segmentation(Segmentation::BOTH);
+        config.identity = config
+            .identity
+            .with_segmentation(Segmentation::SEGMENTED_BOTH);
         let mut server = BACnetServer::bip_builder()
             .interface(Ipv4Addr::LOCALHOST)
             .port(0)

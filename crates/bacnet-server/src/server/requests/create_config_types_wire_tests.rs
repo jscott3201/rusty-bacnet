@@ -362,7 +362,7 @@ async fn a_trend_log_takes_its_buffer_size_after_values_that_record_a_status() {
                     P::LOG_DEVICE_OBJECT_PROPERTY,
                     reference(oid(ObjectType::BINARY_VALUE, 1)),
                 ),
-                (P::LOG_ENABLE, value(PropertyValue::Boolean(false))),
+                (P::ENABLE, value(PropertyValue::Boolean(false))),
                 (P::BUFFER_SIZE, value(PropertyValue::Unsigned(50))),
             ],
         ),
@@ -371,7 +371,7 @@ async fn a_trend_log_takes_its_buffer_size_after_values_that_record_a_status() {
     let log = created(&response);
     let db = fixture.db.read().await;
     assert_eq!(read(&db, log, P::BUFFER_SIZE), PropertyValue::Unsigned(50));
-    assert_eq!(read(&db, log, P::LOG_ENABLE), PropertyValue::Boolean(false));
+    assert_eq!(read(&db, log, P::ENABLE), PropertyValue::Boolean(false));
 }
 
 fn subordinate_list(instances: &[u32]) -> Vec<u8> {

@@ -25,11 +25,11 @@
 //!   puts Event_State back to NORMAL and resets Acked_Transitions and the
 //!   event time stamps, which clears Status_Flags' IN_ALARM (and, on an
 //!   Access Door, can secure it again).
-//! - **Logs.** With a clock, a Log_Enable change, a purge (Record_Count 0,
+//! - **Logs.** With a clock, a Enable change, a purge (Record_Count 0,
 //!   or a new Log_DeviceObjectProperty), a Stop_When_Full that finds the
 //!   buffer full and a window edge (Start_Time, Stop_Time) each add a
 //!   log-status record, moving Record_Count, Total_Record_Count and
-//!   Records_Since_Notification, and a full buffer may turn Log_Enable off.
+//!   Records_Since_Notification, and a full buffer may turn Enable off.
 //!   Turning detection back on restarts the notification count
 //!   (Last_Notify_Record, Records_Since_Notification).
 //! - **Clock-derived reads.** Calendar Present_Value is whether today is in
@@ -92,19 +92,19 @@ const LOG_RECORD: &[P] = &[
     P::RECORDS_SINCE_NOTIFICATION,
 ];
 
-/// A log-status record, and Log_Enable turned off when it fills a buffer
+/// A log-status record, and Enable turned off when it fills a buffer
 /// that stops when full.
 const LOG_RECORD_MAY_STOP: &[P] = &[
     P::RECORD_COUNT,
     P::TOTAL_RECORD_COUNT,
     P::RECORDS_SINCE_NOTIFICATION,
-    P::LOG_ENABLE,
+    P::ENABLE,
 ];
 
 /// The writes that record log status on a Trend Log, Trend Log Multiple or
 /// Event Log (`log_lifecycle.rs`), and turning detection back on.
 const LOG_LIFECYCLE: &[Effect] = &[
-    (P::LOG_ENABLE, LOG_RECORD),
+    (P::ENABLE, LOG_RECORD),
     // A purge empties the buffer and records it. It turns logging off
     // only in a buffer of one record, and Buffer_Size is read-only here.
     (
@@ -117,7 +117,7 @@ const LOG_LIFECYCLE: &[Effect] = &[
         &[
             P::TOTAL_RECORD_COUNT,
             P::RECORDS_SINCE_NOTIFICATION,
-            P::LOG_ENABLE,
+            P::ENABLE,
         ],
     ),
     (P::START_TIME, LOG_RECORD_MAY_STOP),
@@ -165,10 +165,10 @@ pub fn clocked_effects(object_type: T) -> &'static [&'static [Effect]] {
         ],
         T::TREND_LOG | T::TREND_LOG_MULTIPLE => &[LOG_LIFECYCLE, LOG_PURGE_ON_REFERENCE],
         T::EVENT_LOG => &[LOG_LIFECYCLE],
-        // A Log_Enable change appends a status record; a smaller
+        // A Enable change appends a status record; a smaller
         // Buffer_Size drops the oldest records.
         T::AUDIT_LOG => &[&[
-            (P::LOG_ENABLE, &[P::RECORD_COUNT, P::TOTAL_RECORD_COUNT]),
+            (P::ENABLE, &[P::RECORD_COUNT, P::TOTAL_RECORD_COUNT]),
             (P::BUFFER_SIZE, &[P::RECORD_COUNT]),
         ]],
         T::CALENDAR => &[&[(P::DATE_LIST, &[P::PRESENT_VALUE])]],

@@ -357,7 +357,7 @@ mod tests {
             object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap(),
             mac_address: MacAddr::from_slice(&[192, 168, 1, 100, 0xBA, 0xC0]),
             max_apdu_length: 1476,
-            segmentation_supported: Segmentation::NONE,
+            segmentation_supported: Segmentation::NO_SEGMENTATION,
             max_segments_accepted: None,
             vendor_id: 42,
             last_seen: Instant::now(),
@@ -509,7 +509,9 @@ mod tests {
         table.upsert_with_result(make_device(1));
         assert_eq!(
             table.local_peer_segmentation(&[192, 168, 1, 100, 0xBA, 0xC0]),
-            Some(PeerSegmentation::Authoritative(Segmentation::NONE))
+            Some(PeerSegmentation::Authoritative(
+                Segmentation::NO_SEGMENTATION
+            ))
         );
 
         // Purge removes the row and its provenance with it.

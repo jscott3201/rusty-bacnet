@@ -107,7 +107,7 @@ const ACCESS_RIGHTS_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::NEGATIVE_ACCESS_RULES, RequiredRead, None, Always),
     PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::RELIABILITY, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::LOG_ENABLE, RequiredRead, None, Always),
+    PropertyMetadata::new(P::ENABLE, RequiredRead, None, Always),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 

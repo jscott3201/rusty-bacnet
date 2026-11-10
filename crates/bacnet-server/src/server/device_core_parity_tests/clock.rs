@@ -98,7 +98,7 @@ impl Parity {
             .config
             .device
             .clone()
-            .with_segmentation(Segmentation::NONE);
+            .with_segmentation(Segmentation::NO_SEGMENTATION);
         let mut db = database(&identity);
         timer.pin();
         let clock = DeviceClock::new(Zone::new(offset, summer).unwrap(), timer.reader());

@@ -19,7 +19,7 @@ fn i_am() -> IAmRequest {
     IAmRequest {
         object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap(),
         max_apdu_length: 480,
-        segmentation_supported: Segmentation::NONE,
+        segmentation_supported: Segmentation::NO_SEGMENTATION,
         vendor_id: 261,
     }
 }

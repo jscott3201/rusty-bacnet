@@ -15,7 +15,7 @@ expression: text
 "│ Services          33 supported                           ││ event-detection-enable          true                                                               ││  9 site defined           -        │"
 "│ Object types      64 supported                           ││ out-of-service                  false                                                              ││>10 site defined           55       │"
 "│ Max APDU          1476                                   ││ units                           percent                                                            ││ 11 site defined           -        │"
-"│ Segmentation      none                                   ││ priority-array                  priority 10 in control                                             ││ 12 site defined           -        │"
+"│ Segmentation      no-segmentation                        ││ priority-array                  priority 10 in control                                             ││ 12 site defined           -        │"
 "│ Database revision 0                                      ││ relinquish-default              0                                                                  ││ 13 site defined           -        │"
 "└──────────────────────────────────────────────────────────┘│ current-command-priority        10                                                                 ││ 14 site defined           -        │"
 "┌ Objects (11) ────────────────────────────────────────────┐│ cov-increment                   0                                                                  ││ 15 site defined           -        │"

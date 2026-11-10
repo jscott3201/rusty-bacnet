@@ -217,7 +217,7 @@ class PropertyIdentifier:
     EVENT_MESSAGE_TEXTS_CONFIG: PropertyIdentifier
     LOG_BUFFER: PropertyIdentifier
     LOG_DEVICE_OBJECT_PROPERTY: PropertyIdentifier
-    LOG_ENABLE: PropertyIdentifier
+    ENABLE: PropertyIdentifier
     LOG_INTERVAL: PropertyIdentifier
     PROTOCOL_REVISION: PropertyIdentifier
     RECORD_COUNT: PropertyIdentifier
@@ -523,7 +523,7 @@ class PropertyIdentifier:
     BBMD_BROADCAST_DISTRIBUTION_TABLE: PropertyIdentifier
     BBMD_FOREIGN_DEVICE_TABLE: PropertyIdentifier
     CHANGES_PENDING: PropertyIdentifier
-    COMMAND_NP: PropertyIdentifier
+    COMMAND: PropertyIdentifier
     FD_BBMD_ADDRESS: PropertyIdentifier
     FD_SUBSCRIPTION_LIFETIME: PropertyIdentifier
     LINK_SPEED: PropertyIdentifier
@@ -1037,8 +1037,8 @@ class EngineeringUnits(enum.IntEnum):
     OHM_METER_SQUARED_PER_METER: EngineeringUnits
     OHM_METERS: EngineeringUnits
     MILLIOHMS: EngineeringUnits
-    KILOHMS: EngineeringUnits
-    MEGOHMS: EngineeringUnits
+    KILOOHMS: EngineeringUnits
+    MEGAOHMS: EngineeringUnits
     MICROSIEMENS: EngineeringUnits
     MILLISIEMENS: EngineeringUnits
     SIEMENS: EngineeringUnits
@@ -1357,6 +1357,7 @@ class EngineeringUnits(enum.IntEnum):
     POUNDS_FORCE_PER_SQUARE_INCH_ABSOLUTE: EngineeringUnits
     POUNDS_FORCE_PER_SQUARE_INCH_GAUGE: EngineeringUnits
     MICROSIEMENS_PER_CENTIMETER: EngineeringUnits
+    MILLISIEMENS_PER_CENTIMETER: EngineeringUnits
     MILLISIEMENS_PER_METER: EngineeringUnits
     MILLIONS_OF_US_GALLONS: EngineeringUnits
     MILLIONS_OF_IMPERIAL_GALLONS: EngineeringUnits
@@ -1364,6 +1365,7 @@ class EngineeringUnits(enum.IntEnum):
     MILS_PER_YEAR: EngineeringUnits
     MILLIMETERS_PER_YEAR: EngineeringUnits
     PULSES_PER_MINUTE: EngineeringUnits
+    ACTIVE_ENERGY_PULSE_VALUE: EngineeringUnits
     REACTIVE_ENERGY_PULSE_VALUE: EngineeringUnits
     APPARENT_ENERGY_PULSE_VALUE: EngineeringUnits
     VOLT_SQUARED_HOUR_PULSE_VALUE: EngineeringUnits
@@ -1524,17 +1526,17 @@ class ReinitializedState:
 class Segmentation:
     """BACnet segmentation support options (Clause 20.1.2.4)."""
 
-    BOTH: Segmentation
-    TRANSMIT: Segmentation
-    RECEIVE: Segmentation
-    NONE: Segmentation
+    SEGMENTED_BOTH: Segmentation
+    SEGMENTED_TRANSMIT: Segmentation
+    SEGMENTED_RECEIVE: Segmentation
+    NO_SEGMENTATION: Segmentation
 
     @staticmethod
     def from_raw(value: int) -> Segmentation: ...
     def to_raw(self) -> int: ...
     @property
     def name(self) -> str | None:
-        """The constant's name (``"BOTH"``), or None for a value without one."""
+        """The constant's name (``"SEGMENTED_BOTH"``), or None for a value without one."""
         ...
     def __repr__(self) -> str: ...
     def __eq__(self, other: object) -> bool: ...
@@ -5154,7 +5156,7 @@ class BACnetServer:
     lifetime. No generation, persistence, change detection, or version/variant
     enforcement is provided. Non-SC transports ignore this option.
 
-    Segmentation defaults to NONE. When enabled, apdu_segment_timeout_ms must
+    Segmentation defaults to NO_SEGMENTATION. When enabled, apdu_segment_timeout_ms must
     be positive; it supplies Device APDU_SEGMENT_TIMEOUT, response SegmentACK
     waits, and the 4*Tseg receive inactivity timer. A separate 16-second
     no-progress resource limit aborts abandoned request transfers with OTHER.
@@ -5235,7 +5237,7 @@ class BACnetServer:
         daylight_savings: bool = False,
         share_port_by_address: bool = False,
         share_wildcard_port: bool = False,
-        segmentation_supported: Segmentation = Segmentation.NONE,
+        segmentation_supported: Segmentation = Segmentation.NO_SEGMENTATION,
         apdu_segment_timeout_ms: int = 5000,
         bbmd: Optional[Bbmd] = None,
         foreign_device: Optional[ForeignDevice] = None,
@@ -6329,7 +6331,7 @@ class BACnetServer:
 
         ``positive_access_rules`` and ``negative_access_rules`` set the two
         rule arrays as ``AccessRule`` mappings, and ``enable`` sets Enable
-        (``PropertyIdentifier.LOG_ENABLE``, property 133), whose FALSE
+        (``PropertyIdentifier.ENABLE``, property 133), whose FALSE
         disables every rule. Peers can write all three over the network. A
         wrong shape or type raises TypeError, an unknown or missing key or a
         device that isn't a Device raises ValueError, and a location naming

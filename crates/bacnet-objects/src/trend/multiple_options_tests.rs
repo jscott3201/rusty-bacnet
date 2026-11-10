@@ -345,7 +345,7 @@ fn the_window_holds_back_records_and_logs_each_change() {
     log.add_record(sample(at(9, 0))).unwrap();
     assert_eq!(data(&log), [DISABLED]);
     assert_eq!(
-        read(&log, PropertyIdentifier::LOG_ENABLE),
+        read(&log, PropertyIdentifier::ENABLE),
         PropertyValue::Boolean(true)
     );
 
@@ -366,17 +366,17 @@ fn the_window_holds_back_records_and_logs_each_change() {
     // logged for them; a purge there carries LOG_DISABLED.
     write(
         &mut log,
-        PropertyIdentifier::LOG_ENABLE,
+        PropertyIdentifier::ENABLE,
         PropertyValue::Boolean(false),
     )
     .unwrap();
     assert_eq!(
-        read(&log, PropertyIdentifier::LOG_ENABLE),
+        read(&log, PropertyIdentifier::ENABLE),
         PropertyValue::Boolean(false)
     );
     write(
         &mut log,
-        PropertyIdentifier::LOG_ENABLE,
+        PropertyIdentifier::ENABLE,
         PropertyValue::Boolean(true),
     )
     .unwrap();
@@ -398,7 +398,7 @@ fn the_window_holds_back_records_and_logs_each_change() {
     // written TRUE inside it then logs a clear status.
     write(
         &mut log,
-        PropertyIdentifier::LOG_ENABLE,
+        PropertyIdentifier::ENABLE,
         PropertyValue::Boolean(false),
     )
     .unwrap();
@@ -406,7 +406,7 @@ fn the_window_holds_back_records_and_logs_each_change() {
     assert!(!log.log_buffer_mut().unwrap().refresh_window());
     write(
         &mut log,
-        PropertyIdentifier::LOG_ENABLE,
+        PropertyIdentifier::ENABLE,
         PropertyValue::Boolean(true),
     )
     .unwrap();
@@ -541,7 +541,7 @@ fn an_opening_that_would_fill_a_stop_when_full_log_disables_it() {
     assert!(log.log_buffer_mut().unwrap().refresh_window());
     assert_eq!(data(&log), [DISABLED, DISABLED]);
     assert_eq!(
-        read(&log, PropertyIdentifier::LOG_ENABLE),
+        read(&log, PropertyIdentifier::ENABLE),
         PropertyValue::Boolean(false)
     );
 }

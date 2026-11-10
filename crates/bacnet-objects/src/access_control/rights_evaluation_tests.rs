@@ -289,7 +289,7 @@ pub(super) fn stub_rights(
     Stub::new(
         rights(instance),
         vec![
-            (PropertyIdentifier::LOG_ENABLE, enable),
+            (PropertyIdentifier::ENABLE, enable),
             (
                 PropertyIdentifier::POSITIVE_ACCESS_RULES,
                 served_rules(positive),
@@ -647,7 +647,7 @@ fn rule_arrays_that_do_not_decode_are_unreadable() {
     db.add(Stub::new(
         rights(1),
         vec![
-            (PropertyIdentifier::LOG_ENABLE, PropertyValue::Boolean(true)),
+            (PropertyIdentifier::ENABLE, PropertyValue::Boolean(true)),
             (
                 PropertyIdentifier::POSITIVE_ACCESS_RULES,
                 served_rules(&[anytime(None)]),

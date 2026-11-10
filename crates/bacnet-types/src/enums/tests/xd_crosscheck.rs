@@ -162,7 +162,6 @@ fn our_tables() -> Vec<(&'static str, Members)> {
         MessagePriority,
         NetworkNumberQuality,
         NetworkPortCommand,
-        NetworkReachability,
         NetworkType,
         NodeType,
         NotifyType,
@@ -342,12 +341,21 @@ fn compare(table: &str, ours: &Members, theirs: &Members, out: &mut BTreeSet<Dif
 }
 
 /// Our member names that the file uses for a different value: a meaning
-/// difference, never something to allow-list.
-fn moved_names(table: &str, ours: &Members, theirs: &Members) -> Vec<String> {
+/// difference, never something to allow-list, except a name a `file-error`
+/// entry says the file put at the wrong value.
+fn moved_names(table: &str, ours: &Members, theirs: &Members, allowed: &[Allowed]) -> Vec<String> {
+    let misplaced = |xd_name: &str, xd_value: u32| {
+        allowed.iter().any(|e| {
+            e.category == Category::FileError
+                && e.table == table
+                && e.values.contains(&xd_value)
+                && names_eq(e.xd, xd_name)
+        })
+    };
     let mut moved = Vec::new();
     for (name, value) in ours {
         for (xd_name, xd_value) in theirs {
-            if names_eq(name, xd_name) && value != xd_value {
+            if names_eq(name, xd_name) && value != xd_value && !misplaced(xd_name, *xd_value) {
                 moved.push(format!(
                     "{table}: {name} is {value} here, {xd_value} in the file"
                 ));
@@ -364,7 +372,7 @@ fn allows(entry: &Allowed, diff: &Diff) -> bool {
             entry.table == table && entry.values.contains(value)
         }
         (
-            Category::OlderName | Category::LaterRename,
+            Category::OlderName | Category::LaterRename | Category::FileError,
             Diff::Renamed {
                 table,
                 value,
@@ -417,6 +425,7 @@ fn tables_agree_with_ashrae_xd_except_where_allowed() {
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let xd = parse_xd(&text);
     let ours: BTreeMap<&str, Members> = our_tables().into_iter().collect();
+    let allowed = allowed();
 
     let mut diffs = BTreeSet::new();
     let mut moved = Vec::new();
@@ -430,7 +439,7 @@ fn tables_agree_with_ashrae_xd_except_where_allowed() {
         }
         for p in paths {
             compare(name, members, &xd[&p], &mut diffs);
-            moved.extend(moved_names(name, members, &xd[&p]));
+            moved.extend(moved_names(name, members, &xd[&p], &allowed));
             claimed.insert(p);
         }
     }
@@ -443,7 +452,6 @@ fn tables_agree_with_ashrae_xd_except_where_allowed() {
         moved.join("\n")
     );
 
-    let allowed = allowed();
     let mut report = String::new();
     let unlisted: Vec<&Diff> = diffs
         .iter()

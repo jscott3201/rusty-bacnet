@@ -272,7 +272,10 @@ async fn alarm_summary_within_budget_segmented_bip_roundtrip() {
             .interface(Ipv4Addr::LOCALHOST)
             .port(0)
             .database(database)
-            .device(bacnet_objects::DeviceIdentity::default().with_segmentation(Segmentation::BOTH))
+            .device(
+                bacnet_objects::DeviceIdentity::default()
+                    .with_segmentation(Segmentation::SEGMENTED_BOTH),
+            )
             .get_alarm_summary_budget(GetAlarmSummaryBudget {
                 max_objects: work,
                 max_service_ack_bytes: bytes,

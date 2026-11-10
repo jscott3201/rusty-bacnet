@@ -32,11 +32,11 @@ impl IdentityView {
             P::SEGMENTATION_SUPPORTED => {
                 PropertyValue::Enumerated(u32::from(self.segmentation.to_raw()))
             }
-            P::APDU_SEGMENT_TIMEOUT if self.segmentation != Segmentation::NONE => {
+            P::APDU_SEGMENT_TIMEOUT if self.segmentation != Segmentation::NO_SEGMENTATION => {
                 PropertyValue::Unsigned(self.timeout)
             }
-            P::MAX_SEGMENTS_ACCEPTED if self.segmentation != Segmentation::NONE => {
-                PropertyValue::Unsigned(if self.segmentation == Segmentation::TRANSMIT {
+            P::MAX_SEGMENTS_ACCEPTED if self.segmentation != Segmentation::NO_SEGMENTATION => {
+                PropertyValue::Unsigned(if self.segmentation == Segmentation::SEGMENTED_TRANSMIT {
                     1
                 } else {
                     65

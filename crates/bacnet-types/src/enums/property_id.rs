@@ -154,7 +154,7 @@ bacnet_enum! {
     const EVENT_TIME_STAMPS = 130;
     const LOG_BUFFER = 131;
     const LOG_DEVICE_OBJECT_PROPERTY = 132;
-    const LOG_ENABLE = 133;
+    const ENABLE = 133;
     const LOG_INTERVAL = 134;
     const MAXIMUM_VALUE = 135;
     const MINIMUM_VALUE = 136;
@@ -439,7 +439,7 @@ bacnet_enum! {
     const BBMD_BROADCAST_DISTRIBUTION_TABLE = 414;
     const BBMD_FOREIGN_DEVICE_TABLE = 415;
     const CHANGES_PENDING = 416;
-    const COMMAND_NP = 417;
+    const COMMAND = 417;
     const FD_BBMD_ADDRESS = 418;
     const FD_SUBSCRIPTION_LIFETIME = 419;
     const LINK_SPEED = 420;

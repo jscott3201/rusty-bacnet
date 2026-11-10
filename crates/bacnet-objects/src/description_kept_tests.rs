@@ -233,7 +233,7 @@ impl<S: Clone + 'static> Kept for Case<S> {
     fn has_setter(&self) -> bool {
         !matches!(
             self.other.0,
-            P::LOG_ENABLE | P::DEFAULT_COLOR | P::DEFAULT_COLOR_TEMPERATURE
+            P::ENABLE | P::DEFAULT_COLOR | P::DEFAULT_COLOR_TEMPERATURE
         )
     }
     fn clears(&self) -> bool {
@@ -307,7 +307,7 @@ fn cases(saved: Option<&str>) -> Vec<Box<dyn Kept>> {
                 Ok(Box::new(AccessRightsObject::with_persistence(1, "AR", storage)?) as _)
             },
             description: |saved: &AccessRightsSnapshot| saved.description.as_ref(),
-            other: (P::LOG_ENABLE, PropertyValue::Boolean(false)),
+            other: (P::ENABLE, PropertyValue::Boolean(false)),
             tag: Some(|saved| {
                 let rights = oid(bacnet_types::enums::ObjectType::ACCESS_RIGHTS);
                 tag_of(crate::snapshot::access_rights::encode(rights, saved))

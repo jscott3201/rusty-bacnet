@@ -454,7 +454,7 @@ async fn disabled_sink_returns_service_request_denied_without_receiver_mutation(
         db.get_mut(&sink)
             .unwrap()
             .write_property(
-                PropertyIdentifier::LOG_ENABLE,
+                PropertyIdentifier::ENABLE,
                 None,
                 PropertyValue::Boolean(false),
                 None,

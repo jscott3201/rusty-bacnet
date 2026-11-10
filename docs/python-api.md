@@ -288,7 +288,7 @@ state = ReinitializedState.WARMSTART
 
 ### Segmentation
 
-Segmentation support levels. Constants: `BOTH`, `TRANSMIT`, `RECEIVE`, `NONE`.
+Segmentation support levels. Constants: `SEGMENTED_BOTH`, `SEGMENTED_TRANSMIT`, `SEGMENTED_RECEIVE`, `NO_SEGMENTATION`.
 
 ### LifeSafetyOperation
 
@@ -2997,7 +2997,7 @@ server = BACnetServer(
     registered_network_port=None, # keyword-only; see "Registered B/IP Network Port"
     # MS/TP options same as BACnetClient (see "MS/TP serial ports");
     # request admission limits: see "Request admission limits"
-    segmentation_supported=Segmentation.NONE, # keyword-only; full-server capabilities
+    segmentation_supported=Segmentation.NO_SEGMENTATION, # keyword-only; full-server capabilities
     apdu_segment_timeout_ms=5000, # keyword-only; shared Device/runtime segment timeout
     # SC options same as BACnetClient
     mutation_policy="permissive", # keyword-only; "deny_all", or a callable deciding each mutation
@@ -3016,8 +3016,8 @@ server = BACnetServer(
 )
 ```
 
-`segmentation_supported` accepts `Segmentation.NONE`, `TRANSMIT`, `RECEIVE` or
-`BOTH`. When active, `apdu_segment_timeout_ms` must be positive and appears as
+`segmentation_supported` accepts `Segmentation.NO_SEGMENTATION`, `SEGMENTED_TRANSMIT`, `SEGMENTED_RECEIVE` or
+`SEGMENTED_BOTH`. When active, `apdu_segment_timeout_ms` must be positive and appears as
 the Device's `APDU_Segment_Timeout`. Incoming inactivity uses `4 * Tseg`;
 outgoing SegmentACK waits use Tseg. The independent 16-second no-progress cap
 ends an incoming transfer with a local `OTHER` Abort. See [server timing](server-segmentation.md)
@@ -3092,7 +3092,7 @@ These builders, `add_timer`, `add_channel`, the three log builders,
 `add_color` and `add_color_temperature` keep a written Description in their
 `storage_path` file, with these rules: every builder that takes
 `storage_path` does, except `add_audit_log`. An Audit Log's files keep its
-records, Log_Enable and Buffer_Size, and a Description a peer writes to it
+records, Enable and Buffer_Size, and a Description a peer writes to it
 lasts until the server restarts. So does one written to an object built
 without `storage_path`, or to a type whose builder has none: the Device and
 the two lighting outputs among them, which keep one only through the Rust
@@ -3711,13 +3711,13 @@ reopening that Audit Log; the server does not infer a global or
 working-directory location.
 
 An Audit Log's Buffer_Size takes a write, from a client or through
-`write_property_local`, only while Log_Enable is FALSE; with logging on the
+`write_property_local`, only while Enable is FALSE; with logging on the
 write raises `WRITE_ACCESS_DENIED`. A smaller size keeps the newest records
 that fit, and a larger one keeps them all. The size written is stored with
 the log, so a reopened log keeps it and `buffer_size` sizes only a log its
 storage path does not hold yet; when the two differ the log keeps the stored
-size and logs a warning. To give a stored log a new size, turn Log_Enable off,
-write Buffer_Size and turn Log_Enable on again, or use a new storage path. Clients cannot purge an Audit Log, since its
+size and logs a warning. To give a stored log a new size, turn Enable off,
+write Buffer_Size and turn Enable on again, or use a new storage path. Clients cannot purge an Audit Log, since its
 Record_Count is read-only; the application calls
 [`purge_audit_log`](#purge_audit_logobject_id).
 
@@ -4693,7 +4693,7 @@ for ALWAYS and ALL, so a read array can be handed back to the keyword
 (#1344).
 
 `enable` (a bool, `True` when omitted) sets Enable, which a peer reads and
-writes as `PropertyIdentifier.LOG_ENABLE` (property 133); `False` disables
+writes as `PropertyIdentifier.ENABLE` (property 133); `False` disables
 every rule in both arrays. Peers can also write the arrays: the whole array
 as `PropertyValue.application_data` holding the rules' octets back to back,
 one rule at an `array_index`, or the size at index 0. A grown array gets

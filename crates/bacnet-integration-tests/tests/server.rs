@@ -38,7 +38,7 @@ async fn make_server_with_dcc_policy(
         identity: bacnet_objects::DeviceIdentity::new(1234, 555)
             .expect("valid Device identity")
             .with_name("Integration Test Device")
-            .with_segmentation(Segmentation::BOTH),
+            .with_segmentation(Segmentation::SEGMENTED_BOTH),
         vendor_name: "Rusty BACnet".into(),
         ..DeviceConfig::default()
     })
@@ -73,7 +73,7 @@ async fn make_server_with_dcc_policy(
         // this shared fixture advertises both. The other suites are
         // indifferent to it beyond the I-Am/Device property now saying
         // SEGMENTED_BOTH.
-        .device(bacnet_objects::DeviceIdentity::new(1234, 555).unwrap().with_segmentation(Segmentation::BOTH))
+        .device(bacnet_objects::DeviceIdentity::new(1234, 555).unwrap().with_segmentation(Segmentation::SEGMENTED_BOTH))
         .database(db)
         .build()
         .await

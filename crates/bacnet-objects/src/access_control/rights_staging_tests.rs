@@ -84,7 +84,7 @@ fn indexed_index_zero_and_enable_writes_stage_too() {
             Some(0),
             PropertyValue::Unsigned(1),
         ),
-        (P::LOG_ENABLE, None, PropertyValue::Boolean(false)),
+        (P::ENABLE, None, PropertyValue::Boolean(false)),
     ] {
         let wait = stage_saved(&mut rights, property, index, &value);
         write(&mut rights, property, index, value).unwrap();
@@ -147,16 +147,16 @@ fn a_staged_write_whose_save_fails_is_refused_and_the_old_state_stays() {
     write_positive(&mut rights, &old).unwrap();
     storage.fail.store(true, Ordering::SeqCst);
     let enable = PropertyValue::Boolean(false);
-    let wait = stage_saved(&mut rights, P::LOG_ENABLE, None, &enable);
+    let wait = stage_saved(&mut rights, P::ENABLE, None, &enable);
     assert_refused(
-        write(&mut rights, P::LOG_ENABLE, None, enable),
+        write(&mut rights, P::ENABLE, None, enable),
         ErrorClass::DEVICE,
         ErrorCode::OPERATIONAL_PROBLEM,
     );
     rights.release_staged_write(&wait);
     rights.wait_for_saves();
     assert!(rights.enable());
-    assert!(!rights.property_saved(P::LOG_ENABLE));
+    assert!(!rights.property_saved(P::ENABLE));
     assert_eq!(storage.snapshot(), Some(positive_only(&old)));
     assert_eq!(storage.saves(), 1);
 }
@@ -236,8 +236,8 @@ fn staging_skips_writes_the_object_does_not_save_or_will_refuse() {
             PropertyValue::ApplicationData(vec![0xFF]),
         ),
         (P::NEGATIVE_ACCESS_RULES, Some(1), rules.clone()),
-        (P::LOG_ENABLE, None, PropertyValue::Null),
-        (P::LOG_ENABLE, Some(1), PropertyValue::Boolean(true)),
+        (P::ENABLE, None, PropertyValue::Null),
+        (P::ENABLE, Some(1), PropertyValue::Boolean(true)),
     ] {
         assert!(
             skipped(rights.stage_write(property, index, &value)),
@@ -248,7 +248,7 @@ fn staging_skips_writes_the_object_does_not_save_or_will_refuse() {
     assert_refused(
         write(
             &mut rights,
-            P::LOG_ENABLE,
+            P::ENABLE,
             Some(1),
             PropertyValue::Boolean(true),
         ),

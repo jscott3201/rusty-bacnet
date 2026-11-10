@@ -234,7 +234,7 @@ fn property_metadata_access_rights_exact_sets_readable_rows_and_indexed_list() {
         P::NEGATIVE_ACCESS_RULES,
         P::STATUS_FLAGS,
         P::RELIABILITY,
-        P::LOG_ENABLE,
+        P::ENABLE,
     ];
     let required = [
         P::OBJECT_IDENTIFIER,
@@ -245,7 +245,7 @@ fn property_metadata_access_rights_exact_sets_readable_rows_and_indexed_list() {
         P::NEGATIVE_ACCESS_RULES,
         P::STATUS_FLAGS,
         P::RELIABILITY,
-        P::LOG_ENABLE,
+        P::ENABLE,
         P::PROPERTY_LIST,
     ];
     assert_exact_sets(&object, &all, &required);
@@ -261,10 +261,10 @@ fn property_metadata_access_rights_exact_sets_readable_rows_and_indexed_list() {
     );
     // Enable (property 133) starts TRUE and is no array (#1332).
     assert_eq!(
-        object.read_property(P::LOG_ENABLE, None).unwrap(),
+        object.read_property(P::ENABLE, None).unwrap(),
         PropertyValue::Boolean(true)
     );
-    assert!(!is_array_property(&object, P::LOG_ENABLE));
+    assert!(!is_array_property(&object, P::ENABLE));
     // Both rule properties are arrays, empty until rules are set.
     for p in [P::POSITIVE_ACCESS_RULES, P::NEGATIVE_ACCESS_RULES] {
         assert!(is_array_property(&object, p));
@@ -368,7 +368,7 @@ fn property_metadata_access_identity_write_capabilities_match_dispatch() {
                 P::GLOBAL_IDENTIFIER,
                 P::POSITIVE_ACCESS_RULES,
                 P::NEGATIVE_ACCESS_RULES,
-                P::LOG_ENABLE,
+                P::ENABLE,
             ],
             &[],
         ),
@@ -560,16 +560,16 @@ fn property_metadata_access_identity_writes_store_verbatim_and_deny() {
             PropertyValue::Unsigned(77)
         );
         rights
-            .write_property(P::LOG_ENABLE, None, PropertyValue::Boolean(false), None)
+            .write_property(P::ENABLE, None, PropertyValue::Boolean(false), None)
             .unwrap();
         assert_eq!(
-            rights.read_property(P::LOG_ENABLE, None).unwrap(),
+            rights.read_property(P::ENABLE, None).unwrap(),
             PropertyValue::Boolean(false)
         );
         for (p, value) in [
             (P::GLOBAL_IDENTIFIER, PropertyValue::Enumerated(77)),
             (P::DESCRIPTION, PropertyValue::Unsigned(1)),
-            (P::LOG_ENABLE, PropertyValue::Enumerated(1)),
+            (P::ENABLE, PropertyValue::Enumerated(1)),
             (P::POSITIVE_ACCESS_RULES, PropertyValue::Boolean(true)),
         ] {
             assert_error(

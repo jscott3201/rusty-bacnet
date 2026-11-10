@@ -422,8 +422,8 @@ bacnet_enum! {
     /// Segmentation support options (Clause 20.1.2.4).
     pub struct Segmentation(u8);
 
-    const BOTH = 0;
-    const TRANSMIT = 1;
-    const RECEIVE = 2;
-    const NONE = 3;
+    const SEGMENTED_BOTH = 0;
+    const SEGMENTED_TRANSMIT = 1;
+    const SEGMENTED_RECEIVE = 2;
+    const NO_SEGMENTATION = 3;
 }

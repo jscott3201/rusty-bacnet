@@ -185,7 +185,7 @@ fn time_range_references_with_nothing_to_judge() {
     let missing = present_value(schedule(2));
     assert_eq!(judge(with_true_schedule(), missing), Judged::Never);
     let mut unserved = on.clone();
-    unserved.property_identifier = PropertyIdentifier::LOG_ENABLE.to_raw();
+    unserved.property_identifier = PropertyIdentifier::ENABLE.to_raw();
     assert_eq!(judge(with_true_schedule(), unserved), Judged::Never);
     // Another device, or the wildcard Device, even though Schedule 1 exists
     // here: never read.

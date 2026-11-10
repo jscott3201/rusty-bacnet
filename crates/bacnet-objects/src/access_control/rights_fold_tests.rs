@@ -48,7 +48,7 @@ fn provisioning() -> Vec<PendingWrite> {
             octets(&[zone_rule(1), zone_rule(2)]),
         ),
         pending(P::NEGATIVE_ACCESS_RULES, None, octets(&[zone_rule(3)])),
-        pending(P::LOG_ENABLE, None, PropertyValue::Boolean(false)),
+        pending(P::ENABLE, None, PropertyValue::Boolean(false)),
         pending(P::POSITIVE_ACCESS_RULES, Some(2), octets(&[zone_rule(4)])),
     ]
 }
@@ -127,9 +127,9 @@ fn a_request_that_stops_part_way_puts_storage_back_to_the_steps_it_took() {
     assert_eq!(storage.saves(), 2);
     // The object is free: the next write stages at once.
     let enable = PropertyValue::Boolean(false);
-    let wait = staged(rights.stage_write(P::LOG_ENABLE, None, &enable));
+    let wait = staged(rights.stage_write(P::ENABLE, None, &enable));
     block_on(&wait);
-    write(&mut rights, P::LOG_ENABLE, None, enable).unwrap();
+    write(&mut rights, P::ENABLE, None, enable).unwrap();
     rights.release_staged_write(&wait);
     rights.wait_for_saves();
     assert_eq!(storage.saves(), 3);
@@ -143,7 +143,7 @@ fn staging_ends_at_a_write_the_object_will_refuse_and_passes_a_null_by() {
     let writes = vec![
         // A NULL the object refuses as the wrong datatype, which the server
         // answers as a success that changes nothing (#1396).
-        pending(P::LOG_ENABLE, None, PropertyValue::Null),
+        pending(P::ENABLE, None, PropertyValue::Null),
         pending(
             P::DESCRIPTION,
             None,
@@ -152,7 +152,7 @@ fn staging_ends_at_a_write_the_object_will_refuse_and_passes_a_null_by() {
         pending(P::POSITIVE_ACCESS_RULES, None, octets(&rules)),
         // Past the end, so refused: the request makes nothing after it.
         pending(P::NEGATIVE_ACCESS_RULES, Some(1), octets(&rules)),
-        pending(P::LOG_ENABLE, None, PropertyValue::Boolean(false)),
+        pending(P::ENABLE, None, PropertyValue::Boolean(false)),
     ];
     // The Description is kept with the rules (#2364).
     let saved = AccessRightsSnapshot {
@@ -208,7 +208,7 @@ fn a_write_the_object_wont_make_leaves_another_requests_staged_write_alone() {
             ErrorCode::INVALID_DATA_TYPE,
         ),
         (
-            P::LOG_ENABLE,
+            P::ENABLE,
             None,
             PropertyValue::Null,
             ErrorCode::INVALID_DATA_TYPE,
@@ -229,7 +229,7 @@ fn a_write_the_object_wont_make_leaves_another_requests_staged_write_alone() {
     // The staged write still holds the object.
     let enable = PropertyValue::Boolean(false);
     assert!(matches!(
-        rights.stage_write(P::LOG_ENABLE, None, &enable),
+        rights.stage_write(P::ENABLE, None, &enable),
         StageStep::Busy(_)
     ));
     drop(held.go);

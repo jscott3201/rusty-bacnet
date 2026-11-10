@@ -273,14 +273,14 @@ fn access_rights_enable_defaults_true_and_follows_the_setter_and_writes() {
     let mut rights = AccessRightsObject::new(7, "AR-7").unwrap();
     assert!(rights.enable());
     assert_eq!(
-        rights.read_property(P::LOG_ENABLE, None).unwrap(),
+        rights.read_property(P::ENABLE, None).unwrap(),
         PropertyValue::Boolean(true)
     );
     assert!(crate::property_metadata::has_property(
         &rights.property_metadata(),
-        P::LOG_ENABLE
+        P::ENABLE
     ));
-    assert!(is_writable_property(&rights, P::LOG_ENABLE));
+    assert!(is_writable_property(&rights, P::ENABLE));
 
     // Disabling the object leaves each rule's own flag as it was.
     let kept = rule(Some(schedule(1)), Some(local(ObjectType::ACCESS_POINT, 2)));
@@ -288,20 +288,20 @@ fn access_rights_enable_defaults_true_and_follows_the_setter_and_writes() {
     rights.set_enable(false);
     assert!(!rights.enable());
     assert_eq!(
-        rights.read_property(P::LOG_ENABLE, None).unwrap(),
+        rights.read_property(P::ENABLE, None).unwrap(),
         PropertyValue::Boolean(false)
     );
     assert_eq!(rights.positive_access_rules(), std::slice::from_ref(&kept));
 
     rights
-        .write_property(P::LOG_ENABLE, None, PropertyValue::Boolean(true), None)
+        .write_property(P::ENABLE, None, PropertyValue::Boolean(true), None)
         .unwrap();
     assert!(rights.enable());
     // A NULL write is left out: Clause 15.9.2 makes it a no-op success on a
     // property like this one, which the stack doesn't do yet (#1396).
     for wrong in [PropertyValue::Unsigned(0), PropertyValue::Enumerated(0)] {
         assert_property_error(
-            rights.write_property(P::LOG_ENABLE, None, wrong, None),
+            rights.write_property(P::ENABLE, None, wrong, None),
             ErrorCode::INVALID_DATA_TYPE,
         );
     }

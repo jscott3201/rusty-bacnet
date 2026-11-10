@@ -311,7 +311,7 @@ fn disable_logging() {
     let mut el = EventLogObject::new(1, "EL-1", 100).unwrap();
     bind_clock(&mut el);
     el.write_property(
-        PropertyIdentifier::LOG_ENABLE,
+        PropertyIdentifier::ENABLE,
         None,
         PropertyValue::Boolean(false),
         None,
@@ -358,7 +358,7 @@ fn read_event_state_default() {
 fn property_list_complete() {
     let el = EventLogObject::new(1, "EL-1", 100).unwrap();
     let props = crate::test_rows::listed(&el.property_metadata());
-    assert!(props.contains(&PropertyIdentifier::LOG_ENABLE));
+    assert!(props.contains(&PropertyIdentifier::ENABLE));
     assert!(props.contains(&PropertyIdentifier::STOP_WHEN_FULL));
     assert!(props.contains(&PropertyIdentifier::BUFFER_SIZE));
     assert!(props.contains(&PropertyIdentifier::LOG_BUFFER));
@@ -512,7 +512,7 @@ fn event_log_disabled_ordinary_rejection_does_not_consume_identity() {
     let mut el = EventLogObject::new(1, "EL-1", 1).unwrap();
     bind_clock(&mut el);
     el.write_property(
-        PropertyIdentifier::LOG_ENABLE,
+        PropertyIdentifier::ENABLE,
         None,
         PropertyValue::Boolean(false),
         None,

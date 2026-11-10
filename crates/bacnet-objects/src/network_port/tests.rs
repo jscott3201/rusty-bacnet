@@ -60,7 +60,7 @@ fn configured_bip_contract_requires_application_properties() {
             PropertyValue::OctetString(vec![0; 4])
         );
     }
-    for p in [P::MAX_APDU_LENGTH_ACCEPTED, P::COMMAND_NP, P::EVENT_STATE] {
+    for p in [P::MAX_APDU_LENGTH_ACCEPTED, P::COMMAND, P::EVENT_STATE] {
         error(object.read_property(p, None), ErrorCode::UNKNOWN_PROPERTY);
     }
 }
@@ -292,7 +292,7 @@ fn configured_snapshot_refuses_activation_writes_without_state_change() {
         }
         assert_eq!(object.read_property(p, None).unwrap(), before);
     }
-    for p in [P::COMMAND_NP, P::MAX_APDU_LENGTH_ACCEPTED] {
+    for p in [P::COMMAND, P::MAX_APDU_LENGTH_ACCEPTED] {
         assert!(
             matches!(object.write_property(p,None,PropertyValue::Unsigned(1),None),Err(Error::Remote(RemoteError::Error {code,..})) if code==ErrorCode::UNKNOWN_PROPERTY)
         );
@@ -363,7 +363,7 @@ fn non_bip_application_rows_do_not_claim_ipv4_fields() {
             P::IP_SUBNET_MASK,
             P::BACNET_IP_UDP_PORT,
             P::IP_DNS_SERVER,
-            P::COMMAND_NP,
+            P::COMMAND,
             P::MAX_APDU_LENGTH_ACCEPTED,
         ] {
             error(object.read_property(p, None), ErrorCode::UNKNOWN_PROPERTY);

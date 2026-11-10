@@ -92,11 +92,11 @@ pub(crate) fn parse_services(services: Option<Vec<u8>>) -> Vec<ServiceSupported>
     }
 }
 
-/// Map an optional segmentation override (default: NONE, the proven value).
+/// Map an optional segmentation override (default: NO_SEGMENTATION, the proven value).
 pub(crate) fn parse_segmentation(segmentation: Option<PySegmentation>) -> Segmentation {
     segmentation
         .map(|s| s.to_rust())
-        .unwrap_or(Segmentation::NONE)
+        .unwrap_or(Segmentation::NO_SEGMENTATION)
 }
 
 /// Build the single validated DeviceIdentity (builder-time only).

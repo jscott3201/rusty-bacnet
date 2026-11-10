@@ -51,7 +51,7 @@ async fn site(routed: bool) -> (BACnetClient<LoopbackTransport>, Peer) {
                 remote_network: NETWORK,
                 remote_mac: STATION.to_vec(),
                 max_apdu_length: 1476,
-                segmentation_supported: Segmentation::NONE,
+                segmentation_supported: Segmentation::NO_SEGMENTATION,
                 max_segments_accepted: None,
             })
             .await
@@ -378,7 +378,7 @@ async fn device_mgmt_unknown_device_and_invalid_time_routes_send_nothing() {
             object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, INSTANCE + 1).unwrap(),
             mac_address: MacAddr::from_slice(ROUTER),
             max_apdu_length: 1476,
-            segmentation_supported: Segmentation::NONE,
+            segmentation_supported: Segmentation::NO_SEGMENTATION,
             max_segments_accepted: None,
             vendor_id: 0,
             last_seen: std::time::Instant::now(),

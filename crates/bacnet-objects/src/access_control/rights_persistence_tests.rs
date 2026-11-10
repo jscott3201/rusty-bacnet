@@ -21,7 +21,7 @@ use std::sync::atomic::Ordering;
 const SAVED: [P; 3] = [
     P::POSITIVE_ACCESS_RULES,
     P::NEGATIVE_ACCESS_RULES,
-    P::LOG_ENABLE,
+    P::ENABLE,
 ];
 
 #[test]
@@ -45,13 +45,7 @@ fn written_rules_and_enable_read_back_after_a_rebuild() {
         octets(&[zone_rule(3)]),
     )
     .unwrap();
-    write(
-        &mut rights,
-        P::LOG_ENABLE,
-        None,
-        PropertyValue::Boolean(false),
-    )
-    .unwrap();
+    write(&mut rights, P::ENABLE, None, PropertyValue::Boolean(false)).unwrap();
     let negative = [grown_rule(), zone_rule(3)];
     let expected = AccessRightsSnapshot {
         positive_access_rules: Some(positive.to_vec()),
@@ -118,13 +112,7 @@ fn saved_values_win_over_configured_ones() {
     assert_eq!(storage.saves(), 0);
     // An operator then writes the positive rules and Enable; both are saved.
     write_positive(&mut first, &written).unwrap();
-    write(
-        &mut first,
-        P::LOG_ENABLE,
-        None,
-        PropertyValue::Boolean(true),
-    )
-    .unwrap();
+    write(&mut first, P::ENABLE, None, PropertyValue::Boolean(true)).unwrap();
     drop(first);
 
     // Second start: the same configuration again, but the written values
@@ -189,7 +177,7 @@ fn configured_values_apply_at_every_start_until_a_write() {
     write_positive(&mut in_memory, &[zone_rule(3)]).unwrap();
     write(
         &mut in_memory,
-        P::LOG_ENABLE,
+        P::ENABLE,
         None,
         PropertyValue::Boolean(false),
     )
@@ -230,7 +218,7 @@ fn a_write_that_cannot_be_saved_is_refused_and_changes_nothing() {
             PropertyValue::Unsigned(5),
         ),
         (P::NEGATIVE_ACCESS_RULES, None, octets(&[zone_rule(3)])),
-        (P::LOG_ENABLE, None, PropertyValue::Boolean(false)),
+        (P::ENABLE, None, PropertyValue::Boolean(false)),
     ] {
         assert_refused(
             write(&mut rights, property, index, value),
@@ -242,7 +230,7 @@ fn a_write_that_cannot_be_saved_is_refused_and_changes_nothing() {
     assert!(rights.negative_access_rules().is_empty());
     assert!(rights.enable());
     assert!(!rights.property_saved(P::NEGATIVE_ACCESS_RULES));
-    assert!(!rights.property_saved(P::LOG_ENABLE));
+    assert!(!rights.property_saved(P::ENABLE));
     assert_eq!(storage.snapshot(), Some(positive_only(&kept)));
     // A write the object refuses itself keeps its own error, with no save.
     storage.fail.store(false, Ordering::SeqCst);
@@ -442,13 +430,7 @@ fn file_persistence_keeps_rules_across_a_rebuild() {
     let mut rights = AccessRightsObject::with_persistence(4, "AR", storage()).unwrap();
     rights.set_negative_access_rules([zone_rule(1)]).unwrap();
     write_positive(&mut rights, &[zone_rule(2)]).unwrap();
-    write(
-        &mut rights,
-        P::LOG_ENABLE,
-        None,
-        PropertyValue::Boolean(false),
-    )
-    .unwrap();
+    write(&mut rights, P::ENABLE, None, PropertyValue::Boolean(false)).unwrap();
     drop(rights);
     let mut rebuilt = AccessRightsObject::with_persistence(4, "AR", storage()).unwrap();
     rebuilt.set_positive_access_rules([zone_rule(1)]).unwrap();

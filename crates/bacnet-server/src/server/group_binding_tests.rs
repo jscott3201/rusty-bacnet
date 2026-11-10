@@ -61,7 +61,7 @@ fn i_am(identifier: ObjectIdentifier) -> UnconfirmedRequestPdu {
     IAmRequest {
         object_identifier: identifier,
         max_apdu_length: 1476,
-        segmentation_supported: Segmentation::NONE,
+        segmentation_supported: Segmentation::NO_SEGMENTATION,
         vendor_id: 1,
     }
     .encode(&mut service_request);

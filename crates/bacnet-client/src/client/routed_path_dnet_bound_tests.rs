@@ -43,7 +43,7 @@ fn routed_row(dnet: u16, dadr: &[u8]) -> DiscoveredDevice {
         object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, ROUTED_DEVICE).unwrap(),
         mac_address: MacAddr::from_slice(&ROUTER),
         max_apdu_length: 1476,
-        segmentation_supported: Segmentation::NONE,
+        segmentation_supported: Segmentation::NO_SEGMENTATION,
         max_segments_accepted: None,
         vendor_id: 0,
         last_seen: std::time::Instant::now(),
@@ -173,7 +173,7 @@ async fn add_routed_device_refuses_a_destination_no_request_could_reach() {
         remote_network,
         remote_mac,
         max_apdu_length: 1476,
-        segmentation_supported: Segmentation::NONE,
+        segmentation_supported: Segmentation::NO_SEGMENTATION,
         max_segments_accepted: None,
     };
     let too_long = vec![3; bacnet_npdu::MAX_MAC_LEN + 1];

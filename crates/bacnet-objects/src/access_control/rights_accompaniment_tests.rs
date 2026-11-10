@@ -79,7 +79,7 @@ fn assert_listed(rights: &AccessRightsObject, listed: bool) {
         let order: Vec<_> = metadata.iter().map(|row| row.property_identifier).collect();
         assert_eq!(
             &order[order.len() - 3..],
-            [P::LOG_ENABLE, P::ACCOMPANIMENT, P::PROPERTY_LIST]
+            [P::ENABLE, P::ACCOMPANIMENT, P::PROPERTY_LIST]
         );
     }
 }
@@ -374,7 +374,7 @@ fn a_written_accompaniment_survives_a_rebuild_and_wins_over_the_setter() {
     for property in [
         P::POSITIVE_ACCESS_RULES,
         P::NEGATIVE_ACCESS_RULES,
-        P::LOG_ENABLE,
+        P::ENABLE,
     ] {
         assert!(!rebuilt.property_saved(property), "{property:?}");
     }

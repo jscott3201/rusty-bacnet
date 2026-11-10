@@ -20,7 +20,7 @@
 //!   ordinary side effects. No property is skipped as time dependent: the
 //!   proptest's back-to-back read check would catch one that moved by itself.
 //! - no log record is written, because every log-status record needs the
-//!   clock and a write that would add one is refused (Log_Enable changes, a
+//!   clock and a write that would add one is refused (Enable changes, a
 //!   Record_Count purge, a new Log_DeviceObjectProperty). So no log count,
 //!   buffer, Status_Flags or Event_State moves on a log type.
 //! - writes that only `write_property_from` takes (Present_Value of Analog,
@@ -33,7 +33,7 @@
 //!   Reason_For_Disable; stamps (Modification_Date, Count_Change_Time, the
 //!   Timer's Update_Time and Expiration_Time) move; log writes add records,
 //!   moving Record_Count, Total_Record_Count, Log_Buffer and
-//!   Records_Since_Notification, and may turn Log_Enable off;
+//!   Records_Since_Notification, and may turn Enable off;
 //! - with configured actions, Command Present_Value moves In_Process and
 //!   All_Writes_Successful;
 //! - with an IP configuration (or a non-Normal command mode), Network Port

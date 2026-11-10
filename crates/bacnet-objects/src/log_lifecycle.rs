@@ -22,8 +22,8 @@ use crate::property_metadata::{
 
 // Capability describes the implemented write route, not whether a particular
 // value, clock, or buffer state passes that route's existing validation.
-pub(crate) const LOG_ENABLE_METADATA: PropertyMetadata =
-    PropertyMetadata::new(P::LOG_ENABLE, RequiredWrite, None, Always);
+pub(crate) const ENABLE_METADATA: PropertyMetadata =
+    PropertyMetadata::new(P::ENABLE, RequiredWrite, None, Always);
 pub(crate) const STOP_WHEN_FULL_METADATA: PropertyMetadata =
     PropertyMetadata::new(P::STOP_WHEN_FULL, RequiredRead, None, Always);
 pub(crate) const RECORD_COUNT_METADATA: PropertyMetadata =

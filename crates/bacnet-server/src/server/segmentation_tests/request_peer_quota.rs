@@ -101,7 +101,7 @@ async fn request_peer_quota_sixteen_admitted_seventeenth_refused_other_peer_admi
 
 #[tokio::test]
 async fn request_peer_quota_denial_is_stateless_and_active_transfers_complete() {
-    let (server, client, mut rx) = start_reassembly_server(Segmentation::BOTH).await;
+    let (server, client, mut rx) = start_reassembly_server(Segmentation::SEGMENTED_BOTH).await;
     let text = "all-sixteen-survive-denial-and-duplicates";
     let chunks = split_into(&write_property_payload(text), 3);
     for invoke_id in 0..16 {
@@ -170,7 +170,7 @@ async fn request_peer_quota_denial_is_stateless_and_active_transfers_complete() 
 
 #[tokio::test]
 async fn request_peer_quota_wrapped_zero_uses_existing_segment_cap_and_frees_slot() {
-    let (server, client, mut rx) = start_reassembly_server(Segmentation::BOTH).await;
+    let (server, client, mut rx) = start_reassembly_server(Segmentation::SEGMENTED_BOTH).await;
     for invoke_id in 1..16 {
         send_segment_with_window(&client, invoke_id, 0, 1, true, &[1]).await;
         expect_positive_ack(&mut rx, invoke_id, 0).await;
@@ -199,7 +199,7 @@ async fn request_peer_quota_wrapped_zero_uses_existing_segment_cap_and_frees_slo
 
 #[tokio::test]
 async fn request_peer_quota_abort_and_save_failure_release_only_owned_slots() {
-    let (server, client, mut rx) = start_reassembly_server(Segmentation::BOTH).await;
+    let (server, client, mut rx) = start_reassembly_server(Segmentation::SEGMENTED_BOTH).await;
     for invoke_id in 0..16 {
         send_segment_with_window(&client, invoke_id, 0, 1, true, &[1]).await;
         expect_positive_ack(&mut rx, invoke_id, 0).await;
@@ -309,7 +309,7 @@ async fn send_initial_with_raw_window(
 
 #[tokio::test]
 async fn request_peer_quota_preserves_window_and_support_precedence() {
-    let (server, client, mut rx) = start_reassembly_server(Segmentation::BOTH).await;
+    let (server, client, mut rx) = start_reassembly_server(Segmentation::SEGMENTED_BOTH).await;
     for invoke_id in 0..16 {
         send_segment_with_window(&client, invoke_id, 0, 1, true, &[1]).await;
         expect_positive_ack(&mut rx, invoke_id, 0).await;
@@ -332,7 +332,10 @@ async fn request_peer_quota_preserves_window_and_support_precedence() {
 
     // Unsupported devices cannot accumulate inbound sessions: their immutable
     // advertisement rejects even invalid-window traffic before any admission.
-    for segmentation in [Segmentation::NONE, Segmentation::TRANSMIT] {
+    for segmentation in [
+        Segmentation::NO_SEGMENTATION,
+        Segmentation::SEGMENTED_TRANSMIT,
+    ] {
         let (server, client, mut rx) = start_reassembly_server(segmentation).await;
         for invoke_id in 0..=16 {
             send_initial_with_raw_window(&client, invoke_id, 0).await;

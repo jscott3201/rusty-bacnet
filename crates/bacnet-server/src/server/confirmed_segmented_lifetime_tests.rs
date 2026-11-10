@@ -22,7 +22,8 @@ fn segmented_read() -> Apdu {
 async fn segmented_child_keeps_pending_after_parent_returns_through_final_ack() {
     let mut f = Fixture::configured(
         ServerConfig {
-            device: bacnet_objects::DeviceIdentity::default().with_segmentation(Segmentation::BOTH),
+            device: bacnet_objects::DeviceIdentity::default()
+                .with_segmentation(Segmentation::SEGMENTED_BOTH),
             ..Default::default()
         },
         100,

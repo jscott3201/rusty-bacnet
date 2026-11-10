@@ -32,7 +32,7 @@ fn a_new_identity_takes_the_endpoint_defaults() {
     assert_eq!(identity.instance(), 1001);
     assert_eq!(identity.vendor_id(), 42);
     assert_eq!(identity.max_apdu_length(), 1476);
-    assert_eq!(identity.segmentation(), Segmentation::NONE);
+    assert_eq!(identity.segmentation(), Segmentation::NO_SEGMENTATION);
     assert_eq!(identity.apdu_segment_timeout_ms(), 5000);
     assert_eq!(identity.services(), &[ServiceSupported::READ_PROPERTY]);
     assert!(identity.network_ports().is_empty());
@@ -58,14 +58,14 @@ fn the_builders_set_what_they_name() {
     let identity = identity()
         .with_max_apdu(1474)
         .unwrap()
-        .with_segmentation(Segmentation::BOTH)
+        .with_segmentation(Segmentation::SEGMENTED_BOTH)
         .with_apdu_segment_timeout_ms(7000)
         .with_services(&services)
         .with_device_uuid([7; 16])
         .with_name("boiler-plant");
     // The raw ceiling is kept, 1474 included.
     assert_eq!(identity.max_apdu_length(), 1474);
-    assert_eq!(identity.segmentation(), Segmentation::BOTH);
+    assert_eq!(identity.segmentation(), Segmentation::SEGMENTED_BOTH);
     assert_eq!(identity.apdu_segment_timeout_ms(), 7000);
     assert_eq!(identity.services(), &services);
     assert_eq!(identity.device_uuid(), [7; 16]);
@@ -130,7 +130,7 @@ fn validate_refuses_an_unknown_segmentation_and_a_zero_segment_timeout() {
     assert!(encoding_message(unknown.validate()).contains("segmentation"));
 
     let zero = identity()
-        .with_segmentation(Segmentation::TRANSMIT)
+        .with_segmentation(Segmentation::SEGMENTED_TRANSMIT)
         .with_apdu_segment_timeout_ms(0);
     assert!(encoding_message(zero.validate()).contains("APDU_Segment_Timeout"));
     // Without segmentation the timeout isn't served, so zero is fine.
@@ -153,7 +153,7 @@ fn built_device(identity: &DeviceIdentity) -> ObjectDatabase {
 #[test]
 fn validate_device_accepts_the_devices_own_build_and_names_each_mismatch() {
     let segmented = identity()
-        .with_segmentation(Segmentation::BOTH)
+        .with_segmentation(Segmentation::SEGMENTED_BOTH)
         .with_apdu_segment_timeout_ms(6000);
     let db = built_device(&segmented);
     let device = db.get(&segmented.device_oid()).unwrap();
@@ -162,7 +162,7 @@ fn validate_device_accepts_the_devices_own_build_and_names_each_mismatch() {
     // A Device of another instance.
     let other = DeviceIdentity::new(1002, 42)
         .unwrap()
-        .with_segmentation(Segmentation::BOTH)
+        .with_segmentation(Segmentation::SEGMENTED_BOTH)
         .with_apdu_segment_timeout_ms(6000);
     assert!(encoding_message(other.validate_device(device)).contains("identifier"));
 
@@ -171,7 +171,7 @@ fn validate_device_accepts_the_devices_own_build_and_names_each_mismatch() {
         (
             DeviceIdentity::new(1001, 43)
                 .unwrap()
-                .with_segmentation(Segmentation::BOTH)
+                .with_segmentation(Segmentation::SEGMENTED_BOTH)
                 .with_apdu_segment_timeout_ms(6000),
             Some("VENDOR_IDENTIFIER"),
         ),
@@ -180,7 +180,9 @@ fn validate_device_accepts_the_devices_own_build_and_names_each_mismatch() {
             Some("MAX_APDU_LENGTH_ACCEPTED"),
         ),
         (
-            segmented.clone().with_segmentation(Segmentation::TRANSMIT),
+            segmented
+                .clone()
+                .with_segmentation(Segmentation::SEGMENTED_TRANSMIT),
             Some("SEGMENTATION_SUPPORTED"),
         ),
         (

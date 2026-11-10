@@ -261,7 +261,7 @@ fn database() -> ObjectDatabase {
         identity: bacnet_objects::DeviceIdentity::new(4321, 0)
             .expect("valid Device identity")
             .with_name("Audit E2E Device")
-            .with_segmentation(Segmentation::BOTH),
+            .with_segmentation(Segmentation::SEGMENTED_BOTH),
         ..DeviceConfig::default()
     })
     .unwrap();
@@ -284,7 +284,7 @@ async fn started() -> (
         .device(
             bacnet_objects::DeviceIdentity::new(4321, 0)
                 .unwrap()
-                .with_segmentation(Segmentation::BOTH),
+                .with_segmentation(Segmentation::SEGMENTED_BOTH),
         )
         .build()
         .await

@@ -262,8 +262,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                 peer_segmentation
                 && matches!(
                     capability,
-                    bacnet_types::enums::Segmentation::NONE
-                        | bacnet_types::enums::Segmentation::TRANSMIT
+                    bacnet_types::enums::Segmentation::NO_SEGMENTATION
+                        | bacnet_types::enums::Segmentation::SEGMENTED_TRANSMIT
                 )
             {
                 return Err(bacnet_types::error::SegmentationError::PeerCannotReceive {

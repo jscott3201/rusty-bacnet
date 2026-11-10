@@ -60,10 +60,10 @@ fn rpm_device_property_metadata_pics_and_database_are_exact() {
         daylight_savings_status: true,
     };
     for segmentation_supported in [
-        Segmentation::NONE,
-        Segmentation::TRANSMIT,
-        Segmentation::RECEIVE,
-        Segmentation::BOTH,
+        Segmentation::NO_SEGMENTATION,
+        Segmentation::SEGMENTED_TRANSMIT,
+        Segmentation::SEGMENTED_RECEIVE,
+        Segmentation::SEGMENTED_BOTH,
     ] {
         let mut db = ObjectDatabase::new();
         let mut object = DeviceObject::new(DeviceConfig {
@@ -90,7 +90,7 @@ fn rpm_device_property_metadata_pics_and_database_are_exact() {
                 P::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS,
                 P::DEVICE_UUID,
             ];
-            if segmentation_supported != Segmentation::NONE {
+            if segmentation_supported != Segmentation::NO_SEGMENTATION {
                 optional.extend([P::APDU_SEGMENT_TIMEOUT, P::MAX_SEGMENTS_ACCEPTED]);
             }
             if state == 1 {

@@ -220,7 +220,7 @@ async fn device_table_purge_runs_without_inbound_apdu() {
         object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 2001).unwrap(),
         mac_address: MacAddr::from_slice(&[192, 168, 1, 42, 0xBA, 0xC0]),
         max_apdu_length: 1476,
-        segmentation_supported: Segmentation::NONE,
+        segmentation_supported: Segmentation::NO_SEGMENTATION,
         max_segments_accepted: None,
         vendor_id: 42,
         last_seen: Instant::now()
@@ -316,7 +316,7 @@ async fn confirmed_request_does_not_wrap_discovered_max_apdu_length() {
         object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 2002).unwrap(),
         mac_address: MacAddr::from_slice(&remote_mac),
         max_apdu_length: u32::from(u16::MAX) + 1,
-        segmentation_supported: Segmentation::NONE,
+        segmentation_supported: Segmentation::NO_SEGMENTATION,
         max_segments_accepted: None,
         vendor_id: 42,
         last_seen: Instant::now(),

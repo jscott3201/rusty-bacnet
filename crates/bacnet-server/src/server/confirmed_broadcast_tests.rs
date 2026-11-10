@@ -163,7 +163,7 @@ async fn a_confirmed_request_sent_by_broadcast_is_neither_executed_nor_answered(
 async fn a_segment_sent_by_broadcast_draws_no_segment_ack_or_abort() {
     // Without segmented reception the first segment would draw an Abort, and
     // with it a SegmentACK; by broadcast it draws neither.
-    for segmentation in [Segmentation::NONE, Segmentation::BOTH] {
+    for segmentation in [Segmentation::NO_SEGMENTATION, Segmentation::SEGMENTED_BOTH] {
         let (tx, rx) = mpsc::channel(8);
         let transport = TestTransport::builder()
             .local_mac(&BIP_LOCAL_MAC)

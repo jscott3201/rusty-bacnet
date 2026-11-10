@@ -115,7 +115,7 @@ pub(crate) fn stage_audit_notification(
 /// Take a batch [`stage_audit_notification`] staged, once its commit has run.
 ///
 /// A batch whose commit failed is refused with DEVICE / OPERATIONAL_PROBLEM
-/// (#1366), as a Log_Enable or Buffer_Size write or a purge whose commit
+/// (#1366), as a Enable or Buffer_Size write or a purge whose commit
 /// fails is (#1238). The log's writer has already logged the storage error,
 /// which is no protocol error to hand the sender.
 pub(crate) fn finish_audit_notification(

@@ -515,7 +515,7 @@ fn commit_and_clock_failures_leave_memory_and_durable_snapshot_unchanged() {
 fn disabled_sink_denies_before_clock_or_persistence_change() {
     let (mut log, persistence) = log(10);
     log.write_property(
-        bacnet_types::enums::PropertyIdentifier::LOG_ENABLE,
+        bacnet_types::enums::PropertyIdentifier::ENABLE,
         None,
         bacnet_types::primitives::PropertyValue::Boolean(false),
         None,
@@ -556,7 +556,7 @@ fn an_empty_batch_or_a_disabled_log_is_refused_confirmed_or_not() {
         Err(Error::OutOfRange(_))
     ));
     log.write_property(
-        bacnet_types::enums::PropertyIdentifier::LOG_ENABLE,
+        bacnet_types::enums::PropertyIdentifier::ENABLE,
         None,
         bacnet_types::primitives::PropertyValue::Boolean(false),
         None,

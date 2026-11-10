@@ -109,7 +109,7 @@ fn devices() -> DeviceTable {
             network: station.map(|(network, _)| network),
             vendor_id: 260,
             max_apdu: 1476,
-            segmentation: Segmentation::NONE,
+            segmentation: Segmentation::NO_SEGMENTATION,
             last_seen: std::time::Instant::now(),
         });
     }

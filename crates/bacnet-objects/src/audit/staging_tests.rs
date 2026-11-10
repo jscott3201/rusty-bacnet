@@ -359,21 +359,20 @@ fn a_staged_log_enable_write_commits_off_the_lock_and_is_taken_by_the_write() {
     let generation = log.generation();
     let (started, go) = storage.hold();
     let wait = staged_write(log.stage_write(
-        PropertyIdentifier::LOG_ENABLE,
+        PropertyIdentifier::ENABLE,
         None,
         &PropertyValue::Boolean(false),
     ));
     started.recv_timeout(WAIT).unwrap();
     assert!(log.log_enable());
     assert_eq!(
-        log.read_property(PropertyIdentifier::LOG_ENABLE, None)
-            .unwrap(),
+        log.read_property(PropertyIdentifier::ENABLE, None).unwrap(),
         PropertyValue::Boolean(true)
     );
     go.send(()).unwrap();
     block_on(wait.clone());
     log.write_property(
-        PropertyIdentifier::LOG_ENABLE,
+        PropertyIdentifier::ENABLE,
         None,
         PropertyValue::Boolean(false),
         None,
@@ -391,7 +390,7 @@ fn a_staged_log_enable_write_its_request_dropped_leaves_storage_with_the_served_
     let (mut log, storage) = log();
     let generation = log.generation();
     let wait = staged_write(log.stage_write(
-        PropertyIdentifier::LOG_ENABLE,
+        PropertyIdentifier::ENABLE,
         None,
         &PropertyValue::Boolean(false),
     ));
@@ -415,7 +414,7 @@ fn a_staged_log_enable_write_its_request_dropped_leaves_storage_with_the_served_
     assert_eq!(reopened.generation(), generation + 1);
     reopened
         .write_property(
-            PropertyIdentifier::LOG_ENABLE,
+            PropertyIdentifier::ENABLE,
             None,
             PropertyValue::Boolean(false),
             None,
@@ -444,12 +443,12 @@ fn staging_skips_a_write_with_nothing_to_commit() {
     let (mut log, storage) = log();
     let skipped = |step| matches!(step, StageStep::Skip);
     assert!(skipped(log.stage_write(
-        PropertyIdentifier::LOG_ENABLE,
+        PropertyIdentifier::ENABLE,
         None,
         &PropertyValue::Boolean(true),
     )));
     assert!(skipped(log.stage_write(
-        PropertyIdentifier::LOG_ENABLE,
+        PropertyIdentifier::ENABLE,
         None,
         &PropertyValue::Unsigned(0),
     )));
@@ -472,7 +471,7 @@ fn reopen(storage: &Arc<SlowPersistence>) -> AuditLogObject {
 
 fn stage_log_disable(log: &mut AuditLogObject) -> SaveWait {
     staged_write(log.stage_write(
-        PropertyIdentifier::LOG_ENABLE,
+        PropertyIdentifier::ENABLE,
         None,
         &PropertyValue::Boolean(false),
     ))
@@ -503,7 +502,7 @@ fn a_log_dropped_after_its_staged_change_was_made_keeps_it() {
     let wait = stage_log_disable(&mut log);
     block_on(wait.clone());
     log.write_property(
-        PropertyIdentifier::LOG_ENABLE,
+        PropertyIdentifier::ENABLE,
         None,
         PropertyValue::Boolean(false),
         None,
@@ -534,7 +533,7 @@ fn a_log_dropped_part_way_through_staged_changes_keeps_the_steps_taken() {
     let generation = log.generation();
     let wait = staged_write(log.stage_writes(&[
         PendingWrite {
-            property: PropertyIdentifier::LOG_ENABLE,
+            property: PropertyIdentifier::ENABLE,
             array_index: None,
             value: PropertyValue::Boolean(false),
         },
@@ -548,7 +547,7 @@ fn a_log_dropped_part_way_through_staged_changes_keeps_the_steps_taken() {
     assert_eq!(storage.committed().capacity, 5);
     // The request makes its first write, then goes before its second.
     log.write_property(
-        PropertyIdentifier::LOG_ENABLE,
+        PropertyIdentifier::ENABLE,
         None,
         PropertyValue::Boolean(false),
         None,

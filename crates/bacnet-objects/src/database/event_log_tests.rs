@@ -279,7 +279,7 @@ fn a_disabled_log_ignores_the_notification() {
     db.get_mut(&log_oid(1))
         .unwrap()
         .write_property(
-            PropertyIdentifier::LOG_ENABLE,
+            PropertyIdentifier::ENABLE,
             None,
             PropertyValue::Boolean(false),
             None,
@@ -322,7 +322,7 @@ fn stop_when_full_stops_the_log_before_it_fills() {
     assert_eq!(
         db.get(&log_oid(1))
             .unwrap()
-            .read_property(PropertyIdentifier::LOG_ENABLE, None)
+            .read_property(PropertyIdentifier::ENABLE, None)
             .unwrap(),
         PropertyValue::Boolean(false)
     );

@@ -52,7 +52,8 @@ pub(super) async fn start_routed_reassembly_server() -> (
     ))
     .unwrap();
     let config = ServerConfig {
-        device: bacnet_objects::DeviceIdentity::default().with_segmentation(Segmentation::BOTH),
+        device: bacnet_objects::DeviceIdentity::default()
+            .with_segmentation(Segmentation::SEGMENTED_BOTH),
         ..ServerConfig::default()
     };
     let server = BACnetServer::start(config, db, transport).await.unwrap();
@@ -321,7 +322,7 @@ pub(super) async fn present_value<T: TransportPort + 'static>(server: &BACnetSer
 
 #[tokio::test]
 async fn reassembled_request_reuses_invoke_after_direct_response_issuance() {
-    let (server, client, mut rx) = start_reassembly_server(Segmentation::BOTH).await;
+    let (server, client, mut rx) = start_reassembly_server(Segmentation::SEGMENTED_BOTH).await;
     let invoke_id = 5;
     let text = "direct-then-reassembled-duplicate";
     let payload = write_property_payload(text);
@@ -371,7 +372,7 @@ async fn reassembled_request_reuses_invoke_after_direct_response_issuance() {
 /// not break.
 #[tokio::test]
 async fn two_hundred_fifty_six_segments_reassemble_byte_exact() {
-    let (server, client, mut rx) = start_reassembly_server(Segmentation::BOTH).await;
+    let (server, client, mut rx) = start_reassembly_server(Segmentation::SEGMENTED_BOTH).await;
     let text = "x".repeat(300);
     let chunks = split_into(&write_property_payload(&text), 256);
 
@@ -393,7 +394,7 @@ async fn two_hundred_fifty_six_segments_reassemble_byte_exact() {
 /// request "succeeded" as its own tail.
 #[tokio::test]
 async fn segment_past_the_sequence_space_aborts_instead_of_corrupting() {
-    let (server, client, mut rx) = start_reassembly_server(Segmentation::BOTH).await;
+    let (server, client, mut rx) = start_reassembly_server(Segmentation::SEGMENTED_BOTH).await;
     let text = "y".repeat(310);
     let chunks = split_into(&write_property_payload(&text), 260);
 
@@ -434,7 +435,7 @@ async fn segment_past_the_sequence_space_aborts_instead_of_corrupting() {
 /// silently reset the session. The transfer must survive it.
 #[tokio::test]
 async fn duplicate_segment_zero_draws_negative_ack_and_transfer_survives() {
-    let (server, client, mut rx) = start_reassembly_server(Segmentation::BOTH).await;
+    let (server, client, mut rx) = start_reassembly_server(Segmentation::SEGMENTED_BOTH).await;
     let text = "z".repeat(40);
     let chunks = split_into(&write_property_payload(&text), 3);
 
@@ -467,7 +468,7 @@ async fn duplicate_segment_zero_draws_negative_ack_and_transfer_survives() {
 /// It must end the session and say so.
 #[tokio::test]
 async fn unsaveable_segment_aborts_and_ends_the_session() {
-    let (_server, client, mut rx) = start_reassembly_server(Segmentation::BOTH).await;
+    let (_server, client, mut rx) = start_reassembly_server(Segmentation::SEGMENTED_BOTH).await;
 
     send_segment(&client, 13, 0, true, &[0xAA; 32]).await;
     expect_positive_ack(&mut rx, 13, 0).await;
@@ -497,7 +498,7 @@ async fn unsaveable_segment_aborts_and_ends_the_session() {
 /// the next segment was acked as if nothing happened.
 #[tokio::test]
 async fn peer_abort_clears_the_reassembly_session() {
-    let (_server, client, mut rx) = start_reassembly_server(Segmentation::BOTH).await;
+    let (_server, client, mut rx) = start_reassembly_server(Segmentation::SEGMENTED_BOTH).await;
 
     send_segment(&client, 17, 0, true, &[0x11; 16]).await;
     expect_positive_ack(&mut rx, 17, 0).await;
@@ -640,7 +641,7 @@ async fn routed_peer_abort_through_new_router_removes_existing_reassembly_sessio
 /// reassembling. `ServerConfig::default()` advertises NO_SEGMENTATION.
 #[tokio::test]
 async fn default_config_aborts_segmented_requests_as_unsupported() {
-    let (_server, client, mut rx) = start_reassembly_server(Segmentation::NONE).await;
+    let (_server, client, mut rx) = start_reassembly_server(Segmentation::NO_SEGMENTATION).await;
 
     send_segment(&client, 19, 0, true, &[0x33; 16]).await;
     expect_abort(
@@ -656,7 +657,7 @@ async fn default_config_aborts_segmented_requests_as_unsupported() {
 /// Clause 5.4.5.1 Abort as NO_SEGMENTATION.
 #[tokio::test]
 async fn transmit_only_config_aborts_segmented_requests_as_unsupported() {
-    let (_server, client, mut rx) = start_reassembly_server(Segmentation::TRANSMIT).await;
+    let (_server, client, mut rx) = start_reassembly_server(Segmentation::SEGMENTED_TRANSMIT).await;
 
     send_segment(&client, 21, 0, true, &[0x44; 16]).await;
     expect_abort(
@@ -712,14 +713,15 @@ async fn session_count_cap_refuses_the_129th_session() {
 
 /// Clause 5.4.5.3 case (a): a device that does not support transmitting
 /// segments must Abort an oversized response rather than segmenting it —
-/// the receive-side #381 gate's mirror. RECEIVE may reassemble but not
-/// transmit; BOTH is the positive control proving the gate keys on the
+/// the receive-side #381 gate's mirror. SEGMENTED_RECEIVE may reassemble but not
+/// transmit; SEGMENTED_BOTH is the positive control proving the gate keys on the
 /// configured advertisement.
 #[tokio::test]
 async fn transmit_gate_aborts_oversized_response_under_receive_only() {
-    for (segmentation, expects_segmented) in
-        [(Segmentation::RECEIVE, false), (Segmentation::BOTH, true)]
-    {
+    for (segmentation, expects_segmented) in [
+        (Segmentation::SEGMENTED_RECEIVE, false),
+        (Segmentation::SEGMENTED_BOTH, true),
+    ] {
         let (server, client, mut rx) = start_reassembly_server(segmentation).await;
         {
             let db = server.database();
@@ -766,7 +768,7 @@ async fn transmit_gate_aborts_oversized_response_under_receive_only() {
         .await;
 
         if expects_segmented {
-            match recv_apdu(&mut rx, "segmented response under BOTH").await {
+            match recv_apdu(&mut rx, "segmented response under SEGMENTED_BOTH").await {
                 Apdu::ComplexAck(ack) => {
                     assert!(ack.segmented, "an oversized response must segment");
                     assert_eq!(ack.sequence_number, Some(0));

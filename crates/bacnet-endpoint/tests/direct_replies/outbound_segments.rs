@@ -12,7 +12,7 @@ async fn outbound_tls_server_reassembles_requests_and_completes_segmented_replie
         device: bacnet_objects::DeviceIdentity::default()
             .with_max_apdu(480)
             .expect("valid Device APDU")
-            .with_segmentation(Segmentation::BOTH),
+            .with_segmentation(Segmentation::SEGMENTED_BOTH),
         ..Default::default()
     };
     let mut server =
