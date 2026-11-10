@@ -195,7 +195,14 @@ impl TransportPort for ObservedBip {
     }
 }
 pub type Server = BACnetServer<ObservedBip>;
-pub async fn start(transport: BipTransport, gates: Option<Arc<Gates>>) -> (Server, SocketAddrV4) {
+/// Starts the server and returns its start error as the I/O error
+/// `rerun_on_lost_port` judges: a start on an [`observer`] port can lose it to
+/// another process after the observer's bind (#2425). A start on port 0
+/// cannot, so its callers unwrap.
+pub async fn start(
+    transport: BipTransport,
+    gates: Option<Arc<Gates>>,
+) -> std::io::Result<(Server, SocketAddrV4)> {
     let inner = AnyTransport::Bip(Box::new(transport));
     // A BBMD or foreign device, and the server registers no Network Port.
     assert_ne!(
@@ -225,9 +232,9 @@ pub async fn start(transport: BipTransport, gates: Option<Arc<Gates>>) -> (Serve
         ObservedBip { inner, gates },
     ))
     .await
-    .unwrap();
+    .map_err(crate::port_retry::bind_error)?;
     let (ip, port) = decode_bip_mac(server.local_mac()).unwrap();
-    (server, SocketAddrV4::new(Ipv4Addr::from(ip), port))
+    Ok((server, SocketAddrV4::new(Ipv4Addr::from(ip), port)))
 }
 /// A broadcast observer bound before the node under test, which then starts on
 /// the returned port, sharing it (`share_wildcard_port`, #2366): only a

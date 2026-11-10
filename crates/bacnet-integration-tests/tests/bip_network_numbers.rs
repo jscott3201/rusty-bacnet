@@ -24,7 +24,7 @@ async fn foreign(gates: Option<std::sync::Arc<Gates>>) -> (Server, SocketAddrV4,
         renewal_interval: None,
         ttl: 60,
     });
-    let (server, local) = start(transport, gates).await;
+    let (server, local) = start(transport, gates).await.unwrap(); // port 0: nothing to lose
     let (registration, source) = receive(&bbmd).await;
     assert_eq!(source, local);
     assert_eq!(registration, frame(5, &60u16.to_be_bytes()));
@@ -143,7 +143,7 @@ async fn bip_number_bbmd_full_server_wire_admission() {
             broadcast_mask: [255; 4],
         }]);
         transport.enable_foreign_device_registration(ForeignDevicePolicy::default());
-        let (server, local) = start(transport, None).await;
+        let (server, local) = start(transport, None).await?;
         let group = SocketAddrV4::new(BROADCAST, local.port());
         // Before relying on shared capture, prove the real production wildcard
         // receives this broadcast (BDT fanout) and the independent observer sees it.
@@ -240,7 +240,7 @@ async fn gated_progress_and_stop(bbmd_mode: bool, bare_drop: bool) -> std::io::R
         // Beside the observer on Linux; a port the OS picks is never shared.
         transport.set_share_wildcard_port(true);
         transport.enable_bbmd(vec![]);
-        let (server, local) = start(transport, Some(gates.clone())).await;
+        let (server, local) = start(transport, Some(gates.clone())).await?;
         (server, local, None)
     } else {
         let (server, local, bbmd) = foreign(Some(gates.clone())).await;
