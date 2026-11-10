@@ -227,3 +227,32 @@ fn state_text_is_staged_only_ahead_of_a_saved_write_to_its_object() {
         );
     }
 }
+
+/// An Access Door and an Access Zone keep Alarm_Values too, but their lists
+/// are checked against a fixed enumeration and they have no State_Text:
+/// nothing a request writes sizes them. A State_Text attempt ahead of
+/// their Alarm_Values isn't handed to the stage, and the list, which the
+/// object saves, is.
+#[test]
+fn state_text_sizes_no_list_of_an_access_object() {
+    use crate::server::durable_writes::DurableTarget;
+
+    let (index, count) = four_states();
+    let tamper = PropertyValue::List(vec![PropertyValue::Enumerated(4)]);
+    for kind in [ObjectType::ACCESS_DOOR, ObjectType::ACCESS_ZONE] {
+        let request = wpm(vec![WriteAccessSpecification {
+            object_identifier: oid(kind, INSTANCE),
+            list_of_properties: vec![
+                attempt(P::STATE_TEXT, index, count.clone()),
+                attempt(P::ALARM_VALUES, None, tamper.clone()),
+            ],
+        }]);
+        let staged = DurableTarget::write_property_multiple(&request);
+        assert_eq!(staged.len(), 1, "{kind:?}");
+        assert_eq!(
+            staged[0].0.reference.property_identifier,
+            P::ALARM_VALUES.to_raw(),
+            "{kind:?}"
+        );
+    }
+}

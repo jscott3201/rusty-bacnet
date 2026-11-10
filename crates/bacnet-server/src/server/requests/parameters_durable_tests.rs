@@ -1,5 +1,6 @@
 //! The event algorithm parameters a peer writes to an analog, binary or
-//! multi-state object keeping them in storage save through the server
+//! multi-state object, an Access Door or an Access Zone keeping them in
+//! storage save through the server
 //! (#2331): each WriteProperty stages one save off the database guard, the
 //! write takes it, and a server rebuilt on the storage serves what was
 //! written. A WritePropertyMultiple of two parameters and a reporting
@@ -22,10 +23,10 @@ use std::sync::atomic::Ordering;
 
 use PropertyIdentifier as P;
 
-/// The nine object types that keep a parameter: the analog family, the
+/// The eleven object types that keep a parameter: the analog family, the
 /// binary one and the multi-state one, an Input, an Output and a Value
-/// each.
-const KEEPERS: [ObjectType; 9] = [
+/// each, Access Door and Access Zone.
+const KEEPERS: [ObjectType; 11] = [
     ObjectType::ANALOG_INPUT,
     ObjectType::ANALOG_OUTPUT,
     ObjectType::ANALOG_VALUE,
@@ -35,15 +36,37 @@ const KEEPERS: [ObjectType; 9] = [
     ObjectType::MULTI_STATE_INPUT,
     ObjectType::MULTI_STATE_OUTPUT,
     ObjectType::MULTI_STATE_VALUE,
+    ObjectType::ACCESS_DOOR,
+    ObjectType::ACCESS_ZONE,
 ];
+
+/// A list of an Access Door's or Access Zone's states, as a write carries
+/// it.
+fn listed(states: &[u32]) -> PropertyValue {
+    PropertyValue::List(
+        states
+            .iter()
+            .copied()
+            .map(PropertyValue::Enumerated)
+            .collect(),
+    )
+}
 
 /// The parameters of its own an object of `kind` keeps beside the two time
 /// delays, with a value a write gives each: an analog object's four, a
 /// Binary Input's or Value's Alarm_Value, a Multi-state Input's or Value's
-/// Alarm_Values (the fixture's objects have three states), and none on a
-/// Binary or Multi-state Output.
+/// Alarm_Values (the fixture's objects have three states), an Access Door's
+/// three lists of door alarm states (TAMPER and a proprietary state,
+/// LOCK_DOWN, FREE_ACCESS), an Access Zone's Alarm_Values (AT_UPPER_LIMIT
+/// and a proprietary state), and none on a Binary or Multi-state Output.
 fn own(kind: ObjectType) -> Vec<(P, PropertyValue)> {
     match kind {
+        ObjectType::ACCESS_DOOR => vec![
+            (P::ALARM_VALUES, listed(&[4, 300])),
+            (P::FAULT_VALUES, listed(&[6])),
+            (P::MASKED_ALARM_VALUES, listed(&[7])),
+        ],
+        ObjectType::ACCESS_ZONE => vec![(P::ALARM_VALUES, listed(&[3, 100]))],
         ObjectType::ANALOG_INPUT | ObjectType::ANALOG_OUTPUT | ObjectType::ANALOG_VALUE => vec![
             (P::HIGH_LIMIT, PropertyValue::Real(80.0)),
             (P::LOW_LIMIT, PropertyValue::Real(-10.0)),
@@ -79,9 +102,9 @@ fn parameters(kind: ObjectType) -> Vec<(P, PropertyValue)> {
 }
 
 /// Each type keeps the parameters the object crate says it does, and the
-/// tests below cover every one: the two delays on all nine, four more on
-/// the analog types and one more on the binary and multi-state Inputs and
-/// Values.
+/// tests below cover every one: the two delays on all eleven, four more on
+/// the analog types, one more on the binary and multi-state Inputs and
+/// Values and on an Access Zone, and three more on an Access Door.
 #[test]
 fn the_covered_parameters_are_the_ones_each_type_keeps() {
     use bacnet_objects::snapshot::write_config::keeps_parameter;
@@ -94,6 +117,8 @@ fn the_covered_parameters_are_the_ones_each_type_keeps() {
         P::LIMIT_ENABLE,
         P::ALARM_VALUE,
         P::ALARM_VALUES,
+        P::FAULT_VALUES,
+        P::MASKED_ALARM_VALUES,
     ];
     let mut covered = 0;
     for kind in KEEPERS {
@@ -104,7 +129,7 @@ fn the_covered_parameters_are_the_ones_each_type_keeps() {
         }
         covered += kept.len();
     }
-    assert_eq!(covered, 9 * 2 + 3 * 4 + 4);
+    assert_eq!(covered, 11 * 2 + 3 * 4 + 4 + 3 + 1);
 }
 
 /// Each parameter's WriteProperty takes its staged save, without saving

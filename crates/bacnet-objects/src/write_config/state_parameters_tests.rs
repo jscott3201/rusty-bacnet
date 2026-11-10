@@ -199,6 +199,23 @@ fn uncovered(kind: ObjectType) -> Vec<(P, PropertyValue, AlgorithmWriteConfig)> 
             },
         ),
     ];
+    // An Access Door's two other lists: no property of these types.
+    for property in [P::FAULT_VALUES, P::MASKED_ALARM_VALUES] {
+        let list = Some(vec![1]);
+        let stored = if property == P::FAULT_VALUES {
+            AlgorithmWriteConfig {
+                fault_values: list,
+                ..none()
+            }
+        } else {
+            AlgorithmWriteConfig {
+                masked_alarm_values: list,
+                ..none()
+            }
+        };
+        let written = PropertyValue::List(vec![PropertyValue::Enumerated(1)]);
+        rows.push((property, written, stored));
+    }
     if is_binary(kind) || !has_alarm_values(kind) {
         rows.push((
             P::ALARM_VALUES,
@@ -283,7 +300,7 @@ fn set_condition(object: &mut dyn BACnetObject, offnormal: bool, restored: bool)
 }
 
 /// Commit the transition the detector proposed, from `from` to `to`.
-fn commit(object: &mut dyn BACnetObject, from: EventState, to: EventState) {
+pub(super) fn commit(object: &mut dyn BACnetObject, from: EventState, to: EventState) {
     let reporting = object.event_reporting_mut().unwrap();
     reporting
         .commit_event_transition(EventTransitionCommit {
@@ -592,7 +609,8 @@ fn a_stored_parameter_is_validated_as_a_write_of_it_is() {
 fn a_type_keeps_only_its_own_parameters() {
     for kind in KINDS {
         let rows = uncovered(kind);
-        assert_eq!(rows.len() + covered(kind).len(), 8, "{kind}: every row");
+        let every = crate::snapshot::write_config::parameters::ROWS.len();
+        assert_eq!(rows.len() + covered(kind).len(), every, "{kind}: every row");
         let storage = MemoryConfig::new();
         let mut kept = open(kind, Some(&storage));
         let mut plain = open(kind, None);

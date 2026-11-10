@@ -5022,8 +5022,10 @@ class BACnetServer:
         uses them: Time_Delay and Time_Delay_Normal on all nine, High_Limit,
         Low_Limit, Deadband and Limit_Enable on the analog ones, Alarm_Value
         on a Binary Input or Value, and Alarm_Values on a Multi-state Input
-        or Value. Access Door, Access Zone and Event Enrollment don't keep
-        theirs yet. The builders take no keyword for these parameters, so an
+        or Value. ``add_access_door`` and ``add_access_zone`` keep theirs
+        too, as each says; Event Enrollment doesn't keep its yet. The
+        analog, binary and multi-state builders take no keyword for these
+        parameters, so an
         application sets its own with ``write_property_local``, and that
         write is kept like a peer's: writing them at every start replaces
         what a peer wrote before the restart. To keep a peer's values, write
@@ -5803,7 +5805,14 @@ class BACnetServer:
 
         ``storage_path`` and ``clear_written_reporting`` keep the reporting
         settings and Description a peer writes in that file, as on
-        ``add_analog_input``.
+        ``add_analog_input``, and the door's event algorithm parameters:
+        Time_Delay, Time_Delay_Normal, Alarm_Values, Fault_Values and
+        Masked_Alarm_Values. A list a peer wrote is served again after a
+        restart, over its keyword here, and the door's event detection uses
+        it; ``clear_written_reporting=True`` drops it, so the keyword
+        applies again. A saved list is held to what a write is, so a file
+        naming NORMAL or a number outside the enumeration raises
+        BacnetError.
         """
         ...
     def add_access_credential(
@@ -6028,7 +6037,13 @@ class BACnetServer:
 
         ``storage_path`` and ``clear_written_reporting`` keep the reporting
         settings and Description a peer writes in that file, as on
-        ``add_analog_input``.
+        ``add_analog_input``, and the zone's event algorithm parameters:
+        Time_Delay, Time_Delay_Normal and Alarm_Values. A list a peer wrote
+        is served again after a restart, over ``alarm_values`` here, and
+        the zone's event detection uses it;
+        ``clear_written_reporting=True`` drops it, so the keyword applies
+        again. A saved list is held to what a write is, so a file naming
+        NORMAL or a number outside the enumeration raises BacnetError.
         """
         ...
     def add_credential_data_input(

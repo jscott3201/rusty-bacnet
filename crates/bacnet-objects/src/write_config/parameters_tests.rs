@@ -4,7 +4,8 @@
 //! what the object refuses on the wire fails the build, the clear drops
 //! them with the rest, and a request's writes save once. The binary and
 //! multi-state objects' are in `state_parameters_tests` and
-//! `state_parameter_rules_tests`.
+//! `state_parameter_rules_tests`, and Access Door's and Access Zone's in
+//! `access_parameters_tests`.
 
 use alloc::sync::Arc;
 
@@ -19,7 +20,6 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use super::reporting_tests::{persistence, refused_with};
 use super::test_storage::MemoryConfig;
 use super::{AlgorithmWriteConfig, ReportingWriteConfig, WriteConfigSnapshot};
-use crate::access_control::{AccessDoorObject, AccessZoneObject};
 use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use crate::binary::BinaryValueObject;
 #[cfg(feature = "durable-writes")]
@@ -40,7 +40,7 @@ fn open(kind: ObjectType, storage: Option<&Arc<MemoryConfig>>) -> Box<dyn BACnet
     try_open(kind, storage).unwrap()
 }
 
-fn try_open(
+pub(super) fn try_open(
     kind: ObjectType,
     storage: Option<&Arc<MemoryConfig>>,
 ) -> Result<Box<dyn BACnetObject>, Error> {
@@ -489,14 +489,10 @@ fn a_stored_parameter_is_validated_as_a_write_of_it_is() {
     }
 }
 
-/// The four object types with a reporting store that keep no parameter in
-/// this build.
-const OTHERS: [ObjectType; 4] = [
-    ObjectType::ACCESS_DOOR,
-    ObjectType::ACCESS_ZONE,
-    ObjectType::EVENT_ENROLLMENT,
-    ObjectType::ALERT_ENROLLMENT,
-];
+/// The two object types with a reporting store that keep no parameter in
+/// this build. Access Door's and Access Zone's are in
+/// `access_parameters_tests`.
+const OTHERS: [ObjectType; 2] = [ObjectType::EVENT_ENROLLMENT, ObjectType::ALERT_ENROLLMENT];
 
 /// Object 1 of `kind`, one of [`OTHERS`], keeping its reporting settings
 /// in `storage`.
@@ -512,8 +508,6 @@ fn try_other(
     }
     let source = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1)?;
     match kind {
-        ObjectType::ACCESS_DOOR => build!(AccessDoorObject::new(1, "Door")),
-        ObjectType::ACCESS_ZONE => build!(AccessZoneObject::new(1, "Zone")),
         ObjectType::EVENT_ENROLLMENT => build!(EventEnrollmentObject::new(
             1,
             "EE",
@@ -523,12 +517,11 @@ fn try_other(
     }
 }
 
-/// A type keeps only its own parameters. On each of the four other types
-/// with a reporting store, storage holding any parameter fails the build,
-/// and a write of a time delay is answered as without storage, saves
-/// nothing and is gone after a rebuild: Time_Delay where the type has it,
-/// Time_Delay_Normal on an Event Enrollment, and neither on an Alert
-/// Enrollment, which refuses both.
+/// A type keeps only its own parameters. On each of the two enrollment
+/// types, storage holding any parameter fails the build, and a write of a
+/// time delay is answered as without storage, saves nothing and is gone
+/// after a rebuild: Time_Delay_Normal on an Event Enrollment, and neither
+/// delay on an Alert Enrollment, which refuses both.
 #[test]
 fn a_type_keeps_only_its_own_parameters() {
     for kind in OTHERS {
@@ -539,6 +532,14 @@ fn a_type_keeps_only_its_own_parameters() {
             },
             AlgorithmWriteConfig {
                 alarm_values: Some(vec![1]),
+                ..Default::default()
+            },
+            AlgorithmWriteConfig {
+                fault_values: Some(vec![1]),
+                ..Default::default()
+            },
+            AlgorithmWriteConfig {
+                masked_alarm_values: Some(vec![1]),
                 ..Default::default()
             },
         ];
@@ -576,11 +577,7 @@ fn a_type_keeps_only_its_own_parameters() {
                 read_ok(kept.as_ref(), *property) == Some(PropertyValue::Unsigned(7))
             })
             .count();
-        let expected = match kind {
-            ObjectType::ALERT_ENROLLMENT => 0,
-            ObjectType::EVENT_ENROLLMENT => 1,
-            _ => 2,
-        };
+        let expected = usize::from(kind == ObjectType::EVENT_ENROLLMENT);
         assert_eq!(taken, expected, "{kind}: the delays a write changed");
     }
     let object = BinaryValueObject::new(1, "BV")

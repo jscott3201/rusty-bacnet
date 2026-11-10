@@ -3042,8 +3042,9 @@ the two lighting outputs among them, which keep one only through the Rust
 API's `with_tags_persistence`, and the Network Port, whose transport keeps
 only its own tables in `bdt_persist_path`.
 
-The analog, binary and multi-state builders keep the event algorithm
-parameters a peer writes in the same file (#2331):
+The analog, binary and multi-state builders, `add_access_door` and
+`add_access_zone` keep the event algorithm parameters a peer writes in the
+same file (#2331):
 
 | Builders | Parameters kept |
 | --- | --- |
@@ -3051,6 +3052,8 @@ parameters a peer writes in the same file (#2331):
 | `add_binary_input`, `add_binary_value` | Time_Delay, Time_Delay_Normal, Alarm_Value |
 | `add_multistate_input`, `add_multistate_value` | Time_Delay, Time_Delay_Normal, Alarm_Values |
 | `add_binary_output`, `add_multistate_output` | Time_Delay, Time_Delay_Normal |
+| `add_access_door` | Time_Delay, Time_Delay_Normal, Alarm_Values, Fault_Values, Masked_Alarm_Values |
+| `add_access_zone` | Time_Delay, Time_Delay_Normal, Alarm_Values |
 
 The rules are the reporting settings': saved before the write
 is answered, refused with DEVICE / OPERATIONAL_PROBLEM when the save fails,
@@ -3058,9 +3061,20 @@ with the old value still served and still used by the object's event
 detection. After a restart the object detects with the saved parameters
 from its first evaluation. `clear_written_reporting=True` drops them with
 the rest. A file holding a value the object refuses on the wire raises
-`BacnetError`. No new keyword is needed. Access Door, Access Zone and
-Event Enrollment don't keep their parameters yet: a written Alarm_Values,
-Fault_Values or Event_Parameters lasts until the server restarts.
+`BacnetError`. No new keyword is needed. Event Enrollment doesn't keep its
+parameters yet: a written Event_Parameters or Fault_Parameters lasts until
+the server restarts.
+
+`add_access_door` and `add_access_zone` do take keywords for their lists
+(`alarm_values`, and a door's `fault_values` and `masked_alarm_values`).
+Those are the application's configuration, applied at each start, and a list
+a peer wrote goes over its keyword once the file holds it: the peer's list
+is served after the restart, and the keyword applies again on a start that
+passes `clear_written_reporting=True`. A door or zone list is checked
+against its enumeration alone, when it is written and when it is loaded, so
+a saved one always loads. Door_Alarm_State is checked against the lists the
+door serves, so after such a restart `report_door_state_local` refuses a
+state only the keyword lists name.
 
 One value a write refuses is still restored: saved Alarm_Values naming a
 state past `number_of_states`. A peer can't write such a list, and can't
@@ -3079,7 +3093,8 @@ raises no alarm on its value until a list within its states is written or
 the state is added again. `clear_written_reporting=True` drops the list
 like any other saved value.
 
-These builders take no keyword for the parameters, so an application sets
+The analog, binary and multi-state builders take no keyword for the
+parameters, and no builder takes one for the two delays, so an application sets
 its own limits, alarm values or delays with `write_property_local` once the
 server has started. With `storage_path`, that write is kept exactly like a
 peer's: it is saved in the file and served again after a restart. So an

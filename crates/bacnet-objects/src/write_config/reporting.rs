@@ -18,13 +18,15 @@
 //! (through their `ChangeOfStateReporting`), and Event and Alert
 //! Enrollment. The logs keep the same rows in their own files (#1952).
 //!
-//! The analog, binary and multi-state objects keep their event algorithm
-//! parameters as more rows (the `parameters` module here, compiled with
-//! `event-reporting` like the rest): the two time delays on all nine, the
-//! four OUT_OF_RANGE parameters on the analog ones, Alarm_Value on a Binary
-//! Input or Value and Alarm_Values on a Multi-state Input or Value. They
-//! stay in the detector, and a staged write of one is checked on a detector
-//! of the object's own type, by the code its objects write through. Which
+//! The analog, binary and multi-state objects, Access Door and Access Zone
+//! keep their event algorithm parameters as more rows (the `parameters`
+//! module here, compiled with `event-reporting` like the rest): the two
+//! time delays on all eleven, the four OUT_OF_RANGE parameters on the
+//! analog ones, Alarm_Value on a Binary Input or Value, Alarm_Values on a
+//! Multi-state Input or Value, a door and a zone, and a door's Fault_Values
+//! and Masked_Alarm_Values. They stay where the object holds them (the
+//! detector; a door's two other lists beside it), and a staged write of one
+//! is checked by the code the object writes it through. Which
 //! parameters a type keeps is one table,
 //! [`kept`](crate::snapshot::write_config::parameters::kept);
 //! a write of one the type doesn't keep is made as without storage.

@@ -38,21 +38,32 @@
 //! the format: a [`ReportingWriteConfig`], kept once an object opts in with
 //! its `with_reporting_persistence` builder call.
 //!
-//! The analog, binary and multi-state Input, Output and Value objects keep
-//! the event algorithm parameters a peer writes in that file too (#2331):
-//! Time_Delay and Time_Delay_Normal on all nine; High_Limit, Low_Limit,
-//! Deadband and Limit_Enable on the analog ones; Alarm_Value on a Binary
-//! Input or Value; Alarm_Values on a Multi-state Input or Value. They are
+//! The analog, binary and multi-state Input, Output and Value objects,
+//! Access Door and Access Zone keep the event algorithm parameters a peer
+//! writes in that file too (#2331): Time_Delay and Time_Delay_Normal on all
+//! eleven; High_Limit, Low_Limit, Deadband and Limit_Enable on the analog
+//! ones; Alarm_Value on a Binary Input or Value; Alarm_Values on a
+//! Multi-state Input or Value, an Access Door and an Access Zone;
+//! Fault_Values and Masked_Alarm_Values on an Access Door. They are
 //! an [`AlgorithmWriteConfig`] in the `algorithm` field of the object's
 //! [`ReportingWriteConfig`], stored as kind 6 of the format. They follow
 //! the reporting settings' rules, and a rebuilt object's detector starts
-//! with them. Only Alarm_Values has a setter (`set_alarm_values`), which
-//! gives way to a saved list like the other setters. For the rest an
+//! with them. Only the lists have setters (`set_alarm_values`, and a
+//! door's `set_fault_values` and `set_masked_alarm_values`), which give way
+//! to a saved list like the other setters. For the rest an
 //! application sets its own values with `write_property` before the
 //! builder call, and a saved write then goes over them. A `write_property`
 //! after the builder call is a write like a peer's, and is kept. Storage
 //! holding a value the object refuses on the wire, or a parameter its type
 //! doesn't keep, fails the builder call.
+//!
+//! An Access Door's and an Access Zone's lists are checked against their
+//! enumerations alone (a named or proprietary state other than NORMAL), on
+//! a write and on a load alike, so no saved list is one the rebuilt object
+//! would refuse. A door that has taken its saved lists settles
+//! Door_Alarm_State as it does after a write of one: a state the lists no
+//! longer admit goes back to NORMAL. An Event Enrollment keeps no
+//! parameter yet.
 //!
 //! One wire rule doesn't fail the builder call: an Alarm_Values entry past
 //! Number_Of_States, which a write refuses (#1429). The state count and
@@ -100,10 +111,28 @@ pub use persistence::{
     TimerStateChange, TimerWriteConfig, WriteConfigPersistence, WriteConfigSnapshot,
 };
 
+// Access Door's and Access Zone's parameters: their setters, the clear and
+// a request's staged writes.
+#[cfg(all(test, feature = "event-reporting"))]
+#[path = "write_config/access_parameter_rules_tests.rs"]
+mod access_parameter_rules_tests;
+// Access Door's and Access Zone's parameters, kept as the others'.
+#[cfg(all(test, feature = "event-reporting"))]
+#[path = "write_config/access_parameters_tests.rs"]
+mod access_parameters_tests;
+// What a restore does to a door and a zone beyond storing the values.
+#[cfg(all(test, feature = "event-reporting"))]
+#[path = "write_config/access_restore_tests.rs"]
+mod access_restore_tests;
 // A written Description kept beside the rest (#2364).
 #[cfg(test)]
 #[path = "write_config/description_tests.rs"]
 mod description_tests;
+// Every row of the format's table, through the object of each type that
+// keeps it.
+#[cfg(all(test, feature = "event-reporting"))]
+#[path = "write_config/parameter_table_tests.rs"]
+mod parameter_table_tests;
 // The event algorithm parameters kept beside the reporting settings.
 #[cfg(all(test, feature = "event-reporting"))]
 #[path = "write_config/parameters_tests.rs"]

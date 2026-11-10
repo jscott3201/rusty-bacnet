@@ -244,12 +244,15 @@ macro_rules! impl_reporting_persistence {
             /// pair) in `persistence`, and a written Description (#2364),
             /// serving what is saved there for this object, if anything
             /// (#2331). An analog, binary or multi-state Input, Output or
-            /// Value keeps its event algorithm parameters there too, and
-            /// its detector starts with the saved ones: Time_Delay and
-            /// Time_Delay_Normal on all nine, High_Limit, Low_Limit,
-            /// Deadband and Limit_Enable on the analog ones, Alarm_Value on
-            /// a Binary Input or Value, and Alarm_Values on a Multi-state
-            /// Input or Value.
+            /// Value, an Access Door and an Access Zone keep their event
+            /// algorithm parameters there too, and the detector starts
+            /// with the saved ones: Time_Delay and Time_Delay_Normal on all
+            /// eleven, High_Limit, Low_Limit, Deadband and Limit_Enable on
+            /// the analog ones, Alarm_Value on a Binary Input or Value,
+            /// Alarm_Values on a Multi-state Input or Value, a door and a
+            /// zone, and a door's Fault_Values and Masked_Alarm_Values. A
+            /// door that takes saved lists sends a Door_Alarm_State they
+            /// don't admit back to NORMAL, as a write of one does.
             ///
             /// A write of one of them is then saved before the object serves
             /// it, and refused with DEVICE / OPERATIONAL_PROBLEM, the old
