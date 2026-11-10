@@ -15,7 +15,7 @@
 //! - `older-name`: our identifier differs from the 2020 name, which the file keeps (step 3 renames).
 //! - `later-rename`: our identifier is the 2020 name; the file carries a later rename (we keep ours).
 //! - `ours-only`: we name values the file doesn't.
-//! - `file-duplicate`: the file gives one value a second name; ours is the file's first.
+//! - `file-duplicate`: the file gives one value two names, so we leave it unnamed.
 //! - `unmatched-type`: a table with no counterpart on the other side (value 0, no names).
 
 use core::ops::RangeInclusive;
@@ -67,7 +67,7 @@ ours-only ObjectType 38 | network security, which 2020 already removed
 ours-only ObjectTypesSupported 38 | network security, which 2020 already removed
 ours-only PropertyIdentifier 327..337 | network security, which 2020 already removed
 
-file-duplicate EngineeringUnits 47910 ACTIVE_ENERGY_PULSE_VALUE millisiemens-per-centimeter | the file names 47910 twice; we keep its first name
+file-duplicate EngineeringUnits 47910 | the file names this value twice; we name it once the right assignment is confirmed
 
 unmatched-type NetworkReachability 0 | Clause 6 router reachability, unused; tried RouterEntry status
 unmatched-type PduType 0 | the file describes PDUs as a choice of sequences, not an enumeration
@@ -119,10 +119,7 @@ pub(super) fn allowed() -> Vec<Allowed> {
             "unmatched-type" => Category::UnmatchedType,
             other => panic!("unknown category {other}: {line}"),
         };
-        let names = matches!(
-            category,
-            Category::OlderName | Category::LaterRename | Category::FileDuplicate
-        );
+        let names = matches!(category, Category::OlderName | Category::LaterRename);
         assert_eq!(
             fields.len(),
             if names { 5 } else { 3 },

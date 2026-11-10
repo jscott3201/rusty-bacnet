@@ -359,12 +359,12 @@ fn moved_names(table: &str, ours: &Members, theirs: &Members) -> Vec<String> {
 
 fn allows(entry: &Allowed, diff: &Diff) -> bool {
     match (entry.category, diff) {
-        (Category::LaterAddition, Diff::Missing { table, value, .. })
+        (Category::LaterAddition | Category::FileDuplicate, Diff::Missing { table, value, .. })
         | (Category::OursOnly, Diff::Extra { table, value, .. }) => {
             entry.table == table && entry.values.contains(value)
         }
         (
-            Category::OlderName | Category::LaterRename | Category::FileDuplicate,
+            Category::OlderName | Category::LaterRename,
             Diff::Renamed {
                 table,
                 value,
@@ -395,7 +395,7 @@ fn covered_members<'a>(
             .collect()
     };
     match entry.category {
-        Category::LaterAddition => {
+        Category::LaterAddition | Category::FileDuplicate => {
             let paths = xd_paths_for(entry.table, xd);
             paths.first().map(|p| pick(&xd[p])).unwrap_or_default()
         }

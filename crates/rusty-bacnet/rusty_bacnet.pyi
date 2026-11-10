@@ -1357,7 +1357,6 @@ class EngineeringUnits(enum.IntEnum):
     POUNDS_FORCE_PER_SQUARE_INCH_ABSOLUTE: EngineeringUnits
     POUNDS_FORCE_PER_SQUARE_INCH_GAUGE: EngineeringUnits
     MICROSIEMENS_PER_CENTIMETER: EngineeringUnits
-    ACTIVE_ENERGY_PULSE_VALUE: EngineeringUnits
     MILLISIEMENS_PER_METER: EngineeringUnits
     MILLIONS_OF_US_GALLONS: EngineeringUnits
     MILLIONS_OF_IMPERIAL_GALLONS: EngineeringUnits

@@ -389,9 +389,8 @@ bacnet_enum! {
     const POUNDS_FORCE_PER_SQUARE_INCH_ABSOLUTE = 47907;
     const POUNDS_FORCE_PER_SQUARE_INCH_GAUGE = 47908;
     const MICROSIEMENS_PER_CENTIMETER = 47909;
-    // The revision 24 data file gives 47910 two names, this one and
-    // millisiemens-per-centimeter; it is named once, as the file lists first.
-    const ACTIVE_ENERGY_PULSE_VALUE = 47910;
+    // 47910 stays unnamed: the revision 24 data file gives it two names, and
+    // we name it once the right one is confirmed (47918 stays unnamed too).
     const MILLISIEMENS_PER_METER = 47911;
     const MILLIONS_OF_US_GALLONS = 47912;
     const MILLIONS_OF_IMPERIAL_GALLONS = 47913;
