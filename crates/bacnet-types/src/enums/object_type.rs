@@ -53,7 +53,9 @@ bacnet_enum! {
     const ACCESS_USER = 35;
     const ACCESS_ZONE = 36;
     const CREDENTIAL_DATA_INPUT = 37;
-    /// Deprecated in 135-2020 (Clause 24 deleted).
+    /// Removed in protocol revision 22, the 2020 edition, with Network
+    /// Security (Addendum 135-2016by; Clause 21 marks 38 removed); named so
+    /// an older device's value still decodes.
     const NETWORK_SECURITY = 38;
     const BITSTRING_VALUE = 39;
     const CHARACTERSTRING_VALUE = 40;

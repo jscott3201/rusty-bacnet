@@ -2,9 +2,9 @@
 //! read by `xd_crosscheck.rs` (#2435).
 //!
 //! The file is protocol revision 24; this stack implements revision 22
-//! (135-2020). Steps 2 (adding later values) and 3 (renaming to the 2020
-//! names) of #2435 work from this list, and the test makes them delete each
-//! entry they resolve.
+//! (135-2020). Step 2 of #2435 named the later values, so no `later-addition`
+//! entry is left; step 3 (renaming to the 2020 names) works from this list,
+//! and the test makes it delete each entry it resolves.
 //!
 //! One entry per line: `<category> <table> <value>[..<last>] [<ours> <file's>] | <reason>`.
 //! `<table>` is our type name, or the file's table path for a file table with
@@ -15,19 +15,12 @@
 //! - `older-name`: our identifier differs from the 2020 name, which the file keeps (step 3 renames).
 //! - `later-rename`: our identifier is the 2020 name; the file carries a later rename (we keep ours).
 //! - `ours-only`: we name values the file doesn't.
+//! - `file-duplicate`: the file gives one value two names, so we leave it unnamed.
 //! - `unmatched-type`: a table with no counterpart on the other side (value 0, no names).
 
 use core::ops::RangeInclusive;
 
 pub(super) const ALLOWED: &str = "
-later-addition AbortReason 12 | not in the 2020 list, which ends at apdu-too-long (11)
-later-addition EngineeringUnits 47823..47981 | units added after 2020; the file names 47910 twice
-later-addition ErrorCode 200..229 | certificate and token codes added after 2020
-later-addition NetworkPortCommand 8..9 | port commands added after 2020
-later-addition NetworkType 11 | not in the 2020 list, which ends at serial (10)
-later-addition PropertyIdentifier 4194304..4194327 | BACnet/SC port properties added after 2020
-later-addition PropertyIdentifier 4194333 | a schedule property added after 2020
-
 older-name EngineeringUnits 122 KILOHMS kiloohms | spelled as in 2020's cross-reference comments
 older-name EngineeringUnits 123 MEGOHMS megaohms | spelled as in 2020's cross-reference comments
 older-name NetworkPortCommand 5 RESTART_AUTONEG restart-autonegotiation | our abbreviation
@@ -74,6 +67,8 @@ ours-only ObjectType 38 | network security, which 2020 already removed
 ours-only ObjectTypesSupported 38 | network security, which 2020 already removed
 ours-only PropertyIdentifier 327..337 | network security, which 2020 already removed
 
+file-duplicate EngineeringUnits 47910 | the file names this value twice; we name it once the right assignment is confirmed
+
 unmatched-type NetworkReachability 0 | Clause 6 router reachability, unused; tried RouterEntry status
 unmatched-type PduType 0 | the file describes PDUs as a choice of sequences, not an enumeration
 unmatched-type 0-BACnetAccumulatorRecord/accumulator-status 0 | no table of ours yet
@@ -91,6 +86,7 @@ pub(super) enum Category {
     OlderName,
     LaterRename,
     OursOnly,
+    FileDuplicate,
     UnmatchedType,
 }
 
@@ -119,6 +115,7 @@ pub(super) fn allowed() -> Vec<Allowed> {
             "older-name" => Category::OlderName,
             "later-rename" => Category::LaterRename,
             "ours-only" => Category::OursOnly,
+            "file-duplicate" => Category::FileDuplicate,
             "unmatched-type" => Category::UnmatchedType,
             other => panic!("unknown category {other}: {line}"),
         };

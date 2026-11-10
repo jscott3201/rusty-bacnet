@@ -334,27 +334,29 @@ bacnet_enum! {
 
     // 326-398
     const VERIFICATION_TIME = 326;
-    /// Deprecated: removed with Clause 24 in 135-2020.
+    // 327-337: removed in protocol revision 22, the 2020 edition, with Network
+    // Security (Clause 21); named so a value from an older device still decodes.
+    /// Removed with Network Security in revision 22; kept for older devices.
     const BASE_DEVICE_SECURITY_POLICY = 327;
-    /// Deprecated: removed with Clause 24 in 135-2020.
+    /// Removed with Network Security in revision 22; kept for older devices.
     const DISTRIBUTION_KEY_REVISION = 328;
-    /// Deprecated: removed with Clause 24 in 135-2020.
+    /// Removed with Network Security in revision 22; kept for older devices.
     const DO_NOT_HIDE = 329;
-    /// Deprecated: removed with Clause 24 in 135-2020.
+    /// Removed with Network Security in revision 22; kept for older devices.
     const KEY_SETS = 330;
-    /// Deprecated: removed with Clause 24 in 135-2020.
+    /// Removed with Network Security in revision 22; kept for older devices.
     const LAST_KEY_SERVER = 331;
-    /// Deprecated: removed with Clause 24 in 135-2020.
+    /// Removed with Network Security in revision 22; kept for older devices.
     const NETWORK_ACCESS_SECURITY_POLICIES = 332;
-    /// Deprecated: removed with Clause 24 in 135-2020.
+    /// Removed with Network Security in revision 22; kept for older devices.
     const PACKET_REORDER_TIME = 333;
-    /// Deprecated: removed with Clause 24 in 135-2020.
+    /// Removed with Network Security in revision 22; kept for older devices.
     const SECURITY_PDU_TIMEOUT = 334;
-    /// Deprecated: removed with Clause 24 in 135-2020.
+    /// Removed with Network Security in revision 22; kept for older devices.
     const SECURITY_TIME_WINDOW = 335;
-    /// Deprecated: removed with Clause 24 in 135-2020.
+    /// Removed with Network Security in revision 22; kept for older devices.
     const SUPPORTED_SECURITY_ALGORITHMS = 336;
-    /// Deprecated: removed with Clause 24 in 135-2020.
+    /// Removed with Network Security in revision 22; kept for older devices.
     const UPDATE_KEY_SET_TIMEOUT = 337;
     const BACKUP_AND_RESTORE_STATE = 338;
     const BACKUP_PREPARATION_TIME = 339;
@@ -548,6 +550,32 @@ bacnet_enum! {
     const ISSUER_CERTIFICATE_FILES = 511;
 
     // 4194304 and up (the second ASHRAE range)
+    // 4194304-4194327: BACnet/SC Network Port properties added after
+    // revision 22 (135-2020); ASHRAE's revision 24 data types name them.
+    const MAX_BVLC_LENGTH_ACCEPTED = 4194304;
+    const MAX_NPDU_LENGTH_ACCEPTED = 4194305;
+    const OPERATIONAL_CERTIFICATE_FILE = 4194306;
+    const CURRENT_HEALTH = 4194307;
+    const SC_CONNECT_WAIT_TIMEOUT = 4194308;
+    const SC_DIRECT_CONNECT_ACCEPT_ENABLE = 4194309;
+    const SC_DIRECT_CONNECT_ACCEPT_URIS = 4194310;
+    const SC_DIRECT_CONNECT_BINDING = 4194311;
+    const SC_DIRECT_CONNECT_CONNECTION_STATUS = 4194312;
+    const SC_DIRECT_CONNECT_INITIATE_ENABLE = 4194313;
+    const SC_DISCONNECT_WAIT_TIMEOUT = 4194314;
+    const SC_FAILED_CONNECTION_REQUESTS = 4194315;
+    const SC_FAILOVER_HUB_CONNECTION_STATUS = 4194316;
+    const SC_FAILOVER_HUB_URI = 4194317;
+    const SC_HUB_CONNECTOR_STATE = 4194318;
+    const SC_HUB_FUNCTION_ACCEPT_URIS = 4194319;
+    const SC_HUB_FUNCTION_BINDING = 4194320;
+    const SC_HUB_FUNCTION_CONNECTION_STATUS = 4194321;
+    const SC_HUB_FUNCTION_ENABLE = 4194322;
+    const SC_HEARTBEAT_TIMEOUT = 4194323;
+    const SC_PRIMARY_HUB_CONNECTION_STATUS = 4194324;
+    const SC_PRIMARY_HUB_URI = 4194325;
+    const SC_MAXIMUM_RECONNECT_TIME = 4194326;
+    const SC_MINIMUM_RECONNECT_TIME = 4194327;
     /// Whether a lighting output's colour comes from its override reference
     /// (Addendum 135-2020ca part 4).
     const COLOR_OVERRIDE = 4194328;
@@ -562,6 +590,9 @@ bacnet_enum! {
     /// The colour object (Color or Color Temperature) that sets a lighting output's
     /// colour while Color_Override is TRUE (Addendum 135-2020ca part 4).
     const OVERRIDE_COLOR_REFERENCE = 4194332;
+    /// A schedule property added after revision 22 (135-2020); ASHRAE's
+    /// revision 24 data types name it.
+    const WRITE_EVERY_SCHEDULED_ACTION = 4194333;
     /// The BACnetColorCommand of a Color or Color Temperature object
     /// (Addendum 135-2020ca). The addendum itself left this property out of
     /// its Clause 21 list; its errata of 2023-01-05 (item 1) number it, and
