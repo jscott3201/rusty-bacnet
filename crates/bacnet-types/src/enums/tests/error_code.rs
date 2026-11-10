@@ -1,5 +1,5 @@
-//! `ErrorCode`: the BACnet/SC connection codes 152-199 (#2434) and the
-//! table's extent.
+//! `ErrorCode`: the BACnet/SC connection codes 152-199 (#2434), the codes
+//! 200-229 added after the 2020 edition (#2435) and the table's extent.
 
 use super::super::*;
 
@@ -58,9 +58,14 @@ const SC_CONNECTION_CODES: [(&str, u16); 48] = [
 
 #[test]
 fn sc_connection_codes_round_trip_by_value_and_name() {
-    // They are the table's tail, in order, right after NODE_DUPLICATE_VMAC.
-    let tail = &ErrorCode::ALL_NAMED[ErrorCode::ALL_NAMED.len() - SC_CONNECTION_CODES.len()..];
-    for (&(name, raw), &(named, value)) in SC_CONNECTION_CODES.iter().zip(tail) {
+    // They are a run of the table, in order, right after NODE_DUPLICATE_VMAC.
+    let start = ErrorCode::ALL_NAMED
+        .iter()
+        .position(|&(_, code)| code == ErrorCode::NODE_DUPLICATE_VMAC)
+        .unwrap()
+        + 1;
+    let run = &ErrorCode::ALL_NAMED[start..start + SC_CONNECTION_CODES.len()];
+    for (&(name, raw), &(named, value)) in SC_CONNECTION_CODES.iter().zip(run) {
         assert_eq!(named, name);
         assert_eq!(value.to_raw(), raw, "{name}");
         assert_eq!(ErrorCode::from_raw(raw), value, "{name}");
@@ -76,22 +81,25 @@ fn sc_connection_codes_round_trip_by_value_and_name() {
 }
 
 #[test]
-fn error_code_table_ends_at_199_with_every_value_but_33_named() {
+fn error_code_table_ends_at_229_with_every_value_but_33_named() {
     let highest = ErrorCode::ALL_NAMED
         .iter()
         .map(|&(_, code)| code.to_raw())
         .max();
-    assert_eq!(highest, Some(199));
+    assert_eq!(highest, Some(229));
     assert_eq!(
         ErrorCode::ALL_NAMED.last().map(|&(n, _)| n),
-        Some("IP_ERROR")
+        Some("INVALID_TOKEN")
     );
-    // 0..=199 with value 33 (removed from the standard) left unnamed.
-    assert_eq!(ErrorCode::ALL_NAMED.len(), 199);
+    // 0..=229 with value 33 (removed from the standard) left unnamed.
+    assert_eq!(ErrorCode::ALL_NAMED.len(), 229);
     assert_eq!(ErrorCode::from_raw(33).name(), None);
+    // The later additions start right after the SC connection codes.
+    assert_eq!(ErrorCode::from_raw(200), ErrorCode::CERTIFICATE_EXPIRED);
+    assert_eq!(ErrorCode::INVALID_TOKEN.to_raw(), 229);
     // Values past the table still display as bare numbers.
-    assert_eq!(ErrorCode::from_raw(200).name(), None);
-    assert_eq!(format!("{}", ErrorCode::from_raw(200)), "200");
+    assert_eq!(ErrorCode::from_raw(230).name(), None);
+    assert_eq!(format!("{}", ErrorCode::from_raw(230)), "230");
     // Raw values are strictly increasing, so no value is named twice.
     assert!(
         ErrorCode::ALL_NAMED

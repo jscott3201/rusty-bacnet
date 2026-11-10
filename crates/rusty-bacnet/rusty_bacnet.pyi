@@ -602,11 +602,36 @@ class PropertyIdentifier:
     CERTIFICATE_SIGNING_REQUEST_FILE: PropertyIdentifier
     COMMAND_VALIDATION_RESULT: PropertyIdentifier
     ISSUER_CERTIFICATE_FILES: PropertyIdentifier
+    MAX_BVLC_LENGTH_ACCEPTED: PropertyIdentifier
+    MAX_NPDU_LENGTH_ACCEPTED: PropertyIdentifier
+    OPERATIONAL_CERTIFICATE_FILE: PropertyIdentifier
+    CURRENT_HEALTH: PropertyIdentifier
+    SC_CONNECT_WAIT_TIMEOUT: PropertyIdentifier
+    SC_DIRECT_CONNECT_ACCEPT_ENABLE: PropertyIdentifier
+    SC_DIRECT_CONNECT_ACCEPT_URIS: PropertyIdentifier
+    SC_DIRECT_CONNECT_BINDING: PropertyIdentifier
+    SC_DIRECT_CONNECT_CONNECTION_STATUS: PropertyIdentifier
+    SC_DIRECT_CONNECT_INITIATE_ENABLE: PropertyIdentifier
+    SC_DISCONNECT_WAIT_TIMEOUT: PropertyIdentifier
+    SC_FAILED_CONNECTION_REQUESTS: PropertyIdentifier
+    SC_FAILOVER_HUB_CONNECTION_STATUS: PropertyIdentifier
+    SC_FAILOVER_HUB_URI: PropertyIdentifier
+    SC_HUB_CONNECTOR_STATE: PropertyIdentifier
+    SC_HUB_FUNCTION_ACCEPT_URIS: PropertyIdentifier
+    SC_HUB_FUNCTION_BINDING: PropertyIdentifier
+    SC_HUB_FUNCTION_CONNECTION_STATUS: PropertyIdentifier
+    SC_HUB_FUNCTION_ENABLE: PropertyIdentifier
+    SC_HEARTBEAT_TIMEOUT: PropertyIdentifier
+    SC_PRIMARY_HUB_CONNECTION_STATUS: PropertyIdentifier
+    SC_PRIMARY_HUB_URI: PropertyIdentifier
+    SC_MAXIMUM_RECONNECT_TIME: PropertyIdentifier
+    SC_MINIMUM_RECONNECT_TIME: PropertyIdentifier
     COLOR_OVERRIDE: PropertyIdentifier
     COLOR_REFERENCE: PropertyIdentifier
     DEFAULT_COLOR: PropertyIdentifier
     DEFAULT_COLOR_TEMPERATURE: PropertyIdentifier
     OVERRIDE_COLOR_REFERENCE: PropertyIdentifier
+    WRITE_EVERY_SCHEDULED_ACTION: PropertyIdentifier
     COLOR_COMMAND: PropertyIdentifier
     HIGH_END_TRIM: PropertyIdentifier
     LOW_END_TRIM: PropertyIdentifier
@@ -866,6 +891,36 @@ class ErrorCode(enum.IntEnum):
     TCP_ERROR: ErrorCode
     IP_ADDRESS_NOT_REACHABLE: ErrorCode
     IP_ERROR: ErrorCode
+    CERTIFICATE_EXPIRED: ErrorCode
+    CERTIFICATE_INVALID: ErrorCode
+    CERTIFICATE_MALFORMED: ErrorCode
+    CERTIFICATE_REVOKED: ErrorCode
+    UNKNOWN_CERTIFICATE_KEY: ErrorCode
+    REFERENCED_PORT_IN_ERROR: ErrorCode
+    NOT_ENABLED: ErrorCode
+    ADJUST_SCOPE_REQUIRED: ErrorCode
+    AUTH_SCOPE_REQUIRED: ErrorCode
+    BIND_SCOPE_REQUIRED: ErrorCode
+    CONFIG_SCOPE_REQUIRED: ErrorCode
+    CONTROL_SCOPE_REQUIRED: ErrorCode
+    EXTENDED_SCOPE_REQUIRED: ErrorCode
+    INCORRECT_CLIENT: ErrorCode
+    INSTALL_SCOPE_REQUIRED: ErrorCode
+    INSUFFICIENT_SCOPE: ErrorCode
+    NO_DEFAULT_SCOPE: ErrorCode
+    NO_POLICY: ErrorCode
+    REVOKED_TOKEN: ErrorCode
+    OVERRIDE_SCOPE_REQUIRED: ErrorCode
+    INACTIVE_TOKEN: ErrorCode
+    UNKNOWN_AUDIENCE: ErrorCode
+    UNKNOWN_CLIENT: ErrorCode
+    UNKNOWN_SCOPE: ErrorCode
+    VIEW_SCOPE_REQUIRED: ErrorCode
+    INCORRECT_AUDIENCE: ErrorCode
+    INCORRECT_CLIENT_ORIGIN: ErrorCode
+    INVALID_ARRAY_SIZE: ErrorCode
+    INCORRECT_ISSUER: ErrorCode
+    INVALID_TOKEN: ErrorCode
 
     @classmethod
     def from_raw(cls, value: int) -> ErrorCode:
@@ -931,6 +986,7 @@ class AbortReason(enum.IntEnum):
     OUT_OF_RESOURCES: AbortReason
     TSM_TIMEOUT: AbortReason
     APDU_TOO_LONG: AbortReason
+    INCONSISTENT_ATTRIBUTES: AbortReason
 
     @classmethod
     def from_raw(cls, value: int) -> AbortReason:
@@ -1221,6 +1277,152 @@ class EngineeringUnits(enum.IntEnum):
     DEGREES_PLATO: EngineeringUnits
     SPECIFIC_GRAVITY: EngineeringUnits
     EUROPEAN_BREWING_CONVENTION: EngineeringUnits
+    PER_DAY: EngineeringUnits
+    PER_MILLISECOND: EngineeringUnits
+    YARDS: EngineeringUnits
+    MILES: EngineeringUnits
+    NAUTICAL_MILES: EngineeringUnits
+    METRIC_TONNES: EngineeringUnits
+    SHORT_TONS: EngineeringUnits
+    LONG_TONS: EngineeringUnits
+    GRAMS_PER_HOUR: EngineeringUnits
+    GRAMS_PER_DAY: EngineeringUnits
+    KILOGRAMS_PER_DAY: EngineeringUnits
+    SHORT_TONS_PER_SECOND: EngineeringUnits
+    SHORT_TONS_PER_MINUTE: EngineeringUnits
+    SHORT_TONS_PER_HOUR: EngineeringUnits
+    SHORT_TONS_PER_DAY: EngineeringUnits
+    METRIC_TONNES_PER_SECOND: EngineeringUnits
+    METRIC_TONNES_PER_MINUTE: EngineeringUnits
+    METRIC_TONNES_PER_HOUR: EngineeringUnits
+    METRIC_TONNES_PER_DAY: EngineeringUnits
+    LONG_TONS_PER_SECOND: EngineeringUnits
+    LONG_TONS_PER_MINUTE: EngineeringUnits
+    LONG_TONS_PER_HOUR: EngineeringUnits
+    LONG_TONS_PER_DAY: EngineeringUnits
+    BTUS_PER_SECOND: EngineeringUnits
+    BTUS_PER_MINUTE: EngineeringUnits
+    BTUS_PER_DAY: EngineeringUnits
+    KILO_BTUS_PER_SECOND: EngineeringUnits
+    KILO_BTUS_PER_MINUTE: EngineeringUnits
+    KILO_BTUS_PER_DAY: EngineeringUnits
+    MEGA_BTUS_PER_SECOND: EngineeringUnits
+    MEGA_BTUS_PER_MINUTE: EngineeringUnits
+    MEGA_BTUS_PER_HOUR: EngineeringUnits
+    MEGA_BTUS_PER_DAY: EngineeringUnits
+    JOULES_PER_SECOND: EngineeringUnits
+    JOULES_PER_MINUTE: EngineeringUnits
+    JOULES_PER_DAY: EngineeringUnits
+    KILOJOULES_PER_SECOND: EngineeringUnits
+    KILOJOULES_PER_MINUTE: EngineeringUnits
+    KILOJOULES_PER_HOUR: EngineeringUnits
+    KILOJOULES_PER_DAY: EngineeringUnits
+    MEGAJOULES_PER_SECOND: EngineeringUnits
+    MEGAJOULES_PER_MINUTE: EngineeringUnits
+    MEGAJOULES_PER_HOUR: EngineeringUnits
+    MEGAJOULES_PER_DAY: EngineeringUnits
+    DEGREES_CELSIUS_PER_DAY: EngineeringUnits
+    DEGREES_FAHRENHEIT_PER_DAY: EngineeringUnits
+    DELTA_DEGREES_CELSIUS: EngineeringUnits
+    MILLION_CUBIC_FEET_PER_MINUTE: EngineeringUnits
+    MILLION_CUBIC_FEET_PER_DAY: EngineeringUnits
+    IMPERIAL_GALLONS_PER_SECOND: EngineeringUnits
+    LITERS_PER_DAY: EngineeringUnits
+    US_GALLONS_PER_SECOND: EngineeringUnits
+    US_GALLONS_PER_DAY: EngineeringUnits
+    PERCENT_PER_MINUTE: EngineeringUnits
+    PERCENT_PER_HOUR: EngineeringUnits
+    PERCENT_PER_DAY: EngineeringUnits
+    PER_MILLION: EngineeringUnits
+    PER_BILLION: EngineeringUnits
+    MICROGRAMS_PER_KILOGRAM: EngineeringUnits
+    NANOGRAMS_PER_KILOGRAM: EngineeringUnits
+    MILLIGRAMS_PER_MILLILITER: EngineeringUnits
+    MICROGRAMS_PER_MILLILITER: EngineeringUnits
+    NANOGRAMS_PER_MILLILITER: EngineeringUnits
+    KILOGRAMS_PER_LITER: EngineeringUnits
+    NANOGRAMS_PER_LITER: EngineeringUnits
+    MILLIGRAMS_PER_CUBIC_CENTIMETER: EngineeringUnits
+    MICROGRAMS_PER_CUBIC_CENTIMETER: EngineeringUnits
+    NANOGRAMS_PER_CUBIC_CENTIMETER: EngineeringUnits
+    BTU_PER_HOUR_PER_WATT: EngineeringUnits
+    BTU_PER_WATT_HOUR_SEASONAL: EngineeringUnits
+    COEFFICIENT_OF_PERFORMANCE: EngineeringUnits
+    COEFFICIENT_OF_PERFORMANCE_SEASONAL: EngineeringUnits
+    KILOWATT_PER_TON_REFRIGERATION: EngineeringUnits
+    LUMENS_PER_WATT: EngineeringUnits
+    POUND_FORCE_FEET: EngineeringUnits
+    POUND_FORCE_INCHES: EngineeringUnits
+    OUNCE_FORCE_INCHES: EngineeringUnits
+    POUNDS_FORCE_PER_SQUARE_INCH_ABSOLUTE: EngineeringUnits
+    POUNDS_FORCE_PER_SQUARE_INCH_GAUGE: EngineeringUnits
+    MICROSIEMENS_PER_CENTIMETER: EngineeringUnits
+    ACTIVE_ENERGY_PULSE_VALUE: EngineeringUnits
+    MILLISIEMENS_PER_METER: EngineeringUnits
+    MILLIONS_OF_US_GALLONS: EngineeringUnits
+    MILLIONS_OF_IMPERIAL_GALLONS: EngineeringUnits
+    MILLILITERS_PER_MINUTE: EngineeringUnits
+    MILS_PER_YEAR: EngineeringUnits
+    MILLIMETERS_PER_YEAR: EngineeringUnits
+    PULSES_PER_MINUTE: EngineeringUnits
+    REACTIVE_ENERGY_PULSE_VALUE: EngineeringUnits
+    APPARENT_ENERGY_PULSE_VALUE: EngineeringUnits
+    VOLT_SQUARED_HOUR_PULSE_VALUE: EngineeringUnits
+    AMPERE_SQUARED_HOUR_PULSE_VALUE: EngineeringUnits
+    CUBIC_METER_PULSE_VALUE: EngineeringUnits
+    GIGAWATTS: EngineeringUnits
+    BITS_PER_SECOND: EngineeringUnits
+    KILOBITS_PER_SECOND: EngineeringUnits
+    MEGABITS_PER_SECOND: EngineeringUnits
+    GIGABITS_PER_SECOND: EngineeringUnits
+    BYTES_PER_SECOND: EngineeringUnits
+    KILOBYTES_PER_SECOND: EngineeringUnits
+    MEGABYTES_PER_SECOND: EngineeringUnits
+    GIGABYTES_PER_SECOND: EngineeringUnits
+    VOLUME1: EngineeringUnits
+    VOLUME2: EngineeringUnits
+    VOLUME3: EngineeringUnits
+    VOLUME4: EngineeringUnits
+    VOLUME5: EngineeringUnits
+    VOLUME6: EngineeringUnits
+    VOLUME7: EngineeringUnits
+    VOLUME8: EngineeringUnits
+    VOLUME9: EngineeringUnits
+    VOLUME10: EngineeringUnits
+    VOLUMETRIC_FLOW1: EngineeringUnits
+    VOLUMETRIC_FLOW2: EngineeringUnits
+    VOLUMETRIC_FLOW3: EngineeringUnits
+    VOLUMETRIC_FLOW4: EngineeringUnits
+    VOLUMETRIC_FLOW5: EngineeringUnits
+    VOLUMETRIC_FLOW6: EngineeringUnits
+    VOLUMETRIC_FLOW7: EngineeringUnits
+    VOLUMETRIC_FLOW8: EngineeringUnits
+    VOLUMETRIC_FLOW9: EngineeringUnits
+    VOLUMETRIC_FLOW10: EngineeringUnits
+    SITE_UNIT1: EngineeringUnits
+    SITE_UNIT2: EngineeringUnits
+    SITE_UNIT3: EngineeringUnits
+    SITE_UNIT4: EngineeringUnits
+    SITE_UNIT5: EngineeringUnits
+    SITE_UNIT6: EngineeringUnits
+    SITE_UNIT7: EngineeringUnits
+    SITE_UNIT8: EngineeringUnits
+    SITE_UNIT9: EngineeringUnits
+    SITE_UNIT10: EngineeringUnits
+    PARTICLES_PER_CUBIC_FOOT: EngineeringUnits
+    PARTICLES_PER_CUBIC_METER: EngineeringUnits
+    PICOCURIES_PER_LITER: EngineeringUnits
+    BECQUERELS_PER_CUBIC_METER: EngineeringUnits
+    GRAINS_OF_WATER_PER_POUND_DRY_AIR: EngineeringUnits
+    DEGREE_HOURS_CELSIUS: EngineeringUnits
+    DEGREE_HOURS_FAHRENHEIT: EngineeringUnits
+    DEGREE_MINUTES_CELSIUS: EngineeringUnits
+    DEGREE_MINUTES_FAHRENHEIT: EngineeringUnits
+    DEGREE_SECONDS_CELSIUS: EngineeringUnits
+    DEGREE_SECONDS_FAHRENHEIT: EngineeringUnits
+    MICROSECONDS: EngineeringUnits
+    NANOSECONDS: EngineeringUnits
+    PICOSECONDS: EngineeringUnits
 
     @classmethod
     def from_raw(cls, value: int) -> EngineeringUnits:

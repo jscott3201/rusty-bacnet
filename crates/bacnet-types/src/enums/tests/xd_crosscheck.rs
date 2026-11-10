@@ -364,7 +364,7 @@ fn allows(entry: &Allowed, diff: &Diff) -> bool {
             entry.table == table && entry.values.contains(value)
         }
         (
-            Category::OlderName | Category::LaterRename,
+            Category::OlderName | Category::LaterRename | Category::FileDuplicate,
             Diff::Renamed {
                 table,
                 value,

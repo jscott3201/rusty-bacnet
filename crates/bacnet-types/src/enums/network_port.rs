@@ -14,10 +14,14 @@ bacnet_enum! {
     const IPV4 = 5;
     const ZIGBEE = 6;
     const VIRTUAL = 7;
-    /// Removed in version 1, revision 18 (Clause 21 production comment).
+    /// Dropped from the standard in protocol revision 18 (Clause 21); named so
+    /// an older device's value still decodes.
     const NON_BACNET = 8;
     const IPV6 = 9;
     const SERIAL = 10;
+    /// BACnet/SC. Added after revision 22 (135-2020); ASHRAE's revision 24
+    /// data types name it.
+    const SECURE_CONNECT = 11;
 }
 
 bacnet_enum! {
@@ -41,6 +45,10 @@ bacnet_enum! {
     const RESTART_AUTONEG = 5;
     const DISCONNECT = 6;
     const RESTART_PORT = 7;
+    // 8-9: added after revision 22 (135-2020); ASHRAE's revision 24 data
+    // types name them.
+    const GENERATE_CSR_FILE = 8;
+    const VALIDATE_CHANGES = 9;
 }
 
 bacnet_enum! {

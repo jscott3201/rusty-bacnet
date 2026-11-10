@@ -94,7 +94,8 @@ bacnet_enum! {
     pub struct EnableDisable(u32);
 
     const ENABLE = 0;
-    /// Deprecated in revision 20; use DISABLE_INITIATION instead.
+    /// Deprecated in revision 20 (Clause 21); use DISABLE_INITIATION
+    /// instead. Named so a request from an older device still decodes.
     const DISABLE = 1;
     const DISABLE_INITIATION = 2;
 }

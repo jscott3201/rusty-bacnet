@@ -95,20 +95,28 @@ bacnet_enum! {
     pub struct ErrorCode(u16);
 
     const OTHER = 0;
+    /// Removed in protocol revision 11 (Clause 21, BACnetErrorCode); named
+    /// so a code from an older device still decodes.
     const AUTHENTICATION_FAILED = 1;
     const CONFIGURATION_IN_PROGRESS = 2;
     const DEVICE_BUSY = 3;
     const DYNAMIC_CREATION_NOT_SUPPORTED = 4;
     const FILE_ACCESS_DENIED = 5;
+    /// Removed in protocol revision 11 (Clause 21, BACnetErrorCode); named
+    /// so a code from an older device still decodes.
     const INCOMPATIBLE_SECURITY_LEVELS = 6;
     const INCONSISTENT_PARAMETERS = 7;
     const INCONSISTENT_SELECTION_CRITERION = 8;
     const INVALID_DATA_TYPE = 9;
     const INVALID_FILE_ACCESS_METHOD = 10;
     const INVALID_FILE_START_POSITION = 11;
+    /// Removed in protocol revision 11 (Clause 21, BACnetErrorCode); named
+    /// so a code from an older device still decodes.
     const INVALID_OPERATOR_NAME = 12;
     const INVALID_PARAMETER_DATA_TYPE = 13;
     const INVALID_TIME_STAMP = 14;
+    /// Removed in protocol revision 11 (Clause 21, BACnetErrorCode); named
+    /// so a code from an older device still decodes.
     const KEY_GENERATION_ERROR = 15;
     const MISSING_REQUIRED_PARAMETER = 16;
     const NO_OBJECTS_OF_SPECIFIED_TYPE = 17;
@@ -122,6 +130,8 @@ bacnet_enum! {
     const OPERATIONAL_PROBLEM = 25;
     const PASSWORD_FAILURE = 26;
     const READ_ACCESS_DENIED = 27;
+    /// Removed in protocol revision 11 (Clause 21, BACnetErrorCode); named
+    /// so a code from an older device still decodes.
     const SECURITY_NOT_SUPPORTED = 28;
     const SERVICE_REQUEST_DENIED = 29;
     const TIMEOUT = 30;
@@ -184,25 +194,64 @@ bacnet_enum! {
     const BAD_DESTINATION_DEVICE_ID = 87;
     const BAD_SIGNATURE = 88;
     const BAD_SOURCE_ADDRESS = 89;
+    /// Removed in protocol revision 22, the 2020 edition, with Network
+    /// Security (Clause 21, BACnetErrorCode); named so a code from an older
+    /// device still decodes.
     const BAD_TIMESTAMP = 90;
+    /// Removed in protocol revision 22, the 2020 edition, with Network
+    /// Security (Clause 21, BACnetErrorCode); named so a code from an older
+    /// device still decodes.
     const CANNOT_USE_KEY = 91;
+    /// Removed in protocol revision 22, the 2020 edition, with Network
+    /// Security (Clause 21, BACnetErrorCode); named so a code from an older
+    /// device still decodes.
     const CANNOT_VERIFY_MESSAGE_ID = 92;
+    /// Removed in protocol revision 22, the 2020 edition, with Network
+    /// Security (Clause 21, BACnetErrorCode); named so a code from an older
+    /// device still decodes.
     const CORRECT_KEY_REVISION = 93;
+    /// Removed in protocol revision 22, the 2020 edition, with Network
+    /// Security (Clause 21, BACnetErrorCode); named so a code from an older
+    /// device still decodes.
     const DESTINATION_DEVICE_ID_REQUIRED = 94;
     const DUPLICATE_MESSAGE = 95;
     const ENCRYPTION_NOT_CONFIGURED = 96;
     const ENCRYPTION_REQUIRED = 97;
+    /// Removed in protocol revision 22, the 2020 edition, with Network
+    /// Security (Clause 21, BACnetErrorCode); named so a code from an older
+    /// device still decodes.
     const INCORRECT_KEY = 98;
+    /// Removed in protocol revision 22, the 2020 edition, with Network
+    /// Security (Clause 21, BACnetErrorCode); named so a code from an older
+    /// device still decodes.
     const INVALID_KEY_DATA = 99;
+    /// Removed in protocol revision 22, the 2020 edition, with Network
+    /// Security (Clause 21, BACnetErrorCode); named so a code from an older
+    /// device still decodes.
     const KEY_UPDATE_IN_PROGRESS = 100;
     const MALFORMED_MESSAGE = 101;
+    /// Removed in protocol revision 22, the 2020 edition, with Network
+    /// Security (Clause 21, BACnetErrorCode); named so a code from an older
+    /// device still decodes.
     const NOT_KEY_SERVER = 102;
     const SECURITY_NOT_CONFIGURED = 103;
     const SOURCE_SECURITY_REQUIRED = 104;
+    /// Removed in protocol revision 22, the 2020 edition, with Network
+    /// Security (Clause 21, BACnetErrorCode); named so a code from an older
+    /// device still decodes.
     const TOO_MANY_KEYS = 105;
     const UNKNOWN_AUTHENTICATION_TYPE = 106;
+    /// Removed in protocol revision 22, the 2020 edition, with Network
+    /// Security (Clause 21, BACnetErrorCode); named so a code from an older
+    /// device still decodes.
     const UNKNOWN_KEY = 107;
+    /// Removed in protocol revision 22, the 2020 edition, with Network
+    /// Security (Clause 21, BACnetErrorCode); named so a code from an older
+    /// device still decodes.
     const UNKNOWN_KEY_REVISION = 108;
+    /// Removed in protocol revision 22, the 2020 edition, with Network
+    /// Security (Clause 21, BACnetErrorCode); named so a code from an older
+    /// device still decodes.
     const UNKNOWN_SOURCE_MESSAGE = 109;
     const NOT_ROUTER_TO_DNET = 110;
     const ROUTER_BUSY = 111;
@@ -297,6 +346,38 @@ bacnet_enum! {
     const TCP_ERROR = 197;
     const IP_ADDRESS_NOT_REACHABLE = 198;
     const IP_ERROR = 199;
+    // 200-229: certificate, port and authorization-token codes added after
+    // revision 22 (135-2020); ASHRAE's revision 24 data types name them.
+    const CERTIFICATE_EXPIRED = 200;
+    const CERTIFICATE_INVALID = 201;
+    const CERTIFICATE_MALFORMED = 202;
+    const CERTIFICATE_REVOKED = 203;
+    const UNKNOWN_CERTIFICATE_KEY = 204;
+    const REFERENCED_PORT_IN_ERROR = 205;
+    const NOT_ENABLED = 206;
+    const ADJUST_SCOPE_REQUIRED = 207;
+    const AUTH_SCOPE_REQUIRED = 208;
+    const BIND_SCOPE_REQUIRED = 209;
+    const CONFIG_SCOPE_REQUIRED = 210;
+    const CONTROL_SCOPE_REQUIRED = 211;
+    const EXTENDED_SCOPE_REQUIRED = 212;
+    const INCORRECT_CLIENT = 213;
+    const INSTALL_SCOPE_REQUIRED = 214;
+    const INSUFFICIENT_SCOPE = 215;
+    const NO_DEFAULT_SCOPE = 216;
+    const NO_POLICY = 217;
+    const REVOKED_TOKEN = 218;
+    const OVERRIDE_SCOPE_REQUIRED = 219;
+    const INACTIVE_TOKEN = 220;
+    const UNKNOWN_AUDIENCE = 221;
+    const UNKNOWN_CLIENT = 222;
+    const UNKNOWN_SCOPE = 223;
+    const VIEW_SCOPE_REQUIRED = 224;
+    const INCORRECT_AUDIENCE = 225;
+    const INCORRECT_CLIENT_ORIGIN = 226;
+    const INVALID_ARRAY_SIZE = 227;
+    const INCORRECT_ISSUER = 228;
+    const INVALID_TOKEN = 229;
 }
 
 bacnet_enum! {
@@ -315,6 +396,9 @@ bacnet_enum! {
     const OUT_OF_RESOURCES = 9;
     const TSM_TIMEOUT = 10;
     const APDU_TOO_LONG = 11;
+    /// Added after revision 22 (135-2020); ASHRAE's revision 24 data types
+    /// name it.
+    const INCONSISTENT_ATTRIBUTES = 12;
 }
 
 bacnet_enum! {
