@@ -20,7 +20,6 @@
 //! unconfirmed context's report. Each takes only this store's mutex, a leaf
 //! lock, for a synchronous section.
 
-use std::collections::BTreeSet;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -34,7 +33,6 @@ use super::{AtomicCovCounters, CovRevisits};
 use crate::runtime_clock;
 use bacnet_device_core::cov::timed::{
     self, ClaimId, DropReason, Dropped, Settlement, TimedChange, TimedCounts, TimedHistories,
-    ValueFit,
 };
 
 /// What a store's handles share.
@@ -190,7 +188,10 @@ impl HistoryStore {
 /// delivered, dropping it gives the claim back to the histories
 /// ([`TimedHistories::give_back`]), on any early return or failed send.
 ///
-/// Its methods are the plain claim's, which has the policy.
+/// Its methods are the plain claim's, which has the policy. The split of a
+/// report to the subscriber's APDU size works on the plain claim
+/// ([`ClaimGuard::into_plain`]), and each part it hands back is guarded
+/// again ([`ClaimGuard::of`]).
 #[derive(Debug)]
 pub(crate) struct ClaimGuard {
     store: HistoryStore,
@@ -205,10 +206,11 @@ impl ClaimGuard {
         }
     }
 
-    /// `claim` of this claim's store, settling itself as this one does.
-    fn wrap(&self, claim: timed::TimedClaim) -> Self {
+    /// `claim`, of `store`'s histories, settling itself from here on: a part
+    /// the split of a report handed back as plain data.
+    pub(crate) fn of(store: &HistoryStore, claim: timed::TimedClaim) -> Self {
         Self {
-            store: self.store.clone(),
+            store: store.clone(),
             claim,
         }
     }
@@ -216,6 +218,13 @@ impl ClaimGuard {
     /// Take the plain claim out, leaving nothing to give back.
     fn take(&mut self) -> timed::TimedClaim {
         std::mem::take(&mut self.claim)
+    }
+
+    /// The plain claim, for the split of its report. Nothing gives it back
+    /// until [`ClaimGuard::of`] holds its parts again, so no early return
+    /// may come between the two.
+    pub(crate) fn into_plain(mut self) -> timed::TimedClaim {
+        self.take()
     }
 
     /// See [`timed::TimedClaim::add_untimed`].
@@ -226,12 +235,6 @@ impl ClaimGuard {
         owed_since: Option<Instant>,
     ) {
         self.claim.add_untimed(key, generation, owed_since);
-    }
-
-    /// See [`timed::TimedClaim::split_untimed`].
-    pub(crate) fn split_untimed(&mut self, keys: &BTreeSet<CovSubscriptionKey>) -> Self {
-        let part = self.claim.split_untimed(|key| keys.contains(key));
-        self.wrap(part)
     }
 
     /// See [`TimedHistories::forgo_untimed`].
@@ -261,26 +264,13 @@ impl ClaimGuard {
         self.claim.add(key, incarnation, changes);
     }
 
-    /// See [`timed::TimedClaim::split_oldest`].
-    pub(crate) fn split_oldest(&mut self, count: usize) -> Self {
-        let part = self.claim.split_oldest(count);
-        self.wrap(part)
-    }
-
-    /// See [`timed::TimedClaim::split_values`]; the changes that lost a
-    /// value are counted here ([`TimedHistories::lost_values`]).
-    pub(crate) fn split_values(
-        mut self,
-        fit: impl Fn(&CovSubscriptionKey, &TimedChange) -> ValueFit,
-    ) -> Vec<Self> {
-        let (parts, lost) = self.take().split_values(fit);
-        if !lost.is_empty() {
-            self.store.lock().lost_values(&lost);
-        }
-        parts.into_iter().map(|part| self.wrap(part)).collect()
+    /// See [`timed::TimedClaim::untimed`].
+    pub(crate) fn untimed(&self) -> impl Iterator<Item = &CovSubscriptionKey> {
+        self.claim.untimed()
     }
 
     /// See [`timed::TimedClaim::in_order`].
+    #[cfg(test)]
     pub(crate) fn in_order(&self) -> Vec<(&CovSubscriptionKey, &TimedChange)> {
         self.claim.in_order()
     }

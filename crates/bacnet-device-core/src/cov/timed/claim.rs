@@ -90,6 +90,11 @@ impl TimedClaim {
         self.untimed.push((key, generation, owed_since));
     }
 
+    /// The untimestamped references whose prepared values the claim carries.
+    pub fn untimed(&self) -> impl Iterator<Item = &CovSubscriptionKey> {
+        self.untimed.iter().map(|(key, _, _)| key)
+    }
+
     /// Move the untimestamped references `moves` selects into a claim of
     /// their own, for a notification that carries their values.
     pub fn split_untimed(&mut self, moves: impl Fn(&CovSubscriptionKey) -> bool) -> Self {

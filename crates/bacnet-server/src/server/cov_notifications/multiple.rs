@@ -1,6 +1,8 @@
 use super::super::cov_notify_context::{CovFanoutHandles, CovNotifyContext};
 use super::confirmed::ConfirmedReport;
-use super::multiple_chunks::{Envelope, Part, ReportContent, request_limit, split, untimed_octets};
+use super::multiple_chunks::{
+    Envelope, ReportContent, Split, request_limit, split, untimed_octets,
+};
 use super::multiple_items::{Coordinate, FieldStamp};
 use super::*;
 use crate::cov::timed_store::{ClaimGuard, SendTurn};
@@ -454,7 +456,51 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 stamp: &stamp,
             };
             let claim = claim.take().expect("claim created under the table guard");
-            let parts = split(&content, claim, limit);
+            // The split works on the claim as plain data and holds no
+            // histories. What it gave up is told to them here, in the order
+            // and the locked sections the split took itself while it held
+            // the store: one for each change that lost a value, then one for
+            // the references left out. Nothing returns before every part is
+            // guarded again.
+            let Split {
+                parts,
+                lost,
+                forgone,
+                rest,
+            } = split(&content, claim.into_plain(), limit);
+            for key in &lost {
+                store.lock().lost_values(std::slice::from_ref(key));
+            }
+            if !forgone.is_empty() {
+                let mut forgone = ClaimGuard::of(&store, forgone);
+                for key in forgone.untimed() {
+                    let property = match key {
+                        bacnet_device_core::cov::CovSubscriptionKey::Multiple {
+                            property, ..
+                        } => Some(*property),
+                        _ => None,
+                    };
+                    warn!(
+                        object = ?key.object(),
+                        property = ?property,
+                        limit,
+                        "Untimestamped COV-multiple values exceed the notification size on \
+                         their own; left out"
+                    );
+                }
+                forgone.forgo_untimed();
+            }
+            // A last notification that would convey nothing leaves its
+            // changes over: they go back to their references.
+            drop(ClaimGuard::of(&store, rest));
+            let parts: Vec<GuardedPart> = parts
+                .into_iter()
+                .map(|part| GuardedPart {
+                    notification: part.notification,
+                    claim: ClaimGuard::of(&store, part.claim),
+                    finishes: part.finishes,
+                })
+                .collect();
             // Untimestamped values a single notification carries need no
             // turn; reports of them may go out side by side, as before.
             if !any_timestamped && parts.len() < 2 {
@@ -596,6 +642,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     }
 }
 
+/// One notification of a report, its claim under the server's guard: the
+/// claim goes back to its references unless the part is delivered and the
+/// claim committed.
+struct GuardedPart {
+    notification: bacnet_services::cov_multiple::COVNotificationMultipleRequest,
+    claim: ClaimGuard,
+    /// References whose observation this part's delivery completes.
+    finishes: BTreeSet<bacnet_device_core::cov::CovSubscriptionKey>,
+}
+
 /// A reference a report carries, with the observation its delivery
 /// establishes and the ticket that completes it.
 type Carried = (
@@ -608,7 +664,7 @@ type Carried = (
 /// finishes, at their latest drained change or prepared state, and, when
 /// `every` (a confirmed part's Ack completes all it carries), each other
 /// timestamped reference at the last change of it the part carries.
-fn carried(part: &Part, last_notified: &[Carried], every: bool) -> Vec<Carried> {
+fn carried(part: &GuardedPart, last_notified: &[Carried], every: bool) -> Vec<Carried> {
     last_notified
         .iter()
         .filter_map(|(sub, baseline, completion)| {

@@ -7,7 +7,7 @@ use confirmed::ConfirmedSend;
 mod confirmed;
 mod life_safety;
 mod multiple;
-mod multiple_chunks;
+pub(super) mod multiple_chunks;
 mod multiple_items;
 mod revisit;
 
