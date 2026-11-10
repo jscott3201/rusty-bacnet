@@ -514,27 +514,61 @@ impl BACnetServer {
     /// of Event_Parameters and is kept with them. With `storage_path`,
     /// Event_Parameters or Fault_Parameters whose encoding is past 64 KiB
     /// are refused with NO_SPACE_TO_WRITE_PROPERTY; without it the
-    /// enrollment takes them as before. There is no keyword for the
-    /// parameters: an application sets its own with
-    /// `write_property_local`, and that write is kept like a peer's.
+    /// enrollment takes them as before.
+    ///
+    /// The parameter keywords configure those three (#2426):
+    /// `event_parameters` and `fault_parameters`, each a `PropertyValue`
+    /// in the form `write_property_local` takes for the property (the
+    /// encoding through `PropertyValue.application_data`, or a value a read
+    /// of the property returned), and `time_delay_normal` (seconds). None
+    /// leaves the enrollment's default. Each value is checked as a write
+    /// of the property is, and one the enrollment refuses raises
+    /// BacnetProtocolError: octets that aren't one whole parameter value,
+    /// and, with `storage_path`, an encoding past 64 KiB
+    /// (NO_SPACE_TO_WRITE_PROPERTY). A negative delay raises OverflowError.
+    /// The keywords apply before storage attaches, so they are never saved:
+    /// a value a peer wrote and the file holds is served over its keyword,
+    /// and the keyword applies again on a start that passes
+    /// `clear_written_reporting=True`. A `write_property_local` of a
+    /// parameter after the builder call is kept like a peer's write.
     #[pyo3(signature = (
         instance,
         name,
         event_type=PyEventType { inner: EventType::CHANGE_OF_BITSTRING },
         *,
+        event_parameters=None,
+        fault_parameters=None,
+        time_delay_normal=None,
         storage_path=None,
         clear_written_reporting=false
     ))]
+    #[allow(clippy::too_many_arguments)]
     fn add_event_enrollment(
         &self,
         instance: u32,
         name: &str,
         event_type: PyEventType,
+        event_parameters: Option<PyPropertyValue>,
+        fault_parameters: Option<PyPropertyValue>,
+        time_delay_normal: Option<u32>,
         storage_path: Option<&str>,
         clear_written_reporting: bool,
     ) -> PyResult<()> {
+        let parameters = crate::algorithm_keywords::AlgorithmKeywords::enrollment(
+            event_parameters.as_ref().map(|value| &value.inner),
+            fault_parameters.as_ref().map(|value| &value.inner),
+            time_delay_normal,
+        )
+        .map_err(to_py_err)?;
         let obj = crate::object_options::keep_reporting(
-            || EventEnrollmentObject::new(instance, name, event_type.to_rust()),
+            || {
+                let mut ee = EventEnrollmentObject::new(instance, name, event_type.to_rust())?;
+                parameters.apply(&mut ee)?;
+                if storage_path.is_some() {
+                    parameters.check_kept_size(&ee)?;
+                }
+                Ok(ee)
+            },
             storage_path,
             clear_written_reporting,
             EventEnrollmentObject::with_reporting_persistence,

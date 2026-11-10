@@ -49,7 +49,8 @@ def stub_parameter(method: ast.FunctionDef, name: str) -> tuple[str, bool]:
 class EventEnrollmentApiTests(unittest.IsolatedAsyncioTestCase):
     def test_runtime_and_stub_give_event_type_a_default(self) -> None:
         parameters = inspect.signature(BACnetServer.add_event_enrollment).parameters
-        # Then the keyword-only reporting-settings storage (#2331).
+        # Then the keyword-only parameter keywords (#2426) and the
+        # reporting-settings storage (#2331).
         self.assertEqual(
             list(parameters),
             [
@@ -57,6 +58,9 @@ class EventEnrollmentApiTests(unittest.IsolatedAsyncioTestCase):
                 "instance",
                 "name",
                 "event_type",
+                "event_parameters",
+                "fault_parameters",
+                "time_delay_normal",
                 "storage_path",
                 "clear_written_reporting",
             ],

@@ -3090,8 +3090,8 @@ Saved parameters that don't suit them show as they do on any enrollment
 configured that way: an event algorithm whose monitored value has another
 datatype raises nothing and reports no fault, and a fault algorithm that
 can't run on it reports Reliability CONFIGURATION_ERROR.
-`add_event_enrollment` takes no keyword for the parameters, so the note
-below on `write_property_local` applies to it too.
+`add_event_enrollment` takes keywords for the three, described with the
+other builders' parameter keywords below (#2426).
 
 `add_access_door` and `add_access_zone` do take keywords for their lists
 (`alarm_values`, and a door's `fault_values` and `masked_alarm_values`).
@@ -3134,7 +3134,8 @@ the state is added again. `clear_written_reporting=True` drops the list
 like any other saved value.
 
 The analog, binary and multi-state builders take keyword-only parameter
-keywords for the parameters they keep (#2410):
+keywords for the parameters they keep (#2410), and so does
+`add_event_enrollment` (#2426):
 
 | Builders | Parameter keywords |
 | --- | --- |
@@ -3142,6 +3143,7 @@ keywords for the parameters they keep (#2410):
 | `add_binary_input`, `add_binary_value` | `alarm_value`, `time_delay`, `time_delay_normal` |
 | `add_multistate_input`, `add_multistate_value` | `alarm_values`, `time_delay`, `time_delay_normal` |
 | `add_binary_output`, `add_multistate_output` | `time_delay`, `time_delay_normal` |
+| `add_event_enrollment` | `event_parameters`, `fault_parameters`, `time_delay_normal` |
 
 ```python
 server.add_analog_input(
@@ -3166,6 +3168,35 @@ limit, a negative deadband, an `alarm_value` past 1 or a state of 0 or past
 two bits wide with INVALID_DATA_ENCODING. A negative delay raises
 `OverflowError`.
 
+An Event Enrollment's `event_parameters` and `fault_parameters` are each a
+`PropertyValue` in the form `write_property_local` takes for the property:
+its BACnet encoding through `PropertyValue.application_data`, or a value a
+read of the property returned. A read decodes Event_Parameters into a
+mapping whose `kind` names the algorithm, but nothing builds a value from
+that mapping. The
+keyword goes the way such a write does: encoded, decoded for the property as
+a peer's octets are, then written, so octets that aren't one whole parameter
+value raise `BacnetProtocolError` with the code that write gets. With
+`storage_path`, an encoding past 64 KiB raises RESOURCES /
+NO_SPACE_TO_WRITE_PROPERTY, as the write would; without it the enrollment
+takes the value. Event_Type and Fault_Type follow the keyword parameters,
+and the server's enrollment pass evaluates with them. An Event Enrollment
+has no Time_Delay keyword: its Time_Delay is a member of Event_Parameters.
+
+```python
+# OUT_OF_RANGE: above 40 or below 20 after 30 seconds, deadband 1.
+out_of_range = PropertyValue.application_data(
+    bytes.fromhex("5e091e1c41a000002c422000003c3f8000005f")
+)
+server.add_event_enrollment(
+    instance=1,
+    name="Supply Temp Range",
+    event_parameters=out_of_range,
+    time_delay_normal=60,
+    storage_path="/application/state/ee-1",
+)
+```
+
 The keywords are the application's configuration. They are applied before
 storage attaches, so they are never saved: the file doesn't exist, or holds
 no parameter, until a peer writes one. A value a peer wrote and the file
@@ -3179,10 +3210,9 @@ keywords, with the same checks.
 
 A `write_property_local` of a parameter after the builder call is still
 kept exactly like a peer's write: it is saved in the file and served again
-after a restart. `add_event_enrollment` has no keywords for its parameters,
-so an application that writes them at every start that way replaces what a
-peer wrote; to keep a peer's values, write them only when the file doesn't
-exist yet (check before the builder call) or on a start that clears.
+after a restart. An application that writes its parameters that way at
+every start replaces what a peer wrote, so it gives them as keywords
+instead.
 
 `clear_written_reporting=True`, and `clear_written_config=True` on
 `add_timer` and `add_channel`, drop a saved Description with the rest of

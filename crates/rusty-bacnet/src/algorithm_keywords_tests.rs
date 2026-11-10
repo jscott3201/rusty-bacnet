@@ -155,3 +155,105 @@ fn keywords_apply_before_storage_attaches_and_again_after_a_clear() {
     assert_eq!(read(&build(false), limit), PropertyValue::Real(30.0));
     std::fs::remove_dir_all(&directory).unwrap();
 }
+
+/// OUT_OF_RANGE with no delay: above 40 or below 20, a deadband of 1.
+const OUT_OF_RANGE: &str = "5e09001c41a000002c422000003c3f8000005f";
+
+fn enrollment() -> bacnet_objects::event_enrollment::EventEnrollmentObject {
+    bacnet_objects::event_enrollment::EventEnrollmentObject::new(
+        1,
+        "EE-1",
+        bacnet_types::enums::EventType::CHANGE_OF_BITSTRING,
+    )
+    .unwrap()
+}
+
+fn encoded(hex: &str) -> PropertyValue {
+    let octets = (0..hex.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).unwrap())
+        .collect();
+    PropertyValue::ApplicationData(octets)
+}
+
+/// The Event Enrollment keywords go the way a `write_property_local`
+/// does: a malformed value is refused with the code the write gets, and
+/// with storage an encoding past 64 KiB is refused as storage refuses it
+/// (#2426).
+#[test]
+fn enrollment_keywords_are_checked_as_their_writes_are() {
+    let parameters = encoded(OUT_OF_RANGE);
+    let mut ee = enrollment();
+    let keywords = AlgorithmKeywords::enrollment(Some(&parameters), None, Some(9)).unwrap();
+    keywords.apply(&mut ee).unwrap();
+    keywords.check_kept_size(&ee).unwrap();
+    assert_eq!(read(&ee, PropertyIdentifier::EVENT_PARAMETERS), parameters);
+    assert_eq!(
+        read(&ee, PropertyIdentifier::EVENT_TYPE),
+        PropertyValue::Enumerated(5)
+    );
+    assert_eq!(
+        read(&ee, PropertyIdentifier::TIME_DELAY_NORMAL),
+        PropertyValue::Unsigned(9)
+    );
+
+    // A parameter value cut short, and a Fault_Parameters that is no
+    // BACnetFaultParameter, are refused.
+    let cut = encoded(&OUT_OF_RANGE[..OUT_OF_RANGE.len() - 2]);
+    let not_fault = PropertyValue::Real(1.0);
+    for keywords in [
+        AlgorithmKeywords::enrollment(Some(&cut), None, None),
+        AlgorithmKeywords::enrollment(None, Some(&not_fault), None),
+    ] {
+        assert!(keywords.unwrap().apply(&mut enrollment()).is_err());
+    }
+
+    // Legacy octets whose encoding passes the cap: taken, and refused
+    // only by the storage check.
+    let long = PropertyValue::OctetString(vec![0; 65_533]);
+    let keywords = AlgorithmKeywords::enrollment(Some(&long), None, None).unwrap();
+    let mut ee = enrollment();
+    keywords.apply(&mut ee).unwrap();
+    assert_eq!(
+        code(keywords.check_kept_size(&ee).unwrap_err()),
+        ErrorCode::NO_SPACE_TO_WRITE_PROPERTY
+    );
+    let fits = PropertyValue::OctetString(vec![0; 65_000]);
+    let keywords = AlgorithmKeywords::enrollment(Some(&fits), None, None).unwrap();
+    let mut ee = enrollment();
+    keywords.apply(&mut ee).unwrap();
+    keywords.check_kept_size(&ee).unwrap();
+}
+
+/// The enrollment pass evaluates with the keyword parameters: a value of
+/// 50 raises HIGH_LIMIT only under them (the default parameters are the
+/// `none` choice).
+#[test]
+fn the_enrollment_pass_uses_the_keyword_parameters() {
+    use bacnet_objects::database::ObjectDatabase;
+    use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
+    use bacnet_types::enums::EventState;
+
+    let mut db = ObjectDatabase::new();
+    let mut ai = analog_input();
+    ai.set_present_value(50.0);
+    let ai_oid = ai.object_identifier();
+    db.add(Box::new(ai)).unwrap();
+    let mut ee = enrollment();
+    ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+        ai_oid,
+        PropertyIdentifier::PRESENT_VALUE.to_raw(),
+    )))
+    .unwrap();
+    AlgorithmKeywords::enrollment(Some(&encoded(OUT_OF_RANGE)), None, None)
+        .unwrap()
+        .apply(&mut ee)
+        .unwrap();
+    let ee_oid = ee.object_identifier();
+    db.add(Box::new(ee)).unwrap();
+
+    let transitions = bacnet_server::event_enrollment::evaluate_event_enrollments(&mut db, 1);
+    assert_eq!(transitions.len(), 1);
+    assert_eq!(transitions[0].enrollment_oid, ee_oid);
+    assert_eq!(transitions[0].change.to, EventState::HIGH_LIMIT);
+}
