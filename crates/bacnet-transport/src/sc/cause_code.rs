@@ -3,11 +3,19 @@
 //! Annex AB.7.5 gives a node error codes (Clause 18.7, values 152-199) to
 //! report a WebSocket connection that could not be made or that ended:
 //! DNS, IP, TCP, TLS and HTTP failures while connecting, and the WebSocket
-//! close status once connected. A code is reported to local layers and
-//! management, never sent on the wire. Where the standard has a code for
-//! the precise failure and this stack knows it, that code is chosen; where
-//! it only knows the layer, the layer's catch-all code (`DNS_ERROR`,
-//! `TCP_ERROR`, `TLS_ERROR`, `HTTP_ERROR`, `WEBSOCKET_ERROR`) is.
+//! close status once connected. This stack reports them to local layers
+//! and management and never sends one itself, though a peer may put one in
+//! a NAK. Where the standard has a code for the precise failure and this
+//! stack knows it, that code is chosen; where it only knows the layer, the
+//! layer's catch-all code (`DNS_ERROR`, `TCP_ERROR`, `TLS_ERROR`,
+//! `HTTP_ERROR`, `WEBSOCKET_ERROR`) is.
+//!
+//! The close-status mapping is not done yet: [`ScDisconnectCause::from_error`]
+//! reports a closed or ended WebSocket as `PeerClose`, which has no code,
+//! because the peer's close status is not kept. Mapping that status to its
+//! code (Annex AB.7.5.5) is a follow-up. The `Closed` and `StreamEnded`
+//! arms below apply only to a cause built directly as
+//! `ScDisconnectCause::WebSocket(..)`.
 
 use bacnet_types::enums::ErrorCode;
 
@@ -103,9 +111,11 @@ fn websocket_code(kind: ScWebSocketErrorKind) -> Option<ErrorCode> {
         }
         // Answered with close status 1003 (Annex AB.7.5.3).
         ScWebSocketErrorKind::NonBinaryFrame => ErrorCode::WEBSOCKET_DATA_NOT_ACCEPTED,
-        // The stream ended with no close frame at all.
+        // Only for a cause built directly: from_error turns an ended stream
+        // into PeerClose (no code). The stream ended with no close frame.
         ScWebSocketErrorKind::StreamEnded => ErrorCode::WEBSOCKET_CLOSED_ABNORMALLY,
-        // A close whose status code was not kept, or a send or receive fault.
+        // A send or receive fault; or, only for a cause built directly (from_error
+        // turns it into PeerClose, no code), a close whose status was not kept.
         ScWebSocketErrorKind::Closed
         | ScWebSocketErrorKind::Send
         | ScWebSocketErrorKind::Receive => ErrorCode::WEBSOCKET_ERROR,
@@ -116,8 +126,11 @@ fn websocket_code(kind: ScWebSocketErrorKind) -> Option<ErrorCode> {
 fn http_code(status: u16) -> ErrorCode {
     match status {
         200..=299 => ErrorCode::HTTP_NO_UPGRADE,
-        300..=399 => ErrorCode::HTTP_RESOURCE_NOT_LOCAL,
+        // Redirects to another location; other 3xx answers are unexpected.
+        301 | 302 | 303 | 307 | 308 => ErrorCode::HTTP_RESOURCE_NOT_LOCAL,
         407 => ErrorCode::HTTP_PROXY_AUTHENTICATION_FAILED,
+        // The server saw no upgrade request.
+        426 => ErrorCode::HTTP_UPGRADE_REQUIRED,
         503 => ErrorCode::HTTP_TEMPORARY_UNAVAILABLE,
         _ => ErrorCode::HTTP_UNEXPECTED_RESPONSE_CODE,
     }
@@ -231,10 +244,33 @@ mod tests {
             upgrade(407),
             Some(ErrorCode::HTTP_PROXY_AUTHENTICATION_FAILED)
         );
-        assert_eq!(upgrade(301), Some(ErrorCode::HTTP_RESOURCE_NOT_LOCAL));
+        assert_eq!(upgrade(426), Some(ErrorCode::HTTP_UPGRADE_REQUIRED));
+        for redirect in [301, 302, 303, 307, 308] {
+            assert_eq!(
+                upgrade(redirect),
+                Some(ErrorCode::HTTP_RESOURCE_NOT_LOCAL),
+                "{redirect}"
+            );
+        }
+        for other in [300, 304, 305, 306, 399] {
+            assert_eq!(
+                upgrade(other),
+                Some(ErrorCode::HTTP_UNEXPECTED_RESPONSE_CODE),
+                "{other}"
+            );
+        }
         assert_eq!(upgrade(200), Some(ErrorCode::HTTP_NO_UPGRADE));
         // A closed WebSocket reads as a peer close; its status is not kept.
         assert_eq!(code(ws_error(ScWebSocketErrorKind::Closed, None)), None);
+        assert_eq!(
+            code(ws_error(ScWebSocketErrorKind::StreamEnded, None)),
+            None
+        );
+        // Built directly, they take the WebSocket codes.
+        assert_eq!(
+            ScDisconnectCause::WebSocket(ScWebSocketErrorKind::StreamEnded).error_code(),
+            Some(ErrorCode::WEBSOCKET_CLOSED_ABNORMALLY)
+        );
     }
 
     #[test]

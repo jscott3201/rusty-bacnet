@@ -84,3 +84,19 @@ fn sc_and_bip6_frames_give_their_vmacs() {
     assert!(summary.broadcast);
     assert_eq!(summary.service.as_deref(), Some("read-property"));
 }
+
+#[test]
+fn an_sc_nak_names_its_error_code() {
+    // A BACnet/SC connection code (#2434) and an older one, by name.
+    let summary = summarize_frame(Framing::Sc, &sc_nak(169));
+    assert_eq!(summary.link, "result");
+    assert_eq!(
+        summary.problem.as_deref(),
+        Some("NAK websocket-closed-by-peer")
+    );
+    let summary = summarize_frame(Framing::Sc, &sc_nak(151));
+    assert_eq!(summary.problem.as_deref(), Some("NAK node-duplicate-vmac"));
+    // A code with no name stays a number.
+    let summary = summarize_frame(Framing::Sc, &sc_nak(300));
+    assert_eq!(summary.problem.as_deref(), Some("NAK 300"));
+}

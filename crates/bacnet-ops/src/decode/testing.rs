@@ -178,6 +178,25 @@ pub fn sc_npdu(npdu: &[u8], destination: Option<Vmac>) -> Vec<u8> {
     out.to_vec()
 }
 
+/// A BACnet/SC BVLC-Result NAK to a Connect-Request, carrying `error_code`
+/// in the COMMUNICATION class.
+pub fn sc_nak(error_code: u16) -> Vec<u8> {
+    let mut payload = vec![ScFunction::ConnectRequest.to_raw(), 0x01, 0x00, 0x00, 0x07];
+    payload.extend_from_slice(&error_code.to_be_bytes());
+    let message = ScMessage {
+        function: ScFunction::Result,
+        message_id: 0x1234,
+        originating_vmac: None,
+        destination_vmac: None,
+        dest_options: Vec::new(),
+        data_options: Vec::new(),
+        payload: Bytes::from(payload),
+    };
+    let mut out = BytesMut::new();
+    encode_sc_message(&mut out, &message);
+    out.to_vec()
+}
+
 /// An MS/TP frame, preamble to CRC.
 pub fn mstp(frame_type: FrameType, destination: u8, source: u8, data: &[u8]) -> Vec<u8> {
     let mut wire = vec![0; 16 + data.len() * 2];
