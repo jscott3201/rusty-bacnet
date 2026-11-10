@@ -473,6 +473,9 @@ pub struct TimedHistories {
     /// Earliest the deadline backstop may hand a context out again. Only a
     /// context with a timestamped history has an entry.
     not_before: BTreeMap<MultipleContextKey, Instant>,
+    /// Contexts whose report a spent budget kept back at their last turn,
+    /// the one waiting longest first ([`Self::note_turn`]).
+    waiting: Vec<MultipleContextKey>,
     /// Claims kept until they are settled or their deadline passes, oldest
     /// first.
     lodged: Vec<claim::Lodged>,
@@ -515,6 +518,7 @@ impl TimedHistories {
             sending: BTreeMap::new(),
             context_held: BTreeMap::new(),
             not_before: BTreeMap::new(),
+            waiting: Vec::new(),
             lodged: Vec::new(),
             next_claim: 1,
             moved: false,
@@ -629,6 +633,28 @@ impl TimedHistories {
     /// reads the untimestamped values afresh.
     pub fn end_send(&mut self, context: &MultipleContextKey) -> bool {
         self.sending.remove(context).unwrap_or(false)
+    }
+
+    /// Note how a fanout treated `context`'s report: `waited` when the
+    /// input's notification budget was spent before its turn, so the report
+    /// went back to its references unsent. A context that waited takes its
+    /// next turn ahead of those that did not
+    /// ([`in_turn`](super::multiple_report::in_turn)), so the same contexts
+    /// don't lose every time a budget runs out; one that is served waits no
+    /// more.
+    pub fn note_turn(&mut self, context: &MultipleContextKey, waited: bool) {
+        let at = self.waiting.iter().position(|waiting| waiting == context);
+        match (waited, at) {
+            (true, None) => self.waiting.push(context.clone()),
+            (false, Some(at)) => drop(self.waiting.remove(at)),
+            _ => {}
+        }
+    }
+
+    /// The contexts a spent budget kept back, the one waiting longest
+    /// first.
+    pub fn waiting(&self) -> &[MultipleContextKey] {
+        &self.waiting
     }
 
     /// Drop every backstop wait: a block lifted, so overdue changes go out
@@ -829,6 +855,11 @@ impl TimedHistories {
                     self.not_before.remove(context);
                 }
                 self.terms.remove(context);
+                // A context with no reference left waits for nothing.
+                let same = |key: &CovSubscriptionKey| key.multiple_context() == Some(context);
+                if !self.untimed.keys().any(same) {
+                    self.waiting.retain(|waiting| waiting != context);
+                }
             }
         }
     }

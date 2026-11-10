@@ -42,7 +42,7 @@ use super::Reporter;
 use crate::cov::life_safety::{LifeSafetyCovChange, LifeSafetyCovSnapshots};
 use crate::cov::multiple_report::{
     Carried, Gathering, Reading, Report, Source, begin_confirmed, by_context, carried, hold_off,
-    part_token,
+    in_turn, part_token,
 };
 use crate::cov::timed::{ClaimId, Settlement, TimedClaim, TimedHistories, follow_table};
 use crate::cov::timed_capture::TimedCapture;
@@ -272,8 +272,8 @@ impl Reporter {
         if subs.is_empty() || budget.is_exhausted() {
             return;
         }
-        for subs in by_context(subs).values() {
-            self.report_context(db, subs, force, now, budget);
+        for subs in in_turn(&self.multiple.histories, by_context(subs)) {
+            self.report_context(db, &subs, force, now, budget);
         }
         self.multiple_counts();
     }
@@ -315,7 +315,11 @@ impl Reporter {
         if !report.needs_turn {
             self.end_turn(&context, turn.take());
         }
-        if budget.is_exhausted() {
+        // A context the spent budget keeps back goes first at its next
+        // fanout; one that has its turn waits no more.
+        let spent = budget.is_exhausted();
+        self.multiple.histories.note_turn(&context, spent);
+        if spent {
             self.counters.cov.notifications_throttled_fanout += 1;
             for part in report.parts {
                 self.multiple.histories.give_back(part.claim, now);

@@ -177,3 +177,37 @@ fn a_reference_past_its_lifetime_reports_nothing() {
     assert_eq!(rows(&report.parts[0].notification), [(1, 4.0, None)]);
     assert_eq!(report.parts[0].notification.time_remaining, 1);
 }
+
+#[test]
+fn contexts_a_spent_budget_kept_back_take_their_turns_first() {
+    let mut host = Host::new(1);
+    for process in [3, 1, 2] {
+        host.subscribe(process, false, 1, &[reference(PV, false)], None);
+    }
+    let turns = |host: &mut Host| -> Vec<u32> {
+        let grouped = by_context(host.on(1, T0));
+        in_turn(&host.histories, grouped)
+            .iter()
+            .map(|subs| subs[0].subscriber_process_identifier)
+            .collect()
+    };
+    assert_eq!(turns(&mut host), [1, 2, 3], "key order with nobody waiting");
+
+    // The one waiting longest goes first, then the other waiter, then the
+    // rest; waiting again changes nobody's place.
+    host.histories.note_turn(&ctx(3, false), true);
+    host.histories.note_turn(&ctx(1, false), true);
+    host.histories.note_turn(&ctx(3, false), true);
+    assert_eq!(turns(&mut host), [3, 1, 2]);
+    // A context that has its turn waits no more.
+    host.histories.note_turn(&ctx(3, false), false);
+    assert_eq!(turns(&mut host), [1, 2, 3]);
+    assert_eq!(host.histories.waiting(), [ctx(1, false)]);
+
+    // A cancelled context waits for nothing.
+    host.table.unsubscribe_cov_multiple_context(&ctx(1, false));
+    let fenced = host.table.take_fenced();
+    crate::cov::timed::follow_table(&mut host.histories, &host.table, &fenced, &[], T0);
+    assert!(host.histories.waiting().is_empty());
+    assert_eq!(turns(&mut host), [2, 3]);
+}

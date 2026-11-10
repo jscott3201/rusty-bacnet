@@ -2,7 +2,8 @@
 //! §13.18): which of its references a report takes, what it drains from
 //! their histories, how it is split, and what its sends owe afterwards.
 //!
-//! A host fans a change out context by context ([`by_context`]), each in
+//! A host fans a change out context by context ([`by_context`], in the
+//! order [`in_turn`] gives when they share one budget), each in
 //! three steps, because it reads its objects under one guard and its table
 //! under another:
 //!
@@ -57,10 +58,11 @@ use super::{
 };
 
 /// The COV-multiple references of one fanout by context, the contexts in
-/// the order they report: that of their keys, so by recipient (direct
-/// before routed, then by address), then by subscriber process identifier,
-/// the unconfirmed form before the confirmed one. Each context keeps its
-/// references in the order given.
+/// the order of their keys: by recipient (direct before routed, then by
+/// address), then by subscriber process identifier, the unconfirmed form
+/// before the confirmed one. That is the order they report in, unless a
+/// spent budget kept some back last time ([`in_turn`]). Each context keeps
+/// its references in the order given.
 pub fn by_context(
     subscriptions: impl IntoIterator<Item = CovSubscriptionSnapshot>,
 ) -> BTreeMap<MultipleContextKey, Vec<CovSubscriptionSnapshot>> {
@@ -77,6 +79,23 @@ pub fn by_context(
             .push(sub);
     }
     grouped
+}
+
+/// The contexts of one fanout, as [`by_context`] grouped them, in the order
+/// they take their turns under the input's shared notification budget:
+/// first those a spent budget kept back at their last turn
+/// ([`TimedHistories::note_turn`]), the one waiting longest first, then the
+/// rest in key order. With nobody waiting that is plain key order.
+pub fn in_turn(
+    histories: &TimedHistories,
+    mut grouped: BTreeMap<MultipleContextKey, Vec<CovSubscriptionSnapshot>>,
+) -> Vec<Vec<CovSubscriptionSnapshot>> {
+    let waiting = histories.waiting().iter();
+    let mut turns: Vec<_> = waiting
+        .filter_map(|context| grouped.remove(context))
+        .collect();
+    turns.extend(grouped.into_values());
+    turns
 }
 
 /// Where a report reads its values.

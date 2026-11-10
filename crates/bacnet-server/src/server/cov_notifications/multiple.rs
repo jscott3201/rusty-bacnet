@@ -2,7 +2,9 @@ use super::super::cov_notify_context::{CovFanoutHandles, CovNotifyContext};
 use super::confirmed::ConfirmedReport;
 use super::*;
 use crate::cov::timed_store::{ClaimGuard, SendTurn};
-use bacnet_device_core::cov::multiple_report::{Gathering, Reading, Source, by_context, carried};
+use bacnet_device_core::cov::multiple_report::{
+    Gathering, Reading, Source, by_context, carried, in_turn,
+};
 use std::collections::BTreeSet;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
@@ -56,8 +58,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
         // Contexts report in the order of their keys: by recipient, then
         // process identifier, unconfirmed before confirmed. A hash map
-        // gave an order that varied from run to run (#2320).
-        for subs in by_context(subscriptions.iter().cloned()).values() {
+        // gave an order that varied from run to run (#2320). Ahead of that
+        // order go the contexts a spent budget kept back at their last
+        // turn, which the histories remember; only a fanout over several
+        // contexts has an order to ask them for.
+        let grouped = by_context(subscriptions.iter().cloned());
+        let turns: Vec<_> = if grouped.len() > 1 {
+            let store = handles.ctx.cov_table.read().await.timed().clone();
+            in_turn(&store.lock(), grouped)
+        } else {
+            grouped.into_values().collect()
+        };
+        for subs in &turns {
             Self::send_cov_notification_multiple(handles, subs, snapshot, force, budget).await;
         }
     }
@@ -171,7 +183,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         };
 
         // From the final live decision through fresh admission there is no await.
-        if budget.is_exhausted() {
+        // A context the spent budget keeps back goes first at its next
+        // fanout; one that has its turn waits no more.
+        let spent = budget.is_exhausted();
+        if let Some(context) = report.route.key().multiple_context() {
+            store.lock().note_turn(context, spent);
+        }
+        if spent {
             counters
                 .notifications_throttled_fanout
                 .fetch_add(1, Ordering::Relaxed);

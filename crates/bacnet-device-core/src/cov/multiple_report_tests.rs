@@ -75,7 +75,7 @@ impl Host {
     }
 
     /// The live references on Analog Value `instance`.
-    fn on(&mut self, instance: u32, now: Instant) -> Vec<CovSubscriptionSnapshot> {
+    pub(super) fn on(&mut self, instance: u32, now: Instant) -> Vec<CovSubscriptionSnapshot> {
         self.table
             .subscriptions_for(&av(instance), now)
             .into_iter()

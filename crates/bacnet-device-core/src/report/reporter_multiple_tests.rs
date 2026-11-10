@@ -39,6 +39,11 @@ impl Clock {
 
 /// A device whose database reads a hand-set clock, at second 1.
 fn device() -> (Device, Arc<Clock>) {
+    device_under(crate::cov::CovPolicy::default())
+}
+
+/// [`device`] under `policy`.
+fn device_under(policy: crate::cov::CovPolicy) -> (Device, Arc<Clock>) {
     let clock = Arc::new(Clock(Mutex::new(ClockFrame {
         local_date: Date {
             year: 126,
@@ -55,7 +60,7 @@ fn device() -> (Device, Arc<Clock>) {
         utc_offset: 0,
         daylight_savings_status: false,
     })));
-    let mut device = Device::new(OutboxLimits::default());
+    let mut device = Device::with_policy(OutboxLimits::default(), policy);
     device
         .db
         .set_clock_reader(Some(Arc::clone(&clock) as Arc<dyn ClockReader>));
@@ -503,4 +508,140 @@ fn a_deleted_objects_pending_changes_go_with_its_references() {
         .reporter
         .on_deadline(&device.db, &mut device.ids, secs(1 + DELAY));
     assert!(device.pop(secs(1 + DELAY)).is_none());
+}
+
+/// A device whose changes may each send one notification, with one
+/// unconfirmed context per process identifier, 1 to 3, on AI-1's
+/// Present_Value, their initial reports sent.
+fn one_notification_a_change(timestamped: bool) -> (Device, Arc<Clock>) {
+    let (mut device, clock) = device_under(crate::cov::CovPolicy {
+        max_notifications_per_event: 1,
+        ..Default::default()
+    });
+    for process in 1..=3 {
+        device.subscribe_multiple(process, false, &[(ai(), timestamped)], 1476, T0);
+        assert_eq!(device.drain(T0).len(), 1);
+    }
+    (device, clock)
+}
+
+/// The process identifier and rows of each notification queued, all sent.
+fn drain_by_process(device: &mut Device, now: Instant) -> Vec<(u32, Vec<Row>)> {
+    let mut all = Vec::new();
+    while let Some((notification, apdu)) = device.pop(now) {
+        let Apdu::UnconfirmedRequest(request) = apdu else {
+            panic!("unconfirmed contexts");
+        };
+        let request = COVNotificationMultipleRequest::decode(&request.service_request).unwrap();
+        all.push((request.subscriber_process_identifier, rows(&request)));
+        device.sent(&notification, now);
+    }
+    all
+}
+
+#[test]
+fn an_untimestamped_context_behind_a_spent_budget_has_the_next_turn() {
+    let (mut device, _) = one_notification_a_change(false);
+    // Each change reports to one context. Those the spent budget kept back
+    // have no history and no deadline; they go first at the next change,
+    // the one waiting longest ahead.
+    let mut served = Vec::new();
+    for change in 1..=6u8 {
+        let now = secs(u64::from(change));
+        device.sample(ai(), 10.0 + f32::from(change), now);
+        let sent = drain_by_process(&mut device, now);
+        assert_eq!(sent.len(), 1, "one notification a change");
+        assert_eq!(sent[0].1, [(1, 10.0 + f32::from(change), None)]);
+        served.push(sent[0].0);
+    }
+    assert_eq!(served, [1, 2, 3, 1, 2, 3]);
+    assert_eq!(
+        device
+            .reporter
+            .counters()
+            .cov
+            .notifications_throttled_fanout,
+        12
+    );
+    assert_eq!(device.reporter.next_deadline(), lifetime_end(), "none owed");
+}
+
+#[test]
+fn what_a_spent_budget_kept_back_is_in_the_next_report() {
+    let (mut device, clock) = one_notification_a_change(true);
+    clock.set(11);
+    device.sample(ai(), 11.0, secs(1));
+    let first = drain_by_process(&mut device, secs(1));
+    assert_eq!(first, [(1, vec![(1, 11.0, Some(11))])]);
+
+    // The other two drained the change into their reports before the
+    // budget stopped them. It is back in their histories: the next change
+    // reports to the one waiting longest, with both changes.
+    clock.set(12);
+    device.sample(ai(), 12.0, secs(2));
+    let second = drain_by_process(&mut device, secs(2));
+    let both = vec![(1, 11.0, Some(11)), (1, 12.0, Some(12))];
+    assert_eq!(second, [(2, both.clone())]);
+
+    // The third context's changes go out at their delay, then the first's
+    // newer one at its own, each under a budget of its own.
+    assert_eq!(device.reporter.next_deadline(), Some(secs(1 + DELAY)));
+    device.deadline();
+    assert_eq!(drain_by_process(&mut device, secs(1 + DELAY)), [(3, both)]);
+    assert_eq!(device.reporter.next_deadline(), Some(secs(2 + DELAY)));
+    device.deadline();
+    let last = drain_by_process(&mut device, secs(2 + DELAY));
+    assert_eq!(last, [(1, vec![(1, 12.0, Some(12))])]);
+    assert_eq!(device.reporter.next_deadline(), lifetime_end());
+}
+
+#[test]
+fn contexts_due_at_one_deadline_are_looked_at_in_key_order() {
+    let (mut device, clock) = device();
+    for process in [3, 1, 2] {
+        device.subscribe_multiple(process, false, &[(ai(), true)], 1476, T0);
+    }
+    device.drain(T0);
+    // No send of the change's three reports succeeds, so all three
+    // contexts come due at one deadline.
+    clock.set(10);
+    device.sample(ai(), 11.0, secs(1));
+    while let Some((unsent, _)) = device.pop(secs(1)) {
+        device
+            .reporter
+            .delivered(unsent.token, Delivery::NotSent, &mut device.ids, secs(1));
+    }
+    assert_eq!(device.reporter.next_deadline(), Some(secs(1 + DELAY)));
+    device.deadline();
+    let order: Vec<_> = drain_by_process(&mut device, secs(1 + DELAY))
+        .into_iter()
+        .map(|(process, _)| process)
+        .collect();
+    assert_eq!(order, [1, 2, 3]);
+}
+
+#[test]
+fn a_popped_part_holds_its_contexts_turn_until_the_host_reports_it() {
+    let (mut device, clock) = device();
+    device.subscribe_multiple(1, false, &[(ai(), true)], 1476, T0);
+    device.drain(T0);
+    clock.set(10);
+    device.sample(ai(), 11.0, secs(1));
+    let (popped, _) = device.pop_multiple(secs(1)).expect("the report");
+    // The host has the notification and has not said how its send ended:
+    // the context's turn stays taken, so later changes queue nothing,
+    // whatever time passes; their deadline comes and goes.
+    clock.set(20);
+    device.sample(ai(), 12.0, secs(2));
+    assert!(device.pop(secs(2)).is_none());
+    for later in [2 + DELAY, 60, 120] {
+        device
+            .reporter
+            .on_deadline(&device.db, &mut device.ids, secs(later));
+        assert!(device.pop(secs(later)).is_none(), "at {later} s");
+    }
+    // Reporting it ends the turn, and the follow-up carries what waited.
+    device.sent(&popped, secs(121));
+    device.deadline();
+    assert_eq!(device.drain(secs(121)), [[(1, 12.0, Some(20))]]);
 }
