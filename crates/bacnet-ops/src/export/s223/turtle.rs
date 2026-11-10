@@ -8,7 +8,9 @@
 //!   without one), and whether it is quantifiable (analog) or enumerated
 //!   (binary and multi-state);
 //! - an analog point carries its QUDT unit and quantity kind when the unit
-//!   table maps its Units; otherwise a comment names the BACnet unit;
+//!   table maps its Units; otherwise it gets QUDT's unknown quantity kind,
+//!   which the draft requires of every quantifiable property, no unit, and
+//!   a comment naming the BACnet unit;
 //! - a binary point's kind is the ontology's neutral logical one; a
 //!   multi-state point gets a kind of its own, minted from its states,
 //!   with one member a state, named by its State_Text;
@@ -319,23 +321,27 @@ fn point(
     }
 }
 
-/// An analog point's QUDT terms, or the comment that names its unit.
+/// An analog point's QUDT terms. A unit the table doesn't map, or one not
+/// read, gets the unknown quantity kind and no unit, since the draft wants
+/// a quantity kind on every quantifiable property, and a comment naming the
+/// BACnet unit.
 fn units(units: Option<EngineeringUnits>, out: &mut impl Write) -> fmt::Result {
     match units.map(|units| (units, qudt_unit(units))) {
         Some((_, Some((unit, kind)))) => {
             writeln!(out, "    qudt:hasUnit unit:{unit} ;")?;
-            writeln!(out, "    qudt:hasQuantityKind quantitykind:{kind} ;")
+            return writeln!(out, "    qudt:hasQuantityKind quantitykind:{kind} ;");
         }
         Some((units, None)) => writeln!(
             out,
             "    rdfs:comment \"BACnet units {}: no QUDT mapping in this export\" ;",
             kebab(units)
-        ),
+        )?,
         None => writeln!(
             out,
             "    rdfs:comment \"BACnet units not read: no QUDT unit\" ;"
-        ),
+        )?,
     }
+    writeln!(out, "    qudt:hasQuantityKind quantitykind:Unknown ;")
 }
 
 /// A multi-state point's minted enumeration kind and its members. Each is

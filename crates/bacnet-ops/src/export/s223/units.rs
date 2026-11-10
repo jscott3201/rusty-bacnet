@@ -2,9 +2,10 @@
 //! 223 model gives a quantifiable property.
 //!
 //! A hand-written table of the units HVAC, lighting and energy points use
-//! most. It grows on request; a unit it lacks gets no QUDT terms in the
-//! export, only a comment naming the BACnet unit. Each entry is a QUDT
-//! local name, in the `unit:` and `quantitykind:` namespaces.
+//! most. It grows on request; a unit it lacks gets QUDT's unknown quantity
+//! kind and no unit in the export, with a comment naming the BACnet unit.
+//! Each entry is a QUDT local name, in the `unit:` and `quantitykind:`
+//! namespaces.
 
 use bacnet_types::enums::EngineeringUnits as U;
 

@@ -1492,7 +1492,8 @@ object by identifier and by name, and `present-value`.
   to stderr; `--format` and `--json` don't apply.
 - It costs the device name, its Object_List and one request per exported
   object, by ReadPropertyMultiple where the device takes it, one at a time.
-  A target given by address costs one more, to learn the instance. If the
+  A target given by address costs one more: a read of its Device object
+  by the wildcard instance, to learn the device's instance number. If the
   device stops answering partway, the export keeps what was read, says so
   in its header, and exits 1.
 
@@ -1507,10 +1508,10 @@ is why the command name says experimental.
 - The draft's identifier pattern refuses instance 0. An object or a device
   numbered 0 has no identifier string in its reference; its name still
   identifies it, and a comment marks the gap.
-- A unit the table doesn't map gets no QUDT terms, only a comment naming
-  the BACnet unit, and the header counts them. The draft requires a
-  quantity kind on every quantifiable property, so shape validation
-  reports such points.
+- A unit the table doesn't map (or one the device didn't give) is exported
+  with QUDT's unknown quantity kind and no unit, since the draft requires a
+  quantity kind on every quantifiable property, plus a comment naming the
+  BACnet unit. The header counts these points.
 - Device text (names, descriptions, state texts) is kept exactly, escaped
   so the file stays ASCII.
 

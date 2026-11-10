@@ -16,7 +16,9 @@ pub(crate) enum ExportFormat {
     /// states of multi-state objects. A point list only: no equipment,
     /// connections or sensors. The 223 draft and this output can change
     /// between releases. Reads the device name, its object list, then one
-    /// request per exported object. --format and --json don't apply.
+    /// request per exported object; a target given by address costs one
+    /// more, a read of its Device object to learn the instance. --format
+    /// and --json don't apply.
     #[command(name = "223-experimental")]
     S223 {
         /// Target device (address, instance, or routed dnet:instance).

@@ -190,10 +190,13 @@ fn golden_cases_hold_what_they_test() {
     assert!(zero.contains("2 identifiers left out for instance 0"));
 
     let unmapped = text("unmapped-unit.ttl");
+    assert!(!unmapped.contains("qudt:hasUnit"), "no unit is claimed");
     assert_eq!(
-        unmapped.matches("qudt:").count(),
-        1,
-        "only the prefix declaration"
+        unmapped
+            .matches("qudt:hasQuantityKind quantitykind:Unknown ;")
+            .count(),
+        3,
+        "the draft wants a quantity kind on each"
     );
     assert!(unmapped.contains("BACnet units degree-days-celsius: no QUDT mapping"));
     assert!(unmapped.contains("BACnet units 300: no QUDT mapping"));

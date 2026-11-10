@@ -17,6 +17,7 @@
 d:analog-value-5.present-value a s223:QuantifiableProperty ;
     rdfs:label "Heating Degree Days" ;
     rdfs:comment "BACnet units degree-days-celsius: no QUDT mapping in this export" ;
+    qudt:hasQuantityKind quantitykind:Unknown ;
     s223:hasExternalReference d:analog-value-5.present-value.ref .
 
 d:analog-value-5.present-value.ref a s223:BACnetExternalReference ;
@@ -30,6 +31,7 @@ d:analog-value-5.present-value.ref a s223:BACnetExternalReference ;
 d:analog-input-6.present-value a s223:QuantifiableObservableProperty ;
     rdfs:label "Units Unread" ;
     rdfs:comment "BACnet units not read: no QUDT unit" ;
+    qudt:hasQuantityKind quantitykind:Unknown ;
     s223:hasExternalReference d:analog-input-6.present-value.ref .
 
 d:analog-input-6.present-value.ref a s223:BACnetExternalReference ;
@@ -43,6 +45,7 @@ d:analog-input-6.present-value.ref a s223:BACnetExternalReference ;
 d:analog-input-7.present-value a s223:QuantifiableObservableProperty ;
     rdfs:label "Vendor Units" ;
     rdfs:comment "BACnet units 300: no QUDT mapping in this export" ;
+    qudt:hasQuantityKind quantitykind:Unknown ;
     s223:hasExternalReference d:analog-input-7.present-value.ref .
 
 d:analog-input-7.present-value.ref a s223:BACnetExternalReference ;
