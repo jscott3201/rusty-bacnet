@@ -124,7 +124,9 @@ pub struct Observed<'a> {
     /// it, except [`applied`](WriteCommitObserver::applied), which a local
     /// write never calls.
     pub observer: &'a mut dyn WriteCommitObserver,
-    /// The value's octets, as the host encodes it for the observer.
+    /// The value's octets, as the host encodes it for the observer: the
+    /// value as given, before a reference to the local device is localized.
+    /// Every observer call that carries octets is shown these.
     pub octets: &'a [u8],
 }
 

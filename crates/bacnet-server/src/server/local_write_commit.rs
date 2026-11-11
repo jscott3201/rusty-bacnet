@@ -1,4 +1,4 @@
-//! A local write's object step, but a WriteGroup's: bacnet-device-core's
+//! Every local write's object step except a WriteGroup's: bacnet-device-core's
 //! [`apply`](bacnet_device_core::write::local::apply) (#2446), with the
 //! server's Audit around a property write and what the write staged released
 //! as the object step ends, ahead of Audit's record of it.

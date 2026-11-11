@@ -578,8 +578,8 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
         }
     }
 
-    /// [`Self::write`] on behalf of a Command, Channel or Timer run, whose
-    /// object the write names as its source: made only while `run` is still
+    /// [`Self::write`] on behalf of a Command, Channel or Timer run; the
+    /// caller names the run's object as the write's source. Made only while `run` is still
     /// its object's current run, checked under the guard that commits the
     /// write (#2265). A run whose object was deleted, replaced or written
     /// again since gets [`stale_run`](crate::command_lists::stale_run) and
