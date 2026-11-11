@@ -8,8 +8,9 @@ use clap::Subcommand;
 /// What `bacnet export` writes.
 #[derive(Debug, Subcommand)]
 pub(crate) enum ExportFormat {
-    /// EXPERIMENTAL: the device's analog, binary and multi-state objects as
-    /// a proposed ASHRAE Standard 223 point list, in Turtle.
+    /// EXPERIMENTAL: the device's analog, binary and multi-state objects and
+    /// integer values as a proposed ASHRAE Standard 223 point list, in
+    /// Turtle.
     ///
     /// One 223 property per object, each with a BACnet external reference
     /// (device, object, name, property), QUDT units where they map, and the
@@ -31,7 +32,7 @@ pub(crate) enum ExportFormat {
               default_value = bacnet_ops::export::s223::DEFAULT_BASE_IRI)]
         base_iri: String,
         /// Object types to export, comma-separated (default: ai, ao, av,
-        /// bi, bo, bv, msi, mso and msv).
+        /// bi, bo, bv, msi, mso, msv and integer-value).
         #[arg(long, value_name = "TYPES", value_delimiter = ',')]
         types: Vec<String>,
         /// Command priority (1-16) to name in each commandable point's

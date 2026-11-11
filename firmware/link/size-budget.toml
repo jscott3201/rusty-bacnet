@@ -659,6 +659,24 @@
 # clone, so that the list and the database are both live, peaks at 23768.
 # An output or a value takes about 2 KB of it on the host, an input about
 # 0.5 KB.
+#
+# On 2026-11-11 (#2456, Rust 1.99.0, dev at 1d4fb5fb1) the builder covers
+# the Integer Value too. The scenario's list holds none, but the builder
+# reaches its constructor, and so its vtable, whatever the list holds. As
+# text / rodata / flash, dev then this change:
+#
+#   thumbv7m             168576 / 21572 / 191172
+#                        171576 / 22088 / 194688
+#   thumbv7em            168648 / 21572 / 191244
+#                        171752 / 22088 / 194864
+#   riscv32imac          203016 / 25084 / 228122
+#                        206796 / 25640 / 232458
+#
+# So the Integer Value costs 3516 / 3620 / 4336 octets of flash (2718 /
+# 2844 / 3028 of them bacnet-objects .text), and nothing more of RAM or of
+# the arena; core::fmt and the 64-bit division routines stay at 0 and the
+# memmove count doesn't move. Every row was within its budget, so none
+# moved.
 
 [thumbv7m-none-eabi.mstp]
 text = 18320

@@ -1464,7 +1464,7 @@ anything that doesn't decode ends the list as `[raw ..]`.
 ```bash
 bacnet export 223-experimental 192.168.1.100 > ahu1.ttl
 bacnet export 223-experimental 1234 --base-iri https://example.com/site/ -o ahu1.ttl
-bacnet export 223-experimental 192.168.1.100 --types ai,ao,msv --write-priority 8
+bacnet export 223-experimental 192.168.1.100 --types ai,ao,msv,integer-value --write-priority 8
 ```
 
 Proposed ASHRAE Standard 223 is a semantic model of a building: its
@@ -1472,16 +1472,20 @@ equipment, how the equipment connects, and the properties it observes and
 actuates. Its draft ontology ties a model's property to a BACnet point with
 an external reference. `export 223-experimental` writes that part for one
 device, as Turtle: one 223 property for each analog, binary and multi-state
-input, output and value, each with a reference naming the device, the
-object by identifier and by name, and `present-value`.
+input, output and value and each integer value, with a reference naming
+the device, the object by identifier and by name, and `present-value`.
+`--types` narrows the objects read, by the target grammar's type names
+(`ai`, `msv`, `integer-value` and so on); by default it reads all ten
+types.
 
 - Inputs become observable properties, outputs and values with a
   Priority_Array actuatable ones, and values without one plain properties.
-  Analog points are quantifiable; binary points use the ontology's neutral
-  logical kind; each multi-state point gets an enumeration kind of its own,
-  one member a state, named by its State_Text.
-- Analog units go out as QUDT units and quantity kinds where the export's
-  table maps them (about 90 common HVAC, lighting and energy units).
+  Analog points and integer values are quantifiable; binary points use the
+  ontology's neutral logical kind; each multi-state point gets an
+  enumeration kind of its own, one member a state, named by its State_Text.
+- The units of analog points and integer values go out as QUDT units and
+  quantity kinds where the export's table maps them (about 90 common HVAC,
+  lighting and energy units).
 - `--write-priority N` (1 to 16) names a command priority in the reference
   of every actuatable point. Present_Value itself is never read or written.
 - Node names come from object identifiers, so they don't change when an
@@ -1503,8 +1507,8 @@ object by identifier and by name, and `present-value`.
   object, by ReadPropertyMultiple, one at a time. A device that refuses
   ReadPropertyMultiple costs one refused request, then a ReadProperty a
   property: 2 per binary input or output, 3 per analog input or output or
-  binary value, 4 per analog value or multi-state input or output, and 5
-  per multi-state value. A target given by address costs one more: a read
+  binary value, 4 per analog value, integer value or multi-state input or
+  output, and 5 per multi-state value. A target given by address costs one more: a read
   of its Device object by the wildcard instance, to learn the device's
   instance number. If the device stops answering partway, the export
   writes what was read, says so in its header, and exits 1.
@@ -1525,8 +1529,9 @@ is why the command name says experimental.
   quantifiable property, plus a comment naming the BACnet unit. The header
   counts these points.
 - An object whose read the device refuses is skipped, with a comment where
-  it would have been, and so is one that can't give its Object_Name, an
-  analog object's Units or a multi-state object's Number_Of_States. The
+  it would have been, and so is one that can't give its Object_Name, the
+  Units of an analog object or an integer value, or a multi-state object's
+  Number_Of_States. The
   header counts the skipped objects.
 - Device text (names, descriptions, state texts) is kept exactly, escaped
   so the file stays ASCII, except U+0000, which a string literal can't

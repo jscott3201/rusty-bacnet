@@ -703,9 +703,9 @@ the selected types. `to_turtle()` on the result writes the Turtle.
 
 The device is looked up in the discovery table, as the
 `_from_device` methods look it up. `types` narrows the objects read
-(analog, binary and multi-state inputs, outputs and values; all
-nine by default). Another type or an empty list raises ValueError
-before anything is sent.
+(analog, binary and multi-state inputs, outputs and values, and
+integer values; all ten by default). Another type or an empty list
+raises ValueError before anything is sent.
 
 A device that doesn't answer the name read, or a failed read of the
 whole Object\_List, raises the usual error. A device that can't send

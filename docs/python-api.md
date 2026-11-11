@@ -1986,8 +1986,8 @@ await client.write_property_multiple_to_device(1234, [
 #### `export_223_experimental(device_instance, *, types=None) -> Inventory223Experimental`
 
 Reads one device's analog, binary and multi-state inputs, outputs and
-values for an experimental point list in the form of proposed ASHRAE
-Standard 223, the same export as the CLI's
+values, and its integer values, for an experimental point list in the
+form of proposed ASHRAE Standard 223, the same export as the CLI's
 [`bacnet export 223-experimental`](CLI.md#standard-223-export-experimental).
 The result is plain data; `to_turtle()` writes the Turtle.
 
@@ -2020,10 +2020,11 @@ turtle = inventory.to_turtle(base_iri="https://example.com/site-a/", write_prior
   (`str | None`), `objects` (a tuple of `Object223Experimental`, in
   Object_List order) and `stopped`. Each object has `object_identifier`,
   `name`, `description`, `units` (`EngineeringUnits | None`, analog
-  objects), `number_of_states` and `state_texts` (multi-state objects),
-  `commandable` (it has a Priority_Array) and `error` (its read failed, or
-  it couldn't give its Object_Name, an analog object's Units or a
-  multi-state object's Number_Of_States, named in the error; the Turtle
+  objects and integer values), `number_of_states` and `state_texts`
+  (multi-state objects), `commandable` (it has a Priority_Array) and
+  `error` (its read failed, or it couldn't give its Object_Name, the Units
+  of an analog object or an integer value, or a multi-state object's
+  Number_Of_States, named in the error; the Turtle
   skips it, and its other fields are `None` or empty). Device text is kept
   exactly as the device sent it.
 - `to_turtle(base_iri=None, write_priority=None)` takes the base the CLI's

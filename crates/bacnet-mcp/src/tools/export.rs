@@ -1,6 +1,6 @@
 //! `bacnet_export_223` (#2436): one device's analog, binary and
-//! multi-state objects as an experimental Standard 223 point list in
-//! Turtle, written by `bacnet_ops::export::s223` as the CLI's
+//! multi-state objects and integer values as an experimental Standard 223
+//! point list in Turtle, written by `bacnet_ops::export::s223` as the CLI's
 //! `bacnet export 223-experimental` writes it, a page a call.
 //!
 //! A page takes the device's Object_List from `bacnet_list_objects`' cache
@@ -46,9 +46,10 @@ pub(super) const SPEC: Spec = Spec {
     name: NAME,
     title: "Export a device as a Standard 223 model (experimental)",
     description: "EXPERIMENTAL: one device's analog, binary and multi-state inputs, outputs and \
-                  values as a proposed ASHRAE Standard 223 point list in Turtle; the draft and \
-                  this mapping can change between releases. Each object becomes a 223 property \
-                  with a BACnet external reference, analog units as QUDT where mapped, and a \
+                  values, and integer values, as a proposed ASHRAE Standard 223 point list in \
+                  Turtle; the draft and this mapping can change between releases. Each object \
+                  becomes a 223 property with a BACnet external reference, the units of analog \
+                  points and integer values as QUDT where mapped, and a \
                   multi-state point's states as its own enumeration. A point list only: no \
                   equipment, connections or sensors. Paged: each page is a Turtle document of \
                   its own in the second text block, under 24,000 bytes (a point larger than \
@@ -100,8 +101,9 @@ fn input() -> Value {
                 "type": "array",
                 "items": { "type": "string" },
                 "description": "Only these object types, from the analog, binary and \
-                                multi-state inputs, outputs and values (ai, bo, \
-                                multi-state-value, ...). Left out: all nine",
+                                multi-state inputs, outputs and values and the integer value \
+                                (ai, bo, multi-state-value, integer-value, ...). Left out: all \
+                                ten",
             },
             "write_priority": {
                 "type": "integer",
@@ -134,7 +136,8 @@ fn output() -> Value {
         "points": count("Of those, the points this page's Turtle holds"),
         "skipped": count(
             "Of those, the objects left out because the device refused their read or couldn't \
-             give their name, an analog object's units or a multi-state object's state count",
+             give their name, the units of an analog object or an integer value, or a \
+             multi-state object's state count",
         ),
         "by_type": {
             "type": "object",
@@ -142,8 +145,8 @@ fn output() -> Value {
             "description": "This page's points by object type",
         },
         "unmapped_units": count(
-            "This page's analog points whose unit has no QUDT mapping: an unknown quantity kind \
-             and no unit",
+            "This page's analog and integer-value points whose unit has no QUDT mapping: an \
+             unknown quantity kind and no unit",
         ),
         "turtle_bytes": count("This page's Turtle, in bytes"),
         "oversized": {

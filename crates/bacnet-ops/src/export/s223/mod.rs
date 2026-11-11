@@ -5,9 +5,9 @@
 //! connections and the properties they observe or actuate. Its draft
 //! ontology links a model's property to a BACnet point with an external
 //! reference: the device, the object, its name and the property. This
-//! module writes that half: one 223 property per object, each with its
-//! external reference, units where they map to QUDT, and the state names
-//! of multi-state objects. It is a point list in 223 form. An integrator
+//! module writes that half: one 223 property per object of the
+//! [`EXPORTED_TYPES`], each with its external reference, units where they
+//! map to QUDT, and the state names of multi-state objects. It is a point list in 223 form. An integrator
 //! still adds the equipment, the connections and the sensors.
 //!
 //! The work comes in two halves:
@@ -40,7 +40,7 @@ mod turtle;
 pub use self::inventory::read_inventory;
 pub use self::turtle::{Counts, to_turtle, write_turtle};
 pub use bacnet_types::points::{
-    Access, Analog, Binary, DeviceInfo, MultiState, Point, PointKind, PointList,
+    Access, Analog, Binary, DeviceInfo, Integer, MultiState, Point, PointKind, PointList,
 };
 
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
@@ -57,9 +57,10 @@ pub const ONTOLOGY_VERSION: &str = "git:master@6fdc11c6 (2026-10-06)";
 /// export nobody pointed at their own namespace is plain to see.
 pub const DEFAULT_BASE_IRI: &str = "http://example.org/bacnet/";
 
-/// The object types the export maps: the analog, binary and multi-state
-/// inputs, outputs and values.
-pub const EXPORTED_TYPES: [ObjectType; 9] = [
+/// The object types the export maps, and reads by default: the analog,
+/// binary and multi-state inputs, outputs and values, and the Integer Value
+/// (#2456), which maps as an analog value does.
+pub const EXPORTED_TYPES: [ObjectType; 10] = [
     ObjectType::ANALOG_INPUT,
     ObjectType::ANALOG_OUTPUT,
     ObjectType::ANALOG_VALUE,
@@ -69,6 +70,7 @@ pub const EXPORTED_TYPES: [ObjectType; 9] = [
     ObjectType::MULTI_STATE_INPUT,
     ObjectType::MULTI_STATE_OUTPUT,
     ObjectType::MULTI_STATE_VALUE,
+    ObjectType::INTEGER_VALUE,
 ];
 
 /// How much of each object an inventory reads.
@@ -76,17 +78,19 @@ pub const EXPORTED_TYPES: [ObjectType; 9] = [
 #[non_exhaustive]
 pub enum Detail {
     /// What the Turtle export uses, the default: the Device's Object_Name;
-    /// each object's Object_Name and Description, an analog object's Units,
-    /// a multi-state object's Number_Of_States and State_Text, and a
-    /// value's Priority_Array. The optional settings of the point list are
-    /// left `None`, and a commandable point's relinquish default too.
+    /// each object's Object_Name and Description, the Units of an analog
+    /// object or an Integer Value, a multi-state object's Number_Of_States
+    /// and State_Text, and a value's Priority_Array. The optional settings
+    /// of the point list are left `None`, and a commandable point's
+    /// relinquish default too.
     #[default]
     Export,
     /// Everything a [`PointList`] holds, in the same requests: also the
-    /// Device's Description; an analog object's COV_Increment,
-    /// Min_Pres_Value and Max_Pres_Value; a binary object's Active_Text and
-    /// Inactive_Text; and an output's or a value's Relinquish_Default. A
-    /// property the device doesn't have reads as `None`.
+    /// Device's Description; the COV_Increment, Min_Pres_Value and
+    /// Max_Pres_Value of an analog object or an Integer Value; a binary
+    /// object's Active_Text and Inactive_Text; and an output's or a value's
+    /// Relinquish_Default. A property the device doesn't have reads as
+    /// `None`.
     Full,
 }
 
@@ -120,7 +124,7 @@ impl InventoryOptions {
         if let Some(other) = types.iter().find(|t| !EXPORTED_TYPES.contains(t)) {
             return Err(format!(
                 "{} objects can't be exported; the export maps analog, binary and multi-state \
-                 inputs, outputs and values",
+                 inputs, outputs and values, and integer values",
                 crate::label::kebab(other)
             ));
         }
@@ -181,7 +185,7 @@ impl Inventory {
     /// given [`Access::Writable`] reads back [`Access::ReadOnly`]: a read
     /// can't tell the two apart. A field the list left out reads back as
     /// the object's default instead: an empty Description (the Device's
-    /// too), COV_Increment 0.0, "Active" and "Inactive", "State 1" to
+    /// too), COV_Increment 0, "Active" and "Inactive", "State 1" to
     /// "State N", the object's own relinquish default, and the identity's
     /// name for the Device.
     ///
@@ -213,8 +217,9 @@ pub enum Entry {
     /// The object as read.
     Point(Point),
     /// Its read failed, or a property every object of its type has
-    /// (Object_Name, an analog object's Units, a multi-state object's
-    /// Number_Of_States) couldn't be read; the export skips it.
+    /// (Object_Name, the Units of an analog object or an Integer Value, a
+    /// multi-state object's Number_Of_States) couldn't be read; the export
+    /// skips it.
     Failed {
         /// The object.
         object: ObjectIdentifier,

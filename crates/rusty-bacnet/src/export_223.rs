@@ -178,12 +178,13 @@ impl PyObject223 {
         self.point()?.description.as_deref()
     }
 
-    /// An analog object's Units; None for other objects or when its read
-    /// failed.
+    /// The Units of an analog object or an integer value; None for other
+    /// objects or when its read failed.
     #[getter]
     fn units(&self) -> Option<IntEnumValue<EngineeringUnits>> {
         match &self.point()?.kind {
             PointKind::Analog(analog) => Some(IntEnumValue(analog.units)),
+            PointKind::Integer(integer) => Some(IntEnumValue(integer.units)),
             _ => None,
         }
     }
@@ -220,14 +221,17 @@ impl PyObject223 {
             Some(PointKind::MultiState(states)) => {
                 matches!(states.access, Access::Commandable { .. })
             }
+            Some(PointKind::Integer(integer)) => {
+                matches!(integer.access, Access::Commandable { .. })
+            }
             _ => false,
         }
     }
 
     /// Why its read failed, None when it didn't: the device's error, which
-    /// names the property when the object lacked its Object_Name, an analog
-    /// object's Units or a multi-state object's Number_Of_States. The
-    /// Turtle skips such an object.
+    /// names the property when the object lacked its Object_Name, the Units
+    /// of an analog object or an integer value, or a multi-state object's
+    /// Number_Of_States. The Turtle skips such an object.
     #[getter]
     fn error(&self) -> Option<&str> {
         self.0.error()
@@ -257,7 +261,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use bacnet_ops::export::s223::Analog;
+    use bacnet_ops::export::s223::{Analog, Integer};
     use bacnet_types::enums::ObjectType;
     use bacnet_types::primitives::ObjectIdentifier;
 
@@ -298,5 +302,24 @@ mod tests {
                 .is_some_and(|units| units.0 == EngineeringUnits::PERCENT)
         );
         assert!(point.commandable() && point.number_of_states().is_none());
+
+        // An integer value has Units too, and is commandable by its access.
+        let meter = ObjectIdentifier::new(ObjectType::INTEGER_VALUE, 2).unwrap();
+        let integer = Integer::new(EngineeringUnits::KILOWATT_HOURS, Access::Writable);
+        let point = PyObject223(Entry::Point(Point::new(meter, "Meter", integer)));
+        assert!(
+            point
+                .units()
+                .is_some_and(|units| units.0 == EngineeringUnits::KILOWATT_HOURS)
+        );
+        assert!(!point.commandable() && point.number_of_states().is_none());
+        let commanded = Integer::new(
+            EngineeringUnits::NO_UNITS,
+            Access::Commandable {
+                relinquish_default: None,
+            },
+        );
+        let point = PyObject223(Entry::Point(Point::new(meter, "Meter", commanded)));
+        assert!(point.commandable());
     }
 }

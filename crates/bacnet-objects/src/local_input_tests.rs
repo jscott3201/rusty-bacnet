@@ -70,6 +70,7 @@ const MODELS: &[(ObjectType, &[&str])] = &[
     (ObjectType::BINARY_VALUE, &["PresentValue"]),
     (ObjectType::MULTI_STATE_INPUT, &["PresentValue"]),
     (ObjectType::MULTI_STATE_VALUE, &["PresentValue"]),
+    (ObjectType::INTEGER_VALUE, &["PresentValue"]),
     (
         ObjectType::LOOP,
         &["PresentValue", "ControlledVariableValue"],

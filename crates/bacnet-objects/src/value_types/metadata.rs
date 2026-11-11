@@ -36,7 +36,10 @@ use crate::property_metadata::{
 // Value). Bit_Text, Alarm_Value, Fault/High/Low_Limit,
 // event/intrinsic, value-source, and audit rows stay absent until dispatch
 // exists. Every value type is createable at runtime (#2172): the
-// `creation` table builds each.
+// `creation` table builds each. Integer Value projects its rows through its
+// Present_Value access, as the analog, binary and multi-state values do,
+// and adds Min_Pres_Value and Max_Pres_Value (Optional/None/ReadOnly) once
+// each is set (#2456).
 pub(crate) const INTEGER_VALUE_BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, Always),

@@ -29,9 +29,9 @@ fn plain<T>(writable: bool) -> Access<T> {
     }
 }
 
-/// One point of each of the nine types, every optional field given and
+/// One point of each of the ten types, every optional field given and
 /// every relinquish default other than the object's own; then a value of
-/// each family for each other access.
+/// each family, the Integer Value's among them, for each other access.
 fn full_list() -> PointList {
     let celsius = EngineeringUnits::DEGREES_CELSIUS;
     let analog = |access| {
@@ -46,6 +46,12 @@ fn full_list() -> PointList {
             .with_inactive_text("Stopped")
     };
     let multi_state = |access| MultiState::new(3, access).with_state_texts(["Off", "Low", "High"]);
+    let integer = |access| {
+        Integer::new(EngineeringUnits::KILOWATT_HOURS, access)
+            .with_cov_increment(10)
+            .with_min_pres_value(-500)
+            .with_max_pres_value(1_000_000)
+    };
     let point = |object_type, instance, name: &str, kind: PointKind| {
         Point::new(oid(object_type, instance), name, kind)
             .with_description(format!("{name}, as the list gives it"))
@@ -105,10 +111,16 @@ fn full_list() -> PointList {
             "msv",
             multi_state(commanded(Some(3))).into(),
         ),
+        point(
+            ObjectType::INTEGER_VALUE,
+            1,
+            "iv",
+            integer(commanded(Some(-7))).into(),
+        ),
     ];
     for (instance, suffix, writable) in [(2, "writable", true), (3, "read-only", false)] {
         let named = |family: &str| format!("{family} {suffix}");
-        let kinds: [(ObjectType, &str, PointKind); 3] = [
+        let kinds: [(ObjectType, &str, PointKind); 4] = [
             (
                 ObjectType::ANALOG_VALUE,
                 "av",
@@ -123,6 +135,11 @@ fn full_list() -> PointList {
                 ObjectType::MULTI_STATE_VALUE,
                 "msv",
                 multi_state(plain(writable)).into(),
+            ),
+            (
+                ObjectType::INTEGER_VALUE,
+                "iv",
+                integer(plain(writable)).into(),
             ),
         ];
         for (object_type, family, kind) in kinds {
@@ -150,6 +167,7 @@ fn as_read(mut list: PointList) -> PointList {
             PointKind::Analog(analog) => fold(&mut analog.access),
             PointKind::Binary(binary) => fold(&mut binary.access),
             PointKind::MultiState(multi_state) => fold(&mut multi_state.access),
+            PointKind::Integer(integer) => fold(&mut integer.access),
             _ => {}
         }
     }
@@ -217,8 +235,9 @@ async fn a_full_list_reads_back_as_built() {
 /// With no optional field given and every relinquish default left to the
 /// object, each reads back as the object's own default: an empty
 /// Description, COV_Increment 0, no Min_Pres_Value or Max_Pres_Value,
-/// "Active" and "Inactive", "State N", and a relinquish default of 0,
-/// INACTIVE or state 1. A change to an object's default fails here.
+/// "Active" and "Inactive", "State N", and a relinquish default of 0 (an
+/// analog object's and an Integer Value's), INACTIVE or state 1. A change
+/// to an object's default fails here.
 #[tokio::test(start_paused = true)]
 async fn an_absent_field_reads_back_as_the_objects_default() {
     let units = EngineeringUnits::PERCENT;
@@ -272,6 +291,11 @@ async fn an_absent_field_reads_back_as_the_objects_default() {
                 "msv",
                 MultiState::new(2, commanded(None)).into(),
             ),
+            bare(
+                ObjectType::INTEGER_VALUE,
+                "iv",
+                Integer::new(units, commanded(None)).into(),
+            ),
         ],
     );
     let (inventory, _) = read_back(list.clone(), Faults::default(), &full()).await;
@@ -283,7 +307,7 @@ async fn an_absent_field_reads_back_as_the_objects_default() {
             .with_inactive_text("Inactive")
     };
     let multi_state = |access| MultiState::new(2, access).with_state_texts(["State 1", "State 2"]);
-    let kinds: [PointKind; 9] = [
+    let kinds: [PointKind; 10] = [
         analog(Access::ReadOnly).into(),
         analog(commanded(Some(0.0))).into(),
         analog(commanded(Some(0.0))).into(),
@@ -293,6 +317,9 @@ async fn an_absent_field_reads_back_as_the_objects_default() {
         multi_state(Access::ReadOnly).into(),
         multi_state(commanded(Some(1))).into(),
         multi_state(commanded(Some(1))).into(),
+        Integer::new(units, commanded(Some(0)))
+            .with_cov_increment(0)
+            .into(),
     ];
     let points = list
         .points
@@ -324,6 +351,7 @@ async fn full_by_read_property() {
         (ObjectType::MULTI_STATE_INPUT, 4),
         (ObjectType::MULTI_STATE_OUTPUT, 5),
         (ObjectType::MULTI_STATE_VALUE, 6),
+        (ObjectType::INTEGER_VALUE, 8),
     ];
     let list = full_list();
     for (object_type, cost) in costs {

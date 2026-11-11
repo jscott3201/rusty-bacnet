@@ -1,0 +1,46 @@
+# EXPERIMENTAL: device 1234 as a proposed ASHRAE Standard 223 point list, written by
+# rusty-bacnet. The 223 draft and this mapping can change between releases.
+# A point list only: it holds no equipment, connections or sensors.
+# Mapping written against the Open223 ontology git:master@6fdc11c6 (2026-10-06) from
+# https://open223.info/223p.ttl; rusty-bacnet's golden exports were validated against it.
+# 2 objects exported, 0 skipped, 0 with an unmapped unit, 0 identifiers left out for instance 0.
+
+@prefix bacnet: <http://data.ashrae.org/bacnet/2020#> .
+@prefix qudt: <http://qudt.org/schema/qudt/> .
+@prefix quantitykind: <http://qudt.org/vocab/quantitykind/> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix s223: <http://data.ashrae.org/standard223#> .
+@prefix unit: <http://qudt.org/vocab/unit/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix d: <http://example.org/bacnet/device-1234/> .
+
+# integer-value 1
+d:integer-value-1.present-value a s223:QuantifiableActuatableProperty ;
+    rdfs:label "Supply Fan Starts" ;
+    rdfs:comment "Starts since the last reset" ;
+    qudt:hasUnit unit:UNITLESS ;
+    qudt:hasQuantityKind quantitykind:Dimensionless ;
+    s223:hasExternalReference d:integer-value-1.present-value.ref .
+
+d:integer-value-1.present-value.ref a s223:BACnetExternalReference ;
+    bacnet:device-identifier "device,1234" ;
+    bacnet:device-name "AHU-1 Controller" ;
+    bacnet:object-identifier "integer-value,1" ;
+    bacnet:object-name "Supply Fan Starts" ;
+    bacnet:property-identifier "present-value" ;
+    bacnet:priority-for-writing "8"^^xsd:nonNegativeInteger .
+
+# integer-value 2
+d:integer-value-2.present-value a s223:QuantifiableProperty ;
+    rdfs:label "Energy Total" ;
+    qudt:hasUnit unit:KiloW-HR ;
+    qudt:hasQuantityKind quantitykind:Energy ;
+    s223:hasExternalReference d:integer-value-2.present-value.ref .
+
+d:integer-value-2.present-value.ref a s223:BACnetExternalReference ;
+    bacnet:device-identifier "device,1234" ;
+    bacnet:device-name "AHU-1 Controller" ;
+    bacnet:object-identifier "integer-value,2" ;
+    bacnet:object-name "Energy Total" ;
+    bacnet:property-identifier "present-value" .
+

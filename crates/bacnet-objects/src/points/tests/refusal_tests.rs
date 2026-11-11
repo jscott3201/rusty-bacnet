@@ -71,6 +71,7 @@ fn every_refusal_names_its_point_and_property() {
     let units = EngineeringUnits::NO_UNITS;
     let analog = |access| Analog::new(units, access);
     let multi = |count, access| MultiState::new(count, access);
+    let integer = |access| Integer::new(units, access);
     let cases: Vec<(Point, Option<P>, &str)> = vec![
         // Identifiers and names, against an earlier point, the Device and
         // the declared port.
@@ -130,12 +131,30 @@ fn every_refusal_names_its_point_and_property() {
         // Type and kind.
         (
             Point::new(
-                oid(ObjectType::INTEGER_VALUE, 1),
-                "int",
+                oid(ObjectType::POSITIVE_INTEGER_VALUE, 1),
+                "unsigned",
                 analog(Access::Writable),
             ),
             None,
             "TypeNotCovered",
+        ),
+        (
+            Point::new(
+                oid(ObjectType::INTEGER_VALUE, 2),
+                "kind",
+                analog(Access::Writable),
+            ),
+            None,
+            "KindMismatch",
+        ),
+        (
+            Point::new(
+                oid(ObjectType::ANALOG_VALUE, 2),
+                "kind",
+                integer(Access::Writable),
+            ),
+            None,
+            "KindMismatch",
         ),
         (
             Point::new(
@@ -202,6 +221,16 @@ fn every_refusal_names_its_point_and_property() {
             Some(P::PRESENT_VALUE),
             "AccessNotAllowed",
         ),
+        // An Integer kind fits no Input or Output, whatever its access.
+        (
+            Point::new(
+                oid(ObjectType::ANALOG_INPUT, 2),
+                "integer",
+                integer(Access::ReadOnly),
+            ),
+            None,
+            "KindMismatch",
+        ),
         // Reals.
         (
             ai(
@@ -250,12 +279,32 @@ fn every_refusal_names_its_point_and_property() {
             Some(P::MIN_PRES_VALUE),
             "MinAboveMax",
         ),
+        (
+            Point::new(
+                oid(ObjectType::INTEGER_VALUE, 2),
+                "range",
+                integer(commandable(Some(0)))
+                    .with_min_pres_value(1)
+                    .with_max_pres_value(0),
+            ),
+            Some(P::MIN_PRES_VALUE),
+            "MinAboveMax",
+        ),
         // Ranges.
         (
             ai(
                 2,
                 "units",
                 Analog::new(EngineeringUnits::from_raw(65_536), Access::ReadOnly),
+            ),
+            Some(P::UNITS),
+            "OutOfRange",
+        ),
+        (
+            Point::new(
+                oid(ObjectType::INTEGER_VALUE, 2),
+                "units",
+                Integer::new(EngineeringUnits::from_raw(65_536), Access::Writable),
             ),
             Some(P::UNITS),
             "OutOfRange",
@@ -423,13 +472,13 @@ fn a_refusal_displays_object_property_and_reason() {
         "ANALOG_INPUT,3 OBJECT_NAME: name already in use"
     );
     let error = refuse(Point::new(
-        oid(ObjectType::INTEGER_VALUE, 1),
-        "int",
+        oid(ObjectType::LARGE_ANALOG_VALUE, 1),
+        "double",
         Binary::new(Access::ReadOnly),
     ));
     assert_eq!(
         error.to_string(),
-        "INTEGER_VALUE,1: object type not covered by point lists"
+        "LARGE_ANALOG_VALUE,1: object type not covered by point lists"
     );
 }
 
