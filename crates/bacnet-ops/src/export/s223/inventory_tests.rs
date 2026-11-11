@@ -247,7 +247,7 @@ async fn stop(engine: Engine<Link>, mut server: BACnetServer<LoopbackTransport>)
 async fn reads_each_exported_object_once() {
     let (engine, server) = lab(Faults::default()).await;
     let inventory = engine
-        .inventory(LAB, &InventoryOptions::default(), &AtomicBool::new(false))
+        .inventory(LAB, &InventoryOptions::default())
         .await
         .unwrap();
     assert_eq!(engine.limits().recent(), 10 + 2, "{inventory:?}");
@@ -299,10 +299,7 @@ async fn reads_each_exported_object_once() {
 async fn types_narrow_what_is_read() {
     let (engine, server) = lab(Faults::default()).await;
     let options = InventoryOptions::new(vec![ObjectType::MULTI_STATE_VALUE]).unwrap();
-    let inventory = engine
-        .inventory(LAB, &options, &AtomicBool::new(false))
-        .await
-        .unwrap();
+    let inventory = engine.inventory(LAB, &options).await.unwrap();
     assert_eq!(engine.limits().recent(), 1 + 2);
     assert_eq!(inventory.objects.len(), 1);
     assert_eq!(
@@ -337,10 +334,7 @@ async fn by_read_property_when_rpm_is_refused() {
         };
         let (engine, server) = lab(refuses).await;
         let options = InventoryOptions::new(vec![object_type]).unwrap();
-        let inventory = engine
-            .inventory(LAB, &options, &AtomicBool::new(false))
-            .await
-            .unwrap();
+        let inventory = engine.inventory(LAB, &options).await.unwrap();
         assert!(engine.refused_rpm(LAB));
         // The name and the list, the refused RPM, then the ReadProperty.
         assert_eq!(engine.limits().recent(), 2 + 1 + cost, "{object_type}");
@@ -365,7 +359,7 @@ async fn by_read_property_when_rpm_is_refused() {
 async fn a_device_that_stops_answering() {
     let (engine, server) = lab(passing(4)).await;
     let inventory = engine
-        .inventory(LAB, &InventoryOptions::default(), &AtomicBool::new(false))
+        .inventory(LAB, &InventoryOptions::default())
         .await
         .unwrap();
     assert_eq!(inventory.objects.len(), 2, "{inventory:?}");
@@ -380,12 +374,10 @@ async fn a_device_that_stops_answering() {
     stop(engine, server).await;
 
     let (engine, server) = lab(passing(0)).await;
-    let halt = engine
-        .inventory(LAB, &InventoryOptions::default(), &AtomicBool::new(false))
-        .await;
-    let Err(Halt::Device(error)) = halt else {
-        panic!("{halt:?}");
-    };
+    let error = engine
+        .inventory(LAB, &InventoryOptions::default())
+        .await
+        .unwrap_err();
     assert!(crate::engine::unreachable(&error), "{error}");
     assert_eq!(engine.limits().recent(), 1);
     stop(engine, server).await;
@@ -404,7 +396,7 @@ async fn a_list_that_stops_early_ends_the_reading() {
     };
     let (engine, server) = lab(faults).await;
     let inventory = engine
-        .inventory(LAB, &InventoryOptions::default(), &AtomicBool::new(false))
+        .inventory(LAB, &InventoryOptions::default())
         .await
         .unwrap();
     assert!(inventory.objects.is_empty(), "{inventory:?}");
@@ -464,42 +456,58 @@ async fn a_cancel_keeps_what_was_read() {
     stop(engine, server).await;
 }
 
-/// The engine's inventory stops at its caller's flag as a reader does:
-/// set once the Object_List is in, what was read is kept; set before, it
-/// is a cancel, not a panic. The device's refusal of RPM is still
-/// remembered after a stop.
+/// The pieces a front end that pages reads give what the inventory reads:
+/// the device's name exactly, and each object as the inventory has it, one
+/// request each, one the device doesn't have with nothing filled in. A
+/// refusal of RPM is remembered, and a silent device fails either read.
 #[tokio::test(start_paused = true)]
-async fn the_engine_stops_at_the_callers_flag() {
-    let flag = Arc::new(AtomicBool::new(false));
-    let faults = Faults {
-        // The name, the list, the refused RPM, then three ReadProperty of
-        // the analog input: the flag goes up as the third leaves.
-        cancel: Some((6, Arc::clone(&flag))),
+async fn the_pieces_read_as_the_inventory_does() {
+    let (engine, server) = lab(Faults::default()).await;
+    let inventory = engine
+        .inventory(LAB, &InventoryOptions::default())
+        .await
+        .unwrap();
+    let before = engine.limits().recent();
+    let name = engine.inventory_device_name(LAB).await.unwrap();
+    assert_eq!(name, inventory.device_name);
+    for expected in &inventory.objects {
+        let read = engine.inventory_object(LAB, expected.object).await;
+        assert_eq!(&read.unwrap(), expected);
+    }
+    assert_eq!(
+        engine.limits().recent() - before,
+        1 + inventory.objects.len()
+    );
+    let missing = engine
+        .inventory_object(LAB, oid(ObjectType::ANALOG_INPUT, 99))
+        .await
+        .unwrap();
+    // The device answers each of its properties with an error: none is
+    // filled in, as the inventory would have it.
+    let ai99 = InventoryObject::new(oid(ObjectType::ANALOG_INPUT, 99));
+    assert_eq!(missing, ai99);
+    stop(engine, server).await;
+
+    let refuses = Faults {
         reject_rpm: true,
         ..Faults::default()
     };
-    let (engine, server) = lab(faults).await;
-    let inventory = engine
-        .inventory(LAB, &InventoryOptions::default(), &flag)
+    let (engine, server) = lab(refuses).await;
+    let ai = engine
+        .inventory_object(LAB, oid(ObjectType::ANALOG_INPUT, 1))
         .await
         .unwrap();
-    assert_eq!(inventory.objects.len(), 1, "{inventory:?}");
-    let stopped = inventory.stopped.as_deref().unwrap();
-    assert!(stopped.starts_with("cancelled before "), "{stopped}");
-    assert_eq!(engine.limits().recent(), 6);
+    assert_eq!(ai.units, Some(EngineeringUnits::DEGREES_FAHRENHEIT));
     assert!(engine.refused_rpm(LAB));
+    // The refused RPM, then a ReadProperty each for the three properties.
+    assert_eq!(engine.limits().recent(), 1 + 3);
     stop(engine, server).await;
 
-    let flag = Arc::new(AtomicBool::new(false));
-    let faults = Faults {
-        cancel: Some((1, Arc::clone(&flag))),
-        ..Faults::default()
-    };
-    let (engine, server) = lab(faults).await;
-    let early = engine
-        .inventory(LAB, &InventoryOptions::default(), &flag)
-        .await;
-    assert!(matches!(early, Err(Halt::Cancelled)), "{early:?}");
-    assert_eq!(engine.limits().recent(), 1);
+    let (engine, server) = lab(passing(0)).await;
+    let error = engine.inventory_device_name(LAB).await.unwrap_err();
+    assert!(crate::engine::unreachable(&error), "{error}");
+    let ai = oid(ObjectType::ANALOG_INPUT, 1);
+    let error = engine.inventory_object(LAB, ai).await.unwrap_err();
+    assert!(crate::engine::unreachable(&error), "{error}");
     stop(engine, server).await;
 }
