@@ -176,7 +176,7 @@ pub(crate) struct Cleaned {
 #[derive(Debug, Clone)]
 pub(crate) struct CachedList {
     /// When it was read whole, or, for one read element by element, when
-    /// that read began (not when it last went on).
+    /// that read last went on: when it completed, once it has.
     pub(crate) at: Instant,
     /// The entries read, in device order.
     pub(crate) objects: Arc<Vec<ObjectIdentifier>>,
@@ -194,8 +194,8 @@ impl CachedList {
     }
 
     /// Whether it may still be used: a complete list for [`LIST_TTL`]
-    /// after it was read, a partial one for [`PARTIAL_TTL`] after its read
-    /// began.
+    /// after it was read (or its element-by-element read completed), a
+    /// partial one for [`PARTIAL_TTL`] after its read last went on.
     pub(crate) fn fresh(&self) -> bool {
         let ttl = if self.complete() {
             LIST_TTL
@@ -209,8 +209,8 @@ impl CachedList {
 /// How long an object list read for one page serves the next ones.
 pub(crate) const LIST_TTL: Duration = Duration::from_secs(300);
 
-/// How long an element-by-element read may go on across calls before it
-/// starts again.
+/// How long an element-by-element read is kept after it last went on,
+/// for the next call to go on from; past it, the read starts again.
 pub(crate) const PARTIAL_TTL: Duration = Duration::from_secs(600);
 
 /// The most devices whose lists are kept; past it the oldest goes.

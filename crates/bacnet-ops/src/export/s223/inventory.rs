@@ -18,6 +18,10 @@
 //! then a ReadProperty a property: 2 for a binary input or output, 3 for
 //! an analog input or output or a binary value, 4 for an analog value or a
 //! multi-state input or output, and 5 for a multi-state value.
+//!
+//! A front end that pages the export (the MCP tool) takes the Object_List
+//! its own way and reads the rest piece by piece, as the inventory does:
+//! [`Engine::inventory_device_name`] and [`Engine::inventory_object`].
 
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
@@ -43,6 +47,32 @@ impl<T: TransportPort + 'static> Engine<T> {
         self.settle(&reader);
         inventory.map_err(device_error)
     }
+
+    /// `device`'s Object_Name as the inventory reads it: one ReadProperty,
+    /// the text exactly as the device sent it, `None` when it gave none.
+    /// Fails only when the device doesn't answer.
+    pub async fn inventory_device_name(&self, device: u32) -> Result<Option<String>, Error> {
+        read_device_name(&self.reader(device))
+            .await
+            .map_err(device_error)
+    }
+
+    /// One object of `device` as the inventory reads it, with the same
+    /// properties: one ReadPropertyMultiple, or a ReadProperty each once
+    /// the device has refused RPM (remembered, as [`Engine::read`] does).
+    /// A read the device refuses comes back as the object's error, which
+    /// the export skips, and a property it can't give is left out; only a
+    /// device that stops answering is an error.
+    pub async fn inventory_object(
+        &self,
+        device: u32,
+        object: ObjectIdentifier,
+    ) -> Result<InventoryObject, Error> {
+        let mut reader = self.reader(device);
+        let read = read_object(&mut reader, object).await;
+        self.settle(&reader);
+        read.map_err(device_error)
+    }
 }
 
 /// The objects of the types `options` names on `reader`'s device, with
@@ -52,16 +82,7 @@ pub async fn read_inventory<T: TransportPort + 'static>(
     reader: &mut Reader<'_, T>,
     options: &InventoryOptions,
 ) -> Result<Inventory, Halt> {
-    let device = reader.device_object()?;
-    let device_name = match reader
-        .rp(device, PropertyIdentifier::OBJECT_NAME, None)
-        .await
-    {
-        Ok(data) => text(&data),
-        Err(Halt::Device(error)) if unreachable(&error) => return Err(Halt::Device(error)),
-        Err(Halt::Device(_)) => None,
-        Err(Halt::Cancelled) => return Err(Halt::Cancelled),
-    };
+    let device_name = read_device_name(reader).await?;
     let list = reader.object_list(|_, _| {}).await?;
     let mut inventory = Inventory {
         device: reader.device,
@@ -79,19 +100,13 @@ pub async fn read_inventory<T: TransportPort + 'static>(
         .into_iter()
         .filter(|object| options.types.contains(&object.object_type()));
     for object in wanted {
-        let properties = properties(object.object_type());
-        match reader.properties(object, Wanted::List(&properties)).await {
-            Ok((rows, _)) => inventory.objects.push(entry(object, &rows)),
-            Err(Halt::Device(error)) if unreachable(&error) => {
+        match read_object(reader, object).await {
+            Ok(entry) => inventory.objects.push(entry),
+            Err(Halt::Device(error)) => {
                 inventory.stopped = Some(format!("{}: {error}", object_label(object)));
                 break;
             }
-            Err(Halt::Device(error)) => inventory.objects.push(InventoryObject {
-                error: Some(error.to_string()),
-                ..InventoryObject::new(object)
-            }),
-            // A caller that stops partway (an MCP call out of budget, say)
-            // keeps what was read.
+            // A caller that stops partway keeps what was read.
             Err(Halt::Cancelled) => {
                 inventory.stopped = Some(format!("cancelled before {}", object_label(object)));
                 break;
@@ -99,6 +114,42 @@ pub async fn read_inventory<T: TransportPort + 'static>(
         }
     }
     Ok(inventory)
+}
+
+/// The Device object's Object_Name, exactly as the device sent it; `None`
+/// when the device answered with an error or with no string. Only a
+/// device that doesn't answer, or a stop, is an error.
+async fn read_device_name<T: TransportPort + 'static>(
+    reader: &Reader<'_, T>,
+) -> Result<Option<String>, Halt> {
+    let device = reader.device_object()?;
+    match reader
+        .rp(device, PropertyIdentifier::OBJECT_NAME, None)
+        .await
+    {
+        Ok(data) => Ok(text(&data)),
+        Err(Halt::Device(error)) if unreachable(&error) => Err(Halt::Device(error)),
+        Err(Halt::Device(_)) => Ok(None),
+        Err(Halt::Cancelled) => Err(Halt::Cancelled),
+    }
+}
+
+/// One object with what the export needs of it ([`properties`]). A read
+/// the device refuses is kept as the object's error; only a device that
+/// doesn't answer, or a stop, is an error.
+async fn read_object<T: TransportPort + 'static>(
+    reader: &mut Reader<'_, T>,
+    object: ObjectIdentifier,
+) -> Result<InventoryObject, Halt> {
+    let properties = properties(object.object_type());
+    match reader.properties(object, Wanted::List(&properties)).await {
+        Ok((rows, _)) => Ok(entry(object, &rows)),
+        Err(Halt::Device(error)) if !unreachable(&error) => Ok(InventoryObject {
+            error: Some(error.to_string()),
+            ..InventoryObject::new(object)
+        }),
+        Err(halt) => Err(halt),
+    }
 }
 
 /// An output always has a Priority_Array; a value may.

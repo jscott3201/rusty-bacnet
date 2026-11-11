@@ -53,6 +53,7 @@ async fn an_agent_surveys_the_lab_over_the_pipe() {
             "bacnet_alarms",
             "bacnet_decode",
             "bacnet_watch",
+            "bacnet_export_223",
         ]
     );
     for tool in &tools {
@@ -310,7 +311,7 @@ async fn a_2026_07_28_client_needs_no_handshake() {
         .await;
     assert_eq!(
         tools["result"]["tools"].as_array().unwrap().len(),
-        11,
+        12,
         "{tools}"
     );
     let read = lab

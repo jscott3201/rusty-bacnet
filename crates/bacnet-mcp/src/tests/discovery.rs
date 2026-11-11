@@ -286,6 +286,46 @@ async fn a_long_indexed_object_list_resumes() {
     lab.stop().await;
 }
 
+/// An element-by-element read slower than both lifetimes, its calls 200 s
+/// apart: kept from its last progress, it goes on to the end, each element
+/// read once, and the list it completes is then served from the cache.
+#[tokio::test(start_paused = true)]
+async fn a_slow_indexed_read_completes_and_is_kept() {
+    let mut lab = Lab::start_lab(short_budget(), Duration::from_millis(50), 300, true).await;
+    lab.agent.initialize().await;
+    let mut cursor = Value::Null;
+    let mut calls = 0;
+    loop {
+        calls += 1;
+        let mut args = json!({ "device": "1201", "types": ["analog-input"] });
+        if !cursor.is_null() {
+            args["cursor"] = cursor.clone();
+        }
+        let result = lab.agent.call("bacnet_list_objects", args).await;
+        let body = result["structuredContent"].clone();
+        if body["list"]["complete"] == json!(true) {
+            break;
+        }
+        cursor = body["next_cursor"].clone();
+        assert!(calls < 20, "the list never finishes: {body}");
+        tokio::time::sleep(Duration::from_secs(200)).await;
+    }
+    // Longer than either lifetime: 300 s for a list, 600 s for a read.
+    assert!(calls >= 5, "{calls} calls");
+    // One whole read, one count, each of the 304 elements once, and the
+    // count again at each resumption.
+    let sent = lab.sends().len();
+    assert_eq!(sent, 2 + 304 + (calls - 1), "{sent} requests");
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    let again = lab
+        .agent
+        .call("bacnet_list_objects", json!({ "device": "1201" }))
+        .await;
+    assert_eq!(again["structuredContent"]["list"]["cached"], json!(true));
+    assert_eq!(lab.sends().len(), sent, "served from the cache");
+    lab.stop().await;
+}
+
 /// The rates and budget the indexed-list tests share: open rates, and a
 /// budget of two seconds, which reads about 40 elements of a device that
 /// answers in 50 ms.

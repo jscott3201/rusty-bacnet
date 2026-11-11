@@ -455,3 +455,59 @@ async fn a_cancel_keeps_what_was_read() {
     assert!(matches!(early, Err(Halt::Cancelled)), "{early:?}");
     stop(engine, server).await;
 }
+
+/// The pieces a front end that pages reads give what the inventory reads:
+/// the device's name exactly, and each object as the inventory has it, one
+/// request each, one the device doesn't have with nothing filled in. A
+/// refusal of RPM is remembered, and a silent device fails either read.
+#[tokio::test(start_paused = true)]
+async fn the_pieces_read_as_the_inventory_does() {
+    let (engine, server) = lab(Faults::default()).await;
+    let inventory = engine
+        .inventory(LAB, &InventoryOptions::default())
+        .await
+        .unwrap();
+    let before = engine.limits().recent();
+    let name = engine.inventory_device_name(LAB).await.unwrap();
+    assert_eq!(name, inventory.device_name);
+    for expected in &inventory.objects {
+        let read = engine.inventory_object(LAB, expected.object).await;
+        assert_eq!(&read.unwrap(), expected);
+    }
+    assert_eq!(
+        engine.limits().recent() - before,
+        1 + inventory.objects.len()
+    );
+    let missing = engine
+        .inventory_object(LAB, oid(ObjectType::ANALOG_INPUT, 99))
+        .await
+        .unwrap();
+    // The device answers each of its properties with an error: none is
+    // filled in, as the inventory would have it.
+    let ai99 = InventoryObject::new(oid(ObjectType::ANALOG_INPUT, 99));
+    assert_eq!(missing, ai99);
+    stop(engine, server).await;
+
+    let refuses = Faults {
+        reject_rpm: true,
+        ..Faults::default()
+    };
+    let (engine, server) = lab(refuses).await;
+    let ai = engine
+        .inventory_object(LAB, oid(ObjectType::ANALOG_INPUT, 1))
+        .await
+        .unwrap();
+    assert_eq!(ai.units, Some(EngineeringUnits::DEGREES_FAHRENHEIT));
+    assert!(engine.refused_rpm(LAB));
+    // The refused RPM, then a ReadProperty each for the three properties.
+    assert_eq!(engine.limits().recent(), 1 + 3);
+    stop(engine, server).await;
+
+    let (engine, server) = lab(passing(0)).await;
+    let error = engine.inventory_device_name(LAB).await.unwrap_err();
+    assert!(crate::engine::unreachable(&error), "{error}");
+    let ai = oid(ObjectType::ANALOG_INPUT, 1);
+    let error = engine.inventory_object(LAB, ai).await.unwrap_err();
+    assert!(crate::engine::unreachable(&error), "{error}");
+    stop(engine, server).await;
+}

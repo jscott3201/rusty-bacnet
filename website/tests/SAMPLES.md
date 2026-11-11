@@ -64,7 +64,7 @@ table; `test_site_samples.py` fails when this file is out of date. Run
 | guides/ai-agents.md:33 | sh | `bacnet mcp authorize --profile plant-a` | CLI arguments parsed by the CLI (--help) |  |
 | guides/ai-agents.md:45 | json | `{` | CLI arguments parsed by the CLI (--help) |  |
 | guides/ai-agents.md:58 | sh | `bacnet mcp serve --stdio --profile plant-a --passive` | CLI arguments parsed by the CLI (--help) |  |
-| guides/ai-agents.md:89 | toml | `# A plan grant: writes approved in advance` | run or compiled by another CI test |  |
+| guides/ai-agents.md:90 | toml | `# A plan grant: writes approved in advance` | run or compiled by another CI test |  |
 | guides/discovery.mdx:14 | sh | `bacnet discover --target 192.168.1.100 --wait 3` | run against a loopback server |  |
 | guides/discovery.mdx:22 | sh | `bacnet discover 1000-2000 --wait 3` | CLI arguments parsed by the CLI (--help) |  |
 | guides/discovery.mdx:34 | sh | `bacnet --foreign-bbmd 192.168.1.1 --ttl 300 discover --wa...` | CLI arguments parsed by the CLI (--help) |  |

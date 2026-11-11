@@ -1534,6 +1534,9 @@ which is kept in `testdata/open223/`; `scripts/check-223.py` validates any
 export (`-o FILE`) against its shapes with pySHACL. A live export isn't
 validated as it is written.
 
+The MCP server offers the same export to agents as the tool
+`bacnet_export_223` ([MCP server](mcp.md#standard-223-export-experimental)).
+
 ### Writing Properties
 
 ```bash

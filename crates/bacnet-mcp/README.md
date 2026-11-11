@@ -8,7 +8,8 @@ agent host (Claude Code, Codex and others) launches it as `bacnet mcp serve
 devices, describe them, find, list and read their objects, read and
 summarise trend logs, event logs and audit logs, list alarms, map
 networks, routers and BBMD tables, decode frames, follow points as they
-change, and, when a profile allows it, write and revert values.
+change, export a device's points as an experimental Standard 223 model in
+Turtle, and, when a profile allows it, write and revert values.
 
 - Built on the official `rmcp` SDK; targets the 2026-07-28 revision of MCP
   and still answers the older `initialize` handshake.
@@ -16,7 +17,9 @@ change, and, when a profile allows it, write and revert values.
   request at a time per device, a global rate, a rate per network and a
   token bucket per principal. Each result reports what it cost.
 - Device-supplied text comes back in an untrusted envelope: cleaned of
-  control and bidirectional characters, defanged and capped.
+  control and bidirectional characters, defanged and capped. The 223
+  export's Turtle is the exception: it keeps device text exactly, escaped
+  to ASCII, so the model's names match the device's.
 - Results are paged with cursors signed by a per-process key.
 - Passive mode builds no client and sends nothing.
 - Resources for devices, points, properties, alarms, the session and the

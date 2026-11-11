@@ -189,9 +189,10 @@ fn count(data: &[u8]) -> Option<u32> {
 /// read never goes back. An element read stops when the call's budget is
 /// spent (after at least one element) or the device stops answering; an
 /// element the device answers with an error is a gap, recorded and passed.
-/// What was read is kept with where to go on. A read resumed checks the
-/// count again and starts over if it changed, and one begun more than
-/// [`PARTIAL_TTL`](crate::context::PARTIAL_TTL) ago starts over.
+/// What was read is kept with where to go on, stamped with when it last
+/// went on, or, once complete, when it completed. A read resumed checks
+/// the count again and starts over if it changed, and one that hasn't gone
+/// on for [`PARTIAL_TTL`](crate::context::PARTIAL_TTL) starts over.
 pub(super) async fn listing<T: TransportPort + 'static>(
     ctx: &Ctx<T>,
     call: &Call,
@@ -302,6 +303,11 @@ pub(super) async fn listing<T: TransportPort + 'static>(
     }
     state.objects = Arc::new(objects);
     state.indexed = Some((total, next));
+    if read_here > 0 {
+        // The list's age runs from its last progress, and a complete one's
+        // from when it completed, so a slow read finishes and is then kept.
+        state.at = Instant::now();
+    }
     store(ctx, device.instance, state.clone());
     Ok(Listing::from_cache(&state, cached, stopped))
 }
