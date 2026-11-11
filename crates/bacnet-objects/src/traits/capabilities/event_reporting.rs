@@ -123,7 +123,7 @@ pub trait EventReporting {
     /// (#2179); until then a custom object's accepted acknowledgment sends
     /// none.
     /// A request that matches no committed transition fails with the
-    /// service error it earns (INVALID_EVENT_STATE or INVALID_TIME_STAMP),
+    /// service error it earns (INVALID_EVENT_STATE or INVALID_TIMESTAMP),
     /// and an object that can't take acknowledgments, the default, with
     /// [`no_alarm_configured`]. Implementations leave `Acked_Transitions`
     /// unchanged on error.

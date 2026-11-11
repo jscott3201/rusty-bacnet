@@ -136,7 +136,7 @@ fn latest_same_coordinate_timestamp_replaces_the_older_timestamp() {
 
     assert_service_error(
         history.acknowledge_correlated(&mut acked, EventState::LOW_LIMIT, &sequence(1)),
-        ErrorCode::INVALID_TIME_STAMP,
+        ErrorCode::INVALID_TIMESTAMP,
     );
     assert_eq!((acked, history.clone()), before);
     assert_service_error(
@@ -238,7 +238,7 @@ fn uninitialized_sequence_zero_slot_is_not_a_committed_transition() {
 
     assert_service_error(
         history.acknowledge_correlated(&mut acked, EventState::HIGH_LIMIT, &sequence(0)),
-        ErrorCode::INVALID_TIME_STAMP,
+        ErrorCode::INVALID_TIMESTAMP,
     );
     assert_eq!((acked, history), before);
 }

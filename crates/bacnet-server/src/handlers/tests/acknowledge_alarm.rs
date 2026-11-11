@@ -526,7 +526,7 @@ fn state_and_timestamp_mismatches_return_exact_errors_without_mutation() {
     assert_protocol(
         timestamp_error,
         ErrorClass::SERVICES,
-        ErrorCode::INVALID_TIME_STAMP,
+        ErrorCode::INVALID_TIMESTAMP,
     );
     assert_eq!(snapshot(&db, oid), before);
 }
@@ -587,7 +587,7 @@ fn unknown_uninitialized_and_unsupported_objects_fail_closed() {
         ),
     )
     .unwrap_err();
-    assert_protocol(error, ErrorClass::SERVICES, ErrorCode::INVALID_TIME_STAMP);
+    assert_protocol(error, ErrorClass::SERVICES, ErrorCode::INVALID_TIMESTAMP);
     assert_eq!(snapshot(&db, oid), before);
 
     let unconfigured =
