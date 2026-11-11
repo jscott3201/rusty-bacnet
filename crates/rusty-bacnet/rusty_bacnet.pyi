@@ -2585,7 +2585,8 @@ class Inventory223Experimental:
 
 
 class Object223Experimental:
-    """One object of an ``Inventory223Experimental``."""
+    """One object of an ``Inventory223Experimental``: a point, or an object
+    whose read failed, which has only its identifier and ``error``."""
 
     @property
     def object_identifier(self) -> ObjectIdentifier:
@@ -2594,7 +2595,7 @@ class Object223Experimental:
 
     @property
     def name(self) -> Optional[str]:
-        """Its Object_Name; None when it couldn't be read."""
+        """Its Object_Name; None when its read failed."""
         ...
 
     @property
@@ -2604,19 +2605,21 @@ class Object223Experimental:
 
     @property
     def units(self) -> Optional[EngineeringUnits]:
-        """An analog object's Units; None for other objects or when not read."""
+        """An analog object's Units; None for other objects or when its read
+        failed."""
         ...
 
     @property
     def number_of_states(self) -> Optional[int]:
         """A multi-state object's Number_Of_States; None for other objects or
-        when not read."""
+        when its read failed."""
         ...
 
     @property
     def state_texts(self) -> list[str]:
         """A multi-state object's State_Text, state 1 first; empty for other
-        objects or when not read. An entry that wasn't a string is ""."""
+        objects, when it has none or when its read failed. An entry that
+        wasn't a string is ""."""
         ...
 
     @property
@@ -2628,8 +2631,10 @@ class Object223Experimental:
 
     @property
     def error(self) -> Optional[str]:
-        """Why its read failed, None when it didn't; the Turtle skips such an
-        object."""
+        """Why its read failed, None when it didn't: the device's error, which
+        names the property when the object lacked its Object_Name, an analog
+        object's Units or a multi-state object's Number_Of_States. The
+        Turtle skips such an object."""
         ...
 
     def __repr__(self) -> str: ...

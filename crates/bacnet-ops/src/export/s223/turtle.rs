@@ -3,10 +3,10 @@
 //! Each exported object becomes one 223 property for its Present_Value,
 //! with a BACnet external reference node beside it:
 //!
-//! - the class says whether the point is observed (an input), actuated (an
-//!   output, or a value with a Priority_Array) or neither (a value
-//!   without one), and whether it is quantifiable (analog) or enumerated
-//!   (binary and multi-state);
+//! - the class says whether the point is observed (an input), actuated
+//!   (a commandable output or value: [`Access::Commandable`]) or neither (a
+//!   value that isn't commandable), and whether it is quantifiable (analog)
+//!   or enumerated (binary and multi-state);
 //! - an analog point carries its QUDT unit and quantity kind when the unit
 //!   table maps its Units; otherwise it gets QUDT's unknown quantity kind,
 //!   which the draft requires of every quantifiable property, no unit, and
@@ -16,6 +16,11 @@
 //!   with one member a state, named by its State_Text;
 //! - the reference names the device and object by identifier and by name,
 //!   and the property, and the command priority when the caller gave one.
+//!
+//! A failed entry is skipped with a comment where it was, and so is a
+//! point whose type isn't one of the [`EXPORTED_TYPES`] or whose kind
+//! isn't its type's family: a list built by hand can hold one, a device
+//! read can't.
 //!
 //! Node names come from identifiers only (`analog-input-3.present-value`),
 //! never from device text, so they stay the same across runs and renames.
@@ -33,9 +38,10 @@ use bacnet_types::enums::{EngineeringUnits, ObjectType};
 use bacnet_types::primitives::ObjectIdentifier;
 
 use super::{
-    EXPORTED_TYPES, Inventory, InventoryObject, ONTOLOGY_SOURCE, ONTOLOGY_VERSION, TurtleOptions,
+    Access, EXPORTED_TYPES, Entry, Inventory, MultiState, ONTOLOGY_SOURCE, ONTOLOGY_VERSION, Point,
+    PointKind, TurtleOptions,
 };
-use crate::format::is_multistate;
+use crate::format::{is_binary, is_multistate};
 use crate::label::{kebab, object_label};
 use bacnet_types::qudt::qudt_unit;
 
@@ -59,9 +65,10 @@ pub(super) const PREFIXES: [(&str, &str); 7] = [
 pub struct Counts {
     /// Objects written as 223 properties.
     pub exported: usize,
-    /// Objects left out: their read failed, or their type isn't mapped.
+    /// Objects left out: their read failed, or their type or kind isn't
+    /// mapped.
     pub skipped: usize,
-    /// Analog points whose unit has no QUDT mapping, or wasn't read.
+    /// Analog points whose unit has no QUDT mapping.
     pub unmapped_units: usize,
     /// Identifier strings left out because the instance is 0.
     pub instance_zero: usize,
@@ -85,19 +92,25 @@ pub fn write_turtle(
     out: &mut impl Write,
 ) -> Result<Counts, fmt::Error> {
     let mut counts = count(inventory);
-    let device_zero = inventory.device == 0;
+    let device_zero = inventory.device.instance == 0;
     let lit = Literals::default();
     // The body first, so the header can count what it replaced.
     let mut body = String::new();
-    for object in &inventory.objects {
-        let label = object_label(object.object);
-        if object.error.is_some() {
-            writeln!(body, "# {label}: skipped, its read failed.\n")?;
-            continue;
-        }
-        let Some(class) = Class::of(object) else {
-            writeln!(body, "# {label}: skipped, its type isn't mapped.\n")?;
-            continue;
+    for entry in &inventory.entries {
+        let label = object_label(entry.object());
+        let object = match entry {
+            Entry::Point(object) => object,
+            Entry::Failed { .. } => {
+                writeln!(body, "# {label}: skipped, its read failed.\n")?;
+                continue;
+            }
+        };
+        let class = match Class::of(object) {
+            Ok(class) => class,
+            Err(why) => {
+                writeln!(body, "# {label}: skipped, {why}.\n")?;
+                continue;
+            }
         };
         point(
             &lit,
@@ -132,17 +145,19 @@ impl Literals {
 /// The counts the header gives, before any point is written.
 fn count(inventory: &Inventory) -> Counts {
     let mut counts = Counts::default();
-    for object in &inventory.objects {
-        let Some(class) = Class::of(object).filter(|_| object.error.is_none()) else {
+    for entry in &inventory.entries {
+        let Some(object) = entry.point().filter(|object| Class::of(object).is_ok()) else {
             counts.skipped += 1;
             continue;
         };
         counts.exported += 1;
-        if class.quantifiable() && object.units.and_then(qudt_unit).is_none() {
+        if let PointKind::Analog(analog) = &object.kind
+            && qudt_unit(analog.units).is_none()
+        {
             counts.unmapped_units += 1;
         }
-        counts.instance_zero +=
-            usize::from(object.object.instance_number() == 0) + usize::from(inventory.device == 0);
+        counts.instance_zero += usize::from(object.object.instance_number() == 0)
+            + usize::from(inventory.device.instance == 0);
     }
     counts
 }
@@ -158,7 +173,7 @@ fn header(
     writeln!(
         out,
         "# EXPERIMENTAL: device {} as a proposed ASHRAE Standard 223 point list, written by",
-        inventory.device
+        inventory.device.instance
     )?;
     writeln!(
         out,
@@ -191,7 +206,7 @@ fn header(
             plural(counts.replaced, "NUL character", "NUL characters"),
         )?;
     }
-    if inventory.objects.is_empty() && inventory.stopped.is_none() {
+    if inventory.entries.is_empty() && inventory.stopped.is_none() {
         writeln!(
             out,
             "# The device has no object of the selected types: the model is empty."
@@ -212,7 +227,7 @@ fn header(
         out,
         "@prefix d: <{}device-{}/> .\n",
         options.base_iri(),
-        inventory.device
+        inventory.device.instance
     )
 }
 
@@ -228,10 +243,12 @@ enum Class {
 }
 
 impl Class {
-    fn of(object: &InventoryObject) -> Option<Self> {
+    /// A point's class, or why it has none: its type isn't mapped, or its
+    /// kind isn't its type's family.
+    fn of(object: &Point) -> Result<Self, &'static str> {
         let object_type = object.object.object_type();
         if !EXPORTED_TYPES.contains(&object_type) {
-            return None;
+            return Err("its type isn't mapped");
         }
         let input = [
             ObjectType::ANALOG_INPUT,
@@ -239,13 +256,19 @@ impl Class {
             ObjectType::MULTI_STATE_INPUT,
         ]
         .contains(&object_type);
-        let analog = [
-            ObjectType::ANALOG_INPUT,
-            ObjectType::ANALOG_OUTPUT,
-            ObjectType::ANALOG_VALUE,
-        ]
-        .contains(&object_type);
-        Some(match (analog, input, object.priority_array) {
+        let analog_type = !is_binary(object_type) && !is_multistate(object_type);
+        let (fits, analog, commanded) = match &object.kind {
+            PointKind::Analog(kind) => (analog_type, true, commandable(&kind.access)),
+            PointKind::Binary(kind) => (is_binary(object_type), false, commandable(&kind.access)),
+            PointKind::MultiState(kind) => {
+                (is_multistate(object_type), false, commandable(&kind.access))
+            }
+            _ => (false, false, false),
+        };
+        if !fits {
+            return Err("its kind doesn't fit its type");
+        }
+        Ok(match (analog, input, commanded) {
             (true, true, _) => Self::QuantifiableObservable,
             (true, false, true) => Self::QuantifiableActuatable,
             (true, false, false) => Self::Quantifiable,
@@ -266,19 +289,17 @@ impl Class {
         }
     }
 
-    fn quantifiable(self) -> bool {
-        matches!(
-            self,
-            Self::QuantifiableObservable | Self::QuantifiableActuatable | Self::Quantifiable
-        )
-    }
-
     fn actuatable(self) -> bool {
         matches!(
             self,
             Self::QuantifiableActuatable | Self::EnumeratedActuatable
         )
     }
+}
+
+/// Whether peers command Present_Value through a Priority_Array.
+fn commandable<T>(access: &Access<T>) -> bool {
+    matches!(access, Access::Commandable { .. })
 }
 
 /// `analog-input-3`: an object's part of its node names.
@@ -298,36 +319,31 @@ fn identifier(object_type: ObjectType, instance: u32) -> String {
 fn point(
     lit: &Literals,
     inventory: &Inventory,
-    object: &InventoryObject,
+    object: &Point,
     class: Class,
     options: &TurtleOptions,
     device_zero: bool,
     out: &mut impl Write,
 ) -> fmt::Result {
     let node = format!("d:{}.present-value", local(object.object));
-    let label = object
-        .name
-        .clone()
-        .unwrap_or_else(|| object_label(object.object));
+    let label = &object.name;
     writeln!(out, "# {}", object_label(object.object))?;
-    if is_multistate(object.object.object_type()) {
-        states(lit, object, &label, out)?;
+    if let PointKind::MultiState(multi_state) = &object.kind {
+        states(lit, object.object, multi_state, label, out)?;
     }
     writeln!(out, "{node} a {} ;", class.name())?;
-    writeln!(out, "    rdfs:label {} ;", lit.text(&label))?;
+    writeln!(out, "    rdfs:label {} ;", lit.text(label))?;
     if let Some(description) = object.description.as_deref().filter(|d| !d.is_empty()) {
         writeln!(out, "    rdfs:comment {} ;", lit.text(description))?;
     }
-    if class.quantifiable() {
-        units(object.units, out)?;
-    } else if is_multistate(object.object.object_type()) {
-        writeln!(
+    match &object.kind {
+        PointKind::Analog(analog) => units(analog.units, out)?,
+        PointKind::MultiState(_) => writeln!(
             out,
             "    s223:hasEnumerationKind d:{}.states ;",
             local(object.object)
-        )?;
-    } else {
-        writeln!(out, "    s223:hasEnumerationKind s223:Binary-Logical ;")?;
+        )?,
+        _ => writeln!(out, "    s223:hasEnumerationKind s223:Binary-Logical ;")?,
     }
     writeln!(out, "    s223:hasExternalReference {node}.ref .\n")?;
 
@@ -338,10 +354,10 @@ fn point(
             "    # device 0: no device-identifier, which the draft's pattern refuses"
         )?;
     } else {
-        let device = identifier(ObjectType::DEVICE, inventory.device);
+        let device = identifier(ObjectType::DEVICE, inventory.device.instance);
         writeln!(out, "    bacnet:device-identifier {} ;", lit.text(&device))?;
     }
-    if let Some(name) = &inventory.device_name {
+    if let Some(name) = &inventory.device.name {
         writeln!(out, "    bacnet:device-name {} ;", lit.text(name))?;
     }
     let instance = object.object.instance_number();
@@ -354,9 +370,7 @@ fn point(
         let id = identifier(object.object.object_type(), instance);
         writeln!(out, "    bacnet:object-identifier {} ;", lit.text(&id))?;
     }
-    if let Some(name) = &object.name {
-        writeln!(out, "    bacnet:object-name {} ;", lit.text(name))?;
-    }
+    writeln!(out, "    bacnet:object-name {} ;", lit.text(label))?;
     match options.write_priority().filter(|_| class.actuatable()) {
         Some(priority) => {
             writeln!(out, "    bacnet:property-identifier \"present-value\" ;")?;
@@ -370,26 +384,19 @@ fn point(
     }
 }
 
-/// An analog point's QUDT terms. A unit the table doesn't map, or one not
-/// read, gets the unknown quantity kind and no unit, since the draft wants
-/// a quantity kind on every quantifiable property, and a comment naming the
-/// BACnet unit.
-fn units(units: Option<EngineeringUnits>, out: &mut impl Write) -> fmt::Result {
-    match units.map(|units| (units, qudt_unit(units))) {
-        Some((_, Some((unit, kind)))) => {
-            writeln!(out, "    qudt:hasUnit unit:{unit} ;")?;
-            return writeln!(out, "    qudt:hasQuantityKind quantitykind:{kind} ;");
-        }
-        Some((units, None)) => writeln!(
-            out,
-            "    rdfs:comment \"BACnet units {}: no QUDT mapping in this export\" ;",
-            kebab(units)
-        )?,
-        None => writeln!(
-            out,
-            "    rdfs:comment \"BACnet units not read: no QUDT unit\" ;"
-        )?,
+/// An analog point's QUDT terms. A unit the table doesn't map gets the
+/// unknown quantity kind and no unit, since the draft wants a quantity kind
+/// on every quantifiable property, and a comment naming the BACnet unit.
+fn units(units: EngineeringUnits, out: &mut impl Write) -> fmt::Result {
+    if let Some((unit, kind)) = qudt_unit(units) {
+        writeln!(out, "    qudt:hasUnit unit:{unit} ;")?;
+        return writeln!(out, "    qudt:hasQuantityKind quantitykind:{kind} ;");
     }
+    writeln!(
+        out,
+        "    rdfs:comment \"BACnet units {}: no QUDT mapping in this export\" ;",
+        kebab(units)
+    )?;
     writeln!(out, "    qudt:hasQuantityKind quantitykind:Unknown ;")
 }
 
@@ -397,13 +404,13 @@ fn units(units: Option<EngineeringUnits>, out: &mut impl Write) -> fmt::Result {
 /// a class and an instance of itself, as the ontology's own kinds are.
 fn states(
     lit: &Literals,
-    object: &InventoryObject,
+    object: ObjectIdentifier,
+    multi_state: &MultiState,
     label: &str,
     out: &mut impl Write,
 ) -> fmt::Result {
-    let kind = format!("d:{}.states", local(object.object));
-    let listed = u32::try_from(object.state_texts.len()).unwrap_or(u32::MAX);
-    let claimed = object.states.unwrap_or(listed);
+    let kind = format!("d:{}.states", local(object));
+    let claimed = multi_state.number_of_states;
     writeln!(out, "{kind} a s223:Class, {kind} ;")?;
     writeln!(out, "    rdfs:subClassOf s223:EnumerationKind ;")?;
     writeln!(
@@ -418,7 +425,7 @@ fn states(
         )?;
     }
     for state in 1..=claimed.min(MAX_MINTED_STATES) {
-        let text = object
+        let text = multi_state
             .state_texts
             .get(state as usize - 1)
             .filter(|text| !text.is_empty())

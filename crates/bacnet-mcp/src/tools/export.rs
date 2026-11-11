@@ -24,8 +24,8 @@ use sha2::{Digest, Sha256};
 
 use bacnet_ops::engine::timed_out;
 use bacnet_ops::export::s223::{
-    Counts, DEFAULT_BASE_IRI, Inventory, InventoryObject, InventoryOptions, TurtleOptions,
-    WritePriority, write_turtle,
+    Counts, DEFAULT_BASE_IRI, Detail, DeviceInfo, Entry, Inventory, InventoryOptions,
+    TurtleOptions, WritePriority, write_turtle,
 };
 use bacnet_ops::label::{kebab, object_label};
 use bacnet_ops::parse::parse_object_type;
@@ -132,15 +132,18 @@ fn output() -> Value {
         "start": count("Where this page starts among the matching objects, from 0"),
         "read": count("Objects this page read"),
         "points": count("Of those, the points this page's Turtle holds"),
-        "skipped": count("Of those, the objects left out because the device refused their read"),
+        "skipped": count(
+            "Of those, the objects left out because the device refused their read or couldn't \
+             give their name, an analog object's units or a multi-state object's state count",
+        ),
         "by_type": {
             "type": "object",
             "additionalProperties": { "type": "integer" },
             "description": "This page's points by object type",
         },
         "unmapped_units": count(
-            "This page's analog points whose unit has no QUDT mapping (or wasn't read): an \
-             unknown quantity kind and no unit",
+            "This page's analog points whose unit has no QUDT mapping: an unknown quantity kind \
+             and no unit",
         ),
         "turtle_bytes": count("This page's Turtle, in bytes"),
         "oversized": {
@@ -227,7 +230,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
         // Not all read yet: no object on this page, and the same cursor,
         // which goes on reading the list.
         let turtle = format!("{}{LITERALS_COMMENT}", list_note(instance, &listing));
-        let empty = Page::new(instance, None, &turtle_options);
+        let empty = Page::new(DeviceInfo::new(instance), &turtle_options);
         merge(&mut body, summary(&empty, &Counts::default(), &Value::Null));
         body["turtle_bytes"] = json!(turtle.len());
         *out = Some(turtle);
@@ -256,24 +259,27 @@ pub(super) async fn run<T: TransportPort + 'static>(
              without a cursor"
         )));
     }
-    let device_name = engine
-        .inventory_device_name(instance)
+    let device_info = engine
+        .inventory_device(instance, Detail::Export)
         .await
         .map_err(|e| ToolError::device(instance, &e))?;
-    let name = device_name.as_deref().map_or(Value::Null, |name| {
+    let name = device_info.name.as_deref().map_or(Value::Null, |name| {
         let source = format!("device {instance} device:{instance} object-name");
         envelope(name, source, ctx.policy.caps.text)
     });
     let cap = ctx.policy.caps.objects.min(PAGE);
-    let mut page = Page::new(instance, device_name, &turtle_options);
+    let mut page = Page::new(device_info, &turtle_options);
     let mut resume = None;
     for (at, &object) in matching.iter().enumerate().skip(first) {
-        let read = page.inventory.objects.len();
+        let read = page.inventory.entries.len();
         if page.full(cap) || (read > 0 && call.out_of_time()) {
             resume = Some(at);
             break;
         }
-        match engine.inventory_object(instance, object).await {
+        match engine
+            .inventory_object(instance, object, Detail::Export)
+            .await
+        {
             Ok(entry) => {
                 if !page.push(entry) {
                     // Past the cap with others: it heads the next page.
@@ -296,7 +302,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
         }
     }
     let (text, counts) = page.render();
-    let read = page.inventory.objects.len();
+    let read = page.inventory.entries.len();
     let note = page_note(instance, first, read, matching.len(), resume.is_some());
     let turtle = format!("{note}{LITERALS_COMMENT}{text}");
     merge(&mut body, summary(&page, &counts, &name));
@@ -327,15 +333,14 @@ fn merge(into: &mut Value, from: Value) {
 /// device's `name`.
 fn summary(page: &Page<'_>, counts: &Counts, name: &Value) -> Value {
     let mut by_type: BTreeMap<String, usize> = BTreeMap::new();
-    let objects = &page.inventory.objects;
-    for object in objects.iter().filter(|o| o.error.is_none()) {
+    for point in page.inventory.points() {
         *by_type
-            .entry(kebab(object.object.object_type()))
+            .entry(kebab(point.object.object_type()))
             .or_default() += 1;
     }
     json!({
         "device_name": name,
-        "read": objects.len(),
+        "read": page.inventory.entries.len(),
         "points": counts.exported,
         "skipped": counts.skipped,
         "by_type": by_type,
@@ -354,18 +359,9 @@ pub(super) struct Page<'a> {
 }
 
 impl<'a> Page<'a> {
-    pub(super) fn new(
-        device: u32,
-        device_name: Option<String>,
-        options: &'a TurtleOptions,
-    ) -> Self {
+    pub(super) fn new(device: DeviceInfo, options: &'a TurtleOptions) -> Self {
         let mut page = Self {
-            inventory: Inventory {
-                device,
-                device_name,
-                objects: Vec::new(),
-                stopped: None,
-            },
+            inventory: Inventory::new(device),
             options,
             size: 0,
             largest: 0,
@@ -382,14 +378,14 @@ impl<'a> Page<'a> {
         (text, counts)
     }
 
-    /// Add `object`, unless it takes a page of others past
+    /// Add `entry`, unless it takes a page of others past
     /// [`MAX_TURTLE`] with the comment lines: then it is left out, for
     /// the next page, and this says so. A page's first is always taken.
-    pub(super) fn push(&mut self, object: InventoryObject) -> bool {
-        self.inventory.objects.push(object);
+    pub(super) fn push(&mut self, entry: Entry) -> bool {
+        self.inventory.entries.push(entry);
         let size = self.render().0.len();
-        if self.inventory.objects.len() > 1 && size + NOTE_ROOM > MAX_TURTLE {
-            self.inventory.objects.pop();
+        if self.inventory.entries.len() > 1 && size + NOTE_ROOM > MAX_TURTLE {
+            self.inventory.entries.pop();
             return false;
         }
         self.largest = self.largest.max(size.saturating_sub(self.size));
@@ -402,7 +398,7 @@ impl<'a> Page<'a> {
     /// [`MAX_TURTLE`] with the page's comment lines, so it is rare that one
     /// read has to go back ([`push`](Self::push)).
     pub(super) fn full(&self, cap: usize) -> bool {
-        let read = self.inventory.objects.len();
+        let read = self.inventory.entries.len();
         read > 0 && (read >= cap || self.size + self.largest + NOTE_ROOM > MAX_TURTLE)
     }
 }

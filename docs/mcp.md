@@ -15,7 +15,7 @@ page. Experimental in 0.15.
 | Piece | Where | What it does |
 |---|---|---|
 | `bacnet-mcp` | `crates/bacnet-mcp` | `McpServer<T>`: the tool surface, prompts, policy, untrusted-text envelope, signed cursors. Out of `default-members`; publishable, because the CLI depends on it. Default feature `stdio`. |
-| Engine extensions | `bacnet-ops` | `RequestLimits::with_network_rates`, `turn_on` and `slot`; per-caller `Account` and `TokenBucket` through `limits::charged`; `Engine::who_is`, `discover_routers`, `devices`, `device`, `address_style`; `read_trend` charged per request; `alarm_summary` and `enrollment_summary`; `inventory_device_name` and `inventory_object`, the 223 export's reads a page at a time (#2436) |
+| Engine extensions | `bacnet-ops` | `RequestLimits::with_network_rates`, `turn_on` and `slot`; per-caller `Account` and `TokenBucket` through `limits::charged`; `Engine::who_is`, `discover_routers`, `devices`, `device`, `address_style`; `read_trend` charged per request; `alarm_summary` and `enrollment_summary`; `inventory_device` and `inventory_object`, the 223 export's reads a page at a time (#2436) |
 | Decoder | `bacnet-ops::decode` | The capture screen's frame summary and field tree, moved from the CLI for `bacnet_decode`: any tapped link (B/IP, B/IPv6, BACnet/SC, MS/TP), or a bare NPDU or APDU; a field quoting a character string is marked as device text |
 | Watch hub | `bacnet-ops::watch` | `Hub`: one managed COV subscription or poller per point, shared by every listener, holding the latest values (phase 2); `Engine::device_events` |
 | `bacnet mcp` | `crates/bacnet-cli/src/mcp.rs` | `serve --stdio [--profile NAME] [--passive]`, `connect [--profile NAME]` (#2185) and `authorize --profile NAME`, behind the CLI feature `mcp` (which brings `tui`, for the profiles; the release binaries include it from 0.15.0, and a source build enables it with `--features mcp`). Classified `Read` in `bacnet_ops::class`. |
@@ -131,7 +131,9 @@ mapping can change between releases. Read-only; not listed in passive mode.
   Object_List's length) and `matching` (after `types`, the objects the
   pages go through; both null while the list is being read), `start` (the
   page's first object among them, from 0), `read`, and for the page alone
-  `points`, `skipped` (objects whose read the device refused),
+  `points`, `skipped` (objects whose read the device refused, or that
+  couldn't give their name, an analog object's units or a multi-state
+  object's state count),
   `by_type` and `unmapped_units` (analog points exported with an unknown
   quantity kind); `turtle_bytes`, `oversized`, `stopped`, `list` (as
   `bacnet_list_objects` gives it), `truncated`, `next_cursor`, `limits`

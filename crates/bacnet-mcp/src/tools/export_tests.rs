@@ -2,7 +2,10 @@
 //! comment lines, and their points against the whole export's.
 
 use bacnet_ops::export::s223::testing::check_structure;
-use bacnet_ops::export::s223::{Inventory, InventoryObject, TurtleOptions, to_turtle};
+use bacnet_ops::export::s223::{
+    Access, Analog, Binary, DeviceInfo, Entry, Inventory, MultiState, Point, PointKind,
+    TurtleOptions, to_turtle,
+};
 use bacnet_types::enums::{EngineeringUnits, ObjectType};
 use bacnet_types::primitives::ObjectIdentifier;
 
@@ -21,27 +24,39 @@ fn controller(n: u32) -> Inventory {
         ObjectType::BINARY_VALUE,
         ObjectType::MULTI_STATE_VALUE,
     ];
-    let objects = (1..=n)
+    let entries = (1..=n)
         .map(|instance| {
             let object_type = kinds[instance as usize % kinds.len()];
-            let mut object =
-                InventoryObject::new(ObjectIdentifier::new(object_type, instance).unwrap());
-            object.name = Some(format!("AHU-1 Supply Air Point {instance}"));
-            object.description = Some("Air handler 1, mechanical room 2".into());
-            object.units = Some(EngineeringUnits::DEGREES_FAHRENHEIT);
-            object.priority_array = object_type != ObjectType::ANALOG_INPUT;
-            if object_type == ObjectType::MULTI_STATE_VALUE {
-                object.states = Some(4);
-                object.state_texts = ["Off", "Auto", "Low", "High"].map(String::from).into();
-            }
-            object
+            let input = [ObjectType::ANALOG_INPUT, ObjectType::BINARY_INPUT].contains(&object_type);
+            let kind: PointKind = match object_type {
+                ObjectType::ANALOG_INPUT | ObjectType::ANALOG_OUTPUT | ObjectType::ANALOG_VALUE => {
+                    Analog::new(EngineeringUnits::DEGREES_FAHRENHEIT, access(input)).into()
+                }
+                ObjectType::MULTI_STATE_VALUE => MultiState::new(4, access(input))
+                    .with_state_texts(["Off", "Auto", "Low", "High"])
+                    .into(),
+                _ => Binary::new(access(input)).into(),
+            };
+            let object = ObjectIdentifier::new(object_type, instance).unwrap();
+            let point = Point::new(object, format!("AHU-1 Supply Air Point {instance}"), kind)
+                .with_description("Air handler 1, mechanical room 2");
+            Entry::Point(point)
         })
         .collect();
     Inventory {
-        device: 1201,
-        device_name: Some("AHU-1 Controller".into()),
-        objects,
-        stopped: None,
+        entries,
+        ..Inventory::new(DeviceInfo::new(1201).with_name("AHU-1 Controller"))
+    }
+}
+
+/// An input's access, or a commandable one.
+fn access<T>(input: bool) -> Access<T> {
+    if input {
+        Access::ReadOnly
+    } else {
+        Access::Commandable {
+            relinquish_default: None,
+        }
     }
 }
 
@@ -59,24 +74,20 @@ fn paged(inventory: &Inventory, options: &TurtleOptions) -> (Vec<(usize, String)
     let mut pages = Vec::new();
     let mut again = 0;
     let mut at = 0;
-    while at < inventory.objects.len() {
-        let mut page = Page::new(inventory.device, inventory.device_name.clone(), options);
-        while at < inventory.objects.len() && !page.full(PAGE) {
-            if !page.push(inventory.objects[at].clone()) {
+    let entries = &inventory.entries;
+    while at < entries.len() {
+        let mut page = Page::new(inventory.device.clone(), options);
+        while at < entries.len() && !page.full(PAGE) {
+            if !page.push(entries[at].clone()) {
                 again += 1;
                 break;
             }
             at += 1;
         }
-        let read = page.inventory.objects.len();
-        let more = at < inventory.objects.len();
-        let note = page_note(
-            inventory.device,
-            at - read,
-            read,
-            inventory.objects.len(),
-            more,
-        );
+        let read = page.inventory.entries.len();
+        let more = at < entries.len();
+        let device = inventory.device.instance;
+        let note = page_note(device, at - read, read, entries.len(), more);
         pages.push((read, format!("{note}{LITERALS_COMMENT}{}", page.render().0)));
     }
     (pages, again)
@@ -136,12 +147,10 @@ fn a_large_controller_comes_in_pages() {
 #[test]
 fn an_object_larger_than_a_page_gets_one_of_its_own() {
     let mut inventory = controller(60);
-    let huge = &mut inventory.objects[10];
-    *huge = InventoryObject::new(ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 11).unwrap());
-    huge.states = Some(1000);
-    huge.state_texts = (1..=1000)
-        .map(|n| format!("Stage {n} of the plant"))
-        .collect();
+    let huge = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 11).unwrap();
+    let stages = MultiState::new(1000, Access::ReadOnly)
+        .with_state_texts((1..=1000).map(|n| format!("Stage {n} of the plant")));
+    inventory.entries[10] = Entry::Point(Point::new(huge, "Plant Stage", stages));
     let options = TurtleOptions::default();
     let (pages, again) = paged(&inventory, &options);
     assert_eq!(again, 1, "read once more, at the head of its own page");
@@ -189,15 +198,17 @@ fn a_position_round_trips() {
 #[test]
 fn a_page_stops_at_its_cap() {
     let mut inventory = controller(60);
-    for object in &mut inventory.objects {
-        object.name = None;
-        object.description = None;
+    for entry in &mut inventory.entries {
+        if let Entry::Point(point) = entry {
+            point.name = String::new();
+            point.description = None;
+        }
     }
     let options = TurtleOptions::default();
-    let mut page = Page::new(1201, None, &options);
-    for object in inventory.objects.iter().take(5) {
+    let mut page = Page::new(DeviceInfo::new(1201), &options);
+    for entry in inventory.entries.iter().take(5) {
         assert!(!page.full(5));
-        assert!(page.push(object.clone()));
+        assert!(page.push(entry.clone()));
     }
     assert!(page.full(5));
     assert!(!page.full(PAGE));

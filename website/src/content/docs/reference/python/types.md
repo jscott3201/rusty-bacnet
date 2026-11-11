@@ -418,18 +418,19 @@ a priority outside 0 to 255 raises OverflowError.
 
 ## Object223Experimental
 
-One object of an `Inventory223Experimental`.
+One object of an `Inventory223Experimental`: a point, or an object
+whose read failed, which has only its identifier and `error`.
 
 Properties:
 
 - `object_identifier: ObjectIdentifier`: The object.
-- `name: Optional[str]`: Its Object\_Name; None when it couldn't be read.
+- `name: Optional[str]`: Its Object\_Name; None when its read failed.
 - `description: Optional[str]`: Its Description; None when it has none or couldn't be read.
-- `units: Optional[EngineeringUnits]`: An analog object's Units; None for other objects or when not read.
-- `number_of_states: Optional[int]`: A multi-state object's Number\_Of\_States; None for other objects or when not read.
-- `state_texts: list[str]`: A multi-state object's State\_Text, state 1 first; empty for other objects or when not read. An entry that wasn't a string is "".
+- `units: Optional[EngineeringUnits]`: An analog object's Units; None for other objects or when its read failed.
+- `number_of_states: Optional[int]`: A multi-state object's Number\_Of\_States; None for other objects or when its read failed.
+- `state_texts: list[str]`: A multi-state object's State\_Text, state 1 first; empty for other objects, when it has none or when its read failed. An entry that wasn't a string is "".
 - `commandable: bool`: Whether it has a Priority\_Array: always for an output, and for a value when the device gave one. The Turtle makes such a point actuatable.
-- `error: Optional[str]`: Why its read failed, None when it didn't; the Turtle skips such an object.
+- `error: Optional[str]`: Why its read failed, None when it didn't: the device's error, which names the property when the object lacked its Object\_Name, an analog object's Units or a multi-state object's Number\_Of\_States. The Turtle skips such an object.
 
 ## CovNotification
 

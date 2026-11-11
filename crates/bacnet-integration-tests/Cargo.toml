@@ -56,6 +56,15 @@ path = "../../examples/rust/cov_subscriptions.rs"
 name = "multi_object_server"
 path = "../../examples/rust/multi_object_server.rs"
 
+# Databases built from a point list (#2445): a server, and two endpoints.
+[[example]]
+name = "point_list_server"
+path = "../../examples/rust/point_list_server.rs"
+
+[[example]]
+name = "point_list_endpoint"
+path = "../../examples/rust/point_list_endpoint.rs"
+
 # The root README's Rust blocks (#2105): each file is a short header, then
 # the README block byte for byte, which website/tests/python checks.
 [[example]]

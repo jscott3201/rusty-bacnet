@@ -35,14 +35,13 @@ fn literals_escape_device_text() {
 #[test]
 fn nul_becomes_the_replacement_character() {
     assert_eq!(literal("a\0b"), r#""a\uFFFDb""#);
-    let mut ai = InventoryObject::new(oid(ObjectType::ANALOG_INPUT, 1));
-    ai.name = Some("Zone\0Temp".into());
-    ai.description = Some("\0".into());
-    let inventory = Inventory {
-        device: 7,
-        objects: vec![ai],
-        ..Inventory::default()
-    };
+    let ai = Point::new(
+        oid(ObjectType::ANALOG_INPUT, 1),
+        "Zone\0Temp",
+        Analog::new(EngineeringUnits::DEGREES_CELSIUS, Access::ReadOnly),
+    )
+    .with_description("\0");
+    let inventory = Inventory::from(PointList::new(DeviceInfo::new(7), vec![ai]));
     let mut text = String::new();
     let counts = write_turtle(&inventory, &TurtleOptions::default(), &mut text).unwrap();
     // The name goes out twice (label and object-name), the description once.
@@ -59,10 +58,7 @@ fn nul_becomes_the_replacement_character() {
 /// empty model whose header says so.
 #[test]
 fn no_object_of_the_selected_types() {
-    let inventory = Inventory {
-        device: 7,
-        ..Inventory::default()
-    };
+    let inventory = Inventory::new(DeviceInfo::new(7));
     let mut text = String::new();
     let counts = write_turtle(&inventory, &TurtleOptions::default(), &mut text).unwrap();
     assert_eq!(counts, Counts::default());
@@ -131,6 +127,12 @@ fn options_are_checked() {
     assert!(InventoryOptions::new(vec![]).is_err());
     assert!(InventoryOptions::new(vec![ObjectType::TREND_LOG]).is_err());
     assert_eq!(InventoryOptions::default().types, EXPORTED_TYPES);
+    assert_eq!(InventoryOptions::default().detail, Detail::Export);
+    let full = InventoryOptions::new(vec![ObjectType::ANALOG_INPUT])
+        .unwrap()
+        .with_detail(Detail::Full);
+    assert_eq!(full.detail, Detail::Full);
+    assert_eq!(full.types, [ObjectType::ANALOG_INPUT]);
 }
 
 /// The checker itself refuses what it should: an unterminated statement,
@@ -155,19 +157,43 @@ fn the_check_refuses_broken_text() {
 /// claims far more states than it names.
 #[test]
 fn counts_and_the_state_cap() {
-    let mut huge = InventoryObject::new(oid(ObjectType::MULTI_STATE_INPUT, 1));
-    huge.states = Some(u32::MAX);
-    let mut unread = InventoryObject::new(oid(ObjectType::ANALOG_INPUT, 2));
-    unread.error = Some("timeout".into());
-    let trend = InventoryObject::new(oid(ObjectType::TREND_LOG, 1));
-    let mut mapped = InventoryObject::new(oid(ObjectType::ANALOG_VALUE, 0));
-    mapped.units = Some(EngineeringUnits::PERCENT);
-    let unmapped = InventoryObject::new(oid(ObjectType::ANALOG_OUTPUT, 4));
-    let inventory = Inventory {
-        device: 7,
-        objects: vec![huge, unread, trend, mapped, unmapped],
-        ..Inventory::default()
+    let huge = Point::new(
+        oid(ObjectType::MULTI_STATE_INPUT, 1),
+        "huge",
+        MultiState::new(u32::MAX, Access::ReadOnly),
+    );
+    let unread = Entry::Failed {
+        object: oid(ObjectType::ANALOG_INPUT, 2),
+        error: "timeout".into(),
     };
+    let trend = Point::new(
+        oid(ObjectType::TREND_LOG, 1),
+        "trend",
+        Analog::new(EngineeringUnits::NO_UNITS, Access::ReadOnly),
+    );
+    let mapped = Point::new(
+        oid(ObjectType::ANALOG_VALUE, 0),
+        "mapped",
+        Analog::new(EngineeringUnits::PERCENT, Access::ReadOnly),
+    );
+    let unmapped = Point::new(
+        oid(ObjectType::ANALOG_OUTPUT, 4),
+        "unmapped",
+        Analog::new(
+            EngineeringUnits::from_raw(300),
+            Access::Commandable {
+                relinquish_default: None,
+            },
+        ),
+    );
+    let mut inventory = Inventory::new(DeviceInfo::new(7));
+    inventory.entries = vec![
+        Entry::Point(huge),
+        unread,
+        Entry::Point(trend),
+        Entry::Point(mapped),
+        Entry::Point(unmapped),
+    ];
     let mut text = String::new();
     let counts = write_turtle(&inventory, &TurtleOptions::default(), &mut text).unwrap();
     assert_eq!(
@@ -196,4 +222,67 @@ fn counts_and_the_state_cap() {
     );
     check_structure(&text);
     assert_eq!(to_turtle(&inventory, &TurtleOptions::default()), text);
+}
+
+/// A list built by hand can hold a point the export can't map: one whose
+/// kind isn't its type's family. It is skipped where it was, with a
+/// comment, as a type the export doesn't map is.
+#[test]
+fn a_kind_that_doesnt_fit_its_type_is_skipped() {
+    let mismatched = Point::new(
+        oid(ObjectType::ANALOG_INPUT, 1),
+        "mismatched",
+        Binary::new(Access::ReadOnly),
+    );
+    let fits = Point::new(
+        oid(ObjectType::BINARY_INPUT, 1),
+        "fits",
+        Binary::new(Access::ReadOnly),
+    );
+    let inventory = Inventory::from(PointList::new(DeviceInfo::new(7), vec![mismatched, fits]));
+    let mut text = String::new();
+    let counts = write_turtle(&inventory, &TurtleOptions::default(), &mut text).unwrap();
+    assert_eq!((counts.exported, counts.skipped), (1, 1), "{text}");
+    assert!(
+        text.contains("# analog-input 1: skipped, its kind doesn't fit its type.\n"),
+        "{text}"
+    );
+    assert!(!text.contains("d:analog-input-1."), "{text}");
+    check_structure(&text);
+}
+
+/// A point list and an inventory carry the same points: a list made an
+/// inventory gives the list back, and a failed entry is left out of it.
+#[test]
+fn an_inventory_and_its_point_list() {
+    let device = DeviceInfo::new(7)
+        .with_name("plant")
+        .with_description("Plant room");
+    let point = Point::new(
+        oid(ObjectType::BINARY_VALUE, 1),
+        "occupied",
+        Binary::new(Access::Writable).with_active_text("Occupied"),
+    );
+    let list = PointList::new(device.clone(), vec![point.clone()]);
+    let mut inventory = Inventory::from(list.clone());
+    assert_eq!(inventory.point_list(), list);
+    let failed = Entry::Failed {
+        object: oid(ObjectType::ANALOG_INPUT, 2),
+        error: "object-name: OBJECT:UNKNOWN_OBJECT".into(),
+    };
+    inventory.entries.insert(0, failed.clone());
+    assert_eq!(inventory.point_list(), list);
+    assert_eq!(inventory.points().collect::<Vec<_>>(), [&point]);
+    assert_eq!(failed.object(), oid(ObjectType::ANALOG_INPUT, 2));
+    assert_eq!(failed.error(), Some("object-name: OBJECT:UNKNOWN_OBJECT"));
+    assert_eq!(failed.point(), None);
+    let entry = Entry::Point(point.clone());
+    assert_eq!((entry.object(), entry.error()), (point.object, None));
+    assert_eq!(entry.point(), Some(&point));
+    // A Writable value is written as a value that isn't commandable.
+    let text = to_turtle(&inventory, &TurtleOptions::default());
+    assert!(
+        text.contains("d:binary-value-1.present-value a s223:EnumerableProperty ;"),
+        "{text}"
+    );
 }

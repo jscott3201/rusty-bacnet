@@ -7,8 +7,8 @@ use std::sync::atomic::AtomicBool;
 use bacnet_client::client::BACnetClient;
 use bacnet_ops::engine::{Halt, Reader};
 use bacnet_ops::export::s223::{
-    DEFAULT_BASE_IRI, Inventory, InventoryObject, InventoryOptions, TurtleOptions, WritePriority,
-    read_inventory, to_turtle,
+    Access, DEFAULT_BASE_IRI, Entry, Inventory, InventoryOptions, Point, PointKind, TurtleOptions,
+    WritePriority, read_inventory, to_turtle,
 };
 use bacnet_ops::limits::RequestLimits;
 use bacnet_types::enums::EngineeringUnits;
@@ -56,9 +56,9 @@ pub(crate) async fn read(
         // `objects` in a loop doesn't copy the list each time.
         Ok(inventory) => crate::py_async::attach(|py| {
             let objects = inventory
-                .objects
+                .entries
                 .iter()
-                .map(|object| Py::new(py, PyObject223(object.clone())))
+                .map(|entry| Py::new(py, PyObject223(entry.clone())))
                 .collect::<PyResult<Vec<_>>>()?;
             Ok(PyInventory223 {
                 objects: PyTuple::new(py, objects)?.unbind(),
@@ -76,7 +76,7 @@ pub(crate) async fn read(
 #[pyclass(name = "Inventory223Experimental", module = "rusty_bacnet", frozen)]
 pub(crate) struct PyInventory223 {
     inventory: Inventory,
-    /// `inventory.objects` as Python objects, built once.
+    /// `inventory.entries` as Python objects, built once.
     objects: Py<PyTuple>,
 }
 
@@ -85,14 +85,14 @@ impl PyInventory223 {
     /// The device instance.
     #[getter]
     fn device_instance(&self) -> u32 {
-        self.inventory.device
+        self.inventory.device.instance
     }
 
     /// The Device object's Object_Name, exactly as the device sent it;
     /// None when it couldn't be read.
     #[getter]
     fn device_name(&self) -> Option<&str> {
-        self.inventory.device_name.as_deref()
+        self.inventory.device.name.as_deref()
     }
 
     /// The objects read, in Object_List order, as a tuple.
@@ -135,8 +135,8 @@ impl PyInventory223 {
         };
         format!(
             "Inventory223Experimental(device={}, objects={}{stopped})",
-            self.inventory.device,
-            self.inventory.objects.len()
+            self.inventory.device.instance,
+            self.inventory.entries.len()
         )
     }
 
@@ -147,48 +147,66 @@ impl PyInventory223 {
     }
 }
 
-/// One object of an `Inventory223Experimental`.
+/// One object of an `Inventory223Experimental`: a point, or an object
+/// whose read failed, which has only its identifier and `error`.
 #[pyclass(name = "Object223Experimental", module = "rusty_bacnet", frozen)]
-pub(crate) struct PyObject223(InventoryObject);
+pub(crate) struct PyObject223(Entry);
+
+impl PyObject223 {
+    fn point(&self) -> Option<&Point> {
+        self.0.point()
+    }
+}
 
 #[pymethods]
 impl PyObject223 {
     /// The object.
     #[getter]
     fn object_identifier(&self) -> PyObjectIdentifier {
-        PyObjectIdentifier::from_rust(self.0.object)
+        PyObjectIdentifier::from_rust(self.0.object())
     }
 
-    /// Its Object_Name; None when it couldn't be read.
+    /// Its Object_Name; None when its read failed.
     #[getter]
     fn name(&self) -> Option<&str> {
-        self.0.name.as_deref()
+        self.point().map(|point| point.name.as_str())
     }
 
     /// Its Description; None when it has none or couldn't be read.
     #[getter]
     fn description(&self) -> Option<&str> {
-        self.0.description.as_deref()
+        self.point()?.description.as_deref()
     }
 
-    /// An analog object's Units; None for other objects or when not read.
+    /// An analog object's Units; None for other objects or when its read
+    /// failed.
     #[getter]
     fn units(&self) -> Option<IntEnumValue<EngineeringUnits>> {
-        self.0.units.map(IntEnumValue)
+        match &self.point()?.kind {
+            PointKind::Analog(analog) => Some(IntEnumValue(analog.units)),
+            _ => None,
+        }
     }
 
     /// A multi-state object's Number_Of_States; None for other objects or
-    /// when not read.
+    /// when its read failed.
     #[getter]
     fn number_of_states(&self) -> Option<u32> {
-        self.0.states
+        match &self.point()?.kind {
+            PointKind::MultiState(states) => Some(states.number_of_states),
+            _ => None,
+        }
     }
 
     /// A multi-state object's State_Text, state 1 first; empty for other
-    /// objects or when not read. An entry that wasn't a string is "".
+    /// objects, when it has none or when its read failed. An entry that
+    /// wasn't a string is "".
     #[getter]
     fn state_texts(&self) -> Vec<String> {
-        self.0.state_texts.clone()
+        match self.point().map(|point| &point.kind) {
+            Some(PointKind::MultiState(states)) => states.state_texts.clone(),
+            _ => Vec::new(),
+        }
     }
 
     /// Whether it has a Priority_Array: always for an output, and for a
@@ -196,21 +214,30 @@ impl PyObject223 {
     /// actuatable.
     #[getter]
     fn commandable(&self) -> bool {
-        self.0.priority_array
+        match self.point().map(|point| &point.kind) {
+            Some(PointKind::Analog(analog)) => matches!(analog.access, Access::Commandable { .. }),
+            Some(PointKind::Binary(binary)) => matches!(binary.access, Access::Commandable { .. }),
+            Some(PointKind::MultiState(states)) => {
+                matches!(states.access, Access::Commandable { .. })
+            }
+            _ => false,
+        }
     }
 
-    /// Why its read failed, None when it didn't; the Turtle skips such an
-    /// object.
+    /// Why its read failed, None when it didn't: the device's error, which
+    /// names the property when the object lacked its Object_Name, an analog
+    /// object's Units or a multi-state object's Number_Of_States. The
+    /// Turtle skips such an object.
     #[getter]
     fn error(&self) -> Option<&str> {
-        self.0.error.as_deref()
+        self.0.error()
     }
 
     fn __repr__(&self) -> String {
         format!(
             "Object223Experimental({}, name={:?})",
-            self.0.object,
-            self.0.name.as_deref().unwrap_or("")
+            self.0.object(),
+            self.name().unwrap_or("")
         )
     }
 
@@ -226,4 +253,49 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyInventory223>()?;
     m.add_class::<PyObject223>()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use bacnet_ops::export::s223::Analog;
+    use bacnet_types::enums::ObjectType;
+    use bacnet_types::primitives::ObjectIdentifier;
+
+    use super::*;
+
+    /// An object that failed keeps its identifier and its error, which
+    /// names the property; every other getter is empty. A point fills
+    /// those its family has.
+    #[test]
+    fn a_failed_object_has_only_its_error() {
+        let object = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 6).unwrap();
+        let error = "units: PROPERTY:UNKNOWN_PROPERTY";
+        let failed = PyObject223(Entry::Failed {
+            object,
+            error: error.into(),
+        });
+        assert_eq!(failed.error(), Some(error));
+        assert_eq!((failed.name(), failed.description()), (None, None));
+        assert!(failed.units().is_none() && failed.number_of_states().is_none());
+        assert!(failed.state_texts().is_empty() && !failed.commandable());
+        assert!(
+            failed.__repr__().contains("name=\"\""),
+            "{}",
+            failed.__repr__()
+        );
+
+        let damper = ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, 1).unwrap();
+        let commanded = Access::Commandable {
+            relinquish_default: None,
+        };
+        let analog = Analog::new(EngineeringUnits::PERCENT, commanded);
+        let point = PyObject223(Entry::Point(Point::new(damper, "Damper", analog)));
+        assert_eq!((point.name(), point.error()), (Some("Damper"), None));
+        assert!(
+            point
+                .units()
+                .is_some_and(|units| units.0 == EngineeringUnits::PERCENT)
+        );
+        assert!(point.commandable() && point.number_of_states().is_none());
+    }
 }

@@ -1,6 +1,7 @@
 //! The inventory against an in-process device over a loopback link: what
 //! it reads, what it costs (by RPM, and by ReadProperty when the device
-//! refuses RPM), and what a silent device or a cancel leaves.
+//! refuses RPM), and what a silent device or a cancel leaves. The round
+//! trip from a point list is in `round_trip_tests`, over the same link.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -8,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use bacnet_client::client::{BACnetClient, ClientConfig};
 use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use bacnet_objects::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
+use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::device_identity::{DeviceIdentity, build_database_with_extra};
 use bacnet_objects::multistate::{
     MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject,
@@ -30,11 +32,11 @@ use super::*;
 use crate::engine::{Engine, Halt, Reader};
 use crate::limits::RequestLimits;
 
-const LAB: u32 = 2436;
+pub(super) const LAB: u32 = 2436;
 
 /// What the client's side of the lab link does to requests.
 #[derive(Clone)]
-struct Faults {
+pub(super) struct Faults {
     /// Requests passed on before the link goes silent.
     pass: usize,
     /// Answer each ReadPropertyMultiple with a Reject, as a device
@@ -58,7 +60,7 @@ impl Default for Faults {
     }
 }
 
-struct Link {
+pub(super) struct Link {
     inner: LoopbackTransport,
     faults: Faults,
     sent: AtomicUsize,
@@ -199,6 +201,17 @@ async fn lab(faults: Faults) -> (Engine<Link>, BACnetServer<LoopbackTransport>) 
         .unwrap()
         .with_name("Lab \"AHU\"");
     let database = build_database_with_extra(&identity, objects()).unwrap();
+    serve(faults, identity, database).await
+}
+
+/// A device serving `database` as `identity`, and an engine over a client
+/// paired with it, through a link with `faults`.
+pub(super) async fn serve(
+    faults: Faults,
+    identity: DeviceIdentity,
+    database: ObjectDatabase,
+) -> (Engine<Link>, BACnetServer<LoopbackTransport>) {
+    let instance = identity.instance();
     let (client_port, server_port) = LoopbackTransport::pair(vec![1], vec![2]);
     let server = BACnetServer::generic_builder()
         .device(identity)
@@ -219,9 +232,17 @@ async fn lab(faults: Faults) -> (Engine<Link>, BACnetServer<LoopbackTransport>) 
         inbox: Mutex::new(None),
     };
     let client = BACnetClient::start(config, link).await.unwrap();
-    client.add_device(LAB, &[2]).await.unwrap();
+    client.add_device(instance, &[2]).await.unwrap();
     let engine = Engine::new(Arc::new(client), Arc::new(RequestLimits::new(0)));
     (engine, server)
+}
+
+/// A link to a device that refuses RPM.
+pub(super) fn refusing_rpm() -> Faults {
+    Faults {
+        reject_rpm: true,
+        ..Faults::default()
+    }
 }
 
 fn passing(pass: usize) -> Faults {
@@ -231,7 +252,7 @@ fn passing(pass: usize) -> Faults {
     }
 }
 
-async fn stop(engine: Engine<Link>, mut server: BACnetServer<LoopbackTransport>) {
+pub(super) async fn stop(engine: Engine<Link>, mut server: BACnetServer<LoopbackTransport>) {
     let Ok(mut client) = Arc::try_unwrap(engine.client) else {
         panic!("the engine holds the only client");
     };
@@ -239,10 +260,20 @@ async fn stop(engine: Engine<Link>, mut server: BACnetServer<LoopbackTransport>)
     server.stop().await.unwrap();
 }
 
+/// Whether `point` reads as commandable.
+fn commandable(point: &Point) -> bool {
+    match &point.kind {
+        PointKind::Analog(analog) => matches!(analog.access, Access::Commandable { .. }),
+        PointKind::Binary(binary) => matches!(binary.access, Access::Commandable { .. }),
+        PointKind::MultiState(states) => matches!(states.access, Access::Commandable { .. }),
+        _ => false,
+    }
+}
+
 /// Every exported object is read once, by RPM: the device's name, its
 /// Object_List, then one request an object, N + 2 in all. The trend log
 /// isn't read. The device's text comes back exactly, and a value without
-/// a Priority_Array says so.
+/// a Priority_Array reads as read-only, the writable one included.
 #[tokio::test(start_paused = true)]
 async fn reads_each_exported_object_once() {
     let (engine, server) = lab(Faults::default()).await;
@@ -251,34 +282,46 @@ async fn reads_each_exported_object_once() {
         .await
         .unwrap();
     assert_eq!(engine.limits().recent(), 10 + 2, "{inventory:?}");
-    assert_eq!(inventory.device, LAB);
-    assert_eq!(inventory.device_name.as_deref(), Some("Lab \"AHU\""));
+    assert_eq!(
+        inventory.device,
+        DeviceInfo::new(LAB).with_name("Lab \"AHU\"")
+    );
     assert_eq!(inventory.stopped, None);
+    let points: Vec<&Point> = inventory.points().collect();
     let object = |object_type, instance| {
-        inventory
-            .objects
+        *points
             .iter()
             .find(|o| o.object == oid(object_type, instance))
             .unwrap_or_else(|| panic!("{object_type} {instance}: {inventory:?}"))
     };
-    assert_eq!(inventory.objects.len(), 10);
+    assert_eq!(points.len(), 10, "none failed: {inventory:?}");
+    assert_eq!(inventory.entries.len(), 10);
     let ai = object(ObjectType::ANALOG_INPUT, 1);
-    assert_eq!(ai.name.as_deref(), Some("Zone Temp"));
+    assert_eq!(ai.name, "Zone Temp");
     assert_eq!(ai.description.as_deref(), Some("Room 101"));
-    assert_eq!(ai.units, Some(EngineeringUnits::DEGREES_FAHRENHEIT));
-    assert!(!ai.priority_array);
-    assert!(object(ObjectType::ANALOG_OUTPUT, 1).priority_array);
-    assert!(object(ObjectType::ANALOG_VALUE, 1).priority_array);
+    let PointKind::Analog(analog) = &ai.kind else {
+        panic!("{ai:?}");
+    };
+    // Export reads none of the optional settings.
+    let mut expected = Analog::new(EngineeringUnits::DEGREES_FAHRENHEIT, Access::ReadOnly);
+    assert_eq!(analog, &expected);
+    assert!(commandable(object(ObjectType::ANALOG_OUTPUT, 1)));
+    assert!(commandable(object(ObjectType::ANALOG_VALUE, 1)));
     let total = object(ObjectType::ANALOG_VALUE, 2);
-    assert!(!total.priority_array, "{total:?}");
-    assert_eq!(total.units, Some(EngineeringUnits::KILOWATT_HOURS));
-    assert!(object(ObjectType::BINARY_VALUE, 1).priority_array);
-    assert!(!object(ObjectType::BINARY_INPUT, 1).priority_array);
+    expected.units = EngineeringUnits::KILOWATT_HOURS;
+    assert_eq!(total.kind, PointKind::Analog(expected), "{total:?}");
+    assert!(commandable(object(ObjectType::BINARY_VALUE, 1)));
+    assert!(!commandable(object(ObjectType::BINARY_INPUT, 1)));
     let msv = object(ObjectType::MULTI_STATE_VALUE, 1);
-    assert_eq!(msv.states, Some(3));
-    assert_eq!(msv.state_texts, ["Off", "Low", "High"]);
-    assert_eq!(object(ObjectType::MULTI_STATE_INPUT, 1).states, Some(4));
-    assert!(inventory.objects.iter().all(|o| o.error.is_none()));
+    let commanded = Access::Commandable {
+        relinquish_default: None,
+    };
+    let three = MultiState::new(3, commanded).with_state_texts(["Off", "Low", "High"]);
+    assert_eq!(msv.kind, PointKind::MultiState(three));
+    let PointKind::MultiState(msi) = &object(ObjectType::MULTI_STATE_INPUT, 1).kind else {
+        panic!("a multi-state input");
+    };
+    assert_eq!((msi.number_of_states, msi.access), (4, Access::ReadOnly));
     assert!(!engine.refused_rpm(LAB));
 
     let turtle = to_turtle(&inventory, &TurtleOptions::default());
@@ -301,9 +344,9 @@ async fn types_narrow_what_is_read() {
     let options = InventoryOptions::new(vec![ObjectType::MULTI_STATE_VALUE]).unwrap();
     let inventory = engine.inventory(LAB, &options).await.unwrap();
     assert_eq!(engine.limits().recent(), 1 + 2);
-    assert_eq!(inventory.objects.len(), 1);
+    assert_eq!(inventory.entries.len(), 1);
     assert_eq!(
-        inventory.objects[0].object,
+        inventory.entries[0].object(),
         oid(ObjectType::MULTI_STATE_VALUE, 1)
     );
     stop(engine, server).await;
@@ -339,14 +382,15 @@ async fn by_read_property_when_rpm_is_refused() {
         // The name and the list, the refused RPM, then the ReadProperty.
         assert_eq!(engine.limits().recent(), 2 + 1 + cost, "{object_type}");
         assert!(
-            inventory
-                .objects
-                .iter()
-                .all(|o| o.error.is_none() && o.name.is_some()),
+            inventory.entries.iter().all(|o| o.error().is_none()),
             "{inventory:?}"
         );
         if object_type == ObjectType::MULTI_STATE_VALUE {
-            assert_eq!(inventory.objects[0].state_texts, ["Off", "Low", "High"]);
+            let Some(PointKind::MultiState(msv)) = inventory.points().next().map(|p| &p.kind)
+            else {
+                panic!("{inventory:?}");
+            };
+            assert_eq!(msv.state_texts, ["Off", "Low", "High"]);
         }
         stop(engine, server).await;
     }
@@ -362,7 +406,7 @@ async fn a_device_that_stops_answering() {
         .inventory(LAB, &InventoryOptions::default())
         .await
         .unwrap();
-    assert_eq!(inventory.objects.len(), 2, "{inventory:?}");
+    assert_eq!(inventory.entries.len(), 2, "{inventory:?}");
     let stopped = inventory.stopped.as_deref().unwrap();
     assert!(stopped.starts_with("analog-value 1: "), "{stopped}");
     assert_eq!(engine.limits().recent(), 5, "no request after the timeout");
@@ -399,7 +443,7 @@ async fn a_list_that_stops_early_ends_the_reading() {
         .inventory(LAB, &InventoryOptions::default())
         .await
         .unwrap();
-    assert!(inventory.objects.is_empty(), "{inventory:?}");
+    assert!(inventory.entries.is_empty(), "{inventory:?}");
     let stopped = inventory.stopped.as_deref().unwrap();
     assert!(
         stopped.starts_with("Object_List, element 3 of "),
@@ -431,8 +475,7 @@ async fn a_cancel_keeps_what_was_read() {
     let inventory = read_inventory(&mut reader, &InventoryOptions::default())
         .await
         .unwrap();
-    assert_eq!(inventory.objects.len(), 2, "{inventory:?}");
-    assert!(inventory.objects.iter().all(|o| o.name.is_some()));
+    assert_eq!(inventory.points().count(), 2, "{inventory:?}");
     let stopped = inventory.stopped.as_deref().unwrap();
     assert!(stopped.starts_with("cancelled before "), "{stopped}");
     assert_eq!(engine.limits().recent(), 4);
@@ -456,36 +499,48 @@ async fn a_cancel_keeps_what_was_read() {
     stop(engine, server).await;
 }
 
-/// The pieces a front end that pages reads give what the inventory reads:
-/// the device's name exactly, and each object as the inventory has it, one
-/// request each, one the device doesn't have with nothing filled in. A
-/// refusal of RPM is remembered, and a silent device fails either read.
+/// The pieces a front end that pages reads give what the inventory reads,
+/// at either detail: the device exactly, and each object as the inventory
+/// has it, one request each; one the device doesn't have fails, naming
+/// the first property it lacks. A refusal of RPM is remembered, and a
+/// silent device fails either read.
 #[tokio::test(start_paused = true)]
 async fn the_pieces_read_as_the_inventory_does() {
     let (engine, server) = lab(Faults::default()).await;
-    let inventory = engine
-        .inventory(LAB, &InventoryOptions::default())
-        .await
-        .unwrap();
-    let before = engine.limits().recent();
-    let name = engine.inventory_device_name(LAB).await.unwrap();
-    assert_eq!(name, inventory.device_name);
-    for expected in &inventory.objects {
-        let read = engine.inventory_object(LAB, expected.object).await;
-        assert_eq!(&read.unwrap(), expected);
+    for detail in [Detail::Export, Detail::Full] {
+        let options = InventoryOptions::default().with_detail(detail);
+        let inventory = engine.inventory(LAB, &options).await.unwrap();
+        let before = engine.limits().recent();
+        let device = engine.inventory_device(LAB, detail).await.unwrap();
+        assert_eq!(device, inventory.device);
+        for expected in &inventory.entries {
+            let read = engine
+                .inventory_object(LAB, expected.object(), detail)
+                .await;
+            assert_eq!(&read.unwrap(), expected);
+        }
+        assert_eq!(
+            engine.limits().recent() - before,
+            1 + inventory.entries.len()
+        );
     }
-    assert_eq!(
-        engine.limits().recent() - before,
-        1 + inventory.objects.len()
-    );
-    let missing = engine
-        .inventory_object(LAB, oid(ObjectType::ANALOG_INPUT, 99))
+    let missing = oid(ObjectType::ANALOG_INPUT, 99);
+    let read = engine.inventory_object(LAB, missing, Detail::Export).await;
+    // The device answers each of its properties with an error, so there is
+    // no name: the object fails, as the inventory would have it.
+    let Entry::Failed { object, error } = read.unwrap() else {
+        panic!("an object the device doesn't have is no point");
+    };
+    assert_eq!(object, missing);
+    assert!(error.starts_with("object-name: "), "{error}");
+    // A type the export doesn't map isn't asked for.
+    let before = engine.limits().recent();
+    let trend = engine
+        .inventory_object(LAB, oid(ObjectType::TREND_LOG, 1), Detail::Full)
         .await
         .unwrap();
-    // The device answers each of its properties with an error: none is
-    // filled in, as the inventory would have it.
-    let ai99 = InventoryObject::new(oid(ObjectType::ANALOG_INPUT, 99));
-    assert_eq!(missing, ai99);
+    assert_eq!(trend.error(), Some("trend-log objects aren't exported"));
+    assert_eq!(engine.limits().recent(), before);
     stop(engine, server).await;
 
     let refuses = Faults {
@@ -494,20 +549,103 @@ async fn the_pieces_read_as_the_inventory_does() {
     };
     let (engine, server) = lab(refuses).await;
     let ai = engine
-        .inventory_object(LAB, oid(ObjectType::ANALOG_INPUT, 1))
+        .inventory_object(LAB, oid(ObjectType::ANALOG_INPUT, 1), Detail::Export)
         .await
         .unwrap();
-    assert_eq!(ai.units, Some(EngineeringUnits::DEGREES_FAHRENHEIT));
+    let Some(PointKind::Analog(analog)) = ai.point().map(|point| &point.kind) else {
+        panic!("{ai:?}");
+    };
+    assert_eq!(analog.units, EngineeringUnits::DEGREES_FAHRENHEIT);
     assert!(engine.refused_rpm(LAB));
     // The refused RPM, then a ReadProperty each for the three properties.
     assert_eq!(engine.limits().recent(), 1 + 3);
     stop(engine, server).await;
 
     let (engine, server) = lab(passing(0)).await;
-    let error = engine.inventory_device_name(LAB).await.unwrap_err();
-    assert!(crate::engine::unreachable(&error), "{error}");
-    let ai = oid(ObjectType::ANALOG_INPUT, 1);
-    let error = engine.inventory_object(LAB, ai).await.unwrap_err();
-    assert!(crate::engine::unreachable(&error), "{error}");
+    for detail in [Detail::Export, Detail::Full] {
+        let error = engine.inventory_device(LAB, detail).await.unwrap_err();
+        assert!(crate::engine::unreachable(&error), "{error}");
+        let ai = oid(ObjectType::ANALOG_INPUT, 1);
+        let error = engine.inventory_object(LAB, ai, detail).await.unwrap_err();
+        assert!(crate::engine::unreachable(&error), "{error}");
+    }
     stop(engine, server).await;
+}
+
+/// One property as a device gave it.
+fn row(property: PropertyIdentifier, value: PropertyValue) -> crate::format::RawRow {
+    let mut data = bytes::BytesMut::new();
+    bacnet_encoding::primitives::encode_property_value(&mut data, &value).unwrap();
+    (property, Ok(data.to_vec()))
+}
+
+/// One property the device answered with an error.
+fn refused(property: PropertyIdentifier) -> crate::format::RawRow {
+    let error = bacnet_types::error::RemoteError::Error {
+        class: bacnet_types::enums::ErrorClass::PROPERTY,
+        code: bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY,
+    };
+    (property, Err(crate::format::RowError::Remote(error)))
+}
+
+/// A property every object of the type has fails the entry, naming the
+/// property, whether the device refused it or gave something else; an
+/// optional one the device refused is `None`. A value's relinquish
+/// default counts only with a Priority_Array.
+#[test]
+fn a_missing_required_property_fails_the_entry() {
+    use PropertyIdentifier as P;
+    let name = || row(P::OBJECT_NAME, text("Zone"));
+    let ai = oid(ObjectType::ANALOG_INPUT, 1);
+    let failed = |entry: Entry| entry.error().map(str::to_string);
+    let no_units = super::inventory::entry_of(ai, &[name(), refused(P::UNITS)]);
+    assert_eq!(
+        failed(no_units).as_deref(),
+        Some("units: PROPERTY:UNKNOWN_PROPERTY")
+    );
+    let not_units = [name(), row(P::UNITS, PropertyValue::Real(1.0))];
+    let not_units = super::inventory::entry_of(ai, &not_units);
+    assert_eq!(
+        failed(not_units).as_deref(),
+        Some("units: not an engineering unit")
+    );
+    let no_name = [
+        refused(P::OBJECT_NAME),
+        row(P::UNITS, PropertyValue::Enumerated(62)),
+    ];
+    let no_name = super::inventory::entry_of(ai, &no_name);
+    assert_eq!(
+        failed(no_name).as_deref(),
+        Some("object-name: PROPERTY:UNKNOWN_PROPERTY")
+    );
+    let msi = oid(ObjectType::MULTI_STATE_INPUT, 1);
+    let states = [name(), row(P::NUMBER_OF_STATES, text("three"))];
+    let states = super::inventory::entry_of(msi, &states);
+    assert_eq!(
+        failed(states).as_deref(),
+        Some("number-of-states: not an Unsigned")
+    );
+
+    // An optional property refused is None; a binary value's relinquish
+    // default without a Priority_Array is no access of its own.
+    let bv = oid(ObjectType::BINARY_VALUE, 1);
+    let rows = [
+        name(),
+        refused(P::DESCRIPTION),
+        refused(P::PRIORITY_ARRAY),
+        row(P::ACTIVE_TEXT, text("")),
+        refused(P::INACTIVE_TEXT),
+        row(P::RELINQUISH_DEFAULT, PropertyValue::Enumerated(1)),
+    ];
+    let read = super::inventory::entry_of(bv, &rows);
+    let mut expected = Binary::new(Access::ReadOnly);
+    expected.active_text = Some(String::new());
+    assert_eq!(read, Entry::Point(Point::new(bv, "Zone", expected)));
+    let bo = oid(ObjectType::BINARY_OUTPUT, 1);
+    let read = super::inventory::entry_of(bo, &rows);
+    let mut expected = Binary::new(Access::Commandable {
+        relinquish_default: Some(bacnet_types::enums::BinaryPV::ACTIVE),
+    });
+    expected.active_text = Some(String::new());
+    assert_eq!(read, Entry::Point(Point::new(bo, "Zone", expected)));
 }
