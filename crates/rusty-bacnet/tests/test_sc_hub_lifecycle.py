@@ -10,13 +10,14 @@ import asyncio
 import ast
 import inspect
 import socket
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
 
 from rusty_bacnet import BacnetError, BACnetServer, ScHub
+
+from openssl_fixture import site_authority
 
 # Deterministic test provisioning only, not defaults for deployed devices.
 HUB_UUID = bytes.fromhex("9a21f1641a15454d9ed7e3a2710d7001")
@@ -188,27 +189,7 @@ class HubTlsFixture(unittest.IsolatedAsyncioTestCase):
         cls.addClassCleanup(cls.temp.cleanup)
         cls.root = Path(cls.temp.name)
 
-        def run(*args):
-            subprocess.run(["openssl", *args], cwd=cls.root, check=True,
-                           capture_output=True, timeout=10)
-
-        run("req", "-x509", "-newkey", "ec", "-pkeyopt",
-            "ec_paramgen_curve:prime256v1", "-nodes", "-days", "2",
-            "-subj", "/CN=site", "-keyout", "site.key", "-out", "site.pem",
-            "-addext", "basicConstraints=critical,CA:TRUE",
-            "-addext", "keyUsage=critical,keyCertSign,cRLSign")
-        (cls.root / "leaf.cnf").write_text(
-            "[leaf]\nbasicConstraints=critical,CA:FALSE\n"
-            "keyUsage=critical,digitalSignature\n"
-            "extendedKeyUsage=serverAuth,clientAuth\n"
-            "subjectAltName=DNS:localhost,IP:127.0.0.1\n")
-        for name in ("hub", "server"):
-            run("req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1",
-                "-nodes", "-subj", f"/CN={name}", "-keyout", f"{name}.key",
-                "-out", f"{name}.csr")
-            run("x509", "-req", "-in", f"{name}.csr", "-CA", "site.pem",
-                "-CAkey", "site.key", "-CAcreateserial", "-days", "1",
-                "-extfile", "leaf.cnf", "-extensions", "leaf", "-out", f"{name}.pem")
+        site_authority().provide(cls.root, "hub", "server")
 
     def path(self, name):
         return str(self.root / name)

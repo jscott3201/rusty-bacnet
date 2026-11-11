@@ -1,6 +1,7 @@
 """Installed-native Python hub/node authentication; no system trust or persistent keys.
 
-OpenSSL CLI creates a temporary site CA and distinct operational certificates.
+OpenSSL CLI creates a site CA and distinct operational certificates once per
+session (openssl_fixture.py); each class gets copies in its own temporary root.
 TLS negatives use independent stdlib TLS peers, not SC reconnect timeouts.
 """
 import asyncio
@@ -11,7 +12,6 @@ import itertools
 import os
 import socket
 import ssl
-import subprocess
 import tempfile
 import threading
 import unittest
@@ -22,6 +22,7 @@ from rusty_bacnet import (
     PropertyIdentifier, ScHub,
 )
 
+from openssl_fixture import site_authority
 from port_retry import rerun_on_lost_port
 
 # Deterministic test provisioning only, not defaults for deployed devices.
@@ -48,43 +49,9 @@ class MtlsFixture(unittest.IsolatedAsyncioTestCase):
         cls.addClassCleanup(cls.temp.cleanup)
         cls.root = Path(cls.temp.name)
 
-        def run(*args):
-            subprocess.run(["openssl", *args], cwd=cls.root, check=True,
-                           capture_output=True, timeout=10)
-
-        # Explicit CA constraints; leaves are never substituted for trust anchors.
-        for ca in ("site", "foreign"):
-            run("req", "-x509", "-newkey", "ec", "-pkeyopt",
-                "ec_paramgen_curve:prime256v1", "-nodes", "-days", "2",
-                "-subj", f"/CN={ca}", "-keyout", f"{ca}.key", "-out", f"{ca}.pem",
-                "-addext", "basicConstraints=critical,CA:TRUE",
-                "-addext", "keyUsage=critical,keyCertSign,cRLSign")
-        (cls.root / "index").write_text("")
-        (cls.root / "serial").write_text("1000\n")
-        (cls.root / "ca.cnf").write_text(
-            "[ca]\ndefault_ca=issuer\n[issuer]\ndatabase=index\n"
-            "serial=serial\nnew_certs_dir=.\ncertificate=site.pem\n"
-            "private_key=site.key\ndefault_md=sha256\npolicy=policy\n"
-            "unique_subject=no\n[policy]\ncommonName=supplied\n"
-            "[leaf]\nbasicConstraints=critical,CA:FALSE\n"
-            "keyUsage=critical,digitalSignature\n"
-            "extendedKeyUsage=serverAuth,clientAuth\n"
-            "subjectAltName=DNS:localhost,IP:127.0.0.1\n")
-        for name in ("hub", "server", "client", "wrong", "expired", "future"):
-            run("req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1",
-                "-nodes", "-subj", f"/CN={name}", "-keyout", f"{name}.key",
-                "-out", f"{name}.csr")
-            if name in ("expired", "future"):
-                start, end = (("20000101000000Z", "20010101000000Z") if name == "expired"
-                              else ("20990101000000Z", "21000101000000Z"))
-                run("ca", "-batch", "-config", "ca.cnf", "-extensions", "leaf",
-                    "-in", f"{name}.csr", "-out", f"{name}.pem", "-notext",
-                    "-startdate", start, "-enddate", end)
-            else:
-                ca = "foreign" if name == "wrong" else "site"
-                run("x509", "-req", "-in", f"{name}.csr", "-CA", f"{ca}.pem",
-                    "-CAkey", f"{ca}.key", "-CAcreateserial", "-days", "1",
-                    "-extfile", "ca.cnf", "-extensions", "leaf", "-out", f"{name}.pem")
+        # Made once per session and copied, so each class still has its own root.
+        site_authority().provide(cls.root, "foreign", "hub", "server", "client",
+                                 "wrong", "expired", "future")
 
     def path(self, name):
         return str(self.root / name)

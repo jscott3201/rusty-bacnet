@@ -3,9 +3,9 @@ import asyncio
 import hashlib
 import math
 import ssl
-import subprocess
 import time
 
+import openssl_fixture
 from rusty_bacnet import (
     BACnetClient, ScCertificateMetadata, ScPeerCertificate, ScPeerInfo, ScReconnect,
 )
@@ -52,9 +52,8 @@ class ScPeerInfoTests(ClientScFixture):
         self.assertIsInstance(metadata, ScCertificateMetadata)
         self.assertEqual(metadata.subject, "CN=hub")
         self.assertEqual(metadata.issuer, "CN=site")
-        dates = subprocess.run(
-            ["openssl", "x509", "-in", self.path("hub.pem"), "-noout", "-dates"],
-            check=True, capture_output=True, text=True, timeout=5).stdout.splitlines()
+        dates = openssl_fixture.run(
+            self.root, "x509", "-in", "hub.pem", "-noout", "-dates").decode().splitlines()
         self.assertEqual(metadata.not_before_unix, ssl.cert_time_to_seconds(dates[0].split("=", 1)[1]))
         self.assertEqual(metadata.not_after_unix, ssl.cert_time_to_seconds(dates[1].split("=", 1)[1]))
         self.assertEqual(metadata.public_key_algorithm_oid, "1.2.840.10045.2.1")
