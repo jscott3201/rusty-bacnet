@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import asyncio
 import socket
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -41,6 +40,7 @@ from rusty_bacnet import (
     ScEndpoint,
 )
 
+from openssl_fixture import require_openssl, site_authority
 from port_retry import rerun_on_lost_port
 
 
@@ -837,47 +837,11 @@ class ScEndpointHubTests(unittest.IsolatedAsyncioTestCase):
 
     @classmethod
     def setUpClass(cls):
-        try:
-            subprocess.run(["openssl", "version"], check=True, capture_output=True)
-        except Exception as exc:
-            raise unittest.SkipTest(f"openssl unavailable: {exc}")
+        require_openssl()
         cls.temp = tempfile.TemporaryDirectory(prefix="bacnet-endpoint-sc-")
         cls.addClassCleanup(cls.temp.cleanup)
         cls.root = Path(cls.temp.name)
-
-        def run(*args: str):
-            subprocess.run(
-                ["openssl", *args],
-                cwd=cls.root,
-                check=True,
-                capture_output=True,
-                timeout=15,
-            )
-
-        run(
-            "req", "-x509", "-newkey", "ec", "-pkeyopt",
-            "ec_paramgen_curve:prime256v1", "-nodes", "-days", "2",
-            "-subj", "/CN=site", "-keyout", "site.key", "-out", "site.pem",
-            "-addext", "basicConstraints=critical,CA:TRUE",
-            "-addext", "keyUsage=critical,keyCertSign,cRLSign",
-        )
-        (cls.root / "leaf.cnf").write_text(
-            "[leaf]\nbasicConstraints=critical,CA:FALSE\n"
-            "keyUsage=critical,digitalSignature\n"
-            "extendedKeyUsage=serverAuth,clientAuth\n"
-            "subjectAltName=DNS:localhost,IP:127.0.0.1\n"
-        )
-        for name in ("hub", "a", "b"):
-            run(
-                "req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1",
-                "-nodes", "-subj", f"/CN={name}", "-keyout", f"{name}.key",
-                "-out", f"{name}.csr",
-            )
-            run(
-                "x509", "-req", "-in", f"{name}.csr", "-CA", "site.pem",
-                "-CAkey", "site.key", "-CAcreateserial", "-days", "1",
-                "-extfile", "leaf.cnf", "-extensions", "leaf", "-out", f"{name}.pem",
-            )
+        site_authority().provide(cls.root, "hub", "a", "b")
 
     def path(self, name: str) -> str:
         return str(self.root / name)

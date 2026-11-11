@@ -8,7 +8,6 @@ import math
 import os
 import pickle
 import ssl
-import subprocess
 import sys
 import tempfile
 import time
@@ -16,6 +15,7 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
+from openssl_fixture import run as openssl_run
 from rusty_bacnet import (
     ScPemInspection, ScInspectedCertificate, ScInspectionFinding,
     ScExtensionInspection, ScKeyFilePermissions, inspect_sc_pem, inspect_sc_pem_files,
@@ -39,9 +39,10 @@ class ScPemInspectionTests(unittest.TestCase):
         cls.addClassCleanup(cls.temp.cleanup)
         cls.root = Path(cls.temp.name)
 
+        # Self-signed 25-day identities of its own (not the SC site chain):
+        # made here once for this class, and the per-test commands share the root.
         def run(*args):
-            return subprocess.run(["openssl", *args], cwd=cls.root, check=True,
-                                  capture_output=True, timeout=15).stdout
+            return openssl_run(cls.root, *args)
         cls.openssl = staticmethod(run)
         for name in ("identity", "other"):
             run("req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1",
