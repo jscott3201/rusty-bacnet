@@ -164,8 +164,7 @@ pub(super) fn check_bit_string(
 /// must be complete tagged values with every context tag balanced, so that
 /// wrapping them cannot unbalance the record.
 pub(super) fn encode_any_value(buf: &mut BytesMut, tag: u8, bytes: &[u8]) -> Result<(), Error> {
-    validate_tlv_sequence(bytes, "any-value")
-        .map_err(Error::into_encode_refusal)?;
+    validate_tlv_sequence(bytes, "any-value").map_err(Error::into_encode_refusal)?;
     tags::encode_opening_tag(buf, tag);
     buf.extend_from_slice(bytes);
     tags::encode_closing_tag(buf, tag);
@@ -227,10 +226,12 @@ pub(super) fn encode_opaque(
         ref data,
     } = *opaque;
     if tag <= last || tag == u8::MAX {
-        return Err(EncodeError::new("tag [{}] cannot carry an opaque alternative")
-            .within(what)
-            .with_value(tag.into())
-            .into());
+        return Err(
+            EncodeError::new("tag [{}] cannot carry an opaque alternative")
+                .within(what)
+                .with_value(tag.into())
+                .into(),
+        );
     }
     if constructed {
         validate_tlv_sequence(data, what).map_err(Error::into_encode_refusal)?;
@@ -254,6 +255,10 @@ pub(super) fn encode_opaque(
     Ok(())
 }
 
+/// What a record encoder's refusal of a record nested too deep says, which
+/// [`is_record_too_deep`] knows it by.
+const TOO_DEEP: &str = "nests {} tags deep, past what a ReadRange-ACK carries";
+
 /// Refuse a whole written record that a reader couldn't take back.
 ///
 /// Each field was checked as it was written; what only the whole record
@@ -263,31 +268,40 @@ pub(super) fn encode_opaque(
 /// frame, so a record may nest one level less deep than the limit. A stored
 /// record past that would break every page of the log, and a persisted
 /// snapshot holding it would not load.
+///
+/// The walk only follows the tags: no allocation, no recursion, and it
+/// stops at the first opening tag past the limit.
 pub(super) fn check_record(record: &[u8], what: &'static str) -> Result<(), Error> {
-    validate_tlv_sequence(record, what).map_err(Error::into_encode_refusal)?;
-    let (mut depth, mut deepest, mut pos) = (0usize, 0usize, 0usize);
+    let (mut depth, mut pos) = (0usize, 0usize);
     while pos < record.len() {
         let (tag, next) = tags::decode_tag(record, pos).map_err(Error::into_encode_refusal)?;
         pos = next;
         if tag.is_opening {
             depth += 1;
-            deepest = deepest.max(depth);
+            if depth >= tags::MAX_CONTEXT_NESTING_DEPTH {
+                return Err(EncodeError::new(TOO_DEEP)
+                    .within(what)
+                    .with_value(depth as u32)
+                    .into());
+            }
         } else if tag.is_closing {
             depth = depth.saturating_sub(1);
         } else if !(tag.class == tags::TagClass::Application
             && tag.number == tags::app_tag::BOOLEAN)
         {
-            // The checked walk above holds every length to the record.
-            pos += tag.length as usize;
+            // A primitive's contents, which its field's own check read.
+            pos = pos.saturating_add(tag.length as usize);
         }
     }
-    if deepest >= tags::MAX_CONTEXT_NESTING_DEPTH {
-        return Err(EncodeError::new("nests {} tags deep, past what a ReadRange-ACK carries")
-            .within(what)
-            .with_value(deepest as u32)
-            .into());
-    }
     Ok(())
+}
+
+/// Whether `error` is a log record encoder's refusal of a record nested
+/// deeper than a ReadRange-ACK's item data carries (#2474): a record every
+/// field of which is sound, so a reader may drop it and keep the rest, as
+/// the log snapshot loader does with one an older build saved.
+pub fn is_record_too_deep(error: &Error) -> bool {
+    matches!(error, Error::Encode(refusal) if refusal.label == TOO_DEEP)
 }
 
 /// The contents of the application `number` value at `pos`, with exactly

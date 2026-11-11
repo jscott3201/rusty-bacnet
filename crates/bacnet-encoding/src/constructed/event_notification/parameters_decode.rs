@@ -16,7 +16,8 @@ pub fn decode_notification_parameters(
     data: &[u8],
     offset: usize,
 ) -> Result<NotificationParameters, Error> {
-    let enclosing = || closing_tag_start(data, data.len(), 12, "NotificationParameters event-values");
+    let enclosing =
+        || closing_tag_start(data, data.len(), 12, "NotificationParameters event-values");
     let frame_end = tags::decode_tag(data, offset)
         .ok()
         .filter(|(tag, _)| tag.is_opening)

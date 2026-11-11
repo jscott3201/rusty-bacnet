@@ -5,7 +5,7 @@ use crate::prelude::*;
 use crate::property_metadata::is_array_property;
 use core::time::Duration;
 
-use bacnet_encoding::constructed::encode_log_multiple_record;
+use bacnet_encoding::constructed::{encode_log_multiple_record, encode_log_record};
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetLogMultipleRecord, BACnetLogRecord, LogData,
@@ -286,11 +286,16 @@ impl ObjectDatabase {
             }
         }
         let accepted = frame.is_some_and(|frame| {
+            let record = if oid.object_type() == ObjectType::TREND_LOG_MULTIPLE {
+                Record::Multiple
+            } else {
+                Record::Trend
+            };
             let values: Vec<LogValue> = self.trend_poll.0[&oid]
                 .configuration
                 .members
                 .iter()
-                .map(|member| self.acquire(local, member))
+                .map(|member| self.acquire(local, member, record))
                 .collect();
             let inserted = match self.get_mut(&oid).unwrap().log_buffer_mut() {
                 None => Err(crate::traits::not_supported()),
@@ -337,9 +342,9 @@ impl ObjectDatabase {
 
     /// One reference's value, or the failure that stopped its read
     /// (Clause 12.25 Log_Buffer; Clause 12.30.19 for each member).
-    fn acquire(&self, local: LocalDevice, member: &Member) -> LogValue {
+    fn acquire(&self, local: LocalDevice, member: &Member, record: Record) -> LogValue {
         match self.read_member(local, member) {
-            Ok((value, _)) => property_value_to_log_value(&value),
+            Ok((value, _)) => property_value_to_log_value(&value, record),
             Err(failure) => failure,
         }
     }
@@ -509,10 +514,11 @@ fn member(value: &PropertyValue) -> Option<Member> {
 ///
 /// An any-value over [`ANY_VALUE_MAX_OCTETS`] logs PROPERTY /
 /// VALUE_TOO_LONG instead, so every record stays small enough to page. A
-/// value no record could carry (one that fails to encode, a bit string with
-/// impossible padding, framed bytes whose tags don't balance) logs SERVICES
-/// / OTHER, so the log never refuses what the poller hands it.
-fn property_value_to_log_value(value: &PropertyValue) -> LogValue {
+/// value the `record` it goes into couldn't carry (one that fails to
+/// encode, a bit string with impossible padding, framed bytes whose tags
+/// don't balance or nest too deep for that record) logs SERVICES / OTHER,
+/// so the log never refuses what the poller hands it.
+fn property_value_to_log_value(value: &PropertyValue, record: Record) -> LogValue {
     let value = match value {
         PropertyValue::Real(v) => LogValue::RealValue(*v),
         PropertyValue::Unsigned(v) => LogValue::UnsignedValue(*v),
@@ -543,26 +549,52 @@ fn property_value_to_log_value(value: &PropertyValue) -> LogValue {
         return value;
     }
     // Only these two alternatives can hold something no record carries;
-    // encoding a one-member record tells.
-    let probe = BACnetLogMultipleRecord {
-        date: Date {
-            year: 0,
-            month: 1,
-            day: 1,
-            day_of_week: 1,
-        },
-        time: Time {
-            hour: 0,
-            minute: 0,
-            second: 0,
-            hundredths: 0,
-        },
-        log_data: LogData::Values(vec![value.clone()]),
+    // encoding the record it goes into tells. A Trend Log Multiple member
+    // sits a level deeper than a Trend Log datum, so each kind probes its own.
+    let date = Date {
+        year: 0,
+        month: 1,
+        day: 1,
+        day_of_week: 1,
     };
-    match encode_log_multiple_record(&probe, &mut BytesMut::new()) {
+    let time = Time {
+        hour: 0,
+        minute: 0,
+        second: 0,
+        hundredths: 0,
+    };
+    let probe = match record {
+        Record::Trend => encode_log_record(
+            &BACnetLogRecord {
+                date,
+                time,
+                log_datum: trend_datum(value.clone()),
+                status_flags: None,
+            },
+            &mut BytesMut::new(),
+        ),
+        Record::Multiple => encode_log_multiple_record(
+            &BACnetLogMultipleRecord {
+                date,
+                time,
+                log_data: LogData::Values(vec![value.clone()]),
+            },
+            &mut BytesMut::new(),
+        ),
+    };
+    match probe {
         Ok(()) => value,
         Err(_) => failure(ErrorClass::SERVICES, ErrorCode::OTHER),
     }
+}
+
+/// The record a sampled value goes into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Record {
+    /// A Trend Log's datum.
+    Trend,
+    /// A Trend Log Multiple's member, one level deeper.
+    Multiple,
 }
 
 #[cfg(test)]

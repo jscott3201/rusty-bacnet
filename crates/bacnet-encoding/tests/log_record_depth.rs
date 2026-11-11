@@ -2,6 +2,9 @@
 //! whole record it wrote, so a body an any-value or an opaque alternative
 //! holds can't take the record past what a reader takes back.
 //!
+//! The check follows the tags only: a record holds as many members as its
+//! decoder takes, beyond the item limit a framed list's own check applies.
+//!
 //! The binding reader is a ReadRange-ACK's: its item-data frame wraps the
 //! records, and the tag decoder counts its nesting limit from that frame, so
 //! a record may nest one level less deep than the limit. A record one level
@@ -253,4 +256,22 @@ fn a_record_nests_as_deep_as_a_readrange_ack_carries_and_no_deeper() {
     ] {
         check(&case, encode_event_log_record, decode_event_log_record);
     }
+}
+
+/// The whole-record check counts depth, not items: a Trend Log Multiple
+/// record with more members than a framed list's item limit (10,000)
+/// encodes and reads back, as its decoder takes it.
+#[test]
+fn a_record_with_more_members_than_a_framed_list_holds_still_encodes() {
+    let record = BACnetLogMultipleRecord {
+        date: DATE,
+        time: TIME,
+        log_data: LogData::Values(vec![LogValue::NullValue; 10_001]),
+    };
+    let mut octets = BytesMut::new();
+    encode_log_multiple_record(&record, &mut octets).unwrap();
+    assert_eq!(
+        decode_log_multiple_record(&octets, 0).unwrap(),
+        (record, octets.len())
+    );
 }

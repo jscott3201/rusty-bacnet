@@ -29,7 +29,8 @@ use bacnet_types::enums::PropertyIdentifier as P;
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
 
 use super::{
-    LocalDevice, Member, ObjectDatabase, RECONCILE, property_value_to_log_value, trend_datum,
+    LocalDevice, Member, ObjectDatabase, RECONCILE, Record, property_value_to_log_value,
+    trend_datum,
 };
 use crate::cov_change::{effective_increment, is_numeric, reports_change};
 use crate::traits::{BACnetObject, MonotonicClock, not_supported};
@@ -66,7 +67,7 @@ impl CovBaseline {
     /// The record this look logs, stamped `date` and `time`.
     fn record(&self, date: Date, time: Time) -> BACnetLogRecord {
         let datum = match &self.value {
-            Ok(value) => property_value_to_log_value(value),
+            Ok(value) => property_value_to_log_value(value, Record::Trend),
             Err(failure) => failure.clone(),
         };
         BACnetLogRecord {

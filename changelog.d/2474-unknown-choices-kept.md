@@ -1,7 +1,7 @@
 ---
 section: Changed
 ---
-- **Wire:** Event values under a tag Clause 21 gives no alternative, and log
-  record choices under one, now decode, kept as received: the client
-  acknowledges such a confirmed notification instead of rejecting it, the CLI
-  and MCP show the tag and hex, and Python the bytes (#2474).
+- **Wire:** Event values under tag 7, 12 or 23 and up (20 is still refused),
+  and log record choices under a tag their CHOICE doesn't assign, now decode,
+  kept as received: the client acknowledges such a confirmed notification,
+  not rejects it; the CLI and MCP show tag and hex, Python bytes (#2474).

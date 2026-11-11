@@ -10,8 +10,8 @@
 //! kept as [`EventLogDatum::Opaque`] and written back unchanged.
 
 use super::log_fields::{
-    decode_log_status, check_record, decode_opaque, decode_timestamp, encode_log_status, encode_opaque,
-    encode_timestamp,
+    check_record, decode_log_status, decode_opaque, decode_timestamp, encode_log_status,
+    encode_opaque, encode_timestamp,
 };
 use super::tagged::{contents, decode_ctx_constructed, expect_end};
 use super::{decode_event_notification_tolerant, encode_event_notification};

@@ -21,9 +21,9 @@
 use alloc::vec::Vec;
 
 use super::log_fields::{
-    check_bit_string, decode_any_value, decode_failure, decode_integer, decode_log_status,
-    check_record, decode_opaque, decode_timestamp, encode_any_value, encode_ctx_integer, encode_failure,
-    encode_log_status, encode_opaque, encode_timestamp,
+    check_bit_string, check_record, decode_any_value, decode_failure, decode_integer,
+    decode_log_status, decode_opaque, decode_timestamp, encode_any_value, encode_ctx_integer,
+    encode_failure, encode_log_status, encode_opaque, encode_timestamp,
 };
 use super::tagged::{contents, decode_ctx_constructed, expect_end};
 use crate::{primitives, tags};
@@ -141,26 +141,27 @@ pub fn decode_log_multiple_record(
 
 fn decode_log_data(data: &[u8], offset: usize) -> Result<LogData, Error> {
     let (tag, start) = tags::decode_tag(data, 0)?;
-    let (log_data, end) = if let Some((opaque, end)) = decode_opaque(data, &tag, start, TIME_CHANGE)? {
-        (LogData::Opaque(opaque), end)
-    } else if tag.is_context(LOG_STATUS) {
-        let (octets, end) = contents(data, start, tag.length)?;
-        (
-            LogData::LogStatus(decode_log_status(octets, offset, RECORD)?),
-            end,
-        )
-    } else if tag.is_opening_tag(VALUES) {
-        let (list, end) = tags::extract_context_value(data, start, VALUES)?;
-        (LogData::Values(decode_values(list, offset)?), end)
-    } else if tag.is_context(TIME_CHANGE) {
-        let (octets, end) = contents(data, start, tag.length)?;
-        (LogData::TimeChange(primitives::decode_real(octets)?), end)
-    } else {
-        return Err(Error::decoding(
-            offset,
-            "log-data expected context [0], constructed [1], or context [2]",
-        ));
-    };
+    let (log_data, end) =
+        if let Some((opaque, end)) = decode_opaque(data, &tag, start, TIME_CHANGE)? {
+            (LogData::Opaque(opaque), end)
+        } else if tag.is_context(LOG_STATUS) {
+            let (octets, end) = contents(data, start, tag.length)?;
+            (
+                LogData::LogStatus(decode_log_status(octets, offset, RECORD)?),
+                end,
+            )
+        } else if tag.is_opening_tag(VALUES) {
+            let (list, end) = tags::extract_context_value(data, start, VALUES)?;
+            (LogData::Values(decode_values(list, offset)?), end)
+        } else if tag.is_context(TIME_CHANGE) {
+            let (octets, end) = contents(data, start, tag.length)?;
+            (LogData::TimeChange(primitives::decode_real(octets)?), end)
+        } else {
+            return Err(Error::decoding(
+                offset,
+                "log-data expected context [0], constructed [1], or context [2]",
+            ));
+        };
     expect_end(data, end, offset, LOG_DATA)?;
     Ok(log_data)
 }

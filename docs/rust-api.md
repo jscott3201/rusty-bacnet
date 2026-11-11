@@ -6646,7 +6646,11 @@ values, whose tags don't balance; a complex event's property priority outside
 ReadRange-ACK's item data can carry, one level short of the tag decoder's
 limit) with its encoding error, before anything changes. So
 `LogBufferRecords::encode_record` cannot fail, and one bad record can't break
-every ReadRange window over the log.
+every ReadRange window over the log. A saved snapshot holding a record that
+won't encode is damaged, except one nested too deep (an older build could
+save it, #2474): the load drops that record with a warning and restores the
+rest, so the records older than it each take the next number up;
+`bacnet_encoding::constructed::is_record_too_deep` tells that refusal apart.
 
 Trend Log Multiple, Trend Log and Event Log objects list `Log_Buffer` in their
 Property_List, but ReadProperty and ReadPropertyMultiple answer it with

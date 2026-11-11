@@ -360,6 +360,23 @@ fn a_closing_tag_ending_like_the_event_values_close_stays_in_the_choice() {
         let octets = encoded(|buf| encode_event_notification(&request, buf));
         assert_eq!(decode_event_notification(&octets).unwrap(), request);
     }
+    // One stray octet after a choice is refused, not taken for the close of
+    // the event values: after a [12] choice, and after a known one.
+    let known = encoded(|buf| {
+        encode_notification_parameters(
+            &NotificationParameters::ChangeOfBitstring {
+                referenced_bitstring: (0, vec![0xA0]),
+                status_flags: StatusFlags::empty(),
+            },
+            buf,
+        )
+    });
+    for octets in [vec![0xCE, 0xCF, 0x00], [&known[..], &[0x00]].concat()] {
+        assert!(
+            decode_notification_parameters(&octets, 0).is_err(),
+            "{octets:02X?}"
+        );
+    }
     // One close too many after the inner [12] is refused.
     for octets in [
         &[0xCE, 0xCE, 0xCF, 0xCF, 0xCF, 0xCF][..],
