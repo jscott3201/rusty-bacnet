@@ -14,7 +14,9 @@
 //! object reference an `ObjectIdentifier` or `(device, object)` pair, and an
 //! authentication factor `(format_type, format_class, value)` as
 //! `report_access_event_local` takes it. An optional member the device left
-//! out is `None`.
+//! out is `None`. A choice under a tag the standard doesn't assign (#2474)
+//! is `{"kind": "other", "tag": n, "data": bytes}`, its body as received,
+//! the shape an unassigned Event_Parameters algorithm has.
 
 use bacnet_encoding::constructed::{decode_authentication_factor, decode_bacnet_property_value};
 use bacnet_encoding::primitives::decode_application_value;
@@ -379,6 +381,11 @@ pub(crate) fn notification_parameters_to_py<'py>(
                     .as_ref()
                     .map(|(date, time)| date_time(date, time)),
             )?;
+        }
+        N::Opaque { tag, data } => {
+            dict.set_item("kind", "other")?;
+            dict.set_item("tag", tag)?;
+            dict.set_item("data", PyBytes::new(py, data))?;
         }
     }
     Ok(dict)

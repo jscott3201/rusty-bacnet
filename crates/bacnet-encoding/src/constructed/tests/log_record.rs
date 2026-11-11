@@ -1,6 +1,6 @@
 use super::*;
 use bacnet_types::bitstring::LogStatus;
-use bacnet_types::constructed::{BACnetLogRecord, LogDatum};
+use bacnet_types::constructed::{BACnetLogRecord, LogDatum, OpaqueChoice};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::primitives::{Date, StatusFlags, Time};
 
@@ -239,8 +239,9 @@ fn log_record_decoder_rejects_malformed_records() {
     let good = encoded(&record(LogDatum::NullValue, None));
     let mut cases: Vec<Vec<u8>> = vec![
         good[..good.len() - 1].to_vec(),
-        // log-datum [1] holding an unknown alternative, then two alternatives.
-        [&TIMESTAMP[..], &[0x1E, 0xB9, 0x01, 0x1F]].concat(),
+        // log-datum [1] holding a known tag in the wrong form (any-value
+        // [10] is constructed), then two alternatives.
+        [&TIMESTAMP[..], &[0x1E, 0xA9, 0x01, 0x1F]].concat(),
         [&TIMESTAMP[..], &[0x1E, 0x78, 0x78, 0x1F]].concat(),
         // A null-value with contents, and a two-octet boolean.
         [&TIMESTAMP[..], &[0x1E, 0x79, 0x00, 0x1F]].concat(),
@@ -269,6 +270,18 @@ fn log_record_decoder_rejects_malformed_records() {
     for bytes in cases {
         assert!(decode_log_record(&bytes, 0).is_err(), "{bytes:02X?}");
     }
+    // A tag the datum doesn't assign is kept as received (#2474).
+    let unknown = [&TIMESTAMP[..], &[0x1E, 0xB9, 0x01, 0x1F]].concat();
+    let (decoded, end) = decode_log_record(&unknown, 0).unwrap();
+    assert_eq!(end, unknown.len());
+    assert_eq!(
+        decoded.log_datum,
+        LogDatum::Opaque(OpaqueChoice {
+            tag: 11,
+            constructed: false,
+            data: vec![1],
+        })
+    );
 }
 
 #[test]
@@ -330,4 +343,21 @@ fn a_failure_wider_than_sixteen_bits_is_refused() {
             error_code: ErrorCode::UNKNOWN_PROPERTY,
         }
     );
+}
+
+/// An opaque primitive is written only as long as the tag decoder takes
+/// (#2474), before the record it sits in is checked whole.
+#[test]
+fn an_opaque_primitive_is_no_longer_than_a_tag_takes() {
+    use crate::constructed::log_fields::encode_opaque;
+    let opaque = |len| OpaqueChoice {
+        tag: 11,
+        constructed: false,
+        data: vec![0; len],
+    };
+    let mut buf = BytesMut::new();
+    assert!(encode_opaque(&mut buf, &opaque(1 << 20), 10, "datum").is_ok());
+    let mut buf = BytesMut::new();
+    assert!(encode_opaque(&mut buf, &opaque((1 << 20) + 1), 10, "datum").is_err());
+    assert!(buf.is_empty());
 }

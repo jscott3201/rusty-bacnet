@@ -199,3 +199,72 @@ fn a_slot_that_cannot_be_read_fails_the_load() {
     let error = LogPersistence::<BACnetEventLogRecord>::load(&store, oid()).unwrap_err();
     assert!(matches!(error, Error::Transport(_)), "{error:?}");
 }
+
+/// A record an older build saved nested one level deeper than a
+/// ReadRange-ACK carries (#2474) is dropped on load, and the rest of the
+/// snapshot restores.
+#[test]
+fn a_saved_record_nested_too_deep_is_dropped_and_the_rest_restores() {
+    use bacnet_encoding::constructed::encode_log_record;
+    let record = |hour, log_datum| BACnetLogRecord {
+        date: DATE,
+        time: at(hour),
+        log_datum,
+        status_flags: None,
+    };
+    // Field 1 and the any-value take two of the 31 levels a record may use.
+    let deepest = [vec![0x1E; 29], vec![0x1F; 29]].concat();
+    let records = vec![
+        record(1, LogDatum::RealValue(1.0)),
+        record(2, LogDatum::AnyValue(deepest)),
+        record(3, LogDatum::RealValue(3.0)),
+    ];
+    let oid = ObjectIdentifier::new(ObjectType::TREND_LOG, 5).unwrap();
+    let snapshot = LogSnapshot {
+        object_identifier: oid,
+        generation: 1,
+        buffer_size: 4,
+        log_enable: true,
+        stop_when_full: false,
+        total_record_count: 3,
+        records,
+        last_notify_record: 0,
+        records_since_notification_from: 0,
+        notification_threshold: 0,
+        start_time: UNSPECIFIED_DATETIME,
+        stop_time: UNSPECIFIED_DATETIME,
+        acquisition: Some(LogAcquisitionSettings {
+            logging_type: bacnet_types::enums::LoggingType::POLLED,
+            log_interval: 100,
+            align_intervals: false,
+            interval_offset: 0,
+        }),
+        log_device_object_property: vec![super::tests::reference(1)],
+        reporting: LogReportingSettings::default(),
+    };
+    let mut data = codec::encode(&snapshot).unwrap();
+    // Nest the middle record one level deeper, as an older build could have
+    // saved it: an empty [1] inside its innermost value, its length prefix
+    // grown by two, the slot resealed.
+    let mut element = bytes::BytesMut::new();
+    encode_log_record(&snapshot.records[1], &mut element).unwrap();
+    let at_element = data
+        .windows(element.len())
+        .position(|window| window == &element[..])
+        .unwrap();
+    let innermost = element
+        .windows(2)
+        .position(|pair| pair == [0x1E, 0x1F])
+        .unwrap()
+        + 1;
+    data.splice(at_element + innermost..at_element + innermost, [0x1E, 0x1F]);
+    let prefix = at_element - 4..at_element;
+    let length = u32::from_be_bytes(data[prefix.clone()].try_into().unwrap());
+    data[prefix].copy_from_slice(&(length + 2).to_be_bytes());
+    reseal_with_length(&mut data);
+
+    let loaded = codec::decode::<BACnetLogRecord>(&data, oid).unwrap();
+    let mut expected = snapshot.clone();
+    expected.records.remove(1);
+    assert_eq!(loaded, expected);
+}
