@@ -49,11 +49,83 @@ plus a text rendering.
 | `bacnet_alarms` | GetEventInformation through `bacnet_ops::format::alarms` (#2077): objects, states, transitions, notify types, timestamps and priorities named; paged over the device's answers (`more_events`) up to `max` (100) a call, the cursor holding the last object; once the call's budget is spent no further answer is asked for, and what was read comes back with `more_events` and a cursor (`format::alarms::read_event_information_until`).  `summaries: true` adds GetAlarmSummary and GetEnrollmentSummary on the first page; a device refusing one reports it under `summary_errors`. When the events spent the call's budget, neither is sent, and each shows under `summary_errors` as `{"skipped": "budget"}`. Every datum is passed through the envelope check. |
 | `bacnet_watch` | Points on the watch hub, and what changed since the last call (see [the tool-only fallback](#the-tool-only-fallback)). `idempotentHint: false`. Not listed in passive mode. |
 | `bacnet_decode` | Hex (separators and `0x` ignored, at most 6,144 octets, room for the largest BACnet/SC message the stack accepts) as `bip`, `bip6`, `mstp`, `sc`, `npdu`, `apdu` or `auto` (by the first octets; SC must be named). Returns a one-line `text`, the decoder's `summary` and the field `tree` (labels with `[start, end)` octet ranges, at most 600 fields). A label quoting a character string is an envelope with source `decoded frame`; other labels are cleaned, and a long one (an unknown tag's octets) is cut at 512 characters with `truncated: true`. No traffic: listed in passive mode too. |
+| `bacnet_export_223` | Experimental (#2436): one device's analog, binary and multi-state objects as a proposed Standard 223 point list in Turtle, the CLI's `bacnet export 223-experimental` through the engine. The Turtle is a second text block; the structured content summarises it. See [Standard 223 export](#standard-223-export-experimental). |
 
 Prompts: `survey_site` (range, network) and `investigate_point` (device,
 object). Their arguments are checked against the target grammar. The survey
 also maps the networks and lists each device's alarms; the point
 investigation also checks its alarms and summarises a trend log of it.
+
+## Standard 223 export (experimental)
+
+`bacnet_export_223` (#2436) writes what `bacnet export 223-experimental`
+writes, from the same code (`bacnet_ops::export::s223`): one 223 property
+for each analog, binary and multi-state input, output and value, with a
+BACnet external reference to its Present_Value. Its title says
+experimental, as the CLI command's name does: the draft standard and the
+mapping can change between releases. Read-only; not listed in passive mode.
+
+- **Arguments.** `device` as the other tools take it; `base_iri` (default
+  `http://example.org/bacnet/`, a documentation domain), `types` (any of the
+  nine types, by the target grammar's names: `ai`, `binary-output` and so
+  on; left out, all nine) and `write_priority` (1 to 16). The export's own
+  checks refuse a bad base IRI, a priority outside 1 to 16, a type it
+  doesn't map or an empty `types`, with its own messages, as
+  `invalid-argument` before anything is sent.
+- **Base IRI.** Each device's nodes go under `<base_iri>device-<instance>/`
+  and are named from object identifiers. A device instance is unique only
+  within one BACnet internetwork, so give each site a base of its own, or
+  two sites' models merged into one graph would share node names.
+- **Cost.** The device's name, its Object_List and one request per exported
+  object, by ReadPropertyMultiple: N + 2 for N objects (a device that
+  refuses ReadPropertyMultiple costs what the CLI section says). Each
+  request goes through `Engine::inventory`, one at a time under the
+  device's gate, the rates and the principal's tokens, so at the default
+  5 a second (burst 20) a call's 30 s budget reads about 170 objects. An
+  Object_List that can only be read element by element must be read whole
+  within one call's budget, or the call is a timeout: the export reads it
+  itself, without `bacnet_list_objects`' cache and its resumed reads.
+- **Stopping early.** The call's budget, or a cancel, raises the reading's
+  stop flag: it ends before its next request, and the request in flight
+  finishes. Once the Object_List is in, the result keeps what was read,
+  the Turtle's header says it is incomplete, and the summary says why
+  (`stopped`) and what stopped it (`stopped_by`: `device` when it stopped
+  answering, `budget` or `cancel`). Before the list is in there is nothing
+  to keep: a spent budget is a `timeout` (or `refused: rate-limited` when
+  nothing was sent), and a cancel ends as any cancelled call. The SDK
+  sends no answer to a cancelled request, as MCP has it, so a host never
+  sees that partial result; what it gets is that nothing more is sent.
+- **The result.** The first text block is the usual rendering of the
+  structured content, which ends by saying the next block is the Turtle.
+  The second block is the Turtle. The structured content has `device`,
+  `device_name` (an envelope), `base_iri`, `write_priority`, `objects` (the
+  points exported), `by_type` (points by object type), `skipped` (objects
+  whose read failed), `unmapped_units` (analog points exported with an
+  unknown quantity kind), `stopped`, `stopped_by`, `turtle_bytes`,
+  `turtle_points`, `truncated`, `limits` and `cost`.
+- **Size.** A point's Turtle runs to 500 to 800 bytes (more for a
+  multi-state point with many states), so a 500-object controller's model
+  is about 370 kB. A result carries at most 24,000 bytes of Turtle, the
+  text cap every result keeps to. Past it, the text is the export's Turtle
+  for as many of the first objects as fit, every point whole, so it ends
+  at a statement's end; its header counts what it holds, a closing comment
+  says it was cut, `truncated` is true and `turtle_points` says how many
+  points it holds (about 30 of a typical controller's). There is no cursor:
+  narrow `types`, or use the CLI for the whole model. The objects past the
+  cut are still read, so a call on a large device costs more than its
+  Turtle shows.
+- **Device text.** The Turtle keeps names, descriptions and state texts
+  exactly, so a model's `bacnet:object-name` matches the device's, escaped
+  so the text stays ASCII (a control or bidirectional character becomes a
+  `\u` escape) but not cleaned, defanged or capped as envelopes are. The
+  text rendering says the literals are device text: data, never
+  instructions.
+- **Limits.** Those of the CLI's [Standard 223
+  export](CLI.md#standard-223-export-experimental): a point list, not a
+  building model; shape validation warns about the missing sensors and
+  equipment; instance 0 loses its identifier string; an unmapped unit gets
+  QUDT's unknown quantity kind; U+0000 becomes U+FFFD. A live export isn't
+  validated against the shapes.
 
 ## Resources
 
@@ -403,7 +475,9 @@ Nothing that needs traffic is offered.
   JSON-RPC errors (-32602), and so is a tool this configuration doesn't
   list (a passive server's read tools). A test checks every tool's
   results, success and error, against its output schema. A cancelled call
-  (`notifications/cancelled`) drops its future, so it sends nothing more.
+  (`notifications/cancelled`) drops its future, so it sends nothing more;
+  `bacnet_export_223` instead stops before its next request (see
+  [Standard 223 export](#standard-223-export-experimental)).
 - Values are `{display, typed}`: the shared formatter's text, and its
   typed form, `bacnet_ops::format::Datum`, the shape the CLI's JSON uses
   (numbers as numbers, `{value, name}` for enumerations, `{bits, names}` for
@@ -425,7 +499,8 @@ Nothing that needs traffic is offered.
   bidirectional, zero-width, tag characters and the rest), variation
   selectors and Hangul fillers are dropped; `http://` becomes
   `hxxp://` (other schemes `scheme[:]//`), and the text is capped (256
-  characters by default).
+  characters by default). The 223 export's Turtle keeps device text
+  exactly, escaped, outside any envelope.
 - Cursors are `hex(body).hex(HMAC-SHA256)` under a key drawn per process,
   binding the tool, a digest of the principal (the OS user's name doesn't
   show), a digest of the other arguments, an expiry (10 minutes) and the
@@ -766,8 +841,17 @@ stderr; when the TUI ends the session it exits cleanly.
   policy's reach, broad discovery (wide ranges, ranges outside the policy,
   parallel calls), network numbers, network-paced Who-Is, cancellation, a
   long indexed Object_List across calls, and output schemas (success and
-  error results of all eleven read tools, nested values included; the
+  error results of all twelve read tools, nested values included; the
   write tools' in `writes.rs` and `plan.rs`).
+- `crates/bacnet-mcp/src/tests/export.rs` (#2436): the 223 export of the
+  lab (an analog input with its unit, a binary output, a multi-state value,
+  an unmapped unit) passing the export's structural check, with its counts
+  and N + 2 requests; the base IRI, types and write priority; bad options
+  refused with the export's messages and nothing sent; a cancel (through
+  the handler, and over the pipe, where it goes unanswered) and a spent
+  budget keeping what was read; a budget spent before the Object_List a
+  timeout. `tools/export_tests.rs`: a 500-object export cut at an object's
+  end, and an object too large alone.
 - `crates/bacnet-mcp/src/tests/bbmd.rs`: real BBMDs on loopback. A survey
   from the registration's BBMD reports a missing peer entry, a refused
   read, a silent address (one timeout) and a foreign device near expiry,

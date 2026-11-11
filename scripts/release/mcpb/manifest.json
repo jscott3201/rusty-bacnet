@@ -34,7 +34,8 @@
     { "name": "bacnet_read_log_records", "description": "Read and summarise an Event Log's or Audit Log's records" },
     { "name": "bacnet_alarms", "description": "List a device's objects in alarm or fault" },
     { "name": "bacnet_decode", "description": "Decode a BACnet frame given as hex, sending nothing" },
-    { "name": "bacnet_watch", "description": "Follow points and report which changed since the last call" }
+    { "name": "bacnet_watch", "description": "Follow points and report which changed since the last call" },
+    { "name": "bacnet_export_223", "description": "Export a device's points as an experimental Standard 223 model in Turtle" }
   ],
   "tools_generated": true,
   "prompts_generated": true,

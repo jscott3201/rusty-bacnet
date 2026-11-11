@@ -6,12 +6,16 @@
 //! tools that send nothing, and the two write tools (`bacnet_write`,
 //! `bacnet_revert`, #2068) are listed only when the policy offers writes
 //! (`mcp_writes = "elicit"`). Arming a session never changes the list.
+//!
+//! `bacnet_export_223` (#2436, experimental) is the one tool whose text
+//! is more than a rendering: its second text block is the Turtle.
 
 pub(crate) mod alarms;
 mod bbmd;
 mod decode;
 pub(crate) mod describe;
 pub(crate) mod discover;
+pub(crate) mod export;
 mod find;
 mod list;
 mod log_pages;
@@ -74,6 +78,7 @@ const SPECS: &[Spec] = &[
     alarms::SPEC,
     decode::SPEC,
     watch::SPEC,
+    export::SPEC,
 ];
 
 /// The write tools, listed only when the policy offers writes.
@@ -150,6 +155,7 @@ enum Request {
     Alarms(alarms::Args),
     Decode(decode::Args),
     Watch(watch::Args),
+    Export(export::Args),
 }
 
 fn parse<A: DeserializeOwned>(args: &Map<String, Value>) -> Result<A, ErrorData> {
@@ -178,6 +184,7 @@ fn request(name: &str, args: &Map<String, Value>) -> Result<Request, ErrorData> 
         alarms::NAME => Request::Alarms(parse(args)?),
         decode::NAME => Request::Decode(parse(args)?),
         watch::NAME => Request::Watch(parse(args)?),
+        export::NAME => Request::Export(parse(args)?),
         other => {
             return Err(ErrorData::invalid_params(
                 format!("unknown tool: {other}"),
@@ -210,6 +217,8 @@ pub(crate) async fn call<T: TransportPort + 'static>(
     let account = ctx.account();
     let budget = ctx.policy.caps.budget;
     let call = Call::new(budget, Arc::clone(&account));
+    // The export's Turtle, which goes beside the summary.
+    let mut turtle = None;
     let run = async {
         match request {
             Request::Discover(a) => discover::run(ctx, &call, a, &args).await,
@@ -223,26 +232,50 @@ pub(crate) async fn call<T: TransportPort + 'static>(
             Request::Alarms(a) => alarms::run(ctx, &call, a, &args).await,
             Request::Decode(a) => decode::run(ctx, &call, a).await,
             Request::Watch(a) => watch::run(ctx, &call, a, &args).await,
+            Request::Export(a) => export::run(ctx, &call, a, &cancel, &mut turtle).await,
         }
     };
     // A cancelled call (`notifications/cancelled`, or the host going away)
     // drops its future, and with it any gate, lock or slot it waits for:
     // nothing more is sent, and what it was charged is still logged. The
     // call's own engine requests run one after another inside that one
-    // future, so none is left queued and unpolled.
+    // future, so none is left queued and unpolled. The export instead stops
+    // itself at a cancel, before its next request, and returns what it read
+    // (which the SDK drops, as MCP has a cancelled request go unanswered).
+    let stops_itself = name == export::NAME;
+    let dropped = async {
+        if stops_itself {
+            std::future::pending::<()>().await;
+        }
+        cancel.cancelled().await;
+    };
     let work = tokio::time::timeout(budget + GRACE, charged(account, run));
     let finished = tokio::select! {
         finished = work => finished,
-        () = cancel.cancelled() => {
+        () = dropped => {
             ctx.log_read(name, &call, "cancelled");
             return Err(ErrorData::internal_error("the call was cancelled", None));
         }
     };
+    // An export cancelled with nothing to keep ends as any cancelled call.
+    if stops_itself && cancel.is_cancelled() && !matches!(finished, Ok(Ok(_))) {
+        ctx.log_read(name, &call, "cancelled");
+        return Err(ErrorData::internal_error("the call was cancelled", None));
+    }
     let outcome = match finished {
         Ok(outcome) => outcome,
         Err(_) => Err(out_of_budget(&call, budget)),
     };
-    Ok(finish(ctx, name, &call, outcome))
+    let logged = (stops_itself && cancel.is_cancelled()).then_some("cancelled");
+    let mut result = finish(ctx, name, &call, outcome, logged);
+    if let Some(turtle) = turtle.filter(|_| result.is_error == Some(false)) {
+        if let Some(ContentBlock::Text(text)) = result.content.first_mut() {
+            text.text.push('\n');
+            text.text.push_str(export::LITERALS);
+        }
+        result.content.push(ContentBlock::text(turtle));
+    }
+    Ok(result)
 }
 
 /// Why a call that ran past its budget plus grace stopped.
@@ -262,12 +295,14 @@ fn out_of_budget(call: &Call, budget: Duration) -> ToolError {
 }
 
 /// A finished call as its result: the body or the error body, with its
-/// cost, logged, and rendered as text.
+/// cost, logged (as `logged` says, else by its outcome), and rendered as
+/// text.
 fn finish<T: TransportPort + 'static>(
     ctx: &Ctx<T>,
     name: &str,
     call: &Call,
     outcome: Result<Value, ToolError>,
+    logged: Option<&str>,
 ) -> CallToolResult {
     if let Err(ToolError::Timeout { .. }) = &outcome {
         call.timed_out();
@@ -277,7 +312,8 @@ fn finish<T: TransportPort + 'static>(
         Err(error) => (error.json(), true, error.summary()),
     };
     body["cost"] = call.cost();
-    ctx.log_read(name, call, if is_error { &outcome_text } else { "ok" });
+    let by_outcome = if is_error { &outcome_text } else { "ok" };
+    ctx.log_read(name, call, logged.unwrap_or(by_outcome));
     let text = render(name, &body, is_error.then_some(outcome_text.as_str()));
     let mut result = CallToolResult::success(vec![ContentBlock::text(text)]);
     result.structured_content = Some(body);
@@ -330,7 +366,7 @@ pub(crate) async fn call_write<T: TransportPort + 'static>(
                 let account = ctx.account();
                 let call = Call::new(budget, account);
                 let error = write::unconfirmed(ctx, &args, peer, (PENDING, PENDING_WHY)).await;
-                return Ok(finish(ctx, name, &call, Err(error)).into());
+                return Ok(finish(ctx, name, &call, Err(error), None).into());
             }
         }
     } else {
@@ -380,7 +416,7 @@ pub(crate) async fn call_write<T: TransportPort + 'static>(
         Ok(Err(error)) => Err(error),
         Err(_) => Err(out_of_budget(&call, budget)),
     };
-    Ok(finish(ctx, name, &call, outcome).into())
+    Ok(finish(ctx, name, &call, outcome, None).into())
 }
 
 /// The refusal of a write that would ask an older client to confirm
