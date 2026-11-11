@@ -723,6 +723,7 @@ pub use event_parameter::{BACnetEventParameter, ChangeOfValueCriteria, event_par
 mod property_states;
 pub use property_states::{
     BACnetExtendedPropertyState, BACnetPropertyStates, BACnetProprietaryPropertyState,
+    NAMED_EXTENDED_CHOICES, NamedExtendedChoice,
 };
 
 // ---------------------------------------------------------------------------

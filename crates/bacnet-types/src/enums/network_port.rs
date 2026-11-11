@@ -52,6 +52,29 @@ bacnet_enum! {
 }
 
 bacnet_enum! {
+    /// State of a BACnet/SC connection, the value of the property-states
+    /// choice `sc-connection-state` (extended choice 258). Added after
+    /// revision 22 (135-2020); ASHRAE's revision 24 data types name it.
+    pub struct SCConnectionState(u32);
+
+    const NOT_CONNECTED = 0;
+    const CONNECTED = 1;
+    const DISCONNECTED_WITH_ERRORS = 2;
+    const FAILED_TO_CONNECT = 3;
+}
+
+bacnet_enum! {
+    /// State of a BACnet/SC hub connector, the value of the property-states
+    /// choice `sc-hub-connector-state` (extended choice 259). Added after
+    /// revision 22 (135-2020); ASHRAE's revision 24 data types name it.
+    pub struct SCHubConnectorState(u32);
+
+    const NO_HUB_CONNECTION = 0;
+    const CONNECTED_TO_PRIMARY = 1;
+    const CONNECTED_TO_FAILOVER = 2;
+}
+
+bacnet_enum! {
     /// Quality of a NetworkPort's network number (Clause 12.56 (Network_Number_Quality)).
     pub struct NetworkNumberQuality(u32);
 

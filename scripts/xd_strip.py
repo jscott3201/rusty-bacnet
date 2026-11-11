@@ -11,6 +11,8 @@ clients) and writes a derivative that keeps only facts:
 - every enumeration and bit string with a named member list: its path (the
   names of the definitions it sits in, joined with "/"), its range or length
   attributes, and each member's value and name;
+- the alternatives of the property-states choice (#2472): each one's context
+  tag, name and datatype, so the tags above 254 can be checked;
 - every object type: each property's identifier number, name, datatype, the
   size of a fixed-size array, and conformance flags.
 
@@ -152,6 +154,39 @@ def collect_tables(e, path, out):
         collect_tables(c, here, out)
 
 
+# The one choice the cross-checks read: its alternatives by context tag.
+CHOICE_PATH = "0-BACnetPropertyStates"
+CHOICE_ATTRS = {"name", "contextTag", "type", "comment"}
+
+
+def collect_choice(defs):
+    """The alternatives of CHOICE_PATH as (tag, name, element[:type]), by tag."""
+    found = [e for e in defs.iter() if tag(e) == "Choice" and e.get("name") == CHOICE_PATH]
+    if len(found) != 1:
+        fail(f"{CHOICE_PATH}: expected one choice, found {len(found)}")
+    lists = [c for c in found[0] if tag(c) == "Choices"]
+    if len(lists) != 1:
+        fail(f"{CHOICE_PATH}: expected one Choices element")
+    alternatives = []
+    for a in lists[0]:
+        at = tag(a)
+        where = f"{CHOICE_PATH}/{a.get('name')}"
+        if at not in DATATYPE_TAGS or len(a):
+            fail(f"{where}: unexpected alternative element {at}")
+        unknown = set(a.attrib) - CHOICE_ATTRS
+        if unknown:
+            fail(f"{where}: unknown alternative attributes {sorted(unknown)}")
+        number, aname = a.get("contextTag", ""), a.get("name", "")
+        if not number.isdigit() or not re.fullmatch(r"[a-z0-9][a-z0-9-]*", aname):
+            fail(f"{where}: alternative {aname!r}[{number!r}] is not a kebab name and a tag")
+        datatype = at + (":" + a.get("type") if a.get("type") else "")
+        alternatives.append((int(number), aname, datatype))
+    tags = [t for t, _, _ in alternatives]
+    if len(set(tags)) != len(tags) or len({n for _, n, _ in alternatives}) != len(alternatives):
+        fail(f"{CHOICE_PATH}: a tag or name repeats")
+    return sorted(alternatives)
+
+
 def header(kind, sources, rev, published, copyright_line):
     names = ", ".join(sources)
     return [
@@ -180,6 +215,13 @@ def strip_data_types(path):
         lines.append("")
         lines.append(" ".join([kind, tpath] + [f"{k}={v}" for k, v in attrs]))
         lines.extend(f"{v} {n}" for v, n in sorted(members))
+    lines.append("")
+    lines.append(
+        "# choice <path>, then one '<context tag> <name> <datatype>' line per alternative, by tag."
+    )
+    lines.append("")
+    lines.append(f"choice {CHOICE_PATH}")
+    lines.extend(f"{t} {n} {d}" for t, n, d in collect_choice(defs))
     return lines, len(tables)
 
 

@@ -37,6 +37,7 @@ pub use clean::{MAX_NAME_CHARS, clean_name, clean_text};
 pub(crate) use constructed::timestamp_text;
 pub use data::{Datum, Fields, PLAIN_ELEMENTS};
 pub use logged::{LogColumns, LoggedProperty, MAX_STATE_TEXT_OBJECTS};
+pub use recipients::property_state_text;
 pub use wire::format_property_value;
 
 use bacnet_encoding::constructed::{ConstructedElement, ElementShape, property_element};

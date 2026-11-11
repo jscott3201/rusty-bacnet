@@ -12,15 +12,20 @@
 //! `2026-11-10 2`, `11,4,4`), so a value copied from an RDF model can be
 //! typed in. Those forms are pre-publication and may change with it; what
 //! we print is unchanged. `docs/CLI.md`, "Input forms", lists every form.
+//!
+//! A property state carried through the extended-value choice has its own
+//! reader, [`parse_extended_property_state`] (`sc-connection-state connected`).
 
 mod datetime;
 mod json;
 mod numeric;
+mod state;
 mod typed;
 
 pub use datetime::{
     parse_date, parse_date_time, parse_time, parse_timestamp, parse_week_n_day, parse_weekday_digit,
 };
+pub use state::parse_extended_property_state;
 pub use typed::{parse_value_for, parse_value_for_with_priority};
 
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};

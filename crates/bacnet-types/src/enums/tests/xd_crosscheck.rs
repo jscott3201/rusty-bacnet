@@ -21,10 +21,10 @@ use super::xd_allowlist::{Allowed, Category, allowed};
 use crate::bitstring::{DaysOfWeek, EventTransitionBits, LimitEnable, LogStatus, StatusFlags};
 
 /// Name and value pairs of one table; a bit string's values are bit positions.
-type Members = Vec<(String, u32)>;
+pub(super) type Members = Vec<(String, u32)>;
 
 /// The file's tables by path (`0-BACnetAbortReason`, `0-Error/error-code`).
-type XdTables = BTreeMap<String, Members>;
+pub(super) type XdTables = BTreeMap<String, Members>;
 
 /// The file's path for our tables that don't follow `0-BACnet<OurName>`. A
 /// type listed twice is compared with both tables.
@@ -180,6 +180,8 @@ fn our_tables() -> Vec<(&'static str, Members)> {
         Relationship,
         Reliability,
         RestartReason,
+        SCConnectionState,
+        SCHubConnectorState,
         Segmentation,
         ServiceSupported,
         ShedState,
@@ -212,22 +214,23 @@ fn our_tables() -> Vec<(&'static str, Members)> {
     tables
 }
 
-fn workspace_root() -> PathBuf {
+pub(super) fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
 /// Whether our identifier is the file's name exactly, once written in the
 /// file's kebab case: `INVALID_TIMESTAMP` is `invalid-timestamp`, while
 /// `INVALID_TIME_STAMP` is not.
-fn spelled_as(ours: &str, xd: &str) -> bool {
+pub(super) fn spelled_as(ours: &str, xd: &str) -> bool {
     ours.to_ascii_lowercase().replace('_', "-") == xd
 }
 
 /// Parse the stripped file: `enum|bits <path> [attr=N ...]` starts a table,
 /// `<value> <name>` adds a member, `#` lines and blank lines are skipped.
-fn parse_xd(text: &str) -> XdTables {
+pub(super) fn parse_xd(text: &str) -> XdTables {
     let mut tables = XdTables::new();
     let mut current: Option<String> = None;
+    let mut skipping_choice = false;
     for (n, line) in text.lines().enumerate() {
         let line = line.trim_end();
         if line.is_empty() || line.starts_with('#') {
@@ -235,7 +238,14 @@ fn parse_xd(text: &str) -> XdTables {
         }
         let mut words = line.split(' ');
         let first = words.next().unwrap();
+        if first == "choice" {
+            // Choices are read by `named_extended_choices_agree_with_ashrae_xd`.
+            current = None;
+            skipping_choice = true;
+            continue;
+        }
         if first == "enum" || first == "bits" {
+            skipping_choice = false;
             let path = words
                 .next()
                 .unwrap_or_else(|| panic!("line {}: no path", n + 1));
@@ -245,6 +255,9 @@ fn parse_xd(text: &str) -> XdTables {
                 n + 1
             );
             current = Some(path.to_owned());
+            continue;
+        }
+        if skipping_choice {
             continue;
         }
         let value: u32 = first

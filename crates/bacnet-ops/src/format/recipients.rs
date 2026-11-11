@@ -7,6 +7,7 @@ use bacnet_encoding::primitives::decode_application_value;
 use bacnet_types::bitstring::{DaysOfWeek, EventTransitionBits};
 use bacnet_types::constructed::{
     BACnetAddress, BACnetCOVSubscription, BACnetDestination, BACnetPropertyStates, BACnetRecipient,
+    NamedExtendedChoice,
 };
 use bacnet_types::enums::{
     AccessEvent, AccessZoneOccupancyState, BinaryPV, DeviceStatus, DoorAlarmState,
@@ -201,8 +202,11 @@ fn decode_address_binding(
 }
 
 /// A property state by name where its enumeration is known: `high-limit`,
-/// `active`, `degrees-fahrenheit`; any other as its choice and value.
-pub(super) fn property_state_text(state: &BACnetPropertyStates) -> String {
+/// `active`, `degrees-fahrenheit`; any other as its choice and value. An
+/// extended choice the stack names (`sc-connection-state connected`) shows its
+/// choice and value; any other extended value shows only its number
+/// (`extended-value 2`).
+pub fn property_state_text(state: &BACnetPropertyStates) -> String {
     use BACnetPropertyStates as S;
     match state {
         S::BooleanValue(value) => value.to_string(),
@@ -233,6 +237,13 @@ pub(super) fn property_state_text(state: &BACnetPropertyStates) -> String {
         S::SilencedState(v) => kebab(SilencedState::from_raw(*v)),
         S::AccessEvent(v) => kebab(AccessEvent::from_raw(*v)),
         S::ZoneOccupancyState(v) => kebab(AccessZoneOccupancyState::from_raw(*v)),
+        S::ExtendedValue(extended) => match NamedExtendedChoice::from_tag(extended.tag()) {
+            Some(choice) => match choice.value_name(extended.value()) {
+                Some(name) => format!("{} {}", choice.name, kebab(name)),
+                None => format!("{} {}", choice.name, extended.value()),
+            },
+            None => format!("extended-value {}", extended.value()),
+        },
         other => match other.as_u32() {
             Some(value) => format!("{} {value}", choice_name(other)),
             None => choice_name(other),
