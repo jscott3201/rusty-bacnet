@@ -149,6 +149,71 @@ fn a_saved_state_text_wins_over_the_count_setter_until_the_clear() {
     });
 }
 
+/// A saved State_Text wins over `set_state_texts` (#2445) as it does over
+/// the count setter: the setter still refuses no labels at all, and
+/// otherwise leaves the saved labels and count, until the clear. Without
+/// storage, or before a write, it applies.
+#[test]
+fn a_saved_state_text_wins_over_the_labels_setter_until_the_clear() {
+    let mine: Vec<String> = ["Closed", "Open"].map(String::from).to_vec();
+    on_each!(|new, Object| {
+        let storage = MemoryConfig::new();
+        let mut plain = new(STATES);
+        plain.set_state_texts(mine.clone()).unwrap();
+        assert_eq!(read(&plain, P::STATE_TEXT), labels(&mine));
+
+        let mut object: Object = new(STATES)
+            .with_reporting_persistence(persistence(&storage))
+            .unwrap();
+        object.set_state_texts(mine.clone()).unwrap();
+        assert_eq!(read(&object, P::STATE_TEXT), labels(&mine));
+        assert_eq!(storage.saves(), 0, "a setter saves nothing");
+        write(&mut object, P::STATE_TEXT, labels(&written_texts()));
+        object.set_state_texts(mine.clone()).unwrap();
+        assert!(object.set_state_texts(Vec::new()).is_err());
+        assert_eq!(read(&object, P::STATE_TEXT), labels(&written_texts()));
+        let saved_count = count(u32::try_from(written_texts().len()).unwrap());
+        assert_eq!(read(&object, P::NUMBER_OF_STATES), saved_count);
+        object.clear_written_reporting().unwrap();
+        object.set_state_texts(mine.clone()).unwrap();
+        assert_eq!(read(&object, P::STATE_TEXT), labels(&mine));
+        assert_eq!(read(&object, P::NUMBER_OF_STATES), count(2));
+    });
+}
+
+/// With storage, `set_state_texts` refuses labels storage can't keep as a
+/// write of them is refused (#2445), and nothing changes, so a peer's later
+/// write of one label still goes through. Without storage it takes them.
+#[test]
+fn storage_refuses_labels_past_its_cap_with_the_setter() {
+    let long = "é".repeat(MAX_KEPT_STATE_TEXT_OCTETS / 2) + "x";
+    let mut texts = defaults(STATES);
+    texts[0] = long;
+    on_each!(|new, Object| {
+        let storage = MemoryConfig::new();
+        let mut object: Object = new(STATES)
+            .with_reporting_persistence(persistence(&storage))
+            .unwrap();
+        let before = read(&object, P::STATE_TEXT);
+        let result = object.set_state_texts(texts.clone());
+        assert!(
+            refused_with(
+                &result,
+                ErrorClass::RESOURCES,
+                ErrorCode::NO_SPACE_TO_WRITE_PROPERTY
+            ),
+            "{result:?}"
+        );
+        assert_eq!(read(&object, P::STATE_TEXT), before);
+        object
+            .write_property(P::STATE_TEXT, Some(2), text("Low"), None)
+            .unwrap();
+        let mut plain = new(STATES);
+        plain.set_state_texts(texts.clone()).unwrap();
+        assert_eq!(read(&plain, P::STATE_TEXT), labels(&texts));
+    });
+}
+
 /// With storage, a write that would leave a label past 512 octets, or more
 /// than 1,024 states, is refused with RESOURCES /
 /// NO_SPACE_TO_WRITE_PROPERTY before anything is saved: a label written

@@ -1,5 +1,5 @@
 //! The default Object_Names of the Device and of a declared Network Port,
-//! written without `core::fmt` (#2187).
+//! written without `core::fmt` (#2187) by `common::numbered_name`.
 use super::*;
 
 #[test]

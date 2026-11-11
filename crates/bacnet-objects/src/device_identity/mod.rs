@@ -1,5 +1,6 @@
 //! Shared Device declarations and stock object construction.
 mod network_port;
+use crate::common::numbered_name;
 use crate::prelude::*;
 use crate::{
     database::ObjectDatabase,
@@ -515,30 +516,6 @@ pub fn build_database_with_extra(
         db.add(obj)?;
     }
     Ok(db)
-}
-
-/// `<prefix><instance>`, the default Object_Name of the Device
-/// ([`DeviceIdentity::new`], `device-`) and of a declared Network Port
-/// (`port-`), with the decimal digits written by hand: `format!` would link
-/// `core::fmt` into every no_std image that builds a Device database (#2187).
-fn numbered_name(prefix: &str, instance: u32) -> String {
-    // u32::MAX has ten digits.
-    let mut digits = [0u8; 10];
-    let mut start = digits.len();
-    let mut rest = instance;
-    loop {
-        start -= 1;
-        // `rest % 10` is below ten, so the cast keeps it whole.
-        digits[start] = b'0' + (rest % 10) as u8;
-        rest /= 10;
-        if rest == 0 {
-            break;
-        }
-    }
-    let mut name = String::with_capacity(prefix.len() + digits.len() - start);
-    name.push_str(prefix);
-    name.extend(digits[start..].iter().copied().map(char::from));
-    name
 }
 
 impl Default for DeviceIdentity {

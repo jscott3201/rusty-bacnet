@@ -47,6 +47,31 @@ pub(crate) fn protocol_error(
     bacnet_types::error::Error::protocol(class, code)
 }
 
+/// `<prefix><number>`, with the decimal digits written by hand: `format!`
+/// would link `core::fmt` into every no_std image that builds the object.
+/// It names the Device (`device-`) and a declared Network Port (`port-`) by
+/// default (#2187), and labels a multi-state object's states (`State `,
+/// #2445).
+pub(crate) fn numbered_name(prefix: &str, number: u32) -> alloc::string::String {
+    // u32::MAX has ten digits.
+    let mut digits = [0u8; 10];
+    let mut start = digits.len();
+    let mut rest = number;
+    loop {
+        start -= 1;
+        // `rest % 10` is below ten, so the cast keeps it whole.
+        digits[start] = b'0' + (rest % 10) as u8;
+        rest /= 10;
+        if rest == 0 {
+            break;
+        }
+    }
+    let mut name = alloc::string::String::with_capacity(prefix.len() + digits.len() - start);
+    name.push_str(prefix);
+    name.extend(digits[start..].iter().copied().map(char::from));
+    name
+}
+
 /// Classify an unhandled built-in write after its specific guards and routes.
 /// Effective metadata includes PROPERTY_LIST and per-instance optional properties.
 pub(crate) fn unhandled_write_error(
@@ -805,17 +830,23 @@ pub(crate) fn write_cov_increment(
 ) -> Option<Result<(), bacnet_types::error::Error>> {
     if property == bacnet_types::enums::PropertyIdentifier::COV_INCREMENT {
         if let bacnet_types::primitives::PropertyValue::Real(v) = value {
-            if *v < 0.0 || !v.is_finite() {
-                Some(Err(value_out_of_range_error()))
-            } else {
-                *cov_increment = *v;
-                Some(Ok(()))
-            }
+            Some(checked_cov_increment(*v).map(|v| *cov_increment = v))
         } else {
             Some(Err(invalid_data_type_error()))
         }
     } else {
         None
+    }
+}
+
+/// A Real COV_Increment as a write or a setter takes it: a negative or
+/// non-finite one is VALUE_OUT_OF_RANGE.
+#[inline]
+pub(crate) fn checked_cov_increment(value: f32) -> Result<f32, bacnet_types::error::Error> {
+    if value < 0.0 || !value.is_finite() {
+        Err(value_out_of_range_error())
+    } else {
+        Ok(value)
     }
 }
 

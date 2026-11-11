@@ -124,6 +124,7 @@ impl BinaryOutputObject {
 }
 
 crate::write_config::reporting::impl_reporting_persistence!(BinaryOutputObject);
+super::impl_state_texts!(BinaryOutputObject);
 
 impl BACnetObject for BinaryOutputObject {
     fn object_identifier(&self) -> ObjectIdentifier {

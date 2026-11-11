@@ -62,6 +62,7 @@ pub mod network_port;
 pub mod notification_class;
 pub mod notification_forwarder;
 pub mod object_profile;
+pub mod points;
 pub mod present_value_access;
 pub mod program;
 pub mod property_metadata;

@@ -111,6 +111,14 @@ impl AnalogOutputObject {
         self.profile.wait_for_saves();
     }
 
+    /// Set COV_Increment, as
+    /// [`AnalogInputObject::set_cov_increment`](crate::analog::AnalogInputObject::set_cov_increment)
+    /// does (#2445).
+    pub fn set_cov_increment(&mut self, increment: f32) -> Result<(), Error> {
+        self.cov_increment = common::checked_cov_increment(increment)?;
+        Ok(())
+    }
+
     /// Set minimum engineering-bound metadata; this is not a reliability fault limit.
     pub fn set_min_pres_value(&mut self, value: f32) {
         self.min_pres_value = Some(value);

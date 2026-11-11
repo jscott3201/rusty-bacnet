@@ -136,6 +136,15 @@ impl AnalogInputObject {
         Ok(())
     }
 
+    /// Set COV_Increment, the smallest Present_Value change that sends a
+    /// COV notification (#2445). A new object uses 0, so any change
+    /// notifies. As for a write of it, a negative or non-finite increment
+    /// is VALUE_OUT_OF_RANGE and the old one stays.
+    pub fn set_cov_increment(&mut self, increment: f32) -> Result<(), Error> {
+        self.cov_increment = common::checked_cov_increment(increment)?;
+        Ok(())
+    }
+
     /// Set minimum engineering-bound metadata; this is not a reliability fault limit.
     pub fn set_min_pres_value(&mut self, value: f32) {
         self.min_pres_value = Some(value);

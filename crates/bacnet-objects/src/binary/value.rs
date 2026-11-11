@@ -190,6 +190,7 @@ impl BinaryValueObject {
 }
 
 crate::write_config::reporting::impl_reporting_persistence!(BinaryValueObject);
+super::impl_state_texts!(BinaryValueObject);
 
 impl BACnetObject for BinaryValueObject {
     crate::traits::lend_audit_policy!();
