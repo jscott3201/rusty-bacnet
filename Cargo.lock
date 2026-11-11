@@ -575,6 +575,7 @@ dependencies = [
  "bytes",
  "futures-util",
  "libc",
+ "proptest",
  "serde",
  "serde_json",
  "tempfile",

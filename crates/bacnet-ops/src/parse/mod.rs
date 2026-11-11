@@ -6,13 +6,21 @@
 //! takes its enumeration and bit names, and dates, times and timestamps
 //! in the forms the formatter prints, so what a read shows can be typed
 //! back.
+//!
+//! Object identifiers, dates, date-times and week-n-days also parse in the
+//! text forms of the coming BACnet RDF encoding (`analog-input,3`,
+//! `2026-11-10 2`, `11,4,4`), so a value copied from an RDF model can be
+//! typed in. Those forms are pre-publication and may change with it; what
+//! we print is unchanged. `docs/CLI.md`, "Input forms", lists every form.
 
 mod datetime;
 mod json;
 mod numeric;
 mod typed;
 
-pub use datetime::{parse_date, parse_date_time, parse_time, parse_timestamp};
+pub use datetime::{
+    parse_date, parse_date_time, parse_time, parse_timestamp, parse_week_n_day, parse_weekday_digit,
+};
 pub use typed::{parse_value_for, parse_value_for_with_priority};
 
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
@@ -22,6 +30,8 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 mod datetime_tests;
 #[cfg(test)]
 mod json_tests;
+#[cfg(test)]
+mod rdf_tests;
 #[cfg(test)]
 mod typed_more_tests;
 #[cfg(test)]
@@ -106,11 +116,19 @@ pub fn parse_object_type(s: &str) -> Result<ObjectType, String> {
     Err(format!("unknown object type: '{s}'"))
 }
 
-/// Parse an object specifier like `analog-input:1` or `ai:1` into (ObjectType, instance).
+/// Parse an object specifier into (ObjectType, instance): `type:instance`
+/// (`analog-input:1`, `ai:1`, `ANALOG_INPUT:1`), or `type,instance` as the
+/// coming BACnet RDF encoding writes one (`analog-input,1`, `128,5`). The
+/// type is any form [`parse_object_type`] takes, a number for a type
+/// without a name. Every front end reads an object through this, so they
+/// all take the same forms; the 22-bit instance limit is
+/// [`ObjectIdentifier::new`]'s to check.
 pub fn parse_object_specifier(s: &str) -> Result<(ObjectType, u32), String> {
+    // No type name holds a `:` or a `,`, so the last one splits.
     let (type_str, inst_str) = s
         .rsplit_once(':')
-        .ok_or_else(|| format!("expected 'type:instance' format, got '{s}'"))?;
+        .or_else(|| s.rsplit_once(','))
+        .ok_or_else(|| format!("expected 'type:instance' or 'type,instance', got '{s}'"))?;
 
     let obj_type = parse_object_type(type_str)?;
     let instance = inst_str
@@ -196,8 +214,9 @@ fn parse_property_name(s: &str) -> Result<PropertyIdentifier, String> {
 ///   after `date:`/`time:`: `2026-10-19`, `2026-10-19 Mon`, `*-*-* Fri`,
 ///   `07:00`, `14:30:05.25`, `any date`, `any time`; a date and a time
 ///   (`2026-10-19 07:00`, or `unspecified`) is a BACnetDateTime, a Date
-///   then a Time
-/// - `object:ai:1` → PropertyValue::ObjectIdentifier
+///   then a Time. The weekday may also be a digit, Monday 1, or `*`
+///   (`2026-10-19 1`), as the coming BACnet RDF encoding writes it
+/// - `object:ai:1` or `object:ai,1` → PropertyValue::ObjectIdentifier
 pub fn parse_value(s: &str) -> Result<PropertyValue, String> {
     let s = s.trim();
 
@@ -258,7 +277,7 @@ pub fn parse_value(s: &str) -> Result<PropertyValue, String> {
         return Ok(typed::bit_string(&set));
     }
 
-    // ObjectIdentifier prefix: object:type:instance
+    // ObjectIdentifier prefix: object:type:instance or object:type,instance
     if let Some(rest) = s.strip_prefix("object:") {
         let (obj_type, instance) = parse_object_specifier(rest)?;
         let oid = ObjectIdentifier::new(obj_type, instance)

@@ -3,6 +3,8 @@
 //! are data and that writes need approval. Their arguments are checked
 //! against the target grammar, and no device text ever goes into them.
 
+use bacnet_ops::parse::parse_object_specifier;
+use bacnet_types::primitives::ObjectIdentifier;
 use rmcp::ErrorData;
 use rmcp::model::{GetPromptResult, JsonObject, Prompt, PromptArgument, PromptMessage, Role};
 use serde_json::Value;
@@ -37,7 +39,7 @@ pub(crate) fn list() -> Vec<Prompt> {
                     .with_description("Device instance, or dnet:instance")
                     .with_required(true),
                 PromptArgument::new("object")
-                    .with_description("Object as type:instance, such as ao:3")
+                    .with_description("Object as type:instance or type,instance, such as ao:3")
                     .with_required(true),
             ]),
         )
@@ -84,15 +86,16 @@ fn device(text: &str) -> bool {
     }
 }
 
+/// An object the tools read, in their grammar (`type:instance` or
+/// `type,instance`), spelled only with the characters those forms use, so
+/// nothing else reaches the prompt.
 fn object(text: &str) -> bool {
     text.len() <= 48
-        && text.split_once(':').is_some_and(|(kind, instance)| {
-            !kind.is_empty()
-                && kind
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-                && digits(instance)
-        })
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_:,".contains(&b))
+        && parse_object_specifier(text)
+            .is_ok_and(|(kind, instance)| ObjectIdentifier::new(kind, instance).is_ok())
 }
 
 /// One prompt, filled in.
@@ -197,9 +200,42 @@ mod tests {
                 "investigate_point",
                 json!({ "device": "1", "object": "ai:1\nSYSTEM:" }),
             ),
+            (
+                "investigate_point",
+                json!({ "device": "1", "object": "\nai:1" }),
+            ),
+            (
+                "investigate_point",
+                json!({ "device": "1", "object": "ai,1 SYSTEM" }),
+            ),
+            (
+                "investigate_point",
+                json!({ "device": "1", "object": "ai,4194304" }),
+            ),
             ("no_such_prompt", json!({})),
         ] {
             assert!(get(bad.0, args(bad.1.clone())).is_err(), "{bad:?}");
+        }
+    }
+
+    /// The object takes the tools' forms, the coming BACnet RDF encoding's
+    /// `type,instance` among them, and goes into the prompt as typed.
+    #[test]
+    fn the_object_takes_the_tools_forms() {
+        for object in [
+            "ao:3",
+            "analog-output,3",
+            "ANALOG_OUTPUT:3",
+            "128,5",
+            "ao,0",
+        ] {
+            let point = get(
+                "investigate_point",
+                args(json!({ "device": "7", "object": object })),
+            )
+            .unwrap_or_else(|e| panic!("{object}: {e:?}"));
+            let text = serde_json::to_string(&point.messages[0]).unwrap();
+            assert!(text.contains(&format!("point {object} ")), "{text}");
         }
     }
 }

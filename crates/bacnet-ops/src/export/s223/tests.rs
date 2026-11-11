@@ -88,6 +88,23 @@ fn identifier_pattern() {
     }
 }
 
+/// Every identifier string the export writes, every object type named or
+/// by number, reads back through the parser every front end shares.
+#[test]
+fn identifiers_read_back_as_input() {
+    for raw in 0..=1023 {
+        let object_type = ObjectType::from_raw(raw);
+        for instance in [0, 1, 3, ObjectIdentifier::MAX_INSTANCE] {
+            let text = super::turtle::identifier(object_type, instance);
+            assert_eq!(
+                crate::parse::parse_object_specifier(&text),
+                Ok((object_type, instance)),
+                "{text}"
+            );
+        }
+    }
+}
+
 /// A write priority is 1 to 16; a base IRI is absolute, ends in `/` or
 /// `#`, and holds nothing Turtle refuses inside `<...>`.
 #[test]

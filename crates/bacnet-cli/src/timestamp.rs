@@ -308,6 +308,12 @@ mod tests {
             parse_bacnet_timestamp("\"2026-10-25 Sun 14:30:05\"").unwrap(),
             parse_bacnet_timestamp("datetime:2026,10,25,7;14,30,5,0").unwrap()
         );
+        // The coming BACnet RDF encoding's date-time string, weekday digit
+        // and all (#2473).
+        assert_eq!(
+            parse_bacnet_timestamp("2026-10-25 7 14:30:05.00").unwrap(),
+            parse_bacnet_timestamp("datetime:2026,10,25,7;14,30,5,0").unwrap()
+        );
         assert_eq!(
             parse_bacnet_timestamp("time:14:30").unwrap(),
             parse_bacnet_timestamp("time:14,30,0,0").unwrap()

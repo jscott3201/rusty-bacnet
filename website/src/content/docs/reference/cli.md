@@ -289,7 +289,7 @@ Usage: bacnet read [OPTIONS] <TARGET> <OBJECT> <PROPERTY>
 Arguments:
 
 - `<TARGET>`: Target device (IP address or instance number). Required.
-- `<OBJECT>`: Object specifier (e.g., analog-input:1, ai:1). Required.
+- `<OBJECT>`: Object specifier, type:instance or type,instance (e.g., analog-input:1, ai:1, analog-input,1). Required.
 - `<PROPERTY>`: Property (e.g., present-value, pv). Required.
 
 ### bacnet export
@@ -599,7 +599,7 @@ Usage: bacnet ack-alarm [OPTIONS] --state <STATE> --timestamp <TIMESTAMP> --ack-
 Arguments:
 
 - `<TARGET>`: Target device. Required.
-- `<OBJECT>`: Object specifier (e.g., ai:1). Required.
+- `<OBJECT>`: Object specifier (e.g., ai:1 or ai,1). Required.
 
 Options:
 
@@ -621,14 +621,14 @@ Usage: bacnet read-range [OPTIONS] <TARGET> <OBJECT> [PROPERTY]
 Arguments:
 
 - `<TARGET>`: Target device. Required.
-- `<OBJECT>`: Object specifier (e.g., trend-log:1). Required.
+- `<OBJECT>`: Object specifier (e.g., trend-log:1 or trend-log,1). Required.
 - `[PROPERTY]`: Property (default: log-buffer). Default: `log-buffer`.
 
 Options:
 
 - `--position <POSITION>`: Read by position, from this one-based index.
 - `--sequence <SEQUENCE>`: Read by sequence number, from this record.
-- `--time <TIME>`: Read the records logged after this time, in the device's local time: YYYY-MM-DDTHH:MM\[:SS\[.hh\]\].
+- `--time <TIME>`: Read the records logged after this time, in the device's local time: YYYY-MM-DDTHH:MM\[:SS\[.hh\]\], or with the weekday digit (Monday 1) before the time, "2026-11-10 2 16:35:00.00".
 - `--count <COUNT>`: Items to read (default 100); negative reads backward from the reference. With --all, the page size.
 - `--all`: Page through the log from the oldest record, or from --position, --sequence or --time, until the newest.
 - `--strict`: Refuse an answer that breaks a ReadRange rule, instead of showing it with the rules it broke.
@@ -644,7 +644,7 @@ Usage: bacnet create-object [OPTIONS] <TARGET> <OBJECT>
 Arguments:
 
 - `<TARGET>`: Target device. Required.
-- `<OBJECT>`: Object specifier (type:instance, e.g., av:100). Required.
+- `<OBJECT>`: Object specifier (type:instance or type,instance, e.g., av:100). Required.
 
 ### bacnet delete-object
 
@@ -657,7 +657,7 @@ Usage: bacnet delete-object [OPTIONS] <TARGET> <OBJECT>
 Arguments:
 
 - `<TARGET>`: Target device. Required.
-- `<OBJECT>`: Object specifier (type:instance). Required.
+- `<OBJECT>`: Object specifier (type:instance or type,instance). Required.
 
 ### bacnet time-sync
 

@@ -347,7 +347,7 @@ fn local(object: ObjectIdentifier) -> String {
 }
 
 /// `analog-input,3`: the reference's identifier string.
-fn identifier(object_type: ObjectType, instance: u32) -> String {
+pub(super) fn identifier(object_type: ObjectType, instance: u32) -> String {
     format!("{},{instance}", kebab(object_type))
 }
 
