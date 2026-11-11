@@ -47,6 +47,7 @@ an allocator (#1614), for firmware with no heap.
 | Hosted | `std` (default) | Everything, including `error::Error::Transport`. Enables `alloc`. |
 | `no_std` with a heap | `alloc` | Everything but `Error::Transport`. Firmware must supply a global allocator. `bip_port` needs atomic compare-and-swap too, so ARMv6-M goes without it (#1615). |
 | No allocator | neither | The enums, `ObjectIdentifier`, `Date`, `Time`, `BACnetTimeStamp`, the bit-string flag types, the `text` table of hidden characters and the error type. The owned values (`PropertyValue`, the `constructed` types, `MacAddr`, the `calendar` matching) need `alloc`. |
+| | `qudt` | The engineering-units table as QUDT unit and quantity-kind local names, with lookups both ways. Const data, no allocation, no dependency; works in every profile. |
 | | `serde` | Deserialization for `enums::ObjectType` and `enums::PropertyIdentifier`; enables `alloc`, without selecting `std`. |
 
 Without `alloc`, `error::Error` keeps only the variants that own nothing. A

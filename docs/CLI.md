@@ -1490,7 +1490,10 @@ object by identifier and by name, and `present-value`.
   pass your own with `--base-iri`. The base must be ASCII, start with a
   scheme (`http:`, `urn:` and so on), hold no space, control character,
   backtick or any of `<>"{}|^\`, use `%` only in a two-digit hex escape,
-  hold at most one `#`, and end in `/` or `#`.
+  hold at most one `#`, and end in `/` or `#`. Give each site or
+  internetwork a base of its own: a device instance is unique only within
+  one internetwork, so two sites' exports under one base can name
+  different devices with the same node.
 - Stdout carries only the Turtle, or nothing with `-o FILE`, which writes a
   new file and refuses one that exists. A summary goes to stderr either
   way; `--format` and `--json` don't apply. When the device has no object

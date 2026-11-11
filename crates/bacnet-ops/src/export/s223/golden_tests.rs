@@ -218,3 +218,48 @@ fn golden_cases_hold_what_they_test() {
             .contains("# Incomplete: the reading stopped early (analog-input,9: timeout?@prefix).")
     );
 }
+
+/// The vendored ontology still declares the namespaces the writer emits
+/// for the external reference: a refresh that moves the `bacnet:` vocabulary
+/// (to a later edition's, say) fails here until the writer moves with it.
+/// A plain text search; the repository has no RDF parser.
+#[test]
+fn vendored_ontology_declares_the_written_namespaces() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/open223/223p.ttl");
+    let ontology =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let written = |prefix: &str| {
+        super::turtle::PREFIXES
+            .iter()
+            .find(|(p, _)| *p == prefix)
+            .map(|(_, iri)| *iri)
+            .unwrap()
+    };
+    for prefix in ["bacnet", "s223"] {
+        let declaration = format!("@prefix {prefix}: <{}> .", written(prefix));
+        assert!(
+            ontology.lines().any(|line| line == declaration),
+            "{} no longer declares {declaration}",
+            path.display()
+        );
+    }
+    // The external-reference shape's paths are in that vocabulary.
+    let shape = ontology
+        .split("s223:BACnetExternalReferenceShape a sh:NodeShape")
+        .nth(1)
+        .expect("the external-reference shape");
+    let shape = shape.split("\n\n").next().unwrap();
+    for property in [
+        "device-identifier",
+        "device-name",
+        "object-identifier",
+        "object-name",
+        "property-identifier",
+        "priority-for-writing",
+    ] {
+        assert!(
+            shape.contains(&format!("sh:path bacnet:{property}")),
+            "the shape has no bacnet:{property} path"
+        );
+    }
+}

@@ -75,7 +75,8 @@ const PYTHON_METHOD_SUFFIXES: &[&str] = &[
 /// `BACnetClient` methods in the stub whose name names no service, so they
 /// count for none. Some send a service another method already names
 /// (`discover` and `who_is`, `unsubscribe_cov` and `subscribe_cov`,
-/// `read_log_page` and `read_range`); the rest send none: lifecycle,
+/// `read_log_page` and `read_range`, `export_223_experimental` and the
+/// ReadProperty and ReadPropertyMultiple readers); the rest send none: lifecycle,
 /// accessors, event streams, and BVLL or network-layer messages. Generation
 /// fails on a method that is neither here nor named after a service, and on
 /// an entry here the stub no longer has.
@@ -87,6 +88,7 @@ const PYTHON_OTHER_METHODS: &[&str] = &[
     "discover",
     "unsubscribe_cov",
     "read_log_page",
+    "export_223_experimental",
     "i_have_events",
     "cov_notifications",
     "network_reports",

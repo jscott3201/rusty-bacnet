@@ -23,6 +23,9 @@ std = ["alloc"]
 # on targets with atomic compare-and-swap, the B/IP port contract (`bip_port`).
 alloc = ["dep:smallvec"]
 serde = ["alloc", "dep:serde", "serde/alloc"]
+# The BACnet engineering units as QUDT unit and quantity-kind local names, with
+# lookups both ways (`qudt`): const data, no allocation, no dependency (#2448).
+qudt = []
 
 [dependencies]
 bacnet-npdu = { workspace = true }

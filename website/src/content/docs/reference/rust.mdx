@@ -39,7 +39,7 @@ Types, the APDU codec and the service requests and responses. They build with `s
 
 | Crate | Purpose | Features | Depends on |
 |---|---|---|---|
-| <a href={`https://docs.rs/bacnet-types/${release}`}>bacnet-types</a> | BACnet protocol types, enums, and primitives per ASHRAE 135-2020. | `alloc`, `serde`, `std` (default) | `bacnet-npdu` |
+| <a href={`https://docs.rs/bacnet-types/${release}`}>bacnet-types</a> | BACnet protocol types, enums, and primitives per ASHRAE 135-2020. | `alloc`, `qudt`, `serde`, `std` (default) | `bacnet-npdu` |
 | <a href={`https://docs.rs/bacnet-encoding/${release}`}>bacnet-encoding</a> | BACnet ASN.1/BER encoding, APDU and NPDU codecs per ASHRAE 135-2020. | `alloc`, `heapless`, `std` (default) | `bacnet-npdu`, `bacnet-types` |
 | <a href={`https://docs.rs/bacnet-services/${release}`}>bacnet-services</a> | BACnet service request/response encode/decode per ASHRAE 135-2020. | `alloc`, `std` (default) | `bacnet-encoding`, `bacnet-types` |
 

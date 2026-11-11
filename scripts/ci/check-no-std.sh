@@ -74,6 +74,7 @@ checks=(
   "bacnet-router-core bip,mstp"
   "bacnet-types -"
   "bacnet-types alloc"
+  "bacnet-types qudt"
   "bacnet-types serde"
   "bacnet-encoding -"
   "bacnet-encoding heapless"

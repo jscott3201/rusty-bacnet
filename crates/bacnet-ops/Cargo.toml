@@ -19,7 +19,7 @@ targets = []
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
-bacnet-types = { workspace = true, features = ["std"] }
+bacnet-types = { workspace = true, features = ["std", "qudt"] }
 bacnet-encoding = { workspace = true, features = ["std"] }
 bacnet-services = { workspace = true, features = ["std"] }
 bacnet-transport = { workspace = true, features = ["ipv6"] }
