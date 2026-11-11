@@ -7,7 +7,7 @@
 # comment and description of the original was removed.
 # Regenerate: python3 scripts/xd_strip.py <bacnet-data-types.xml> <bacnet-object-types.xml> testdata/ashrae-xd
 
-# object <name>, then one line per property: <identifier> <name> <datatype> [flag=value ...].
+# object <name>, then one line per property: <identifier> <name> <datatype> [size=N] [flag=value ...].
 
 object 0-AccessCredentialObject
 28 description String optional=true
@@ -57,12 +57,12 @@ object 0-AccessDoorObject
 79 object-type Enumerated:0-BACnetObjectType writable=false
 81 out-of-service Boolean
 85 present-value Enumerated:0-BACnetDoorValue writable=true commandable=true
-87 priority-array Array<0-BACnetOptionalDoorValue> writable=false
+87 priority-array Array<0-BACnetOptionalDoorValue> size=16 writable=false
 103 reliability Enumerated:0-BACnetReliability required-with=reliability-evaluation-inhibit
 104 relinquish-default Enumerated:0-BACnetDoorValue
 111 status-flags BitString:0-BACnetStatusFlags writable=false
 113 time-delay Unsigned optional=true required-with=acked-transitions,alarm-values,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type,time-delay-normal
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,alarm-values,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type,time-delay,time-delay-normal
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,alarm-values,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type,time-delay,time-delay-normal
 158 maintenance-required Enumerated:0-BACnetMaintenance optional=true
 168 profile-name String optional=true
 226 door-alarm-state Enumerated:0-BACnetDoorAlarmState optional=true required-with=acked-transitions,alarm-values,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type,time-delay,time-delay-normal
@@ -75,19 +75,19 @@ object 0-AccessDoorObject
 233 lock-status Enumerated:0-BACnetLockStatus optional=true
 234 masked-alarm-values List<0-BACnetDoorAlarmState> optional=true
 235 secured-status Enumerated:0-BACnetDoorSecuredStatus optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,alarm-values,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type,time-delay,time-delay-normal
 354 event-algorithm-inhibit Boolean optional=true
 355 event-algorithm-inhibit-ref Sequence:0-BACnetObjectPropertyReference optional=true
 356 time-delay-normal Unsigned optional=true
 357 reliability-evaluation-inhibit Boolean optional=true
 371 property-list Array<0-BACnetPropertyIdentifier> writable=false
-430 command-time-array Array<0-BACnetTimeStamp> optional=true writable=false
+430 command-time-array Array<0-BACnetTimeStamp> size=16 optional=true writable=false
 431 current-command-priority Choice:0-BACnetOptionalUnsigned writable=false
 432 last-command-time Choice:0-BACnetTimeStamp optional=true writable=false
 433 value-source Choice:0-BACnetValueSource optional=true writable=false
-434 value-source-array Array<0-BACnetValueSource> optional=true writable=false
+434 value-source-array Array<0-BACnetValueSource> size=16 optional=true writable=false
 485 profile-location String optional=true
 486 tags Array<0-BACnetNameValue> optional=true
 498 audit-level Enumerated:0-BACnetAuditLevel optional=true
@@ -108,7 +108,7 @@ object 0-AccessPointObject
 88 priority-for-writing Unsigned:0-Unsigned8
 103 reliability Enumerated:0-BACnetReliability required-with=reliability-evaluation-inhibit
 111 status-flags BitString:0-BACnetStatusFlags writable=false
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=access-alarm-events,access-transaction-events,acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=access-alarm-events,access-transaction-events,acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type
 168 profile-name String optional=true
 245 access-alarm-events List<0-BACnetAccessEvent> optional=true required-with=access-transaction-events,acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type
 246 access-doors Array<0-BACnetDeviceObjectReference>
@@ -140,8 +140,8 @@ object 0-AccessPointObject
 321 zone-to Sequence:0-BACnetDeviceObjectReference optional=true
 322 access-event-tag Unsigned
 326 verification-time Unsigned optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=access-alarm-events,access-transaction-events,acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type
 354 event-algorithm-inhibit Boolean optional=true
 355 event-algorithm-inhibit-ref Sequence:0-BACnetObjectPropertyReference optional=true
@@ -210,7 +210,7 @@ object 0-AccessZoneObject
 103 reliability Enumerated:0-BACnetReliability required-with=reliability-evaluation-inhibit
 111 status-flags BitString:0-BACnetStatusFlags writable=false
 113 time-delay Unsigned optional=true required-with=acked-transitions,alarm-values,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type,time-delay-normal
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,alarm-values,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type,time-delay,time-delay-normal
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,alarm-values,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type,time-delay,time-delay-normal
 168 profile-name String optional=true
 176 adjust-value Integer optional=true writable=true required-with=acked-transitions,alarm-values,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type,time-delay,time-delay-normal
 266 credentials-in-zone List<0-BACnetDeviceObjectReference> optional=true
@@ -228,8 +228,8 @@ object 0-AccessZoneObject
 300 passback-mode Enumerated:0-BACnetAccessPassbackMode optional=true
 301 passback-timeout Unsigned optional=true
 323 global-identifier Unsigned:0-Unsigned32 writable=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,alarm-values,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type,time-delay,time-delay-normal
 354 event-algorithm-inhibit Boolean optional=true
 355 event-algorithm-inhibit-ref Sequence:0-BACnetObjectPropertyReference optional=true
@@ -262,7 +262,7 @@ object 0-AccumulatorObject
 111 status-flags BitString:0-BACnetStatusFlags writable=false
 113 time-delay Unsigned optional=true required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay-normal
 117 units Enumerated:0-BACnetEngineeringUnits
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay,time-delay-normal
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay,time-delay-normal
 168 profile-name String optional=true
 182 limit-monitoring-interval Unsigned optional=true required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay,time-delay-normal
 183 logging-object ObjectIdentifier optional=true
@@ -273,8 +273,8 @@ object 0-AccumulatorObject
 190 value-before-change Unsigned optional=true
 191 value-set Unsigned optional=true
 192 value-change-time DateTime optional=true writable=false
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay,time-delay-normal
 354 event-algorithm-inhibit Boolean optional=true
 355 event-algorithm-inhibit-ref Sequence:0-BACnetObjectPropertyReference optional=true
@@ -299,10 +299,10 @@ object 0-AlertEnrollmentObject
 77 object-name String
 79 object-type Enumerated:0-BACnetObjectType writable=false
 85 present-value ObjectIdentifier writable=false
-130 event-time-stamps Array<0-BACnetTimeStamp> writable=false
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 writable=false
 168 profile-name String optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean
 354 event-algorithm-inhibit Boolean optional=true
 355 event-algorithm-inhibit-ref Sequence:0-BACnetObjectPropertyReference optional=true
@@ -338,10 +338,10 @@ object 0-AnalogInputObject
 113 time-delay Unsigned optional=true required-with=acked-transitions,deadband,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay-normal
 117 units Enumerated:0-BACnetEngineeringUnits
 118 update-interval Unsigned optional=true
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,deadband,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay,time-delay-normal
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,deadband,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay,time-delay-normal
 168 profile-name String optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,deadband,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay,time-delay-normal
 354 event-algorithm-inhibit Boolean optional=true
 355 event-algorithm-inhibit-ref Sequence:0-BACnetObjectPropertyReference optional=true
@@ -376,17 +376,17 @@ object 0-AnalogOutputObject
 79 object-type Enumerated:0-BACnetObjectType writable=false
 81 out-of-service Boolean
 85 present-value Real writable=true commandable=true
-87 priority-array Array<0-BACnetOptionalReal> writable=false
+87 priority-array Array<0-BACnetOptionalReal> size=16 writable=false
 103 reliability Enumerated:0-BACnetReliability optional=true required-with=reliability-evaluation-inhibit
 104 relinquish-default Real
 106 resolution Real optional=true writable=false
 111 status-flags BitString:0-BACnetStatusFlags writable=false
 113 time-delay Unsigned optional=true required-with=acked-transitions,deadband,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay-normal
 117 units Enumerated:0-BACnetEngineeringUnits
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,deadband,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay,time-delay-normal
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,deadband,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay,time-delay-normal
 168 profile-name String optional=true
-351 event-message-texts Array<String> optional=true writable=false required-with=event-message-texts-config
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false required-with=event-message-texts-config
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,deadband,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay,time-delay-normal
 354 event-algorithm-inhibit Boolean optional=true required-with=event-algorithm-inhibit-ref
 355 event-algorithm-inhibit-ref Sequence:0-BACnetObjectPropertyReference optional=true
@@ -394,11 +394,11 @@ object 0-AnalogOutputObject
 357 reliability-evaluation-inhibit Boolean optional=true
 371 property-list Array<0-BACnetPropertyIdentifier> writable=false
 387 interface-value Choice:0-BACnetOptionalReal optional=true writable=false
-430 command-time-array Array<0-BACnetTimeStamp> optional=true writable=false
+430 command-time-array Array<0-BACnetTimeStamp> size=16 optional=true writable=false
 431 current-command-priority Choice:0-BACnetOptionalUnsigned writable=false
 432 last-command-time Choice:0-BACnetTimeStamp optional=true writable=false
 433 value-source Choice:0-BACnetValueSource optional=true writable=false
-434 value-source-array Array<0-BACnetValueSource> optional=true writable=false
+434 value-source-array Array<0-BACnetValueSource> size=16 optional=true writable=false
 485 profile-location String optional=true
 486 tags Array<0-BACnetNameValue> optional=true
 498 audit-level Enumerated:0-BACnetAuditLevel optional=true
@@ -424,17 +424,17 @@ object 0-AnalogValueObject
 79 object-type Enumerated:0-BACnetObjectType writable=false
 81 out-of-service Boolean
 85 present-value Real
-87 priority-array Array<0-BACnetOptionalReal> optional=true writable=false
+87 priority-array Array<0-BACnetOptionalReal> size=16 optional=true writable=false
 103 reliability Enumerated:0-BACnetReliability optional=true required-with=reliability-evaluation-inhibit
 104 relinquish-default Real optional=true
 106 resolution Real optional=true writable=false
 111 status-flags BitString:0-BACnetStatusFlags writable=false
 113 time-delay Unsigned optional=true required-with=acked-transitions,deadband,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay-normal
 117 units Enumerated:0-BACnetEngineeringUnits
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,deadband,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay,time-delay-normal
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,deadband,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay,time-delay-normal
 168 profile-name String optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,deadband,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay,time-delay-normal
 354 event-algorithm-inhibit Boolean optional=true
 355 event-algorithm-inhibit-ref Sequence:0-BACnetObjectPropertyReference optional=true
@@ -443,11 +443,11 @@ object 0-AnalogValueObject
 371 property-list Array<0-BACnetPropertyIdentifier> writable=false
 388 fault-high-limit Real optional=true
 389 fault-low-limit Real optional=true
-430 command-time-array Array<0-BACnetTimeStamp> optional=true writable=false
+430 command-time-array Array<0-BACnetTimeStamp> size=16 optional=true writable=false
 431 current-command-priority Choice:0-BACnetOptionalUnsigned optional=true writable=false
 432 last-command-time Choice:0-BACnetTimeStamp optional=true writable=false
 433 value-source Choice:0-BACnetValueSource optional=true writable=false
-434 value-source-array Array<0-BACnetValueSource> optional=true writable=false
+434 value-source-array Array<0-BACnetValueSource> size=16 optional=true writable=false
 485 profile-location String optional=true
 486 tags Array<0-BACnetNameValue> optional=true
 498 audit-level Enumerated:0-BACnetAuditLevel optional=true
@@ -468,15 +468,15 @@ object 0-AuditLogObject
 103 reliability Enumerated:0-BACnetReliability optional=true required-with=reliability-evaluation-inhibit
 111 status-flags BitString:0-BACnetStatusFlags writable=false
 126 buffer-size Unsigned:0-Unsigned32
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type
 131 log-buffer List<0-BACnetAuditLogRecord> writable=false readable=false
 133 enable Boolean writable=true
 141 record-count Unsigned:0-Unsigned64 writable=false
 145 total-record-count Unsigned:0-Unsigned64 writable=false
 159 member-of Sequence:0-BACnetDeviceObjectReference optional=true
 168 profile-name String optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type
 357 reliability-evaluation-inhibit Boolean optional=true
 371 property-list Array<0-BACnetPropertyIdentifier> writable=false
@@ -499,10 +499,10 @@ object 0-AuditReporterObject
 79 object-type Enumerated:0-BACnetObjectType writable=false
 103 reliability Enumerated:0-BACnetReliability required-with=reliability-evaluation-inhibit
 111 status-flags BitString:0-BACnetStatusFlags writable=false
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type
 168 profile-name String optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type
 357 reliability-evaluation-inhibit Boolean optional=true
 371 property-list Array<0-BACnetPropertyIdentifier> writable=false
@@ -564,10 +564,10 @@ object 0-BinaryInputObject
 113 time-delay Unsigned optional=true required-with=acked-transitions,alarm-value,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type,time-delay-normal
 114 time-of-active-time-reset DateTime optional=true
 115 time-of-state-count-reset DateTime optional=true
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,alarm-value,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type,time-delay,time-delay-normal
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,alarm-value,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type,time-delay,time-delay-normal
 168 profile-name String optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,alarm-value,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type,time-delay,time-delay-normal
 354 event-algorithm-inhibit Boolean optional=true
 355 event-algorithm-inhibit-ref Sequence:0-BACnetObjectPropertyReference optional=true
@@ -595,15 +595,15 @@ object 0-BinaryLightingOutputObject
 81 out-of-service Boolean
 84 polarity Enumerated:0-BACnetPolarity optional=true
 85 present-value Enumerated:0-BACnetBinaryLightingPV writable=true commandable=true
-87 priority-array Array<0-BACnetOptionalBinaryLightingPV> writable=false
+87 priority-array Array<0-BACnetOptionalBinaryLightingPV> size=16 writable=false
 103 reliability Enumerated:0-BACnetReliability optional=true required-with=reliability-evaluation-inhibit
 104 relinquish-default Enumerated:0-BACnetBinaryLightingPV
 111 status-flags BitString:0-BACnetStatusFlags writable=false
 114 time-of-active-time-reset DateTime optional=true
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false
 168 profile-name String optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true
 357 reliability-evaluation-inhibit Boolean optional=true
 371 property-list Array<0-BACnetPropertyIdentifier> writable=false
@@ -613,11 +613,11 @@ object 0-BinaryLightingOutputObject
 386 egress-active Boolean writable=false
 391 strike-count Unsigned optional=true
 392 time-of-strike-count-reset DateTime optional=true
-430 command-time-array Array<0-BACnetTimeStamp> optional=true writable=false
+430 command-time-array Array<0-BACnetTimeStamp> size=16 optional=true writable=false
 431 current-command-priority Choice:0-BACnetOptionalUnsigned writable=false
 432 last-command-time Choice:0-BACnetTimeStamp optional=true writable=false
 433 value-source Choice:0-BACnetValueSource optional=true writable=false
-434 value-source-array Array<0-BACnetValueSource> optional=true writable=false
+434 value-source-array Array<0-BACnetValueSource> size=16 optional=true writable=false
 485 profile-location String optional=true
 486 tags Array<0-BACnetNameValue> optional=true
 498 audit-level Enumerated:0-BACnetAuditLevel optional=true
@@ -649,17 +649,17 @@ object 0-BinaryOutputObject
 81 out-of-service Boolean
 84 polarity Enumerated:0-BACnetPolarity
 85 present-value Enumerated:0-BACnetBinaryPV writable=true commandable=true
-87 priority-array Array<0-BACnetOptionalBinaryPV> writable=false
+87 priority-array Array<0-BACnetOptionalBinaryPV> size=16 writable=false
 103 reliability Enumerated:0-BACnetReliability optional=true required-with=reliability-evaluation-inhibit
 104 relinquish-default Enumerated:0-BACnetBinaryPV
 111 status-flags BitString:0-BACnetStatusFlags writable=false
 113 time-delay Unsigned optional=true required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type,time-delay-normal
 114 time-of-active-time-reset DateTime optional=true
 115 time-of-state-count-reset DateTime optional=true
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type,time-delay,time-delay-normal
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type,time-delay,time-delay-normal
 168 profile-name String optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type,time-delay,time-delay-normal
 354 event-algorithm-inhibit Boolean optional=true
 355 event-algorithm-inhibit-ref Sequence:0-BACnetObjectPropertyReference optional=true
@@ -667,11 +667,11 @@ object 0-BinaryOutputObject
 357 reliability-evaluation-inhibit Boolean optional=true
 371 property-list Array<0-BACnetPropertyIdentifier> writable=false
 387 interface-value Choice:0-BACnetOptionalBinaryPV optional=true writable=false
-430 command-time-array Array<0-BACnetTimeStamp> optional=true writable=false
+430 command-time-array Array<0-BACnetTimeStamp> size=16 optional=true writable=false
 431 current-command-priority Choice:0-BACnetOptionalUnsigned writable=false
 432 last-command-time Choice:0-BACnetTimeStamp optional=true writable=false
 433 value-source Choice:0-BACnetValueSource optional=true writable=false
-434 value-source-array Array<0-BACnetValueSource> optional=true writable=false
+434 value-source-array Array<0-BACnetValueSource> size=16 optional=true writable=false
 485 profile-location String optional=true
 486 tags Array<0-BACnetNameValue> optional=true
 498 audit-level Enumerated:0-BACnetAuditLevel optional=true
@@ -698,28 +698,28 @@ object 0-BinaryValueObject
 79 object-type Enumerated:0-BACnetObjectType writable=false
 81 out-of-service Boolean
 85 present-value Enumerated:0-BACnetBinaryPV
-87 priority-array Array<0-BACnetOptionalBinaryPV> optional=true writable=false
+87 priority-array Array<0-BACnetOptionalBinaryPV> size=16 optional=true writable=false
 103 reliability Enumerated:0-BACnetReliability optional=true required-with=reliability-evaluation-inhibit
 104 relinquish-default Enumerated:0-BACnetBinaryPV optional=true
 111 status-flags BitString:0-BACnetStatusFlags writable=false
 113 time-delay Unsigned optional=true required-with=acked-transitions,alarm-value,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type,time-delay-normal
 114 time-of-active-time-reset DateTime optional=true
 115 time-of-state-count-reset DateTime optional=true
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,alarm-value,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type,time-delay,time-delay-normal
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,alarm-value,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type,time-delay,time-delay-normal
 168 profile-name String optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,alarm-value,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type,time-delay,time-delay-normal
 354 event-algorithm-inhibit Boolean optional=true
 355 event-algorithm-inhibit-ref Sequence:0-BACnetObjectPropertyReference optional=true
 356 time-delay-normal Unsigned optional=true
 357 reliability-evaluation-inhibit Boolean optional=true
 371 property-list Array<0-BACnetPropertyIdentifier> writable=false
-430 command-time-array Array<0-BACnetTimeStamp> optional=true writable=false
+430 command-time-array Array<0-BACnetTimeStamp> size=16 optional=true writable=false
 431 current-command-priority Choice:0-BACnetOptionalUnsigned optional=true writable=false
 432 last-command-time Choice:0-BACnetTimeStamp optional=true writable=false
 433 value-source Choice:0-BACnetValueSource optional=true writable=false
-434 value-source-array Array<0-BACnetValueSource> optional=true writable=false
+434 value-source-array Array<0-BACnetValueSource> size=16 optional=true writable=false
 485 profile-location String optional=true
 486 tags Array<0-BACnetNameValue> optional=true
 498 audit-level Enumerated:0-BACnetAuditLevel optional=true
@@ -739,28 +739,28 @@ object 0-BitstringValueObject
 79 object-type Enumerated:0-BACnetObjectType writable=false
 81 out-of-service Boolean optional=true
 85 present-value BitString
-87 priority-array Array<0-BACnetOptionalBitString> optional=true writable=false
+87 priority-array Array<0-BACnetOptionalBitString> size=16 optional=true writable=false
 103 reliability Enumerated:0-BACnetReliability optional=true required-with=reliability-evaluation-inhibit
 104 relinquish-default BitString optional=true
 111 status-flags BitString:0-BACnetStatusFlags writable=false
 113 time-delay Unsigned optional=true required-with=acked-transitions,alarm-values,bit-mask,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type,time-delay-normal
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,alarm-values,bit-mask,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type,time-delay,time-delay-normal
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,alarm-values,bit-mask,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type,time-delay,time-delay-normal
 168 profile-name String optional=true
 342 bit-mask BitString optional=true required-with=acked-transitions,alarm-values,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type,time-delay,time-delay-normal
 343 bit-text Array<String> optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,alarm-values,bit-mask,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type,time-delay,time-delay-normal
 354 event-algorithm-inhibit Boolean optional=true
 355 event-algorithm-inhibit-ref Sequence:0-BACnetObjectPropertyReference optional=true
 356 time-delay-normal Unsigned optional=true
 357 reliability-evaluation-inhibit Boolean optional=true
 371 property-list Array<0-BACnetPropertyIdentifier> writable=false
-430 command-time-array Array<0-BACnetTimeStamp> optional=true writable=false
+430 command-time-array Array<0-BACnetTimeStamp> size=16 optional=true writable=false
 431 current-command-priority Choice:0-BACnetOptionalUnsigned optional=true writable=false
 432 last-command-time Choice:0-BACnetTimeStamp optional=true writable=false
 433 value-source Choice:0-BACnetValueSource optional=true writable=false
-434 value-source-array Array<0-BACnetValueSource> optional=true writable=false
+434 value-source-array Array<0-BACnetValueSource> size=16 optional=true writable=false
 485 profile-location String optional=true
 486 tags Array<0-BACnetNameValue> optional=true
 498 audit-level Enumerated:0-BACnetAuditLevel optional=true
@@ -796,10 +796,10 @@ object 0-ChannelObject
 85 present-value Choice:0-BACnetChannelValue writable=true commandable=true
 103 reliability Enumerated:0-BACnetReliability optional=true required-with=reliability-evaluation-inhibit
 111 status-flags BitString:0-BACnetStatusFlags writable=false
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-state,notification-class,notify-type
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-state,notification-class,notify-type
 168 profile-name String optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,event-enable,event-message-texts,event-message-texts-config,event-state,event-time-stamps,notification-class,notify-type
 357 reliability-evaluation-inhibit Boolean optional=true
 365 allow-group-delay-inhibit Boolean optional=true
@@ -830,26 +830,26 @@ object 0-CharacterstringValueObject
 79 object-type Enumerated:0-BACnetObjectType writable=false
 81 out-of-service Boolean optional=true
 85 present-value String
-87 priority-array Array<0-BACnetOptionalCharacterString> optional=true writable=false
+87 priority-array Array<0-BACnetOptionalCharacterString> size=16 optional=true writable=false
 103 reliability Enumerated:0-BACnetReliability optional=true required-with=reliability-evaluation-inhibit
 104 relinquish-default String optional=true
 111 status-flags BitString:0-BACnetStatusFlags writable=false
 113 time-delay Unsigned optional=true required-with=acked-transitions,alarm-values,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type,time-delay-normal
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,alarm-values,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type,time-delay,time-delay-normal
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,alarm-values,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type,time-delay,time-delay-normal
 168 profile-name String optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,alarm-values,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type,time-delay,time-delay-normal
 354 event-algorithm-inhibit Boolean optional=true
 355 event-algorithm-inhibit-ref Sequence:0-BACnetObjectPropertyReference optional=true
 356 time-delay-normal Unsigned optional=true
 357 reliability-evaluation-inhibit Boolean optional=true
 371 property-list Array<0-BACnetPropertyIdentifier> writable=false
-430 command-time-array Array<0-BACnetTimeStamp> optional=true writable=false
+430 command-time-array Array<0-BACnetTimeStamp> size=16 optional=true writable=false
 431 current-command-priority Choice:0-BACnetOptionalUnsigned optional=true writable=false
 432 last-command-time Choice:0-BACnetTimeStamp optional=true writable=false
 433 value-source Choice:0-BACnetValueSource optional=true writable=false
-434 value-source-array Array<0-BACnetValueSource> optional=true writable=false
+434 value-source-array Array<0-BACnetValueSource> size=16 optional=true writable=false
 485 profile-location String optional=true
 486 tags Array<0-BACnetNameValue> optional=true
 498 audit-level Enumerated:0-BACnetAuditLevel optional=true
@@ -917,10 +917,10 @@ object 0-CommandObject
 85 present-value Unsigned writable=true
 103 reliability Enumerated:0-BACnetReliability optional=true required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type
 111 status-flags BitString:0-BACnetStatusFlags optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type
 168 profile-name String optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type
 357 reliability-evaluation-inhibit Boolean optional=true
 371 property-list Array<0-BACnetPropertyIdentifier> writable=false
@@ -944,13 +944,13 @@ object 0-CredentialDataInputObject
 85 present-value Sequence:0-BACnetAuthenticationFactor
 103 reliability Enumerated:0-BACnetReliability required-with=reliability-evaluation-inhibit
 111 status-flags BitString:0-BACnetStatusFlags writable=false
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-state,notification-class,notify-type
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-state,notification-class,notify-type
 168 profile-name String optional=true
 189 update-time Choice:0-BACnetTimeStamp
 304 supported-formats Array<0-BACnetAuthenticationFactorFormat>
 305 supported-format-classes Array<Unsigned> optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,event-enable,event-message-texts,event-message-texts-config,event-state,event-time-stamps,notification-class,notify-type
 357 reliability-evaluation-inhibit Boolean optional=true
 371 property-list Array<0-BACnetPropertyIdentifier> writable=false
@@ -971,22 +971,22 @@ object 0-DatePatternValueObject
 79 object-type Enumerated:0-BACnetObjectType writable=false
 81 out-of-service Boolean optional=true
 85 present-value DatePattern
-87 priority-array Array<0-BACnetOptionalDatePattern> optional=true writable=false
+87 priority-array Array<0-BACnetOptionalDatePattern> size=16 optional=true writable=false
 103 reliability Enumerated:0-BACnetReliability optional=true required-with=reliability-evaluation-inhibit
 104 relinquish-default DatePattern optional=true
 111 status-flags BitString:0-BACnetStatusFlags writable=false
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type
 168 profile-name String optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type
 357 reliability-evaluation-inhibit Boolean optional=true
 371 property-list Array<0-BACnetPropertyIdentifier> writable=false
-430 command-time-array Array<0-BACnetTimeStamp> optional=true writable=false
+430 command-time-array Array<0-BACnetTimeStamp> size=16 optional=true writable=false
 431 current-command-priority Choice:0-BACnetOptionalUnsigned optional=true writable=false
 432 last-command-time Choice:0-BACnetTimeStamp optional=true writable=false
 433 value-source Choice:0-BACnetValueSource optional=true writable=false
-434 value-source-array Array<0-BACnetValueSource> optional=true writable=false
+434 value-source-array Array<0-BACnetValueSource> size=16 optional=true writable=false
 485 profile-location String optional=true
 486 tags Array<0-BACnetNameValue> optional=true
 498 audit-level Enumerated:0-BACnetAuditLevel optional=true
@@ -1005,22 +1005,22 @@ object 0-DateValueObject
 79 object-type Enumerated:0-BACnetObjectType writable=false
 81 out-of-service Boolean optional=true
 85 present-value Date
-87 priority-array Array<0-BACnetOptionalDate> optional=true writable=false
+87 priority-array Array<0-BACnetOptionalDate> size=16 optional=true writable=false
 103 reliability Enumerated:0-BACnetReliability optional=true required-with=reliability-evaluation-inhibit
 104 relinquish-default Date optional=true
 111 status-flags BitString:0-BACnetStatusFlags writable=false
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type
 168 profile-name String optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type
 357 reliability-evaluation-inhibit Boolean optional=true
 371 property-list Array<0-BACnetPropertyIdentifier> writable=false
-430 command-time-array Array<0-BACnetTimeStamp> optional=true writable=false
+430 command-time-array Array<0-BACnetTimeStamp> size=16 optional=true writable=false
 431 current-command-priority Choice:0-BACnetOptionalUnsigned optional=true writable=false
 432 last-command-time Choice:0-BACnetTimeStamp optional=true writable=false
 433 value-source Choice:0-BACnetValueSource optional=true writable=false
-434 value-source-array Array<0-BACnetValueSource> optional=true writable=false
+434 value-source-array Array<0-BACnetValueSource> size=16 optional=true writable=false
 485 profile-location String optional=true
 486 tags Array<0-BACnetNameValue> optional=true
 498 audit-level Enumerated:0-BACnetAuditLevel optional=true
@@ -1039,23 +1039,23 @@ object 0-DatetimePatternValueObject
 79 object-type Enumerated:0-BACnetObjectType writable=false
 81 out-of-service Boolean optional=true
 85 present-value DateTimePattern
-87 priority-array Array<0-BACnetOptionalDateTimePattern> optional=true writable=false
+87 priority-array Array<0-BACnetOptionalDateTimePattern> size=16 optional=true writable=false
 103 reliability Enumerated:0-BACnetReliability optional=true required-with=reliability-evaluation-inhibit
 104 relinquish-default DateTimePattern optional=true
 111 status-flags BitString:0-BACnetStatusFlags writable=false
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type
 168 profile-name String optional=true
 344 is-utc Boolean optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type
 357 reliability-evaluation-inhibit Boolean optional=true
 371 property-list Array<0-BACnetPropertyIdentifier> writable=false
-430 command-time-array Array<0-BACnetTimeStamp> optional=true writable=false
+430 command-time-array Array<0-BACnetTimeStamp> size=16 optional=true writable=false
 431 current-command-priority Choice:0-BACnetOptionalUnsigned optional=true writable=false
 432 last-command-time Choice:0-BACnetTimeStamp optional=true writable=false
 433 value-source Choice:0-BACnetValueSource optional=true writable=false
-434 value-source-array Array<0-BACnetValueSource> optional=true writable=false
+434 value-source-array Array<0-BACnetValueSource> size=16 optional=true writable=false
 485 profile-location String optional=true
 486 tags Array<0-BACnetNameValue> optional=true
 498 audit-level Enumerated:0-BACnetAuditLevel optional=true
@@ -1074,23 +1074,23 @@ object 0-DatetimeValueObject
 79 object-type Enumerated:0-BACnetObjectType writable=false
 81 out-of-service Boolean optional=true
 85 present-value DateTime
-87 priority-array Array<0-BACnetOptionalDateTime> optional=true writable=false
+87 priority-array Array<0-BACnetOptionalDateTime> size=16 optional=true writable=false
 103 reliability Enumerated:0-BACnetReliability optional=true required-with=reliability-evaluation-inhibit
 104 relinquish-default DateTime optional=true
 111 status-flags BitString:0-BACnetStatusFlags writable=false
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type
 168 profile-name String optional=true
 344 is-utc Boolean optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type
 357 reliability-evaluation-inhibit Boolean optional=true
 371 property-list Array<0-BACnetPropertyIdentifier> writable=false
-430 command-time-array Array<0-BACnetTimeStamp> optional=true writable=false
+430 command-time-array Array<0-BACnetTimeStamp> size=16 optional=true writable=false
 431 current-command-priority Choice:0-BACnetOptionalUnsigned optional=true writable=false
 432 last-command-time Choice:0-BACnetTimeStamp optional=true writable=false
 433 value-source Choice:0-BACnetValueSource optional=true writable=false
-434 value-source-array Array<0-BACnetValueSource> optional=true writable=false
+434 value-source-array Array<0-BACnetValueSource> size=16 optional=true writable=false
 485 profile-location String optional=true
 486 tags Array<0-BACnetNameValue> optional=true
 498 audit-level Enumerated:0-BACnetAuditLevel optional=true
@@ -1135,7 +1135,7 @@ object 0-DeviceObject
 120 vendor-identifier Unsigned:0-Unsigned16 writable=false
 121 vendor-name String
 122 vt-classes-supported List<0-BACnetVTClass> optional=true
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type
 139 protocol-revision Unsigned writable=false
 152 active-cov-subscriptions List<0-BACnetCOVSubscription> optional=true writable=false
 153 backup-failure-timeout Unsigned:0-Unsigned16 optional=true writable=true
@@ -1156,8 +1156,8 @@ object 0-DeviceObject
 339 backup-preparation-time Unsigned:0-Unsigned16 optional=true
 340 restore-completion-time Unsigned:0-Unsigned16 optional=true
 341 restore-preparation-time Unsigned:0-Unsigned16 optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type
 357 reliability-evaluation-inhibit Boolean optional=true
 371 property-list Array<0-BACnetPropertyIdentifier> writable=false
@@ -1203,10 +1203,10 @@ object 0-EscalatorObject
 103 reliability Enumerated:0-BACnetReliability optional=true required-with=reliability-evaluation-inhibit
 111 status-flags BitString:0-BACnetStatusFlags writable=false
 113 time-delay Unsigned optional=true required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-state,event-time-stamps,notification-class,notify-type,time-delay-normal
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-state,notification-class,notify-type,time-delay,time-delay-normal
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-state,notification-class,notify-type,time-delay,time-delay-normal
 168 profile-name String optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-enable,event-message-texts,event-message-texts-config,event-state,event-time-stamps,notification-class,notify-type,time-delay,time-delay-normal
 354 event-algorithm-inhibit Boolean optional=true
 355 event-algorithm-inhibit-ref Sequence:0-BACnetObjectPropertyReference optional=true
@@ -1243,10 +1243,10 @@ object 0-EventEnrollmentObject
 83 event-parameters Choice:0-BACnetEventParameter
 103 reliability Enumerated:0-BACnetReliability required-with=reliability-evaluation-inhibit
 111 status-flags BitString:0-BACnetStatusFlags writable=false
-130 event-time-stamps Array<0-BACnetTimeStamp> writable=false
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 writable=false
 168 profile-name String optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean
 354 event-algorithm-inhibit Boolean optional=true
 355 event-algorithm-inhibit-ref Sequence:0-BACnetObjectPropertyReference optional=true
@@ -1273,7 +1273,7 @@ object 0-EventLogObject
 103 reliability Enumerated:0-BACnetReliability optional=true required-with=reliability-evaluation-inhibit
 111 status-flags BitString:0-BACnetStatusFlags writable=false
 126 buffer-size Unsigned:0-Unsigned32
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,last-notify-record,notification-class,notification-threshold,notify-type,records-since-notification
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,last-notify-record,notification-class,notification-threshold,notify-type,records-since-notification
 131 log-buffer List<0-BACnetEventLogRecord> writable=false readable=false
 133 enable Boolean writable=true
 137 notification-threshold Unsigned:0-Unsigned32 optional=true required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,last-notify-record,notification-class,notify-type,records-since-notification
@@ -1285,8 +1285,8 @@ object 0-EventLogObject
 145 total-record-count Unsigned:0-Unsigned32 writable=false
 168 profile-name String optional=true
 173 last-notify-record Unsigned:0-Unsigned32 optional=true writable=false required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notification-threshold,notify-type,records-since-notification
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,last-notify-record,notification-class,notification-threshold,notify-type,records-since-notification
 354 event-algorithm-inhibit Boolean optional=true
 355 event-algorithm-inhibit-ref Sequence:0-BACnetObjectPropertyReference optional=true
@@ -1334,7 +1334,7 @@ object 0-GlobalGroupObject
 118 update-interval Unsigned optional=true
 127 client-cov-increment Choice:0-BACnetClientCOV optional=true
 128 cov-resubscription-interval Unsigned optional=true
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type,time-delay,time-delay-normal
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type,time-delay,time-delay-normal
 168 profile-name String optional=true
 345 group-members Array<0-BACnetDeviceObjectPropertyReference>
 346 group-member-names Array<String> optional=true
@@ -1342,8 +1342,8 @@ object 0-GlobalGroupObject
 348 requested-update-interval Unsigned optional=true
 349 covu-period Unsigned optional=true
 350 covu-recipients List<0-BACnetRecipient> optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type,time-delay,time-delay-normal
 354 event-algorithm-inhibit Boolean optional=true
 355 event-algorithm-inhibit-ref Sequence:0-BACnetObjectPropertyReference optional=true
@@ -1388,17 +1388,17 @@ object 0-IntegerValueObject
 79 object-type Enumerated:0-BACnetObjectType writable=false
 81 out-of-service Boolean optional=true
 85 present-value Integer
-87 priority-array Array<0-BACnetOptionalInteger> optional=true writable=false
+87 priority-array Array<0-BACnetOptionalInteger> size=16 optional=true writable=false
 103 reliability Enumerated:0-BACnetReliability optional=true required-with=reliability-evaluation-inhibit
 104 relinquish-default Integer optional=true
 106 resolution Integer optional=true writable=false
 111 status-flags BitString:0-BACnetStatusFlags writable=false
 113 time-delay Unsigned optional=true required-with=acked-transitions,deadband,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay-normal
 117 units Enumerated:0-BACnetEngineeringUnits
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,deadband,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay,time-delay-normal
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,deadband,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay,time-delay-normal
 168 profile-name String optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,deadband,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay,time-delay-normal
 354 event-algorithm-inhibit Boolean optional=true
 355 event-algorithm-inhibit-ref Sequence:0-BACnetObjectPropertyReference optional=true
@@ -1407,11 +1407,11 @@ object 0-IntegerValueObject
 371 property-list Array<0-BACnetPropertyIdentifier> writable=false
 388 fault-high-limit Integer optional=true
 389 fault-low-limit Integer optional=true
-430 command-time-array Array<0-BACnetTimeStamp> optional=true writable=false
+430 command-time-array Array<0-BACnetTimeStamp> size=16 optional=true writable=false
 431 current-command-priority Choice:0-BACnetOptionalUnsigned optional=true writable=false
 432 last-command-time Choice:0-BACnetTimeStamp optional=true writable=false
 433 value-source Choice:0-BACnetValueSource optional=true writable=false
-434 value-source-array Array<0-BACnetValueSource> optional=true writable=false
+434 value-source-array Array<0-BACnetValueSource> size=16 optional=true writable=false
 485 profile-location String optional=true
 486 tags Array<0-BACnetNameValue> optional=true
 498 audit-level Enumerated:0-BACnetAuditLevel optional=true
@@ -1437,17 +1437,17 @@ object 0-LargeAnalogValueObject
 79 object-type Enumerated:0-BACnetObjectType writable=false
 81 out-of-service Boolean optional=true
 85 present-value Double
-87 priority-array Array<0-BACnetOptionalDouble> optional=true writable=false
+87 priority-array Array<0-BACnetOptionalDouble> size=16 optional=true writable=false
 103 reliability Enumerated:0-BACnetReliability optional=true required-with=reliability-evaluation-inhibit
 104 relinquish-default Double optional=true
 106 resolution Double optional=true writable=false
 111 status-flags BitString:0-BACnetStatusFlags writable=false
 113 time-delay Unsigned optional=true required-with=acked-transitions,deadband,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay-normal
 117 units Enumerated:0-BACnetEngineeringUnits
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,deadband,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay,time-delay-normal
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,deadband,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay,time-delay-normal
 168 profile-name String optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,deadband,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay,time-delay-normal
 354 event-algorithm-inhibit Boolean optional=true
 355 event-algorithm-inhibit-ref Sequence:0-BACnetObjectPropertyReference optional=true
@@ -1456,11 +1456,11 @@ object 0-LargeAnalogValueObject
 371 property-list Array<0-BACnetPropertyIdentifier> writable=false
 388 fault-high-limit Double optional=true
 389 fault-low-limit Double optional=true
-430 command-time-array Array<0-BACnetTimeStamp> optional=true writable=false
+430 command-time-array Array<0-BACnetTimeStamp> size=16 optional=true writable=false
 431 current-command-priority Choice:0-BACnetOptionalUnsigned optional=true writable=false
 432 last-command-time Choice:0-BACnetTimeStamp optional=true writable=false
 433 value-source Choice:0-BACnetValueSource optional=true writable=false
-434 value-source-array Array<0-BACnetValueSource> optional=true writable=false
+434 value-source-array Array<0-BACnetValueSource> size=16 optional=true writable=false
 485 profile-location String optional=true
 486 tags Array<0-BACnetNameValue> optional=true
 498 audit-level Enumerated:0-BACnetAuditLevel optional=true
@@ -1486,7 +1486,7 @@ object 0-LifeSafetyPointObject
 111 status-flags BitString:0-BACnetStatusFlags writable=false
 113 time-delay Unsigned optional=true
 117 units Enumerated:0-BACnetEngineeringUnits optional=true
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false
 156 direct-reading Real optional=true
 158 maintenance-required Enumerated:0-BACnetMaintenance optional=true
 159 member-of List<0-BACnetDeviceObjectReference> optional=true
@@ -1498,8 +1498,8 @@ object 0-LifeSafetyPointObject
 166 life-safety-alarm-values List<0-BACnetLifeSafetyState> optional=true
 168 profile-name String optional=true
 175 accepted-modes List<0-BACnetLifeSafetyMode> writable=false
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true
 354 event-algorithm-inhibit Boolean optional=true
 355 event-algorithm-inhibit-ref Sequence:0-BACnetObjectPropertyReference optional=true
@@ -1531,7 +1531,7 @@ object 0-LifeSafetyZoneObject
 103 reliability Enumerated:0-BACnetReliability required-with=reliability-evaluation-inhibit
 111 status-flags BitString:0-BACnetStatusFlags writable=false
 113 time-delay Unsigned optional=true
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false
 158 maintenance-required Boolean optional=true
 159 member-of List<0-BACnetDeviceObjectReference> optional=true
 160 mode Enumerated:0-BACnetLifeSafetyMode writable=true
@@ -1542,8 +1542,8 @@ object 0-LifeSafetyZoneObject
 166 life-safety-alarm-values List<0-BACnetLifeSafetyState> optional=true
 168 profile-name String optional=true
 175 accepted-modes List<0-BACnetLifeSafetyMode> writable=false
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true
 354 event-algorithm-inhibit Boolean optional=true
 355 event-algorithm-inhibit-ref Sequence:0-BACnetObjectPropertyReference optional=true
@@ -1571,10 +1571,10 @@ object 0-LiftObject
 103 reliability Enumerated:0-BACnetReliability optional=true required-with=reliability-evaluation-inhibit
 111 status-flags BitString:0-BACnetStatusFlags writable=false
 113 time-delay Unsigned optional=true required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-state,event-time-stamps,notification-class,notify-type,time-delay-normal
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-state,notification-class,notify-type,time-delay,time-delay-normal
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-state,notification-class,notify-type,time-delay,time-delay-normal
 168 profile-name String optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-enable,event-message-texts,event-message-texts-config,event-state,event-time-stamps,notification-class,notify-type,time-delay,time-delay-normal
 354 event-algorithm-inhibit Boolean optional=true
 355 event-algorithm-inhibit-ref Sequence:0-BACnetObjectPropertyReference optional=true
@@ -1626,15 +1626,15 @@ object 0-LightingOutputObject
 79 object-type Enumerated:0-BACnetObjectType writable=false
 81 out-of-service Boolean
 85 present-value Real writable=true commandable=true
-87 priority-array Array<0-BACnetOptionalReal> writable=false
+87 priority-array Array<0-BACnetOptionalReal> size=16 writable=false
 103 reliability Enumerated:0-BACnetReliability optional=true required-with=reliability-evaluation-inhibit
 104 relinquish-default Real
 111 status-flags BitString:0-BACnetStatusFlags writable=false
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type
 164 tracking-value Real
 168 profile-name String optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type
 357 reliability-evaluation-inhibit Boolean optional=true
 371 property-list Array<0-BACnetPropertyIdentifier> writable=false
@@ -1652,11 +1652,11 @@ object 0-LightingOutputObject
 384 power Real optional=true
 385 transition Enumerated:0-BACnetLightingTransition optional=true
 386 egress-active Boolean
-430 command-time-array Array<0-BACnetTimeStamp> optional=true writable=false
+430 command-time-array Array<0-BACnetTimeStamp> size=16 optional=true writable=false
 431 current-command-priority Choice:0-BACnetOptionalUnsigned writable=false
 432 last-command-time Choice:0-BACnetTimeStamp optional=true writable=false
 433 value-source Choice:0-BACnetValueSource optional=true writable=false
-434 value-source-array Array<0-BACnetValueSource> optional=true writable=false
+434 value-source-array Array<0-BACnetValueSource> size=16 optional=true writable=false
 485 profile-location String optional=true
 486 tags Array<0-BACnetNameValue> optional=true
 498 audit-level Enumerated:0-BACnetAuditLevel optional=true
@@ -1683,7 +1683,7 @@ object 0-LoadControlObject
 103 reliability Enumerated:0-BACnetReliability optional=true required-with=reliability-evaluation-inhibit
 111 status-flags BitString:0-BACnetStatusFlags writable=false
 113 time-delay Unsigned optional=true required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type,time-delay-normal
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type,time-delay,time-delay-normal
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type,time-delay,time-delay-normal
 133 enable Boolean writable=true
 142 start-time DateTime writable=true
 168 profile-name String optional=true
@@ -1696,8 +1696,8 @@ object 0-LoadControlObject
 220 shed-level-descriptions Array<String>
 221 shed-levels Array<Unsigned> writable=true
 222 state-description String optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type,time-delay,time-delay-normal
 354 event-algorithm-inhibit Boolean optional=true
 355 event-algorithm-inhibit-ref Sequence:0-BACnetObjectPropertyReference optional=true
@@ -1747,10 +1747,10 @@ object 0-LoopObject
 111 status-flags BitString:0-BACnetStatusFlags writable=false
 113 time-delay Unsigned optional=true required-with=acked-transitions,deadband,error-limit,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type,time-delay-normal
 118 update-interval Unsigned optional=true
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,deadband,error-limit,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type,time-delay,time-delay-normal
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,deadband,error-limit,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type,time-delay,time-delay-normal
 168 profile-name String optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,deadband,error-limit,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type,time-delay,time-delay-normal
 354 event-algorithm-inhibit Boolean optional=true
 355 event-algorithm-inhibit-ref Sequence:0-BACnetObjectPropertyReference optional=true
@@ -1783,10 +1783,10 @@ object 0-MultistateInputObject
 110 state-text Array<String> optional=true
 111 status-flags BitString:0-BACnetStatusFlags writable=false
 113 time-delay Unsigned optional=true required-with=acked-transitions,alarm-values,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type,time-delay-normal
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,alarm-values,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type,time-delay,time-delay-normal
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,alarm-values,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type,time-delay,time-delay-normal
 168 profile-name String optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,alarm-values,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type,time-delay,time-delay-normal
 354 event-algorithm-inhibit Boolean optional=true
 355 event-algorithm-inhibit-ref Sequence:0-BACnetObjectPropertyReference optional=true
@@ -1814,16 +1814,16 @@ object 0-MultistateOutputObject
 79 object-type Enumerated:0-BACnetObjectType writable=false
 81 out-of-service Boolean
 85 present-value Unsigned writable=true commandable=true
-87 priority-array Array<0-BACnetOptionalUnsigned> writable=false
+87 priority-array Array<0-BACnetOptionalUnsigned> size=16 writable=false
 103 reliability Enumerated:0-BACnetReliability optional=true required-with=reliability-evaluation-inhibit
 104 relinquish-default Unsigned
 110 state-text Array<String> optional=true
 111 status-flags BitString:0-BACnetStatusFlags writable=false
 113 time-delay Unsigned optional=true required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type,time-delay-normal
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type,time-delay,time-delay-normal
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type,time-delay,time-delay-normal
 168 profile-name String optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type,time-delay,time-delay-normal
 354 event-algorithm-inhibit Boolean optional=true
 355 event-algorithm-inhibit-ref Sequence:0-BACnetObjectPropertyReference optional=true
@@ -1831,11 +1831,11 @@ object 0-MultistateOutputObject
 357 reliability-evaluation-inhibit Boolean optional=true
 371 property-list Array<0-BACnetPropertyIdentifier> writable=false
 387 interface-value Choice:0-BACnetOptionalUnsigned optional=true writable=false
-430 command-time-array Array<0-BACnetTimeStamp> optional=true writable=false
+430 command-time-array Array<0-BACnetTimeStamp> size=16 optional=true writable=false
 431 current-command-priority Choice:0-BACnetOptionalUnsigned writable=false
 432 last-command-time Choice:0-BACnetTimeStamp optional=true writable=false
 433 value-source Choice:0-BACnetValueSource optional=true writable=false
-434 value-source-array Array<0-BACnetValueSource> optional=true writable=false
+434 value-source-array Array<0-BACnetValueSource> size=16 optional=true writable=false
 485 profile-location String optional=true
 486 tags Array<0-BACnetNameValue> optional=true
 498 audit-level Enumerated:0-BACnetAuditLevel optional=true
@@ -1857,27 +1857,27 @@ object 0-MultistateValueObject
 79 object-type Enumerated:0-BACnetObjectType writable=false
 81 out-of-service Boolean
 85 present-value Unsigned
-87 priority-array Array<0-BACnetOptionalUnsigned> optional=true writable=false
+87 priority-array Array<0-BACnetOptionalUnsigned> size=16 optional=true writable=false
 103 reliability Enumerated:0-BACnetReliability optional=true required-with=reliability-evaluation-inhibit
 104 relinquish-default Unsigned optional=true
 110 state-text Array<String> optional=true
 111 status-flags BitString:0-BACnetStatusFlags writable=false
 113 time-delay Unsigned optional=true required-with=acked-transitions,alarm-values,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type,time-delay-normal
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,alarm-values,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type,time-delay,time-delay-normal
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,alarm-values,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type,time-delay,time-delay-normal
 168 profile-name String optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,alarm-values,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type,time-delay,time-delay-normal
 354 event-algorithm-inhibit Boolean optional=true
 355 event-algorithm-inhibit-ref Sequence:0-BACnetObjectPropertyReference optional=true
 356 time-delay-normal Unsigned optional=true
 357 reliability-evaluation-inhibit Boolean optional=true
 371 property-list Array<0-BACnetPropertyIdentifier> writable=false
-430 command-time-array Array<0-BACnetTimeStamp> optional=true writable=false
+430 command-time-array Array<0-BACnetTimeStamp> size=16 optional=true writable=false
 431 current-command-priority Choice:0-BACnetOptionalUnsigned optional=true writable=false
 432 last-command-time Choice:0-BACnetTimeStamp optional=true writable=false
 433 value-source Choice:0-BACnetValueSource optional=true writable=false
-434 value-source-array Array<0-BACnetValueSource> optional=true writable=false
+434 value-source-array Array<0-BACnetValueSource> size=16 optional=true writable=false
 485 profile-location String optional=true
 486 tags Array<0-BACnetNameValue> optional=true
 498 audit-level Enumerated:0-BACnetAuditLevel optional=true
@@ -1899,14 +1899,14 @@ object 0-NetworkPortObject
 81 out-of-service Boolean
 103 reliability Enumerated:0-BACnetReliability required-with=reliability-evaluation-inhibit
 111 status-flags BitString:0-BACnetStatusFlags writable=false
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type
 168 profile-name String optional=true
 169 auto-subordinate-discovery Boolean optional=true
 170 manual-subordinate-address-binding List<0-BACnetAddressBinding> optional=true
 171 subordinate-address-binding List<0-BACnetAddressBinding> optional=true writable=false
 172 subordinate-proxy-enable Boolean optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type
 357 reliability-evaluation-inhibit Boolean optional=true
 371 property-list Array<0-BACnetPropertyIdentifier> writable=false
@@ -1962,7 +1962,7 @@ object 0-NetworkPortObject
 508 additional-reference-ports List<Unsigned> optional=true
 509 certificate-signing-request-file ObjectIdentifier optional=true writable=false
 510 command-validation-result Sequence:0-BACnetHealth optional=true writable=false
-511 issuer-certificate-files Array<ObjectIdentifier> optional=true writable=false
+511 issuer-certificate-files Array<ObjectIdentifier> size=2 optional=true writable=false
 4194304 max-bvlc-length-accepted Unsigned optional=true
 4194305 max-npdu-length-accepted Unsigned optional=true
 4194306 operational-certificate-file ObjectIdentifier optional=true writable=false
@@ -1999,14 +1999,14 @@ object 0-NotificationClassObject
 75 object-identifier ObjectIdentifier
 77 object-name String
 79 object-type Enumerated:0-BACnetObjectType writable=false
-86 priority Array<Unsigned>
+86 priority Array<Unsigned> size=3
 102 recipient-list List<0-BACnetDestination>
 103 reliability Enumerated:0-BACnetReliability optional=true required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type
 111 status-flags BitString:0-BACnetStatusFlags optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type
 168 profile-name String optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type
 357 reliability-evaluation-inhibit Boolean optional=true
 371 property-list Array<0-BACnetPropertyIdentifier> writable=false
@@ -2044,18 +2044,18 @@ object 0-OctetstringValueObject
 79 object-type Enumerated:0-BACnetObjectType writable=false
 81 out-of-service Boolean optional=true
 85 present-value OctetString
-87 priority-array Array<0-BACnetOptionalOctetString> optional=true writable=false
+87 priority-array Array<0-BACnetOptionalOctetString> size=16 optional=true writable=false
 103 reliability Enumerated:0-BACnetReliability optional=true required-with=reliability-evaluation-inhibit
 104 relinquish-default OctetString optional=true
 111 status-flags BitString:0-BACnetStatusFlags writable=false
 168 profile-name String optional=true
 357 reliability-evaluation-inhibit Boolean optional=true
 371 property-list Array<0-BACnetPropertyIdentifier> writable=false
-430 command-time-array Array<0-BACnetTimeStamp> optional=true writable=false
+430 command-time-array Array<0-BACnetTimeStamp> size=16 optional=true writable=false
 431 current-command-priority Choice:0-BACnetOptionalUnsigned optional=true writable=false
 432 last-command-time Choice:0-BACnetTimeStamp optional=true writable=false
 433 value-source Choice:0-BACnetValueSource optional=true writable=false
-434 value-source-array Array<0-BACnetValueSource> optional=true writable=false
+434 value-source-array Array<0-BACnetValueSource> size=16 optional=true writable=false
 485 profile-location String optional=true
 486 tags Array<0-BACnetNameValue> optional=true
 498 audit-level Enumerated:0-BACnetAuditLevel optional=true
@@ -2081,17 +2081,17 @@ object 0-PositiveIntegerValueObject
 79 object-type Enumerated:0-BACnetObjectType writable=false
 81 out-of-service Boolean optional=true
 85 present-value Unsigned
-87 priority-array Array<0-BACnetOptionalUnsigned> optional=true writable=false
+87 priority-array Array<0-BACnetOptionalUnsigned> size=16 optional=true writable=false
 103 reliability Enumerated:0-BACnetReliability optional=true required-with=reliability-evaluation-inhibit
 104 relinquish-default Unsigned optional=true
 106 resolution Unsigned optional=true writable=false
 111 status-flags BitString:0-BACnetStatusFlags writable=false
 113 time-delay Unsigned optional=true required-with=acked-transitions,deadband,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay-normal
 117 units Enumerated:0-BACnetEngineeringUnits
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,deadband,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay,time-delay-normal
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,deadband,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay,time-delay-normal
 168 profile-name String optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,deadband,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay,time-delay-normal
 354 event-algorithm-inhibit Boolean optional=true
 355 event-algorithm-inhibit-ref Sequence:0-BACnetObjectPropertyReference optional=true
@@ -2100,11 +2100,11 @@ object 0-PositiveIntegerValueObject
 371 property-list Array<0-BACnetPropertyIdentifier> writable=false
 388 fault-high-limit Unsigned optional=true
 389 fault-low-limit Unsigned optional=true
-430 command-time-array Array<0-BACnetTimeStamp> optional=true writable=false
+430 command-time-array Array<0-BACnetTimeStamp> size=16 optional=true writable=false
 431 current-command-priority Choice:0-BACnetOptionalUnsigned optional=true writable=false
 432 last-command-time Choice:0-BACnetTimeStamp optional=true writable=false
 433 value-source Choice:0-BACnetValueSource optional=true writable=false
-434 value-source-array Array<0-BACnetValueSource> optional=true writable=false
+434 value-source-array Array<0-BACnetValueSource> size=16 optional=true writable=false
 485 profile-location String optional=true
 486 tags Array<0-BACnetNameValue> optional=true
 498 audit-level Enumerated:0-BACnetAuditLevel optional=true
@@ -2130,10 +2130,10 @@ object 0-ProgramObject
 100 reason-for-halt Enumerated:0-BACnetProgramError optional=true writable=false
 103 reliability Enumerated:0-BACnetReliability optional=true required-with=reliability-evaluation-inhibit
 111 status-flags BitString:0-BACnetStatusFlags writable=false
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-state,notification-class,notify-type
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-state,notification-class,notify-type
 168 profile-name String optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,event-enable,event-message-texts,event-message-texts-config,event-state,event-time-stamps,notification-class,notify-type
 357 reliability-evaluation-inhibit Boolean optional=true
 371 property-list Array<0-BACnetPropertyIdentifier> writable=false
@@ -2163,7 +2163,7 @@ object 0-PulseConverterObject
 111 status-flags BitString:0-BACnetStatusFlags writable=false
 113 time-delay Unsigned optional=true required-with=acked-transitions,deadband,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay-normal
 117 units Enumerated:0-BACnetEngineeringUnits
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,deadband,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay,time-delay-normal
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,deadband,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay,time-delay-normal
 168 profile-name String optional=true
 176 adjust-value Real writable=true
 177 count Unsigned writable=false
@@ -2173,8 +2173,8 @@ object 0-PulseConverterObject
 181 input-reference Sequence:0-BACnetObjectPropertyReference optional=true
 188 scale-factor Real
 189 update-time DateTime writable=false
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,deadband,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,high-limit,limit-enable,low-limit,notification-class,notify-type,time-delay,time-delay-normal
 354 event-algorithm-inhibit Boolean optional=true
 355 event-algorithm-inhibit-ref Sequence:0-BACnetObjectPropertyReference optional=true
@@ -2204,12 +2204,12 @@ object 0-ScheduleObject
 88 priority-for-writing Unsigned:0-Unsigned8
 103 reliability Enumerated:0-BACnetReliability required-with=reliability-evaluation-inhibit
 111 status-flags BitString:0-BACnetStatusFlags writable=false
-123 weekly-schedule Array<0-BACnetDailySchedule> optional=true
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-state,notification-class,notify-type
+123 weekly-schedule Array<0-BACnetDailySchedule> size=7 optional=true
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-state,notification-class,notify-type
 168 profile-name String optional=true
 174 schedule-default Any
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,event-enable,event-message-texts,event-message-texts-config,event-state,event-time-stamps,notification-class,notify-type
 357 reliability-evaluation-inhibit Boolean optional=true
 371 property-list Array<0-BACnetPropertyIdentifier> writable=false
@@ -2238,10 +2238,10 @@ object 0-StagingObject
 103 reliability Enumerated:0-BACnetReliability required-with=reliability-evaluation-inhibit
 111 status-flags BitString:0-BACnetStatusFlags writable=false
 117 units Enumerated:0-BACnetEngineeringUnits
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type
 168 profile-name String optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type
 357 reliability-evaluation-inhibit Boolean optional=true
 371 property-list Array<0-BACnetPropertyIdentifier> writable=false
@@ -2289,22 +2289,22 @@ object 0-TimePatternValueObject
 79 object-type Enumerated:0-BACnetObjectType writable=false
 81 out-of-service Boolean optional=true
 85 present-value TimePattern
-87 priority-array Array<0-BACnetOptionalTimePattern> optional=true writable=false
+87 priority-array Array<0-BACnetOptionalTimePattern> size=16 optional=true writable=false
 103 reliability Enumerated:0-BACnetReliability optional=true required-with=reliability-evaluation-inhibit
 104 relinquish-default TimePattern optional=true
 111 status-flags BitString:0-BACnetStatusFlags writable=false
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type
 168 profile-name String optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type
 357 reliability-evaluation-inhibit Boolean optional=true
 371 property-list Array<0-BACnetPropertyIdentifier> writable=false
-430 command-time-array Array<0-BACnetTimeStamp> optional=true writable=false
+430 command-time-array Array<0-BACnetTimeStamp> size=16 optional=true writable=false
 431 current-command-priority Choice:0-BACnetOptionalUnsigned optional=true writable=false
 432 last-command-time Choice:0-BACnetTimeStamp optional=true writable=false
 433 value-source Choice:0-BACnetValueSource optional=true writable=false
-434 value-source-array Array<0-BACnetValueSource> optional=true writable=false
+434 value-source-array Array<0-BACnetValueSource> size=16 optional=true writable=false
 485 profile-location String optional=true
 486 tags Array<0-BACnetNameValue> optional=true
 498 audit-level Enumerated:0-BACnetAuditLevel optional=true
@@ -2323,22 +2323,22 @@ object 0-TimeValueObject
 79 object-type Enumerated:0-BACnetObjectType writable=false
 81 out-of-service Boolean optional=true
 85 present-value Time
-87 priority-array Array<0-BACnetOptionalTime> optional=true writable=false
+87 priority-array Array<0-BACnetOptionalTime> size=16 optional=true writable=false
 103 reliability Enumerated:0-BACnetReliability optional=true required-with=reliability-evaluation-inhibit
 104 relinquish-default Time optional=true
 111 status-flags BitString:0-BACnetStatusFlags writable=false
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type
 168 profile-name String optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type
 357 reliability-evaluation-inhibit Boolean optional=true
 371 property-list Array<0-BACnetPropertyIdentifier> writable=false
-430 command-time-array Array<0-BACnetTimeStamp> optional=true writable=false
+430 command-time-array Array<0-BACnetTimeStamp> size=16 optional=true writable=false
 431 current-command-priority Choice:0-BACnetOptionalUnsigned optional=true writable=false
 432 last-command-time Choice:0-BACnetTimeStamp optional=true writable=false
 433 value-source Choice:0-BACnetValueSource optional=true writable=false
-434 value-source-array Array<0-BACnetValueSource> optional=true writable=false
+434 value-source-array Array<0-BACnetValueSource> size=16 optional=true writable=false
 485 profile-location String optional=true
 486 tags Array<0-BACnetNameValue> optional=true
 498 audit-level Enumerated:0-BACnetAuditLevel optional=true
@@ -2366,12 +2366,12 @@ object 0-TimerObject
 106 resolution Unsigned optional=true
 111 status-flags BitString:0-BACnetStatusFlags writable=false
 113 time-delay Unsigned optional=true required-with=acked-transitions,alarm-values,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type,time-delay-normal
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,alarm-values,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type,time-delay,time-delay-normal
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,alarm-values,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,notification-class,notify-type,time-delay,time-delay-normal
 168 profile-name String optional=true
 189 update-time DateTime optional=true writable=false required-with=acked-transitions,alarm-values,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type,time-delay,time-delay-normal
 270 expiration-time DateTime optional=true writable=false
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,alarm-values,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,notification-class,notify-type,time-delay,time-delay-normal
 354 event-algorithm-inhibit Boolean optional=true
 355 event-algorithm-inhibit-ref Sequence:0-BACnetObjectPropertyReference optional=true
@@ -2381,7 +2381,7 @@ object 0-TimerObject
 393 default-timeout Unsigned optional=true
 394 initial-timeout Unsigned optional=true writable=false
 395 last-state-change Enumerated:0-BACnetTimerTransition optional=true writable=false
-396 state-change-values Array<0-BACnetTimerStateChangeValue> optional=true
+396 state-change-values Array<0-BACnetTimerStateChangeValue> size=7 optional=true
 397 timer-running Boolean
 398 timer-state Enumerated:0-BACnetTimerState
 485 profile-location String optional=true
@@ -2402,7 +2402,7 @@ object 0-TrendLogMultipleObject
 103 reliability Enumerated:0-BACnetReliability optional=true required-with=reliability-evaluation-inhibit
 111 status-flags BitString:0-BACnetStatusFlags writable=false
 126 buffer-size Unsigned:0-Unsigned32
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,last-notify-record,notification-class,notification-threshold,notify-type,records-since-notification
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,last-notify-record,notification-class,notification-threshold,notify-type,records-since-notification
 131 log-buffer List<0-BACnetLogMultipleRecord> writable=false readable=false
 132 log-device-object-property Array<0-BACnetDeviceObjectPropertyReference>
 133 enable Boolean writable=true
@@ -2420,8 +2420,8 @@ object 0-TrendLogMultipleObject
 195 interval-offset Unsigned optional=true
 197 logging-type Enumerated:0-BACnetLoggingType
 205 trigger Boolean optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,last-notify-record,notification-class,notification-threshold,notify-type,records-since-notification
 354 event-algorithm-inhibit Boolean optional=true
 355 event-algorithm-inhibit-ref Sequence:0-BACnetObjectPropertyReference optional=true
@@ -2447,7 +2447,7 @@ object 0-TrendLogObject
 126 buffer-size Unsigned:0-Unsigned32
 127 client-cov-increment Choice:0-BACnetClientCOV optional=true
 128 cov-resubscription-interval Unsigned optional=true
-130 event-time-stamps Array<0-BACnetTimeStamp> optional=true writable=false required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,last-notify-record,notification-class,notification-threshold,notify-type,records-since-notification
+130 event-time-stamps Array<0-BACnetTimeStamp> size=3 optional=true writable=false required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-detection-enable,event-enable,event-message-texts,event-message-texts-config,last-notify-record,notification-class,notification-threshold,notify-type,records-since-notification
 131 log-buffer List<0-BACnetLogRecord> writable=false readable=false
 132 log-device-object-property Sequence:0-BACnetDeviceObjectPropertyReference optional=true
 133 enable Boolean writable=true
@@ -2465,8 +2465,8 @@ object 0-TrendLogObject
 195 interval-offset Unsigned optional=true
 197 logging-type Enumerated:0-BACnetLoggingType
 205 trigger Boolean optional=true
-351 event-message-texts Array<String> optional=true writable=false
-352 event-message-texts-config Array<String> optional=true
+351 event-message-texts Array<String> size=3 optional=true writable=false
+352 event-message-texts-config Array<String> size=3 optional=true
 353 event-detection-enable Boolean optional=true required-with=acked-transitions,event-algorithm-inhibit,event-algorithm-inhibit-ref,event-enable,event-message-texts,event-message-texts-config,event-time-stamps,last-notify-record,notification-class,notification-threshold,notify-type,records-since-notification
 354 event-algorithm-inhibit Boolean optional=true
 355 event-algorithm-inhibit-ref Sequence:0-BACnetObjectPropertyReference optional=true
