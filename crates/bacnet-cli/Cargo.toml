@@ -80,6 +80,7 @@ bacnet-device-core = { workspace = true, features = ["std"] }
 rcgen.workspace = true
 futures-util.workspace = true
 insta = "1.48"
+proptest.workspace = true
 # The scripted MS/TP ring the monitor screen's tests play (#970).
 bacnet-transport = { workspace = true, features = ["test-support"] }
 tokio = { workspace = true, features = ["test-util"] }

@@ -1576,8 +1576,11 @@ Every `write` needs `--allow-write` (see [Write guard](#write-guard)).
 **Write multiple properties (WritePropertyMultiple):** each object is followed
 by its comma-separated `property=value` writes, each value with an optional
 `@priority`. Like `write`, it needs `--allow-write` and takes routed targets.
-A value can't contain a comma, since the comma separates the writes. The
-TUI's `:writem` command takes a different grammar, `OBJECT PROPERTY VALUE`
+A comma ends a write only when a property and an `=` follow it, so a value
+may hold commas: `pv=object:ai,1`, `ef=in-alarm,fault`. A value that holds a
+comma, a real property name and an `=` (`desc=heat, mode=auto` writes
+Description `heat` and Mode `auto`) needs quotes, which a comma never splits:
+`desc='"heat, mode=auto"'`. The TUI's `:writem` command takes a different grammar, `OBJECT PROPERTY VALUE`
 groups separated by spaces; the one-shot takes `OBJECT prop=value,...`.
 
 ```bash
@@ -1624,8 +1627,8 @@ read pastes back as a write:
   (`active (On)`); a multi-state state by number, its text allowed after
   it (`2 (Heat)`);
 - a named bit string by its set bits, `in-alarm,fault` or `in-alarm |
-  fault` (quote a `|` for the shell; `writem` needs the `|` form, since a
-  comma separates its writes), as 0/1 digits first bit first (`1100`), or
+  fault` (quote a `|` for the shell; `writem` takes the comma form too, as no
+  property name follows the comma), as 0/1 digits first bit first (`1100`), or
   `none` for no bit set (an empty value is refused, so a blank field never
   clears every bit); a bit string without names as `bits(0101)`;
 - a date as `2026-10-19`, with a weekday (`2026-10-19 Mon`, or as a digit,
@@ -2323,9 +2326,11 @@ published. What we print is unchanged.
   tool's `object`, a resource URI (`bacnet://device/1201/object/analog-input,3`),
   the `investigate_point` prompt, an `object:` value (`object:ai,1`), and a
   JSON `"calendar,1"` period or `"device,99"` recipient.
-- **One exception:** in the one-shot `writem`, a comma separates an object's
-  writes, so an `object:` value there takes the colon form (`pv=object:ai:1`);
-  `object:ai,1` would be cut at its comma and refused.
+- **Commas in `writem`.** The one-shot `writem` ends a write at a comma only
+  when a property and an `=` follow it, so an `object:` value takes either
+  form (`pv=object:ai,1`), as do a comma-separated bit or enumeration list
+  and a date with commas. Text that holds a comma, a property name and an `=`
+  needs quotes: `desc='"heat, mode=auto"'` is one Description write.
 - **Weekdays.** A weekday after a date, by name or by digit, is kept as
   typed and not checked against the date, as a name always has been:
   `2026-11-10 3` writes that date with Wednesday, though it is a Tuesday. The
