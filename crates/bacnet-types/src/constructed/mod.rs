@@ -43,7 +43,7 @@ pub use lighting::BACnetLightingCommand;
 mod log;
 pub use log::{
     BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord, EventLogDatum, LogData,
-    LogDatum, LogValue,
+    LogDatum, LogValue, OpaqueChoice,
 };
 mod name_value;
 pub use name_value::BACnetNameValue;

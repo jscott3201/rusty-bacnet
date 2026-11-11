@@ -8,12 +8,26 @@ use super::*;
 use crate::constructed::tagged::decode_ctx_character_string;
 
 /// Decode one notification-parameter choice, with an optional enclosing `[12]` close.
+///
+/// That close is the octet after the choice's own closing tag, so the last
+/// octet of an unassigned choice's closing tag that reads as a closing
+/// `[12]` (`[207]`'s is `FF CF`) stays part of the choice.
 pub fn decode_notification_parameters(
     data: &[u8],
     offset: usize,
 ) -> Result<NotificationParameters, Error> {
-    let end = closing_tag_start(data, data.len(), 12, "NotificationParameters event-values")
-        .unwrap_or(data.len());
+    let enclosing = || closing_tag_start(data, data.len(), 12, "NotificationParameters event-values");
+    let frame_end = tags::decode_tag(data, offset)
+        .ok()
+        .filter(|(tag, _)| tag.is_opening)
+        .and_then(|(tag, start)| tags::extract_context_value(data, start, tag.number).ok())
+        .map(|(_, end)| end);
+    let end = match frame_end {
+        Some(end) if end + 1 == data.len() && enclosing().is_ok() => end,
+        Some(_) => data.len(),
+        // Not a whole frame: fail as before, short of any closing [12].
+        None => enclosing().unwrap_or(data.len()),
+    };
     decode_bounded(data, offset, end)
 }
 
@@ -650,10 +664,24 @@ pub(super) fn decode_bounded(
         21 => decode_change_of_discrete_value(data, inner_start, variant_body_end),
         // [22] Change of timer
         22 => decode_change_of_timer(data, inner_start, variant_body_end),
+        // A tag the 2020 production doesn't assign (a later revision's):
+        // keep its body as received. Its nested tags were checked above, so
+        // only a well-formed alternative gets here.
+        tag if tag > LAST_ASSIGNED_TAG => {
+            let (body, _) = tags::extract_context_value(data, inner_start, tag)?;
+            finish_variant(
+                NotificationParameters::Opaque {
+                    tag,
+                    data: body.to_vec(),
+                },
+                inner_start + body.len(),
+            )
+        }
+        // 7, 12 and 20, which Clause 21 deprecates, reserves or leaves out.
         other => Err(DecodeError::new(
             DecodingKind::InvalidTag,
             offset,
-            "NotificationParameters variant [{}] unknown",
+            "NotificationParameters context tag [{}] carries no alternative in Clause 21",
         )
         .with_value(other.into())
         .into()),

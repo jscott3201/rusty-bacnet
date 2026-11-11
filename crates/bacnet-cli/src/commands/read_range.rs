@@ -26,7 +26,7 @@ use bacnet_client::client::BACnetClient;
 use bacnet_client::log_reader::{LogCursor, LogGap};
 use bacnet_ops::destination::Destination;
 use bacnet_ops::format::notification::EventValues;
-use bacnet_ops::format::{Datum, Floats, LogColumns, ValueFormat};
+use bacnet_ops::format::{Datum, Floats, LogColumns, ValueFormat, unknown_choice};
 use bacnet_services::read_range::{
     LogRecords, ReadRangeAck, ReadRangeRequest, ReadRangeValidation, ReadRangeViolation,
 };
@@ -35,7 +35,7 @@ use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{
     BACnetAuditLogDatum, BACnetAuditLogRecord, BACnetAuditNotification, BACnetEventLogRecord,
     BACnetLogMultipleRecord, BACnetLogRecord, BACnetRecipient, EventLogDatum,
-    EventNotificationRequest, LogData, LogDatum,
+    EventNotificationRequest, LogData, LogDatum, OpaqueChoice,
 };
 use bacnet_types::enums::{NotifyType, ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{Date, ObjectIdentifier, PropertyValue, StatusFlags, Time};
@@ -367,6 +367,7 @@ fn event_log_row(record: &BACnetEventLogRecord) -> LogRecordRow {
             text
         }
         EventLogDatum::TimeChange(seconds) => time_change(*seconds),
+        EventLogDatum::Opaque(opaque) => unknown(opaque),
     };
     LogRecordRow {
         timestamp: timestamp(record.date, record.time),
@@ -385,11 +386,15 @@ fn trend_log_multiple_row(record: &BACnetLogMultipleRecord, columns: &LogColumns
             let values: Vec<String> = values
                 .iter()
                 .enumerate()
-                .map(|(column, value)| log_datum(&LogDatum::from(value.clone()), columns, column))
+                .map(|(column, value)| match LogDatum::try_from(value.clone()) {
+                    Ok(datum) => log_datum(&datum, columns, column),
+                    Err(opaque) => unknown(&opaque),
+                })
                 .collect();
             format!("[{}]", values.join(", "))
         }
         LogData::TimeChange(seconds) => time_change(*seconds),
+        LogData::Opaque(opaque) => unknown(opaque),
     };
     LogRecordRow {
         timestamp: timestamp(record.date, record.time),
@@ -439,6 +444,12 @@ fn time_change(seconds: f32) -> String {
     format!("time-change {seconds} s")
 }
 
+/// A record or member value under a tag its CHOICE doesn't assign, in the
+/// tagged view: `[11] [raw 01 02]`.
+fn unknown(opaque: &OpaqueChoice) -> String {
+    unknown_choice(opaque.tag, opaque.constructed, &opaque.data, Floats::Exact).0
+}
+
 fn object(oid: ObjectIdentifier) -> String {
     format!("{}:{}", oid.object_type(), oid.instance_number())
 }
@@ -464,6 +475,7 @@ fn log_datum(datum: &LogDatum, columns: &LogColumns, index: usize) -> String {
         } => return format!("failure {error_class}/{error_code}"),
         LogDatum::TimeChange(seconds) => return time_change(*seconds),
         LogDatum::AnyValue(bytes) => return format.logged_octets(column, bytes),
+        LogDatum::Opaque(opaque) => return unknown(opaque),
         LogDatum::BooleanValue(value) => PropertyValue::Boolean(*value),
         LogDatum::RealValue(value) => PropertyValue::Real(*value),
         LogDatum::EnumValue(value) => match u32::try_from(*value) {

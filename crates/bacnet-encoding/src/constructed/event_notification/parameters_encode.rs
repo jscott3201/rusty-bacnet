@@ -379,6 +379,21 @@ fn encode_into(params: &NotificationParameters, buf: &mut BytesMut) -> Result<()
             }
             tags::encode_closing_tag(buf, 22);
         }
+        NotificationParameters::Opaque { tag, data } => {
+            // Only an unassigned tag: an assigned one would decode as its
+            // own variant, or not at all, so it couldn't round-trip.
+            if *tag <= LAST_ASSIGNED_TAG || *tag == u8::MAX {
+                return Err(EncodeError::new("tag [{}] cannot use an opaque body")
+                    .within("NotificationParameters")
+                    .with_value((*tag).into())
+                    .into());
+            }
+            validate_tlv_sequence(data, "opaque NotificationParameters")
+                .map_err(Error::into_encode_refusal)?;
+            tags::encode_opening_tag(buf, *tag);
+            buf.extend_from_slice(data);
+            tags::encode_closing_tag(buf, *tag);
+        }
     }
     Ok(())
 }

@@ -2329,7 +2329,10 @@ type in snake case (#2073), with each value under its member's name:
 
 The keys follow the event type's members in the standard, for every type the
 stack decodes, from `change_of_bitstring` to `change_of_timer`, and
-`complex_event_type` too. Status flags and other bit strings are
+`complex_event_type` too. Event values under a tag the standard doesn't
+assign (a later revision's) are `{"kind": "other", "tag": 30, "data": b"..."}`,
+the body as received, as an unassigned Event_Parameters algorithm reads
+(#2474). Status flags and other bit strings are
 `BitString`s; a property state is a `(choice_tag, value)` pair, as in
 [Event_Parameters](#typed-constructed-values); a life safety operation is a
 `LifeSafetyOperation`; the enumerations Python has no class for (life safety
@@ -2342,6 +2345,10 @@ references `DeviceObjectPropertyReference` mappings, an access credential an
 `ObjectIdentifier` or `(device, object)` pair, and an authentication factor
 `(format_type, format_class, value)`. An optional member the device left out
 is `None`. Before 0.15, `"event_values"` was the encoded values as `bytes`.
+A record's datum, or a Trend Log Multiple member's value, under a tag the
+standard doesn't assign is `{"kind": "other", "tag": 11, "constructed":
+False, "data": b"..."}`: its contents (or a constructed one's body) as
+received, so the rest of the page still reads (#2474).
 It raises `ValueError` for any other result, or when the item data doesn't
 decode as `item_count` records, naming the first record that fails by index
 and offset.

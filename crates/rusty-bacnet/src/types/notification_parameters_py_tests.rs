@@ -330,6 +330,32 @@ fn every_event_type_reads_as_a_mapping_without_bytes() {
     });
 }
 
+/// A choice under a tag the standard doesn't assign reads as Event_Parameters'
+/// unassigned algorithm does: `other`, its tag and its body as received
+/// (#2474).
+#[test]
+fn an_unassigned_choice_reads_as_other_with_its_body() {
+    Python::initialize();
+    Python::attach(|py| {
+        let read = notification_parameters_to_py(
+            py,
+            &NotificationParameters::Opaque {
+                tag: 30,
+                data: vec![0x09, 0x1E],
+            },
+        )
+        .unwrap();
+        let expected = py
+            .eval(
+                c"{'kind': 'other', 'tag': 30, 'data': b'\x09\x1e'}",
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(read.as_any().eq(&expected).unwrap(), "{read}");
+    });
+}
+
 /// An authentication factor reads as the tuple `report_access_event_local`
 /// takes, its value the factor's own octets.
 #[test]

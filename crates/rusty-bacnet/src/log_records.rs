@@ -3,7 +3,10 @@
 //!
 //! A record is a dict: `timestamp` as a `(date, time)` pair and `datum` as a
 //! dict whose `kind` names the choice and whose same-named key, when there
-//! is one, holds its value; a Trend Log record adds `status_flags`. A cursor
+//! is one, holds its value; a Trend Log record adds `status_flags`. A choice
+//! under a tag the standard doesn't assign (#2474), a record's datum or a
+//! Trend Log Multiple member's value, is `{"kind": "other", "tag": n,
+//! "constructed": bool, "data": bytes}`, as received. A cursor
 //! is `None` or `"oldest"`, or a `(kind, value)` pair: `("sequence", n)`,
 //! `("position", n)` or `("time", reference_time)`.
 
@@ -11,7 +14,7 @@ use bacnet_client::log_reader::{LogCursor, LogGap, LogPage};
 use bacnet_services::read_range::{LogRecords, ReadRangeAck, ReadRangeViolation};
 use bacnet_types::constructed::{
     BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord, EventLogDatum,
-    EventNotificationRequest, LogData, LogDatum,
+    EventNotificationRequest, LogData, LogDatum, OpaqueChoice,
 };
 use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 use pyo3::exceptions::{PyTypeError, PyValueError};
@@ -47,6 +50,16 @@ fn datum_with<'py>(
     Ok(datum)
 }
 
+/// A choice kept as received: `{"kind": "other", "tag": n, "constructed":
+/// bool, "data": bytes}`.
+fn opaque<'py>(py: Python<'py>, opaque: &OpaqueChoice) -> PyResult<Bound<'py, PyDict>> {
+    let datum = datum(py, "other")?;
+    datum.set_item("tag", opaque.tag)?;
+    datum.set_item("constructed", opaque.constructed)?;
+    datum.set_item("data", PyBytes::new(py, &opaque.data))?;
+    Ok(datum)
+}
+
 /// A Trend Log datum, or a Trend Log Multiple value through its
 /// [`LogDatum`] form.
 fn log_datum<'py>(py: Python<'py>, value: &LogDatum) -> PyResult<Bound<'py, PyDict>> {
@@ -73,6 +86,7 @@ fn log_datum<'py>(py: Python<'py>, value: &LogDatum) -> PyResult<Bound<'py, PyDi
         ),
         LogDatum::TimeChange(seconds) => datum_with(py, "time_change", seconds),
         LogDatum::AnyValue(bytes) => datum_with(py, "any", PyBytes::new(py, bytes)),
+        LogDatum::Opaque(choice) => opaque(py, choice),
     }
 }
 
@@ -153,6 +167,7 @@ fn event_log_record<'py>(
             datum_with(py, "notification", notification(py, request)?)?
         }
         EventLogDatum::TimeChange(seconds) => datum_with(py, "time_change", seconds)?,
+        EventLogDatum::Opaque(choice) => opaque(py, choice)?,
     };
     result.set_item("datum", value)?;
     Ok(result)
@@ -171,11 +186,16 @@ fn trend_log_multiple_record<'py>(
         LogData::Values(values) => {
             let list = PyList::empty(py);
             for value in values {
-                list.append(log_datum(py, &LogDatum::from(value.clone()))?)?;
+                let value = match LogDatum::try_from(value.clone()) {
+                    Ok(value) => log_datum(py, &value)?,
+                    Err(choice) => opaque(py, &choice)?,
+                };
+                list.append(value)?;
             }
             datum_with(py, "values", list)?
         }
         LogData::TimeChange(seconds) => datum_with(py, "time_change", seconds)?,
+        LogData::Opaque(choice) => opaque(py, choice)?,
     };
     result.set_item("datum", value)?;
     Ok(result)

@@ -5,7 +5,9 @@
 //! error that stopped a sample, a change of the log's own status, or a
 //! clock change. Records carrying status flags with any flag set, and log
 //! status records, are flagged, since either means the samples around them
-//! may not be what they seem.
+//! may not be what they seem. A record or member value under a tag the
+//! standard doesn't assign (#2474) is an `unknown-choice` element, its tag
+//! and its octets as hex; such a record is flagged too.
 //!
 //! Each column's values are named by the property the log samples there,
 //! from its Log_DeviceObjectProperty ([`LogColumns`], #2091): an
@@ -21,10 +23,12 @@
 
 use std::collections::BTreeMap;
 
-use bacnet_ops::format::{Datum, Floats, LogColumns, LoggedProperty, StateTexts, ValueFormat};
+use bacnet_ops::format::{
+    Datum, Floats, LogColumns, LoggedProperty, StateTexts, ValueFormat, unknown_choice,
+};
 use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{
-    BACnetLogMultipleRecord, BACnetLogRecord, LogData, LogDatum, LogValue,
+    BACnetLogMultipleRecord, BACnetLogRecord, LogData, LogDatum, LogValue, OpaqueChoice,
 };
 use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType, PropertyIdentifier};
 use bacnet_types::error::RemoteError;
@@ -69,6 +73,9 @@ pub(super) enum Kind {
     Values(Vec<Sample>),
     LogStatus(LogStatus),
     TimeChange(f32),
+    /// A record under a tag its CHOICE doesn't assign, as the shared
+    /// formatter's `unknown-choice` element.
+    Unknown(Datum),
 }
 
 /// One column's sample.
@@ -79,6 +86,14 @@ pub(super) enum Sample {
     /// A value of another datatype, as its tagged octets.
     Any(Vec<u8>),
     Failure(ErrorClass, ErrorCode),
+    /// A member value under a tag the member CHOICE doesn't assign, as the
+    /// shared formatter's `unknown-choice` element.
+    Unknown(Datum),
+}
+
+/// An alternative kept as received, as typed data.
+pub(super) fn unknown(opaque: &OpaqueChoice) -> Datum {
+    unknown_choice(opaque.tag, opaque.constructed, &opaque.data, Floats::Exact).1
 }
 
 impl Entry {
@@ -102,6 +117,7 @@ impl Entry {
                 error_code,
             } => Kind::Values(vec![Sample::Failure(*error_class, *error_code)]),
             LogDatum::AnyValue(octets) => Kind::Values(vec![Sample::Any(octets.clone())]),
+            LogDatum::Opaque(opaque) => Kind::Unknown(unknown(opaque)),
         };
         Self {
             time: stamp_text(&record.date, &record.time),
@@ -116,6 +132,7 @@ impl Entry {
             LogData::LogStatus(status) => Kind::LogStatus(*status),
             LogData::TimeChange(seconds) => Kind::TimeChange(*seconds),
             LogData::Values(values) => Kind::Values(values.iter().map(sample).collect()),
+            LogData::Opaque(opaque) => Kind::Unknown(unknown(opaque)),
         };
         Self {
             time: stamp_text(&record.date, &record.time),
@@ -124,10 +141,11 @@ impl Entry {
         }
     }
 
-    /// Whether the record is flagged: status flags with any flag set, or a
-    /// change of the log's status.
+    /// Whether the record is flagged: status flags with any flag set, a
+    /// change of the log's status, or a record of a kind this stack doesn't
+    /// know.
     pub(super) fn flagged(&self) -> bool {
-        matches!(self.kind, Kind::LogStatus(_))
+        matches!(self.kind, Kind::LogStatus(_) | Kind::Unknown(_))
             || self.status_flags.is_some_and(|flags| !flags.is_empty())
     }
 
@@ -168,6 +186,10 @@ impl Entry {
                 row["kind"] = json!("time-change");
                 row["time_change_s"] = finite(f64::from(*seconds));
             }
+            Kind::Unknown(choice) => {
+                row["kind"] = json!("unknown-choice");
+                row["choice"] = enveloped(choice, source, cap);
+            }
         }
         row
     }
@@ -202,6 +224,7 @@ fn sample(value: &LogValue) -> Sample {
             error_code,
         } => Sample::Failure(*error_class, *error_code),
         LogValue::AnyValue(octets) => Sample::Any(octets.clone()),
+        LogValue::Opaque(opaque) => Sample::Unknown(unknown(opaque)),
     }
 }
 
@@ -261,6 +284,7 @@ fn sample_json(sample: &Sample, column: Option<LoggedProperty>, source: &str, ca
             let decoded = with_format(|format| format.logged_octets_data(column, octets));
             enveloped(&decoded, source, cap)
         }
+        Sample::Unknown(choice) => enveloped(choice, source, cap),
         Sample::Failure(class, code) => {
             let remote = RemoteError::Error {
                 class: *class,
@@ -431,6 +455,7 @@ impl Summary {
             }
             Kind::LogStatus(_) => self.log_status += 1,
             Kind::TimeChange(_) => self.time_changes += 1,
+            Kind::Unknown(_) => {}
         }
     }
 

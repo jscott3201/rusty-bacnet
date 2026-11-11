@@ -297,7 +297,7 @@ fn single_event(record: &BACnetEventLogRecord) -> BACnetLogRecord {
 fn single(record: &BACnetLogMultipleRecord) -> BACnetLogRecord {
     let log_datum = match &record.log_data {
         LogData::LogStatus(bits) => LogDatum::LogStatus(*bits),
-        LogData::Values(values) if values.len() == 1 => values[0].clone().into(),
+        LogData::Values(values) if values.len() == 1 => values[0].clone().try_into().unwrap(),
         other => panic!("no single-datum form for {other:?}"),
     };
     BACnetLogRecord {

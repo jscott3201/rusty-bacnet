@@ -217,7 +217,7 @@ fn trend_logs_refuse_unencodable_records_at_add() {
     let mut bad = record(2, 0.0, None);
     bad.log_datum = LogDatum::AnyValue(stray_close.clone());
     assert!(trend.add_record(bad.clone()).is_err());
-    bad.log_datum = bad_padding.clone().into();
+    bad.log_datum = bad_padding.clone().try_into().unwrap();
     assert!(
         trend
             .log_buffer_mut()

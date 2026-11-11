@@ -1,6 +1,7 @@
 //! The fields the three log record codecs share: the constructed timestamp,
-//! the three-bit log status, the error pair, bit-string checks and the
-//! any-value wrapper.
+//! the three-bit log status, the error pair, bit-string checks, the
+//! any-value wrapper and an alternative under a tag the CHOICE doesn't
+//! assign.
 //!
 //! Every record of Clause 21's BACnetLogRecord, BACnetEventLogRecord and
 //! BACnetLogMultipleRecord opens with context 0 around an application Date
@@ -16,8 +17,9 @@ use super::tagged::{contents, decode_ctx_constructed, expect_end};
 use super::validate_tlv_sequence;
 use crate::{primitives, tags};
 use bacnet_types::bitstring::LogStatus;
+use bacnet_types::constructed::OpaqueChoice;
 use bacnet_types::enums::{ErrorClass, ErrorCode};
-use bacnet_types::error::{DecodeError, DecodingKind, Error, RangeError};
+use bacnet_types::error::{DecodeError, DecodingKind, EncodeError, Error, RangeError};
 use bacnet_types::primitives::{Date, Time};
 use bytes::BytesMut;
 
@@ -175,6 +177,72 @@ pub(super) fn encode_any_value(buf: &mut BytesMut, tag: u8, bytes: &[u8]) -> Res
 pub(super) fn decode_any_value(body: &[u8]) -> Result<Vec<u8>, Error> {
     validate_tlv_sequence(body, "any-value")?;
     Ok(body.to_vec())
+}
+
+/// The alternative whose tag `tag` starts at `start` in `data`, kept as
+/// received when the tag is above `last`, the highest its CHOICE assigns:
+/// `None` for any other tag, which the caller decodes or refuses. A
+/// constructed one's body must be complete tagged values with every context
+/// tag balanced, the rule an any-value's body follows, so a malformed or
+/// truncated one still fails, as does nesting past the tag decoder's depth
+/// limit.
+pub(super) fn decode_opaque(
+    data: &[u8],
+    tag: &tags::Tag,
+    start: usize,
+    last: u8,
+) -> Result<Option<(OpaqueChoice, usize)>, Error> {
+    if tag.class != tags::TagClass::Context || tag.is_closing || tag.number <= last {
+        return Ok(None);
+    }
+    let (data, end) = if tag.is_opening {
+        let (body, end) = tags::extract_context_value(data, start, tag.number)?;
+        validate_tlv_sequence(body, "unknown choice")?;
+        (body, end)
+    } else {
+        contents(data, start, tag.length)?
+    };
+    let opaque = OpaqueChoice {
+        tag: tag.number,
+        constructed: tag.is_opening,
+        data: data.to_vec(),
+    };
+    Ok(Some((opaque, end)))
+}
+
+/// Write an alternative [`decode_opaque`] kept back as it came: under its
+/// own tag, primitive or between an opening and closing tag pair. Refuses a
+/// tag up to `last`, which its CHOICE assigns, or 255, and a constructed
+/// body that isn't complete tagged values. `what` names the field in errors.
+pub(super) fn encode_opaque(
+    buf: &mut BytesMut,
+    opaque: &OpaqueChoice,
+    last: u8,
+    what: &'static str,
+) -> Result<(), Error> {
+    let OpaqueChoice {
+        tag,
+        constructed,
+        ref data,
+    } = *opaque;
+    if tag <= last || tag == u8::MAX {
+        return Err(EncodeError::new("tag [{}] cannot carry an opaque alternative")
+            .within(what)
+            .with_value(tag.into())
+            .into());
+    }
+    if constructed {
+        validate_tlv_sequence(data, what).map_err(Error::into_encode_refusal)?;
+        tags::encode_opening_tag(buf, tag);
+        buf.extend_from_slice(data);
+        tags::encode_closing_tag(buf, tag);
+    } else {
+        let length = u32::try_from(data.len())
+            .map_err(|_| Error::encode("opaque alternative too long for a tag length"))?;
+        tags::encode_tag(buf, tag, tags::TagClass::Context, length);
+        buf.extend_from_slice(data);
+    }
+    Ok(())
 }
 
 /// The contents of the application `number` value at `pos`, with exactly

@@ -11,14 +11,19 @@
 //! primitives, then failure as a constructed pair of application
 //! Enumerated class and code, then any-value as a constructed wrapper
 //! around the value's own tagged encoding.
+//!
+//! An alternative under a tag either CHOICE doesn't assign (above 2 for the
+//! log data, above 8 for an entry), primitive or constructed, is kept as
+//! [`LogData::Opaque`] or [`LogValue::Opaque`] and written back unchanged;
+//! a known tag in the wrong form still fails.
 
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
 use super::log_fields::{
     check_bit_string, decode_any_value, decode_failure, decode_integer, decode_log_status,
-    decode_timestamp, encode_any_value, encode_ctx_integer, encode_failure, encode_log_status,
-    encode_timestamp,
+    decode_opaque, decode_timestamp, encode_any_value, encode_ctx_integer, encode_failure,
+    encode_log_status, encode_opaque, encode_timestamp,
 };
 use super::tagged::{contents, decode_ctx_constructed, expect_end};
 use crate::{primitives, tags};
@@ -41,6 +46,15 @@ const NULL: u8 = 6;
 const FAILURE: u8 = 7;
 const ANY: u8 = 8;
 
+/// The log-data CHOICE's own alternatives: log status, the entries and the
+/// clock change.
+const LOG_STATUS: u8 = 0;
+const VALUES: u8 = 1;
+const TIME_CHANGE: u8 = 2;
+
+/// What an opaque entry's encoding errors name.
+const ENTRY: &str = "BACnetLogMultipleRecord log-data entry";
+
 /// Encode one Trend Log Multiple record.
 ///
 /// Fails, leaving `buf` unchanged, for a bit string whose unused-bit count
@@ -62,15 +76,16 @@ fn write_log_multiple_record(
     encode_timestamp(out, &record.date, &record.time);
     tags::encode_opening_tag(out, 1);
     match &record.log_data {
-        LogData::LogStatus(status) => encode_log_status(out, 0, *status),
+        LogData::LogStatus(status) => encode_log_status(out, LOG_STATUS, *status),
         LogData::Values(values) => {
-            tags::encode_opening_tag(out, 1);
+            tags::encode_opening_tag(out, VALUES);
             for value in values {
                 encode_value(value, out)?;
             }
-            tags::encode_closing_tag(out, 1);
+            tags::encode_closing_tag(out, VALUES);
         }
-        LogData::TimeChange(seconds) => primitives::encode_ctx_real(out, 2, *seconds),
+        LogData::TimeChange(seconds) => primitives::encode_ctx_real(out, TIME_CHANGE, *seconds),
+        LogData::Opaque(opaque) => encode_opaque(out, opaque, TIME_CHANGE, LOG_DATA)?,
     }
     tags::encode_closing_tag(out, 1);
     Ok(())
@@ -97,6 +112,7 @@ fn encode_value(value: &LogValue, buf: &mut BytesMut) -> Result<(), Error> {
             error_code,
         } => encode_failure(buf, FAILURE, *error_class, *error_code),
         LogValue::AnyValue(bytes) => encode_any_value(buf, ANY, bytes)?,
+        LogValue::Opaque(opaque) => encode_opaque(buf, opaque, ANY, ENTRY)?,
     }
     Ok(())
 }
@@ -122,16 +138,18 @@ pub fn decode_log_multiple_record(
 
 fn decode_log_data(data: &[u8], offset: usize) -> Result<LogData, Error> {
     let (tag, start) = tags::decode_tag(data, 0)?;
-    let (log_data, end) = if tag.is_context(0) {
+    let (log_data, end) = if let Some((opaque, end)) = decode_opaque(data, &tag, start, TIME_CHANGE)? {
+        (LogData::Opaque(opaque), end)
+    } else if tag.is_context(LOG_STATUS) {
         let (octets, end) = contents(data, start, tag.length)?;
         (
             LogData::LogStatus(decode_log_status(octets, offset, RECORD)?),
             end,
         )
-    } else if tag.is_opening_tag(1) {
-        let (list, end) = tags::extract_context_value(data, start, 1)?;
+    } else if tag.is_opening_tag(VALUES) {
+        let (list, end) = tags::extract_context_value(data, start, VALUES)?;
         (LogData::Values(decode_values(list, offset)?), end)
-    } else if tag.is_context(2) {
+    } else if tag.is_context(TIME_CHANGE) {
         let (octets, end) = contents(data, start, tag.length)?;
         (LogData::TimeChange(primitives::decode_real(octets)?), end)
     } else {
@@ -149,7 +167,9 @@ fn decode_values(data: &[u8], offset: usize) -> Result<Vec<LogValue>, Error> {
     let mut pos = 0;
     while pos < data.len() {
         let (tag, start) = tags::decode_tag(data, pos)?;
-        let (value, end) = if tag.is_opening_tag(FAILURE) {
+        let (value, end) = if let Some((opaque, end)) = decode_opaque(data, &tag, start, ANY)? {
+            (LogValue::Opaque(opaque), end)
+        } else if tag.is_opening_tag(FAILURE) {
             let (body, end) = tags::extract_context_value(data, start, FAILURE)?;
             let (error_class, error_code) = decode_failure(body, offset, FAILURE_FIELD)?;
             let value = LogValue::Failure {

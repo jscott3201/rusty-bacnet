@@ -307,7 +307,7 @@ impl ObjectDatabase {
                     log_datum: values
                         .into_iter()
                         .next()
-                        .map_or(LogDatum::NullValue, LogDatum::from),
+                        .map_or(LogDatum::NullValue, trend_datum),
                     status_flags: None,
                 }),
             };
@@ -400,6 +400,16 @@ fn failure(class: ErrorClass, code: ErrorCode) -> LogValue {
         error_class: class,
         error_code: code,
     }
+}
+
+/// A sampled value as a Trend Log datum. The poller never samples an opaque
+/// value, which has no datum; one would log SERVICES / OTHER, as a value no
+/// record can carry does.
+fn trend_datum(value: LogValue) -> LogDatum {
+    LogDatum::try_from(value).unwrap_or(LogDatum::Failure {
+        error_class: ErrorClass::SERVICES,
+        error_code: ErrorCode::OTHER,
+    })
 }
 
 /// Whether `new` differs from `old` only in a COV log's increment.

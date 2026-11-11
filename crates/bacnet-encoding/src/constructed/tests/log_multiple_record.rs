@@ -1,6 +1,6 @@
 use super::*;
 use bacnet_types::bitstring::LogStatus;
-use bacnet_types::constructed::{BACnetLogMultipleRecord, LogData, LogValue};
+use bacnet_types::constructed::{BACnetLogMultipleRecord, LogData, LogValue, OpaqueChoice};
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::primitives::{Date, Time};
 
@@ -175,10 +175,10 @@ fn log_multiple_record_decoder_rejects_malformed_records() {
     let good = encoded(&record(LogData::Values(vec![LogValue::NullValue])));
     let mut cases: Vec<Vec<u8>> = vec![
         good[..good.len() - 1].to_vec(),
-        // log-data [1] holding an unknown alternative.
-        [&TIMESTAMP[..], &[0x1E, 0x39, 0x01, 0x1F]].concat(),
-        // A member list entry with an unknown tag.
-        [&TIMESTAMP[..], &[0x1E, 0x1E, 0x99, 0x00, 0x1F, 0x1F]].concat(),
+        // log-data [1] holding a known tag in the wrong form, and a member
+        // list entry with one.
+        [&TIMESTAMP[..], &[0x1E, 0x29, 0x01, 0x1F]].concat(),
+        [&TIMESTAMP[..], &[0x1E, 0x1E, 0x89, 0x00, 0x1F, 0x1F]].concat(),
         // A null-value with contents, and a two-octet boolean.
         [&TIMESTAMP[..], &[0x1E, 0x1E, 0x69, 0x00, 0x1F, 0x1F]].concat(),
         [&TIMESTAMP[..], &[0x1E, 0x1E, 0x0A, 0x00, 0x01, 0x1F, 0x1F]].concat(),
@@ -194,6 +194,25 @@ fn log_multiple_record_decoder_rejects_malformed_records() {
             decode_log_multiple_record(&bytes, 0).is_err(),
             "{bytes:02X?}"
         );
+    }
+    // A tag either CHOICE doesn't assign is kept as received (#2474).
+    let opaque = |tag| OpaqueChoice {
+        tag,
+        constructed: false,
+        data: vec![0],
+    };
+    for (bytes, log_data) in [
+        (
+            [&TIMESTAMP[..], &[0x1E, 0x39, 0x00, 0x1F]].concat(),
+            LogData::Opaque(opaque(3)),
+        ),
+        (
+            [&TIMESTAMP[..], &[0x1E, 0x1E, 0x99, 0x00, 0x1F, 0x1F]].concat(),
+            LogData::Values(vec![LogValue::Opaque(opaque(9))]),
+        ),
+    ] {
+        let (decoded, end) = decode_log_multiple_record(&bytes, 0).unwrap();
+        assert_eq!((decoded.log_data, end), (log_data, bytes.len()));
     }
 }
 

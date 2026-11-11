@@ -3,6 +3,9 @@
 //! decodes (#2073): as text, `exceeding value 101.5, flags in-alarm,
 //! deadband 1, limit 100`, and as typed data with each field by name. The
 //! CLI's Event Log records, the terminal UI and the MCP server share them.
+//! A choice under a tag the standard doesn't assign (#2474) shows as its
+//! number, with its fields by context tag as text and its octets as hex in
+//! the data, as an unassigned Event_Parameters algorithm does.
 
 use bacnet_encoding::constructed::{decode_authentication_factor, decode_bacnet_property_value};
 use bacnet_types::constructed::{
@@ -17,6 +20,7 @@ use super::fields::{
     FieldList, bits_value, encoded_value, named, property_state_value, reference_value,
 };
 use super::primitive::{date_time, hex};
+use super::tagged::fields_text;
 use super::{Datum, Fields, Floats, StateTexts, ValueFormat};
 use crate::label::kebab;
 
@@ -102,6 +106,7 @@ fn event_type(parameters: &NotificationParameters) -> u32 {
         N::ChangeOfReliability { .. } => 19,
         N::ChangeOfDiscreteValue { .. } => 21,
         N::ChangeOfTimer { .. } => 22,
+        N::Opaque { tag, .. } => u32::from(*tag),
     }
 }
 
@@ -517,6 +522,12 @@ fn render(
                 None => f.quiet("expiration_time", Datum::Null),
             }
         }
+        // A tag the standard doesn't assign: its fields by context tag.
+        N::Opaque { data, .. } => f.field(
+            "data",
+            fields_text(data, format.floats),
+            Datum::Raw { raw: hex(data, "") },
+        ),
     }
     let (details, fields) = f.finish();
     (name, details, fields)

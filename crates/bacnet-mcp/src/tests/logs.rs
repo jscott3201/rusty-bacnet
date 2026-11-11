@@ -296,7 +296,7 @@ async fn an_event_log_pages_across_answers_and_calls() {
                         && n.to_state != EventState::NORMAL,
                 );
             }
-            EventLogDatum::LogStatus(_) => flagged += 1,
+            EventLogDatum::LogStatus(_) | EventLogDatum::Opaque { .. } => flagged += 1,
             EventLogDatum::TimeChange(_) => {}
         }
     }

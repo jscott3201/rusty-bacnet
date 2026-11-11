@@ -399,6 +399,37 @@ class LogRecordBitStringTests(unittest.TestCase):
         self.assertIsNone(datum.names)
         self.assertIsNone(second["status_flags"])
 
+    def test_choices_under_unassigned_tags_read_as_other(self):
+        # #2474: a later revision's choice keeps its octets, and the records
+        # around it still decode.
+        stamp = "0e a4 7e 0a 05 01 b4 09 00 00 00 0f"
+        # A Trend Log datum under [11], primitive, then a REAL 1.5.
+        unknown = bytes.fromhex(stamp + "1e ba 01 02 1f")
+        real = bytes.fromhex(stamp + "1e 2c 3f c0 00 00 1f")
+        first, second = decode_log_records({
+            "object_id": ObjectIdentifier(ObjectType.TREND_LOG, 1),
+            "property_id": PropertyIdentifier.LOG_BUFFER,
+            "item_count": 2,
+            "item_data": unknown + real,
+        })
+        self.assertEqual(
+            first["datum"],
+            {"kind": "other", "tag": 11, "constructed": False, "data": b"\x01\x02"},
+        )
+        self.assertEqual(second["datum"], {"kind": "real", "real": 1.5})
+        # A Trend Log Multiple member under [9], constructed, beside a NULL.
+        (record,) = decode_log_records({
+            "object_id": ObjectIdentifier(ObjectType.TREND_LOG_MULTIPLE, 1),
+            "property_id": PropertyIdentifier.LOG_BUFFER,
+            "item_count": 1,
+            "item_data": bytes.fromhex(stamp + "1e 1e 68 9e 09 01 9f 1f 1f"),
+        })
+        null, member = record["datum"]["values"]
+        self.assertEqual(null, {"kind": "null"})
+        self.assertEqual(
+            member, {"kind": "other", "tag": 9, "constructed": True, "data": b"\x09\x01"}
+        )
+
 
 class EventInformationPagingTests(unittest.IsolatedAsyncioTestCase):
     async def test_pages_follow_the_last_object_id(self):

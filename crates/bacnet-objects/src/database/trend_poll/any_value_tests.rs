@@ -62,7 +62,7 @@ fn read_values_map_to_their_datum_or_an_any_value() {
         ),
     ] {
         assert_eq!(
-            LogDatum::from(property_value_to_log_value(&value)),
+            LogDatum::try_from(property_value_to_log_value(&value)).unwrap(),
             expected,
             "{value:?}"
         );
@@ -76,7 +76,8 @@ fn read_values_map_to_their_datum_or_an_any_value() {
 #[test]
 fn oversized_and_uncarriable_values_log_a_failure() {
     let unsigned = |count| PropertyValue::List(vec![PropertyValue::Unsigned(1); count]);
-    let logged = |value: &PropertyValue| LogDatum::from(property_value_to_log_value(value));
+    let logged =
+        |value: &PropertyValue| LogDatum::try_from(property_value_to_log_value(value)).unwrap();
     // 128 two-octet elements fill the cap exactly; one more is too long.
     assert_eq!(ANY_VALUE_MAX_OCTETS, 256);
     assert_eq!(

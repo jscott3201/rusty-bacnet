@@ -727,11 +727,12 @@ fn primitive_notification_fields_require_their_context_tags() {
     }
 }
 
-/// A variant number the decoder doesn't know, reserved or past the last one,
-/// is the wrong tag (#1446).
+/// A variant number Clause 21 deprecates, reserves or leaves out (7, 12,
+/// 20) is the wrong tag (#1446); one past the last it assigns is kept as
+/// received (#2474).
 #[test]
 fn an_unknown_variant_is_the_wrong_tag() {
-    for data in [&[0x7E, 0x7F][..], &[0xFE, 0x17, 0xFF, 0x17]] {
+    for data in [&[0x7E, 0x7F][..], &[0xCE, 0xCF], &[0xFE, 0x14, 0xFF, 0x14]] {
         let error = decode_variant(data).unwrap_err();
         assert_eq!(
             error.reject_reason(),
@@ -739,4 +740,11 @@ fn an_unknown_variant_is_the_wrong_tag() {
             "{data:02X?}: {error:?}"
         );
     }
+    assert_eq!(
+        decode_variant(&[0xFE, 0x17, 0xFF, 0x17]).unwrap(),
+        NotificationParameters::Opaque {
+            tag: 23,
+            data: vec![],
+        }
+    );
 }

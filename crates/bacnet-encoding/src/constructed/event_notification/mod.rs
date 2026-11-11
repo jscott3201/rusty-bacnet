@@ -39,6 +39,11 @@ mod property_states;
 mod structured;
 mod tolerant;
 
+/// The highest context tag the 2020 NotificationParameters production assigns
+/// or rules out: an alternative above it is kept as
+/// [`NotificationParameters::Opaque`].
+const LAST_ASSIGNED_TAG: u8 = 22;
+
 pub use parameters_decode::decode_notification_parameters;
 pub use parameters_encode::encode_notification_parameters;
 pub use tolerant::decode_event_notification_tolerant;

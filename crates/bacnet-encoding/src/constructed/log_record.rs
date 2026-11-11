@@ -9,11 +9,15 @@
 //! constructed pair of application Enumerated class and code, and any-value
 //! as a constructed wrapper around the value's own tagged encoding. A
 //! primitive context 2 holding the four-bit Status_Flags may follow.
+//!
+//! An alternative under a tag above 10, primitive or constructed, is kept as
+//! [`LogDatum::Opaque`] and written back unchanged; a known tag in the wrong
+//! form still fails.
 
 use super::log_fields::{
     check_bit_string, decode_any_value, decode_failure, decode_integer, decode_log_status,
-    decode_timestamp, encode_any_value, encode_ctx_integer, encode_failure, encode_log_status,
-    encode_timestamp,
+    decode_opaque, decode_timestamp, encode_any_value, encode_ctx_integer, encode_failure,
+    encode_log_status, encode_opaque, encode_timestamp,
 };
 use super::tagged::{contents, decode_ctx_constructed, expect_end};
 use crate::{primitives, tags};
@@ -80,6 +84,7 @@ fn write_log_record(record: &BACnetLogRecord, out: &mut BytesMut) -> Result<(), 
         } => encode_failure(out, FAILURE, *error_class, *error_code),
         LogDatum::TimeChange(seconds) => primitives::encode_ctx_real(out, TIME_CHANGE, *seconds),
         LogDatum::AnyValue(bytes) => encode_any_value(out, ANY, bytes)?,
+        LogDatum::Opaque(opaque) => encode_opaque(out, opaque, ANY, DATUM)?,
     }
     tags::encode_closing_tag(out, 1);
     if let Some(flags) = record.status_flags {
@@ -131,7 +136,9 @@ pub fn decode_log_record(data: &[u8], offset: usize) -> Result<(BACnetLogRecord,
 
 fn decode_datum(data: &[u8], offset: usize) -> Result<LogDatum, Error> {
     let (tag, start) = tags::decode_tag(data, 0)?;
-    let (datum, end) = if tag.is_opening_tag(FAILURE) {
+    let (datum, end) = if let Some((opaque, end)) = decode_opaque(data, &tag, start, ANY)? {
+        (LogDatum::Opaque(opaque), end)
+    } else if tag.is_opening_tag(FAILURE) {
         let (body, end) = tags::extract_context_value(data, start, FAILURE)?;
         let (error_class, error_code) = decode_failure(body, offset, FAILURE_FIELD)?;
         let datum = LogDatum::Failure {
