@@ -208,6 +208,7 @@ jobs:
       - name: Changelog fragments
         run: |
           python3 -m unittest discover -s scripts -p 'test_changelog.py'
+          python3 -m unittest discover -s scripts -p 'test_xd_strip.py'
           python3 scripts/changelog.py check
 
   clippy:

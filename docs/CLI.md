@@ -1367,7 +1367,11 @@ An `event-parameter` element also has `fields`, an object of the value's
 members by their snake-case names in wire order, each in the forms above:
 `algorithm` first (an enumerated named as its event type), then the
 algorithm's members, references as `device-object-property-reference`
-elements and change-of-state values as `property-state` elements:
+elements and change-of-state values as `property-state` elements (a state is
+named where its enumeration is known; one carried through the extended-value
+choice reads `sc-connection-state connected` or `sc-hub-connector-state
+connected-to-failover` for choices 258 and 259, and any other as
+`extended-value 260 2`, its tag then its value):
 
 ```json
 {
@@ -2341,17 +2345,6 @@ published. What we print is unchanged.
   months), the week of the month 1 to 9, the day 1 (Monday) to 7. Give the
   three numbers or the one `week_n_day` text, not both. The text works in a
   Date_List entry and in an Exception_Schedule period alike.
-- **Extended property states.** A property state carried through the
-  extended-value choice shows its choice and value when the stack names the
-  choice: `sc-connection-state connected` (choice 258) and
-  `sc-hub-connector-state connected-to-failover` (choice 259), both added after
-  the 2020 edition and named by ASHRAE's revision 24 data. Any other extended
-  value shows its number alone (`extended-value 2`). The names show up wherever
-  Event_Parameters and event notifications print a state
-  (CLI, TUI, MCP and the JSON `text`). A Rust caller reads them back with
-  `bacnet_ops::parse::parse_extended_property_state`, which takes the names, a
-  value as its number and the choice as its tag (`258 1`); nothing on the wire
-  differs between the spellings.
 - **Python** takes typed values rather than these texts:
   `ObjectIdentifier(ObjectType.ANALOG_INPUT, 3)`, dates as tuples, and the
   calendar entry mapping with numbers ([Python API](python-api.md)).

@@ -87,7 +87,7 @@ fn every_algorithm_by_its_fields() {
         ),
         (
             // The extended choices the stack names show choice and value
-            // (#2472); any other shows its number.
+            // (#2472); any other shows its tag and number.
             EP::ChangeOfState {
                 time_delay: 0,
                 list_of_values: [(258, 1), (259, 2), (260, 2)]
@@ -100,14 +100,14 @@ fn every_algorithm_by_its_fields() {
                     .collect(),
             },
             "change-of-state: delay 0 s, alarm values [sc-connection-state connected, \
-             sc-hub-connector-state connected-to-failover, extended-value 2]",
+             sc-hub-connector-state connected-to-failover, extended-value 260 2]",
             json!({
                 "algorithm": algorithm(1, "change-of-state"),
                 "time_delay": 0,
                 "list_of_values": [
                     {"element": "property-state", "text": "sc-connection-state connected"},
                     {"element": "property-state", "text": "sc-hub-connector-state connected-to-failover"},
-                    {"element": "property-state", "text": "extended-value 2"},
+                    {"element": "property-state", "text": "extended-value 260 2"},
                 ],
             }),
         ),

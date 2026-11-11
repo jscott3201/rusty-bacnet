@@ -204,9 +204,9 @@ fn decode_address_binding(
 /// A property state by name where its enumeration is known: `high-limit`,
 /// `active`, `degrees-fahrenheit`; any other as its choice and value. An
 /// extended choice the stack names (`sc-connection-state connected`) shows its
-/// choice and value; any other extended value shows only its number
-/// (`extended-value 2`).
-pub fn property_state_text(state: &BACnetPropertyStates) -> String {
+/// choice and value; any other extended value shows its tag and number
+/// (`extended-value 260 2`), so the choice isn't lost.
+pub(super) fn property_state_text(state: &BACnetPropertyStates) -> String {
     use BACnetPropertyStates as S;
     match state {
         S::BooleanValue(value) => value.to_string(),
@@ -242,7 +242,7 @@ pub fn property_state_text(state: &BACnetPropertyStates) -> String {
                 Some(name) => format!("{} {}", choice.name, kebab(name)),
                 None => format!("{} {}", choice.name, extended.value()),
             },
-            None => format!("extended-value {}", extended.value()),
+            None => format!("extended-value {} {}", extended.tag(), extended.value()),
         },
         other => match other.as_u32() {
             Some(value) => format!("{} {value}", choice_name(other)),
@@ -277,6 +277,66 @@ mod tests {
         assert_eq!(days(0), "no days");
         assert_eq!(days(0b110_0101), "Mon, Wed, Sat-Sun");
         assert_eq!(days(0b000_0010), "Tue");
+    }
+
+    fn extended(tag: u32, value: u32) -> BACnetPropertyStates {
+        BACnetPropertyStates::ExtendedValue(
+            bacnet_types::constructed::BACnetExtendedPropertyState::new(tag, value).unwrap(),
+        )
+    }
+
+    #[test]
+    fn the_named_extended_states_print_with_their_choice() {
+        assert_eq!(
+            property_state_text(&extended(258, 1)),
+            "sc-connection-state connected"
+        );
+        assert_eq!(
+            property_state_text(&extended(258, 3)),
+            "sc-connection-state failed-to-connect"
+        );
+        assert_eq!(
+            property_state_text(&extended(259, 2)),
+            "sc-hub-connector-state connected-to-failover"
+        );
+        // An unnamed value of a named choice keeps its number.
+        assert_eq!(
+            property_state_text(&extended(258, 9)),
+            "sc-connection-state 9"
+        );
+    }
+
+    #[test]
+    fn any_other_extended_value_keeps_its_tag_and_number() {
+        assert_eq!(
+            property_state_text(&extended(260, 2)),
+            "extended-value 260 2"
+        );
+        assert_eq!(
+            property_state_text(&extended(255, 7)),
+            "extended-value 255 7"
+        );
+    }
+
+    /// Naming a choice changes display only: a named state encodes as its
+    /// tag times 100000 plus the value under context tag 63.
+    #[test]
+    fn a_named_extended_state_encodes_as_its_number() {
+        let octets = |state: &BACnetPropertyStates| {
+            let mut buf = bytes::BytesMut::new();
+            bacnet_encoding::constructed::encode_property_state(&mut buf, state).unwrap();
+            buf
+        };
+        // 258 * 100000 + 1 = 0x0189AD41; tag 63 opens with 0xFC 0x3F.
+        assert_eq!(
+            &octets(&extended(258, 1))[..],
+            &[0xfc, 0x3f, 0x01, 0x89, 0xad, 0x41][..]
+        );
+        // 259 * 100000 + 2 = 0x018B33E2.
+        assert_eq!(
+            &octets(&extended(259, 2))[..],
+            &[0xfc, 0x3f, 0x01, 0x8b, 0x33, 0xe2][..]
+        );
     }
 
     #[test]
