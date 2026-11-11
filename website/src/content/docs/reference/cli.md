@@ -370,7 +370,7 @@ Usage: bacnet writem [OPTIONS] <TARGET> <SPECS> <SPECS>...
 Arguments:
 
 - `<TARGET>`: Target device. Required.
-- `<SPECS>...`: Each object, then its comma-separated writes, each with an optional @priority: "av:1 pv=72.5@8,on=Zone ao:1 pv=10". Required.
+- `<SPECS>...`: Each object, then its comma-separated writes, each with an optional @priority: "av:1 pv=72.5@8,on=Zone ao:1 pv=10". A comma ends a write only before a property and `=`, so a value may hold commas (`pv=object:ai,1`); quote one that holds `, mode=`. Required.
 
 ### bacnet subscribe
 
