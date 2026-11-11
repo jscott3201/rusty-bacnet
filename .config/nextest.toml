@@ -55,12 +55,12 @@ filter = '''
 success-output = "immediate"
 
 # The firmware link test's RAM sizes on the host (#1626, #1664, #1667), for
-# the log; check-firmware-link.sh prints the bare-metal ones. Likewise the
-# apdu scenario's peak heap use (#1635), against the image's arena.
+# the log; check-firmware-link.sh prints the bare-metal ones. Likewise each
+# scenario's peak heap use against its image's arena (#1635, #2178, #2303),
+# and the points scenario's list, build and database (#2445).
 [[profile.default.overrides]]
 filter = '''
-    (package(firmware-link) & test(=ram_sizes))
-  | (binary_id(firmware-link::apdu) & test(=heap_fits_the_arena))
+    (package(firmware-link) & (test(=ram_sizes) | test(=heap_fits_the_arena)))
 '''
 success-output = "immediate"
 

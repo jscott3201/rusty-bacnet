@@ -621,6 +621,44 @@
 # with three 64-bit division routines (two on riscv32imac): over the thumb
 # targets' 256 KiB region and this table's limits, so the row waits for
 # the path to be trimmed (docs/design/device-core-events.md, decision 18).
+#
+# The points rows are from when that image joined, on 2026-11-10, Rust
+# 1.99.0 against dev at 420a0d6ad (#2445). It answers the objects image's
+# requests, and two reads of its own, from a database that bacnet-objects'
+# point-list builder (points::build_database) makes: the objects image's
+# four points and one each of the other seven analog, binary and
+# multi-state types, so all nine the builder covers, in a 28 KiB arena. As
+# text / rodata / flash, then RAM, the objects image, then this one:
+#
+#   thumbv7m             128736 / 15168 / 144928    16480
+#                        168576 / 21572 / 191172    28768
+#   thumbv7em            128860 / 15168 / 145052    16480
+#                        168648 / 21572 / 191244    28768
+#   riscv32imac          155612 / 18712 / 174346    16480
+#                        203016 / 25084 / 228122    28768
+#
+# So the builder's price for all nine types is 46244 / 46192 / 53776
+# octets of flash, and 12 KiB more arena. The builder reaches every type's
+# constructor, and so its vtable, whatever the list holds. A spike that
+# built the same eleven objects by hand, with the same settings and no
+# builder, measured 161876 / 21584 / 184484 on thumbv7m: the seven more
+# types cost about 39.6 KB of flash (21.3 KB of it .text in their own
+# functions), and the builder 6.7 KB (its checks, the setters it calls and
+# the match over a list it can't see; build_database, with the nine
+# constructors inlined, is 16.6 KB of .text). Boxing two of the larger
+# objects (1488 and 1392 octets) copies them with __aeabi_memmove8 on Arm,
+# a third memmove entry point, which the hand-built spike linked too. The
+# counts are what the image links, with no headroom; the octet budgets are
+# --suggest's.
+#
+# Its heap, on a 64-bit host, whose blocks bound a 32-bit target's
+# (tests/points.rs, capability features off as the image builds them, the
+# identity's 32 octets counted in each figure but the list's): the list
+# 1624 octets, the build's peak 22144 and the database it leaves 21672,
+# the scenario's peak 25320. A host that keeps its list and builds from a
+# clone, so that the list and the database are both live, peaks at 23768.
+# An output or a value takes about 2 KB of it on the host, an input about
+# 0.5 KB.
 
 [thumbv7m-none-eabi.mstp]
 text = 18320
@@ -731,6 +769,17 @@ ram = 27648
 fmt_functions = 0
 div64_functions = 0
 memmove_functions = 4
+
+[thumbv7m-none-eabi.points]
+text = 188816
+rodata = 24160
+data = 64
+bss = 32224
+flash = 214112
+ram = 32224
+fmt_functions = 0
+div64_functions = 0
+memmove_functions = 3
 
 [thumbv6m-none-eabi.mstp]
 text = 19696
@@ -1018,6 +1067,17 @@ fmt_functions = 0
 div64_functions = 0
 memmove_functions = 4
 
+[thumbv7em-none-eabihf.points]
+text = 188896
+rodata = 24160
+data = 64
+bss = 32224
+flash = 214208
+ram = 32224
+fmt_functions = 0
+div64_functions = 0
+memmove_functions = 3
+
 [riscv32imac-unknown-none-elf.objects]
 text = 172336
 rodata = 20880
@@ -1036,6 +1096,17 @@ data = 64
 bss = 27648
 flash = 255040
 ram = 27648
+fmt_functions = 0
+div64_functions = 0
+memmove_functions = 2
+
+[riscv32imac-unknown-none-elf.points]
+text = 227392
+rodata = 28096
+data = 64
+bss = 32224
+flash = 255504
+ram = 32224
 fmt_functions = 0
 div64_functions = 0
 memmove_functions = 2

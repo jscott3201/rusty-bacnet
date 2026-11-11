@@ -79,7 +79,7 @@ if ! "$quick"; then
   step "no_std crates' tests (alloc, without std)"
   cargo nextest run -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc,bacnet-objects/event-reporting,bacnet-objects/durable-writes,bacnet-device-core/structured-writes,bacnet-device-core/cov-multiple --locked
   step "bacnet-objects and bacnet-device-core tests (alloc, capability features and structured-writes off)"
-  cargo nextest run -p bacnet-objects -p bacnet-device-core -p firmware-link --no-default-features --features alloc,firmware-link/reporting --locked
+  cargo nextest run -p bacnet-objects -p bacnet-device-core -p firmware-link --no-default-features --features alloc,firmware-link/reporting,firmware-link/points --locked
   step "no_std crates' doctests (alloc, without std)"
   cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc,bacnet-objects/event-reporting,bacnet-objects/durable-writes,bacnet-device-core/structured-writes,bacnet-device-core/cov-multiple --locked
   step "no_std crates' tests (without alloc)"
