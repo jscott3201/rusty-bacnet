@@ -708,11 +708,17 @@ untrusted CA, an expired or future-dated certificate (with clock skew when it
 is close), a key mismatch, a missing client-authentication key usage, a proxy
 that drops the upgrade or refuses it with an HTTP status (which the hint
 names), a dial that stalls (placed on the step it stalled in), a hub that
-never answers the Connect-Request, or a duplicate VMAC. A failed connect opens
+never answers the Connect-Request, or a duplicate VMAC. Below the hint it
+names the failure's BACnet error code (Annex AB.7.5), such as
+`TCP_CONNECTION_REFUSED` or `WEBSOCKET_ENDPOINT_LEAVES` for a hub that closed
+the WebSocket going away, and the timeline's line for a failure ends with it
+(#2438). A failed connect opens
 the doctor. Connects, losses, reconnect attempts, failover, each failed probe
 of the primary while on the failover hub, and the primary's return go on the
 screen's timeline and in the log pane, and the status bar
-names the hub in use. The one-shot `--sc` commands report errors as before.
+names the hub in use. The one-shot `--sc` commands, and `bacnet mcp serve` on
+an SC profile, end a failed dial's error line with the same code, as in
+`(BACnet/SC error code TCP_CONNECTION_REFUSED)`.
 
 **Joining an MS/TP trunk.** An MS/TP session adds a master to the trunk's
 token ring, which every station on it notices, so the TUI asks before it opens

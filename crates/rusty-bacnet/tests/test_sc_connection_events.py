@@ -50,8 +50,9 @@ class ScHubOptionTests(unittest.TestCase):
             self.assertEqual(runtime_arg_kinds(getattr(BACnetClient, name)),
                              stub_arg_kinds(node))
         for cls, names in (
-            ("ScEvent", {"kind", "hub", "hub_vmac", "cause", "cause_detail", "dial_stage",
-                         "http_status", "error_class", "error_code", "attempt", "backoff"}),
+            ("ScEvent", {"kind", "hub", "hub_vmac", "cause", "cause_code", "cause_detail",
+                         "dial_stage", "http_status", "close_status", "error_class",
+                         "error_code", "attempt", "backoff"}),
             ("ScLinkStatus", {"state", "active_hub", "hub_vmac", "heartbeat_age",
                               "heartbeat_rtt"}),
             ("ScEventIterator", {"missed"}),
@@ -193,6 +194,38 @@ class ScConnectionEventTests(ClientScFixture):
         self.assertIsInstance(event.error_code, rusty_bacnet.ErrorCode)
         self.assertIsNone(event.error_code.name)
         self.assertEqual((event.error_class, event.error_code), (7, 600))
+        # A NAK's code is the cause's code too, unnamed here (#2438).
+        self.assertEqual(event.cause_code, 600)
+        self.assertIsNone(event.cause_code.name)
+        await asyncio.wait_for(client.stop(), 10)
+
+    async def test_a_websocket_close_status_names_its_error_code(self):
+        # #2438: the hub accepts, then closes the WebSocket with status 1001
+        # (going away); the disconnect keeps the status and names its code.
+        subscribed, seen = asyncio.Event(), asyncio.Event()
+
+        async def peer(reader, writer, connect):
+            await self.accept_sc(writer, connect)
+            await subscribed.wait()
+            await self.send_frame(writer, (1001).to_bytes(2, "big"), opcode=8)
+            await seen.wait()
+
+        client = self.client(await self.raw_peer(peer))
+        await asyncio.wait_for(client.__aenter__(), 5)
+        events = await client.connection_events()
+        subscribed.set()
+
+        async def disconnected():
+            async for event in events:
+                if event.kind == "disconnected":
+                    return event
+        event = await asyncio.wait_for(disconnected(), 15)
+        seen.set()
+        self.assertEqual((event.cause, event.close_status), ("websocket_closed", 1001))
+        self.assertIs(event.cause_code, rusty_bacnet.ErrorCode.WEBSOCKET_ENDPOINT_LEAVES)
+        self.assertEqual(event.cause_code.name, "WEBSOCKET_ENDPOINT_LEAVES")
+        self.assertIsNone(event.http_status)
+        self.assertIsNone(event.error_code)
         await asyncio.wait_for(client.stop(), 10)
 
     async def test_the_first_subscriber_sees_the_first_connected(self):

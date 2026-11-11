@@ -1333,7 +1333,8 @@ the failover hub, each restore probe of the primary that fails reads one
 `primary_restore_failed` (`hub` is `primary`), at most one per restore
 interval (#1828).
 
-`cause` is `local_close`, `peer_close`, `heartbeat_timeout`, `websocket`,
+`cause` is `local_close`, `peer_close` (a Disconnect-Request from the hub),
+`heartbeat_timeout`, `websocket`, `websocket_closed`,
 `tls`, `nak` (with `error_class` and `error_code`, `ErrorClass` and
 `ErrorCode` members), `dial_timeout`,
 `connect_accept_timeout`, `upgrade_refused`, `malformed_result`,
@@ -1344,6 +1345,17 @@ adds text for `websocket`, `tls` and `other`. A `dial_timeout` is a dial
 `connect_accept_timeout` is a hub that opened the WebSocket but never answered
 the Connect-Request. An `upgrade_refused` is a server, often a proxy, that
 answered the WebSocket upgrade with the HTTP status in `http_status` (#1839).
+A `websocket_closed` is a hub that closed the WebSocket with the status in
+`close_status`, such as 1001 for a hub going away (#2438).
+
+`cause_code` names the cause with an `ErrorCode` member where one applies
+(#2438): a NAK's own code, or the BACnet/SC connection code Annex AB.7.5
+gives a DNS, TCP, TLS, HTTP or WebSocket failure, such as
+`TCP_CONNECTION_REFUSED`, `HTTP_TEMPORARY_UNAVAILABLE` for an upgrade answered
+with 503, or `WEBSOCKET_ENDPOINT_LEAVES` for a close with status 1001. Its
+`name` is the code's name, and None for a number the table doesn't name.
+`cause_code` is None for a local close, a Disconnect-Request and the timeouts
+with no code of their own.
 
 The connector never waits for Python. An iterator more than 64 events behind
 loses the oldest and adds their count to its `missed`, then goes on with the

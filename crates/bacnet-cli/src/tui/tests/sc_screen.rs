@@ -113,6 +113,7 @@ fn after_a_failover() -> App {
         LinkEvent::Disconnected {
             hub: ScActiveHub::Primary,
             fault: lost,
+            code: None,
         },
         LinkEvent::Reconnecting {
             hub: ScActiveHub::Primary,
@@ -122,6 +123,7 @@ fn after_a_failover() -> App {
         LinkEvent::ConnectFailed {
             hub: ScActiveHub::Primary,
             fault: Fault::WebSocket(ScWebSocketErrorKind::TcpDial),
+            code: None,
         },
         LinkEvent::FailoverEngaged,
         LinkEvent::Connected {
@@ -195,13 +197,14 @@ fn a_failed_restore_probe_is_a_timeline_line_only() {
         &mut app,
         ScReport::Event(LinkEvent::PrimaryRestoreFailed {
             fault: Fault::WebSocket(ScWebSocketErrorKind::TcpDial),
+            code: None,
         }),
     );
     let last = app.sc.timeline.back().unwrap();
     assert_eq!(last.severity, crate::tui::app::sc::Severity::Warn);
     assert_eq!(
         last.text,
-        "primary hub still unreachable: nothing accepted the TCP connection"
+        "primary hub still unreachable: the TCP dial to the hub failed"
     );
     assert_eq!((states(&app), app.sc.failure.clone(), app.sc.link), before);
 }
@@ -216,6 +219,7 @@ fn repeated_restore_failures_share_one_timeline_line() {
     let probe = |fault| {
         ScReport::Event(LinkEvent::PrimaryRestoreFailed {
             fault: Fault::WebSocket(fault),
+            code: None,
         })
     };
     sc(&mut app, probe(ScWebSocketErrorKind::TcpDial));
@@ -230,7 +234,7 @@ fn repeated_restore_failures_share_one_timeline_line() {
     assert!(last.at > first_at, "the line keeps the latest time");
     app.screen = Screen::Sc;
     assert!(
-        screen(&mut app, 120, 40).contains("nothing accepted the TCP connection (3 times)"),
+        screen(&mut app, 120, 40).contains("the TCP dial to the hub failed (3 times)"),
         "{}",
         screen(&mut app, 120, 40)
     );
@@ -290,10 +294,12 @@ fn duplicate_vmac_naks_are_kept_with_the_reseed() {
         ScReport::Event(LinkEvent::ConnectFailed {
             hub: ScActiveHub::Primary,
             fault: duplicate(true),
+            code: None,
         }),
     );
     let failure = ScFailure {
         fault: duplicate(false),
+        code: None,
         detail: "NAK".into(),
         presented: Vec::new(),
     };
@@ -368,6 +374,7 @@ pub(super) fn refused() -> App {
                 by: Some(Duration::from_secs(400 * 86_400)),
             },
         )),
+        code: None,
         detail: "BACnet/SC WebSocket tls-handshake failure: WebSocket TLS handshake with \
                  hub.site.example:443 failed: invalid peer certificate: certificate expired"
             .into(),
