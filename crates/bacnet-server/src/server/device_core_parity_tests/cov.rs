@@ -16,6 +16,7 @@ use bacnet_device_core::cov::{CovCounters, CovPolicy};
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_objects::command_source::{CommandDeviceBinding, CommandOrigin};
 
+mod local_write;
 mod notify;
 
 /// Both sides of one fixture under one COV policy.

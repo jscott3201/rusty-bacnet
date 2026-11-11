@@ -237,7 +237,7 @@ async fn write_channel<T: TransportPort + 'static>(
         inhibit_delay: request.inhibit_delay == Some(true),
         requester,
     };
-    writer.write(&write.channel, write_group, value, None).await
+    writer.write(&write.channel, write_group, value).await
 }
 
 impl<T: TransportPort + 'static> BACnetServer<T> {

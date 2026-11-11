@@ -31,6 +31,9 @@ mod test_event_state;
 mod test_rows;
 pub mod trend_log;
 
-/// Explicit initiators for local command-source tracking.
-pub mod command_source;
-pub use command_source::LocalCommandSource;
+#[cfg(test)]
+mod command_source;
+// The tests name the source a local write takes as `crate::LocalCommandSource`;
+// it is `bacnet_device_core::write::local::LocalCommandSource` (#2446).
+#[cfg(test)]
+use bacnet_device_core::write::local::LocalCommandSource;

@@ -24,7 +24,7 @@ expression: text
 "┌ Events ──────────────────────────────────────────────────────────────────────────────────────────────────────────────┐"
 "│  35s ago warn  lost the primary hub: the hub ended the exchange                                                      │"
 "│  35s ago info  reconnect attempt 1 to the primary hub after 10000 ms                                                 │"
-"│  35s ago warn  dial to the primary hub failed: nothing accepted the TCP connection                                   │"
+"│  35s ago warn  dial to the primary hub failed: the TCP dial to the hub failed                                        │"
 "│  35s ago warn  primary hub unreachable: switching to the failover hub                                                │"
 "│  35s ago info  connected to the failover hub (hub VMAC 20:20:20:20:20:20)                                            │"
 "│   5s ago info  primary hub is back: leaving the failover hub                                                         │"

@@ -9,6 +9,9 @@ mod connect_accept_tests;
 #[path = "dial_failure_tests.rs"]
 mod dial_failure_tests;
 
+#[path = "error_code_tests.rs"]
+mod error_code_tests;
+
 #[path = "mu_liveness_tests.rs"]
 mod mu_liveness_tests;
 

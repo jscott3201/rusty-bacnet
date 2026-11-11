@@ -157,7 +157,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         array_index: Option<u32>,
         value: &[u8],
         priority: Option<u8>,
-        source: crate::LocalCommandSource,
+        source: bacnet_device_core::write::local::LocalCommandSource,
     ) -> Result<(), Error> {
         self.active_network()?;
         let value = {

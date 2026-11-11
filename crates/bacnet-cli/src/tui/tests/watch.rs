@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use bacnet_server::LocalCommandSource;
+use bacnet_device_core::write::local::LocalCommandSource;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use insta::assert_snapshot;

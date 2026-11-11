@@ -461,6 +461,11 @@ fn doctor<'a>(sc: &ScState, compact: bool, theme: &Theme) -> Vec<Row<'a>> {
         Row::hang(Line::from(vec![label, text]), NOTE_INDENT)
     };
     rows.push(note("Hint", theme.warn(), Span::raw(d.hint.clone())));
+    // The BACnet error code by name, as a management tool would report the
+    // failure (Annex AB.7.5); its number only when it has no name (#2438).
+    if let Some(code) = last.failure.code {
+        rows.push(note("Code", theme.dim(), Span::raw(code.to_string())));
+    }
     // The error in full: the footer has room for a line only.
     let detail = Span::styled(last.failure.detail.clone(), theme.dim());
     rows.push(note("Detail", theme.dim(), detail));

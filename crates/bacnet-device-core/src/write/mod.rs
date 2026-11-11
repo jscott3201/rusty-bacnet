@@ -1,7 +1,8 @@
 //! The write services against a borrowed [`ObjectDatabase`]: WriteProperty,
-//! the checks and decoding every write path shares, the NULL-relinquish
-//! rule, the local form of references naming this device, and the end of a
-//! Command or Channel run a write queued that its host can't make.
+//! the application's own writes ([`local`]), the checks and decoding every
+//! write path shares, the NULL-relinquish rule, the local form of
+//! references naming this device, and the end of a Command or Channel run a
+//! write queued that its host can't make.
 //!
 //! The host owns the database guard. A [`WriteCommitObserver`] runs under
 //! it, synchronously; [its documentation](WriteCommitObserver) says which
@@ -17,6 +18,7 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 mod decode;
 mod executor;
+pub mod local;
 mod local_references;
 mod multiple;
 pub mod policy;

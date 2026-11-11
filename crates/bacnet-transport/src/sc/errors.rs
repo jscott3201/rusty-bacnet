@@ -19,25 +19,40 @@ pub enum ScWebSocketErrorKind {
     MissingHubHost,
     /// The host name in the URL did not resolve to any address.
     HostLookup,
-    /// The TCP dial failed before TLS or WebSocket negotiation began.
+    /// The TCP dial failed before TLS or WebSocket negotiation began, for a
+    /// reason other than a refusal ([`Self::TcpRefused`]).
     TcpDial,
+    /// The peer refused the TCP connection: nothing listens on that port, or
+    /// a firewall rejects the connection.
+    TcpRefused,
     /// TLS negotiation failed after the TCP dial succeeded.
     TlsHandshake,
     /// The WebSocket HTTP upgrade failed after the TCP dial succeeded.
     WebSocketHandshake,
-    /// The hub did not accept the BACnet/SC hub subprotocol.
+    /// The hub's answer to the upgrade named a subprotocol other than the
+    /// BACnet/SC hub subprotocol.
     HubSubprotocol,
-    /// The direct peer did not accept the BACnet/SC direct subprotocol.
+    /// The direct peer's answer to the upgrade named a subprotocol other than
+    /// the BACnet/SC direct subprotocol.
     DirectSubprotocol,
+    /// The hub answered the upgrade without a `Sec-WebSocket-Protocol`
+    /// header, so it chose no subprotocol.
+    HubSubprotocolMissing,
+    /// The direct peer answered the upgrade without a
+    /// `Sec-WebSocket-Protocol` header, so it chose no subprotocol.
+    DirectSubprotocolMissing,
     /// Sending a WebSocket frame failed.
     Send,
     /// Receiving a WebSocket frame failed.
     Receive,
-    /// The WebSocket closed.
+    /// The peer closed the WebSocket with a close frame. The frame's status
+    /// code, when it carried one, is the `close_status` of
+    /// [`ScConnectError::WebSocket`].
     Closed,
     /// A non-binary WebSocket frame was received.
     NonBinaryFrame,
-    /// The WebSocket stream ended without a frame.
+    /// The connection ended without a close frame: the stream ended, or the
+    /// TCP or TLS connection under it was lost.
     StreamEnded,
 }
 
@@ -48,11 +63,13 @@ impl ScWebSocketErrorKind {
                 io::ErrorKind::InvalidInput
             }
             Self::HostLookup => io::ErrorKind::NotFound,
-            Self::TcpDial => io::ErrorKind::ConnectionRefused,
+            Self::TcpDial | Self::TcpRefused => io::ErrorKind::ConnectionRefused,
             Self::TlsHandshake
             | Self::WebSocketHandshake
             | Self::HubSubprotocol
-            | Self::DirectSubprotocol => io::ErrorKind::InvalidData,
+            | Self::DirectSubprotocol
+            | Self::HubSubprotocolMissing
+            | Self::DirectSubprotocolMissing => io::ErrorKind::InvalidData,
             Self::Send
             | Self::Receive
             | Self::Closed
@@ -70,10 +87,13 @@ impl fmt::Display for ScWebSocketErrorKind {
             Self::MissingHubHost => "missing-hub-host",
             Self::HostLookup => "host-lookup",
             Self::TcpDial => "tcp-dial",
+            Self::TcpRefused => "tcp-refused",
             Self::TlsHandshake => "tls-handshake",
             Self::WebSocketHandshake => "websocket-handshake",
             Self::HubSubprotocol => "hub-subprotocol",
             Self::DirectSubprotocol => "direct-subprotocol",
+            Self::HubSubprotocolMissing => "hub-subprotocol-missing",
+            Self::DirectSubprotocolMissing => "direct-subprotocol-missing",
             Self::Send => "send",
             Self::Receive => "receive",
             Self::Closed => "closed",
@@ -285,6 +305,9 @@ pub enum ScConnectError {
         /// instead of switching protocols, such as a proxy's 403 or 502.
         /// `None` when no HTTP response came back.
         http_status: Option<u16>,
+        /// The status code in the peer's WebSocket close frame, for a
+        /// [`ScWebSocketErrorKind::Closed`] failure whose frame carried one.
+        close_status: Option<u16>,
     },
     /// The hub dial (host lookup, TCP, TLS and WebSocket upgrade) did not
     /// finish within the connect timeout.
@@ -319,6 +342,21 @@ impl ScConnectError {
         match self {
             Self::WebSocket { tls, .. } => *tls,
             _ => None,
+        }
+    }
+
+    /// A [`Self::WebSocket`] failure of `kind` with none of the optional
+    /// details: no TLS reason, peer certificate, HTTP or close status. The
+    /// `sc-tls` WebSocket driver is its only user.
+    #[cfg(feature = "sc-tls")]
+    pub(crate) fn websocket(kind: ScWebSocketErrorKind, message: impl Into<String>) -> Self {
+        Self::WebSocket {
+            kind,
+            message: message.into(),
+            tls: None,
+            untrusted_peer: None,
+            http_status: None,
+            close_status: None,
         }
     }
 

@@ -95,7 +95,7 @@ async fn distribute(
             None,
             value,
             Some(8),
-            bacnet_server::LocalCommandSource::ServerDevice,
+            bacnet_device_core::write::local::LocalCommandSource::ServerDevice,
         )
         .await
         .unwrap();

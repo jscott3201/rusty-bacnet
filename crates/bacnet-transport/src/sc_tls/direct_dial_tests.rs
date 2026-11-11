@@ -198,16 +198,16 @@ async fn direct_dial_rejects_hub_subprotocol_offer() {
     let err = expect_direct_err(&direct_url(&addr), ca.client_config(vec!["node".into()])).await;
 
     // The upgrade itself rejects a subprotocol the dial did not offer, so no
-    // connection is established and the failure stays typed.
+    // connection is established, and the failure names a wrong one (#2438).
     assert!(
         matches!(
             ScConnectError::from_error(&err),
             Some(ScConnectError::WebSocket {
-                kind: ScWebSocketErrorKind::WebSocketHandshake,
+                kind: ScWebSocketErrorKind::DirectSubprotocol,
                 ..
             })
         ),
-        "expected websocket-handshake error, got {err:?}"
+        "expected a direct-subprotocol error, got {err:?}"
     );
 }
 
@@ -220,16 +220,17 @@ async fn direct_dial_rejects_missing_subprotocol_offer() {
     let err = expect_direct_err(&direct_url(&addr), ca.client_config(vec!["node".into()])).await;
 
     // The upgrade requires the server to echo an offered subprotocol, so a
-    // missing offer also fails typed at the handshake with no connection.
+    // missing one also fails at the handshake with no connection, told
+    // apart from a wrong one (#2438).
     assert!(
         matches!(
             ScConnectError::from_error(&err),
             Some(ScConnectError::WebSocket {
-                kind: ScWebSocketErrorKind::WebSocketHandshake,
+                kind: ScWebSocketErrorKind::DirectSubprotocolMissing,
                 ..
             })
         ),
-        "expected websocket-handshake error, got {err:?}"
+        "expected a missing direct-subprotocol error, got {err:?}"
     );
 }
 
@@ -394,13 +395,16 @@ fn verify_direct_subprotocol_accepts_only_direct_offer() {
                 .unwrap()
         };
         let err = super::verify_direct_subprotocol(&response).unwrap_err();
+        // No header is told apart from a wrong one (#2438).
+        let expected = if offer.is_empty() {
+            ScWebSocketErrorKind::DirectSubprotocolMissing
+        } else {
+            ScWebSocketErrorKind::DirectSubprotocol
+        };
         assert!(
             matches!(
                 ScConnectError::from_error(&err),
-                Some(ScConnectError::WebSocket {
-                    kind: ScWebSocketErrorKind::DirectSubprotocol,
-                    ..
-                })
+                Some(ScConnectError::WebSocket { kind, .. }) if *kind == expected
             ),
             "offer {offer:?} must fail direct verification: {err:?}"
         );
