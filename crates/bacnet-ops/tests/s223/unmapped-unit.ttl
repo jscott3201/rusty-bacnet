@@ -3,7 +3,7 @@
 # A point list only: it holds no equipment, connections or sensors.
 # Mapping written against the Open223 ontology git:master@6fdc11c6 (2026-10-06) from
 # https://open223.info/223p.ttl; rusty-bacnet's golden exports were validated against it.
-# 3 objects exported, 0 skipped, 3 with an unmapped unit, 0 identifiers left out for instance 0.
+# 2 objects exported, 1 skipped, 2 with an unmapped unit, 0 identifiers left out for instance 0.
 
 @prefix bacnet: <http://data.ashrae.org/bacnet/2020#> .
 @prefix qudt: <http://qudt.org/schema/qudt/> .
@@ -28,19 +28,7 @@ d:analog-value-5.present-value.ref a s223:BACnetExternalReference ;
     bacnet:object-name "Heating Degree Days" ;
     bacnet:property-identifier "present-value" .
 
-# analog-input 6
-d:analog-input-6.present-value a s223:QuantifiableObservableProperty ;
-    rdfs:label "Units Unread" ;
-    rdfs:comment "BACnet units not read: no QUDT unit" ;
-    qudt:hasQuantityKind quantitykind:Unknown ;
-    s223:hasExternalReference d:analog-input-6.present-value.ref .
-
-d:analog-input-6.present-value.ref a s223:BACnetExternalReference ;
-    bacnet:device-identifier "device,1234" ;
-    bacnet:device-name "AHU-1 Controller" ;
-    bacnet:object-identifier "analog-input,6" ;
-    bacnet:object-name "Units Unread" ;
-    bacnet:property-identifier "present-value" .
+# analog-input 6: skipped, no readable units, which its type requires.
 
 # analog-input 7
 d:analog-input-7.present-value a s223:QuantifiableObservableProperty ;

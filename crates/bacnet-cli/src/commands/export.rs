@@ -93,7 +93,7 @@ pub async fn export_cmd<T: TransportPort + 'static>(
          {} identifiers left out for instance 0).",
         counts.exported, counts.skipped, counts.unmapped_units, counts.instance_zero,
     );
-    if inventory.objects.is_empty() && inventory.stopped.is_none() {
+    if inventory.entries.is_empty() && inventory.stopped.is_none() {
         eprintln!("Device {device} has no object of the selected types: the model is empty.");
     }
     match inventory.stopped {

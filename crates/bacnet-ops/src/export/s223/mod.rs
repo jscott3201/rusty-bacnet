@@ -20,6 +20,15 @@
 //! - [`write_turtle`] and [`to_turtle`] turn an inventory into Turtle text
 //!   with no I/O, so the same inventory always gives the same text.
 //!
+//! An inventory holds its points in the shape `bacnet_types::points` gives
+//! a device's points (re-exported here), the shape
+//! `bacnet_objects::points::build_database` builds a database from. Read at
+//! [`Detail::Full`], [`Inventory::point_list`] gives the device as such a
+//! list, within the limits its docs name: a field a list leaves out reads
+//! back as the object's default, and a list read from another device need
+//! not build. The other way, `Inventory::from(list)` takes a [`PointList`]
+//! to Turtle without touching the wire.
+//!
 //! The draft can change, and so can this export: its name says
 //! experimental in every front end. The output's header comment names the
 //! ontology copy the mapping was written against and the golden files were
@@ -30,8 +39,11 @@ mod turtle;
 
 pub use self::inventory::read_inventory;
 pub use self::turtle::{Counts, to_turtle, write_turtle};
+pub use bacnet_types::points::{
+    Access, Analog, Binary, DeviceInfo, MultiState, Point, PointKind, PointList,
+};
 
-use bacnet_types::enums::{EngineeringUnits, ObjectType};
+use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
 
 /// Where the ontology copy the mapping was written against came from; the
@@ -59,26 +71,48 @@ pub const EXPORTED_TYPES: [ObjectType; 9] = [
     ObjectType::MULTI_STATE_VALUE,
 ];
 
+/// How much of each object an inventory reads.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Detail {
+    /// What the Turtle export uses, the default: the Device's Object_Name;
+    /// each object's Object_Name and Description, an analog object's Units,
+    /// a multi-state object's Number_Of_States and State_Text, and a
+    /// value's Priority_Array. The optional settings of the point list are
+    /// left `None`, and a commandable point's relinquish default too.
+    #[default]
+    Export,
+    /// Everything a [`PointList`] holds, in the same requests: also the
+    /// Device's Description; an analog object's COV_Increment,
+    /// Min_Pres_Value and Max_Pres_Value; a binary object's Active_Text and
+    /// Inactive_Text; and an output's or a value's Relinquish_Default. A
+    /// property the device doesn't have reads as `None`.
+    Full,
+}
+
 /// What an inventory reads.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InventoryOptions {
     /// The object types to read, from [`EXPORTED_TYPES`]; the device's
     /// other objects are left out without a request.
     pub types: Vec<ObjectType>,
+    /// How much of each object to read.
+    pub detail: Detail,
 }
 
 impl Default for InventoryOptions {
-    /// Every one of the [`EXPORTED_TYPES`].
+    /// Every one of the [`EXPORTED_TYPES`], at [`Detail::Export`].
     fn default() -> Self {
         Self {
             types: EXPORTED_TYPES.to_vec(),
+            detail: Detail::Export,
         }
     }
 }
 
 impl InventoryOptions {
-    /// Options for `types`, refused when one isn't among the
-    /// [`EXPORTED_TYPES`] or none is given.
+    /// Options for `types` at [`Detail::Export`], refused when one isn't
+    /// among the [`EXPORTED_TYPES`] or none is given.
     pub fn new(types: Vec<ObjectType>) -> Result<Self, String> {
         if types.is_empty() {
             return Err("name at least one object type to export".into());
@@ -90,61 +124,132 @@ impl InventoryOptions {
                 crate::label::kebab(other)
             ));
         }
-        Ok(Self { types })
+        Ok(Self {
+            types,
+            detail: Detail::Export,
+        })
+    }
+
+    /// The same options, reading at `detail`.
+    pub fn with_detail(mut self, detail: Detail) -> Self {
+        self.detail = detail;
+        self
     }
 }
 
 /// A device's objects as the export reads them: plain data, device text
 /// exactly as the device sent it.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+///
+/// Read from a device, `device.name` is `None` when the Device gave no
+/// name, and `device.description` is read only at [`Detail::Full`].
+#[derive(Debug, Clone, PartialEq)]
 pub struct Inventory {
-    /// The device instance.
-    pub device: u32,
-    /// The Device object's Object_Name; `None` when it couldn't be read.
-    pub device_name: Option<String>,
-    /// The objects read, in Object_List order.
-    pub objects: Vec<InventoryObject>,
+    /// The Device object.
+    pub device: DeviceInfo,
+    /// The objects read, in Object_List order: a point each, or why its
+    /// read failed.
+    pub entries: Vec<Entry>,
     /// Why the reading stopped early: the device stopped answering (during
     /// the Object_List or after it) or the caller cancelled. The first
-    /// reason is kept; the objects after it are not in `objects`.
+    /// reason is kept; the objects after it are not in `entries`.
     pub stopped: Option<String>,
 }
 
-/// One object of an [`Inventory`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InventoryObject {
-    /// The object.
-    pub object: ObjectIdentifier,
-    /// Its Object_Name; `None` when it couldn't be read.
-    pub name: Option<String>,
-    /// Its Description; `None` when it has none or couldn't be read.
-    pub description: Option<String>,
-    /// An analog object's Units; `None` when not read.
-    pub units: Option<EngineeringUnits>,
-    /// A multi-state object's Number_Of_States; `None` when not read.
-    pub states: Option<u32>,
-    /// A multi-state object's State_Text, state 1 first; an entry that
-    /// wasn't a string is empty.
-    pub state_texts: Vec<String>,
-    /// Whether it has a Priority_Array: always for an output, and for a
-    /// value when the device gave one.
-    pub priority_array: bool,
-    /// Why the object's read failed; the export skips such an object.
-    pub error: Option<String>,
+impl Inventory {
+    /// An inventory of `device` with no entry yet.
+    pub fn new(device: DeviceInfo) -> Self {
+        Self {
+            device,
+            entries: Vec::new(),
+            stopped: None,
+        }
+    }
+
+    /// The points read, in Object_List order.
+    pub fn points(&self) -> impl Iterator<Item = &Point> {
+        self.entries.iter().filter_map(|entry| match entry {
+            Entry::Point(point) => Some(point),
+            Entry::Failed { .. } => None,
+        })
+    }
+
+    /// The device and the points read, as a point list; the objects whose
+    /// read failed are left out.
+    ///
+    /// Read at [`Detail::Full`] from a device built from a list, it equals
+    /// that list only when the list set every field, and even then a value
+    /// given [`Access::Writable`] reads back [`Access::ReadOnly`]: a read
+    /// can't tell the two apart. A field the list left out reads back as
+    /// the object's default instead: an empty Description (the Device's
+    /// too), COV_Increment 0.0, "Active" and "Inactive", "State 1" to
+    /// "State N", the object's own relinquish default, and the identity's
+    /// name for the Device.
+    ///
+    /// A list read from another device need not build: it can hold what
+    /// `bacnet_objects::points::build_database` refuses, such as State_Text
+    /// with other than one label per state, a Real that isn't finite,
+    /// Min_Pres_Value above Max_Pres_Value, or a multi-state relinquish
+    /// default that names no state. The builder stops at the first refusal.
+    pub fn point_list(&self) -> PointList {
+        PointList::new(self.device.clone(), self.points().cloned().collect())
+    }
 }
 
-impl InventoryObject {
-    /// An object with nothing read yet.
-    pub fn new(object: ObjectIdentifier) -> Self {
+impl From<PointList> for Inventory {
+    /// The list's device and points, in its order, none failed: Turtle for a
+    /// list that never touched the wire.
+    fn from(list: PointList) -> Self {
         Self {
-            object,
-            name: None,
-            description: None,
-            units: None,
-            states: None,
-            state_texts: Vec::new(),
-            priority_array: false,
-            error: None,
+            device: list.device,
+            entries: list.points.into_iter().map(Entry::Point).collect(),
+            stopped: None,
+        }
+    }
+}
+
+/// One object of an [`Inventory`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum Entry {
+    /// The object as read.
+    Point(Point),
+    /// Its read failed, or a property every object of its type has
+    /// (Object_Name, an analog object's Units, a multi-state object's
+    /// Number_Of_States) couldn't be read; the export skips it.
+    Failed {
+        /// The object.
+        object: ObjectIdentifier,
+        /// The property every object of its type has that couldn't be
+        /// read; `None` when the read failed as a whole, or the type isn't
+        /// one the export reads.
+        property: Option<PropertyIdentifier>,
+        /// Why: the device's error, naming the property when one property
+        /// is at fault.
+        error: String,
+    },
+}
+
+impl Entry {
+    /// The object.
+    pub fn object(&self) -> ObjectIdentifier {
+        match self {
+            Self::Point(point) => point.object,
+            Self::Failed { object, .. } => *object,
+        }
+    }
+
+    /// The point, unless its read failed.
+    pub fn point(&self) -> Option<&Point> {
+        match self {
+            Self::Point(point) => Some(point),
+            Self::Failed { .. } => None,
+        }
+    }
+
+    /// Why its read failed, `None` when it didn't.
+    pub fn error(&self) -> Option<&str> {
+        match self {
+            Self::Point(_) => None,
+            Self::Failed { error, .. } => Some(error),
         }
     }
 }
@@ -268,3 +373,6 @@ mod golden_tests;
 
 #[cfg(test)]
 mod inventory_tests;
+
+#[cfg(test)]
+mod round_trip_tests;

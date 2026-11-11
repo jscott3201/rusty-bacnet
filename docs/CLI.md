@@ -1520,10 +1520,14 @@ is why the command name says experimental.
 - The draft's identifier pattern refuses instance 0. An object or a device
   numbered 0 has no identifier string in its reference; its name still
   identifies it, and a comment marks the gap.
-- A unit the table doesn't map (or one the device didn't give) is exported
-  with QUDT's unknown quantity kind and no unit, since the draft requires a
-  quantity kind on every quantifiable property, plus a comment naming the
-  BACnet unit. The header counts these points.
+- A unit the table doesn't map is exported with QUDT's unknown quantity
+  kind and no unit, since the draft requires a quantity kind on every
+  quantifiable property, plus a comment naming the BACnet unit. The header
+  counts these points.
+- An object whose read the device refuses is skipped, with a comment where
+  it would have been, and so is one that can't give its Object_Name, an
+  analog object's Units or a multi-state object's Number_Of_States. The
+  header counts the skipped objects.
 - Device text (names, descriptions, state texts) is kept exactly, escaped
   so the file stays ASCII, except U+0000, which a string literal can't
   hold: it becomes U+FFFD, and the header counts each one.

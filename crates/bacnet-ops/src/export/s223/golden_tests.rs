@@ -7,26 +7,32 @@
 
 use std::path::PathBuf;
 
-use bacnet_types::enums::{EngineeringUnits, ObjectType};
+use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier};
 
 use super::tests::{check_structure, oid};
 use super::*;
 
-/// An object with `name`, nothing else read yet.
-fn named(object_type: ObjectType, instance: u32, name: &str) -> InventoryObject {
-    InventoryObject {
-        name: Some(name.into()),
-        ..InventoryObject::new(oid(object_type, instance))
+/// A point named `name` of `kind`.
+fn named(object_type: ObjectType, instance: u32, name: &str, kind: impl Into<PointKind>) -> Point {
+    Point::new(oid(object_type, instance), name, kind)
+}
+
+/// A commandable access that keeps the object's relinquish default.
+fn commanded<T>() -> Access<T> {
+    Access::Commandable {
+        relinquish_default: None,
     }
 }
 
-fn device(instance: u32, objects: Vec<InventoryObject>) -> Inventory {
+fn device(instance: u32, entries: Vec<Entry>) -> Inventory {
     Inventory {
-        device: instance,
-        device_name: Some("AHU-1 Controller".into()),
-        objects,
-        stopped: None,
+        entries,
+        ..Inventory::new(DeviceInfo::new(instance).with_name("AHU-1 Controller"))
     }
+}
+
+fn points(points: Vec<Point>) -> Vec<Entry> {
+    points.into_iter().map(Entry::Point).collect()
 }
 
 /// Each golden case: its file, its inventory and its options.
@@ -35,81 +41,150 @@ fn cases() -> Vec<(&'static str, Inventory, TurtleOptions)> {
     let priority =
         TurtleOptions::new(DEFAULT_BASE_IRI, Some(WritePriority::new(8).unwrap())).unwrap();
 
-    let mut zone = named(ObjectType::ANALOG_INPUT, 3, "Zone Temp");
-    zone.description = Some("Zone temperature, room 101".into());
-    zone.units = Some(EngineeringUnits::DEGREES_FAHRENHEIT);
+    let fahrenheit = EngineeringUnits::DEGREES_FAHRENHEIT;
+    let celsius = EngineeringUnits::DEGREES_CELSIUS;
+    let zone = named(
+        ObjectType::ANALOG_INPUT,
+        3,
+        "Zone Temp",
+        Analog::new(fahrenheit, Access::ReadOnly),
+    )
+    .with_description("Zone temperature, room 101");
 
-    let mut fan = named(ObjectType::BINARY_OUTPUT, 1, "Supply Fan Start");
-    fan.priority_array = true;
+    let fan = named(
+        ObjectType::BINARY_OUTPUT,
+        1,
+        "Supply Fan Start",
+        Binary::new(commanded()),
+    );
 
-    let mut mode = named(ObjectType::MULTI_STATE_VALUE, 2, "Fan Mode");
-    mode.states = Some(3);
-    mode.state_texts = vec!["Off".into(), String::new(), "High".into()];
-    mode.priority_array = true;
+    let mode = named(
+        ObjectType::MULTI_STATE_VALUE,
+        2,
+        "Fan Mode",
+        MultiState::new(3, commanded()).with_state_texts(["Off", "", "High"]),
+    );
 
-    let mut setpoint = named(ObjectType::ANALOG_VALUE, 1, "Zone Setpoint");
-    setpoint.units = Some(EngineeringUnits::DEGREES_FAHRENHEIT);
-    setpoint.priority_array = true;
-    let mut flow = named(ObjectType::ANALOG_VALUE, 2, "Flow Total");
-    flow.units = Some(EngineeringUnits::CUBIC_FEET_PER_MINUTE);
-    let occupied = named(ObjectType::BINARY_VALUE, 3, "Occupied");
+    let setpoint = named(
+        ObjectType::ANALOG_VALUE,
+        1,
+        "Zone Setpoint",
+        Analog::new(fahrenheit, commanded()),
+    );
+    let flow = named(
+        ObjectType::ANALOG_VALUE,
+        2,
+        "Flow Total",
+        Analog::new(EngineeringUnits::CUBIC_FEET_PER_MINUTE, Access::ReadOnly),
+    );
+    let occupied = named(
+        ObjectType::BINARY_VALUE,
+        3,
+        "Occupied",
+        Binary::new(Access::ReadOnly),
+    );
 
-    let mut first = named(ObjectType::ANALOG_INPUT, 0, "Outside Air");
-    first.units = Some(EngineeringUnits::DEGREES_CELSIUS);
+    let first = named(
+        ObjectType::ANALOG_INPUT,
+        0,
+        "Outside Air",
+        Analog::new(celsius, Access::ReadOnly),
+    );
 
-    let mut days = named(ObjectType::ANALOG_VALUE, 5, "Heating Degree Days");
-    days.units = Some(EngineeringUnits::DEGREE_DAYS_CELSIUS);
-    let unread = named(ObjectType::ANALOG_INPUT, 6, "Units Unread");
-    let mut proprietary = named(ObjectType::ANALOG_INPUT, 7, "Vendor Units");
-    proprietary.units = Some(EngineeringUnits::from_raw(300));
+    let days = named(
+        ObjectType::ANALOG_VALUE,
+        5,
+        "Heating Degree Days",
+        Analog::new(EngineeringUnits::DEGREE_DAYS_CELSIUS, Access::ReadOnly),
+    );
+    // An analog object whose Units can't be read has no point: it is
+    // skipped where it was.
+    let unread = Entry::Failed {
+        object: oid(ObjectType::ANALOG_INPUT, 6),
+        property: Some(PropertyIdentifier::UNITS),
+        error: "units: PROPERTY:UNKNOWN_PROPERTY".into(),
+    };
+    let proprietary = named(
+        ObjectType::ANALOG_INPUT,
+        7,
+        "Vendor Units",
+        Analog::new(EngineeringUnits::from_raw(300), Access::ReadOnly),
+    );
 
-    let mut hostile = named(
+    let hostile = named(
         ObjectType::ANALOG_INPUT,
         9,
         "Say \"hi\" \\ to\nRoom\t101\u{7}\u{1b}[2J",
+        Analog::new(celsius, Access::ReadOnly),
+    )
+    .with_description("Temp\u{e9}rature \u{202E}evil\u{2066} \u{1F525}\0");
+    let hostile_states = named(
+        ObjectType::MULTI_STATE_INPUT,
+        4,
+        "Mode \"A\"",
+        MultiState::new(2, Access::ReadOnly)
+            .with_state_texts(["\"off\" .", "on\r\n# not a comment"]),
     );
-    hostile.description = Some("Temp\u{e9}rature \u{202E}evil\u{2066} \u{1F525}\0".into());
-    hostile.units = Some(EngineeringUnits::DEGREES_CELSIUS);
-    let mut hostile_states = named(ObjectType::MULTI_STATE_INPUT, 4, "Mode \"A\"");
-    hostile_states.states = Some(2);
-    hostile_states.state_texts = vec!["\"off\" .".into(), "on\r\n# not a comment".into()];
-    let mut hostile_device = device(1234, vec![hostile, hostile_states]);
-    hostile_device.device_name = Some("Bldg \u{2028}\"B\" \\ \u{feff}".into());
+    let mut hostile_device = device(1234, points(vec![hostile, hostile_states]));
+    hostile_device.device.name = Some("Bldg \u{2028}\"B\" \\ \u{feff}".into());
 
-    let mut failed = named(ObjectType::ANALOG_INPUT, 1, "Unreadable");
-    failed.error = Some("PROPERTY:UNKNOWN_PROPERTY\n# not a comment".into());
-    let trend = named(ObjectType::TREND_LOG, 1, "Not Mapped");
+    let failed = Entry::Failed {
+        object: oid(ObjectType::ANALOG_INPUT, 1),
+        property: None,
+        error: "PROPERTY:UNKNOWN_PROPERTY\n# not a comment".into(),
+    };
+    // Only a list built by hand can hold a point of a type the export
+    // doesn't map.
+    let trend = named(
+        ObjectType::TREND_LOG,
+        1,
+        "Not Mapped",
+        Analog::new(EngineeringUnits::NO_UNITS, Access::ReadOnly),
+    );
+    let filter = named(
+        ObjectType::BINARY_INPUT,
+        2,
+        "Filter Alarm",
+        Binary::new(Access::ReadOnly),
+    );
     let mut skipped = device(
         1234,
-        vec![
-            failed,
-            trend,
-            named(ObjectType::BINARY_INPUT, 2, "Filter Alarm"),
-        ],
+        vec![failed, Entry::Point(trend), Entry::Point(filter)],
     );
     skipped.stopped = Some("analog-input,9: timeout\n@prefix".into());
 
     vec![
-        ("analog-input.ttl", device(1234, vec![zone]), plain.clone()),
+        (
+            "analog-input.ttl",
+            device(1234, points(vec![zone])),
+            plain.clone(),
+        ),
         (
             "binary-output-priority.ttl",
-            device(1234, vec![fan]),
+            device(1234, points(vec![fan])),
             priority.clone(),
         ),
         (
             "multi-state-value.ttl",
-            device(1234, vec![mode]),
+            device(1234, points(vec![mode])),
             plain.clone(),
         ),
         (
             "value-priority-array.ttl",
-            device(1234, vec![setpoint, flow, occupied]),
+            device(1234, points(vec![setpoint, flow, occupied])),
             priority,
         ),
-        ("instance-zero.ttl", device(0, vec![first]), plain.clone()),
+        (
+            "instance-zero.ttl",
+            device(0, points(vec![first])),
+            plain.clone(),
+        ),
         (
             "unmapped-unit.ttl",
-            device(1234, vec![days, unread, proprietary]),
+            device(
+                1234,
+                vec![Entry::Point(days), unread, Entry::Point(proprietary)],
+            ),
             plain.clone(),
         ),
         ("hostile-strings.ttl", hostile_device, plain.clone()),
@@ -195,12 +270,16 @@ fn golden_cases_hold_what_they_test() {
         unmapped
             .matches("qudt:hasQuantityKind quantitykind:Unknown ;")
             .count(),
-        3,
+        2,
         "the draft wants a quantity kind on each"
     );
     assert!(unmapped.contains("BACnet units degree-days-celsius: no QUDT mapping"));
     assert!(unmapped.contains("BACnet units 300: no QUDT mapping"));
-    assert!(unmapped.contains("3 with an unmapped unit"));
+    assert!(unmapped.contains("2 with an unmapped unit"));
+    assert!(
+        unmapped.contains("# analog-input 6: skipped, no readable units, which its type requires."),
+        "an analog object without Units is skipped where it was"
+    );
 
     let hostile = text("hostile-strings.ttl");
     assert!(hostile.is_ascii());

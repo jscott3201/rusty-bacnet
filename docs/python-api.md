@@ -2021,8 +2021,11 @@ turtle = inventory.to_turtle(base_iri="https://example.com/site-a/", write_prior
   Object_List order) and `stopped`. Each object has `object_identifier`,
   `name`, `description`, `units` (`EngineeringUnits | None`, analog
   objects), `number_of_states` and `state_texts` (multi-state objects),
-  `commandable` (it has a Priority_Array) and `error` (its read failed, and
-  the Turtle skips it). Device text is kept exactly as the device sent it.
+  `commandable` (it has a Priority_Array) and `error` (its read failed, or
+  it couldn't give its Object_Name, an analog object's Units or a
+  multi-state object's Number_Of_States, named in the error; the Turtle
+  skips it, and its other fields are `None` or empty). Device text is kept
+  exactly as the device sent it.
 - `to_turtle(base_iri=None, write_priority=None)` takes the base the CLI's
   `--base-iri` takes (default `http://example.org/bacnet/`) and a command
   priority, 1 to 16, for the reference of each commandable point. A bad
