@@ -274,7 +274,9 @@ pub fn run(list: PointList, apdus: &[&[u8]; objects::REQUESTS], reads: &[&[u8]; 
 
 /// Give AI-1 and AI-2 their Present_Value, [`ANALOG_VALUES`], as the
 /// application does for an input once the builder has made it: through the
-/// object's local input, before anything serves the database.
+/// object's local input, before anything serves the database. This image
+/// has no `Reporter`; firmware with one gives a served input its value with
+/// `Reporter::update`, which reports the change to COV subscribers (#2446).
 fn set_inputs(db: &mut ObjectDatabase) -> Result<(), Error> {
     for (instance, value) in (1..).zip(ANALOG_VALUES) {
         let input = db

@@ -1,12 +1,14 @@
 //! The staged local write against a borrowed database (#2446): its checks
 //! and their order, what the observer hears, the source a write is made
-//! as, and the commands an application makes at its priorities.
+//! as, the commands an application makes at its priorities, the Reliability
+//! it sets and the Input_Reference judged again after a write.
 use super::*;
 use alloc::borrow::Cow;
 use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
 use bacnet_encoding::constructed::encode_device_object_property_reference;
+use bacnet_objects::accumulator::PulseConverterObject;
 use bacnet_objects::analog::{AnalogInputObject, AnalogValueObject};
 use bacnet_objects::averaging::AveragingObject;
 use bacnet_objects::binary::BinaryValueObject;
@@ -15,7 +17,7 @@ use bacnet_objects::multistate::MultiStateValueObject;
 use bacnet_objects::present_value_access::PresentValueAccess;
 use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_types::constructed::BACnetDeviceObjectPropertyReference;
-use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier as P};
+use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier as P, Reliability};
 use bacnet_types::error::RemoteError;
 use bytes::BytesMut;
 
@@ -454,4 +456,105 @@ fn a_reference_naming_the_local_device_is_localized() {
     let other = oid(ObjectType::DEVICE, 99);
     let remote = write(P::OBJECT_PROPERTY_REFERENCE, reference(Some(other)), None);
     assert!(apply(&mut db, averaging(), remote, None).is_err());
+}
+
+/// The application's Reliability (#2446): taken in service, where
+/// Status_Flags' FAULT follows it, and refused out of service, while
+/// Reliability_Evaluation_Inhibit is TRUE, and outside BACnetReliability,
+/// each leaving it as it was. It reports to no observer, as an input
+/// doesn't; an object that takes none refuses it.
+#[test]
+fn reliability_is_taken_in_service_and_reports_to_no_observer() {
+    let mut db = database();
+    let mut observer = Heard::default();
+    let set = |reliability| LocalChange::Reliability(reliability);
+    let enumerated = |reliability: Reliability| PropertyValue::Enumerated(reliability.to_raw());
+    let flags = |db: &ObjectDatabase| match read(db, ai1(), P::STATUS_FLAGS) {
+        PropertyValue::BitString { data, .. } => data[0] >> 4,
+        other => panic!("Status_Flags is a BIT STRING: {other:?}"),
+    };
+    let result = heard(
+        &mut db,
+        ai1(),
+        set(Reliability::NO_SENSOR),
+        &mut observer,
+        &[],
+    );
+    assert_eq!(ok(result), Applied::Written);
+    assert_eq!(
+        read(&db, ai1(), P::RELIABILITY),
+        enumerated(Reliability::NO_SENSOR)
+    );
+    assert_eq!(flags(&db), 0b0100, "FAULT");
+    let denied = (ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED);
+    let range = (ErrorClass::PROPERTY, ErrorCode::VALUE_OUT_OF_RANGE);
+    let outside = set(Reliability::from_raw(26));
+    assert_eq!(refused(apply(&mut db, ai1(), outside, None)), range);
+    let inhibit = P::RELIABILITY_EVALUATION_INHIBIT;
+    let on = write(inhibit, PropertyValue::Boolean(true), None);
+    assert_eq!(ok(apply(&mut db, ai1(), on, None)), Applied::Written);
+    let inhibited = apply(&mut db, ai1(), set(Reliability::OVER_RANGE), None);
+    assert_eq!(refused(inhibited), denied);
+    let off = write(inhibit, PropertyValue::Boolean(false), None);
+    assert_eq!(ok(apply(&mut db, ai1(), off, None)), Applied::Written);
+    let oos = write(P::OUT_OF_SERVICE, PropertyValue::Boolean(true), None);
+    assert_eq!(ok(apply(&mut db, ai1(), oos, None)), Applied::Written);
+    let out = apply(&mut db, ai1(), set(Reliability::OVER_RANGE), None);
+    assert_eq!(refused(out), denied);
+    assert_ne!(
+        read(&db, ai1(), P::RELIABILITY),
+        enumerated(Reliability::OVER_RANGE)
+    );
+    let result = heard(
+        &mut db,
+        averaging(),
+        set(Reliability::NO_SENSOR),
+        &mut observer,
+        &[],
+    );
+    assert_eq!(
+        refused(result),
+        (
+            ErrorClass::OBJECT,
+            ErrorCode::OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED
+        )
+    );
+    assert!(observer.calls.is_empty(), "{:?}", observer.calls);
+}
+
+/// After a write of a Pulse Converter's Input_Reference commits, the
+/// database judges the reference at once (#1341): one naming a REAL is a
+/// CONFIGURATION_ERROR, one naming an Unsigned is no fault.
+#[test]
+fn an_input_reference_write_is_judged_as_it_commits() {
+    let mut db = database();
+    let converter = PulseConverterObject::new(1, "PC-1", EngineeringUnits::NO_UNITS).unwrap();
+    let pc1 = converter.object_identifier();
+    db.add(Box::new(converter)).unwrap();
+    let reliability = |db: &ObjectDatabase| read(db, pc1, P::RELIABILITY);
+    let no_fault = PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw());
+    assert_eq!(reliability(&db), no_fault);
+    // [0] the object, [1] present-value.
+    let reference = |object: ObjectIdentifier| {
+        let named = [&[0x0C][..], &object.encode(), &[0x19, 0x55]].concat();
+        write(
+            P::INPUT_REFERENCE,
+            PropertyValue::ApplicationData(named),
+            None,
+        )
+    };
+    for (named, expected) in [
+        (ai1(), Reliability::CONFIGURATION_ERROR),
+        (msv1(), Reliability::NO_FAULT_DETECTED),
+    ] {
+        assert_eq!(
+            ok(apply(&mut db, pc1, reference(named), None)),
+            Applied::Written
+        );
+        assert_eq!(
+            reliability(&db),
+            PropertyValue::Enumerated(expected.to_raw()),
+            "{named:?}"
+        );
+    }
 }

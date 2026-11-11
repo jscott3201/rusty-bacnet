@@ -156,12 +156,13 @@ pub fn effects(object_type: T) -> Option<&'static [&'static [Effect]]> {
         | T::DATE_VALUE
         | T::DATETIMEPATTERN_VALUE
         | T::DATETIME_VALUE
-        | T::INTEGER_VALUE
         | T::LARGE_ANALOG_VALUE
         | T::OCTETSTRING_VALUE
         | T::POSITIVE_INTEGER_VALUE
         | T::TIMEPATTERN_VALUE
         | T::TIME_VALUE => &[OUT_OF_SERVICE_FLAGS, COMMANDED, RELINQUISH_DEFAULT],
+        // Reliability simulated out of service, as on the Accumulator (#2446).
+        T::INTEGER_VALUE => &[RELIABILITY_SIMULATION, COMMANDED, RELINQUISH_DEFAULT],
         T::GLOBAL_GROUP
         | T::PROGRAM
         | T::NOTIFICATION_FORWARDER

@@ -280,3 +280,137 @@ fn the_local_input_needs_a_noncommandable_object() {
         PropertyValue::Signed(0)
     );
 }
+
+/// The application's Reliability (#2446), in each access mode: taken in
+/// service, where Status_Flags shows FAULT until NO_FAULT_DETECTED clears
+/// it, and refused outside BACnetReliability. A client's write of it is
+/// refused in service; out of service it is the client's (Clause 12.43.9),
+/// and the application's is refused.
+#[test]
+fn the_application_sets_reliability_in_service() {
+    use bacnet_types::enums::Reliability;
+    for access in [
+        PresentValueAccess::ReadOnly,
+        PresentValueAccess::Writable,
+        PresentValueAccess::Commandable,
+    ] {
+        let mut object = IntegerValueObject::with_access(1, "IV-1", access).unwrap();
+        let set = |object: &mut IntegerValueObject, value| {
+            object.reliability_eval().unwrap().set_reliability(value)
+        };
+        set(&mut object, Reliability::NO_SENSOR).unwrap();
+        assert_eq!(reliability(&object), Reliability::NO_SENSOR, "{access:?}");
+        assert_eq!(flags(&object), 0b0100, "{access:?}: FAULT");
+        assert_eq!(
+            code(set(&mut object, Reliability::from_raw(26))),
+            ErrorCode::VALUE_OUT_OF_RANGE
+        );
+        set(&mut object, Reliability::NO_FAULT_DETECTED).unwrap();
+        assert_eq!(flags(&object), 0, "{access:?}: cleared");
+        let over_range = enumerated(Reliability::OVER_RANGE);
+        assert_eq!(
+            code(object.write_property(P::RELIABILITY, None, over_range, None)),
+            ErrorCode::WRITE_ACCESS_DENIED,
+            "{access:?}: a client's, in service"
+        );
+        out_of_service(&mut object, true);
+        assert_eq!(
+            code(set(&mut object, Reliability::NO_SENSOR)),
+            ErrorCode::WRITE_ACCESS_DENIED,
+            "{access:?}: the application's, out of service"
+        );
+        assert_eq!(reliability(&object), Reliability::NO_FAULT_DETECTED);
+        assert_eq!(flags(&object), 0b0001, "{access:?}: OUT_OF_SERVICE alone");
+    }
+}
+
+/// Out of service a client writes Reliability to simulate a fault (Clause
+/// 12.43.9, #2446): an Enumerated within BACnetReliability is taken and
+/// Status_Flags shows FAULT; another datatype or a value outside the
+/// enumeration is refused, changing nothing. Back in service the
+/// application's Reliability, set aside on the way out, comes back; a
+/// second simulation sets aside and restores a fault the same way. The row
+/// is writable out of service.
+#[test]
+fn a_client_simulates_reliability_out_of_service() {
+    use bacnet_types::enums::Reliability;
+    for access in [
+        PresentValueAccess::ReadOnly,
+        PresentValueAccess::Writable,
+        PresentValueAccess::Commandable,
+    ] {
+        let mut object = IntegerValueObject::with_access(1, "IV-1", access).unwrap();
+        let row = object
+            .property_metadata()
+            .iter()
+            .find(|row| row.property_identifier == P::RELIABILITY)
+            .copied()
+            .unwrap();
+        assert_eq!(
+            row.write_capability,
+            PropertyWriteCapability::WhenOutOfService
+        );
+        let write = |object: &mut IntegerValueObject, value| {
+            object.write_property(P::RELIABILITY, None, value, None)
+        };
+        out_of_service(&mut object, true);
+        write(&mut object, enumerated(Reliability::OPEN_LOOP)).unwrap();
+        assert_eq!(reliability(&object), Reliability::OPEN_LOOP, "{access:?}");
+        assert_eq!(flags(&object), 0b0101, "{access:?}: FAULT, OUT_OF_SERVICE");
+        for (value, refused) in [
+            (PropertyValue::Unsigned(1), ErrorCode::INVALID_DATA_TYPE),
+            (PropertyValue::Enumerated(26), ErrorCode::VALUE_OUT_OF_RANGE),
+            (
+                PropertyValue::Enumerated(65_536),
+                ErrorCode::VALUE_OUT_OF_RANGE,
+            ),
+        ] {
+            assert_eq!(code(write(&mut object, value)), refused, "{access:?}");
+        }
+        assert_eq!(reliability(&object), Reliability::OPEN_LOOP);
+        out_of_service(&mut object, false);
+        assert_eq!(reliability(&object), Reliability::NO_FAULT_DETECTED);
+        assert_eq!(flags(&object), 0, "{access:?}: restored");
+        object
+            .reliability_eval()
+            .unwrap()
+            .set_reliability(Reliability::NO_SENSOR)
+            .unwrap();
+        out_of_service(&mut object, true);
+        write(&mut object, enumerated(Reliability::NO_FAULT_DETECTED)).unwrap();
+        assert_eq!(
+            flags(&object),
+            0b0001,
+            "{access:?}: the fault simulated away"
+        );
+        out_of_service(&mut object, false);
+        assert_eq!(reliability(&object), Reliability::NO_SENSOR, "{access:?}");
+        assert_eq!(flags(&object), 0b0100, "{access:?}: the fault back");
+    }
+}
+
+fn enumerated(reliability: bacnet_types::enums::Reliability) -> PropertyValue {
+    PropertyValue::Enumerated(reliability.to_raw())
+}
+
+fn reliability(object: &IntegerValueObject) -> bacnet_types::enums::Reliability {
+    match read(object, P::RELIABILITY).unwrap() {
+        PropertyValue::Enumerated(raw) => bacnet_types::enums::Reliability::from_raw(raw),
+        other => panic!("Reliability is an Enumerated: {other:?}"),
+    }
+}
+
+/// Status_Flags' four bits, IN_ALARM first.
+fn flags(object: &IntegerValueObject) -> u8 {
+    match read(object, P::STATUS_FLAGS).unwrap() {
+        PropertyValue::BitString { data, .. } => data[0] >> 4,
+        other => panic!("Status_Flags is a BIT STRING: {other:?}"),
+    }
+}
+
+fn out_of_service(object: &mut IntegerValueObject, oos: bool) {
+    let value = PropertyValue::Boolean(oos);
+    object
+        .write_property(P::OUT_OF_SERVICE, None, value, None)
+        .unwrap();
+}

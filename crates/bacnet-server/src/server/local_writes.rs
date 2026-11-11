@@ -6,6 +6,7 @@ use bacnet_device_core::write::{Applied, WriteCommitObserver, WriteTarget};
 use bacnet_objects::command::CommandRun;
 use bacnet_objects::traits::not_supported;
 use bacnet_types::constructed::BACnetRecipient;
+use bacnet_types::enums::Reliability;
 
 #[path = "local_write_finish.rs"]
 mod finish;
@@ -70,6 +71,8 @@ pub(super) enum LocalWrite<'s> {
     /// The application feeding an Accumulator the input pulses it counted
     /// (#2259).
     ApplicationPulses(u64),
+    /// The application setting the Reliability it worked out (#2446).
+    ApplicationReliability(Reliability),
     /// One value of an inbound WriteGroup for a Channel's `Present_Value`, at
     /// the priority the request gave it (Clause 15.11). Under the write guard
     /// the Channel takes it only while its Control_Groups still holds `group`
@@ -414,6 +417,46 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         self.write_local_as(
             oid,
             LocalWrite::ApplicationPulses(pulses),
+            PropertyValue::Null,
+        )
+        .await
+    }
+
+    /// Set the Reliability the application works out for an object, such
+    /// as NO_SENSOR when its hardware reports a missing sensor (#2446).
+    ///
+    /// The object's `ReliabilityEval` takes it: the analog, binary and
+    /// multi-state Inputs, Outputs and Values, the Integer Value, Loop,
+    /// Schedule, Life Safety Point and Zone, Access Zone, Credential Data
+    /// Input and Accumulator among the built-in objects. They refuse it with
+    /// PROPERTY / WRITE_ACCESS_DENIED while `Out_Of_Service` is TRUE, when a
+    /// client's simulated Reliability is in force, and while
+    /// Reliability_Evaluation_Inhibit is TRUE where they have it, and a
+    /// value outside BACnetReliability with PROPERTY / VALUE_OUT_OF_RANGE.
+    /// An unknown object fails with OBJECT / UNKNOWN_OBJECT and one that
+    /// takes no Reliability with OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED,
+    /// as with [`BACnetServer::set_present_value_local`]. The value stays
+    /// until the application sets another: the object's own evaluation
+    /// doesn't clear it.
+    ///
+    /// Status_Flags' FAULT follows Reliability, so a change goes through
+    /// the same post-write event and COV processing as
+    /// `set_present_value_local` once the database lock is released, and a
+    /// subscriber hears of it. Like the other `*_local` inputs it is not
+    /// audited.
+    ///
+    /// Like [`write_local`](Self::write_local), it must be awaited inside a
+    /// Tokio runtime, failing before anything is written outside one, and a
+    /// caller dropped once the write has committed skips none of the work
+    /// the write owes (#1367).
+    pub async fn set_reliability_local(
+        &self,
+        oid: &ObjectIdentifier,
+        reliability: Reliability,
+    ) -> Result<(), Error> {
+        self.write_local_as(
+            oid,
+            LocalWrite::ApplicationReliability(reliability),
             PropertyValue::Null,
         )
         .await

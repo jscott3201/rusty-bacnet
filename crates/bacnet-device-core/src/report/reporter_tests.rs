@@ -18,6 +18,8 @@ use bacnet_time::Duration;
 use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier as P};
 use bacnet_types::primitives::PropertyValue;
 
+#[path = "reporter_local_tests.rs"]
+mod local;
 #[cfg(feature = "cov-multiple")]
 #[path = "reporter_multiple_tests.rs"]
 mod multiple;

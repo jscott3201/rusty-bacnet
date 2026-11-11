@@ -5,8 +5,11 @@
 //! changed. It holds no lock, reads no clock and does none of the work a
 //! change owes afterwards: the host runs its event pass and COV reporting
 //! once the object holds the value. `bacnet-server`'s `write_local`,
-//! `set_present_value_local` and its other `*_local` inputs make their change
-//! through it.
+//! `set_present_value_local`, `set_reliability_local` and its other
+//! `*_local` inputs make their change through it. A host with a
+//! [`Reporter`](crate::report::Reporter) makes it through
+//! [`Reporter::apply_local`](crate::report::Reporter::apply_local) and the
+//! typed calls beside it, which report it too.
 //!
 //! A local write is not [`commit_attempt`](super::commit_attempt), the
 //! network commit, and the two differ (#2446): here a NULL is told by its
@@ -18,7 +21,7 @@
 use bacnet_objects::command_source::CommandOrigin;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::traits::{BACnetObject, LocalInputValue, not_supported};
-use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
+use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
@@ -76,7 +79,7 @@ pub fn resolve_source(
 /// On absent or invalid local identity, context-free dispatch preserves
 /// unrelated property writes while first-party tracked commands fail closed
 /// in the object.
-pub fn write_target(
+pub fn write_as(
     object: &mut dyn BACnetObject,
     property: PropertyIdentifier,
     index: Option<u32>,
@@ -101,6 +104,14 @@ pub enum LocalChange {
     /// a noncommandable Value that tracks its source publishes that Device
     /// (#1552); otherwise it is applied without one.
     Input(LocalInputValue),
+    /// A Reliability worked out in the device, such as a sensor's
+    /// NO_SENSOR, through the object's
+    /// [`ReliabilityEval::set_reliability`](bacnet_objects::traits::ReliabilityEval::set_reliability).
+    /// The built-in objects take it in service and refuse it out of it, or
+    /// while Reliability_Evaluation_Inhibit is TRUE where they model it,
+    /// with PROPERTY / WRITE_ACCESS_DENIED; one outside BACnetReliability
+    /// with PROPERTY / VALUE_OUT_OF_RANGE. Status_Flags' FAULT follows it.
+    Reliability(Reliability),
     /// A network-equivalent property write made as `source`. Present_Value
     /// at a priority commands that slot, and NULL relinquishes it.
     Property {
@@ -145,8 +156,12 @@ pub struct Observed<'a> {
 /// [`before`](WriteCommitObserver::before) and
 /// [`commit_policy`](WriteCommitObserver::commit_policy) ahead of the
 /// object's write, then [`committed`](WriteCommitObserver::committed) or
-/// [`failed`](WriteCommitObserver::failed). An input reports to no
-/// observer.
+/// [`failed`](WriteCommitObserver::failed). An input or a Reliability
+/// reports to no observer: neither is a write a client could make, so a
+/// host's Audit doesn't record them. An object that lends no
+/// [`LocalInput`](bacnet_objects::traits::LocalInput), or no
+/// [`ReliabilityEval`](bacnet_objects::traits::ReliabilityEval), refuses
+/// the change with OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
 ///
 /// [`Applied::Unchanged`] is a NULL the property left as it was
 /// ([`relinquish`]): a success the observer is told of as committed, after
@@ -180,6 +195,14 @@ pub fn apply(
             apply_input(object, input)?;
             Ok(Applied::Written)
         }
+        LocalChange::Reliability(reliability) => {
+            let object = db.get_mut(&oid).expect("existence checked above");
+            match object.reliability_eval() {
+                Some(eval) => eval.set_reliability(reliability)?,
+                None => return Err(not_supported()),
+            }
+            Ok(Applied::Written)
+        }
         LocalChange::Property {
             property,
             array_index,
@@ -209,7 +232,7 @@ pub fn apply(
             let origin = resolve_source(db, source).ok();
             let result = prepared.unwrap_or_else(|| {
                 super::check_executor_owned_write(oid, property)?;
-                write_target(
+                write_as(
                     db.get_mut(&oid).expect("existence checked above"),
                     property,
                     array_index,

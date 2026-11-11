@@ -1317,7 +1317,7 @@ Property rows aggregate configured instances: a row or access flag means at leas
 | OUT_OF_SERVICE | RWO |
 | PRESENT_VALUE | RW |
 | PRIORITY_ARRAY | RO |
-| RELIABILITY | RO |
+| RELIABILITY | RWO |
 | RELINQUISH_DEFAULT | RWO |
 | STATUS_FLAGS | R |
 | UNITS | R |
