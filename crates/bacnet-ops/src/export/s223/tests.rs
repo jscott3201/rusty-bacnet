@@ -3,7 +3,7 @@
 //! crate needs no RDF library. `scripts/check-223.py` validates the golden
 //! files against the ontology's shapes.
 
-use bacnet_types::enums::{EngineeringUnits, ObjectType};
+use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
 
 pub(super) use super::testing::check_structure;
@@ -164,6 +164,7 @@ fn counts_and_the_state_cap() {
     );
     let unread = Entry::Failed {
         object: oid(ObjectType::ANALOG_INPUT, 2),
+        property: None,
         error: "timeout".into(),
     };
     let trend = Point::new(
@@ -224,30 +225,69 @@ fn counts_and_the_state_cap() {
     assert_eq!(to_turtle(&inventory, &TurtleOptions::default()), text);
 }
 
-/// A list built by hand can hold a point the export can't map: one whose
-/// kind isn't its type's family. It is skipped where it was, with a
-/// comment, as a type the export doesn't map is.
+/// Each entry the export can't write is skipped where it was, with a
+/// comment saying which case it is, in text of ours only (the error's
+/// device text never reaches it): a type the export doesn't map, whether
+/// a point (a list built by hand can hold one) or a failed entry (as the
+/// reader gives one); a read that failed; a property the type requires
+/// that couldn't be read; a kind that isn't the type's family.
 #[test]
-fn a_kind_that_doesnt_fit_its_type_is_skipped() {
+fn each_skip_says_why() {
+    let failed = |object_type, instance, property| Entry::Failed {
+        object: oid(object_type, instance),
+        property,
+        error: "PROPERTY:UNKNOWN_PROPERTY\n@prefix evil".into(),
+    };
     let mismatched = Point::new(
         oid(ObjectType::ANALOG_INPUT, 1),
         "mismatched",
         Binary::new(Access::ReadOnly),
+    );
+    let trend = Point::new(
+        oid(ObjectType::TREND_LOG, 1),
+        "trend",
+        Analog::new(EngineeringUnits::NO_UNITS, Access::ReadOnly),
     );
     let fits = Point::new(
         oid(ObjectType::BINARY_INPUT, 1),
         "fits",
         Binary::new(Access::ReadOnly),
     );
-    let inventory = Inventory::from(PointList::new(DeviceInfo::new(7), vec![mismatched, fits]));
+    let mut inventory = Inventory::new(DeviceInfo::new(7));
+    inventory.entries = vec![
+        Entry::Point(mismatched),
+        Entry::Point(trend),
+        failed(ObjectType::TREND_LOG, 2, None),
+        failed(ObjectType::ANALOG_VALUE, 3, None),
+        failed(
+            ObjectType::MULTI_STATE_VALUE,
+            4,
+            Some(PropertyIdentifier::NUMBER_OF_STATES),
+        ),
+        failed(
+            ObjectType::BINARY_OUTPUT,
+            5,
+            Some(PropertyIdentifier::OBJECT_NAME),
+        ),
+        Entry::Point(fits),
+    ];
     let mut text = String::new();
     let counts = write_turtle(&inventory, &TurtleOptions::default(), &mut text).unwrap();
-    assert_eq!((counts.exported, counts.skipped), (1, 1), "{text}");
+    assert_eq!((counts.exported, counts.skipped), (1, 6), "{text}");
+    for line in [
+        "# analog-input 1: skipped, its kind doesn't fit its type.",
+        "# trend-log 1: skipped, its type isn't mapped.",
+        "# trend-log 2: skipped, its type isn't mapped.",
+        "# analog-value 3: skipped, its read failed.",
+        "# multi-state-value 4: skipped, no readable number-of-states, which its type requires.",
+        "# binary-output 5: skipped, no readable object-name, which its type requires.",
+    ] {
+        assert!(text.lines().any(|l| l == line), "{line}\n{text}");
+    }
     assert!(
-        text.contains("# analog-input 1: skipped, its kind doesn't fit its type.\n"),
+        !text.contains("d:analog-input-1.") && !text.contains("evil"),
         "{text}"
     );
-    assert!(!text.contains("d:analog-input-1."), "{text}");
     check_structure(&text);
 }
 
@@ -268,6 +308,7 @@ fn an_inventory_and_its_point_list() {
     assert_eq!(inventory.point_list(), list);
     let failed = Entry::Failed {
         object: oid(ObjectType::ANALOG_INPUT, 2),
+        property: Some(PropertyIdentifier::OBJECT_NAME),
         error: "object-name: OBJECT:UNKNOWN_OBJECT".into(),
     };
     inventory.entries.insert(0, failed.clone());
@@ -279,10 +320,12 @@ fn an_inventory_and_its_point_list() {
     let entry = Entry::Point(point.clone());
     assert_eq!((entry.object(), entry.error()), (point.object, None));
     assert_eq!(entry.point(), Some(&point));
-    // A Writable value is written as a value that isn't commandable.
+    // A Writable value is written as a value that isn't commandable, in
+    // Turtle as well formed as a read device's.
     let text = to_turtle(&inventory, &TurtleOptions::default());
     assert!(
         text.contains("d:binary-value-1.present-value a s223:EnumerableProperty ;"),
         "{text}"
     );
+    check_structure(&text);
 }

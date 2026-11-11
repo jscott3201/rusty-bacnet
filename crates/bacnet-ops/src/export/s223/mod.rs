@@ -23,8 +23,10 @@
 //! An inventory holds its points in the shape `bacnet_types::points` gives
 //! a device's points (re-exported here), the shape
 //! `bacnet_objects::points::build_database` builds a database from. Read at
-//! [`Detail::Full`], [`Inventory::point_list`] is the list a device would be
-//! built from; the other way, `Inventory::from(list)` takes a [`PointList`]
+//! [`Detail::Full`], [`Inventory::point_list`] gives the device as such a
+//! list, within the limits its docs name: a field a list leaves out reads
+//! back as the object's default, and a list read from another device need
+//! not build. The other way, `Inventory::from(list)` takes a [`PointList`]
 //! to Turtle without touching the wire.
 //!
 //! The draft can change, and so can this export: its name says
@@ -41,7 +43,7 @@ pub use bacnet_types::points::{
     Access, Analog, Binary, DeviceInfo, MultiState, Point, PointKind, PointList,
 };
 
-use bacnet_types::enums::ObjectType;
+use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
 
 /// Where the ontology copy the mapping was written against came from; the
@@ -71,6 +73,7 @@ pub const EXPORTED_TYPES: [ObjectType; 9] = [
 
 /// How much of each object an inventory reads.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Detail {
     /// What the Turtle export uses, the default: the Device's Object_Name;
     /// each object's Object_Name and Description, an analog object's Units,
@@ -171,9 +174,22 @@ impl Inventory {
     }
 
     /// The device and the points read, as a point list; the objects whose
-    /// read failed are left out. Read at [`Detail::Full`] from a device
-    /// built from a list, it is that list, except that a value given
-    /// [`Access::Writable`] reads back [`Access::ReadOnly`].
+    /// read failed are left out.
+    ///
+    /// Read at [`Detail::Full`] from a device built from a list, it equals
+    /// that list only when the list set every field, and even then a value
+    /// given [`Access::Writable`] reads back [`Access::ReadOnly`]: a read
+    /// can't tell the two apart. A field the list left out reads back as
+    /// the object's default instead: an empty Description (the Device's
+    /// too), COV_Increment 0.0, "Active" and "Inactive", "State 1" to
+    /// "State N", the object's own relinquish default, and the identity's
+    /// name for the Device.
+    ///
+    /// A list read from another device need not build: it can hold what
+    /// `bacnet_objects::points::build_database` refuses, such as State_Text
+    /// with other than one label per state, a Real that isn't finite,
+    /// Min_Pres_Value above Max_Pres_Value, or a multi-state relinquish
+    /// default that names no state. The builder stops at the first refusal.
     pub fn point_list(&self) -> PointList {
         PointList::new(self.device.clone(), self.points().cloned().collect())
     }
@@ -202,6 +218,10 @@ pub enum Entry {
     Failed {
         /// The object.
         object: ObjectIdentifier,
+        /// The property every object of its type has that couldn't be
+        /// read; `None` when the read failed as a whole, or the type isn't
+        /// one the export reads.
+        property: Option<PropertyIdentifier>,
         /// Why: the device's error, naming the property when one property
         /// is at fault.
         error: String,

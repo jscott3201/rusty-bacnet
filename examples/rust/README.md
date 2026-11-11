@@ -12,6 +12,7 @@ starts a server and a client on 127.0.0.1 over BACnet/IP and exits when done.
 | [`multi_object_server.rs`](multi_object_server.rs) | Server with 15 objects of 12 types, bulk ReadPropertyMultiple query |
 | [`point_list_server.rs`](point_list_server.rs) | Server whose database is built from a `PointList` with `bacnet_objects::points::build_database`; a first reading set before it serves, the points read back |
 | [`point_list_endpoint.rs`](point_list_endpoint.rs) | Two endpoints, each built from its own `PointList`, each serving its points and reading the other's through one socket |
+| [`points.rs`](../../firmware/link/src/points.rs) | The firmware example: a `no_std` + `alloc` image's database built from a `PointList` of all nine analog, binary and multi-state types, then answered by `bacnet-device-core`'s `Responder`; `cargo nextest run -p firmware-link --test points` runs it natively |
 | [`sc_peer_certificates.rs`](../../crates/bacnet-client/tests/support/sc_peer_certificates.rs) | Owned accepted-Hub snapshots and untrusted rejected-attempt certificates; exercised by the SC client integration test |
 | [`sc_inspect_pem.rs`](../../crates/bacnet-transport/examples/sc_inspect_pem.rs) | Inspect supplied SC credential files offline, without a hub or client |
 

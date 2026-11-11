@@ -45,6 +45,10 @@ pub(super) struct Faults {
     /// Answer a ReadProperty of the whole Object_List with a Reject, so
     /// the list is read element by element.
     reject_whole_list: bool,
+    /// Answer each ReadPropertyMultiple with an Error PDU (PROPERTY,
+    /// UNKNOWN_PROPERTY), as a device does that fails the whole request
+    /// over one property it lacks.
+    error_rpm: bool,
     /// Set this flag as the given request goes out (1 for the first).
     cancel: Option<(usize, Arc<AtomicBool>)>,
 }
@@ -55,6 +59,7 @@ impl Default for Faults {
             pass: usize::MAX,
             reject_rpm: false,
             reject_whole_list: false,
+            error_rpm: false,
             cancel: None,
         }
     }
@@ -64,7 +69,7 @@ pub(super) struct Link {
     inner: LoopbackTransport,
     faults: Faults,
     sent: AtomicUsize,
-    /// Feeds the client's receive channel, for the Rejects.
+    /// Feeds the client's receive channel, for the Rejects and Errors.
     inbox: Mutex<Option<mpsc::Sender<ReceivedNpdu>>>,
 }
 
@@ -82,15 +87,21 @@ impl Link {
         }
     }
 
-    fn refused(&self, npdu: &[u8]) -> Option<u8> {
+    /// The device's answer the faults put in place of `npdu`'s, if any.
+    fn refused(&self, npdu: &[u8]) -> Option<Vec<u8>> {
         let (invoke_id, service, rest) = Self::request(npdu)?;
         // RPM is service 14; ReadProperty 12, here of Object_List (76)
         // with no array index.
+        if self.faults.error_rpm && service == 14 {
+            // An Error PDU: class PROPERTY (2), code UNKNOWN_PROPERTY (32).
+            return Some(vec![0x01, 0x00, 0x50, invoke_id, 14, 0x91, 2, 0x91, 32]);
+        }
         let rpm = self.faults.reject_rpm && service == 14;
         let whole_list = self.faults.reject_whole_list
             && service == 12
             && matches!(rest, [0x0C, _, _, _, _, 0x19, 0x4C]);
-        (rpm || whole_list).then_some(invoke_id)
+        // A Reject PDU for UNRECOGNIZED_SERVICE (9).
+        (rpm || whole_list).then(|| vec![0x01, 0x00, 0x60, invoke_id, 9])
     }
 }
 
@@ -122,11 +133,10 @@ impl TransportPort for Link {
         if sent > self.faults.pass {
             return Ok(());
         }
-        let Some(invoke_id) = self.refused(npdu) else {
+        let Some(answer) = self.refused(npdu) else {
             return self.inner.send_unicast(npdu, mac).await;
         };
-        // A Reject PDU for UNRECOGNIZED_SERVICE (9), from the device.
-        let reject = Bytes::from(vec![0x01, 0x00, 0x60, invoke_id, 9]);
+        let reject = Bytes::from(answer);
         let inbox = self.inbox.lock().unwrap().clone();
         if let Some(inbox) = inbox {
             let source = MacAddr::from_slice(mac);
@@ -528,10 +538,18 @@ async fn the_pieces_read_as_the_inventory_does() {
     let read = engine.inventory_object(LAB, missing, Detail::Export).await;
     // The device answers each of its properties with an error, so there is
     // no name: the object fails, as the inventory would have it.
-    let Entry::Failed { object, error } = read.unwrap() else {
+    let Entry::Failed {
+        object,
+        property,
+        error,
+    } = read.unwrap()
+    else {
         panic!("an object the device doesn't have is no point");
     };
-    assert_eq!(object, missing);
+    assert_eq!(
+        (object, property),
+        (missing, Some(PropertyIdentifier::OBJECT_NAME))
+    );
     assert!(error.starts_with("object-name: "), "{error}");
     // A type the export doesn't map isn't asked for.
     let before = engine.limits().recent();
@@ -599,6 +617,16 @@ fn a_missing_required_property_fails_the_entry() {
     let ai = oid(ObjectType::ANALOG_INPUT, 1);
     let failed = |entry: Entry| entry.error().map(str::to_string);
     let no_units = super::inventory::entry_of(ai, &[name(), refused(P::UNITS)]);
+    assert!(
+        matches!(
+            no_units,
+            Entry::Failed {
+                property: Some(P::UNITS),
+                ..
+            }
+        ),
+        "{no_units:?}"
+    );
     assert_eq!(
         failed(no_units).as_deref(),
         Some("units: PROPERTY:UNKNOWN_PROPERTY")
@@ -648,4 +676,26 @@ fn a_missing_required_property_fails_the_entry() {
     });
     expected.active_text = Some(String::new());
     assert_eq!(read, Entry::Point(Point::new(bo, "Zone", expected)));
+}
+
+/// A device that fails a whole RPM with an error of its own, not a refusal
+/// of the service: at Full the Device's name is then read by ReadProperty,
+/// as Export reads it, so Full never knows less than Export. Only the
+/// Description, which Export doesn't read, is lost.
+#[tokio::test(start_paused = true)]
+async fn full_reads_the_device_name_after_an_rpm_error() {
+    let faults = Faults {
+        error_rpm: true,
+        ..Faults::default()
+    };
+    let (engine, server) = lab(faults).await;
+    let export = engine.inventory_device(LAB, Detail::Export).await.unwrap();
+    let before = engine.limits().recent();
+    let full = engine.inventory_device(LAB, Detail::Full).await.unwrap();
+    assert_eq!(full, export);
+    assert_eq!(full.name.as_deref(), Some("Lab \"AHU\""));
+    // The failed RPM, then the name by ReadProperty.
+    assert_eq!(engine.limits().recent() - before, 2);
+    assert!(!engine.refused_rpm(LAB), "an error isn't a refusal of RPM");
+    stop(engine, server).await;
 }

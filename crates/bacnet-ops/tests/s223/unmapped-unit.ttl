@@ -28,7 +28,7 @@ d:analog-value-5.present-value.ref a s223:BACnetExternalReference ;
     bacnet:object-name "Heating Degree Days" ;
     bacnet:property-identifier "present-value" .
 
-# analog-input 6: skipped, its read failed.
+# analog-input 6: skipped, no readable units, which its type requires.
 
 # analog-input 7
 d:analog-input-7.present-value a s223:QuantifiableObservableProperty ;

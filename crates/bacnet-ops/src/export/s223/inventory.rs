@@ -87,8 +87,10 @@ impl<T: TransportPort + 'static> Engine<T> {
     /// [`Engine::read`] does). A read the device refuses, or a property
     /// every object of the type has that it can't give, comes back as
     /// [`Entry::Failed`], which the export skips; an optional property it
-    /// can't give is `None`. Only a device that stops answering is an
-    /// error.
+    /// can't give is `None`. An object of a type the export doesn't read
+    /// (not one of the [`EXPORTED_TYPES`](super::EXPORTED_TYPES)) is
+    /// [`Entry::Failed`] at once, with no request sent. Only a device that
+    /// stops answering is an error.
     pub async fn inventory_object(
         &self,
         device: u32,
@@ -160,7 +162,17 @@ async fn read_device<T: TransportPort + 'static>(
             let wanted = [P::OBJECT_NAME, P::DESCRIPTION];
             match reader.properties(device, Wanted::List(&wanted)).await {
                 Ok((rows, _)) => rows,
-                Err(Halt::Device(error)) if !unreachable(&error) => Vec::new(),
+                // An RPM the device answers with an error of its own (not
+                // a refusal of the service, which `properties` reads past
+                // itself) still leaves the name to read as Export does, so
+                // Full never knows less than Export.
+                Err(Halt::Device(error)) if !unreachable(&error) => {
+                    match reader.rp(device, P::OBJECT_NAME, None).await {
+                        Ok(data) => vec![(P::OBJECT_NAME, Ok(data))],
+                        Err(Halt::Device(error)) if !unreachable(&error) => Vec::new(),
+                        Err(halt) => return Err(halt),
+                    }
+                }
                 Err(halt) => return Err(halt),
             }
         }
@@ -180,19 +192,33 @@ async fn read_object<T: TransportPort + 'static>(
 ) -> Result<Entry, Halt> {
     let Some((family, role)) = family_of(object.object_type()) else {
         let error = format!("{} objects aren't exported", kebab(object.object_type()));
-        return Ok(Entry::Failed { object, error });
+        return Ok(Entry::Failed {
+            object,
+            property: None,
+            error,
+        });
     };
     let properties = properties(family, role, detail);
     match reader.properties(object, Wanted::List(&properties)).await {
-        Ok((rows, _)) => Ok(match point(object, family, role, &rows) {
-            Ok(point) => Entry::Point(point),
-            Err(error) => Entry::Failed { object, error },
-        }),
+        Ok((rows, _)) => Ok(entry(object, family, role, &rows)),
         Err(Halt::Device(error)) if !unreachable(&error) => Ok(Entry::Failed {
             object,
+            property: None,
             error: error.to_string(),
         }),
         Err(halt) => Err(halt),
+    }
+}
+
+/// `object`'s entry from the rows its read gave.
+fn entry(object: ObjectIdentifier, family: Family, role: Role, rows: &[RawRow]) -> Entry {
+    match point(object, family, role, rows) {
+        Ok(point) => Entry::Point(point),
+        Err((property, error)) => Entry::Failed {
+            object,
+            property: Some(property),
+            error,
+        },
     }
 }
 
@@ -201,10 +227,7 @@ async fn read_object<T: TransportPort + 'static>(
 #[cfg(test)]
 pub(super) fn entry_of(object: ObjectIdentifier, rows: &[RawRow]) -> Entry {
     let (family, role) = family_of(object.object_type()).expect("an exported type");
-    match point(object, family, role, rows) {
-        Ok(point) => Entry::Point(point),
-        Err(error) => Entry::Failed { object, error },
-    }
+    entry(object, family, role, rows)
 }
 
 /// The families the export maps.
@@ -270,13 +293,13 @@ fn properties(family: Family, role: Role, detail: Detail) -> Vec<P> {
 }
 
 /// One object's point from its rows, or why it has none: a property every
-/// object of its type has is missing.
+/// object of its type has is missing, named with the reason.
 fn point(
     object: ObjectIdentifier,
     family: Family,
     role: Role,
     rows: &[RawRow],
-) -> Result<Point, String> {
+) -> Result<Point, (P, String)> {
     let name = required(rows, P::OBJECT_NAME, text, "a character string")?;
     let kind = match family {
         Family::Analog => {
@@ -338,7 +361,7 @@ fn required<T>(
     property: P,
     decode: fn(&[u8]) -> Option<T>,
     what: &str,
-) -> Result<T, String> {
+) -> Result<T, (P, String)> {
     let why = match rows.iter().find(|(p, _)| *p == property) {
         None => "not read".to_string(),
         Some((_, Err(error))) => error.to_string(),
@@ -347,7 +370,7 @@ fn required<T>(
             None => format!("not {what}"),
         },
     };
-    Err(format!("{}: {why}", kebab(property)))
+    Err((property, format!("{}: {why}", kebab(property))))
 }
 
 /// The one value in `data`, when it decodes as exactly one.

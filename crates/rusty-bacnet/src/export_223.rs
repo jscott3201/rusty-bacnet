@@ -272,6 +272,7 @@ mod tests {
         let error = "units: PROPERTY:UNKNOWN_PROPERTY";
         let failed = PyObject223(Entry::Failed {
             object,
+            property: Some(bacnet_types::enums::PropertyIdentifier::UNITS),
             error: error.into(),
         });
         assert_eq!(failed.error(), Some(error));

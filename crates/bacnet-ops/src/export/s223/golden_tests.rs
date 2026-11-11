@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use bacnet_types::enums::{EngineeringUnits, ObjectType};
+use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier};
 
 use super::tests::{check_structure, oid};
 use super::*;
@@ -101,6 +101,7 @@ fn cases() -> Vec<(&'static str, Inventory, TurtleOptions)> {
     // skipped where it was.
     let unread = Entry::Failed {
         object: oid(ObjectType::ANALOG_INPUT, 6),
+        property: Some(PropertyIdentifier::UNITS),
         error: "units: PROPERTY:UNKNOWN_PROPERTY".into(),
     };
     let proprietary = named(
@@ -129,6 +130,7 @@ fn cases() -> Vec<(&'static str, Inventory, TurtleOptions)> {
 
     let failed = Entry::Failed {
         object: oid(ObjectType::ANALOG_INPUT, 1),
+        property: None,
         error: "PROPERTY:UNKNOWN_PROPERTY\n# not a comment".into(),
     };
     // Only a list built by hand can hold a point of a type the export
@@ -275,7 +277,7 @@ fn golden_cases_hold_what_they_test() {
     assert!(unmapped.contains("BACnet units 300: no QUDT mapping"));
     assert!(unmapped.contains("2 with an unmapped unit"));
     assert!(
-        unmapped.contains("# analog-input 6: skipped, its read failed."),
+        unmapped.contains("# analog-input 6: skipped, no readable units, which its type requires."),
         "an analog object without Units is skipped where it was"
     );
 

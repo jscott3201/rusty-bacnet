@@ -1,4 +1,4 @@
 ---
-section: Changed
+section: Added
 ---
-- **Breaking (Rust API):** the 223 export's `Inventory` in `bacnet-ops` holds the shared point-list types, reads everything a point list holds at `Detail::Full`, and skips an object that can't give its name, units or state count, in every front end (#2445).
+- **Experimental:** the 223 export's inventory in `bacnet-ops` holds the `bacnet_types::points` types, and `Detail::Full` reads everything a point list holds (#2445).

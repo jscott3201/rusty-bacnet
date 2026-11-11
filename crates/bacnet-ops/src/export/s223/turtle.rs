@@ -17,10 +17,11 @@
 //! - the reference names the device and object by identifier and by name,
 //!   and the property, and the command priority when the caller gave one.
 //!
-//! A failed entry is skipped with a comment where it was, and so is a
-//! point whose type isn't one of the [`EXPORTED_TYPES`] or whose kind
-//! isn't its type's family: a list built by hand can hold one, a device
-//! read can't.
+//! An entry that can't be written is skipped with a comment where it was,
+//! saying which case it is, in text of ours only: a type that isn't one of
+//! the [`EXPORTED_TYPES`], a read that failed, a property every object of
+//! the type has that couldn't be read, or a point whose kind isn't its
+//! type's family (a list built by hand can hold one, a device read can't).
 //!
 //! Node names come from identifiers only (`analog-input-3.present-value`),
 //! never from device text, so they stay the same across runs and renames.
@@ -65,8 +66,9 @@ pub(super) const PREFIXES: [(&str, &str); 7] = [
 pub struct Counts {
     /// Objects written as 223 properties.
     pub exported: usize,
-    /// Objects left out: their read failed, or their type or kind isn't
-    /// mapped.
+    /// Objects left out: their type isn't mapped, their read failed, a
+    /// property their type requires couldn't be read, or their kind isn't
+    /// their type's.
     pub skipped: usize,
     /// Analog points whose unit has no QUDT mapping.
     pub unmapped_units: usize,
@@ -97,17 +99,10 @@ pub fn write_turtle(
     // The body first, so the header can count what it replaced.
     let mut body = String::new();
     for entry in &inventory.entries {
-        let label = object_label(entry.object());
-        let object = match entry {
-            Entry::Point(object) => object,
-            Entry::Failed { .. } => {
-                writeln!(body, "# {label}: skipped, its read failed.\n")?;
-                continue;
-            }
-        };
-        let class = match Class::of(object) {
-            Ok(class) => class,
+        let (object, class) = match exported(entry) {
+            Ok(exported) => exported,
             Err(why) => {
+                let label = object_label(entry.object());
                 writeln!(body, "# {label}: skipped, {why}.\n")?;
                 continue;
             }
@@ -146,7 +141,7 @@ impl Literals {
 fn count(inventory: &Inventory) -> Counts {
     let mut counts = Counts::default();
     for entry in &inventory.entries {
-        let Some(object) = entry.point().filter(|object| Class::of(object).is_ok()) else {
+        let Ok((object, _)) = exported(entry) else {
             counts.skipped += 1;
             continue;
         };
@@ -242,14 +237,33 @@ enum Class {
     Enumerable,
 }
 
+/// The point an entry writes and its class, or why the entry is skipped,
+/// in text of ours: never device text, and the same for every device.
+fn exported(entry: &Entry) -> Result<(&Point, Class), String> {
+    if !EXPORTED_TYPES.contains(&entry.object().object_type()) {
+        return Err("its type isn't mapped".into());
+    }
+    match entry {
+        Entry::Point(point) => match Class::of(point) {
+            Some(class) => Ok((point, class)),
+            None => Err("its kind doesn't fit its type".into()),
+        },
+        Entry::Failed {
+            property: Some(property),
+            ..
+        } => Err(format!(
+            "no readable {}, which its type requires",
+            kebab(property)
+        )),
+        Entry::Failed { property: None, .. } => Err("its read failed".into()),
+    }
+}
+
 impl Class {
-    /// A point's class, or why it has none: its type isn't mapped, or its
-    /// kind isn't its type's family.
-    fn of(object: &Point) -> Result<Self, &'static str> {
+    /// The class of a point of one of the [`EXPORTED_TYPES`]; `None` when
+    /// its kind isn't its type's family.
+    fn of(object: &Point) -> Option<Self> {
         let object_type = object.object.object_type();
-        if !EXPORTED_TYPES.contains(&object_type) {
-            return Err("its type isn't mapped");
-        }
         let input = [
             ObjectType::ANALOG_INPUT,
             ObjectType::BINARY_INPUT,
@@ -266,9 +280,9 @@ impl Class {
             _ => (false, false, false),
         };
         if !fits {
-            return Err("its kind doesn't fit its type");
+            return None;
         }
-        Ok(match (analog, input, commanded) {
+        Some(match (analog, input, commanded) {
             (true, true, _) => Self::QuantifiableObservable,
             (true, false, true) => Self::QuantifiableActuatable,
             (true, false, false) => Self::Quantifiable,
