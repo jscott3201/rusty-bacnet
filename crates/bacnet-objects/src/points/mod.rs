@@ -10,9 +10,22 @@
 //! are re-exported here.
 //!
 //! The database comes back before anything serves it, so the host can set
-//! what a list doesn't describe first. The built objects are reached as
-//! `dyn BACnetObject` through [`ObjectDatabase::get_mut`], and the routes
-//! there are:
+//! what a list doesn't describe first. Once something serves it, the
+//! application's changes go where that host reports them (#2446):
+//! - firmware with `bacnet-device-core`'s `Reporter`: `Reporter::update`
+//!   for a read-only point's Present_Value, `Reporter::command` and
+//!   `Reporter::relinquish` for a commandable point's priority slot as the
+//!   local Device, `Reporter::set_reliability`, and `Reporter::apply_local`
+//!   for any other change, such as Out_Of_Service. Each queues the COV
+//!   notifications the change calls for;
+//! - a `bacnet-server`: `BACnetServer::set_present_value_local`,
+//!   `write_local` and `set_reliability_local`, so COV and event processing
+//!   see each change.
+//!
+//! A host with neither, one that answers requests without reporting COV,
+//! or any host before it serves the database, reaches the built objects as
+//! `dyn BACnetObject` through [`ObjectDatabase::get_mut`]. The routes there
+//! are:
 //! - a read-only point's Present_Value: [`BACnetObject::local_input`] and
 //!   its `apply_local_input`;
 //! - a commandable point's priority slot: [`BACnetObject::write_property_from`]
@@ -21,9 +34,9 @@
 //! - Reliability: [`BACnetObject::reliability_eval`] and its
 //!   `set_reliability`; Out_Of_Service: `write_property`.
 //!
-//! Once a server runs the database, `BACnetServer::write_local` and
-//! `BACnetServer::set_present_value_local` take over, so COV and event
-//! processing see each change.
+//! `bacnet-device-core`'s `write::local::apply` makes any of these changes
+//! with the checks and the source the hosts' own routes give them, and
+//! reports to no one.
 //!
 //! A refusal is a [`BuildError`] naming the object and, where one property
 //! is at fault, that property. Only one is reported: the first the checks

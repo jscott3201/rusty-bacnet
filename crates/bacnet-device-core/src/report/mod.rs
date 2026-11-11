@@ -17,7 +17,12 @@
 //! [`Reporter::delivered`], and each object it deletes through
 //! [`Reporter::remove_for_object`]: the `Responder` runs no DeleteObject,
 //! so a host that serves it takes the request before
-//! [`Reporter::handle`]. All time is the host's monotonic `now`.
+//! [`Reporter::handle`]. The application's own changes go through
+//! [`Reporter::apply_local`], or the typed [`Reporter::update`],
+//! [`Reporter::set_reliability`], [`Reporter::command`] and
+//! [`Reporter::relinquish`] (#2446), which make the change with
+//! [`write::local::apply`](crate::write::local::apply) and report it. All
+//! time is the host's monotonic `now`.
 //!
 //! With `cov-multiple` a report to a SubscribeCOVPropertyMultiple context
 //! leaves the same way, as one or more [`NotifyService::CovMultiple`]
@@ -39,7 +44,7 @@ mod outbox;
 mod reporter;
 
 pub use outbox::OutboxLimits;
-pub use reporter::Reporter;
+pub use reporter::{LocalValue, Reporter};
 
 /// The services a [`Reporter`] runs, for the Device's
 /// Protocol_Services_Supported: the [`Responder`](crate::responder)'s,

@@ -33,12 +33,16 @@ use crate::reply::{self, SEGMENTED, emit};
 use crate::responder::{Access, Inbound, Outcome, Responder, Written};
 use crate::write::{WriteCommitObserver, WriteTarget};
 
+#[path = "reporter_local.rs"]
+mod local;
 #[cfg(feature = "cov-multiple")]
 #[path = "reporter_multiple.rs"]
 mod multiple;
 #[path = "reporter_tests.rs"]
 #[cfg(test)]
 mod tests;
+
+pub use local::LocalValue;
 
 /// The [`Responder`] with COV reporting: SubscribeCOV, SubscribeCOVProperty
 /// and, with the `cov-multiple` feature, SubscribeCOVPropertyMultiple, the
@@ -48,9 +52,12 @@ mod tests;
 /// guards; the parity tests hold the two to the same notifications.
 ///
 /// The host hands it each request ([`handle`](Self::handle)), each answer to
-/// a confirmed notification ([`reply`](Self::reply)), the objects it changes
-/// itself ([`changed`](Self::changed)) or deletes
-/// ([`remove_for_object`](Self::remove_for_object)), and the time whenever
+/// a confirmed notification ([`reply`](Self::reply)), the application's own
+/// changes, which it makes and reports ([`apply_local`](Self::apply_local),
+/// [`update`](Self::update), [`set_reliability`](Self::set_reliability),
+/// [`command`](Self::command), [`relinquish`](Self::relinquish)), the
+/// objects the host changes by other means ([`changed`](Self::changed)) or
+/// deletes ([`remove_for_object`](Self::remove_for_object)), and the time whenever
 /// [`next_deadline`](Self::next_deadline) comes ([`on_deadline`](Self::on_deadline)).
 /// It sends what [`pop`](Self::pop) hands out, and reports how each send
 /// ended ([`delivered`](Self::delivered)).

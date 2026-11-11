@@ -4949,6 +4949,12 @@ server.add_time_pattern_value(instance=1, name="Work Hours")
 server.add_date_time_pattern_value(instance=1, name="Schedule Pattern")
 ```
 
+An Integer Value's Reliability takes a client's write only while
+Out_Of_Service is set, to simulate a fault (#2446): in service the write
+raises WRITE_ACCESS_DENIED, and a value outside BACnetReliability
+VALUE_OUT_OF_RANGE. Status_Flags FAULT follows it, and the return to service
+puts back the Reliability the object had before.
+
 #### Measurement & File
 
 ```python

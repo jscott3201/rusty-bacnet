@@ -458,7 +458,7 @@ fn write_targets(
             reference.property_array_index,
         )
         .and_then(|()| {
-            local::write_target(
+            local::write_as(
                 target_obj,
                 property,
                 reference.property_array_index,
