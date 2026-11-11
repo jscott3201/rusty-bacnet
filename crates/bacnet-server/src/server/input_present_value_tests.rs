@@ -500,7 +500,7 @@ async fn noncommandable_value_write_local_without_resolved_origin_runs_cov() {
     subscribe(&fixture.server, oid).await;
     let missing = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 999).unwrap();
     assert!(
-        crate::command_source::resolve_local(
+        bacnet_device_core::write::local::resolve_source(
             &*fixture.server.database().read().await,
             crate::LocalCommandSource::Object(missing),
         )

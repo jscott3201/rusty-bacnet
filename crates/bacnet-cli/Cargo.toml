@@ -75,6 +75,8 @@ tempfile = "3"
 bacnet-ops = { workspace = true, features = ["test-support"] }
 bacnet-objects = { workspace = true, features = ["std"] }
 bacnet-server.workspace = true
+# The source a local write takes (`write::local::LocalCommandSource`).
+bacnet-device-core = { workspace = true, features = ["std"] }
 rcgen.workspace = true
 futures-util.workspace = true
 insta = "1.48"

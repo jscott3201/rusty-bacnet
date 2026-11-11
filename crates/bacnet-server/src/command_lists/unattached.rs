@@ -104,9 +104,9 @@ impl RunHost for Unattached<'_> {
             if !super::is_current(&db, run) {
                 return Err(super::stale_run());
             }
-            let origin = crate::command_source::resolve_local(
+            let origin = bacnet_device_core::write::local::resolve_source(
                 &db,
-                crate::LocalCommandSource::Object(run.source),
+                bacnet_device_core::write::local::LocalCommandSource::Object(run.source),
             )
             .ok();
             let (target, _) = bacnet_device_core::write::write_property(

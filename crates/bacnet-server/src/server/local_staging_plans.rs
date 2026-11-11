@@ -5,6 +5,7 @@
 use super::super::cov_notify_context::CovNotifyContext;
 use super::super::*;
 use crate::command_lists::TakenRuns;
+use bacnet_device_core::write::local;
 use bacnet_objects::staging::StagingWritePlan;
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
@@ -101,13 +102,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     let result = if !current {
                         TargetResult::Stale
                     } else {
-                        let origin = crate::command_source::resolve_local(
+                        let origin = local::resolve_source(
                             &database,
-                            crate::LocalCommandSource::Object(plan.source),
+                            local::LocalCommandSource::Object(plan.source),
                         )
                         .ok();
                         match database.get_mut(&target.object_identifier) {
-                            Some(object) => match crate::command_source::write_target(
+                            Some(object) => match local::write_target(
                                 object,
                                 PropertyIdentifier::PRESENT_VALUE,
                                 None,

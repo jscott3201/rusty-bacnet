@@ -5,10 +5,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use bacnet_device_core::write::local::LocalCommandSource;
 use bacnet_ops::engine::Engine;
 use bacnet_ops::limits::RequestLimits;
 use bacnet_ops::watch::Hub;
-use bacnet_server::LocalCommandSource;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::PropertyValue;
 

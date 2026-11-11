@@ -88,7 +88,7 @@ async fn run(server: &BACnetServer<BipTransport>, list: u64) -> (bool, Vec<bool>
             None,
             PropertyValue::Unsigned(list),
             None,
-            bacnet_server::LocalCommandSource::ServerDevice,
+            bacnet_device_core::write::local::LocalCommandSource::ServerDevice,
         )
         .await
         .unwrap();

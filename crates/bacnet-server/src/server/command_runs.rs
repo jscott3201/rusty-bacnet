@@ -263,6 +263,9 @@ impl<T: TransportPort + 'static> RunHost for CommandRunner<T> {
                     property: command.property_identifier,
                     array_index: command.property_array_index,
                     priority: command.priority,
+                    source: bacnet_device_core::write::local::LocalCommandSource::Object(
+                        run.source,
+                    ),
                 },
                 value,
                 run,

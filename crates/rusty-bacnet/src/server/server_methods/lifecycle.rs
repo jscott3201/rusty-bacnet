@@ -520,10 +520,10 @@ impl BACnetServer {
         let oid = object_id.to_rust();
         let pid = property_id.to_rust();
         let prop_value = value.inner;
-        let source = source_object
-            .map_or(bacnet_server::LocalCommandSource::ServerDevice, |object| {
-                bacnet_server::LocalCommandSource::Object(object.to_rust())
-            });
+        let source = source_object.map_or(
+            bacnet_device_core::write::local::LocalCommandSource::ServerDevice,
+            |object| bacnet_device_core::write::local::LocalCommandSource::Object(object.to_rust()),
+        );
 
         let future = async move {
             let mut encoded = bytes::BytesMut::new();

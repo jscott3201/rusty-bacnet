@@ -58,6 +58,7 @@ use std::sync::Arc;
 
 use crate::committed_cov::{BackgroundCommit, CommittedCov};
 use crate::cov::CovSubscriptionTable;
+use bacnet_device_core::write::local;
 use bacnet_objects::clock::ClockFrame;
 use bacnet_objects::command_source::CommandOrigin;
 use bacnet_objects::database::ObjectDatabase;
@@ -351,14 +352,14 @@ fn deliver(
 /// The origin a Schedule's writes carry: the local Device, with the Schedule
 /// as the initiating object, while both are in the database.
 fn command_origin(db: &ObjectDatabase, schedule: ObjectIdentifier) -> Option<CommandOrigin> {
-    crate::command_source::resolve_local(db, crate::LocalCommandSource::Object(schedule)).ok()
+    local::resolve_source(db, local::LocalCommandSource::Object(schedule)).ok()
 }
 
 /// [`command_origin`] for a Schedule already out of the database: the local
 /// Device, while its object is here, with `schedule` as the initiating
 /// object, the origin its writes carried while it was in.
 fn removed_origin(db: &ObjectDatabase, schedule: ObjectIdentifier) -> Option<CommandOrigin> {
-    match crate::command_source::resolve_local(db, crate::LocalCommandSource::ServerDevice) {
+    match local::resolve_source(db, local::LocalCommandSource::ServerDevice) {
         Ok(CommandOrigin::Local { owner_device, .. }) => Some(CommandOrigin::Local {
             owner_device,
             initiating_object: Some(schedule),
@@ -457,7 +458,7 @@ fn write_targets(
             reference.property_array_index,
         )
         .and_then(|()| {
-            crate::command_source::write_target(
+            local::write_target(
                 target_obj,
                 property,
                 reference.property_array_index,
