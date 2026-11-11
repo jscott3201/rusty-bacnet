@@ -344,3 +344,20 @@ fn a_failure_wider_than_sixteen_bits_is_refused() {
         }
     );
 }
+
+/// An opaque primitive is written only as long as the tag decoder takes
+/// (#2474), before the record it sits in is checked whole.
+#[test]
+fn an_opaque_primitive_is_no_longer_than_a_tag_takes() {
+    use crate::constructed::log_fields::encode_opaque;
+    let opaque = |len| OpaqueChoice {
+        tag: 11,
+        constructed: false,
+        data: vec![0; len],
+    };
+    let mut buf = BytesMut::new();
+    assert!(encode_opaque(&mut buf, &opaque(1 << 20), 10, "datum").is_ok());
+    let mut buf = BytesMut::new();
+    assert!(encode_opaque(&mut buf, &opaque((1 << 20) + 1), 10, "datum").is_err());
+    assert!(buf.is_empty());
+}

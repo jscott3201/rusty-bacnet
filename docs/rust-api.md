@@ -6631,16 +6631,20 @@ its contents or body as received, and the encoder writes it back unchanged,
 so a log read from a newer device still pages, and a stored or forwarded
 record isn't altered. The body must be well formed: a known tag in the wrong
 form, unbalanced or truncated tags, or nesting past the tag decoder's limit
-still fail. Event values under an unassigned tag (23 and up) decode the same
-way, as `NotificationParameters::Opaque { tag, data }`, so the rest of the
-notification stays usable. `LogDatum::try_from(LogValue)` replaces the old
+still fail. Event values under a tag Clause 21 gives no alternative (7 and
+12, which it deprecates and reserves, or 23 and up) decode the same way, as
+`NotificationParameters::Opaque { tag, data }`, so the rest of the
+notification stays usable; tag 20, which matches the event type that reports
+no values, is still refused. `LogDatum::try_from(LogValue)` replaces the old
 `From`: an opaque member value has no Trend Log datum and comes back as the
 error.
 
 `add_record` and the trend hooks refuse a record that would not encode (an
-any-value, or a notification's raw event values, whose tags don't balance; a
-complex event's property priority outside 1 to 16; a bit string with
-impossible padding) with its encoding error, before anything changes. So
+any-value, an opaque alternative's body, or a notification's raw event
+values, whose tags don't balance; a complex event's property priority outside
+1 to 16; a bit string with impossible padding; a record nested deeper than a
+ReadRange-ACK's item data can carry, one level short of the tag decoder's
+limit) with its encoding error, before anything changes. So
 `LogBufferRecords::encode_record` cannot fail, and one bad record can't break
 every ReadRange window over the log.
 

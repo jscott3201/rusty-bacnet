@@ -664,10 +664,11 @@ pub(super) fn decode_bounded(
         21 => decode_change_of_discrete_value(data, inner_start, variant_body_end),
         // [22] Change of timer
         22 => decode_change_of_timer(data, inner_start, variant_body_end),
-        // A tag the 2020 production doesn't assign (a later revision's):
-        // keep its body as received. Its nested tags were checked above, so
-        // only a well-formed alternative gets here.
-        tag if tag > LAST_ASSIGNED_TAG => {
+        // A tag the 2020 production gives no alternative (a later
+        // revision's, or one it deprecates or reserves): keep its body as
+        // received. Its nested tags were checked above, so only a
+        // well-formed alternative gets here.
+        tag if is_opaque_tag(tag) => {
             let (body, _) = tags::extract_context_value(data, inner_start, tag)?;
             finish_variant(
                 NotificationParameters::Opaque {
@@ -677,11 +678,12 @@ pub(super) fn decode_bounded(
                 inner_start + body.len(),
             )
         }
-        // 7, 12 and 20, which Clause 21 deprecates, reserves or leaves out.
+        // 20, which Clause 21 leaves out to match the event type that
+        // reports no values.
         other => Err(DecodeError::new(
             DecodingKind::InvalidTag,
             offset,
-            "NotificationParameters context tag [{}] carries no alternative in Clause 21",
+            "NotificationParameters context tag [{}] carries no values in Clause 21",
         )
         .with_value(other.into())
         .into()),

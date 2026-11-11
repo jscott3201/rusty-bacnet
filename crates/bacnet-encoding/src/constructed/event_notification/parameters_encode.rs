@@ -380,9 +380,9 @@ fn encode_into(params: &NotificationParameters, buf: &mut BytesMut) -> Result<()
             tags::encode_closing_tag(buf, 22);
         }
         NotificationParameters::Opaque { tag, data } => {
-            // Only an unassigned tag: an assigned one would decode as its
-            // own variant, or not at all, so it couldn't round-trip.
-            if *tag <= LAST_ASSIGNED_TAG || *tag == u8::MAX {
+            // Only a tag the decoder keeps opaque: any other would decode as
+            // its own variant, or not at all, so it couldn't round-trip.
+            if !is_opaque_tag(*tag) {
                 return Err(EncodeError::new("tag [{}] cannot use an opaque body")
                     .within("NotificationParameters")
                     .with_value((*tag).into())

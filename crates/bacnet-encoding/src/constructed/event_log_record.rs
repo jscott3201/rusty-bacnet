@@ -10,7 +10,7 @@
 //! kept as [`EventLogDatum::Opaque`] and written back unchanged.
 
 use super::log_fields::{
-    decode_log_status, decode_opaque, decode_timestamp, encode_log_status, encode_opaque,
+    decode_log_status, check_record, decode_opaque, decode_timestamp, encode_log_status, encode_opaque,
     encode_timestamp,
 };
 use super::tagged::{contents, decode_ctx_constructed, expect_end};
@@ -32,14 +32,17 @@ const TIME_CHANGE: u8 = 2;
 ///
 /// Fails, leaving `buf` unchanged, for a notification that would not encode,
 /// such as one whose raw event values aren't a well-formed run of tagged
-/// fields.
+/// fields, an opaque body that isn't one, or a record nested too deep for a
+/// ReadRange-ACK to carry.
 pub fn encode_event_log_record(
     record: &BACnetEventLogRecord,
     buf: &mut BytesMut,
 ) -> Result<(), Error> {
     // Straight into `buf`, cut back on failure: no staging buffer (#2233).
     let start = buf.len();
-    write_event_log_record(record, buf).inspect_err(|_| buf.truncate(start))
+    write_event_log_record(record, buf)
+        .and_then(|()| check_record(&buf[start..], RECORD))
+        .inspect_err(|_| buf.truncate(start))
 }
 
 fn write_event_log_record(record: &BACnetEventLogRecord, out: &mut BytesMut) -> Result<(), Error> {

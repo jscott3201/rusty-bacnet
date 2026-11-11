@@ -2329,8 +2329,8 @@ type in snake case (#2073), with each value under its member's name:
 
 The keys follow the event type's members in the standard, for every type the
 stack decodes, from `change_of_bitstring` to `change_of_timer`, and
-`complex_event_type` too. Event values under a tag the standard doesn't
-assign (a later revision's) are `{"kind": "other", "tag": 30, "data": b"..."}`,
+`complex_event_type` too. Event values under a tag the standard gives no
+alternative (7, 12, or a later revision's) are `{"kind": "other", "tag": 30, "data": b"..."}`,
 the body as received, as an unassigned Event_Parameters algorithm reads
 (#2474). Status flags and other bit strings are
 `BitString`s; a property state is a `(choice_tag, value)` pair, as in

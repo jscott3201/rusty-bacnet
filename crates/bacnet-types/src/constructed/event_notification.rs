@@ -64,9 +64,10 @@ pub struct EventNotificationRequest {
 ///
 /// Each variant but the last is one alternative of the Clause 21
 /// `BACnetNotificationParameters` CHOICE, under the context tag its doc
-/// gives. An alternative under a tag the 2020 production doesn't assign (a
-/// later revision's, 23 and up) decodes as [`Self::Opaque`], so one choice
-/// this stack doesn't model doesn't cost the rest of the notification.
+/// gives. An alternative under a tag the 2020 production gives none (7 and
+/// 12, which it deprecates and reserves, or a later revision's, 23 and up)
+/// decodes as [`Self::Opaque`], so one choice this stack doesn't model
+/// doesn't cost the rest of the notification.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NotificationParameters {
     /// \[0\] Change of bitstring.
@@ -266,11 +267,11 @@ pub enum NotificationParameters {
     ///
     /// Every alternative of this CHOICE is a SEQUENCE, so `data` is the
     /// complete body between the opening and closing `tag`. The encoder
-    /// writes it back unchanged, and refuses a tag up to 22 (each has a
-    /// variant here or carries no alternative: 7 is deprecated, 12 reserved
-    /// and 20 left out) or 255, and a body that isn't complete tagged values.
+    /// writes it back unchanged. It refuses a tag that has a variant here,
+    /// 20 (left out, matching the event type that reports no values) and
+    /// 255, and a body that isn't complete tagged values.
     Opaque {
-        /// The unassigned context tag, 23 to 254.
+        /// The context tag: 7, 12, or 23 to 254.
         tag: u8,
         /// The encoded SEQUENCE body, without its enclosing tag pair.
         data: Vec<u8>,

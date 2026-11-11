@@ -212,8 +212,9 @@ pub(super) fn decode_opaque(
 
 /// Write an alternative [`decode_opaque`] kept back as it came: under its
 /// own tag, primitive or between an opening and closing tag pair. Refuses a
-/// tag up to `last`, which its CHOICE assigns, or 255, and a constructed
-/// body that isn't complete tagged values. `what` names the field in errors.
+/// tag up to `last`, which its CHOICE assigns, or 255, a primitive longer
+/// than the tag decoder takes, and a constructed body that isn't complete
+/// tagged values. `what` names the field in errors.
 pub(super) fn encode_opaque(
     buf: &mut BytesMut,
     opaque: &OpaqueChoice,
@@ -238,9 +239,53 @@ pub(super) fn encode_opaque(
         tags::encode_closing_tag(buf, tag);
     } else {
         let length = u32::try_from(data.len())
-            .map_err(|_| Error::encode("opaque alternative too long for a tag length"))?;
+            .ok()
+            .filter(|&length| length <= tags::MAX_TAG_LENGTH)
+            .ok_or_else(|| {
+                Error::from(
+                    EncodeError::new("opaque alternative over {} octets")
+                        .within(what)
+                        .with_value(tags::MAX_TAG_LENGTH),
+                )
+            })?;
         tags::encode_tag(buf, tag, tags::TagClass::Context, length);
         buf.extend_from_slice(data);
+    }
+    Ok(())
+}
+
+/// Refuse a whole written record that a reader couldn't take back.
+///
+/// Each field was checked as it was written; what only the whole record
+/// shows is how deep it nests, an any-value's or an opaque alternative's body
+/// under the record's own levels. A ReadRange-ACK carries records inside its
+/// item-data frame, and the tag decoder counts its nesting limit from that
+/// frame, so a record may nest one level less deep than the limit. A stored
+/// record past that would break every page of the log, and a persisted
+/// snapshot holding it would not load.
+pub(super) fn check_record(record: &[u8], what: &'static str) -> Result<(), Error> {
+    validate_tlv_sequence(record, what).map_err(Error::into_encode_refusal)?;
+    let (mut depth, mut deepest, mut pos) = (0usize, 0usize, 0usize);
+    while pos < record.len() {
+        let (tag, next) = tags::decode_tag(record, pos).map_err(Error::into_encode_refusal)?;
+        pos = next;
+        if tag.is_opening {
+            depth += 1;
+            deepest = deepest.max(depth);
+        } else if tag.is_closing {
+            depth = depth.saturating_sub(1);
+        } else if !(tag.class == tags::TagClass::Application
+            && tag.number == tags::app_tag::BOOLEAN)
+        {
+            // The checked walk above holds every length to the record.
+            pos += tag.length as usize;
+        }
+    }
+    if deepest >= tags::MAX_CONTEXT_NESTING_DEPTH {
+        return Err(EncodeError::new("nests {} tags deep, past what a ReadRange-ACK carries")
+            .within(what)
+            .with_value(deepest as u32)
+            .into());
     }
     Ok(())
 }

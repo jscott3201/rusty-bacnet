@@ -39,10 +39,15 @@ mod property_states;
 mod structured;
 mod tolerant;
 
-/// The highest context tag the 2020 NotificationParameters production assigns
-/// or rules out: an alternative above it is kept as
-/// [`NotificationParameters::Opaque`].
-const LAST_ASSIGNED_TAG: u8 = 22;
+/// Whether a NotificationParameters alternative under `tag` is kept as
+/// [`NotificationParameters::Opaque`]: a tag the 2020 production gives no
+/// alternative, 7 (deprecated), 12 (reserved for a later addendum) or 23 and
+/// up (a later revision's), short of 255, which no tag may use. Tag 20 isn't
+/// one: it pairs with the event type that reports no values, so a choice
+/// under it is refused. Every other tag has its own variant.
+fn is_opaque_tag(tag: u8) -> bool {
+    matches!(tag, 7 | 12 | 23..=254)
+}
 
 pub use parameters_decode::decode_notification_parameters;
 pub use parameters_encode::encode_notification_parameters;

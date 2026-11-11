@@ -22,7 +22,7 @@ use alloc::vec::Vec;
 
 use super::log_fields::{
     check_bit_string, decode_any_value, decode_failure, decode_integer, decode_log_status,
-    decode_opaque, decode_timestamp, encode_any_value, encode_ctx_integer, encode_failure,
+    check_record, decode_opaque, decode_timestamp, encode_any_value, encode_ctx_integer, encode_failure,
     encode_log_status, encode_opaque, encode_timestamp,
 };
 use super::tagged::{contents, decode_ctx_constructed, expect_end};
@@ -58,15 +58,18 @@ const ENTRY: &str = "BACnetLogMultipleRecord log-data entry";
 /// Encode one Trend Log Multiple record.
 ///
 /// Fails, leaving `buf` unchanged, for a bit string whose unused-bit count
-/// is above 7 (or nonzero with no data) or an any-value whose bytes aren't
-/// complete tagged values.
+/// is above 7 (or nonzero with no data), an any-value or opaque body whose
+/// bytes aren't complete tagged values, or a record nested too deep for a
+/// ReadRange-ACK to carry.
 pub fn encode_log_multiple_record(
     record: &BACnetLogMultipleRecord,
     buf: &mut BytesMut,
 ) -> Result<(), Error> {
     // Straight into `buf`, cut back on failure: no staging buffer (#2233).
     let start = buf.len();
-    write_log_multiple_record(record, buf).inspect_err(|_| buf.truncate(start))
+    write_log_multiple_record(record, buf)
+        .and_then(|()| check_record(&buf[start..], RECORD))
+        .inspect_err(|_| buf.truncate(start))
 }
 
 fn write_log_multiple_record(

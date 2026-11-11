@@ -108,6 +108,12 @@ fn opaque(last: u8) -> impl Strategy<Value = OpaqueChoice> {
         })
 }
 
+/// A tag event values keep opaque: 7 and 12, which Clause 21 deprecates and
+/// reserves, or one past the last it assigns.
+fn opaque_tag() -> impl Strategy<Value = u8> {
+    prop_oneof![Just(7u8), Just(12u8), 23u8..=254]
+}
+
 /// The wire form of `opaque`, built here rather than by the codec.
 fn wire(opaque: &OpaqueChoice) -> Vec<u8> {
     let mut buf = BytesMut::new();
@@ -198,14 +204,18 @@ fn encoded(encode: impl FnOnce(&mut BytesMut) -> Result<(), Error>) -> Vec<u8> {
 // ---------------------------------------------------------------------------
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
+    #![proptest_config(ProptestConfig {
+        // Failures shrink in the run's output; none is saved as a file.
+        failure_persistence: None,
+        ..ProptestConfig::with_cases(256)
+    })]
 
     /// Event values under an unassigned tag, alone and in a request: the
     /// octets the codec writes are the opening tag, the body and the
     /// closing tag, they decode to the same value, and the rest of the
     /// request decodes as it was.
     #[test]
-    fn event_values_keep_an_unassigned_alternative(tag in 23u8..=254, body in body()) {
+    fn event_values_keep_an_unassigned_alternative(tag in opaque_tag(), body in body()) {
         let values = NotificationParameters::Opaque { tag, data: body.clone() };
         let octets = encoded(|buf| encode_notification_parameters(&values, buf));
         let alone = OpaqueChoice { tag, constructed: true, data: body };
@@ -277,7 +287,7 @@ proptest! {
     /// An Event Log record's datum under an unassigned tag, and a logged
     /// notification whose event values are under one.
     #[test]
-    fn event_log_datum_round_trips(opaque in opaque(2), tag in 23u8..=254, body in body()) {
+    fn event_log_datum_round_trips(opaque in opaque(2), tag in opaque_tag(), body in body()) {
         let record = BACnetEventLogRecord {
             date: date(),
             time: time(),
@@ -324,6 +334,40 @@ fn a_closing_tag_ending_like_the_event_values_close_stays_in_the_choice() {
         assert!(
             decode_notification_parameters(&octets, 0).is_err(),
             "{tail:02X?}"
+        );
+    }
+
+    // A [12] choice ends in the octet of the enclosing close itself, and
+    // its body may hold a [12] of its own: each closing tag pairs with its
+    // own opening, alone, enclosed and inside a request.
+    for data in [
+        vec![],
+        vec![0x09, 1],
+        vec![0xCE, 0xCF],
+        vec![0xCE, 0x09, 1, 0xCF],
+    ] {
+        let values = NotificationParameters::Opaque { tag: 12, data };
+        let octets = encoded(|buf| encode_notification_parameters(&values, buf));
+        let enclosed = [&octets[..], &[0xCF]].concat();
+        for octets in [&octets, &enclosed] {
+            assert_eq!(
+                decode_notification_parameters(octets, 0).unwrap(),
+                values,
+                "{octets:02X?}"
+            );
+        }
+        let request = notification(Some(values.clone()));
+        let octets = encoded(|buf| encode_event_notification(&request, buf));
+        assert_eq!(decode_event_notification(&octets).unwrap(), request);
+    }
+    // One close too many after the inner [12] is refused.
+    for octets in [
+        &[0xCE, 0xCE, 0xCF, 0xCF, 0xCF, 0xCF][..],
+        &[0xCE, 0xCF, 0xCF, 0xCF],
+    ] {
+        assert!(
+            decode_notification_parameters(octets, 0).is_err(),
+            "{octets:02X?}"
         );
     }
 }
@@ -444,9 +488,7 @@ fn event_values_refuse_a_malformed_or_reserved_alternative() {
             vec![0xFE, 30, 0xFF, 30, 0xFE, 30, 0xFF, 30],
             RejectReason::TOO_MANY_ARGUMENTS,
         ),
-        // Tags Clause 21 deprecates, reserves or leaves out.
-        (vec![0x7E, 0x7F], RejectReason::INVALID_TAG),
-        (vec![0xCE, 0xCF], RejectReason::INVALID_TAG),
+        // Tag 20, left out to match the event type that reports no values.
         (vec![0xFE, 20, 0xFF, 20], RejectReason::INVALID_TAG),
     ] {
         let request = request_with(&values);
@@ -464,6 +506,20 @@ fn event_values_refuse_a_malformed_or_reserved_alternative() {
             reason,
             "{what}"
         );
+    }
+    // Tag 255, which no tag may use, primitive or constructed.
+    for values in [&[0xF8, 0xFF][..], &[0xFE, 0xFF, 0xFF, 0xFF]] {
+        assert!(decode_event_notification(&request_with(values)).is_err());
+        let alone = [values, &[0xCF]].concat();
+        assert!(decode_notification_parameters(&alone, 0).is_err());
+    }
+    // Tags 7 and 12, which Clause 21 deprecates and reserves, are kept.
+    for (values, tag) in [(&[0x7E, 0x7F][..], 7), (&[0xCE, 0x09, 1, 0xCF], 12)] {
+        let request = decode_event_notification(&request_with(values)).unwrap();
+        let Some(NotificationParameters::Opaque { tag: kept, .. }) = request.event_values else {
+            panic!("{values:02X?}: {request:?}");
+        };
+        assert_eq!(kept, tag);
     }
 }
 
@@ -504,6 +560,9 @@ fn log_records_refuse_a_malformed_alternative_or_a_known_tag_in_the_wrong_form()
         &[0x21, 1],
         // A second alternative after the first.
         &[0xB8, 0xB8],
+        // Tag 255, which no tag may use, primitive or constructed.
+        &[0xF8, 0xFF],
+        &[0xFE, 0xFF, 0xFF, 0xFF],
     ];
     for datum in malformed {
         let what = format!("{datum:02X?}");
@@ -511,6 +570,11 @@ fn log_records_refuse_a_malformed_alternative_or_a_known_tag_in_the_wrong_form()
         assert!(decode_log_record(&record, 0).is_err(), "{what}");
         assert!(decode_event_log_record(&record, 0).is_err(), "{what}");
         assert!(decode_log_multiple_record(&record, 0).is_err(), "{what}");
+        // As member values, where two in a row are two members.
+        if *datum != [0xB8, 0xB8] {
+            let member = record_wire(&[&[0x1E][..], datum, &[0x1F]].concat());
+            assert!(decode_log_multiple_record(&member, 0).is_err(), "{what}");
+        }
     }
     let deep = [&[0xCE][..], &nested(1, MAX_CONTEXT_NESTING_DEPTH), &[0xCF]].concat();
     assert!(decode_log_record(&record_wire(&deep), 0).is_err());
@@ -548,8 +612,9 @@ fn log_records_refuse_a_malformed_alternative_or_a_known_tag_in_the_wrong_form()
 }
 
 /// The encoders write an opaque alternative only under a tag its CHOICE
-/// doesn't assign, and only around a well-formed body, leaving the buffer
-/// as it was when they refuse.
+/// doesn't assign, only around a well-formed body, only as long as a tag
+/// takes, and only in a record no deeper than a ReadRange-ACK carries,
+/// leaving the buffer as it was when they refuse.
 #[test]
 fn encoders_refuse_an_opaque_alternative_they_could_not_read_back() {
     let refuses = |encode: &dyn Fn(&mut BytesMut) -> Result<(), Error>| {
@@ -562,7 +627,7 @@ fn encoders_refuse_an_opaque_alternative_they_could_not_read_back() {
         constructed,
         data: data.to_vec(),
     };
-    for tag in [0, 7, 12, 20, 22, 255] {
+    for tag in [0, 6, 13, 20, 22, 255] {
         let values = NotificationParameters::Opaque { tag, data: vec![] };
         refuses(&|buf| encode_notification_parameters(&values, buf));
         let request = notification(Some(values.clone()));
@@ -619,9 +684,25 @@ fn encoders_refuse_an_opaque_alternative_they_could_not_read_back() {
     let member = LogValue::Opaque(choice(9, true, &[0x44, 0]));
     let record = multiple(LogData::Values(vec![member]));
     refuses(&|buf| encode_log_multiple_record(&record, buf));
-    // The same body is fine as a primitive's contents.
+    // The same body is fine as a primitive's contents, but not contents
+    // longer than the tag decoder takes.
     let record = trend(choice(11, false, &[0x1F]));
     assert!(encode_log_record(&record, &mut BytesMut::new()).is_ok());
+    let record = trend(choice(11, false, &vec![0; 1 << 20]));
+    assert!(encode_log_record(&record, &mut BytesMut::new()).is_ok());
+    let record = trend(choice(11, false, &vec![0; (1 << 20) + 1]));
+    refuses(&|buf| encode_log_record(&record, buf));
+    // A body one level deeper than a ReadRange-ACK carries: the record's
+    // field 1 and the alternative's own tag take two levels.
+    let deep = nested(1, MAX_CONTEXT_NESTING_DEPTH - 2);
+    let record = trend(choice(11, true, &deep));
+    refuses(&|buf| encode_log_record(&record, buf));
+    let record = event(choice(3, true, &deep));
+    refuses(&|buf| encode_event_log_record(&record, buf));
+    // A member's own levels are three: one level less of the same body.
+    let member = LogValue::Opaque(choice(9, true, &deep[1..deep.len() - 1]));
+    let record = multiple(LogData::Values(vec![member]));
+    refuses(&|buf| encode_log_multiple_record(&record, buf));
 }
 
 /// A member value kept opaque has no Trend Log datum.

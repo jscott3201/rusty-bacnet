@@ -415,10 +415,18 @@ fn an_unassigned_choice_shows_its_tag_and_body() {
             },
         })
     );
-    // An empty body shows the tag alone.
+    // An empty body shows the tag alone; tags 7 and 12, which Clause 21
+    // deprecates and reserves, have no name either.
     let values = EventValues::new(&NotificationParameters::Opaque {
         tag: 254,
         data: vec![],
     });
     assert_eq!(values.text(), "254");
+    for tag in [7, 12] {
+        let values = EventValues::new(&NotificationParameters::Opaque {
+            tag,
+            data: vec![0x09, 0x01],
+        });
+        assert_eq!(values.text(), format!("{tag}: [0] [raw 01]"));
+    }
 }

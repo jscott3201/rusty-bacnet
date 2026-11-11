@@ -1,9 +1,0 @@
-# Seeds for failure cases proptest has generated in the past. It is
-# automatically read and these particular cases re-run before any
-# novel cases are generated.
-#
-# It is recommended to check this file in to source control so that
-# everyone who runs the test benefits from these saved cases.
-cc 1e0fec8f223aea77608a549bfccd5f62a5702624b868efe0421d87e543179ac7 # shrinks to tag = 23, body = []
-cc 6b0609aafc1b3b7d96264fef2ba512a43c28758fabf1a260aabc55641fd7a3da # shrinks to opaque = OpaqueChoice { tag: 3, constructed: false, data: [] }, tag = 23, body = []
-cc 5ad24c711063c4f432bcc0f3b26a2c73c544069d871402e194f655746f3f9e6d # shrinks to tag = 207, body = []
