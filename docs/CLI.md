@@ -1367,7 +1367,11 @@ An `event-parameter` element also has `fields`, an object of the value's
 members by their snake-case names in wire order, each in the forms above:
 `algorithm` first (an enumerated named as its event type), then the
 algorithm's members, references as `device-object-property-reference`
-elements and change-of-state values as `property-state` elements:
+elements and change-of-state values as `property-state` elements (a state is
+named where its enumeration is known; one carried through the extended-value
+choice reads `sc-connection-state connected` or `sc-hub-connector-state
+connected-to-failover` for choices 258 and 259, and any other as
+`extended-value 260 2`, its tag then its value):
 
 ```json
 {

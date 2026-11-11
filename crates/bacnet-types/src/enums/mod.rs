@@ -133,7 +133,7 @@ impl core::error::Error for ParseEnumError {}
 /// (lowercase, UPPERCASE, PascalCase, camelCase, snake_case,
 /// SCREAMING_SNAKE_CASE, kebab-case, SCREAMING-KEBAB-CASE) onto the same form,
 /// and comparing lazily keeps this allocation-free.
-fn names_eq(a: &str, b: &str) -> bool {
+pub(crate) fn names_eq(a: &str, b: &str) -> bool {
     fn significant(s: &str) -> impl Iterator<Item = char> + '_ {
         s.chars()
             .filter(|c| *c != '_' && *c != '-')

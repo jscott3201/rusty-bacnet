@@ -2,7 +2,8 @@
 
 use bacnet_encoding::constructed::encode_event_parameter;
 use bacnet_types::constructed::{
-    BACnetDeviceObjectPropertyReference, BACnetPropertyStates, ChangeOfValueCriteria,
+    BACnetDeviceObjectPropertyReference, BACnetExtendedPropertyState, BACnetPropertyStates,
+    ChangeOfValueCriteria,
 };
 use bacnet_types::enums::{AccessEvent, LifeSafetyState, ObjectType, TimerState};
 use bacnet_types::primitives::{ObjectIdentifier, StatusFlags};
@@ -82,6 +83,32 @@ fn every_algorithm_by_its_fields() {
                 "algorithm": algorithm(1, "change-of-state"),
                 "time_delay": 0,
                 "list_of_values": [{"element": "property-state", "text": "high-limit"}],
+            }),
+        ),
+        (
+            // The extended choices the stack names show choice and value
+            // (#2472); any other shows its tag and number.
+            EP::ChangeOfState {
+                time_delay: 0,
+                list_of_values: [(258, 1), (259, 2), (260, 2)]
+                    .into_iter()
+                    .map(|(tag, value)| {
+                        BACnetPropertyStates::ExtendedValue(
+                            BACnetExtendedPropertyState::new(tag, value).unwrap(),
+                        )
+                    })
+                    .collect(),
+            },
+            "change-of-state: delay 0 s, alarm values [sc-connection-state connected, \
+             sc-hub-connector-state connected-to-failover, extended-value 260 2]",
+            json!({
+                "algorithm": algorithm(1, "change-of-state"),
+                "time_delay": 0,
+                "list_of_values": [
+                    {"element": "property-state", "text": "sc-connection-state connected"},
+                    {"element": "property-state", "text": "sc-hub-connector-state connected-to-failover"},
+                    {"element": "property-state", "text": "extended-value 260 2"},
+                ],
             }),
         ),
         (

@@ -67,8 +67,6 @@ unmatched-type 0-BACnetAccumulatorRecord/accumulator-status 0 | no table of ours
 unmatched-type 0-BACnetPriorityFilter 0 | BACnetPriorityFilter has no per-bit names (bit N is priority N+1)
 unmatched-type 0-BACnetResultFlags 0 | ReadRange result flags are three booleans in bacnet-services
 unmatched-type 0-BACnetRouterEntry/status 0 | no table of ours; nothing reports a router entry status
-unmatched-type 0-BACnetSCConnectionState 0 | added after 2020; bacnet-transport has its own state type
-unmatched-type 0-BACnetSCHubConnectorState 0 | added after 2020 with the SC port properties
 ";
 
 /// Why a difference is accepted.

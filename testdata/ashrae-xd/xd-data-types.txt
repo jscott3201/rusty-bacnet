@@ -2286,3 +2286,68 @@ enum 0-ReinitializeDevice-Request/reinitialized-state-of-device
 enum 0-UnconfirmedTextMessage-Request/message-priority
 0 normal
 1 urgent
+
+# choice <path>, then one '<context tag> <name> <datatype>' line per alternative, by tag.
+
+choice 0-BACnetPropertyStates
+0 boolean-value Boolean
+1 binary-value Enumerated:0-BACnetBinaryPV
+2 event-type Enumerated:0-BACnetEventType
+3 polarity Enumerated:0-BACnetPolarity
+4 program-change Enumerated:0-BACnetProgramRequest
+5 program-state Enumerated:0-BACnetProgramState
+6 reason-for-halt Enumerated:0-BACnetProgramError
+7 reliability Enumerated:0-BACnetReliability
+8 state Enumerated:0-BACnetEventState
+9 system-status Enumerated:0-BACnetDeviceStatus
+10 units Enumerated:0-BACnetEngineeringUnits
+11 unsigned-value Unsigned
+12 life-safety-mode Enumerated:0-BACnetLifeSafetyMode
+13 life-safety-state Enumerated:0-BACnetLifeSafetyState
+14 restart-reason Enumerated:0-BACnetRestartReason
+15 door-alarm-state Enumerated:0-BACnetDoorAlarmState
+16 action Enumerated:0-BACnetAction
+17 door-secured-status Enumerated:0-BACnetDoorSecuredStatus
+18 door-status Enumerated:0-BACnetDoorStatus
+19 door-value Enumerated:0-BACnetDoorValue
+20 file-access-method Enumerated:0-BACnetFileAccessMethod
+21 lock-status Enumerated:0-BACnetLockStatus
+22 life-safety-operation Enumerated:0-BACnetLifeSafetyOperation
+23 maintenance Enumerated:0-BACnetMaintenance
+24 node-type Enumerated:0-BACnetNodeType
+25 notify-type Enumerated:0-BACnetNotifyType
+27 shed-state Enumerated:0-BACnetShedState
+28 silenced-state Enumerated:0-BACnetSilencedState
+30 access-event Enumerated:0-BACnetAccessEvent
+31 zone-occupancy-state Enumerated:0-BACnetAccessZoneOccupancyState
+32 access-credential-disable-reason Enumerated:0-BACnetAccessCredentialDisableReason
+33 access-credential-disable Enumerated:0-BACnetAccessCredentialDisable
+34 authentication-status Enumerated:0-BACnetAuthenticationStatus
+36 backup-state Enumerated:0-BACnetBackupState
+37 write-status Enumerated:0-BACnetWriteStatus
+38 lighting-in-progress Enumerated:0-BACnetLightingInProgress
+39 lighting-operation Enumerated:0-BACnetLightingOperation
+40 lighting-transition Enumerated:0-BACnetLightingTransition
+41 integer-value Integer
+42 binary-lighting-value Enumerated:0-BACnetBinaryLightingPV
+43 timer-state Enumerated:0-BACnetTimerState
+44 timer-transition Enumerated:0-BACnetTimerTransition
+45 bacnet-ip-mode Enumerated:0-BACnetIPMode
+46 network-port-command Enumerated:0-BACnetNetworkPortCommand
+47 network-type Enumerated:0-BACnetNetworkType
+48 network-number-quality Enumerated:0-BACnetNetworkNumberQuality
+49 escalator-operation-direction Enumerated:0-BACnetEscalatorOperationDirection
+50 escalator-fault Enumerated:0-BACnetEscalatorFault
+51 escalator-mode Enumerated:0-BACnetEscalatorMode
+52 lift-car-direction Enumerated:0-BACnetLiftCarDirection
+53 lift-car-door-command Enumerated:0-BACnetLiftCarDoorCommand
+54 lift-car-drive-status Enumerated:0-BACnetLiftCarDriveStatus
+55 lift-car-mode Enumerated:0-BACnetLiftCarMode
+56 lift-group-mode Enumerated:0-BACnetLiftGroupMode
+57 lift-fault Enumerated:0-BACnetLiftFault
+58 protocol-level Enumerated:0-BACnetProtocolLevel
+59 audit-level Enumerated:0-BACnetAuditLevel
+60 audit-operation Enumerated:0-BACnetAuditOperation
+63 extended-value Unsigned:0-Unsigned32
+258 sc-connection-state Enumerated:0-BACnetSCConnectionState
+259 sc-hub-connector-state Enumerated:0-BACnetSCHubConnectorState

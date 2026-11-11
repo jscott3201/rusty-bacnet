@@ -1,6 +1,7 @@
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
+use crate::enums::{SCConnectionState, SCHubConnectorState};
 use crate::error::Error;
 
 const EXTENDED_VALUE_FACTOR: u32 = 100_000;
@@ -54,6 +55,84 @@ impl BACnetExtendedPropertyState {
     /// Return the Unsigned32 encoded under context tag 63.
     pub fn encoded(self) -> u32 {
         self.tag * EXTENDED_VALUE_FACTOR + self.value
+    }
+}
+
+/// A property-states choice above 254 the stack names: its tag, its name in
+/// the standard's kebab case, and the enumeration its value belongs to.
+///
+/// Both are additions after revision 22 (135-2020) that ASHRAE's revision 24
+/// data types name. Naming a choice changes display and text input only: the
+/// wire form is the same `tag * 100000 + value` under context tag 63 for any
+/// tag, named or not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NamedExtendedChoice {
+    /// The choice tag, as in `BACnetExtendedPropertyState::tag`.
+    pub tag: u32,
+    /// The choice's name, `sc-connection-state`.
+    pub name: &'static str,
+    /// The data type of the value, as the revision 24 data names it without
+    /// the `0-` prefix: `BACnetSCConnectionState`.
+    pub datatype: &'static str,
+}
+
+/// The extended choices the stack names, by tag.
+pub const NAMED_EXTENDED_CHOICES: &[NamedExtendedChoice] = &[
+    NamedExtendedChoice {
+        tag: 258,
+        name: "sc-connection-state",
+        datatype: "BACnetSCConnectionState",
+    },
+    NamedExtendedChoice {
+        tag: 259,
+        name: "sc-hub-connector-state",
+        datatype: "BACnetSCHubConnectorState",
+    },
+];
+
+impl NamedExtendedChoice {
+    /// The named choice with this tag, if the stack names it.
+    pub fn from_tag(tag: u32) -> Option<&'static Self> {
+        NAMED_EXTENDED_CHOICES.iter().find(|c| c.tag == tag)
+    }
+
+    /// The named choice with this name, ignoring case and `-`/`_` separators.
+    pub fn from_name(name: &str) -> Option<&'static Self> {
+        NAMED_EXTENDED_CHOICES
+            .iter()
+            .find(|c| crate::enums::names_eq(c.name, name))
+    }
+
+    /// The identifier of `value` in this choice's enumeration
+    /// (`CONNECTED`), or `None` when the table doesn't name it.
+    pub fn value_name(&self, value: u32) -> Option<&'static str> {
+        match self.tag {
+            258 => SCConnectionState::ALL_NAMED
+                .iter()
+                .find(|(_, v)| v.to_raw() == value)
+                .map(|&(name, _)| name),
+            259 => SCHubConnectorState::ALL_NAMED
+                .iter()
+                .find(|(_, v)| v.to_raw() == value)
+                .map(|&(name, _)| name),
+            _ => None,
+        }
+    }
+
+    /// The value a name stands for in this choice's enumeration, ignoring
+    /// case and `-`/`_` separators.
+    pub fn value_from_name(&self, name: &str) -> Option<u32> {
+        match self.tag {
+            258 => SCConnectionState::ALL_NAMED
+                .iter()
+                .find(|(n, _)| crate::enums::names_eq(n, name))
+                .map(|(_, v)| v.to_raw()),
+            259 => SCHubConnectorState::ALL_NAMED
+                .iter()
+                .find(|(n, _)| crate::enums::names_eq(n, name))
+                .map(|(_, v)| v.to_raw()),
+            _ => None,
+        }
     }
 }
 
