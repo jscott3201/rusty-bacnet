@@ -182,20 +182,26 @@ impl MultiStateInputObject {
     /// the whole array is: 1 to [`MAX_NUMBER_OF_STATES`] labels, and no
     /// fewer than a state Present_Value or Alarm_Values names, else
     /// VALUE_OUT_OF_RANGE with nothing changed. Reliability is then worked
-    /// out again. On an object keeping its reporting settings, a State_Text
-    /// a write saved wins: this refuses only a count no object takes and
-    /// leaves the saved texts, until `clear_written_reporting` (#2414).
+    /// out again. On an object keeping its reporting settings, labels its
+    /// storage can't keep (one past [`MAX_KEPT_STATE_TEXT_OCTETS`] octets)
+    /// are RESOURCES / NO_SPACE_TO_WRITE_PROPERTY, as a write of them is,
+    /// and a State_Text a write saved wins: this then refuses only a count
+    /// no object takes and leaves the saved texts, until
+    /// `clear_written_reporting` (#2414).
     pub fn set_state_texts(&mut self, texts: Vec<String>) -> Result<(), Error> {
         #[cfg(feature = "event-reporting")]
         if self.kept_over_setter(PropertyIdentifier::STATE_TEXT) {
             return kept_state_texts_check(&texts);
         }
-        self.number_of_states = whole_state_text_count(
+        let count = whole_state_text_count(
             self.number_of_states,
             texts.len(),
             self.held_states(&self.event_detector.alarm_values),
         )?;
+        #[cfg(feature = "event-reporting")]
+        storable_state_texts(&self.reporting_store, &texts)?;
         self.state_text = texts;
+        self.number_of_states = count;
         let _ = self.recompute_reliability();
         Ok(())
     }

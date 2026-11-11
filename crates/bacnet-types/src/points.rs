@@ -67,7 +67,9 @@ use crate::primitives::ObjectIdentifier;
 
 /// A device and its points: what `bacnet_objects::points::build_database`
 /// builds a database from. The builder takes the list by value and moves
-/// its strings into the objects, so it copies none of them.
+/// each point's strings into its object rather than copying them; the
+/// database's name index keeps its own copy of every name, and the
+/// Device's name is copied on its way through the identity.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PointList {
     /// The Device object.
@@ -320,9 +322,10 @@ impl MultiState {
         }
     }
 
-    /// Give the point these labels, state 1 first: one per state.
-    pub fn with_state_texts(mut self, texts: Vec<String>) -> Self {
-        self.state_texts = texts;
+    /// Give the point these labels, state 1 first: one per state. Owned
+    /// strings move in as they are.
+    pub fn with_state_texts(mut self, texts: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.state_texts = texts.into_iter().map(Into::into).collect();
         self
     }
 }

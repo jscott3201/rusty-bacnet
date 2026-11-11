@@ -370,6 +370,29 @@ fn the_devices_part_is_checked() {
     assert_eq!(variant(&error.reason), "EmptyName");
 }
 
+/// A Device named as a declared port's object is named is refused in the
+/// uniqueness pass, naming the Device and Object_Name, not later by the
+/// database without a property.
+#[test]
+fn the_device_may_not_take_a_ports_name() {
+    let identity = identity();
+    let list = PointList::new(DeviceInfo::new(1001).with_name("port-1"), vec![first()]);
+    let error = refused(build_database(list, &identity));
+    assert_eq!(
+        (error.object, error.property, variant(&error.reason)),
+        (identity.device_oid(), Some(P::OBJECT_NAME), "DuplicateName")
+    );
+    let renamed = identity.with_name("port-1");
+    let error = refused(build_database(
+        PointList::new(DeviceInfo::new(1001), vec![]),
+        &renamed,
+    ));
+    assert_eq!(
+        (error.property, variant(&error.reason)),
+        (Some(P::OBJECT_NAME), "DuplicateName")
+    );
+}
+
 /// A point that takes a name the list gives the Device is refused too.
 #[test]
 fn a_point_may_not_take_the_lists_device_name() {

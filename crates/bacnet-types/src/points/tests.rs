@@ -56,10 +56,13 @@ fn each_with_sets_its_own_field() {
     assert_eq!(binary.active_text.as_deref(), Some("On"));
     assert_eq!(binary.inactive_text.as_deref(), Some("Off"));
 
-    let texts = vec!["Off".into(), "Low".into(), "High".into()];
+    let texts: Vec<String> = vec!["Off".into(), "Low".into(), "High".into()];
     let multi_state = MultiState::new(3, Access::Writable).with_state_texts(texts.clone());
     assert_eq!(multi_state.number_of_states, 3);
     assert_eq!(multi_state.state_texts, texts);
+    // Borrowed labels are taken too.
+    let borrowed = MultiState::new(3, Access::Writable).with_state_texts(["Off", "Low", "High"]);
+    assert_eq!(borrowed, multi_state);
 
     let device = DeviceInfo::new(7)
         .with_name("AHU-1")

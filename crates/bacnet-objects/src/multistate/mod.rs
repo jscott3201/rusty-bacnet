@@ -271,6 +271,26 @@ fn kept_state_texts_check(texts: &[String]) -> Result<(), Error> {
     check_state_count(0, texts.len() as u64, core::iter::empty()).map(|_| ())
 }
 
+/// The refusal `set_state_texts` gives labels on an object whose `store`
+/// keeps its reporting settings: storage keeps only what
+/// [`state_text_fits`] takes, so a label past
+/// [`MAX_KEPT_STATE_TEXT_OCTETS`] is RESOURCES /
+/// NO_SPACE_TO_WRITE_PROPERTY, as a State_Text write of it is. Taken, it
+/// would leave every later State_Text write refused (#2445).
+#[cfg(feature = "event-reporting")]
+fn storable_state_texts(
+    store: &crate::write_config::reporting::ReportingStore,
+    texts: &[String],
+) -> Result<(), Error> {
+    if store.attached() && !state_text_fits(texts) {
+        return Err(common::protocol_error(
+            ErrorClass::RESOURCES,
+            ErrorCode::NO_SPACE_TO_WRITE_PROPERTY,
+        ));
+    }
+    Ok(())
+}
+
 /// Write one State_Text element, the whole array
 /// ([`write_whole_state_text`]), or its size at index 0; an index past the
 /// states is INVALID_ARRAY_INDEX.

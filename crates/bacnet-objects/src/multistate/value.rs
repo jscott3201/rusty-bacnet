@@ -203,12 +203,15 @@ impl MultiStateValueObject {
         if self.kept_over_setter(PropertyIdentifier::STATE_TEXT) {
             return kept_state_texts_check(&texts);
         }
-        self.number_of_states = whole_state_text_count(
+        let count = whole_state_text_count(
             self.number_of_states,
             texts.len(),
             self.held_states(&self.event_detector.alarm_values),
         )?;
+        #[cfg(feature = "event-reporting")]
+        storable_state_texts(&self.reporting_store, &texts)?;
         self.state_text = texts;
+        self.number_of_states = count;
         let _ = self.recompute_reliability();
         Ok(())
     }

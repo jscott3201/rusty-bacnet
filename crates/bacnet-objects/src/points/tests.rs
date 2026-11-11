@@ -25,7 +25,9 @@ fn texts(labels: &[&str]) -> Vec<String> {
     labels.iter().map(|label| String::from(*label)).collect()
 }
 
-/// One point of each of the nine types, every optional field given.
+/// One point of each of the nine types, every optional field given, and
+/// every relinquish default other than the object's own, so each one set
+/// shows.
 fn full_list() -> PointList {
     let celsius = EngineeringUnits::DEGREES_CELSIUS;
     let analog = |access| {
@@ -57,7 +59,9 @@ fn full_list() -> PointList {
         Point::new(
             oid(ObjectType::ANALOG_VALUE, 1),
             "av",
-            analog(Access::Writable),
+            analog(Access::Commandable {
+                relinquish_default: Some(21.5),
+            }),
         ),
         Point::new(
             oid(ObjectType::BINARY_INPUT, 1),
@@ -75,7 +79,7 @@ fn full_list() -> PointList {
             oid(ObjectType::BINARY_VALUE, 1),
             "bv",
             binary(Access::Commandable {
-                relinquish_default: Some(BinaryPV::INACTIVE),
+                relinquish_default: Some(BinaryPV::ACTIVE),
             }),
         ),
         Point::new(
@@ -175,7 +179,7 @@ pub(super) fn read_back(database: &ObjectDatabase, object: ObjectIdentifier) -> 
             let Some(PropertyValue::List(labels)) = read(P::STATE_TEXT) else {
                 panic!("{object} serves no State_Text");
             };
-            let labels = labels
+            let labels: Vec<String> = labels
                 .into_iter()
                 .map(|label| match label {
                     PropertyValue::CharacterString(label) => label,
@@ -350,24 +354,60 @@ fn an_absent_field_reads_back_as_the_objects_default() {
     }
 }
 
-/// A Value takes each access, and serves the one it was given.
+/// Each Value type takes each access, and serves the one it was given.
 #[test]
 fn a_value_takes_every_access() {
-    for access in [
-        Access::ReadOnly,
-        Access::Writable,
-        Access::Commandable {
-            relinquish_default: Some(2),
-        },
-    ] {
-        let object = oid(ObjectType::MULTI_STATE_VALUE, 4);
-        let point = Point::new(object, "msv", MultiState::new(2, access));
-        let list = PointList::new(DeviceInfo::new(1001), vec![point]);
-        let database = build_database(list, &identity()).unwrap();
-        let PointKind::MultiState(served) = read_back(&database, object).kind else {
-            panic!("a multi-state point");
+    let units = EngineeringUnits::NO_UNITS;
+    let mut points = Vec::new();
+    let accesses = [
+        (Access::ReadOnly, Access::ReadOnly, Access::ReadOnly),
+        (Access::Writable, Access::Writable, Access::Writable),
+        (
+            Access::Commandable {
+                relinquish_default: Some(5.0),
+            },
+            Access::Commandable {
+                relinquish_default: Some(BinaryPV::ACTIVE),
+            },
+            Access::Commandable {
+                relinquish_default: Some(2),
+            },
+        ),
+    ];
+    for (instance, (analog, binary, multi_state)) in (1..).zip(accesses) {
+        points.push(Point::new(
+            oid(ObjectType::ANALOG_VALUE, instance),
+            format!("av-{instance}"),
+            Analog::new(units, analog),
+        ));
+        points.push(Point::new(
+            oid(ObjectType::BINARY_VALUE, instance),
+            format!("bv-{instance}"),
+            Binary::new(binary),
+        ));
+        points.push(Point::new(
+            oid(ObjectType::MULTI_STATE_VALUE, instance),
+            format!("msv-{instance}"),
+            MultiState::new(2, multi_state),
+        ));
+    }
+    let list = PointList::new(DeviceInfo::new(1001), points.clone());
+    let database = build_database(list, &identity()).unwrap();
+    for point in points {
+        let served = read_back(&database, point.object).kind;
+        let same = match (&point.kind, &served) {
+            (PointKind::Analog(given), PointKind::Analog(read)) => given.access == read.access,
+            (PointKind::Binary(given), PointKind::Binary(read)) => given.access == read.access,
+            (PointKind::MultiState(given), PointKind::MultiState(read)) => {
+                given.access == read.access
+            }
+            _ => false,
         };
-        assert_eq!(served.access, access);
+        assert!(
+            same,
+            "{}: {:?} served as {served:?}",
+            point.name, point.kind
+        );
     }
 }
 
@@ -426,6 +466,56 @@ fn the_host_sets_runtime_state_before_serving() {
         input.read_property(P::OUT_OF_SERVICE, None).unwrap(),
         PropertyValue::Boolean(true)
     );
+}
+
+/// The application commands a built Output at a priority with a local
+/// origin, the route a host has before a server runs, and relinquishes it
+/// with a NULL: Present_Value then falls back to the list's relinquish
+/// default.
+#[test]
+fn the_application_commands_and_relinquishes_a_built_output() {
+    let identity = identity();
+    let object = oid(ObjectType::ANALOG_OUTPUT, 3);
+    let point = Point::new(
+        object,
+        "damper",
+        Analog::new(
+            EngineeringUnits::PERCENT,
+            Access::Commandable {
+                relinquish_default: Some(20.0),
+            },
+        ),
+    );
+    let list = PointList::new(DeviceInfo::new(1001), vec![point]);
+    let mut database = build_database(list, &identity).unwrap();
+    let local = crate::command_source::CommandOrigin::Local {
+        owner_device: identity.device_oid(),
+        initiating_object: None,
+    };
+    let output = database.get_mut(&object).unwrap();
+    let slot_8 = |output: &dyn BACnetObject| output.read_property(P::PRIORITY_ARRAY, Some(8));
+    output
+        .write_property_from(
+            P::PRESENT_VALUE,
+            None,
+            PropertyValue::Real(75.0),
+            Some(8),
+            &local,
+        )
+        .unwrap();
+    assert_eq!(
+        output.read_property(P::PRESENT_VALUE, None).unwrap(),
+        PropertyValue::Real(75.0)
+    );
+    assert_eq!(slot_8(output).unwrap(), PropertyValue::Real(75.0));
+    output
+        .write_property_from(P::PRESENT_VALUE, None, PropertyValue::Null, Some(8), &local)
+        .unwrap();
+    assert_eq!(
+        output.read_property(P::PRESENT_VALUE, None).unwrap(),
+        PropertyValue::Real(20.0)
+    );
+    assert_eq!(slot_8(output).unwrap(), PropertyValue::Null);
 }
 
 /// The builder is a pure function of the list: a second build gives the

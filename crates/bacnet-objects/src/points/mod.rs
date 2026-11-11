@@ -9,15 +9,32 @@
 //! its own database. The list's types live in [`bacnet_types::points`] and
 //! are re-exported here.
 //!
-//! The database comes back before anything serves it, so the host sets
-//! what a list doesn't describe (Present_Value, Reliability,
-//! Out_Of_Service) through the database and the objects' own API first,
-//! then hands the database to its server.
+//! The database comes back before anything serves it, so the host can set
+//! what a list doesn't describe first. The built objects are reached as
+//! `dyn BACnetObject` through [`ObjectDatabase::get_mut`], and the routes
+//! there are:
+//! - a read-only point's Present_Value: [`BACnetObject::local_input`] and
+//!   its `apply_local_input`;
+//! - a commandable point's priority slot: [`BACnetObject::write_property_from`]
+//!   with the priority and a [`CommandOrigin::Local`] origin, a value to
+//!   command the slot and NULL to relinquish it;
+//! - Reliability: [`BACnetObject::reliability_eval`] and its
+//!   `set_reliability`; Out_Of_Service: `write_property`.
+//!
+//! Once a server runs the database, `BACnetServer::write_local` and
+//! `BACnetServer::set_present_value_local` take over, so COV and event
+//! processing see each change.
 //!
 //! A refusal is a [`BuildError`] naming the object and, where one property
-//! is at fault, that property. Only the first refusal is reported. Making
-//! one formats nothing; its text is written only when something displays
-//! it, so firmware that never shows one links no formatting for it.
+//! is at fault, that property. Only one is reported: the first the checks
+//! meet in their order. The Device comes first, then a pass over every
+//! point for repeated identifiers and names, then each point in list order
+//! for the rest, so a repeated name late in the list is reported before a
+//! wrong kind early in it. Making one formats nothing; its text is written
+//! only when something displays it, so firmware that never shows one links
+//! no formatting for it.
+//!
+//! [`CommandOrigin::Local`]: crate::command_source::CommandOrigin::Local
 //!
 //! The builder refuses:
 //! - a list whose Device instance isn't the identity's, or whose Device
@@ -42,6 +59,10 @@
 //!   negative COV_Increment, a binary relinquish default other than
 //!   INACTIVE or ACTIVE, a multi-state one that names no state.
 //!
+//! An analog relinquish default outside Min_Pres_Value to Max_Pres_Value
+//! builds: the builder, like the objects, doesn't compare it with the
+//! range.
+//!
 //! Identifiers are checked, never assigned, and a list has no size cap: the
 //! 10,000-object cap is a rule for CreateObject from the network, and a
 //! firmware image is bounded by its heap.
@@ -51,6 +72,7 @@
 //! use bacnet_objects::points::{
 //!     Access, Analog, DeviceInfo, MultiState, Point, PointList, Refusal, build_database,
 //! };
+//! use bacnet_objects::command_source::CommandOrigin;
 //! use bacnet_objects::traits::LocalInputValue;
 //! use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier};
 //! use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
@@ -78,7 +100,7 @@
 //!             mode,
 //!             "ahu-1.mode",
 //!             MultiState::new(3, Access::Writable)
-//!                 .with_state_texts(vec!["Off".into(), "Heat".into(), "Cool".into()]),
+//!                 .with_state_texts(["Off", "Heat", "Cool"]),
 //!         ),
 //!     ],
 //! );
@@ -90,9 +112,22 @@
 //!     .local_input()
 //!     .expect("an Analog Input takes its Present_Value from the application")
 //!     .apply_local_input(LocalInputValue::present_value(PropertyValue::Real(18.5)))?;
+//! // Command the setpoint at priority 8 as the application itself; a NULL
+//! // there would relinquish it, back to 21.
+//! let local = CommandOrigin::Local {
+//!     owner_device: identity.device_oid(),
+//!     initiating_object: None,
+//! };
+//! database.get_mut(&setpoint).expect("built").write_property_from(
+//!     PropertyIdentifier::PRESENT_VALUE,
+//!     None,
+//!     PropertyValue::Real(23.0),
+//!     Some(8),
+//!     &local,
+//! )?;
 //! let read = |oid| database.get(&oid).expect("built").read_property(PropertyIdentifier::PRESENT_VALUE, None);
 //! assert_eq!(read(supply)?, PropertyValue::Real(18.5));
-//! assert_eq!(read(setpoint)?, PropertyValue::Real(21.0));
+//! assert_eq!(read(setpoint)?, PropertyValue::Real(23.0));
 //!
 //! // The same identifier twice is refused, naming the second point.
 //! let mut twice = list;
@@ -164,6 +199,20 @@ impl fmt::Display for BuildError {
 impl core::error::Error for BuildError {}
 
 /// What was wrong with a point, as a [`BuildError`] reports it.
+///
+/// The builder's own checks give the named variants: [`NotFinite`] for a
+/// Real that is infinite or NaN, [`MinAboveMax`], and [`OutOfRange`] for
+/// Units and the state count, each before any object is made. What it
+/// leaves to the object comes back as [`Object`] with the error the
+/// object's constructor or setter gave, the one a write of the value gets:
+/// a negative COV_Increment, or a relinquish default that isn't one of the
+/// object's states. The reserved instance comes back as [`Object`] too,
+/// with the error `ObjectIdentifier::new_addressable` gives it.
+///
+/// [`NotFinite`]: Self::NotFinite
+/// [`MinAboveMax`]: Self::MinAboveMax
+/// [`OutOfRange`]: Self::OutOfRange
+/// [`Object`]: Self::Object
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Refusal {
@@ -230,7 +279,8 @@ impl fmt::Display for Refusal {
 /// the Device's name reaches the Device through a copy of `identity`.
 ///
 /// Nothing serves the database it returns, so the host can set values,
-/// Reliability and Out_Of_Service through it before starting a server.
+/// Reliability and Out_Of_Service on the built objects before starting a
+/// server, by the routes the [module](self) names.
 pub fn build_database(
     list: PointList,
     identity: &DeviceIdentity,
@@ -298,7 +348,15 @@ fn check_unique(
         if let Ok(oid) = ObjectIdentifier::new(ObjectType::NETWORK_PORT, port.instance) {
             identifiers.insert(oid);
         }
-        names.insert(name.as_str());
+        // Ports have distinct instances, so only the Device's name can
+        // already be here.
+        if !names.insert(name.as_str()) {
+            return Err(BuildError::new(
+                identity.device_oid(),
+                Some(P::OBJECT_NAME),
+                Refusal::DuplicateName,
+            ));
+        }
     }
     for point in points {
         let refuse = |property: P, reason| BuildError::new(point.object, Some(property), reason);
