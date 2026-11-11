@@ -157,7 +157,7 @@ reporting = ["objects", "dep:bacnet-time"]
 # `points`: the points image and its scenario (#2445), the objects image's
 # requests answered from a database bacnet-objects' point-list builder
 # (`points::build_database`) makes, for measuring what the builder and the
-# nine object types it reaches cost an image. It needs nothing the objects
+# ten object types it reaches cost an image. It needs nothing the objects
 # image doesn't, and builds on the same targets. On by default, as `objects`
 # is, for the host builds.
 points = ["objects"]

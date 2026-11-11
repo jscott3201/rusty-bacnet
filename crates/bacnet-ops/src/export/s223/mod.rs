@@ -7,8 +7,9 @@
 //! reference: the device, the object, its name and the property. This
 //! module writes that half: one 223 property per object of the
 //! [`EXPORTED_TYPES`], each with its external reference, units where they
-//! map to QUDT, and the state names of multi-state objects. It is a point list in 223 form. An integrator
-//! still adds the equipment, the connections and the sensors.
+//! map to QUDT, and the state names of multi-state objects. It is a point
+//! list in 223 form. An integrator still adds the equipment, the
+//! connections and the sensors.
 //!
 //! The work comes in two halves:
 //!

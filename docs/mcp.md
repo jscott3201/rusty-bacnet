@@ -61,17 +61,18 @@ investigation also checks its alarms and summarises a trend log of it.
 `bacnet_export_223` (#2436) writes what `bacnet export 223-experimental`
 writes, from the same code (`bacnet_ops::export::s223`): one 223 property
 for each analog, binary and multi-state input, output and value and each
-integer value, with a BACnet external reference to its Present_Value. Its title says
-experimental, as the CLI command's name does: the draft standard and the
-mapping can change between releases. Read-only; not listed in passive mode.
+integer value, with a BACnet external reference to its Present_Value. Its
+title says experimental, as the CLI command's name does: the draft standard
+and the mapping can change between releases. Read-only; not listed in
+passive mode.
 
 - **Arguments.** `device` as the other tools take it; `base_iri` (default
   `http://example.org/bacnet/`, a documentation domain), `types` (any of the
   ten types, by the target grammar's names: `ai`, `binary-output`,
-  `integer-value` and so on; left out, all ten) and `write_priority` (1 to 16). The export's own
-  checks refuse a bad base IRI, a priority outside 1 to 16, a type it
-  doesn't map or an empty `types`, with its own messages, as
-  `invalid-argument` before anything is sent.
+  `integer-value` and so on; left out, all ten) and `write_priority` (1 to
+  16). The export's own checks refuse a bad base IRI, a priority outside 1
+  to 16, a type it doesn't map or an empty `types`, with its own messages,
+  as `invalid-argument` before anything is sent.
 - **Base IRI.** Each device's nodes go under `<base_iri>device-<instance>/`
   and are named from object identifiers. A device instance is unique only
   within one BACnet internetwork, so give each site a base of its own, or

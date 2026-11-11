@@ -342,8 +342,9 @@ fn an_inventory_and_its_point_list() {
 /// An Integer Value is written as an analog value is (#2456): actuatable
 /// when commandable, plainly quantifiable when not, with its QUDT terms or,
 /// for a unit the table doesn't map, the unknown quantity kind, counted in
-/// the header. A kind that isn't its type's family is skipped either way:
-/// an analog kind on an Integer Value, an integer kind on an Analog Value.
+/// the header, and at instance 0 without its identifier string, as any
+/// object. A kind that isn't its type's family is skipped either way: an
+/// analog kind on an Integer Value, an integer kind on an Analog Value.
 #[test]
 fn an_integer_value_maps_as_an_analog_value_does() {
     let integer = |instance, name: &str, units, access| {
@@ -376,7 +377,7 @@ fn an_integer_value_maps_as_an_analog_value_does() {
             Access::Writable,
         ),
         integer(
-            3,
+            0,
             "vendor",
             EngineeringUnits::from_raw(300),
             Access::ReadOnly,
@@ -388,8 +389,13 @@ fn an_integer_value_maps_as_an_analog_value_does() {
     let mut text = String::new();
     let counts = write_turtle(&inventory, &options.unwrap(), &mut text).unwrap();
     assert_eq!(
-        (counts.exported, counts.skipped, counts.unmapped_units),
-        (3, 2, 1),
+        (
+            counts.exported,
+            counts.skipped,
+            counts.unmapped_units,
+            counts.instance_zero
+        ),
+        (3, 2, 1, 1),
         "{text}"
     );
     for line in [
@@ -398,7 +404,8 @@ fn an_integer_value_maps_as_an_analog_value_does() {
         "d:integer-value-2.present-value a s223:QuantifiableProperty ;",
         "    qudt:hasUnit unit:KiloW-HR ;",
         "    qudt:hasQuantityKind quantitykind:Energy ;",
-        "d:integer-value-3.present-value a s223:QuantifiableProperty ;",
+        "d:integer-value-0.present-value a s223:QuantifiableProperty ;",
+        "    # instance 0: no object-identifier, which the draft's pattern refuses",
         "    rdfs:comment \"BACnet units 300: no QUDT mapping in this export\" ;",
         "    qudt:hasQuantityKind quantitykind:Unknown ;",
         "    bacnet:object-identifier \"integer-value,1\" ;",

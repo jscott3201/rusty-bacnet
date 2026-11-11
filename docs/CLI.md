@@ -1508,10 +1508,10 @@ types.
   ReadPropertyMultiple costs one refused request, then a ReadProperty a
   property: 2 per binary input or output, 3 per analog input or output or
   binary value, 4 per analog value, integer value or multi-state input or
-  output, and 5 per multi-state value. A target given by address costs one more: a read
-  of its Device object by the wildcard instance, to learn the device's
-  instance number. If the device stops answering partway, the export
-  writes what was read, says so in its header, and exits 1.
+  output, and 5 per multi-state value. A target given by address costs one
+  more: a read of its Device object by the wildcard instance, to learn the
+  device's instance number. If the device stops answering partway, the
+  export writes what was read, says so in its header, and exits 1.
 
 **Limits.** The draft and this export can change between releases, which
 is why the command name says experimental.
@@ -1531,8 +1531,7 @@ is why the command name says experimental.
 - An object whose read the device refuses is skipped, with a comment where
   it would have been, and so is one that can't give its Object_Name, the
   Units of an analog object or an integer value, or a multi-state object's
-  Number_Of_States. The
-  header counts the skipped objects.
+  Number_Of_States. The header counts the skipped objects.
 - Device text (names, descriptions, state texts) is kept exactly, escaped
   so the file stays ASCII, except U+0000, which a string literal can't
   hold: it becomes U+FFFD, and the header counts each one.

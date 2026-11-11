@@ -5,9 +5,9 @@
 //! the objects image's four points (AI-1 and AI-2, BV-1 and BV-2) and one
 //! each of the other seven analog, binary and multi-state types, so all nine
 //! of those are in it, each with settings of its family. The list holds no
-//! Integer Value, the tenth type the builder covers (#2456). It
-//! then sets AI-1's and AI-2's Present_Value as the application's inputs, and
-//! hands `bacnet-device-core`'s `Responder` the objects image's requests
+//! Integer Value, the tenth type the builder covers (#2456). It then sets
+//! AI-1's and AI-2's Present_Value as the application's inputs, and hands
+//! `bacnet-device-core`'s `Responder` the objects image's requests
 //! ([`APDUS`](crate::objects::APDUS)), which it must answer as the objects
 //! image does, then [`READ_APDUS`]: a ReadProperty of the Device's
 //! Object_List, which shows the list's order, and a ReadPropertyMultiple of
@@ -17,10 +17,11 @@
 //! links, and its size less the objects image's is the builder's price for
 //! all ten types: its checks and the setters it calls, and the eight object
 //! types the objects image doesn't have, the Integer Value among them, whose
-//! constructors the builder reaches whatever the list holds. `firmware/link/size-budget.toml` splits
-//! the two. The image passes the list through `black_box`, as it does the
-//! requests, so the builder can't be specialized to a list known at build
-//! time (without it the image measured the same).
+//! constructors the builder reaches whatever the list holds.
+//! `firmware/link/size-budget.toml` splits the two. The image passes the list
+//! through `black_box`, as it does the requests, so the builder can't be
+//! specialized to a list known at build time (without it the image measured
+//! the same).
 //!
 //! The work lives on the heap, in an arena of [`ARENA`] octets.
 //! `tests/points.rs` runs the scenario natively and compares the whole

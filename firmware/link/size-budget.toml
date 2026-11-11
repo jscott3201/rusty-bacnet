@@ -673,10 +673,11 @@
 #                        206796 / 25640 / 232458
 #
 # So the Integer Value costs 3516 / 3620 / 4336 octets of flash (2718 /
-# 2844 / 3028 of them bacnet-objects .text), and nothing more of RAM or of
-# the arena; core::fmt and the 64-bit division routines stay at 0 and the
-# memmove count doesn't move. Every row was within its budget, so none
-# moved.
+# 2844 / 3028 of them bacnet-objects .text) and nothing more of RAM or of
+# the arena, which makes the builder's price for all ten types 49760 /
+# 49812 / 58112. core::fmt and the 64-bit division routines stay at 0 and
+# the memmove count doesn't move. Every row was within its budget, so
+# none moved.
 
 [thumbv7m-none-eabi.mstp]
 text = 18320
