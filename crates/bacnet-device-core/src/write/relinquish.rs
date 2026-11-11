@@ -178,7 +178,8 @@ mod tests {
         assert!(differences.is_empty(), "{}", differences.join("\n"));
     }
 
-    /// The rule's match before #2177, frozen.
+    /// The rule's match before #2177, frozen (but for #2465: the Audit
+    /// Reporter's Audit_Priority_Filter, a plain bit string).
     fn old_null_in_datatype(
         object_type: ObjectType,
         property: PropertyIdentifier,
@@ -195,8 +196,10 @@ mod tests {
             PropertyIdentifier::ALARM_VALUES | PropertyIdentifier::FAULT_VALUES => {
                 object_type == ObjectType::CHARACTERSTRING_VALUE
             }
+            // The Audit Reporter's own filter is the plain bit string
+            // (#2465); the old match named it for every object type.
+            PropertyIdentifier::AUDIT_PRIORITY_FILTER => object_type != ObjectType::AUDIT_REPORTER,
             PropertyIdentifier::PRIORITY_ARRAY
-            | PropertyIdentifier::AUDIT_PRIORITY_FILTER
             | PropertyIdentifier::CLIENT_COV_INCREMENT
             | PropertyIdentifier::CURRENT_COMMAND_PRIORITY
             | PropertyIdentifier::INTERFACE_VALUE
@@ -244,6 +247,13 @@ mod tests {
                 P::AUDIT_PRIORITY_FILTER,
                 None,
                 true,
+            ),
+            // The reporter's own filter is a plain bit string (#2465).
+            (
+                ObjectType::AUDIT_REPORTER,
+                P::AUDIT_PRIORITY_FILTER,
+                None,
+                false,
             ),
             (ObjectType::ANALOG_OUTPUT, P::PRIORITY_ARRAY, Some(1), true),
             // Context-tagged NULL members are no application NULL.

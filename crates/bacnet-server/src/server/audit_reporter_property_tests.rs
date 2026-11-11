@@ -397,3 +397,56 @@ async fn audit_reporter_monitored_objects_network_writes_are_denied_without_muta
 
 #[path = "audit_delay_property_tests.rs"]
 mod delay;
+
+/// #2465: the reporter's Audit_Priority_Filter is a plain bit string in the
+/// shared table, so a NULL is no value of it, and the property is read-only
+/// on the wire. A write of NULL, or of a bit string, is refused as a denied
+/// write, never turned into the success a NULL to a nullable property gets
+/// (Clause 15.9.2), and the filter keeps its value.
+#[tokio::test]
+async fn audit_reporter_priority_filter_null_write_is_denied_and_changes_nothing() {
+    for value in [vec![0x00], vec![0x82, 0x00, 0x80]] {
+        let mut fixture = server(reporter()).await;
+        let before = read_wire(
+            &fixture.server,
+            PropertyIdentifier::AUDIT_PRIORITY_FILTER,
+            None,
+        )
+        .await
+        .unwrap();
+        let mut bytes = BytesMut::new();
+        WritePropertyRequest {
+            object_identifier: oid(ObjectType::AUDIT_REPORTER, 1),
+            property_identifier: PropertyIdentifier::AUDIT_PRIORITY_FILTER,
+            property_array_index: None,
+            property_value: value,
+            priority: None,
+        }
+        .encode(&mut bytes)
+        .unwrap();
+        let response = dispatch(
+            &fixture.server,
+            ConfirmedServiceChoice::WRITE_PROPERTY,
+            bytes.freeze(),
+        )
+        .await;
+        let Apdu::Error(error) = response else {
+            panic!("expected denial, got {response:?}")
+        };
+        assert_eq!(
+            (error.error_class, error.error_code),
+            (ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED)
+        );
+        assert_eq!(
+            read_wire(
+                &fixture.server,
+                PropertyIdentifier::AUDIT_PRIORITY_FILTER,
+                None
+            )
+            .await
+            .unwrap(),
+            before
+        );
+        fixture.server.stop().await.unwrap();
+    }
+}
