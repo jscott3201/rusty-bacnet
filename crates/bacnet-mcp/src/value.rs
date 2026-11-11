@@ -195,6 +195,27 @@ mod tests {
         buf.to_vec()
     }
 
+    /// The form the tools print an object in is one their arguments take,
+    /// for every object type, named or by number.
+    #[test]
+    fn printed_objects_read_back_as_arguments() {
+        for raw in 0..=1023 {
+            let object_type = ObjectType::from_raw(raw);
+            for instance in [
+                0,
+                7,
+                bacnet_types::primitives::ObjectIdentifier::MAX_INSTANCE,
+            ] {
+                let text = object_text(object_type, instance);
+                assert_eq!(
+                    bacnet_ops::parse::parse_object_specifier(&text),
+                    Ok((object_type, instance)),
+                    "{text}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn numbers_carry_units_and_enumerations_their_names() {
         let pv = encoded(&PropertyValue::Real(72.5));

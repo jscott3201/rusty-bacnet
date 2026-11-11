@@ -405,7 +405,8 @@ pub(crate) enum Command {
     Read {
         /// Target device (IP address or instance number).
         target: String,
-        /// Object specifier (e.g., analog-input:1, ai:1).
+        /// Object specifier, type:instance or type,instance (e.g.,
+        /// analog-input:1, ai:1, analog-input,1).
         object: String,
         /// Property (e.g., present-value, pv).
         property: String,
@@ -600,7 +601,7 @@ pub(crate) enum Command {
     AckAlarm {
         /// Target device.
         target: String,
-        /// Object specifier (e.g., ai:1).
+        /// Object specifier (e.g., ai:1 or ai,1).
         object: String,
         /// Event state to acknowledge (0=normal, 1=fault, etc.).
         #[arg(long)]
@@ -621,7 +622,7 @@ pub(crate) enum Command {
     ReadRange {
         /// Target device.
         target: String,
-        /// Object specifier (e.g., trend-log:1).
+        /// Object specifier (e.g., trend-log:1 or trend-log,1).
         object: String,
         /// Property (default: log-buffer).
         #[arg(default_value = "log-buffer")]
@@ -634,7 +635,7 @@ pub(crate) enum Command {
     CreateObject {
         /// Target device.
         target: String,
-        /// Object specifier (type:instance, e.g., av:100).
+        /// Object specifier (type:instance or type,instance, e.g., av:100).
         object: String,
     },
 
@@ -642,7 +643,7 @@ pub(crate) enum Command {
     DeleteObject {
         /// Target device.
         target: String,
-        /// Object specifier (type:instance).
+        /// Object specifier (type:instance or type,instance).
         object: String,
     },
 

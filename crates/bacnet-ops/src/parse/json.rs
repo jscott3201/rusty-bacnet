@@ -10,7 +10,9 @@
 //! - a calendar entry is `{"kind": "date", "date": "2026-12-25"}`,
 //!   `{"kind": "date_range", "start_date": ..., "end_date": ...}` or
 //!   `{"kind": "week_n_day", "month": 12, "week_of_month": 1,
-//!   "day_of_week": 1}` (255 or `null` for any);
+//!   "day_of_week": 1}` (255 or `null` for any); a week-n-day's fields may
+//!   instead be one text as the coming BACnet RDF encoding writes it,
+//!   `{"kind": "week_n_day", "week_n_day": "12,1,1"}` (`*` for any);
 //! - a special event is `{"period": <calendar entry or "calendar:1">,
 //!   "time_values": <day>, "priority": 16}`;
 //! - a destination is `{"recipient": "device:99", "process_identifier": 7}`
@@ -37,7 +39,7 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, Time};
 use bytes::BytesMut;
 use serde_json::{Map, Value};
 
-use super::datetime::{parse_date, parse_time};
+use super::datetime::{parse_date, parse_time, parse_week_n_day};
 use super::numeric::finite;
 use super::{parse_object_specifier, parse_value};
 
@@ -260,8 +262,22 @@ fn calendar_entry(path: &str, value: &Value) -> Result<BACnetCalendarEntry, Stri
             }))
         }
         "week_n_day" => {
-            let keys = ["month", "week_of_month", "day_of_week"];
+            let keys = ["month", "week_of_month", "day_of_week", "week_n_day"];
             let fields = object(path, value, &["kind"], &keys)?;
+            // The three fields as one text, `11,4,4`, as the coming BACnet
+            // RDF encoding writes a week-n-day, in place of the numbers.
+            if let Some(text) = fields.get("week_n_day") {
+                if let Some(also) = keys[..3].iter().find(|key| fields.contains_key(**key)) {
+                    return Err(format!(
+                        "{path}: week_n_day stands for month, week_of_month and day_of_week; \
+                         drop {also}"
+                    ));
+                }
+                let path = format!("{path}.week_n_day");
+                return parse_week_n_day(string(&path, text)?)
+                    .map(BACnetCalendarEntry::WeekNDay)
+                    .map_err(|e| format!("{path}: {e}"));
+            }
             let field = |key: &str| week_n_day_field(&format!("{path}.{key}"), fields.get(key));
             Ok(BACnetCalendarEntry::WeekNDay(BACnetWeekNDay {
                 month: field("month")?,

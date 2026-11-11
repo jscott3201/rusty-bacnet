@@ -16,7 +16,8 @@ pub(super) fn device() -> Value {
 pub(super) fn object() -> Value {
     json!({
         "type": "string",
-        "description": "Object as type:instance, such as ai:1, analog-output:3 or device:1234",
+        "description": "Object as type:instance or type,instance, such as ai:1, analog-output:3, \
+                        analog-output,3 or device:1234",
     })
 }
 

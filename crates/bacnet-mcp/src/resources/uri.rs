@@ -144,6 +144,12 @@ mod tests {
             of_point(&point),
             "bacnet://device/1201/object/analog-input:1"
         );
+        // The coming BACnet RDF encoding's `type,instance` names the same
+        // point; the canonical URI keeps the colon.
+        assert_eq!(
+            parse("bacnet://device/1201/object/analog-input,1"),
+            Ok(Uri::Point(point))
+        );
         let Ok(Uri::Point(element)) =
             parse("bacnet://device/7/object/analog-output:2/property/priority-array%5B8%5D")
         else {

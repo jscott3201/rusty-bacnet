@@ -33,7 +33,11 @@ each request's `_meta`) and the older `initialize` handshake.
 The read tools are read-only (`readOnlyHint: true`, `destructiveHint:
 false`); the two [write tools](#writes) are listed only when the profile
 offers writes. All have input and output schemas and structured content
-plus a text rendering.
+plus a text rendering. An `object` argument is `type:instance` (`ai:1`,
+`analog-output:3`) or, as the coming BACnet RDF encoding writes one,
+`type,instance` (`analog-output,3`); a log tool's `from` and `to` also take
+that encoding's date-time string, `2026-11-10 2 16:35:00.00`. Every form is
+in the CLI reference's [Input Forms](CLI.md#input-forms).
 
 | Tool | Notes |
 |---|---|
@@ -164,7 +168,7 @@ under its own account and budget, and a cancelled read sends nothing more.
 | `bacnet://devices` | the first page of the discovery table in reach, sorted by instance (up to the device page size, 200 by default), no device text; nothing sent. `total` counts every device in reach and `truncated` says more follow; then `next` holds the next page's URI | an update when a device arrives or is lost, at most once a second |
 | `bacnet://devices/after/{instance}` | the next page: the devices whose instance is above `{instance}` (digits only, 0 to 4194303), with the same page size, `total`, `truncated` and its own `next` | the same as `bacnet://devices`: every subscribed page is told when the list changes. A listen stream follows at most 16 device-list pages, the first included and each spelling counted (the acknowledgment leaves out the rest); a legacy session counts them in its 64 URIs |
 | `bacnet://device/{instance}` | `bacnet_describe_device`'s summary, cached five minutes (`cached`) | not honoured: a summary has no updates |
-| `bacnet://device/{instance}/object/{type}:{n}` | the point facts (`bacnet_read`'s `preset: "point"` properties); `source` `read` when read just now, `cov` or `poll` when watched, with `state` (`starting`, `live`, `failed`, `unreachable`, `stopped`), `note` (why it is polled or not live), `seq`, `age_ms` and `updates` (notifications, coalesced, polls, renewals) | a watch on the hub |
+| `bacnet://device/{instance}/object/{type}:{n}` (or `{type},{n}`) | the point facts (`bacnet_read`'s `preset: "point"` properties); `source` `read` when read just now, `cov` or `poll` when watched, with `state` (`starting`, `live`, `failed`, `unreachable`, `stopped`), `note` (why it is polled or not live), `seq`, `age_ms` and `updates` (notifications, coalesced, polls, renewals) | a watch on the hub |
 | `.../property/{prop}` | one property (`name` or `name[index]`; `[`, `]` and `:` may be percent-encoded) | a property watch (SubscribeCOVProperty) |
 | `bacnet://alarms` | each device in reach: its first page of GetEventInformation, as far as the read's budget goes (`unread` past it, `errors` per device) | a poll every 60 s; an update when the events change |
 | `bacnet://device/{instance}/alarms` | one device's first page of events | the same, for one device. A session's per-device alarm URIs, on listen streams and legacy subscriptions alike, count against its 64-URI bound (the acknowledgment leaves out the rest), so the poll reads at most that many devices |
@@ -373,8 +377,9 @@ Writes go through `bacnet_ops::safety`: the TUI's planner, tiers, ledger
   with an optional `[index]` (`present-value` when left out), `value`,
   `priority`), `batch`
   (WritePropertyMultiple; several writes need it) and `reason`. Targets are
-  numeric (`ao:1`, never a name); a value is a number, a boolean, `null`
-  (relinquish), a typed `{"value": n}` or the CLI value grammar, checked
+  numeric (`ao:1` or `ao,1`, never a name); a value is a number, a boolean,
+  `null` (relinquish), a typed `{"value": n}` or the
+  [CLI value grammar](CLI.md#writing-properties), checked
   before anything is sent. A Priority_Array element is never written
   (`read-only-property`: command or relinquish the slot through
   `present-value` at that priority), and a write to Relinquish_Default is

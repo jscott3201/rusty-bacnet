@@ -35,6 +35,28 @@ fn reference_times_take_minutes_seconds_and_hundredths() {
     }
 }
 
+/// The coming BACnet RDF encoding's date-time string, with a weekday digit
+/// or `*` between the date and the time, reads as the same time.
+#[test]
+fn reference_times_take_the_rdf_weekday_digit() {
+    let plain = parse_reference_time("2026-11-10 16:35:00.00").unwrap();
+    for text in ["2026-11-10 2 16:35:00.00", "2026-11-10 * 16:35:00.00"] {
+        assert_eq!(parse_reference_time(text), Ok(plain), "{text}");
+    }
+    // 10 November 2026 is a Tuesday, weekday 2.
+    let refused = parse_reference_time("2026-11-10 3 16:35").unwrap_err();
+    assert!(refused.contains("is weekday 2"), "{refused}");
+    for bad in [
+        "2026-11-10 0 16:35",
+        "2026-11-10 8 16:35",
+        "2026-11-10 Tue 16:35",
+        "2026-11-10T2 16:35",
+        "2026-11-10 2",
+    ] {
+        assert!(parse_reference_time(bad).is_err(), "{bad}");
+    }
+}
+
 #[test]
 fn a_start_picks_the_range_and_count_defaults() {
     let by_position = RangeOptions {

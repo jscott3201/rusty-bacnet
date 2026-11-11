@@ -154,6 +154,22 @@ mod tests {
         assert_eq!(specs[1].0, ObjectType::BINARY_VALUE);
     }
 
+    /// An object word in the coming BACnet RDF encoding's `type,instance`
+    /// form names the same object. A value still can't hold a comma, since
+    /// the comma separates the writes: `object:ai,1` is cut at it, so an
+    /// object value takes the `type:instance` form here.
+    #[test]
+    fn writem_objects_take_the_comma_form_but_values_keep_the_comma_split() {
+        assert_eq!(
+            parse_write_multiple(&words("analog-value,1 pv=72.5@8,ol[2]=3 bv,2 pv=active")),
+            parse_write_multiple(&words("av:1 pv=72.5@8,ol[2]=3 bv:2 pv=active"))
+        );
+        // Cut at the comma, `object:ai` has no instance.
+        let refused = parse_write_multiple(&words("nc:1 pv=object:ai,1")).unwrap_err();
+        assert!(refused.contains("got 'ai'"), "{refused}");
+        assert!(parse_write_multiple(&words("nc:1 pv=object:ai:1")).is_ok());
+    }
+
     #[test]
     fn a_malformed_writem_spec_is_refused() {
         for (text, error) in [
