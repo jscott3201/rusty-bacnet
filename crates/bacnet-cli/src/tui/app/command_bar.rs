@@ -4,8 +4,8 @@
 //! - `watch DEVICE OBJECT [PROPERTY]` (or `w`): add a watch row. DEVICE is
 //!   a device from the device table, in the shared target grammar: its
 //!   instance, `dnet:instance` for a routed one, or the routed station the
-//!   table shows, `dnet:0xMAC`; OBJECT is `ai:1` or `analog-input:1`;
-//!   PROPERTY defaults to present-value.
+//!   table shows, `dnet:0xMAC`; OBJECT is `ai:1`, `analog-input:1` or
+//!   `analog-input,1`; PROPERTY defaults to present-value.
 //! - `csv on|off`: log watched values to the profile workspace, or stop.
 //! - `writem DEVICE OBJECT PROPERTY VALUE[@PRIORITY] ...`: one
 //!   WritePropertyMultiple to the device, any number of `OBJECT PROPERTY
@@ -667,6 +667,15 @@ mod tests {
                 property: PropertyIdentifier::STATUS_FLAGS
             }))
         );
+        // The coming BACnet RDF encoding's `type,instance` names the same
+        // object.
+        for object in ["analog-input,1", "ai,1", "0,1"] {
+            assert_eq!(
+                parse(&format!("watch 100 {object}")),
+                parse("watch 100 ai:1"),
+                "{object}"
+            );
+        }
         assert_eq!(parse("csv on"), Ok(Line::Csv(true)));
         assert_eq!(
             parse("bbmd 10.0.0.1"),
@@ -737,6 +746,20 @@ mod tests {
         assert!(parse("writem 100 ao:1 pv").is_err());
         assert!(parse("writem 100 ao:1 pv 42@17").is_err());
         assert!(parse("writem 100").is_err());
+        // An OBJECT, or an `object:` value, in the coming BACnet RDF
+        // encoding's `type,instance` form.
+        assert_eq!(
+            parse("writem 100 analog-output,1 pv 42@8"),
+            parse("writem 100 ao:1 pv 42@8")
+        );
+        let Ok(Line::Writem(specs)) = parse("writem 100 nc,1 pv object:ai,1") else {
+            panic!("expected writem");
+        };
+        assert_eq!(
+            specs[0].object,
+            ObjectIdentifier::new(ObjectType::NOTIFICATION_CLASS, 1).unwrap()
+        );
+        assert_eq!(specs[0].value.as_deref(), Some("object:ai,1"));
     }
 
     /// The table row a parsed line came from. A new `Line` fails to

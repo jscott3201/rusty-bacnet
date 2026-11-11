@@ -1,6 +1,7 @@
 //! The range a `read-range` asks for, from its flags (#1532).
 
 use bacnet_client::log_reader::LogCursor;
+use bacnet_ops::parse::parse_weekday_digit;
 use bacnet_services::read_range::RangeSpec;
 use bacnet_types::calendar::SpecificDate;
 use bacnet_types::primitives::{Date, Time};
@@ -19,7 +20,8 @@ pub struct RangeOptions {
     #[arg(long, conflicts_with = "time")]
     pub sequence: Option<u64>,
     /// Read the records logged after this time, in the device's local time:
-    /// YYYY-MM-DDTHH:MM[:SS[.hh]].
+    /// YYYY-MM-DDTHH:MM[:SS[.hh]], or with the weekday digit (Monday 1)
+    /// before the time, "2026-11-10 2 16:35:00.00".
     #[arg(long, value_parser = parse_reference_time)]
     pub time: Option<(Date, Time)>,
     /// Items to read (default 100); negative reads backward from the
@@ -87,10 +89,19 @@ fn number<T: std::str::FromStr>(text: &str, what: &str) -> Result<T, String> {
 }
 
 /// Parse `YYYY-MM-DDTHH:MM[:SS[.hh]]` (a space may stand for the `T`) as a
-/// specific local date and time, with the weekday the date falls on.
+/// specific local date and time, with the weekday the date falls on. The
+/// coming BACnet RDF encoding's date-time string, a weekday digit (Monday 1)
+/// or `*` between the date and the time (`2026-11-10 2 16:35:00.00`), reads
+/// the same; a digit that names another day than the date's is refused.
 pub fn parse_reference_time(text: &str) -> Result<(Date, Time), String> {
     let usage = || format!("--time must be YYYY-MM-DDTHH:MM[:SS[.hh]], got '{text}'");
     let (date, time) = text.split_once(['T', ' ']).ok_or_else(usage)?;
+    let (typed_weekday, time) = match time.split_once(' ') {
+        Some((word, time)) if text[date.len()..].starts_with(' ') => {
+            (Some(parse_weekday_digit(word).ok_or_else(usage)?), time)
+        }
+        _ => (None, time),
+    };
     let [year, month, day] =
         <[&str; 3]>::try_from(date.split('-').collect::<Vec<_>>()).map_err(|_| usage())?;
     let day = SpecificDate::new(
@@ -99,6 +110,15 @@ pub fn parse_reference_time(text: &str) -> Result<(Date, Time), String> {
         number(day, "day")?,
     )
     .ok_or_else(|| format!("--time date '{date}' is not a day in 1900..=2154"))?;
+    if let Some(typed) = typed_weekday
+        && typed != Date::UNSPECIFIED
+        && typed != day.weekday()
+    {
+        return Err(format!(
+            "--time date '{date}' is weekday {} (Monday 1), not {typed}",
+            day.weekday()
+        ));
+    }
     let (clock, hundredths) = match time.split_once('.') {
         Some((clock, fraction)) if fraction.len() == 2 => (clock, number(fraction, "hundredths")?),
         Some(_) => return Err(usage()),

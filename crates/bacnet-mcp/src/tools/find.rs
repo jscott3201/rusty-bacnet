@@ -29,11 +29,12 @@ pub(super) const SPEC: Spec = Spec {
     description: "Find objects across the devices already discovered (call bacnet_discover \
                   first), within this server's reach: by name or description (a \
                   case-insensitive substring of the device-reported text), by object \
-                  (type:instance) or by object types. Each device's Object_List is read once \
-                  and kept 5 minutes; matching by name or description reads each candidate's \
-                  name, one request an object, so narrow with types or range. Paged: call again \
-                  with next_cursor. A device whose list couldn't be read whole is listed under \
-                  incomplete, and one that failed under skipped. Read-only.",
+                  (type:instance or type,instance) or by object types. Each device's \
+                  Object_List is read once and kept 5 minutes; matching by name or description \
+                  reads each candidate's name, one request an object, so narrow with types or \
+                  range. Paged: call again with next_cursor. A device whose list couldn't be \
+                  read whole is listed under incomplete, and one that failed under skipped. \
+                  Read-only.",
     input,
     output,
     idempotent: true,

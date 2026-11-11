@@ -1258,6 +1258,7 @@ bacnet read-range 192.168.1.100 trend-log:1     # defaults to log-buffer
 bacnet read-range 192.168.1.100 trend-log:1 --position 1 --count 50
 bacnet read-range 192.168.1.100 trend-log:1 --sequence 1200 --count -20   # backward
 bacnet read-range 192.168.1.100 trend-log:1 --time 2026-10-05T09:00 --count 50
+bacnet read-range 192.168.1.100 trend-log,1 --time "2026-10-05 1 09:00:00.00"  # the RDF forms
 bacnet read-range 192.168.1.100 trend-log:1 --all --count 100            # the whole log
 bacnet --min-interval-ms 50 read-range 192.168.1.100 trend-log:1 --all --sequence 1201
 ```
@@ -1598,9 +1599,11 @@ bacnet --allow-write writem 192.168.1.100 av:1 pv=72.5@8,desc='"Zone Temp"' av:2
 | `enumerated:N` | `enumerated:3` | Enumerated |
 | `date:YYYY-MM-DD` | `date:2024-03-15` | Date (use `*` for unspecified) |
 | `time:HH:MM:SS[.hh]` | `time:14:30:00` | Time (use `*` for unspecified) |
-| `object:type:inst` | `object:ai:1` | ObjectIdentifier |
+| `object:type:inst` | `object:ai:1`, `object:ai,1` | ObjectIdentifier |
 
 Inline priority: append `@N` to any value (e.g., `72.5@8`, `null@16`).
+[Input Forms](#input-forms) lists every form an object, a date or a time
+takes, the coming BACnet RDF encoding's among them.
 
 **Values by name.** `write` and `writem` know the property they write, so
 a value can be typed as [Value output](#value-output) prints it, and a value
@@ -1625,9 +1628,9 @@ read pastes back as a write:
   comma separates its writes), as 0/1 digits first bit first (`1100`), or
   `none` for no bit set (an empty value is refused, so a blank field never
   clears every bit); a bit string without names as `bits(0101)`;
-- a date as `2026-10-19`, with a weekday (`2026-10-19 Mon`), `*` for any
-  field, the special months and days by name (`*-even-months-last-day`),
-  or `any date`; a time as `07:00`, `14:30:05` or `14:30:05.25`, `*` for any
+- a date as `2026-10-19`, with a weekday (`2026-10-19 Mon`, or as a digit,
+  Monday 1, `2026-10-19 1`), `*` for any field, the special months and days
+  by name (`*-even-months-last-day`), or `any date`; a time as `07:00`, `14:30:05` or `14:30:05.25`, `*` for any
   field, or `any time`; hundredths are two digits (`.05`, `.50`). The
   `date:` and `time:` prefixes take the same forms;
 - a date-time as a date then a time, `2026-10-19 Mon 07:00`, or
@@ -1658,7 +1661,7 @@ written as above:
 | Element | JSON |
 |---------|------|
 | Day | `[["07:00", 72.5], ["18:00", null]]`; an entry may also be `{"time": "07:00", "value": 72.5}` |
-| Calendar entry | `{"kind": "date", "date": "2026-12-25"}`, `{"kind": "date_range", "start_date": "2026-07-01", "end_date": "2026-07-04"}` or `{"kind": "week_n_day", "month": 12, "week_of_month": 1, "day_of_week": 1}` (`null` or 255 for any) |
+| Calendar entry | `{"kind": "date", "date": "2026-12-25"}`, `{"kind": "date_range", "start_date": "2026-07-01", "end_date": "2026-07-04"}` or `{"kind": "week_n_day", "month": 12, "week_of_month": 1, "day_of_week": 1}` (`null` or 255 for any); a week-n-day may instead be one text, `{"kind": "week_n_day", "week_n_day": "12,1,1"}` (`*` for any; see [Input Forms](#input-forms)) |
 | Special event | `{"period": <calendar entry or "calendar:1">, "time_values": <day>, "priority": 10}` |
 | Destination | `{"recipient": "device:99", "process_identifier": 7}`, optionally with `valid_days` (`["mon", "tue"]` or Python's bit number), `from_time`, `to_time`, `issue_confirmed_notifications` and `transitions` (`["to-offnormal"]` or a number); left out, a destination covers every day, all day, every transition, unconfirmed. A recipient may also be `{"kind": "device", "object_identifier": "device:99"}` or `{"kind": "address", "network_number": 5, "mac_address": "0a:00:00:64:ba:c0"}` |
 
@@ -2289,6 +2292,69 @@ All BACnet object types are also accepted by full name in kebab-case (e.g., `ana
 | `all` | ALL (reads all properties via RPM) |
 
 All BACnet properties are also accepted by full name in kebab-case (e.g., `present-value`, `reliability`, `notification-class`) or by numeric value. Array indices use bracket syntax: `ol[3]`, `pa[8]`.
+
+## Input Forms
+
+The one-shot CLI, the TUI (its `:` command bar and write form) and the MCP
+server (tool arguments, resource URIs, prompts) read objects, dates, times
+and constructed values with one parser (`bacnet_ops::parse`), so a form one
+of them takes, they all take. Beside the forms we print, the parser takes the
+text forms of the coming BACnet RDF encoding, so a value copied from an RDF
+model can be typed in. That encoding isn't published yet (it is due as an
+addendum to Standard 135; the forms here come from its public drafts), so
+these forms may still change, and the parser will follow them when it is
+published. What we print is unchanged.
+
+| Value | Forms | Also taken, in the RDF encoding's form |
+|-------|-------|-----------------------------------------|
+| Object | `type:instance`: `analog-input:3`, `ai:3`, `ANALOG_INPUT:3`, `128:5` | `type,instance`: `analog-input,3`, `128,5` |
+| Date | `2026-11-10`, with a weekday by name (`2026-11-10 Tue`), `*` for any field, the special months and days by name (`*-even-months-last-day`), `any date` | a weekday digit, Monday 1, or `*` for any: `2026-11-10 2`, `2026-11-10 *`, `*-*-* *` |
+| Time | `16:35`, `16:35:05`, `16:35:05.25`, `*` for any field, `any time` | `16:35:00.00`, `*:*:*.*` (the forms above already take these) |
+| Date-time | a date then a time, `2026-11-10 Tue 16:35`; `unspecified` | `2026-11-10 2 16:35:00.00` |
+| Week-n-day, in a calendar entry | `{"kind": "week_n_day", "month": 11, "week_of_month": 4, "day_of_week": 4}` (`null` or 255 for any) | `{"kind": "week_n_day", "week_n_day": "11,4,4"}` (`*` for any field: `*,*,1` is every Monday) |
+| `read-range --time`, and an MCP log tool's `from` and `to` | `2026-10-05T09:00[:SS[.hh]]`, a space for the `T` | `2026-11-10 2 16:35:00.00` |
+
+- **Objects.** The type is a name in any case, with `-` or `_`, one of the
+  [shorthands](#object-type-shorthand), or a number, 0 to 1023, for a type
+  without a name. The instance is 0 to 4194303; a larger one is refused
+  (`instance number 4194304 exceeds max 4194303`), whichever form names it.
+  Either form works wherever an object is typed: each command's OBJECT, each
+  object of `readm` and `writem`, the TUI's `:watch` and `:writem`, an MCP
+  tool's `object`, a resource URI (`bacnet://device/1201/object/analog-input,3`),
+  the `investigate_point` prompt, an `object:` value (`object:ai,1`), and a
+  JSON `"calendar,1"` period or `"device,99"` recipient.
+- **One exception:** in the one-shot `writem`, a comma separates an object's
+  writes, so an `object:` value there takes the colon form (`pv=object:ai:1`);
+  `object:ai,1` would be cut at its comma and refused.
+- **Weekdays.** A weekday after a date, by name or by digit, is kept as
+  typed and not checked against the date, as a name always has been:
+  `2026-11-10 3` writes that date with Wednesday, though it is a Tuesday. The
+  `read-range --time` and MCP log windows work out the weekday from the
+  date, so there a digit naming another day is refused, and `*` takes the
+  date's own.
+- **Week-n-day.** The month is 1 to 14 (13 and 14 the odd and the even
+  months), the week of the month 1 to 9, the day 1 (Monday) to 7. Give the
+  three numbers or the one `week_n_day` text, not both. The text works in a
+  Date_List entry and in an Exception_Schedule period alike.
+- **Python** takes typed values rather than these texts:
+  `ObjectIdentifier(ObjectType.ANALOG_INPUT, 3)`, dates as tuples, and the
+  calendar entry mapping with numbers ([Python API](python-api.md)).
+
+**Forms we print.** Each output keeps its own form of an object:
+
+| Where | Form | Example |
+|-------|------|---------|
+| An object identifier value, as `read` shows it, and the TUI's lists | a label | `analog-input 3` |
+| MCP tool results and resource URIs | `type:instance`, kebab case | `analog-input:3` |
+| One-shot CLI rows (`find`, and the object of `read`, `readm` and `read-range`) | `TYPE:instance` | `ANALOG_INPUT:3`, `128:5` |
+| JSON `decoded` | an object | `{"type": "analog-input", "type_number": 0, "instance": 3}` |
+| [Standard 223 export](#standard-223-export-experimental) | `type,instance`; instance 0 is left out | `analog-input,3` |
+| Python `repr` | the constructor | `ObjectIdentifier(ANALOG_INPUT, 3)` |
+
+All of these but the label read back as input. Dates print as
+`2026-11-10 Tue`, times as `16:35` with seconds and hundredths when they
+aren't zero, and the wire view as `2026-11-10` and `16:35:00.00`; every date,
+time and date-time printed reads back.
 
 ## Pre-built Binaries
 

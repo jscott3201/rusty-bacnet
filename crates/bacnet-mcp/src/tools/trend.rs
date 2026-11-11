@@ -43,7 +43,9 @@ pub(super) const SPEC: Spec = Spec {
 };
 
 fn input() -> Value {
-    log_pages::input("The log as type:instance: trend-log:1, trend-log-multiple:2")
+    log_pages::input(
+        "The log as type:instance or type,instance: trend-log:1, trend-log,1, trend-log-multiple:2",
+    )
 }
 
 fn output() -> Value {

@@ -276,3 +276,20 @@ async fn tables_and_readm_use_the_same_names() {
     assert!(json[2].get("decoded").is_none(), "{json}");
     server.stop().await.unwrap();
 }
+
+/// An object named in the coming BACnet RDF encoding's `type,instance`
+/// form reads the same object, alone and in a `readm` spec (#2473).
+#[tokio::test]
+async fn objects_take_the_rdf_comma_form() {
+    let (mut server, target) = server().await;
+    assert_eq!(
+        read(&target, "analog-input,1", "reliability").await,
+        read(&target, "ai:1", "reliability").await
+    );
+    let readm = |object: &'static str| {
+        let target = target.clone();
+        async move { cli(&target, "json", &["readm", object, "event-state,units"]).await }
+    };
+    assert_eq!(readm("0,1").await, readm("analog-input:1").await);
+    server.stop().await.unwrap();
+}

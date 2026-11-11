@@ -42,7 +42,9 @@ pub(super) const SPEC: Spec = Spec {
 };
 
 fn input() -> Value {
-    log_pages::input("The log as type:instance: event-log:1, audit-log:2")
+    log_pages::input(
+        "The log as type:instance or type,instance: event-log:1, event-log,1, audit-log:2",
+    )
 }
 
 fn output() -> Value {
