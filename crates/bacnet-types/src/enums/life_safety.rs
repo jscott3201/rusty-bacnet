@@ -54,7 +54,7 @@ bacnet_enum! {
     const UNMANNED = 4;
     const ARMED = 5;
     const DISARMED = 6;
-    const PRE_ARMED = 7;
+    const PREARMED = 7;
     const SLOW = 8;
     const FAST = 9;
     const DISCONNECTED = 10;

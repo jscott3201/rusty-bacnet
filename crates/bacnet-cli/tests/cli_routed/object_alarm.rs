@@ -240,7 +240,7 @@ async fn acknowledge<T: TransportPort + 'static>(
     );
     for (state, timestamp, error) in [
         ("4", "sequence:42", "invalid-event-state"),
-        ("3", "sequence:41", "invalid-time-stamp"),
+        ("3", "sequence:41", "invalid-timestamp"),
     ] {
         failure(
             &invoke(
