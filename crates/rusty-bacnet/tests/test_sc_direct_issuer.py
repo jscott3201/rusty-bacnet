@@ -1,10 +1,10 @@
 """ScPemInspection.direct_issuer over an independent OpenSSL CA chain (#1846)."""
 import ast
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
+from openssl_fixture import run as openssl
 from rusty_bacnet import inspect_sc_pem, inspect_sc_pem_files
 from test_endpoint_stub_parity import installed_stub, stub_classes
 
@@ -16,9 +16,10 @@ class ScDirectIssuerTests(unittest.TestCase):
         cls.addClassCleanup(cls.temp.cleanup)
         root = cls.root = Path(cls.temp.name)
 
+        # Its own chain (a 25-day root, an intermediate, two leaves): no other
+        # class uses it, so it is made here and not shared.
         def run(*args):
-            subprocess.run(["openssl", *args], cwd=root, check=True,
-                           capture_output=True, timeout=15)
+            openssl(root, *args)
         ec = ["-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes"]
         (root / "ca.ext").write_text(
             "basicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\n")
