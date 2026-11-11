@@ -35,6 +35,9 @@ fn change(write: LocalWrite<'_>, value: PropertyValue) -> LocalChange {
         LocalWrite::ApplicationProgramState => LocalInputValue::ProgramState(value),
         LocalWrite::ApplicationAccessInput(input) => LocalInputValue::AccessControl(input.clone()),
         LocalWrite::ApplicationPulses(pulses) => LocalInputValue::Pulses(pulses),
+        LocalWrite::ApplicationReliability(reliability) => {
+            return LocalChange::Reliability(reliability);
+        }
         LocalWrite::WriteGroup { .. } => unreachable!("a WriteGroup commits in the server"),
     };
     LocalChange::Input(input)
@@ -92,7 +95,7 @@ impl<T: TransportPort + 'static> LocalWriter<'_, T> {
     /// Commit `write` of `value` to `oid` under the write's guard: every
     /// local write but a WriteGroup's. A property write is audited, unless
     /// it is the Device's recipient sink's, which exclusively owns its
-    /// old/new pair; an application input is not. What was staged goes back
+    /// old/new pair; an application input or Reliability is not. What was staged goes back
     /// as the object step ends, or once a check refuses the write first.
     pub(super) fn commit_local(
         &self,

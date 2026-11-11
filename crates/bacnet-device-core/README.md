@@ -44,8 +44,9 @@ the database guard, the transport, addressing and time.
 - `write`: WriteProperty and WritePropertyMultiple, with a
   `WriteCommitObserver` the host's audit and change capture run in under its
   guard; the application's own writes (`write::local::apply`: an input such
-  as a sensor's Present_Value, or a write made as the local Device or one of
-  its objects, which `bacnet-server`'s `*_local` methods make through it);
+  as a sensor's Present_Value, a Reliability it works out, or a write made
+  as the local Device or one of its objects, which `bacnet-server`'s
+  `*_local` methods make through it);
   the array-index gate and value decoding every write path shares;
   the NULL-relinquish rule (`write::relinquish`); the local form of
   references naming this device; and the end of a Command's or Channel's
@@ -79,7 +80,12 @@ the database guard, the transport, addressing and time.
   like a host that deletes an object on its own, calls
   `remove_for_object`. That drops the object's subscriptions, their queued
   and owed reports and any confirmed one still out, giving its invoke ID
-  back; `pop` hands out nothing more for the object.
+  back; `pop` hands out nothing more for the object. The application's
+  own changes go through `apply_local`, which makes one with
+  `write::local::apply` and queues what it reports, or the typed
+  `update`, `set_reliability`, `command` and `relinquish`, which take a
+  `LocalValue` (#2446). A change that wrote nothing, or was refused,
+  reports nothing.
 - `clock`: the Device's clock for firmware with none of its own (#2321).
   `SyncedClock` is plain data on the host's monotonic timeline: until
   set it counts from local midnight, 1990-01-01, as a device does after a

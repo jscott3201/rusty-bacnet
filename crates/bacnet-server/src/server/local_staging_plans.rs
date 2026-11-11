@@ -108,7 +108,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         )
                         .ok();
                         match database.get_mut(&target.object_identifier) {
-                            Some(object) => match local::write_target(
+                            Some(object) => match local::write_as(
                                 object,
                                 PropertyIdentifier::PRESENT_VALUE,
                                 None,

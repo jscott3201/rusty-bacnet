@@ -4335,7 +4335,9 @@ The capabilities, with what each accessor's `None` means:
   It is the in-service complement of a client's write: the built-in objects
   refuse it with PROPERTY / WRITE_ACCESS_DENIED while Out_Of_Service is TRUE.
   All three default to opting out; `set_reliability` answers
-  `not_supported()`.
+  `not_supported()`. `BACnetServer::set_reliability_local` and the
+  device core's `Reporter::set_reliability` reach it and report the
+  Status_Flags change (#2446).
 - **`schedule_runner()` → `ScheduleRunner`**, for a Schedule whose writes
   to its controlled references the server makes. The schedule pass calls
   `take_owed_schedule_writes`, then `tick_schedule(today, time,
@@ -5915,6 +5917,12 @@ Analog Value:
   `set_description`.
 - A noncommandable one takes the application's Present_Value through its
   `LocalInput` while in service, so `set_present_value_local` reaches it.
+- Any of the three lends `ReliabilityEval` (#2446): it runs no fault
+  algorithm, and takes the Reliability its application works out through
+  `set_reliability` while in service, refusing it out of service with
+  PROPERTY / WRITE_ACCESS_DENIED. Status_Flags' FAULT follows it, so
+  `set_reliability_local` reports the change. A client still can't write
+  Reliability.
 
 `BACnetServer::set_present_value_local` supplies a logical application value to
 Analog/Binary/Multi-state Inputs, noncommandable Values, Loop (the control
@@ -5935,6 +5943,17 @@ Rust construction APIs; Python constructors retain their current defaults. A
 Loop's measured input has its own route,
 `BACnetServer::set_controlled_variable_value_local` (see
 [Building Control](#building-control-7)).
+
+`BACnetServer::set_reliability_local(&oid, reliability)` (#2446) sets the
+Reliability the application works out, such as NO_SENSOR from its hardware,
+through the object's `ReliabilityEval`, then runs the same event and COV
+path, so a subscriber hears the Status_Flags change. The built-in objects
+take it in service and refuse it with PROPERTY / WRITE_ACCESS_DENIED out of
+service, where a client's simulated value is in force, and while
+Reliability_Evaluation_Inhibit is TRUE; a value outside BACnetReliability is
+PROPERTY / VALUE_OUT_OF_RANGE, and an object that takes none OBJECT /
+OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. It is not audited, as the other
+`*_local` inputs aren't. Python has no binding for it yet.
 
 #### Schedule & Notification (6)
 
@@ -8227,11 +8246,13 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   `handle_read_property_multiple` and `handle_write_property_multiple` are
   gone from `bacnet_server::handlers`.
 - `write::local` (#2446): the application's own writes. `apply` checks one
-  `LocalChange` (an input the object's `LocalInput` takes, or a property
-  write made as a `LocalCommandSource`) and commits it under the host's
-  guard, telling an optional observer of a property write (`Observed`), and
-  returns `Applied`; `resolve_source` and `write_target` are its origin and
-  object steps. `LocalCommandSource` moved here from `bacnet_server`.
+  `LocalChange` (an input the object's `LocalInput` takes, a Reliability its
+  `ReliabilityEval` takes, or a property write made as a
+  `LocalCommandSource`) and commits it under the host's guard, telling an
+  optional observer of a property write (`Observed`), and returns
+  `Applied`; `resolve_source` and `write_as` are its origin and object
+  steps. An input or a Reliability reports to no observer, so the server
+  audits neither. `LocalCommandSource` moved here from `bacnet_server`.
   `BACnetServer::write_local`, `set_present_value_local` and the other
   `*_local` inputs make their change through it and keep the rest: durable
   staging, Audit, WriteGroup, and the event, COV, Schedule, Staging and run
@@ -8279,7 +8300,20 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   notification, hands every other request to the `Responder`, reads the
   Device's lists through the overlay, and queues what a write changes (a
   Life Safety object from the values the write changed). `capture` and
-  `changed` do the same for the host's own changes. The outbox is one
+  `changed` do the same for the host's own changes. `apply_local(db, oid,
+  change, now)` makes the application's change itself (#2446): it captures
+  a Life Safety object, calls `write::local::apply`, and on
+  `Applied::Written` reports through `changed`; a change that changed
+  nothing or was refused reports nothing. `update(db, oid, value, now)`,
+  `set_reliability`, `command(db, oid, priority, value, now)` and
+  `relinquish(db, oid, priority, now)` are one call each over it, with a
+  typed `report::LocalValue` (`Real`, `Binary`, `State` or `Integer`;
+  `From<f32>`, `From<BinaryPV>` and `From<i32>`). `command` and
+  `relinquish` write Present_Value as the local Device, as
+  `BACnetServer::write_local` does, and add no refusal of their own. The
+  `Reporter` reports COV only until #2303's third part gives it the event
+  pass, so a fault doesn't move an intrinsic reporter's Event_State here
+  as it does on the server. The outbox is one
   buffer and one queue allocated at build (`OutboxLimits`: entries and
   octets). A subscription holds one unconfirmed entry: a newer report
   replaces it in its turn, so one that changes faster than the link sends

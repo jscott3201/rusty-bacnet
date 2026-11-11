@@ -280,3 +280,58 @@ fn the_local_input_needs_a_noncommandable_object() {
         PropertyValue::Signed(0)
     );
 }
+
+/// The application's Reliability (#2446), in each access mode: taken in
+/// service, where Status_Flags shows FAULT until NO_FAULT_DETECTED clears
+/// it; refused out of service, and outside BACnetReliability, leaving it
+/// as it was. A client still can't write it, out of service or in.
+#[test]
+fn the_application_sets_reliability_in_service() {
+    use bacnet_types::enums::Reliability;
+    let flags = |object: &IntegerValueObject| match read(object, P::STATUS_FLAGS).unwrap() {
+        PropertyValue::BitString { data, .. } => data[0] >> 4,
+        other => panic!("Status_Flags is a BIT STRING: {other:?}"),
+    };
+    let reliability = |object: &IntegerValueObject| read(object, P::RELIABILITY).unwrap();
+    let no_sensor = PropertyValue::Enumerated(Reliability::NO_SENSOR.to_raw());
+    for access in [
+        PresentValueAccess::ReadOnly,
+        PresentValueAccess::Writable,
+        PresentValueAccess::Commandable,
+    ] {
+        let mut object = IntegerValueObject::with_access(1, "IV-1", access).unwrap();
+        let set = |object: &mut IntegerValueObject, value| {
+            object.reliability_eval().unwrap().set_reliability(value)
+        };
+        set(&mut object, Reliability::NO_SENSOR).unwrap();
+        assert_eq!(reliability(&object), no_sensor, "{access:?}");
+        assert_eq!(flags(&object), 0b0100, "{access:?}: FAULT");
+        assert_eq!(
+            code(set(&mut object, Reliability::from_raw(26))),
+            ErrorCode::VALUE_OUT_OF_RANGE
+        );
+        set(&mut object, Reliability::NO_FAULT_DETECTED).unwrap();
+        assert_eq!(flags(&object), 0, "{access:?}: cleared");
+        let enumerated = PropertyValue::Enumerated(Reliability::OVER_RANGE.to_raw());
+        assert_eq!(
+            code(object.write_property(P::RELIABILITY, None, enumerated.clone(), None)),
+            ErrorCode::WRITE_ACCESS_DENIED
+        );
+        object
+            .write_property(P::OUT_OF_SERVICE, None, PropertyValue::Boolean(true), None)
+            .unwrap();
+        assert_eq!(
+            code(set(&mut object, Reliability::NO_SENSOR)),
+            ErrorCode::WRITE_ACCESS_DENIED
+        );
+        assert_eq!(
+            code(object.write_property(P::RELIABILITY, None, enumerated, None)),
+            ErrorCode::WRITE_ACCESS_DENIED
+        );
+        assert_eq!(
+            reliability(&object),
+            PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw())
+        );
+        assert_eq!(flags(&object), 0b0001, "{access:?}: OUT_OF_SERVICE alone");
+    }
+}

@@ -35,6 +35,14 @@ struct CovParity {
 
 impl CovParity {
     async fn start(policy: CovPolicy) -> Self {
+        Self::start_from(policy, fixture).await
+    }
+
+    /// [`start`](Self::start), each side's database built by `fixture`.
+    async fn start_from(
+        policy: CovPolicy,
+        fixture: fn(&bacnet_objects::DeviceIdentity) -> ObjectDatabase,
+    ) -> Self {
         let identity = identity();
         let (transport, tx) = TestTransport::inbound(16);
         let sent = transport.sent();

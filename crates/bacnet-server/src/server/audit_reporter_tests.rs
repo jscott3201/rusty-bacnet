@@ -713,3 +713,34 @@ mod write_group;
 
 #[path = "audit_reporter_apdu_tests.rs"]
 mod apdu_limits;
+
+/// The application's Reliability, like its Present_Value, is an input, not
+/// a write, and isn't audited (#2446); a write of Out_Of_Service after it
+/// is, so the reporter was listening.
+#[tokio::test]
+async fn audit_reporter_excludes_an_application_reliability() {
+    let mut fixture = server(reporter()).await;
+    let ai = oid(ObjectType::ANALOG_INPUT, 1);
+    fixture
+        .server
+        .set_reliability_local(&ai, Reliability::NO_SENSOR)
+        .await
+        .unwrap();
+    settle().await;
+    assert!(notifications(&fixture.transport.sent).is_empty());
+    fixture
+        .server
+        .write_local(
+            &ai,
+            PropertyIdentifier::OUT_OF_SERVICE,
+            None,
+            PropertyValue::Boolean(true),
+            None,
+            crate::LocalCommandSource::ServerDevice,
+        )
+        .await
+        .unwrap();
+    settle().await;
+    assert_eq!(notifications(&fixture.transport.sent).len(), 1);
+    fixture.server.stop().await.unwrap();
+}

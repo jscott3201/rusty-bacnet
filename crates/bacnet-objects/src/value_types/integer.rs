@@ -34,6 +34,11 @@ use crate::traits::{BACnetObject, LocalInput, LocalInputValue, not_supported};
 /// [`BACnetObject::local_input`] while in service. It doesn't track
 /// Value_Source, so a write's or an input's origin is not kept.
 ///
+/// It runs no fault algorithm of its own, but takes the Reliability its
+/// application works out through [`BACnetObject::reliability_eval`] while
+/// in service (#2446), and Status_Flags' FAULT follows it. A client can't
+/// write Reliability, in service or out of it.
+///
 /// Min_Pres_Value and Max_Pres_Value are absent until set, and only
 /// describe the range: like the analog objects, nothing compares a written
 /// value or Relinquish_Default with them.
@@ -304,8 +309,26 @@ impl BACnetObject for IntegerValueObject {
 
     crate::traits::lend_cov_reporting!();
 
+    crate::traits::lend_reliability_eval!();
+
     fn local_input(&mut self) -> Option<&mut dyn LocalInput> {
         Some(self)
+    }
+}
+
+/// The application's route to Reliability, as on the Accumulator: the
+/// object runs no fault algorithm, so it only takes the value worked out
+/// for it, in service.
+impl crate::traits::ReliabilityEval for IntegerValueObject {
+    fn set_reliability(&mut self, reliability: Reliability) -> Result<(), Error> {
+        if self.out_of_service {
+            return Err(common::write_access_denied_error());
+        }
+        if !common::is_reliability_value_valid(reliability) {
+            return Err(common::value_out_of_range_error());
+        }
+        self.reliability = reliability;
+        Ok(())
     }
 }
 
