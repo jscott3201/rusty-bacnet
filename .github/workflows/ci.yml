@@ -399,11 +399,12 @@ jobs:
       # tests that need a capability compile out, and
       # capability_features_tests checks no object lends one (#2215). With
       # bacnet-device-core over it, structured-writes off too, so its
-      # structured writes are refused (#2210), and the image's host
-      # scenario: the configuration that ships.
+      # structured writes are refused (#2210), and the images' host
+      # scenarios, the points image's among them (#2445): the configuration
+      # that ships.
       - name: bacnet-objects and bacnet-device-core tests (alloc, capability features and structured-writes off)
         if: ${{ !cancelled() }}
-        run: cargo nextest run -p bacnet-objects -p bacnet-device-core -p firmware-link --no-default-features --features alloc,firmware-link/reporting --locked --profile ci
+        run: cargo nextest run -p bacnet-objects -p bacnet-device-core -p firmware-link --no-default-features --features alloc,firmware-link/reporting,firmware-link/points --locked --profile ci
       - name: no_std crates' doctests (alloc, without std)
         if: ${{ !cancelled() }}
         run: cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc,bacnet-objects/event-reporting,bacnet-objects/durable-writes,bacnet-device-core/structured-writes,bacnet-device-core/cov-multiple --locked
