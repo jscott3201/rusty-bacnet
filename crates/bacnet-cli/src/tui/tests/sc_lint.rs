@@ -199,6 +199,7 @@ fn a_refused_dial_opens_the_credentials_view() {
         &mut app,
         ScReport::Failed(Box::new(ScFailure {
             fault: Fault::Other(detail.clone()),
+            code: None,
             detail,
             presented: Vec::new(),
         })),

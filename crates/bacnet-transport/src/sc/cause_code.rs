@@ -10,12 +10,10 @@
 //! layer's catch-all code (`DNS_ERROR`, `TCP_ERROR`, `TLS_ERROR`,
 //! `HTTP_ERROR`, `WEBSOCKET_ERROR`) is.
 //!
-//! The close-status mapping is not done yet: [`ScDisconnectCause::from_error`]
-//! reports a closed or ended WebSocket as `PeerClose`, which has no code,
-//! because the peer's close status is not kept. Mapping that status to its
-//! code (Annex AB.7.5.5) is a follow-up. The `Closed` and `StreamEnded`
-//! arms below apply only to a cause built directly as
-//! `ScDisconnectCause::WebSocket(..)`.
+//! A WebSocket that ends is told apart three ways (#2438): a close frame
+//! with a status maps that status (Annex AB.7.5.5), a close frame without
+//! one takes the table's catch-all, and an end with no close frame is the
+//! abnormal close, as RFC 6455 section 7.1.5 counts it.
 
 use bacnet_types::enums::ErrorCode;
 
@@ -34,14 +32,18 @@ impl ScDisconnectCause {
     ///   one this node dials, so the hub is the TLS server: a certificate
     ///   this node refused is a `TLS_SERVER_*` code, and an alert from the
     ///   hub refusing this node is a `TLS_CLIENT_*` code.
-    /// - `None` when no code applies: a local or orderly close, a heartbeat
-    ///   or Connect-Accept timeout, a BVLC-level fault, a bad URL, or a
-    ///   WebSocket close whose status code was not kept.
+    /// - A WebSocket the hub closed gives the code for its close status
+    ///   (Annex AB.7.5.5), and one that ended with no close frame gives
+    ///   `WEBSOCKET_CLOSED_ABNORMALLY`.
+    /// - `None` when no code applies: a local close, a Disconnect-Request
+    ///   from the hub, a heartbeat or Connect-Accept timeout, a BVLC-level
+    ///   fault, or a bad URL.
     pub fn error_code(&self) -> Option<ErrorCode> {
         match self {
             Self::Nak { error_code, .. } => Some(*error_code),
             Self::Tls(failure) => Some(tls_code(*failure)),
             Self::WebSocket(kind) => websocket_code(*kind),
+            Self::WebSocketClosed { close_status } => Some(close_code(*close_status)),
             Self::UpgradeRefused { http_status } => Some(http_code(*http_status)),
             Self::DialTimeout { stage } => stage.map(|stage| match stage {
                 ScDialStage::HostLookup => ErrorCode::DNS_ERROR,
@@ -102,24 +104,49 @@ fn websocket_code(kind: ScWebSocketErrorKind) -> Option<ErrorCode> {
         ScWebSocketErrorKind::InvalidUrl | ScWebSocketErrorKind::MissingHubHost => return None,
         ScWebSocketErrorKind::UnsupportedScheme => ErrorCode::WEBSOCKET_SCHEME_NOT_SUPPORTED,
         ScWebSocketErrorKind::HostLookup => ErrorCode::DNS_ERROR,
+        // The peer turned the connection away (Annex AB.7.5.1, TCP table).
+        ScWebSocketErrorKind::TcpRefused => ErrorCode::TCP_CONNECTION_REFUSED,
         ScWebSocketErrorKind::TcpDial => ErrorCode::TCP_ERROR,
         ScWebSocketErrorKind::TlsHandshake => ErrorCode::TLS_ERROR,
         ScWebSocketErrorKind::WebSocketHandshake => ErrorCode::HTTP_ERROR,
-        // The Sec-WebSocket-Protocol answer lacked the BACnet/SC subprotocol.
+        // The upgrade answer had no Sec-WebSocket-Protocol header at all, or
+        // one whose value is not the subprotocol asked for. AB.7.5.1's HTTP
+        // table names no header; giving a missing one the missing-header code
+        // and a wrong value the value-error code is this stack's reading.
+        ScWebSocketErrorKind::HubSubprotocolMissing
+        | ScWebSocketErrorKind::DirectSubprotocolMissing => ErrorCode::HTTP_RESPONSE_MISSING_HEADER,
         ScWebSocketErrorKind::HubSubprotocol | ScWebSocketErrorKind::DirectSubprotocol => {
-            ErrorCode::HTTP_WEBSOCKET_HEADER_ERROR
+            ErrorCode::HTTP_RESPONSE_VALUE_ERROR
         }
         // Answered with close status 1003 (Annex AB.7.5.3).
         ScWebSocketErrorKind::NonBinaryFrame => ErrorCode::WEBSOCKET_DATA_NOT_ACCEPTED,
-        // Only for a cause built directly: from_error turns an ended stream
-        // into PeerClose (no code). The stream ended with no close frame.
+        // No close frame came: RFC 6455 reports that as status 1006.
         ScWebSocketErrorKind::StreamEnded => ErrorCode::WEBSOCKET_CLOSED_ABNORMALLY,
-        // A send or receive fault; or, only for a cause built directly (from_error
-        // turns it into PeerClose, no code), a close whose status was not kept.
-        ScWebSocketErrorKind::Closed
-        | ScWebSocketErrorKind::Send
-        | ScWebSocketErrorKind::Receive => ErrorCode::WEBSOCKET_ERROR,
+        // A close frame without a status code: RFC 6455 reports that as
+        // 1005, which AB.7.5.5's table leaves to its catch-all. A close with
+        // a status is ScDisconnectCause::WebSocketClosed.
+        ScWebSocketErrorKind::Closed => ErrorCode::WEBSOCKET_ERROR,
+        ScWebSocketErrorKind::Send | ScWebSocketErrorKind::Receive => ErrorCode::WEBSOCKET_ERROR,
     })
+}
+
+/// The code for a WebSocket close status from the peer (Annex AB.7.5.5).
+fn close_code(status: u16) -> ErrorCode {
+    match status {
+        1000 => ErrorCode::WEBSOCKET_CLOSED_BY_PEER,
+        1001 => ErrorCode::WEBSOCKET_ENDPOINT_LEAVES,
+        1002 => ErrorCode::WEBSOCKET_PROTOCOL_ERROR,
+        1003 => ErrorCode::WEBSOCKET_DATA_NOT_ACCEPTED,
+        // RFC 6455 keeps 1006 off the wire, but the table maps it.
+        1006 => ErrorCode::WEBSOCKET_CLOSED_ABNORMALLY,
+        1007 => ErrorCode::WEBSOCKET_DATA_INCONSISTENT,
+        1008 => ErrorCode::WEBSOCKET_DATA_AGAINST_POLICY,
+        1009 => ErrorCode::WEBSOCKET_FRAME_TOO_LONG,
+        1010 => ErrorCode::WEBSOCKET_EXTENSION_MISSING,
+        1011 => ErrorCode::WEBSOCKET_REQUEST_UNAVAILABLE,
+        // 1004, 1005, 1012 and up, and application statuses.
+        _ => ErrorCode::WEBSOCKET_ERROR,
+    }
 }
 
 /// A status other than 101 Switching Protocols in answer to the upgrade.
@@ -153,6 +180,20 @@ mod tests {
             #[cfg(feature = "sc-tls")]
             untrusted_peer: None,
             http_status,
+            close_status: None,
+        }
+        .into_bacnet_error()
+    }
+
+    fn closed_with(close_status: Option<u16>) -> Error {
+        ScConnectError::WebSocket {
+            kind: ScWebSocketErrorKind::Closed,
+            message: "test".into(),
+            tls: None,
+            #[cfg(feature = "sc-tls")]
+            untrusted_peer: None,
+            http_status: None,
+            close_status,
         }
         .into_bacnet_error()
     }
@@ -227,9 +268,29 @@ mod tests {
             Some(ErrorCode::TCP_ERROR)
         );
         assert_eq!(
-            code(ws_error(ScWebSocketErrorKind::HubSubprotocol, None)),
-            Some(ErrorCode::HTTP_WEBSOCKET_HEADER_ERROR)
+            code(ws_error(ScWebSocketErrorKind::TcpRefused, None)),
+            Some(ErrorCode::TCP_CONNECTION_REFUSED)
         );
+        // A wrong subprotocol value and a missing header each have a code.
+        for (wrong, missing) in [
+            (
+                ScWebSocketErrorKind::HubSubprotocol,
+                ScWebSocketErrorKind::HubSubprotocolMissing,
+            ),
+            (
+                ScWebSocketErrorKind::DirectSubprotocol,
+                ScWebSocketErrorKind::DirectSubprotocolMissing,
+            ),
+        ] {
+            assert_eq!(
+                code(ws_error(wrong, None)),
+                Some(ErrorCode::HTTP_RESPONSE_VALUE_ERROR)
+            );
+            assert_eq!(
+                code(ws_error(missing, None)),
+                Some(ErrorCode::HTTP_RESPONSE_MISSING_HEADER)
+            );
+        }
         assert_eq!(code(ws_error(ScWebSocketErrorKind::InvalidUrl, None)), None);
         // An HTTP status in place of 101 Switching Protocols.
         let upgrade = |status| {
@@ -260,16 +321,66 @@ mod tests {
             );
         }
         assert_eq!(upgrade(200), Some(ErrorCode::HTTP_NO_UPGRADE));
-        // A closed WebSocket reads as a peer close; its status is not kept.
-        assert_eq!(code(ws_error(ScWebSocketErrorKind::Closed, None)), None);
+    }
+
+    /// A close frame's status maps per Annex AB.7.5.5; a close frame with
+    /// no status takes the catch-all, and an end with no close frame is the
+    /// abnormal close (#2438).
+    #[test]
+    fn websocket_closes_map_their_status_and_tell_an_abnormal_end_apart() {
+        let cause = |error: Error| ScDisconnectCause::from_error(&error);
+        for (status, expected) in [
+            (1000, ErrorCode::WEBSOCKET_CLOSED_BY_PEER),
+            (1001, ErrorCode::WEBSOCKET_ENDPOINT_LEAVES),
+            (1002, ErrorCode::WEBSOCKET_PROTOCOL_ERROR),
+            (1003, ErrorCode::WEBSOCKET_DATA_NOT_ACCEPTED),
+            (1006, ErrorCode::WEBSOCKET_CLOSED_ABNORMALLY),
+            (1007, ErrorCode::WEBSOCKET_DATA_INCONSISTENT),
+            (1008, ErrorCode::WEBSOCKET_DATA_AGAINST_POLICY),
+            (1009, ErrorCode::WEBSOCKET_FRAME_TOO_LONG),
+            (1010, ErrorCode::WEBSOCKET_EXTENSION_MISSING),
+            (1011, ErrorCode::WEBSOCKET_REQUEST_UNAVAILABLE),
+            (1004, ErrorCode::WEBSOCKET_ERROR),
+            (1005, ErrorCode::WEBSOCKET_ERROR),
+            (1012, ErrorCode::WEBSOCKET_ERROR),
+            (1015, ErrorCode::WEBSOCKET_ERROR),
+            (3000, ErrorCode::WEBSOCKET_ERROR),
+            (4999, ErrorCode::WEBSOCKET_ERROR),
+        ] {
+            let closed = cause(closed_with(Some(status)));
+            assert_eq!(
+                closed,
+                ScDisconnectCause::WebSocketClosed {
+                    close_status: status
+                }
+            );
+            assert_eq!(closed.error_code(), Some(expected), "{status}");
+        }
+        let without_status = cause(closed_with(None));
         assert_eq!(
-            code(ws_error(ScWebSocketErrorKind::StreamEnded, None)),
-            None
+            without_status,
+            ScDisconnectCause::WebSocket(ScWebSocketErrorKind::Closed)
         );
-        // Built directly, they take the WebSocket codes.
         assert_eq!(
-            ScDisconnectCause::WebSocket(ScWebSocketErrorKind::StreamEnded).error_code(),
+            without_status.error_code(),
+            Some(ErrorCode::WEBSOCKET_ERROR)
+        );
+        let ended = cause(ws_error(ScWebSocketErrorKind::StreamEnded, None));
+        assert_eq!(
+            ended,
+            ScDisconnectCause::WebSocket(ScWebSocketErrorKind::StreamEnded)
+        );
+        assert_eq!(
+            ended.error_code(),
             Some(ErrorCode::WEBSOCKET_CLOSED_ABNORMALLY)
+        );
+        // Shown by name.
+        assert_eq!(
+            cause(closed_with(Some(1001)))
+                .error_code()
+                .unwrap()
+                .to_string(),
+            "WEBSOCKET_ENDPOINT_LEAVES"
         );
     }
 

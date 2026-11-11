@@ -523,8 +523,12 @@ fn main() -> std::process::ExitCode {
 
 /// Write a fatal error as `Error: ` and its Display text, then each source
 /// whose text the line doesn't already hold, after `: `. Most errors here
-/// put their source in their own message, and that isn't repeated.
-fn report(error: &dyn std::error::Error, out: &mut dyn std::io::Write) -> std::io::Result<()> {
+/// put their source in their own message, and that isn't repeated. A
+/// BACnet/SC connection failure ends with its error code by name (#2438).
+fn report(
+    error: &(dyn std::error::Error + 'static),
+    out: &mut dyn std::io::Write,
+) -> std::io::Result<()> {
     let mut line = format!("Error: {error}");
     let mut source = error.source();
     while let Some(cause) = source {
@@ -535,7 +539,28 @@ fn report(error: &dyn std::error::Error, out: &mut dyn std::io::Write) -> std::i
         }
         source = cause.source();
     }
+    if let Some(code) = sc_error_code(error) {
+        line.push_str(&format!(" (BACnet/SC error code {code})"));
+    }
     writeln!(out, "{line}")
+}
+
+/// The error code Annex AB.7.5 gives a failed BACnet/SC connection, when
+/// `error` or one of its sources is one and a code applies.
+fn sc_error_code(
+    error: &(dyn std::error::Error + 'static),
+) -> Option<bacnet_types::enums::ErrorCode> {
+    use bacnet_transport::sc::{ScConnectError, ScDisconnectCause};
+    let mut next = Some(error);
+    while let Some(error) = next {
+        if let Some(bacnet) = error.downcast_ref::<bacnet_types::error::Error>()
+            && ScConnectError::from_error(bacnet).is_some()
+        {
+            return ScDisconnectCause::from_error(bacnet).error_code();
+        }
+        next = error.source();
+    }
+    None
 }
 
 /// The network path owns runtime/tracing/transport initialization. Keeping it

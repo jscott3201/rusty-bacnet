@@ -215,3 +215,6 @@ mod cov_reporting;
 mod property_list;
 
 mod value_type_equivalence;
+
+mod xd_conformance;
+mod xd_conformance_allowlist;

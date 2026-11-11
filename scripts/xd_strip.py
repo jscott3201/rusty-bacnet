@@ -11,8 +11,8 @@ clients) and writes a derivative that keeps only facts:
 - every enumeration and bit string with a named member list: its path (the
   names of the definitions it sits in, joined with "/"), its range or length
   attributes, and each member's value and name;
-- every object type: each property's identifier number, name, datatype and
-  conformance flags.
+- every object type: each property's identifier number, name, datatype, the
+  size of a fixed-size array, and conformance flags.
 
 No comment, description or other prose is copied. The output is sorted and
 formatted the same way on every run. Anything the script doesn't recognise
@@ -22,8 +22,9 @@ revision can't drop information silently.
     python3 scripts/xd_strip.py DATA_TYPES_XML OBJECT_TYPES_XML OUT_DIR
 
 writes OUT_DIR/xd-data-types.txt and OUT_DIR/xd-object-types.txt. The
-cross-check test in bacnet-types (src/enums/tests/xd_crosscheck.rs) reads the
-first; the second is kept for a later datatype and conformance check.
+cross-checks in bacnet-types read both (src/enums/tests/xd_crosscheck.rs the
+first, src/datatype/standard/xd_crosscheck.rs the second, #2452), and one in
+bacnet-objects reads the second (src/property_metadata_audit/xd_conformance.rs).
 """
 
 import re
@@ -46,8 +47,10 @@ LIST_TAGS = {"Enumerated": "NamedValues", "BitString": "NamedBits"}
 KNOWN_DUPLICATES = {("0-BACnetEngineeringUnits", 47910)}
 
 # Object type property attributes: kept as flags, kept as a datatype, or
-# dropped (variability, sizes, units and value constraints are left for a
-# later step).
+# dropped (variability, string lengths, units and value constraints are left
+# for a later step). An array's size is kept as one number: the file gives a
+# fixed-size array the same minimum and maximum, and any other pairing stops
+# the script.
 PROP_BOOL_FLAGS = ("optional", "writable", "commandable", "readable")
 PROP_DROP = {
     "name", "propertyIdentifier", "type", "memberType", "variability", "minimumSize",
@@ -209,6 +212,11 @@ def strip_object_types(path):
             if p.get("memberType"):
                 datatype += "<" + p.get("memberType") + ">"
             fields = [pid, p.get("name"), datatype]
+            low, high = p.get("minimumSize"), p.get("maximumSize")
+            if low is not None or high is not None:
+                if pt != "Array" or low != high or not low.isdigit():
+                    fail(f"{where}: sizes {low!r}..{high!r} on {pt} are not one fixed array size")
+                fields.append(f"size={low}")
             for flag in PROP_BOOL_FLAGS:
                 if flag in p.attrib:
                     check_bool(where, flag, p.get(flag))
@@ -220,7 +228,9 @@ def strip_object_types(path):
             props[int(pid)] = " ".join(fields)
         objects[oname] = props
     lines = header("object types", ["bacnet-object-types.xml"], rev, published, copyright_line)
-    lines.append("# object <name>, then one line per property: <identifier> <name> <datatype> [flag=value ...].")
+    lines.append(
+        "# object <name>, then one line per property: <identifier> <name> <datatype> [size=N] [flag=value ...]."
+    )
     for oname in sorted(objects):
         lines.append("")
         lines.append(f"object {oname}")

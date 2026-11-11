@@ -100,8 +100,10 @@ pub(crate) enum Fault {
     UpgradeRefused(u16),
     /// The hub went silent past the heartbeat timeout.
     HeartbeatTimeout,
-    /// The hub closed the connection.
+    /// The hub closed the connection with a Disconnect-Request.
     PeerClose,
+    /// The hub closed the WebSocket with this close status.
+    WebSocketClosed(u16),
     /// This node closed it.
     LocalClose,
     /// A reply to the Connect-Request that was malformed or not an accept.
@@ -164,6 +166,9 @@ impl From<ScDisconnectCause> for Fault {
             ScDisconnectCause::UpgradeRefused { http_status, .. } => {
                 Self::UpgradeRefused(http_status)
             }
+            ScDisconnectCause::WebSocketClosed { close_status, .. } => {
+                Self::WebSocketClosed(close_status)
+            }
             ScDisconnectCause::MalformedResult | ScDisconnectCause::UnexpectedConnectReply => {
                 Self::BadReply
             }
@@ -193,6 +198,8 @@ pub(crate) struct CertSummary {
 pub(crate) struct ScFailure {
     /// Why.
     pub(crate) fault: Fault,
+    /// The BACnet error code that names it (Annex AB.7.5), when one does.
+    pub(crate) code: Option<ErrorCode>,
     /// The error's text, shown as is.
     pub(crate) detail: String,
     /// The certificates a refused hub presented, leaf first; untrusted.
@@ -204,6 +211,7 @@ impl ScFailure {
     pub(crate) fn from_error(error: &Error) -> Self {
         Self {
             fault: Fault::from_error(error),
+            code: ScDisconnectCause::from_error(error).error_code(),
             detail: error.to_string(),
             presented: presented(error),
         }
@@ -266,6 +274,8 @@ pub(crate) enum LinkEvent {
         hub: ScActiveHub,
         /// Why.
         fault: Fault,
+        /// The BACnet error code that names it, when one does.
+        code: Option<ErrorCode>,
     },
     /// A dial to `hub` failed.
     ConnectFailed {
@@ -273,6 +283,8 @@ pub(crate) enum LinkEvent {
         hub: ScActiveHub,
         /// Why.
         fault: Fault,
+        /// The BACnet error code that names it, when one does.
+        code: Option<ErrorCode>,
     },
     /// Dialling `hub` again after `backoff`.
     Reconnecting {
@@ -291,6 +303,8 @@ pub(crate) enum LinkEvent {
     PrimaryRestoreFailed {
         /// Why.
         fault: Fault,
+        /// The BACnet error code that names it, when one does.
+        code: Option<ErrorCode>,
     },
     /// Reconnection stopped.
     GaveUp {
@@ -307,10 +321,12 @@ impl LinkEvent {
             E::Connected { hub, hub_vmac, .. } => Self::Connected { hub, hub_vmac },
             E::Disconnected { hub, cause, .. } => Self::Disconnected {
                 hub,
+                code: cause.error_code(),
                 fault: cause.into(),
             },
             E::ConnectFailed { hub, cause, .. } => Self::ConnectFailed {
                 hub,
+                code: cause.error_code(),
                 fault: cause.into(),
             },
             E::ReconnectAttempt {
@@ -326,6 +342,7 @@ impl LinkEvent {
             E::FailoverEngaged => Self::FailoverEngaged,
             E::PrimaryRestored => Self::PrimaryRestored,
             E::PrimaryRestoreFailed { cause, .. } => Self::PrimaryRestoreFailed {
+                code: cause.error_code(),
                 fault: cause.into(),
             },
             E::ReconnectGaveUp { attempts, .. } => Self::GaveUp { attempts },

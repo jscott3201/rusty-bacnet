@@ -169,7 +169,7 @@ impl std::error::Error for Outer {
     }
 }
 
-fn reported(error: &dyn std::error::Error) -> String {
+fn reported(error: &(dyn std::error::Error + 'static)) -> String {
     let mut out = Vec::new();
     report(error, &mut out).unwrap();
     String::from_utf8(out).unwrap()
