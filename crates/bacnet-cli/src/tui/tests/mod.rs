@@ -22,8 +22,10 @@
 //!   refusal of an invalid SC profile before any dial, the flags-only path,
 //!   and the SC connection screen's frames.
 //! - `sc_screen`: the SC screen from synthetic reports, with its frames;
-//!   `sc_hub`: the SC worker against in-process mTLS hubs; `sc_lint`: the
-//!   credential lint on the preview, in the coordinator and on the SC screen.
+//!   `sc_hub`: the SC worker against in-process mTLS hubs; `sc_codes`: the
+//!   error code a real failure reports, as the screen shows it; `sc_lint`:
+//!   the credential lint on the preview, in the coordinator and on the SC
+//!   screen.
 //! - `mstp_monitor`: the MS/TP monitor and the safe-join wizard end to end,
 //!   on the scripted ring of `bacnet-transport`'s `test-support`.
 //! - `mstp_screen`: the MS/TP screen and the join confirmation from
@@ -118,6 +120,8 @@ mod passive_retention;
 mod port_retry;
 mod profile_ui;
 mod request_gate;
+#[cfg(feature = "sc-tls")]
+mod sc_codes;
 #[cfg(feature = "sc-tls")]
 mod sc_hub;
 mod sc_layout;

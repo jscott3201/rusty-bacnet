@@ -155,6 +155,13 @@ fn read(fault: &Fault) -> (Option<Phase>, String, String) {
             "nothing accepted the TCP connection",
             "Check the port, that the hub is running, and that no firewall blocks it.".into(),
         ),
+        Fault::WebSocket(K::TcpRefused) => (
+            Phase::Tcp,
+            "the hub host refused the TCP connection",
+            "The host answered, but nothing listens on that port: check the port in the URL \
+             and that the hub is running. A firewall that rejects connections does this too."
+                .into(),
+        ),
         Fault::WebSocket(K::TlsHandshake) => (
             Phase::Tls,
             "the TLS handshake failed",
@@ -198,11 +205,32 @@ fn read(fault: &Fault) -> (Option<Phase>, String, String) {
         Fault::WebSocket(K::HubSubprotocol | K::DirectSubprotocol) => (
             Phase::WebSocket,
             "the hub subprotocol was not accepted",
-            "The server upgraded without the BACnet/SC hub subprotocol. Is the URL a hub's, \
-             not a direct-connect port or another web service? A proxy that strips the \
-             Sec-WebSocket-Protocol header does this too."
+            "The server upgraded with another subprotocol in its Sec-WebSocket-Protocol \
+             header. Is the URL a hub's, not a direct-connect port or another web service?"
                 .into(),
         ),
+        Fault::WebSocket(K::HubSubprotocolMissing | K::DirectSubprotocolMissing) => (
+            Phase::WebSocket,
+            "the upgrade named no subprotocol",
+            "The server upgraded without a Sec-WebSocket-Protocol header. A proxy that strips \
+             that header does this, as does a WebSocket service that is not a BACnet/SC hub."
+                .into(),
+        ),
+        Fault::WebSocket(K::StreamEnded) => (
+            Phase::Connect,
+            "the connection dropped without a WebSocket close",
+            "The connection to the hub was lost with no close frame: the hub stopped, or \
+             something on the path (NAT, firewall, proxy) cut it. Check the hub's log and the \
+             path's idle timers."
+                .into(),
+        ),
+        Fault::WebSocketClosed(status) => {
+            return (
+                Some(Phase::Connect),
+                format!("the hub closed the WebSocket with status {status}"),
+                closed_hint(*status).into(),
+            );
+        }
         Fault::WebSocket(_) | Fault::PeerClose | Fault::BadReply => (
             Phase::Connect,
             "the hub ended the exchange",
@@ -298,6 +326,16 @@ fn stalled(stage: ScDialStage) -> (Phase, &'static str) {
             Phase::Connect,
             "The dial ran out of time in a step this screen has no hint for.",
         ),
+    }
+}
+
+/// What a hub's WebSocket close status most likely means.
+fn closed_hint(status: u16) -> &'static str {
+    match status {
+        1001 => "The hub is going away, as when it restarts or shuts down.",
+        1008 => "The hub closed it for breaking its policy; its log says which.",
+        1009 => "The hub got a message larger than it takes.",
+        _ => "The hub closed the WebSocket on purpose; its log says why.",
     }
 }
 
@@ -488,6 +526,13 @@ mod tests {
                 Some(Phase::WebSocket),
             ),
             (Fault::WebSocket(K::HubSubprotocol), Some(Phase::WebSocket)),
+            (Fault::WebSocket(K::TcpRefused), Some(Phase::Tcp)),
+            (
+                Fault::WebSocket(K::HubSubprotocolMissing),
+                Some(Phase::WebSocket),
+            ),
+            (Fault::WebSocket(K::StreamEnded), Some(Phase::Connect)),
+            (Fault::WebSocketClosed(1001), Some(Phase::Connect)),
             (Fault::BadReply, Some(Phase::Connect)),
             (Fault::HeartbeatTimeout, Some(Phase::Connect)),
             (Fault::DialTimeout(None), None),
@@ -612,6 +657,17 @@ mod tests {
         assert!(refused.hint.contains("proxy"), "{}", refused.hint);
         let subprotocol = diagnose(&Fault::WebSocket(ScWebSocketErrorKind::HubSubprotocol));
         assert!(subprotocol.hint.contains("Sec-WebSocket-Protocol"));
+        // A missing header reads apart from a wrong value (#2438).
+        let missing = diagnose(&Fault::WebSocket(
+            ScWebSocketErrorKind::HubSubprotocolMissing,
+        ));
+        assert!(missing.hint.contains("without a Sec-WebSocket-Protocol"));
+        assert_ne!(missing.summary, subprotocol.summary);
+        let refused = diagnose(&Fault::WebSocket(ScWebSocketErrorKind::TcpRefused));
+        assert!(refused.summary.contains("refused"), "{}", refused.summary);
+        let closed = diagnose(&Fault::WebSocketClosed(1001));
+        assert!(closed.summary.contains("status 1001"), "{}", closed.summary);
+        assert!(closed.hint.contains("going away"), "{}", closed.hint);
         let duplicate = diagnose(&Fault::Nak {
             class: ErrorClass::COMMUNICATION,
             code: ErrorCode::NODE_DUPLICATE_VMAC,

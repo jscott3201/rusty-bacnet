@@ -44,9 +44,9 @@ const HUB_NOT_AFTER: i64 = 1_924_992_000;
 
 /// A leaf certificate and its key.
 pub(super) struct Leaf {
-    der: CertificateDer<'static>,
+    pub(super) der: CertificateDer<'static>,
     pem: String,
-    key: KeyPair,
+    pub(super) key: KeyPair,
 }
 
 /// A site CA that issues leaves.
@@ -405,7 +405,7 @@ async fn presenting(cert: &Leaf) -> (String, tokio::task::JoinHandle<()>) {
 }
 
 /// The doctor after a failed connect to `url`.
-async fn refused(site: &Site, node: &Leaf, url: &str) -> App {
+pub(super) async fn refused(site: &Site, node: &Leaf, url: &str) -> App {
     let dir = tempfile::tempdir().unwrap();
     session(args(dir.path(), site, node, url), |app| {
         matches!(app.link, Link::Failed(_)) && app.sc.failure.is_some()

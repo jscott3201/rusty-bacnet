@@ -98,6 +98,7 @@ fn errors_map_to_their_disconnect_causes() {
             #[cfg(feature = "sc-tls")]
             untrusted_peer: None,
             tls: None,
+            close_status: None,
         }
         .into_bacnet_error()
     };
@@ -127,17 +128,21 @@ fn errors_map_to_their_disconnect_causes() {
                 #[cfg(feature = "sc-tls")]
                 untrusted_peer: None,
                 tls: Some(ScTlsFailure::AlertReceived(ScTlsAlert::UnknownCa)),
+                close_status: None,
             }
             .into_bacnet_error(),
             ScDisconnectCause::Tls(ScTlsFailure::AlertReceived(ScTlsAlert::UnknownCa)),
         ),
+        // A WebSocket close is no longer a Disconnect-Request's PeerClose: a
+        // close without a status and an end with no close frame keep their
+        // kinds (#2438).
         (
             websocket(ScWebSocketErrorKind::Closed),
-            ScDisconnectCause::PeerClose,
+            ScDisconnectCause::WebSocket(ScWebSocketErrorKind::Closed),
         ),
         (
             websocket(ScWebSocketErrorKind::StreamEnded),
-            ScDisconnectCause::PeerClose,
+            ScDisconnectCause::WebSocket(ScWebSocketErrorKind::StreamEnded),
         ),
         (
             Error::Timeout(Duration::from_secs(1)),

@@ -17,6 +17,7 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use bacnet_transport::sc::{ScActiveHub, ScConnectionState};
+use bacnet_types::enums::ErrorCode;
 
 use super::App;
 use crate::tui::sc::credentials::{Credentials, Level};
@@ -144,6 +145,16 @@ pub(crate) struct ScState {
     pub(crate) credentials: Option<Result<Credentials, String>>,
 }
 
+/// The doctor's summary of `fault`, with the error code that names it
+/// (Annex AB.7.5) by name after it, when there is one (#2438).
+pub(crate) fn summary(fault: &Fault, code: Option<ErrorCode>) -> String {
+    let summary = doctor::diagnose(fault).summary;
+    match code {
+        Some(code) => format!("{summary} ({code})"),
+        None => summary,
+    }
+}
+
 /// A timeline line for an event.
 pub(crate) fn describe(event: &LinkEvent) -> (Severity, String) {
     match event {
@@ -155,20 +166,16 @@ pub(crate) fn describe(event: &LinkEvent) -> (Severity, String) {
                 vmac_text(hub_vmac)
             ),
         ),
-        LinkEvent::Disconnected { hub, fault } => (
+        LinkEvent::Disconnected { hub, fault, code } => (
             Severity::Warn,
-            format!(
-                "lost the {} hub: {}",
-                hub_name(*hub),
-                doctor::diagnose(fault).summary
-            ),
+            format!("lost the {} hub: {}", hub_name(*hub), summary(fault, *code)),
         ),
-        LinkEvent::ConnectFailed { hub, fault } => (
+        LinkEvent::ConnectFailed { hub, fault, code } => (
             Severity::Warn,
             format!(
                 "dial to the {} hub failed: {}",
                 hub_name(*hub),
-                doctor::diagnose(fault).summary
+                summary(fault, *code)
             ),
         ),
         LinkEvent::Reconnecting {
@@ -191,12 +198,9 @@ pub(crate) fn describe(event: &LinkEvent) -> (Severity, String) {
             Severity::Info,
             "primary hub is back: leaving the failover hub".into(),
         ),
-        LinkEvent::PrimaryRestoreFailed { fault } => (
+        LinkEvent::PrimaryRestoreFailed { fault, code } => (
             Severity::Warn,
-            format!(
-                "primary hub still unreachable: {}",
-                doctor::diagnose(fault).summary
-            ),
+            format!("primary hub still unreachable: {}", summary(fault, *code)),
         ),
         LinkEvent::GaveUp { attempts } => (
             Severity::Error,
@@ -290,7 +294,7 @@ impl ScState {
         let repeated =
             matches!(event, LinkEvent::PrimaryRestoreFailed { .. }) && self.repeat(at, &text);
         if !repeated {
-            self.note(at, severity, text);
+            self.note(at, severity, text.clone());
         }
         match event {
             LinkEvent::Connected { hub, hub_vmac } => {
@@ -301,33 +305,25 @@ impl ScState {
                     link.hub_vmac = Some(hub_vmac);
                 }
             }
-            LinkEvent::Disconnected { hub, fault } => {
+            LinkEvent::Disconnected { hub, fault, code } => {
                 self.chain.clear();
                 self.enter(at, ScConnectionState::Disconnected, Some(hub));
                 self.patch(at, ScConnectionState::Disconnected, Some(hub));
                 if fault != Fault::LocalClose {
-                    let detail = describe(&LinkEvent::Disconnected {
-                        hub,
-                        fault: fault.clone(),
-                    })
-                    .1;
                     let failure = ScFailure {
                         fault,
-                        detail,
+                        code,
+                        detail: text,
                         presented: Vec::new(),
                     };
                     self.failed(at, Some(hub), failure);
                 }
             }
-            LinkEvent::ConnectFailed { hub, fault } => {
-                let detail = describe(&LinkEvent::ConnectFailed {
-                    hub,
-                    fault: fault.clone(),
-                })
-                .1;
+            LinkEvent::ConnectFailed { hub, fault, code } => {
                 let failure = ScFailure {
                     fault,
-                    detail,
+                    code,
+                    detail: text,
                     presented: Vec::new(),
                 };
                 self.failed(at, Some(hub), failure);
@@ -380,7 +376,7 @@ impl ScState {
                     Severity::Error,
                     format!(
                         "could not connect: {}",
-                        doctor::diagnose(&failure.fault).summary
+                        summary(&failure.fault, failure.code)
                     ),
                 );
                 self.enter(at, ScConnectionState::Disconnected, None);

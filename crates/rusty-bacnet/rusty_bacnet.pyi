@@ -3516,16 +3516,32 @@ class ScEvent:
         ...
     @property
     def cause(self) -> Literal["local_close", "peer_close", "heartbeat_timeout",
-                               "websocket", "tls", "nak", "dial_timeout",
-                               "connect_accept_timeout", "upgrade_refused",
-                               "malformed_result", "unexpected_connect_reply",
-                               "rejection_expired", "other"] | None:
+                               "websocket", "websocket_closed", "tls", "nak",
+                               "dial_timeout", "connect_accept_timeout",
+                               "upgrade_refused", "malformed_result",
+                               "unexpected_connect_reply", "rejection_expired",
+                               "other"] | None:
         """Why a ``disconnected`` link ended, or a ``connect_failed`` attempt
-        or ``primary_restore_failed`` probe failed. ``dial_timeout``: the
+        or ``primary_restore_failed`` probe failed. ``peer_close``: a
+        Disconnect-Request from the hub; ``websocket_closed``: the hub closed
+        the WebSocket with ``close_status`` (#2438); ``dial_timeout``: the
         dial (host lookup, TCP, TLS, WebSocket upgrade) ran out of time;
         ``connect_accept_timeout``: the hub never answered the
         Connect-Request; ``upgrade_refused``: the server answered the
-        upgrade with ``http_status`` (#1839)."""
+        upgrade with ``http_status`` (#1839). ``cause_code`` names it."""
+        ...
+    @property
+    def cause_code(self) -> ErrorCode | None:
+        """The BACnet error code that names the cause (Annex AB.7.5): a NAK's
+        own code, or the BACnet/SC connection code for a DNS, TCP, TLS, HTTP
+        or WebSocket failure, such as ``TCP_CONNECTION_REFUSED`` or
+        ``WEBSOCKET_ENDPOINT_LEAVES``. None when no code applies, as for a
+        local close or a heartbeat timeout (#2438)."""
+        ...
+    @property
+    def close_status(self) -> int | None:
+        """The status in the hub's WebSocket close frame, for a
+        ``websocket_closed`` cause, such as 1001 for a hub going away."""
         ...
     @property
     def dial_stage(self) -> Literal["host_lookup", "tcp_connect", "tls",

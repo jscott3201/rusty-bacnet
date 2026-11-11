@@ -1645,8 +1645,10 @@ receiver of `ScEvent`s (#959): `Connected { hub, hub_vmac }`,
 `ReconnectGaveUp { attempts }`. `hub` is an `ScActiveHub` (`Primary` or
 `Failover`, Annex AB.5.2). While on the failover hub, each failed probe of
 the primary is one `PrimaryRestoreFailed`, at most one per restore interval
-(#1828). The cause is an `ScDisconnectCause`: local close, peer close,
-heartbeat timeout, a WebSocket or TLS error kind, a BVLC-Result NAK with its
+(#1828). The cause is an `ScDisconnectCause`: local close, peer close (a
+Disconnect-Request from the hub), heartbeat timeout, a WebSocket or TLS error
+kind, `WebSocketClosed { close_status }` (the hub closed the WebSocket with
+that status), a BVLC-Result NAK with its
 typed `ErrorClass` and `ErrorCode`, `DialTimeout { stage }` (the dial ran out of
 time in its host lookup, TCP connect, TLS handshake or WebSocket upgrade, `stage` an `ScDialStage` when the
 dialler reports it), `ConnectAcceptTimeout` (no Connect-Accept in time),
@@ -1658,7 +1660,13 @@ BACnet `ErrorCode` where one applies (#2434): a NAK's own code, or one of the
 BACnet/SC connection codes 152-199 (`DNS_ERROR`, `TCP_CONNECT_TIMEOUT`,
 `TLS_SERVER_CERTIFICATE_EXPIRED`, `HTTP_TEMPORARY_UNAVAILABLE` and so on,
 Annex AB.7.5) for a DNS, TCP, TLS, HTTP-upgrade or WebSocket failure; `None`
-for a local or orderly close and the timeouts with no code of their own.
+for a local close, a Disconnect-Request and the timeouts with no code of
+their own. A refused TCP connection is `TCP_CONNECTION_REFUSED`, an upgrade
+answer with no `Sec-WebSocket-Protocol` header or another subprotocol is
+`HTTP_RESPONSE_MISSING_HEADER` or `HTTP_RESPONSE_VALUE_ERROR`, and a WebSocket
+the hub ends maps its close status by Annex AB.7.5.5's table: a close frame
+without a status is `WEBSOCKET_ERROR`, and an end with no close frame is
+`WEBSOCKET_CLOSED_ABNORMALLY` (#2438).
 A dial timeout is `ScConnectError::DialTimeout` inside
 `Error::Transport`; `bacnet_transport::sc::dial_within` bounds a dial the same
 way. A Connect-Request with no answer stays `Error::Timeout`.

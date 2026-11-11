@@ -39,16 +39,27 @@ pub enum ScActiveHub {
 pub enum ScDisconnectCause {
     /// This node closed the connection: the transport was stopped or aborted.
     LocalClose,
-    /// The hub closed it: a Disconnect-Request from the hub, or the
-    /// WebSocket closed or ended.
+    /// The hub closed it with a Disconnect-Request.
     PeerClose,
     /// Nothing arrived from the hub within the heartbeat timeout. Annex
     /// AB.6.3 has the connecting node probe an idle link with Heartbeat-Request;
     /// dropping the connection when the silence outlasts the timeout is this
     /// stack's local policy.
     HeartbeatTimeout,
-    /// A TCP, TLS or WebSocket failure of the given kind.
+    /// A TCP, TLS or WebSocket failure of the given kind. A WebSocket the
+    /// hub closed with a status code is [`Self::WebSocketClosed`]; one closed
+    /// without a status is [`ScWebSocketErrorKind::Closed`] here, and one that
+    /// ended with no close frame is [`ScWebSocketErrorKind::StreamEnded`].
     WebSocket(ScWebSocketErrorKind),
+    /// The hub closed the WebSocket with a close frame carrying this status
+    /// code (#2438). Annex AB.7.5.5 maps the status to an error code; see
+    /// [`Self::error_code`].
+    #[non_exhaustive]
+    WebSocketClosed {
+        /// The WebSocket close status code, such as 1001 for a hub going
+        /// away.
+        close_status: u16,
+    },
     /// A TLS failure the TLS library explained: a certificate this node
     /// refused, or an alert from the hub refusing this node (Annex AB.7.4).
     Tls(ScTlsFailure),
@@ -131,9 +142,12 @@ impl ScDisconnectCause {
                 http_status: *http_status,
             },
             Some(ScConnectError::WebSocket {
-                kind: ScWebSocketErrorKind::Closed | ScWebSocketErrorKind::StreamEnded,
+                kind: ScWebSocketErrorKind::Closed,
+                close_status: Some(close_status),
                 ..
-            }) => Self::PeerClose,
+            }) => Self::WebSocketClosed {
+                close_status: *close_status,
+            },
             Some(ScConnectError::WebSocket { kind, .. }) => Self::WebSocket(*kind),
             None => Self::Other(error.to_string()),
         }
