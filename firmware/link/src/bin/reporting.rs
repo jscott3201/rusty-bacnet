@@ -6,7 +6,9 @@
 //! [`ARENA`](firmware_link::reporting::ARENA) octets, then runs
 //! [`firmware_link::reporting::run`] once on the hand-written requests,
 //! which subscribe, renew and cancel through the `Reporter`, report and
-//! read what they subscribed to, and set and read the Device clock.
+//! read what they subscribed to, and set and read the Device clock, and on
+//! the application's own control loop, whose readings, commands and fault
+//! go through the `Reporter`'s local writes (#2446).
 //! The requests and the summary pass through [`core::hint::black_box`], so
 //! none of the work can be optimized away, and then it loops. CI never runs
 //! it: building it proves that COV reporting links `no_std` with `alloc`,
