@@ -394,6 +394,12 @@ reliability_gate_test!(
     life_safety_zone_reliability_requires_out_of_service,
     LifeSafetyZoneObject::new(1, "LSZ-1").unwrap()
 );
+// Clause 12.43.9: once the application can set a fault, Reliability takes
+// a client's write out of service (#2446).
+reliability_gate_test!(
+    integer_value_reliability_requires_out_of_service,
+    crate::value_types::IntegerValueObject::new(1, "IV-1").unwrap()
+);
 // Clause 12.61.10: out of service, Reliability takes a write to simulate
 // a fault (#2280).
 reliability_gate_test!(

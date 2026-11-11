@@ -85,7 +85,10 @@ the database guard, the transport, addressing and time.
   `write::local::apply` and queues what it reports, or the typed
   `update`, `set_reliability`, `command` and `relinquish`, which take a
   `LocalValue` (#2446). A change that wrote nothing, or was refused,
-  reports nothing.
+  reports nothing. The `Reporter` runs no event pass yet (#2303): with
+  `bacnet-objects`' `event-reporting` on, a fault leaves an intrinsic
+  reporter's Event_State as it was, so Status_Flags and the COV
+  notification carry FAULT without the IN_ALARM `bacnet-server` reports.
 - `clock`: the Device's clock for firmware with none of its own (#2321).
   `SyncedClock` is plain data on the host's monotonic timeline: until
   set it counts from local midnight, 1990-01-01, as a device does after a

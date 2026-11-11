@@ -23,8 +23,9 @@ use crate::traits::ReliabilityEvaluation;
 ///
 /// Every method has a default that opts out, so an object overrides only
 /// what it models. Among the built-in objects, the Analog, Binary and
-/// Multi-state Inputs, Outputs and Values, Loop, Schedule, Life Safety Point
-/// and Zone, Access Zone, Credential Data Input and Accumulator lend it.
+/// Multi-state Inputs, Outputs and Values, the Integer Value, Loop,
+/// Schedule, Life Safety Point and Zone, Access Zone, Credential Data Input
+/// and Accumulator lend it.
 ///
 /// Reliability has two owners. While Out_Of_Service is TRUE a client may
 /// write Reliability to simulate a fault, and the object's own evaluation

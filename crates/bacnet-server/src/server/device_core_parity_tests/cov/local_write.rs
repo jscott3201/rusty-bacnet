@@ -21,6 +21,8 @@ use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::enums::{EventState, Reliability};
 use bacnet_types::error::RemoteError;
 
+mod points;
+
 const PV: P = P::PRESENT_VALUE;
 
 /// What both sides read back after each change. Event_State shows that
@@ -66,7 +68,25 @@ fn lsp() -> ObjectIdentifier {
     oid(ObjectType::LIFE_SAFETY_POINT, 1)
 }
 
-/// The COV fixture with [`av2`], [`bv2`], [`iv1`] and [`iv2`] besides.
+/// IV-3: writable.
+fn iv3() -> ObjectIdentifier {
+    oid(ObjectType::INTEGER_VALUE, 3)
+}
+
+fn bo1() -> ObjectIdentifier {
+    oid(ObjectType::BINARY_OUTPUT, 1)
+}
+
+fn bi1() -> ObjectIdentifier {
+    oid(ObjectType::BINARY_INPUT, 1)
+}
+
+fn msi1() -> ObjectIdentifier {
+    oid(ObjectType::MULTI_STATE_INPUT, 1)
+}
+
+/// The COV fixture with [`av2`], [`bv2`], [`iv1`], [`iv2`], [`iv3`],
+/// [`bo1`], [`bi1`] and [`msi1`] (three states) besides.
 fn local_fixture(identity: &bacnet_objects::DeviceIdentity) -> ObjectDatabase {
     let mut db = fixture(identity);
     let mut av = AnalogValueObject::with_access(
@@ -77,11 +97,16 @@ fn local_fixture(identity: &bacnet_objects::DeviceIdentity) -> ObjectDatabase {
     )
     .unwrap();
     av.set_value_source_tracking(true);
-    let more: [Box<dyn bacnet_objects::traits::BACnetObject>; 4] = [
+    let writable = PresentValueAccess::Writable;
+    let more: [Box<dyn bacnet_objects::traits::BACnetObject>; 8] = [
         Box::new(av),
-        Box::new(BinaryValueObject::with_access(2, "BV-2", PresentValueAccess::Writable).unwrap()),
+        Box::new(BinaryValueObject::with_access(2, "BV-2", writable).unwrap()),
         Box::new(IntegerValueObject::with_access(1, "IV-1", PresentValueAccess::ReadOnly).unwrap()),
         Box::new(IntegerValueObject::new(2, "IV-2").unwrap()),
+        Box::new(IntegerValueObject::with_access(3, "IV-3", writable).unwrap()),
+        Box::new(bacnet_objects::binary::BinaryOutputObject::new(1, "BO-1").unwrap()),
+        Box::new(bacnet_objects::binary::BinaryInputObject::new(1, "BI-1").unwrap()),
+        Box::new(bacnet_objects::multistate::MultiStateInputObject::new(1, "MSI-1", 3).unwrap()),
     ];
     for object in more {
         db.add(object).unwrap();
@@ -158,7 +183,19 @@ impl CovParity {
             .await
             .set_clock_reader(Some(Arc::new(FixedClock)));
         let a = direct(1);
-        let objects = [ai(), msv(), av2(), bv2(), iv1(), iv2(), lsp()];
+        let objects = [
+            ai(),
+            msv(),
+            av2(),
+            bv2(),
+            iv1(),
+            iv2(),
+            lsp(),
+            iv3(),
+            bo1(),
+            bi1(),
+            msi1(),
+        ];
         for (process, object) in (1..).zip(objects) {
             let body = subscribe(process, object, Some(false), Some(600));
             let (reply, initial) = cov.exchange("subscribe", &a, SUBSCRIBE, &body).await;

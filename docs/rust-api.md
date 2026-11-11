@@ -5921,8 +5921,13 @@ Analog Value:
   algorithm, and takes the Reliability its application works out through
   `set_reliability` while in service, refusing it out of service with
   PROPERTY / WRITE_ACCESS_DENIED. Status_Flags' FAULT follows it, so
-  `set_reliability_local` reports the change. A client still can't write
-  Reliability.
+  `set_reliability_local` reports the change.
+- Its Reliability takes a client's write only while Out_Of_Service is TRUE,
+  to simulate a fault (Clause 12.43.9): in service the write is PROPERTY /
+  WRITE_ACCESS_DENIED, another datatype INVALID_DATA_TYPE and a value
+  outside BACnetReliability VALUE_OUT_OF_RANGE. Going out of service sets
+  the application's value aside, and the return puts it back. The row is
+  writable out of service, so the PICS lists it RWO.
 
 `BACnetServer::set_present_value_local` supplies a logical application value to
 Analog/Binary/Multi-state Inputs, noncommandable Values, Loop (the control

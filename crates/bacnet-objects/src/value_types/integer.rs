@@ -36,8 +36,10 @@ use crate::traits::{BACnetObject, LocalInput, LocalInputValue, not_supported};
 ///
 /// It runs no fault algorithm of its own, but takes the Reliability its
 /// application works out through [`BACnetObject::reliability_eval`] while
-/// in service (#2446), and Status_Flags' FAULT follows it. A client can't
-/// write Reliability, in service or out of it.
+/// in service (#2446), and Status_Flags' FAULT follows it. While
+/// Out_Of_Service is TRUE a client may write Reliability to simulate a
+/// fault (Clause 12.43.9), and the application's value is set aside until
+/// the object returns to service.
 ///
 /// Min_Pres_Value and Max_Pres_Value are absent until set, and only
 /// describe the range: like the analog objects, nothing compares a written
@@ -50,6 +52,9 @@ pub struct IntegerValueObject {
     out_of_service: bool,
     status_flags: StatusFlags,
     reliability: Reliability,
+    /// The in-service Reliability, set aside while a client simulates one
+    /// out of service, and restored on the return.
+    reliability_before_out_of_service: Option<Reliability>,
     access: PresentValueAccess,
     /// 16-level priority array. `None` = no command at that level.
     priority_array: [Option<i32>; 16],
@@ -84,6 +89,7 @@ impl IntegerValueObject {
             out_of_service: false,
             status_flags: StatusFlags::empty(),
             reliability: Reliability::NO_FAULT_DETECTED,
+            reliability_before_out_of_service: None,
             access,
             priority_array: [None; 16],
             relinquish_default: 0,
@@ -211,6 +217,24 @@ impl IntegerValueObject {
         Ok(())
     }
 
+    /// A client's Reliability, taken only while Out_Of_Service is TRUE, to
+    /// simulate a fault (Clause 12.43.9); in service the application owns
+    /// it.
+    fn write_simulated_reliability(&mut self, value: PropertyValue) -> Result<(), Error> {
+        if !self.out_of_service {
+            return Err(common::write_access_denied_error());
+        }
+        let PropertyValue::Enumerated(raw) = value else {
+            return Err(common::invalid_data_type_error());
+        };
+        let reliability = Reliability::from_raw(raw);
+        if !common::is_reliability_value_valid(reliability) {
+            return Err(common::value_out_of_range_error());
+        }
+        self.reliability = reliability;
+        Ok(())
+    }
+
     /// A Present_Value or Relinquish_Default: any INTEGER.
     fn checked_present_value(value: PropertyValue) -> Result<i32, Error> {
         match value {
@@ -290,10 +314,19 @@ impl BACnetObject for IntegerValueObject {
             let increment = <u64 as CovIncrement>::from_property(value)?;
             return self.set_cov_increment(increment);
         }
-        if let Some(result) =
-            common::write_out_of_service(&mut self.out_of_service, property, &value)
-        {
+        // A Reliability simulated out of service ends with it: back in
+        // service, the one set aside comes back.
+        if let Some(result) = common::write_out_of_service_with_reliability_restore(
+            &mut self.out_of_service,
+            &mut self.reliability,
+            &mut self.reliability_before_out_of_service,
+            property,
+            &value,
+        ) {
             return result;
+        }
+        if property == P::RELIABILITY {
+            return self.write_simulated_reliability(value);
         }
         if let Some(result) = common::write_object_name(&mut self.name, property, &value) {
             return result;

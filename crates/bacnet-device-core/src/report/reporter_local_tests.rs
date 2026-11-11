@@ -256,3 +256,35 @@ fn a_change_that_changed_nothing_reports_nothing_and_drops_its_capture() {
     assert_eq!(sent(&mut device).len(), 1);
     assert_eq!(read(&device, lsp1(), P::PRESENT_VALUE), alarm);
 }
+
+/// A change that changed nothing looks at nothing: a change the host made
+/// by other means and hasn't reported stays unreported until the host's own
+/// `changed` reports it.
+#[test]
+fn an_unchanged_change_leaves_a_pending_one_unreported() {
+    let mut device = device();
+    let input = LocalInputValue::present_value(PropertyValue::Real(50.0));
+    let object = device.db.get_mut(&ai()).unwrap();
+    object
+        .local_input()
+        .unwrap()
+        .apply_local_input(input)
+        .unwrap();
+    // Object_Name has no NULL in its datatype (#1396).
+    let null = LocalChange::Property {
+        property: P::OBJECT_NAME,
+        array_index: None,
+        value: PropertyValue::Null,
+        priority: None,
+        source: LocalCommandSource::ServerDevice,
+    };
+    let unchanged = device.reporter.apply_local(&mut device.db, ai(), null, T0);
+    assert_eq!(unchanged.unwrap(), Applied::Unchanged);
+    assert!(sent(&mut device).is_empty());
+    device.reporter.changed(&device.db, &[ai()], T0);
+    assert_eq!(
+        sent(&mut device).len(),
+        1,
+        "the host's change, once it says so"
+    );
+}

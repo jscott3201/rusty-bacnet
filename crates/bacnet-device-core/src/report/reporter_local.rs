@@ -14,20 +14,24 @@ use crate::write::Applied;
 use crate::write::local::{self, LocalChange, LocalCommandSource};
 
 /// A Present_Value the application gives a point through
-/// [`Reporter::update`] or [`Reporter::command`], typed by the point's
-/// family. A value of another family than the object's is still refused
-/// with PROPERTY / INVALID_DATA_TYPE, as a write of it would be.
+/// [`Reporter::update`] or [`Reporter::command`], typed by the datatype it
+/// is written as: a REAL, an Enumerated, an Unsigned or a Signed. The
+/// object takes or refuses it by that datatype, as it would a write of it,
+/// not by the family a variant is named for: a Life Safety Point takes a
+/// `Binary` as the Enumerated it is, and a Positive Integer Value a
+/// `State`. A datatype the object's Present_Value doesn't have is refused
+/// with PROPERTY / INVALID_DATA_TYPE.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum LocalValue {
-    /// An analog object's REAL.
+    /// A REAL, as an analog object takes.
     Real(f32),
-    /// A binary object's state, an Enumerated.
+    /// An Enumerated, as a binary object takes for its state.
     Binary(BinaryPV),
-    /// A multi-state object's state, an Unsigned from 1 to its
-    /// Number_Of_States.
+    /// An Unsigned, as a multi-state object takes for its state, from 1 to
+    /// its Number_Of_States.
     State(u32),
-    /// An Integer Value's INTEGER.
+    /// A Signed, as an Integer Value takes.
     Integer(i32),
 }
 
@@ -73,12 +77,17 @@ impl Reporter {
     /// through [`changed`](Self::changed). One that changed nothing
     /// ([`Applied::Unchanged`]) or was refused reports nothing, and the
     /// capture is dropped. The refusal is the object's or `apply`'s, as it
-    /// is.
+    /// is. `changed` takes every capture pending, not only `oid`'s, and a
+    /// change that wrote nothing forgets `oid`'s capture even when the host
+    /// made it before this call.
     ///
-    /// The reporter sends COV notifications only. Event notifications come
-    /// with #2303's third part, from the same entry ahead of COV, as
-    /// `bacnet-server` orders them, so a change made here will reach them
-    /// too.
+    /// The reporter sends COV notifications only, and runs no event pass
+    /// yet. With `bacnet-objects`' `event-reporting` on, a fault set here
+    /// leaves an intrinsic reporter's Event_State as it was, so Status_Flags
+    /// and the COV notification carry FAULT without the IN_ALARM the
+    /// server's event pass would add. Event notifications come with #2303's
+    /// third part, from the same entry ahead of COV, as `bacnet-server`
+    /// orders them, so a change made here will reach them too.
     pub fn apply_local(
         &mut self,
         db: &mut ObjectDatabase,
@@ -114,6 +123,11 @@ impl Reporter {
 
     /// Give `oid` the Reliability the application works out, and report
     /// the change, Status_Flags' FAULT with it: [`LocalChange::Reliability`].
+    ///
+    /// Until the reporter runs the event pass (#2303), a fault leaves an
+    /// intrinsic reporter's Event_State as it was, so the notification
+    /// carries no IN_ALARM where `bacnet-server`'s would; see
+    /// [`apply_local`](Self::apply_local).
     pub fn set_reliability(
         &mut self,
         db: &mut ObjectDatabase,
@@ -140,8 +154,9 @@ impl Reporter {
         self.apply_local(db, oid, present_value(value.into(), priority), now)
     }
 
-    /// Relinquish the local Device's command of `oid` at `priority`, and
-    /// report what follows: [`command`](Self::command) with a NULL.
+    /// Relinquish `oid`'s priority slot `priority` as the local Device,
+    /// whatever holds it, and report what follows:
+    /// [`command`](Self::command) with a NULL.
     pub fn relinquish(
         &mut self,
         db: &mut ObjectDatabase,
