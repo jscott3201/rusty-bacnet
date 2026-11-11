@@ -622,6 +622,37 @@
 # targets' 256 KiB region and this table's limits, so the row waits for
 # the path to be trimmed (docs/design/device-core-events.md, decision 18).
 #
+# On 2026-11-11 (#2446, Rust 1.99.0, against PR 2's branch at 0c2e1f314)
+# the scenario runs the application's control loop through the Reporter's
+# local writes: four cycles, each an `update` of AI-2's reading, which its
+# six subscribers hear of, then BV-2 commanded at 8 and at 12 and
+# relinquished at both (`command`, `relinquish`); the last cycle also sets
+# a fault (`set_reliability`); and after CHANGE an `update` of the
+# out-of-service AI-2 is refused. As text / rodata / flash, before then
+# after; RAM unchanged at 24680:
+#
+#   thumbv7m             177164 / 17656 / 195844
+#                        181416 / 17804 / 200244
+#   thumbv7em            177976 / 17660 / 196660
+#                        181616 / 17808 / 200448
+#   riscv32imac          214052 / 21340 / 235414
+#                        218536 / 21552 / 240110
+#
+# So 4400 / 3788 / 4696 octets of flash. A spike with the five calls
+# stubbed out measured 198132 / 198976 / 237706, which puts 2112 / 1472 /
+# 2404 octets on the facade and the rest on the scenario's own loop and
+# summary. Of the facade's 2108 octets of thumbv7m .text, apply_local is
+# 1544 (the local write inlined into it), and source resolution, the name
+# index and the array-index check, which the network write doesn't reach,
+# are 446; the code it shares with the request path (handle and
+# commit_attempt), outlined now rather than inlined there, nets 288 less.
+# core::fmt and the 64-bit division routines stay at 0, and the memmove
+# count doesn't move. The host test's heap peak goes from 19136 to 19768
+# octets (31848 to 32560 with `reporting-multiple`), within the arena. The
+# rows were last set by #2363's second review round, at 171440 / 171936 /
+# 206732 octets of .text, and the image grew to the sizes before this
+# change without a re-set; they are --suggest's again.
+#
 # The points rows are from when that image joined, on 2026-11-10, Rust
 # 1.99.0 against dev at 420a0d6ad (#2445). It answers the objects image's
 # requests, and two reads of its own, from a database that bacnet-objects'
@@ -779,11 +810,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [thumbv7m-none-eabi.reporting]
-text = 192016
-rodata = 19360
+text = 203200
+rodata = 19952
 data = 64
 bss = 27648
-flash = 212528
+flash = 224288
 ram = 27648
 fmt_functions = 0
 div64_functions = 0
@@ -1076,11 +1107,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [thumbv7em-none-eabihf.reporting]
-text = 192576
-rodata = 19360
+text = 203424
+rodata = 19952
 data = 64
 bss = 27648
-flash = 213088
+flash = 224512
 ram = 27648
 fmt_functions = 0
 div64_functions = 0
@@ -1109,11 +1140,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [riscv32imac-unknown-none-elf.reporting]
-text = 231552
-rodata = 23472
+text = 244768
+rodata = 24144
 data = 64
 bss = 27648
-flash = 255040
+flash = 268928
 ram = 27648
 fmt_functions = 0
 div64_functions = 0

@@ -313,10 +313,13 @@ credited to a crate reliably within one LTO image:
   `thumbv7em-none-eabihf` and `riscv32imac-unknown-none-elf` only, the last
   for this image and the next two alone;
 - `reporting` links what `objects` links and `bacnet-device-core`'s COV
-  table, with its SubscribeCOV and SubscribeCOVProperty (#2303), and the
-  core's Device clock, which a UTCTimeSynchronization sets (#2321), in the
-  same arena and on the same targets. Its size less the objects image's is
-  what COV and the clock cost;
+  table, with its SubscribeCOV and SubscribeCOVProperty (#2303), the
+  core's Device clock, which a UTCTimeSynchronization sets (#2321), and the
+  `Reporter`'s local writes, which the application's own control loop
+  makes (#2446), in the same arena and on the same targets. Its size less
+  the objects image's is what COV, the clock and the local writes cost;
+  the local writes alone are about 2 KB of flash on `thumbv7m-none-eabi`
+  (`size-budget.toml` has the figures);
 - `points` answers the objects image's requests from a database that
   `bacnet-objects`' point-list builder (`points::build_database`, #2445)
   makes: the objects image's four points and one each of the other seven
@@ -453,11 +456,19 @@ targets, so a crate that needs one builds only with a backend such as
   - `reporting::run` runs `objects::run`, then hands a `CovTable` capped at
     eight subscriptions twelve SubscribeCOV and SubscribeCOVProperty
     requests: two subscriptions, a renewal, six more up to the cap, one
-    past it, which is refused, and two cancellations; then an expiry pass
-    removes the rest. Before that pass a UTCTimeSynchronization sets the
-    Device clock, and two reads return its Local_Date and Local_Time.
-    `reporting::expected()` holds each reply and how many subscriptions the
-    table held after it.
+    past it, which is refused, and two cancellations. Then the
+    application's control loop runs four one-second cycles through the
+    `Reporter`'s local writes: each gives an Analog Input a reading, which
+    its six subscribers hear of, and commands a Binary Value at priorities
+    8 and 12 and relinquishes both, and the last also sets a fault as the
+    input's Reliability. Once a WriteProperty has taken the input out of
+    service, its next reading is refused. Then an expiry pass removes the
+    rest. Before that pass a UTCTimeSynchronization sets the Device clock,
+    and two reads return its Local_Date and Local_Time.
+    `reporting::expected()` holds each reply, how many subscriptions the
+    table held after it, each local write's result, the Binary Value's
+    Present_Value after each step, and the first notification each reading
+    and the fault sent.
   - `points::run` builds its database from the point list it is handed
     (`points::list()`), sets the two Analog Inputs' Present_Value through
     their local input, and hands `Responder::handle` the objects image's

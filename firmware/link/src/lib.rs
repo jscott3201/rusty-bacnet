@@ -29,8 +29,9 @@
 //!   atomic compare-and-swap, so it builds for thumbv7m, thumbv7em and
 //!   riscv32imac only.
 //! - `reporting` (`reporting::run`, with the `reporting` feature): the
-//!   objects image's database with `bacnet-device-core`'s COV `Reporter`
-//!   and Device clock, on the objects image's targets.
+//!   objects image's database with `bacnet-device-core`'s COV `Reporter`,
+//!   which also makes the application's own changes, and Device clock, on
+//!   the objects image's targets.
 //! - `points` (`points::run`, with the `points` feature): the objects
 //!   image's requests answered from a database `bacnet-objects`' point-list
 //!   builder makes, one point of each of the nine analog, binary and
