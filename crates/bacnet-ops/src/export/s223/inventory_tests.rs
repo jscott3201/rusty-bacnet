@@ -247,7 +247,7 @@ async fn stop(engine: Engine<Link>, mut server: BACnetServer<LoopbackTransport>)
 async fn reads_each_exported_object_once() {
     let (engine, server) = lab(Faults::default()).await;
     let inventory = engine
-        .inventory(LAB, &InventoryOptions::default())
+        .inventory(LAB, &InventoryOptions::default(), &AtomicBool::new(false))
         .await
         .unwrap();
     assert_eq!(engine.limits().recent(), 10 + 2, "{inventory:?}");
@@ -299,7 +299,10 @@ async fn reads_each_exported_object_once() {
 async fn types_narrow_what_is_read() {
     let (engine, server) = lab(Faults::default()).await;
     let options = InventoryOptions::new(vec![ObjectType::MULTI_STATE_VALUE]).unwrap();
-    let inventory = engine.inventory(LAB, &options).await.unwrap();
+    let inventory = engine
+        .inventory(LAB, &options, &AtomicBool::new(false))
+        .await
+        .unwrap();
     assert_eq!(engine.limits().recent(), 1 + 2);
     assert_eq!(inventory.objects.len(), 1);
     assert_eq!(
@@ -334,7 +337,10 @@ async fn by_read_property_when_rpm_is_refused() {
         };
         let (engine, server) = lab(refuses).await;
         let options = InventoryOptions::new(vec![object_type]).unwrap();
-        let inventory = engine.inventory(LAB, &options).await.unwrap();
+        let inventory = engine
+            .inventory(LAB, &options, &AtomicBool::new(false))
+            .await
+            .unwrap();
         assert!(engine.refused_rpm(LAB));
         // The name and the list, the refused RPM, then the ReadProperty.
         assert_eq!(engine.limits().recent(), 2 + 1 + cost, "{object_type}");
@@ -359,7 +365,7 @@ async fn by_read_property_when_rpm_is_refused() {
 async fn a_device_that_stops_answering() {
     let (engine, server) = lab(passing(4)).await;
     let inventory = engine
-        .inventory(LAB, &InventoryOptions::default())
+        .inventory(LAB, &InventoryOptions::default(), &AtomicBool::new(false))
         .await
         .unwrap();
     assert_eq!(inventory.objects.len(), 2, "{inventory:?}");
@@ -374,10 +380,12 @@ async fn a_device_that_stops_answering() {
     stop(engine, server).await;
 
     let (engine, server) = lab(passing(0)).await;
-    let error = engine
-        .inventory(LAB, &InventoryOptions::default())
-        .await
-        .unwrap_err();
+    let halt = engine
+        .inventory(LAB, &InventoryOptions::default(), &AtomicBool::new(false))
+        .await;
+    let Err(Halt::Device(error)) = halt else {
+        panic!("{halt:?}");
+    };
     assert!(crate::engine::unreachable(&error), "{error}");
     assert_eq!(engine.limits().recent(), 1);
     stop(engine, server).await;
@@ -396,7 +404,7 @@ async fn a_list_that_stops_early_ends_the_reading() {
     };
     let (engine, server) = lab(faults).await;
     let inventory = engine
-        .inventory(LAB, &InventoryOptions::default())
+        .inventory(LAB, &InventoryOptions::default(), &AtomicBool::new(false))
         .await
         .unwrap();
     assert!(inventory.objects.is_empty(), "{inventory:?}");
@@ -453,5 +461,45 @@ async fn a_cancel_keeps_what_was_read() {
     };
     let early = read_inventory(&mut reader, &InventoryOptions::default()).await;
     assert!(matches!(early, Err(Halt::Cancelled)), "{early:?}");
+    stop(engine, server).await;
+}
+
+/// The engine's inventory stops at its caller's flag as a reader does:
+/// set once the Object_List is in, what was read is kept; set before, it
+/// is a cancel, not a panic. The device's refusal of RPM is still
+/// remembered after a stop.
+#[tokio::test(start_paused = true)]
+async fn the_engine_stops_at_the_callers_flag() {
+    let flag = Arc::new(AtomicBool::new(false));
+    let faults = Faults {
+        // The name, the list, the refused RPM, then three ReadProperty of
+        // the analog input: the flag goes up as the third leaves.
+        cancel: Some((6, Arc::clone(&flag))),
+        reject_rpm: true,
+        ..Faults::default()
+    };
+    let (engine, server) = lab(faults).await;
+    let inventory = engine
+        .inventory(LAB, &InventoryOptions::default(), &flag)
+        .await
+        .unwrap();
+    assert_eq!(inventory.objects.len(), 1, "{inventory:?}");
+    let stopped = inventory.stopped.as_deref().unwrap();
+    assert!(stopped.starts_with("cancelled before "), "{stopped}");
+    assert_eq!(engine.limits().recent(), 6);
+    assert!(engine.refused_rpm(LAB));
+    stop(engine, server).await;
+
+    let flag = Arc::new(AtomicBool::new(false));
+    let faults = Faults {
+        cancel: Some((1, Arc::clone(&flag))),
+        ..Faults::default()
+    };
+    let (engine, server) = lab(faults).await;
+    let early = engine
+        .inventory(LAB, &InventoryOptions::default(), &flag)
+        .await;
+    assert!(matches!(early, Err(Halt::Cancelled)), "{early:?}");
+    assert_eq!(engine.limits().recent(), 1);
     stop(engine, server).await;
 }

@@ -48,7 +48,8 @@ tempfile = "3"
 # B/IP when it formats addresses (`AddressStyle::of`).
 sc-tls = ["bacnet-transport/sc-tls", "bacnet-client/sc-tls"]
 # Frame builders for decode tests (`decode::testing`), for the CLI's
-# capture tests. Not a stable API.
+# capture tests, and the 223 export's structural check
+# (`export::s223::testing`), for the MCP tool's tests. Not a stable API.
 test-support = []
 
 [lints]

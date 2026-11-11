@@ -19,29 +19,38 @@
 //! an analog input or output or a binary value, 4 for an analog value or a
 //! multi-state input or output, and 5 for a multi-state value.
 
+use std::sync::atomic::AtomicBool;
+
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
-use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::{Inventory, InventoryObject, InventoryOptions};
-use crate::engine::{Engine, Halt, Reader, Wanted, device_error, unreachable};
+use crate::engine::{Engine, Halt, Reader, Wanted, unreachable};
 use crate::format::{RawRow, StateTexts, decode_all, units};
 use crate::label::object_label;
 
 impl<T: TransportPort + 'static> Engine<T> {
     /// `device`'s objects of the types `options` names, as the Standard
-    /// 223 export reads them ([`read_inventory`]). Fails only when the
-    /// device's name or Object_List can't be read.
+    /// 223 export reads them ([`read_inventory`]). `stop` set ends the
+    /// reading before its next request: once the Object_List is in, the
+    /// objects read so far are kept and [`Inventory::stopped`] says so (an
+    /// MCP call out of budget, say); before, it is [`Halt::Cancelled`].
+    /// Fails otherwise only when the device's name or Object_List can't be
+    /// read.
     pub async fn inventory(
         &self,
         device: u32,
         options: &InventoryOptions,
-    ) -> Result<Inventory, Error> {
-        let mut reader = self.reader(device);
+        stop: &AtomicBool,
+    ) -> Result<Inventory, Halt> {
+        let mut reader = Reader {
+            cancel: stop,
+            ..self.reader(device)
+        };
         let inventory = read_inventory(&mut reader, options).await;
         self.settle(&reader);
-        inventory.map_err(device_error)
+        inventory
     }
 }
 
