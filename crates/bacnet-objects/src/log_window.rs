@@ -13,12 +13,11 @@
 //! logging at the last look; [`crate::log_lifecycle::LogLifecycle`] turns a
 //! change of that into the LOG_DISABLED record the log keeps.
 
-use bacnet_types::calendar::SpecificDate;
 use bacnet_types::enums::PropertyIdentifier as P;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, PropertyValue, Time};
 
-use crate::clock::UNSPECIFIED_DATETIME;
+use crate::clock::{UNSPECIFIED_DATETIME, local_moment};
 use crate::common;
 use crate::property_metadata::{
     PropertyConformance::Optional, PropertyMetadata, PropertyWriteCapability::Always,
@@ -30,34 +29,21 @@ pub(crate) const START_TIME_METADATA: PropertyMetadata =
 pub(crate) const STOP_TIME_METADATA: PropertyMetadata =
     PropertyMetadata::new(P::STOP_TIME, Optional, None, Always);
 
-/// One end of the span: open, or an actual local date and time.
+/// One end of the span: open, or an actual local moment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum End {
     Open,
-    At(SpecificDate, (u8, u8, u8, u8)),
+    At(i64),
 }
 
 impl End {
     /// The end `value` names, or `None` for a value that is neither wholly
-    /// unspecified nor an actual moment. The weekday octet may be left
-    /// unspecified or disagree with the date: it never changes the day named.
-    /// Unspecified seconds or hundredths count as zero.
-    fn of((date, time): (Date, Time)) -> Option<Self> {
-        if (date, time) == UNSPECIFIED_DATETIME {
+    /// unspecified nor an actual moment ([`local_moment`]'s rules).
+    fn of(value: (Date, Time)) -> Option<Self> {
+        if value == UNSPECIFIED_DATETIME {
             return Some(Self::Open);
         }
-        let weekday = date.day_of_week == Date::UNSPECIFIED || (1..=7).contains(&date.day_of_week);
-        let day = SpecificDate::from_date(&date).filter(|_| weekday)?;
-        let or_zero = |field: u8| if field == Time::UNSPECIFIED { 0 } else { field };
-        let time = Time {
-            second: or_zero(time.second),
-            hundredths: or_zero(time.hundredths),
-            ..time
-        };
-        time.is_specific().then_some(Self::At(
-            day,
-            (time.hour, time.minute, time.second, time.hundredths),
-        ))
+        local_moment(value).map(Self::At)
     }
 }
 

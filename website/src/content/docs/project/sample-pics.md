@@ -931,12 +931,16 @@ Property rows aggregate configured instances: a row or access flag means at leas
 | OBJECT_TYPE | R |
 | PRESENT_VALUE | R |
 | RELIABILITY | RO |
-| STATUS_FLAGS | RO |
-| START_TIME | R |
+| STATUS_FLAGS | R |
+| ENABLE | RW |
+| START_TIME | RW |
 | ACTUAL_SHED_LEVEL | R |
+| DUTY_WINDOW | RW |
 | EXPECTED_SHED_LEVEL | R |
 | REQUESTED_SHED_LEVEL | RW |
 | SHED_DURATION | RW |
+| SHED_LEVEL_DESCRIPTIONS | R |
+| SHED_LEVELS | RW |
 | PROPERTY_LIST | R |
 
 #### STRUCTURED_VIEW

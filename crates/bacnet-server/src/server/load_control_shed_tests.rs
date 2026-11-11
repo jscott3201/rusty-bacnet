@@ -1,0 +1,387 @@
+//! A Load Control shed request over the wire (#2464): a client writes the
+//! request, the server runs the Clause 12.28 state machine on the Device
+//! clock (paused time, a clock set by hand), the application's
+//! `LoadShedder` answers it, and each shed state reaches a SubscribeCOV
+//! subscriber, the ones time alone brings included.
+
+use super::*;
+use bacnet_objects::clock::ClockFrame;
+use bacnet_objects::load_control::{LoadShedder, ShedProgress, ShedRequest, ShedStatus};
+use bacnet_types::primitives::{Date, Time};
+use std::sync::Mutex as StdMutex;
+
+/// 15:mm:00 on the harness's day, as the Device clock reads it.
+fn clock_at(minute: u8) -> ClockFrame {
+    ClockFrame {
+        local_time: Time {
+            minute,
+            ..at(0).local_time
+        },
+        ..at(0)
+    }
+}
+
+/// 15:mm:00 on the harness's day, as a client writes Start_Time.
+fn start_at(minute: u8) -> Vec<u8> {
+    let frame = clock_at(minute);
+    encode_date_time(frame.local_date, frame.local_time)
+}
+
+fn encode_date_time(date: Date, time: Time) -> Vec<u8> {
+    let mut bytes = encode(PropertyValue::Date(date));
+    bytes.extend(encode(PropertyValue::Time(time)));
+    bytes
+}
+
+fn set_clock(h: &Harness, minute: u8) {
+    *h.clock.0.lock().unwrap() = clock_at(minute);
+}
+
+/// An application whose answer the test sets, counting its stops.
+struct App {
+    answer: StdMutex<ShedStatus>,
+    asked: StdMutex<Vec<ShedRequest>>,
+    stops: StdMutex<usize>,
+}
+
+impl App {
+    fn answer(&self, progress: ShedProgress, actual: u64) {
+        *self.answer.lock().unwrap() = ShedStatus::new(
+            progress,
+            BACnetShedLevel::Level(2),
+            BACnetShedLevel::Level(actual),
+        );
+    }
+}
+
+impl LoadShedder for App {
+    fn shed(&self, request: &ShedRequest) -> ShedStatus {
+        self.asked.lock().unwrap().push(request.clone());
+        self.answer.lock().unwrap().clone()
+    }
+
+    fn stop(&self) {
+        *self.stops.lock().unwrap() += 1;
+    }
+}
+
+/// A harness serving LC-1 with three shed levels and `app` installed.
+async fn harness(app: &Arc<App>) -> Harness {
+    let mut object = LoadControlObject::new(1, "LC-1").unwrap();
+    object.set_shed_levels(vec![
+        (1, "Dim the lights".into()),
+        (2, "Raise cooling setpoints".into()),
+        (3, "Stop the chillers".into()),
+    ]);
+    object.set_shedder(app.clone());
+    Harness::start_with(ServerConfig::default(), |db| {
+        db.add(Box::new(object)).unwrap()
+    })
+    .await
+}
+
+fn app() -> Arc<App> {
+    Arc::new(App {
+        answer: StdMutex::new(ShedStatus::new(
+            ShedProgress::Waiting,
+            BACnetShedLevel::Level(2),
+            BACnetShedLevel::Level(0),
+        )),
+        asked: StdMutex::new(Vec::new()),
+        stops: StdMutex::new(0),
+    })
+}
+
+fn lc1() -> ObjectIdentifier {
+    ObjectIdentifier::new(ObjectType::LOAD_CONTROL, 1).unwrap()
+}
+
+/// A SubscribeCOV report of LC-1: its state, then the request properties.
+fn report(state: u32, requested: u64, start: Vec<u8>, duration: u64, window: u64) -> Values {
+    vec![
+        (PV, enumerated(state)),
+        (SF, normal()),
+        (
+            PropertyIdentifier::REQUESTED_SHED_LEVEL,
+            vec![0x19, u8::try_from(requested).unwrap()],
+        ),
+        (PropertyIdentifier::START_TIME, start),
+        (PropertyIdentifier::SHED_DURATION, unsigned(duration)),
+        (PropertyIdentifier::DUTY_WINDOW, unsigned(window)),
+    ]
+}
+
+fn unspecified() -> Vec<u8> {
+    vec![0xA4, 0xFF, 0xFF, 0xFF, 0xFF, 0xB4, 0xFF, 0xFF, 0xFF, 0xFF]
+}
+
+/// Read `property` of LC-1 from the server's database, encoded.
+async fn read(h: &Harness, property: PropertyIdentifier) -> Vec<u8> {
+    let db = h.server.database().read().await;
+    encode(
+        db.get(&lc1())
+            .unwrap()
+            .read_property(property, None)
+            .unwrap(),
+    )
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_shed_request_runs_on_the_device_clock_and_reports_each_state() {
+    let app = app();
+    let mut h = harness(&app).await;
+    let oid = lc1();
+    set_clock(&h, 0);
+    assert_eq!(
+        subscribed(&mut h, oid).await,
+        report(0, 0, unspecified(), 0, 0)
+    );
+
+    // The request: level 2 for 30 minutes over a 10-minute window, from
+    // 15:05. Each parameter write reports, and nothing starts until the
+    // Start_Time write, which before #2464 was refused.
+    let parameters = [
+        (PropertyIdentifier::REQUESTED_SHED_LEVEL, vec![0x19, 0x02]),
+        (PropertyIdentifier::SHED_DURATION, unsigned(30)),
+        (PropertyIdentifier::DUTY_WINDOW, unsigned(10)),
+    ];
+    for (property, value) in parameters {
+        write(&mut h, oid, property, value).await;
+        h.cov_notification().await;
+    }
+    write(&mut h, oid, PropertyIdentifier::START_TIME, start_at(5)).await;
+    // SHED_REQUEST_PENDING: the application expects level 2 by 15:05.
+    assert_eq!(
+        values(&h.cov_notification().await, oid),
+        report(1, 2, start_at(5), 30, 10)
+    );
+    assert_eq!(
+        read(&h, PropertyIdentifier::EXPECTED_SHED_LEVEL).await,
+        vec![0x19, 2]
+    );
+    {
+        let asked = app.asked.lock().unwrap();
+        let request = asked.last().unwrap();
+        assert!(!request.started);
+        assert_eq!(request.shed_level, Some(1));
+    }
+
+    // 15:05 comes, and the application complies: SHED_COMPLIANT without
+    // any write, from the server's once-a-second pass.
+    app.answer(ShedProgress::Compliant, 2);
+    set_clock(&h, 5);
+    assert_eq!(
+        values(&h.cov_notification().await, oid),
+        report(2, 2, start_at(5), 30, 10)
+    );
+    assert_eq!(
+        read(&h, PropertyIdentifier::ACTUAL_SHED_LEVEL).await,
+        vec![0x19, 2]
+    );
+
+    // Actual_Shed_Level isn't in the row, so its change alone reports
+    // nothing, though the pass serves it.
+    app.answer(ShedProgress::Compliant, 3);
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    assert_eq!(
+        read(&h, PropertyIdentifier::ACTUAL_SHED_LEVEL).await,
+        vec![0x19, 3]
+    );
+    h.no_notification().await;
+
+    // The loads fall short: SHED_NON_COMPLIANT.
+    app.answer(ShedProgress::Shedding, 1);
+    assert_eq!(
+        values(&h.cov_notification().await, oid),
+        report(3, 2, start_at(5), 30, 10)
+    );
+
+    // 15:35, Start_Time plus Shed_Duration: the request is over and its
+    // properties go back to their idle values.
+    set_clock(&h, 35);
+    assert_eq!(
+        values(&h.cov_notification().await, oid),
+        report(0, 0, unspecified(), 0, 0)
+    );
+    assert_eq!(*app.stops.lock().unwrap(), 1);
+    h.no_notification().await;
+    h.server.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn writes_cancel_and_disable_a_request_over_the_wire() {
+    let app = app();
+    app.answer(ShedProgress::Compliant, 2);
+    let mut h = harness(&app).await;
+    let oid = lc1();
+    set_clock(&h, 0);
+    assert_eq!(
+        subscribed(&mut h, oid).await,
+        report(0, 0, unspecified(), 0, 0)
+    );
+
+    // One WritePropertyMultiple carries a whole request starting now.
+    write_multiple(
+        &mut h,
+        oid,
+        vec![
+            (PropertyIdentifier::REQUESTED_SHED_LEVEL, vec![0x19, 0x02]),
+            (PropertyIdentifier::SHED_DURATION, unsigned(30)),
+            (PropertyIdentifier::START_TIME, start_at(0)),
+        ],
+    )
+    .await;
+    let mut last = None;
+    while let Ok(notification) =
+        tokio::time::timeout(Duration::from_millis(100), h.cov_notification()).await
+    {
+        last = Some(values(&notification, oid));
+    }
+    assert_eq!(last, Some(report(2, 2, start_at(0), 30, 0)));
+
+    // The unspecified Start_Time cancels it.
+    write(&mut h, oid, PropertyIdentifier::START_TIME, unspecified()).await;
+    assert_eq!(
+        values(&h.cov_notification().await, oid),
+        report(0, 0, unspecified(), 0, 0)
+    );
+    assert_eq!(*app.stops.lock().unwrap(), 1);
+
+    // A request again, then Enable FALSE ends it, and a Start_Time written
+    // while disabled is kept but starts nothing.
+    write(
+        &mut h,
+        oid,
+        PropertyIdentifier::REQUESTED_SHED_LEVEL,
+        vec![0x19, 0x03],
+    )
+    .await;
+    write(&mut h, oid, PropertyIdentifier::SHED_DURATION, unsigned(20)).await;
+    write(&mut h, oid, PropertyIdentifier::START_TIME, start_at(1)).await;
+    let mut state = None;
+    while let Ok(notification) =
+        tokio::time::timeout(Duration::from_millis(100), h.cov_notification()).await
+    {
+        state = Some(values(&notification, oid)[0].clone());
+    }
+    assert_eq!(state, Some((PV, enumerated(2))));
+    write(
+        &mut h,
+        oid,
+        PropertyIdentifier::ENABLE,
+        encode(PropertyValue::Boolean(false)),
+    )
+    .await;
+    assert_eq!(
+        values(&h.cov_notification().await, oid),
+        report(0, 0, unspecified(), 0, 0)
+    );
+    assert_eq!(*app.stops.lock().unwrap(), 2);
+    write(
+        &mut h,
+        oid,
+        PropertyIdentifier::REQUESTED_SHED_LEVEL,
+        vec![0x19, 0x01],
+    )
+    .await;
+    write(&mut h, oid, PropertyIdentifier::SHED_DURATION, unsigned(20)).await;
+    write(&mut h, oid, PropertyIdentifier::START_TIME, start_at(2)).await;
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    assert_eq!(
+        read(&h, PropertyIdentifier::PRESENT_VALUE).await,
+        enumerated(0)
+    );
+    assert_eq!(read(&h, PropertyIdentifier::START_TIME).await, start_at(2));
+    h.server.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_new_properties_take_their_datatypes_over_the_wire() {
+    let app = app();
+    let mut h = harness(&app).await;
+    let oid = lc1();
+    // Element 2 of Shed_Levels; its size and Shed_Level_Descriptions are the
+    // device's.
+    let write_at = |property, index, value| WritePropertyRequest {
+        object_identifier: oid,
+        property_identifier: property,
+        property_array_index: Some(index),
+        property_value: value,
+        priority: None,
+    };
+    let mut answers = Vec::new();
+    for request in [
+        write_at(PropertyIdentifier::SHED_LEVELS, 2, unsigned(5)),
+        write_at(PropertyIdentifier::SHED_LEVELS, 0, unsigned(4)),
+        write_at(PropertyIdentifier::SHED_LEVELS, 4, unsigned(4)),
+        write_at(
+            PropertyIdentifier::SHED_LEVEL_DESCRIPTIONS,
+            1,
+            encode(PropertyValue::CharacterString("other".into())),
+        ),
+    ] {
+        let mut body = BytesMut::new();
+        request.encode(&mut body).unwrap();
+        h.request(ConfirmedServiceChoice::WRITE_PROPERTY, body)
+            .await;
+        answers.push(response(&h).await);
+    }
+    assert_eq!(
+        answers,
+        [
+            Ok(()),
+            Err(ErrorCode::WRITE_ACCESS_DENIED),
+            Err(ErrorCode::INVALID_ARRAY_INDEX),
+            Err(ErrorCode::WRITE_ACCESS_DENIED),
+        ]
+    );
+    let levels = [1, 5, 3].map(unsigned).concat();
+    assert_eq!(read(&h, PropertyIdentifier::SHED_LEVELS).await, levels);
+    for (property, value, code) in [
+        (
+            PropertyIdentifier::ENABLE,
+            unsigned(1),
+            ErrorCode::INVALID_DATA_TYPE,
+        ),
+        (
+            PropertyIdentifier::DUTY_WINDOW,
+            encode(PropertyValue::Real(1.0)),
+            ErrorCode::INVALID_DATA_TYPE,
+        ),
+        // A Start_Time with an unspecified hour names no moment.
+        (
+            PropertyIdentifier::START_TIME,
+            encode_date_time(
+                clock_at(0).local_date,
+                Time {
+                    hour: 0xFF,
+                    ..clock_at(0).local_time
+                },
+            ),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        ),
+    ] {
+        assert_eq!(
+            try_write(&mut h, oid, property, value).await,
+            Err(code),
+            "{property:?}"
+        );
+    }
+    write(&mut h, oid, PropertyIdentifier::DUTY_WINDOW, unsigned(15)).await;
+    assert_eq!(
+        read(&h, PropertyIdentifier::DUTY_WINDOW).await,
+        unsigned(15)
+    );
+    write(
+        &mut h,
+        oid,
+        PropertyIdentifier::ENABLE,
+        encode(PropertyValue::Boolean(false)),
+    )
+    .await;
+    assert_eq!(
+        read(&h, PropertyIdentifier::ENABLE).await,
+        encode(PropertyValue::Boolean(false))
+    );
+    h.server.stop().await.unwrap();
+}

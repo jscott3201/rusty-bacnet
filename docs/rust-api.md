@@ -5591,11 +5591,10 @@ framing, through the shared `bacnet-encoding` codecs.
   anything else fails with INVALID_DATA_TYPE, and a percent above 100 or an
   amount that is negative or not finite with VALUE_OUT_OF_RANGE.
   `LoadControlObject::set_requested_shed_level` applies the same checks and
-  returns `Result`. Present_Value stays SHED_INACTIVE (the shed state machine
-  isn't modeled), so a new requested level also resets Expected_Shed_Level and
-  Actual_Shed_Level to its choice's Table 12-33 default: 100, 0 or 0.0.
-  `set_actual_shed_level` refuses a level of another choice than the requested
-  one.
+  returns `Result`. While no request is under way, Expected_Shed_Level and
+  Actual_Shed_Level read the requested choice's Table 12-33 default: 100, 0 or
+  0.0. During one they read what the application's `LoadShedder` reports, in
+  the requested choice (see Load Control below).
 - **Access Point `Access_Event_Time` and Credential Data Input `Update_Time`**
   are `BACnetTimeStamp` values, the unspecified date and time in the datetime
   form until the first update. Credential Data Input `Present_Value` is a
@@ -6933,10 +6932,42 @@ known, before its invoke ID is leased, and before each retry; a request that
 already passed its last check is still sent if the delete lands in that gap,
 since no guard is held over a send.
 
+`LoadControlObject` runs the shed state machine of Clause 12.28 (Figure
+12-5, #2464). A client writes Requested_Shed_Level, Shed_Duration and
+Duty_Window (both in minutes), then Start_Time, a BACnetDateTime whose
+seconds and hundredths may be unspecified; a partly unspecified one is
+VALUE_OUT_OF_RANGE. Start_Time starts the request (SHED_REQUEST_PENDING), and
+on the Device clock the object moves to SHED_COMPLIANT or SHED_NON_COMPLIANT
+once Start_Time comes, or before it when the loads start shedding early, and
+back to SHED_INACTIVE when Shed_Duration has run. A write of any of the four
+during a shed decides the request again; the requested choice's default
+level or the unspecified Start_Time cancels it, and so does Enable FALSE,
+which leaves later requests unacted on until it is TRUE again. However a
+request ends, Requested_Shed_Level returns to its choice's default,
+Start_Time to unspecified, Shed_Duration to 0 and Duty_Window to the agreed
+value (`set_agreed_duty_window`, 0 by default). The object needs the Device
+clock to start shedding: without one a request stays pending. The server
+checks a request on each write and on its once-a-second operation pass.
+
+The loads belong to the application. It implements
+`load_control::LoadShedder` and installs it with `set_shedder`: `shed` gets
+the request (`ShedRequest`: the level, the Shed_Levels element a LEVEL
+request selects, the times, and whether Start_Time has come) and returns a
+`ShedStatus` (Waiting, Shedding or Compliant, with the expected and actual
+levels), and `stop` says the request ended. Both run under the database's
+write guard, so they must return quickly and not touch the database. Without
+a shedder nothing is shed: a request runs SHED_NON_COMPLIANT from Start_Time
+to its end. `set_shed_levels` sets Shed_Levels and Shed_Level_Descriptions
+together (empty by default); clients may rewrite a level but not resize the
+array, and only read the descriptions. `set_start_time`,
+`set_shed_duration`, `set_duty_window` and `set_enable` make the network
+writes' changes locally. The object doesn't serve Full_Duty_Baseline or
+State_Description, and doesn't keep a request across a restart.
+
 Load Control supports COV (Table 13-1). Its SubscribeCOV report carries
-Present_Value, Status_Flags, Requested_Shed_Level, Start_Time and
-Shed_Duration, and a change of any of them sends one. Duty_Window, which the
-row also names, isn't served yet.
+Present_Value, Status_Flags, Requested_Shed_Level, Start_Time, Shed_Duration
+and Duty_Window, and a change of any of them sends one, the state changes
+time brings included.
 
 A running server samples an Averaging object's Object_Property_Reference
 itself, every Window_Interval / Window_Samples seconds (#1144). The first sample

@@ -42,7 +42,7 @@ const DEVICE_INSTANCE: u32 = 2175;
 const CATALOGUE_TYPES: usize = 64;
 /// Values an RPM ALL reads over the catalogue: every row but Property_List.
 /// A row added or dropped changes it.
-const VALUES_READ: usize = 1138;
+const VALUES_READ: usize = 1142;
 /// Rows a write over the wire is refused for access: the rows without a
 /// write route and the Out_Of_Service rows, the arrays that read empty
 /// included (#2305).

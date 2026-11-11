@@ -10,10 +10,11 @@
 //! of service (#1131), so those tests report them through the application's
 //! routes, `report_access_event_local`, `report_credential_read_local` and
 //! `report_door_state_local` (#1132). The door's simulation test writes it
-//! over the wire instead, as the Load Control test does Requested_Shed_Level.
-//! A Load Control's Actual_Shed_Level has no such route, so its test puts an
-//! object holding the changed value into the database (`ObjectDatabase::add`
-//! replaces by identifier) and runs the fanout a write commit would.
+//! over the wire instead, as the Load Control test does its request
+//! properties. That test also puts an object configured locally into the
+//! database (`ObjectDatabase::add` replaces by identifier) and runs the
+//! fanout a write commit would; `load_control_shed_tests.rs` follows a
+//! request through the shed states on the Device clock.
 //!
 //! The BACnetTimeStamp, BACnetAuthenticationFactor and BACnetShedLevel values
 //! go out in their Clause 21 forms (#1133). A Credential Data Input's
@@ -605,24 +606,14 @@ async fn credential_data_input_simulated_rows_report_and_restore() {
     h.server.stop().await.unwrap();
 }
 
-/// LC-1 at requested level `requested`, achieving level 1, with the
-/// Shed_Duration given.
+/// LC-1 at requested level `requested`, with the Shed_Duration given and no
+/// request under way.
 fn load_control(requested: u64, duration: u64) -> Box<dyn BACnetObject> {
     let mut object = LoadControlObject::new(1, "LC-1").unwrap();
     object
         .set_requested_shed_level(BACnetShedLevel::Level(requested))
         .unwrap();
-    object
-        .set_actual_shed_level(BACnetShedLevel::Level(1))
-        .unwrap();
-    object
-        .write_property(
-            PropertyIdentifier::SHED_DURATION,
-            None,
-            PropertyValue::Unsigned(duration),
-            None,
-        )
-        .unwrap();
+    object.set_shed_duration(duration);
     Box::new(object)
 }
 
@@ -637,21 +628,25 @@ async fn load_control_cov_reports_and_triggers_on_its_shed_rows() {
     .await;
     // Start_Time is a BACnetDateTime: an application Date and Time.
     let unspecified = vec![0xA4, 0xFF, 0xFF, 0xFF, 0xFF, 0xB4, 0xFF, 0xFF, 0xFF, 0xFF];
-    // Duty_Window isn't served yet, so the report leaves it out. The
-    // requested level goes out as its BACnetShedLevel choice.
-    let report = |requested: Vec<u8>, duration: u64| {
+    // The requested level goes out as its BACnetShedLevel choice, and
+    // Duty_Window, served since #2464, closes the row.
+    let report = |requested: Vec<u8>, duration: u64, window: u64| {
         vec![
             (PV, enumerated(0)),
             (SF, normal()),
             (REQUESTED, requested),
             (PropertyIdentifier::START_TIME, unspecified.clone()),
             (PropertyIdentifier::SHED_DURATION, unsigned(duration)),
+            (PropertyIdentifier::DUTY_WINDOW, unsigned(window)),
         ]
     };
     // level [1] 0, the LEVEL choice's default.
-    assert_eq!(subscribed(&mut h, oid).await, report(vec![0x19, 0x00], 0));
+    assert_eq!(
+        subscribed(&mut h, oid).await,
+        report(vec![0x19, 0x00], 0, 0)
+    );
 
-    // Actual_Shed_Level isn't in the row, so its change doesn't report.
+    // An object with the same row values sends nothing.
     h.replace_and_fan_out(load_control(0, 0)).await;
     h.no_notification().await;
 
@@ -665,7 +660,7 @@ async fn load_control_cov_reports_and_triggers_on_its_shed_rows() {
     .await;
     assert_eq!(
         values(&h.cov_notification().await, oid),
-        report(vec![0x19, 0x00], 3600)
+        report(vec![0x19, 0x00], 3600, 0)
     );
     h.no_notification().await;
 
@@ -675,16 +670,24 @@ async fn load_control_cov_reports_and_triggers_on_its_shed_rows() {
         write(&mut h, oid, REQUESTED, requested.clone()).await;
         assert_eq!(
             values(&h.cov_notification().await, oid),
-            report(requested, 3600)
+            report(requested, 3600, 0)
         );
         h.no_notification().await;
     }
+
+    // And a Duty_Window write.
+    write(&mut h, oid, PropertyIdentifier::DUTY_WINDOW, unsigned(15)).await;
+    assert_eq!(
+        values(&h.cov_notification().await, oid),
+        report(vec![0x09, 0x50], 3600, 15)
+    );
+    h.no_notification().await;
 
     // A level the application sets reports the same way.
     h.replace_and_fan_out(load_control(5, 3600)).await;
     assert_eq!(
         values(&h.cov_notification().await, oid),
-        report(vec![0x19, 0x05], 3600)
+        report(vec![0x19, 0x05], 3600, 0)
     );
     h.no_notification().await;
     h.server.stop().await.unwrap();
@@ -751,3 +754,6 @@ mod access_inputs;
 
 #[path = "local_authorization_tests.rs"]
 mod local_authorization;
+
+#[path = "load_control_shed_tests.rs"]
+mod load_control_shed;

@@ -291,6 +291,7 @@ const fn by_identifier(property: P) -> Option<ValueType> {
         | P::OCCUPANCY_LOWER_LIMIT
         | P::OCCUPANCY_UPPER_LIMIT
         | P::SHED_DURATION
+        | P::DUTY_WINDOW
         | P::MAXIMUM_SEND_DELAY
         | P::NETWORK_NUMBER
         | P::BACNET_IP_UDP_PORT
