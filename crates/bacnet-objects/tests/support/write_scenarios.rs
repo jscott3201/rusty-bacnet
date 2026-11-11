@@ -234,6 +234,35 @@ pub fn SCENARIOS() -> Vec<Scenario> {
             ],
         },
         Scenario {
+            name: "a Start_Time behind a level to shed starts a request",
+            object_type: T::LOAD_CONTROL,
+            steps: vec![
+                // level [1] 1
+                Step::new(
+                    P::REQUESTED_SHED_LEVEL,
+                    PropertyValue::ApplicationData(vec![0x19, 0x01]),
+                ),
+                Step::new(P::SHED_DURATION, PropertyValue::Unsigned(60)),
+                Step::new(P::START_TIME, datetime(Some(9))),
+            ],
+        },
+        Scenario {
+            name: "a shorter Shed_Duration ends a request that has run its course",
+            object_type: T::LOAD_CONTROL,
+            steps: vec![
+                Step::new(
+                    P::REQUESTED_SHED_LEVEL,
+                    PropertyValue::ApplicationData(vec![0x19, 0x01]),
+                ),
+                Step::new(P::SHED_DURATION, PropertyValue::Unsigned(90)),
+                Step::new(P::DUTY_WINDOW, PropertyValue::Unsigned(15)),
+                // Shedding since 07:00, until 08:30.
+                Step::new(P::START_TIME, datetime(Some(7))),
+                // Now it ended at 07:10.
+                Step::new(P::SHED_DURATION, PropertyValue::Unsigned(10)),
+            ],
+        },
+        Scenario {
             name: "execution delays for the Channel's one member",
             object_type: T::CHANNEL,
             steps: vec![
@@ -263,6 +292,11 @@ pub const IDENTITY_ONLY: &[(T, P, &str)] = &[
         T::ACCESS_POINT,
         P::AUTHORIZATION_MODE,
         "the catalogue point supports AUTHORIZE alone",
+    ),
+    (
+        T::LOAD_CONTROL,
+        P::SHED_LEVELS,
+        "the catalogue Load Control has no shed levels, and a client can't change their number",
     ),
 ];
 

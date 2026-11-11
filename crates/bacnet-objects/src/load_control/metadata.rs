@@ -12,28 +12,21 @@ use crate::property_metadata::{
 // Canonical effective rows for Load Control (type 28, ASHRAE 135-2020 §12.28
 // Table 12-32; printed p. 344 / PDF p. 346, PDF = printed + 2; property
 // descriptions PDF pp. 347-349).
-// Order preserves the earlier 13-property order; EVENT_STATE (readable
-// but unlisted) and PROPERTY_LIST are appended. Only implemented rows are
-// described: table rows the object does not serve (Duty_Window, Enable,
-// Full_Duty_Baseline, Shed_Levels, Shed_Level_Descriptions, State_Description,
-// event/audit/tags/value-source/profile rows) stay absent until dispatch
-// exists. Enable has no PropertyIdentifier constant so no row can be emitted.
-// Object_Identifier, Object_Name, and Object_Type carry the table R code and
-// have no network write route, so RequiredRead/ReadOnly. Description is
-// Optional with a routed CharacterString write arm, so Optional/Always.
-// Present_Value, Expected_Shed_Level, and Actual_Shed_Level carry the table R
-// code and have no network write route, so RequiredRead/ReadOnly.
-// Requested_Shed_Level carries the table W code and dispatch accepts one
-// BACnetShedLevel CHOICE (#1133), so RequiredWrite/Always. Shed_Duration
-// carries the table W code and dispatch accepts Unsigned, so
-// RequiredWrite/Always. Start_Time carries the table W
-// code but dispatch has no write arm, so the row mirrors dispatch as
-// RequiredRead/ReadOnly rather than advertising a route write_property
-// rejects (Averaging Attempted_Samples precedent). Status_Flags and
-// Reliability carry the table O code, so Optional/ReadOnly. Table 12-32 has
-// no Out_Of_Service, so there is no such row (#1064). Event_State
-// carries the table R code and is readable but was absent from the legacy
-// list, so RequiredRead/ReadOnly and appended.
+// Order keeps the earlier rows' order; the rows served since #2464 follow
+// Event_State in table order, and PROPERTY_LIST comes last. Only implemented
+// rows are described: the optional Full_Duty_Baseline and State_Description,
+// and the event/audit/tags/value-source/profile rows, stay absent.
+// Object_Identifier, Object_Name, Object_Type, Present_Value,
+// Expected_Shed_Level, Actual_Shed_Level, Status_Flags, Event_State and
+// Shed_Level_Descriptions carry the table R code and have no network write
+// route, so RequiredRead/ReadOnly. Description and Reliability carry the
+// table O code; Description has a CharacterString write arm (Optional/Always)
+// and Reliability none (Optional/ReadOnly). Table 12-32 has no
+// Out_Of_Service, so there is no such row (#1064). Requested_Shed_Level (one
+// BACnetShedLevel CHOICE, #1133), Start_Time, Shed_Duration, Duty_Window,
+// Enable and Shed_Levels carry the table W code and each has its write arm,
+// so RequiredWrite/Always; Shed_Levels takes its elements but not a new size
+// (the table's footnote 1).
 const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_IDENTIFIER, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::OBJECT_NAME, RequiredRead, None, ReadOnly),
@@ -44,10 +37,14 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::EXPECTED_SHED_LEVEL, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::ACTUAL_SHED_LEVEL, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::SHED_DURATION, RequiredWrite, None, Always),
-    PropertyMetadata::new(P::START_TIME, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::STATUS_FLAGS, Optional, None, ReadOnly),
+    PropertyMetadata::new(P::START_TIME, RequiredWrite, None, Always),
+    PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::RELIABILITY, Optional, None, ReadOnly),
     PropertyMetadata::new(P::EVENT_STATE, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::DUTY_WINDOW, RequiredWrite, None, Always),
+    PropertyMetadata::new(P::ENABLE, RequiredWrite, None, Always),
+    PropertyMetadata::new(P::SHED_LEVELS, RequiredWrite, None, Always),
+    PropertyMetadata::new(P::SHED_LEVEL_DESCRIPTIONS, RequiredRead, None, ReadOnly),
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
@@ -90,6 +87,17 @@ mod tests {
         ])
     }
 
+    /// The rows a client writes: Table 12-32's W rows, and Description.
+    const WRITABLE: [P; 7] = [
+        P::DESCRIPTION,
+        P::REQUESTED_SHED_LEVEL,
+        P::SHED_DURATION,
+        P::START_TIME,
+        P::DUTY_WINDOW,
+        P::ENABLE,
+        P::SHED_LEVELS,
+    ];
+
     #[test]
     fn property_metadata_load_control_exact_sets_readable_rows_and_indexed_list() {
         let object = LoadControlObject::new(1, "LC-1").unwrap();
@@ -107,7 +115,12 @@ mod tests {
             P::STATUS_FLAGS,
             P::RELIABILITY,
             P::EVENT_STATE,
+            P::DUTY_WINDOW,
+            P::ENABLE,
+            P::SHED_LEVELS,
+            P::SHED_LEVEL_DESCRIPTIONS,
         ];
+        // Table 12-32's R and W rows, Status_Flags among them.
         let required = [
             P::OBJECT_IDENTIFIER,
             P::OBJECT_NAME,
@@ -118,12 +131,17 @@ mod tests {
             P::ACTUAL_SHED_LEVEL,
             P::SHED_DURATION,
             P::START_TIME,
+            P::STATUS_FLAGS,
             P::EVENT_STATE,
+            P::DUTY_WINDOW,
+            P::ENABLE,
+            P::SHED_LEVELS,
+            P::SHED_LEVEL_DESCRIPTIONS,
             P::PROPERTY_LIST,
         ];
         let metadata = object.property_metadata();
         assert!(matches!(metadata, Cow::Borrowed(_)));
-        assert_eq!(metadata.len(), 14);
+        assert_eq!(metadata.len(), 18);
         assert_eq!(
             crate::test_rows::listed(&object.property_metadata()),
             crate::test_rows::listed_from(&all)
@@ -147,17 +165,16 @@ mod tests {
         assert!(object.cov().is_some_and(|cov| cov.supports_subscribe_cov()));
         for row in metadata.iter() {
             assert_eq!(row.presence_condition, None);
-            let expected = if row.property_identifier == P::REQUESTED_SHED_LEVEL
-                || row.property_identifier == P::SHED_DURATION
-            {
+            let p = row.property_identifier;
+            let expected = if WRITABLE.contains(&p) && p != P::DESCRIPTION {
                 RequiredWrite
-            } else if required.contains(&row.property_identifier) {
+            } else if required.contains(&p) {
                 RequiredRead
             } else {
                 Optional
             };
-            assert_eq!(row.conformance, expected, "{:?}", row.property_identifier);
-            object.read_property(row.property_identifier, None).unwrap();
+            assert_eq!(row.conformance, expected, "{p:?}");
+            object.read_property(p, None).unwrap();
         }
         // Default readbacks pin the pure value stores.
         assert_eq!(
@@ -175,14 +192,31 @@ mod tests {
                 PropertyValue::ApplicationData(vec![0x19, 0x00])
             );
         }
-        assert_eq!(
-            object.read_property(P::SHED_DURATION, None).unwrap(),
-            PropertyValue::Unsigned(0)
-        );
+        for p in [P::SHED_DURATION, P::DUTY_WINDOW] {
+            assert_eq!(
+                object.read_property(p, None).unwrap(),
+                PropertyValue::Unsigned(0)
+            );
+        }
         assert_eq!(
             object.read_property(P::START_TIME, None).unwrap(),
             unspec_start_time()
         );
+        assert_eq!(
+            object.read_property(P::ENABLE, None).unwrap(),
+            PropertyValue::Boolean(true)
+        );
+        for p in [P::SHED_LEVELS, P::SHED_LEVEL_DESCRIPTIONS] {
+            assert!(crate::property_metadata::is_array_property(&object, p));
+            assert_eq!(
+                object.read_property(p, None).unwrap(),
+                PropertyValue::List(vec![])
+            );
+            assert_eq!(
+                object.read_property(p, Some(0)).unwrap(),
+                PropertyValue::Unsigned(0)
+            );
+        }
         assert_eq!(
             object.read_property(P::EVENT_STATE, None).unwrap(),
             PropertyValue::Enumerated(0)
@@ -192,7 +226,7 @@ mod tests {
             .filter(|&&p| !matches!(p, P::OBJECT_IDENTIFIER | P::OBJECT_NAME | P::OBJECT_TYPE))
             .map(|p| PropertyValue::Enumerated(p.to_raw()))
             .collect();
-        assert_eq!(wire.len(), 10);
+        assert_eq!(wire.len(), 14);
         assert!(crate::property_metadata::is_array_property(
             &object,
             P::PROPERTY_LIST
@@ -203,7 +237,7 @@ mod tests {
         );
         assert_eq!(
             object.read_property(P::PROPERTY_LIST, Some(0)).unwrap(),
-            PropertyValue::Unsigned(10)
+            PropertyValue::Unsigned(14)
         );
         for (index, value) in wire.iter().enumerate() {
             assert_eq!(
@@ -213,7 +247,7 @@ mod tests {
                 *value
             );
         }
-        for index in [11, u32::MAX] {
+        for index in [15, u32::MAX] {
             assert_error(
                 object
                     .read_property(P::PROPERTY_LIST, Some(index))
@@ -229,9 +263,10 @@ mod tests {
         let original = object.property_metadata().into_owned();
         for row in &original {
             let p = row.property_identifier;
-            let capability = match p {
-                P::DESCRIPTION | P::REQUESTED_SHED_LEVEL | P::SHED_DURATION => Always,
-                _ => ReadOnly,
+            let capability = if WRITABLE.contains(&p) {
+                Always
+            } else {
+                ReadOnly
             };
             assert_eq!(row.write_capability, capability, "{p:?}");
             assert_eq!(
@@ -239,6 +274,8 @@ mod tests {
                 capability.is_writable(),
                 "{p:?}"
             );
+            // Writing back what reads succeeds on every writable row, the
+            // unspecified Start_Time and the empty Shed_Levels included.
             let value = object.read_property(p, None).unwrap();
             let result = object.write_property(p, None, value, None);
             if capability.is_writable() {
@@ -249,10 +286,6 @@ mod tests {
         }
         // Object_Name has no network write route: a rename falls through
         // to WRITE_ACCESS_DENIED even with a well-formed value.
-        assert!(!crate::property_metadata::is_writable_property(
-            &object,
-            P::OBJECT_NAME
-        ));
         assert_error(
             object
                 .write_property(
@@ -264,76 +297,18 @@ mod tests {
                 .unwrap_err(),
             ErrorCode::WRITE_ACCESS_DENIED,
         );
-        // Present_Value, Expected_Shed_Level, and Actual_Shed_Level have
-        // no network write route.
-        for p in [
-            P::PRESENT_VALUE,
-            P::EXPECTED_SHED_LEVEL,
-            P::ACTUAL_SHED_LEVEL,
-        ] {
-            let value = object.read_property(p, None).unwrap();
-            assert_error(
-                object.write_property(p, None, value, None).unwrap_err(),
-                ErrorCode::WRITE_ACCESS_DENIED,
-            );
-            assert!(!crate::property_metadata::is_writable_property(&object, p));
-        }
-        // Start_Time carries the table W code but dispatch has no write
-        // arm (not even a schedule update), so even the read-back
-        // Date/Time list is denied and the row stays ReadOnly.
-        assert!(!crate::property_metadata::is_writable_property(
-            &object,
-            P::START_TIME
-        ));
+        // Shed_Level_Descriptions is the embedder's: clients only read it.
+        object.set_shed_levels(vec![(1, "lights".into())]).unwrap();
         assert_error(
             object
-                .write_property(P::START_TIME, None, unspec_start_time(), None)
+                .write_property(
+                    P::SHED_LEVEL_DESCRIPTIONS,
+                    Some(1),
+                    PropertyValue::CharacterString("other".into()),
+                    None,
+                )
                 .unwrap_err(),
             ErrorCode::WRITE_ACCESS_DENIED,
-        );
-        // Requested_Shed_Level takes a BACnetShedLevel CHOICE (percent [0]
-        // 50, then amount [2] 25.5) and serves it back as written; the bare
-        // Unsigned and one-element list it took before #1133 are the wrong
-        // datatype.
-        for written in [vec![0x09, 0x32], vec![0x2C, 0x41, 0xCC, 0x00, 0x00]] {
-            let written = PropertyValue::ApplicationData(written);
-            object
-                .write_property(P::REQUESTED_SHED_LEVEL, None, written.clone(), None)
-                .unwrap();
-            assert_eq!(
-                object.read_property(P::REQUESTED_SHED_LEVEL, None).unwrap(),
-                written
-            );
-        }
-        for legacy in [
-            PropertyValue::Unsigned(50),
-            PropertyValue::List(vec![PropertyValue::Unsigned(50)]),
-        ] {
-            assert_error(
-                object
-                    .write_property(P::REQUESTED_SHED_LEVEL, None, legacy, None)
-                    .unwrap_err(),
-                ErrorCode::INVALID_DATA_TYPE,
-            );
-        }
-        // Shed_Duration stores Unsigned verbatim and rejects other types
-        // without changing state.
-        object
-            .write_property(P::SHED_DURATION, None, PropertyValue::Unsigned(3600), None)
-            .unwrap();
-        assert_eq!(
-            object.read_property(P::SHED_DURATION, None).unwrap(),
-            PropertyValue::Unsigned(3600)
-        );
-        assert_error(
-            object
-                .write_property(P::SHED_DURATION, None, PropertyValue::Real(1.0), None)
-                .unwrap_err(),
-            ErrorCode::INVALID_DATA_TYPE,
-        );
-        assert_eq!(
-            object.read_property(P::SHED_DURATION, None).unwrap(),
-            PropertyValue::Unsigned(3600)
         );
         // Description rejects a mistyped value without changing state.
         assert_error(
@@ -342,16 +317,12 @@ mod tests {
                 .unwrap_err(),
             ErrorCode::INVALID_DATA_TYPE,
         );
-        // Unserved table rows stay unknown on read and denied on write.
-        // Enable has no PropertyIdentifier constant so no row can be
-        // emitted; the remaining unserved Load Control rows pin the
-        // exclusion. Table 12-32 has no Out_Of_Service at all (#1064).
+        // Unserved rows stay unknown on read and on write: Table 12-32 has
+        // no Out_Of_Service at all (#1064), and the object leaves out the
+        // optional Full_Duty_Baseline and State_Description.
         for p in [
             P::OUT_OF_SERVICE,
-            P::DUTY_WINDOW,
-            P::SHED_LEVELS,
             P::FULL_DUTY_BASELINE,
-            P::SHED_LEVEL_DESCRIPTIONS,
             P::STATE_DESCRIPTION,
         ] {
             assert!(!crate::property_metadata::is_writable_property(&object, p));

@@ -39,6 +39,8 @@
 //! - **Command actions.** A Command's Present_Value starts its list:
 //!   In_Process turns TRUE until the host finishes the run, and
 //!   All_Writes_Successful starts again.
+//! - **Load Control requests.** A request runs on the Device clock, so a
+//!   Shed_Duration write can put its end in the past, which ends it.
 //! - **Pending activation.** On a BBMD Network Port whose owner activates
 //!   changes, the BDT, Accept_FD_Registrations and multicast group rows
 //!   wait for activation, so Changes_Pending turns TRUE.
@@ -188,6 +190,17 @@ pub fn clocked_effects(object_type: T) -> &'static [&'static [Effect]] {
             (P::BBMD_ACCEPT_FD_REGISTRATIONS, &[P::CHANGES_PENDING]),
             (P::BACNET_IP_MULTICAST_ADDRESS, &[P::CHANGES_PENDING]),
         ]],
+        // A Shed_Duration that puts a Load Control request's end behind the
+        // clock ends it, and its properties go back to their idle values.
+        T::LOAD_CONTROL => &[&[(
+            P::SHED_DURATION,
+            &[
+                P::PRESENT_VALUE,
+                P::START_TIME,
+                P::REQUESTED_SHED_LEVEL,
+                P::DUTY_WINDOW,
+            ],
+        )]],
         // Starting, stopping and expiring the timer.
         T::TIMER => &[&[
             (P::PRESENT_VALUE, &[P::EXPIRATION_TIME]),

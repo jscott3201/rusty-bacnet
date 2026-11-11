@@ -61,6 +61,36 @@ pub(crate) fn current_datetime(clock: Option<&dyn ClockReader>) -> Option<(Date,
         .map(|frame| (frame.local_date, frame.local_time))
 }
 
+/// Hundredths of a second in a day.
+const HUNDREDTHS_PER_DAY: i64 = 24 * 60 * 60 * 100;
+
+/// The local moment `value` names, as hundredths of a second since
+/// 1970-01-01 00:00 local time, or `None` when it names none.
+///
+/// A written BACnetDateTime names a moment when its date is a real day and
+/// its hour and minute are set. Workstations often leave the seconds or the
+/// hundredths unspecified, so each of those counts as zero. The weekday octet
+/// may be unspecified or disagree with the date, but must be in range: it
+/// never changes the day named. Anything else partly unspecified, and the
+/// wholly unspecified value, name no moment.
+pub(crate) fn local_moment((date, time): (Date, Time)) -> Option<i64> {
+    let weekday = date.day_of_week == Date::UNSPECIFIED || (1..=7).contains(&date.day_of_week);
+    let day = SpecificDate::from_date(&date).filter(|_| weekday)?;
+    let or_zero = |field: u8| if field == Time::UNSPECIFIED { 0 } else { field };
+    let time = Time {
+        second: or_zero(time.second),
+        hundredths: or_zero(time.hundredths),
+        ..time
+    };
+    if !time.is_specific() {
+        return None;
+    }
+    let of_day =
+        ((i64::from(time.hour) * 60 + i64::from(time.minute)) * 60 + i64::from(time.second)) * 100
+            + i64::from(time.hundredths);
+    Some(day.days_since_1970() * HUNDREDTHS_PER_DAY + of_day)
+}
+
 /// A BACnetDateTime with every field unspecified, the value of a timestamp
 /// that has never been set.
 pub(crate) const UNSPECIFIED_DATETIME: (Date, Time) = (

@@ -46,6 +46,10 @@ fn rpm_load_control_metadata_selectors_preserve_bytes_and_budgets() {
         P::STATUS_FLAGS,
         P::RELIABILITY,
         P::EVENT_STATE,
+        P::DUTY_WINDOW,
+        P::ENABLE,
+        P::SHED_LEVELS,
+        P::SHED_LEVEL_DESCRIPTIONS,
     ];
     let required = [
         P::OBJECT_IDENTIFIER,
@@ -57,10 +61,16 @@ fn rpm_load_control_metadata_selectors_preserve_bytes_and_budgets() {
         P::ACTUAL_SHED_LEVEL,
         P::SHED_DURATION,
         P::START_TIME,
+        P::STATUS_FLAGS,
         P::EVENT_STATE,
+        P::DUTY_WINDOW,
+        P::ENABLE,
+        P::SHED_LEVELS,
+        P::SHED_LEVEL_DESCRIPTIONS,
     ];
-    // Table 12-32 has no Out_Of_Service (#1064).
-    let optional = [P::DESCRIPTION, P::STATUS_FLAGS, P::RELIABILITY];
+    // Table 12-32 has no Out_Of_Service (#1064), and this object leaves out
+    // Full_Duty_Baseline and State_Description.
+    let optional = [P::DESCRIPTION, P::RELIABILITY];
     for configured in [false, true] {
         let object = load_control_object(configured);
         let oid = object.object_identifier();

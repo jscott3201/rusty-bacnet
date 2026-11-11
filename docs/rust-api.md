@@ -5602,11 +5602,10 @@ framing, through the shared `bacnet-encoding` codecs.
   anything else fails with INVALID_DATA_TYPE, and a percent above 100 or an
   amount that is negative or not finite with VALUE_OUT_OF_RANGE.
   `LoadControlObject::set_requested_shed_level` applies the same checks and
-  returns `Result`. Present_Value stays SHED_INACTIVE (the shed state machine
-  isn't modeled), so a new requested level also resets Expected_Shed_Level and
-  Actual_Shed_Level to its choice's Table 12-33 default: 100, 0 or 0.0.
-  `set_actual_shed_level` refuses a level of another choice than the requested
-  one.
+  returns `Result`. While no request is under way, Expected_Shed_Level and
+  Actual_Shed_Level read the requested choice's Table 12-33 default: 100, 0 or
+  0.0. During one they read what the application's `LoadShedder` reports, in
+  the requested choice (see Load Control below).
 - **Access Point `Access_Event_Time` and Credential Data Input `Update_Time`**
   are `BACnetTimeStamp` values, the unspecified date and time in the datetime
   form until the first update. Credential Data Input `Present_Value` is a
@@ -6966,10 +6965,62 @@ known, before its invoke ID is leased, and before each retry; a request that
 already passed its last check is still sent if the delete lands in that gap,
 since no guard is held over a send.
 
+`LoadControlObject` runs the shed state machine of Clause 12.28 (Figure
+12-5, #2464). The object looks at a request on each write, so the order
+matters: a client writes Requested_Shed_Level, a non-zero Shed_Duration and
+Duty_Window (both in minutes) first, and Start_Time last. Start_Time is a
+BACnetDateTime whose seconds and hundredths may be unspecified, and whose
+weekday is taken as written; a partly unspecified one is VALUE_OUT_OF_RANGE.
+It starts the request (SHED_REQUEST_PENDING), and on the Device clock the
+object moves to SHED_COMPLIANT or SHED_NON_COMPLIANT once Start_Time comes,
+or before it when the loads start shedding early, and back to SHED_INACTIVE
+when Shed_Duration has run. If the clock is set back before Start_Time
+during a shed, the object looks at the request again as though Start_Time
+had just been written. A write of any of the four during a shed decides the
+request again; the requested choice's default level or the unspecified
+Start_Time cancels it. A Start_Time written behind the default level, or one
+whose Shed_Duration has already run, is acknowledged and ends the request at
+once, so Start_Time reads unspecified again; the unspecified Start_Time
+written with no request under way changes nothing. However a request ends,
+Requested_Shed_Level returns to its choice's default, Start_Time to
+unspecified, Shed_Duration to 0 and Duty_Window to the agreed value
+(`set_agreed_duty_window`, 0 by default). The object needs the Device clock
+to start shedding: without one a request stays pending, and a request,
+pending or being shed, holds its state and levels while the clock can't be
+read. The server checks a request on each
+write and on its once-a-second operation pass. A request is not kept across
+a restart: the object starts SHED_INACTIVE with the idle values.
+
+Enable FALSE ends a request and takes no new one. While it is FALSE, writes
+of Start_Time and Shed_Duration are acknowledged but not kept, so both read
+their idle values (unspecified and 0); Requested_Shed_Level and Duty_Window
+are kept as configuration. Enable TRUE starts nothing by itself: the next
+Start_Time write does, with the level and duty window held and a
+Shed_Duration written after Enable came back.
+
+The loads belong to the application. It implements
+`load_control::LoadShedder` and installs it with `set_shedder`: `shed` gets
+the request (`ShedRequest`: the level, the Shed_Levels element a LEVEL
+request selects, the times, and whether Start_Time has come) and returns a
+`ShedStatus` (Waiting, Shedding or Compliant, with the expected and actual
+levels), and `stop` says that a request it was asked about ended. Removing
+or replacing the object during a request doesn't call `stop`, and neither
+does replacing the shedder: the old one isn't told, and the new one hears of
+the request's end only once it has been asked about it. Both run under
+the database's write guard, so they must return quickly and not touch the
+database. Without a shedder nothing is shed: a request runs
+SHED_NON_COMPLIANT from Start_Time to its end. `set_shed_levels` sets
+Shed_Levels and Shed_Level_Descriptions together (empty by default) and
+refuses a level of 0, the no-shed level, with VALUE_OUT_OF_RANGE; clients may
+rewrite a level (0 refused the same way) but not resize the array, and only
+read the descriptions. `set_start_time`, `set_shed_duration`,
+`set_duty_window` and `set_enable` make the network writes' changes locally.
+The object doesn't serve Full_Duty_Baseline or State_Description.
+
 Load Control supports COV (Table 13-1). Its SubscribeCOV report carries
-Present_Value, Status_Flags, Requested_Shed_Level, Start_Time and
-Shed_Duration, and a change of any of them sends one. Duty_Window, which the
-row also names, isn't served yet.
+Present_Value, Status_Flags, Requested_Shed_Level, Start_Time, Shed_Duration
+and Duty_Window, and a change of any of them sends one, the state changes
+time brings included.
 
 A running server samples an Averaging object's Object_Property_Reference
 itself, every Window_Interval / Window_Samples seconds (#1144). The first sample

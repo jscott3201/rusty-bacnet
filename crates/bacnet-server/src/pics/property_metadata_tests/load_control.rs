@@ -16,11 +16,15 @@ fn pics_load_control_property_metadata_is_exact() {
         (P::EXPECTED_SHED_LEVEL, false, false),
         (P::ACTUAL_SHED_LEVEL, false, false),
         (P::SHED_DURATION, false, true),
-        (P::START_TIME, false, false),
+        (P::START_TIME, false, true),
         // Table 12-32 has no Out_Of_Service (#1064).
-        (P::STATUS_FLAGS, true, false),
+        (P::STATUS_FLAGS, false, false),
         (P::RELIABILITY, true, false),
         (P::EVENT_STATE, false, false),
+        (P::DUTY_WINDOW, false, true),
+        (P::ENABLE, false, true),
+        (P::SHED_LEVELS, false, true),
+        (P::SHED_LEVEL_DESCRIPTIONS, false, false),
         (P::PROPERTY_LIST, false, false),
     ];
     for configured in [false, true] {
