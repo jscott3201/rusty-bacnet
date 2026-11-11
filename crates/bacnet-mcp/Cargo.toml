@@ -68,6 +68,8 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
+# The 223 export's structural check (`export::s223::testing`).
+bacnet-ops = { workspace = true, features = ["test-support"] }
 bacnet-encoding = { workspace = true, features = ["std"] }
 bacnet-objects = { workspace = true, features = ["std"] }
 bytes = { workspace = true, features = ["std"] }

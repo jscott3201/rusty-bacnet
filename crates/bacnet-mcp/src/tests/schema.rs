@@ -303,6 +303,11 @@ async fn results_fit_their_output_schemas() {
             "bacnet_watch",
             json!({ "points": [{ "device": 1201, "object": "nope:1" }] }),
         ),
+        ("bacnet_export_223", json!({ "device": 1201 })),
+        (
+            "bacnet_export_223",
+            json!({ "device": 1201, "base_iri": "no-scheme/" }),
+        ),
     ];
     // Each tool's (successes, errors) checked.
     let mut checked: std::collections::BTreeMap<&str, (u32, u32)> = Default::default();
@@ -319,7 +324,7 @@ async fn results_fit_their_output_schemas() {
         violations(schema, &result["structuredContent"], "$", &mut out);
         assert!(out.is_empty(), "{tool} {args}: {out:?}");
     }
-    assert_eq!(checked.len(), 11, "every tool: {checked:?}");
+    assert_eq!(checked.len(), 12, "every tool: {checked:?}");
     for (tool, (successes, errors)) in &checked {
         assert!(
             *successes > 0 && *errors > 0,

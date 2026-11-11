@@ -74,6 +74,7 @@ bacnet mcp serve --stdio --profile plant-a --passive
 | `bacnet_alarms` | Lists a device's objects in alarm or fault or waiting for acknowledgment, with states, times and priorities named, and optionally its alarm and enrollment summaries |
 | `bacnet_decode` | Decodes a frame, NPDU or APDU given as hex into its layers and fields, without sending anything (also in passive mode) |
 | `bacnet_watch` | Follows up to 32 points and, called again with its cursor, says which changed since the last call, for hosts without resource subscriptions |
+| `bacnet_export_223` | Experimental: writes a device's analog, binary and multi-state points as a proposed ASHRAE Standard 223 point list in Turtle, with a summary. A large device comes in pages of about 30 points, each a Turtle document of its own; call again with the cursor for the next. Give each site its own `base_iri` |
 
 Two prompts start common jobs: `survey_site` surveys a range of devices, their networks and their alarms, and `investigate_point` explains one point's value, status, priority array, alarms and trend. Every value comes as display text and a typed form with enumeration and bit names. A property a device can't give is an error row with the device's error class and code.
 

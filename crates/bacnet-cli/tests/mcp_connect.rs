@@ -200,7 +200,7 @@ async fn connect_bridges_an_agent_to_the_listener() {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())
             .collect();
-        assert_eq!(names.len(), 11, "{names:?}");
+        assert_eq!(names.len(), 12, "{names:?}");
         assert!(!names.contains(&"bacnet_write") && !names.contains(&"bacnet_revert"));
         let read: Value = serde_json::from_str(lines[2].trim_end_matches('\r')).unwrap();
         assert_eq!(read["result"]["isError"], json!(false), "{read}");

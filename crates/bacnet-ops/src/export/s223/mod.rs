@@ -256,6 +256,10 @@ fn check_base_iri(base: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub mod testing;
+
 #[cfg(test)]
 mod tests;
 

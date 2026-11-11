@@ -238,8 +238,9 @@ engine, and `device_events`.
 Rules:
 
 1. **Few, composable tools**, named `bacnet_*` so they can't collide when a
-   host aggregates servers. Eleven read tools (nine in phase 1, `bacnet_watch`
-   in phase 2, `bacnet_read_log_records` after it, #2103), two write tools (phase 3).
+   host aggregates servers. Twelve read tools (nine in phase 1, `bacnet_watch`
+   in phase 2, `bacnet_read_log_records` after it, #2103, and the experimental
+   `bacnet_export_223`, #2436), two write tools (phase 3).
 2. **`tools/list` depends on the launch configuration and the caller's
    authorization, never on runtime state.** The 2026-07-28 revision forbids a
    list that varies per connection. Write tools appear only when the profile
@@ -279,6 +280,7 @@ openWorldHint: false`.
 | `bacnet_alarms` | 1 | RO | `device`, `max`, `summaries`, `cursor` | event summaries: object, event state, acknowledgment, timestamps, notify type, priorities; the alarm and enrollment summaries on request |
 | `bacnet_watch` | 2 | RO, not idempotent | `points` (1 to 32: device, object, property), `cursor` | each point's values and watch state, or `changed: false` without values when unchanged since the cursor's call; a cursor holding the hub's sequence number |
 | `bacnet_decode` | 1 | local, pure | `hex`, `link` (bip, bip6, mstp, sc, npdu, apdu, auto) | decoded layers as a field tree and a one-line summary; no traffic, so it works in passive mode |
+| `bacnet_export_223` | after 4 (#2436), experimental | RO | `device`, `base_iri`, `types`, `write_priority`, `cursor` | a page of the device's points as a proposed Standard 223 model in Turtle (a second text block, a document of its own under 24 kB unless one point alone is larger) and a summary of the page: objects listed and matching, the page's start, points by type and unmapped units; a cursor holding the next object's place among the matching ones and a fingerprint of them, so a list changed between pages is refused |
 | `bacnet_write` | 3 | `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: false` | `device`, `writes` (1 to 20: object, property, index, typed value or null to relinquish, priority), `batch` (WPM), `reason` | outcome per write (ack, error, timeout, not sent), ledger ids, a revert hint |
 | `bacnet_revert` | 3 | destructive | ledger ids, or all of this principal's | outcome per entry |
 

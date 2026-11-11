@@ -15,6 +15,7 @@ mod bbmd;
 mod budget;
 mod confirm;
 mod discovery;
+mod export;
 mod handoff;
 mod legacy;
 mod limits;
@@ -398,8 +399,13 @@ impl Lab {
             EngineeringUnits::PERCENT,
         )
         .unwrap();
+        self.add_object(Box::new(point)).await;
+    }
+
+    /// Add `object` to the lab device, listed in its Object_List.
+    pub(crate) async fn add_object(&self, object: Box<dyn BACnetObject>) {
         let mut db = self.server.database().write().await;
-        db.add(Box::new(point)).unwrap();
+        db.add(object).unwrap();
         // The Device's Object_List names its objects; list the new one.
         let device = bacnet_types::primitives::ObjectIdentifier::new(
             bacnet_types::enums::ObjectType::DEVICE,

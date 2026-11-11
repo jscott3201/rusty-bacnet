@@ -129,7 +129,7 @@ class ManifestTests(unittest.TestCase):
 
     def test_template_lists_only_read_tools(self):
         names = [t["name"] for t in mcpb.manifest_for("1.2.0", "linux-x86_64")["tools"]]
-        self.assertEqual(len(names), 11)
+        self.assertEqual(len(names), 12)
         self.assertFalse(set(names) & mcpb.WRITE_TOOLS)
 
     def test_schema_refuses_what_0_3_refuses(self):
@@ -528,7 +528,7 @@ class SmokeTests(unittest.TestCase):
         shown = self.smoke("good")
         self.assertIn("profile unauthorized: refused at start", shown)
         self.assertIn("profile missing: refused at start", shown)
-        self.assertIn("11 read-only tools", shown)
+        self.assertIn("12 read-only tools", shown)
 
     def test_each_fault_fails(self):
         cases = {"writes": "tools/list gave", "unannotated": "not annotated read-only",

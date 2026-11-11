@@ -6,12 +6,16 @@
 //! tools that send nothing, and the two write tools (`bacnet_write`,
 //! `bacnet_revert`, #2068) are listed only when the policy offers writes
 //! (`mcp_writes = "elicit"`). Arming a session never changes the list.
+//!
+//! `bacnet_export_223` (#2436, experimental) is the one tool whose text
+//! is more than a rendering: its second text block is the Turtle.
 
 pub(crate) mod alarms;
 mod bbmd;
 mod decode;
 pub(crate) mod describe;
 pub(crate) mod discover;
+pub(crate) mod export;
 mod find;
 mod list;
 mod log_pages;
@@ -74,6 +78,7 @@ const SPECS: &[Spec] = &[
     alarms::SPEC,
     decode::SPEC,
     watch::SPEC,
+    export::SPEC,
 ];
 
 /// The write tools, listed only when the policy offers writes.
@@ -150,6 +155,7 @@ enum Request {
     Alarms(alarms::Args),
     Decode(decode::Args),
     Watch(watch::Args),
+    Export(export::Args),
 }
 
 fn parse<A: DeserializeOwned>(args: &Map<String, Value>) -> Result<A, ErrorData> {
@@ -178,6 +184,7 @@ fn request(name: &str, args: &Map<String, Value>) -> Result<Request, ErrorData> 
         alarms::NAME => Request::Alarms(parse(args)?),
         decode::NAME => Request::Decode(parse(args)?),
         watch::NAME => Request::Watch(parse(args)?),
+        export::NAME => Request::Export(parse(args)?),
         other => {
             return Err(ErrorData::invalid_params(
                 format!("unknown tool: {other}"),
@@ -210,6 +217,8 @@ pub(crate) async fn call<T: TransportPort + 'static>(
     let account = ctx.account();
     let budget = ctx.policy.caps.budget;
     let call = Call::new(budget, Arc::clone(&account));
+    // The export's Turtle, which goes beside the summary.
+    let mut turtle = None;
     let run = async {
         match request {
             Request::Discover(a) => discover::run(ctx, &call, a, &args).await,
@@ -223,6 +232,7 @@ pub(crate) async fn call<T: TransportPort + 'static>(
             Request::Alarms(a) => alarms::run(ctx, &call, a, &args).await,
             Request::Decode(a) => decode::run(ctx, &call, a).await,
             Request::Watch(a) => watch::run(ctx, &call, a, &args).await,
+            Request::Export(a) => export::run(ctx, &call, a, &args, &mut turtle).await,
         }
     };
     // A cancelled call (`notifications/cancelled`, or the host going away)
@@ -242,7 +252,15 @@ pub(crate) async fn call<T: TransportPort + 'static>(
         Ok(outcome) => outcome,
         Err(_) => Err(out_of_budget(&call, budget)),
     };
-    Ok(finish(ctx, name, &call, outcome))
+    let mut result = finish(ctx, name, &call, outcome);
+    if let Some(turtle) = turtle.filter(|_| result.is_error == Some(false)) {
+        if let Some(ContentBlock::Text(text)) = result.content.first_mut() {
+            text.text.push('\n');
+            text.text.push_str(export::LITERALS);
+        }
+        result.content.push(ContentBlock::text(turtle));
+    }
+    Ok(result)
 }
 
 /// Why a call that ran past its budget plus grace stopped.
