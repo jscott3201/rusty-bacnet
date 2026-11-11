@@ -204,7 +204,7 @@ fn a_failed_restore_probe_is_a_timeline_line_only() {
     assert_eq!(last.severity, crate::tui::app::sc::Severity::Warn);
     assert_eq!(
         last.text,
-        "primary hub still unreachable: nothing accepted the TCP connection"
+        "primary hub still unreachable: the TCP dial to the hub failed"
     );
     assert_eq!((states(&app), app.sc.failure.clone(), app.sc.link), before);
 }
@@ -234,7 +234,7 @@ fn repeated_restore_failures_share_one_timeline_line() {
     assert!(last.at > first_at, "the line keeps the latest time");
     app.screen = Screen::Sc;
     assert!(
-        screen(&mut app, 120, 40).contains("nothing accepted the TCP connection (3 times)"),
+        screen(&mut app, 120, 40).contains("the TCP dial to the hub failed (3 times)"),
         "{}",
         screen(&mut app, 120, 40)
     );

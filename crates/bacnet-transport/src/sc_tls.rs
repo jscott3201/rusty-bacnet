@@ -162,7 +162,9 @@ impl TlsWebSocket {
             .await
             .map_err(|e| {
                 // A refusal has its own code (Annex AB.7.5.1); connect_resolved
-                // gives it the refused kind on every OS.
+                // gives it the refused kind on every OS. With several addresses,
+                // a refusal on any one reports the dial refused, even when
+                // another address timed out.
                 let kind = if e.kind() == std::io::ErrorKind::ConnectionRefused {
                     ScWebSocketErrorKind::TcpRefused
                 } else {
@@ -655,9 +657,12 @@ mod tests {
         let mut last = None;
         for _ in 0..5 {
             let url = format!("wss://{}", closed_port());
-            let err = match TlsWebSocket::connect(&url, test_tls_config()).await {
-                Ok(_) => continue,
-                Err(err) => err,
+            // Bounded: a process that took the port could accept and stay
+            // silent; that attempt doesn't count.
+            let dial = TlsWebSocket::connect(&url, test_tls_config());
+            let err = match tokio::time::timeout(std::time::Duration::from_secs(10), dial).await {
+                Ok(Err(err)) => err,
+                Ok(Ok(_)) | Err(_) => continue,
             };
             // Nothing listens: the peer refused it, which has its own code.
             if matches!(

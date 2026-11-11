@@ -111,7 +111,8 @@ fn websocket_code(kind: ScWebSocketErrorKind) -> Option<ErrorCode> {
         ScWebSocketErrorKind::WebSocketHandshake => ErrorCode::HTTP_ERROR,
         // The upgrade answer had no Sec-WebSocket-Protocol header at all, or
         // one whose value is not the subprotocol asked for. AB.7.5.1's HTTP
-        // table has a code for a missing header and one for a wrong value.
+        // table names no header; giving a missing one the missing-header code
+        // and a wrong value the value-error code is this stack's reading.
         ScWebSocketErrorKind::HubSubprotocolMissing
         | ScWebSocketErrorKind::DirectSubprotocolMissing => ErrorCode::HTTP_RESPONSE_MISSING_HEADER,
         ScWebSocketErrorKind::HubSubprotocol | ScWebSocketErrorKind::DirectSubprotocol => {

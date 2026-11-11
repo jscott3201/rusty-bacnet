@@ -152,7 +152,7 @@ fn read(fault: &Fault) -> (Option<Phase>, String, String) {
         ),
         Fault::WebSocket(K::TcpDial) => (
             Phase::Tcp,
-            "nothing accepted the TCP connection",
+            "the TCP dial to the hub failed",
             "Check the port, that the hub is running, and that no firewall blocks it.".into(),
         ),
         Fault::WebSocket(K::TcpRefused) => (

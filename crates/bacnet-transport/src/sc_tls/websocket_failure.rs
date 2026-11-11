@@ -8,6 +8,7 @@ use tokio_tungstenite::tungstenite::Error as TungsteniteError;
 
 use bacnet_types::error::Error;
 
+use super::peer_info::escaped_bounded;
 use super::tls_failure;
 use crate::sc::{ScConnectError, ScWebSocketErrorKind};
 use crate::sc_frame::{BACNET_SC_DIRECT_SUBPROTOCOL, BACNET_SC_HUB_SUBPROTOCOL};
@@ -104,8 +105,14 @@ fn verify_selected_subprotocol(
     }
 }
 
+/// The most of a peer's close reason an error message keeps, after
+/// escaping. RFC 6455 allows 123 bytes; escaping can lengthen them.
+const CLOSE_REASON_LIMIT: usize = 256;
+
 /// The error for a close frame from the peer, keeping its status code
-/// (Annex AB.7.5.5 maps it to an error code).
+/// (Annex AB.7.5.5 maps it to an error code). The reason is text the peer
+/// chose and reaches terminals and logs, so its controls and non-ASCII are
+/// escaped and its length bounded, as for peer certificate text.
 pub(super) fn closed_by_peer(
     frame: Option<tokio_tungstenite::tungstenite::protocol::CloseFrame>,
 ) -> Error {
@@ -114,10 +121,18 @@ pub(super) fn closed_by_peer(
         Some(frame) if frame.reason.is_empty() => {
             format!("WebSocket closed by the peer with status {}", frame.code)
         }
-        Some(frame) => format!(
-            "WebSocket closed by the peer with status {}: {}",
-            frame.code, frame.reason
-        ),
+        Some(frame) => {
+            let mut truncated = false;
+            let mut reason =
+                escaped_bounded(&frame.reason.as_str(), &mut truncated, CLOSE_REASON_LIMIT);
+            if truncated {
+                reason.push_str("...");
+            }
+            format!(
+                "WebSocket closed by the peer with status {}: {reason}",
+                frame.code
+            )
+        }
         None => "WebSocket closed by the peer without a status".to_owned(),
     };
     ScConnectError::WebSocket {
@@ -147,5 +162,55 @@ pub(super) fn ended_without_close(error: &TungsteniteError) -> bool {
                 | ErrorKind::BrokenPipe
         ),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+    use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+
+    use super::*;
+
+    fn message(reason: &str) -> String {
+        let error = closed_by_peer(Some(CloseFrame {
+            code: CloseCode::Away,
+            reason: reason.into(),
+        }));
+        match ScConnectError::from_error(&error) {
+            Some(ScConnectError::WebSocket {
+                message,
+                close_status,
+                ..
+            }) => {
+                assert_eq!(*close_status, Some(1001));
+                message.clone()
+            }
+            other => panic!("expected a WebSocket close, got {other:?}"),
+        }
+    }
+
+    /// A hostile close reason can't drive a terminal: its controls, an ANSI
+    /// escape sequence and bidi text arrive escaped (#2438).
+    #[test]
+    fn a_close_reason_is_escaped() {
+        let shown = message("bye\x1b[2J\x1b[31mred\r\nfake: line\u{202e}txt\x07");
+        assert!(!shown.chars().any(char::is_control), "{shown:?}");
+        assert!(shown.is_ascii(), "{shown:?}");
+        assert!(
+            shown
+                .ends_with(r"status 1001: bye\u{1b}[2J\u{1b}[31mred\r\nfake: line\u{202e}txt\u{7}"),
+            "{shown}"
+        );
+    }
+
+    /// A long reason is cut at the bound, and says so.
+    #[test]
+    fn a_long_close_reason_is_bounded() {
+        let shown = message(&"\u{1b}".repeat(123));
+        let reason = shown.split_once(": ").unwrap().1;
+        assert!(reason.len() <= CLOSE_REASON_LIMIT + 3, "{}", reason.len());
+        assert!(reason.ends_with("..."), "{reason}");
+        assert!(!shown.chars().any(char::is_control));
     }
 }
