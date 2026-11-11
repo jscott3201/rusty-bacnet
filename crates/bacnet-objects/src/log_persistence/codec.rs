@@ -21,7 +21,7 @@
 use crate::prelude::*;
 use bacnet_encoding::constructed::{
     decode_device_object_property_reference, decode_event_log_record, decode_log_multiple_record,
-    decode_log_record, encode_device_object_property_reference,
+    decode_log_record, encode_device_object_property_reference, is_record_too_deep,
 };
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetEventLogRecord, BACnetLogMultipleRecord,
@@ -516,7 +516,7 @@ fn decode_payload<R: SnapshotRecord>(
     if reader.offset != reader.data.len() {
         return Err(corrupt("payload has trailing octets"));
     }
-    let snapshot = LogSnapshot {
+    let mut snapshot = LogSnapshot {
         object_identifier,
         generation,
         buffer_size,
@@ -535,13 +535,32 @@ fn decode_payload<R: SnapshotRecord>(
     };
     validate(&snapshot)?;
     // A record that decodes but would not encode again could never be
-    // served, so such a slot is as damaged as one that fails to decode.
+    // served, so such a slot is as damaged as one that fails to decode. The
+    // exception is a record an older build saved nested deeper than a
+    // ReadRange-ACK carries (#2474): every field of it is sound, so it is
+    // dropped and the rest restores, the records older than it each taking
+    // the number one higher.
     let mut scratch = element_buffer(snapshot.records.len());
-    for record in &snapshot.records {
+    let mut too_deep = Vec::new();
+    for (index, record) in snapshot.records.iter().enumerate() {
         scratch.clear();
-        record
-            .encode(&mut scratch)
-            .map_err(|_| corrupt("holds a record that doesn't encode"))?;
+        match record.encode(&mut scratch) {
+            Ok(()) => {}
+            Err(error) if is_record_too_deep(&error) => too_deep.push(index),
+            Err(_) => return Err(corrupt("holds a record that doesn't encode")),
+        }
+    }
+    if !too_deep.is_empty() {
+        log_warn!(
+            log = %object_identifier,
+            dropped = too_deep.len(),
+            "Dropping saved log records nested too deep for a ReadRange-ACK to carry"
+        );
+        let mut index = 0;
+        snapshot.records.retain(|_| {
+            index += 1;
+            !too_deep.contains(&(index - 1))
+        });
     }
     Ok(snapshot)
 }

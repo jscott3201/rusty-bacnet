@@ -67,7 +67,9 @@ fn output() -> Value {
                 "properties": {
                     "time": { "type": "string" },
                     "seq": { "type": "integer" },
-                    "kind": { "enum": ["notification", "audit", "log-status", "time-change"] },
+                    "kind": {
+                        "enum": ["notification", "audit", "log-status", "time-change", "unknown-choice"],
+                    },
                     "flagged": { "type": "boolean" },
                     "notification": fields,
                     "audit": {
@@ -82,6 +84,7 @@ fn output() -> Value {
                     },
                     "log_status": schema::typed(),
                     "time_change_s": { "type": ["number", "null"] },
+                    "choice": schema::typed(),
                 },
                 "required": ["time", "kind", "flagged"],
             },

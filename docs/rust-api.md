@@ -6623,12 +6623,34 @@ log-interrupted `05 20`. `LogDatum` and `LogValue` keep INTEGER values as
 device hold these to 32 bits but doesn't require it, so a record read from a
 peer may carry wider values, and the decoders accept up to eight octets.
 
+A record whose datum (or a Trend Log Multiple member's value) is under a
+context tag its CHOICE doesn't assign, a later revision's, decodes as the
+`Opaque` variant of `LogDatum`, `LogValue`, `LogData` or `EventLogDatum`
+(#2474). Its `OpaqueChoice` holds the tag, whether it is constructed, and
+its contents or body as received, and the encoder writes it back unchanged,
+so a log read from a newer device still pages, and a stored or forwarded
+record isn't altered. The body must be well formed: a known tag in the wrong
+form, unbalanced or truncated tags, or nesting past the tag decoder's limit
+still fail. Event values under a tag Clause 21 gives no alternative (7 and
+12, which it deprecates and reserves, or 23 and up) decode the same way, as
+`NotificationParameters::Opaque { tag, data }`, so the rest of the
+notification stays usable; tag 20, which matches the event type that reports
+no values, is still refused. `LogDatum::try_from(LogValue)` replaces the old
+`From`: an opaque member value has no Trend Log datum and comes back as the
+error.
+
 `add_record` and the trend hooks refuse a record that would not encode (an
-any-value, or a notification's raw event values, whose tags don't balance; a
-complex event's property priority outside 1 to 16; a bit string with
-impossible padding) with its encoding error, before anything changes. So
+any-value, an opaque alternative's body, or a notification's raw event
+values, whose tags don't balance; a complex event's property priority outside
+1 to 16; a bit string with impossible padding; a record nested deeper than a
+ReadRange-ACK's item data can carry, one level short of the tag decoder's
+limit) with its encoding error, before anything changes. So
 `LogBufferRecords::encode_record` cannot fail, and one bad record can't break
-every ReadRange window over the log.
+every ReadRange window over the log. A saved snapshot holding a record that
+won't encode is damaged, except one nested too deep (an older build could
+save it, #2474): the load drops that record with a warning and restores the
+rest, so the records older than it each take the next number up;
+`bacnet_encoding::constructed::is_record_too_deep` tells that refusal apart.
 
 Trend Log Multiple, Trend Log and Event Log objects list `Log_Buffer` in their
 Property_List, but ReadProperty and ReadPropertyMultiple answer it with

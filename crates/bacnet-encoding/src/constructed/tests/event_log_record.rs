@@ -2,7 +2,7 @@ use super::*;
 use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{
     BACnetDeviceObjectReference, BACnetEventLogRecord, BACnetPropertyValue, ChangeOfValueChoice,
-    EventLogDatum, EventNotificationRequest, NotificationParameters,
+    EventLogDatum, EventNotificationRequest, NotificationParameters, OpaqueChoice,
 };
 use bacnet_types::enums::{
     AccessEvent, EventState, EventType, NotifyType, PropertyIdentifier, TimerState, TimerTransition,
@@ -297,8 +297,7 @@ fn event_log_record_decoder_rejects_malformed_records() {
     let good = encoded(&record(EventLogDatum::TimeChange(1.0)));
     let mut cases: Vec<Vec<u8>> = vec![
         good[..good.len() - 1].to_vec(),
-        // A Trend Log datum tag, and two alternatives in one datum.
-        [&TIMESTAMP[..], &[0x1E, 0x78, 0x1F]].concat(),
+        // Two alternatives in one datum.
         [
             &TIMESTAMP[..],
             &[0x1E, 0x0A, 0x05, 0x80, 0x0A, 0x05, 0x80, 0x1F],
@@ -316,6 +315,19 @@ fn event_log_record_decoder_rejects_malformed_records() {
     for bytes in cases {
         assert!(decode_event_log_record(&bytes, 0).is_err(), "{bytes:02X?}");
     }
+    // A tag the datum doesn't assign, a Trend Log's null-value [7] say, is
+    // kept as received (#2474), not refused.
+    let unknown = [&TIMESTAMP[..], &[0x1E, 0x78, 0x1F]].concat();
+    let (decoded, end) = decode_event_log_record(&unknown, 0).unwrap();
+    assert_eq!(end, unknown.len());
+    assert_eq!(
+        decoded.log_datum,
+        EventLogDatum::Opaque(OpaqueChoice {
+            tag: 7,
+            constructed: false,
+            data: vec![],
+        })
+    );
 }
 
 /// Well-formed tagged fields that don't make up a notification request fail

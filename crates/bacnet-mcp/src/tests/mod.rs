@@ -30,6 +30,7 @@ mod safety;
 mod schema;
 mod site;
 mod trends;
+mod unknown_choices;
 mod writes;
 
 use std::collections::VecDeque;

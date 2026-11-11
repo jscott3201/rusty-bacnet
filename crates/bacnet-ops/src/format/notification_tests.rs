@@ -392,3 +392,41 @@ fn absent_and_undecodable_values() {
         json!({"raw": "0e0f"})
     );
 }
+
+/// A choice under a tag the standard doesn't assign (#2474): the tag as the
+/// event type, with no name, and the body by context tag, hex in the data,
+/// as an unassigned Event_Parameters algorithm shows.
+#[test]
+fn an_unassigned_choice_shows_its_tag_and_body() {
+    let values = EventValues::new(&NotificationParameters::Opaque {
+        tag: 30,
+        data: vec![0x09, 0x1E, 0x1E, 0x21, 0x05, 0x1F],
+    });
+    assert_eq!(values.event_type, "30");
+    assert_eq!(values.text(), "30: [0] [raw 1e], [1] (5)");
+    assert_eq!(
+        json_of(&values),
+        json!({
+            "element": "notification-parameters",
+            "text": "30: [0] [raw 1e], [1] (5)",
+            "fields": {
+                "event_type": {"value": 30},
+                "data": {"raw": "091e1e21051f"},
+            },
+        })
+    );
+    // An empty body shows the tag alone; tags 7 and 12, which Clause 21
+    // deprecates and reserves, have no name either.
+    let values = EventValues::new(&NotificationParameters::Opaque {
+        tag: 254,
+        data: vec![],
+    });
+    assert_eq!(values.text(), "254");
+    for tag in [7, 12] {
+        let values = EventValues::new(&NotificationParameters::Opaque {
+            tag,
+            data: vec![0x09, 0x01],
+        });
+        assert_eq!(values.text(), format!("{tag}: [0] [raw 01]"));
+    }
+}

@@ -5,7 +5,7 @@ use bacnet_encoding::constructed::{
 };
 use bacnet_types::constructed::{
     AuditPropertyReference, BACnetAuditLogRecord, BACnetDeviceObjectPropertyReference,
-    BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord, LogValue,
+    BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord, LogValue, OpaqueChoice,
 };
 use bacnet_types::enums::{AuditOperation, ErrorClass, ErrorCode, EventState, EventType};
 use bacnet_types::primitives::BACnetTimeStamp;
@@ -274,10 +274,89 @@ fn records_after_an_undecodable_one_fall_back_to_hex() {
     assert_eq!(records.rows, [row(8, "7", None)]);
     assert_eq!(records.undecoded.as_deref(), Some("0e a4"));
 
-    // A Trend Log record read as a Trend Log Multiple record fails whole.
+    // A Trend Log record read as a Trend Log Multiple record: its unsigned
+    // datum's tag is one the log data doesn't assign, kept as received
+    // (#2474), while a boolean's is log data [1] in the wrong form, which
+    // fails whole.
     let records = rows(ObjectType::TREND_LOG_MULTIPLE, 1, &data[..data.len() - 2]);
+    assert_eq!(records.rows, [row(8, "[4] [raw 07]", None)]);
+    let mut data = BytesMut::new();
+    let record = BACnetLogRecord {
+        date: DATE,
+        time: time(8),
+        log_datum: LogDatum::BooleanValue(true),
+        status_flags: None,
+    };
+    encode_log_record(&record, &mut data).unwrap();
+    let records = rows(ObjectType::TREND_LOG_MULTIPLE, 1, &data);
     assert!(records.rows.is_empty());
     assert!(records.undecoded.unwrap().starts_with("0e a4 7e 0a 03"));
+}
+
+/// A record or member under a tag its CHOICE doesn't assign (#2474) shows
+/// in the tagged view, its tag and octets, among the records around it.
+#[test]
+fn unknown_choices_show_their_tag_and_octets() {
+    let opaque = |tag, constructed, data: &[u8]| OpaqueChoice {
+        tag,
+        constructed,
+        data: data.to_vec(),
+    };
+    let mut data = BytesMut::new();
+    for (hour, log_datum) in [
+        (8, LogDatum::Opaque(opaque(11, false, &[1, 2]))),
+        (9, LogDatum::RealValue(20.5)),
+    ] {
+        let record = BACnetLogRecord {
+            date: DATE,
+            time: time(hour),
+            log_datum,
+            status_flags: None,
+        };
+        encode_log_record(&record, &mut data).unwrap();
+    }
+    assert_eq!(
+        rows(ObjectType::TREND_LOG, 2, &data).rows,
+        [row(8, "[11] [raw 01 02]", None), row(9, "20.5", None)]
+    );
+
+    let mut data = BytesMut::new();
+    for (hour, log_data) in [
+        (
+            8,
+            LogData::Values(vec![
+                LogValue::RealValue(21.5),
+                LogValue::Opaque(opaque(9, true, &[0x09, 1])),
+            ]),
+        ),
+        (9, LogData::Opaque(opaque(3, true, &[]))),
+    ] {
+        let record = BACnetLogMultipleRecord {
+            date: DATE,
+            time: time(hour),
+            log_data,
+        };
+        encode_log_multiple_record(&record, &mut data).unwrap();
+    }
+    assert_eq!(
+        rows(ObjectType::TREND_LOG_MULTIPLE, 2, &data).rows,
+        [
+            row(8, "[21.5, [9] ([0] [raw 01])]", None),
+            row(9, "[3] ()", None),
+        ]
+    );
+
+    let mut data = BytesMut::new();
+    let record = BACnetEventLogRecord {
+        date: DATE,
+        time: time(8),
+        log_datum: EventLogDatum::Opaque(opaque(5, false, &[0xff])),
+    };
+    encode_event_log_record(&record, &mut data).unwrap();
+    assert_eq!(
+        rows(ObjectType::EVENT_LOG, 1, &data).rows,
+        [row(8, "[5] [raw ff]", None)]
+    );
 }
 
 /// The columns a Log_DeviceObjectProperty naming `references` gives, each

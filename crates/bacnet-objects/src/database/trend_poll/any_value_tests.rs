@@ -62,7 +62,7 @@ fn read_values_map_to_their_datum_or_an_any_value() {
         ),
     ] {
         assert_eq!(
-            LogDatum::from(property_value_to_log_value(&value)),
+            LogDatum::try_from(property_value_to_log_value(&value, Record::Trend)).unwrap(),
             expected,
             "{value:?}"
         );
@@ -76,7 +76,9 @@ fn read_values_map_to_their_datum_or_an_any_value() {
 #[test]
 fn oversized_and_uncarriable_values_log_a_failure() {
     let unsigned = |count| PropertyValue::List(vec![PropertyValue::Unsigned(1); count]);
-    let logged = |value: &PropertyValue| LogDatum::from(property_value_to_log_value(value));
+    let logged = |value: &PropertyValue| {
+        LogDatum::try_from(property_value_to_log_value(value, Record::Trend)).unwrap()
+    };
     // 128 two-octet elements fill the cap exactly; one more is too long.
     assert_eq!(ANY_VALUE_MAX_OCTETS, 256);
     assert_eq!(
@@ -103,6 +105,135 @@ fn oversized_and_uncarriable_values_log_a_failure() {
             "{value:?}"
         );
     }
+}
+
+/// Each record kind probes a sampled value with its own record (#2474): a
+/// Trend Log Multiple member sits a level deeper than a Trend Log datum, so
+/// a value nested as deep as a Trend Log record leaves room for is logged
+/// there, and the member logs SERVICES / OTHER; a level deeper, both do.
+#[test]
+fn each_record_kind_probes_with_its_own_record() {
+    // A Trend Log datum takes two levels, field 1 and any-value [10], of
+    // the 31 a ReadRange-ACK leaves a record; a member takes three.
+    let nested = |n: usize| PropertyValue::ApplicationData([vec![0x1E; n], vec![0x1F; n]].concat());
+    let other = LogValue::Failure {
+        error_class: ErrorClass::SERVICES,
+        error_code: ErrorCode::OTHER,
+    };
+    let fits = nested(29);
+    let PropertyValue::ApplicationData(bytes) = &fits else {
+        unreachable!()
+    };
+    assert_eq!(
+        property_value_to_log_value(&fits, Record::Trend),
+        LogValue::AnyValue(bytes.clone())
+    );
+    assert_eq!(property_value_to_log_value(&fits, Record::Multiple), other);
+    let fits = nested(28);
+    assert!(matches!(
+        property_value_to_log_value(&fits, Record::Multiple),
+        LogValue::AnyValue(_)
+    ));
+    assert_eq!(
+        property_value_to_log_value(&nested(30), Record::Trend),
+        other
+    );
+}
+
+/// An object whose Present_Value is `n` empty constructed values, each
+/// inside the last, standing in for a value a property could nest that
+/// deep.
+struct Nested {
+    oid: ObjectIdentifier,
+    depth: usize,
+}
+
+impl Nested {
+    fn value(depth: usize) -> PropertyValue {
+        PropertyValue::ApplicationData([vec![0x1E; depth], vec![0x1F; depth]].concat())
+    }
+}
+
+impl BACnetObject for Nested {
+    fn object_identifier(&self) -> ObjectIdentifier {
+        self.oid
+    }
+
+    fn object_name(&self) -> &str {
+        "Nested"
+    }
+
+    fn read_property(&self, property: P, _: Option<u32>) -> Result<PropertyValue, Error> {
+        match property {
+            P::PRESENT_VALUE => Ok(Self::value(self.depth)),
+            _ => Err(Error::protocol(
+                ErrorClass::PROPERTY,
+                ErrorCode::UNKNOWN_PROPERTY,
+            )),
+        }
+    }
+
+    fn write_property(
+        &mut self,
+        _: P,
+        _: Option<u32>,
+        _: PropertyValue,
+        _: Option<u8>,
+    ) -> Result<(), Error> {
+        Err(Error::protocol(
+            ErrorClass::PROPERTY,
+            ErrorCode::WRITE_ACCESS_DENIED,
+        ))
+    }
+
+    fn property_metadata(&self) -> std::borrow::Cow<'_, [PropertyMetadata]> {
+        crate::test_rows::read_only(&[P::PRESENT_VALUE])
+    }
+}
+
+/// The poller probes with the log's own record kind: a value nested as deep
+/// as a Trend Log record leaves room for is logged as it is by a Trend Log,
+/// and as SERVICES / OTHER by a Trend Log Multiple, whose member sits a
+/// level deeper (#2474).
+#[test]
+fn the_poller_probes_with_the_logs_own_record() {
+    let (mut db, oid, _, _) = fixture(u32::MAX);
+    db.remove(&target()).unwrap();
+    db.add(Box::new(Nested {
+        oid: target(),
+        depth: 29,
+    }))
+    .unwrap();
+    db.poll_trend_logs();
+    assert_eq!(count(&db, oid), 1);
+    let PropertyValue::ApplicationData(bytes) = Nested::value(29) else {
+        unreachable!()
+    };
+    assert_eq!(last_datum(&db, oid), LogDatum::AnyValue(bytes));
+
+    db.remove(&oid).unwrap();
+    let log = super::multiple_tests::multiple(
+        u32::MAX,
+        16,
+        vec![super::multiple_tests::member(
+            target(),
+            P::PRESENT_VALUE,
+            None,
+            None,
+        )],
+    );
+    let multiple = log.object_identifier();
+    db.add(Box::new(log)).unwrap();
+    db.poll_trend_logs();
+    let records = super::multiple_tests::records(&db, multiple);
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].log_data,
+        LogData::Values(vec![LogValue::Failure {
+            error_class: ErrorClass::SERVICES,
+            error_code: ErrorCode::OTHER,
+        }])
+    );
 }
 
 /// Polling an Object_Name longer than the cap logs the failure record,

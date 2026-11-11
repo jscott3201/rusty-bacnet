@@ -10,11 +10,15 @@
 //! back in untrusted envelopes.
 //!
 //! A record is flagged when it changes the log's status, reports an event
-//! into a state other than normal, or records an operation that failed.
+//! into a state other than normal, or records an operation that failed. An
+//! Event Log record under a tag the standard doesn't assign (#2474) is an
+//! `unknown-choice` element, its tag and its octets as hex, and is flagged
+//! too: nothing here can say what it reports.
 
 use std::collections::BTreeMap;
 
 use bacnet_client::log_reader::LogPage;
+use bacnet_ops::format::Datum;
 use bacnet_ops::format::log_records::{AuditNotificationData, EventNotificationData};
 use bacnet_ops::label::kebab;
 use bacnet_services::read_range::LogRecords;
@@ -25,7 +29,7 @@ use bacnet_types::constructed::{
 use bacnet_types::enums::{EventState, NotifyType};
 use serde_json::{Value, json};
 
-use super::trend_data::{finite, log_status, stamp_text};
+use super::trend_data::{finite, log_status, stamp_text, unknown};
 use crate::value::enveloped;
 
 /// One record of an Event Log or an Audit Log.
@@ -39,6 +43,9 @@ enum Kind<'a> {
     Audit(&'a BACnetAuditNotification),
     LogStatus(LogStatus),
     TimeChange(f32),
+    /// A record under a tag its CHOICE doesn't assign, as the shared
+    /// formatter's `unknown-choice` element.
+    Unknown(Datum),
 }
 
 /// A page's records, oldest first; none for a log of another kind.
@@ -52,6 +59,7 @@ pub(super) fn records(page: &LogPage) -> Vec<Record<'_>> {
                     EventLogDatum::Notification(notification) => Kind::Event(notification),
                     EventLogDatum::LogStatus(status) => Kind::LogStatus(*status),
                     EventLogDatum::TimeChange(seconds) => Kind::TimeChange(*seconds),
+                    EventLogDatum::Opaque(opaque) => Kind::Unknown(unknown(opaque)),
                 },
             })
             .collect(),
@@ -82,10 +90,11 @@ fn key(name: Option<&str>, raw: impl ToString) -> String {
 
 impl Record<'_> {
     /// Whether the record is flagged: a change of the log's status, an
-    /// event into a state other than normal, or a failed operation.
+    /// event into a state other than normal, a failed operation, or a
+    /// record of a kind this stack doesn't know.
     fn flagged(&self) -> bool {
-        match self.kind {
-            Kind::LogStatus(_) => true,
+        match &self.kind {
+            Kind::LogStatus(_) | Kind::Unknown(_) => true,
             Kind::Event(event) => {
                 event.notify_type != NotifyType::ACK_NOTIFICATION
                     && event.to_state != EventState::NORMAL
@@ -102,7 +111,7 @@ impl Record<'_> {
         if let Some(seq) = seq {
             row["seq"] = json!(seq);
         }
-        match self.kind {
+        match &self.kind {
             Kind::Event(event) => {
                 row["kind"] = json!("notification");
                 row["notification"] = enveloped(&EventNotificationData::new(event), source, cap);
@@ -113,11 +122,15 @@ impl Record<'_> {
             }
             Kind::LogStatus(status) => {
                 row["kind"] = json!("log-status");
-                row["log_status"] = enveloped(&log_status(status), source, cap);
+                row["log_status"] = enveloped(&log_status(*status), source, cap);
             }
             Kind::TimeChange(seconds) => {
                 row["kind"] = json!("time-change");
-                row["time_change_s"] = finite(f64::from(seconds));
+                row["time_change_s"] = finite(f64::from(*seconds));
+            }
+            Kind::Unknown(choice) => {
+                row["kind"] = json!("unknown-choice");
+                row["choice"] = enveloped(choice, source, cap);
             }
         }
         row
@@ -155,7 +168,7 @@ impl Summary {
             self.first = Some(record.time.clone());
         }
         self.last = Some(record.time.clone());
-        match record.kind {
+        match &record.kind {
             Kind::Event(event) => {
                 self.notifications += 1;
                 for (counts, name) in [
@@ -185,6 +198,7 @@ impl Summary {
             }
             Kind::LogStatus(_) => self.log_status += 1,
             Kind::TimeChange(_) => self.time_changes += 1,
+            Kind::Unknown(_) => {}
         }
     }
 

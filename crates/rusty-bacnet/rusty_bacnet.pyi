@@ -2981,9 +2981,12 @@ def decode_log_records(result: ReadRangeResult) -> list[dict[str, Any]]:
     ``event_values`` None or a dict whose ``kind`` names the event type in
     snake case, ``out_of_range``, with each value under its member's name;
     see docs/python-api.md) or ``audit_notification`` (an Audit
-    Log record, as ``audit_log_query`` shows it). A Trend Log record adds
-    ``status_flags`` (a ``BitString`` naming ``IN_ALARM``, ``FAULT``,
-    ``OVERRIDDEN``, ``OUT_OF_SERVICE``), or None.
+    Log record, as ``audit_log_query`` shows it). A choice under a tag the
+    standard doesn't assign, a datum or a member value, is ``other`` with
+    ``tag``, ``constructed`` and ``data`` (its octets as received), and
+    event values of such a type are ``other`` with ``tag`` and ``data``. A
+    Trend Log record adds ``status_flags`` (a ``BitString`` naming
+    ``IN_ALARM``, ``FAULT``, ``OVERRIDDEN``, ``OUT_OF_SERVICE``), or None.
 
     Raises ValueError for a result that isn't a log's Log_Buffer, or whose
     item data doesn't decode as ``item_count`` records, naming the first

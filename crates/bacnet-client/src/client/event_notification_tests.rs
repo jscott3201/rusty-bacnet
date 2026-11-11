@@ -569,6 +569,62 @@ async fn immediate_reply_and_closed_channel_fallback_preserve_event_responses() 
     h.client.stop().await.unwrap();
 }
 
+/// #2474: event values under a tag Clause 21 gives no alternative (12,
+/// which it reserves, or a later revision's 30) no longer cost the
+/// notification. The client acknowledges a confirmed one and both services
+/// deliver it, the values kept as received and every other member as sent.
+#[tokio::test]
+async fn an_unassigned_event_values_choice_is_acked_and_delivered() {
+    let mut h = Harness::new(64).await;
+    let mut rx = h.client.event_notifications();
+    for (tag, open, close) in [
+        (12, &[0xce][..], &[0xcf][..]),
+        (30, &[0xfe, 30], &[0xff, 30]),
+    ] {
+        let mut prefix = PREFIX.to_vec();
+        *prefix.last_mut().unwrap() = tag;
+        // The suffix up to and with the opening [12], then the choice
+        // around [0] 1, then the closing [12].
+        let data: Bytes = [
+            &prefix[..],
+            &SUFFIX[..9],
+            open,
+            &[0x09, 0x01],
+            close,
+            &[0xcf],
+        ]
+        .concat()
+        .into();
+        for confirmed in [true, false] {
+            h.send(inbound(request(data.clone(), confirmed, false), remote()))
+                .await;
+            if confirmed {
+                h.reply(remote(), &[0x20, INVOKE, 2]).await;
+            }
+            h.fence().await;
+            let received = rx.try_recv().unwrap();
+            assert_eq!(received.source_network, Some(200));
+            let notification = received.notification;
+            assert_eq!(notification.event_type, EventType::from_raw(tag.into()));
+            assert_eq!(
+                notification.event_object_identifier,
+                ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 7).unwrap()
+            );
+            assert_eq!(notification.timestamp, BACnetTimeStamp::SequenceNumber(5));
+            assert_eq!(notification.to_state, EventState::HIGH_LIMIT);
+            assert_eq!(
+                notification.event_values,
+                Some(NotificationParameters::Opaque {
+                    tag,
+                    data: vec![0x09, 0x01],
+                })
+            );
+            assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
+        }
+    }
+    h.client.stop().await.unwrap();
+}
+
 #[tokio::test]
 async fn valid_confirmed_event_is_acked_without_subscribers() {
     let mut h = Harness::new(1).await;

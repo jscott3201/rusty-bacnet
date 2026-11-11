@@ -379,6 +379,21 @@ fn encode_into(params: &NotificationParameters, buf: &mut BytesMut) -> Result<()
             }
             tags::encode_closing_tag(buf, 22);
         }
+        NotificationParameters::Opaque { tag, data } => {
+            // Only a tag the decoder keeps opaque: any other would decode as
+            // its own variant, or not at all, so it couldn't round-trip.
+            if !is_opaque_tag(*tag) {
+                return Err(EncodeError::new("tag [{}] cannot use an opaque body")
+                    .within("NotificationParameters")
+                    .with_value((*tag).into())
+                    .into());
+            }
+            validate_tlv_sequence(data, "opaque NotificationParameters")
+                .map_err(Error::into_encode_refusal)?;
+            tags::encode_opening_tag(buf, *tag);
+            buf.extend_from_slice(data);
+            tags::encode_closing_tag(buf, *tag);
+        }
     }
     Ok(())
 }
