@@ -152,6 +152,9 @@ const fn by_type(object_type: T, property: P) -> Option<ValueType> {
         (T::ALERT_ENROLLMENT, P::PRESENT_VALUE) => single(D::ObjectIdentifier),
         (T::CHANNEL, P::PRESENT_VALUE) => single(D::ChannelValue),
         (T::COLOR, P::PRESENT_VALUE | P::TRACKING_VALUE) => single(D::XyColor),
+        // The reporter's own filter is the plain bit string; every other object
+        // type takes the optional form by identifier below.
+        (T::AUDIT_REPORTER, P::AUDIT_PRIORITY_FILTER) => single(D::BitString),
         (T::COMMAND, P::ACTION) => array(D::ActionList),
         (T::COMMAND, P::ACTION_TEXT) => array(D::CharacterString),
         (T::MULTI_STATE_INPUT | T::MULTI_STATE_VALUE, P::ALARM_VALUES | P::FAULT_VALUES) => {
@@ -160,7 +163,7 @@ const fn by_type(object_type: T, property: P) -> Option<ValueType> {
         (T::CHARACTERSTRING_VALUE, P::ALARM_VALUES | P::FAULT_VALUES) => {
             array(D::OptionalCharacterString)
         }
-        (T::BITSTRING_VALUE, P::ALARM_VALUES | P::FAULT_VALUES) => array(D::BitString),
+        (T::BITSTRING_VALUE, P::ALARM_VALUES) => array(D::BitString),
         (T::LIFE_SAFETY_POINT | T::LIFE_SAFETY_ZONE | T::ACCESS_USER, P::MEMBER_OF) => {
             list(D::DeviceObjectReference)
         }
@@ -551,6 +554,8 @@ const fn by_identifier(property: P) -> Option<ValueType> {
     Some(value_type)
 }
 
+#[cfg(test)]
+mod audit_filter_tests;
 #[cfg(test)]
 mod xd_allowlist;
 #[cfg(test)]

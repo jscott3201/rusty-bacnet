@@ -88,10 +88,13 @@ fn old_array(object_type: ObjectType, property: PropertyIdentifier) -> bool {
         | P::TARGET_REFERENCES
         | P::MONITORED_OBJECTS => true,
         P::ACTION | P::ACTION_TEXT => object_type == ObjectType::COMMAND,
-        P::ALARM_VALUES | P::FAULT_VALUES => matches!(
+        P::ALARM_VALUES => matches!(
             object_type,
             ObjectType::CHARACTERSTRING_VALUE | ObjectType::BITSTRING_VALUE
         ),
+        // BitString Value has no Fault_Values, so it no longer has an entry
+        // of its own (#2465).
+        P::FAULT_VALUES => object_type == ObjectType::CHARACTERSTRING_VALUE,
         P::LIST_OF_OBJECT_PROPERTY_REFERENCES => object_type == ObjectType::CHANNEL,
         P::LOG_DEVICE_OBJECT_PROPERTY => object_type == ObjectType::TREND_LOG_MULTIPLE,
         P::PRESENT_VALUE => object_type == ObjectType::GLOBAL_GROUP,
@@ -137,10 +140,11 @@ fn old_list(object_type: ObjectType, property: PropertyIdentifier) -> bool {
         | PropertyIdentifier::ROUTING_TABLE
         | PropertyIdentifier::LANDING_CALLS
         | PropertyIdentifier::FAULT_SIGNALS => true,
-        PropertyIdentifier::ALARM_VALUES | PropertyIdentifier::FAULT_VALUES => !matches!(
+        PropertyIdentifier::ALARM_VALUES => !matches!(
             object_type,
             ObjectType::CHARACTERSTRING_VALUE | ObjectType::BITSTRING_VALUE
         ),
+        PropertyIdentifier::FAULT_VALUES => object_type != ObjectType::CHARACTERSTRING_VALUE,
         PropertyIdentifier::LIST_OF_OBJECT_PROPERTY_REFERENCES => {
             object_type != ObjectType::CHANNEL
         }

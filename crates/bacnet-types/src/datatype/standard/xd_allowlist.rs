@@ -68,10 +68,6 @@ not-one-to-one multi-state-output,multi-state-value,positive-integer-value prior
 not-one-to-one octetstring-value priority-array Array<PriorityValue>[16] Array<0-BACnetOptionalOctetString>[16] | as for access-door
 not-one-to-one time-value priority-array Array<PriorityValue>[16] Array<0-BACnetOptionalTime>[16] | as for access-door
 not-one-to-one timepattern-value priority-array Array<PriorityValue>[16] Array<0-BACnetOptionalTimePattern>[16] | as for access-door
-
-ours-only bitstring-value fault-values | Table 12-47 has no Fault_Values; the entry predates this check and shapes only a custom object's row
-
-to-fix audit-reporter audit-priority-filter OptionalPriorityFilter BitString:0-BACnetPriorityFilter | Table 12-82 types it a plain BACnetPriorityFilter, but the by-identifier entry gives every type the optional form; follow-up to file
 ";
 
 /// Why a difference is accepted.
