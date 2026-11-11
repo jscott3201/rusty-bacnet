@@ -8,13 +8,19 @@
 //! device's name, then reads the objects of the selected types one at a
 //! time from the cursor's place
 //! ([`Engine::inventory_object`](bacnet_ops::engine::Engine::inventory_object)).
-//! It ends before an object that would likely take its Turtle past
-//! [`MAX_TURTLE`] bytes, at the call's budget, or at [`PAGE`] objects,
-//! with a cursor to the first object not read: nothing past the page is
-//! read. Each page is a Turtle document of its own, prefixes and header
-//! again, and the points of consecutive pages are the whole model's.
+//! Its Turtle stays under [`MAX_TURTLE`] bytes: it ends before an object
+//! likely to pass that, and an object that passes it anyway goes back to
+//! the next page, to be read again there; a point too large for any page
+//! goes out alone. It ends too at the call's budget or at [`PAGE`]
+//! objects. The cursor points at the first object not on the page, and is
+//! bound to the list it was cut from ([`Position`]): a list that changed
+//! between pages is refused rather than paged wrong. Each page is a Turtle
+//! document of its own, prefixes and header again, and the points of
+//! consecutive pages are the whole model's.
 
 use std::collections::BTreeMap;
+
+use sha2::{Digest, Sha256};
 
 use bacnet_ops::engine::timed_out;
 use bacnet_ops::export::s223::{
@@ -45,9 +51,13 @@ pub(super) const SPEC: Spec = Spec {
                   with a BACnet external reference, analog units as QUDT where mapped, and a \
                   multi-state point's states as its own enumeration. A point list only: no \
                   equipment, connections or sensors. Paged: each page is a Turtle document of \
-                  its own (about 24 kB at most) in the second text block, read with one request \
-                  per object plus the device name; call again with next_cursor for the next \
-                  page. The structured content summarises the page. Read-only.",
+                  its own in the second text block, under 24,000 bytes (a point larger than \
+                  that alone gets a page of its own, flagged oversized); call again with \
+                  next_cursor for the next. Costs the Object_List read once (cached, element by \
+                  element across calls when it must be), the device name each page, and one \
+                  request per object (several per object from a device that refuses \
+                  ReadPropertyMultiple). The structured content summarises the page. \
+                  Read-only.",
     input,
     output,
     idempotent: true,
@@ -55,8 +65,8 @@ pub(super) const SPEC: Spec = Spec {
     passive: false,
 };
 
-/// The most Turtle a page aims for, in bytes (it is ASCII): the text cap
-/// every result keeps to.
+/// The most Turtle a page holds, in bytes (it is ASCII), unless its one
+/// point alone is larger: the text cap every result keeps to.
 pub(crate) const MAX_TURTLE: usize = MAX_TEXT;
 
 /// Objects a page reads at most (the policy's object page, when smaller).
@@ -133,10 +143,15 @@ fn output() -> Value {
              unknown quantity kind and no unit",
         ),
         "turtle_bytes": count("This page's Turtle, in bytes"),
+        "oversized": {
+            "type": "boolean",
+            "description": "The page's one point alone is larger than 24,000 bytes of Turtle",
+        },
         "stopped": {
             "type": "object",
-            "description": "Set when the device stopped answering partway: the error. The \
-                            page holds what was read before; next_cursor tries again there",
+            "description": "Set when the device stopped answering partway, through the objects \
+                            or the Object_List: the error. The page holds what was read \
+                            before; next_cursor tries again there",
         },
         "list": {
             "type": "object",
@@ -194,7 +209,8 @@ pub(super) async fn run<T: TransportPort + 'static>(
 ) -> Result<Value, ToolError> {
     let (options, turtle_options) = args.options()?;
     let device = ctx.device(call, &args.device).await?;
-    let first = start(ctx, NAME, args.cursor.as_deref(), raw)? as usize;
+    let position = Position::from(start(ctx, NAME, args.cursor.as_deref(), raw)?);
+    let first = position.index;
     let engine = ctx.engine()?;
     let instance = device.instance;
     let listing = listing(ctx, call, &device).await?;
@@ -203,12 +219,13 @@ pub(super) async fn run<T: TransportPort + 'static>(
         "base_iri": turtle_options.base_iri(),
         "write_priority": turtle_options.write_priority().map(WritePriority::get),
         "start": first,
+        "oversized": false,
         "list": listing.progress(),
         "limits": ctx.limits(Some(ctx.policy.caps.objects.min(PAGE))),
     });
     if !listing.complete() {
-        // Not all read yet: no object on this page, and a cursor for the
-        // same place, which goes on reading the list.
+        // Not all read yet: no object on this page, and the same cursor,
+        // which goes on reading the list.
         let turtle = format!("{}{LITERALS_COMMENT}", list_note(instance, &listing));
         let empty = Page::new(instance, None, &turtle_options);
         merge(&mut body, summary(&empty, &Counts::default(), &Value::Null));
@@ -217,7 +234,10 @@ pub(super) async fn run<T: TransportPort + 'static>(
         body["listed"] = Value::Null;
         body["matching"] = Value::Null;
         body["truncated"] = json!(true);
-        body["next_cursor"] = next(ctx, NAME, raw, first as u64);
+        body["next_cursor"] = next(ctx, NAME, raw, position.into());
+        if let Some(why) = listing.stopped() {
+            body["stopped"] = ToolError::Failed(format!("the Object_List read, {why}")).json();
+        }
         return Ok(body);
     }
     let matching: Vec<ObjectIdentifier> = listing
@@ -226,6 +246,16 @@ pub(super) async fn run<T: TransportPort + 'static>(
         .copied()
         .filter(|object| options.types.contains(&object.object_type()))
         .collect();
+    let list = fingerprint(&matching);
+    if position.list.is_some_and(|cut| cut != list) || (first > 0 && first >= matching.len()) {
+        // Pages cut from another list would repeat some objects and miss
+        // others; nothing past the list read is sent.
+        return Err(ToolError::Failed(format!(
+            "device {instance}'s Object_List changed since this cursor's page (objects added, \
+             removed or moved), so its pages no longer line up: start the export again \
+             without a cursor"
+        )));
+    }
     let device_name = engine
         .inventory_device_name(instance)
         .await
@@ -244,7 +274,13 @@ pub(super) async fn run<T: TransportPort + 'static>(
             break;
         }
         match engine.inventory_object(instance, object).await {
-            Ok(entry) => page.push(entry),
+            Ok(entry) => {
+                if !page.push(entry) {
+                    // Past the cap with others: it heads the next page.
+                    resume = Some(at);
+                    break;
+                }
+            }
             Err(error) if read == 0 => return Err(ToolError::device(instance, &error)),
             Err(error) => {
                 // Later objects would fail the same way: stop here, say
@@ -262,19 +298,20 @@ pub(super) async fn run<T: TransportPort + 'static>(
     let (text, counts) = page.render();
     let read = page.inventory.objects.len();
     let note = page_note(instance, first, read, matching.len(), resume.is_some());
-    // A page past the last object holds none of the matching ones: the
-    // export's "no object of the selected types" header would be wrong.
-    let turtle = if read == 0 && !matching.is_empty() {
-        format!("{note}{LITERALS_COMMENT}")
-    } else {
-        format!("{note}{LITERALS_COMMENT}{text}")
-    };
+    let turtle = format!("{note}{LITERALS_COMMENT}{text}");
     merge(&mut body, summary(&page, &counts, &name));
     body["listed"] = json!(listing.objects.len());
     body["matching"] = json!(matching.len());
     body["turtle_bytes"] = json!(turtle.len());
+    body["oversized"] = json!(turtle.len() > MAX_TURTLE);
     body["truncated"] = json!(resume.is_some());
-    body["next_cursor"] = json!(resume.map(|at| next(ctx, NAME, raw, at as u64)));
+    body["next_cursor"] = json!(resume.map(|index| {
+        let position = Position {
+            list: Some(list),
+            index,
+        };
+        next(ctx, NAME, raw, position.into())
+    }));
     *out = Some(turtle);
     Ok(body)
 }
@@ -345,22 +382,67 @@ impl<'a> Page<'a> {
         (text, counts)
     }
 
-    pub(super) fn push(&mut self, object: InventoryObject) {
+    /// Add `object`, unless it takes a page of others past
+    /// [`MAX_TURTLE`] with the comment lines: then it is left out, for
+    /// the next page, and this says so. A page's first is always taken.
+    pub(super) fn push(&mut self, object: InventoryObject) -> bool {
         self.inventory.objects.push(object);
         let size = self.render().0.len();
+        if self.inventory.objects.len() > 1 && size + NOTE_ROOM > MAX_TURTLE {
+            self.inventory.objects.pop();
+            return false;
+        }
         self.largest = self.largest.max(size.saturating_sub(self.size));
         self.size = size;
+        true
     }
 
     /// Whether the page ends before its next object: it holds `cap`, or
     /// another as large as its largest so far wouldn't fit under
-    /// [`MAX_TURTLE`] with the page's comment lines. One larger than that
-    /// can carry the page past it, never by more than that one object; a
-    /// page always takes its first.
+    /// [`MAX_TURTLE`] with the page's comment lines, so it is rare that one
+    /// read has to go back ([`push`](Self::push)).
     pub(super) fn full(&self, cap: usize) -> bool {
         let read = self.inventory.objects.len();
         read > 0 && (read >= cap || self.size + self.largest + NOTE_ROOM > MAX_TURTLE)
     }
+}
+
+/// Where a page starts: an index into the matching objects, and the list
+/// it was cut from, a fingerprint of those objects in order, `None` for a
+/// first page or one cut before the list was all read. It travels in the
+/// cursor's signed position, the fingerprint in the high 32 bits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Position {
+    pub(super) list: Option<u32>,
+    pub(super) index: usize,
+}
+
+impl From<u64> for Position {
+    fn from(position: u64) -> Self {
+        let list = u32::try_from(position >> 32).unwrap_or(u32::MAX);
+        Self {
+            list: (list != 0).then_some(list),
+            index: usize::try_from(position & u64::from(u32::MAX)).unwrap_or(usize::MAX),
+        }
+    }
+}
+
+impl From<Position> for u64 {
+    fn from(position: Position) -> Self {
+        let index = u64::try_from(position.index).unwrap_or(u64::MAX) & u64::from(u32::MAX);
+        (u64::from(position.list.unwrap_or(0)) << 32) | index
+    }
+}
+
+/// A fingerprint of `objects` in order, never 0 (which means no list).
+pub(super) fn fingerprint(objects: &[ObjectIdentifier]) -> u32 {
+    let mut hash = Sha256::new();
+    for object in objects {
+        hash.update(object.object_type().to_raw().to_be_bytes());
+        hash.update(object.instance_number().to_be_bytes());
+    }
+    let digest = hash.finalize();
+    u32::from_be_bytes([digest[0], digest[1], digest[2], digest[3]]).max(1)
 }
 
 /// The page's first comment: which of the matching objects it holds, and

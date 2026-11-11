@@ -13,7 +13,7 @@ use bacnet_ops::export::s223::testing::check_structure;
 use bacnet_ops::export::s223::{InventoryOptions, TurtleOptions, WritePriority, to_turtle};
 use bacnet_ops::parse::parse_object_type;
 use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier};
-use bacnet_types::primitives::PropertyValue;
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
@@ -482,7 +482,8 @@ async fn a_cancel_stops_the_export() {
     tokio::time::sleep(Duration::from_millis(2_700)).await;
     lab.agent.cancel(id).await;
     tokio::time::sleep(Duration::from_secs(20)).await;
-    // The Object_List came from the cache: the name and four objects.
+    // The Object_List came from the cache: the name, four objects answered
+    // and a fifth on its way.
     assert_eq!(lab.sends().len() - before, 1 + 5, "none after the cancel");
     // Any answer to the cancelled call would have come before this one.
     lab.agent.request("tools/list", json!({})).await;
@@ -491,5 +492,109 @@ async fn a_cancel_stops_the_export() {
         "{:?}",
         lab.agent.backlog
     );
+    lab.stop().await;
+}
+
+/// Keep only the first `keep` entries of the lab device's Object_List, as
+/// a site change taking points out would.
+async fn keep_only(lab: &Lab, keep: usize) {
+    let mut db = lab.server.database().write().await;
+    let device = ObjectIdentifier::new(ObjectType::DEVICE, LAB).unwrap();
+    let mut objects = db.list_objects();
+    objects.sort_by_key(|o| (o.object_type() != device.object_type(), o.instance_number()));
+    objects.truncate(keep);
+    db.get_mut(&device)
+        .and_then(|device| device.device_authority_internal())
+        .expect("the lab Device")
+        .set_object_list(objects);
+}
+
+/// A cursor is bound to the Object_List its page was cut from. Once the
+/// list has changed (a point added, or points gone) and is read again,
+/// past its five minutes in the cache, the next page is refused, saying to
+/// start again, after the list read and nothing more; starting again works.
+#[tokio::test(start_paused = true)]
+async fn a_list_changed_between_pages_is_refused() {
+    for grow in [true, false] {
+        let mut lab = export_lab(Policy::default(), Duration::ZERO, 130, false).await;
+        lab.agent.initialize().await;
+        let first = lab.agent.call(TOOL, json!({ "device": LAB })).await;
+        let cursor = ok(&first)["next_cursor"].as_str().unwrap().to_string();
+        tokio::time::sleep(Duration::from_secs(301)).await;
+        if grow {
+            lab.add_point(500).await;
+        } else {
+            keep_only(&lab, 20).await;
+        }
+        let before = lab.sends().len();
+        let args = json!({ "device": LAB, "cursor": cursor });
+        let result = lab.agent.call(TOOL, args).await;
+        let body = failed(&result);
+        assert_eq!(body["error"], json!("failed"), "{body}");
+        let message = body["message"].as_str().unwrap();
+        assert!(
+            message.contains("changed since this cursor's page"),
+            "{message}"
+        );
+        assert!(message.contains("without a cursor"), "{message}");
+        assert_eq!(lab.sends().len() - before, 1, "the list read alone");
+        let again = lab.agent.call(TOOL, json!({ "device": LAB })).await;
+        assert_eq!(ok(&again)["start"], json!(0));
+        lab.stop().await;
+    }
+}
+
+/// A device that stops answering partway through a page: the page holds
+/// what was read, says why under `stopped` and in its header, counts the
+/// timeout, and its cursor tries that object again once the device answers.
+#[tokio::test(start_paused = true)]
+async fn a_device_silent_mid_page() {
+    let mut lab = export_lab(Policy::default(), Duration::ZERO, 0, false).await;
+    lab.agent.initialize().await;
+    // The list, the name and two objects; the third goes unanswered.
+    lab.go_silent_after(4);
+    let result = lab.agent.call(TOOL, json!({ "device": LAB })).await;
+    let body = ok(&result);
+    assert_eq!(body["read"], json!(2), "{body}");
+    assert_eq!(body["stopped"]["error"], json!("timeout"), "{body}");
+    assert_eq!(body["truncated"], json!(true));
+    assert_eq!(body["cost"]["timeouts"], json!(1));
+    let turtle = texts(&result).1;
+    check_structure(turtle);
+    assert!(
+        turtle.contains("# Incomplete: the reading stopped early ("),
+        "{turtle}"
+    );
+    let cursor = body["next_cursor"].as_str().unwrap().to_string();
+    *lab.mute.lock().unwrap() = None;
+    let rest = lab
+        .agent
+        .call(TOOL, json!({ "device": LAB, "cursor": cursor }))
+        .await;
+    let rest = ok(&rest);
+    assert_eq!((&rest["start"], &rest["read"]), (&json!(2), &json!(4)));
+    assert_eq!(rest["next_cursor"], Value::Null);
+    lab.stop().await;
+}
+
+/// The policy's object page, below the tool's own 50, caps a page.
+#[tokio::test(start_paused = true)]
+async fn the_policys_object_page_caps_a_page() {
+    let policy = Policy {
+        caps: Caps {
+            objects: 4,
+            ..Caps::default()
+        },
+        ..Policy::default()
+    };
+    let mut lab = export_lab(policy, Duration::ZERO, 0, false).await;
+    lab.agent.initialize().await;
+    let pages = all_pages(&mut lab, &json!({ "device": LAB })).await;
+    let reads: Vec<&Value> = pages
+        .iter()
+        .map(|(result, _)| &ok(result)["read"])
+        .collect();
+    assert_eq!(reads, [&json!(4), &json!(2)]);
+    assert_eq!(ok(&pages[0].0)["limits"]["page"], json!(4));
     lab.stop().await;
 }
