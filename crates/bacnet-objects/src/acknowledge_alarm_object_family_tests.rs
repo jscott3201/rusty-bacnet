@@ -119,7 +119,7 @@ fn binary_and_multistate_families_require_exact_idempotent_correlation() {
         assert_protocol(
             timestamp_error,
             ErrorClass::SERVICES,
-            ErrorCode::INVALID_TIME_STAMP,
+            ErrorCode::INVALID_TIMESTAMP,
         );
         assert_eq!(snapshot(&*object), before, "{object_name}");
 

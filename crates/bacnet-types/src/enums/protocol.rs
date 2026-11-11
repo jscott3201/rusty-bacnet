@@ -114,7 +114,7 @@ bacnet_enum! {
     /// so a code from an older device still decodes.
     const INVALID_OPERATOR_NAME = 12;
     const INVALID_PARAMETER_DATA_TYPE = 13;
-    const INVALID_TIME_STAMP = 14;
+    const INVALID_TIMESTAMP = 14;
     /// Removed in protocol revision 11 (Clause 21, BACnetErrorCode); named
     /// so a code from an older device still decodes.
     const KEY_GENERATION_ERROR = 15;

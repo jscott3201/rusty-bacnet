@@ -298,7 +298,7 @@ impl EventHistory {
         let coordinate = EventTransition::for_target_state(requested_state);
         let index = coordinate.index();
         let Some(original_state) = self.original_to_states[index] else {
-            return Err(service_error(ErrorCode::INVALID_TIME_STAMP));
+            return Err(service_error(ErrorCode::INVALID_TIMESTAMP));
         };
 
         let state_matches = original_state == requested_state
@@ -309,7 +309,7 @@ impl EventHistory {
             return Err(service_error(ErrorCode::INVALID_EVENT_STATE));
         }
         if self.time_stamps[index] != *timestamp {
-            return Err(service_error(ErrorCode::INVALID_TIME_STAMP));
+            return Err(service_error(ErrorCode::INVALID_TIMESTAMP));
         }
 
         *acked_transitions |= coordinate.bit_mask();

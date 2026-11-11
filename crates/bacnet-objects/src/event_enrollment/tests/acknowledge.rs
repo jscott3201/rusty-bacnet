@@ -138,9 +138,9 @@ fn the_refusal_lifts_once_detection_is_back() {
     match ee.acknowledge_alarm(EventState::OFFNORMAL, &STAMP) {
         Err(Error::Remote(RemoteError::Error {
             class: ErrorClass::SERVICES,
-            code: ErrorCode::INVALID_TIME_STAMP,
+            code: ErrorCode::INVALID_TIMESTAMP,
         })) => {}
-        other => panic!("expected SERVICES / INVALID_TIME_STAMP, got {other:?}"),
+        other => panic!("expected SERVICES / INVALID_TIMESTAMP, got {other:?}"),
     }
     assert_eq!(snapshot(&ee), before);
 

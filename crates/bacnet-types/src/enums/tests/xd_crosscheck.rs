@@ -5,10 +5,12 @@
 //! data-types file (names and values only, Apache-2.0), regenerated with
 //! `scripts/xd_strip.py`. It is a cross-check, not a source: the tables stay
 //! hand-written. Every table we define is compared with its counterpart in the
-//! file in both directions, names compared the way `FromStr` compares them
-//! (`names_eq`). Each accepted difference is an entry in `xd_allowlist.rs`; the
-//! test fails on a difference without an entry and on an entry that no longer
-//! applies, so the list only shrinks as tables catch up.
+//! file in both directions. Names must match exactly in kebab case
+//! (`spelled_as`): `FromStr` ignores separators, so a looser comparison let
+//! `invalid-time-stamp` pass for `invalid-timestamp` (#2471). Each accepted
+//! difference is an entry in `xd_allowlist.rs`; the test fails on a difference
+//! without an entry and on an entry that no longer applies, so the list only
+//! shrinks as tables catch up.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -214,6 +216,13 @@ fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
+/// Whether our identifier is the file's name exactly, once written in the
+/// file's kebab case: `INVALID_TIMESTAMP` is `invalid-timestamp`, while
+/// `INVALID_TIME_STAMP` is not.
+fn spelled_as(ours: &str, xd: &str) -> bool {
+    ours.to_ascii_lowercase().replace('_', "-") == xd
+}
+
 /// Parse the stripped file: `enum|bits <path> [attr=N ...]` starts a table,
 /// `<value> <name>` adds a member, `#` lines and blank lines are skipped.
 fn parse_xd(text: &str) -> XdTables {
@@ -318,7 +327,7 @@ fn compare(table: &str, ours: &Members, theirs: &Members, out: &mut BTreeSet<Dif
                 value: *value,
                 xd: xd_name.clone(),
             });
-        } else if !at_value.iter().any(|n| names_eq(n, xd_name)) {
+        } else if !at_value.iter().any(|n| spelled_as(n, xd_name)) {
             for n in at_value {
                 out.insert(Diff::Renamed {
                     table: table.into(),
@@ -342,14 +351,16 @@ fn compare(table: &str, ours: &Members, theirs: &Members, out: &mut BTreeSet<Dif
 
 /// Our member names that the file uses for a different value: a meaning
 /// difference, never something to allow-list, except a name a `file-error`
-/// entry says the file put at the wrong value.
+/// entry says the file put at the wrong value. Unlike the spelling check, this
+/// one matches names the way `FromStr` does (`names_eq`), so a near-spelling at
+/// another value is caught too.
 fn moved_names(table: &str, ours: &Members, theirs: &Members, allowed: &[Allowed]) -> Vec<String> {
     let misplaced = |xd_name: &str, xd_value: u32| {
         allowed.iter().any(|e| {
             e.category == Category::FileError
                 && e.table == table
                 && e.values.contains(&xd_value)
-                && names_eq(e.xd, xd_name)
+                && e.xd == xd_name
         })
     };
     let mut moved = Vec::new();

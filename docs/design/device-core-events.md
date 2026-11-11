@@ -823,7 +823,7 @@ only a `Responder` with no clock refuses them (decision 14).
 (`handlers/alarm_event/acknowledge_alarm.rs:37-95`), moved. The object
 matches the acknowledged state and timestamp against its committed history
 and sets that transition's Acked_Transitions bit (Clause 13.2.3), or
-answers INVALID_EVENT_STATE, INVALID_TIME_STAMP or NO_ALARM_CONFIGURED.
+answers INVALID_EVENT_STATE, INVALID_TIMESTAMP or NO_ALARM_CONFIGURED.
 When it knows the transition's states and the object's algorithm, the core
 queues the acknowledgement notification (ACK_NOTIFICATION, Table 13-3's
 acknowledgement column), stamped when the acknowledgement runs. It goes out

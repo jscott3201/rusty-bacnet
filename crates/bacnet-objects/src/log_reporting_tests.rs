@@ -462,7 +462,7 @@ fn an_acknowledgment_needs_detection_and_the_reports_timestamp() {
     };
     let stamp = BACnetTimeStamp::SequenceNumber(42);
     let other = BACnetTimeStamp::SequenceNumber(43);
-    let invalid_stamp = (ErrorClass::SERVICES, ErrorCode::INVALID_TIME_STAMP);
+    let invalid_stamp = (ErrorClass::SERVICES, ErrorCode::INVALID_TIMESTAMP);
     for mut log in logs() {
         let log = log.as_mut();
         write(log, P::NOTIFICATION_THRESHOLD, PropertyValue::Unsigned(1));
