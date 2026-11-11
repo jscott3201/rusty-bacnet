@@ -18,7 +18,9 @@
 //!
 //! Time is the Device clock: the object needs one to start a request, and
 //! the server lends its own. A request's moments are checked on each write
-//! and on the server's once-a-second operation pass.
+//! and on the server's once-a-second operation pass, so a client writes
+//! Start_Time last ([`LoadControlObject::set_start_time`]). A request is not
+//! kept across a restart.
 
 use crate::prelude::*;
 use alloc::borrow::Cow;
@@ -77,6 +79,9 @@ pub struct LoadControlObject {
     reliability: Reliability,
     clock: Option<Arc<dyn ClockReader>>,
     shedder: Option<Arc<dyn LoadShedder>>,
+    /// Whether the request under way has been offered to the shedder, so
+    /// that its end is reported to it.
+    offered: bool,
 }
 
 impl LoadControlObject {
@@ -108,6 +113,7 @@ impl LoadControlObject {
             reliability: Reliability::NO_FAULT_DETECTED,
             clock: None,
             shedder: None,
+            offered: false,
         })
     }
 
@@ -142,25 +148,39 @@ impl LoadControlObject {
 
     /// Set Start_Time, with the checks and effects of a WriteProperty of it:
     /// an actual local date and time starts a request, or reconfigures the
-    /// one under way, and the wholly unspecified value cancels it.
+    /// one under way, and the wholly unspecified value cancels it (and while
+    /// no request is under way changes nothing).
     ///
-    /// The seconds and hundredths may be unspecified, and count as zero. Any
-    /// other partly unspecified value names no moment and fails with
-    /// PROPERTY / VALUE_OUT_OF_RANGE, changing nothing.
+    /// The object looks at the request on each write, so Start_Time goes
+    /// last: write Requested_Shed_Level, a non-zero Shed_Duration and
+    /// Duty_Window first, then Start_Time. A Start_Time behind the requested
+    /// choice's default level, or one whose Shed_Duration has already run,
+    /// is taken and ends the request at once, so it reads unspecified again.
+    ///
+    /// The seconds and hundredths may be unspecified, and count as zero, and
+    /// the weekday is taken as written. Any other partly unspecified value
+    /// names no moment and fails with PROPERTY / VALUE_OUT_OF_RANGE, changing
+    /// nothing. While Enable is FALSE an acceptable value is taken but not
+    /// kept: Start_Time stays unspecified.
     pub fn set_start_time(&mut self, start_time: (Date, Time)) -> Result<(), Error> {
         if start_time != UNSPECIFIED_DATETIME && local_moment(start_time).is_none() {
             return Err(common::value_out_of_range_error());
         }
-        self.start_time = start_time;
-        self.settle(shed::Prompt::StartTime);
+        if self.enable {
+            self.start_time = start_time;
+            self.settle(shed::Prompt::StartTime);
+        }
         Ok(())
     }
 
     /// Set Shed_Duration, in minutes, with the effects of a WriteProperty of
-    /// it: during a request, it reconfigures the request.
+    /// it: during a request, it reconfigures the request. While Enable is
+    /// FALSE it is taken but not kept: Shed_Duration stays zero.
     pub fn set_shed_duration(&mut self, minutes: u64) {
-        self.shed_duration = minutes;
-        self.settle(shed::Prompt::Parameters);
+        if self.enable {
+            self.shed_duration = minutes;
+            self.settle(shed::Prompt::Parameters);
+        }
     }
 
     /// Set Duty_Window, in minutes, with the effects of a WriteProperty of it:
@@ -182,9 +202,15 @@ impl LoadControlObject {
     }
 
     /// Set Enable, with the effects of a WriteProperty of it: FALSE ends any
-    /// request and leaves later ones unacted on until it is TRUE again
-    /// (Clause 12.28.14). Turning it back on starts nothing by itself: the
-    /// next Start_Time write does.
+    /// request and takes no new one until it is TRUE again (Clause
+    /// 12.28.14).
+    ///
+    /// While it is FALSE, a write of Start_Time or Shed_Duration is
+    /// acknowledged but not kept, so both keep their idle values (unspecified
+    /// and zero); Requested_Shed_Level and Duty_Window are kept as plain
+    /// configuration. Turning it back on starts nothing by itself: the next
+    /// Start_Time write does, with the level and duty window held and the
+    /// Shed_Duration written since.
     pub fn set_enable(&mut self, enable: bool) {
         self.enable = enable;
         self.settle(shed::Prompt::Look);
@@ -192,18 +218,26 @@ impl LoadControlObject {
 
     /// Set Shed_Levels and Shed_Level_Descriptions together: for each level
     /// the object can take, its value and a description of what it sheds,
-    /// in order of increasing shed (Clauses 12.28.18 and 12.28.19).
+    /// in order of increasing shed (Clauses 12.28.18 and 12.28.19). The
+    /// order isn't checked.
     ///
-    /// Clients may rewrite the values but not change their number, and read
-    /// the descriptions only.
-    pub fn set_shed_levels(&mut self, levels: Vec<(u64, String)>) {
+    /// Level 0 is the no-shed level, which the array doesn't hold (Clause
+    /// 12.28.10): a 0 fails with PROPERTY / VALUE_OUT_OF_RANGE and changes
+    /// nothing. Clients may rewrite the values but not change their number,
+    /// and read the descriptions only.
+    pub fn set_shed_levels(&mut self, levels: Vec<(u64, String)>) -> Result<(), Error> {
+        if levels.iter().any(|&(level, _)| level == 0) {
+            return Err(common::value_out_of_range_error());
+        }
         (self.shed_levels, self.shed_level_descriptions) = levels.into_iter().unzip();
         self.settle(shed::Prompt::Look);
+        Ok(())
     }
 
     /// A WriteProperty of Shed_Levels: the array whole, keeping its size, or
     /// one element (Table 12-32 footnote 1). Index 0, the size, is
-    /// WRITE_ACCESS_DENIED.
+    /// WRITE_ACCESS_DENIED, and a level of 0 VALUE_OUT_OF_RANGE, as for
+    /// [`set_shed_levels`](Self::set_shed_levels).
     fn write_shed_levels(
         &mut self,
         array_index: Option<u32>,
@@ -213,6 +247,7 @@ impl LoadControlObject {
             PropertyValue::Unsigned(level) => Ok(level),
             _ => Err(common::invalid_data_type_error()),
         };
+        let mut levels = self.shed_levels.clone();
         match array_index {
             None => {
                 // A one-element array arrives as its element alone.
@@ -220,24 +255,27 @@ impl LoadControlObject {
                     PropertyValue::List(elements) => elements,
                     element => vec![element],
                 };
-                let levels = elements
+                levels = elements
                     .into_iter()
                     .map(unsigned)
                     .collect::<Result<Vec<_>, _>>()?;
                 if levels.len() != self.shed_levels.len() {
                     return Err(common::value_out_of_range_error());
                 }
-                self.shed_levels = levels;
             }
             Some(0) => return Err(common::write_access_denied_error()),
             Some(index) => {
                 let position = usize::try_from(index - 1).unwrap_or(usize::MAX);
-                if position >= self.shed_levels.len() {
+                let Some(level) = levels.get_mut(position) else {
                     return Err(common::invalid_array_index_error());
-                }
-                self.shed_levels[position] = unsigned(value)?;
+                };
+                *level = unsigned(value)?;
             }
         }
+        if levels.contains(&0) {
+            return Err(common::value_out_of_range_error());
+        }
+        self.shed_levels = levels;
         self.settle(shed::Prompt::Look);
         Ok(())
     }

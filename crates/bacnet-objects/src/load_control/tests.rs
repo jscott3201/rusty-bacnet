@@ -270,6 +270,21 @@ fn load_control_start_time_takes_a_moment_or_the_unspecified_value() {
             .unwrap();
         assert_eq!(lc.read_property(P::START_TIME, None).unwrap(), written);
     }
+    // A weekday that disagrees with the date is taken and served as
+    // written: the date alone names the day.
+    let wrong_weekday = date_time(
+        Date {
+            day_of_week: 6,
+            ..DAY
+        },
+        TEN,
+    );
+    lc.write_property(P::START_TIME, None, wrong_weekday.clone(), None)
+        .unwrap();
+    assert_eq!(
+        lc.read_property(P::START_TIME, None).unwrap(),
+        wrong_weekday
+    );
     let kept = lc.read_property(P::START_TIME, None).unwrap();
     let refused = [
         // Partly unspecified: no moment.
@@ -378,7 +393,8 @@ fn load_control_shed_levels_take_elements_but_keep_their_size() {
         (1, "Dim the lights".into()),
         (2, "Raise cooling setpoints".into()),
         (3, "Stop the chillers".into()),
-    ]);
+    ])
+    .unwrap();
     let levels = |lc: &LoadControlObject| lc.read_property(P::SHED_LEVELS, None).unwrap();
     let unsigned = |values: &[u64]| {
         PropertyValue::List(values.iter().map(|&v| PropertyValue::Unsigned(v)).collect())
@@ -450,6 +466,13 @@ fn load_control_shed_levels_take_elements_but_keep_their_size() {
             ]),
             ErrorCode::INVALID_DATA_TYPE,
         ),
+        // Level 0 is no shed, which the array doesn't hold.
+        (
+            Some(2),
+            PropertyValue::Unsigned(0),
+            ErrorCode::VALUE_OUT_OF_RANGE,
+        ),
+        (None, unsigned(&[10, 0, 50]), ErrorCode::VALUE_OUT_OF_RANGE),
     ];
     for (index, value, code) in refused {
         assert_error(
@@ -463,9 +486,21 @@ fn load_control_shed_levels_take_elements_but_keep_their_size() {
         lc.read_property(P::SHED_LEVELS, Some(4)).unwrap_err(),
         ErrorCode::INVALID_ARRAY_INDEX,
     );
+    // The embedder's setter refuses a 0 the same way, changing nothing.
+    assert_error(
+        lc.set_shed_levels(vec![(0, "none".into()), (1, "one".into())])
+            .unwrap_err(),
+        ErrorCode::VALUE_OUT_OF_RANGE,
+    );
+    assert_eq!(levels(&lc), unsigned(&[10, 30, 50]));
+    // The order isn't checked.
+    lc.write_property(P::SHED_LEVELS, None, unsigned(&[50, 10, 30]), None)
+        .unwrap();
+    assert_eq!(levels(&lc), unsigned(&[50, 10, 30]));
     // A one-element array takes its element written whole, as the
     // WriteProperty decoder passes it on.
-    lc.set_shed_levels(vec![(1, "Dim the lights".into())]);
+    lc.set_shed_levels(vec![(1, "Dim the lights".into())])
+        .unwrap();
     lc.write_property(P::SHED_LEVELS, None, PropertyValue::Unsigned(7), None)
         .unwrap();
     assert_eq!(levels(&lc), unsigned(&[7]));

@@ -4,9 +4,10 @@
 //! Writes and time drive the machine. A write of Start_Time is the request
 //! that leaves SHED_INACTIVE; a write of Requested_Shed_Level, Start_Time,
 //! Shed_Duration or Duty_Window sends a request in either shedding state back
-//! to SHED_REQUEST_PENDING, which decides at once where it goes next. Time is
-//! the Device clock, which the server reads on each write and on its
-//! once-a-second operation pass. Whether the loads can meet the request, and
+//! to SHED_REQUEST_PENDING, which decides at once where it goes next, and so
+//! does a Device clock set back before Start_Time. Time is the Device clock,
+//! which the server reads on each write and on its once-a-second operation
+//! pass. Whether the loads can meet the request, and
 //! the levels they reach, come from the application's [`LoadShedder`].
 
 use bacnet_types::constructed::BACnetShedLevel;
@@ -31,8 +32,11 @@ const HUNDREDTHS_PER_MINUTE: i64 = 60 * 100;
 ///
 /// Both run while the host holds the object exclusively (the server holds
 /// the database's write guard): return quickly, never block, and never reach
-/// for the object database. With `std`, a call that panics counts as nothing
-/// shed; without it, the panic goes on up.
+/// for the object database. A panic is caught only with `std` and panics
+/// that unwind: then a `shed` that panics counts as nothing shed, and a
+/// `stop` that panics is logged and the request ends anyway. Without `std`
+/// the panic goes on up to the caller, and with `panic = "abort"` it ends
+/// the process.
 pub trait LoadShedder: Send + Sync {
     /// Look at `request` and say how the loads stand against it.
     ///
@@ -43,6 +47,13 @@ pub trait LoadShedder: Send + Sync {
 
     /// The request ended: it ran its Shed_Duration, a client cancelled it,
     /// or Enable went FALSE. Stop shedding. The default does nothing.
+    ///
+    /// Only a request the object has offered to [`shed`](Self::shed) is
+    /// stopped: one cancelled by the write that started it never reaches
+    /// the application. Removing the object from its database, or putting
+    /// another object in its place, while a request is under way doesn't
+    /// call this either; an application that does either stops its loads
+    /// itself.
     fn stop(&self) {}
 }
 
@@ -184,7 +195,11 @@ impl LoadControlObject {
         }
         match (self.state, prompt) {
             // ReceiveShedRequest: only a Start_Time write starts a request.
-            (ShedState::SHED_INACTIVE, Prompt::StartTime) => {
+            // The unspecified Start_Time, which would cancel one at once,
+            // starts none: while idle it changes nothing.
+            (ShedState::SHED_INACTIVE, Prompt::StartTime)
+                if self.start_time != UNSPECIFIED_DATETIME =>
+            {
                 self.state = ShedState::SHED_REQUEST_PENDING;
             }
             (ShedState::SHED_INACTIVE, _) => return,
@@ -220,7 +235,9 @@ impl LoadControlObject {
             self.actual_shed_level = none;
             return;
         };
-        // CancelShed: a request whose end has passed is ignored.
+        // CancelShed: a request whose end has passed is ignored. The
+        // instant of Start_Time plus Shed_Duration counts as passed, by
+        // choice: the shed runs up to it, not through it.
         if now >= self.end_of(start) {
             self.end_request();
             return;
@@ -240,12 +257,22 @@ impl LoadControlObject {
     }
 
     /// SHED_COMPLIANT or SHED_NON_COMPLIANT: finish at the request's end, or
-    /// follow the application between the two.
+    /// follow the application between the two. While the clock can't be
+    /// read the state holds.
     fn follow_shed(&mut self) {
         let (Some(start), Some(now)) = (clock::local_moment(self.start_time), self.now()) else {
             return;
         };
-        // FinishedSuccessfulShed and FinishedUnsuccessfulShed.
+        // The Device clock moved back before Start_Time (it was set, or
+        // daylight saving ended): look at the request again as if Start_Time
+        // had just been written, through SHED_REQUEST_PENDING.
+        if now < start {
+            self.state = ShedState::SHED_REQUEST_PENDING;
+            self.decide_pending();
+            return;
+        }
+        // FinishedSuccessfulShed and FinishedUnsuccessfulShed, at the same
+        // instant CancelShed takes as passed.
         if now >= self.end_of(start) {
             self.end_request();
             return;
@@ -263,9 +290,10 @@ impl LoadControlObject {
     /// Duty_Window the agreed value (Clauses 12.28.10 to 12.28.13). The
     /// clause names these resets for a request that ran its course; the
     /// object makes them however the request ends, so a request is never
-    /// left half there.
+    /// left half there. The application is told to stop only when it was
+    /// asked about the request.
     fn end_request(&mut self) {
-        if self.state != ShedState::SHED_INACTIVE
+        if core::mem::take(&mut self.offered)
             && let Some(shedder) = &self.shedder
             && crate::catch_panic(|| shedder.stop()).is_none()
         {
@@ -291,8 +319,9 @@ impl LoadControlObject {
     }
 
     /// Ask the application how the loads stand, and serve the levels it
-    /// reports.
+    /// reports. From here on the request counts as offered to it.
     fn ask(&mut self, started: bool) -> ShedProgress {
+        self.offered = true;
         let request = ShedRequest {
             requested: self.requested_shed_level.clone(),
             shed_level: match self.requested_shed_level {

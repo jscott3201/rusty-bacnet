@@ -298,7 +298,7 @@ mod tests {
             ErrorCode::WRITE_ACCESS_DENIED,
         );
         // Shed_Level_Descriptions is the embedder's: clients only read it.
-        object.set_shed_levels(vec![(1, "lights".into())]);
+        object.set_shed_levels(vec![(1, "lights".into())]).unwrap();
         assert_error(
             object
                 .write_property(

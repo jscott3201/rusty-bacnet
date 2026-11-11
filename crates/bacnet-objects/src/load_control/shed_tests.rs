@@ -126,7 +126,8 @@ fn object() -> (LoadControlObject, Arc<TestClock>) {
         (1, "one".into()),
         (2, "two".into()),
         (3, "three".into()),
-    ]);
+    ])
+    .unwrap();
     lc.set_requested_shed_level(BACnetShedLevel::Level(2))
         .unwrap();
     lc.set_shed_duration(30);
@@ -412,7 +413,7 @@ fn a_shed_levels_write_asks_the_application_again_without_reconfiguring() {
 }
 
 #[test]
-fn enable_false_ends_a_request_and_leaves_later_ones_unacted_on() {
+fn enable_false_ends_a_request_and_keeps_only_the_level_and_window_written_meanwhile() {
     let (mut lc, clock) = object();
     let app = TestShedder::new(ShedProgress::Compliant, 2, 2);
     lc.set_shedder(app.clone());
@@ -423,28 +424,190 @@ fn enable_false_ends_a_request_and_leaves_later_ones_unacted_on() {
         .unwrap();
     assert_idle(&lc, 0);
     assert_eq!(app.take(), [Told::Stop]);
-    // A request written while disabled is kept, but nothing runs it.
-    lc.set_requested_shed_level(BACnetShedLevel::Level(3))
-        .unwrap();
-    lc.set_shed_duration(20);
+    // While disabled every request write is acknowledged. The level and
+    // the duty window are kept as configuration; Shed_Duration and
+    // Start_Time keep their idle values, so nothing stale reads back.
+    let writes = [
+        (P::REQUESTED_SHED_LEVEL, shed(3)),
+        (P::SHED_DURATION, PropertyValue::Unsigned(20)),
+        (P::DUTY_WINDOW, PropertyValue::Unsigned(5)),
+    ];
+    for (p, value) in writes {
+        lc.write_property(p, None, value, None).unwrap();
+    }
     write_start(&mut lc, at(10));
+    lc.set_shed_duration(25);
+    lc.set_start_time(at(11)).unwrap();
+    // A value the write would refuse is still refused.
+    assert!(
+        lc.set_start_time((
+            DAY,
+            Time {
+                hour: 24,
+                ..at(0).1
+            }
+        ))
+        .is_err()
+    );
     assert!(!pass(&mut lc, &clock, 12));
     assert_eq!(present_value(&lc), INACTIVE);
-    assert_eq!(start_time(&lc), at(10));
+    assert_eq!(start_time(&lc), UNSPECIFIED_DATETIME);
+    assert_eq!(level(&lc, P::SHED_DURATION), PropertyValue::Unsigned(0));
     assert_eq!(level(&lc, P::REQUESTED_SHED_LEVEL), shed(3));
+    assert_eq!(level(&lc, P::DUTY_WINDOW), PropertyValue::Unsigned(5));
     assert_eq!(level(&lc, P::EXPECTED_SHED_LEVEL), shed(0));
-    // Enabling again starts nothing by itself; the next Start_Time does.
+    assert_eq!(level(&lc, P::ENABLE), PropertyValue::Boolean(false));
+    assert!(app.take().is_empty());
+    // Enabling again starts nothing by itself.
     lc.set_enable(true);
     assert!(!pass(&mut lc, &clock, 13));
     assert_eq!(present_value(&lc), INACTIVE);
     assert!(app.take().is_empty());
+    // A full request after it runs with the level and duty window held.
+    lc.write_property(P::SHED_DURATION, None, PropertyValue::Unsigned(20), None)
+        .unwrap();
     write_start(&mut lc, at(14));
     assert_eq!(present_value(&lc), COMPLIANT);
+    assert_eq!(
+        app.take(),
+        [Told::Shed(ShedRequest {
+            requested: BACnetShedLevel::Level(3),
+            shed_level: Some(2),
+            start_time: at(14),
+            shed_duration: 20,
+            duty_window: 5,
+            started: false,
+        })]
+    );
+    assert!(!pass(&mut lc, &clock, 33));
+    assert!(pass(&mut lc, &clock, 34));
+    assert_idle(&lc, 0);
     // Disabling an idle object changes nothing else.
     let (mut idle, _clock) = object();
     idle.set_enable(false);
     assert_eq!(level(&idle, P::SHED_DURATION), PropertyValue::Unsigned(30));
     assert_eq!(present_value(&idle), INACTIVE);
+}
+
+#[test]
+fn a_clock_set_back_before_start_time_looks_at_the_request_again() {
+    let (mut lc, clock) = object();
+    let app = TestShedder::new(ShedProgress::Compliant, 2, 2);
+    lc.set_shedder(app.clone());
+    write_start(&mut lc, at(5));
+    // Compliant early, and still so once Start_Time has come.
+    assert!(!pass(&mut lc, &clock, 5));
+    assert_eq!(present_value(&lc), COMPLIANT);
+    // The clock goes back to 10:02, before Start_Time. As though Start_Time
+    // had been written: waiting loads put the request back to pending,
+    // shedding ones keep it non-compliant ahead of time, and compliant ones
+    // keep it compliant.
+    for (progress, state) in [
+        (ShedProgress::Waiting, PENDING),
+        (ShedProgress::Shedding, NON_COMPLIANT),
+        (ShedProgress::Compliant, COMPLIANT),
+        (ShedProgress::Waiting, PENDING),
+    ] {
+        app.answer(progress, 2, 0);
+        app.take();
+        pass(&mut lc, &clock, 2);
+        assert_eq!(present_value(&lc), state, "{progress:?}");
+        assert!(matches!(&app.take()[..], [Told::Shed(r)] if !r.started));
+    }
+    // Back at Start_Time the request goes on.
+    app.answer(ShedProgress::Compliant, 2, 2);
+    assert!(pass(&mut lc, &clock, 5));
+    assert_eq!(present_value(&lc), COMPLIANT);
+}
+
+#[test]
+fn a_shed_holds_its_state_while_the_clock_cant_be_read() {
+    let (mut lc, clock) = object();
+    let app = TestShedder::new(ShedProgress::Shedding, 2, 1);
+    lc.set_shedder(app.clone());
+    write_start(&mut lc, at(0));
+    assert_eq!(present_value(&lc), NON_COMPLIANT);
+    app.take();
+    // A weekday that disagrees with the date: no actual date and time.
+    clock.set((
+        Date {
+            day_of_week: 1,
+            ..DAY
+        },
+        at(10).1,
+    ));
+    app.answer(ShedProgress::Waiting, 0, 0);
+    assert!(!lc.advance_monotonic_time(Duration::ZERO));
+    assert_eq!(present_value(&lc), NON_COMPLIANT);
+    assert_eq!(level(&lc, P::ACTUAL_SHED_LEVEL), shed(1));
+    assert!(app.take().is_empty());
+}
+
+#[test]
+fn a_start_time_that_ends_at_once_never_reaches_the_application() {
+    // (level, start, what): each Start_Time is taken and ends its request at
+    // once, so it reads unspecified again and the application hears nothing.
+    let cases = [
+        (0, at(5), "the default level"),
+        (
+            2,
+            (DAY, Time { hour: 8, ..at(0).1 }),
+            "a request already over",
+        ),
+    ];
+    for (requested, start, what) in cases {
+        let (mut lc, _clock) = object();
+        let app = TestShedder::new(ShedProgress::Compliant, 2, 2);
+        lc.set_shedder(app.clone());
+        lc.set_requested_shed_level(BACnetShedLevel::Level(requested))
+            .unwrap();
+        write_start(&mut lc, start);
+        assert_eq!(present_value(&lc), INACTIVE, "{what}");
+        assert_eq!(start_time(&lc), UNSPECIFIED_DATETIME, "{what}");
+        assert!(app.take().is_empty(), "{what}");
+    }
+    // The unspecified Start_Time while idle changes nothing at all: the
+    // level and duty window written stay.
+    let (mut lc, _clock) = object();
+    let app = TestShedder::new(ShedProgress::Compliant, 2, 2);
+    lc.set_shedder(app.clone());
+    write_start(&mut lc, UNSPECIFIED_DATETIME);
+    assert_eq!(present_value(&lc), INACTIVE);
+    assert_eq!(level(&lc, P::REQUESTED_SHED_LEVEL), shed(2));
+    assert_eq!(level(&lc, P::SHED_DURATION), PropertyValue::Unsigned(30));
+    assert_eq!(level(&lc, P::DUTY_WINDOW), PropertyValue::Unsigned(10));
+    assert!(app.take().is_empty());
+}
+
+#[test]
+fn parameter_writes_while_idle_start_nothing_and_no_start_time_is_left_behind() {
+    let (mut lc, clock) = object();
+    let app = TestShedder::new(ShedProgress::Compliant, 2, 2);
+    lc.set_shedder(app.clone());
+    // Each parameter is kept as written, with no request and no question.
+    let writes = [
+        (P::REQUESTED_SHED_LEVEL, shed(3)),
+        (P::SHED_DURATION, PropertyValue::Unsigned(45)),
+        (P::DUTY_WINDOW, PropertyValue::Unsigned(15)),
+    ];
+    for (p, value) in writes {
+        lc.write_property(p, None, value.clone(), None).unwrap();
+        assert_eq!(present_value(&lc), INACTIVE, "{p:?}");
+        assert_eq!(level(&lc, p), value, "{p:?}");
+    }
+    assert!(!pass(&mut lc, &clock, 1));
+    assert!(app.take().is_empty());
+    // Every way back to idle leaves Start_Time unspecified, so a later
+    // parameter write finds no Start_Time to start a request from.
+    write_start(&mut lc, at(2));
+    assert_eq!(present_value(&lc), COMPLIANT);
+    lc.set_requested_shed_level(BACnetShedLevel::Level(0))
+        .unwrap();
+    assert_eq!(start_time(&lc), UNSPECIFIED_DATETIME);
+    lc.set_shed_duration(30);
+    lc.set_requested_shed_level(BACnetShedLevel::Level(2))
+        .unwrap();
+    assert_eq!(present_value(&lc), INACTIVE);
 }
 
 #[test]

@@ -68,11 +68,13 @@ impl LoadShedder for App {
 /// A harness serving LC-1 with three shed levels and `app` installed.
 async fn harness(app: &Arc<App>) -> Harness {
     let mut object = LoadControlObject::new(1, "LC-1").unwrap();
-    object.set_shed_levels(vec![
-        (1, "Dim the lights".into()),
-        (2, "Raise cooling setpoints".into()),
-        (3, "Stop the chillers".into()),
-    ]);
+    object
+        .set_shed_levels(vec![
+            (1, "Dim the lights".into()),
+            (2, "Raise cooling setpoints".into()),
+            (3, "Stop the chillers".into()),
+        ])
+        .unwrap();
     object.set_shedder(app.clone());
     Harness::start_with(ServerConfig::default(), |db| {
         db.add(Box::new(object)).unwrap()
@@ -247,8 +249,9 @@ async fn writes_cancel_and_disable_a_request_over_the_wire() {
     );
     assert_eq!(*app.stops.lock().unwrap(), 1);
 
-    // A request again, then Enable FALSE ends it, and a Start_Time written
-    // while disabled is kept but starts nothing.
+    // A request again, then Enable FALSE ends it. While disabled, the
+    // request writes are all acknowledged, but only the level and the duty
+    // window are kept: Shed_Duration and Start_Time keep their idle values.
     write(
         &mut h,
         oid,
@@ -285,13 +288,44 @@ async fn writes_cancel_and_disable_a_request_over_the_wire() {
     )
     .await;
     write(&mut h, oid, PropertyIdentifier::SHED_DURATION, unsigned(20)).await;
+    write(&mut h, oid, PropertyIdentifier::DUTY_WINDOW, unsigned(5)).await;
     write(&mut h, oid, PropertyIdentifier::START_TIME, start_at(2)).await;
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    for (property, value) in [
+        (PropertyIdentifier::PRESENT_VALUE, enumerated(0)),
+        (PropertyIdentifier::REQUESTED_SHED_LEVEL, vec![0x19, 0x01]),
+        (PropertyIdentifier::SHED_DURATION, unsigned(0)),
+        (PropertyIdentifier::DUTY_WINDOW, unsigned(5)),
+        (PropertyIdentifier::START_TIME, unspecified()),
+    ] {
+        assert_eq!(read(&h, property).await, value, "{property:?}");
+    }
+    // Enable TRUE starts nothing; a Shed_Duration and a Start_Time written
+    // after it start a request with the level and window held.
+    write(
+        &mut h,
+        oid,
+        PropertyIdentifier::ENABLE,
+        encode(PropertyValue::Boolean(true)),
+    )
+    .await;
     tokio::time::sleep(Duration::from_millis(1100)).await;
     assert_eq!(
         read(&h, PropertyIdentifier::PRESENT_VALUE).await,
         enumerated(0)
     );
-    assert_eq!(read(&h, PropertyIdentifier::START_TIME).await, start_at(2));
+    write(&mut h, oid, PropertyIdentifier::SHED_DURATION, unsigned(20)).await;
+    write(&mut h, oid, PropertyIdentifier::START_TIME, start_at(0)).await;
+    assert_eq!(
+        read(&h, PropertyIdentifier::PRESENT_VALUE).await,
+        enumerated(2)
+    );
+    {
+        let asked = app.asked.lock().unwrap();
+        let request = asked.last().unwrap();
+        assert_eq!(request.requested, BACnetShedLevel::Level(1));
+        assert_eq!((request.shed_duration, request.duty_window), (20, 5));
+    }
     h.server.stop().await.unwrap();
 }
 
@@ -314,6 +348,8 @@ async fn the_new_properties_take_their_datatypes_over_the_wire() {
         write_at(PropertyIdentifier::SHED_LEVELS, 2, unsigned(5)),
         write_at(PropertyIdentifier::SHED_LEVELS, 0, unsigned(4)),
         write_at(PropertyIdentifier::SHED_LEVELS, 4, unsigned(4)),
+        // Level 0 is no shed, which Shed_Levels doesn't hold.
+        write_at(PropertyIdentifier::SHED_LEVELS, 1, unsigned(0)),
         write_at(
             PropertyIdentifier::SHED_LEVEL_DESCRIPTIONS,
             1,
@@ -332,6 +368,7 @@ async fn the_new_properties_take_their_datatypes_over_the_wire() {
             Ok(()),
             Err(ErrorCode::WRITE_ACCESS_DENIED),
             Err(ErrorCode::INVALID_ARRAY_INDEX),
+            Err(ErrorCode::VALUE_OUT_OF_RANGE),
             Err(ErrorCode::WRITE_ACCESS_DENIED),
         ]
     );
@@ -382,6 +419,50 @@ async fn the_new_properties_take_their_datatypes_over_the_wire() {
     assert_eq!(
         read(&h, PropertyIdentifier::ENABLE).await,
         encode(PropertyValue::Boolean(false))
+    );
+    h.server.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_clock_set_back_before_start_time_reports_the_request_pending_again() {
+    let app = app();
+    app.answer(ShedProgress::Compliant, 2);
+    let mut h = harness(&app).await;
+    let oid = lc1();
+    set_clock(&h, 0);
+    assert_eq!(
+        subscribed(&mut h, oid).await,
+        report(0, 0, unspecified(), 0, 0)
+    );
+    for (property, value) in [
+        (PropertyIdentifier::REQUESTED_SHED_LEVEL, vec![0x19, 0x02]),
+        (PropertyIdentifier::SHED_DURATION, unsigned(30)),
+        (PropertyIdentifier::START_TIME, start_at(5)),
+    ] {
+        write(&mut h, oid, property, value).await;
+        h.cov_notification().await;
+    }
+    // Compliant early, and on at 15:05.
+    set_clock(&h, 5);
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    assert_eq!(
+        read(&h, PropertyIdentifier::PRESENT_VALUE).await,
+        enumerated(2)
+    );
+    h.no_notification().await;
+    // The Device clock goes back to 15:02 and the loads wait for Start_Time
+    // again: the request is pending once more, with no write.
+    app.answer(ShedProgress::Waiting, 0);
+    set_clock(&h, 2);
+    assert_eq!(
+        values(&h.cov_notification().await, oid),
+        report(1, 2, start_at(5), 30, 0)
+    );
+    // At 15:05 again the loads, still waiting, don't comply.
+    set_clock(&h, 5);
+    assert_eq!(
+        values(&h.cov_notification().await, oid),
+        report(3, 2, start_at(5), 30, 0)
     );
     h.server.stop().await.unwrap();
 }

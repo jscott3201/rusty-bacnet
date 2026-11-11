@@ -36,7 +36,9 @@ fn rpm_load_control_indexed_reads_and_bytes_are_unchanged() {
                     None,
                 )
                 .unwrap();
-            object.set_shed_levels(vec![(1, "lights".into()), (2, "chiller".into())]);
+            object
+                .set_shed_levels(vec![(1, "lights".into()), (2, "chiller".into())])
+                .unwrap();
         }
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();

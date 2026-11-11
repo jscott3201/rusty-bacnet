@@ -298,7 +298,7 @@ fn configured() -> Vec<Box<dyn BACnetObject>> {
     elevators.add_member(oid(T::LIFT, 1));
     // Clients may rewrite the shed levels but not size them.
     let mut load_control = LoadControlObject::new(1, "LC-1").unwrap();
-    load_control.set_shed_levels(vec![(1, "a".into())]);
+    load_control.set_shed_levels(vec![(1, "a".into())]).unwrap();
     vec![
         Box::new(command),
         Box::new(group),

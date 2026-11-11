@@ -1,7 +1,7 @@
 ---
 section: Fixed
 ---
-- **Wire:** Load Control serves Duty_Window, Enable, Shed_Levels and
-  Shed_Level_Descriptions, marks Status_Flags required, and takes the
-  Start_Time write it refused; a client's shed request now runs through
-  pending, compliant and non-compliant on the Device clock (#2464).
+- **Wire:** Load Control takes the Start_Time write it refused, and a
+  client's shed request runs through pending, compliant and non-compliant on
+  the Device clock; a partly unspecified Start_Time is VALUE_OUT_OF_RANGE,
+  and a request is not kept across a restart (#2464).
