@@ -169,6 +169,7 @@ mod client_methods {
     mod cov_discovery;
     mod discovery_streams;
     mod enrollment_alarm_covmulti_who_writegroup;
+    mod export_223;
     mod file_list_private_text_life;
     mod foreign_registration;
     mod lifecycle;

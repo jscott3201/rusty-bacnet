@@ -386,6 +386,51 @@ Properties:
 - `source_network: Optional[int]`
 - `source_address: Optional[bytes]`
 
+## Inventory223Experimental
+
+A device's objects as the experimental Standard 223 export read them
+(`BACnetClient.export_223_experimental`). Device text is kept exactly
+as the device sent it. Refuses `copy` and `pickle`.
+
+Properties:
+
+- `device_instance: int`: The device instance.
+- `device_name: Optional[str]`: The Device object's Object\_Name, exactly as the device sent it; None when it couldn't be read.
+- `objects: tuple[Object223Experimental, ...]`: The objects read, in Object\_List order, as a tuple.
+- `stopped: Optional[str]`: Why the reading stopped early, None when it didn't. A request to the device timed out or its link failed, so the objects after that point are missing; or a read of the Object\_List element by element failed partway (an error or no answer), and then `objects` is empty.
+
+### Inventory223Experimental.to_turtle
+
+```python
+def to_turtle(
+    self,
+    base_iri: Optional[str] = None,
+    write_priority: Optional[int] = None,
+) -> str
+```
+
+The inventory as Turtle. `base_iri` defaults to
+`http://example.org/bacnet/`; each device's nodes go under
+`<base_iri>device-<instance>/`. `write_priority` (1 to 16) goes in
+the reference of every commandable point. A bad base IRI or a
+priority outside 1 to 16 raises ValueError saying which rule failed;
+a priority outside 0 to 255 raises OverflowError.
+
+## Object223Experimental
+
+One object of an `Inventory223Experimental`.
+
+Properties:
+
+- `object_identifier: ObjectIdentifier`: The object.
+- `name: Optional[str]`: Its Object\_Name; None when it couldn't be read.
+- `description: Optional[str]`: Its Description; None when it has none or couldn't be read.
+- `units: Optional[EngineeringUnits]`: An analog object's Units; None for other objects or when not read.
+- `number_of_states: Optional[int]`: A multi-state object's Number\_Of\_States; None for other objects or when not read.
+- `state_texts: list[str]`: A multi-state object's State\_Text, state 1 first; empty for other objects or when not read. An entry that wasn't a string is "".
+- `commandable: bool`: Whether it has a Priority\_Array: always for an output, and for a value when the device gave one. The Turtle makes such a point actuatable.
+- `error: Optional[str]`: Why its read failed, None when it didn't; the Turtle skips such an object.
+
 ## CovNotification
 
 A Change-of-Value notification received from a remote device.

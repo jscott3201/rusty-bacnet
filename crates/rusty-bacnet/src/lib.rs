@@ -16,6 +16,7 @@ mod discovery;
 mod endpoint;
 mod errors;
 mod event_stream;
+mod export_223;
 mod group_members;
 mod hub;
 mod hub_bindings;
@@ -79,6 +80,7 @@ fn rusty_bacnet(m: &Bound<'_, PyModule>) -> PyResult<()> {
     sc_peer::register(m)?;
     sc_events::register(m)?;
     discovery::register(m)?;
+    export_223::register(m)?;
     sc_inspection::register(m)?;
     endpoint::register(m)?;
     router::register(m)?;

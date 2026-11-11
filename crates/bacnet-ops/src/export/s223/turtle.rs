@@ -44,7 +44,7 @@ use bacnet_types::qudt::qudt_unit;
 const MAX_MINTED_STATES: u32 = 1024;
 
 /// The prefixes every export declares, the device's own `d:` after them.
-const PREFIXES: [(&str, &str); 7] = [
+pub(super) const PREFIXES: [(&str, &str); 7] = [
     ("bacnet", "http://data.ashrae.org/bacnet/2020#"),
     ("qudt", "http://qudt.org/schema/qudt/"),
     ("quantitykind", "http://qudt.org/vocab/quantitykind/"),

@@ -686,6 +686,35 @@ before discovery or dispatch: nonempty request/property lists, no special
 selectors, priority None or 1..16. Invalid u8 priorities/structure raise
 ValueError; priorities outside u8 raise OverflowError.
 
+### BACnetClient.export_223_experimental
+
+```python
+def export_223_experimental(
+    self,
+    device_instance: int,
+    *,
+    types: Optional[list[ObjectType]] = None,
+) -> Awaitable[Inventory223Experimental]
+```
+
+Read a device's objects for the experimental Standard 223 export
+(#2436): its name, its Object\_List, then one request per object of
+the selected types. `to_turtle()` on the result writes the Turtle.
+
+The device is looked up in the discovery table, as the
+`_from_device` methods look it up. `types` narrows the objects read
+(analog, binary and multi-state inputs, outputs and values; all
+nine by default). Another type or an empty list raises ValueError
+before anything is sent.
+
+A device that doesn't answer the name read, or a failed read of the
+whole Object\_List, raises the usual error. A device that can't send
+the list whole is read element by element; an element that fails
+there ends the reading with `stopped` set and no objects. A device
+that stops answering once the list is in gives an inventory with
+`stopped` set and the objects read before it. `stop()`, and leaving
+`async with`, wait for a running export to finish.
+
 ### BACnetClient.add_device
 
 ```python
