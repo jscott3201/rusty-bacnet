@@ -26,6 +26,9 @@ pub mod enums;
 pub mod error;
 pub mod map_hash;
 pub mod network_number;
+// Owned strings and a list, like `constructed`.
+#[cfg(feature = "alloc")]
+pub mod points;
 pub mod primitives;
 #[cfg(feature = "qudt")]
 pub mod qudt;

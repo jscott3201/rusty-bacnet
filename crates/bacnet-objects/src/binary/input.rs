@@ -277,6 +277,7 @@ impl BinaryInputObject {
 }
 
 crate::write_config::reporting::impl_reporting_persistence!(BinaryInputObject);
+super::impl_state_texts!(BinaryInputObject);
 
 impl BACnetObject for BinaryInputObject {
     fn object_identifier(&self) -> ObjectIdentifier {

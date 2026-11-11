@@ -118,6 +118,18 @@ fn require_nonzero_states(number_of_states: u32) -> Result<(), Error> {
     Ok(())
 }
 
+/// The label a new object gives `state`: `State <state>`, written without
+/// `core::fmt`, which a no_std image building a multi-state object would
+/// otherwise link (#2445).
+fn default_state_label(state: u32) -> String {
+    common::numbered_name("State ", state)
+}
+
+/// The State_Text a new object with `number_of_states` states starts with.
+fn default_state_text(number_of_states: u32) -> Vec<String> {
+    (1..=number_of_states).map(default_state_label).collect()
+}
+
 /// Resize an object's State_Text with the repository's local count-change policy.
 ///
 /// Validation precedes mutation. Shrink truncates the tail, while growth keeps
@@ -132,7 +144,9 @@ fn resize_state_text(
     if new_len < state_text.len() {
         state_text.truncate(new_len);
     } else {
-        state_text.extend((state_text.len() + 1..=new_len).map(|state| format!("State {state}")));
+        // The labels held number fewer than `number_of_states`, a u32.
+        let first = state_text.len() as u32 + 1;
+        state_text.extend((first..=number_of_states).map(default_state_label));
     }
     *current_number_of_states = number_of_states;
     Ok(())
@@ -226,14 +240,35 @@ fn write_whole_state_text(
             .collect::<Result<Vec<_>, _>>()?,
         _ => return Err(common::invalid_data_type_error()),
     };
-    let count = if labels.len() == *number_of_states as usize {
-        *number_of_states
-    } else {
-        check_state_count(*number_of_states, labels.len() as u64, held)?
-    };
+    let count = whole_state_text_count(*number_of_states, labels.len(), held)?;
     *state_text = labels;
     *number_of_states = count;
     Ok(())
+}
+
+/// The Number_Of_States `len` labels given as the whole State_Text leave an
+/// object with `current` states, by a write ([`write_whole_state_text`]) or
+/// a `set_state_texts` (#2445): `current` when the count stays, otherwise
+/// a new count checked as [`check_state_count`] says.
+fn whole_state_text_count(
+    current: u32,
+    len: usize,
+    held: impl IntoIterator<Item = u32>,
+) -> Result<u32, Error> {
+    if len == current as usize {
+        Ok(current)
+    } else {
+        check_state_count(current, len as u64, held)
+    }
+}
+
+/// The check a `set_state_texts` makes of `texts` when a State_Text a write
+/// saved wins over it (#2414): only a count no object takes, none or past
+/// [`MAX_NUMBER_OF_STATES`], is refused, since the saved texts keep their
+/// own count.
+#[cfg(feature = "event-reporting")]
+fn kept_state_texts_check(texts: &[String]) -> Result<(), Error> {
+    check_state_count(0, texts.len() as u64, core::iter::empty()).map(|_| ())
 }
 
 /// Write one State_Text element, the whole array

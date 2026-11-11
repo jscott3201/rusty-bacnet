@@ -31,6 +31,29 @@ pub(crate) fn write_alarm_value(
     Ok(())
 }
 
+/// Give a binary object, which holds `active_text` and `inactive_text`,
+/// typed setters for them (#2445).
+macro_rules! impl_state_texts {
+    ($object:ty) => {
+        impl $object {
+            /// Set Active_Text, the label of an ACTIVE Present_Value. A new
+            /// object says `Active`. Like a write of it, this takes any
+            /// text.
+            pub fn set_active_text(&mut self, text: impl Into<String>) {
+                self.active_text = text.into();
+            }
+
+            /// Set Inactive_Text, the label of an INACTIVE Present_Value. A
+            /// new object says `Inactive`. Like a write of it, this takes
+            /// any text.
+            pub fn set_inactive_text(&mut self, text: impl Into<String>) {
+                self.inactive_text = text.into();
+            }
+        }
+    };
+}
+use impl_state_texts;
+
 mod input;
 mod output;
 mod value;

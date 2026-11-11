@@ -87,9 +87,7 @@ impl MultiStateValueObject {
             reliability_before_out_of_service: None,
             reliability_inhibit: common::ReliabilityInhibitState::default(),
             reliability_evaluator: MultiStateReliabilityState::default(),
-            state_text: (1..=number_of_states)
-                .map(|i| format!("State {i}"))
-                .collect(),
+            state_text: default_state_text(number_of_states),
             event_detector: ChangeOfStateDetector::default(),
             event_detection_enable: true,
             event_history: EventHistory::default(),
@@ -192,6 +190,25 @@ impl MultiStateValueObject {
             &mut self.state_text,
             number_of_states,
         )?;
+        let _ = self.recompute_reliability();
+        Ok(())
+    }
+
+    /// Set State_Text, one label per state, state 1 first (#2445), as
+    /// [`MultiStateInputObject::set_state_texts`](crate::multistate::MultiStateInputObject::set_state_texts)
+    /// does. The states a new count may not strand are Present_Value's,
+    /// Relinquish_Default's, those Priority_Array commands and Alarm_Values.
+    pub fn set_state_texts(&mut self, texts: Vec<String>) -> Result<(), Error> {
+        #[cfg(feature = "event-reporting")]
+        if self.kept_over_setter(PropertyIdentifier::STATE_TEXT) {
+            return kept_state_texts_check(&texts);
+        }
+        self.number_of_states = whole_state_text_count(
+            self.number_of_states,
+            texts.len(),
+            self.held_states(&self.event_detector.alarm_values),
+        )?;
+        self.state_text = texts;
         let _ = self.recompute_reliability();
         Ok(())
     }

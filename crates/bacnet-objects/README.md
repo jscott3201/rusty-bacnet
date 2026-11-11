@@ -97,6 +97,8 @@ Use [`DeviceIdentity`] and [`device_identity::build_database_with_extra`] when
 assembling a server database. The helper installs the Device and configured
 Network Ports, and seeds the Device's Object_List with the extra application
 objects. Adding a standalone analog object alone does not create a Device.
+[`points::build_database`] builds the same database from a plain-data point
+list (`bacnet_types::points`), checking every identifier and name first.
 
 Objects read through a raw database return standalone state. A running
 `BACnetServer` supplies live executor-owned Device properties and lists through

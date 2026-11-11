@@ -98,11 +98,16 @@ impl NetworkPortEntry {
         }
     }
 
+    /// The Object_Name the port's object gets: `port-<instance>`.
+    pub(crate) fn object_name(&self) -> alloc::string::String {
+        crate::common::numbered_name("port-", self.instance)
+    }
+
     /// Build the declared configuration; this does not inspect an active port.
     pub(super) fn build_object(&self) -> Result<NetworkPortObject, Error> {
         let network_number = u16::try_from(self.network_number)
             .map_err(|_| Error::Encoding("network number must be 0..65534".into()))?;
-        let name = super::numbered_name("port-", self.instance);
+        let name = self.object_name();
         // Configured B/IP/SC capacity, independently of Device62/role limits.
         // Live transport association and capability validation are separate.
         let apdu_length = 1476;

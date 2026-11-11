@@ -62,9 +62,7 @@ impl MultiStateInputObject {
             reliability_before_out_of_service: None,
             reliability_inhibit: common::ReliabilityInhibitState::default(),
             reliability_evaluator: MultiStateReliabilityState::default(),
-            state_text: (1..=number_of_states)
-                .map(|i| format!("State {i}"))
-                .collect(),
+            state_text: default_state_text(number_of_states),
             event_detector: ChangeOfStateDetector::default(),
             event_detection_enable: true,
             event_history: EventHistory::default(),
@@ -174,6 +172,30 @@ impl MultiStateInputObject {
             &mut self.state_text,
             number_of_states,
         )?;
+        let _ = self.recompute_reliability();
+        Ok(())
+    }
+
+    /// Set State_Text, one label per state, state 1 first (#2445).
+    ///
+    /// The number of labels becomes Number_Of_States, checked as a write of
+    /// the whole array is: 1 to [`MAX_NUMBER_OF_STATES`] labels, and no
+    /// fewer than a state Present_Value or Alarm_Values names, else
+    /// VALUE_OUT_OF_RANGE with nothing changed. Reliability is then worked
+    /// out again. On an object keeping its reporting settings, a State_Text
+    /// a write saved wins: this refuses only a count no object takes and
+    /// leaves the saved texts, until `clear_written_reporting` (#2414).
+    pub fn set_state_texts(&mut self, texts: Vec<String>) -> Result<(), Error> {
+        #[cfg(feature = "event-reporting")]
+        if self.kept_over_setter(PropertyIdentifier::STATE_TEXT) {
+            return kept_state_texts_check(&texts);
+        }
+        self.number_of_states = whole_state_text_count(
+            self.number_of_states,
+            texts.len(),
+            self.held_states(&self.event_detector.alarm_values),
+        )?;
+        self.state_text = texts;
         let _ = self.recompute_reliability();
         Ok(())
     }
