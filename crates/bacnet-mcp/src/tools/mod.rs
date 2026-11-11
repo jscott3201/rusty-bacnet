@@ -232,42 +232,27 @@ pub(crate) async fn call<T: TransportPort + 'static>(
             Request::Alarms(a) => alarms::run(ctx, &call, a, &args).await,
             Request::Decode(a) => decode::run(ctx, &call, a).await,
             Request::Watch(a) => watch::run(ctx, &call, a, &args).await,
-            Request::Export(a) => export::run(ctx, &call, a, &cancel, &mut turtle).await,
+            Request::Export(a) => export::run(ctx, &call, a, &args, &mut turtle).await,
         }
     };
     // A cancelled call (`notifications/cancelled`, or the host going away)
     // drops its future, and with it any gate, lock or slot it waits for:
     // nothing more is sent, and what it was charged is still logged. The
     // call's own engine requests run one after another inside that one
-    // future, so none is left queued and unpolled. The export instead stops
-    // itself at a cancel, before its next request, and returns what it read
-    // (which the SDK drops, as MCP has a cancelled request go unanswered).
-    let stops_itself = name == export::NAME;
-    let dropped = async {
-        if stops_itself {
-            std::future::pending::<()>().await;
-        }
-        cancel.cancelled().await;
-    };
+    // future, so none is left queued and unpolled.
     let work = tokio::time::timeout(budget + GRACE, charged(account, run));
     let finished = tokio::select! {
         finished = work => finished,
-        () = dropped => {
+        () = cancel.cancelled() => {
             ctx.log_read(name, &call, "cancelled");
             return Err(ErrorData::internal_error("the call was cancelled", None));
         }
     };
-    // An export cancelled with nothing to keep ends as any cancelled call.
-    if stops_itself && cancel.is_cancelled() && !matches!(finished, Ok(Ok(_))) {
-        ctx.log_read(name, &call, "cancelled");
-        return Err(ErrorData::internal_error("the call was cancelled", None));
-    }
     let outcome = match finished {
         Ok(outcome) => outcome,
         Err(_) => Err(out_of_budget(&call, budget)),
     };
-    let logged = (stops_itself && cancel.is_cancelled()).then_some("cancelled");
-    let mut result = finish(ctx, name, &call, outcome, logged);
+    let mut result = finish(ctx, name, &call, outcome);
     if let Some(turtle) = turtle.filter(|_| result.is_error == Some(false)) {
         if let Some(ContentBlock::Text(text)) = result.content.first_mut() {
             text.text.push('\n');
@@ -295,14 +280,12 @@ fn out_of_budget(call: &Call, budget: Duration) -> ToolError {
 }
 
 /// A finished call as its result: the body or the error body, with its
-/// cost, logged (as `logged` says, else by its outcome), and rendered as
-/// text.
+/// cost, logged, and rendered as text.
 fn finish<T: TransportPort + 'static>(
     ctx: &Ctx<T>,
     name: &str,
     call: &Call,
     outcome: Result<Value, ToolError>,
-    logged: Option<&str>,
 ) -> CallToolResult {
     if let Err(ToolError::Timeout { .. }) = &outcome {
         call.timed_out();
@@ -312,8 +295,7 @@ fn finish<T: TransportPort + 'static>(
         Err(error) => (error.json(), true, error.summary()),
     };
     body["cost"] = call.cost();
-    let by_outcome = if is_error { &outcome_text } else { "ok" };
-    ctx.log_read(name, call, logged.unwrap_or(by_outcome));
+    ctx.log_read(name, call, if is_error { &outcome_text } else { "ok" });
     let text = render(name, &body, is_error.then_some(outcome_text.as_str()));
     let mut result = CallToolResult::success(vec![ContentBlock::text(text)]);
     result.structured_content = Some(body);
@@ -366,7 +348,7 @@ pub(crate) async fn call_write<T: TransportPort + 'static>(
                 let account = ctx.account();
                 let call = Call::new(budget, account);
                 let error = write::unconfirmed(ctx, &args, peer, (PENDING, PENDING_WHY)).await;
-                return Ok(finish(ctx, name, &call, Err(error), None).into());
+                return Ok(finish(ctx, name, &call, Err(error)).into());
             }
         }
     } else {
@@ -416,7 +398,7 @@ pub(crate) async fn call_write<T: TransportPort + 'static>(
         Ok(Err(error)) => Err(error),
         Err(_) => Err(out_of_budget(&call, budget)),
     };
-    Ok(finish(ctx, name, &call, outcome, None).into())
+    Ok(finish(ctx, name, &call, outcome).into())
 }
 
 /// The refusal of a write that would ask an older client to confirm

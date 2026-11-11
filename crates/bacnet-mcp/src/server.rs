@@ -59,6 +59,7 @@ const INSTRUCTIONS: &str = "Access to a BACnet building automation network. \
     bacnet_read_trend reads and summarises trend logs, bacnet_read_log_records reads \
     event and audit log records, bacnet_alarms lists active alarms, \
     bacnet_export_223 (experimental) writes a device's points as a Standard 223 model in Turtle, \
+    a page a call, \
     bacnet_decode decodes a frame without sending anything, and bacnet_watch follows points \
     and says what changed since the last call. Resources (bacnet://devices, \
     bacnet://device/{instance}/object/{type}:{n}, ...) can be read and subscribed to \

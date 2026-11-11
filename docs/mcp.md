@@ -15,7 +15,7 @@ page. Experimental in 0.15.
 | Piece | Where | What it does |
 |---|---|---|
 | `bacnet-mcp` | `crates/bacnet-mcp` | `McpServer<T>`: the tool surface, prompts, policy, untrusted-text envelope, signed cursors. Out of `default-members`; publishable, because the CLI depends on it. Default feature `stdio`. |
-| Engine extensions | `bacnet-ops` | `RequestLimits::with_network_rates`, `turn_on` and `slot`; per-caller `Account` and `TokenBucket` through `limits::charged`; `Engine::who_is`, `discover_routers`, `devices`, `device`, `address_style`; `read_trend` charged per request; `alarm_summary` and `enrollment_summary` |
+| Engine extensions | `bacnet-ops` | `RequestLimits::with_network_rates`, `turn_on` and `slot`; per-caller `Account` and `TokenBucket` through `limits::charged`; `Engine::who_is`, `discover_routers`, `devices`, `device`, `address_style`; `read_trend` charged per request; `alarm_summary` and `enrollment_summary`; `inventory_device_name` and `inventory_object`, the 223 export's reads a page at a time (#2436) |
 | Decoder | `bacnet-ops::decode` | The capture screen's frame summary and field tree, moved from the CLI for `bacnet_decode`: any tapped link (B/IP, B/IPv6, BACnet/SC, MS/TP), or a bare NPDU or APDU; a field quoting a character string is marked as device text |
 | Watch hub | `bacnet-ops::watch` | `Hub`: one managed COV subscription or poller per point, shared by every listener, holding the latest values (phase 2); `Engine::device_events` |
 | `bacnet mcp` | `crates/bacnet-cli/src/mcp.rs` | `serve --stdio [--profile NAME] [--passive]`, `connect [--profile NAME]` (#2185) and `authorize --profile NAME`, behind the CLI feature `mcp` (which brings `tui`, for the profiles; the release binaries include it from 0.15.0, and a source build enables it with `--features mcp`). Classified `Read` in `bacnet_ops::class`. |
@@ -49,7 +49,7 @@ plus a text rendering.
 | `bacnet_alarms` | GetEventInformation through `bacnet_ops::format::alarms` (#2077): objects, states, transitions, notify types, timestamps and priorities named; paged over the device's answers (`more_events`) up to `max` (100) a call, the cursor holding the last object; once the call's budget is spent no further answer is asked for, and what was read comes back with `more_events` and a cursor (`format::alarms::read_event_information_until`).  `summaries: true` adds GetAlarmSummary and GetEnrollmentSummary on the first page; a device refusing one reports it under `summary_errors`. When the events spent the call's budget, neither is sent, and each shows under `summary_errors` as `{"skipped": "budget"}`. Every datum is passed through the envelope check. |
 | `bacnet_watch` | Points on the watch hub, and what changed since the last call (see [the tool-only fallback](#the-tool-only-fallback)). `idempotentHint: false`. Not listed in passive mode. |
 | `bacnet_decode` | Hex (separators and `0x` ignored, at most 6,144 octets, room for the largest BACnet/SC message the stack accepts) as `bip`, `bip6`, `mstp`, `sc`, `npdu`, `apdu` or `auto` (by the first octets; SC must be named). Returns a one-line `text`, the decoder's `summary` and the field `tree` (labels with `[start, end)` octet ranges, at most 600 fields). A label quoting a character string is an envelope with source `decoded frame`; other labels are cleaned, and a long one (an unknown tag's octets) is cut at 512 characters with `truncated: true`. No traffic: listed in passive mode too. |
-| `bacnet_export_223` | Experimental (#2436): one device's analog, binary and multi-state objects as a proposed Standard 223 point list in Turtle, the CLI's `bacnet export 223-experimental` through the engine. The Turtle is a second text block; the structured content summarises it. See [Standard 223 export](#standard-223-export-experimental). |
+| `bacnet_export_223` | Experimental (#2436): one device's analog, binary and multi-state objects as a proposed Standard 223 point list in Turtle, the CLI's `bacnet export 223-experimental` through the engine, paged with a cursor. Each page's Turtle is a second text block; the structured content summarises the page. See [Standard 223 export](#standard-223-export-experimental). |
 
 Prompts: `survey_site` (range, network) and `investigate_point` (device,
 object). Their arguments are checked against the target grammar. The survey
@@ -76,50 +76,61 @@ mapping can change between releases. Read-only; not listed in passive mode.
   and are named from object identifiers. A device instance is unique only
   within one BACnet internetwork, so give each site a base of its own, or
   two sites' models merged into one graph would share node names.
-- **Cost.** The device's name, its Object_List and one request per exported
-  object, by ReadPropertyMultiple: N + 2 for N objects (a device that
-  refuses ReadPropertyMultiple costs what the CLI section says). Each
-  request goes through `Engine::inventory`, one at a time under the
-  device's gate, the rates and the principal's tokens, so at the default
-  5 a second (burst 20) a call's 30 s budget reads about 170 objects. An
-  Object_List that can only be read element by element must be read whole
-  within one call's budget, or the call is a timeout: the export reads it
-  itself, without `bacnet_list_objects`' cache and its resumed reads.
-- **Stopping early.** The call's budget, or a cancel, raises the reading's
-  stop flag: it ends before its next request, and the request in flight
-  finishes. Once the Object_List is in, the result keeps what was read,
-  the Turtle's header says it is incomplete, and the summary says why
-  (`stopped`) and what stopped it (`stopped_by`: `device` when it stopped
-  answering, `budget` or `cancel`). Before the list is in there is nothing
-  to keep: a spent budget is a `timeout` (or `refused: rate-limited` when
-  nothing was sent), and a cancel ends as any cancelled call. The SDK
-  sends no answer to a cancelled request, as MCP has it, so a host never
-  sees that partial result; what it gets is that nothing more is sent.
+- **Pages.** A call returns one page. It takes the device's Object_List
+  as `bacnet_list_objects` does (from its five-minute cache, or read
+  element by element across calls, each going on where the last stopped;
+  while it is incomplete a page holds no object and its cursor goes on
+  reading the list), reads the device's name, then reads the objects of
+  the selected types in Object_List order, one at a time from the cursor's
+  place, through `Engine::inventory_object`. A page ends before an object
+  that would likely take its Turtle past 24,000 bytes (judged by the
+  largest point on the page so far, so one larger than those can carry it
+  past, by that one point), at 50 objects (or the policy's object page, if
+  smaller), or once the call's budget is spent; with objects left, it
+  takes at least one. Then `next_cursor` points at the first object not
+  read: nothing past the page is read. The cursor is bound, as every cursor is,
+  to the call's other arguments (device, `types`, `base_iri`,
+  `write_priority`), the principal and ten minutes; another call's cursor
+  is refused (`invalid-argument` on `cursor`) before anything is sent.
+- **Each page is a Turtle document of its own**: the export's header and
+  prefixes again, and its points. A multi-state point's enumeration kind
+  belongs to that point, so the pages' points, in order, are the whole
+  export's, and concatenated pages make one model. The page's first
+  comment says which of the matching objects it holds and whether more
+  follow; the header's counts are the page's.
+- **Cost.** One request per object, by ReadPropertyMultiple (a device that
+  refuses it costs what the CLI section says), plus the device's name on
+  every page and the Object_List once (until the cache expires): a small
+  device is N + 2 in one page. A point's Turtle runs to 500 to 800 bytes
+  (more for a multi-state point with many states), so a page holds about
+  30, and a 500-object controller (about 370 kB of Turtle) comes in about
+  18 pages, about 519 requests. At the default principal rate (5 a second,
+  burst 20) a page takes a few seconds. Every request goes through the
+  engine, one at a time under the device's gate, the rates and the
+  principal's tokens.
+- **A device that stops answering** partway through a page: the page holds
+  the objects read before it (its header says the reading stopped early),
+  `stopped` holds the error, and `next_cursor` tries that object again. If
+  it stops at the page's first object, or at its name, the call is an
+  error. A cancel drops the call, as for every tool: nothing more is sent.
 - **The result.** The first text block is the usual rendering of the
-  structured content, which ends by saying the next block is the Turtle.
-  The second block is the Turtle. The structured content has `device`,
-  `device_name` (an envelope), `base_iri`, `write_priority`, `objects` (the
-  points exported), `by_type` (points by object type), `skipped` (objects
-  whose read failed), `unmapped_units` (analog points exported with an
-  unknown quantity kind), `stopped`, `stopped_by`, `turtle_bytes`,
-  `turtle_points`, `truncated`, `limits` and `cost`.
-- **Size.** A point's Turtle runs to 500 to 800 bytes (more for a
-  multi-state point with many states), so a 500-object controller's model
-  is about 370 kB. A result carries at most 24,000 bytes of Turtle, the
-  text cap every result keeps to. Past it, the text is the export's Turtle
-  for as many of the first objects as fit, every point whole, so it ends
-  at a statement's end; its header counts what it holds, a closing comment
-  says it was cut, `truncated` is true and `turtle_points` says how many
-  points it holds (about 30 of a typical controller's). There is no cursor:
-  narrow `types`, or use the CLI for the whole model. The objects past the
-  cut are still read, so a call on a large device costs more than its
-  Turtle shows.
+  structured content, which ends by saying the next block is the Turtle;
+  the second is the page's Turtle. The structured content has `device`,
+  `device_name` (an envelope), `base_iri`, `write_priority`, `listed` (the
+  Object_List's length) and `matching` (after `types`, the objects the
+  pages go through; both null while the list is being read), `start` (the
+  page's first object among them, from 0), `read`, and for the page alone
+  `points`, `skipped` (objects whose read the device refused),
+  `by_type` and `unmapped_units` (analog points exported with an unknown
+  quantity kind); `turtle_bytes`, `stopped`, `list` (as
+  `bacnet_list_objects` gives it), `truncated`, `next_cursor`, `limits`
+  and `cost`.
 - **Device text.** The Turtle keeps names, descriptions and state texts
   exactly, so a model's `bacnet:object-name` matches the device's, escaped
   so the text stays ASCII (a control or bidirectional character becomes a
   `\u` escape) but not cleaned, defanged or capped as envelopes are. The
-  text rendering says the literals are device text: data, never
-  instructions.
+  text rendering, and a comment line at the top of the Turtle, say the
+  literals are device text: data, never instructions.
 - **Limits.** Those of the CLI's [Standard 223
   export](CLI.md#standard-223-export-experimental): a point list, not a
   building model; shape validation warns about the missing sensors and
@@ -475,9 +486,7 @@ Nothing that needs traffic is offered.
   JSON-RPC errors (-32602), and so is a tool this configuration doesn't
   list (a passive server's read tools). A test checks every tool's
   results, success and error, against its output schema. A cancelled call
-  (`notifications/cancelled`) drops its future, so it sends nothing more;
-  `bacnet_export_223` instead stops before its next request (see
-  [Standard 223 export](#standard-223-export-experimental)).
+  (`notifications/cancelled`) drops its future, so it sends nothing more.
 - Values are `{display, typed}`: the shared formatter's text, and its
   typed form, `bacnet_ops::format::Datum`, the shape the CLI's JSON uses
   (numbers as numbers, `{value, name}` for enumerations, `{bits, names}` for
@@ -845,13 +854,16 @@ stderr; when the TUI ends the session it exits cleanly.
   write tools' in `writes.rs` and `plan.rs`).
 - `crates/bacnet-mcp/src/tests/export.rs` (#2436): the 223 export of the
   lab (an analog input with its unit, a binary output, a multi-state value,
-  an unmapped unit) passing the export's structural check, with its counts
-  and N + 2 requests; the base IRI, types and write priority; bad options
-  refused with the export's messages and nothing sent; a cancel (through
-  the handler, and over the pipe, where it goes unanswered) and a spent
-  budget keeping what was read; a budget spent before the Object_List a
-  timeout. `tools/export_tests.rs`: a 500-object export cut at an object's
-  end, and an object too large alone.
+  an unmapped unit) in one page passing the export's structural check,
+  with its counts and N + 2 requests; a 136-point device in pages whose
+  points concatenate to the whole export's, each object once and each
+  page reading only its own; the base IRI, types and write priority; bad
+  options and other calls' cursors refused with nothing sent; a spent
+  budget ending a page that the cursor resumes; an Object_List read
+  element by element across calls; a cancel sending nothing more (through
+  the handler, and over the pipe, where it goes unanswered).
+  `tools/export_tests.rs`: a 500-object controller in 18 pages under the
+  text cap, an object larger than a page, and the page cap.
 - `crates/bacnet-mcp/src/tests/bbmd.rs`: real BBMDs on loopback. A survey
   from the registration's BBMD reports a missing peer entry, a refused
   read, a silent address (one timeout) and a foreign device near expiry,

@@ -1,12 +1,12 @@
-//! The Turtle a result carries: whole when it fits, otherwise cut at an
-//! object's end, every point whole, with a closing comment saying so.
+//! Pages as the tool fills them, without a device: their size, their
+//! comment lines, and their points against the whole export's.
 
 use bacnet_ops::export::s223::testing::check_structure;
 use bacnet_ops::export::s223::{Inventory, InventoryObject, TurtleOptions, to_turtle};
 use bacnet_types::enums::{EngineeringUnits, ObjectType};
 use bacnet_types::primitives::ObjectIdentifier;
 
-use super::{MAX_TURTLE, turtle};
+use super::{LITERALS_COMMENT, MAX_TURTLE, PAGE, Page, page_note};
 
 /// A site controller's points: `n` objects, mostly analog with units and
 /// names and descriptions of ordinary length, some binary and multi-state.
@@ -45,87 +45,119 @@ fn controller(n: u32) -> Inventory {
     }
 }
 
-/// An export that fits comes back whole: the core's Turtle exactly.
-#[test]
-fn a_small_export_is_whole() {
-    let inventory = controller(5);
-    let options = TurtleOptions::default();
-    let written = turtle(&inventory, &options, MAX_TURTLE);
-    assert!(!written.cut);
-    assert_eq!(written.text, to_turtle(&inventory, &options));
-    assert_eq!((written.points, written.all.exported), (5, 5));
+/// A Turtle document's points: what follows the last prefix.
+pub(crate) fn points(text: &str) -> &str {
+    let at = text.find("\n@prefix d: ").expect("the device's prefix");
+    let end = text[at..].find("\n\n").expect("the blank line after it");
+    &text[at + end + 2..]
 }
 
-/// A 500-object controller's Turtle is about 370 kB, far past what one
-/// result carries: it is cut to its first 30 or so objects, each point
-/// whole, and the text is still well formed, its header counting what it
-/// holds.
+/// `inventory`'s objects in pages as the tool fills them, each page's
+/// Turtle as the tool writes it.
+fn paged(inventory: &Inventory, options: &TurtleOptions) -> Vec<(usize, String)> {
+    let mut pages = Vec::new();
+    let mut at = 0;
+    while at < inventory.objects.len() {
+        let mut page = Page::new(inventory.device, inventory.device_name.clone(), options);
+        while at < inventory.objects.len() && !page.full(PAGE) {
+            page.push(inventory.objects[at].clone());
+            at += 1;
+        }
+        let read = page.inventory.objects.len();
+        let more = at < inventory.objects.len();
+        let note = page_note(
+            inventory.device,
+            at - read,
+            read,
+            inventory.objects.len(),
+            more,
+        );
+        pages.push((read, format!("{note}{LITERALS_COMMENT}{}", page.render().0)));
+    }
+    pages
+}
+
+/// A 500-object controller's model is about 370 kB: it comes in pages of
+/// about 30 points, each a well-formed document under the text cap, and
+/// their points, in order, are the whole export's.
 #[test]
-fn a_large_export_is_cut_at_an_objects_end() {
+fn a_large_controller_comes_in_pages() {
     let inventory = controller(500);
     let options = TurtleOptions::default();
     let whole = to_turtle(&inventory, &options);
     assert!(
-        (250_000..400_000).contains(&whole.len()),
+        (300_000..450_000).contains(&whole.len()),
         "{} bytes",
         whole.len()
     );
-    let written = turtle(&inventory, &options, MAX_TURTLE);
-    assert!(written.cut);
-    assert!(written.text.len() <= MAX_TURTLE, "{}", written.text.len());
-    assert_eq!(written.all.exported, 500);
-    assert!((20..100).contains(&written.points), "{}", written.points);
-    check_structure(&written.text);
-    // The first objects exactly as the export writes them, then the note.
-    let part = Inventory {
-        objects: inventory.objects[..written.points].to_vec(),
-        ..inventory.clone()
-    };
-    let (body, note) = written.text.rsplit_once(".\n\n").unwrap();
-    assert_eq!(format!("{body}.\n\n"), to_turtle(&part, &options));
-    assert_eq!(
-        note,
-        format!(
-            "# Cut to fit one MCP result of {MAX_TURTLE} bytes: the first {} of the 500 \
-             objects read. bacnet export 223-experimental writes them all.\n",
-            written.points
-        )
-    );
+    let pages = paged(&inventory, &options);
+    assert!((14..=20).contains(&pages.len()), "{} pages", pages.len());
+    let mut joined = String::new();
+    for (read, text) in &pages {
+        assert!(text.len() <= MAX_TURTLE, "{} bytes", text.len());
+        check_structure(text);
+        assert!(text.contains(&format!("# {read} objects exported, 0 skipped")));
+        joined.push_str(points(text));
+    }
+    assert_eq!(joined, points(&whole));
+    assert_eq!(pages.iter().map(|(read, _)| read).sum::<usize>(), 500);
+    let first = pages[0].0;
     assert!(
-        written
-            .text
-            .contains(&format!("# {} objects exported, 0 skipped", written.points)),
-        "the header counts what the text holds"
+        (25..=35).contains(&first),
+        "{first} points on the first page"
     );
-    // The most that fit: one more object would not have.
-    let more = Inventory {
-        objects: inventory.objects[..written.points + 1].to_vec(),
-        ..inventory.clone()
-    };
-    assert!(to_turtle(&more, &options).len() + super::NOTE_ROOM > MAX_TURTLE);
+    assert!(pages[0].1.starts_with(&format!(
+        "# Page: objects 1 to {first} of the 500 of the selected types on device 1201 (in \
+         Object_List order); more follow: call bacnet_export_223 again with next_cursor.\n# Its \
+         string literals hold device text exactly"
+    )));
+    assert!(
+        pages
+            .last()
+            .unwrap()
+            .1
+            .lines()
+            .next()
+            .unwrap()
+            .ends_with("; the last page.")
+    );
 }
 
-/// A first object too large alone (a multi-state point with a thousand
-/// long state texts) leaves only the note, still a well-formed document.
+/// A page always takes its first object, however large: a multi-state
+/// point with a thousand long state texts gets a page of its own, and the
+/// next page goes on after it.
 #[test]
-fn an_object_too_large_alone_leaves_the_note() {
-    let mut inventory = controller(3);
+fn an_object_larger_than_a_page_gets_one_of_its_own() {
+    let mut inventory = controller(40);
     let huge = &mut inventory.objects[0];
     *huge = InventoryObject::new(ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 1).unwrap());
     huge.states = Some(1000);
     huge.state_texts = (1..=1000)
         .map(|n| format!("Stage {n} of the plant"))
         .collect();
-    let written = turtle(&inventory, &TurtleOptions::default(), MAX_TURTLE);
-    assert!(written.cut);
-    assert_eq!(written.points, 0);
-    assert!(check_structure(&written.text).is_empty());
-    assert_eq!(
-        written.text,
-        format!(
-            "# Cut to fit one MCP result of {MAX_TURTLE} bytes: the first object alone is too \
-             large, so none of the 3 objects read. bacnet export 223-experimental writes them \
-             all.\n"
-        )
-    );
+    let options = TurtleOptions::default();
+    let pages = paged(&inventory, &options);
+    assert_eq!(pages[0].0, 1);
+    assert!(pages[0].1.len() > MAX_TURTLE);
+    assert!(pages[1].1.len() <= MAX_TURTLE);
+    let joined: String = pages.iter().map(|(_, text)| points(text)).collect();
+    assert_eq!(joined, points(&to_turtle(&inventory, &options)));
+}
+
+/// The policy's object page caps a page of small points.
+#[test]
+fn a_page_stops_at_its_cap() {
+    let mut inventory = controller(60);
+    for object in &mut inventory.objects {
+        object.name = None;
+        object.description = None;
+    }
+    let options = TurtleOptions::default();
+    let mut page = Page::new(1201, None, &options);
+    for object in inventory.objects.iter().take(5) {
+        assert!(!page.full(5));
+        page.push(object.clone());
+    }
+    assert!(page.full(5));
+    assert!(!page.full(PAGE));
 }
