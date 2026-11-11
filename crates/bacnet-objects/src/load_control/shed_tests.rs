@@ -11,6 +11,8 @@ use std::time::Duration;
 
 use PropertyIdentifier as P;
 
+mod lifecycle;
+
 const INACTIVE: ShedState = ShedState::SHED_INACTIVE;
 const PENDING: ShedState = ShedState::SHED_REQUEST_PENDING;
 const COMPLIANT: ShedState = ShedState::SHED_COMPLIANT;
@@ -482,65 +484,20 @@ fn enable_false_ends_a_request_and_keeps_only_the_level_and_window_written_meanw
     assert!(!pass(&mut lc, &clock, 33));
     assert!(pass(&mut lc, &clock, 34));
     assert_idle(&lc, 0);
-    // Disabling an idle object changes nothing else.
+    // Disabling an idle object clears a Shed_Duration staged before it and
+    // keeps the level and Duty_Window.
     let (mut idle, _clock) = object();
     idle.set_enable(false);
-    assert_eq!(level(&idle, P::SHED_DURATION), PropertyValue::Unsigned(30));
+    assert_eq!(level(&idle, P::SHED_DURATION), PropertyValue::Unsigned(0));
+    assert_eq!(level(&idle, P::REQUESTED_SHED_LEVEL), shed(2));
+    assert_eq!(level(&idle, P::DUTY_WINDOW), PropertyValue::Unsigned(10));
     assert_eq!(present_value(&idle), INACTIVE);
-}
-
-#[test]
-fn a_clock_set_back_before_start_time_looks_at_the_request_again() {
-    let (mut lc, clock) = object();
-    let app = TestShedder::new(ShedProgress::Compliant, 2, 2);
-    lc.set_shedder(app.clone());
-    write_start(&mut lc, at(5));
-    // Compliant early, and still so once Start_Time has come.
-    assert!(!pass(&mut lc, &clock, 5));
-    assert_eq!(present_value(&lc), COMPLIANT);
-    // The clock goes back to 10:02, before Start_Time. As though Start_Time
-    // had been written: waiting loads put the request back to pending,
-    // shedding ones keep it non-compliant ahead of time, and compliant ones
-    // keep it compliant.
-    for (progress, state) in [
-        (ShedProgress::Waiting, PENDING),
-        (ShedProgress::Shedding, NON_COMPLIANT),
-        (ShedProgress::Compliant, COMPLIANT),
-        (ShedProgress::Waiting, PENDING),
-    ] {
-        app.answer(progress, 2, 0);
-        app.take();
-        pass(&mut lc, &clock, 2);
-        assert_eq!(present_value(&lc), state, "{progress:?}");
-        assert!(matches!(&app.take()[..], [Told::Shed(r)] if !r.started));
-    }
-    // Back at Start_Time the request goes on.
-    app.answer(ShedProgress::Compliant, 2, 2);
-    assert!(pass(&mut lc, &clock, 5));
-    assert_eq!(present_value(&lc), COMPLIANT);
-}
-
-#[test]
-fn a_shed_holds_its_state_while_the_clock_cant_be_read() {
-    let (mut lc, clock) = object();
-    let app = TestShedder::new(ShedProgress::Shedding, 2, 1);
-    lc.set_shedder(app.clone());
-    write_start(&mut lc, at(0));
-    assert_eq!(present_value(&lc), NON_COMPLIANT);
-    app.take();
-    // A weekday that disagrees with the date: no actual date and time.
-    clock.set((
-        Date {
-            day_of_week: 1,
-            ..DAY
-        },
-        at(10).1,
-    ));
-    app.answer(ShedProgress::Waiting, 0, 0);
-    assert!(!lc.advance_monotonic_time(Duration::ZERO));
-    assert_eq!(present_value(&lc), NON_COMPLIANT);
-    assert_eq!(level(&lc, P::ACTUAL_SHED_LEVEL), shed(1));
-    assert!(app.take().is_empty());
+    // So it isn't used after Enable comes back: a Start_Time with no
+    // Shed_Duration written since ends at once.
+    idle.set_enable(true);
+    write_start(&mut idle, at(0));
+    assert_eq!(present_value(&idle), INACTIVE);
+    assert_eq!(start_time(&idle), UNSPECIFIED_DATETIME);
 }
 
 #[test]

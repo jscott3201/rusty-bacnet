@@ -186,9 +186,14 @@ impl LoadControlObject {
 
     fn step(&mut self, prompt: Prompt) {
         // Clause 12.28.14: a disabled object ends any request and takes no
-        // new one. What a client writes meanwhile is kept, unacted on.
+        // new one. Start_Time and Shed_Duration hold their idle values
+        // while it is disabled (their setters keep nothing then), so a
+        // Shed_Duration staged before Enable went FALSE goes too; the
+        // level and Duty_Window stay as configuration.
         if !self.enable {
-            if self.state != ShedState::SHED_INACTIVE {
+            if self.state == ShedState::SHED_INACTIVE {
+                self.shed_duration = 0;
+            } else {
                 self.end_request();
             }
             return;
@@ -210,16 +215,18 @@ impl LoadControlObject {
             ) => self.state = ShedState::SHED_REQUEST_PENDING,
             _ => {}
         }
+        // One reading of the clock serves the whole look.
+        let now = self.now();
         if self.state == ShedState::SHED_REQUEST_PENDING {
-            self.decide_pending();
+            self.decide_pending(now);
         } else {
-            self.follow_shed();
+            self.follow_shed(now);
         }
     }
 
-    /// SHED_REQUEST_PENDING: cancel the request, keep waiting, or start
-    /// shedding.
-    fn decide_pending(&mut self) {
+    /// SHED_REQUEST_PENDING at the moment `now`: cancel the request, keep
+    /// waiting, or start shedding.
+    fn decide_pending(&mut self, now: Option<i64>) {
         // CancelShed: a default level or an unspecified Start_Time cancels.
         let start = clock::local_moment(self.start_time);
         let cancelled = self.requested_shed_level == choice_default(&self.requested_shed_level);
@@ -228,11 +235,11 @@ impl LoadControlObject {
             return;
         };
         // Without a Device clock the object can't tell when Start_Time
-        // comes, so the request waits, with nothing shed yet.
-        let Some(now) = self.now() else {
-            let none = choice_default(&self.requested_shed_level);
-            self.expected_shed_level = none.clone();
-            self.actual_shed_level = none;
+        // comes, so the request waits. The levels last reported hold, unless
+        // a new requested choice has made them the wrong units.
+        let Some(now) = now else {
+            self.expected_shed_level = self.in_requested_units(self.expected_shed_level.clone());
+            self.actual_shed_level = self.in_requested_units(self.actual_shed_level.clone());
             return;
         };
         // CancelShed: a request whose end has passed is ignored. The
@@ -256,11 +263,11 @@ impl LoadControlObject {
         };
     }
 
-    /// SHED_COMPLIANT or SHED_NON_COMPLIANT: finish at the request's end, or
-    /// follow the application between the two. While the clock can't be
-    /// read the state holds.
-    fn follow_shed(&mut self) {
-        let (Some(start), Some(now)) = (clock::local_moment(self.start_time), self.now()) else {
+    /// SHED_COMPLIANT or SHED_NON_COMPLIANT at the moment `now`: finish at
+    /// the request's end, or follow the application between the two. While
+    /// the clock can't be read the state and levels hold.
+    fn follow_shed(&mut self, now: Option<i64>) {
+        let (Some(start), Some(now)) = (clock::local_moment(self.start_time), now) else {
             return;
         };
         // The Device clock moved back before Start_Time (it was set, or
@@ -268,7 +275,7 @@ impl LoadControlObject {
         // had just been written, through SHED_REQUEST_PENDING.
         if now < start {
             self.state = ShedState::SHED_REQUEST_PENDING;
-            self.decide_pending();
+            self.decide_pending(Some(now));
             return;
         }
         // FinishedSuccessfulShed and FinishedUnsuccessfulShed, at the same

@@ -6985,8 +6985,9 @@ written with no request under way changes nothing. However a request ends,
 Requested_Shed_Level returns to its choice's default, Start_Time to
 unspecified, Shed_Duration to 0 and Duty_Window to the agreed value
 (`set_agreed_duty_window`, 0 by default). The object needs the Device clock
-to start shedding: without one a request stays pending, and a shed holds its
-state while the clock can't be read. The server checks a request on each
+to start shedding: without one a request stays pending, and a request,
+pending or being shed, holds its state and levels while the clock can't be
+read. The server checks a request on each
 write and on its once-a-second operation pass. A request is not kept across
 a restart: the object starts SHED_INACTIVE with the idle values.
 
@@ -7003,7 +7004,9 @@ the request (`ShedRequest`: the level, the Shed_Levels element a LEVEL
 request selects, the times, and whether Start_Time has come) and returns a
 `ShedStatus` (Waiting, Shedding or Compliant, with the expected and actual
 levels), and `stop` says that a request it was asked about ended. Removing
-or replacing the object during a request doesn't call `stop`. Both run under
+or replacing the object during a request doesn't call `stop`, and neither
+does replacing the shedder: the old one isn't told, and the new one hears of
+the request's end only once it has been asked about it. Both run under
 the database's write guard, so they must return quickly and not touch the
 database. Without a shedder nothing is shed: a request runs
 SHED_NON_COMPLIANT from Start_Time to its end. `set_shed_levels` sets

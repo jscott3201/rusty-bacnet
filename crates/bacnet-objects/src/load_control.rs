@@ -119,8 +119,13 @@ impl LoadControlObject {
 
     /// Install the application's [`LoadShedder`], replacing any earlier one.
     /// The object asks it from the next look at a request on.
+    ///
+    /// The shedder replaced is not told anything, even with a request under
+    /// way, and the new one hears of that request's end only once it has
+    /// been asked about it.
     pub fn set_shedder(&mut self, shedder: Arc<dyn LoadShedder>) {
         self.shedder = Some(shedder);
+        self.offered = false;
     }
 
     /// Present_Value, the shed state.
@@ -206,9 +211,9 @@ impl LoadControlObject {
     /// 12.28.14).
     ///
     /// While it is FALSE, a write of Start_Time or Shed_Duration is
-    /// acknowledged but not kept, so both keep their idle values (unspecified
-    /// and zero); Requested_Shed_Level and Duty_Window are kept as plain
-    /// configuration. Turning it back on starts nothing by itself: the next
+    /// acknowledged but not kept, so both read their idle values (unspecified
+    /// and zero), a Shed_Duration written before it went FALSE included;
+    /// Requested_Shed_Level and Duty_Window are kept as plain configuration. Turning it back on starts nothing by itself: the next
     /// Start_Time write does, with the level and duty window held and the
     /// Shed_Duration written since.
     pub fn set_enable(&mut self, enable: bool) {
