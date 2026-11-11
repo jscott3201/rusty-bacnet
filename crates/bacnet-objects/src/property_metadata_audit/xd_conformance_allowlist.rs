@@ -20,10 +20,6 @@
 pub(super) const ALLOWED: &str = "
 later-change network-port link-speed R O | Table 12-71 gives Link_Speed R
 later-change notification-class notification-class R O | Table 12-24 gives Notification_Class R
-
-to-fix load-control status-flags O R | Table 12-32 gives Status_Flags R; follow-up to file: Load Control's Table 12-32 rows
-to-fix load-control start-time R W | Table 12-32 gives Start_Time W, and the object has no write route for it; same follow-up
-to-fix load-control duty-window,enable,shed-level-descriptions,shed-levels | Table 12-32 requires these, and the object doesn't serve them; same follow-up
 ";
 
 /// Why a difference is accepted.

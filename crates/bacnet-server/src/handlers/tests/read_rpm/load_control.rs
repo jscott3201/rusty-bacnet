@@ -36,6 +36,9 @@ fn rpm_load_control_indexed_reads_and_bytes_are_unchanged() {
                     None,
                 )
                 .unwrap();
+            object
+                .set_shed_levels(vec![(1, "lights".into()), (2, "chiller".into())])
+                .unwrap();
         }
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
@@ -143,10 +146,10 @@ fn rpm_load_control_indexed_reads_and_bytes_are_unchanged() {
                 None,
                 Ok(&[
                     0x91, 28, 0x91, 85, 0x91, 218, 0x91, 214, 0x91, 212, 0x91, 219, 0x91, 142,
-                    0x91, 111, 0x91, 103, 0x91, 36,
+                    0x91, 111, 0x91, 103, 0x91, 36, 0x91, 213, 0x91, 133, 0x91, 221, 0x91, 220,
                 ]),
             ),
-            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 10])),
+            (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 14])),
             (P::PROPERTY_LIST, Some(1), Ok(&[0x91, 28])),
             (P::PROPERTY_LIST, Some(2), Ok(&[0x91, 85])),
             (P::PROPERTY_LIST, Some(3), Ok(&[0x91, 218])),
@@ -157,9 +160,13 @@ fn rpm_load_control_indexed_reads_and_bytes_are_unchanged() {
             (P::PROPERTY_LIST, Some(8), Ok(&[0x91, 111])),
             (P::PROPERTY_LIST, Some(9), Ok(&[0x91, 103])),
             (P::PROPERTY_LIST, Some(10), Ok(&[0x91, 36])),
+            (P::PROPERTY_LIST, Some(11), Ok(&[0x91, 213])),
+            (P::PROPERTY_LIST, Some(12), Ok(&[0x91, 133])),
+            (P::PROPERTY_LIST, Some(13), Ok(&[0x91, 221])),
+            (P::PROPERTY_LIST, Some(14), Ok(&[0x91, 220])),
             (
                 P::PROPERTY_LIST,
-                Some(11),
+                Some(15),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
             (
@@ -167,23 +174,55 @@ fn rpm_load_control_indexed_reads_and_bytes_are_unchanged() {
                 Some(u32::MAX),
                 Err(ErrorCode::INVALID_ARRAY_INDEX),
             ),
-            // Unserved Load Control table rows stay unknown. Enable has no
-            // PropertyIdentifier constant so no row can be emitted; the duty
-            // family pins the exclusion.
-            (P::DUTY_WINDOW, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
+            // The rows served since #2464: Duty_Window (minutes), Enable,
+            // and the two arrays the embedder sizes, empty until it does.
+            (P::DUTY_WINDOW, None, Ok(&[0x21, 0])),
             (
                 P::DUTY_WINDOW,
                 Some(1),
                 Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
             ),
-            // An array this object doesn't hold: absent, indexed or not.
-            (P::SHED_LEVELS, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
-            (P::SHED_LEVELS, Some(1), Err(ErrorCode::UNKNOWN_PROPERTY)),
+            (P::ENABLE, None, Ok(&[0x11])),
+            (
+                P::SHED_LEVELS,
+                None,
+                Ok(if configured { &[0x21, 1, 0x21, 2] } else { &[] }),
+            ),
+            (
+                P::SHED_LEVELS,
+                Some(0),
+                Ok(if configured { &[0x21, 2] } else { &[0x21, 0] }),
+            ),
+            if configured {
+                (P::SHED_LEVELS, Some(2), Ok(&[0x21, 2]))
+            } else {
+                (P::SHED_LEVELS, Some(1), Err(ErrorCode::INVALID_ARRAY_INDEX))
+            },
+            (
+                P::SHED_LEVEL_DESCRIPTIONS,
+                Some(0),
+                Ok(if configured { &[0x21, 2] } else { &[0x21, 0] }),
+            ),
+            if configured {
+                (
+                    P::SHED_LEVEL_DESCRIPTIONS,
+                    Some(1),
+                    Ok(&[0x75, 7, 0, b'l', b'i', b'g', b'h', b't', b's']),
+                )
+            } else {
+                (
+                    P::SHED_LEVEL_DESCRIPTIONS,
+                    Some(1),
+                    Err(ErrorCode::INVALID_ARRAY_INDEX),
+                )
+            },
+            // The optional rows this object leaves out stay unknown.
             (
                 P::FULL_DUTY_BASELINE,
                 None,
                 Err(ErrorCode::UNKNOWN_PROPERTY),
             ),
+            (P::STATE_DESCRIPTION, None, Err(ErrorCode::UNKNOWN_PROPERTY)),
         ];
         let mut request = BytesMut::new();
         ReadPropertyMultipleRequest {

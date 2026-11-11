@@ -22,6 +22,7 @@ use bacnet_objects::command::CommandObject;
 use bacnet_objects::elevator::ElevatorGroupObject;
 use bacnet_objects::group::{GlobalGroupObject, GroupObject, StructuredViewObject};
 use bacnet_objects::life_safety::{LifeSafetyPointObject, LifeSafetyZoneObject};
+use bacnet_objects::load_control::LoadControlObject;
 use bacnet_objects::network_port::NetworkPortObject;
 use bacnet_objects::property_metadata::{ArraySize, Datatype as D, ValueShape, ValueType};
 use bacnet_objects::traits::BACnetObject;
@@ -295,6 +296,9 @@ fn configured() -> Vec<Box<dyn BACnetObject>> {
         .unwrap();
     let mut elevators = ElevatorGroupObject::new(1, "EG-1").unwrap();
     elevators.add_member(oid(T::LIFT, 1));
+    // Clients may rewrite the shed levels but not size them.
+    let mut load_control = LoadControlObject::new(1, "LC-1").unwrap();
+    load_control.set_shed_levels(vec![(1, "a".into())]).unwrap();
     vec![
         Box::new(command),
         Box::new(group),
@@ -309,6 +313,7 @@ fn configured() -> Vec<Box<dyn BACnetObject>> {
         Box::new(user),
         Box::new(access_zone),
         Box::new(elevators),
+        Box::new(load_control),
     ]
 }
 

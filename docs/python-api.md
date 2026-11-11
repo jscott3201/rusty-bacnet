@@ -4853,9 +4853,12 @@ SubscribeCOV, and each report carries the values their Table 13-1 rows name:
 Door_Alarm_State on a door; Access_Event (in place of Present_Value),
 Access_Event_Tag, Access_Event_Time, Access_Event_Credential and
 Access_Event_Authentication_Factor on an Access Point; Update_Time on a
-Credential Data Input; and Requested_Shed_Level, Start_Time and Shed_Duration
-on a Load Control. While a door's Out_Of_Service is TRUE, clients can write
-its Door_Status, Lock_Status and Door_Alarm_State to simulate it (Table 12-30
+Credential Data Input; and Requested_Shed_Level, Start_Time, Shed_Duration
+and Duty_Window on a Load Control. A Load Control runs a client's shed
+request on the Device clock (#2464), but the binding has no route yet for
+the application that sheds the loads, so a request runs SHED_NON_COMPLIANT
+from its Start_Time to its end. While a door's Out_Of_Service is TRUE,
+clients can write its Door_Status, Lock_Status and Door_Alarm_State to simulate it (Table 12-30
 footnote 1); returning it to service brings back the door's own values. A
 door's Secured_Status follows its command, Door_Status and Lock_Status,
 simulated or not (Clause 12.26.14). A Credential Data Input's Present_Value
