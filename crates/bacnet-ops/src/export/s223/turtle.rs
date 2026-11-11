@@ -32,12 +32,12 @@ use std::fmt::{self, Write};
 use bacnet_types::enums::{EngineeringUnits, ObjectType};
 use bacnet_types::primitives::ObjectIdentifier;
 
-use super::units::qudt_unit;
 use super::{
     EXPORTED_TYPES, Inventory, InventoryObject, ONTOLOGY_SOURCE, ONTOLOGY_VERSION, TurtleOptions,
 };
 use crate::format::is_multistate;
 use crate::label::{kebab, object_label};
+use bacnet_types::qudt::qudt_unit;
 
 /// States minted for one multi-state point at most; a device claiming more
 /// gets the first this many.

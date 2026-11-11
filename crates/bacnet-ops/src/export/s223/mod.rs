@@ -27,11 +27,9 @@
 
 mod inventory;
 mod turtle;
-mod units;
 
 pub use self::inventory::read_inventory;
 pub use self::turtle::{Counts, to_turtle, write_turtle};
-pub use self::units::qudt_unit;
 
 use bacnet_types::enums::{EngineeringUnits, ObjectType};
 use bacnet_types::primitives::ObjectIdentifier;

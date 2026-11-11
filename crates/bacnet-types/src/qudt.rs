@@ -1,15 +1,38 @@
-//! BACnet engineering units as QUDT units and quantity kinds, the terms a
-//! 223 model gives a quantifiable property.
+//! BACnet engineering units as QUDT units and quantity kinds, with lookups
+//! both ways (feature `qudt`).
 //!
-//! A hand-written table of the units HVAC, lighting and energy points use
-//! most. It grows on request; a unit it lacks gets QUDT's unknown quantity
-//! kind and no unit in the export, with a comment naming the BACnet unit.
-//! Each entry is a QUDT local name, in the `unit:` and `quantitykind:`
-//! namespaces.
+//! QUDT is the unit vocabulary the ASHRAE 223 ontology uses for a
+//! quantifiable property. This module is a hand-written table of the units
+//! HVAC, lighting and energy points use most, as const data: no allocation,
+//! no dependency, usable without `std` or `alloc`. It grows on request.
+//!
+//! Every name is a QUDT *local name*, the part after the `unit:` or
+//! `quantitykind:` prefix (`DEG_F`, `Temperature`), as a `&'static str`.
+//!
+//! # Lookups
+//!
+//! - [`qudt_unit`] maps an [`EngineeringUnits`](crate::enums::EngineeringUnits) value to its QUDT unit and
+//!   quantity kind, or `None` when the table has no row for it.
+//! - [`engineering_units_from_qudt`] maps a QUDT unit local name back, or
+//!   `None` when the name is not in the table. QUDT units the table lacks, and
+//!   spelling variants of the names it has, return `None`; none are guessed.
+//!
+//! Both are a linear scan over the table (about ninety rows), so neither
+//! allocates and neither needs a sorted layout or a hash.
+//!
+//! # Aliases
+//!
+//! Two BACnet units can share a QUDT unit, so the reverse lookup is not
+//! injective. The only such case today is `UNITLESS`, which both
+//! [`EngineeringUnits::NO_UNITS`](crate::enums::EngineeringUnits::NO_UNITS) and [`EngineeringUnits::POWER_FACTOR`](crate::enums::EngineeringUnits::POWER_FACTOR) map
+//! to (they differ in quantity kind). The reverse lookup returns
+//! [`EngineeringUnits::NO_UNITS`](crate::enums::EngineeringUnits::NO_UNITS) for it: the plain reading of a
+//! dimensionless unit, and the row that comes first in the table.
 
-use bacnet_types::enums::EngineeringUnits as U;
+use crate::enums::EngineeringUnits as U;
 
-/// `(BACnet unit, QUDT unit, QUDT quantity kind)`.
+/// `(BACnet unit, QUDT unit, QUDT quantity kind)`. For a QUDT unit that
+/// more than one row names, the first row is the reverse lookup's answer.
 const TABLE: &[(U, &str, &str)] = &[
     // Temperature and humidity.
     (U::DEGREES_FAHRENHEIT, "DEG_F", "Temperature"),
@@ -113,9 +136,10 @@ const TABLE: &[(U, &str, &str)] = &[
     (U::PERCENT, "PERCENT", "DimensionlessRatio"),
     (U::PARTS_PER_MILLION, "PPM", "DimensionlessRatio"),
     (U::PARTS_PER_BILLION, "PPB", "DimensionlessRatio"),
+    // `UNITLESS` is shared: the first row is what the reverse lookup returns.
+    (U::NO_UNITS, "UNITLESS", "Dimensionless"),
     (U::POWER_FACTOR, "UNITLESS", "PowerFactor"),
     (U::DEGREES_ANGULAR, "DEG", "PlaneAngle"),
-    (U::NO_UNITS, "UNITLESS", "Dimensionless"),
 ];
 
 /// `units` as a QUDT unit and quantity kind (local names), or `None` when
@@ -127,9 +151,23 @@ pub fn qudt_unit(units: U) -> Option<(&'static str, &'static str)> {
         .map(|&(_, unit, kind)| (unit, kind))
 }
 
+/// The BACnet unit for a QUDT unit local name (such as `"DEG_F"`), or `None`
+/// when the name is not in the table. Where two BACnet units share a name,
+/// the first row's unit is returned (see the module's alias notes).
+pub fn engineering_units_from_qudt(unit: &str) -> Option<U> {
+    TABLE
+        .iter()
+        .find(|(_, name, _)| *name == unit)
+        .map(|&(bacnet, _, _)| bacnet)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// QUDT units that more than one row names, with the BACnet unit the
+    /// reverse lookup answers.
+    const ACCEPTED_ALIASES: &[(&str, U)] = &[("UNITLESS", U::NO_UNITS)];
 
     /// Each BACnet unit has one row, and every local name is a plain
     /// prefixed-name local part (letters, digits, `_` and `-`), so it can
@@ -157,5 +195,50 @@ mod tests {
             Some(("DEG_F", "Temperature"))
         );
         assert_eq!(qudt_unit(U::DEGREE_DAYS_CELSIUS), None);
+    }
+
+    /// Every row's unit name reads back to a unit with the same name, and
+    /// to the row's own unit unless the name is an accepted alias.
+    #[test]
+    fn every_row_round_trips() {
+        for &(bacnet, unit, _) in TABLE {
+            let back = engineering_units_from_qudt(unit).expect(unit);
+            match ACCEPTED_ALIASES.iter().find(|(name, _)| *name == unit) {
+                Some(&(_, canonical)) => assert_eq!(back, canonical, "{unit}"),
+                None => assert_eq!(back, bacnet, "{unit}"),
+            }
+            assert_eq!(qudt_unit(back).map(|(name, _)| name), Some(unit));
+        }
+    }
+
+    /// No two rows share a QUDT unit unless it is listed as an alias, and
+    /// every alias is shared by at least two rows.
+    #[test]
+    fn shared_qudt_units_are_exactly_the_accepted_aliases() {
+        for (i, (_, unit, _)) in TABLE.iter().enumerate() {
+            let shared = TABLE[i + 1..].iter().any(|(_, other, _)| other == unit);
+            let listed = ACCEPTED_ALIASES.iter().any(|(name, _)| name == unit);
+            assert!(!shared || listed, "{unit} shared but not listed");
+        }
+        for (name, canonical) in ACCEPTED_ALIASES {
+            let rows = TABLE.iter().filter(|(_, unit, _)| unit == name).count();
+            assert!(rows >= 2, "{name} listed but not shared");
+            assert_eq!(
+                TABLE.iter().find(|(_, u, _)| u == name).unwrap().0,
+                *canonical
+            );
+        }
+    }
+
+    /// Names outside the table, including near misses, return `None`.
+    #[test]
+    fn unknown_names_return_none() {
+        for name in ["", "deg_f", "DEG_F ", "unit:DEG_F", "KiloGM-PER-DAY"] {
+            assert_eq!(engineering_units_from_qudt(name), None, "{name:?}");
+        }
+        assert_eq!(
+            engineering_units_from_qudt("DEG_F"),
+            Some(U::DEGREES_FAHRENHEIT)
+        );
     }
 }
