@@ -1,68 +1,7 @@
-//! Explicit source choice for trusted local property writes.
-use bacnet_objects::{command_source::CommandOrigin, database::ObjectDatabase};
-use bacnet_types::{
-    enums::{ErrorClass, ErrorCode},
-    error::Error,
-    primitives::ObjectIdentifier,
-};
+//! A command origin for the server's tests. The local source a trusted
+//! caller asserts, and its resolution, are
+//! `bacnet_device_core::write::local`'s (#2446).
 
-/// Initiator asserted by a trusted local caller. The local Device (the
-/// identity's, in a running server) owns the command in either case; an
-/// object changes only its published source.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LocalCommandSource {
-    /// The concrete local Device initiated the command.
-    ServerDevice,
-    /// An existing concrete local object initiated the command.
-    Object(ObjectIdentifier),
-}
-
-pub(crate) fn resolve_local(
-    db: &ObjectDatabase,
-    source: LocalCommandSource,
-) -> Result<CommandOrigin, Error> {
-    let denied = || Error::protocol(ErrorClass::PROPERTY, ErrorCode::WRITE_ACCESS_DENIED);
-    // The Device this server speaks for, not the lowest one (#2227), and
-    // only while its object is here.
-    let owner_device = db
-        .local_device()
-        .identifier()
-        .filter(|device| db.get(device).is_some())
-        .ok_or_else(denied)?;
-    let initiating_object = match source {
-        LocalCommandSource::ServerDevice => None,
-        LocalCommandSource::Object(oid) => {
-            if db.get(&oid).is_none() {
-                return Err(denied());
-            }
-            Some(oid)
-        }
-    };
-    let origin = CommandOrigin::Local {
-        owner_device,
-        initiating_object,
-    };
-    origin.validate()?;
-    Ok(origin)
-}
-
-/// On absent/invalid local identity, context-free dispatch preserves unrelated
-/// property writes while first-party tracked commands fail closed in the object.
-pub(crate) fn write_target(
-    object: &mut dyn bacnet_objects::traits::BACnetObject,
-    property: bacnet_types::enums::PropertyIdentifier,
-    index: Option<u32>,
-    value: bacnet_types::primitives::PropertyValue,
-    priority: Option<u8>,
-    origin: Option<&CommandOrigin>,
-) -> Result<(), Error> {
-    match origin {
-        Some(origin) => object.write_property_from(property, index, value, priority, origin),
-        None => object.write_property(property, index, value, priority),
-    }
-}
-
-#[cfg(test)]
 pub(crate) fn test_origin() -> bacnet_objects::command_source::CommandOrigin {
     bacnet_objects::command_source::CommandOrigin::Local {
         owner_device: bacnet_types::primitives::ObjectIdentifier::new(
@@ -74,10 +13,11 @@ pub(crate) fn test_origin() -> bacnet_objects::command_source::CommandOrigin {
     }
 }
 
-#[cfg(test)]
 mod tests {
-    use super::*;
-    use bacnet_types::enums::ObjectType;
+    use bacnet_device_core::write::local::{LocalCommandSource, resolve_source as resolve_local};
+    use bacnet_objects::{command_source::CommandOrigin, database::ObjectDatabase};
+    use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
+    use bacnet_types::{error::Error, primitives::ObjectIdentifier};
 
     fn device(instance: u32) -> ObjectIdentifier {
         ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap()

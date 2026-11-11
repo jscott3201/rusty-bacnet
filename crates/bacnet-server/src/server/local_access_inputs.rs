@@ -114,7 +114,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             oid,
             LocalWrite::ApplicationAccessInput(&input),
             PropertyValue::Null,
-            None,
         )
         .await
     }

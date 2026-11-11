@@ -43,7 +43,10 @@ the database guard, the transport, addressing and time.
   then read it.
 - `write`: WriteProperty and WritePropertyMultiple, with a
   `WriteCommitObserver` the host's audit and change capture run in under its
-  guard; the array-index gate and value decoding every write path shares;
+  guard; the application's own writes (`write::local::apply`: an input such
+  as a sensor's Present_Value, or a write made as the local Device or one of
+  its objects, which `bacnet-server`'s `*_local` methods make through it);
+  the array-index gate and value decoding every write path shares;
   the NULL-relinquish rule (`write::relinquish`); the local form of
   references naming this device; and the end of a Command's or Channel's
   run a host can't make.

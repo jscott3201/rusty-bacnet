@@ -502,7 +502,8 @@ the initiating Schedule and preserve complete target references; Staging command
 name the actual plan source after its existing generation check. Failed CreateObject initialization rolls back the new object;
 WPM retains its successful prefix and failed coordinate.
 
-`BACnetServer::write_local` requires a final `LocalCommandSource` argument:
+`BACnetServer::write_local` requires a final `LocalCommandSource` argument
+(`bacnet_device_core::write::local::LocalCommandSource`, #2446):
 `ServerDevice` or `Object(oid)`. Both require the identity's Device object for
 tracked commands; the object form also requires an existing concrete local
 initiator under the database guard. Missing or wildcard-only Device identity and
@@ -8225,6 +8226,19 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   the objects the attempts changed. `handle_write_property`,
   `handle_read_property_multiple` and `handle_write_property_multiple` are
   gone from `bacnet_server::handlers`.
+- `write::local` (#2446): the application's own writes. `apply` checks one
+  `LocalChange` (an input the object's `LocalInput` takes, or a property
+  write made as a `LocalCommandSource`) and commits it under the host's
+  guard, telling an optional observer of a property write (`Observed`), and
+  returns `Applied`; `resolve_source` and `write_target` are its origin and
+  object steps. `LocalCommandSource` moved here from `bacnet_server`.
+  `BACnetServer::write_local`, `set_present_value_local` and the other
+  `*_local` inputs make their change through it and keep the rest: durable
+  staging, Audit, WriteGroup, and the event, COV, Schedule, Staging and run
+  work a change owes. It is not `commit_attempt`: a NULL is told by its
+  value, an Audit Reporter's Description, Maximum_Send_Delay and Send_Now
+  and the Device's Audit recipient take no route of their own, and the
+  observer's `applied` is not called.
 - `discovery`: `who_is` (the I-Am a Who-Is calls for, or none), `who_has`
   (the I-Have, or none), `i_am` and `announcement_device`. Both answers name
   the Device the `DeviceIdentity` names, and neither is sent while the

@@ -1,13 +1,17 @@
 use super::cov_notify_context::CovNotifyContext;
 use super::*;
 use crate::command_lists::TakenRuns;
-use bacnet_device_core::write::{WriteCommitObserver, WriteTarget};
+use bacnet_device_core::write::local::LocalCommandSource;
+use bacnet_device_core::write::{Applied, WriteCommitObserver, WriteTarget};
 use bacnet_objects::command::CommandRun;
-use bacnet_objects::traits::{BACnetObject, LocalInputValue, not_supported};
+use bacnet_objects::traits::not_supported;
 use bacnet_types::constructed::BACnetRecipient;
 
 #[path = "local_write_finish.rs"]
 mod finish;
+
+#[path = "local_write_commit.rs"]
+mod commit;
 
 #[path = "local_access_inputs.rs"]
 mod access_inputs;
@@ -39,11 +43,13 @@ mod local_index_staged_release_tests;
 /// network-equivalent writes, including their Out_Of_Service ownership checks.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) enum LocalWrite<'s> {
-    /// A trusted local program performing a network-equivalent property write.
+    /// A trusted local program performing a network-equivalent property
+    /// write, as `source`.
     Property {
         property: PropertyIdentifier,
         array_index: Option<u32>,
         priority: Option<u8>,
+        source: LocalCommandSource,
     },
     /// The application supplying a supported object's logical `Present_Value`.
     ApplicationPresentValue,
@@ -193,7 +199,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         array_index: Option<u32>,
         value: PropertyValue,
         priority: Option<u8>,
-        source: crate::LocalCommandSource,
+        source: LocalCommandSource,
     ) -> Result<(), Error> {
         self.write_local_as(
             oid,
@@ -201,9 +207,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 property,
                 array_index,
                 priority,
+                source,
             },
             value,
-            Some(source),
         )
         .await
     }
@@ -248,7 +254,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         oid: &ObjectIdentifier,
         value: PropertyValue,
     ) -> Result<(), Error> {
-        self.write_local_as(oid, LocalWrite::ApplicationPresentValue, value, None)
+        self.write_local_as(oid, LocalWrite::ApplicationPresentValue, value)
             .await
     }
 
@@ -280,13 +286,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         oid: &ObjectIdentifier,
         value: PropertyValue,
     ) -> Result<(), Error> {
-        self.write_local_as(
-            oid,
-            LocalWrite::ApplicationControlledVariableValue,
-            value,
-            None,
-        )
-        .await
+        self.write_local_as(oid, LocalWrite::ApplicationControlledVariableValue, value)
+            .await
     }
 
     /// Record one sample for an Averaging object, taken by the application.
@@ -334,7 +335,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ) -> Result<(), Error> {
         match sample {
             Some(value) => {
-                self.write_local_as(oid, LocalWrite::ApplicationAveragingSample, value, None)
+                self.write_local_as(oid, LocalWrite::ApplicationAveragingSample, value)
                     .await
             }
             None => {
@@ -342,7 +343,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     oid,
                     LocalWrite::ApplicationAveragingMiss,
                     PropertyValue::Null,
-                    None,
                 )
                 .await
             }
@@ -381,7 +381,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         oid: &ObjectIdentifier,
         value: PropertyValue,
     ) -> Result<(), Error> {
-        self.write_local_as(oid, LocalWrite::ApplicationTrackingValue, value, None)
+        self.write_local_as(oid, LocalWrite::ApplicationTrackingValue, value)
             .await
     }
 
@@ -415,7 +415,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             oid,
             LocalWrite::ApplicationPulses(pulses),
             PropertyValue::Null,
-            None,
         )
         .await
     }
@@ -446,7 +445,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         oid: &ObjectIdentifier,
         value: PropertyValue,
     ) -> Result<(), Error> {
-        self.write_local_as(oid, LocalWrite::ApplicationProgramState, value, None)
+        self.write_local_as(oid, LocalWrite::ApplicationProgramState, value)
             .await
     }
 
@@ -462,15 +461,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         oid: &ObjectIdentifier,
         write: LocalWrite<'_>,
         value: PropertyValue,
-        source: Option<crate::LocalCommandSource>,
     ) -> Result<(), Error> {
         let runtime = local_runtime()?;
         self.active_network()?;
-        let Some(committed) = self
-            .local_writer()
-            .commit(oid, write, value, source)
-            .await?
-        else {
+        let Some(committed) = self.local_writer().commit(oid, write, value).await? else {
             return Ok(());
         };
         let runner = super::command_runs::CommandRunner::for_server(self);
@@ -577,19 +571,18 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
         oid: &ObjectIdentifier,
         write: LocalWrite<'_>,
         value: PropertyValue,
-        source: Option<crate::LocalCommandSource>,
     ) -> Result<TakenRuns, Error> {
-        match self.commit(oid, write, value, source).await? {
+        match self.commit(oid, write, value).await? {
             Some(committed) => Ok(self.finish(committed).await),
             None => Ok(TakenRuns::default()),
         }
     }
 
-    /// [`Self::write`] on behalf of a Command, Channel or Timer run: made
-    /// only while `run` is still its object's current run, checked under
-    /// the guard that commits the write (#2265). A run whose object was
-    /// deleted, replaced or written again since gets
-    /// [`stale_run`](crate::command_lists::stale_run) and
+    /// [`Self::write`] on behalf of a Command, Channel or Timer run; the
+    /// caller names the run's object as the write's source. Made only while `run` is still
+    /// its object's current run, checked under the guard that commits the
+    /// write (#2265). A run whose object was deleted, replaced or written
+    /// again since gets [`stale_run`](crate::command_lists::stale_run) and
     /// writes nothing.
     pub(super) async fn write_for_run(
         &self,
@@ -598,11 +591,7 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
         value: PropertyValue,
         run: &CommandRun,
     ) -> Result<TakenRuns, Error> {
-        let source = Some(crate::LocalCommandSource::Object(run.source));
-        match self
-            .commit_checked(oid, write, value, source, Some(run))
-            .await?
-        {
+        match self.commit_checked(oid, write, value, Some(run)).await? {
             Some(committed) => Ok(self.finish(committed).await),
             None => Ok(TakenRuns::default()),
         }
@@ -618,9 +607,8 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
         oid: &ObjectIdentifier,
         write: LocalWrite<'_>,
         value: PropertyValue,
-        source: Option<crate::LocalCommandSource>,
     ) -> Result<Option<Committed>, Error> {
-        self.commit_checked(oid, write, value, source, None).await
+        self.commit_checked(oid, write, value, None).await
     }
 
     /// [`Self::commit`], refused with
@@ -631,20 +619,8 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
         oid: &ObjectIdentifier,
         write: LocalWrite<'_>,
         value: PropertyValue,
-        source: Option<crate::LocalCommandSource>,
         run: Option<&CommandRun>,
     ) -> Result<Option<Committed>, Error> {
-        // Only a property write can carry OBJECT_NAME, so only it needs the name
-        // index kept in step.
-        let renaming = matches!(
-            write,
-            LocalWrite::Property { property, .. } if property == PropertyIdentifier::OBJECT_NAME
-        );
-        // A Pulse Converter's Input_Reference is judged as it commits (#1341).
-        let input_reference = matches!(
-            write,
-            LocalWrite::Property { property, .. } if property == PropertyIdentifier::INPUT_REFERENCE
-        );
         let life_safety = bacnet_device_core::cov::life_safety::is_life_safety_object(*oid);
         // A write the object saves first saves here, without the guard.
         let durable = match write {
@@ -668,22 +644,24 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                 bacnet_device_core::cov::life_safety::LifeSafetyCovSnapshots::capture_oid(
                     &db, *oid,
                 );
-            if let Err(error) = precheck(&db, oid, write, &value) {
-                // Nothing reached the object: what was staged goes back.
-                staged.release(&mut db);
-                return Err(error);
-            }
-            // A WriteGroup was planned under an earlier guard; the Channel
-            // may have left the group or changed number since.
-            let mut group_skips_delays = false;
-            if let LocalWrite::WriteGroup {
+            let group_skips_delays = if let LocalWrite::WriteGroup {
                 group,
                 number,
+                priority,
                 inhibit_delay,
-                ..
+                requester,
             } = write
             {
-                let object = db.get(oid).expect("existence checked above");
+                let Some(object) = db.get(oid) else {
+                    // Nothing reached the object: what was staged goes back.
+                    staged.release(&mut db);
+                    return Err(Error::protocol(
+                        ErrorClass::OBJECT,
+                        ErrorCode::UNKNOWN_OBJECT,
+                    ));
+                };
+                // A WriteGroup was planned under an earlier guard; the Channel
+                // may have left the group or changed number since.
                 if !super::write_group::qualifies(object, group, number) {
                     debug!(
                         channel = %oid,
@@ -693,221 +671,54 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                     );
                     return Ok(None);
                 }
-                group_skips_delays =
+                let skips_delays =
                     inhibit_delay && super::write_group::allows_delay_inhibit(object);
-            }
-            let mut audit = match write {
-                LocalWrite::Property {
-                    property,
-                    array_index,
-                    priority,
-                } => {
-                    // Device's recipient sink exclusively owns the old/new pair.
-                    let recipient_sink = property
-                        == PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT
-                        && db
-                            .get_mut(oid)
-                            .and_then(|object| object.device_authority_internal())
-                            .is_some();
-                    if recipient_sink {
-                        None
-                    } else {
-                        let mut audit = audit_reporter::WriteAudit::local(
-                            self.config,
-                            self.network,
-                            self.notification_transactions,
-                        );
-                        let encoded = audit_reporter::small_value(&value).unwrap_or_default();
-                        audit.before(
-                            &db,
-                            WriteTarget {
-                                oid: *oid,
-                                property,
-                                array_index,
-                                priority,
-                                value: &encoded,
-                            },
-                        );
-                        Some(audit)
-                    }
-                }
                 // Audited as the WriteProperty of the Channel's Present_Value
                 // it amounts to, from the device that sent the WriteGroup.
-                LocalWrite::WriteGroup {
-                    priority,
-                    requester,
-                    ..
-                } => {
-                    let mut audit = audit_reporter::WriteAudit::requested_by(
-                        self.config,
-                        self.network,
-                        self.notification_transactions,
-                        requester.clone(),
-                        None,
-                    );
-                    let encoded = audit_reporter::small_value(&value).unwrap_or_default();
-                    audit.before(
-                        &db,
-                        WriteTarget {
-                            oid: *oid,
-                            property: PropertyIdentifier::PRESENT_VALUE,
-                            array_index: None,
-                            priority: Some(priority),
-                            value: &encoded,
-                        },
-                    );
-                    Some(audit)
-                }
-                LocalWrite::ApplicationPresentValue
-                | LocalWrite::ApplicationControlledVariableValue
-                | LocalWrite::ApplicationAveragingSample
-                | LocalWrite::ApplicationAveragingMiss
-                | LocalWrite::ApplicationTrackingValue
-                | LocalWrite::ApplicationProgramState
-                | LocalWrite::ApplicationAccessInput(_)
-                | LocalWrite::ApplicationPulses(_) => None,
-            };
-            let value = match write {
-                LocalWrite::Property { property, .. } => {
-                    bacnet_device_core::write::localize(&db, *oid, property, value)
-                }
-                _ => value,
-            };
-            let null = bacnet_device_core::write::relinquish::is_null_value(&value);
-            let prepared = match write {
-                LocalWrite::Property {
-                    property,
-                    array_index,
-                    priority,
-                } => {
-                    let encoded = audit_reporter::small_value(&value).unwrap_or_default();
-                    audit.as_mut().and_then(|audit| {
-                        audit.commit_policy(
-                            &mut db,
-                            WriteTarget {
-                                oid: *oid,
-                                property,
-                                array_index,
-                                priority,
-                                value: &encoded,
-                            },
-                            &value,
-                        )
-                    })
-                }
-                LocalWrite::ApplicationPresentValue
-                | LocalWrite::ApplicationControlledVariableValue
-                | LocalWrite::ApplicationAveragingSample
-                | LocalWrite::ApplicationAveragingMiss
-                | LocalWrite::ApplicationTrackingValue
-                | LocalWrite::ApplicationProgramState
-                | LocalWrite::ApplicationAccessInput(_)
-                | LocalWrite::ApplicationPulses(_)
-                | LocalWrite::WriteGroup { .. } => None,
-            };
-            // The application's own Present_Value comes from this Device, which
-            // a tracked noncommandable Value publishes as its source (#1552).
-            let source = source.or(matches!(write, LocalWrite::ApplicationPresentValue)
-                .then_some(crate::LocalCommandSource::ServerDevice));
-            let command_origin =
-                source.and_then(|source| crate::command_source::resolve_local(&db, source).ok());
-            let result = prepared.unwrap_or_else(|| {
-                let object = db.get_mut(oid).expect("existence checked above");
-                match write {
-                    LocalWrite::Property {
-                        property,
-                        array_index,
-                        priority,
-                    } => {
-                        bacnet_device_core::write::check_executor_owned_write(*oid, property)?;
-                        crate::command_source::write_target(
-                            object,
-                            property,
-                            array_index,
-                            value,
-                            priority,
-                            command_origin.as_ref(),
-                        )
-                    }
-                    LocalWrite::ApplicationPresentValue => {
-                        let input = match command_origin {
-                            Some(origin) => LocalInputValue::present_value_from(value, origin),
-                            None => LocalInputValue::present_value(value),
-                        };
-                        apply_local_input(object, input)
-                    }
-                    LocalWrite::ApplicationControlledVariableValue => {
-                        apply_local_input(object, LocalInputValue::ControlledVariableValue(value))
-                    }
-                    LocalWrite::ApplicationAveragingSample => {
-                        apply_local_input(object, LocalInputValue::AveragingSample(Some(value)))
-                    }
-                    LocalWrite::ApplicationAveragingMiss => {
-                        apply_local_input(object, LocalInputValue::AveragingSample(None))
-                    }
-                    LocalWrite::ApplicationTrackingValue => {
-                        apply_local_input(object, LocalInputValue::TrackingValue(value))
-                    }
-                    LocalWrite::ApplicationProgramState => {
-                        apply_local_input(object, LocalInputValue::ProgramState(value))
-                    }
-                    LocalWrite::ApplicationAccessInput(input) => {
-                        apply_local_input(object, LocalInputValue::AccessControl(input.clone()))
-                    }
-                    LocalWrite::ApplicationPulses(pulses) => {
-                        apply_local_input(object, LocalInputValue::Pulses(pulses))
-                    }
-                    LocalWrite::WriteGroup { priority, .. } => object.write_property(
+                let mut audit = audit_reporter::WriteAudit::requested_by(
+                    self.config,
+                    self.network,
+                    self.notification_transactions,
+                    requester.clone(),
+                    None,
+                );
+                let encoded = audit_reporter::small_value(&value).unwrap_or_default();
+                audit.before(
+                    &db,
+                    WriteTarget {
+                        oid: *oid,
+                        property: PropertyIdentifier::PRESENT_VALUE,
+                        array_index: None,
+                        priority: Some(priority),
+                        value: &encoded,
+                    },
+                );
+                let result = db
+                    .get_mut(oid)
+                    .expect("existence checked above")
+                    .write_property(
                         PropertyIdentifier::PRESENT_VALUE,
                         None,
                         value,
                         Some(priority),
-                    ),
-                }
-            });
-            staged.release(&mut db);
-            // A NULL the property left as it was succeeds unchanged
-            // (`bacnet_device_core::write::relinquish`): audited as the write it is, with no
-            // post-write work, since nothing changed.
-            if let (
-                Err(error),
-                LocalWrite::Property {
-                    property,
-                    array_index,
-                    ..
-                },
-            ) = (&result, write)
-            {
-                let object = db.get(oid).expect("existence checked above");
-                if null
-                    && bacnet_device_core::write::relinquish::leaves_unchanged(
-                        object,
-                        property,
-                        array_index,
-                        error,
-                    )
-                {
-                    if let Some(audit) = &mut audit {
-                        audit.committed(&mut db);
-                    }
-                    return Ok(None);
-                }
-            }
-            if let Err(error) = result {
-                if let Some(audit) = &mut audit {
+                    );
+                staged.release(&mut db);
+                if let Err(error) = result {
                     audit.failed(&mut db, &error);
+                    return Err(error);
                 }
-                return Err(error);
-            }
-            if let Some(audit) = &mut audit {
                 audit.committed(&mut db);
-            }
-            if renaming {
-                db.update_name_index(oid);
-            }
-            if input_reference {
-                db.check_input_reference(oid);
-            }
+                skips_delays
+            } else {
+                // Everything else is bacnet-device-core's local write (#2446).
+                // A NULL the property left as it was succeeds unchanged
+                // (`bacnet_device_core::write::relinquish`), with no
+                // post-write work, since nothing changed.
+                match self.commit_local(&mut db, oid, write, value, staged)? {
+                    Applied::Written => false,
+                    Applied::Unchanged => return Ok(None),
+                }
+            };
             let staging_plans =
                 BACnetServer::<T>::take_staging_plans(&mut db, std::slice::from_ref(oid));
             let mut command_runs = TakenRuns::take(self.db, &mut db, std::slice::from_ref(oid));
@@ -924,51 +735,5 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
                 command_runs,
             }))
         }
-    }
-}
-
-/// Hand `input` to the object's [`LocalInput`](bacnet_objects::traits::LocalInput),
-/// refusing it as the object would an input it doesn't take when the object
-/// lends none.
-fn apply_local_input(object: &mut dyn BACnetObject, input: LocalInputValue) -> Result<(), Error> {
-    match object.local_input() {
-        Some(local) => local.apply_local_input(input),
-        None => Err(not_supported()),
-    }
-}
-
-/// The checks made under the write's guard before the audit hooks or the
-/// object see the value, in WriteProperty's order: the object exists, and
-/// for a property write, the array index fits the property (WriteProperty's
-/// own [`check_write_array_index`](bacnet_objects::property_metadata::check_write_array_index))
-/// and a new Object_Name is free. The name check calls
-/// [`ObjectDatabase::check_name_available`] directly, which is what
-/// WriteProperty's `check_and_prepare_name_write` runs for a CharacterString.
-/// A Command's or Channel's write takes this path too; a Schedule's target
-/// writes run the same index gate in `schedule::deliver`.
-fn precheck(
-    db: &ObjectDatabase,
-    oid: &ObjectIdentifier,
-    write: LocalWrite<'_>,
-    value: &PropertyValue,
-) -> Result<(), Error> {
-    let object = db.get(oid).ok_or(Error::protocol(
-        ErrorClass::OBJECT,
-        ErrorCode::UNKNOWN_OBJECT,
-    ))?;
-    let LocalWrite::Property {
-        property,
-        array_index,
-        ..
-    } = write
-    else {
-        return Ok(());
-    };
-    bacnet_objects::property_metadata::check_write_array_index(object, property, array_index)?;
-    match value {
-        PropertyValue::CharacterString(new_name) if property == PropertyIdentifier::OBJECT_NAME => {
-            db.check_name_available(oid, new_name)
-        }
-        _ => Ok(()),
     }
 }
