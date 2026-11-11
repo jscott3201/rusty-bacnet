@@ -5,6 +5,7 @@ use crate::multistate::MultiStateValueObject;
 use crate::present_value_access::PresentValueAccess;
 use crate::property_metadata::PropertyWriteCapability;
 use crate::traits::BACnetObject;
+use crate::value_types::IntegerValueObject;
 use bacnet_types::enums::{EngineeringUnits, ErrorClass, ErrorCode, PropertyIdentifier as P};
 use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::PropertyValue;
@@ -23,11 +24,11 @@ const COMMANDABLE_ONLY: [P; 7] = [
     P::AUDIT_PRIORITY_FILTER,
 ];
 
-/// One Value object per family, built with `access`, and two different Present_Values each
-/// accepts.
+/// One Value object per family, and an Integer Value (#2456), built with `access`, and two
+/// different Present_Values each accepts.
 fn values(
     access: PresentValueAccess,
-) -> [(Box<dyn BACnetObject>, PropertyValue, PropertyValue); 3] {
+) -> [(Box<dyn BACnetObject>, PropertyValue, PropertyValue); 4] {
     [
         (
             Box::new(
@@ -52,10 +53,17 @@ fn values(
             PropertyValue::Unsigned(2),
             PropertyValue::Unsigned(3),
         ),
+        (
+            Box::new(IntegerValueObject::with_access(1, "IV-1", access).unwrap()),
+            PropertyValue::Signed(-7),
+            PropertyValue::Signed(i32::MAX),
+        ),
     ]
 }
 
-/// The same three objects built with `new`, and two different Present_Values each accepts.
+/// The first three objects built with `new`, and two different Present_Values each accepts.
+/// Not the Integer Value: a commandable one takes a command with no origin, as the macro's
+/// value types do (`value_types::tests::integer`).
 fn commandable_values() -> [(Box<dyn BACnetObject>, PropertyValue, PropertyValue); 3] {
     [
         (
@@ -378,10 +386,12 @@ fn noncommandable_context_free_writes_match_sourced_writes() {
 fn noncommandable_write_errors_preserve_value_and_internal_null_is_invalid() {
     for access in [PresentValueAccess::Writable, PresentValueAccess::ReadOnly] {
         for sourced in [false, true] {
+            // Every INTEGER is a valid Integer Value, so it has no value out of range.
             for ((mut object, value, _), invalid_range) in values(access).into_iter().zip([
-                PropertyValue::Real(f32::NAN),
-                PropertyValue::Enumerated(2),
-                PropertyValue::Unsigned(4),
+                Some(PropertyValue::Real(f32::NAN)),
+                Some(PropertyValue::Enumerated(2)),
+                Some(PropertyValue::Unsigned(4)),
+                None,
             ]) {
                 object
                     .local_input()
@@ -399,20 +409,25 @@ fn noncommandable_write_errors_preserve_value_and_internal_null_is_invalid() {
                 if access == PresentValueAccess::ReadOnly {
                     take_out_of_service(object.as_mut());
                 }
+                let out_of_range =
+                    invalid_range.map(|invalid| (None, invalid, ErrorCode::VALUE_OUT_OF_RANGE));
                 for (index, invalid, code) in [
-                    (
+                    Some((
                         None,
                         PropertyValue::Boolean(true),
                         ErrorCode::INVALID_DATA_TYPE,
-                    ),
-                    (None, invalid_range, ErrorCode::VALUE_OUT_OF_RANGE),
-                    (
+                    )),
+                    out_of_range,
+                    Some((
                         Some(0),
                         PropertyValue::Null,
                         ErrorCode::PROPERTY_IS_NOT_AN_ARRAY,
-                    ),
-                    (Some(1), value.clone(), ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
-                ] {
+                    )),
+                    Some((Some(1), value.clone(), ErrorCode::PROPERTY_IS_NOT_AN_ARRAY)),
+                ]
+                .into_iter()
+                .flatten()
+                {
                     assert_protocol(
                         property_write(object.as_mut(), sourced, index, invalid, Some(6)),
                         ErrorClass::PROPERTY,

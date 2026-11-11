@@ -34,6 +34,7 @@ DEVICE = 2436
 AI = ObjectIdentifier(ObjectType.ANALOG_INPUT, 3)
 BO = ObjectIdentifier(ObjectType.BINARY_OUTPUT, 1)
 MSV = ObjectIdentifier(ObjectType.MULTI_STATE_VALUE, 2)
+IV = ObjectIdentifier(ObjectType.INTEGER_VALUE, 5)
 
 
 class Relay(asyncio.DatagramProtocol):
@@ -172,6 +173,8 @@ def lab() -> BACnetServer:
     server.add_analog_input(3, "Zone Temp", units=EngineeringUnits.DEGREES_FAHRENHEIT)
     server.add_binary_output(1, "Supply Fan Start")
     server.add_multistate_value(2, "Fan Mode", 3)
+    # An integer value, which the export reads by default (#2456).
+    server.add_integer_value(5, "Fan Starts")
     # A trend log, which the export doesn't read.
     server.add_trend_log(1, "TL-1")
     return server
@@ -210,13 +213,13 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
             close(relay)
         self.assertIsInstance(inventory, Inventory223Experimental)
         # The device's name, its Object_List, then one RPM an object: N + 2.
-        self.assertEqual(relay.requests, 3 + 2)
+        self.assertEqual(relay.requests, 4 + 2)
         self.assertEqual(inventory.device_instance, DEVICE)
         self.assertEqual(inventory.device_name, "AHU-1 Controller")
         self.assertIsNone(inventory.stopped)
-        ai, bo, msv = inventory.objects
+        ai, bo, msv, iv = inventory.objects
         self.assertEqual(
-            [o.object_identifier for o in inventory.objects], [AI, BO, MSV]
+            [o.object_identifier for o in inventory.objects], [AI, BO, MSV, IV]
         )
         self.assertEqual(ai.name, "Zone Temp")
         self.assertIs(type(ai.units), EngineeringUnits)
@@ -230,6 +233,11 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(msv.number_of_states, 3)
         self.assertEqual(msv.state_texts, ["Off", "Low", "High"])
         self.assertTrue(msv.commandable)
+        self.assertEqual(iv.name, "Fan Starts")
+        self.assertIs(type(iv.units), EngineeringUnits)
+        self.assertEqual(iv.units, EngineeringUnits.NO_UNITS)
+        self.assertIsNone(iv.number_of_states)
+        self.assertTrue(iv.commandable)
         self.assertTrue(all(o.error is None for o in inventory.objects))
 
         turtle = inventory.to_turtle()
@@ -244,6 +252,8 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
             "d:multi-state-value-2.states.3",
             "d:multi-state-value-2.present-value",
             "d:multi-state-value-2.present-value.ref",
+            "d:integer-value-5.present-value",
+            "d:integer-value-5.present-value.ref",
         ):
             self.assertIn(node, subjects)
         for line in (
@@ -256,7 +266,9 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
             '    bacnet:device-name "AHU-1 Controller" ;',
             '    bacnet:object-identifier "multi-state-value,2" ;',
             '    rdfs:label "High" .',
-            "# 3 objects exported, 0 skipped, 0 with an unmapped unit, "
+            "d:integer-value-5.present-value a s223:QuantifiableActuatableProperty ;",
+            "    qudt:hasUnit unit:UNITLESS ;",
+            "# 4 objects exported, 0 skipped, 0 with an unmapped unit, "
             "0 identifiers left out for instance 0.",
         ):
             self.assertIn(line, turtle.splitlines())
@@ -267,9 +279,10 @@ class ExportTests(unittest.IsolatedAsyncioTestCase):
         )
         check_structure(named)
         self.assertIn("@prefix d: <https://example.com/site#device-2436/> .", named)
-        # The binary output and the multi-state value are commandable.
+        # The binary output, the multi-state value and the integer value are
+        # commandable.
         self.assertEqual(
-            named.count('bacnet:priority-for-writing "8"^^xsd:nonNegativeInteger'), 2
+            named.count('bacnet:priority-for-writing "8"^^xsd:nonNegativeInteger'), 3
         )
         # The same inventory always gives the same text.
         self.assertEqual(inventory.to_turtle(), turtle)

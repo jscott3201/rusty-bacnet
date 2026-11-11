@@ -48,20 +48,24 @@
 //!   compared exactly, and nothing limits their length or characters: a
 //!   long dotted path such as `site.building-2.floor-3.ahu-1.supply-temp`
 //!   is taken as it is, as an Object_Name write would take it;
-//! - an object type other than the nine it covers, and a kind of another
-//!   family than the type's;
+//! - an object type other than the ten it covers (the analog, binary and
+//!   multi-state Inputs, Outputs and Values, and the Integer Value), and a
+//!   kind of another family than the type's;
 //! - an Input whose access isn't [`Access::ReadOnly`], and an Output whose
 //!   access isn't [`Access::Commandable`];
-//! - a Real that isn't finite, Min_Pres_Value above Max_Pres_Value, Units
-//!   past 65535, a state count outside 1 to [`MAX_NUMBER_OF_STATES`], and
-//!   State_Text given with other than one label per state;
+//! - a Real that isn't finite, Min_Pres_Value above Max_Pres_Value (an
+//!   analog object's or an Integer Value's), Units past 65535, a state
+//!   count outside 1 to [`MAX_NUMBER_OF_STATES`], and State_Text given with
+//!   other than one label per state;
 //! - whatever the objects' own setters refuse, as a write would be: a
 //!   negative COV_Increment, a binary relinquish default other than
 //!   INACTIVE or ACTIVE, a multi-state one that names no state.
 //!
-//! An analog relinquish default outside Min_Pres_Value to Max_Pres_Value
-//! builds: the builder, like the objects, doesn't compare it with the
-//! range.
+//! A relinquish default outside Min_Pres_Value to Max_Pres_Value builds,
+//! an analog one or an Integer Value's: the builder, like the objects,
+//! doesn't compare it with the range. Every INTEGER is a valid Integer
+//! Value relinquish default and every Unsigned a valid COV_Increment, so
+//! an Integer Value's setters refuse nothing the builder lets through.
 //!
 //! Identifiers are checked, never assigned, and a list has no size cap: the
 //! 10,000-object cap is a rule for CreateObject from the network, and a
@@ -157,9 +161,10 @@ use crate::multistate::{
 use crate::prelude::*;
 use crate::present_value_access::PresentValueAccess;
 use crate::traits::BACnetObject;
+use crate::value_types::IntegerValueObject;
 
 pub use bacnet_types::points::{
-    Access, Analog, Binary, DeviceInfo, MultiState, Point, PointKind, PointList,
+    Access, Analog, Binary, DeviceInfo, Integer, MultiState, Point, PointKind, PointList,
 };
 
 /// Why a point list, or one point, couldn't be built.
@@ -409,6 +414,7 @@ pub fn build_object(point: Point) -> Result<Box<dyn BACnetObject>, BuildError> {
         (Family::MultiState, PointKind::MultiState(multi_state)) => {
             multi_state_object(object, multi_state)
         }
+        (Family::Integer, PointKind::Integer(integer)) => integer_object(object, integer),
         _ => Err(refuse(None, Refusal::KindMismatch)),
     }
 }
@@ -419,9 +425,11 @@ enum Family {
     Analog,
     Binary,
     MultiState,
+    /// The Integer Value alone, a Value.
+    Integer,
 }
 
-/// Which of a family's three types an object is.
+/// Which of a family's types an object is.
 #[derive(Clone, Copy)]
 enum Role {
     Input,
@@ -441,6 +449,7 @@ fn family_of(object_type: ObjectType) -> Option<(Family, Role)> {
         ObjectType::MULTI_STATE_INPUT => (Family::MultiState, Role::Input),
         ObjectType::MULTI_STATE_OUTPUT => (Family::MultiState, Role::Output),
         ObjectType::MULTI_STATE_VALUE => (Family::MultiState, Role::Value),
+        ObjectType::INTEGER_VALUE => (Family::Integer, Role::Value),
         _ => return None,
     })
 }
@@ -696,6 +705,59 @@ fn multi_state_object(
             Box::new(built)
         }
     })
+}
+
+fn integer_object(named: Named, integer: Integer) -> Result<Box<dyn BACnetObject>, BuildError> {
+    let Named {
+        object,
+        name,
+        description,
+        role,
+    } = named;
+    let refuse = |property: P, reason| BuildError::new(object, Some(property), reason);
+    let Integer {
+        units,
+        cov_increment,
+        min_pres_value,
+        max_pres_value,
+        access,
+        ..
+    } = integer;
+    let (access, relinquish_default) =
+        admit(role, access).map_err(|reason| refuse(P::PRESENT_VALUE, reason))?;
+    if units.to_raw() > 65_535 {
+        return Err(refuse(P::UNITS, Refusal::OutOfRange));
+    }
+    if let (Some(min), Some(max)) = (min_pres_value, max_pres_value)
+        && min > max
+    {
+        return Err(refuse(P::MIN_PRES_VALUE, Refusal::MinAboveMax));
+    }
+    let mut built = IntegerValueObject::with_access(object.instance_number(), name, access)
+        .map_err(refused_by(object, None))?;
+    built
+        .set_units(units)
+        .map_err(refused_by(object, Some(P::UNITS)))?;
+    if let Some(description) = description {
+        built.set_description(description);
+    }
+    if let Some(increment) = cov_increment {
+        built
+            .set_cov_increment(increment)
+            .map_err(refused_by(object, Some(P::COV_INCREMENT)))?;
+    }
+    if let Some(min) = min_pres_value {
+        built.set_min_pres_value(min);
+    }
+    if let Some(max) = max_pres_value {
+        built.set_max_pres_value(max);
+    }
+    if let Some(default) = relinquish_default {
+        built
+            .set_relinquish_default(default)
+            .map_err(refused_by(object, Some(P::RELINQUISH_DEFAULT)))?;
+    }
+    Ok(Box::new(built))
 }
 
 #[cfg(test)]

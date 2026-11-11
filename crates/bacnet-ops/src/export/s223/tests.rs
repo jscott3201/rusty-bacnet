@@ -127,6 +127,15 @@ fn options_are_checked() {
     assert!(InventoryOptions::new(vec![]).is_err());
     assert!(InventoryOptions::new(vec![ObjectType::TREND_LOG]).is_err());
     assert_eq!(InventoryOptions::default().types, EXPORTED_TYPES);
+    assert!(
+        EXPORTED_TYPES.contains(&ObjectType::INTEGER_VALUE),
+        "read by default (#2456)"
+    );
+    let refused = InventoryOptions::new(vec![ObjectType::POSITIVE_INTEGER_VALUE]).unwrap_err();
+    assert!(
+        refused.ends_with("multi-state inputs, outputs and values, and integer values"),
+        "{refused}"
+    );
     assert_eq!(InventoryOptions::default().detail, Detail::Export);
     let full = InventoryOptions::new(vec![ObjectType::ANALOG_INPUT])
         .unwrap()
@@ -327,5 +336,84 @@ fn an_inventory_and_its_point_list() {
         text.contains("d:binary-value-1.present-value a s223:EnumerableProperty ;"),
         "{text}"
     );
+    check_structure(&text);
+}
+
+/// An Integer Value is written as an analog value is (#2456): actuatable
+/// when commandable, plainly quantifiable when not, with its QUDT terms or,
+/// for a unit the table doesn't map, the unknown quantity kind, counted in
+/// the header, and at instance 0 without its identifier string, as any
+/// object. A kind that isn't its type's family is skipped either way: an
+/// analog kind on an Integer Value, an integer kind on an Analog Value.
+#[test]
+fn an_integer_value_maps_as_an_analog_value_does() {
+    let integer = |instance, name: &str, units, access| {
+        Entry::Point(Point::new(
+            oid(ObjectType::INTEGER_VALUE, instance),
+            name,
+            Integer::new(units, access),
+        ))
+    };
+    let commanded = Access::Commandable {
+        relinquish_default: None,
+    };
+    let analog_kind = Point::new(
+        oid(ObjectType::INTEGER_VALUE, 4),
+        "analog kind",
+        Analog::new(EngineeringUnits::PERCENT, Access::ReadOnly),
+    );
+    let integer_kind = Point::new(
+        oid(ObjectType::ANALOG_VALUE, 5),
+        "integer kind",
+        Integer::new(EngineeringUnits::PERCENT, Access::ReadOnly),
+    );
+    let mut inventory = Inventory::new(DeviceInfo::new(7));
+    inventory.entries = vec![
+        integer(1, "count", EngineeringUnits::NO_UNITS, commanded),
+        integer(
+            2,
+            "total",
+            EngineeringUnits::KILOWATT_HOURS,
+            Access::Writable,
+        ),
+        integer(
+            0,
+            "vendor",
+            EngineeringUnits::from_raw(300),
+            Access::ReadOnly,
+        ),
+        Entry::Point(analog_kind),
+        Entry::Point(integer_kind),
+    ];
+    let options = TurtleOptions::new(DEFAULT_BASE_IRI, Some(WritePriority::new(9).unwrap()));
+    let mut text = String::new();
+    let counts = write_turtle(&inventory, &options.unwrap(), &mut text).unwrap();
+    assert_eq!(
+        (
+            counts.exported,
+            counts.skipped,
+            counts.unmapped_units,
+            counts.instance_zero
+        ),
+        (3, 2, 1, 1),
+        "{text}"
+    );
+    for line in [
+        "d:integer-value-1.present-value a s223:QuantifiableActuatableProperty ;",
+        "    qudt:hasUnit unit:UNITLESS ;",
+        "d:integer-value-2.present-value a s223:QuantifiableProperty ;",
+        "    qudt:hasUnit unit:KiloW-HR ;",
+        "    qudt:hasQuantityKind quantitykind:Energy ;",
+        "d:integer-value-0.present-value a s223:QuantifiableProperty ;",
+        "    # instance 0: no object-identifier, which the draft's pattern refuses",
+        "    rdfs:comment \"BACnet units 300: no QUDT mapping in this export\" ;",
+        "    qudt:hasQuantityKind quantitykind:Unknown ;",
+        "    bacnet:object-identifier \"integer-value,1\" ;",
+        "# integer-value 4: skipped, its kind doesn't fit its type.",
+        "# analog-value 5: skipped, its kind doesn't fit its type.",
+    ] {
+        assert!(text.lines().any(|l| l == line), "{line}\n{text}");
+    }
+    assert_eq!(text.matches("priority-for-writing").count(), 1, "{text}");
     check_structure(&text);
 }

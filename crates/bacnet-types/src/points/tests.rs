@@ -22,6 +22,15 @@ fn new_leaves_every_optional_property_out() {
     assert_eq!((binary.active_text, binary.inactive_text), (None, None));
     let multi_state = MultiState::new(3, Access::ReadOnly);
     assert!(multi_state.state_texts.is_empty());
+    let integer = Integer::new(EngineeringUnits::NO_UNITS, Access::Writable);
+    assert_eq!(
+        (
+            integer.cov_increment,
+            integer.min_pres_value,
+            integer.max_pres_value
+        ),
+        (None, None, None)
+    );
     let device = DeviceInfo::new(7);
     assert_eq!((device.name, device.description), (None, None));
     let point = Point::new(analog_input(), "zone-temp", analog);
@@ -64,6 +73,26 @@ fn each_with_sets_its_own_field() {
     let borrowed = MultiState::new(3, Access::Writable).with_state_texts(["Off", "Low", "High"]);
     assert_eq!(borrowed, multi_state);
 
+    let integer = Integer::new(
+        EngineeringUnits::KILOWATT_HOURS,
+        Access::Commandable {
+            relinquish_default: Some(-5),
+        },
+    )
+    .with_cov_increment(10)
+    .with_min_pres_value(i32::MIN)
+    .with_max_pres_value(i32::MAX);
+    assert_eq!(integer.units, EngineeringUnits::KILOWATT_HOURS);
+    assert_eq!(integer.cov_increment, Some(10));
+    assert_eq!(integer.min_pres_value, Some(i32::MIN));
+    assert_eq!(integer.max_pres_value, Some(i32::MAX));
+    assert_eq!(
+        integer.access,
+        Access::Commandable {
+            relinquish_default: Some(-5)
+        }
+    );
+
     let device = DeviceInfo::new(7)
         .with_name("AHU-1")
         .with_description("Air handler");
@@ -86,6 +115,11 @@ fn each_family_converts_into_its_kind() {
     assert_eq!(
         PointKind::from(multi_state.clone()),
         PointKind::MultiState(multi_state)
+    );
+    let integer = Integer::new(EngineeringUnits::NO_UNITS, Access::ReadOnly);
+    assert_eq!(
+        PointKind::from(integer.clone()),
+        PointKind::Integer(integer)
     );
 }
 

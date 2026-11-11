@@ -8,12 +8,15 @@
 //! compiling the object model. They are owned data, so they need `alloc`;
 //! nothing here does I/O or allocates beyond the strings and the one list.
 //!
-//! Version 1 covers the analog, binary and multi-state Input, Output and
-//! Value objects (Clauses 12.2 to 12.4, 12.6 to 12.8 and 12.18 to 12.20).
+//! It covers the analog, binary and multi-state Input, Output and Value
+//! objects (Clauses 12.2 to 12.4, 12.6 to 12.8 and 12.18 to 12.20) and the
+//! Integer Value (Clause 12.43, #2456), whose signed 32-bit Present_Value
+//! holds a whole-number signal an analog object's REAL can't hold exactly.
 //! The fields follow one rule:
 //!
 //! - A property every object of the type has is a plain field: Object_Name,
-//!   an analog object's Units, a multi-state object's Number_Of_States.
+//!   the Units of an analog object or an Integer Value, a multi-state
+//!   object's Number_Of_States.
 //! - A property the type may go without is an `Option`, or for State_Text
 //!   an empty list. `None` leaves the object as it starts.
 //! - [`Access`] says how Present_Value is written. Priority_Array and
@@ -169,6 +172,8 @@ pub enum PointKind {
     Binary(Binary),
     /// A Multi-state Input, Output or Value.
     MultiState(MultiState),
+    /// An Integer Value.
+    Integer(Integer),
 }
 
 impl From<Analog> for PointKind {
@@ -189,11 +194,18 @@ impl From<MultiState> for PointKind {
     }
 }
 
+impl From<Integer> for PointKind {
+    fn from(integer: Integer) -> Self {
+        Self::Integer(integer)
+    }
+}
+
 /// How a point's Present_Value is written, and with it whether the object
 /// has Priority_Array and Relinquish_Default.
 ///
 /// An Input is always [`ReadOnly`](Self::ReadOnly) and an Output always
-/// [`Commandable`](Self::Commandable); a Value may be any of the three.
+/// [`Commandable`](Self::Commandable); a Value, an Integer Value
+/// included, may be any of the three.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Access<T> {
     /// The application owns Present_Value; a peer may write it only for a
@@ -326,6 +338,59 @@ impl MultiState {
     /// strings move in as they are.
     pub fn with_state_texts(mut self, texts: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.state_texts = texts.into_iter().map(Into::into).collect();
+        self
+    }
+}
+
+/// The settings of an Integer Value (Clause 12.43): a Present_Value that is
+/// a signed 32-bit INTEGER, for a count or another whole-number signal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Integer {
+    /// Units, the engineering units of Present_Value.
+    pub units: EngineeringUnits,
+    /// COV_Increment, the smallest change of Present_Value that sends a
+    /// change-of-value notification, an Unsigned as the object keeps it;
+    /// `None` keeps the object's default.
+    pub cov_increment: Option<u64>,
+    /// Min_Pres_Value, the lowest Present_Value the object can report;
+    /// `None` leaves the property out.
+    pub min_pres_value: Option<i32>,
+    /// Max_Pres_Value, the highest Present_Value the object can report;
+    /// `None` leaves the property out.
+    pub max_pres_value: Option<i32>,
+    /// How Present_Value is written; a relinquish default is an INTEGER.
+    pub access: Access<i32>,
+}
+
+impl Integer {
+    /// An Integer Value in `units`, written as `access` says, with every
+    /// optional property left as the object starts.
+    pub const fn new(units: EngineeringUnits, access: Access<i32>) -> Self {
+        Self {
+            units,
+            cov_increment: None,
+            min_pres_value: None,
+            max_pres_value: None,
+            access,
+        }
+    }
+
+    /// Give the point this COV_Increment.
+    pub const fn with_cov_increment(mut self, increment: u64) -> Self {
+        self.cov_increment = Some(increment);
+        self
+    }
+
+    /// Give the point this Min_Pres_Value.
+    pub const fn with_min_pres_value(mut self, min: i32) -> Self {
+        self.min_pres_value = Some(min);
+        self
+    }
+
+    /// Give the point this Max_Pres_Value.
+    pub const fn with_max_pres_value(mut self, max: i32) -> Self {
+        self.max_pres_value = Some(max);
         self
     }
 }

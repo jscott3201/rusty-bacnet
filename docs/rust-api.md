@@ -5869,10 +5869,12 @@ stay unconfigured.
 
 #### Value Present_Value access
 
-The three Value families also offer `with_access`: Analog Value takes
-`(instance, name, units, access)`, Binary Value takes `(instance, name, access)`,
-and Multi-state Value takes `(instance, name, number_of_states, access)`.
-The final argument is `bacnet_objects::present_value_access::PresentValueAccess`:
+The three Value families and Integer Value also offer `with_access`: Analog
+Value takes `(instance, name, units, access)`, Binary Value takes
+`(instance, name, access)`, Multi-state Value takes
+`(instance, name, number_of_states, access)` and Integer Value takes
+`(instance, name, access)`. The final argument is
+`bacnet_objects::present_value_access::PresentValueAccess`:
 
 | Mode | Network-equivalent Present_Value writes | Local application updates |
 | --- | --- | --- |
@@ -5890,10 +5892,28 @@ are absent from these modes' projected metadata, and so is Value_Source unless
 `set_value_source_tracking(true)` provisions it (see
 [Source of a noncommandable Present_Value](#source-of-a-noncommandable-present_value)).
 This does not disable the remaining supported AV/BV target Audit policy or add
-MSV target Audit reporting. Each Value type also accepts `set_profile(ObjectProfile)`
-for optional Tags and profile text rows in all three modes; Present_Value access
-does not control those rows. See [Object profile rows](#object-profile-rows) for
-the access-explicit Tags persistence constructors.
+MSV target Audit reporting. Each of the three Value families also accepts
+`set_profile(ObjectProfile)` for optional Tags and profile text rows in all
+three modes; Present_Value access does not control those rows. See
+[Object profile rows](#object-profile-rows) for the access-explicit Tags
+persistence constructors.
+
+Integer Value (#2456) takes the same three modes, with these differences from
+Analog Value:
+
+- Built commandable, it takes a Present_Value write with no command origin
+  as a command: `write_property` commands the slot it names, priority 16
+  when it names none, as the other extended value types do.
+  `write_property_from` does the same and doesn't keep the origin.
+- It has no Value_Source tracking, no `set_profile` or Tags persistence
+  constructors, and no audit policy.
+- Its setters are `set_units`, `set_cov_increment` (an Unsigned),
+  `set_relinquish_default` (UNKNOWN_PROPERTY unless commandable),
+  `set_min_pres_value` and `set_max_pres_value` (each row appears once set,
+  read-only on the network, and nothing compares a written value with it) and
+  `set_description`.
+- A noncommandable one takes the application's Present_Value through its
+  `LocalInput` while in service, so `set_present_value_local` reaches it.
 
 `BACnetServer::set_present_value_local` supplies a logical application value to
 Analog/Binary/Multi-state Inputs, noncommandable Values, Loop (the control
@@ -8135,16 +8155,18 @@ still feed Count with `add_pulses`.
 | `TimePatternValueObject` | `::new(instance, name)` |
 | `DateTimePatternValueObject` | `::new(instance, name)` |
 
-All 12 are commandable. Each serves `Current_Command_Priority`, the
-Priority_Array slot Present_Value comes from, or NULL while
-Relinquish_Default is in effect. Integer, Positive Integer and Large Analog
-Value also serve `Units` (set with `set_units`) and a writable
-`COV_Increment`, Unsigned on the two integer types and Double on Large Analog
-Value, set over the network or with `set_cov_increment`. It starts at 0, so
-every Present_Value change sends a SubscribeCOV notification; a larger
-increment holds notifications back until Present_Value has moved that far from
-the value last reported (Table 13-1). Large Analog Value refuses a negative or
-non-finite increment with VALUE_OUT_OF_RANGE.
+All 12 are commandable when built with `new`. Integer Value also has
+`with_access`, Min_Pres_Value and Max_Pres_Value, and a Description setter
+(see [Value Present_Value access](#value-present_value-access)). A commandable
+one serves `Current_Command_Priority`, the Priority_Array slot Present_Value
+comes from, or NULL while Relinquish_Default is in effect. Integer, Positive
+Integer and Large Analog Value also serve `Units` (set with `set_units`) and a
+writable `COV_Increment`, Unsigned on the two integer types and Double on
+Large Analog Value, set over the network or with `set_cov_increment`. It
+starts at 0, so every Present_Value change sends a SubscribeCOV notification;
+a larger increment holds notifications back until Present_Value has moved that
+far from the value last reported (Table 13-1). Large Analog Value refuses a
+negative or non-finite increment with VALUE_OUT_OF_RANGE.
 
 ---
 

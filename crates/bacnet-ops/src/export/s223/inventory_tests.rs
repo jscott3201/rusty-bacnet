@@ -17,6 +17,7 @@ use bacnet_objects::multistate::{
 use bacnet_objects::present_value_access::PresentValueAccess;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_objects::trend::TrendLogObject;
+use bacnet_objects::value_types::IntegerValueObject;
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
@@ -161,7 +162,8 @@ fn text(value: &str) -> PropertyValue {
 }
 
 /// One object of each exported type (two analog values: one commandable,
-/// one writable), a multi-state value with state texts, and a trend log.
+/// one writable), a multi-state value with state texts, a writable integer
+/// value in kilowatt-hours, and a trend log.
 fn objects() -> Vec<Box<dyn BACnetObject>> {
     let mut ai =
         AnalogInputObject::new(1, "Zone Temp", EngineeringUnits::DEGREES_FAHRENHEIT).unwrap();
@@ -181,6 +183,8 @@ fn objects() -> Vec<Box<dyn BACnetObject>> {
     )
     .unwrap();
     let f = EngineeringUnits::DEGREES_FAHRENHEIT;
+    let mut iv = IntegerValueObject::with_access(1, "Meter", PresentValueAccess::Writable).unwrap();
+    iv.set_units(EngineeringUnits::KILOWATT_HOURS).unwrap();
     vec![
         Box::new(ai),
         Box::new(AnalogOutputObject::new(1, "Damper", EngineeringUnits::PERCENT).unwrap()),
@@ -200,6 +204,7 @@ fn objects() -> Vec<Box<dyn BACnetObject>> {
         Box::new(MultiStateInputObject::new(1, "Season", 4).unwrap()),
         Box::new(MultiStateOutputObject::new(1, "Stage", 2).unwrap()),
         Box::new(msv),
+        Box::new(iv),
         Box::new(TrendLogObject::new(1, "Log", 10).unwrap()),
     ]
 }
@@ -276,6 +281,7 @@ fn commandable(point: &Point) -> bool {
         PointKind::Analog(analog) => matches!(analog.access, Access::Commandable { .. }),
         PointKind::Binary(binary) => matches!(binary.access, Access::Commandable { .. }),
         PointKind::MultiState(states) => matches!(states.access, Access::Commandable { .. }),
+        PointKind::Integer(integer) => matches!(integer.access, Access::Commandable { .. }),
         _ => false,
     }
 }
@@ -291,7 +297,7 @@ async fn reads_each_exported_object_once() {
         .inventory(LAB, &InventoryOptions::default())
         .await
         .unwrap();
-    assert_eq!(engine.limits().recent(), 10 + 2, "{inventory:?}");
+    assert_eq!(engine.limits().recent(), 11 + 2, "{inventory:?}");
     assert_eq!(
         inventory.device,
         DeviceInfo::new(LAB).with_name("Lab \"AHU\"")
@@ -304,8 +310,8 @@ async fn reads_each_exported_object_once() {
             .find(|o| o.object == oid(object_type, instance))
             .unwrap_or_else(|| panic!("{object_type} {instance}: {inventory:?}"))
     };
-    assert_eq!(points.len(), 10, "none failed: {inventory:?}");
-    assert_eq!(inventory.entries.len(), 10);
+    assert_eq!(points.len(), 11, "none failed: {inventory:?}");
+    assert_eq!(inventory.entries.len(), 11);
     let ai = object(ObjectType::ANALOG_INPUT, 1);
     assert_eq!(ai.name, "Zone Temp");
     assert_eq!(ai.description.as_deref(), Some("Room 101"));
@@ -332,6 +338,10 @@ async fn reads_each_exported_object_once() {
         panic!("a multi-state input");
     };
     assert_eq!((msi.number_of_states, msi.access), (4, Access::ReadOnly));
+    // The integer value, writable, reads as read-only, as the analog does.
+    let meter = object(ObjectType::INTEGER_VALUE, 1);
+    let integer = Integer::new(EngineeringUnits::KILOWATT_HOURS, Access::ReadOnly);
+    assert_eq!(meter.kind, PointKind::Integer(integer), "{meter:?}");
     assert!(!engine.refused_rpm(LAB));
 
     let turtle = to_turtle(&inventory, &TurtleOptions::default());
@@ -341,7 +351,11 @@ async fn reads_each_exported_object_once() {
         "{turtle}"
     );
     assert!(
-        turtle.contains("# 10 objects exported, 0 skipped"),
+        turtle.contains("d:integer-value-1.present-value a s223:QuantifiableProperty ;"),
+        "{turtle}"
+    );
+    assert!(
+        turtle.contains("# 11 objects exported, 0 skipped"),
         "{turtle}"
     );
     stop(engine, server).await;
@@ -364,8 +378,9 @@ async fn types_narrow_what_is_read() {
 
 /// A device that refuses RPM costs one refused request, then a
 /// ReadProperty a property, by type: 2 for a binary input or output, 3 for
-/// an analog input or output or a binary value, 4 for an analog value or a
-/// multi-state input or output, 5 for a multi-state value. Each type is
+/// an analog input or output or a binary value, 4 for an analog value, an
+/// integer value or a multi-state input or output, 5 for a multi-state
+/// value. Each type is
 /// read alone, so the refusal comes first each time.
 #[tokio::test(start_paused = true)]
 async fn by_read_property_when_rpm_is_refused() {
@@ -379,6 +394,7 @@ async fn by_read_property_when_rpm_is_refused() {
         (ObjectType::MULTI_STATE_INPUT, 4),
         (ObjectType::MULTI_STATE_OUTPUT, 4),
         (ObjectType::MULTI_STATE_VALUE, 5),
+        (ObjectType::INTEGER_VALUE, 4),
     ];
     for (object_type, cost) in costs {
         let refuses = Faults {
@@ -645,6 +661,37 @@ fn a_missing_required_property_fails_the_entry() {
     assert_eq!(
         failed(no_name).as_deref(),
         Some("object-name: PROPERTY:UNKNOWN_PROPERTY")
+    );
+    // An integer value needs its Units as an analog object does; its range
+    // and relinquish default decode as INTEGER and its increment as an
+    // Unsigned of any size, and anything else there is None.
+    let iv = oid(ObjectType::INTEGER_VALUE, 1);
+    let no_units = super::inventory::entry_of(iv, &[name(), refused(P::UNITS)]);
+    assert_eq!(
+        failed(no_units).as_deref(),
+        Some("units: PROPERTY:UNKNOWN_PROPERTY")
+    );
+    let rows = [
+        name(),
+        row(P::UNITS, PropertyValue::Enumerated(19)),
+        row(P::PRIORITY_ARRAY, PropertyValue::Null),
+        row(P::RELINQUISH_DEFAULT, PropertyValue::Signed(-4)),
+        row(P::COV_INCREMENT, PropertyValue::Unsigned(u64::MAX)),
+        row(P::MIN_PRES_VALUE, PropertyValue::Signed(i32::MIN)),
+        row(P::MAX_PRES_VALUE, PropertyValue::Real(5.0)),
+    ];
+    let mut expected = Integer::new(
+        EngineeringUnits::KILOWATT_HOURS,
+        Access::Commandable {
+            relinquish_default: Some(-4),
+        },
+    )
+    .with_cov_increment(u64::MAX)
+    .with_min_pres_value(i32::MIN);
+    expected.max_pres_value = None;
+    assert_eq!(
+        super::inventory::entry_of(iv, &rows),
+        Entry::Point(Point::new(iv, "Zone", expected))
     );
     let msi = oid(ObjectType::MULTI_STATE_INPUT, 1);
     let states = [name(), row(P::NUMBER_OF_STATES, text("three"))];

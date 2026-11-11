@@ -321,10 +321,11 @@ credited to a crate reliably within one LTO image:
   `bacnet-objects`' point-list builder (`points::build_database`, #2445)
   makes: the objects image's four points and one each of the other seven
   analog, binary and multi-state types, in a 28 KiB arena, on the same
-  targets. The builder reaches all nine types' constructors whatever the
-  list holds, so its size less the objects image's is the builder's price
-  for all nine: about 46 KB of flash on `thumbv7m-none-eabi`, of which the
-  builder's own code is about 7 KB and the seven more types the rest
+  targets. The builder reaches every covered type's constructor whatever
+  the list holds, the Integer Value's too (#2456), so its size less the
+  objects image's is the builder's price for all ten: about 50 KB of flash
+  on `thumbv7m-none-eabi`, of which the builder's own code is about 7 KB,
+  the Integer Value about 3.5 KB and the seven more types the rest
   (`size-budget.toml` has the split).
 
 A use of `alloc` anywhere in an image but `apdu`, `objects`, `reporting` and `points`, the device's application layer included, fails its build with "no

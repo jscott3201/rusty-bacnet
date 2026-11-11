@@ -115,7 +115,7 @@ These options go before or after the command. Each command also takes `-h` or `-
 | [`find`](#bacnet-find) | `whohas` | Find objects by name (WhoHas). |
 | [`read`](#bacnet-read) | `rp` | Read a property. |
 | [`export`](#bacnet-export) | — | Export a device's objects in another model's terms (experimental). |
-| [`export 223-experimental`](#bacnet-export-223-experimental) | — | EXPERIMENTAL: the device's analog, binary and multi-state objects as a proposed ASHRAE Standard 223 point list, in Turtle. |
+| [`export 223-experimental`](#bacnet-export-223-experimental) | — | EXPERIMENTAL: the device's analog, binary and multi-state objects and integer values as a proposed ASHRAE Standard 223 point list, in Turtle. |
 | [`readm`](#bacnet-readm) | `rpm` | Read multiple properties. |
 | [`write`](#bacnet-write) | `wp` | Write a property. |
 | [`writem`](#bacnet-writem) | `wpm` | Write multiple properties (WritePropertyMultiple). |
@@ -302,7 +302,7 @@ Usage: bacnet export [OPTIONS] <COMMAND>
 
 ### bacnet export 223-experimental
 
-EXPERIMENTAL: the device's analog, binary and multi-state objects as a proposed ASHRAE Standard 223 point list, in Turtle.
+EXPERIMENTAL: the device's analog, binary and multi-state objects and integer values as a proposed ASHRAE Standard 223 point list, in Turtle.
 
 One 223 property per object, each with a BACnet external reference (device, object, name, property), QUDT units where they map, and the states of multi-state objects. A point list only: no equipment, connections or sensors. The 223 draft and this output can change between releases. Reads the device name, its object list, then one request per exported object; a target given by address costs one more, a read of its Device object to learn the instance. Stdout carries only the Turtle; a summary goes to stderr. --format and --json don't apply.
 
@@ -317,7 +317,7 @@ Arguments:
 Options:
 
 - `--base-iri <IRI>`: Base IRI of the generated nodes: an ASCII absolute IRI ending in / or #. A device's nodes go under the base followed by device-INSTANCE/. Default: `http://example.org/bacnet/`.
-- `--types <TYPES>`: Object types to export, comma-separated (default: ai, ao, av, bi, bo, bv, msi, mso and msv).
+- `--types <TYPES>`: Object types to export, comma-separated (default: ai, ao, av, bi, bo, bv, msi, mso, msv and integer-value).
 - `--write-priority <N>`: Command priority (1-16) to name in each commandable point's reference.
 - `-o, --output <FILE>`: Write the Turtle to this new file instead of stdout; an existing file is refused.
 

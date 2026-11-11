@@ -25,7 +25,7 @@ fn texts(labels: &[&str]) -> Vec<String> {
     labels.iter().map(|label| String::from(*label)).collect()
 }
 
-/// One point of each of the nine types, every optional field given, and
+/// One point of each of the ten types, every optional field given, and
 /// every relinquish default other than the object's own, so each one set
 /// shows.
 fn full_list() -> PointList {
@@ -101,6 +101,19 @@ fn full_list() -> PointList {
                 relinquish_default: Some(3),
             }),
         ),
+        Point::new(
+            oid(ObjectType::INTEGER_VALUE, 1),
+            "iv",
+            Integer::new(
+                EngineeringUnits::KILOWATT_HOURS,
+                Access::Commandable {
+                    relinquish_default: Some(-12),
+                },
+            )
+            .with_cov_increment(5)
+            .with_min_pres_value(-1_000)
+            .with_max_pres_value(i32::MAX),
+        ),
     ];
     let points = points
         .into_iter()
@@ -151,13 +164,18 @@ pub(super) fn read_back(database: &ObjectDatabase, object: ObjectIdentifier) -> 
         Some(PropertyValue::Unsigned(value)) => Some(value as u32),
         _ => None,
     };
+    let signed = |property| match read(property) {
+        Some(PropertyValue::Signed(value)) => Some(value),
+        _ => None,
+    };
+    let units = || match read(P::UNITS) {
+        Some(PropertyValue::Enumerated(units)) => EngineeringUnits::from_raw(units),
+        _ => panic!("{object} serves no Units"),
+    };
     let kind = match family_of(object.object_type()).expect("a covered type").0 {
         Family::Analog => {
-            let Some(PropertyValue::Enumerated(units)) = read(P::UNITS) else {
-                panic!("{object} serves no Units");
-            };
             let access = served_access(served, real(P::RELINQUISH_DEFAULT));
-            let mut analog = Analog::new(EngineeringUnits::from_raw(units), access);
+            let mut analog = Analog::new(units(), access);
             analog.cov_increment = real(P::COV_INCREMENT);
             analog.min_pres_value = real(P::MIN_PRES_VALUE);
             analog.max_pres_value = real(P::MAX_PRES_VALUE);
@@ -187,6 +205,17 @@ pub(super) fn read_back(database: &ObjectDatabase, object: ObjectIdentifier) -> 
                 })
                 .collect();
             PointKind::MultiState(MultiState::new(count, access).with_state_texts(labels))
+        }
+        Family::Integer => {
+            let access = served_access(served, signed(P::RELINQUISH_DEFAULT));
+            let mut integer = Integer::new(units(), access);
+            integer.cov_increment = match read(P::COV_INCREMENT) {
+                Some(PropertyValue::Unsigned(increment)) => Some(increment),
+                _ => None,
+            };
+            integer.min_pres_value = signed(P::MIN_PRES_VALUE);
+            integer.max_pres_value = signed(P::MAX_PRES_VALUE);
+            PointKind::Integer(integer)
         }
     };
     Point {
@@ -304,6 +333,11 @@ fn an_absent_field_reads_back_as_the_objects_default() {
                 "mso",
                 MultiState::new(2, unset_default()),
             ),
+            Point::new(
+                oid(ObjectType::INTEGER_VALUE, 7),
+                "iv",
+                Integer::new(units, unset_default()),
+            ),
         ],
     );
     let database = build_database(list, &identity()).unwrap();
@@ -327,6 +361,14 @@ fn an_absent_field_reads_back_as_the_objects_default() {
         },
     )
     .with_state_texts(texts(&["State 1", "State 2"]));
+    // No Min_Pres_Value or Max_Pres_Value: an Integer Value starts without.
+    let integer = Integer::new(
+        units,
+        Access::Commandable {
+            relinquish_default: Some(0),
+        },
+    )
+    .with_cov_increment(0);
     for (object, name, kind) in [
         (
             oid(ObjectType::ANALOG_OUTPUT, 7),
@@ -342,6 +384,11 @@ fn an_absent_field_reads_back_as_the_objects_default() {
             oid(ObjectType::MULTI_STATE_OUTPUT, 7),
             "mso",
             PointKind::MultiState(multi_state),
+        ),
+        (
+            oid(ObjectType::INTEGER_VALUE, 7),
+            "iv",
+            PointKind::Integer(integer),
         ),
     ] {
         let expected = Point {
@@ -360,8 +407,18 @@ fn a_value_takes_every_access() {
     let units = EngineeringUnits::NO_UNITS;
     let mut points = Vec::new();
     let accesses = [
-        (Access::ReadOnly, Access::ReadOnly, Access::ReadOnly),
-        (Access::Writable, Access::Writable, Access::Writable),
+        (
+            Access::ReadOnly,
+            Access::ReadOnly,
+            Access::ReadOnly,
+            Access::ReadOnly,
+        ),
+        (
+            Access::Writable,
+            Access::Writable,
+            Access::Writable,
+            Access::Writable,
+        ),
         (
             Access::Commandable {
                 relinquish_default: Some(5.0),
@@ -372,9 +429,12 @@ fn a_value_takes_every_access() {
             Access::Commandable {
                 relinquish_default: Some(2),
             },
+            Access::Commandable {
+                relinquish_default: Some(-2),
+            },
         ),
     ];
-    for (instance, (analog, binary, multi_state)) in (1..).zip(accesses) {
+    for (instance, (analog, binary, multi_state, integer)) in (1..).zip(accesses) {
         points.push(Point::new(
             oid(ObjectType::ANALOG_VALUE, instance),
             format!("av-{instance}"),
@@ -390,6 +450,11 @@ fn a_value_takes_every_access() {
             format!("msv-{instance}"),
             MultiState::new(2, multi_state),
         ));
+        points.push(Point::new(
+            oid(ObjectType::INTEGER_VALUE, instance),
+            format!("iv-{instance}"),
+            Integer::new(units, integer),
+        ));
     }
     let list = PointList::new(DeviceInfo::new(1001), points.clone());
     let database = build_database(list, &identity()).unwrap();
@@ -401,6 +466,7 @@ fn a_value_takes_every_access() {
             (PointKind::MultiState(given), PointKind::MultiState(read)) => {
                 given.access == read.access
             }
+            (PointKind::Integer(given), PointKind::Integer(read)) => given.access == read.access,
             _ => false,
         };
         assert!(
@@ -533,4 +599,43 @@ fn building_twice_gives_the_same_database() {
             read_back(&second, point.object)
         );
     }
+}
+
+/// An Integer Value's edges build and read back: a one-value range, a
+/// relinquish default outside the range and at the INTEGER's ends (the
+/// builder compares a default with no range), and the largest Unsigned
+/// COV_Increment.
+#[test]
+fn an_integer_values_edges_build() {
+    let units = EngineeringUnits::NO_UNITS;
+    let points: Vec<Point> = [(1, i32::MIN), (2, i32::MAX)]
+        .into_iter()
+        .map(|(instance, default)| {
+            let integer = Integer::new(
+                units,
+                Access::Commandable {
+                    relinquish_default: Some(default),
+                },
+            )
+            .with_cov_increment(u64::MAX)
+            .with_min_pres_value(7)
+            .with_max_pres_value(7);
+            Point::new(
+                oid(ObjectType::INTEGER_VALUE, instance),
+                format!("iv-{instance}"),
+                integer,
+            )
+            .with_description("")
+        })
+        .collect();
+    let list = PointList::new(DeviceInfo::new(1001), points.clone());
+    let database = build_database(list, &identity()).unwrap();
+    for point in &points {
+        assert_eq!(&read_back(&database, point.object), point);
+    }
+    let served = database.get(&points[0].object).unwrap();
+    assert_eq!(
+        served.read_property(P::PRESENT_VALUE, None).unwrap(),
+        PropertyValue::Signed(i32::MIN)
+    );
 }

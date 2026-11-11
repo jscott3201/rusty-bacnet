@@ -33,9 +33,10 @@
 //!   and Device clock, on the objects image's targets.
 //! - `points` (`points::run`, with the `points` feature): the objects
 //!   image's requests answered from a database `bacnet-objects`' point-list
-//!   builder makes, one point of each of the nine types it covers among
-//!   them, on the objects image's targets. Its size less the objects
-//!   image's is what the builder costs.
+//!   builder makes, one point of each of the nine analog, binary and
+//!   multi-state types among them, on the objects image's targets. Its size
+//!   less the objects image's is what the builder costs, the Integer Value
+//!   it also covers included.
 //!
 //! One image per stack keeps each stack's flash and RAM separate: within one
 //! LTO image, code can't be attributed to a crate reliably. So `bip` links

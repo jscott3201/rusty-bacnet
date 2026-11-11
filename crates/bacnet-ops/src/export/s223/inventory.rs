@@ -8,26 +8,27 @@
 //! reads do. A device with N exported objects costs N + 2 requests by RPM.
 //!
 //! An object whose read fails is kept with its error, and the export skips
-//! it; so is one whose Object_Name, an analog object's Units or a
-//! multi-state object's Number_Of_States can't be read, the error naming
-//! that property. A device that stops answering, or a caller that cancels,
-//! ends the reading once the Object_List is in; what was read is kept, and
-//! [`Inventory::stopped`] says why. Before that, either is an error. An
-//! Object_List read element by element that stops early ends the reading
-//! there: no object is asked for.
+//! it; so is one whose Object_Name, the Units of an analog object or an
+//! Integer Value, or a multi-state object's Number_Of_States can't be read,
+//! the error naming that property. A device that stops answering, or a
+//! caller that cancels, ends the reading once the Object_List is in; what
+//! was read is kept, and [`Inventory::stopped`] says why. Before that,
+//! either is an error. An Object_List read element by element that stops
+//! early ends the reading there: no object is asked for.
 //!
 //! A device that refuses ReadPropertyMultiple costs one refused request,
 //! then a ReadProperty a property: 2 for a binary input or output, 3 for
-//! an analog input or output or a binary value, 4 for an analog value or a
-//! multi-state input or output, and 5 for a multi-state value.
+//! an analog input or output or a binary value, 4 for an analog value, an
+//! integer value or a multi-state input or output, and 5 for a multi-state
+//! value.
 //!
 //! [`Detail::Full`] reads the rest of a point list in the same requests:
 //! still N + 2 by RPM, the Device's name and Description going in one
 //! RPM. By ReadProperty it costs one more for the Device's Description and
 //! these per object: 6 for an analog input, 7 for an analog output, 8 for
-//! an analog value, 4 for a binary input, 5 for a binary output, 6 for a
-//! binary value, 4 for a multi-state input, 5 for a multi-state output and
-//! 6 for a multi-state value.
+//! an analog value or an integer value, 4 for a binary input, 5 for a
+//! binary output, 6 for a binary value, 4 for a multi-state input, 5 for a
+//! multi-state output and 6 for a multi-state value.
 //!
 //! An input reads as [`Access::ReadOnly`] and an output as
 //! [`Access::Commandable`]. A value is commandable when it has a
@@ -45,8 +46,8 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::{
-    Access, Analog, Binary, Detail, DeviceInfo, Entry, Inventory, InventoryOptions, MultiState,
-    Point, PointKind,
+    Access, Analog, Binary, Detail, DeviceInfo, Entry, Integer, Inventory, InventoryOptions,
+    MultiState, Point, PointKind,
 };
 use crate::engine::{Engine, Halt, Reader, Wanted, device_error, unreachable};
 use crate::format::{RawRow, StateTexts, decode_all};
@@ -236,9 +237,11 @@ enum Family {
     Analog,
     Binary,
     MultiState,
+    /// The Integer Value alone, a value.
+    Integer,
 }
 
-/// Which of a family's three types an object is.
+/// Which of a family's types an object is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Role {
     Input,
@@ -259,6 +262,7 @@ fn family_of(object_type: ObjectType) -> Option<(Family, Role)> {
         ObjectType::MULTI_STATE_INPUT => (Family::MultiState, Role::Input),
         ObjectType::MULTI_STATE_OUTPUT => (Family::MultiState, Role::Output),
         ObjectType::MULTI_STATE_VALUE => (Family::MultiState, Role::Value),
+        ObjectType::INTEGER_VALUE => (Family::Integer, Role::Value),
         _ => return None,
     })
 }
@@ -269,7 +273,7 @@ fn family_of(object_type: ObjectType) -> Option<(Family, Role)> {
 fn properties(family: Family, role: Role, detail: Detail) -> Vec<P> {
     let mut list = vec![P::OBJECT_NAME, P::DESCRIPTION];
     match family {
-        Family::Analog => list.push(P::UNITS),
+        Family::Analog | Family::Integer => list.push(P::UNITS),
         Family::Binary => {}
         Family::MultiState => list.extend([P::NUMBER_OF_STATES, P::STATE_TEXT]),
     }
@@ -279,7 +283,7 @@ fn properties(family: Family, role: Role, detail: Detail) -> Vec<P> {
     }
     if detail == Detail::Full {
         match family {
-            Family::Analog => {
+            Family::Analog | Family::Integer => {
                 list.extend([P::COV_INCREMENT, P::MIN_PRES_VALUE, P::MAX_PRES_VALUE]);
             }
             Family::Binary => list.extend([P::ACTIVE_TEXT, P::INACTIVE_TEXT]),
@@ -321,6 +325,14 @@ fn point(
             let mut multi_state = MultiState::new(states, access(role, rows, unsigned));
             multi_state.state_texts = StateTexts::from_rows(rows).states;
             PointKind::MultiState(multi_state)
+        }
+        Family::Integer => {
+            let units = required(rows, P::UNITS, units, "an engineering unit")?;
+            let mut integer = Integer::new(units, access(role, rows, signed));
+            integer.cov_increment = value(rows, P::COV_INCREMENT).and_then(unsigned64);
+            integer.min_pres_value = value(rows, P::MIN_PRES_VALUE).and_then(signed);
+            integer.max_pres_value = value(rows, P::MAX_PRES_VALUE).and_then(signed);
+            PointKind::Integer(integer)
         }
     };
     let mut point = Point::new(object, name, kind);
@@ -399,6 +411,23 @@ fn real(data: &[u8]) -> Option<f32> {
 fn unsigned(data: &[u8]) -> Option<u32> {
     match single(data)? {
         PropertyValue::Unsigned(value) => u32::try_from(value).ok(),
+        _ => None,
+    }
+}
+
+/// An Unsigned of any size, as an Integer Value's COV_Increment is.
+fn unsigned64(data: &[u8]) -> Option<u64> {
+    match single(data)? {
+        PropertyValue::Unsigned(value) => Some(value),
+        _ => None,
+    }
+}
+
+/// An INTEGER: an Integer Value's Present_Value, relinquish default and
+/// range ends.
+fn signed(data: &[u8]) -> Option<i32> {
+    match single(data)? {
+        PropertyValue::Signed(value) => Some(value),
         _ => None,
     }
 }

@@ -151,6 +151,22 @@ fn cases() -> Vec<(&'static str, Inventory, TurtleOptions)> {
         1234,
         vec![failed, Entry::Point(trend), Entry::Point(filter)],
     );
+
+    // An Integer Value maps as an analog value does (#2456): actuatable
+    // when commandable, plainly quantifiable when not, with its units.
+    let starts = named(
+        ObjectType::INTEGER_VALUE,
+        1,
+        "Supply Fan Starts",
+        Integer::new(EngineeringUnits::NO_UNITS, commanded()),
+    )
+    .with_description("Starts since the last reset");
+    let energy = named(
+        ObjectType::INTEGER_VALUE,
+        2,
+        "Energy Total",
+        Integer::new(EngineeringUnits::KILOWATT_HOURS, Access::ReadOnly),
+    );
     skipped.stopped = Some("analog-input,9: timeout\n@prefix".into());
 
     vec![
@@ -172,7 +188,7 @@ fn cases() -> Vec<(&'static str, Inventory, TurtleOptions)> {
         (
             "value-priority-array.ttl",
             device(1234, points(vec![setpoint, flow, occupied])),
-            priority,
+            priority.clone(),
         ),
         (
             "instance-zero.ttl",
@@ -189,6 +205,11 @@ fn cases() -> Vec<(&'static str, Inventory, TurtleOptions)> {
         ),
         ("hostile-strings.ttl", hostile_device, plain.clone()),
         ("skipped.ttl", skipped, plain),
+        (
+            "integer-value.ttl",
+            device(1234, points(vec![starts, energy])),
+            priority,
+        ),
     ]
 }
 
@@ -287,6 +308,26 @@ fn golden_cases_hold_what_they_test() {
     assert!(hostile.contains("# 1 NUL character in device text written as U+FFFD."));
     assert!(hostile.contains(r#"rdfs:label "Say \"hi\" \\ to\nRoom\t101\u0007\u001B[2J" ;"#));
     assert!(hostile.contains("\\u202Eevil\\u2066 \\U0001F525"));
+
+    let integers = text("integer-value.ttl");
+    assert!(
+        integers
+            .contains("d:integer-value-1.present-value a s223:QuantifiableActuatableProperty ;")
+    );
+    assert!(integers.contains("d:integer-value-2.present-value a s223:QuantifiableProperty ;"));
+    assert!(integers.contains("qudt:hasUnit unit:UNITLESS ;"));
+    assert!(integers.contains("qudt:hasQuantityKind quantitykind:Dimensionless ;"));
+    assert!(integers.contains("qudt:hasUnit unit:KiloW-HR ;"));
+    assert!(integers.contains("bacnet:object-identifier \"integer-value,2\" ;"));
+    assert!(
+        !integers.contains("hasEnumerationKind"),
+        "quantifiable, not enumerated"
+    );
+    assert_eq!(
+        integers.matches("priority-for-writing").count(),
+        1,
+        "only the commandable one"
+    );
 
     let skipped = text("skipped.ttl");
     assert!(skipped.contains("# analog-input 1: skipped, its read failed."));

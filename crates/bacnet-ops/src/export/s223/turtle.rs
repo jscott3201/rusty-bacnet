@@ -5,12 +5,15 @@
 //!
 //! - the class says whether the point is observed (an input), actuated
 //!   (a commandable output or value: [`Access::Commandable`]) or neither (a
-//!   value that isn't commandable), and whether it is quantifiable (analog)
-//!   or enumerated (binary and multi-state);
-//! - an analog point carries its QUDT unit and quantity kind when the unit
-//!   table maps its Units; otherwise it gets QUDT's unknown quantity kind,
-//!   which the draft requires of every quantifiable property, no unit, and
-//!   a comment naming the BACnet unit;
+//!   value that isn't commandable), and whether it is quantifiable (an
+//!   analog object or an Integer Value) or enumerated (binary and
+//!   multi-state);
+//! - a quantifiable point carries its QUDT unit and quantity kind when the
+//!   unit table maps its Units; otherwise it gets QUDT's unknown quantity
+//!   kind, which the draft requires of every quantifiable property, no
+//!   unit, and a comment naming the BACnet unit. An Integer Value maps as
+//!   an analog value does: it is never an input, so it is actuatable when
+//!   commandable and plainly quantifiable otherwise;
 //! - a binary point's kind is the ontology's neutral logical one; a
 //!   multi-state point gets a kind of its own, minted from its states,
 //!   with one member a state, named by its State_Text;
@@ -70,7 +73,7 @@ pub struct Counts {
     /// property their type requires couldn't be read, or their kind isn't
     /// their type's.
     pub skipped: usize,
-    /// Analog points whose unit has no QUDT mapping.
+    /// Analog and Integer Value points whose unit has no QUDT mapping.
     pub unmapped_units: usize,
     /// Identifier strings left out because the instance is 0.
     pub instance_zero: usize,
@@ -146,9 +149,7 @@ fn count(inventory: &Inventory) -> Counts {
             continue;
         };
         counts.exported += 1;
-        if let PointKind::Analog(analog) = &object.kind
-            && qudt_unit(analog.units).is_none()
-        {
+        if quantity(object).is_some_and(|units| qudt_unit(units).is_none()) {
             counts.unmapped_units += 1;
         }
         counts.instance_zero += usize::from(object.object.instance_number() == 0)
@@ -270,9 +271,19 @@ impl Class {
             ObjectType::MULTI_STATE_INPUT,
         ]
         .contains(&object_type);
-        let analog_type = !is_binary(object_type) && !is_multistate(object_type);
+        let analog_type = [
+            ObjectType::ANALOG_INPUT,
+            ObjectType::ANALOG_OUTPUT,
+            ObjectType::ANALOG_VALUE,
+        ]
+        .contains(&object_type);
         let (fits, analog, commanded) = match &object.kind {
             PointKind::Analog(kind) => (analog_type, true, commandable(&kind.access)),
+            PointKind::Integer(kind) => (
+                object_type == ObjectType::INTEGER_VALUE,
+                true,
+                commandable(&kind.access),
+            ),
             PointKind::Binary(kind) => (is_binary(object_type), false, commandable(&kind.access)),
             PointKind::MultiState(kind) => {
                 (is_multistate(object_type), false, commandable(&kind.access))
@@ -316,6 +327,16 @@ fn commandable<T>(access: &Access<T>) -> bool {
     matches!(access, Access::Commandable { .. })
 }
 
+/// The Units of a quantifiable point: an analog object's or an Integer
+/// Value's.
+fn quantity(point: &Point) -> Option<EngineeringUnits> {
+    match &point.kind {
+        PointKind::Analog(analog) => Some(analog.units),
+        PointKind::Integer(integer) => Some(integer.units),
+        _ => None,
+    }
+}
+
 /// `analog-input-3`: an object's part of its node names.
 fn local(object: ObjectIdentifier) -> String {
     format!(
@@ -350,9 +371,9 @@ fn point(
     if let Some(description) = object.description.as_deref().filter(|d| !d.is_empty()) {
         writeln!(out, "    rdfs:comment {} ;", lit.text(description))?;
     }
-    match &object.kind {
-        PointKind::Analog(analog) => units(analog.units, out)?,
-        PointKind::MultiState(_) => writeln!(
+    match (quantity(object), &object.kind) {
+        (Some(quantity), _) => units(quantity, out)?,
+        (None, PointKind::MultiState(_)) => writeln!(
             out,
             "    s223:hasEnumerationKind d:{}.states ;",
             local(object.object)
@@ -398,7 +419,7 @@ fn point(
     }
 }
 
-/// An analog point's QUDT terms. A unit the table doesn't map gets the
+/// A quantifiable point's QUDT terms. A unit the table doesn't map gets the
 /// unknown quantity kind and no unit, since the draft wants a quantity kind
 /// on every quantifiable property, and a comment naming the BACnet unit.
 fn units(units: EngineeringUnits, out: &mut impl Write) -> fmt::Result {

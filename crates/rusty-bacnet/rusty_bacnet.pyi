@@ -2605,8 +2605,8 @@ class Object223Experimental:
 
     @property
     def units(self) -> Optional[EngineeringUnits]:
-        """An analog object's Units; None for other objects or when its read
-        failed."""
+        """The Units of an analog object or an integer value; None for other
+        objects or when its read failed."""
         ...
 
     @property
@@ -2632,9 +2632,9 @@ class Object223Experimental:
     @property
     def error(self) -> Optional[str]:
         """Why its read failed, None when it didn't: the device's error, which
-        names the property when the object lacked its Object_Name, an analog
-        object's Units or a multi-state object's Number_Of_States. The
-        Turtle skips such an object."""
+        names the property when the object lacked its Object_Name, the Units
+        of an analog object or an integer value, or a multi-state object's
+        Number_Of_States. The Turtle skips such an object."""
         ...
 
     def __repr__(self) -> str: ...
@@ -4215,9 +4215,9 @@ class BACnetClient:
 
         The device is looked up in the discovery table, as the
         ``_from_device`` methods look it up. ``types`` narrows the objects read
-        (analog, binary and multi-state inputs, outputs and values; all
-        nine by default). Another type or an empty list raises ValueError
-        before anything is sent.
+        (analog, binary and multi-state inputs, outputs and values, and
+        integer values; all ten by default). Another type or an empty list
+        raises ValueError before anything is sent.
 
         A device that doesn't answer the name read, or a failed read of the
         whole Object_List, raises the usual error. A device that can't send

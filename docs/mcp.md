@@ -49,7 +49,7 @@ plus a text rendering.
 | `bacnet_alarms` | GetEventInformation through `bacnet_ops::format::alarms` (#2077): objects, states, transitions, notify types, timestamps and priorities named; paged over the device's answers (`more_events`) up to `max` (100) a call, the cursor holding the last object; once the call's budget is spent no further answer is asked for, and what was read comes back with `more_events` and a cursor (`format::alarms::read_event_information_until`).  `summaries: true` adds GetAlarmSummary and GetEnrollmentSummary on the first page; a device refusing one reports it under `summary_errors`. When the events spent the call's budget, neither is sent, and each shows under `summary_errors` as `{"skipped": "budget"}`. Every datum is passed through the envelope check. |
 | `bacnet_watch` | Points on the watch hub, and what changed since the last call (see [the tool-only fallback](#the-tool-only-fallback)). `idempotentHint: false`. Not listed in passive mode. |
 | `bacnet_decode` | Hex (separators and `0x` ignored, at most 6,144 octets, room for the largest BACnet/SC message the stack accepts) as `bip`, `bip6`, `mstp`, `sc`, `npdu`, `apdu` or `auto` (by the first octets; SC must be named). Returns a one-line `text`, the decoder's `summary` and the field `tree` (labels with `[start, end)` octet ranges, at most 600 fields). A label quoting a character string is an envelope with source `decoded frame`; other labels are cleaned, and a long one (an unknown tag's octets) is cut at 512 characters with `truncated: true`. No traffic: listed in passive mode too. |
-| `bacnet_export_223` | Experimental (#2436): one device's analog, binary and multi-state objects as a proposed Standard 223 point list in Turtle, the CLI's `bacnet export 223-experimental` through the engine, paged with a cursor. Each page's Turtle is a second text block; the structured content summarises the page. See [Standard 223 export](#standard-223-export-experimental). |
+| `bacnet_export_223` | Experimental (#2436): one device's analog, binary and multi-state objects and integer values as a proposed Standard 223 point list in Turtle, the CLI's `bacnet export 223-experimental` through the engine, paged with a cursor. Each page's Turtle is a second text block; the structured content summarises the page. See [Standard 223 export](#standard-223-export-experimental). |
 
 Prompts: `survey_site` (range, network) and `investigate_point` (device,
 object). Their arguments are checked against the target grammar. The survey
@@ -60,18 +60,19 @@ investigation also checks its alarms and summarises a trend log of it.
 
 `bacnet_export_223` (#2436) writes what `bacnet export 223-experimental`
 writes, from the same code (`bacnet_ops::export::s223`): one 223 property
-for each analog, binary and multi-state input, output and value, with a
-BACnet external reference to its Present_Value. Its title says
-experimental, as the CLI command's name does: the draft standard and the
-mapping can change between releases. Read-only; not listed in passive mode.
+for each analog, binary and multi-state input, output and value and each
+integer value, with a BACnet external reference to its Present_Value. Its
+title says experimental, as the CLI command's name does: the draft standard
+and the mapping can change between releases. Read-only; not listed in
+passive mode.
 
 - **Arguments.** `device` as the other tools take it; `base_iri` (default
   `http://example.org/bacnet/`, a documentation domain), `types` (any of the
-  nine types, by the target grammar's names: `ai`, `binary-output` and so
-  on; left out, all nine) and `write_priority` (1 to 16). The export's own
-  checks refuse a bad base IRI, a priority outside 1 to 16, a type it
-  doesn't map or an empty `types`, with its own messages, as
-  `invalid-argument` before anything is sent.
+  ten types, by the target grammar's names: `ai`, `binary-output`,
+  `integer-value` and so on; left out, all ten) and `write_priority` (1 to
+  16). The export's own checks refuse a bad base IRI, a priority outside 1
+  to 16, a type it doesn't map or an empty `types`, with its own messages,
+  as `invalid-argument` before anything is sent.
 - **Base IRI.** Each device's nodes go under `<base_iri>device-<instance>/`
   and are named from object identifiers. A device instance is unique only
   within one BACnet internetwork, so give each site a base of its own, or

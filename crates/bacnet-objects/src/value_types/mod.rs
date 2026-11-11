@@ -3,7 +3,9 @@
 //! The 12 "value" object types share a common structure: present_value, status_flags,
 //! out_of_service, reliability, and (for commandable types) a 16-level priority array.
 //!
-//! A `define_value_object!` macro generates the struct + BACnetObject impl for each type.
+//! A `define_value_object!` macro generates the struct + BACnetObject impl for each type
+//! but Integer Value, which `integer` writes by hand so it can take a
+//! Present_Value access and a presentation range (#2456).
 
 use crate::prelude::*;
 use alloc::borrow::Cow;
@@ -19,7 +21,10 @@ use crate::traits::BACnetObject;
 use cov_increment::CovIncrement;
 
 mod cov_increment;
+mod integer;
 mod metadata;
+
+pub use integer::IntegerValueObject;
 
 // ---------------------------------------------------------------------------
 // Macro: define_value_object! (commandable variant)
@@ -422,28 +427,8 @@ fn pv_to_datetime(v: PropertyValue) -> Result<(Date, Time), Error> {
 }
 
 // ---------------------------------------------------------------------------
-// 9 Commandable value objects
+// 8 Commandable value objects (Integer Value is in `integer`)
 // ---------------------------------------------------------------------------
-
-define_value_object_commandable! {
-    name: IntegerValueObject,
-    doc: "BACnet Integer Value object (type 45).",
-    object_type: ObjectType::INTEGER_VALUE,
-    value_type: i32,
-    default_value: 0,
-    pv_to_property: (|v: &i32| PropertyValue::Signed(*v)),
-    property_to_pv: (|v: PropertyValue| -> Result<i32, Error> {
-        if let PropertyValue::Signed(n) = v { Ok(n) }
-        else { Err(common::invalid_data_type_error()) }
-    }),
-    pa_wrap: PropertyValue::Signed,
-    rd_wrap: (|v: &i32| PropertyValue::Signed(*v)),
-    rd_validate: (|_: &i32| -> Result<(), Error> { Ok(()) }),
-    copy_type: copy,
-    units: EngineeringUnits,
-    cov_increment: u64,
-    property_metadata: metadata::INTEGER_VALUE_BASE,
-}
 
 define_value_object_commandable! {
     name: PositiveIntegerValueObject,

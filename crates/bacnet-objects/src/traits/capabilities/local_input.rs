@@ -85,8 +85,8 @@ impl LocalInputValue {
 /// The built-in objects that take an input:
 ///
 /// - Present_Value: Analog, Binary and Multi-state Inputs, Analog, Binary
-///   and Multi-state Values whose Present_Value isn't commandable, the
-///   Loop, and the Life Safety Point and Zone;
+///   and Multi-state Values and Integer Values whose Present_Value isn't
+///   commandable, the Loop, and the Life Safety Point and Zone;
 /// - Tracking_Value: the Life Safety Point and Zone;
 /// - Controlled_Variable_Value: the Loop;
 /// - a sample: the Averaging object;
