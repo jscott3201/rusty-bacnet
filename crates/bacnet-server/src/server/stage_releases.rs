@@ -21,7 +21,10 @@ use tokio::sync::Notify;
 /// objects: the [`SLOW_SAVE_WARNING`](super::SLOW_SAVE_WARNING) after which it
 /// warns that storage holds it up. A release task waits only for the guard,
 /// so one still outstanding by then waits behind a guard `stop()` does not
-/// own, as an application's.
+/// own, as an application's, or on a runtime nothing drives any more.
+// Coupled to SLOW_SAVE_WARNING on purpose (one 5 s mark for stop()): if that
+// changes, recheck that a busy runtime's guard wait still fits, and the "5 s"
+// in stop()'s docs and docs/rust-api.md.
 pub(in crate::server) const RELEASE_WAIT: Duration = super::SLOW_SAVE_WARNING;
 
 /// The release tasks a server's dropped local writes left, counted.
@@ -57,7 +60,8 @@ impl StageReleases {
                 outstanding = self.outstanding.load(Ordering::Acquire),
                 waited_secs = RELEASE_WAIT.as_secs(),
                 "stop() stopped waiting for dropped local writes to let go of their \
-                 stages; the database is held, so staged writes settle once it is free"
+                 stages; the database may be held, or their runtime no longer driven, \
+                 so staged writes settle once it is free"
             );
         }
     }
@@ -83,6 +87,8 @@ impl StageReleases {
 impl Drop for Release {
     fn drop(&mut self) {
         if self.0.outstanding.fetch_sub(1, Ordering::AcqRel) == 1 {
+            #[cfg(test)]
+            self.0.hooks.on_idle();
             self.0.idle.notify_waiters();
         }
     }
@@ -128,6 +134,11 @@ impl StageReleases {
     pub(in crate::server) fn waits(&self) -> usize {
         self.hooks.waits.load(Ordering::Acquire)
     }
+
+    /// Run `check` as the count next reaches zero, before any waiter wakes.
+    pub(in crate::server) fn when_idle(&self, check: impl FnOnce() + Send + 'static) {
+        *self.hooks.idle_check.lock().unwrap() = Some(Box::new(check));
+    }
 }
 
 #[cfg(test)]
@@ -144,11 +155,19 @@ mod hooks {
     pub(super) struct Hooks {
         pub(super) gate: Mutex<Option<Gate>>,
         pub(super) waits: AtomicUsize,
+        pub(super) idle_check: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     }
 
     impl Hooks {
         pub(super) fn note_wait(&self) {
             self.waits.fetch_add(1, Ordering::AcqRel);
+        }
+
+        pub(super) fn on_idle(&self) {
+            let check = self.idle_check.lock().unwrap().take();
+            if let Some(check) = check {
+                check();
+            }
         }
     }
 }

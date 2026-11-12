@@ -113,3 +113,26 @@ fn a_release_task_spawned_onto_a_runtime_already_gone_gives_up_its_place() {
     drop(guard);
     assert!(waits_for_nothing(&releases));
 }
+
+#[test]
+fn a_release_task_gives_up_its_place_only_once_the_guard_is_free() {
+    let releases = Arc::new(StageReleases::default());
+    let db = database();
+    let staging = runtime();
+    let held = stage(&staging, &db, &releases);
+    let guard = db.try_write().unwrap();
+    drop(held);
+    // Whatever `stop()` does on waking, on any thread, comes after this.
+    let (free, was_free) = std::sync::mpsc::channel();
+    let checked = Arc::clone(&db);
+    releases.when_idle(move || {
+        let _ = free.send(checked.try_write().is_ok());
+    });
+    drop(guard);
+    staging.block_on(releases.wait_at_stop());
+    assert_eq!(
+        was_free.try_recv(),
+        Ok(true),
+        "the release task gave up its place while it held the guard"
+    );
+}

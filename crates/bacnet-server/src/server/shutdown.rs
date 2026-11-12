@@ -71,8 +71,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// tasks before it settles, for at most 5 s (#2495). A task still waiting
     /// then is behind a guard the application holds: the objects settle from
     /// a task once it is free (see above), and storage is put back after stop
-    /// returns. A local write dropped once that wait is over is not waited
-    /// for.
+    /// returns. No local write can drop its stage after that wait: one the
+    /// application makes borrows the server, which stop holds exclusively,
+    /// and fails before it stages once stop has sealed the server, and a
+    /// run's write is a request task, joined before the wait.
     ///
     /// [`DurableWrites::settle_forgotten_writes`]:bacnet_objects::durable::DurableWrites::settle_forgotten_writes
     ///
@@ -155,9 +157,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         self.request_tasks.stage_releases().wait_at_stop().await;
         // No request is left to take or release a staged save, and the
         // operation task that would drop one is gone: put storage back to
-        // what each object serves before stop returns (#1363). A
-        // `write_local` still in flight isn't joined; if it staged, it finds
-        // its stage gone and saves in place under the guard.
+        // what each object serves before stop returns (#1363).
         super::durable_writes::settle_forgotten(&self.db).await;
         // Nothing can own a Command or Channel run any more. End the runs let
         // go of while the database was busy where they stood, then any run no

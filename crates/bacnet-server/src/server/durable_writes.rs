@@ -582,11 +582,6 @@ pub(super) const SLOW_SAVE_REPEAT: Duration = Duration::from_secs(30);
 /// A second pass takes what the first waited for: an Audit Log batch whose
 /// commit was still running, which the log takes once it has landed.
 ///
-/// `stop()` does not join an application's `write_local`. One that staged
-/// its save before the stop finds its stage dropped here when it comes back
-/// for the guard, and saves in place under the guard instead; storage still
-/// leads what the object serves.
-///
 /// An application holding the database is not waited for, as with the
 /// Command runs `stop()` ends: the objects then settle from a task once it
 /// lets go, and in any case put storage back when they are dropped. A task
@@ -829,7 +824,10 @@ pub(super) async fn stage_held(
 /// still waiting then waits behind a guard `stop()` does not own, as when an
 /// application holds the database across `stop()`: the objects then settle
 /// from a task once it is free, and storage is put back after `stop()`
-/// returns. A local write dropped after that wait is not waited for either.
+/// returns. No stage can drop after the wait: an application's local write
+/// borrows the server, which `stop()` holds exclusively, and fails before it
+/// stages once `stop()` has sealed the server; a run's write is a request
+/// task, joined before the wait.
 /// An endpoint has no pass that expires a forgotten stage, and its dispatch
 /// task waits for the next write that stages on the object; a server's pass
 /// takes about 10 s, during which storage leads what the object serves and a
@@ -877,6 +875,9 @@ impl Drop for HeldStage {
             #[cfg(test)]
             stage_releases::gate(release.as_ref()).await;
             staged.release(&mut guard);
+            // This order matters: the place in the count goes last. Dropped
+            // while the guard is held, it could wake `stop()` on another
+            // thread into a settle that finds the guard taken.
             drop(guard);
             drop(super::drop_database_off_runtime(db));
             drop(release);
