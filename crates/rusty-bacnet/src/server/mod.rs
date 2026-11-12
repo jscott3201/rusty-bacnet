@@ -27,7 +27,7 @@ use bacnet_objects::file::FileObject;
 use bacnet_objects::group::{GlobalGroupObject, StructuredViewObject};
 use bacnet_objects::life_safety::{LifeSafetyPointObject, LifeSafetyZoneObject};
 use bacnet_objects::lighting::{BinaryLightingOutputObject, LightingOutputObject};
-use bacnet_objects::load_control::LoadControlObject;
+use bacnet_objects::load_control::{FileLoadControlPersistence, LoadControlObject};
 use bacnet_objects::loop_obj::LoopObject;
 use bacnet_objects::multistate::{
     MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject,
@@ -246,6 +246,7 @@ mod server_methods {
     mod life_safety_methods;
     mod lifecycle;
     mod lighting_methods;
+    mod load_control_methods;
     mod loop_methods;
     mod network_port;
     mod notification_forwarder;
