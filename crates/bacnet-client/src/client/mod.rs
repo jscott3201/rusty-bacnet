@@ -593,6 +593,8 @@ pub struct BACnetClient<T: TransportPort = AnyTransport> {
     network_report_tx: broadcast::Sender<bacnet_network::layer::ReceivedNetworkReport>,
     dispatch_task: Option<JoinHandle<()>>,
     network_number_task: Option<JoinHandle<()>>,
+    /// Purges devices not heard from; see `lifecycle::spawn_device_purge`.
+    device_purge_task: Option<JoinHandle<()>>,
     /// Owner-qualified channels feeding SegmentACKs to in-flight segmented sends.
     ///
     /// Dispatch may hold [`Self::tsm`] while acquiring this lock so phase
@@ -892,6 +894,7 @@ mod device_mgmt;
 mod discovery;
 mod dispatch;
 mod dispatch_context;
+mod dispatch_turn;
 mod inbound_replies;
 use inbound_replies::InboundReply;
 mod event_notifications;
@@ -965,6 +968,8 @@ mod cov_renewal_tests;
 mod cov_tests;
 #[cfg(test)]
 mod device_events_tests;
+#[cfg(test)]
+mod dispatch_turn_tests;
 #[cfg(test)]
 mod event_notification_tests;
 #[cfg(test)]

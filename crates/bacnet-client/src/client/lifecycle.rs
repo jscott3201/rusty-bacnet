@@ -1,8 +1,11 @@
 use super::dispatch_context::{DispatchContext, InboundApdu};
+use super::dispatch_turn::{Turn, TurnOrder};
 use super::*;
+use bacnet_network::layer::ReceivedNetworkControl;
 use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::sync::mpsc::error::TryRecvError;
 
-const DEVICE_PURGE_INTERVAL: Duration = Duration::from_secs(300);
+pub(super) const DEVICE_PURGE_INTERVAL: Duration = Duration::from_secs(300);
 #[cfg(not(test))]
 const DEVICE_MAX_AGE: Duration = Duration::from_secs(600);
 // Unit tests use Tokio's paused clock, while DeviceTable timestamps use
@@ -31,9 +34,13 @@ impl ClientConfig {
 
 impl<T: TransportPort> BACnetClient<T> {
     fn abort_owned_tasks(&self) {
-        for task in [&self.dispatch_task, &self.network_number_task]
-            .into_iter()
-            .flatten()
+        for task in [
+            &self.dispatch_task,
+            &self.network_number_task,
+            &self.device_purge_task,
+        ]
+        .into_iter()
+        .flatten()
         {
             task.abort();
         }
@@ -46,6 +53,77 @@ async fn join_owned_task(slot: &mut Option<JoinHandle<()>>) {
         let _ = task.await;
     }
     *slot = None;
+}
+
+/// The dispatch loop's network controls, read without waiting: see the
+/// [`dispatch_turn`] docs for why they need no waker.
+pub(super) struct Controls {
+    rx: mpsc::Receiver<ReceivedNetworkControl>,
+    pub(super) open: bool,
+    /// The layer's ingress sequence when the queue was last found empty.
+    drained_at: u64,
+}
+
+impl Controls {
+    pub(super) fn new(rx: mpsc::Receiver<ReceivedNetworkControl>, admitted: u64) -> Self {
+        Self {
+            rx,
+            open: true,
+            drained_at: admitted,
+        }
+    }
+
+    /// Take a queued control, given the layer's ingress sequence now. It
+    /// advances for each control the layer admits, which happens only in
+    /// this task's APDU receive, so while it stands where the queue was last
+    /// found empty there is nothing to take and the queue isn't read. At
+    /// `u64::MAX` it stops advancing, and the queue is read every time.
+    pub(super) fn take(&mut self, admitted: u64) -> Option<ReceivedNetworkControl> {
+        if !self.open || (admitted == self.drained_at && admitted != u64::MAX) {
+            return None;
+        }
+        match self.rx.try_recv() {
+            Ok(control) => Some(control),
+            Err(TryRecvError::Empty) => {
+                self.drained_at = admitted;
+                None
+            }
+            Err(TryRecvError::Disconnected) => {
+                self.open = false;
+                None
+            }
+        }
+    }
+}
+
+/// Every [`DEVICE_PURGE_INTERVAL`], drop the devices not heard from in
+/// [`DEVICE_MAX_AGE`] and announce each as lost. A task of its own, so the
+/// dispatch loop doesn't poll this timer on every turn (#1978 item 8); the
+/// loop ends it when it ends itself, and `stop()` and drop abort both.
+fn spawn_device_purge(
+    device_table: Arc<SyncMutex<DeviceTable>>,
+    device_tx: broadcast::Sender<DeviceEvent>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(DEVICE_PURGE_INTERVAL);
+        // Tokio intervals tick immediately; consume that tick so purges run
+        // on the configured cadence.
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            // The events go out under the table's lock, as a broadcast send
+            // never waits. The dispatch task adds a device and announces it
+            // in that order, so a device it adds back after this purge is
+            // announced after its Lost event, never before.
+            let mut table = device_table.lock();
+            for device in table.purge_stale_collect(DEVICE_MAX_AGE) {
+                let _ = device_tx.send(DeviceEvent {
+                    kind: DeviceEventKind::Lost,
+                    device,
+                });
+            }
+        }
+    })
 }
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
@@ -71,7 +149,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         options.validate()?;
 
         let mut network = NetworkLayer::new(transport);
-        let mut network_control_rx = network.enable_network_control_receiver()?;
+        let network_control_rx = network.enable_network_control_receiver()?;
         let mut apdu_rx = network.start().await?;
         let _bucket = cap_max_apdu_to_transport(
             config.max_apdu_length,
@@ -137,39 +215,46 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         #[cfg(test)]
         let response_warning_hook = Arc::clone(&response_warning);
 
+        let device_purge_task = spawn_device_purge(Arc::clone(&device_table), device_tx.clone());
+        let device_purge = device_purge_task.abort_handle();
         let dispatch_task = tokio::spawn(async move {
             let mut seg_state: HashMap<SegKey, SegmentedReceiveState> = HashMap::new();
-            let mut device_purge_interval = tokio::time::interval(DEVICE_PURGE_INTERVAL);
-            let mut network_control_open = true;
-            // Tokio intervals tick immediately; consume that tick so discovery purges
-            // run on the configured cadence instead of racing the first APDU.
-            device_purge_interval.tick().await;
+            let mut controls = Controls::new(
+                network_control_rx,
+                network_dispatch.network_control_ingress_sequence(),
+            );
+            let mut order = TurnOrder::default();
 
             loop {
-                tokio::select! {
-                    control = network_control_rx.recv(), if network_control_open => {
-                        match control {
-                            Some(control) => {
-                                // Read once; subscribers first, and a broadcast
-                                // send never waits.
-                                let number = bacnet_network::network_number::NumberControl::parse(&control);
-                                network_reports::publish(&network_report_tx_dispatch, &control, number);
-                                if let Some((tx, parsed)) = number_tx.as_ref().zip(number)
-                                {
-                                    if tx.try_send(parsed).is_err() {
-                                        debug!("client Number control queue full or closed; dropping control");
-                                    }
-                                } else {
-                                    // Preserve the original envelope and ingress sequence for Reject correlation.
-                                    routed_path_limits_dispatch
-                                        .handle_network_control(&tsm_dispatch, control)
-                                        .await;
-                                }
+                let turn = std::future::poll_fn(|cx| {
+                    order.poll_turn(
+                        cx,
+                        || controls.take(network_dispatch.network_control_ingress_sequence()),
+                        |cx| apdu_rx.poll_recv(cx),
+                        |cx| cleanup_rx.poll_recv(cx),
+                    )
+                })
+                .await;
+                match turn {
+                    Turn::Control(control) => {
+                        // Read once; subscribers first, and a broadcast
+                        // send never waits.
+                        let number = bacnet_network::network_number::NumberControl::parse(&control);
+                        network_reports::publish(&network_report_tx_dispatch, &control, number);
+                        if let Some((tx, parsed)) = number_tx.as_ref().zip(number) {
+                            if tx.try_send(parsed).is_err() {
+                                debug!(
+                                    "client Number control queue full or closed; dropping control"
+                                );
                             }
-                            None => network_control_open = false,
+                        } else {
+                            // Preserve the original envelope and ingress sequence for Reject correlation.
+                            routed_path_limits_dispatch
+                                .handle_network_control(&tsm_dispatch, control)
+                                .await;
                         }
                     }
-                    cleanup = cleanup_rx.recv() => {
+                    Turn::Cleanup(cleanup) => {
                         let Some(cleanup) = cleanup else {
                             break;
                         };
@@ -190,9 +275,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                     && key.1 == cleanup.invoke_id
                                     && seg_state
                                         .get(*key)
-                                        .is_some_and(|state| {
-                                            state.owner.same_as(&cleanup.owner)
-                                        })
+                                        .is_some_and(|state| state.owner.same_as(&cleanup.owner))
                             })
                             .cloned();
                         #[cfg(test)]
@@ -203,31 +286,17 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                         if let Some(expected_sender) = cleanup.seg_ack_sender {
                             let key = (cleanup.mac, cleanup.invoke_id);
                             let mut senders = seg_ack_senders_dispatch.lock();
-                            if senders
-                                .get(&key)
-                                .is_some_and(|route| {
-                                    route.owner.same_as(&cleanup.owner)
-                                        && route.sender.same_channel(&expected_sender)
-                                })
-                            {
+                            if senders.get(&key).is_some_and(|route| {
+                                route.owner.same_as(&cleanup.owner)
+                                    && route.sender.same_channel(&expected_sender)
+                            }) {
                                 senders.remove(&key);
                             }
                         }
                         #[cfg(test)]
                         segmented_cleanup_dispatch.record_processed(removed);
                     }
-                    _ = device_purge_interval.tick() => {
-                        let lost_devices = device_table_dispatch
-                            .lock()
-                            .purge_stale_collect(DEVICE_MAX_AGE);
-                        for device in lost_devices {
-                            let _ = device_tx_dispatch.send(DeviceEvent {
-                                kind: DeviceEventKind::Lost,
-                                device,
-                            });
-                        }
-                    }
-                    received = apdu_rx.recv() => {
+                    Turn::Apdu(received) => {
                         let Some(received) = received else {
                             break;
                         };
@@ -283,6 +352,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     }
                 }
             }
+            // The receive queue closed: no device can be heard from again,
+            // so the purge ends with the loop, as it did inside it.
+            device_purge.abort();
         });
 
         // Shared: each paced request's guard keeps the pacer it reports to.
@@ -302,6 +374,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             network_report_tx,
             dispatch_task: Some(dispatch_task),
             network_number_task,
+            device_purge_task: Some(device_purge_task),
             seg_ack_senders,
             cleanup_tx,
             #[cfg(test)]
@@ -357,12 +430,14 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         self.network.transport().egress_apdu_limit()
     }
 
-    /// Stop the client, aborting and joining dispatch and local Number work.
+    /// Stop the client, aborting and joining dispatch, the device purge and
+    /// local Number work.
     /// Canceling this waiter retains task joins for a subsequent stop.
     pub async fn stop(&mut self) -> Result<(), Error> {
         self.abort_owned_tasks();
         join_owned_task(&mut self.network_number_task).await;
         join_owned_task(&mut self.dispatch_task).await;
+        join_owned_task(&mut self.device_purge_task).await;
         self.tsm.lock().cancel_all_transactions();
         let network = Arc::get_mut(&mut self.network).ok_or_else(|| {
             Error::Encoding("cannot stop BACnetClient while network references remain".into())
