@@ -6627,19 +6627,23 @@ peer may carry wider values, and the decoders accept up to eight octets.
 
 A record whose datum (or a Trend Log Multiple member's value) is under a
 context tag its CHOICE doesn't assign, a later revision's, decodes as the
-`Opaque` variant of `LogDatum`, `LogValue`, `LogData` or `EventLogDatum`
-(#2474). Its `OpaqueChoice` holds the tag, whether it is constructed, and
-its contents or body as received, and the encoder writes it back unchanged,
-so a log read from a newer device still pages, and a stored or forwarded
-record isn't altered. The body must be well formed: a known tag in the wrong
-form, unbalanced or truncated tags, or nesting past the tag decoder's limit
-still fail. Event values under a tag Clause 21 gives no alternative (7 and
-12, which it deprecates and reserves, or 23 and up) decode the same way, as
-`NotificationParameters::Opaque { tag, data }`, so the rest of the
+`Opaque` variant of `LogDatum`, `LogValue`, `LogData`, `EventLogDatum` or
+`BACnetAuditLogDatum` (#2474, #2483). Its `OpaqueChoice` holds the tag,
+whether it is constructed, and its contents or body as received, and the
+encoder writes it back unchanged, so a log read from a newer device still
+pages, and a stored or forwarded record isn't altered. The body must be well
+formed: a known tag in the wrong form, unbalanced or truncated tags, or
+nesting past the tag decoder's limit still fail. Event values under a tag
+Clause 21 gives no alternative (7 and 12, which it deprecates and reserves,
+or 23 and up) decode the same way, primitive or constructed, as
+`NotificationParameters::Opaque(OpaqueChoice)`, so the rest of the
 notification stays usable; tag 20, which matches the event type that reports
-no values, is still refused. `LogDatum::try_from(LogValue)` replaces the old
-`From`: an opaque member value has no Trend Log datum and comes back as the
-error.
+no values, is still refused. Event_Parameters keeps tags 7 and 12 as
+`BACnetEventParameter::Opaque` too, as it keeps 23 and up (#2483), and still
+refuses 6 and 19, which Clause 21 leaves out on purpose (complex-event-type's
+parameters are proprietary; change-of-reliability has none).
+`LogDatum::try_from(LogValue)` replaces the old `From`: an opaque member
+value has no Trend Log datum and comes back as the error.
 
 `add_record` and the trend hooks refuse a record that would not encode (an
 any-value, an opaque alternative's body, or a notification's raw event
@@ -6653,6 +6657,12 @@ won't encode is damaged, except one nested too deep (an older build could
 save it, #2474): the load drops that record with a warning and restores the
 rest, so the records older than it each take the next number up;
 `bacnet_encoding::constructed::is_record_too_deep` tells that refusal apart.
+An Audit Log record nests one level less deep again, since an
+AuditLogQuery-ACK carries it inside its record list and the result's own
+field (#2483): `AuditLogObject::add_record` and the stored audit
+notifications refuse a deeper one, and a saved Audit Log snapshot drops one
+the same way, each older record's sequence number moving up by the number of newer records
+dropped.
 
 Trend Log Multiple, Trend Log and Event Log objects list `Log_Buffer` in their
 Property_List, but ReadProperty and ReadPropertyMultiple answer it with

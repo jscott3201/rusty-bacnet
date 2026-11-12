@@ -529,3 +529,35 @@ fn query_ack_record_list_accepts_limit_and_rejects_one_more() {
     assert!(over_limit_model.encode(&mut output).is_err());
     assert_eq!(output.as_ref(), b"prefix");
 }
+
+/// A datum under a tag the CHOICE doesn't assign (#2483) round trips
+/// through the ACK; one nested as deep as the ACK carries reads back, and
+/// the encoder refuses one level more, which the ACK's decoder can't take.
+#[test]
+fn query_ack_carries_an_opaque_datum_as_deep_as_it_reads() {
+    let opaque = |levels| {
+        BACnetAuditLogDatum::Opaque(bacnet_types::constructed::OpaqueChoice {
+            tag: 3,
+            constructed: true,
+            data: [vec![0x1e; levels], vec![0x1f; levels]].concat(),
+        })
+    };
+    // The datum field and the opaque tag take two of the record's levels.
+    let encoded = encode_query_ack(opaque(28));
+    assert_eq!(
+        AuditLogQueryAck::decode(&encoded).unwrap(),
+        query_ack(opaque(28))
+    );
+    let mut buf = BytesMut::from(&b"kept"[..]);
+    assert!(query_ack(opaque(29)).encode(&mut buf).is_err());
+    assert_eq!(&buf[..], b"kept");
+    // What it would have written: one more level inside the innermost one.
+    let innermost = encoded
+        .windows(2)
+        .position(|pair| pair == [0x1e, 0x1f])
+        .unwrap()
+        + 1;
+    let mut deeper = encoded;
+    deeper.splice(innermost..innermost, [0x1e, 0x1f]);
+    assert!(AuditLogQueryAck::decode(&deeper).is_err());
+}

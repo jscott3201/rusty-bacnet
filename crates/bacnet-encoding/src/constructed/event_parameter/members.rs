@@ -135,10 +135,9 @@ pub(super) fn decode(data: &[u8], pos: usize, tag: u8) -> Result<Decoded, Error>
         17 => {
             let what = "BACnetEventParameter change-of-characterstring";
             let (time_delay, pos) = decode_ctx_unsigned::<u32>(data, pos, 0, what)?;
-            let (list_of_alarm_values, pos) =
-                list(data, pos, 1, what, |data, pos| {
-                    decode_app_character_string(data, pos, what)
-                })?;
+            let (list_of_alarm_values, pos) = list(data, pos, 1, what, |data, pos| {
+                decode_app_character_string(data, pos, what)
+            })?;
             let value = EP::ChangeOfCharacterstring {
                 time_delay,
                 list_of_alarm_values,
@@ -211,7 +210,10 @@ fn list<T>(
     let mut items = Vec::new();
     while !next_is_closing(data, pos, tag)? {
         if items.len() >= MAX_FRAMED_ITEMS {
-            return Err(Error::overflow(pos, "BACnetEventParameter: list exceeds limit"));
+            return Err(Error::overflow(
+                pos,
+                "BACnetEventParameter: list exceeds limit",
+            ));
         }
         let (value, next) = item(data, pos)?;
         items.push(value);

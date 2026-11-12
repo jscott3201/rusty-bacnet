@@ -115,14 +115,12 @@ pub(super) fn closing_tag_start(
     })?;
     let (tag, next) = tags::decode_tag(data, start)?;
     if !tag.is_closing_tag(tag_number) || next != end {
-        return Err(DecodeError::new(
-            DecodingKind::InvalidTag,
-            start,
-            "expected closing tag {}",
-        )
-        .within(field)
-        .with_value(tag_number.into())
-        .into());
+        return Err(
+            DecodeError::new(DecodingKind::InvalidTag, start, "expected closing tag {}")
+                .within(field)
+                .with_value(tag_number.into())
+                .into(),
+        );
     }
     Ok(start)
 }

@@ -21,7 +21,7 @@
 use alloc::vec::Vec;
 
 use super::log_fields::{
-    check_bit_string, check_record, decode_any_value, decode_failure, decode_integer,
+    IN_ITEM_DATA, check_bit_string, check_record, decode_any_value, decode_failure, decode_integer,
     decode_log_status, decode_opaque, decode_timestamp, encode_any_value, encode_ctx_integer,
     encode_failure, encode_log_status, encode_opaque, encode_timestamp,
 };
@@ -55,6 +55,18 @@ const TIME_CHANGE: u8 = 2;
 /// What an opaque entry's encoding errors name.
 const ENTRY: &str = "BACnetLogMultipleRecord log-data entry";
 
+/// Whether the log-data CHOICE gives `tag` no alternative: above
+/// time-change, the last it assigns.
+fn unassigned_data(tag: u8) -> bool {
+    tag > TIME_CHANGE
+}
+
+/// Whether the entry CHOICE gives `tag` no alternative: above any-value,
+/// the last it assigns.
+fn unassigned_entry(tag: u8) -> bool {
+    tag > ANY
+}
+
 /// Encode one Trend Log Multiple record.
 ///
 /// Fails, leaving `buf` unchanged, for a bit string whose unused-bit count
@@ -68,7 +80,7 @@ pub fn encode_log_multiple_record(
     // Straight into `buf`, cut back on failure: no staging buffer (#2233).
     let start = buf.len();
     write_log_multiple_record(record, buf)
-        .and_then(|()| check_record(&buf[start..], RECORD))
+        .and_then(|()| check_record(&buf[start..], IN_ITEM_DATA, RECORD))
         .inspect_err(|_| buf.truncate(start))
 }
 
@@ -88,7 +100,7 @@ fn write_log_multiple_record(
             tags::encode_closing_tag(out, VALUES);
         }
         LogData::TimeChange(seconds) => primitives::encode_ctx_real(out, TIME_CHANGE, *seconds),
-        LogData::Opaque(opaque) => encode_opaque(out, opaque, TIME_CHANGE, LOG_DATA)?,
+        LogData::Opaque(opaque) => encode_opaque(out, opaque, unassigned_data, LOG_DATA)?,
     }
     tags::encode_closing_tag(out, 1);
     Ok(())
@@ -115,7 +127,7 @@ fn encode_value(value: &LogValue, buf: &mut BytesMut) -> Result<(), Error> {
             error_code,
         } => encode_failure(buf, FAILURE, *error_class, *error_code),
         LogValue::AnyValue(bytes) => encode_any_value(buf, ANY, bytes)?,
-        LogValue::Opaque(opaque) => encode_opaque(buf, opaque, ANY, ENTRY)?,
+        LogValue::Opaque(opaque) => encode_opaque(buf, opaque, unassigned_entry, ENTRY)?,
     }
     Ok(())
 }
@@ -142,7 +154,7 @@ pub fn decode_log_multiple_record(
 fn decode_log_data(data: &[u8], offset: usize) -> Result<LogData, Error> {
     let (tag, start) = tags::decode_tag(data, 0)?;
     let (log_data, end) =
-        if let Some((opaque, end)) = decode_opaque(data, &tag, start, TIME_CHANGE)? {
+        if let Some((opaque, end)) = decode_opaque(data, &tag, start, unassigned_data)? {
             (LogData::Opaque(opaque), end)
         } else if tag.is_context(LOG_STATUS) {
             let (octets, end) = contents(data, start, tag.length)?;
@@ -171,25 +183,26 @@ fn decode_values(data: &[u8], offset: usize) -> Result<Vec<LogValue>, Error> {
     let mut pos = 0;
     while pos < data.len() {
         let (tag, start) = tags::decode_tag(data, pos)?;
-        let (value, end) = if let Some((opaque, end)) = decode_opaque(data, &tag, start, ANY)? {
-            (LogValue::Opaque(opaque), end)
-        } else if tag.is_opening_tag(FAILURE) {
-            let (body, end) = tags::extract_context_value(data, start, FAILURE)?;
-            let (error_class, error_code) = decode_failure(body, offset, FAILURE_FIELD)?;
-            let value = LogValue::Failure {
-                error_class,
-                error_code,
+        let (value, end) =
+            if let Some((opaque, end)) = decode_opaque(data, &tag, start, unassigned_entry)? {
+                (LogValue::Opaque(opaque), end)
+            } else if tag.is_opening_tag(FAILURE) {
+                let (body, end) = tags::extract_context_value(data, start, FAILURE)?;
+                let (error_class, error_code) = decode_failure(body, offset, FAILURE_FIELD)?;
+                let value = LogValue::Failure {
+                    error_class,
+                    error_code,
+                };
+                (value, end)
+            } else if tag.is_opening_tag(ANY) {
+                let (body, end) = tags::extract_context_value(data, start, ANY)?;
+                (LogValue::AnyValue(decode_any_value(body)?), end)
+            } else if tag.class == tags::TagClass::Context && !tag.is_opening && !tag.is_closing {
+                let (octets, end) = contents(data, start, tag.length)?;
+                (decode_primitive(tag.number, octets, offset)?, end)
+            } else {
+                return Err(Error::decoding(offset, "log-data entry has an unknown tag"));
             };
-            (value, end)
-        } else if tag.is_opening_tag(ANY) {
-            let (body, end) = tags::extract_context_value(data, start, ANY)?;
-            (LogValue::AnyValue(decode_any_value(body)?), end)
-        } else if tag.class == tags::TagClass::Context && !tag.is_opening && !tag.is_closing {
-            let (octets, end) = contents(data, start, tag.length)?;
-            (decode_primitive(tag.number, octets, offset)?, end)
-        } else {
-            return Err(Error::decoding(offset, "log-data entry has an unknown tag"));
-        };
         values.push(value);
         pos = end;
     }

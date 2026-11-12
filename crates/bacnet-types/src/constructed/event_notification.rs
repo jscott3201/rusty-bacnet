@@ -8,7 +8,7 @@ use alloc::{string::String, vec::Vec};
 
 use super::{
     BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference, BACnetPropertyStates,
-    BACnetPropertyValue,
+    BACnetPropertyValue, OpaqueChoice,
 };
 use crate::enums::{
     AccessEvent, EventState, EventType, LifeSafetyMode, LifeSafetyOperation, LifeSafetyState,
@@ -262,20 +262,15 @@ pub enum NotificationParameters {
         expiration_time: Option<(Date, Time)>,
     },
     /// An alternative under a context tag the 2020 production doesn't
-    /// assign, kept as received, as `BACnetEventParameter::Opaque` keeps one
-    /// in Event_Parameters.
+    /// assign (7, 12, or 23 to 254), kept as received, primitive or
+    /// constructed, as the log record CHOICEs keep theirs.
     ///
-    /// Every alternative of this CHOICE is a SEQUENCE, so `data` is the
-    /// complete body between the opening and closing `tag`. The encoder
-    /// writes it back unchanged. It refuses a tag that has a variant here,
-    /// 20 (left out, matching the event type that reports no values) and
-    /// 255, and a body that isn't complete tagged values.
-    Opaque {
-        /// The context tag: 7, 12, or 23 to 254.
-        tag: u8,
-        /// The encoded SEQUENCE body, without its enclosing tag pair.
-        data: Vec<u8>,
-    },
+    /// Every alternative the 2020 production assigns is constructed, but a
+    /// later revision's need not be, so the form is kept with the octets.
+    /// The encoder writes it back unchanged. It refuses a tag that has a
+    /// variant here, 20 (left out, matching the event type that reports no
+    /// values) and 255, and a body that isn't complete tagged values.
+    Opaque(OpaqueChoice),
 }
 
 /// CHOICE within ChangeOfValue notification parameters.

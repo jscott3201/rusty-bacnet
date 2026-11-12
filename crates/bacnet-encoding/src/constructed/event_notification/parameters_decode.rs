@@ -5,7 +5,8 @@ use super::decode_helpers::{
 use super::decode_timer::{decode_change_of_discrete_value, decode_change_of_timer};
 use super::structured::{decode_access_event, decode_complex_event_type};
 use super::*;
-use crate::constructed::tagged::decode_ctx_character_string;
+use crate::constructed::log_fields::decode_opaque;
+use crate::constructed::tagged::{contents, decode_ctx_character_string};
 
 /// Decode one notification-parameter choice, with an optional enclosing `[12]` close.
 ///
@@ -18,11 +19,21 @@ pub fn decode_notification_parameters(
 ) -> Result<NotificationParameters, Error> {
     let enclosing =
         || closing_tag_start(data, data.len(), 12, "NotificationParameters event-values");
+    // Where the choice itself ends: past its closing tag, or past a
+    // primitive's contents (#2483), whose last octet may read as a close.
     let frame_end = tags::decode_tag(data, offset)
         .ok()
-        .filter(|(tag, _)| tag.is_opening)
-        .and_then(|(tag, start)| tags::extract_context_value(data, start, tag.number).ok())
-        .map(|(_, end)| end);
+        .and_then(|(tag, start)| {
+            if tag.is_opening {
+                tags::extract_context_value(data, start, tag.number)
+                    .ok()
+                    .map(|(_, end)| end)
+            } else if tag.is_closing {
+                None
+            } else {
+                contents(data, start, tag.length).ok().map(|(_, end)| end)
+            }
+        });
     let end = match frame_end {
         Some(end) if end + 1 == data.len() && enclosing().is_ok() => end,
         Some(_) => data.len(),
@@ -53,6 +64,17 @@ pub(super) fn decode_bounded(
     }
     let (inner_tag, inner_start) = tags::decode_tag(data, offset)?;
     if !inner_tag.is_opening {
+        // Every alternative Clause 21 assigns is constructed; one under a
+        // tag it doesn't may be primitive (#2483), kept with its form.
+        if let Some((opaque, end)) = decode_opaque(data, &inner_tag, inner_start, is_opaque_tag)? {
+            if end != data.len() {
+                return Err(Error::trailing(
+                    end,
+                    "NotificationParameters has octets after the choice",
+                ));
+            }
+            return Ok(NotificationParameters::Opaque(opaque));
+        }
         return Err(misplaced_tag(
             data,
             &inner_tag,
@@ -672,10 +694,11 @@ pub(super) fn decode_bounded(
         tag if is_opaque_tag(tag) => {
             let (body, _) = tags::extract_context_value(data, inner_start, tag)?;
             finish_variant(
-                NotificationParameters::Opaque {
+                NotificationParameters::Opaque(OpaqueChoice {
                     tag,
+                    constructed: true,
                     data: body.to_vec(),
-                },
+                }),
                 inner_start + body.len(),
             )
         }

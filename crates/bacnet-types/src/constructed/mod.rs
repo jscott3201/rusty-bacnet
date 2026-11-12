@@ -43,12 +43,14 @@ pub use lighting::BACnetLightingCommand;
 mod log;
 pub use log::{
     BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord, EventLogDatum, LogData,
-    LogDatum, LogValue, OpaqueChoice,
+    LogDatum, LogValue,
 };
 mod name_value;
 pub use name_value::BACnetNameValue;
 mod network_port;
 pub use network_port::{BACnetBDTEntry, BACnetFDTEntry, BACnetHostAddress, BACnetHostNPort};
+mod opaque;
+pub use opaque::OpaqueChoice;
 mod property_access;
 pub use property_access::{AccessResult, BACnetPropertyAccessResult};
 mod property_value;

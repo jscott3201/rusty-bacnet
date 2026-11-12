@@ -1,7 +1,9 @@
-//! A choice under a context tag its CHOICE doesn't assign (#2474): event
-//! values and every log record CHOICE keep it as their `Opaque` variant,
-//! write it back octet for octet, and still refuse one that isn't well
-//! formed.
+//! A choice under a context tag its CHOICE doesn't assign (#2474, #2483):
+//! event values and every log record CHOICE keep it as their `Opaque`
+//! variant, primitive or constructed, write it back octet for octet, and
+//! still refuse one that isn't well formed. The Audit Log datum and the
+//! Event_Parameters tags Clause 21 deprecates and reserves are in the
+//! submodules.
 //!
 //! The generated bodies are runs of complete tagged values: application
 //! values, context primitives of any contents, and constructed values
@@ -34,6 +36,11 @@ use bacnet_types::primitives::{
 };
 use bytes::BytesMut;
 use proptest::prelude::*;
+
+#[path = "opaque_choices/audit_log.rs"]
+mod audit_log;
+#[path = "opaque_choices/event_parameters.rs"]
+mod event_parameters;
 
 // ---------------------------------------------------------------------------
 // Well-formed bodies
@@ -92,11 +99,11 @@ fn body() -> impl Strategy<Value = Vec<u8>> {
     })
 }
 
-/// An alternative under a tag above `last`, the highest its CHOICE
-/// assigns: primitive with any contents, or constructed around a body.
-fn opaque(last: u8) -> impl Strategy<Value = OpaqueChoice> {
+/// An alternative under a tag `tags` gives: primitive with any contents,
+/// or constructed around a body.
+fn opaque_under(tags: impl Strategy<Value = u8>) -> impl Strategy<Value = OpaqueChoice> {
     (
-        last + 1..=254,
+        tags,
         any::<bool>(),
         body(),
         prop::collection::vec(any::<u8>(), 0..12),
@@ -108,10 +115,39 @@ fn opaque(last: u8) -> impl Strategy<Value = OpaqueChoice> {
         })
 }
 
+/// An alternative under a tag above `last`, the highest its CHOICE
+/// assigns.
+fn opaque(last: u8) -> impl Strategy<Value = OpaqueChoice> {
+    opaque_under(last + 1..=254)
+}
+
 /// A tag event values keep opaque: 7 and 12, which Clause 21 deprecates and
 /// reserves, or one past the last it assigns.
 fn opaque_tag() -> impl Strategy<Value = u8> {
     prop_oneof![Just(7u8), Just(12u8), 23u8..=254]
+}
+
+/// Event values under a tag they keep opaque, in either form (#2483).
+fn opaque_values() -> impl Strategy<Value = NotificationParameters> {
+    opaque_under(opaque_tag()).prop_map(NotificationParameters::Opaque)
+}
+
+/// A constructed alternative under `tag` around `data`.
+fn constructed(tag: u8, data: &[u8]) -> OpaqueChoice {
+    OpaqueChoice {
+        tag,
+        constructed: true,
+        data: data.to_vec(),
+    }
+}
+
+/// A primitive alternative under `tag` holding `data`.
+fn primitive(tag: u8, data: &[u8]) -> OpaqueChoice {
+    OpaqueChoice {
+        tag,
+        constructed: false,
+        data: data.to_vec(),
+    }
 }
 
 /// The wire form of `opaque`, built here rather than by the codec.
@@ -210,17 +246,19 @@ proptest! {
         ..ProptestConfig::with_cases(256)
     })]
 
-    /// Event values under an unassigned tag, alone and in a request: the
-    /// octets the codec writes are the opening tag, the body and the
-    /// closing tag, they decode to the same value, and the rest of the
-    /// request decodes as it was.
+    /// Event values under an unassigned tag, primitive or constructed
+    /// (#2483), alone and in a request: the octets the codec writes are the
+    /// alternative as it came, they decode to the same value, alone and
+    /// closed by the event values' `[12]`, and the rest of the request
+    /// decodes as it was.
     #[test]
-    fn event_values_keep_an_unassigned_alternative(tag in opaque_tag(), body in body()) {
-        let values = NotificationParameters::Opaque { tag, data: body.clone() };
+    fn event_values_keep_an_unassigned_alternative(values in opaque_values()) {
         let octets = encoded(|buf| encode_notification_parameters(&values, buf));
-        let alone = OpaqueChoice { tag, constructed: true, data: body };
-        prop_assert_eq!(&octets, &wire(&alone));
+        let NotificationParameters::Opaque(alone) = &values else { unreachable!() };
+        prop_assert_eq!(&octets, &wire(alone));
         prop_assert_eq!(decode_notification_parameters(&octets, 0).unwrap(), values.clone());
+        let enclosed = [&octets[..], &[0xCF]].concat();
+        prop_assert_eq!(decode_notification_parameters(&enclosed, 0).unwrap(), values.clone());
 
         let request = notification(Some(values));
         let octets = encoded(|buf| encode_event_notification(&request, buf));
@@ -287,7 +325,7 @@ proptest! {
     /// An Event Log record's datum under an unassigned tag, and a logged
     /// notification whose event values are under one.
     #[test]
-    fn event_log_datum_round_trips(opaque in opaque(2), tag in opaque_tag(), body in body()) {
+    fn event_log_datum_round_trips(opaque in opaque(2), values in opaque_values()) {
         let record = BACnetEventLogRecord {
             date: date(),
             time: time(),
@@ -297,7 +335,6 @@ proptest! {
         prop_assert_eq!(&octets, &record_wire(&wire(&opaque)));
         prop_assert_eq!(decode_event_log_record(&octets, 0).unwrap(), (record, octets.len()));
 
-        let values = NotificationParameters::Opaque { tag, data: body };
         let record = BACnetEventLogRecord {
             date: date(),
             time: time(),
@@ -316,10 +353,7 @@ proptest! {
 /// choice's own closing tag.
 #[test]
 fn a_closing_tag_ending_like_the_event_values_close_stays_in_the_choice() {
-    let values = NotificationParameters::Opaque {
-        tag: 207,
-        data: vec![0x09, 1],
-    };
+    let values = NotificationParameters::Opaque(constructed(207, &[0x09, 1]));
     let octets = encoded(|buf| encode_notification_parameters(&values, buf));
     assert_eq!(octets, [0xFE, 207, 0x09, 1, 0xFF, 207]);
     assert_eq!(decode_notification_parameters(&octets, 0).unwrap(), values);
@@ -346,7 +380,7 @@ fn a_closing_tag_ending_like_the_event_values_close_stays_in_the_choice() {
         vec![0xCE, 0xCF],
         vec![0xCE, 0x09, 1, 0xCF],
     ] {
-        let values = NotificationParameters::Opaque { tag: 12, data };
+        let values = NotificationParameters::Opaque(constructed(12, &data));
         let octets = encoded(|buf| encode_notification_parameters(&values, buf));
         let enclosed = [&octets[..], &[0xCF]].concat();
         for octets in [&octets, &enclosed] {
@@ -357,6 +391,31 @@ fn a_closing_tag_ending_like_the_event_values_close_stays_in_the_choice() {
             );
         }
         let request = notification(Some(values.clone()));
+        let octets = encoded(|buf| encode_event_notification(&request, buf));
+        assert_eq!(decode_event_notification(&octets).unwrap(), request);
+    }
+    // A primitive choice whose last octet reads as a closing [12] (#2483):
+    // its length, not that octet, says where it ends, alone, enclosed and
+    // inside a request; a stray octet or a close too many after it fails.
+    for data in [vec![], vec![0xCF], vec![0x01, 0xCF]] {
+        let values = NotificationParameters::Opaque(primitive(30, &data));
+        let alone = encoded(|buf| encode_notification_parameters(&values, buf));
+        let enclosed = [&alone[..], &[0xCF]].concat();
+        for octets in [&alone, &enclosed] {
+            assert_eq!(
+                decode_notification_parameters(octets, 0).unwrap(),
+                values,
+                "{octets:02X?}"
+            );
+        }
+        for tail in [&[0xCF, 0xCF][..], &[0x00]] {
+            let octets = [&alone[..], tail].concat();
+            assert!(
+                decode_notification_parameters(&octets, 0).is_err(),
+                "{octets:02X?}"
+            );
+        }
+        let request = notification(Some(values));
         let octets = encoded(|buf| encode_event_notification(&request, buf));
         assert_eq!(decode_event_notification(&octets).unwrap(), request);
     }
@@ -429,10 +488,7 @@ fn an_unknown_datum_between_known_records_decodes_in_place() {
 fn request_with(values: &[u8]) -> Vec<u8> {
     let template = encoded(|buf| {
         encode_event_notification(
-            &notification(Some(NotificationParameters::Opaque {
-                tag: 30,
-                data: vec![],
-            })),
+            &notification(Some(NotificationParameters::Opaque(constructed(30, &[])))),
             buf,
         )
     });
@@ -498,8 +554,13 @@ fn event_values_refuse_a_malformed_or_reserved_alternative() {
             vec![0xFE, 30, 0x43, 0, 0, 0, 0xFF, 30],
             RejectReason::INVALID_DATA_ENCODING,
         ),
-        // A primitive alternative: every alternative is a SEQUENCE.
-        (vec![0xF9, 30, 1], RejectReason::INVALID_TAG),
+        // A primitive alternative whose contents run past the close of the
+        // event values, and one under a tag that has a variant, or 20.
+        (vec![0xFB, 30, 1], RejectReason::MISSING_REQUIRED_PARAMETER),
+        (vec![0x29, 1], RejectReason::INVALID_TAG),
+        (vec![0xF9, 20, 1], RejectReason::INVALID_TAG),
+        // Two primitive alternatives where one is due.
+        (vec![0xF8, 30, 0xF8, 30], RejectReason::TOO_MANY_ARGUMENTS),
         // Two alternatives where one is due.
         (
             vec![0xFE, 30, 0xFF, 30, 0xFE, 30, 0xFF, 30],
@@ -530,13 +591,21 @@ fn event_values_refuse_a_malformed_or_reserved_alternative() {
         let alone = [values, &[0xCF]].concat();
         assert!(decode_notification_parameters(&alone, 0).is_err());
     }
-    // Tags 7 and 12, which Clause 21 deprecates and reserves, are kept.
-    for (values, tag) in [(&[0x7E, 0x7F][..], 7), (&[0xCE, 0x09, 1, 0xCF], 12)] {
+    // Tags 7 and 12, which Clause 21 deprecates and reserves, are kept, and
+    // a primitive under a tag it doesn't assign (#2483), with its form.
+    for (values, kept) in [
+        (&[0x7E, 0x7F][..], constructed(7, &[])),
+        (&[0xCE, 0x09, 1, 0xCF], constructed(12, &[0x09, 1])),
+        (&[0x79, 1], primitive(7, &[1])),
+        (&[0xC8], primitive(12, &[])),
+        (&[0xF9, 30, 1], primitive(30, &[1])),
+    ] {
         let request = decode_event_notification(&request_with(values)).unwrap();
-        let Some(NotificationParameters::Opaque { tag: kept, .. }) = request.event_values else {
-            panic!("{values:02X?}: {request:?}");
-        };
-        assert_eq!(kept, tag);
+        assert_eq!(
+            request.event_values,
+            Some(NotificationParameters::Opaque(kept)),
+            "{values:02X?}"
+        );
     }
 }
 
@@ -644,21 +713,21 @@ fn encoders_refuse_an_opaque_alternative_they_could_not_read_back() {
         constructed,
         data: data.to_vec(),
     };
-    for tag in [0, 6, 13, 20, 22, 255] {
-        let values = NotificationParameters::Opaque { tag, data: vec![] };
-        refuses(&|buf| encode_notification_parameters(&values, buf));
-        let request = notification(Some(values.clone()));
-        refuses(&|buf| encode_event_notification(&request, buf));
+    for form in [primitive, constructed] {
+        for tag in [0, 6, 13, 20, 22, 255] {
+            let values = NotificationParameters::Opaque(form(tag, &[]));
+            refuses(&|buf| encode_notification_parameters(&values, buf));
+            let request = notification(Some(values.clone()));
+            refuses(&|buf| encode_event_notification(&request, buf));
+        }
     }
-    refuses(&|buf| {
-        encode_notification_parameters(
-            &NotificationParameters::Opaque {
-                tag: 30,
-                data: vec![0x1F],
-            },
-            buf,
-        )
-    });
+    let values = NotificationParameters::Opaque(constructed(30, &[0x1F]));
+    refuses(&|buf| encode_notification_parameters(&values, buf));
+    // A primitive's contents may be anything, up to what a tag takes.
+    let values = NotificationParameters::Opaque(primitive(30, &[0x1F]));
+    assert!(encode_notification_parameters(&values, &mut BytesMut::new()).is_ok());
+    let values = NotificationParameters::Opaque(primitive(30, &vec![0; (1 << 20) + 1]));
+    refuses(&|buf| encode_notification_parameters(&values, buf));
 
     let trend = |opaque| BACnetLogRecord {
         date: date(),

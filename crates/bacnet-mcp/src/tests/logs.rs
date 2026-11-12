@@ -132,7 +132,7 @@ fn audit(i: u32) -> BACnetAuditLogDatum {
 
 /// An Audit Log's storage, in memory.
 #[derive(Default)]
-struct Memory(Mutex<Option<AuditLogSnapshot>>);
+pub(super) struct Memory(Mutex<Option<AuditLogSnapshot>>);
 
 impl AuditLogPersistence for Memory {
     fn load(&self, _: ObjectIdentifier) -> Result<Option<AuditLogSnapshot>, Error> {

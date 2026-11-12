@@ -140,6 +140,14 @@ fn datum_to_py<'py>(py: Python<'py>, datum: &BACnetAuditLogDatum) -> PyResult<Bo
             result.set_item("kind", "time_change")?;
             result.set_item("time_change", change)?;
         }
+        // A datum under a tag the standard doesn't assign (#2483), as the
+        // other log records show one.
+        BACnetAuditLogDatum::Opaque(opaque) => {
+            result.set_item("kind", "other")?;
+            result.set_item("tag", opaque.tag)?;
+            result.set_item("constructed", opaque.constructed)?;
+            result.set_item("data", PyBytes::new(py, &opaque.data))?;
+        }
     }
     Ok(result)
 }

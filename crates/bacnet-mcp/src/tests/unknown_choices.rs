@@ -1,19 +1,25 @@
-//! Records under a tag their CHOICE doesn't assign (#2474), as a newer
-//! device might hold them: a ReadRange of each log kind carries them, the
-//! client keeps them as received, and the tools show each as an
+//! Records under a tag their CHOICE doesn't assign (#2474, #2483), as a
+//! newer device might hold them: a ReadRange of each log kind carries them,
+//! the client keeps them as received, and the tools show each as an
 //! `unknown-choice` element (its tag and octets) beside the records around
 //! it, which still read.
 
+use std::sync::Arc;
+
+use bacnet_objects::audit::AuditLogObject;
 use bacnet_objects::event_log::EventLogObject;
 use bacnet_objects::trend::{TrendLogMultipleObject, TrendLogObject};
+use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{
-    BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord, EventLogDatum,
-    EventNotificationRequest, LogData, LogDatum, LogValue, NotificationParameters, OpaqueChoice,
+    BACnetAuditLogDatum, BACnetAuditLogRecord, BACnetEventLogRecord, BACnetLogMultipleRecord,
+    BACnetLogRecord, EventLogDatum, EventNotificationRequest, LogData, LogDatum, LogValue,
+    NotificationParameters, OpaqueChoice,
 };
 use bacnet_types::enums::{EventState, EventType, NotifyType, ObjectType};
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier};
 use serde_json::{Value, json};
 
+use super::logs::Memory;
 use super::site::{ok, trend_time};
 use super::{LAB, Lab};
 use crate::Policy;
@@ -41,16 +47,17 @@ fn later_alarm() -> EventNotificationRequest {
         ack_required: false,
         from_state: EventState::NORMAL,
         to_state: EventState::OFFNORMAL,
-        event_values: Some(NotificationParameters::Opaque {
-            tag: 30,
-            data: vec![0x09, 0x01],
-        }),
+        event_values: Some(NotificationParameters::Opaque(opaque(
+            30,
+            true,
+            &[0x09, 0x01],
+        ))),
     }
 }
 
 impl Lab {
-    /// Add event-log:9, trend-log:9 and trend-log-multiple:9, each with an
-    /// unknown record between two known ones.
+    /// Add event-log:9, trend-log:9, trend-log-multiple:9 and audit-log:9,
+    /// each with an unknown record between known ones.
     async fn add_unknown_choice_logs(&self) {
         let stamp = |i| trend_time(i);
         let mut events = EventLogObject::new(9, "Newer Events", 10).unwrap();
@@ -110,10 +117,28 @@ impl Lab {
                 })
                 .unwrap();
         }
+        let mut audits =
+            AuditLogObject::new(9, "Newer Audit", 10, Arc::new(Memory::default())).unwrap();
+        for (i, datum) in [
+            BACnetAuditLogDatum::TimeChange(-1.5),
+            BACnetAuditLogDatum::Opaque(opaque(3, false, &[0x01, 0x02])),
+            BACnetAuditLogDatum::LogStatus(LogStatus::BUFFER_PURGED),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            audits
+                .add_record(BACnetAuditLogRecord {
+                    timestamp: stamp(u32::try_from(i).unwrap()),
+                    datum,
+                })
+                .unwrap();
+        }
         let mut db = self.server.database().write().await;
         db.add(Box::new(events)).unwrap();
         db.add(Box::new(trend)).unwrap();
         db.add(Box::new(multiple)).unwrap();
+        db.add(Box::new(audits)).unwrap();
     }
 }
 
@@ -183,5 +208,19 @@ async fn records_of_an_unknown_kind_read_through_readrange_as_unknown_choices() 
     assert_eq!(fields["constructed"], json!(true));
     assert_eq!(multiple[1]["kind"], json!("unknown-choice"));
     assert_eq!(choice(&multiple[1]["choice"]).0, "[3] [raw 07]");
+
+    // Audit Log (#2483): the unknown datum is flagged, its neighbours read
+    // as their kinds.
+    let audits = records(&mut lab, "bacnet_read_log_records", "audit-log:9").await;
+    assert_eq!(audits.len(), 3, "{audits:?}");
+    assert_eq!(audits[0]["kind"], json!("time-change"));
+    assert_eq!(audits[1]["kind"], json!("unknown-choice"));
+    assert_eq!(audits[1]["flagged"], json!(true));
+    let (text, fields) = choice(&audits[1]["choice"]);
+    assert_eq!(text, "[3] [raw 01 02]");
+    assert_eq!(fields["tag"], json!(3));
+    assert_eq!(fields["constructed"], json!(false));
+    assert_eq!(fields["data"], json!({"raw": "0102"}));
+    assert_eq!(audits[2]["kind"], json!("log-status"));
     lab.stop().await;
 }
