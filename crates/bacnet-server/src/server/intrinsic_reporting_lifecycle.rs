@@ -1,7 +1,8 @@
 //! Periodic intrinsic notification owner; uses the server's effective raw acceptance.
 use super::super::cov_fanout::CovFanout;
-use super::super::event_notifications::{commit_intrinsic_transition, logged_intrinsic_commit};
+use super::super::event_notifications::logged_intrinsic_commit;
 use super::*;
+use bacnet_device_core::event::sweep;
 
 pub(super) async fn run<T: TransportPort + 'static>(
     fanout: CovFanout<T>,
@@ -30,27 +31,15 @@ pub(super) async fn run<T: TransportPort + 'static>(
             let mut db = fanout.db.write().await;
             let mut out = Vec::new();
             let mut commit = BackgroundCommit::new();
-            for oid in db.list_objects() {
-                // Event_Algorithm_Inhibit follows its reference once a
-                // second at least, under this same guard (#1329).
-                db.follow_event_algorithm_inhibit(&oid);
-                let Some(outcome) = db
-                    .get_mut(&oid)
-                    .and_then(|object| object.event_reporting_mut())
-                    .and_then(|reporting| reporting.tick_intrinsic_reporting())
-                else {
-                    continue;
-                };
-                // A proposal can commit and still have its projection rejected,
-                // so owe the fanout for every proposal; COV criteria drop it if
-                // nothing changed.
-                commit.before_change(&db, oid);
+            // A proposal can commit and still have its projection rejected,
+            // so owe the fanout for every proposal; COV criteria drop it if
+            // nothing changed.
+            let swept = sweep(&mut db, |db, oid| {
+                commit.before_change(db, oid);
                 commit.changed(oid);
-                let resolved = logged_intrinsic_commit(
-                    &oid,
-                    commit_intrinsic_transition(&mut db, &oid, outcome),
-                );
-                if let Some(resolved) = resolved
+            });
+            for (oid, result) in swept {
+                if let Some(resolved) = logged_intrinsic_commit(&oid, result)
                     && resolved.distribute
                     && resolved.event_values.is_some()
                 {

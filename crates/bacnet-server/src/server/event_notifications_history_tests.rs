@@ -3,7 +3,7 @@ use crate::event_enrollment::{
     CommittedEventEnrollmentDelivery, CommittedEventEnrollmentResult,
     EventEnrollmentReliabilityCause, EventEnrollmentReliabilityResult, EventEnrollmentTransition,
 };
-use crate::server::event_notifications::commit_intrinsic_transition;
+use bacnet_device_core::event::commit_intrinsic_transition;
 use bacnet_device_core::event::{CommittedNotificationPayload, SampledEventClock};
 use bacnet_objects::event::{
     EventStateChange, EventTransitionCommit, EventTransitionCommitError, TransitionOutcome,

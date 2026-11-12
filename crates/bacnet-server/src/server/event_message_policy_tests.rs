@@ -1,6 +1,5 @@
 use super::*;
-use crate::server::event_notifications::commit_intrinsic_transition;
-use bacnet_device_core::event::CommittedIntrinsicTransition;
+use bacnet_device_core::event::{CommittedIntrinsicTransition, commit_intrinsic_transition};
 use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use bacnet_objects::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use bacnet_objects::event::TransitionOutcome;

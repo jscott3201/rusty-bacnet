@@ -37,9 +37,6 @@ use bacnet_encoding::segmentation::{
 use bacnet_network::layer::NetworkLayer;
 use bacnet_npdu::NetworkPriority;
 use bacnet_objects::database::ObjectDatabase;
-use bacnet_objects::notification_class::{
-    lookup_notification_recipients, resolve_transition_priority_ack,
-};
 use bacnet_services::alarm_event::EventNotificationRequest;
 // The server's tests name these through `use super::*`; the Single fanout
 // that used them here builds its notifications in bacnet-device-core now.
@@ -55,12 +52,12 @@ use bacnet_transport::port::TransportPort;
 use bacnet_transport::warn_throttle::WarnThrottle;
 use bacnet_transport::warn_throttled;
 use bacnet_types::MacAddr;
-#[cfg(test)]
-use bacnet_types::enums::RejectReason;
 use bacnet_types::enums::{
-    AbortReason, ConfirmedServiceChoice, ErrorClass, ErrorCode, LifeSafetyOperation, NotifyType,
-    ObjectType, PropertyIdentifier, Segmentation, UnconfirmedServiceChoice,
+    AbortReason, ConfirmedServiceChoice, ErrorClass, ErrorCode, LifeSafetyOperation, ObjectType,
+    PropertyIdentifier, Segmentation, UnconfirmedServiceChoice,
 };
+#[cfg(test)]
+use bacnet_types::enums::{NotifyType, RejectReason};
 use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 

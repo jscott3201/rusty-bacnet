@@ -1,83 +1,16 @@
 use super::event_recipient_route::system_utc_recipient_filter_time;
 use super::*;
 use bacnet_device_core::event::{
-    CommittedHistorySnapshot, CommittedIntrinsicTransition, CommittedNotificationPayload,
-    NotificationConstruction, NotificationHistorySource, NotificationTransition, SampledEventClock,
-    confirm_event_timestamp, intrinsic_event_message_text, project_intrinsic_payload,
-    sample_event_timestamp, stage_event_timestamp,
+    CommittedIntrinsicTransition, DistributionOutcome, IntrinsicCommit, IntrinsicCommitRefusal,
+    MessageTexts, NotificationConstruction, NotificationHistorySource, NotificationTransition,
+    SampledEventClock, after_write, distribute_event, read_committed_history_snapshot,
 };
-use bacnet_encoding::primitives::decode_timestamp_choice;
-use bacnet_objects::event::{
-    EventTransition, EventTransitionCommit, EventTransitionCommitError, TransitionOutcome,
-};
-use bacnet_objects::notification_class::RecipientLookupOutcome;
-use bacnet_objects::traits::BACnetObject;
-use bacnet_types::bitstring::DaysOfWeek;
-use bacnet_types::primitives::Time;
 
 use crate::event_enrollment::{CommittedEventEnrollmentDelivery, CommittedEventEnrollmentResult};
 
 #[path = "event_recipient_lookup.rs"]
 mod recipient_lookup;
 use recipient_lookup::matched_recipients_or_log;
-
-/// Whether a committed projection needs Event_Message_Texts.
-#[derive(Clone, Copy)]
-enum MessageTexts {
-    /// Intrinsic reporters serve it; failing to read it fails closed.
-    Required,
-    /// Event Enrollment serves it as an optional row (Table 12-14). An object
-    /// that doesn't (UNKNOWN_PROPERTY) sends no message text; any other
-    /// failure, or a value that isn't a CharacterString, still fails closed.
-    Optional,
-}
-
-/// Read one exact committed transition coordinate through the object contract.
-///
-/// Required properties are projected while the caller still owns the database
-/// write guard. A malformed or incomplete projection is not equivalent to a
-/// missing message/timestamp: the committed transition remains local, but no
-/// outward frame can be built from an unproven history snapshot. An empty
-/// Event_Message_Texts entry sends no message text: an Event Enrollment
-/// commits one unless Event_Message_Texts_Config gives it a text (#1507).
-fn read_committed_history_snapshot(
-    object: &dyn BACnetObject,
-    coordinate: EventTransition,
-    message_texts: MessageTexts,
-) -> Option<CommittedHistorySnapshot> {
-    let array_index = u32::try_from(coordinate.index() + 1)
-        .expect("three event transition coordinates fit in u32");
-    let PropertyValue::ApplicationData(encoded_timestamp) = object
-        .read_property(PropertyIdentifier::EVENT_TIME_STAMPS, Some(array_index))
-        .ok()?
-    else {
-        return None;
-    };
-    let (timestamp, consumed) = decode_timestamp_choice(&encoded_timestamp, 0).ok()?;
-    if consumed != encoded_timestamp.len() {
-        return None;
-    }
-
-    let message_text = match (
-        object.read_property(PropertyIdentifier::EVENT_MESSAGE_TEXTS, Some(array_index)),
-        message_texts,
-    ) {
-        (Ok(PropertyValue::CharacterString(message_text)), _) => message_text,
-        (
-            Err(Error::Remote(RemoteError::Error {
-                class: ErrorClass::PROPERTY,
-                code: ErrorCode::UNKNOWN_PROPERTY,
-            })),
-            MessageTexts::Optional,
-        ) => String::new(),
-        _ => return None,
-    };
-
-    Some(CommittedHistorySnapshot {
-        timestamp,
-        message_text: (!message_text.is_empty()).then_some(message_text),
-    })
-}
 
 /// Project an already-committed Event Enrollment result without another
 /// transition commit or timestamp sample.
@@ -123,85 +56,11 @@ pub(super) fn resolve_committed_event_enrollment_transition(
     ))
 }
 
-/// Why [`commit_intrinsic_transition`] committed nothing to distribute.
-#[derive(Debug)]
-pub(super) enum IntrinsicCommitRefusal {
-    /// The object is gone.
-    Gone,
-    /// The object refused the commit; its event state is unchanged.
-    Rejected(EventTransitionCommitError),
-    /// The transition committed, but its timestamp or message text at
-    /// `coordinate` doesn't read back, so no notification can be built.
-    HistoryUnreadable(EventTransition),
-}
-
-/// Resolve policy and atomically commit one intrinsic proposal.
-///
-/// A committed transition whose Event Values don't project comes back with
-/// `event_values` empty: committed, but not to be distributed.
-pub(super) fn commit_intrinsic_transition(
-    db: &mut ObjectDatabase,
-    oid: &ObjectIdentifier,
-    outcome: TransitionOutcome,
-) -> Result<CommittedIntrinsicTransition, IntrinsicCommitRefusal> {
-    let coordinate = outcome.change.transition();
-    let notification_class = db
-        .get(oid)
-        .ok_or(IntrinsicCommitRefusal::Gone)?
-        .read_property(PropertyIdentifier::NOTIFICATION_CLASS, None)
-        .ok()
-        .and_then(|value| match value {
-            PropertyValue::Unsigned(number) => Some(number as u32),
-            _ => None,
-        })
-        .unwrap_or(0);
-    let (_, ack_required) = resolve_transition_priority_ack(db, notification_class, coordinate);
-    let staged_timestamp = stage_event_timestamp(db);
-    let message_text = intrinsic_event_message_text(oid, &outcome.change);
-    let commit = EventTransitionCommit {
-        change: outcome.change.clone(),
-        coordinate,
-        ack_required,
-        timestamp: staged_timestamp.sample.timestamp.clone(),
-        message_text: Some(message_text),
-    };
-
-    db.get_mut(oid)
-        .ok_or(IntrinsicCommitRefusal::Gone)?
-        .event_reporting_mut()
-        .map_or(Err(EventTransitionCommitError::Unsupported), |reporting| {
-            reporting.commit_event_transition(commit)
-        })
-        .map_err(IntrinsicCommitRefusal::Rejected)?;
-
-    let recipient_clock = confirm_event_timestamp(db, staged_timestamp).clock;
-    let history_snapshot = db
-        .get(oid)
-        .and_then(|object| {
-            read_committed_history_snapshot(object, coordinate, MessageTexts::Required)
-        })
-        .ok_or(IntrinsicCommitRefusal::HistoryUnreadable(coordinate))?;
-    let event_type = outcome.change.event_type(outcome.event_type);
-    let device = db.local_device().identifier();
-    let event_values = db
-        .get(oid)
-        .and_then(|object| project_intrinsic_payload(object, &outcome.change, event_type, device));
-    Ok(CommittedIntrinsicTransition {
-        change: outcome.change,
-        event_type,
-        distribute: outcome.distribute,
-        history_snapshot,
-        recipient_clock,
-        ack_required,
-        event_values,
-    })
-}
-
 /// Log why an intrinsic commit gave nothing to distribute, as the commit
 /// once did itself, and keep what it committed.
 pub(super) fn logged_intrinsic_commit(
     oid: &ObjectIdentifier,
-    result: Result<CommittedIntrinsicTransition, IntrinsicCommitRefusal>,
+    result: IntrinsicCommit,
 ) -> Option<CommittedIntrinsicTransition> {
     match result {
         Ok(committed) => {
@@ -230,178 +89,6 @@ pub(super) fn logged_intrinsic_commit(
     }
 }
 
-/// What [`distribute_event`] made of one transition, under the caller's
-/// database guard.
-pub(super) struct EventDistribution {
-    /// The Device clock the recipient filter read. Anything but
-    /// [`SampledEventClock::Valid`] means the filter used the fallback.
-    pub(super) clock: SampledEventClock,
-    /// Whether a notification was built, and for whom.
-    pub(super) outcome: DistributionOutcome,
-}
-
-/// The end of one [`distribute_event`] call.
-pub(super) enum DistributionOutcome {
-    /// The event object is gone.
-    Gone,
-    /// The Notification Class lookup failed closed: nothing was built or
-    /// logged, and the transition goes to nobody.
-    Refused {
-        /// The class the object names.
-        notification_class: u32,
-        /// The transition's coordinate.
-        transition: EventTransition,
-        /// Why the lookup failed.
-        lookup: RecipientLookupOutcome,
-    },
-    /// Built and logged to the Event Logs. `lookup` holds the recipients
-    /// ([`RecipientLookupOutcome::Matched`]) or says why there are none.
-    Built {
-        /// The notification, Process Identifier 0.
-        notification: EventNotificationRequest,
-        /// The class the object names.
-        notification_class: u32,
-        /// The transition's coordinate.
-        transition: EventTransition,
-        /// The selection.
-        lookup: RecipientLookupOutcome,
-    },
-}
-
-/// Build the EventNotification for one transition under the database
-/// guard, select its recipients and log it to the device's Event Log
-/// objects. `fallback` is the day and time the recipient filter uses when
-/// the Device clock gives none.
-pub(super) fn distribute_event(
-    db: &mut ObjectDatabase,
-    device: ObjectIdentifier,
-    oid: &ObjectIdentifier,
-    transition: NotificationTransition,
-    fallback: (DaysOfWeek, Time),
-) -> EventDistribution {
-    let NotificationTransition {
-        change,
-        event_type,
-        history_source,
-        ack_required: ack_required_snapshot,
-        event_values,
-        construction,
-    } = transition;
-
-    let (timestamp, message_text, recipient_clock) = match history_source {
-        NotificationHistorySource::SendTime => {
-            let sample = sample_event_timestamp(db);
-            (sample.timestamp, None, sample.clock)
-        }
-        NotificationHistorySource::Committed {
-            snapshot,
-            recipient_clock,
-        } => (snapshot.timestamp, snapshot.message_text, recipient_clock),
-    };
-
-    let (today, current_time) = match recipient_clock {
-        SampledEventClock::Valid(clock_frame) => (
-            clock_frame
-                .day_of_week()
-                .expect("validated ClockFrame has a day of week"),
-            clock_frame.local_time,
-        ),
-        SampledEventClock::Unavailable | SampledEventClock::Invalid => fallback,
-    };
-    let distribution = |outcome| EventDistribution {
-        clock: recipient_clock,
-        outcome,
-    };
-
-    let object = match db.get_mut(oid) {
-        Some(o) => o,
-        None => return distribution(DistributionOutcome::Gone),
-    };
-
-    let notification_class = object
-        .read_property(PropertyIdentifier::NOTIFICATION_CLASS, None)
-        .ok()
-        .and_then(|v| match v {
-            PropertyValue::Unsigned(n) => Some(n as u32),
-            _ => None,
-        })
-        .unwrap_or(0);
-
-    let notify_type = match construction {
-        NotificationConstruction::Acknowledgment => NotifyType::ACK_NOTIFICATION,
-        NotificationConstruction::Event => object
-            .read_property(PropertyIdentifier::NOTIFY_TYPE, None)
-            .ok()
-            .and_then(|v| match v {
-                PropertyValue::Enumerated(n) => Some(NotifyType::from_raw(n)),
-                _ => None,
-            })
-            .unwrap_or(NotifyType::ALARM),
-    };
-
-    let transition = change.transition();
-
-    // Resolve the per-transition Priority and Ack_Required from the
-    // referenced NotificationClass (ASHRAE 135-2020 §13.2.1), falling
-    // back to the BACnet defaults (Priority 255, no ack) when the
-    // class is missing.
-    let (priority, resolved_ack_required) =
-        resolve_transition_priority_ack(db, notification_class, transition);
-    let ack_required = ack_required_snapshot.unwrap_or(resolved_ack_required);
-
-    let lookup =
-        lookup_notification_recipients(db, notification_class, transition, today, &current_time);
-    if matches!(
-        lookup,
-        RecipientLookupOutcome::NotificationClassMissing
-            | RecipientLookupOutcome::RecipientListUnavailable
-            | RecipientLookupOutcome::RecipientListInvalid
-            | RecipientLookupOutcome::RecipientListTooLong
-    ) {
-        return distribution(DistributionOutcome::Refused {
-            notification_class,
-            transition,
-            lookup,
-        });
-    }
-
-    let notification = EventNotificationRequest {
-        process_identifier: 0,
-        initiating_device_identifier: device,
-        event_object_identifier: *oid,
-        timestamp,
-        notification_class,
-        priority,
-        event_type,
-        message_text,
-        notify_type,
-        // ack_required is only meaningful for ALARM/EVENT notify types
-        // (ACK_NOTIFICATION omits the field on the wire). Per §13.2.1 the
-        // value is the NotificationClass's per-transition Ack_Required,
-        // not a function of Notify_Type alone.
-        ack_required: if notify_type == NotifyType::ACK_NOTIFICATION {
-            false
-        } else {
-            ack_required
-        },
-        from_state: change.from,
-        to_state: change.to,
-        event_values: if notify_type == NotifyType::ACK_NOTIFICATION {
-            None
-        } else {
-            event_values.map(CommittedNotificationPayload::into_parameters)
-        },
-    };
-
-    db.log_event_notification(&notification);
-    distribution(DistributionOutcome::Built {
-        notification,
-        notification_class,
-        transition,
-        lookup,
-    })
-}
-
 impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Evaluate intrinsic reporting on an object and send event notifications
     /// to the recipients the object's NotificationClass names.
@@ -426,15 +113,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let db = ctx.db;
         let resolved = {
             let mut db = db.write().await;
-            // Event_Algorithm_Inhibit follows its reference as of now (#1329).
-            db.follow_event_algorithm_inhibit(oid);
-            let outcome = db
-                .get_mut(oid)
-                .and_then(|object| object.event_reporting_mut())
-                .and_then(|reporting| reporting.evaluate_intrinsic_reporting());
-            let resolved = outcome.and_then(|outcome| {
-                logged_intrinsic_commit(oid, commit_intrinsic_transition(&mut db, oid, outcome))
-            });
+            let resolved =
+                after_write(&mut db, oid).and_then(|result| logged_intrinsic_commit(oid, result));
             // A committed transition changes Status_Flags: capture it at its
             // own time for timestamped COV-multiple references.
             if resolved.is_some() {

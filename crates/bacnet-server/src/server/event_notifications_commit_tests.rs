@@ -1,5 +1,5 @@
 use super::*;
-use crate::server::event_notifications::commit_intrinsic_transition;
+use bacnet_device_core::event::commit_intrinsic_transition;
 use bacnet_objects::event::EventStateChange;
 use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::traits::BACnetObject;
