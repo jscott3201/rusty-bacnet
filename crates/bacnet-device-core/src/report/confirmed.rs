@@ -158,6 +158,17 @@ impl ConfirmedTable {
             .min()
     }
 
+    /// When the notification `token` names times out next, as
+    /// [`next_deadline`](Self::next_deadline) reckons each.
+    pub(super) fn deadline_of(&self, token: Token) -> Option<Instant> {
+        let out = self.out.iter().find(|out| out.token == token)?;
+        Some(if out.resend {
+            out.cutoff
+        } else {
+            out.deadline.min(out.cutoff)
+        })
+    }
+
     /// Whether a notification waits to be resent.
     pub(super) fn resend_due(&self) -> bool {
         self.out.iter().any(|out| out.resend)

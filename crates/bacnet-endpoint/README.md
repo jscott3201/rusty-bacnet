@@ -169,9 +169,6 @@ async fn main() -> Result<(), bacnet_types::error::Error> {
   [`COV_CONFIRMED_IN_FLIGHT`](session::COV_CONFIRMED_IN_FLIGHT) (64) at once,
   so subscribers that stop answering can't leave the client role without one;
   four silent subscribers fill it at the default per-subscriber limit.
-  Unconfirmed notifications don't count against it, though while the session
-  is at the bound one that found the outbox full goes at the task's next wake,
-  which can be seconds later: size the outbox for the subscriptions expected.
   Full `bacnet-server`
   dispatch parity is out of scope. Accepted-direct replies preserve the original
   sealed response capability through the bounded endpoint queue, before any

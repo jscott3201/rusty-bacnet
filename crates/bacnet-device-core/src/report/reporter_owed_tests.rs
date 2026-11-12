@@ -208,3 +208,67 @@ fn an_owed_report_the_byte_budget_drops_after_admission_stays_owed() {
     );
     assert!(device.reporter.owed.is_empty());
 }
+
+/// Reports owed for an invoke ID are kept apart from those owed room
+/// (#2512): while one waits for an ID, nothing comes due for it, and the
+/// reporter's own ID coming back, here with an Ack, gives it its turn.
+#[test]
+fn a_report_owed_an_id_waits_for_one_without_coming_due() {
+    let mut device = Device::new(OutboxLimits::default());
+    device.ids.limit = 1;
+    device.subscribe(1, true, T0);
+    let (out, _) = device.pop(T0).unwrap();
+    device.subscribe(2, true, T0);
+    assert!(device.pop(T0).is_none(), "no ID for 2's report");
+    let answer = T0 + Duration::from_secs(3);
+    assert_eq!(device.reporter.next_deadline(), Some(answer), "1's answer");
+    assert!(device.ack(out.invoke_id.unwrap(), T0));
+    assert_eq!(device.reporter.next_deadline(), Some(T0), "2's turn");
+    device.deadline();
+    let (second, apdu) = device.pop(T0).unwrap();
+    assert!(second.invoke_id.is_some());
+    assert_eq!(reported(&apdu).0, 2);
+}
+
+/// While a report waits for an ID, one owed room still goes as room frees:
+/// the outbox's one entry passes from one unconfirmed subscriber to the
+/// next with no other change, and nothing comes due for the ID.
+#[test]
+fn a_report_owed_room_goes_while_one_waits_for_an_id() {
+    let mut device = Device::new(OutboxLimits {
+        entries: 1,
+        octets: 256,
+    });
+    device.ids.limit = 0;
+    device.subscribe(1, true, T0);
+    assert!(device.pop(T0).is_none());
+    device.subscribe_to(ai2(), 2, false, T0);
+    device.subscribe_to(ai2(), 3, false, T0);
+    assert_eq!(send(&mut device, T0), Some(2));
+    assert_eq!(device.reporter.next_deadline(), Some(T0), "room freed");
+    device.deadline();
+    assert_eq!(send(&mut device, T0), Some(3));
+    assert!(
+        device.reporter.next_deadline().is_none_or(|due| due > T0),
+        "the ID wait comes due for nothing"
+    );
+}
+
+/// A confirmed notification's own deadline: its answer's, then its cutoff
+/// while a resend waits, then the resend's answer's; none once answered.
+#[test]
+fn each_notification_out_has_its_deadline() {
+    let mut device = Device::new(OutboxLimits::default());
+    device.subscribe(1, true, T0);
+    let (out, _) = device.pop(T0).unwrap();
+    let after = |seconds| T0 + Duration::from_secs(seconds);
+    let deadline = |device: &Device| device.reporter.notification_deadline(out.token);
+    assert_eq!(deadline(&device), Some(after(3)));
+    device.deadline();
+    // Three seconds a try, one retry: the cutoff is two tries and a half.
+    assert_eq!(deadline(&device), Some(T0 + Duration::from_millis(7_500)));
+    device.pop(after(3)).unwrap();
+    assert_eq!(deadline(&device), Some(after(6)));
+    assert!(device.ack(out.invoke_id.unwrap(), after(4)));
+    assert_eq!(deadline(&device), None);
+}

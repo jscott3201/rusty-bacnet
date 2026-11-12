@@ -21,6 +21,7 @@ use cases::{Change, Outcome, READ_BACK, Step};
 /// The cases every host runs, which bacnet-endpoint includes too.
 #[path = "../../../../tests/support/local_write_cases.rs"]
 mod cases;
+mod change_back;
 mod points;
 
 const PV: P = P::PRESENT_VALUE;

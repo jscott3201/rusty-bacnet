@@ -676,3 +676,44 @@ async fn a_routed_subscriber_is_notified_and_answered() {
     crate::session::eventually::eventually(Duration::from_secs(1), "the Ack ends it", ended).await;
     session.stop().await.unwrap();
 }
+
+/// Two changes back to back, the second returning AI-1 to the value its
+/// subscriber last heard (#2508): the server sends both, the endpoint's
+/// queue the second in the first's place, and both end alike.
+#[tokio::test(start_paused = true)]
+async fn back_to_back_changes_end_where_the_server_does() {
+    let mut pair = Pair::start().await;
+    let body = subscribe(7, Some(false), Some(300));
+    pair.both("subscribe", SUBSCRIBE_COV, &body).await;
+    let server = MacAddr::from_slice(pair.server.local_mac());
+    let endpoint = mac_of(&pair.endpoint);
+    let values = [PropertyValue::Real(25.0), PropertyValue::Real(20.0)];
+    for value in values.clone() {
+        pair.server
+            .set_present_value_local(&ai1(), value)
+            .await
+            .unwrap();
+    }
+    let from_server = pair.node.quiet(&server).await;
+    for value in values.clone() {
+        pair.endpoint
+            .set_present_value_local(&ai1(), value)
+            .await
+            .unwrap();
+    }
+    let from_endpoint = pair.node.quiet(&endpoint).await;
+    let heard = |apdus: &[Bytes]| {
+        apdus
+            .iter()
+            .map(|apdu| notified(apdu).2)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(heard(&from_server), values);
+    assert_eq!(heard(&from_endpoint), [PropertyValue::Real(20.0)]);
+    assert_eq!(
+        from_endpoint.last(),
+        from_server.last(),
+        "endpoint, then server"
+    );
+    pair.stop().await;
+}

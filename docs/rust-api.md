@@ -8443,15 +8443,19 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   contexts refreshed, and `take_counts()`. The entries sit in one vector
   sorted with the monitored object first. `evaluate` decides what a change
   of one object reports to its ordinary and Single subscriptions: it
-  compares each with the observation its last delivered notification
-  established, skips a confirmed one whose report is out, encodes each
+  compares each with the newest observation decided for it, that of an
+  unconfirmed report not yet sent when there is one, else the one its last
+  delivered notification established (#2508), skips a confirmed one whose
+  report is out, encodes each
   notification's parameters and spends the input's `EventBudget`. Every
   report takes the host's lease first (for a confirmed one the server's
   in-flight slot and invoke ID, for the `Reporter` room in its outbox), and
   a confirmed one then begins its flight; every report comes back through
   `delivered`, where `Delivery::Sent` commits an unconfirmed one and an Ack
   commits what `begin_confirmed` kept and names the references owed a
-  fresh look. The values a notification carries are in `cov::prepare`,
+  fresh look. An unconfirmed report that ends unsent names its reference
+  when a later change was measured from it and reported nothing, so that
+  change gets its look from what was delivered. The values a notification carries are in `cov::prepare`,
   `flags`, `reported`, `value_source` and `life_safety`, and the Device's
   two subscription lists in `cov::active`, with `ActiveCovOverlay`, which
   answers both from a `CovTable` through any read that takes a
@@ -8480,8 +8484,18 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   buffer and one queue allocated at build (`OutboxLimits`: entries and
   octets). A subscription holds one unconfirmed entry: a newer report
   replaces it in its turn, so one that changes faster than the link sends
-  can't crowd out the others. A report the outbox has no room for leaves
-  its subscription owed, looked at again as room frees. A confirmed
+  can't crowd out the others. Because a change is measured from the queued
+  report, one that goes back to what the subscriber last heard replaces it
+  too, and the subscriber ends with the current value (#2508). A report
+  the outbox has no room for leaves its subscription owed, looked at again
+  as room frees. A confirmed report `pop` finds no invoke ID for is owed
+  one instead, looked at again only as IDs come back (#2512): those the
+  reporter gives back itself, and those the host reports with
+  `invoke_ids_released(count)` when the IDs it shares with other work come
+  back. A host that refuses IDs past a bound of its own needn't report
+  anything, and `next_deadline` never comes due for a report waiting for an
+  ID. `notification_deadline(token)` is a confirmed notification's own
+  deadline: its answer's, or its cutoff when that comes first. A confirmed
   report's answers are cut off at `FlightTiming::cutoff` from when the
   table began it, however late `pop` sent it, as the server's worker's
   are. `pop(bindings, ids, now, out)` appends the next
@@ -12251,10 +12265,8 @@ lease every ID and leave the client role none for its own requests. With it,
 four silent subscribers fill the bound at the default limits. A confirmed
 report past it then waits, oldest owed first, until one of the notifications
 out ends: answered, or failed once its retries run out (12 s at the default
-timing). Nothing is dropped. Unconfirmed notifications don't count against the
-bound, though one that found the outbox full while it holds goes at the
-task's next wake (a change, an answer or a timeout), which can be seconds
-later: size the outbox for the subscriptions expected. When many confirmed
+timing). Nothing is dropped, and unconfirmed notifications don't count against
+the bound. When many confirmed
 subscribers are expected, lower `max_confirmed_in_flight_per_peer`, so that
 more silent subscribers are needed to fill the bound.
 
@@ -12288,10 +12300,11 @@ SubscribeCOVPropertyMultiple stay refused with UNRECOGNIZED_SERVICE, as
 SubscribeCOV is on a session without the opt-in. No event notification
 follows a change: the endpoint runs no event pass.
 
-Known defect (#2508): with an unconfirmed subscription, if two changes to one
-object come before the session's task sends, and the second returns the object
-to the values the subscriber last received, only the first is sent, and the
-subscriber keeps it until a later change.
+A subscriber ends with the current value even when a change takes the object
+back to what it last heard before the last change's notification went
+(#2508): an unconfirmed notification still queued gives way to the newer one,
+where `BACnetServer`, which sends each at once, sends both, and a confirmed
+one's Ack brings a fresh look.
 
 `stop()` stops sending, drops what is still queued and gives back every
 invoke ID a notification holds.

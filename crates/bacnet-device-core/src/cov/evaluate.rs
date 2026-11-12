@@ -16,8 +16,13 @@
 //!   change, and reports a Status_Flags change too. Value_Source on a
 //!   commandable or source-tracking object takes the Table 13-1a-2 report
 //!   ([`value_source`]).
-//! - Each compares with the observation the subscription's last delivered
-//!   notification established, not one merely sent.
+//! - Each compares with the newest observation decided for the
+//!   subscription: that of an unconfirmed report not yet sent, when there
+//!   is one, else the one its last delivered notification established. So
+//!   a change back to the delivered value while a report is still to go
+//!   reports too, and a host that queues reports sends the newer in the
+//!   older's place (#2508). An observation still becomes the baseline only
+//!   once its notification is sent (#826).
 //!
 //! A confirmed subscription whose report is outstanding is skipped, and its
 //! report's Ack owes it a fresh look ([`CovTable::delivered`]). One holding
@@ -123,14 +128,24 @@ pub fn evaluate<L>(
         .then(|| Ordinary::capture(object))
         .flatten();
     for (index, sub) in subscriptions.iter().enumerate() {
+        let pending = table.newest_pending(sub);
+        let last = pending
+            .as_ref()
+            .map(|(_, observation)| observation)
+            .or(sub.last_notified_observation.as_ref());
         let decided = match sub.monitored_property {
             None => ordinary
                 .as_ref()
-                .filter(|ordinary| ordinary.reports(sub, evaluation.force))
+                .filter(|ordinary| ordinary.reports(sub, last, evaluation.force))
                 .map(Ordinary::report),
-            Some(property) => property_report(object, sub, property, evaluation.force),
+            Some(property) => property_report(object, sub, last, property, evaluation.force),
         };
         let Some((values, observation)) = decided else {
+            // Nothing new against a report still to go: should that one
+            // end unsent, this change is owed a fresh look.
+            if let Some((ticket, _)) = pending {
+                table.rely_on_pending(sub, ticket);
+            }
             continue;
         };
         // A confirmed reference with an outstanding report waits for it (#896).
@@ -248,15 +263,19 @@ impl Ordinary {
         })
     }
 
-    /// Whether `sub` reports this observation.
-    fn reports(&self, sub: &CovSubscriptionSnapshot, force: bool) -> bool {
-        let last = sub.last_notified_observation.as_ref();
+    /// Whether `sub` reports this observation, measured from `last`.
+    fn reports(
+        &self,
+        sub: &CovSubscriptionSnapshot,
+        last: Option<&CovObservation>,
+        force: bool,
+    ) -> bool {
         force
             || (self.lead.triggers()
-                && CovTable::should_notify(
-                    sub,
-                    Some(self.observation.sample()),
+                && self.observation.sample().reports(
+                    last.map(CovObservation::sample),
                     sub.cov_increment.map(f64::from).or(self.increment),
+                    true,
                 ))
             || self.observation.flags_changed(last)
             || self.observation.triggers_changed(last)
@@ -267,16 +286,17 @@ impl Ordinary {
     }
 }
 
-/// What a property subscription to `property` reports, if anything: its
-/// value and Status_Flags, or the Table 13-1a-2 report.
+/// What a property subscription to `property` reports, if anything,
+/// measured from `last`: its value and Status_Flags, or the Table 13-1a-2
+/// report.
 fn property_report(
     object: &dyn BACnetObject,
     sub: &CovSubscriptionSnapshot,
+    last: Option<&CovObservation>,
     property: PropertyIdentifier,
     force: bool,
 ) -> Option<(Vec<BACnetPropertyValue>, CovObservation)> {
     let flags = PreparedFlags::read(object).ok()?;
-    let last = sub.last_notified_observation.as_ref();
     if value_source::applies(object, property) {
         if sub.monitored_property_array_index.is_some() {
             return None;

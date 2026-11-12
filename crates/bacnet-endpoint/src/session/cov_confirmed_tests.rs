@@ -374,3 +374,107 @@ async fn a_report_waits_for_an_invoke_id() {
     .await;
     session.stop().await.unwrap();
 }
+
+/// Two changes back to back to a confirmed subscriber, on the server and
+/// on the endpoint alike: the first goes, the second waits for its Ack,
+/// and the look the Ack brings sends the current value (#2508).
+#[tokio::test(start_paused = true)]
+async fn back_to_back_confirmed_changes_follow_the_ack_as_on_the_server() {
+    let mut node = Node::new().await;
+    let mut server = server().await;
+    let mut session = endpoint(SessionRole::ServerOnly, Some(ReportConfig::default())).await;
+    let body = subscribe(7, Some(true), Some(300));
+    let mut heard = Vec::new();
+    for to in [MacAddr::from_slice(server.local_mac()), mac_of(&session)] {
+        node.request(&to, 1, SUBSCRIBE_COV, &body).await;
+        let sent = node.quiet(&to).await;
+        node.send(&to, &ack(confirmed_notification(&sent[1]).0))
+            .await;
+        assert!(node.quiet(&to).await.is_empty());
+        for value in [25.0, 20.0] {
+            let value = PropertyValue::Real(value);
+            if to.as_slice() == server.local_mac() {
+                server.set_present_value_local(&ai1(), value).await.unwrap();
+            } else {
+                session
+                    .set_present_value_local(&ai1(), value)
+                    .await
+                    .unwrap();
+            }
+        }
+        let mut params = Vec::new();
+        for _ in 0..2 {
+            let sent = node.quiet(&to).await;
+            let [notification] = &sent[..] else {
+                panic!("one notification at a time: {sent:?}");
+            };
+            let (id, notification) = confirmed_notification(notification);
+            params.push(notification);
+            node.send(&to, &ack(id)).await;
+        }
+        assert!(node.quiet(&to).await.is_empty());
+        heard.push(params);
+    }
+    assert_eq!(heard[1], heard[0], "endpoint, then server");
+    session.stop().await.unwrap();
+    server.stop().await.unwrap();
+}
+
+/// At the bound, with an outbox of one entry, an unconfirmed report waits
+/// for room alone (#2512): LSP-1's two unconfirmed subscribers both hear
+/// its change with no time passing, while 65 silent confirmed
+/// subscriptions hold every ID the bound allows and one more waits.
+#[tokio::test(start_paused = true)]
+async fn at_the_bound_an_unconfirmed_report_goes_at_once() {
+    use crate::session::COV_CONFIRMED_IN_FLIGHT;
+    use bacnet_device_core::cov::FlightTiming;
+    use bacnet_device_core::write::local::LocalCommandSource;
+    let policy = CovPolicy {
+        max_subscriptions_per_peer: 256,
+        max_confirmed_in_flight_per_peer: 256,
+        ..CovPolicy::default()
+    };
+    let minute = FlightTiming::new(bacnet_time::Duration::from_secs(60), 0);
+    let one = OutboxLimits {
+        entries: 1,
+        octets: 256,
+    };
+    let config = ReportConfig::new(policy)
+        .with_confirmed(minute)
+        .with_outbox(one);
+    let (mut silent, mut node) = (Node::new().await, Node::new().await);
+    let mut session = endpoint(SessionRole::ServerOnly, Some(config)).await;
+    let to = mac_of(&session);
+    for process in 0..=COV_CONFIRMED_IN_FLIGHT as u32 {
+        let invoke_id = process as u8;
+        let body = subscribe(process, Some(true), Some(300));
+        silent.request(&to, invoke_id, SUBSCRIBE_COV, &body).await;
+        while let Some((_, apdu)) = silent.next_within(Duration::from_millis(100)).await {
+            if apdu[0] >> 4 != 0 {
+                assert_eq!(apdu, acked(invoke_id));
+                break;
+            }
+        }
+    }
+    silent.quiet(&to).await;
+    assert_eq!(session.active_leases(), COV_CONFIRMED_IN_FLIGHT);
+    for process in [1, 2] {
+        let body = subscribe_to(lsp1(), process, Some(false), Some(300));
+        node.request(&to, process as u8, SUBSCRIBE_COV, &body).await;
+        assert_eq!(node.quiet(&to).await.len(), 2);
+    }
+    let at = tokio::time::Instant::now();
+    let source = LocalCommandSource::ServerDevice;
+    let oos = PropertyIdentifier::OUT_OF_SERVICE;
+    let value = PropertyValue::Boolean(true);
+    session
+        .write_local(&lsp1(), oos, None, value, None, source)
+        .await
+        .unwrap();
+    for subscriber in 1..=2 {
+        let heard = node.next_within(Duration::from_secs(1)).await;
+        assert!(heard.is_some(), "subscriber {subscriber} hears it");
+    }
+    assert_eq!(tokio::time::Instant::now(), at, "with no time passing");
+    session.stop().await.unwrap();
+}

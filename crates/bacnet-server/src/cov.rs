@@ -559,10 +559,15 @@ impl CovSubscriptionTable {
     }
 
     /// End an unconfirmed report `evaluate` handed out: a sent one commits
-    /// its observation.
+    /// its observation, and one not sent that a later change was measured
+    /// from has that change revisited.
     pub(crate) fn delivered_unconfirmed(&mut self, token: Token, outcome: Delivery) {
-        self.core
+        // A report not sent that a later change was measured from owes that
+        // change a fresh look (#2508).
+        let owed = self
+            .core
             .delivered(token, outcome, runtime_clock::core_now());
+        self.revisits.request(owed);
     }
 
     /// Whether a fanout may report this ordinary or Single subscription now;

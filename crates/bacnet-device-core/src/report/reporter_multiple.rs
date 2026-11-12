@@ -249,9 +249,9 @@ impl Reporter {
             .filter(|sub| self.table.is_current(sub, now))
             .cloned()
             .collect();
-        // A reference owed a look for want of room has it now; its report
-        // owes it again if it is refused again.
-        self.owed.retain(|owed| !wanted.contains(owed));
+        // A reference owed a look for want of room or of an invoke ID has
+        // it now; its report owes it again if it is refused again.
+        self.forgive(|owed| wanted.contains(owed));
         for subs in by_context(subs).values() {
             let mut budget = EventBudget::new(self.table.policy());
             self.report_context(db, subs, false, now, &mut budget);
