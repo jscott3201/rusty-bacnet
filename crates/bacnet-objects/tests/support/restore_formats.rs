@@ -246,4 +246,12 @@ pub const FORMATS: &[Format] = &[
         sample: samples::load_control,
         kind: Kind::LoadControl,
     },
+    // Its version 2, with written Shed_Levels elements (#2502). Last for the
+    // same reason.
+    Format {
+        name: "written_levels_load_control",
+        two_slot: false,
+        sample: samples::written_levels_load_control,
+        kind: Kind::LoadControl,
+    },
 ];

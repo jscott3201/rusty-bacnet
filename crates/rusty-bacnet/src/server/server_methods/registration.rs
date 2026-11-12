@@ -246,17 +246,26 @@ impl BACnetServer {
     ///
     /// With `storage_path` (a `str`), the object keeps its shed request in
     /// that file (#2497): the request properties, the agreed Duty_Window,
-    /// the shed state, Enable and a Description a client wrote. A rebuilt
-    /// object looks at a request that was pending or being shed again, as
-    /// though Start_Time had just been written, and calls `shed` for it; one
-    /// that was being shed calls `stop` when it ends. A write that cannot be
-    /// saved is refused with DEVICE / OPERATIONAL_PROBLEM. The shed levels,
-    /// baseline and state description are configuration the file does not
-    /// keep: give them as keywords here at every start, so a restored
-    /// request is put to `shed` with them. The `set_load_control_*_local`
-    /// methods work only once the server runs, after that first look, so use
-    /// them for changes while it runs. Give each Load Control its own file;
-    /// one that holds another object's request raises BacnetError.
+    /// the shed state, Enable, and a Description and the Shed_Levels
+    /// elements a client wrote (#2502). A rebuilt object looks at a request
+    /// that was pending or being shed again, as though Start_Time had just
+    /// been written, and calls `shed` for it; one that was being shed calls
+    /// `stop` when it ends. A write that cannot be saved is refused with
+    /// DEVICE / OPERATIONAL_PROBLEM. The shed levels, baseline and state
+    /// description are configuration the file does not keep: give them as
+    /// keywords here at every start, so a restored request is put to `shed`
+    /// with them. A written Shed_Levels element wins over the keyword's level
+    /// for it, one past the end of the keyword's array is dropped, and
+    /// `set_load_control_shed_levels_local` drops the written ones;
+    /// `clear_written_shed_levels=True` drops them first, so the keyword
+    /// applies whole (a refused level raises with the file untouched; the
+    /// keyword does nothing without `storage_path`). Without `shed_levels`
+    /// the written ones are neither
+    /// served nor dropped: the file keeps them for a start that gives the
+    /// levels. The `set_load_control_*_local` methods work only once the
+    /// server runs, after that first look, so use them for changes while it
+    /// runs. Give each Load Control its own file; one that holds another
+    /// object's request raises BacnetError.
     #[pyo3(signature = (
         instance,
         name,
@@ -267,7 +276,8 @@ impl BACnetServer {
         full_duty_baseline=None,
         state_description=None,
         agreed_duty_window=None,
-        storage_path=None
+        storage_path=None,
+        clear_written_shed_levels=false
     ))]
     fn add_load_control(
         &self,
@@ -280,6 +290,7 @@ impl BACnetServer {
         state_description: Option<String>,
         agreed_duty_window: Option<u64>,
         storage_path: Option<&str>,
+        clear_written_shed_levels: bool,
     ) -> PyResult<()> {
         let shedder = crate::load_shedder::PyLoadShedder::parse(shed, stop)?;
         let mut obj = match storage_path {
@@ -289,6 +300,15 @@ impl BACnetServer {
             }
             None => LoadControlObject::new(instance, name).map_err(to_py_err)?,
         };
+        // Before the levels are set, so `shed_levels` applies whole. The
+        // levels are checked first, so a refused one leaves the file as it
+        // was. Without storage there is nothing to clear.
+        if clear_written_shed_levels {
+            if let Some(levels) = &shed_levels {
+                obj.set_shed_levels(levels.clone()).map_err(to_py_err)?;
+            }
+            obj.clear_written_shed_levels().map_err(to_py_err)?;
+        }
         if let Some(levels) = shed_levels {
             obj.set_shed_levels(levels).map_err(to_py_err)?;
         }

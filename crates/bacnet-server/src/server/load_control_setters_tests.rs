@@ -379,3 +379,67 @@ async fn a_restored_request_is_put_to_the_shedder_with_the_levels_given_at_build
     }
     h.server.stop().await.unwrap();
 }
+
+#[tokio::test(start_paused = true)]
+async fn written_levels_win_at_a_restart_until_the_route_replaces_them() {
+    let app = app();
+    app.answer(ShedProgress::Compliant, 2);
+    let (_, _, store, _) = restored(&app);
+    let mut h = kept_harness(&app, &store).await;
+    assert_eq!(
+        app.asked.lock().unwrap().last().unwrap().shed_level,
+        Some(1)
+    );
+    // A client rewrites the array whole, over the wire: the requested
+    // level 2 is its first element now, and the request is looked at again.
+    let mut written = unsigned(2);
+    written.extend(unsigned(5));
+    write(&mut h, lc1(), PropertyIdentifier::SHED_LEVELS, written).await;
+    assert_eq!(
+        app.asked.lock().unwrap().last().unwrap().shed_level,
+        Some(0)
+    );
+    assert_eq!(
+        store.saved.lock().unwrap().as_ref().unwrap().shed_levels,
+        [(1, 2), (2, 5)]
+    );
+    h.server.stop().await.unwrap();
+    drop(h);
+
+    // Back with the same levels given at build: the written ones win, and
+    // the restored request is put to the shedder with them.
+    app.asked.lock().unwrap().clear();
+    let mut h = kept_harness(&app, &store).await;
+    assert_eq!(
+        app.asked.lock().unwrap().first().unwrap().shed_level,
+        Some(0)
+    );
+    assert_eq!(
+        read_value(&h, PropertyIdentifier::SHED_LEVELS, Some(1)).await,
+        Some(PropertyValue::Unsigned(2))
+    );
+    // The application's route replaces them, and storage forgets them.
+    h.server
+        .set_load_control_shed_levels_local(&lc1(), vec![(1, "a".into()), (2, "b".into())])
+        .await
+        .unwrap();
+    h.server.stop().await.unwrap();
+    drop(h);
+    assert!(
+        store
+            .saved
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .shed_levels
+            .is_empty()
+    );
+    app.asked.lock().unwrap().clear();
+    let mut h = kept_harness(&app, &store).await;
+    assert_eq!(
+        app.asked.lock().unwrap().first().unwrap().shed_level,
+        Some(1)
+    );
+    h.server.stop().await.unwrap();
+}

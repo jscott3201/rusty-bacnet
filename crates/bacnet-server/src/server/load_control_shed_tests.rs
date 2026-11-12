@@ -531,13 +531,11 @@ fn restored(
     use bacnet_objects::device::{DeviceConfig, DeviceObject};
     const CENTURY: u64 = 100 * 365 * 24 * 60;
     let frame = clock_at(0);
-    let saved = LoadControlSnapshot {
-        state: bacnet_types::enums::ShedState::SHED_COMPLIANT,
-        requested_shed_level: BACnetShedLevel::Level(2),
-        start_time: (frame.local_date, frame.local_time),
-        shed_duration: CENTURY,
-        ..LoadControlSnapshot::default()
-    };
+    let mut saved = LoadControlSnapshot::default();
+    saved.state = bacnet_types::enums::ShedState::SHED_COMPLIANT;
+    saved.requested_shed_level = BACnetShedLevel::Level(2);
+    saved.start_time = (frame.local_date, frame.local_time);
+    saved.shed_duration = CENTURY;
     let store = Arc::new(Store::default());
     *store.saved.lock().unwrap() = Some(saved.clone());
     let mut object = LoadControlObject::with_persistence(1, "LC-1", store.clone()).unwrap();
