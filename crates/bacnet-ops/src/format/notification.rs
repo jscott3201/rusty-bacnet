@@ -4,8 +4,9 @@
 //! deadband 1, limit 100`, and as typed data with each field by name. The
 //! CLI's Event Log records, the terminal UI and the MCP server share them.
 //! A choice under a tag the standard doesn't assign (#2474) shows as its
-//! number, with its fields by context tag as text and its octets as hex in
-//! the data, as an unassigned Event_Parameters algorithm does.
+//! number, with a constructed one's fields by context tag (a primitive
+//! one's contents, #2483) as text, and in the data whether it is
+//! constructed and its octets as hex.
 
 use bacnet_encoding::constructed::{decode_authentication_factor, decode_bacnet_property_value};
 use bacnet_types::constructed::{
@@ -21,7 +22,7 @@ use super::fields::{
 };
 use super::primitive::{date_time, hex};
 use super::tagged::fields_text;
-use super::{Datum, Fields, Floats, StateTexts, ValueFormat};
+use super::{Datum, Fields, Floats, StateTexts, ValueFormat, raw_text};
 use crate::label::kebab;
 
 /// The element kind the JSON names the values by.
@@ -106,7 +107,7 @@ fn event_type(parameters: &NotificationParameters) -> u32 {
         N::ChangeOfReliability { .. } => 19,
         N::ChangeOfDiscreteValue { .. } => 21,
         N::ChangeOfTimer { .. } => 22,
-        N::Opaque { tag, .. } => u32::from(*tag),
+        N::Opaque(opaque) => u32::from(opaque.tag),
     }
 }
 
@@ -522,12 +523,18 @@ fn render(
                 None => f.quiet("expiration_time", Datum::Null),
             }
         }
-        // A tag the standard doesn't assign: its fields by context tag.
-        N::Opaque { data, .. } => f.field(
-            "data",
-            fields_text(data, format.floats),
-            Datum::Raw { raw: hex(data, "") },
-        ),
+        // A tag the standard doesn't assign: a constructed one's fields by
+        // context tag, a primitive one's contents (#2483).
+        N::Opaque(opaque) => {
+            let data = &opaque.data;
+            let text = match (opaque.constructed, data.is_empty()) {
+                (true, _) => fields_text(data, format.floats),
+                (false, true) => String::new(),
+                (false, false) => raw_text(data),
+            };
+            f.quiet("constructed", Datum::Boolean(opaque.constructed));
+            f.field("data", text, Datum::Raw { raw: hex(data, "") });
+        }
     }
     let (details, fields) = f.finish();
     (name, details, fields)

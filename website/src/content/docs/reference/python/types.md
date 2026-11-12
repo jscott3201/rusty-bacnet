@@ -1175,6 +1175,19 @@ Keys:
 - `kind: Literal["time_change"]`
 - `time_change: float`
 
+## AuditOtherDatum
+
+`class AuditOtherDatum(TypedDict)`
+
+A datum under a tag the standard doesn't assign, as received (#2483).
+
+Keys:
+
+- `kind: Literal["other"]`
+- `tag: int`
+- `constructed: bool`
+- `data: bytes`
+
 ## AuditLogRecord
 
 `class AuditLogRecord(TypedDict)`
@@ -1394,6 +1407,6 @@ AtomicWriteFileResult = Union[AtomicWriteFileStreamResult, AtomicWriteFileRecord
 ## AuditLogDatum
 
 ```python
-AuditLogDatum = AuditLogStatusDatum | AuditNotificationDatum | AuditTimeChangeDatum
+AuditLogDatum = AuditLogStatusDatum | AuditNotificationDatum | AuditTimeChangeDatum | AuditOtherDatum
 ```
 <!-- generated:end -->

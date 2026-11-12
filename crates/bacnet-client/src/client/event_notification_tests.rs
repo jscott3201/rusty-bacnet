@@ -6,6 +6,7 @@ use bacnet_encoding::tags::{TagClass, encode_tag};
 use bacnet_services::alarm_event::NotificationParameters;
 use bacnet_transport::port::ReceivedNpdu;
 use bacnet_transport::port::TransportProvenance;
+use bacnet_types::constructed::OpaqueChoice;
 use bacnet_types::enums::{EventState, EventType, NotifyType, ObjectType, RejectReason};
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, StatusFlags};
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
@@ -571,15 +572,18 @@ async fn immediate_reply_and_closed_channel_fallback_preserve_event_responses() 
 
 /// #2474: event values under a tag Clause 21 gives no alternative (12,
 /// which it reserves, or a later revision's 30) no longer cost the
-/// notification. The client acknowledges a confirmed one and both services
-/// deliver it, the values kept as received and every other member as sent.
+/// notification, nor does a primitive one (#2483). The client acknowledges
+/// a confirmed one and both services deliver it, the values kept as
+/// received and every other member as sent.
 #[tokio::test]
 async fn an_unassigned_event_values_choice_is_acked_and_delivered() {
     let mut h = Harness::new(64).await;
     let mut rx = h.client.event_notifications();
-    for (tag, open, close) in [
-        (12, &[0xce][..], &[0xcf][..]),
-        (30, &[0xfe, 30], &[0xff, 30]),
+    for (tag, constructed, open, close) in [
+        (12, true, &[0xce][..], &[0xcf][..]),
+        (30, true, &[0xfe, 30], &[0xff, 30]),
+        // Primitive [30], two octets of contents.
+        (30, false, &[0xfa, 30], &[]),
     ] {
         let mut prefix = PREFIX.to_vec();
         *prefix.last_mut().unwrap() = tag;
@@ -614,10 +618,11 @@ async fn an_unassigned_event_values_choice_is_acked_and_delivered() {
             assert_eq!(notification.to_state, EventState::HIGH_LIMIT);
             assert_eq!(
                 notification.event_values,
-                Some(NotificationParameters::Opaque {
+                Some(NotificationParameters::Opaque(OpaqueChoice {
                     tag,
+                    constructed,
                     data: vec![0x09, 0x01],
-                })
+                }))
             );
             assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
         }

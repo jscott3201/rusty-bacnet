@@ -409,6 +409,7 @@ fn audit_log_row(record: &BACnetAuditLogRecord) -> LogRecordRow {
         BACnetAuditLogDatum::LogStatus(status) => log_status(*status),
         BACnetAuditLogDatum::AuditNotification(notification) => audit_notification(notification),
         BACnetAuditLogDatum::TimeChange(seconds) => time_change(*seconds),
+        BACnetAuditLogDatum::Opaque(opaque) => unknown(opaque),
     };
     let (date, time) = record.timestamp;
     LogRecordRow {

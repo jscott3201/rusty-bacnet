@@ -15,7 +15,7 @@
 //! form still fails.
 
 use super::log_fields::{
-    check_bit_string, check_record, decode_any_value, decode_failure, decode_integer,
+    IN_ITEM_DATA, check_bit_string, check_record, decode_any_value, decode_failure, decode_integer,
     decode_log_status, decode_opaque, decode_timestamp, encode_any_value, encode_ctx_integer,
     encode_failure, encode_log_status, encode_opaque, encode_timestamp,
 };
@@ -47,6 +47,12 @@ const ANY: u8 = 10;
 /// The record field after the datum.
 const STATUS_FLAGS: u8 = 2;
 
+/// Whether the log-datum CHOICE gives `tag` no alternative: above
+/// any-value, the last it assigns.
+fn unassigned(tag: u8) -> bool {
+    tag > ANY
+}
+
 /// Encode one Trend Log record.
 ///
 /// Fails, leaving `buf` unchanged, for a bit string whose unused-bit count
@@ -57,7 +63,7 @@ pub fn encode_log_record(record: &BACnetLogRecord, buf: &mut BytesMut) -> Result
     // Straight into `buf`, cut back on failure: no staging buffer (#2233).
     let start = buf.len();
     write_log_record(record, buf)
-        .and_then(|()| check_record(&buf[start..], RECORD))
+        .and_then(|()| check_record(&buf[start..], IN_ITEM_DATA, RECORD))
         .inspect_err(|_| buf.truncate(start))
 }
 
@@ -87,7 +93,7 @@ fn write_log_record(record: &BACnetLogRecord, out: &mut BytesMut) -> Result<(), 
         } => encode_failure(out, FAILURE, *error_class, *error_code),
         LogDatum::TimeChange(seconds) => primitives::encode_ctx_real(out, TIME_CHANGE, *seconds),
         LogDatum::AnyValue(bytes) => encode_any_value(out, ANY, bytes)?,
-        LogDatum::Opaque(opaque) => encode_opaque(out, opaque, ANY, DATUM)?,
+        LogDatum::Opaque(opaque) => encode_opaque(out, opaque, unassigned, DATUM)?,
     }
     tags::encode_closing_tag(out, 1);
     if let Some(flags) = record.status_flags {
@@ -139,7 +145,7 @@ pub fn decode_log_record(data: &[u8], offset: usize) -> Result<(BACnetLogRecord,
 
 fn decode_datum(data: &[u8], offset: usize) -> Result<LogDatum, Error> {
     let (tag, start) = tags::decode_tag(data, 0)?;
-    let (datum, end) = if let Some((opaque, end)) = decode_opaque(data, &tag, start, ANY)? {
+    let (datum, end) = if let Some((opaque, end)) = decode_opaque(data, &tag, start, unassigned)? {
         (LogDatum::Opaque(opaque), end)
     } else if tag.is_opening_tag(FAILURE) {
         let (body, end) = tags::extract_context_value(data, start, FAILURE)?;

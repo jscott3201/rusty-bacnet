@@ -356,8 +356,8 @@ fn an_opaque_primitive_is_no_longer_than_a_tag_takes() {
         data: vec![0; len],
     };
     let mut buf = BytesMut::new();
-    assert!(encode_opaque(&mut buf, &opaque(1 << 20), 10, "datum").is_ok());
+    assert!(encode_opaque(&mut buf, &opaque(1 << 20), |tag| tag > 10, "datum").is_ok());
     let mut buf = BytesMut::new();
-    assert!(encode_opaque(&mut buf, &opaque((1 << 20) + 1), 10, "datum").is_err());
+    assert!(encode_opaque(&mut buf, &opaque((1 << 20) + 1), |tag| tag > 10, "datum").is_err());
     assert!(buf.is_empty());
 }

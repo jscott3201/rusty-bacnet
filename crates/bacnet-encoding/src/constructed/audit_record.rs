@@ -1,4 +1,18 @@
-use super::log_fields::{decode_log_status, encode_log_status};
+//! Audit Log records and AuditLogQuery results, framed as Clause 21 gives
+//! BACnetAuditLogRecord and BACnetAuditLogRecordResult.
+//!
+//! A record is two constructed fields: context 0 around the application
+//! Date and Time, and context 1 around the datum, a primitive context 0
+//! holding the three-bit log status, a constructed context 1 holding an
+//! audit notification, or a primitive context 2 holding the clock change
+//! as a REAL. An alternative under a higher tag, primitive or constructed,
+//! is kept as [`BACnetAuditLogDatum::Opaque`] and written back unchanged
+//! (#2483), with the bounds the other log records' CHOICEs keep.
+
+use super::log_fields::{
+    IN_AUDIT_RESULT, check_record, decode_log_status, decode_opaque, encode_log_status,
+    encode_opaque,
+};
 use super::tagged::{
     decode_app_fixed, decode_ctx_canonical_unsigned, decode_ctx_constructed, decode_ctx_primitive,
     expect_end,
@@ -12,25 +26,53 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{Date, Time};
 use bytes::BytesMut;
 
-/// Encode one adjacent `BACnetAuditLogRecordResult` sequence.
+const RECORD: &str = "BACnetAuditLogRecord";
+const DATUM: &str = "BACnetAuditLogRecord log-datum";
+
+const LOG_STATUS: u8 = 0;
+const NOTIFICATION: u8 = 1;
+const TIME_CHANGE: u8 = 2;
+
+/// Whether the log-datum CHOICE gives `tag` no alternative: above
+/// time-change, the last it assigns.
+fn unassigned(tag: u8) -> bool {
+    tag > TIME_CHANGE
+}
+
+/// Encode one adjacent `BACnetAuditLogRecordResult` sequence, leaving `buf`
+/// unchanged when the record doesn't encode.
 pub fn encode_audit_log_record_result(
     result: &BACnetAuditLogRecordResult,
     buf: &mut BytesMut,
 ) -> Result<(), Error> {
+    let start = buf.len();
     primitives::encode_ctx_unsigned(buf, 0, result.sequence_number);
     tags::encode_opening_tag(buf, 1);
-    encode_audit_log_record(&result.record, buf)?;
+    encode_audit_log_record(&result.record, buf).inspect_err(|_| buf.truncate(start))?;
     tags::encode_closing_tag(buf, 1);
     Ok(())
 }
 
 /// Encode one bare `BACnetAuditLogRecord` field sequence.
+///
+/// Fails, leaving `buf` unchanged, for a timestamp that isn't a date and
+/// time, a notification that would not encode, an opaque datum under a tag
+/// the CHOICE assigns or whose body isn't complete tagged values, or a
+/// record nested too deep for an AuditLogQuery-ACK to carry (#2483), which
+/// [`is_record_too_deep`](super::is_record_too_deep) tells apart.
 pub fn encode_audit_log_record(
     record: &BACnetAuditLogRecord,
     buf: &mut BytesMut,
 ) -> Result<(), Error> {
     validate_date_time(&record.timestamp.0, &record.timestamp.1)?;
+    // Straight into `buf`, cut back on failure: no staging buffer (#2233).
+    let start = buf.len();
+    write_audit_log_record(record, buf)
+        .and_then(|()| check_record(&buf[start..], IN_AUDIT_RESULT, RECORD))
+        .inspect_err(|_| buf.truncate(start))
+}
 
+fn write_audit_log_record(record: &BACnetAuditLogRecord, buf: &mut BytesMut) -> Result<(), Error> {
     tags::encode_opening_tag(buf, 0);
     primitives::encode_app_date(buf, &record.timestamp.0);
     primitives::encode_app_time(buf, &record.timestamp.1);
@@ -38,14 +80,17 @@ pub fn encode_audit_log_record(
 
     tags::encode_opening_tag(buf, 1);
     match &record.datum {
-        BACnetAuditLogDatum::LogStatus(status) => encode_log_status(buf, 0, *status),
+        BACnetAuditLogDatum::LogStatus(status) => encode_log_status(buf, LOG_STATUS, *status),
         BACnetAuditLogDatum::AuditNotification(notification) => {
-            tags::encode_opening_tag(buf, 1);
+            tags::encode_opening_tag(buf, NOTIFICATION);
             encode_audit_notification(notification, buf)?;
-            tags::encode_closing_tag(buf, 1);
+            tags::encode_closing_tag(buf, NOTIFICATION);
         }
         BACnetAuditLogDatum::TimeChange(change) => {
-            primitives::encode_ctx_real(buf, 2, *change);
+            primitives::encode_ctx_real(buf, TIME_CHANGE, *change);
+        }
+        BACnetAuditLogDatum::Opaque(opaque) => {
+            encode_opaque(buf, opaque, unassigned, DATUM)?;
         }
     }
     tags::encode_closing_tag(buf, 1);
@@ -115,19 +160,20 @@ fn decode_date_time(data: &[u8]) -> Result<(Date, Time), Error> {
 }
 
 fn decode_datum(data: &[u8]) -> Result<BACnetAuditLogDatum, Error> {
-    let (choice, _) = tags::decode_tag(data, 0)?;
-    if choice.is_context(0) {
+    let (choice, start) = tags::decode_tag(data, 0)?;
+    if let Some((opaque, end)) = decode_opaque(data, &choice, start, unassigned)? {
+        expect_end(data, end, end, DATUM)?;
+        Ok(BACnetAuditLogDatum::Opaque(opaque))
+    } else if choice.is_context(LOG_STATUS) {
         const WHAT: &str = "BACnetAuditLogRecord log-status";
-        let (contents, end) = decode_ctx_primitive(data, 0, 0, WHAT)?;
+        let (contents, end) = decode_ctx_primitive(data, 0, LOG_STATUS, WHAT)?;
         expect_end(data, end, end, WHAT)?;
         Ok(BACnetAuditLogDatum::LogStatus(decode_log_status(
-            contents,
-            0,
-            "BACnetAuditLogRecord",
+            contents, 0, RECORD,
         )?))
-    } else if choice.is_opening_tag(1) {
+    } else if choice.is_opening_tag(NOTIFICATION) {
         const WHAT: &str = "AuditLogQuery-ACK AuditNotification choice";
-        let (notification_body, end) = decode_ctx_constructed(data, 0, 1, WHAT)?;
+        let (notification_body, end) = decode_ctx_constructed(data, 0, NOTIFICATION, WHAT)?;
         expect_end(data, end, end, WHAT)?;
         let (notification, notification_end) = decode_audit_notification_at(notification_body, 0)?;
         expect_end(
@@ -137,9 +183,9 @@ fn decode_datum(data: &[u8]) -> Result<BACnetAuditLogDatum, Error> {
             "AuditNotification choice notification",
         )?;
         Ok(BACnetAuditLogDatum::AuditNotification(notification))
-    } else if choice.is_context(2) {
+    } else if choice.is_context(TIME_CHANGE) {
         const WHAT: &str = "BACnetAuditLogRecord time-change";
-        let (contents, end) = decode_ctx_primitive(data, 0, 2, WHAT)?;
+        let (contents, end) = decode_ctx_primitive(data, 0, TIME_CHANGE, WHAT)?;
         expect_end(data, end, end, WHAT)?;
         Ok(BACnetAuditLogDatum::TimeChange(primitives::decode_real(
             contents,
@@ -161,7 +207,9 @@ fn validate_date_time(date: &Date, time: &Time) -> Result<(), Error> {
         && (time.second == Time::UNSPECIFIED || time.second <= 59)
         && (time.hundredths == Time::UNSPECIFIED || time.hundredths <= 99);
     if !date_valid || !time_valid {
-        return Err(Error::encode("BACnetAuditLogRecord timestamp contains an invalid Date or Time component"));
+        return Err(Error::encode(
+            "BACnetAuditLogRecord timestamp contains an invalid Date or Time component",
+        ));
     }
     Ok(())
 }

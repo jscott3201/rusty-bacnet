@@ -2339,9 +2339,10 @@ type in snake case (#2073), with each value under its member's name:
 The keys follow the event type's members in the standard, for every type the
 stack decodes, from `change_of_bitstring` to `change_of_timer`, and
 `complex_event_type` too. Event values under a tag the standard gives no
-alternative (7, 12, or a later revision's) are `{"kind": "other", "tag": 30, "data": b"..."}`,
-the body as received, as an unassigned Event_Parameters algorithm reads
-(#2474). Status flags and other bit strings are
+alternative (7, 12, or a later revision's) are `{"kind": "other", "tag": 30,
+"constructed": True, "data": b"..."}`, the contents (or a constructed one's
+body) as received, as a log record's unknown choice reads (#2474, #2483).
+Status flags and other bit strings are
 `BitString`s; a property state is a `(choice_tag, value)` pair, as in
 [Event_Parameters](#typed-constructed-values); a life safety operation is a
 `LifeSafetyOperation`; life safety states and modes, reliabilities, access
@@ -2887,7 +2888,9 @@ and `datum`. `timestamp` is `(date, time)`, where date is
 `(hour, minute, second, hundredths)`, matching the established
 `BACnetTimeStamp.date_time(...).value` convention. Datum mappings use `kind`
 values `"log_status"`, `"audit_notification"`, or `"time_change"`, with a
-same-named payload key. `log_status` is a
+same-named payload key; a datum under a tag the standard doesn't assign is
+`{"kind": "other", "tag": 3, "constructed": False, "data": b"..."}`, as
+received (#2483). `log_status` is a
 [`BitString`](#bit-strings-and-enum-names) naming `LOG_DISABLED`,
 `BUFFER_PURGED` and `LOG_INTERRUPTED`, in the wire's bit order
 (log-disabled in the top bit of the octet). Nested notifications use the canonical field names

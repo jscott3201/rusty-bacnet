@@ -11,9 +11,9 @@
 //!
 //! A record is flagged when it changes the log's status, reports an event
 //! into a state other than normal, or records an operation that failed. An
-//! Event Log record under a tag the standard doesn't assign (#2474) is an
-//! `unknown-choice` element, its tag and its octets as hex, and is flagged
-//! too: nothing here can say what it reports.
+//! Event Log or Audit Log record under a tag the standard doesn't assign
+//! (#2474, #2483) is an `unknown-choice` element, its tag and its octets as
+//! hex, and is flagged too: nothing here can say what it reports.
 
 use std::collections::BTreeMap;
 
@@ -75,6 +75,7 @@ pub(super) fn records(page: &LogPage) -> Vec<Record<'_>> {
                         }
                         BACnetAuditLogDatum::LogStatus(status) => Kind::LogStatus(*status),
                         BACnetAuditLogDatum::TimeChange(seconds) => Kind::TimeChange(*seconds),
+                        BACnetAuditLogDatum::Opaque(opaque) => Kind::Unknown(unknown(opaque)),
                     },
                 }
             })

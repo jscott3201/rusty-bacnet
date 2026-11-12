@@ -746,7 +746,11 @@ fn an_unknown_variant_is_the_wrong_tag() {
     ] {
         assert_eq!(
             decode_variant(data).unwrap(),
-            NotificationParameters::Opaque { tag, data: vec![] },
+            NotificationParameters::Opaque(bacnet_types::constructed::OpaqueChoice {
+                tag,
+                constructed: true,
+                data: vec![],
+            }),
             "{data:02X?}"
         );
     }

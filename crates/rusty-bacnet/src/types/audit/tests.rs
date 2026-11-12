@@ -442,6 +442,12 @@ fn ack_projection_covers_every_datum_and_nested_optional_field() {
         BACnetAuditLogDatum::AuditNotification(audit_notification(true)),
         BACnetAuditLogDatum::AuditNotification(audit_notification(false)),
         BACnetAuditLogDatum::TimeChange(-1.5),
+        // A later revision's datum, kept as received (#2483).
+        BACnetAuditLogDatum::Opaque(bacnet_types::constructed::OpaqueChoice {
+            tag: 3,
+            constructed: false,
+            data: vec![0x01, 0x02],
+        }),
     ];
     let ack = AuditLogQueryAck {
         audit_log: oid(ObjectType::AUDIT_LOG, 9),
@@ -488,7 +494,7 @@ fn ack_projection_covers_every_datum_and_nested_optional_field() {
             .unwrap()
             .cast_into::<PyList>()
             .unwrap();
-        assert_eq!(records.len(), 4);
+        assert_eq!(records.len(), 5);
 
         let mut kinds = Vec::new();
         for (index, item) in records.iter().enumerate() {
@@ -561,6 +567,16 @@ fn ack_projection_covers_every_datum_and_nested_optional_field() {
                         .unwrap(),
                     -1.5
                 ),
+                4 => {
+                    let expected = py
+                        .eval(
+                            c"{'kind': 'other', 'tag': 3, 'constructed': False, 'data': b'\x01\x02'}",
+                            None,
+                            None,
+                        )
+                        .unwrap();
+                    assert!(datum.as_any().eq(&expected).unwrap(), "{datum}");
+                }
                 _ => {}
             }
             if index == 1 || index == 2 {
@@ -591,7 +607,8 @@ fn ack_projection_covers_every_datum_and_nested_optional_field() {
                 "log_status",
                 "audit_notification",
                 "audit_notification",
-                "time_change"
+                "time_change",
+                "other"
             ]
         );
     });

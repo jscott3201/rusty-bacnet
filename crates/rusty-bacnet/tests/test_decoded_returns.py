@@ -429,6 +429,20 @@ class LogRecordBitStringTests(unittest.TestCase):
         self.assertEqual(
             member, {"kind": "other", "tag": 9, "constructed": True, "data": b"\x09\x01"}
         )
+        # #2483: an Audit Log datum under [3], primitive, then a time change.
+        unknown = bytes.fromhex(stamp + "1e 3a 01 02 1f")
+        change = bytes.fromhex(stamp + "1e 2c 3f c0 00 00 1f")
+        first, second = decode_log_records({
+            "object_id": ObjectIdentifier(ObjectType.AUDIT_LOG, 1),
+            "property_id": PropertyIdentifier.LOG_BUFFER,
+            "item_count": 2,
+            "item_data": unknown + change,
+        })
+        self.assertEqual(
+            first["datum"],
+            {"kind": "other", "tag": 3, "constructed": False, "data": b"\x01\x02"},
+        )
+        self.assertEqual(second["datum"], {"kind": "time_change", "time_change": 1.5})
 
 
 class EventInformationPagingTests(unittest.IsolatedAsyncioTestCase):

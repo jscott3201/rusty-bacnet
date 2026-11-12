@@ -6,35 +6,10 @@
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
-use super::EventNotificationRequest;
+use super::{EventNotificationRequest, OpaqueChoice};
 use crate::bitstring::LogStatus;
 use crate::enums::{ErrorClass, ErrorCode};
 use crate::primitives::{Date, StatusFlags, Time};
-
-// ---------------------------------------------------------------------------
-// OpaqueChoice
-// ---------------------------------------------------------------------------
-
-/// An alternative of a log record's CHOICE under a context tag that CHOICE
-/// doesn't assign (a later revision's), kept as received so that it
-/// re-encodes unchanged: the `Opaque` variant of [`LogDatum`],
-/// [`EventLogDatum`], [`LogData`] and [`LogValue`].
-///
-/// The encoder writes it back under its own tag, primitive or between an
-/// opening and closing tag pair. It refuses a tag its CHOICE assigns, or 255,
-/// and a constructed body that isn't complete tagged values with every
-/// context tag balanced.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OpaqueChoice {
-    /// The unassigned context tag.
-    pub tag: u8,
-    /// Whether the alternative is constructed (an opening and closing tag
-    /// pair around `data`) rather than primitive.
-    pub constructed: bool,
-    /// A primitive alternative's contents, or a constructed one's body
-    /// without its enclosing tag pair.
-    pub data: Vec<u8>,
-}
 
 // ---------------------------------------------------------------------------
 // LogDatum (Clause 12.25.14 -- Trend Log Log_Buffer)
