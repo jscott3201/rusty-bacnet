@@ -31,7 +31,7 @@
 //! | [`tags`] | [`TagsSnapshot`] | `RBNTAG01` | 1, 2 (1, 2) | `FileTagsPersistence` |
 //! | [`color`] | [`ColorOutputSnapshot`] | `RBNCLR02` | 1 (`RBNCLR01`), 2, 3 (2, 3) | `FileColorOutputPersistence` |
 //! | [`access_rights`] | [`AccessRightsSnapshot`] | `RBNACR01` | 1, 2 (1, 2) | `FileAccessRightsPersistence` |
-//! | [`load_control`] | [`LoadControlSnapshot`] | `RBNLCT01` | 1 (1) | `FileLoadControlPersistence` |
+//! | [`load_control`] | [`LoadControlSnapshot`] | `RBNLCT02` | 1 (`RBNLCT01`), 2 (1, 2) | `FileLoadControlPersistence` |
 //!
 //! A written Description (#2364) takes the newest version (or kind) in each
 //! row it changed: log schema version 3, write configuration kind 5, the
@@ -42,7 +42,8 @@
 //! [`UnknownVersion`](SnapshotErrorKind::UnknownVersion) or
 //! [`UnknownKind`](SnapshotErrorKind::UnknownKind). A written event
 //! algorithm parameter (#2331) takes write configuration kind 6 the same
-//! way.
+//! way, and a written Shed_Levels element (#2502) the Load Control's
+//! version 2.
 //!
 //! The one-file formats share a header: the eight-octet tag, which names the
 //! format and its version, then the four-octet identifier of the object the

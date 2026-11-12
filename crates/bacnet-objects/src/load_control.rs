@@ -33,7 +33,9 @@
 //! application sets with the object's setters before it joins a server, so a
 //! restored request is put to the shedder with them as the server starts, or
 //! changes while the server runs ([`LoadControlSetting`], #2497); storage
-//! keeps none of them.
+//! keeps none of them, but for the Shed_Levels elements a peer wrote, which
+//! win over the application's levels after a restart (#2502; the `saving`
+//! module says how).
 
 use crate::prelude::*;
 use alloc::borrow::Cow;
@@ -60,7 +62,8 @@ mod tests;
 
 #[cfg(feature = "std")]
 pub use persistence::FileLoadControlPersistence;
-pub use persistence::{LoadControlPersistence, LoadControlSnapshot};
+pub use persistence::{LoadControlPersistence, LoadControlSnapshot, MAX_WRITTEN_SHED_LEVELS};
+pub(crate) use saving::written_levels_sound;
 pub use shed::{LoadShedder, ShedProgress, ShedRequest, ShedStatus};
 
 /// One configuration property of a running Load Control, as the application
@@ -285,11 +288,34 @@ impl LoadControlObject {
     /// 12.28.10): a 0 fails with PROPERTY / VALUE_OUT_OF_RANGE and changes
     /// nothing. Clients may rewrite the values but not change their number,
     /// and read the descriptions only.
+    ///
+    /// With storage, an element a client wrote, now or before a restart,
+    /// wins over the level given here for it, and one past the end of the
+    /// array given here is dropped (#2502):
+    /// [`clear_written_shed_levels`](Self::clear_written_shed_levels) first
+    /// applies these whole. Set the levels before the object's first look
+    /// with a clock, so a restored request is put to the shedder with the
+    /// written ones.
     pub fn set_shed_levels(&mut self, levels: Vec<(u64, String)>) -> Result<(), Error> {
+        self.configure_shed_levels(levels, true)
+    }
+
+    /// Set the levels as [`set_shed_levels`](Self::set_shed_levels) does,
+    /// the written elements winning if `keep_written`, and otherwise
+    /// dropped from storage.
+    fn configure_shed_levels(
+        &mut self,
+        levels: Vec<(u64, String)>,
+        keep_written: bool,
+    ) -> Result<(), Error> {
         if levels.iter().any(|&(level, _)| level == 0) {
             return Err(common::value_out_of_range_error());
         }
         (self.shed_levels, self.shed_level_descriptions) = levels.into_iter().unzip();
+        self.durable
+            .levels_configured(self.shed_levels.len(), keep_written);
+        // `levels_configured` kept only the elements inside the array.
+        put_levels(&mut self.shed_levels, self.durable.written_levels());
         self.settle(shed::Prompt::Look);
         Ok(())
     }
@@ -325,11 +351,12 @@ impl LoadControlObject {
     }
 
     /// A WriteProperty of a property storage keeps, through its setter:
-    /// one of the four request properties or Enable, or, with storage, a
-    /// written Description.
+    /// one of the four request properties, Enable or Shed_Levels, or, with
+    /// storage, a written Description.
     fn write_request(
         &mut self,
         property: PropertyIdentifier,
+        array_index: Option<u32>,
         value: PropertyValue,
     ) -> Result<(), Error> {
         match property {
@@ -352,6 +379,7 @@ impl LoadControlObject {
                 self.set_shed_duration(unsigned_write(value)?);
                 Ok(())
             }
+            p if p == PropertyIdentifier::SHED_LEVELS => self.write_shed_levels(array_index, value),
             _ => {
                 self.set_duty_window(unsigned_write(value)?);
                 Ok(())
@@ -359,47 +387,74 @@ impl LoadControlObject {
         }
     }
 
-    /// A WriteProperty of Shed_Levels: the array whole, keeping its size, or
-    /// one element (Table 12-32 footnote 1). Index 0, the size, is
-    /// WRITE_ACCESS_DENIED, and a level of 0 VALUE_OUT_OF_RANGE, as for
-    /// [`set_shed_levels`](Self::set_shed_levels).
+    /// A WriteProperty of Shed_Levels ([`shed_levels_write`]). With storage
+    /// the elements it sets are kept as written (#2502).
     fn write_shed_levels(
         &mut self,
         array_index: Option<u32>,
         value: PropertyValue,
     ) -> Result<(), Error> {
-        let mut levels = self.shed_levels.clone();
-        match array_index {
-            None => {
-                // A one-element array arrives as its element alone.
-                let elements = match value {
-                    PropertyValue::List(elements) => elements,
-                    element => vec![element],
-                };
-                levels = elements
-                    .into_iter()
-                    .map(unsigned_write)
-                    .collect::<Result<Vec<_>, _>>()?;
-                if levels.len() != self.shed_levels.len() {
-                    return Err(common::value_out_of_range_error());
-                }
-            }
-            Some(0) => return Err(common::write_access_denied_error()),
-            Some(index) => {
-                let position = usize::try_from(index - 1).unwrap_or(usize::MAX);
-                let Some(level) = levels.get_mut(position) else {
-                    return Err(common::invalid_array_index_error());
-                };
-                *level = unsigned_write(value)?;
-            }
-        }
-        if levels.contains(&0) {
-            return Err(common::value_out_of_range_error());
-        }
-        self.shed_levels = levels;
+        let elements = shed_levels_write(self.shed_levels.len(), array_index, value)?;
+        put_levels(&mut self.shed_levels, &elements);
+        self.durable.levels_written(&elements);
         self.settle(shed::Prompt::Look);
         Ok(())
     }
+}
+
+/// Put each of `elements`, an (array index, level) pair, into `levels`;
+/// one past its end has no place there.
+fn put_levels(levels: &mut [u64], elements: &[(u32, u64)]) {
+    for &(index, level) in elements {
+        let position = usize::try_from(index)
+            .ok()
+            .and_then(|index| index.checked_sub(1));
+        if let Some(slot) = position.and_then(|position| levels.get_mut(position)) {
+            *slot = level;
+        }
+    }
+}
+
+/// The elements a WriteProperty of `value` to Shed_Levels sets in an array
+/// of `size` levels, as (array index, level) pairs: the array whole,
+/// keeping its size, or one element (Table 12-32 footnote 1). Index 0, the
+/// size, is WRITE_ACCESS_DENIED, an index past the end INVALID_ARRAY_INDEX,
+/// a whole array of another size or a level of 0 VALUE_OUT_OF_RANGE, as for
+/// [`set_shed_levels`](LoadControlObject::set_shed_levels), and anything
+/// but Unsigned INVALID_DATA_TYPE.
+fn shed_levels_write(
+    size: usize,
+    array_index: Option<u32>,
+    value: PropertyValue,
+) -> Result<Vec<(u32, u64)>, Error> {
+    let elements = match array_index {
+        None => {
+            // A one-element array arrives as its element alone.
+            let elements = match value {
+                PropertyValue::List(elements) => elements,
+                element => vec![element],
+            };
+            let levels = elements
+                .into_iter()
+                .map(unsigned_write)
+                .collect::<Result<Vec<_>, _>>()?;
+            if levels.len() != size {
+                return Err(common::value_out_of_range_error());
+            }
+            (1..).zip(levels).collect()
+        }
+        Some(0) => return Err(common::write_access_denied_error()),
+        Some(index) => {
+            if usize::try_from(index).map_or(true, |index| index > size) {
+                return Err(common::invalid_array_index_error());
+            }
+            vec![(index, unsigned_write(value)?)]
+        }
+    };
+    if elements.iter().any(|&(_, level)| level == 0) {
+        return Err(common::value_out_of_range_error());
+    }
+    Ok(elements)
 }
 
 /// Refuse a Start_Time that names no moment and isn't wholly unspecified.
@@ -575,17 +630,16 @@ impl BACnetObject for LoadControlObject {
         _priority: Option<u8>,
     ) -> Result<(), Error> {
         crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
-        // With storage, the request, Enable and a written Description are
-        // saved before they are served (#2479).
+        // With storage, the request, Enable, Shed_Levels and a written
+        // Description are saved before they are served (#2479, #2502).
         if self.durable.is_kept() && saving::kept(property, &value) {
-            return self.write_kept(property, value);
+            return self.write_kept(property, array_index, value);
         }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
         match property {
-            p if saving::kept(p, &value) => self.write_request(p, value),
-            p if p == PropertyIdentifier::SHED_LEVELS => self.write_shed_levels(array_index, value),
+            p if saving::kept(p, &value) => self.write_request(p, array_index, value),
             _ => Err(crate::common::unhandled_write_error(
                 self.property_metadata().as_ref(),
                 property,
@@ -621,13 +675,15 @@ impl crate::traits::CovReporting for LoadControlObject {}
 /// setters, behind the server's local routes (#2497). They are not storage's
 /// business (the module docs of `saving` say what it keeps), but a change
 /// that moves a request under way is saved like any the state machine makes.
+/// New levels here are the application's newer word over a client's: they
+/// replace the written elements storage keeps, which go (#2502).
 impl crate::traits::LocalInput for LoadControlObject {
     fn apply_local_input(&mut self, input: crate::traits::LocalInputValue) -> Result<(), Error> {
         let crate::traits::LocalInputValue::LoadControl(setting) = input else {
             return Err(crate::traits::not_supported());
         };
         match setting {
-            LoadControlSetting::ShedLevels(levels) => self.set_shed_levels(levels),
+            LoadControlSetting::ShedLevels(levels) => self.configure_shed_levels(levels, false),
             LoadControlSetting::FullDutyBaseline(kilowatts) => {
                 self.set_full_duty_baseline(kilowatts)
             }

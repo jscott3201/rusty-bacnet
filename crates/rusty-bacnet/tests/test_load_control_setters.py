@@ -1,7 +1,8 @@
 """A running Load Control's configuration (#2497): Shed_Levels,
 Full_Duty_Baseline and State_Description change through the server's local
 routes, a request under way is put to `shed` again, and `storage_path` keeps
-a request across a restart."""
+a request, and the Shed_Levels elements a client wrote (#2502), across a
+restart."""
 
 import asyncio
 import datetime
@@ -268,6 +269,50 @@ class StorageTests(unittest.IsolatedAsyncioTestCase):
                         await node.read_property(LC1, P.STATE_DESCRIPTION)
                     self.assertEqual(caught.exception.error_code,
                                      ErrorCode.UNKNOWN_PROPERTY.to_raw())
+            finally:
+                await node.stop()
+
+    async def test_written_shed_levels_survive_a_restart_until_the_route_replaces_them(self):
+        # #2502: the file keeps the elements a client wrote, which win over
+        # the keyword's levels at the next start.
+        keywords = [(1, "lights"), (2, "chillers"), (3, "pumps")]
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "lc1.bin")
+
+            async def serve():
+                node = server()
+                node.add_load_control(1, "LC-1", shed_levels=keywords, storage_path=path)
+                await node.start()
+                return node
+
+            node = await serve()
+            client = BACnetClient(interface="127.0.0.1", port=0, apdu_timeout_ms=2000)
+            await client.__aenter__()
+            try:
+                async with asyncio.timeout(10):
+                    address = await node.local_address()
+                    await client.write_property(address, LC1, P.SHED_LEVELS, V.unsigned(5),
+                                                array_index=2)
+            finally:
+                await client.stop()
+                await node.stop()
+
+            node = await serve()
+            try:
+                async with asyncio.timeout(10):
+                    self.assertEqual(await node.read_property(LC1, P.SHED_LEVELS),
+                                     V.list([V.unsigned(1), V.unsigned(5), V.unsigned(3)]))
+                    # The application's route replaces them, and the file
+                    # drops them.
+                    await node.set_load_control_shed_levels_local(LC1, keywords)
+            finally:
+                await node.stop()
+
+            node = await serve()
+            try:
+                async with asyncio.timeout(10):
+                    self.assertEqual(await node.read_property(LC1, P.SHED_LEVELS),
+                                     V.list([V.unsigned(1), V.unsigned(2), V.unsigned(3)]))
             finally:
                 await node.stop()
 

@@ -39,8 +39,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// themselves are configuration, not part of the request: an object with
     /// storage does not keep them, so set them with the object's setters
     /// before it joins the server, where a restored request is put to the
-    /// shedder with them as the server starts. This route works only on a
-    /// running server, after that first look.
+    /// shedder with them as the server starts. Storage keeps only the
+    /// elements a client wrote (#2502), which win over the setter's at a
+    /// restart; the levels given here are the application's newer word, so
+    /// they replace those, and storage drops them in a save nobody waits
+    /// for. This route works only on a running server, after that first
+    /// look.
     ///
     /// Like [`write_local`](Self::write_local), it must be awaited inside a
     /// Tokio runtime, failing before anything is written outside one, and a

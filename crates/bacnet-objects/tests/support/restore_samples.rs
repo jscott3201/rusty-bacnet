@@ -91,6 +91,16 @@ fn save_forwarder(path: &Path, snapshot: ForwarderSnapshot) {
 /// A Load Control shedding a percent short of compliance, with a written
 /// Description: every field of `RBNLCT01` present (#2479).
 pub fn load_control(path: &Path) {
+    save_load_control(path, Vec::new());
+}
+
+/// [`load_control`] with two written Shed_Levels elements: `RBNLCT02`
+/// (#2502).
+pub fn written_levels_load_control(path: &Path) {
+    save_load_control(path, vec![(1, 3), (3, 9)]);
+}
+
+fn save_load_control(path: &Path, shed_levels: Vec<(u32, u64)>) {
     let snapshot = LoadControlSnapshot {
         state: bacnet_types::enums::ShedState::SHED_NON_COMPLIANT,
         requested_shed_level: bacnet_types::constructed::BACnetShedLevel::Percent(80),
@@ -113,6 +123,7 @@ pub fn load_control(path: &Path) {
         agreed_duty_window: 15,
         enable: true,
         description: Some("Chillers".into()),
+        shed_levels,
     };
     FileLoadControlPersistence::new(path)
         .unwrap()

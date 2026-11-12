@@ -246,17 +246,20 @@ impl BACnetServer {
     ///
     /// With `storage_path` (a `str`), the object keeps its shed request in
     /// that file (#2497): the request properties, the agreed Duty_Window,
-    /// the shed state, Enable and a Description a client wrote. A rebuilt
-    /// object looks at a request that was pending or being shed again, as
-    /// though Start_Time had just been written, and calls `shed` for it; one
-    /// that was being shed calls `stop` when it ends. A write that cannot be
-    /// saved is refused with DEVICE / OPERATIONAL_PROBLEM. The shed levels,
-    /// baseline and state description are configuration the file does not
-    /// keep: give them as keywords here at every start, so a restored
-    /// request is put to `shed` with them. The `set_load_control_*_local`
-    /// methods work only once the server runs, after that first look, so use
-    /// them for changes while it runs. Give each Load Control its own file;
-    /// one that holds another object's request raises BacnetError.
+    /// the shed state, Enable, and a Description and the Shed_Levels
+    /// elements a client wrote (#2502). A rebuilt object looks at a request
+    /// that was pending or being shed again, as though Start_Time had just
+    /// been written, and calls `shed` for it; one that was being shed calls
+    /// `stop` when it ends. A write that cannot be saved is refused with
+    /// DEVICE / OPERATIONAL_PROBLEM. The shed levels, baseline and state
+    /// description are configuration the file does not keep: give them as
+    /// keywords here at every start, so a restored request is put to `shed`
+    /// with them. A written Shed_Levels element wins over the keyword's level
+    /// for it, and `set_load_control_shed_levels_local` drops the written
+    /// ones. The `set_load_control_*_local` methods work only once the server
+    /// runs, after that first look, so use them for changes while it runs.
+    /// Give each Load Control its own file; one that holds another object's
+    /// request raises BacnetError.
     #[pyo3(signature = (
         instance,
         name,

@@ -7028,10 +7028,12 @@ across a restart (Clause 12.28, #2479) in storage the application gives it:
 `load_control::LoadControlPersistence`, or `FileLoadControlPersistence` for a
 file (the `snapshot::load_control` format). It keeps Requested_Shed_Level,
 Start_Time, Shed_Duration, Duty_Window, the agreed Duty_Window, the shed
-state, Enable and a written Description. A peer's write of one of the four
-request properties, of Enable or of Description is saved before it is
-answered: the server stages it, and one that can't be saved is refused with
-DEVICE / OPERATIONAL_PROBLEM (a Description past 16 KiB with RESOURCES /
+state, Enable, a written Description and the Shed_Levels elements a peer
+wrote (#2502). A peer's write of one of the four request properties, of
+Enable, of Description or of Shed_Levels (whole or one element) is saved
+before it is answered: the server stages it, and one that can't be saved is
+refused with DEVICE / OPERATIONAL_PROBLEM (a Description past 16 KiB, or
+more than `MAX_WRITTEN_SHED_LEVELS` written elements, with RESOURCES /
 NO_SPACE_TO_WRITE_PROPERTY). The staged save holds what the object will
 serve once the state machine's own rules have run (Enable FALSE, a cancel, an
 end already past); whether a request that goes on sheds follows in a save
@@ -7054,10 +7056,18 @@ request, `remove` the object first, then add the new one. A start dropped by
 its caller after the outputs started releases them as a failed one does. An
 object from `new` keeps nothing and starts SHED_INACTIVE with the idle
 values. `clear_written_description` drops a written Description from
-storage. `LoadShedder::stop` should be idempotent: it can come with no loads
-shed, for a restored request this process never offered, and twice with no
-`shed` between (an object replaced before its first look, then its
-successor's restored request ending).
+storage. Storage keeps only the Shed_Levels elements a peer wrote, by index,
+not the levels the application gives: after a restart `set_shed_levels`
+takes the application's array and serves each written element in place of
+its level, dropping any past the array's end, so call it before the
+object's first look and a restored request is put to the shedder with the
+written levels. `clear_written_shed_levels` drops them first, so the next
+`set_shed_levels` applies whole; the running server's
+`set_load_control_shed_levels_local` replaces them and storage drops them.
+`LoadShedder::stop` should be idempotent: it can come with no loads shed, for
+a restored request this process never offered, and twice with no `shed`
+between (an object replaced before its first look, then its successor's
+restored request ending).
 
 Enable FALSE ends a request and takes no new one. While it is FALSE, writes
 of Start_Time and Shed_Duration are acknowledged but not kept, so both read
@@ -7113,7 +7123,10 @@ request that changed nothing a SubscribeCOV report carries sends none. The
 routes are not audited, as `set_reliability_local` is not. Storage keeps the
 request, not this configuration: set the levels, baseline and description with
 the object's setters before it joins the server, so a restored request is put
-to the shedder with them as the server starts. The routes work only on a
+to the shedder with them as the server starts. The one exception is a
+Shed_Levels element a peer wrote, which storage keeps and which wins over the
+setter's level at a restart (#2502); the route's levels replace those, and
+storage drops them in a save nobody waits for. The routes work only on a
 running server, after that first look, so they are for changes while it runs.
 
 Load Control supports COV (Table 13-1). Its SubscribeCOV report carries

@@ -1158,14 +1158,18 @@ wrote one, and the one a finished request returns to.
 
 With `storage_path` the object keeps its shed request in that file
 (#2497): the request properties, the agreed Duty\_Window, the shed
-state, Enable and a Description a client wrote. A rebuilt object
-looks at a request that was pending or being shed again, as though
-Start\_Time had just been written, and calls `shed` for it; one
+state, Enable, and a Description and the Shed\_Levels elements a
+client wrote (#2502). A rebuilt object looks at a request that was
+pending or being shed again, as though Start\_Time had just been
+written, and calls `shed` for it; one
 that was being shed calls `stop` when it ends. A write that cannot
 be saved is refused with DEVICE / OPERATIONAL\_PROBLEM. The shed
 levels, baseline and state description are configuration the file
 does not keep: give them as keywords at every start, so a restored
-request is put to `shed` with them. The
+request is put to `shed` with them. A written Shed\_Levels element
+wins over the `shed_levels` keyword's level for it, one past the
+end of the keyword's array is dropped, and
+`set_load_control_shed_levels_local` drops them all. The
 `set_load_control_*_local` methods work only once the server runs,
 after that first look, so use them for changes while it runs. Give
 each Load Control its own file; one that holds another object's
@@ -2472,7 +2476,9 @@ way is put to `shed` again, and stays in its state unless the
 answer moves it; what that moves is reported through COV and saved
 with the request. Storage does not keep the levels: give them as
 `add_load_control` keywords at every start, so a restored request
-is put to `shed` with them. Not audited, like
+is put to `shed` with them. These replace the elements a client
+wrote, which storage keeps over the keywords' levels until then
+(#2502), and storage drops those. Not audited, like
 `set_reliability_local`.
 
 ### BACnetServer.set_load_control_full_duty_baseline_local

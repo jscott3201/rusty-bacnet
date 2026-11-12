@@ -20,7 +20,9 @@ impl BACnetServer {
     /// put to `shed` again and stays in its state unless the answer moves
     /// it. Storage does not keep the levels: give them as `add_load_control`
     /// keywords at every start, so a restored request is put to `shed` with
-    /// them. Like `set_reliability_local`, it is not audited.
+    /// them. They replace the elements a client wrote, which storage keeps
+    /// over the keywords' levels until then, and storage drops those
+    /// (#2502). Like `set_reliability_local`, it is not audited.
     #[pyo3(signature = (object_id, shed_levels))]
     fn set_load_control_shed_levels_local<'py>(
         &self,

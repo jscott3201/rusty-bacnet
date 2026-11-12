@@ -8,6 +8,7 @@ use crate::load_control::{LoadControlPersistence, LoadControlSnapshot};
 use crate::traits::{BACnetObject, Retirement};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
+mod levels;
 mod setting;
 
 /// Storage in memory, counting its saves, and refusing them while `fail`.

@@ -4279,13 +4279,18 @@ RuntimeError.
 
 `storage_path` on `add_load_control` keeps the object's request in that file
 across a restart: the four request properties, the agreed Duty_Window, the
-shed state, Enable and a Description a client wrote. A rebuilt object looks at
+shed state, Enable, and a Description and the Shed_Levels elements a client
+wrote (#2502). A rebuilt object looks at
 a pending or shed request again as the server starts and calls `shed` for it;
 one that was being shed calls `stop` when it ends. A write that cannot be
 saved is refused with DEVICE / OPERATIONAL_PROBLEM. The shed levels, baseline
 and state description are configuration, not request: the file does not keep
 them, so give them as keywords at every start: a restored request is put to
-`shed` as the server starts, with whatever the object holds then. The
+`shed` as the server starts, with whatever the object holds then. A
+Shed_Levels element a client wrote wins over the `shed_levels` keyword's level
+for it, one past the end of the keyword's array is dropped, and
+`set_load_control_shed_levels_local` replaces the written ones, which the file
+then drops. The
 `set_load_control_*_local` methods work only once the server runs, after that
 first look, so they are for changes while it runs. Give each Load Control its
 own file. These methods are not audited, as `set_reliability_local` is not.

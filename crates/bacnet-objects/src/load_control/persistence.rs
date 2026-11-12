@@ -27,12 +27,18 @@ use crate::durable::file::ObjectFile;
 #[cfg(feature = "std")]
 use crate::snapshot::load_control as format;
 
+/// The most Shed_Levels elements storage keeps written (#2502). With
+/// storage, a write that would leave more written is refused with
+/// RESOURCES / NO_SPACE_TO_WRITE_PROPERTY before anything is saved.
+pub const MAX_WRITTEN_SHED_LEVELS: usize = 1024;
+
 /// What a Load Control keeps across a restart: its shed request as it
-/// stands, its agreed Duty_Window, its shed state, Enable, and a written
-/// Description.
+/// stands, its agreed Duty_Window, its shed state, Enable, a written
+/// Description and the Shed_Levels elements a write set.
 ///
 /// [`Default`] is an idle object's: SHED_INACTIVE, level 0, Start_Time
-/// unspecified, the three durations zero, enabled, and no Description.
+/// unspecified, the three durations zero, enabled, no Description and no
+/// written levels.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LoadControlSnapshot {
     /// Present_Value. A rebuilt object takes any state but SHED_INACTIVE as
@@ -59,6 +65,15 @@ pub struct LoadControlSnapshot {
     /// UTF-8, as an object with storage refuses a longer write. `None`
     /// until then.
     pub description: Option<String>,
+    /// The Shed_Levels elements a write set (#2502), each as its array
+    /// index (from 1) and level, in index order with no index twice, at
+    /// most [`MAX_WRITTEN_SHED_LEVELS`] of them; no level is 0. A rebuilt
+    /// object serves each over the level the application gives that
+    /// element ([`set_shed_levels`]), and drops those past the end of the
+    /// array it gives. Empty until a write sets one.
+    ///
+    /// [`set_shed_levels`]: super::LoadControlObject::set_shed_levels
+    pub shed_levels: Vec<(u32, u64)>,
 }
 
 impl Default for LoadControlSnapshot {
@@ -72,6 +87,7 @@ impl Default for LoadControlSnapshot {
             agreed_duty_window: 0,
             enable: true,
             description: None,
+            shed_levels: Vec::new(),
         }
     }
 }
