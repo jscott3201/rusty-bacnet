@@ -705,7 +705,8 @@ mod transport {
 
             // The frame carries its own 802.3 header, destination first, and
             // the bound socket sends on its interface: no address needed.
-            // A short send is an error (#1918); a frame that went is tapped.
+            // A short send is an error (#1918); the frame is tapped just
+            // before the send, whether or not it goes (#2519).
             send_tapped(&self.frame_tap, &dst, &buf, |frame| socket.send(frame))
                 .map_err(Error::Transport)
         }
