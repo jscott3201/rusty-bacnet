@@ -325,3 +325,52 @@ fn ids_count_only_while_a_report_waits_and_only_once() {
     // C looked at, D still owed: counted twice, both would be.
     assert_eq!(device.reporter.owed_ids.len(), 1, "one free ID, one look");
 }
+
+/// Three reports owed an ID and the host's word that three are free: all
+/// three go from the one look it brings, with no further call.
+#[test]
+fn as_many_owed_reports_go_as_ids_are_free() {
+    let mut device = Device::new(OutboxLimits::default());
+    device.ids.limit = 0;
+    for process in 1..=3 {
+        device.subscribe(process, true, T0);
+        assert!(device.pop(T0).is_none(), "{process} waits for an ID");
+    }
+    assert!(device.reporter.owes_invoke_id());
+    device.ids.limit = 3;
+    device.reporter.invoke_ids_released(3);
+    device.deadline();
+    let mut sent = Vec::new();
+    while let Some((notification, apdu)) = device.pop(T0) {
+        assert!(notification.invoke_id.is_some());
+        sent.push(reported(&apdu).0);
+    }
+    assert_eq!(sent, [1, 2, 3]);
+    assert!(!device.reporter.owes_invoke_id());
+}
+
+/// Three reports owed an ID and one ID free at a time: each word from the
+/// host lets the oldest still owed go, and the others keep waiting, owed,
+/// with nothing due until the next.
+#[test]
+fn one_free_id_lets_one_owed_report_go_each_time() {
+    let mut device = Device::new(OutboxLimits::default());
+    device.ids.limit = 0;
+    for process in 1..=3 {
+        device.subscribe(process, true, T0);
+        assert!(device.pop(T0).is_none());
+    }
+    for process in 1..=3 {
+        device.ids.limit += 1;
+        device.reporter.invoke_ids_released(1);
+        device.deadline();
+        let (_, apdu) = device.pop(T0).expect("the oldest owed goes");
+        assert_eq!(reported(&apdu).0, process);
+        assert!(device.pop(T0).is_none(), "one ID, one report");
+        assert_eq!(device.reporter.owes_invoke_id(), process < 3);
+        assert!(
+            device.reporter.next_deadline().is_none_or(|due| due > T0),
+            "nothing due until the host's next word"
+        );
+    }
+}

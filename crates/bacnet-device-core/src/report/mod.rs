@@ -179,7 +179,8 @@ pub trait InvokeIds {
     /// does: a late answer to an ended request would otherwise match the
     /// next one sent under its ID. A report refused one waits until IDs
     /// come back: those the reporter gives back itself, and those the host
-    /// reports with [`Reporter::invoke_ids_released`] (#2512).
+    /// reports with [`Reporter::invoke_ids_released`] while
+    /// [`Reporter::owes_invoke_id`] holds (#2512).
     fn take(&mut self, to: &BACnetAddress, service: ConfirmedServiceChoice) -> Option<u8>;
     /// Give back `id`, taken for `to`: its request has ended.
     fn release(&mut self, to: &BACnetAddress, id: u8);

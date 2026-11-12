@@ -8505,9 +8505,11 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   one instead, looked at again only as IDs come back (#2512): those the
   reporter gives back itself, and those the host reports with
   `invoke_ids_released(free)` when the IDs it shares with other work come
-  back. `free` is how many are free then, not how many came back, so an ID
-  the reporter gave back itself isn't counted twice; IDs counted while no
-  report waited for one don't count. A host that refuses IDs past a bound
+  back, for as long as `owes_invoke_id()` holds (one report getting an ID
+  doesn't end the wait for the others). `free` is how many are free then,
+  not how many came back, so an ID the reporter gave back itself isn't
+  counted twice, and up to that many owed reports go from the one look;
+  IDs counted while no report waited for one don't count. A host that refuses IDs past a bound
   of its own needn't report anything, and `next_deadline` never comes due
   for a report waiting for an ID. `notification_deadline(token)` is a
   confirmed notification's own deadline: its answer's, or its cutoff when
@@ -12277,7 +12279,8 @@ on `config.confirmed` (three seconds and three retries by default, apart from
 the client role's `SessionConfig` timer), and a subscriber that refuses one or
 never answers is held off for one retry cycle. A change made while a report is
 out waits for its answer. With every invoke ID leased, a report waits until
-one comes back.
+one comes back, and each report waiting goes as an ID comes back for it, not
+only the first.
 
 At most `bacnet_endpoint::session::COV_CONFIRMED_IN_FLIGHT` (64) confirmed
 notifications are out at once, all subscribers together: a quarter of the 256

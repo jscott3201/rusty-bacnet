@@ -353,12 +353,17 @@ async fn a_report_waits_for_an_invoke_id() {
     node.request(&to, 1, SUBSCRIBE_COV, &subscribe(7, Some(true), Some(300)))
         .await;
     assert_eq!(node.quiet(&to).await, [acked(1)], "no ID for the report");
-    // Paused time moves, so the task waits rather than spins.
+    // Paused time moves, so the task waits rather than spins: no pass
+    // while it does.
+    let host = Arc::clone(session.cov.host().unwrap());
+    let passes = || host.passes.load(std::sync::atomic::Ordering::Relaxed);
+    let before = passes();
     assert!(
         node.next_within(Duration::from_millis(1_025))
             .await
             .is_none()
     );
+    assert_eq!(passes(), before, "asleep while the pool is full");
     coordinator.release(held[0]).unwrap();
     let (_, apdu) = node.next_within(Duration::from_millis(10)).await.unwrap();
     let (id, _) = confirmed_notification(&apdu);
@@ -536,5 +541,108 @@ async fn an_id_back_while_the_task_sends_is_not_lost() {
     for token in held {
         coordinator.release(token).unwrap();
     }
+    session.stop().await.unwrap();
+}
+
+/// Three confirmed reports owed an ID at a full pool, and IDs coming back
+/// one at a time, at 0, 0.5 and 1 s: each report goes as its ID comes back,
+/// not once the subscriber before it, which never answers, has used up its
+/// retries. One report getting an ID doesn't end the wait for the others.
+#[tokio::test(start_paused = true)]
+async fn each_owed_report_goes_as_an_id_comes_back() {
+    use bacnet_endpoint_core::coordinator::TerminalPolicy;
+    let mut node = Node::new().await;
+    let mut session = endpoint(SessionRole::ServerOnly, Some(ReportConfig::default())).await;
+    let to = mac_of(&session);
+    let coordinator = session.coordinator();
+    let lease = || {
+        let peer = CanonicalPeer::direct(&[9]);
+        LeaseMetadata::requester(peer, READ_PROPERTY, TerminalPolicy::ComplexAck)
+    };
+    let mut held: Vec<_> = (0..256)
+        .map(|_| coordinator.reserve(lease()).unwrap())
+        .collect();
+    for process in 1..=3u8 {
+        let body = subscribe(process.into(), Some(true), Some(300));
+        node.request(&to, process, SUBSCRIBE_COV, &body).await;
+        assert_eq!(node.quiet(&to).await, [acked(process)], "owed an ID");
+    }
+    let mut heard = Vec::new();
+    for at in [0, 500, 1_000] {
+        tokio::time::sleep_until(tokio::time::Instant::now() + Duration::from_millis(at)).await;
+        let back = tokio::time::Instant::now();
+        coordinator.release(held.pop().unwrap()).unwrap();
+        let (_, apdu) = node
+            .next_within(Duration::from_millis(10))
+            .await
+            .unwrap_or_else(|| panic!("a report as the ID at {at} ms came back"));
+        assert_eq!(tokio::time::Instant::now(), back, "with no time passing");
+        let (_, body) = confirmed_notification(&apdu);
+        let request = bacnet_services::cov::COVNotificationRequest::decode(&body).unwrap();
+        heard.push(request.subscriber_process_identifier);
+    }
+    assert_eq!(heard, [1, 2, 3]);
+    for token in held {
+        coordinator.release(token).unwrap();
+    }
+    session.stop().await.unwrap();
+}
+
+/// Only an empty pool is waited for: it fills again as IDs come back. A
+/// coordinator whose generations ran out, or whose state is poisoned,
+/// never leases again, so the task stops watching after either.
+#[test]
+fn only_an_empty_pool_is_waited_for() {
+    use bacnet_endpoint_core::coordinator::ReserveError;
+    let leases = || Leases {
+        coordinator: Arc::new(OutboundTransactionCoordinator::new()),
+        out: Vec::new(),
+        spent: false,
+    };
+    let mut empty = leases();
+    empty.refused(ReserveError::Exhausted);
+    assert!(empty.could_take(), "an empty pool fills again");
+    for error in [
+        ReserveError::GenerationExhausted,
+        ReserveError::StatePoisoned,
+    ] {
+        let mut spent = leases();
+        spent.refused(error);
+        assert!(!spent.could_take(), "{error:?} lasts");
+    }
+}
+
+/// A report owed an ID by a coordinator that can no longer lease waits
+/// without watching the pool: IDs coming back wake no pass and send
+/// nothing.
+#[tokio::test(start_paused = true)]
+async fn a_spent_coordinator_is_not_watched() {
+    use bacnet_endpoint_core::coordinator::TerminalPolicy;
+    let mut node = Node::new().await;
+    let mut session = endpoint(SessionRole::ServerOnly, Some(ReportConfig::default())).await;
+    let to = mac_of(&session);
+    let coordinator = session.coordinator();
+    let lease = || {
+        let peer = CanonicalPeer::direct(&[9]);
+        LeaseMetadata::requester(peer, READ_PROPERTY, TerminalPolicy::ComplexAck)
+    };
+    let held: Vec<_> = (0..256)
+        .map(|_| coordinator.reserve(lease()).unwrap())
+        .collect();
+    node.request(&to, 1, SUBSCRIBE_COV, &subscribe(7, Some(true), Some(300)))
+        .await;
+    assert_eq!(node.quiet(&to).await, [acked(1)], "no ID for the report");
+    let host = Arc::clone(session.cov.host().unwrap());
+    // As a refusal that lasts would leave it.
+    host.lock()
+        .leases
+        .refused(bacnet_endpoint_core::coordinator::ReserveError::GenerationExhausted);
+    let passes = || host.passes.load(std::sync::atomic::Ordering::Relaxed);
+    let before = passes();
+    for token in held {
+        coordinator.release(token).unwrap();
+    }
+    assert!(node.next_within(Duration::from_secs(1)).await.is_none());
+    assert_eq!(passes(), before, "no pass for IDs coming back");
     session.stop().await.unwrap();
 }

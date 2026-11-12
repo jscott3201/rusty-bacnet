@@ -730,7 +730,7 @@ fn a_lease_takes_the_service_it_is_given() {
     let mut leases = Leases {
         coordinator: Arc::clone(&coordinator),
         out: Vec::new(),
-        pool_empty: false,
+        spent: false,
     };
     let mac = [0x0A, 0, 0, 5, 0xBA, 0xC0];
     let to = BACnetAddress {

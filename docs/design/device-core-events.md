@@ -168,7 +168,8 @@ full, a COV notification isn't queued and its subscription is marked owed
 (one later notification with the current values), looked at again as room
 frees. A confirmed one that finds no invoke ID at `pop` is owed apart from
 those, and looked at again only as IDs come back: the `Reporter`'s own, and
-those the host reports with `invoke_ids_released` (#2512). So
+those the host reports with `invoke_ids_released` while `owes_invoke_id`
+holds, up to as many owed reports as IDs are free (#2512). So
 `next_deadline` never comes due for a report waiting for an ID, and a host
 that bounds its IDs needs no special case. An event notification
 evicts the newest COV entry, whose subscription becomes owed the same way,
@@ -227,6 +228,8 @@ impl Reporter {
     pub fn acknowledge_local(&mut self, db: &mut ObjectDatabase, object: ObjectIdentifier,
         state: EventState, now: Instant) -> Result<(), Error>;   // §6.4
     pub fn next_deadline(&self) -> Option<Instant>;
+    /// Whether a report waits for an invoke ID (#2512).
+    pub fn owes_invoke_id(&self) -> bool;
     /// IDs came back from outside the reporter (#2512).
     pub fn invoke_ids_released(&mut self, free: usize);
     pub fn notification_deadline(&self, token: Token) -> Option<Instant>;

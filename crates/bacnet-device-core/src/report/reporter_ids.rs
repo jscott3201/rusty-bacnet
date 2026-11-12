@@ -13,16 +13,26 @@ use crate::cov::{CovSubscriptionKey, Token};
 use crate::report::InvokeIds;
 
 impl Reporter {
+    /// Whether a report waits for an invoke ID: a [`pop`](Self::pop) found
+    /// [`InvokeIds::take`] refusing, and no look has served it since. While
+    /// this holds, a host whose IDs other work shares watches for them
+    /// coming back and reports them with
+    /// [`invoke_ids_released`](Self::invoke_ids_released); one report
+    /// getting an ID doesn't end the wait while others remain.
+    pub fn owes_invoke_id(&self) -> bool {
+        !self.owed_ids.is_empty()
+    }
+
     /// Invoke IDs came back to the host's pool from outside this reporter,
     /// such as the device's own client requests ending, and `free` are free
-    /// now: as many of the reports owed one are looked at again at the
-    /// next [`on_deadline`](Self::on_deadline). `free` is how many the host
-    /// has, not how many came back, so one this reporter gave back itself,
-    /// which it counts, isn't counted twice. A host need report only while
-    /// a report waits for an ID (a [`pop`](Self::pop) found
-    /// [`InvokeIds::take`] refusing), and a host that refuses IDs past a
-    /// bound of its own needn't report anything: only this reporter's own
-    /// notifications ending free a place under it.
+    /// now: up to that many of the reports owed one are looked at again at
+    /// the next [`on_deadline`](Self::on_deadline), in one pass, oldest
+    /// first. `free` is how many the host has, not how many came back, so
+    /// one this reporter gave back itself, which it counts, isn't counted
+    /// twice. A host need report only while
+    /// [`owes_invoke_id`](Self::owes_invoke_id) holds, and a host that
+    /// refuses IDs past a bound of its own needn't report anything: only
+    /// this reporter's own notifications ending free a place under it.
     pub fn invoke_ids_released(&mut self, free: usize) {
         self.ids_freed = self.ids_freed.max(free);
     }
