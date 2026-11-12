@@ -17,29 +17,15 @@ use bacnet_types::primitives::ObjectIdentifier;
 /// objects opt in by lending
 /// [`BACnetObject::reliability_eval`](bacnet_objects::traits::BACnetObject::reliability_eval).
 /// An object that lends none is left alone.
+#[derive(Default)]
 pub struct FaultDetector {
-    /// Timeout after which an object is considered to have a communication
-    /// failure. Set to `None` to disable communication-failure detection.
-    pub comm_timeout: Option<std::time::Duration>,
     warned_internal_failures: Mutex<HashMap<ObjectIdentifier, String>>,
 }
 
-impl Default for FaultDetector {
-    fn default() -> Self {
-        Self {
-            comm_timeout: Some(std::time::Duration::from_secs(60)),
-            warned_internal_failures: Mutex::new(HashMap::new()),
-        }
-    }
-}
-
 impl FaultDetector {
-    /// Create a new fault detector with the given communication timeout.
-    pub fn new(comm_timeout: Option<std::time::Duration>) -> Self {
-        Self {
-            comm_timeout,
-            warned_internal_failures: Mutex::new(HashMap::new()),
-        }
+    /// Create a new fault detector.
+    pub fn new() -> Self {
+        Self::default()
     }
 
     fn should_warn_internal_failure(&self, oid: ObjectIdentifier, error: &str) -> bool {
