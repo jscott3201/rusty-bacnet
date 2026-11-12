@@ -6,7 +6,9 @@ use bacnet_time::{Duration, Instant};
 use bacnet_types::enums::EventState;
 
 /// Pending (delayed) intrinsic-reporting transition state, shared by every
-/// detector that honors [`OutOfRangeDetector::time_delay`] and its peers.
+/// detector that honors
+/// [`OutOfRangeDetector::time_delay`](super::OutOfRangeDetector::time_delay)
+/// and its peers.
 ///
 /// Per ASHRAE 135-2020 Clause 13.3, a transition to a new `EventState` is
 /// delayed by `Time_Delay` seconds, measured from when the condition began
@@ -17,10 +19,10 @@ use bacnet_types::enums::EventState;
 ///
 /// The transition is due at the instant the condition was first seen plus
 /// the delay. The detector's periodic `tick` (for example
-/// [`OutOfRangeDetector::tick`]) fires it at the first call at or after
-/// that instant; `probe` only seeds or cancels it, and a repeated write of
-/// the same value keeps the instant it has, so a fast poll loop cannot
-/// shorten or restart the delay (#2303).
+/// [`OutOfRangeDetector::tick`](super::OutOfRangeDetector::tick)) fires it
+/// at the first call at or after that instant; `probe` only seeds or
+/// cancels it, and a repeated write of the same value keeps the instant it
+/// has, so a fast poll loop cannot shorten or restart the delay (#2303).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingTransition {
     /// The state the detector wants to transition to once the delay elapses.
