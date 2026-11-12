@@ -44,12 +44,10 @@ fn push_for(outbox: &mut Outbox, ticket: u64, process: u32, params: &[u8]) -> Pu
 }
 
 fn pop(outbox: &mut Outbox) -> Option<(u64, Vec<u8>)> {
-    outbox
-        .pop(|entry, params| (entry.token, params.to_vec()))
-        .map(|(token, params)| {
-            assert_eq!(token, Token::for_test(u64::from(params[0])));
-            (u64::from(params[0]), params)
-        })
+    outbox.pop().map(|(_, entry, params)| {
+        assert_eq!(entry.token, Token::for_test(u64::from(params[0])));
+        (u64::from(params[0]), params)
+    })
 }
 
 #[test]

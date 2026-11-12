@@ -408,13 +408,16 @@ impl CovHost {
                 !state.closed && state.reporter.next_deadline().is_some_and(|at| at <= now)
             };
             if due {
-                let db = db.read().await;
+                // Exclusive: the reporter's deadline may sweep, which
+                // commits; this host turns no event path on, so it only
+                // expires, times out and looks, as before.
+                let mut db = db.write().await;
                 let mut state = self.lock();
                 let now = self.now();
                 let CovState {
                     reporter, leases, ..
                 } = &mut *state;
-                reporter.on_deadline(&db, leases, now);
+                reporter.on_deadline(&mut db, leases, now);
             }
             let Some(outgoing) = self.pop() else {
                 return;

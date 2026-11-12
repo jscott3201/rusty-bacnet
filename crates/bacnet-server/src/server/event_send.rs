@@ -4,11 +4,12 @@
 
 use super::event_forwarding::ForwardingBudget;
 use super::event_recipient_route::{
-    ConfirmedRecipientRoute, ConfirmedRouteRefusal, RecipientRoute, network_priority_for_event,
+    ConfirmedRecipientRoute, ConfirmedRouteRefusal, RecipientRoute,
 };
 use super::event_suppression::EventSuppression;
 use super::notification_transactions::{Attempt, NotificationReserveError, run_attempts};
 use super::*;
+use bacnet_device_core::event::network_priority;
 use bacnet_types::constructed::BACnetRecipient;
 
 #[path = "event_awaited_recipients.rs"]
@@ -132,7 +133,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             device: _,
         } = ctx;
         let notification_class = outbound.notification_class;
-        let network_priority = network_priority_for_event(outbound.priority);
+        let network_priority = network_priority(outbound.priority);
         let is_group = |mac: &[u8]| network.transport().is_group_destination(mac);
 
         // A route that can't carry this notification is skipped and

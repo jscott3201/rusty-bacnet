@@ -102,7 +102,7 @@ fn a_deleted_object_takes_its_reports_with_it() {
     while let Some(due) = device.reporter.next_deadline().filter(|due| *due <= end) {
         device
             .reporter
-            .on_deadline(&device.db, &mut device.ids, due);
+            .on_deadline(&mut device.db, &mut device.ids, due);
         assert!(
             sent(&mut device, due).is_empty(),
             "nothing for AI-1 at {due:?}"

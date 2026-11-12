@@ -494,7 +494,7 @@ impl Device {
     /// Run every deadline up to `now`, sending what each calls for.
     fn until(&mut self, now: Instant, summary: &mut Summary) {
         while let Some(due) = self.reporter.next_deadline().filter(|due| *due <= now) {
-            self.reporter.on_deadline(&self.db, &mut self.ids, due);
+            self.reporter.on_deadline(&mut self.db, &mut self.ids, due);
             self.send(due, summary, false);
         }
     }

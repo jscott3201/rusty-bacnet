@@ -469,6 +469,55 @@ pub fn lookup_notification_recipients(
     }
 }
 
+/// [`lookup_notification_recipients`] for a device that may not know the
+/// day and time: with `window` `None` (no clock, or one not yet set), only a
+/// destination open every day, all day ([`always_in_window`]) is selected,
+/// so a destination's window is never judged on a guessed time (#2303).
+pub fn lookup_notification_recipients_at(
+    db: &ObjectDatabase,
+    notification_class: u32,
+    transition: EventTransition,
+    window: Option<(DaysOfWeek, Time)>,
+) -> RecipientLookupOutcome {
+    match window {
+        Some((today, time)) => {
+            lookup_notification_recipients(db, notification_class, transition, today, &time)
+        }
+        None => {
+            let Some(nc) = find_notification_class(db, notification_class) else {
+                return RecipientLookupOutcome::NotificationClassMissing;
+            };
+            let Ok(value) = nc.read_property(PropertyIdentifier::RECIPIENT_LIST, None) else {
+                return RecipientLookupOutcome::RecipientListUnavailable;
+            };
+            let destinations = match routed_destinations(&value) {
+                Ok(destinations) => destinations,
+                Err(outcome) => return outcome,
+            };
+            if destinations.is_empty() {
+                return RecipientLookupOutcome::NoConfiguredDestinations;
+            }
+            let mask = transition.bit_mask();
+            let recipients: Vec<_> = destinations
+                .into_iter()
+                .filter(|dest| always_in_window(dest) && dest.transitions.intersects(mask))
+                .map(|dest| {
+                    (
+                        dest.recipient,
+                        dest.process_identifier,
+                        dest.issue_confirmed_notifications,
+                    )
+                })
+                .collect();
+            if recipients.is_empty() {
+                RecipientLookupOutcome::NoMatchingDestinations
+            } else {
+                RecipientLookupOutcome::Matched(recipients)
+            }
+        }
+    }
+}
+
 /// Get notification recipients for a given class number and transition.
 ///
 /// This source-compatible wrapper delegates to

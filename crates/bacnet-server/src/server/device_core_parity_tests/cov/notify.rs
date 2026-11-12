@@ -252,7 +252,9 @@ impl CovParity {
             .next_deadline()
             .is_some_and(|due| due <= now)
         {
-            parity.reporter.on_deadline(&parity.db, &mut self.ids, now);
+            parity
+                .reporter
+                .on_deadline(&mut parity.db, &mut self.ids, now);
             if parity.reporter.next_deadline() == Some(now) {
                 break;
             }

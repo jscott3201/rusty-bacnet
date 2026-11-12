@@ -8,6 +8,7 @@
 use bacnet_time::Instant;
 use bacnet_types::constructed::BACnetAddress;
 
+use super::super::outbox::Entry;
 use super::Reporter;
 use crate::cov::{CovSubscriptionKey, Token};
 use crate::report::InvokeIds;
@@ -20,7 +21,7 @@ impl Reporter {
     /// [`invoke_ids_released`](Self::invoke_ids_released); one report
     /// getting an ID doesn't end the wait while others remain.
     pub fn owes_invoke_id(&self) -> bool {
-        !self.owed_ids.is_empty()
+        !self.owed_ids.is_empty() || self.outbox.held() > 0
     }
 
     /// Invoke IDs came back to the host's pool from outside this reporter,
@@ -66,13 +67,28 @@ impl Reporter {
     pub(super) fn owe_id(&mut self, key: CovSubscriptionKey) {
         // IDs counted while nothing was owed one, or for reports owed
         // before and since served or gone, say nothing of this one.
-        if self.owed_ids.is_empty() {
+        if !self.owes_invoke_id() {
             self.ids_freed = 0;
         }
         if !self.owed_ids.contains(&key) && !self.owed.contains(&key) {
             self.counters.owed += 1;
             self.owed_ids.push(key);
         }
+    }
+
+    /// Hold the confirmed event notification `entry`, which `pop` took from
+    /// `at` and found no invoke ID for, in that place until one comes back
+    /// (#2303): IDs serve held notifications first, oldest first, then the
+    /// references owed one. It is counted owed once, however often it is
+    /// refused.
+    pub(super) fn hold_event(&mut self, at: usize, entry: Entry, params: &[u8]) {
+        if !self.owes_invoke_id() {
+            self.ids_freed = 0;
+        }
+        if !entry.counted {
+            self.counters.owed += 1;
+        }
+        self.outbox.hold(at, entry, params);
     }
 
     /// Owe nothing more to the references `gone` names, for room or an ID.
