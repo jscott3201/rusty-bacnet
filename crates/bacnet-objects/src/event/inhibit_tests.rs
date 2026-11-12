@@ -3,6 +3,7 @@
 //! offnormal and normal transitions but not fault detection (Clause
 //! 13.2.2.1), and a configured text is what a transition stores.
 
+use crate::event::test_clock::{test_now, test_tick};
 use crate::traits::EventReporting as _;
 use crate::traits::Timed;
 use bacnet_types::bitstring::LimitEnable;
@@ -74,8 +75,8 @@ fn high_input(time_delay: u32) -> AnalogInputObject {
 fn an_inhibited_algorithm_proposes_no_offnormal_transition_but_still_faults() {
     let mut ai = high_input(0);
     inhibit(&mut ai, true);
-    assert_eq!(ai.evaluate_intrinsic_reporting(), None);
-    assert_eq!(ai.tick_intrinsic_reporting(), None);
+    assert_eq!(ai.evaluate_intrinsic_reporting(test_now()), None);
+    assert_eq!(ai.tick_intrinsic_reporting(test_tick()), None);
     assert_eq!(state(&ai), EventState::NORMAL);
 
     // Fault detection runs on: into FAULT, and back to NORMAL from it.
@@ -85,21 +86,21 @@ fn an_inhibited_algorithm_proposes_no_offnormal_transition_but_still_faults() {
         P::RELIABILITY,
         PropertyValue::Enumerated(Reliability::OVER_RANGE.to_raw()),
     );
-    let entered = ai.evaluate_intrinsic_reporting();
+    let entered = ai.evaluate_intrinsic_reporting(test_now());
     assert_eq!(step(&mut ai, entered), Some(EventState::FAULT));
     write(
         &mut ai,
         P::RELIABILITY,
         PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw()),
     );
-    let recovered = ai.evaluate_intrinsic_reporting();
+    let recovered = ai.evaluate_intrinsic_reporting(test_now());
     assert_eq!(step(&mut ai, recovered), Some(EventState::NORMAL));
     // Still inhibited, the out-of-range value proposes nothing.
-    assert_eq!(ai.evaluate_intrinsic_reporting(), None);
+    assert_eq!(ai.evaluate_intrinsic_reporting(test_now()), None);
 
     // Cleared, the condition is reported.
     inhibit(&mut ai, false);
-    let offnormal = ai.evaluate_intrinsic_reporting();
+    let offnormal = ai.evaluate_intrinsic_reporting(test_now());
     assert_eq!(step(&mut ai, offnormal), Some(EventState::HIGH_LIMIT));
 }
 
@@ -107,16 +108,18 @@ fn an_inhibited_algorithm_proposes_no_offnormal_transition_but_still_faults() {
 #[test]
 fn turning_the_inhibit_on_returns_an_offnormal_object_to_normal_at_once() {
     let mut ai = high_input(0);
-    let offnormal = ai.evaluate_intrinsic_reporting();
+    let offnormal = ai.evaluate_intrinsic_reporting(test_now());
     assert_eq!(step(&mut ai, offnormal), Some(EventState::HIGH_LIMIT));
     inhibit(&mut ai, true);
     // No Time_Delay_Normal wait: the inhibit, not the algorithm, decides.
-    let outcome = ai.tick_intrinsic_reporting().expect("back to NORMAL");
+    let outcome = ai
+        .tick_intrinsic_reporting(test_tick())
+        .expect("back to NORMAL");
     assert_eq!(outcome.change.from, EventState::HIGH_LIMIT);
     assert_eq!(outcome.change.to, EventState::NORMAL);
     assert_eq!(outcome.event_type, EventType::OUT_OF_RANGE);
     commit_test_proposal(&mut ai, outcome);
-    assert_eq!(ai.tick_intrinsic_reporting(), None);
+    assert_eq!(ai.tick_intrinsic_reporting(test_tick()), None);
 }
 
 #[cfg(feature = "event-reporting")]
@@ -124,15 +127,15 @@ fn turning_the_inhibit_on_returns_an_offnormal_object_to_normal_at_once() {
 fn a_condition_has_to_last_its_whole_delay_after_the_inhibit_clears() {
     let mut ai = high_input(2);
     // A countdown under way is dropped by the inhibit.
-    assert_eq!(ai.evaluate_intrinsic_reporting(), None);
-    assert_eq!(ai.tick_intrinsic_reporting(), None);
+    assert_eq!(ai.evaluate_intrinsic_reporting(test_now()), None);
+    assert_eq!(ai.tick_intrinsic_reporting(test_tick()), None);
     inhibit(&mut ai, true);
-    assert_eq!(ai.tick_intrinsic_reporting(), None);
+    assert_eq!(ai.tick_intrinsic_reporting(test_tick()), None);
     inhibit(&mut ai, false);
     // Two whole seconds from the change to FALSE.
-    assert_eq!(ai.tick_intrinsic_reporting(), None);
-    assert_eq!(ai.tick_intrinsic_reporting(), None);
-    let outcome = ai.tick_intrinsic_reporting();
+    assert_eq!(ai.tick_intrinsic_reporting(test_tick()), None);
+    assert_eq!(ai.tick_intrinsic_reporting(test_tick()), None);
+    let outcome = ai.tick_intrinsic_reporting(test_tick());
     assert_eq!(step(&mut ai, outcome), Some(EventState::HIGH_LIMIT));
 }
 
@@ -169,7 +172,7 @@ fn the_change_of_state_and_command_failure_detectors_take_the_inhibit_too() {
             object
                 .event_reporting_mut()
                 .expect("lends event reporting")
-                .evaluate_intrinsic_reporting(),
+                .evaluate_intrinsic_reporting(test_now()),
             None,
             "{name}"
         );
@@ -177,7 +180,7 @@ fn the_change_of_state_and_command_failure_detectors_take_the_inhibit_too() {
         let offnormal = object
             .event_reporting_mut()
             .expect("lends event reporting")
-            .evaluate_intrinsic_reporting();
+            .evaluate_intrinsic_reporting(test_now());
         assert_eq!(
             step(object, offnormal),
             Some(EventState::OFFNORMAL),
@@ -187,7 +190,7 @@ fn the_change_of_state_and_command_failure_detectors_take_the_inhibit_too() {
         let normal = object
             .event_reporting_mut()
             .expect("lends event reporting")
-            .evaluate_intrinsic_reporting();
+            .evaluate_intrinsic_reporting(test_now());
         assert_eq!(step(object, normal), Some(EventState::NORMAL), "{name}");
     }
 }
@@ -247,7 +250,7 @@ fn a_configured_text_is_the_message_a_transition_stores() {
             PropertyValue::CharacterString(String::new()),
         ]),
     );
-    let offnormal = ai.evaluate_intrinsic_reporting().unwrap();
+    let offnormal = ai.evaluate_intrinsic_reporting(test_now()).unwrap();
     let commit = |outcome: TransitionOutcome| EventTransitionCommit {
         coordinate: outcome.change.transition(),
         change: outcome.change,
@@ -263,7 +266,7 @@ fn a_configured_text_is_the_message_a_transition_stores() {
     // An empty entry leaves the server's text.
     write(&mut ai, P::TIME_DELAY_NORMAL, PropertyValue::Unsigned(0));
     ai.set_present_value(10.0);
-    let normal = ai.evaluate_intrinsic_reporting().unwrap();
+    let normal = ai.evaluate_intrinsic_reporting(test_now()).unwrap();
     ai.commit_event_transition(commit(normal)).unwrap();
     assert_eq!(
         ai.read_property(P::EVENT_MESSAGE_TEXTS, Some(3)).unwrap(),
@@ -288,11 +291,11 @@ fn an_inhibited_log_holds_its_buffer_ready_report() {
         .unwrap()
         .add_event_log_record(record())
         .unwrap();
-    assert_eq!(log.tick_intrinsic_reporting(), None);
-    assert_eq!(log.evaluate_intrinsic_reporting(), None);
+    assert_eq!(log.tick_intrinsic_reporting(test_tick()), None);
+    assert_eq!(log.evaluate_intrinsic_reporting(test_now()), None);
     // The record still counts, so the report falls due once it clears.
     inhibit(&mut log, false);
-    let report = log.tick_intrinsic_reporting().expect("due");
+    let report = log.tick_intrinsic_reporting(test_tick()).expect("due");
     assert_eq!(report.change.to, EventState::NORMAL);
 }
 

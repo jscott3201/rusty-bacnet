@@ -3,6 +3,7 @@
 //! newer slot falls back to the older one, and BUFFER_READY carries on from
 //! the saved Last_Notify_Record.
 
+use crate::event::test_clock::test_tick;
 use crate::traits::Timed;
 use std::path::Path;
 use std::sync::Arc;
@@ -343,7 +344,7 @@ fn buffer_ready_resumes_from_the_saved_last_notify_record() {
         let outcome = log
             .event_reporting_mut()
             .expect("lends event reporting")
-            .tick_intrinsic_reporting()
+            .tick_intrinsic_reporting(test_tick())
             .expect("a report is due");
         commit_test_proposal(log.as_mut(), outcome);
         add(log.as_mut(), 4);
@@ -368,7 +369,7 @@ fn buffer_ready_resumes_from_the_saved_last_notify_record() {
         assert_eq!(
             log.event_reporting_mut()
                 .expect("lends event reporting")
-                .tick_intrinsic_reporting(),
+                .tick_intrinsic_reporting(test_tick()),
             None,
             "{kind:?}"
         );
@@ -376,7 +377,7 @@ fn buffer_ready_resumes_from_the_saved_last_notify_record() {
         let outcome = log
             .event_reporting_mut()
             .expect("lends event reporting")
-            .tick_intrinsic_reporting()
+            .tick_intrinsic_reporting(test_tick())
             .expect("the third record since");
         commit_test_proposal(log.as_mut(), outcome);
         assert_eq!(

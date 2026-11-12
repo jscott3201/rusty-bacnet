@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::event::test_clock::test_now;
 use crate::property_metadata::is_writable_property;
 use crate::traits::EventReporting as _;
 use bacnet_types::bitstring::LimitEnable;
@@ -366,11 +367,11 @@ fn av_intrinsic_reporting_normal_to_high_limit_to_normal() {
 
     // Normal value — no transition
     av.set_relinquish_default(50.0).unwrap();
-    assert!(av.evaluate_intrinsic_reporting().is_none());
+    assert!(av.evaluate_intrinsic_reporting(test_now()).is_none());
 
     // Go above high limit
     av.set_relinquish_default(81.0).unwrap();
-    let proposal = av.evaluate_intrinsic_reporting().unwrap();
+    let proposal = av.evaluate_intrinsic_reporting(test_now()).unwrap();
     let outcome = crate::event::commit_test_proposal(&mut av, proposal);
     let change = outcome.change;
     assert_eq!(change.from, EventState::NORMAL);
@@ -385,7 +386,7 @@ fn av_intrinsic_reporting_normal_to_high_limit_to_normal() {
 
     // Drop below deadband threshold → back to NORMAL
     av.set_relinquish_default(77.0).unwrap();
-    let change = av.evaluate_intrinsic_reporting().unwrap().change;
+    let change = av.evaluate_intrinsic_reporting(test_now()).unwrap().change;
     assert_eq!(change.to, EventState::NORMAL);
 }
 
@@ -443,7 +444,7 @@ fn av_intrinsic_reporting_after_priority_write() {
         &crate::command_source::test_origin(),
     )
     .unwrap();
-    let change = av.evaluate_intrinsic_reporting().unwrap().change;
+    let change = av.evaluate_intrinsic_reporting(test_now()).unwrap().change;
     assert_eq!(change.to, EventState::HIGH_LIMIT);
 }
 

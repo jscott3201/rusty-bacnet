@@ -231,7 +231,7 @@ fn get_event_information_reports_non_normal_objects() {
     // Push value above high limit and evaluate
     ai.set_present_value(85.0);
     let proposal = ai
-        .evaluate_intrinsic_reporting()
+        .evaluate_intrinsic_reporting(crate::runtime_clock::core_now())
         .expect("out-of-range value must propose HIGH_LIMIT");
     commit_test_proposal(&mut ai, proposal);
     db.add(Box::new(ai)).unwrap();
@@ -316,7 +316,7 @@ fn get_event_information_reads_event_enable_notify_type_and_priorities() {
     // Push above high limit and evaluate to trigger alarm
     ai.set_present_value(85.0);
     let proposal = ai
-        .evaluate_intrinsic_reporting()
+        .evaluate_intrinsic_reporting(crate::runtime_clock::core_now())
         .expect("out-of-range value must propose HIGH_LIMIT");
     commit_test_proposal(&mut ai, proposal);
     db.add(Box::new(ai)).unwrap();

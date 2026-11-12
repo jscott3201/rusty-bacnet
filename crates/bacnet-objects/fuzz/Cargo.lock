@@ -27,11 +27,16 @@ name = "bacnet-objects"
 version = "0.15.0"
 dependencies = [
  "bacnet-encoding",
+ "bacnet-time",
  "bacnet-types",
  "bytes",
  "libc",
  "tracing",
 ]
+
+[[package]]
+name = "bacnet-time"
+version = "0.13.1"
 
 [[package]]
 name = "bacnet-types"

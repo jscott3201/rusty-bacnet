@@ -1,5 +1,7 @@
 use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
+#[cfg(feature = "event-reporting")]
+use crate::event::test_clock::test_now;
 use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject};
 use crate::property_metadata::is_writable_property;
 use crate::property_metadata::{PropertyConformance, PropertyWriteCapability};
@@ -394,7 +396,7 @@ fn inhibit_does_not_change_detection_enable_and_recovery_is_reportable() {
         .set_reliability(Reliability::NO_SENSOR)
         .unwrap();
     let fault = object
-        .evaluate_intrinsic_reporting()
+        .evaluate_intrinsic_reporting(test_now())
         .expect("nonzero Reliability must propose FAULT");
     crate::event::commit_test_proposal(&mut object, fault);
     assert_eq!(
@@ -409,7 +411,7 @@ fn inhibit_does_not_change_detection_enable_and_recovery_is_reportable() {
         detection_enable
     );
     let recovery = object
-        .evaluate_intrinsic_reporting()
+        .evaluate_intrinsic_reporting(test_now())
         .expect("Reliability normalization must remain visible to intrinsic reporting");
     assert_eq!(recovery.change.from, EventState::FAULT);
     assert_eq!(recovery.change.to, EventState::NORMAL);

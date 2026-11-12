@@ -21,7 +21,7 @@ fn committed_input() -> AnalogInputObject {
         .unwrap();
     object.event_detector.pending = Some(PendingTransition {
         state: EventState::NORMAL,
-        remaining: 3,
+        due: crate::event::test_clock::in_seconds(3),
     });
     object.event_detector.fault_reliability = Some(Reliability::OVER_RANGE);
     object

@@ -419,6 +419,9 @@ impl crate::traits::LocalInput for AnalogInputObject {
 #[cfg(test)]
 mod detection_enable_reset_tests {
     use super::*;
+    use crate::event::test_clock::test_now;
+    #[cfg(feature = "event-reporting")]
+    use crate::event::test_clock::test_tick;
     use crate::traits::EventReporting as _;
     use bacnet_types::error::RemoteError;
 
@@ -433,7 +436,7 @@ mod detection_enable_reset_tests {
         ai.set_present_value(81.0);
 
         let outcome = ai
-            .evaluate_intrinsic_reporting()
+            .evaluate_intrinsic_reporting(test_now())
             .expect("out-of-range value should propose TO_OFFNORMAL");
         assert_eq!(
             outcome.change.to,
@@ -488,11 +491,12 @@ mod detection_enable_reset_tests {
         delayed.event_detector.limit_enable = bacnet_types::bitstring::LimitEnable::all();
         delayed.event_detector.time_delay = 1;
         delayed.set_present_value(81.0);
-        assert_eq!(delayed.evaluate_intrinsic_reporting(), None);
-        let proposal = delayed.tick_intrinsic_reporting().unwrap();
+        assert_eq!(delayed.evaluate_intrinsic_reporting(test_now()), None);
+        let proposal = delayed.tick_intrinsic_reporting(test_tick()).unwrap();
+        // Fire-ready: still pending, due now (the countdown held it at 1).
         assert_eq!(
-            delayed.event_detector.pending.as_ref().unwrap().remaining,
-            1
+            delayed.event_detector.pending.as_ref().unwrap().remaining(),
+            0
         );
 
         let stale = EventTransitionCommit {
@@ -513,18 +517,21 @@ mod detection_enable_reset_tests {
             })
         );
         assert_eq!(
-            delayed.event_detector.pending.as_ref().unwrap().remaining,
-            1
+            delayed.event_detector.pending.as_ref().unwrap().remaining(),
+            0
         );
-        assert_eq!(delayed.tick_intrinsic_reporting(), Some(proposal));
+        assert_eq!(
+            delayed.tick_intrinsic_reporting(test_tick()),
+            Some(proposal)
+        );
 
         let mut faulted =
             AnalogInputObject::new(2, "AI-fault", EngineeringUnits::DEGREES_CELSIUS).unwrap();
         faulted.reliability = Reliability::OVER_RANGE;
-        let entry = faulted.evaluate_intrinsic_reporting().unwrap();
+        let entry = faulted.evaluate_intrinsic_reporting(test_now()).unwrap();
         crate::event::commit_test_proposal(&mut faulted, entry);
         faulted.reliability = Reliability::NO_SENSOR;
-        let reindication = faulted.evaluate_intrinsic_reporting().unwrap();
+        let reindication = faulted.evaluate_intrinsic_reporting(test_now()).unwrap();
         assert_eq!(
             reindication.change,
             EventStateChange {
@@ -549,7 +556,10 @@ mod detection_enable_reset_tests {
             faulted.event_detector.fault_reliability,
             Some(Reliability::OVER_RANGE)
         );
-        assert_eq!(faulted.evaluate_intrinsic_reporting(), Some(reindication));
+        assert_eq!(
+            faulted.evaluate_intrinsic_reporting(test_now()),
+            Some(reindication)
+        );
     }
 
     /// Regression guard for issue #123: once transitions populate timestamps and messages,
@@ -566,7 +576,7 @@ mod detection_enable_reset_tests {
         ai.event_detector.acked_transitions = bacnet_types::bitstring::EventTransitionBits::empty();
         ai.event_detector.pending = Some(crate::event::PendingTransition {
             state: bacnet_types::enums::EventState::HIGH_LIMIT,
-            remaining: 2,
+            due: crate::event::test_clock::in_seconds(2),
         });
         ai.event_detector.fault_reliability = Some(bacnet_types::enums::Reliability::NO_SENSOR);
         ai.event_history.time_stamps = [
@@ -623,7 +633,7 @@ mod detection_enable_reset_tests {
             bacnet_types::bitstring::EventTransitionBits::TO_FAULT;
         ai.event_detector.pending = Some(crate::event::PendingTransition {
             state: bacnet_types::enums::EventState::NORMAL,
-            remaining: 2,
+            due: crate::event::test_clock::in_seconds(2),
         });
         ai.event_detector.fault_reliability = Some(bacnet_types::enums::Reliability::NO_SENSOR);
         ai.event_history.time_stamps[0] = BACnetTimeStamp::SequenceNumber(7);
@@ -653,7 +663,7 @@ mod detection_enable_reset_tests {
             ai.event_detector.acked_transitions,
             bacnet_types::bitstring::EventTransitionBits::TO_FAULT
         );
-        assert_eq!(ai.event_detector.pending.unwrap().remaining, 2);
+        assert_eq!(ai.event_detector.pending.unwrap().remaining(), 2);
         assert_eq!(
             ai.event_detector.fault_reliability,
             Some(bacnet_types::enums::Reliability::NO_SENSOR)

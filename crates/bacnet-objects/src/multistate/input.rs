@@ -512,6 +512,7 @@ impl crate::traits::LocalInput for MultiStateInputObject {
 #[cfg(test)]
 mod detection_enable_tests {
     use super::*;
+    use crate::event::test_clock::{test_now, test_tick};
     use crate::traits::EventReporting as _;
 
     #[test]
@@ -525,7 +526,7 @@ mod detection_enable_tests {
         msi.set_alarm_values(vec![2]).unwrap();
         msi.event_detector.time_delay = 2;
         msi.set_present_value(2);
-        assert_eq!(msi.evaluate_intrinsic_reporting(), None);
+        assert_eq!(msi.evaluate_intrinsic_reporting(test_now()), None);
         assert!(msi.event_detector.pending.is_some());
 
         msi.event_detector.event_state = bacnet_types::enums::EventState::OFFNORMAL;
@@ -560,8 +561,8 @@ mod detection_enable_tests {
         );
         assert!(msi.event_detector.pending.is_none());
         assert!(msi.event_detector.fault_reliability.is_none());
-        assert_eq!(msi.evaluate_intrinsic_reporting(), None);
-        assert_eq!(msi.tick_intrinsic_reporting(), None);
+        assert_eq!(msi.evaluate_intrinsic_reporting(test_now()), None);
+        assert_eq!(msi.tick_intrinsic_reporting(test_tick()), None);
         assert!(
             msi.event_detector.pending.is_none(),
             "evaluate/tick re-armed a countdown while detection is disabled"
