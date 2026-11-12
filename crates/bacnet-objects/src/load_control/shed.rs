@@ -175,6 +175,8 @@ impl LoadControlObject {
             self.expected_shed_level = none.clone();
             self.actual_shed_level = none;
         }
+        // With persistence, storage follows the request (#2479).
+        self.follow_storage();
         before != self.observed()
     }
 

@@ -13,6 +13,9 @@ use PropertyIdentifier as P;
 
 mod lifecycle;
 mod removal;
+// std: the saves run on the writer thread.
+#[cfg(feature = "std")]
+mod restart;
 
 const INACTIVE: ShedState = ShedState::SHED_INACTIVE;
 const PENDING: ShedState = ShedState::SHED_REQUEST_PENDING;

@@ -1,10 +1,11 @@
 //! Saving object state off the object database lock (#1270).
 //!
 //! The Audit Log, the Notification Forwarder, the Notification Class, the
-//! Access Rights object, and the Timer and Channel keep state in storage the
-//! application provides ([`AuditLogPersistence`],
+//! Access Rights object, the Timer and Channel, and the Load Control keep
+//! state in storage the application provides ([`AuditLogPersistence`],
 //! [`NotificationForwarderPersistence`], [`NotificationClassPersistence`],
-//! [`AccessRightsPersistence`] and [`WriteConfigPersistence`]).
+//! [`AccessRightsPersistence`], [`WriteConfigPersistence`] and
+//! [`LoadControlPersistence`]).
 //! A storage call can be slow, since the file backends write, synchronize and
 //! rename, so none of these objects makes one while its caller holds the
 //! database's write guard. They all follow the pattern this module provides.
@@ -135,6 +136,7 @@
 //! [`AccessRightsPersistence`]: crate::access_control::AccessRightsPersistence
 //! [`LogPersistence`]: crate::log_persistence::LogPersistence
 //! [`WriteConfigPersistence`]: crate::write_config::WriteConfigPersistence
+//! [`LoadControlPersistence`]: crate::load_control::LoadControlPersistence
 
 use alloc::sync::Arc;
 use core::future::Future;

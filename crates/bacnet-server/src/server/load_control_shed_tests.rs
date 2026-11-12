@@ -6,7 +6,9 @@
 
 use super::*;
 use bacnet_objects::clock::ClockFrame;
-use bacnet_objects::load_control::{LoadShedder, ShedProgress, ShedRequest, ShedStatus};
+use bacnet_objects::load_control::{
+    LoadControlPersistence, LoadControlSnapshot, LoadShedder, ShedProgress, ShedRequest, ShedStatus,
+};
 use bacnet_types::primitives::{Date, Time};
 use std::sync::Mutex as StdMutex;
 
@@ -420,6 +422,98 @@ async fn the_new_properties_take_their_datatypes_over_the_wire() {
         read(&h, PropertyIdentifier::ENABLE).await,
         encode(PropertyValue::Boolean(false))
     );
+    h.server.stop().await.unwrap();
+}
+
+/// Storage in memory for a Load Control's request, refusing saves while
+/// `fail`.
+#[derive(Default)]
+struct Store {
+    saved: StdMutex<Option<LoadControlSnapshot>>,
+    fail: std::sync::atomic::AtomicBool,
+}
+
+impl LoadControlPersistence for Store {
+    fn load(&self, _: ObjectIdentifier) -> Result<Option<LoadControlSnapshot>, Error> {
+        Ok(self.saved.lock().unwrap().clone())
+    }
+
+    fn save(&self, _: ObjectIdentifier, snapshot: &LoadControlSnapshot) -> Result<(), Error> {
+        if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(Error::Encoding("the disk is full".into()));
+        }
+        *self.saved.lock().unwrap() = Some(snapshot.clone());
+        Ok(())
+    }
+}
+
+/// A harness serving LC-1 kept in `store`, with `app` installed.
+async fn kept_harness(app: &Arc<App>, store: &Arc<Store>) -> Harness {
+    let mut object = LoadControlObject::with_persistence(1, "LC-1", store.clone()).unwrap();
+    object
+        .set_shed_levels(vec![(1, "a".into()), (2, "b".into())])
+        .unwrap();
+    object.set_shedder(app.clone());
+    Harness::start_with(ServerConfig::default(), |db| {
+        db.add(Box::new(object)).unwrap()
+    })
+    .await
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_request_written_over_the_wire_survives_a_restart() {
+    // A century: the server starts on the system clock before the harness
+    // sets its own, so the request is under way whatever the date.
+    const CENTURY: u64 = 100 * 365 * 24 * 60;
+    let app = app();
+    app.answer(ShedProgress::Compliant, 2);
+    let store = Arc::new(Store::default());
+    let mut h = kept_harness(&app, &store).await;
+    let oid = lc1();
+    set_clock(&h, 0);
+    for (property, value) in [
+        (PropertyIdentifier::REQUESTED_SHED_LEVEL, vec![0x19, 0x02]),
+        (PropertyIdentifier::SHED_DURATION, unsigned(CENTURY)),
+        (PropertyIdentifier::START_TIME, start_at(0)),
+    ] {
+        write(&mut h, oid, property, value).await;
+    }
+    // Each write was saved before it was answered (#2479).
+    {
+        let saved = store.saved.lock().unwrap().clone().unwrap();
+        assert_eq!(saved.requested_shed_level, BACnetShedLevel::Level(2));
+        assert_eq!(saved.shed_duration, CENTURY);
+        let frame = clock_at(0);
+        assert_eq!(saved.start_time, (frame.local_date, frame.local_time));
+    }
+    assert_eq!(
+        read(&h, PropertyIdentifier::PRESENT_VALUE).await,
+        enumerated(2)
+    );
+    h.server.stop().await.unwrap();
+    drop(h);
+    // The device comes back: the server's start looks at the request again,
+    // and the loads are shed for it.
+    app.asked.lock().unwrap().clear();
+    let h = kept_harness(&app, &store).await;
+    assert_eq!(
+        read(&h, PropertyIdentifier::PRESENT_VALUE).await,
+        enumerated(2)
+    );
+    assert_eq!(read(&h, PropertyIdentifier::START_TIME).await, start_at(0));
+    assert_eq!(
+        read(&h, PropertyIdentifier::SHED_DURATION).await,
+        unsigned(CENTURY)
+    );
+    assert!(!app.asked.lock().unwrap().is_empty());
+    // A write that can't be saved is refused, and changes nothing.
+    let mut h = h;
+    store.fail.store(true, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(
+        try_write(&mut h, oid, PropertyIdentifier::DUTY_WINDOW, unsigned(5)).await,
+        Err(ErrorCode::OPERATIONAL_PROBLEM)
+    );
+    assert_eq!(read(&h, PropertyIdentifier::DUTY_WINDOW).await, unsigned(0));
     h.server.stop().await.unwrap();
 }
 

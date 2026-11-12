@@ -19,8 +19,16 @@
 //! Time is the Device clock: the object needs one to start a request, and
 //! the server lends its own. A request's moments are checked on each write
 //! and on the server's once-a-second operation pass, so a client writes
-//! Start_Time last ([`LoadControlObject::set_start_time`]). A request is not
-//! kept across a restart.
+//! Start_Time last ([`LoadControlObject::set_start_time`]).
+//!
+//! # Across a restart
+//!
+//! An object built with [`LoadControlObject::with_persistence`] keeps its
+//! request in storage the application gives it ([`LoadControlPersistence`],
+//! or the file backend `FileLoadControlPersistence` with std), and a rebuilt
+//! one looks at it again as though Start_Time had just been written (Clause
+//! 12.28, #2479). The `saving` module says when it saves. An object from
+//! [`new`](LoadControlObject::new) keeps nothing: it starts SHED_INACTIVE.
 
 use crate::prelude::*;
 use alloc::borrow::Cow;
@@ -37,12 +45,17 @@ use crate::common::{self, read_common_properties};
 use crate::traits::BACnetObject;
 
 mod metadata;
+mod persistence;
+mod saving;
 mod shed;
 #[cfg(test)]
 mod shed_tests;
 #[cfg(test)]
 mod tests;
 
+#[cfg(feature = "std")]
+pub use persistence::FileLoadControlPersistence;
+pub use persistence::{LoadControlPersistence, LoadControlSnapshot};
 pub use shed::{LoadShedder, ShedProgress, ShedRequest, ShedStatus};
 
 /// BACnet Load Control object — demand-response load shedding.
@@ -89,6 +102,8 @@ pub struct LoadControlObject {
     /// Whether the request under way has been offered to the shedder, so
     /// that its end is reported to it.
     offered: bool,
+    /// Where the request is kept, with persistence (#2479).
+    durable: saving::Durable,
 }
 
 impl LoadControlObject {
@@ -123,6 +138,7 @@ impl LoadControlObject {
             clock: None,
             shedder: None,
             offered: false,
+            durable: saving::Durable::default(),
         })
     }
 
@@ -177,9 +193,7 @@ impl LoadControlObject {
     /// nothing. While Enable is FALSE an acceptable value is taken but not
     /// kept: Start_Time stays unspecified.
     pub fn set_start_time(&mut self, start_time: (Date, Time)) -> Result<(), Error> {
-        if start_time != UNSPECIFIED_DATETIME && local_moment(start_time).is_none() {
-            return Err(common::value_out_of_range_error());
-        }
+        check_start_time(start_time)?;
         if self.enable {
             self.start_time = start_time;
             self.settle(shed::Prompt::StartTime);
@@ -213,6 +227,7 @@ impl LoadControlObject {
         if self.state == ShedState::SHED_INACTIVE {
             self.duty_window = minutes;
         }
+        self.follow_storage();
     }
 
     /// Set Enable, with the effects of a WriteProperty of it: FALSE ends any
@@ -278,6 +293,32 @@ impl LoadControlObject {
         self.state_description = text;
     }
 
+    /// A WriteProperty of one of the four request properties, through its
+    /// setter: Requested_Shed_Level, Start_Time, Shed_Duration or
+    /// Duty_Window.
+    fn write_request(
+        &mut self,
+        property: PropertyIdentifier,
+        value: PropertyValue,
+    ) -> Result<(), Error> {
+        match property {
+            p if p == PropertyIdentifier::REQUESTED_SHED_LEVEL => {
+                self.set_requested_shed_level(decode_shed_level_write(value)?)
+            }
+            p if p == PropertyIdentifier::START_TIME => {
+                self.set_start_time(decode_date_time_write(&value)?)
+            }
+            p if p == PropertyIdentifier::SHED_DURATION => {
+                self.set_shed_duration(unsigned_write(value)?);
+                Ok(())
+            }
+            _ => {
+                self.set_duty_window(unsigned_write(value)?);
+                Ok(())
+            }
+        }
+    }
+
     /// A WriteProperty of Shed_Levels: the array whole, keeping its size, or
     /// one element (Table 12-32 footnote 1). Index 0, the size, is
     /// WRITE_ACCESS_DENIED, and a level of 0 VALUE_OUT_OF_RANGE, as for
@@ -287,10 +328,6 @@ impl LoadControlObject {
         array_index: Option<u32>,
         value: PropertyValue,
     ) -> Result<(), Error> {
-        let unsigned = |value: PropertyValue| match value {
-            PropertyValue::Unsigned(level) => Ok(level),
-            _ => Err(common::invalid_data_type_error()),
-        };
         let mut levels = self.shed_levels.clone();
         match array_index {
             None => {
@@ -301,7 +338,7 @@ impl LoadControlObject {
                 };
                 levels = elements
                     .into_iter()
-                    .map(unsigned)
+                    .map(unsigned_write)
                     .collect::<Result<Vec<_>, _>>()?;
                 if levels.len() != self.shed_levels.len() {
                     return Err(common::value_out_of_range_error());
@@ -313,7 +350,7 @@ impl LoadControlObject {
                 let Some(level) = levels.get_mut(position) else {
                     return Err(common::invalid_array_index_error());
                 };
-                *level = unsigned(value)?;
+                *level = unsigned_write(value)?;
             }
         }
         if levels.contains(&0) {
@@ -322,6 +359,22 @@ impl LoadControlObject {
         self.shed_levels = levels;
         self.settle(shed::Prompt::Look);
         Ok(())
+    }
+}
+
+/// Refuse a Start_Time that names no moment and isn't wholly unspecified.
+fn check_start_time(start_time: (Date, Time)) -> Result<(), Error> {
+    if start_time != UNSPECIFIED_DATETIME && local_moment(start_time).is_none() {
+        return Err(common::value_out_of_range_error());
+    }
+    Ok(())
+}
+
+/// Decode a write of an Unsigned, or PROPERTY / INVALID_DATA_TYPE.
+fn unsigned_write(value: PropertyValue) -> Result<u64, Error> {
+    match value {
+        PropertyValue::Unsigned(value) => Ok(value),
+        _ => Err(common::invalid_data_type_error()),
     }
 }
 
@@ -477,25 +530,9 @@ impl BACnetObject for LoadControlObject {
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
-        let unsigned = |value: PropertyValue| match value {
-            PropertyValue::Unsigned(v) => Ok(v),
-            _ => Err(common::invalid_data_type_error()),
-        };
         match property {
-            p if p == PropertyIdentifier::REQUESTED_SHED_LEVEL => {
-                self.set_requested_shed_level(decode_shed_level_write(value)?)
-            }
-            p if p == PropertyIdentifier::START_TIME => {
-                self.set_start_time(decode_date_time_write(&value)?)
-            }
-            p if p == PropertyIdentifier::SHED_DURATION => {
-                self.set_shed_duration(unsigned(value)?);
-                Ok(())
-            }
-            p if p == PropertyIdentifier::DUTY_WINDOW => {
-                self.set_duty_window(unsigned(value)?);
-                Ok(())
-            }
+            p if saving::kept(p) && self.durable.is_kept() => self.write_kept(p, value),
+            p if saving::kept(p) => self.write_request(p, value),
             p if p == PropertyIdentifier::ENABLE => match value {
                 PropertyValue::Boolean(enable) => {
                     self.set_enable(enable);
@@ -513,6 +550,11 @@ impl BACnetObject for LoadControlObject {
 
     fn property_metadata(&self) -> Cow<'_, [crate::property_metadata::PropertyMetadata]> {
         metadata::for_object(self)
+    }
+
+    #[cfg(feature = "durable-writes")]
+    fn durable_writes(&mut self) -> Option<&mut dyn crate::durable::DurableWrites> {
+        Some(self)
     }
 
     fn timed(&mut self) -> Option<&mut dyn crate::traits::Timed> {
@@ -535,6 +577,13 @@ impl crate::traits::Timed for LoadControlObject {
     /// are wall-clock moments, so the monotonic `now` isn't used.
     fn advance_monotonic_time(&mut self, _now: core::time::Duration) -> bool {
         self.settle(shed::Prompt::Look)
+    }
+
+    /// The device is starting: look at a request restored from storage as
+    /// though Start_Time had just been written (Clause 12.28, #2479). A
+    /// look at an object with no request under way changes nothing.
+    fn start_output(&mut self) {
+        self.settle(shed::Prompt::Look);
     }
 
     /// Removed from its database or replaced there: a request under way

@@ -7022,8 +7022,22 @@ unspecified, Shed_Duration to 0 and Duty_Window to the agreed value
 to start shedding: without one a request stays pending, and a request,
 pending or being shed, holds its state and levels while the clock can't be
 read. The server checks a request on each
-write and on its once-a-second operation pass. A request is not kept across
-a restart: the object starts SHED_INACTIVE with the idle values.
+write and on its once-a-second operation pass.
+
+A Load Control from `LoadControlObject::with_persistence` keeps its request
+across a restart (Clause 12.28, #2479) in storage the application gives it:
+`load_control::LoadControlPersistence`, or `FileLoadControlPersistence` for a
+file (the `snapshot::load_control` format). It keeps Requested_Shed_Level,
+Start_Time, Shed_Duration, Duty_Window, the agreed Duty_Window and the shed
+state. A peer's write of one of the four request properties is saved before
+it is answered: the server stages it, and one that can't be saved is refused
+with DEVICE / OPERATIONAL_PROBLEM. What the state machine and the setters
+change is saved afterwards with nobody waiting. A rebuilt object brings a
+request that was pending or being shed back as SHED_REQUEST_PENDING, and the
+first look decides it as a Start_Time write would: the server's start
+(`Timed::start_output`), a write or the next pass. A request whose time ran
+out while the device was down ends at once, with no `stop`. An object from
+`new` keeps nothing and starts SHED_INACTIVE with the idle values.
 
 Enable FALSE ends a request and takes no new one. While it is FALSE, writes
 of Start_Time and Shed_Duration are acknowledged but not kept, so both read
