@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::event::test_clock::{test_now, test_tick};
 use crate::property_metadata::is_writable_property;
 use crate::traits::EventReporting as _;
 use bacnet_types::enums::{EventState, EventType};
@@ -105,7 +106,7 @@ fn bo_fresh_object_reports_nothing_when_detection_is_enabled() {
     let mut bo = BinaryOutputObject::new(1, "BO-1").unwrap();
     set_detection_enabled(&mut bo, true);
 
-    assert_eq!(bo.evaluate_intrinsic_reporting(), None);
+    assert_eq!(bo.evaluate_intrinsic_reporting(test_now()), None);
     assert_eq!(
         bo.read_property(PropertyIdentifier::EVENT_STATE, None)
             .unwrap(),
@@ -125,7 +126,7 @@ fn bo_disabling_detection_discards_an_in_flight_time_delay_countdown() {
     /// seeded by the probe or by the first tick.
     fn ticks_until_offnormal(bo: &mut BinaryOutputObject) -> usize {
         for n in 1..20 {
-            if let Some(outcome) = bo.tick_intrinsic_reporting() {
+            if let Some(outcome) = bo.tick_intrinsic_reporting(test_tick()) {
                 assert_eq!(outcome.change.to, EventState::OFFNORMAL);
                 return n;
             }
@@ -145,8 +146,8 @@ fn bo_disabling_detection_discards_an_in_flight_time_delay_countdown() {
     write_enumerated(&mut cycled, PropertyIdentifier::PRESENT_VALUE, 1);
 
     // Spend part of the countdown, then disable and re-enable.
-    assert_eq!(cycled.evaluate_intrinsic_reporting(), None);
-    assert_eq!(cycled.tick_intrinsic_reporting(), None);
+    assert_eq!(cycled.evaluate_intrinsic_reporting(test_now()), None);
+    assert_eq!(cycled.tick_intrinsic_reporting(test_tick()), None);
     set_detection_enabled(&mut cycled, false);
     set_detection_enabled(&mut cycled, true);
 
@@ -166,7 +167,9 @@ fn bo_command_failure_uses_present_and_feedback_values() {
     set_detection_enabled(&mut disagreeing, true);
     write_enumerated(&mut disagreeing, PropertyIdentifier::PRESENT_VALUE, 1);
 
-    let outcome = disagreeing.evaluate_intrinsic_reporting().unwrap();
+    let outcome = disagreeing
+        .evaluate_intrinsic_reporting(test_now())
+        .unwrap();
     assert_eq!(outcome.change.to, EventState::OFFNORMAL);
     assert_eq!(outcome.event_type, EventType::COMMAND_FAILURE);
 
@@ -175,7 +178,7 @@ fn bo_command_failure_uses_present_and_feedback_values() {
     write_enumerated(&mut agreeing, PropertyIdentifier::FEEDBACK_VALUE, 1);
     write_enumerated(&mut agreeing, PropertyIdentifier::PRESENT_VALUE, 1);
 
-    assert_eq!(agreeing.evaluate_intrinsic_reporting(), None);
+    assert_eq!(agreeing.evaluate_intrinsic_reporting(test_now()), None);
     assert_eq!(
         agreeing
             .read_property(PropertyIdentifier::EVENT_STATE, None)
@@ -198,9 +201,9 @@ fn bo_time_delay_gates_command_failure() {
     .unwrap();
     write_enumerated(&mut bo, PropertyIdentifier::PRESENT_VALUE, 1);
 
-    assert_eq!(bo.evaluate_intrinsic_reporting(), None);
-    assert_eq!(bo.tick_intrinsic_reporting(), None);
-    let proposal = bo.tick_intrinsic_reporting().unwrap();
+    assert_eq!(bo.evaluate_intrinsic_reporting(test_now()), None);
+    assert_eq!(bo.tick_intrinsic_reporting(test_tick()), None);
+    let proposal = bo.tick_intrinsic_reporting(test_tick()).unwrap();
     let outcome = crate::event::commit_test_proposal(&mut bo, proposal);
     assert_eq!(outcome.change.to, EventState::OFFNORMAL);
     assert_eq!(outcome.event_type, EventType::COMMAND_FAILURE);
@@ -232,9 +235,9 @@ fn bo_time_delay_normal_selects_the_return_to_normal_delay() {
     .unwrap();
     write_enumerated(&mut bo, PropertyIdentifier::PRESENT_VALUE, 1);
 
-    assert_eq!(bo.evaluate_intrinsic_reporting(), None);
-    assert_eq!(bo.tick_intrinsic_reporting(), None);
-    let proposal = bo.tick_intrinsic_reporting().unwrap();
+    assert_eq!(bo.evaluate_intrinsic_reporting(test_now()), None);
+    assert_eq!(bo.tick_intrinsic_reporting(test_tick()), None);
+    let proposal = bo.tick_intrinsic_reporting(test_tick()).unwrap();
     let outcome = crate::event::commit_test_proposal(&mut bo, proposal);
     assert_eq!(
         outcome.change.to,
@@ -245,18 +248,18 @@ fn bo_time_delay_normal_selects_the_return_to_normal_delay() {
 
     write_enumerated(&mut bo, PropertyIdentifier::FEEDBACK_VALUE, 1);
     assert_eq!(
-        bo.evaluate_intrinsic_reporting(),
+        bo.evaluate_intrinsic_reporting(test_now()),
         None,
         "condition (b): agreement only seeds the NORMAL countdown"
     );
     for _ in 0..3 {
         assert_eq!(
-            bo.tick_intrinsic_reporting(),
+            bo.tick_intrinsic_reporting(test_tick()),
             None,
             "Time_Delay_Normal = 4 must hold the NORMAL state off"
         );
     }
-    let outcome = bo.tick_intrinsic_reporting().unwrap();
+    let outcome = bo.tick_intrinsic_reporting(test_tick()).unwrap();
     assert_eq!(outcome.change.from, EventState::OFFNORMAL);
     assert_eq!(outcome.change.to, EventState::NORMAL);
     assert_eq!(outcome.event_type, EventType::COMMAND_FAILURE);
@@ -270,7 +273,9 @@ fn bo_event_enable_to_offnormal_bit_controls_distribution() {
         write_event_enable(&mut bo, encoded);
         write_enumerated(&mut bo, PropertyIdentifier::PRESENT_VALUE, 1);
         assert_eq!(
-            bo.evaluate_intrinsic_reporting().unwrap().distribute,
+            bo.evaluate_intrinsic_reporting(test_now())
+                .unwrap()
+                .distribute,
             expected
         );
     }
@@ -281,8 +286,8 @@ fn bo_detection_enable_is_a_disabled_by_default_invariant() {
     let mut bo = BinaryOutputObject::new(1, "BO-1").unwrap();
     write_enumerated(&mut bo, PropertyIdentifier::PRESENT_VALUE, 1);
 
-    assert_eq!(bo.evaluate_intrinsic_reporting(), None);
-    assert_eq!(bo.tick_intrinsic_reporting(), None);
+    assert_eq!(bo.evaluate_intrinsic_reporting(test_now()), None);
+    assert_eq!(bo.tick_intrinsic_reporting(test_tick()), None);
     assert_eq!(
         bo.read_property(PropertyIdentifier::EVENT_STATE, None)
             .unwrap(),
@@ -299,16 +304,19 @@ fn bo_detection_enable_is_a_disabled_by_default_invariant() {
 
     bo.event_detector.time_delay = 2;
     set_detection_enabled(&mut bo, true);
-    assert_eq!(bo.evaluate_intrinsic_reporting(), None);
+    assert_eq!(bo.evaluate_intrinsic_reporting(test_now()), None);
     bo.event_detection_enable = false;
     let pending = bo.event_detector.pending.clone();
-    assert_eq!(bo.tick_intrinsic_reporting(), None);
+    assert_eq!(bo.tick_intrinsic_reporting(test_tick()), None);
     assert_eq!(bo.event_detector.pending, pending);
 
     set_detection_enabled(&mut bo, true);
     bo.event_detector.time_delay = 0;
     assert_eq!(
-        bo.evaluate_intrinsic_reporting().unwrap().change.to,
+        bo.evaluate_intrinsic_reporting(test_now())
+            .unwrap()
+            .change
+            .to,
         EventState::OFFNORMAL
     );
     bo.event_detector.acked_transitions = bacnet_types::bitstring::EventTransitionBits::empty();
@@ -327,8 +335,8 @@ fn bo_detection_enable_is_a_disabled_by_default_invariant() {
             data: vec![0xe0],
         }
     );
-    assert_eq!(bo.evaluate_intrinsic_reporting(), None);
-    assert_eq!(bo.tick_intrinsic_reporting(), None);
+    assert_eq!(bo.evaluate_intrinsic_reporting(test_now()), None);
+    assert_eq!(bo.tick_intrinsic_reporting(test_tick()), None);
 
     bo.reliability = Reliability::NO_SENSOR;
     assert_eq!(

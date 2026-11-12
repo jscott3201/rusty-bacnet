@@ -3,6 +3,7 @@ use super::*;
 use crate::clock::{ClockFrame, ClockReader};
 #[cfg(feature = "event-reporting")]
 use crate::event::commit_test_proposal;
+use crate::event::test_clock::{test_now, test_tick};
 use crate::event_log::EventLogObject;
 use crate::traits::BACnetObject;
 use crate::trend::{TrendLogMultipleObject, TrendLogObject};
@@ -131,7 +132,7 @@ fn every_threshold_of_records_proposes_one_report_on_each_log() {
                 assert_eq!(
                     log.event_reporting_mut()
                         .expect("lends event reporting")
-                        .tick_intrinsic_reporting(),
+                        .tick_intrinsic_reporting(test_tick()),
                     None,
                     "{kind:?}"
                 );
@@ -140,12 +141,12 @@ fn every_threshold_of_records_proposes_one_report_on_each_log() {
             let outcome = log
                 .event_reporting_mut()
                 .expect("lends event reporting")
-                .tick_intrinsic_reporting()
+                .tick_intrinsic_reporting(test_tick())
                 .expect("a report is due");
             assert_eq!(
                 log.event_reporting_mut()
                     .expect("lends event reporting")
-                    .evaluate_intrinsic_reporting(),
+                    .evaluate_intrinsic_reporting(test_now()),
                 Some(outcome.clone())
             );
             assert_eq!(
@@ -179,7 +180,7 @@ fn every_threshold_of_records_proposes_one_report_on_each_log() {
             assert_eq!(
                 log.event_reporting_mut()
                     .expect("lends event reporting")
-                    .tick_intrinsic_reporting(),
+                    .tick_intrinsic_reporting(test_tick()),
                 None,
                 "{kind:?}"
             );
@@ -214,7 +215,7 @@ fn no_threshold_or_detection_off_proposes_nothing() {
         assert_eq!(
             log.event_reporting_mut()
                 .expect("lends event reporting")
-                .tick_intrinsic_reporting(),
+                .tick_intrinsic_reporting(test_tick()),
             None
         );
         write(
@@ -226,7 +227,7 @@ fn no_threshold_or_detection_off_proposes_nothing() {
         assert_eq!(
             log.event_reporting_mut()
                 .expect("lends event reporting")
-                .tick_intrinsic_reporting(),
+                .tick_intrinsic_reporting(test_tick()),
             None
         );
         // Turned on again, the algorithm counts from where the log stands.
@@ -236,14 +237,14 @@ fn no_threshold_or_detection_off_proposes_nothing() {
         assert_eq!(
             log.event_reporting_mut()
                 .expect("lends event reporting")
-                .tick_intrinsic_reporting(),
+                .tick_intrinsic_reporting(test_tick()),
             None
         );
         add(log);
         assert!(
             log.event_reporting_mut()
                 .expect("lends event reporting")
-                .tick_intrinsic_reporting()
+                .tick_intrinsic_reporting(test_tick())
                 .is_some()
         );
     }
@@ -265,14 +266,14 @@ fn a_purge_restarts_records_since_notification_only() {
         assert_eq!(
             log.event_reporting_mut()
                 .expect("lends event reporting")
-                .tick_intrinsic_reporting(),
+                .tick_intrinsic_reporting(test_tick()),
             None
         );
         add(log);
         assert!(
             log.event_reporting_mut()
                 .expect("lends event reporting")
-                .tick_intrinsic_reporting()
+                .tick_intrinsic_reporting(test_tick())
                 .is_some()
         );
     }
@@ -296,7 +297,7 @@ fn event_enable_to_normal_decides_distribution_only() {
         let outcome = log
             .event_reporting_mut()
             .expect("lends event reporting")
-            .tick_intrinsic_reporting()
+            .tick_intrinsic_reporting(test_tick())
             .unwrap();
         assert!(!outcome.distribute);
         commit_test_proposal(log, outcome);
@@ -416,7 +417,7 @@ fn commit_acked_report(log: &mut dyn BACnetObject, stamp: &BACnetTimeStamp) {
     add(log);
     let reporting = log.event_reporting_mut().expect("lends event reporting");
     let outcome = reporting
-        .tick_intrinsic_reporting()
+        .tick_intrinsic_reporting(test_tick())
         .expect("a report is due");
     reporting
         .commit_event_transition(EventTransitionCommit {

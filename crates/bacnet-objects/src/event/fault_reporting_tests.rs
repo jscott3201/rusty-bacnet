@@ -2,6 +2,7 @@
 //! needs the `event-reporting` feature (#2215); `fault_tests` holds the rest.
 
 use super::*;
+use crate::event::test_clock::{test_now, test_tick};
 use crate::traits::EventReporting as _;
 
 const NO_FAULT: Reliability = Reliability::NO_FAULT_DETECTED;
@@ -33,7 +34,7 @@ fn ticking_an_object_uses_reliability_for_fault_and_recovery() {
     )
     .expect("reliability is writable");
     let proposal = ai
-        .tick_intrinsic_reporting()
+        .tick_intrinsic_reporting(test_tick())
         .expect("periodic tick must observe bad reliability");
     let fault = commit_test_proposal(&mut ai, proposal);
     assert_eq!(fault.change.to, EventState::FAULT);
@@ -46,7 +47,7 @@ fn ticking_an_object_uses_reliability_for_fault_and_recovery() {
     )
     .expect("reliability is writable");
     let recovery = ai
-        .tick_intrinsic_reporting()
+        .tick_intrinsic_reporting(test_tick())
         .expect("periodic tick must observe recovered reliability");
     assert_eq!(recovery.change.from, EventState::FAULT);
     assert_eq!(recovery.change.to, EventState::NORMAL);
@@ -74,7 +75,7 @@ fn faulted_object_reports_both_fault_and_in_alarm_status_flags() {
         .set_reliability(OVER_RANGE)
         .expect("in-service reliability evaluation is supported");
     let proposal = ai
-        .evaluate_intrinsic_reporting()
+        .evaluate_intrinsic_reporting(test_now())
         .expect("bad reliability must propose FAULT");
     commit_test_proposal(&mut ai, proposal);
 

@@ -55,6 +55,9 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "te
 rcgen.workspace = true
 futures-util.workspace = true
 tokio-rustls.workspace = true
+# The instants the forwarding probe and intrinsic tests pass to event
+# reporting (#2303).
+bacnet-time.workspace = true
 rustls.workspace = true
 
 [lints]

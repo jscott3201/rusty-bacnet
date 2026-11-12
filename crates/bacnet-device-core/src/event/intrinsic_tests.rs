@@ -4,6 +4,7 @@
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::traits::BACnetObject;
+use bacnet_time::Instant;
 use bacnet_types::enums::{EngineeringUnits, EventState, ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::PropertyValue;
 
@@ -70,19 +71,22 @@ fn event_state(db: &ObjectDatabase, oid: ObjectIdentifier) -> EventState {
 #[test]
 fn before_commit_sees_the_state_from_before_the_commit() {
     let (mut db, oid) = high_limit_database();
-    // The evaluation seeds the delay; nothing commits yet.
-    assert!(after_write(&mut db, &oid).is_none());
+    // The evaluation seeds the delay, due a second later; nothing commits
+    // yet.
+    assert!(after_write(&mut db, &oid, Instant::from_millis(500)).is_none());
+    assert_eq!(next_due(&db), Some(Instant::from_millis(1_500)));
 
     let mut seen = Vec::new();
-    let mut committed = Vec::new();
-    for _ in 0..3 {
-        committed = sweep(&mut db, |db, object| {
-            seen.push((object, event_state(db, object)));
-        });
-        if !committed.is_empty() {
-            break;
-        }
-    }
+    assert!(
+        sweep(&mut db, Instant::from_secs(1), |_, object| seen
+            .push((object, EventState::FAULT)))
+        .is_empty()
+    );
+    assert!(seen.is_empty(), "nothing proposed before the delay ends");
+    let committed = sweep(&mut db, Instant::from_millis(1_500), |db, object| {
+        seen.push((object, event_state(db, object)));
+    });
+    assert_eq!(next_due(&db), None);
 
     assert_eq!(seen, vec![(oid, EventState::NORMAL)]);
     let [(swept, Ok(transition))] = committed.as_slice() else {

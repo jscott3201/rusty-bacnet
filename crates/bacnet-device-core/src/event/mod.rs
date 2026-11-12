@@ -56,7 +56,7 @@ pub use event_information::{
     handle_get_event_information, handle_get_event_information_configured,
 };
 pub use fault::{FaultPass, ReliabilityChange, fault_pass};
-pub use intrinsic::{IntrinsicCommit, after_write, sweep};
+pub use intrinsic::{IntrinsicCommit, after_write, next_due, sweep};
 
 pub use message::intrinsic_event_message_text;
 pub use payload::{

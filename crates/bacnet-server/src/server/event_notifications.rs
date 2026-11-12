@@ -114,8 +114,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let db = ctx.db;
         let resolved = {
             let mut db = db.write().await;
-            let resolved =
-                after_write(&mut db, oid).and_then(|result| logged_intrinsic_commit(oid, result));
+            let resolved = after_write(&mut db, oid, crate::runtime_clock::core_now())
+                .and_then(|result| logged_intrinsic_commit(oid, result));
             // A committed transition changes Status_Flags: capture it at its
             // own time for timestamped COV-multiple references.
             if resolved.is_some() {

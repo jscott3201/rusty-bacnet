@@ -1,5 +1,6 @@
 //! Restoring or seeding a log's buffer and Total_Record_Count (#1537).
 use super::*;
+use crate::event::test_clock::test_now;
 
 const MAX: u64 = u32::MAX as u64;
 
@@ -274,7 +275,7 @@ fn buffer_ready_counts_from_the_restored_count() {
             log.object_mut()
                 .event_reporting_mut()
                 .expect("lends event reporting")
-                .evaluate_intrinsic_reporting()
+                .evaluate_intrinsic_reporting(test_now())
                 .is_none(),
             "{kind:?}"
         );
@@ -293,7 +294,7 @@ fn buffer_ready_counts_from_the_restored_count() {
             log.object_mut()
                 .event_reporting_mut()
                 .expect("lends event reporting")
-                .evaluate_intrinsic_reporting()
+                .evaluate_intrinsic_reporting(test_now())
                 .is_none()
         );
         log.add_record(ordinary(6, 6)).unwrap();
@@ -301,7 +302,7 @@ fn buffer_ready_counts_from_the_restored_count() {
             log.object_mut()
                 .event_reporting_mut()
                 .expect("lends event reporting")
-                .evaluate_intrinsic_reporting()
+                .evaluate_intrinsic_reporting(test_now())
                 .is_some(),
             "{kind:?}"
         );

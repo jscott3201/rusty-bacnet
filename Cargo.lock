@@ -411,6 +411,7 @@ dependencies = [
  "bacnet-objects",
  "bacnet-server",
  "bacnet-services",
+ "bacnet-time",
  "bacnet-transport",
  "bacnet-types",
  "bytes",
@@ -552,6 +553,7 @@ name = "bacnet-objects"
 version = "0.15.0"
 dependencies = [
  "bacnet-encoding",
+ "bacnet-time",
  "bacnet-types",
  "bytes",
  "hashbrown 0.17.1",

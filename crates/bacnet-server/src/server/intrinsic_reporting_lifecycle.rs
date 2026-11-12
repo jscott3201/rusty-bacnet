@@ -2,22 +2,38 @@
 use super::super::cov_fanout::CovFanout;
 use super::super::event_notifications::logged_intrinsic_commit;
 use super::*;
-use bacnet_device_core::event::sweep;
+use bacnet_device_core::event::{next_due, sweep};
 
 pub(super) async fn run<T: TransportPort + 'static>(
     fanout: CovFanout<T>,
     learned_routers: Arc<Mutex<LearnedRouterCache>>,
     device_bindings: Arc<RwLock<DeviceBindingTable>>,
 ) {
-    let mut interval = tokio::time::interval(Duration::from_secs(1));
-    // The countdown decrements exactly once per call, so a delayed wake
-    // must NOT burst-deliver missed ticks (each would decrement
-    // `remaining`, compressing the Time_Delay). `Delay` collapses a
-    // missed deadline into a single tick, preserving per-second
-    // granularity (Time_Delay counts seconds, ASHRAE 135-2020 Clause 13.3).
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // The sweep runs once a second, as it always has: it follows
+    // Event_Algorithm_Inhibit references and re-derives FAULT from
+    // Reliability, which no write may report. Between those sweeps it also
+    // runs when the database's next Time_Delay ends, so a transition fires at
+    // its due instant rather than the next whole second (#2303). A late wake
+    // runs one sweep, not one per missed second, and the cadence restarts a
+    // period after it, as `MissedTickBehavior::Delay` did.
+    let period = Duration::from_secs(1);
+    let mut next_sweep = tokio::time::Instant::now();
+    let mut due: Option<tokio::time::Instant> = None;
     loop {
-        interval.tick().await;
+        let now = tokio::time::Instant::now();
+        let wake = match due {
+            Some(due) if due > now && due < next_sweep => due,
+            _ => next_sweep,
+        };
+        tokio::time::sleep_until(wake).await;
+        let woke = tokio::time::Instant::now();
+        if woke >= next_sweep {
+            next_sweep = if woke > next_sweep {
+                woke + period
+            } else {
+                next_sweep + period
+            };
+        }
         // DCC gates the outbound sender, not event-state detection or
         // the local transition actions in Clause 13.2.2.1.4.
         // Collect resolved transitions under a brief write lock, then
@@ -34,7 +50,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
             // A proposal can commit and still have its projection rejected,
             // so owe the fanout for every proposal; COV criteria drop it if
             // nothing changed.
-            let swept = sweep(&mut db, |db, oid| {
+            let swept = sweep(&mut db, crate::runtime_clock::core_now(), |db, oid| {
                 commit.before_change(db, oid);
                 commit.changed(oid);
             });
@@ -46,6 +62,10 @@ pub(super) async fn run<T: TransportPort + 'static>(
                     out.push((oid, resolved));
                 }
             }
+            // When the next delay ends, on tokio's clock.
+            due = next_due(&db)
+                .and_then(|due| crate::runtime_clock::core_clock().to_std(due))
+                .map(tokio::time::Instant::from_std);
             // Each committed transition changes Status_Flags. Timestamped
             // references capture it at commit time; every subscriber hears of
             // it once the guard is dropped, after the event notifications, as

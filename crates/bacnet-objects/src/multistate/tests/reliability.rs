@@ -1,6 +1,7 @@
 //! Multi-state Number_Of_States configuration and object-owned Reliability.
 
 use super::super::*;
+use crate::event::test_clock::test_now;
 use crate::property_metadata::is_writable_property;
 #[cfg(feature = "event-reporting")]
 use crate::traits::EventReporting as _;
@@ -551,14 +552,14 @@ fn synchronous_reliability_is_observed_by_the_existing_intrinsic_event_kernel() 
     let mut msi = MultiStateInputObject::new(1, "MSI-events", 2).unwrap();
     msi.set_present_value(3);
     let fault = msi
-        .evaluate_intrinsic_reporting()
+        .evaluate_intrinsic_reporting(test_now())
         .expect("synchronous Reliability fault must be observable");
     assert_eq!(fault.change.to, EventState::FAULT);
     crate::event::commit_test_proposal(&mut msi, fault);
 
     msi.set_present_value(1);
     let recovery = msi
-        .evaluate_intrinsic_reporting()
+        .evaluate_intrinsic_reporting(test_now())
         .expect("synchronous Reliability recovery must be observable");
     assert_eq!(recovery.change.from, EventState::FAULT);
     assert_eq!(recovery.change.to, EventState::NORMAL);

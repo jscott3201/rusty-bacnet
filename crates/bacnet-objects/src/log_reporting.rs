@@ -577,11 +577,17 @@ macro_rules! impl_buffer_ready_reporting {
                 Some(self.$reporting.enrollment_summary())
             }
 
-            fn evaluate_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
+            fn evaluate_intrinsic_reporting(
+                &mut self,
+                _now: bacnet_time::Instant,
+            ) -> Option<$crate::event::TransitionOutcome> {
                 self.$reporting.propose(self.$buffer.total_record_count())
             }
 
-            fn tick_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
+            fn tick_intrinsic_reporting(
+                &mut self,
+                _now: bacnet_time::Instant,
+            ) -> Option<$crate::event::TransitionOutcome> {
                 self.$reporting.propose(self.$buffer.total_record_count())
             }
 

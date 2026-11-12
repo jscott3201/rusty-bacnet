@@ -99,7 +99,10 @@ impl BACnetObject for Boundary {
 /// Only the evaluation reaches the wrapped object, as before the capability
 /// existed: every other event hook keeps its default.
 impl bacnet_objects::traits::EventReporting for Boundary {
-    fn evaluate_intrinsic_reporting(&mut self) -> Option<bacnet_objects::event::TransitionOutcome> {
+    fn evaluate_intrinsic_reporting(
+        &mut self,
+        now: bacnet_time::Instant,
+    ) -> Option<bacnet_objects::event::TransitionOutcome> {
         if self
             .panic_event
             .as_ref()
@@ -109,7 +112,7 @@ impl bacnet_objects::traits::EventReporting for Boundary {
         }
         self.inner
             .event_reporting_mut()
-            .and_then(|reporting| reporting.evaluate_intrinsic_reporting())
+            .and_then(|reporting| reporting.evaluate_intrinsic_reporting(now))
     }
 }
 

@@ -33,6 +33,7 @@
 //! object type watches and which BACnetPropertyStates choice carries it.
 
 use crate::prelude::*;
+use bacnet_time::Instant;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{ErrorClass, ErrorCode, EventState, PropertyIdentifier, Reliability};
 use bacnet_types::error::Error;
@@ -166,26 +167,37 @@ impl ChangeOfStateReporting {
         &mut self,
         watched: u32,
         reliability: Reliability,
-    ) -> Option<TransitionOutcome> {
-        if !self.event_detection_enable {
-            return None;
-        }
-        let inhibited = self.event_history.options.inhibited();
-        self.event_detector.propose(watched, reliability, inhibited)
-    }
-
-    /// The one-second tick, suspended while detection is off.
-    pub(crate) fn tick(
-        &mut self,
-        watched: u32,
-        reliability: Reliability,
+        now: Instant,
     ) -> Option<TransitionOutcome> {
         if !self.event_detection_enable {
             return None;
         }
         let inhibited = self.event_history.options.inhibited();
         self.event_detector
-            .tick_proposal(watched, reliability, inhibited)
+            .propose(watched, reliability, inhibited, now)
+    }
+
+    /// The periodic tick, suspended while detection is off.
+    pub(crate) fn tick(
+        &mut self,
+        watched: u32,
+        reliability: Reliability,
+        now: Instant,
+    ) -> Option<TransitionOutcome> {
+        if !self.event_detection_enable {
+            return None;
+        }
+        let inhibited = self.event_history.options.inhibited();
+        self.event_detector
+            .tick_proposal(watched, reliability, inhibited, now)
+    }
+
+    /// When the pending transition is due, while detection is on.
+    pub(crate) fn next_due(&self) -> Option<Instant> {
+        if !self.event_detection_enable {
+            return None;
+        }
+        self.event_detector.next_due()
     }
 
     /// Commit one transition through the shared kernel, then settle the
@@ -494,14 +506,24 @@ macro_rules! impl_change_of_state_reporting {
                 Some(self.$reporting.enrollment_summary())
             }
 
-            fn evaluate_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
+            fn evaluate_intrinsic_reporting(
+                &mut self,
+                now: bacnet_time::Instant,
+            ) -> Option<$crate::event::TransitionOutcome> {
                 let (watched, reliability) = ($watched(self), $reliability(self));
-                self.$reporting.propose(watched, reliability)
+                self.$reporting.propose(watched, reliability, now)
             }
 
-            fn tick_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
+            fn tick_intrinsic_reporting(
+                &mut self,
+                now: bacnet_time::Instant,
+            ) -> Option<$crate::event::TransitionOutcome> {
                 let (watched, reliability) = ($watched(self), $reliability(self));
-                self.$reporting.tick(watched, reliability)
+                self.$reporting.tick(watched, reliability, now)
+            }
+
+            fn next_due(&self) -> Option<bacnet_time::Instant> {
+                self.$reporting.next_due()
             }
 
             fn commit_event_transition(

@@ -138,7 +138,10 @@ impl BACnetObject for CustomProposal {
 }
 
 impl bacnet_objects::traits::EventReporting for CustomProposal {
-    fn evaluate_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
+    fn evaluate_intrinsic_reporting(
+        &mut self,
+        _now: bacnet_time::Instant,
+    ) -> Option<TransitionOutcome> {
         if self.delay == 0 {
             return self.proposal();
         }
@@ -147,7 +150,10 @@ impl bacnet_objects::traits::EventReporting for CustomProposal {
         }
         None
     }
-    fn tick_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
+    fn tick_intrinsic_reporting(
+        &mut self,
+        _now: bacnet_time::Instant,
+    ) -> Option<TransitionOutcome> {
         let remaining = self.remaining.as_mut()?;
         *remaining = remaining.saturating_sub(1);
         if *remaining == 0 {
@@ -223,11 +229,14 @@ impl BACnetObject for UnsupportedProposal {
 }
 
 impl bacnet_objects::traits::EventReporting for UnsupportedProposal {
-    fn evaluate_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
-        self.0.evaluate_intrinsic_reporting()
+    fn evaluate_intrinsic_reporting(
+        &mut self,
+        now: bacnet_time::Instant,
+    ) -> Option<TransitionOutcome> {
+        self.0.evaluate_intrinsic_reporting(now)
     }
-    fn tick_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
-        self.0.tick_intrinsic_reporting()
+    fn tick_intrinsic_reporting(&mut self, now: bacnet_time::Instant) -> Option<TransitionOutcome> {
+        self.0.tick_intrinsic_reporting(now)
     }
 }
 
@@ -373,7 +382,7 @@ async fn unsupported_custom_proposal_runtime_is_silent_unchanged_and_retryable()
             .unwrap()
             .event_reporting_mut()
             .expect("lends event reporting")
-            .evaluate_intrinsic_reporting()
+            .evaluate_intrinsic_reporting(crate::runtime_clock::core_now())
             .unwrap();
         let sent = broadcasts_from_per_write_path(&db, DccState::Enable).await;
         assert!(
@@ -389,7 +398,7 @@ async fn unsupported_custom_proposal_runtime_is_silent_unchanged_and_retryable()
                 .unwrap()
                 .event_reporting_mut()
                 .expect("lends event reporting")
-                .evaluate_intrinsic_reporting(),
+                .evaluate_intrinsic_reporting(crate::runtime_clock::core_now()),
             Some(proposal)
         );
         assert!(commits.lock().unwrap().is_empty());
@@ -455,7 +464,7 @@ async fn delayed_runtime(fail_first: bool, unsupported: bool) {
             .unwrap()
             .event_reporting_mut()
             .expect("lends event reporting")
-            .evaluate_intrinsic_reporting()
+            .evaluate_intrinsic_reporting(crate::runtime_clock::core_now())
             .is_none()
     );
     assert_eq!(snapshot(&db), before);
@@ -488,7 +497,7 @@ async fn delayed_runtime(fail_first: bool, unsupported: bool) {
                 .unwrap()
                 .event_reporting_mut()
                 .expect("lends event reporting")
-                .tick_intrinsic_reporting()
+                .tick_intrinsic_reporting(crate::runtime_clock::core_now())
                 .unwrap();
             assert_eq!(proposal.change.from, EventState::NORMAL);
             assert_eq!(proposal.change.to, EventState::HIGH_LIMIT);

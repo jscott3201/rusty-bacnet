@@ -230,7 +230,10 @@ impl bacnet_objects::traits::BACnetObject for PanicsAfterCommit {
 }
 
 impl bacnet_objects::traits::EventReporting for PanicsAfterCommit {
-    fn evaluate_intrinsic_reporting(&mut self) -> Option<bacnet_objects::event::TransitionOutcome> {
+    fn evaluate_intrinsic_reporting(
+        &mut self,
+        _now: bacnet_time::Instant,
+    ) -> Option<bacnet_objects::event::TransitionOutcome> {
         panic!("AFTER-99 panics in the work after its write");
     }
 }
