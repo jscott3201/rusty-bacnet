@@ -63,7 +63,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// write first. Its answer is sealed, but the object serves that write,
     /// and storage holds it (#1457).
     ///
-    /// [`DurableWrites::settle_forgotten_writes`]: bacnet_objects::durable::DurableWrites::settle_forgotten_writes
+    /// A local write aborted with its request (a Command or Channel run
+    /// writing) lets go of its stage as it drops, at once when the database
+    /// guard is free. One that finds the guard taken leaves the release to a
+    /// task that stop does not join, so if that task holds the guard just as
+    /// stop settles, the objects settle from a task once it is free (see
+    /// above) and storage is put back just after stop returns (#2493).
+    ///
+    /// [`DurableWrites::settle_forgotten_writes`]:bacnet_objects::durable::DurableWrites::settle_forgotten_writes
     ///
     /// Cancelling this waiter leaves cleanup owned by the server. A later stop
     /// joins it; after transport cleanup begins, dropping the server lets that

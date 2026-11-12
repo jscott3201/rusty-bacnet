@@ -15,8 +15,8 @@
 //! A staged write its request releases without making is dropped, and the
 //! class at once queues a save of the list it serves, so storage goes back to
 //! that list. A staged write whose request vanished without releasing it, as
-//! when `stop()` aborts a request or an application drops a local write's
-//! future, is dropped the same way once
+//! when a handler panics between its stage and its release, is dropped the
+//! same way once
 //! [`STAGED_WRITE_LIFETIME`](crate::durable::STAGED_WRITE_LIFETIME) has
 //! passed since its save finished: by the next write that stages, or by the
 //! server's once-a-second operation task, which calls
