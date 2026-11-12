@@ -1,5 +1,6 @@
-//! A Load Control's shed request (`RBNLCT01`), as
-//! `FileLoadControlPersistence` (with std) writes its file (#2479).
+//! A Load Control's shed request (`RBNLCT01`, and `RBNLCT02` with written
+//! Shed_Levels elements), as `FileLoadControlPersistence` (with std) writes
+//! its file (#2479, #2502).
 //!
 //! After the magic tag and the four-octet object identifier, the body, each
 //! field big-endian:
@@ -19,12 +20,21 @@
 //!   the Description: its length in four octets, then at most 16 KiB of
 //!   UTF-8.
 //!
+//! Version 2 ([`MAGIC_WITH_SHED_LEVELS`]) goes on with the Shed_Levels
+//! elements a write set (#2502): their count in four octets, then for each
+//! its array index in four octets and its level in eight. [`encode`] writes
+//! it only for a snapshot holding one, so a snapshot without keeps version
+//! 1's octets, and a build that reads only version 1 refuses version 2 as
+//! an unknown version.
+//!
 //! The body ends where its last field does. A state outside the four shed
 //! states, a choice past 2, a percent over 100, an amount that is negative
 //! or not finite, a Start_Time that is neither a moment nor wholly
 //! unspecified, an Enable or presence octet other than 0 or 1, octets past
-//! the end, and a Description past its cap or not UTF-8 are what no save
-//! writes, so they are damage.
+//! the end, a Description past its cap or not UTF-8, and in version 2 no
+//! written level, more than [`MAX_WRITTEN_SHED_LEVELS`], an index of 0 or
+//! one not past the one before, or a level of 0, are what no save writes, so
+//! they are damage.
 
 use crate::prelude::*;
 use bacnet_types::constructed::BACnetShedLevel;
@@ -34,17 +44,27 @@ use bacnet_types::primitives::{Date, ObjectIdentifier, Time};
 use super::SnapshotError;
 use super::framing;
 use crate::clock::{UNSPECIFIED_DATETIME, local_moment};
-use crate::load_control::LoadControlSnapshot;
+use crate::load_control::{LoadControlSnapshot, MAX_WRITTEN_SHED_LEVELS};
 use crate::write_config::description::MAX_OCTETS as MAX_DESCRIPTION_OCTETS;
 
 /// The format's tag, version 1.
 pub const MAGIC: [u8; 8] = *b"RBNLCT01";
+/// The format's tag, version 2, for a snapshot with written Shed_Levels
+/// elements (#2502).
+pub const MAGIC_WITH_SHED_LEVELS: [u8; 8] = *b"RBNLCT02";
 /// The fixed fields' length: the state, the level, Start_Time, the three
 /// durations, Enable and the Description's presence octet.
 const FIXED_LEN: usize = 4 + 9 + 8 + 3 * 8 + 2;
-/// The most octets a file may take: the header, the fixed fields and the
-/// longest Description.
-pub const MAX_LEN: usize = framing::HEADER_LEN + FIXED_LEN + 4 + MAX_DESCRIPTION_OCTETS;
+/// One written Shed_Levels element: its index and its level.
+const LEVEL_LEN: usize = 4 + 8;
+/// The most octets a file may take: the header, the fixed fields, the
+/// longest Description and the most written levels.
+pub const MAX_LEN: usize = framing::HEADER_LEN
+    + FIXED_LEN
+    + 4
+    + MAX_DESCRIPTION_OCTETS
+    + 4
+    + MAX_WRITTEN_SHED_LEVELS * LEVEL_LEN;
 
 /// The file octets for `snapshot`, saved for the Load Control `object`.
 ///
@@ -55,7 +75,14 @@ pub fn encode(
     snapshot: &LoadControlSnapshot,
 ) -> Result<Vec<u8>, SnapshotError> {
     encode_body(snapshot)
-        .map(|body| framing::seal(&MAGIC, object, &body))
+        .map(|body| {
+            let magic = if snapshot.shed_levels.is_empty() {
+                &MAGIC
+            } else {
+                &MAGIC_WITH_SHED_LEVELS
+            };
+            framing::seal(magic, object, &body)
+        })
         .map_err(|error| error.in_format("Load Control snapshot"))
 }
 
@@ -87,14 +114,22 @@ fn encode_body(snapshot: &LoadControlSnapshot) -> Result<Vec<u8>, SnapshotError>
     if let Some(text) = &snapshot.description {
         framing::put_description(&mut body, text)?;
     }
+    if !snapshot.shed_levels.is_empty() {
+        let count = u32::try_from(snapshot.shed_levels.len()).expect("checked by `sound`");
+        body.extend_from_slice(&count.to_be_bytes());
+        for &(index, level) in &snapshot.shed_levels {
+            body.extend_from_slice(&index.to_be_bytes());
+            body.extend_from_slice(&level.to_be_bytes());
+        }
+    }
     Ok(body)
 }
 
 /// The snapshot a file's `octets` hold for the Load Control `object`.
 ///
-/// Refuses octets past [`MAX_LEN`], without the tag, saved for another
-/// object, cut short, going on past the body's end, and a value no save
-/// writes.
+/// Reads both versions. Refuses octets past [`MAX_LEN`], without either
+/// tag, saved for another object, cut short, going on past the body's end,
+/// and a value no save writes.
 pub fn decode(
     object: ObjectIdentifier,
     octets: &[u8],
@@ -106,7 +141,13 @@ fn decode_file(
     object: ObjectIdentifier,
     octets: &[u8],
 ) -> Result<LoadControlSnapshot, SnapshotError> {
-    let (_, body) = framing::open(octets, &MAGIC, None, MAX_LEN, object)?;
+    let (version_1, body) = framing::open(
+        octets,
+        &MAGIC_WITH_SHED_LEVELS,
+        Some(&MAGIC),
+        MAX_LEN,
+        object,
+    )?;
     let Some((fixed, rest)) = body.split_first_chunk::<FIXED_LEN>() else {
         return Err(SnapshotError::truncated("is cut short"));
     };
@@ -145,6 +186,11 @@ fn decode_file(
     } else {
         (None, rest)
     };
+    let (shed_levels, rest) = if version_1 {
+        (Vec::new(), rest)
+    } else {
+        take_levels(rest)?
+    };
     if !rest.is_empty() {
         return Err(SnapshotError::damaged("goes on past its body"));
     }
@@ -157,6 +203,7 @@ fn decode_file(
         agreed_duty_window: word(37),
         enable,
         description,
+        shed_levels,
     };
     if !sound(&snapshot) {
         return Err(SnapshotError::damaged("holds a value no write leaves"));
@@ -164,9 +211,43 @@ fn decode_file(
     Ok(snapshot)
 }
 
+/// Written Shed_Levels elements: (array index, level) pairs.
+type Levels = Vec<(u32, u64)>;
+
+/// The written levels version 2 holds at the start of `rest`, and what
+/// follows them. [`sound`] checks them.
+fn take_levels(rest: &[u8]) -> Result<(Levels, &[u8]), SnapshotError> {
+    let Some((count, rest)) = rest.split_first_chunk::<4>() else {
+        return Err(SnapshotError::truncated("ends before its written levels"));
+    };
+    let count = usize::try_from(u32::from_be_bytes(*count))
+        .ok()
+        .filter(|count| (1..=MAX_WRITTEN_SHED_LEVELS).contains(count))
+        .ok_or(SnapshotError::damaged(
+            "holds no written levels or too many",
+        ))?;
+    let Some((levels, rest)) = rest.split_at_checked(count * LEVEL_LEN) else {
+        return Err(SnapshotError::truncated("ends inside its written levels"));
+    };
+    let levels = levels
+        .as_chunks::<LEVEL_LEN>()
+        .0
+        .iter()
+        .map(|entry| {
+            let (index, level) = entry.split_at(4);
+            (
+                u32::from_be_bytes(index.try_into().expect("four octets")),
+                u64::from_be_bytes(level.try_into().expect("eight octets")),
+            )
+        })
+        .collect();
+    Ok((levels, rest))
+}
+
 /// Whether `snapshot` holds only what the object serves: a shed state, a
-/// level a write takes, and a Start_Time that names a moment or none. A
-/// Description past its cap is refused as it is written.
+/// level a write takes, a Start_Time that names a moment or none, and
+/// written levels a write leaves. A Description past its cap is refused as
+/// it is written.
 fn sound(snapshot: &LoadControlSnapshot) -> bool {
     let state = snapshot.state.to_raw() <= ShedState::SHED_NON_COMPLIANT.to_raw();
     let level = match snapshot.requested_shed_level {
@@ -176,7 +257,7 @@ fn sound(snapshot: &LoadControlSnapshot) -> bool {
     };
     let start =
         snapshot.start_time == UNSPECIFIED_DATETIME || local_moment(snapshot.start_time).is_some();
-    state && level && start
+    state && level && start && crate::load_control::written_levels_sound(&snapshot.shed_levels)
 }
 
 #[cfg(test)]
@@ -212,6 +293,7 @@ mod tests {
             agreed_duty_window: 15,
             enable: true,
             description: Some("Chillers".into()),
+            shed_levels: Vec::new(),
         }
     }
 
@@ -321,5 +403,108 @@ mod tests {
                 SnapshotErrorKind::OutOfRange
             );
         }
+    }
+
+    /// [`shedding`] with two written Shed_Levels elements.
+    fn with_levels() -> LoadControlSnapshot {
+        LoadControlSnapshot {
+            shed_levels: vec![(1, 3), (4, u64::MAX)],
+            ..shedding()
+        }
+    }
+
+    #[test]
+    fn written_levels_take_version_2_and_a_file_without_keeps_version_1() {
+        let octets = encode(oid(1), &with_levels()).unwrap();
+        assert_eq!(octets[..8], MAGIC_WITH_SHED_LEVELS);
+        let levels_at = HEADER + FIXED_LEN + 4 + "Chillers".len();
+        assert_eq!(octets.len(), levels_at + 4 + 2 * LEVEL_LEN);
+        assert_eq!(octets[levels_at..levels_at + 4], [0, 0, 0, 2]);
+        assert_eq!(decode(oid(1), &octets).unwrap(), with_levels());
+        // Without a Description too.
+        let plain = LoadControlSnapshot {
+            description: None,
+            ..with_levels()
+        };
+        assert_eq!(
+            decode(oid(1), &encode(oid(1), &plain).unwrap()).unwrap(),
+            plain
+        );
+        // No written level: version 1's octets, which still load.
+        let old = encode(oid(1), &shedding()).unwrap();
+        assert_eq!(old[..8], MAGIC);
+        assert_eq!(decode(oid(1), &old).unwrap(), shedding());
+        // A later version is refused as one, not as damage.
+        let mut later = octets.clone();
+        later[..8].copy_from_slice(b"RBNLCT03");
+        assert_eq!(
+            decode(oid(1), &later).unwrap_err().kind(),
+            SnapshotErrorKind::UnknownVersion(3)
+        );
+    }
+
+    #[test]
+    fn written_levels_no_save_writes_are_refused() {
+        let octets = encode(oid(1), &with_levels()).unwrap();
+        let kind = |octets: &[u8]| decode(oid(1), octets).unwrap_err().kind();
+        let levels_at = octets.len() - 4 - 2 * LEVEL_LEN;
+        // Cut short in the count and in the last element; an octet past
+        // the end; version 1's tag on a body with levels.
+        assert_eq!(kind(&octets[..levels_at + 2]), SnapshotErrorKind::Truncated);
+        assert_eq!(
+            kind(&octets[..octets.len() - 1]),
+            SnapshotErrorKind::Truncated
+        );
+        let mut longer = octets.clone();
+        longer.push(0);
+        assert_eq!(kind(&longer), SnapshotErrorKind::Damaged);
+        let mut v1 = octets.clone();
+        v1[..8].copy_from_slice(&MAGIC);
+        assert_eq!(kind(&v1), SnapshotErrorKind::Damaged);
+        // A count of 0 or past the cap, an index of 0, an index not past
+        // the one before, and a level of 0.
+        let first = levels_at + 4;
+        let second = first + LEVEL_LEN;
+        let past_cap = (MAX_WRITTEN_SHED_LEVELS as u32 + 1).to_be_bytes();
+        for (at, written) in [
+            (levels_at, &[0u8, 0, 0, 0][..]),
+            (levels_at, &past_cap[..]),
+            (first, &[0, 0, 0, 0][..]),
+            (second, &[0, 0, 0, 1][..]),
+            (second + 4, &[0; 8][..]),
+        ] {
+            let mut damaged = octets.clone();
+            damaged[at..at + written.len()].copy_from_slice(written);
+            assert_eq!(kind(&damaged), SnapshotErrorKind::Damaged, "octet {at}");
+        }
+        for refused in [
+            vec![(0, 1)],
+            vec![(1, 0)],
+            vec![(2, 1), (1, 1)],
+            vec![(1, 1), (1, 2)],
+            (1..=MAX_WRITTEN_SHED_LEVELS as u32 + 1)
+                .map(|index| (index, 1))
+                .collect(),
+        ] {
+            let snapshot = LoadControlSnapshot {
+                shed_levels: refused,
+                ..shedding()
+            };
+            assert_eq!(
+                encode(oid(1), &snapshot).unwrap_err().kind(),
+                SnapshotErrorKind::OutOfRange
+            );
+        }
+        // The cap itself saves, and the file fits.
+        let most = LoadControlSnapshot {
+            description: Some("x".repeat(MAX_DESCRIPTION_OCTETS)),
+            shed_levels: (1..=MAX_WRITTEN_SHED_LEVELS as u32)
+                .map(|index| (index, 1))
+                .collect(),
+            ..shedding()
+        };
+        let octets = encode(oid(1), &most).unwrap();
+        assert_eq!(octets.len(), MAX_LEN);
+        assert_eq!(decode(oid(1), &octets).unwrap(), most);
     }
 }

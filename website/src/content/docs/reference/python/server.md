@@ -1113,6 +1113,7 @@ def add_load_control(
     state_description: Optional[str] = None,
     agreed_duty_window: Optional[int] = None,
     storage_path: Optional[str] = None,
+    clear_written_shed_levels: bool = False,
 ) -> None
 ```
 
@@ -1158,14 +1159,23 @@ wrote one, and the one a finished request returns to.
 
 With `storage_path` the object keeps its shed request in that file
 (#2497): the request properties, the agreed Duty\_Window, the shed
-state, Enable and a Description a client wrote. A rebuilt object
-looks at a request that was pending or being shed again, as though
-Start\_Time had just been written, and calls `shed` for it; one
-that was being shed calls `stop` when it ends. A write that cannot
-be saved is refused with DEVICE / OPERATIONAL\_PROBLEM. The shed
-levels, baseline and state description are configuration the file
-does not keep: give them as keywords at every start, so a restored
-request is put to `shed` with them. The
+state, Enable, and a Description and the Shed\_Levels elements a
+client wrote (#2502). A rebuilt object looks at a request that was
+pending or being shed again, as though Start\_Time had just been
+written, and calls `shed` for it; one that was being shed calls
+`stop` when it ends. A write that cannot be saved is refused with
+DEVICE / OPERATIONAL\_PROBLEM. The shed levels, baseline and state
+description are configuration the file does not keep: give them as
+keywords at every start, so a restored request is put to `shed`
+with them. A written Shed\_Levels element wins over the
+`shed_levels` keyword's level for it, one past the end of the
+keyword's array is dropped, and `set_load_control_shed_levels_local`
+drops them all; `clear_written_shed_levels=True` drops them first,
+so the keyword applies whole (a refused level raises with the file
+untouched; without `storage_path` the keyword does nothing).
+Without `shed_levels` the written ones
+are neither served nor dropped: the file keeps them for a start that
+gives the levels. The
 `set_load_control_*_local` methods work only once the server runs,
 after that first look, so use them for changes while it runs. Give
 each Load Control its own file; one that holds another object's
@@ -2470,9 +2480,15 @@ unknown object raises UNKNOWN\_OBJECT and any object other than a
 Load Control OPTIONAL\_FUNCTIONALITY\_NOT\_SUPPORTED. A request under
 way is put to `shed` again, and stays in its state unless the
 answer moves it; what that moves is reported through COV and saved
-with the request. Storage does not keep the levels: give them as
-`add_load_control` keywords at every start, so a restored request
-is put to `shed` with them. Not audited, like
+with the request. Storage keeps only the elements a client wrote
+(#2502), not these levels: give them as `add_load_control`
+keywords at every start, so a restored request is put to `shed`
+with them. These replace the written elements, which win over the
+keywords' levels until then, and storage drops those in a save
+nobody waits for. If that save fails, the file holds the older state,
+written elements included, until a retry succeeds, and a restart
+before then serves them: the running server's next look tries again,
+and later tries back off to once every 64 s. Not audited, like
 `set_reliability_local`.
 
 ### BACnetServer.set_load_control_full_duty_baseline_local
