@@ -284,6 +284,9 @@ impl TestTransportHandle {
 #[derive(Default)]
 struct Hooks {
     on_start: Option<Callback>,
+    /// Awaited after `on_start`, before `start` answers: a start the test
+    /// holds, or fails.
+    start_gate: Option<StopHook>,
     on_send: Option<SendHook>,
     on_stop: Option<StopHook>,
     on_drop: Option<Callback>,
@@ -436,6 +439,9 @@ impl TransportPort for TestTransport {
         self.shared.starts.fetch_add(1, Ordering::SeqCst);
         if let Some(hook) = &self.hooks.on_start {
             hook();
+        }
+        if let Some(gate) = &self.hooks.start_gate {
+            gate().await?;
         }
         match &mut self.start {
             StartMode::Closed => Ok(mpsc::channel(1).1),
@@ -629,6 +635,17 @@ impl TestTransportBuilder {
         let hook: SendHook =
             Arc::new(move |frame: SentFrame| -> HookFuture { Box::pin(hook(frame)) });
         self.transport.hooks.on_send = Some(hook);
+        self
+    }
+
+    /// Await this hook's future in `start`, after `on_start`, and fail the
+    /// start with its error: a start the test holds open, to drop it there.
+    pub(crate) fn start_gate<F>(mut self, hook: impl Fn() -> F + Send + Sync + 'static) -> Self
+    where
+        F: Future<Output = Result<(), Error>> + Send + 'static,
+    {
+        let hook: StopHook = Arc::new(move || -> HookFuture { Box::pin(hook()) });
+        self.transport.hooks.start_gate = Some(hook);
         self
     }
 

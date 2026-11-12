@@ -1130,8 +1130,10 @@ one is pending or under way, and it answers `(progress, expected, actual)`: `"wa
 the expected and actual levels as `ShedLevel` mappings in the
 requested choice. `stop` (optional, needs `shed`) is called with
 no arguments once a request `shed` was asked about ends, removal
-of the object included. Without `shed` nothing is shed: a request
-runs SHED\_NON\_COMPLIANT from Start\_Time to its end.
+of the object and a start that fails or is cancelled included. Make
+it idempotent: it may come with no loads shed, and twice with no
+`shed` between. Without `shed` nothing is shed: a request runs
+SHED\_NON\_COMPLIANT from Start\_Time to its end.
 
 Both run with the server's object database locked: they must return
 at once, may not await, and may not start a binding operation (it

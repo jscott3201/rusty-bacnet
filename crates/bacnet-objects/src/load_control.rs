@@ -155,7 +155,8 @@ impl LoadControlObject {
     ///
     /// The shedder replaced is not told anything, even with a request under
     /// way, and the new one hears of that request's end only once it has
-    /// been asked about it.
+    /// been asked about it, or when the request was restored as it was
+    /// being shed and no shedder has been asked about it since (#2479).
     pub fn set_shedder(&mut self, shedder: Arc<dyn LoadShedder>) {
         self.shedder = Some(shedder);
         self.offered = false;

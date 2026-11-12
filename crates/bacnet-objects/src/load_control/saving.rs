@@ -21,7 +21,9 @@
 //!   begun.
 //!
 //! A staged save holds the request as the writes leave it once the state
-//! machine's own rules have run on it: a disabled object holds none, and a
+//! machine's own rules have run on it after each write the live object
+//! looks at the request for (not Description, nor a Start_Time or
+//! Shed_Duration taken while disabled): a disabled object holds none, and a
 //! request cancelled, or whose time has run out on the Device clock, ends.
 //! What the application answers can't be known ahead, so whether a request
 //! that goes on then sheds, and so is SHED_COMPLIANT or SHED_NON_COMPLIANT
@@ -39,7 +41,17 @@
 //! from before the restart are let go, though `shed` was never asked about
 //! it in this process.
 //!
+//! Storage outlives the object. A replaced object leaves it alone
+//! ([`Retirement::Released`]), for a successor built over it to restore;
+//! one put in its place over other storage leaves the old request stored,
+//! and a later object built over that storage restores it. To end the
+//! request and forget it, remove the object first
+//! ([`ObjectDatabase::remove`] saves the ended request), then add the new
+//! one.
+//!
 //! [`Timed::start_output`]: crate::traits::Timed::start_output
+//! [`Retirement::Released`]: crate::traits::Retirement::Released
+//! [`ObjectDatabase::remove`]: crate::database::ObjectDatabase::remove
 
 use crate::prelude::*;
 use alloc::sync::Arc;
@@ -50,12 +62,12 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 
 use super::persistence::{LoadControlPersistence, LoadControlSnapshot};
-use super::shed::request_end;
+use super::shed::request_over;
 use super::{
     LoadControlObject, boolean_write, check_requested_level, check_start_time, choice_default,
     decode_date_time_write, decode_shed_level_write, unsigned_write,
 };
-use crate::clock::{UNSPECIFIED_DATETIME, local_moment};
+use crate::clock::UNSPECIFIED_DATETIME;
 use crate::common;
 use crate::durable::staged::{self, StagedSaves};
 use crate::durable::{DurableWrites, PendingWrite, SaveWait, SaveWriter, StageStep};
@@ -134,7 +146,11 @@ impl LoadControlObject {
     /// a storage in place of another built on the same one while the first
     /// still runs: each saves what it serves. A replaced object leaves the
     /// storage alone as it goes ([`Retirement::Released`]), so building the
-    /// replacement first, from the request the first one saved, is safe.
+    /// replacement first, from the request the first one saved, is safe. A
+    /// replacement over other storage leaves the old request stored, to come
+    /// back with any later object built over it: to end and forget it,
+    /// [`remove`](crate::database::ObjectDatabase::remove) the object first,
+    /// then add the new one.
     ///
     /// Fails when the saved request can't be loaded, or holds what a write
     /// would refuse: a percent over 100, a negative or non-finite amount, a
@@ -164,6 +180,31 @@ impl LoadControlObject {
         object.durable.storage = Some(StagedSaves::new(writer));
         object.durable.saved = object.snapshot();
         Ok(object)
+    }
+
+    /// Drop the Description a write saved (#2364): storage keeps none from
+    /// now on, so a rebuilt object starts from the Description the
+    /// application gives it. The text served now stays until a write changes
+    /// it. Saves before it returns; a save that fails keeps the written
+    /// Description and returns storage's error. Does nothing without storage
+    /// or a saved Description. Call it before the object joins the database,
+    /// as the setters are, not under the database guard: it waits for its
+    /// save.
+    pub fn clear_written_description(&mut self) -> Result<(), Error> {
+        if self.durable.storage.is_none() || !self.durable.description_written {
+            return Ok(());
+        }
+        let mut cleared = self.snapshot();
+        cleared.description = None;
+        let storage = self.durable.storage.as_mut().expect("checked above");
+        storage.save_now(cleared.clone())?;
+        self.durable.description_written = false;
+        self.durable.saved = cleared;
+        // A write staged before this gives way, and keeps the cleared state
+        // as what is served.
+        self.durable.writes = self.durable.writes.wrapping_add(1);
+        self.with_storage(|_| ());
+        Ok(())
     }
 
     /// Block until the saves queued so far have run. Dropping the object
@@ -306,6 +347,13 @@ fn next_request(
 ) -> Result<LoadControlSnapshot, Error> {
     let mut next = request.clone();
     let enable = next.enable;
+    // The writes the live object looks at the request for: not a
+    // Description, nor a Start_Time or Shed_Duration taken while disabled.
+    let looks = match property {
+        PropertyIdentifier::DESCRIPTION => false,
+        PropertyIdentifier::START_TIME | PropertyIdentifier::SHED_DURATION => enable,
+        _ => true,
+    };
     match property {
         PropertyIdentifier::REQUESTED_SHED_LEVEL => {
             let level = decode_shed_level_write(value.clone())?;
@@ -333,15 +381,16 @@ fn next_request(
         PropertyIdentifier::ENABLE => next.enable = boolean_write(value.clone())?,
         _ => next.description = Some(description::written(value)?),
     }
-    decided(&mut next, now);
+    if looks {
+        decided(&mut next, now);
+    }
     Ok(next)
 }
 
 /// Run on `request` what the state machine decides without the application
 /// (`shed::step`): a disabled object holds no request and no Shed_Duration;
-/// a request whose level is its choice's default, whose Start_Time names no
-/// moment, or whose end has come at `now`, ends, its properties back at
-/// their idle values.
+/// a request over at `now` ([`request_over`], which the live machine asks
+/// too) ends, its properties back at their idle values.
 fn decided(request: &mut LoadControlSnapshot, now: Option<i64>) {
     if request.state == ShedState::SHED_INACTIVE {
         if !request.enable {
@@ -349,14 +398,13 @@ fn decided(request: &mut LoadControlSnapshot, now: Option<i64>) {
         }
         return;
     }
-    let start = local_moment(request.start_time);
-    let cancelled = request.requested_shed_level == choice_default(&request.requested_shed_level);
-    let over = match (start, now) {
-        (Some(start), Some(now)) => now >= request_end(start, request.shed_duration),
-        (Some(_), None) => false,
-        (None, _) => true,
-    };
-    if !request.enable || cancelled || over {
+    let over = request_over(
+        &request.requested_shed_level,
+        request.start_time,
+        request.shed_duration,
+        now,
+    );
+    if !request.enable || over {
         request.state = ShedState::SHED_INACTIVE;
         request.requested_shed_level = choice_default(&request.requested_shed_level);
         request.start_time = UNSPECIFIED_DATETIME;

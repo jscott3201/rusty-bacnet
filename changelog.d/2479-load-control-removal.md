@@ -2,5 +2,7 @@
 section: Fixed
 ---
 - Removing a Load Control from its database, or replacing it there, during a
-  shed request ends the request and calls `LoadShedder::stop`, through a new
-  `Timed::retire` hook the database calls on an object leaving it (#2479).
+  shed request calls `LoadShedder::stop` through a new
+  `Timed::retire(Retirement)` hook, and a server start that fails or is
+  cancelled releases what it began with `ObjectDatabase::release_outputs`
+  (#2479).

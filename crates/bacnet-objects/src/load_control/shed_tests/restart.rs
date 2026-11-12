@@ -345,7 +345,10 @@ fn a_stop_still_owed_survives_a_second_restart() {
     let mut lc = LoadControlObject::with_persistence(1, "LC-1", store.clone()).unwrap();
     lc.set_shedder(app.clone());
     lc.set_shed_levels(vec![(1, "one".into())]).unwrap();
+    // A change that saves in this lifetime still saves the shed state.
+    lc.set_agreed_duty_window(20);
     power_off(lc);
+    assert_eq!(store.held().agreed_duty_window, 20);
     assert_eq!(store.held().state, COMPLIANT);
     app.take();
     clock.set(at(45));
@@ -501,4 +504,147 @@ fn a_staged_save_is_what_the_object_serves_after_the_writes() {
     assert_eq!(staged.shed_duration, 30);
     lc.wait_for_saves();
     assert_eq!(store.held(), staged);
+}
+
+/// The writes of one request, as the server hands them to be staged.
+fn pending(writes: &[(P, PropertyValue)]) -> Vec<PendingWrite> {
+    writes
+        .iter()
+        .map(|(property, value)| PendingWrite {
+            property: *property,
+            array_index: None,
+            value: value.clone(),
+        })
+        .collect()
+}
+
+/// Stage `writes`, make them, and return what the staged save held.
+fn stage_and_write(
+    lc: &mut LoadControlObject,
+    store: &Store,
+    writes: &[(P, PropertyValue)],
+) -> LoadControlSnapshot {
+    let StageStep::Staged(wait) = lc.stage_writes(&pending(writes)) else {
+        panic!("the writes stage");
+    };
+    wait.block();
+    let staged = store.held();
+    for (property, value) in writes {
+        lc.write_property(*property, None, value.clone(), None)
+            .unwrap();
+    }
+    lc.release_staged_write(&wait);
+    staged
+}
+
+#[test]
+fn a_description_staged_with_a_request_change_leaves_the_request_to_it() {
+    let (store, clock) = (Arc::new(Store::default()), test_clock());
+    let app = TestShedder::new(ShedProgress::Compliant, 2, 2);
+    let mut lc = kept(&store, &clock, &app);
+    write_start(&mut lc, at(0));
+    // 10:31, past the 30 minutes, before the once-a-second pass looked: a
+    // Description changes nothing of the request, and the longer
+    // Shed_Duration written with it carries the shed on.
+    clock.set(at(31));
+    lc.wait_for_saves();
+    let staged = stage_and_write(
+        &mut lc,
+        &store,
+        &[
+            (
+                P::DESCRIPTION,
+                PropertyValue::CharacterString("Chillers".into()),
+            ),
+            (P::SHED_DURATION, PropertyValue::Unsigned(60)),
+        ],
+    );
+    assert_eq!(present_value(&lc), COMPLIANT);
+    assert_eq!((staged.state, staged.start_time), (COMPLIANT, at(0)));
+    assert_eq!(staged.shed_duration, 60);
+    lc.wait_for_saves();
+    assert_eq!(store.held(), staged);
+}
+
+#[test]
+fn a_staged_enable_false_ends_the_request_it_stages() {
+    let (store, clock) = (Arc::new(Store::default()), test_clock());
+    let app = TestShedder::new(ShedProgress::Compliant, 2, 2);
+    let mut lc = kept(&store, &clock, &app);
+    write_start(&mut lc, at(0));
+    lc.wait_for_saves();
+    let staged = stage_and_write(
+        &mut lc,
+        &store,
+        &[(P::ENABLE, PropertyValue::Boolean(false))],
+    );
+    assert_idle(&lc, 0);
+    assert_eq!(app.take().last(), Some(&Told::Stop));
+    assert_eq!(
+        staged,
+        LoadControlSnapshot {
+            enable: false,
+            ..LoadControlSnapshot::default()
+        }
+    );
+    lc.wait_for_saves();
+    assert_eq!(store.held(), staged);
+}
+
+#[test]
+fn a_stop_owed_waits_for_a_shedder_installed_later() {
+    let (store, clock) = (Arc::new(Store::default()), test_clock());
+    let app = TestShedder::new(ShedProgress::Compliant, 2, 2);
+    let mut lc = kept(&store, &clock, &app);
+    write_start(&mut lc, at(0));
+    power_off(lc);
+    app.take();
+    // Back at 10:10 with no shedder yet: the look sheds nothing, and the
+    // stop stays owed to the shedder installed after it.
+    clock.set(at(10));
+    let mut lc = LoadControlObject::with_persistence(1, "LC-1", store.clone()).unwrap();
+    lc.bind_clocks(&Clocks::default().with_clock(Some(clock.clone() as Arc<dyn ClockReader>)));
+    lc.start_output();
+    assert_eq!(present_value(&lc), NON_COMPLIANT);
+    lc.set_shedder(app.clone());
+    lc.set_requested_shed_level(BACnetShedLevel::Level(0))
+        .unwrap();
+    assert_eq!(present_value(&lc), INACTIVE);
+    assert_eq!(app.take(), [Told::Stop]);
+}
+
+#[test]
+fn a_written_description_can_be_cleared_from_storage() {
+    let (store, clock) = (Arc::new(Store::default()), test_clock());
+    let app = TestShedder::new(ShedProgress::Compliant, 2, 2);
+    let mut lc = kept(&store, &clock, &app);
+    let chillers = PropertyValue::CharacterString("Chillers".into());
+    lc.write_property(P::DESCRIPTION, None, chillers.clone(), None)
+        .unwrap();
+    power_off(lc);
+    let mut lc = kept(&store, &clock, &app);
+    assert_eq!(store.held().description.as_deref(), Some("Chillers"));
+    lc.clear_written_description().unwrap();
+    // Storage keeps none now; the text served stays until a write changes it.
+    assert_eq!(store.held().description, None);
+    assert_eq!(lc.read_property(P::DESCRIPTION, None).unwrap(), chillers);
+    // A save that fails keeps the written Description, and nothing to clear
+    // is no save at all.
+    lc.write_property(P::DESCRIPTION, None, chillers.clone(), None)
+        .unwrap();
+    lc.wait_for_saves();
+    store.fail.store(true, Ordering::SeqCst);
+    assert!(lc.clear_written_description().is_err());
+    store.fail.store(false, Ordering::SeqCst);
+    assert_eq!(store.held().description.as_deref(), Some("Chillers"));
+    lc.clear_written_description().unwrap();
+    let saves = store.saves.load(Ordering::SeqCst);
+    lc.clear_written_description().unwrap();
+    assert_eq!(store.saves.load(Ordering::SeqCst), saves);
+    power_off(lc);
+    let lc = kept(&store, &clock, &app);
+    assert_eq!(
+        lc.read_property(P::DESCRIPTION, None).unwrap(),
+        PropertyValue::CharacterString(String::new())
+    );
 }

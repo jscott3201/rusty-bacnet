@@ -517,15 +517,19 @@ async fn a_request_written_over_the_wire_survives_a_restart() {
     h.server.stop().await.unwrap();
 }
 
-#[tokio::test(start_paused = true)]
-async fn a_start_that_fails_lets_a_restored_shed_go() {
-    use crate::server::test_transport::{StartMode, TestTransport};
+/// A database restored with a shed under way for a century from the
+/// harness's day, so it is under way on the system clock a start reads,
+/// with `app` installed, the config to start it with, and its storage.
+fn restored(
+    app: &Arc<App>,
+) -> (
+    ObjectDatabase,
+    ServerConfig,
+    Arc<Store>,
+    LoadControlSnapshot,
+) {
     use bacnet_objects::device::{DeviceConfig, DeviceObject};
-    // A century from the harness's day, so the request is under way on the
-    // system clock, which a start reads.
     const CENTURY: u64 = 100 * 365 * 24 * 60;
-    let app = app();
-    app.answer(ShedProgress::Compliant, 2);
     let frame = clock_at(0);
     let saved = LoadControlSnapshot {
         state: bacnet_types::enums::ShedState::SHED_COMPLIANT,
@@ -553,6 +557,15 @@ async fn a_start_that_fails_lets_a_restored_shed_go() {
         device: identity,
         ..ServerConfig::default()
     };
+    (db, config, store, saved)
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_start_that_fails_lets_a_restored_shed_go() {
+    use crate::server::test_transport::{StartMode, TestTransport};
+    let app = app();
+    app.answer(ShedProgress::Compliant, 2);
+    let (db, config, store, saved) = restored(&app);
     // A transport whose start fails: its one receiver is already gone.
     let transport = TestTransport::builder()
         .start(StartMode::Inbound(None))
@@ -561,6 +574,33 @@ async fn a_start_that_fails_lets_a_restored_shed_go() {
     // The start offered the restored request to the application, then let
     // it go as it failed (#2479); storage keeps it for the next start.
     assert!(!app.asked.lock().unwrap().is_empty());
+    assert_eq!(*app.stops.lock().unwrap(), 1);
+    assert_eq!(*store.saved.lock().unwrap(), Some(saved));
+}
+
+#[tokio::test]
+async fn a_start_dropped_after_its_outputs_lets_a_restored_shed_go() {
+    use crate::server::test_transport::TestTransport;
+    let app = app();
+    app.answer(ShedProgress::Compliant, 2);
+    let (db, config, store, saved) = restored(&app);
+    // The transport's start never answers, as a hub that never connects.
+    let starting = Arc::new(tokio::sync::Notify::new());
+    let transport = TestTransport::builder()
+        .on_start({
+            let starting = Arc::clone(&starting);
+            move || starting.notify_one()
+        })
+        .start_gate(std::future::pending::<Result<(), Error>>)
+        .build();
+    let start = tokio::spawn(BACnetServer::start(config, db, transport));
+    starting.notified().await;
+    assert!(!app.asked.lock().unwrap().is_empty());
+    assert_eq!(*app.stops.lock().unwrap(), 0);
+    // The caller gives up on the start: dropping its future lets the shed go
+    // (#2479), and storage keeps the request for the next start.
+    start.abort();
+    assert!(start.await.is_err_and(|error| error.is_cancelled()));
     assert_eq!(*app.stops.lock().unwrap(), 1);
     assert_eq!(*store.saved.lock().unwrap(), Some(saved));
 }

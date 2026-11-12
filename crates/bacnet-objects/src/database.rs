@@ -122,9 +122,13 @@ impl ObjectDatabase {
     /// held, as [`remove`](Self::remove) has it do (#2264). A timed object
     /// replaced retires as [`Retirement::Released`] (#2479): it ends what it
     /// runs but leaves its storage as it was, since the object put in its
-    /// place may restore from the same storage. It is dropped here, under
-    /// the caller's borrow, and dropping an object with storage waits for
-    /// the saves it queued earlier (see [`crate::durable`]).
+    /// place may restore from the same storage. So a Load Control replaced
+    /// by one over other storage leaves its request stored, to come back
+    /// with a later object built over that storage; to end and forget it,
+    /// [`remove`](Self::remove) the object first, then add the new one. The
+    /// replaced object is dropped here, under the caller's borrow, and
+    /// dropping an object with storage waits for the saves it queued
+    /// earlier (see [`crate::durable`]).
     pub fn add(&mut self, mut object: Box<dyn BACnetObject>) -> Result<(), Error> {
         let identifier = object.object_identifier();
         ObjectIdentifier::new_addressable(identifier.object_type(), identifier.instance_number())?;

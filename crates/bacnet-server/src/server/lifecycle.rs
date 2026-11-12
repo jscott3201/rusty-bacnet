@@ -8,6 +8,9 @@ mod period;
 use super::binary_lighting_lifecycle::spawn_binary_lighting_operation_task as spawn_operation;
 use super::heap_futures::boxed;
 use super::{audit_recipient::spawn_owned, audit_recipient_routes::AuditRoutes};
+
+#[path = "start_outputs.rs"]
+mod start_outputs;
 pub(super) use period::{MonotonicClocks, event_enrollment_period};
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
@@ -71,19 +74,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // harmless, since the drive is what any start does, and a later
         // start over the same objects drives them the same way again. What
         // a start began elsewhere, such as a restored Load Control shed, is
-        // released if the start fails (#2479).
-        db.start_outputs();
-        let membership = crate::membership::install_waker(&mut db);
+        // released if the start fails or its future is dropped (#2479).
+        let mut outputs = start_outputs::StartedOutputs::start(db);
+        let membership = crate::membership::install_waker(outputs.db());
 
-        let started =
-            boxed(|| super::network_port::start(&mut db, &config, transport, audit_routes)).await;
-        let (network, mut apdu_rx, audit_routes, network_controls) = match started {
-            Ok(started) => started,
-            Err(error) => {
-                db.release_outputs();
-                return Err(error);
-            }
-        };
+        let (network, mut apdu_rx, audit_routes, network_controls) =
+            boxed(|| super::network_port::start(outputs.db(), &config, transport, audit_routes))
+                .await?;
         let local_mac = MacAddr::from_slice(network.local_mac());
 
         let network = Arc::new(network);
@@ -91,7 +88,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // later does not rebind it.
         let device_instance = Some(config.device.instance());
         let (discovery_limiter, time_sync_limiter) = request_limiters(&config, device_instance);
-        let db = Arc::new(RwLock::new(db));
+        let db = outputs.share();
         let cov_counters = Arc::new(crate::cov::AtomicCovCounters::default());
         let cov_table = Arc::new(RwLock::new(
             CovSubscriptionTable::with_policy(config.cov_policy.clone(), Arc::clone(&cov_counters))
@@ -123,7 +120,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let target_audit = match target_audit {
             Ok(runtime) => runtime,
             Err(error) => {
-                db.write().await.release_outputs();
                 let network = Arc::try_unwrap(network).map_err(|_| {
                     Error::Encoding("startup cleanup has an unexpected network owner".into())
                 })?;
@@ -842,6 +838,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             local_mac,
         };
         boxed(|| server.execute_initial_staging_plans()).await;
+        outputs.complete();
         Ok(server)
     }
 }

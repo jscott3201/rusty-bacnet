@@ -46,21 +46,25 @@ pub trait LoadShedder: Send + Sync {
     fn shed(&self, request: &ShedRequest) -> ShedStatus;
 
     /// The request ended: it ran its Shed_Duration, a client cancelled it,
-    /// Enable went FALSE, or the object left its database, removed from it
-    /// or replaced by another object (#2479). Stop shedding. The default
-    /// does nothing.
+    /// Enable went FALSE, the object left its database (removed from it or
+    /// replaced by another object), or a server start that looked at it
+    /// failed or was cancelled (#2479). Stop shedding. The default does
+    /// nothing.
     ///
     /// Only a request the object has offered to [`shed`](Self::shed) is
     /// stopped: one cancelled by the write that started it never reaches
     /// the application. Dropping the object, or a copy of it, outside its
     /// database calls nothing.
     ///
-    /// With persistence, a stop may come for a request this process never
-    /// offered: one restored by
+    /// Make it idempotent: it may come when no loads are shed, and twice
+    /// with no `shed` between. With persistence it may come for a request
+    /// this process never offered: one restored by
     /// [`with_persistence`](LoadControlObject::with_persistence) that was
-    /// being shed when the device went down, and that ends before `shed` is
-    /// asked about it, as when its time ran out meanwhile. Loads still shed
-    /// from before the restart are released then.
+    /// being shed when the device went down and ends before `shed` is asked
+    /// about it, as when its time ran out meanwhile, so loads still shed
+    /// from before the restart are let go. An object replaced before its
+    /// first look stops its restored request, and the successor restored
+    /// from the same storage stops it again when it ends.
     fn stop(&self) {}
 }
 
@@ -250,28 +254,27 @@ impl LoadControlObject {
     /// SHED_REQUEST_PENDING at the moment `now`: cancel the request, keep
     /// waiting, or start shedding.
     fn decide_pending(&mut self, now: Option<i64>) {
-        // CancelShed: a default level or an unspecified Start_Time cancels.
-        let start = clock::local_moment(self.start_time);
-        let cancelled = self.requested_shed_level == choice_default(&self.requested_shed_level);
-        let Some(start) = start.filter(|_| !cancelled) else {
+        // CancelShed: the level's default, a Start_Time that names no
+        // moment, or an end already past ([`request_over`], which the
+        // staged save's model asks too).
+        if request_over(
+            &self.requested_shed_level,
+            self.start_time,
+            self.shed_duration,
+            now,
+        ) {
             self.end_request();
             return;
-        };
+        }
         // Without a Device clock the object can't tell when Start_Time
         // comes, so the request waits. The levels last reported hold, unless
-        // a new requested choice has made them the wrong units.
-        let Some(now) = now else {
+        // a new requested choice has made them the wrong units. A request
+        // that isn't over has a Start_Time that names a moment.
+        let (Some(start), Some(now)) = (clock::local_moment(self.start_time), now) else {
             self.expected_shed_level = self.in_requested_units(self.expected_shed_level.clone());
             self.actual_shed_level = self.in_requested_units(self.actual_shed_level.clone());
             return;
         };
-        // CancelShed: a request whose end has passed is ignored. The
-        // instant of Start_Time plus Shed_Duration counts as passed, by
-        // choice: the shed runs up to it, not through it.
-        if now >= self.end_of(start) {
-            self.end_request();
-            return;
-        }
         let started = now >= start;
         let progress = self.ask(started);
         self.state = match (progress, started) {
@@ -320,8 +323,9 @@ impl LoadControlObject {
     /// Duty_Window the agreed value (Clauses 12.28.10 to 12.28.13). The
     /// clause names these resets for a request that ran its course; the
     /// object makes them however the request ends, so a request is never
-    /// left half there. The application is told to stop only when it was
-    /// asked about the request.
+    /// left half there. The application is told to stop when it was asked
+    /// about the request, or when the request was restored as it was being
+    /// shed and no shedder has been asked about it since (#2479).
     fn end_request(&mut self) {
         // A request restored as it was being shed owes a stop too (#2479).
         let restored = self.shed_before_restart.take().is_some();
@@ -353,9 +357,12 @@ impl LoadControlObject {
     /// reports. From here on the request counts as offered to it.
     fn ask(&mut self, started: bool) -> ShedProgress {
         self.offered = true;
-        // The shedder now knows of a restored request, and its end reaches
-        // it through `offered`.
-        self.shed_before_restart = None;
+        // A shedder now knows of a restored request, and its end reaches it
+        // through `offered`. With none installed, the stop stays owed to the
+        // one installed later.
+        if self.shedder.is_some() {
+            self.shed_before_restart = None;
+        }
         let request = ShedRequest {
             requested: self.requested_shed_level.clone(),
             shed_level: match self.requested_shed_level {
@@ -391,6 +398,30 @@ impl LoadControlObject {
         } else {
             choice_default(&self.requested_shed_level)
         }
+    }
+}
+
+/// Whether a request with this level, Start_Time and Shed_Duration (in
+/// minutes) is over at `now`, the Device clock's local moment if it can be
+/// read: cancelled by its choice's default level or by a Start_Time that
+/// names no moment, or at or past its end. The instant of Start_Time plus
+/// Shed_Duration counts as passed, by choice: the shed runs up to it, not
+/// through it. Without a clock only a cancel ends it. The live state
+/// machine (`decide_pending`) and the staged save's model
+/// (`saving::decided`) both ask this, so the two can't drift.
+pub(super) fn request_over(
+    level: &BACnetShedLevel,
+    start_time: (Date, Time),
+    minutes: u64,
+    now: Option<i64>,
+) -> bool {
+    if *level == choice_default(level) {
+        return true;
+    }
+    match (clock::local_moment(start_time), now) {
+        (None, _) => true,
+        (Some(start), Some(now)) => now >= request_end(start, minutes),
+        (Some(_), None) => false,
     }
 }
 

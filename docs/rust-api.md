@@ -7047,8 +7047,17 @@ process. A server whose start fails after that look releases what it began
 (`ObjectDatabase::release_outputs`), with storage left for the next start.
 Give each object its own storage. Removing the object saves the ended
 request; replacing it leaves storage as it was (`Retirement::Released`), so a
-replacement built first from the same storage keeps the request. An object
-from `new` keeps nothing and starts SHED_INACTIVE with the idle values.
+replacement built first from the same storage keeps the request. A
+replacement over other storage leaves the old request stored, and a later
+object built over that storage brings it back: to end and forget the
+request, `remove` the object first, then add the new one. A start dropped by
+its caller after the outputs started releases them as a failed one does. An
+object from `new` keeps nothing and starts SHED_INACTIVE with the idle
+values. `clear_written_description` drops a written Description from
+storage. `LoadShedder::stop` should be idempotent: it can come with no loads
+shed, for a restored request this process never offered, and twice with no
+`shed` between (an object replaced before its first look, then its
+successor's restored request ending).
 
 Enable FALSE ends a request and takes no new one. While it is FALSE, writes
 of Start_Time and Shed_Duration are acknowledged but not kept, so both read

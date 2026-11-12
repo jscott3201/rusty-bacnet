@@ -4242,7 +4242,9 @@ It answers `(progress, expected, actual)`: `"waiting"`, `"shedding"` or
 `"compliant"`, then the expected and actual levels as
 `{"kind": ..., "value": ...}` mappings in the requested choice. The optional
 `stop` is called with no arguments once a request `shed` was asked about
-ends, a DeleteObject of the Load Control included; it needs `shed`. Without
+ends, a DeleteObject of the Load Control and a start that fails or is
+cancelled included; it needs `shed`. Make it idempotent: it may come with no
+loads shed, and twice with no `shed` between. Without
 `shed` nothing is shed, and a request runs SHED_NON_COMPLIANT from Start_Time
 to its end. Both callables run with the server's object database locked, as
 `on_reinitialize` does: they must return at once, may not await or start a
