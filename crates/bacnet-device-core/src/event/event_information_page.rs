@@ -1,6 +1,6 @@
 //! Bounded retained encoding with full strict projection validation.
 use super::*;
-use alloc::format;
+use alloc::string::String;
 use alloc::vec;
 use bacnet_encoding::{primitives, tags};
 
@@ -41,7 +41,10 @@ impl GetEventInformationBudget {
             ),
         ] {
             if value == 0 {
-                return Err(Error::Encoding(format!("{name} must be positive")));
+                // Built from fragments: the core formats nothing (#2187).
+                let mut message = String::from(name);
+                message.push_str(" must be positive");
+                return Err(Error::Encoding(message));
             }
         }
         Ok(())
@@ -211,6 +214,41 @@ mod tests {
             event_enable: EventTransitionBits::all(),
             event_priorities: [0, 100, 255],
         }
+    }
+
+    /// The refusal reads as it did when the server formatted it.
+    #[test]
+    fn zero_limits_are_refused_with_the_formatted_text() {
+        let default = GetEventInformationBudget::default();
+        for (name, budget) in [
+            (
+                "event_information_max_objects",
+                GetEventInformationBudget {
+                    max_objects: 0,
+                    ..default
+                },
+            ),
+            (
+                "event_information_max_returned_summaries",
+                GetEventInformationBudget {
+                    max_returned_summaries: 0,
+                    ..default
+                },
+            ),
+            (
+                "event_information_max_service_ack_bytes",
+                GetEventInformationBudget {
+                    max_service_ack_bytes: 0,
+                    ..default
+                },
+            ),
+        ] {
+            let Err(Error::Encoding(message)) = budget.validate() else {
+                panic!("a zero {name} must be refused");
+            };
+            assert_eq!(message, format!("{name} must be positive"));
+        }
+        default.validate().unwrap();
     }
 
     #[test]
