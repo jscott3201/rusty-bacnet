@@ -133,11 +133,14 @@ async fn a_member_here_due_while_one_there_waits_for_the_database_goes_through()
     // A reader, such as a client's ReadProperty, holds the database when the
     // datatype read is answered, so keeping the datatype waits for it.
     let reader = h.server.database().read().await;
+    let requests = crate::command_lists::remember_hook::requests();
     h.respond(read_ack(invoke_id, &request, &PropertyValue::Real(0.0)))
         .await;
-    // A waiting writer turns new readers away.
+    // The run's own write for the datatype is the one to wait for: the
+    // server's tasks queue for the guard too, so a queued writer alone proves
+    // nothing. Its ask is counted in the poll that first queues it.
     tokio::time::timeout(Duration::from_millis(50), async {
-        while h.server.database().try_read().is_ok() {
+        while crate::command_lists::remember_hook::requests() == requests {
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
     })

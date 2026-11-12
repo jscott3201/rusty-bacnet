@@ -39,6 +39,9 @@ tokio-rustls = { workspace = true, optional = true }
 
 [features]
 sc-tls = ["bacnet-transport/sc-tls", "dep:tokio-rustls"]
+# Hooks for another crate's tests: the count of network-number controls that
+# asked for the database's write guard (#2507). Not for production builds.
+test-support = []
 
 [dev-dependencies]
 rcgen.workspace = true

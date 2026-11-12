@@ -62,6 +62,8 @@ use crate::server::RemoteRequestError;
 
 mod chain;
 mod channel;
+#[cfg(test)]
+pub(crate) use channel::remember_hook;
 mod remote_slots;
 mod taken;
 mod target;
