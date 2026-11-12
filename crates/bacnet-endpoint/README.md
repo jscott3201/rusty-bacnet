@@ -164,7 +164,10 @@ async fn main() -> Result<(), bacnet_types::error::Error> {
   [`EndpointSession::with_cov`](session::EndpointSession::with_cov) enables
   SubscribeCOV over bacnet-device-core's `Reporter`, with unconfirmed and
   confirmed COV notifications whose octets and parameters match
-  `bacnet-server`'s on paused-time in-memory tests. Full `bacnet-server`
+  `bacnet-server`'s on paused-time in-memory tests. Its confirmed
+  notifications share the client role's 256 invoke IDs but hold at most
+  [`COV_CONFIRMED_IN_FLIGHT`](session::COV_CONFIRMED_IN_FLIGHT) (64) at once,
+  so subscribers that stop answering can't leave the client role without one. Full `bacnet-server`
   dispatch parity is out of scope. Accepted-direct replies preserve the original
   sealed response capability through the bounded endpoint queue, before any
   prompt reply channel. Retired/invalid authority never falls back by address;

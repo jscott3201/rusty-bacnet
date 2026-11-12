@@ -139,14 +139,17 @@ async fn a_subscriber_that_never_answers_is_asked_again_then_held_off() {
     session.stop().await.unwrap();
 }
 
-/// The table holds at most `max_subscriptions_global` and refuses the next
+/// The table holds at most `max_subscriptions_per_peer` from one
+/// subscriber and `max_subscriptions_global` in all, and refuses the next
 /// with RESOURCES / NO_SPACE_TO_ADD_LIST_ELEMENT; an outbox of one entry
-/// sends a change to two subscribers one after the other, the second with
-/// the current value once room frees. An invalid policy fails startup.
+/// sends a change to three subscriptions one after the other, the later
+/// ones with the current value once room frees. An invalid policy, an empty
+/// outbox and a client-only session fail startup.
 #[tokio::test(start_paused = true)]
 async fn the_bounds_hold() {
     let policy = CovPolicy {
-        max_subscriptions_global: 2,
+        max_subscriptions_global: 3,
+        max_subscriptions_per_peer: 2,
         ..CovPolicy::default()
     };
     let one = OutboxLimits {
@@ -154,57 +157,136 @@ async fn the_bounds_hold() {
         octets: 256,
     };
     let config = ReportConfig::new(policy).with_outbox(one);
-    let mut node = Node::new().await;
+    let (mut a, mut b) = (Node::new().await, Node::new().await);
     let mut session = endpoint(SessionRole::ServerOnly, Some(config)).await;
     let to = mac_of(&session);
+    // Error: RESOURCES (3), NO_SPACE_TO_ADD_LIST_ELEMENT (19).
+    let refused = |invoke_id| [Bytes::from(vec![0x50, invoke_id, 5, 0x91, 3, 0x91, 19])];
     for process in [1, 2] {
         let body = subscribe(process, Some(false), Some(300));
-        node.request(&to, process as u8, SUBSCRIBE_COV, &body).await;
-        assert_eq!(node.quiet(&to).await.len(), 2);
+        a.request(&to, process as u8, SUBSCRIBE_COV, &body).await;
+        assert_eq!(a.quiet(&to).await.len(), 2);
     }
-    node.request(&to, 3, SUBSCRIBE_COV, &subscribe(3, Some(false), Some(300)))
-        .await;
-    // Error: RESOURCES (3), NO_SPACE_TO_ADD_LIST_ELEMENT (19).
+    let third = subscribe(3, Some(false), Some(300));
+    a.request(&to, 3, SUBSCRIBE_COV, &third).await;
     assert_eq!(
-        node.quiet(&to).await,
-        [Bytes::from_static(&[0x50, 3, 5, 0x91, 3, 0x91, 19])]
+        a.quiet(&to).await,
+        refused(3),
+        "past the per-subscriber cap"
     );
+    b.request(&to, 1, SUBSCRIBE_COV, &subscribe(1, Some(false), Some(300)))
+        .await;
+    assert_eq!(b.quiet(&to).await.len(), 2, "another subscriber's");
+    b.request(&to, 2, SUBSCRIBE_COV, &subscribe(2, Some(false), Some(300)))
+        .await;
+    assert_eq!(b.quiet(&to).await, refused(2), "past the global cap");
+
     session
         .set_present_value_local(&ai1(), PropertyValue::Real(26.0))
         .await
         .unwrap();
-    let mut heard: Vec<_> = node
+    let value = PropertyValue::Real(26.0);
+    let mut heard: Vec<_> = a
         .quiet(&to)
         .await
         .iter()
         .map(|apdu| notified(apdu))
         .collect();
     heard.sort_by_key(|(process, ..)| *process);
-    let value = PropertyValue::Real(26.0);
-    assert_eq!(heard, [(1, 300, value.clone()), (2, 300, value)]);
+    assert_eq!(heard, [(1, 300, value.clone()), (2, 300, value.clone())]);
+    let heard: Vec<_> = b
+        .quiet(&to)
+        .await
+        .iter()
+        .map(|apdu| notified(apdu))
+        .collect();
+    assert_eq!(heard, [(1, 300, value)]);
     let counters = session.cov.host().unwrap().lock().reporter.counters();
-    assert_eq!(counters.owed, 1, "one report waited for room");
+    assert_eq!(counters.owed, 2, "two reports waited for room");
     session.stop().await.unwrap();
 
-    for (role, cov) in [
-        (
-            SessionRole::ServerOnly,
-            CovPolicy {
-                max_subscriptions_global: 0,
-                ..CovPolicy::default()
-            },
-        ),
-        (SessionRole::ClientOnly, CovPolicy::default()),
+    let invalid = CovPolicy {
+        max_subscriptions_global: 0,
+        ..CovPolicy::default()
+    };
+    let empty =
+        |entries, octets| ReportConfig::default().with_outbox(OutboxLimits { entries, octets });
+    for (role, config) in [
+        (SessionRole::ServerOnly, ReportConfig::new(invalid)),
+        (SessionRole::ServerOnly, empty(0, 2048)),
+        (SessionRole::ServerOnly, empty(16, 0)),
+        (SessionRole::ClientOnly, ReportConfig::default()),
     ] {
         let mut refused = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
             .role(role)
             .database(fixture())
             .build_session_over(BusPort::new())
             .unwrap()
-            .with_cov(ReportConfig::new(cov));
-        assert!(refused.start().await.is_err(), "{role:?}");
+            .with_cov(config.clone());
+        assert!(refused.start().await.is_err(), "{role:?} {config:?}");
         assert!(!refused.is_running());
     }
+}
+
+/// However many subscribers stop answering, their confirmed notifications
+/// hold at most `COV_CONFIRMED_IN_FLIGHT` invoke IDs: the client role still
+/// gets one and its read completes, and a report held at the bound goes
+/// as soon as one of them comes back.
+#[tokio::test(start_paused = true)]
+async fn silent_subscribers_leave_the_client_role_its_invoke_ids() {
+    use crate::session::COV_CONFIRMED_IN_FLIGHT;
+    use bacnet_device_core::cov::FlightTiming;
+    // One subscriber with room for 256 subscriptions, all in flight at
+    // once, and a minute's timeout, so nothing ends on its own.
+    let policy = CovPolicy {
+        max_subscriptions_per_peer: 256,
+        max_confirmed_in_flight_per_peer: 256,
+        ..CovPolicy::default()
+    };
+    let minute = FlightTiming::new(bacnet_time::Duration::from_secs(60), 0);
+    let config = ReportConfig::new(policy).with_confirmed(minute);
+    let mut node = Node::new().await;
+    let mut server = server().await;
+    let mut session = endpoint(SessionRole::Both, Some(config)).await;
+    let to = mac_of(&session);
+    let mut out = Vec::new();
+    for process in 0..256u32 {
+        let invoke_id = process as u8;
+        let body = subscribe(process, Some(true), Some(300));
+        node.request(&to, invoke_id, SUBSCRIBE_COV, &body).await;
+        // Its reply, after any notification still on its way.
+        loop {
+            let (_, apdu) = node.next_within(Duration::from_millis(100)).await.unwrap();
+            if apdu[0] >> 4 != 0 {
+                assert_eq!(apdu, acked(invoke_id));
+                break;
+            }
+            out.push(confirmed_notification(&apdu).0);
+        }
+    }
+    while let Some((_, apdu)) = node.next_within(Duration::from_millis(100)).await {
+        out.push(confirmed_notification(&apdu).0);
+    }
+    assert_eq!(out.len(), COV_CONFIRMED_IN_FLIGHT);
+    assert_eq!(session.active_leases(), COV_CONFIRMED_IN_FLIGHT);
+
+    let client = session.client().unwrap();
+    let read = client.read_property(
+        server.local_mac(),
+        ai1(),
+        PropertyIdentifier::PRESENT_VALUE,
+        None,
+    );
+    let answer = read.await.expect("the client role gets an invoke ID");
+    assert_eq!(answer.object_identifier, ai1());
+
+    node.send(&to, &ack(out[0])).await;
+    let (_, apdu) = node.next_within(Duration::from_millis(10)).await.unwrap();
+    let (next, _) = confirmed_notification(&apdu);
+    assert!(!out[1..].contains(&next), "an ID that came back");
+    assert_eq!(session.active_leases(), COV_CONFIRMED_IN_FLIGHT);
+    session.stop().await.unwrap();
+    server.stop().await.unwrap();
 }
 
 /// Stopping with reports outstanding and changes held behind them gives

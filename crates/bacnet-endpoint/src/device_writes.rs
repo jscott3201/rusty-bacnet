@@ -123,30 +123,35 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// then of each change the application makes through
     /// [`write_local`](Self::write_local),
     /// [`set_present_value_local`](Self::set_present_value_local) and
-    /// [`set_reliability_local`](Self::set_reliability_local), and of each
-    /// change a Device write makes. A change the application makes to the
-    /// database by other means reports nothing. A confirmed notification
-    /// leases its invoke ID from the pool the client role uses, is sent
-    /// again on the timeout and retries of `config.confirmed`, and a
-    /// subscriber that refuses it or never answers is held off for one
-    /// retry cycle. The Device lists the subscriptions in
-    /// Active_COV_Subscriptions.
+    /// [`set_reliability_local`](Self::set_reliability_local). A change
+    /// made to the database by other means reports nothing. A confirmed
+    /// notification leases its invoke ID from the pool the client role
+    /// uses, is sent again on the timeout and retries of
+    /// `config.confirmed`, and a subscriber that refuses it or never
+    /// answers is held off for one retry cycle. The Device lists the
+    /// subscriptions in Active_COV_Subscriptions.
     ///
     /// `config` bounds the work: `config.cov` caps the subscriptions (in
     /// all, per subscriber, indefinite ones and confirmed notifications in
     /// flight per subscriber) and what one change may send, and
     /// `config.outbox` the notifications queued at once, in entries and
     /// octets, allocated at start. A notification with no room waits, and
-    /// goes with the subscription's current values once room frees.
-    /// [`stop`](Self::stop) drops what is still queued and gives back every
-    /// invoke ID a notification holds.
+    /// goes with the subscription's current values once room frees. At most
+    /// [`COV_CONFIRMED_IN_FLIGHT`](crate::session::COV_CONFIRMED_IN_FLIGHT)
+    /// (64) confirmed notifications are out at once, all subscribers
+    /// together, so the client role keeps three quarters of the 256 invoke
+    /// IDs however many subscribers stop answering; a report past it waits
+    /// for one to end. [`stop`](Self::stop) drops what is still queued and
+    /// gives back every invoke ID a notification holds.
     ///
     /// SubscribeCOVProperty and SubscribeCOVPropertyMultiple stay refused.
     /// Startup requirements and the advertised services are those of
-    /// [`with_device_writes`](Self::with_device_writes); without a composed
-    /// identity, the notifications name the Device by its own
-    /// Vendor_Identifier and Max_APDU_Length_Accepted. An invalid
-    /// `config.cov` fails startup before the transport starts.
+    /// [`with_device_writes`](Self::with_device_writes). Without a composed
+    /// identity, the Device object supplies what the notifications carry of
+    /// it: its identifier, as the initiating device, and for a confirmed
+    /// one its Max_APDU_Length_Accepted. An invalid `config.cov`, or a
+    /// `config.outbox` with no entry or no octet, fails startup before the
+    /// transport starts.
     ///
     /// # Panics
     /// Panics if startup has already consumed the session configuration.

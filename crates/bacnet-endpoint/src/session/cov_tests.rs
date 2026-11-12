@@ -16,7 +16,7 @@ use crate::bip::BipEndpointBuilder;
 use crate::session::bus_port::BusPort;
 use crate::session::{EndpointSession, SessionRole};
 use bacnet_encoding::apdu::{ConfirmedRequest, encode_apdu};
-use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
+use bacnet_encoding::npdu::{Npdu, NpduAddress, decode_npdu, encode_npdu};
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_server::server::BACnetServer;
 use bacnet_services::cov::SubscribeCOVRequest;
@@ -39,16 +39,21 @@ fn ai1() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap()
 }
 
+fn lsp1() -> ObjectIdentifier {
+    ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, 1).unwrap()
+}
+
 fn device() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::DEVICE, DEVICE).unwrap()
 }
 
-/// The Device and AI-1 at 20.0, built alike for every host.
+/// The Device, AI-1 at 20.0 and LSP-1, built alike for every host.
 fn fixture() -> ObjectDatabase {
     let identity = DeviceIdentity::new(DEVICE, 0x105).unwrap();
     let mut input = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     input.set_present_value(20.0);
-    crate::build_database_with_extra(&identity, vec![Box::new(input)]).unwrap()
+    let point = bacnet_objects::life_safety::LifeSafetyPointObject::new(1, "LSP-1").unwrap();
+    crate::build_database_with_extra(&identity, vec![Box::new(input), Box::new(point)]).unwrap()
 }
 
 /// A running endpoint over [`fixture`] on the in-memory link, with COV
@@ -86,13 +91,23 @@ async fn server() -> BACnetServer<BusPort> {
         .unwrap()
 }
 
-/// SubscribeCOV's parameters: a cancellation without `confirmed` and
-/// `lifetime`.
+/// SubscribeCOV's parameters for AI-1: a cancellation without `confirmed`
+/// and `lifetime`.
 fn subscribe(process: u32, confirmed: Option<bool>, lifetime: Option<u32>) -> Vec<u8> {
+    subscribe_to(ai1(), process, confirmed, lifetime)
+}
+
+/// SubscribeCOV's parameters for `object`.
+fn subscribe_to(
+    object: ObjectIdentifier,
+    process: u32,
+    confirmed: Option<bool>,
+    lifetime: Option<u32>,
+) -> Vec<u8> {
     let mut body = BytesMut::new();
     SubscribeCOVRequest {
         subscriber_process_identifier: process,
-        monitored_object_identifier: ai1(),
+        monitored_object_identifier: object,
         issue_confirmed_notifications: confirmed,
         lifetime,
     }
@@ -150,9 +165,16 @@ impl Node {
     }
 
     async fn send(&self, to: &[u8], apdu: &[u8]) {
+        self.send_from(to, apdu, None).await;
+    }
+
+    /// Send `apdu` to `to` as a router passing it on from `source`, when
+    /// given.
+    async fn send_from(&self, to: &[u8], apdu: &[u8], source: Option<&NpduAddress>) {
         let mut npdu = BytesMut::new();
         let npdu_header = Npdu {
             expecting_reply: apdu[0] >> 4 == 0,
+            source: source.cloned(),
             payload: Bytes::copy_from_slice(apdu),
             ..Npdu::default()
         };
@@ -174,11 +196,14 @@ impl Node {
 
     /// The next APDU and who sent it, if one comes within `within`.
     async fn next_within(&mut self, within: Duration) -> Option<(MacAddr, Bytes)> {
+        let (source, npdu) = self.next_npdu(within).await?;
+        Some((source, npdu.payload))
+    }
+
+    /// The next NPDU and who sent it, if one comes within `within`.
+    async fn next_npdu(&mut self, within: Duration) -> Option<(MacAddr, Npdu)> {
         let received = tokio::time::timeout(within, self.rx.recv()).await.ok()??;
-        Some((
-            received.source_mac,
-            decode_npdu(received.npdu).unwrap().payload,
-        ))
+        Some((received.source_mac, decode_npdu(received.npdu).unwrap()))
     }
 
     /// Every APDU from `from` until the link has been quiet for 100 ms.
@@ -502,9 +527,8 @@ fn empty_list(invoke_id: u8) -> [Bytes; 1] {
     [Bytes::from(ack)]
 }
 
-/// A Device write reports to COV subscribers too; the Device itself takes
-/// none, so with a subscription to AI-1 a written Description sends
-/// nothing beyond its reply.
+/// With COV on, a Device write still answers alone: a written Description
+/// sends nothing beyond its reply, a subscription to AI-1 notwithstanding.
 #[tokio::test(start_paused = true)]
 async fn a_device_write_with_cov_on_answers_alone() {
     let mut node = Node::new().await;
@@ -575,5 +599,80 @@ async fn the_first_notification_waits_for_its_reply() {
     host.replied();
     let (_, apdu) = node.next_within(Duration::from_millis(50)).await.unwrap();
     assert_eq!(notified(&apdu), (7, 300, PropertyValue::Real(20.0)));
+    session.stop().await.unwrap();
+}
+
+/// Life Safety values are captured before a local change, so a change that
+/// moves Status_Flags reports even when the subscriber's last delivered
+/// values match: taking LSP-1 out of service and back before the task sends
+/// leaves the subscriber where the server's last notification does, in
+/// service, not with the first change's stale flags.
+#[tokio::test(start_paused = true)]
+async fn a_life_safety_change_back_ends_where_the_server_does() {
+    use bacnet_device_core::write::local::LocalCommandSource;
+    let mut pair = Pair::start().await;
+    let body = subscribe_to(lsp1(), 9, Some(false), Some(300));
+    assert_eq!(
+        pair.both("subscribe LSP-1", SUBSCRIBE_COV, &body)
+            .await
+            .len(),
+        2
+    );
+    let server = MacAddr::from_slice(pair.server.local_mac());
+    let endpoint = mac_of(&pair.endpoint);
+    let source = LocalCommandSource::ServerDevice;
+    let oos = PropertyIdentifier::OUT_OF_SERVICE;
+    for on in [true, false] {
+        let value = PropertyValue::Boolean(on);
+        pair.server
+            .write_local(&lsp1(), oos, None, value, None, source)
+            .await
+            .unwrap();
+    }
+    let from_server = pair.node.quiet(&server).await;
+    // Back to back: nothing between them lets the task send.
+    for on in [true, false] {
+        let value = PropertyValue::Boolean(on);
+        pair.endpoint
+            .write_local(&lsp1(), oos, None, value, None, source)
+            .await
+            .unwrap();
+    }
+    let from_endpoint = pair.node.quiet(&endpoint).await;
+    assert!(!from_server.is_empty());
+    assert_eq!(
+        from_endpoint.last(),
+        from_server.last(),
+        "endpoint, then server"
+    );
+    pair.stop().await;
+}
+
+/// A subscriber behind a router: its confirmed notification goes through
+/// the router to its routed address, and its Ack, which the router passes
+/// back, ends the report and gives the invoke ID back.
+#[tokio::test(start_paused = true)]
+async fn a_routed_subscriber_is_notified_and_answered() {
+    let mut router = Node::new().await;
+    let mut session = endpoint(SessionRole::ServerOnly, Some(ReportConfig::default())).await;
+    let to = mac_of(&session);
+    let behind = NpduAddress {
+        network: 7,
+        mac_address: MacAddr::from_slice(&[0x42]),
+    };
+    let request = confirmed_apdu(1, SUBSCRIBE_COV, &subscribe(7, Some(true), Some(300)));
+    router.send_from(&to, &request, Some(&behind)).await;
+    let (_, reply) = router.next_npdu(Duration::from_millis(100)).await.unwrap();
+    assert_eq!(reply.payload, acked(1));
+    let (_, notification) = router.next_npdu(Duration::from_millis(100)).await.unwrap();
+    assert_eq!(notification.destination, Some(behind.clone()), "routed");
+    let Ok(Apdu::ConfirmedRequest(sent)) = decode_apdu(notification.payload) else {
+        panic!("a confirmed notification")
+    };
+    assert_eq!(session.active_leases(), 1);
+    let ack = [0x20, sent.invoke_id, sent.service_choice.to_raw()];
+    router.send_from(&to, &ack, Some(&behind)).await;
+    let ended = async || session.active_leases() == 0;
+    crate::session::eventually::eventually(Duration::from_secs(1), "the Ack ends it", ended).await;
     session.stop().await.unwrap();
 }

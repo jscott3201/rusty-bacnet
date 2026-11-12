@@ -12171,11 +12171,9 @@ session.set_present_value_local(&ai1, PropertyValue::Real(21.5)).await?;
 
 What is reported: an accepted subscription's first notification, which follows
 the SubscribeCOV's reply; then each change the application makes through
-`write_local`, `set_present_value_local` and `set_reliability_local`, and
-each change a Device write makes. The endpoint's Device writes reach the
-Device's Description and Audit_Notification_Recipient only, and a Device takes
-no subscription, so none of them reports yet. A change made to the database
-any other way reports nothing.
+`write_local`, `set_present_value_local` and `set_reliability_local`. A
+change made to the database any other way, a client's Device write included,
+reports nothing.
 
 Confirmed notifications lease their invoke IDs from the coordinator the
 client role draws from, so the two roles never hold one ID at once, and their
@@ -12185,6 +12183,14 @@ the client role's `SessionConfig` timer), and a subscriber that refuses one or
 never answers is held off for one retry cycle. A change made while a report is
 out waits for its answer. With every invoke ID leased, a report waits until
 one comes back.
+
+At most `bacnet_endpoint::session::COV_CONFIRMED_IN_FLIGHT` (64) confirmed
+notifications are out at once, all subscribers together: a quarter of the 256
+invoke IDs. A subscriber that never answers holds an ID per notification until
+its retries run out, so without the bound sixteen silent subscribers could
+lease every ID and leave the client role none for its own requests. A report
+past the bound waits for one of them to end, as it waits for an empty pool;
+nothing is dropped.
 
 `config` bounds the work:
 
@@ -12198,14 +12204,16 @@ one comes back.
 - `config.outbox` (`OutboxLimits`, 16 entries and 2,048 octets by default)
   holds the notifications decided and not yet sent, allocated once at start.
   A notification that finds no room isn't queued: its subscription is owed
-  one later notification with its current values, sent as room frees.
+  one later notification with its current values, sent as room frees. An
+  outbox with no entry or no octet fails `start()`.
 
 Startup requires a server role and a concrete built-in local Device, as the
 Device-write opt-in does. The Device and identity then advertise SubscribeCOV,
 and the Device lists Active_COV_Subscriptions, read live from the table. It
 doesn't list Active_COV_Multiple_Subscriptions, which belongs to a device that
 executes SubscribeCOVPropertyMultiple (Table 12-13). Without a composed
-identity, the notifications name the Device by its own Vendor_Identifier and
+identity, the Device object supplies what the notifications carry of it: its
+identifier, as the initiating device, and for a confirmed one its
 Max_APDU_Length_Accepted. SubscribeCOVProperty and
 SubscribeCOVPropertyMultiple stay refused with UNRECOGNIZED_SERVICE, as
 SubscribeCOV is on a session without the opt-in. No event notification

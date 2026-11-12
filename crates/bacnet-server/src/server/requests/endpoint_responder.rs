@@ -199,8 +199,7 @@ impl EndpointResponder {
     }
 
     /// Run SubscribeCOV through `cov`, which then serves the Device's
-    /// Active_COV_Subscriptions and hears of each object a Device write
-    /// changes (#2490).
+    /// Active_COV_Subscriptions (#2490).
     #[doc(hidden)]
     pub fn with_cov(mut self, cov: Arc<dyn EndpointCov>) -> Self {
         self.cov = Some(cov);
@@ -289,9 +288,6 @@ impl EndpointResponder {
         let mut db = self.db().write().await;
         let result = self.commit_device_write(&mut db, *device, write, value, request, received);
         staged.release(&mut db);
-        if let (Ok(()), Some(cov)) = (&result, &self.cov) {
-            cov.changed(&db, &[write.object_identifier]);
-        }
         result
     }
 
@@ -409,7 +405,13 @@ impl EndpointResponder {
             self.ensure_open()?;
             let reply = cov.subscribe(&mut db, &received);
             _replied = Some(Replied(cov));
-            reply.unwrap_or_else(|| reply::unrecognized_service(invoke_id))
+            // Never drawn. The request has run, so not a Reject (Clause
+            // 20.1.8): an Abort.
+            reply.unwrap_or(Apdu::Abort(AbortPdu {
+                sent_by_server: true,
+                invoke_id,
+                abort_reason: AbortReason::OTHER,
+            }))
         } else if let Some((handler, password)) = reinitialization {
             let requester = reinitialize::Requester::new(
                 &received.source_mac,

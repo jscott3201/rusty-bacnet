@@ -5,10 +5,10 @@
 //! ([`EndpointSession::with_cov`]), the `Reporter` its preflight builds, and
 //! once it starts a [`CovHost`] and the task that sends what the host queues.
 //! The host keeps the `Reporter` under a std mutex, with the invoke IDs its
-//! confirmed notifications hold. The responder reaches it for SubscribeCOV,
-//! for reads of the Device's Active_COV_Subscriptions and after a Device
-//! write; the dispatch task for the answers to its confirmed notifications;
-//! the local writes for the changes the application makes.
+//! confirmed notifications hold. The responder reaches it for SubscribeCOV
+//! and for reads of the Device's Active_COV_Subscriptions; the dispatch task
+//! for the answers to its confirmed notifications; the local writes for the
+//! changes the application makes.
 //!
 //! - **Locks.** Every caller takes the database guard first and the host's
 //!   mutex after it. The mutex is never held across an await, nor while
@@ -18,7 +18,9 @@
 //! - **Invoke IDs.** A confirmed notification leases its ID from the
 //!   session's one coordinator, the pool the client role draws from, so the
 //!   two roles never use one ID at once; the answer comes back through the
-//!   dispatch task's single admission.
+//!   dispatch task's single admission. At most
+//!   [`COV_CONFIRMED_IN_FLIGHT`] are out at once, so silent subscribers
+//!   can't take every ID from the client role.
 //! - **Order.** The first notification of a subscription waits until the
 //!   SubscribeCOV's reply has been handed off ([`EndpointCov::replied`]).
 //!
@@ -59,6 +61,16 @@ use crate::held_database::HeldDatabase;
 /// owed for want of an invoke ID, unless one comes back sooner.
 const STARVED_RETRY: std::time::Duration = std::time::Duration::from_millis(50);
 
+/// The most confirmed COV notifications a session with
+/// [`with_cov`](super::EndpointSession::with_cov) has out at once, all
+/// subscribers together: a quarter of the 256 invoke IDs its client role
+/// draws from too. A silent subscriber holds an ID for each notification
+/// until its retries run out, so without this bound a few of them could
+/// lease every ID, and every request of the client role would fail for
+/// want of one. At the bound a report waits for one of them to end, as it
+/// waits when the pool is empty, and nothing is dropped.
+pub const COV_CONFIRMED_IN_FLIGHT: usize = 64;
+
 /// The session's COV opt-in and, once it starts, what runs it.
 #[derive(Default)]
 pub(crate) struct CovRole {
@@ -73,9 +85,10 @@ pub(crate) struct CovRole {
 
 impl CovRole {
     /// Build the `Reporter` for the local Device `device` of `db`: under
-    /// the session's identity when it has one, otherwise under the Device's
-    /// own Vendor_Identifier and Max_APDU_Length_Accepted. Does nothing
-    /// unless COV is enabled.
+    /// the session's identity when it has one, otherwise under one read
+    /// from the Device object. Does nothing unless COV is enabled. Refuses
+    /// an invalid policy, and an outbox with no entry or no octet, which
+    /// could queue nothing.
     pub(super) fn prepare(
         &mut self,
         identity: Option<&DeviceIdentity>,
@@ -86,6 +99,11 @@ impl CovRole {
             return Ok(());
         };
         config.cov.validate()?;
+        if config.outbox.entries == 0 || config.outbox.octets == 0 {
+            return Err(Error::Encoding(
+                "SubscribeCOV requires an outbox of at least one entry and one octet".into(),
+            ));
+        }
         let identity = match identity {
             Some(identity) => identity.clone(),
             None => device_identity(db, device)?,
@@ -282,6 +300,10 @@ impl CovHost {
     /// The task: wait for something queued or a deadline, then send.
     async fn run(self: Arc<Self>, db: HeldDatabase) {
         loop {
+            // Made before `starved` is read, so a lease released in between
+            // still wakes the task (Tokio delivers `notify_waiters` to every
+            // `Notified` already made, polled or not).
+            let released = self.coordinator.released();
             let (deadline, starved) = self.next_wake();
             let due = async {
                 match deadline {
@@ -291,7 +313,7 @@ impl CovHost {
             };
             let released = async {
                 if starved {
-                    self.coordinator.released().await;
+                    released.await;
                 } else {
                     std::future::pending::<()>().await;
                 }
@@ -469,27 +491,25 @@ impl EndpointCov for CovHost {
         };
         LiveDeviceCov::project(db, selection, entries)
     }
-
-    fn changed(&self, db: &ObjectDatabase, objects: &[ObjectIdentifier]) {
-        let mut state = self.lock();
-        let now = self.now();
-        state.reporter.changed(db, objects, now);
-        drop(state);
-        self.wake.notify_one();
-    }
 }
 
 /// The invoke IDs the `Reporter`'s confirmed notifications hold: leases of
-/// the session's coordinator, each kept with the peer it was taken for.
+/// the session's coordinator, each kept with the peer it was taken for, at
+/// most [`COV_CONFIRMED_IN_FLIGHT`] of them.
 struct Leases {
     coordinator: Arc<OutboundTransactionCoordinator>,
     out: Vec<(BACnetAddress, LeaseToken)>,
-    /// The last `take` found none free.
+    /// The last `take` found none free, or the bound reached.
     starved: bool,
 }
 
 impl InvokeIds for Leases {
     fn take(&mut self, to: &BACnetAddress) -> Option<u8> {
+        // At the bound a report waits, as it does for an empty pool.
+        if self.out.len() >= COV_CONFIRMED_IN_FLIGHT {
+            self.starved = true;
+            return None;
+        }
         let peer = match to.network_number {
             0 => CanonicalPeer::direct(&to.mac_address),
             network => CanonicalPeer::routed(network, &to.mac_address),
