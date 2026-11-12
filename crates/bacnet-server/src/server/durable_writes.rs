@@ -781,13 +781,15 @@ async fn stage_into(
 
 /// [`stage`] for an endpoint session's local write (#2468), whose caller
 /// may drop it at any await: what an object stages is held from that moment
-/// in a [`HeldStage`], which releases it even then.
+/// in a [`HeldStage`], which releases it even then. It runs on a Tokio
+/// runtime, as [`stage`] does, and the stage keeps that runtime's handle.
 pub(super) async fn stage_held(
     db: &Arc<RwLock<ObjectDatabase>>,
     targets: Vec<DurableTarget>,
 ) -> HeldStage {
     let mut held = HeldStage {
         db: Arc::downgrade(db),
+        runtime: tokio::runtime::Handle::current(),
         staged: Vec::new(),
     };
     stage_into(db, &targets, &mut held.staged).await;
@@ -797,12 +799,14 @@ pub(super) async fn stage_held(
 /// What an endpoint session's local write staged. [`release`](Self::release)
 /// lets it go under the guard of the write's commit. Dropped first, as when
 /// the caller drops the call while a save runs, it releases from a task of
-/// its own once the guard is free, so the object queues the save of what it
-/// serves at once. An endpoint has no pass that expires a forgotten stage,
-/// and its dispatch task waits for the next write that stages on the object,
-/// so the stage must not wait out its lifetime.
+/// its own on the runtime it staged on, whatever thread drops it, once the
+/// guard is free, so the object queues the save of what it serves at once.
+/// An endpoint has no pass that expires a forgotten stage, and its dispatch
+/// task waits for the next write that stages on the object, so the stage
+/// must not wait out its lifetime.
 pub(super) struct HeldStage {
     db: std::sync::Weak<RwLock<ObjectDatabase>>,
+    runtime: tokio::runtime::Handle,
     staged: Vec<(ObjectIdentifier, SaveWait)>,
 }
 
@@ -822,20 +826,15 @@ impl Drop for HeldStage {
             return;
         };
         let staged = StagedWrites(std::mem::take(&mut self.staged));
-        match tokio::runtime::Handle::try_current() {
-            Ok(runtime) => {
-                runtime.spawn(async move {
-                    staged.release(&mut *db.write().await);
-                    drop(super::drop_database_off_runtime(db));
-                });
-            }
-            // No runtime to wait on: release now if the guard is free,
-            // or leave it to the stage's lifetime and `stop()`.
-            Err(_) => {
-                if let Ok(mut guard) = db.try_write() {
-                    staged.release(&mut guard);
-                }
-            }
-        }
+        // A runtime that has shut down drops the task, and with it a stage
+        // nothing could still take.
+        self.runtime.spawn(async move {
+            staged.release(&mut *db.write().await);
+            drop(super::drop_database_off_runtime(db));
+        });
     }
 }
+
+#[cfg(test)]
+#[path = "held_stage_tests.rs"]
+mod held_stage_tests;

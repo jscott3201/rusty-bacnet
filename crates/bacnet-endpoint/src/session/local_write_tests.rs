@@ -330,7 +330,8 @@ async fn assert_ao1_unwritten(session: &EndpointSession<BusPort>) {
 /// write starts a distribution the endpoint has no task to make, so it
 /// ends at once, unmade, as bacnet-device-core's `Responder` ends one:
 /// Write_Status FAILED, Reliability PROCESS_ERROR with FAULT, and no
-/// member written. The server writes the members.
+/// member written. The server writes the members. A Channel with no
+/// members starts no run, and stays IDLE and without a fault.
 #[tokio::test(start_paused = true)]
 async fn a_channel_write_ends_its_distribution_failed_with_no_member_written() {
     let ch1 = cases::oid(ObjectType::CHANNEL, 1);
@@ -357,6 +358,30 @@ async fn a_channel_write_ends_its_distribution_failed_with_no_member_written() {
         flags(0b0100)
     );
     assert_ao1_unwritten(&session).await;
+    // A Channel with no members starts no run: nothing fails.
+    let ch2 = cases::oid(ObjectType::CHANNEL, 2);
+    let empty = ChannelObject::new(2, "CH-2", 8).unwrap();
+    session
+        .database
+        .as_ref()
+        .unwrap()
+        .write()
+        .await
+        .add(Box::new(empty))
+        .unwrap();
+    let value = PropertyValue::Real(40.0);
+    session
+        .write_local(&ch2, P_PV, None, value, Some(8), source)
+        .await
+        .unwrap();
+    assert_eq!(
+        read(&session, ch2, PropertyIdentifier::WRITE_STATUS).await,
+        PropertyValue::Enumerated(WriteStatus::IDLE.to_raw())
+    );
+    assert_eq!(
+        read(&session, ch2, PropertyIdentifier::RELIABILITY).await,
+        PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw())
+    );
     session.stop().await.unwrap();
 }
 

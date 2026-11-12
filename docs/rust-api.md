@@ -12015,8 +12015,8 @@ its own database through bacnet-device-core's `write::local::apply`, under the
 database guard the responder reads under, so a request sees the object before
 the change or after it. Each is refused where the server's call is, with the
 same error. They work in any role while the session runs with a database;
-before `start()`, after `stop()` or without a database they fail with
-`Error::Encoding` and change nothing.
+before `start()`, once `stop()` has begun (a cancelled `stop()` included) or
+without a database they fail with `Error::Encoding` and change nothing.
 
 ```rust
 use bacnet_device_core::write::local::LocalCommandSource;
@@ -12037,11 +12037,13 @@ No task makes the writes a change starts either. Each run ends at once, unmade,
 as bacnet-device-core's `Responder` ends one a client's write starts, so none
 leaves its object busy, but what it leaves differs by object:
 
-- A Command's Present_Value write ends its list with In_Process and
-  All_Writes_Successful FALSE, and no action is written.
-- A Channel's Present_Value write ends its distribution with Write_Status
-  FAILED, Reliability PROCESS_ERROR and Status_Flags FAULT, and no member is
-  written.
+- A Command's Present_Value write that selects a list with actions ends it with
+  In_Process and All_Writes_Successful FALSE, and no action is written; one
+  that selects no list, or an empty one, starts no run.
+- A Channel's Present_Value write to a Channel with members ends its
+  distribution with Write_Status FAILED, Reliability PROCESS_ERROR and
+  Status_Flags FAULT, and no member is written; with no members it starts no
+  run and Write_Status stays IDLE.
 - A write that starts or moves a Timer gives it its new state, but the
   State_Change_Values writes the transition owes aren't made (Reliability
   PROCESS_ERROR, FAULT), and with no Timer task a running Timer never expires.

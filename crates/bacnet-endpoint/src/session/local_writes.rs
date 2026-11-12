@@ -37,11 +37,14 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// unmade, as bacnet-device-core's `Responder` ends one a client's write
     /// starts, so none leaves its object busy, but what it leaves differs:
     ///
-    /// - a Command's Present_Value write ends its list with In_Process and
-    ///   All_Writes_Successful FALSE and no action written;
-    /// - a Channel's Present_Value write ends its distribution with
-    ///   Write_Status FAILED, Reliability PROCESS_ERROR and Status_Flags
-    ///   FAULT, and no member written;
+    /// - a Command's Present_Value write that selects a list with actions
+    ///   ends it with In_Process and All_Writes_Successful FALSE and no
+    ///   action written (one that selects no list, or an empty one, starts
+    ///   no run);
+    /// - a Channel's Present_Value write to a Channel with members ends its
+    ///   distribution with Write_Status FAILED, Reliability PROCESS_ERROR
+    ///   and Status_Flags FAULT, and no member written (with no members it
+    ///   starts no run and Write_Status stays IDLE);
     /// - a write that starts or moves a Timer gives it its new state, but the
     ///   State_Change_Values writes it owes aren't made (Reliability
     ///   PROCESS_ERROR, FAULT), and with no Timer task a running Timer never
@@ -68,8 +71,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     ///
     /// # Errors
     /// [`Error::Encoding`] when the session is not running (before
-    /// [`start`](Self::start) or after [`stop`](Self::stop)) or has no
-    /// database; nothing changes then. Otherwise the refusal above, with
+    /// [`start`](Self::start), or once [`stop`](Self::stop) has begun, a
+    /// cancelled stop included) or has no database; nothing changes then. Otherwise the refusal above, with
     /// nothing changed.
     ///
     /// # Cancellation
