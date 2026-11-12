@@ -1519,6 +1519,45 @@ runtimes, with allocations unchanged. The firmware image that encodes
 with the allocator-using profile (apdu) grows by 56 bytes of flash on a
 Cortex-M3, to 42,924 of its budget of 47,840.
 
+### 10.13 The client's dispatch loop and two write-path clock reads (#1978 items 8 and 6)
+
+One more request-path change, and one measured and dropped, each counted
+against its own baseline
+([benchmarks/results/perf-1978-dispatch](benchmarks/results/perf-1978-dispatch/README.md)):
+
+- **The client's dispatch loop.** It waited on four sources at once: the
+  received APDUs, the network-control messages, the cleanups of requests
+  given up on, and the five-minute device purge. Every wake polled all four,
+  and each idle one registered the task to be woken again; a ReadProperty
+  round trip wakes the loop twice. The loop now takes its work in a fixed
+  order and polls an idle source only when the turn would otherwise wait,
+  and the purge runs as a task of its own. After 16 APDUs in a row a turn
+  looks at the cleanups first, so a steady stream of APDUs can't hold one
+  back. That saves 768.7 instructions per ReadProperty request on the
+  current-thread runtime and 766.9 on the multi-thread one, 85 and 54 times
+  the run-to-run floor, 761.1 and 769.1 per WriteProperty request, and 209.3 and
+  902.6 per ten-object ReadPropertyMultiple request, with every pair lower
+  and allocations unchanged. On the current-thread ReadPropertyMultiple row
+  the same loop savings are partly offset by the memory allocator's work
+  (the same calls, finding other free chunks), a heap-layout effect.
+- **Not accepted: clock reads on a write.** A ReadProperty round trip
+  still reads the clock about 12 times, but only one read is the stack's
+  own: the client's request timer, which is the deadline itself. The
+  others are Tokio's (its timer and I/O drivers, and its busy-time
+  metrics). A WriteProperty reads it twice more on the server, to resolve
+  learned device bindings and to filter COV subscriptions, even with
+  neither there. Skipping both when there was nothing to resolve or filter
+  saved 156.9 instructions per WriteProperty request on both runtimes,
+  with 12 of 12 pairs lower and allocations unchanged, but only 1.7 and 2.6
+  times the run-to-run floor, where the rule asks for more than three
+  times. The change was dropped; nothing else moved.
+
+The kernel's side of the vectored B/IP send (section 10.9) is not in these
+counts, as callgrind sees only the program's own instructions. Weighing it
+needs a wall-clock comparison of `bip_latency` and `bip_throughput` on a
+quiet machine, or kernel instruction counts on Linux, against a build that
+sends one joined buffer.
+
 ## 11. How to reproduce
 
 Run one suite at a time on an idle machine. Each Criterion suite takes 1 to
