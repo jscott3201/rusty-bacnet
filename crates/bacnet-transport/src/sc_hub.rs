@@ -94,7 +94,6 @@ const HUB_MAX_NPDU_LENGTH: u16 = bacnet_npdu::MAX_NPDU as u16;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ConnectRequestVmacDisposition {
     Accept,
-    CloseReserved,
     Nak(ErrorClass, ErrorCode),
 }
 

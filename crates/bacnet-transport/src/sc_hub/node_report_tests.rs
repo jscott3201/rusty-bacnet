@@ -220,3 +220,48 @@ async fn a_refused_node_reports_the_nak_not_the_close() {
         hub.stop().await;
     }
 }
+
+/// This stack's transport will not send a reserved VMAC (it refuses one
+/// before dialling), so a malformed Connect-Request goes out through its
+/// WebSocket driver: the NAK arrives first, with its class and code, then
+/// the hub's close with no status (#2463).
+#[tokio::test]
+async fn a_malformed_connect_request_reads_the_nak_then_a_close_without_status() {
+    let tls = TestTls::new();
+    let mut hub = graceful_hub(&tls).await;
+    let ws = dial(&tls, &hub).await;
+    let Message::Binary(connect) = request([0; 6], NODE_UUID) else {
+        unreachable!("a Connect-Request is binary")
+    };
+    ws.send(&connect).await.unwrap();
+    let nak = tokio::time::timeout(WAIT, ws.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    match crate::sc_frame::decode_sc_bvlc_result(&decode_sc_message(&nak).unwrap()).unwrap() {
+        crate::sc_frame::ScBvlcResult::Nak {
+            error_class,
+            error_code,
+            ..
+        } => assert_eq!(
+            (error_class, error_code),
+            (
+                ErrorClass::COMMUNICATION.to_raw(),
+                ErrorCode::PARAMETER_OUT_OF_RANGE.to_raw()
+            )
+        ),
+        other => panic!("expected a NAK, got {other:?}"),
+    }
+    let error = tokio::time::timeout(WAIT, ws.recv())
+        .await
+        .expect("the hub's close did not arrive")
+        .unwrap_err();
+    let cause = ScDisconnectCause::from_error(&error);
+    assert_eq!(
+        cause,
+        ScDisconnectCause::WebSocket(crate::sc::ScWebSocketErrorKind::Closed),
+        "{error}"
+    );
+    assert_eq!(cause.error_code(), Some(ErrorCode::WEBSOCKET_ERROR));
+    hub.stop().await;
+}

@@ -10,7 +10,7 @@ use futures_util::SinkExt;
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::sc_frame::{BACNET_SC_HUB_SUBPROTOCOL, BROADCAST_VMAC, ScFunction, ScMessage, Vmac};
+use crate::sc_frame::{BACNET_SC_HUB_SUBPROTOCOL, ScFunction, ScMessage, Vmac};
 
 use super::{
     Clients, ConnectRequestVmacDisposition, DeviceUuid, HubClient, HubClientRegistrationDecision,
@@ -72,9 +72,8 @@ pub(super) fn connect_request_vmac_disposition(
     vmac: Vmac,
     hub_vmac: Vmac,
 ) -> ConnectRequestVmacDisposition {
-    if vmac == crate::sc_frame::UNKNOWN_VMAC || vmac == BROADCAST_VMAC {
-        ConnectRequestVmacDisposition::CloseReserved
-    } else if vmac == hub_vmac {
+    // A reserved VMAC never gets here: the Connect-Request check NAKs it.
+    if vmac == hub_vmac {
         ConnectRequestVmacDisposition::Nak(
             ErrorClass::COMMUNICATION,
             ErrorCode::NODE_DUPLICATE_VMAC,

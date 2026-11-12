@@ -1,7 +1,7 @@
 ---
 section: Changed
 ---
-- **Wire:** the BACnet/SC hub closes a connection it ends on purpose with a
-  WebSocket status: 1001 on a graceful shutdown, else 1000, including after
-  refusing a Connect-Request, which it used to drop with no close frame; the
-  direct acceptor sends 1000 too, and faults are unchanged (#2463).
+- **Wire:** the BACnet/SC hub sends a close frame with a status when it ends a
+  connection on purpose: 1001 on a graceful shutdown, else 1000, also after
+  refusing a Connect-Request, which it used to drop silently. A malformed one
+  gets a close with no status; the direct acceptor sends 1000 too (#2463).

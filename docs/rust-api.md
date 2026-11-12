@@ -2061,18 +2061,21 @@ Close without Disconnect-Ack still yields a forced graceful-shutdown outcome;
 forceful abort may forgo the reply. Tests cover the WebSocket replies, not TLS
 `close_notify` behavior.
 
-A connection the Hub ends on purpose gets the close handshake with a status
-(#2463). A graceful shutdown says 1001, the server going away (after the
+A connection the Hub ends on purpose gets a close frame with a status
+(#2463). The Hub sends it and drops the connection without waiting for the
+echo, except in a graceful shutdown, which waits for the echo within its
+bounds. A graceful shutdown says 1001, the server going away (after the
 Disconnect-Ack, at once for an upgraded peer that never sent Connect, and
 after an exchange that failed), which a peer reads as
 `WEBSOCKET_ENDPOINT_LEAVES`. The other ends say 1000, which a peer reads as
 `WEBSOCKET_CLOSED_BY_PEER`: an answered Disconnect-Request, a retirement (a
 same-UUID replacement or a failed liveness probe), an expired Connect wait,
 and a refused Connect-Request (duplicate VMAC, no room, admission denied),
-where the close follows the NAK. A connection the peer's fault ends (a
-receive error, a second Connect-Request, a malformed Connect-Request) keeps
-the close with no status, or none at all before registration, and a
-non-binary data frame still gets 1003. A node's direct-connection acceptor
+where the close follows the NAK. A connection the peer's fault ends gets a
+close frame with no status: a receive error, a second Connect-Request, or a
+malformed Connect-Request (a reserved VMAC among them), after its NAK. A
+receive error before registration still drops the connection with no close
+frame, and a non-binary data frame still gets 1003. A node's direct-connection acceptor
 closes an idle or retired link with 1000 too.
 
 What a node of this stack reports follows from the order of what arrives.

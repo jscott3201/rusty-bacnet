@@ -154,7 +154,11 @@ pub(super) async fn run(
             }
             // Preserve the existing pre-registration rejection lifecycle;
             // a malformed repeat must not retire an established connection.
+            // A malformed request is the peer's fault: after the NAK, the
+            // lease closes with no status (#2463).
             if lease.vmac.is_none() {
+                lease.note_hub_ends();
+                lease.note_fault();
                 break;
             }
             continue;
@@ -417,10 +421,6 @@ pub(super) async fn run(
 
                 match connect_request_vmac_disposition(vmac, hub_vmac) {
                     ConnectRequestVmacDisposition::Accept => {}
-                    ConnectRequestVmacDisposition::CloseReserved => {
-                        refused(lease, ConnectRefusal::ReservedVmac(vmac));
-                        break;
-                    }
                     ConnectRequestVmacDisposition::Nak(error_class, error_code) => {
                         super::outcomes::increment(&clients.outcomes.vmac_collision_rejections);
                         refused(lease, ConnectRefusal::VmacCollision(vmac));

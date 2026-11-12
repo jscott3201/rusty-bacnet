@@ -235,10 +235,10 @@ async fn a_refusal_answers_first_then_closes_with_status_1000() {
 
 /// A Connect-Request with a reserved VMAC is malformed, a peer fault: the
 /// request check NAKs it with PARAMETER_OUT_OF_RANGE before any refusal
-/// is weighed, and the hub drops the connection with no close frame, as
-/// before #2463.
+/// is weighed, and then the hub closes with no status, as for its other
+/// peer faults (#2463).
 #[tokio::test]
-async fn a_malformed_connect_request_is_naked_and_dropped_without_a_close() {
+async fn a_malformed_connect_request_is_naked_then_closed_without_a_status() {
     let tls = TestTls::new();
     let mut hub = CountedHub::start(&tls, ScHubHandshakeTimeouts::default()).await;
     let mut peer = tls.websocket(hub.address).await;
@@ -252,11 +252,7 @@ async fn a_malformed_connect_request_is_naked_and_dropped_without_a_close() {
         }
         other => panic!("expected a NAK, got {other:?}"),
     }
-    let after = poll_io(peer.next()).await;
-    assert!(
-        !matches!(after, Some(Ok(Message::Close(_) | Message::Binary(_)))),
-        "{after:?}"
-    );
+    assert_eq!(next(&mut peer).await, Message::Close(None));
     hub.hub.stop().await;
 }
 

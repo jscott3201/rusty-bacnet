@@ -69,6 +69,9 @@ class PeerUuidTests(MtlsFixture):
                 await self.send(writer, b"\x06" + fields[:1] + b"\x22\x33" + fields[1:] + nil_payload)
                 if reply is not None:
                     self.assertEqual(await self.binary(reader), reply)
+                # A malformed request is a peer fault: a close with no status,
+                # then the hub drops the connection (#2463).
+                self.assertEqual(await asyncio.wait_for(reader.readexactly(2), 3), b"\x88\0")
                 self.assertEqual(await asyncio.wait_for(reader.read(1), 3), b"")
             finally:
                 writer.close()

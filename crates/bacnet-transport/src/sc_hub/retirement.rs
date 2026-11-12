@@ -92,11 +92,12 @@ impl Lease {
         }
     }
 
-    /// The hub ends a connection that never registered, on purpose: it
-    /// refused the Connect-Request (with a NAK, or without one for a
-    /// reserved VMAC), or answered a Disconnect-Request that came before
-    /// any Connect. Annex AB.6.2.3 has the accepting peer close after a
-    /// refusal, and AB.7.5.5 asks for the close handshake (#2463).
+    /// The hub ends a connection that never registered: it refused the
+    /// Connect-Request with a NAK, NAKed a malformed one (a peer fault, so
+    /// the close has no status), or answered a Disconnect-Request that came
+    /// before any Connect. Annex AB.6.2.3 has the accepting peer close after
+    /// a refusal; the close frame goes out and the socket drops without
+    /// waiting for the echo, as in [`Self::cleanup`] (#2463).
     pub fn note_hub_ends(&mut self) {
         self.hub_ends = true;
     }

@@ -191,12 +191,20 @@ fn read(fault: &Fault) -> (Option<Phase>, String, String) {
              WebSocket upgrades through does this: let it pass them, or dial the hub directly."
                 .into(),
         ),
-        Fault::WebSocket(K::UpgradeResponseSyntax | K::UpgradeResponseValue) => (
+        Fault::WebSocket(K::UpgradeResponseSyntax) => (
             Phase::WebSocket,
-            "the upgrade answer was not HTTP/1.1",
-            "The answer to the upgrade could not be read as an HTTP/1.1 response. The port \
-             may serve something other than a web server, or an old proxy sits in the path; \
-             check the port in the URL."
+            "the upgrade answer was not valid HTTP",
+            "The answer to the upgrade could not be read as an HTTP response. The port may \
+             serve something other than a web server; check the port in the URL."
+                .into(),
+        ),
+        Fault::WebSocket(K::UpgradeResponseValue) => (
+            Phase::WebSocket,
+            "the upgrade answer's HTTP version or status was unusable",
+            "The answer to the upgrade named an HTTP version or a status code this node \
+             cannot accept: a version below 1.1, or a status outside 100 to 999. An old \
+             proxy in the path, or a server that is not a WebSocket server, does this; check \
+             the port in the URL."
                 .into(),
         ),
         Fault::UpgradeRefused(status) => {
@@ -709,6 +717,22 @@ mod tests {
             header.hint
         );
         assert!(header.hint.contains("proxy"), "{}", header.hint);
+        // A bad version or status code is not a parse failure (#2463).
+        let value = diagnose(&Fault::WebSocket(
+            ScWebSocketErrorKind::UpgradeResponseValue,
+        ));
+        assert!(
+            value.summary.contains("version or status"),
+            "{}",
+            value.summary
+        );
+        assert_ne!(
+            value.summary,
+            diagnose(&Fault::WebSocket(
+                ScWebSocketErrorKind::UpgradeResponseSyntax
+            ))
+            .summary
+        );
         let closed = diagnose(&Fault::WebSocketClosed(1001));
         assert!(closed.summary.contains("status 1001"), "{}", closed.summary);
         assert!(closed.hint.contains("going away"), "{}", closed.hint);
