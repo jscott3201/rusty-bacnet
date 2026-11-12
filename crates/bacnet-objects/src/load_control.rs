@@ -490,6 +490,13 @@ impl crate::traits::Timed for LoadControlObject {
         self.settle(shed::Prompt::Look)
     }
 
+    /// Removed from its database or replaced there: a request under way
+    /// ends as a cancelled one does, so the application is told to stop and
+    /// the object handed back reads SHED_INACTIVE (#2479).
+    fn retire(&mut self) {
+        self.settle(shed::Prompt::Retire);
+    }
+
     fn cov_snapshot(&self) -> Option<Box<dyn BACnetObject>> {
         Some(Box::new(Self {
             clock: None,

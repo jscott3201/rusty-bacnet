@@ -424,6 +424,38 @@ async fn the_new_properties_take_their_datatypes_over_the_wire() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_delete_object_during_a_shed_stops_the_loads() {
+    let app = app();
+    app.answer(ShedProgress::Compliant, 2);
+    let mut h = harness(&app).await;
+    let oid = lc1();
+    set_clock(&h, 0);
+    for (property, value) in [
+        (PropertyIdentifier::REQUESTED_SHED_LEVEL, vec![0x19, 0x02]),
+        (PropertyIdentifier::SHED_DURATION, unsigned(30)),
+        (PropertyIdentifier::START_TIME, start_at(0)),
+    ] {
+        write(&mut h, oid, property, value).await;
+    }
+    assert_eq!(
+        read(&h, PropertyIdentifier::PRESENT_VALUE).await,
+        enumerated(2)
+    );
+    assert_eq!(*app.stops.lock().unwrap(), 0);
+    // The object goes with its request, and the application is told (#2479).
+    let mut body = BytesMut::new();
+    bacnet_services::object_mgmt::DeleteObjectRequest {
+        object_identifier: oid,
+    }
+    .encode(&mut body);
+    h.request(ConfirmedServiceChoice::DELETE_OBJECT, body).await;
+    assert_eq!(response(&h).await, Ok(()));
+    assert!(h.server.database().read().await.get(&oid).is_none());
+    assert_eq!(*app.stops.lock().unwrap(), 1);
+    h.server.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_clock_set_back_before_start_time_reports_the_request_pending_again() {
     let app = app();
     app.answer(ShedProgress::Compliant, 2);

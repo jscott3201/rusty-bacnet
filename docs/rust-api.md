@@ -7038,9 +7038,11 @@ the request (`ShedRequest`: the level, the Shed_Levels element a LEVEL
 request selects, the times, and whether Start_Time has come) and returns a
 `ShedStatus` (Waiting, Shedding or Compliant, with the expected and actual
 levels), and `stop` says that a request it was asked about ended. Removing
-or replacing the object during a request doesn't call `stop`, and neither
-does replacing the shedder: the old one isn't told, and the new one hears of
-the request's end only once it has been asked about it. Both run under
+the object from its database, or replacing it there, during a request ends
+the request and calls `stop` (#2479), through the `Timed::retire` hook the
+database calls on an object leaving it. Replacing the shedder doesn't: the
+old one isn't told, and the new one hears of the request's end only once it
+has been asked about it. Both run under
 the database's write guard, so they must return quickly and not touch the
 database. Without a shedder nothing is shed: a request runs
 SHED_NON_COMPLIANT from Start_Time to its end. `set_shed_levels` sets

@@ -12,6 +12,7 @@ use std::time::Duration;
 use PropertyIdentifier as P;
 
 mod lifecycle;
+mod removal;
 
 const INACTIVE: ShedState = ShedState::SHED_INACTIVE;
 const PENDING: ShedState = ShedState::SHED_REQUEST_PENDING;

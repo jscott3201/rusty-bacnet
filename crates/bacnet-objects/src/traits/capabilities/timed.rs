@@ -132,6 +132,14 @@ pub trait Timed {
     /// output nothing has driven yet to its default (#1526).
     fn start_output(&mut self) {}
 
+    /// The object is leaving its database: removed from it, or replaced by
+    /// another object at its identifier (#2479). End what it runs outside
+    /// the database, such as a Load Control's shed, whose application is
+    /// told to stop. The database calls this before it hands a removed
+    /// object back or drops a replaced one; dropping an object, or a copy
+    /// of one, calls nothing.
+    fn retire(&mut self) {}
+
     /// A frozen copy of the COV-readable state, taken while the host still
     /// holds the object, for the COV report of an advance that changed it.
     /// `None` reports nothing.

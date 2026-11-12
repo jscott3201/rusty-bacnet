@@ -119,7 +119,8 @@ impl ObjectDatabase {
     /// Reliability changes is queued for the server's COV fanout. A Schedule
     /// holding a refused reference to it is queued for the server to retry
     /// that reference (#1440). A Schedule replaced gives up the slots it
-    /// held, as [`remove`](Self::remove) has it do (#2264).
+    /// held, as [`remove`](Self::remove) has it do (#2264), and an object
+    /// replaced retires as a removed one does (#2479).
     pub fn add(&mut self, mut object: Box<dyn BACnetObject>) -> Result<(), Error> {
         let identifier = object.object_identifier();
         ObjectIdentifier::new_addressable(identifier.object_type(), identifier.instance_number())?;
@@ -150,9 +151,10 @@ impl ObjectDatabase {
         self.enrollment_eval_sources.remove(&oid);
         self.trend_poll.retire(&oid);
         // A Schedule or Staging object replaced gives up the slots it held,
-        // as a removed one does (#2264, #2265); the new object starts from
-        // what it holds.
+        // as a removed one does (#2264, #2265), and a timed one retires
+        // (#2479); the new object starts from what it holds.
         if let Some(mut replaced) = self.objects.insert(oid, object) {
+            retire(replaced.as_mut());
             self.commander_removed(oid, replaced.as_mut());
         }
         self.audit_membership_changed(oid, true);
@@ -375,7 +377,12 @@ impl ObjectDatabase {
     /// the reference judged again, as [`add`](Self::add) does. A removed
     /// Schedule gives up the slots it holds on its targets: the NULLs are
     /// queued for the server, which writes them under its next guard and
-    /// fans COV out (#2264). Without a server they wait in the queue.
+    /// fans COV out (#2264). Without a server they wait in the queue. A
+    /// timed object retires ([`Timed::retire`]) before it is handed back, so
+    /// a Load Control ends a request under way and tells its application to
+    /// stop (#2479).
+    ///
+    /// [`Timed::retire`]: crate::traits::Timed::retire
     pub fn remove(
         &mut self,
         oid: &ObjectIdentifier,
@@ -406,6 +413,7 @@ impl ObjectDatabase {
                     type_set.retain(|o| o != oid);
                 }
                 self.audit_membership_changed(*oid, false);
+                retire(obj.as_mut());
                 self.commander_removed(*oid, obj.as_mut());
                 self.membership_changed(*oid, false);
                 Ok(Some(obj))
@@ -584,6 +592,14 @@ impl ObjectDatabase {
     /// Whether the database is empty.
     pub fn is_empty(&self) -> bool {
         self.objects.is_empty()
+    }
+}
+
+/// Tell an object leaving the database, removed or replaced, that it is
+/// going (#2479).
+fn retire(object: &mut dyn BACnetObject) {
+    if let Some(timed) = object.timed() {
+        timed.retire();
     }
 }
 

@@ -46,14 +46,14 @@ pub trait LoadShedder: Send + Sync {
     fn shed(&self, request: &ShedRequest) -> ShedStatus;
 
     /// The request ended: it ran its Shed_Duration, a client cancelled it,
-    /// or Enable went FALSE. Stop shedding. The default does nothing.
+    /// Enable went FALSE, or the object left its database, removed from it
+    /// or replaced by another object (#2479). Stop shedding. The default
+    /// does nothing.
     ///
     /// Only a request the object has offered to [`shed`](Self::shed) is
     /// stopped: one cancelled by the write that started it never reaches
-    /// the application. Removing the object from its database, or putting
-    /// another object in its place, while a request is under way doesn't
-    /// call this either; an application that does either stops its loads
-    /// itself.
+    /// the application. Dropping the object, or a copy of it, outside its
+    /// database calls nothing.
     fn stop(&self) {}
 }
 
@@ -143,6 +143,8 @@ pub(super) enum Prompt {
     /// Anything else: time passing, Enable, or a change the application
     /// may answer differently, such as a write of Shed_Levels.
     Look,
+    /// The object is leaving its database (#2479).
+    Retire,
 }
 
 /// The readable state a look may change, to tell whether it did.
@@ -185,6 +187,14 @@ impl LoadControlObject {
     }
 
     fn step(&mut self, prompt: Prompt) {
+        // An object removed or replaced takes its request with it, and the
+        // application stops the loads it shed for it (#2479).
+        if prompt == Prompt::Retire {
+            if self.state != ShedState::SHED_INACTIVE {
+                self.end_request();
+            }
+            return;
+        }
         // Clause 12.28.14: a disabled object ends any request and takes no
         // new one. Start_Time and Shed_Duration hold their idle values
         // while it is disabled (their setters keep nothing then), so a
