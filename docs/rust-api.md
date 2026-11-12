@@ -12075,7 +12075,8 @@ attached database (the lowest when it holds several; see
 and contain only the service bits the responder executes. Configuration
 validation precedes transport startup and any profile/source-ownership changes.
 The enabled Device and identity advertise exactly RP+WP, plus ReinitializeDevice
-when that is enabled too, including sessions without an identity. Default
+and SubscribeCOV when those are enabled too, including sessions without an
+identity. Default
 sessions keep their existing RP-only responder.
 Valid priorities 1–16 are ignored for noncommandable Description. Authorized
 NULL relinquishment succeeds without changing its value. Array indices,
@@ -12165,11 +12166,13 @@ session
     .await?;
 ```
 
-What doesn't follow on an endpoint: it serves no COV subscriptions and runs no
-event pass, so it sends no COV or event notification after a local change (COV
-on the endpoint is #2490), and Event_State stays as it is: a fault set here
-shows FAULT in Status_Flags without the IN_ALARM the server's event pass adds.
-No task makes the writes a change starts either. Each run ends at once, unmade,
+A change that writes is reported to the session's COV subscribers when COV is
+enabled (see [Endpoint COV reporting](#endpoint-cov-reporting)), once a run it
+started has ended as below. What doesn't follow on an endpoint: it runs no
+event pass, so it sends no event notification after a local change, and
+Event_State stays as it is: a fault set here shows FAULT in Status_Flags
+without the IN_ALARM the server's event pass adds. No task makes the writes a
+change starts either. Each run ends at once, unmade,
 as bacnet-device-core's `Responder` ends one a client's write starts, so none
 leaves its object busy, but what it leaves differs by object:
 
@@ -12216,6 +12219,108 @@ The local-write cases the server and bacnet-device-core run side by side run on
 the endpoint too, compared by result and by the properties read back; the event
 pass and the Command, Channel and Timer runs are the differences pinned by
 tests.
+
+### Endpoint COV reporting
+
+`EndpointSession::with_cov(config)` (#2490) lets the endpoint execute
+SubscribeCOV for the objects of its database and send the COV notifications
+its subscriptions call for. The session runs bacnet-device-core's `Reporter`
+(`bacnet_device_core::report`): the subscription table, change detection and
+confirmed delivery the core gives firmware. A subscription, its renewal, its
+cancellation (one that matches nothing succeeds) and a lifetime that runs out
+on the session's clock behave as on `BACnetServer`, and the notifications
+carry the same octets.
+
+```rust
+use bacnet_device_core::cov::CovPolicy;
+use bacnet_device_core::report::{OutboxLimits, ReportConfig};
+
+let policy = CovPolicy { max_subscriptions_global: 256, ..CovPolicy::default() };
+let config = ReportConfig::new(policy).with_outbox(OutboxLimits { entries: 64, octets: 16_384 });
+let mut session = BipEndpointBuilder::new(Ipv4Addr::UNSPECIFIED, 47808, Ipv4Addr::BROADCAST)
+    .role(SessionRole::ServerOnly)
+    .database(db)
+    .build_session()?
+    .with_cov(config);
+session.start().await?;
+// AI-1's subscribers hear of this.
+session.set_present_value_local(&ai1, PropertyValue::Real(21.5)).await?;
+```
+
+What is reported: an accepted subscription's first notification, which follows
+the SubscribeCOV's reply; then each change the application makes through
+`write_local`, `set_present_value_local` and `set_reliability_local`. A
+change made to the database any other way, a client's Device write included,
+reports nothing.
+
+Confirmed notifications lease their invoke IDs from the coordinator the
+client role draws from, so the two roles never hold one ID at once, and their
+answers come back through the session's one admission. They are sent again
+on `config.confirmed` (three seconds and three retries by default, apart from
+the client role's `SessionConfig` timer), and a subscriber that refuses one or
+never answers is held off for one retry cycle. A change made while a report is
+out waits for its answer. With every invoke ID leased, a report waits until
+one comes back.
+
+At most `bacnet_endpoint::session::COV_CONFIRMED_IN_FLIGHT` (64) confirmed
+notifications are out at once, all subscribers together: a quarter of the 256
+invoke IDs. A subscriber that never answers holds an ID per notification until
+its retries run out, up to `CovPolicy::max_confirmed_in_flight_per_peer` of
+them (16 by default), so without the bound sixteen silent subscribers could
+lease every ID and leave the client role none for its own requests. With it,
+four silent subscribers fill the bound at the default limits. A confirmed
+report past it then waits, oldest owed first, until one of the notifications
+out ends: answered, or failed once its retries run out (12 s at the default
+timing). Nothing is dropped. Unconfirmed notifications don't count against the
+bound, though one that found the outbox full while it holds goes at the
+task's next wake (a change, an answer or a timeout), which can be seconds
+later: size the outbox for the subscriptions expected. When many confirmed
+subscribers are expected, lower `max_confirmed_in_flight_per_peer`, so that
+more silent subscribers are needed to fill the bound.
+
+`config` bounds the work:
+
+- `config.cov` (`CovPolicy`) caps the subscriptions: 1,024 in all, 64 per
+  subscriber, 16 indefinite and 16 confirmed notifications in flight per
+  subscriber by default, with 64 slots reserved for the peers it names. It
+  also bounds what one change sends: 64 notifications and 65,536 octets.
+  A subscription past a cap is refused with RESOURCES /
+  NO_SPACE_TO_ADD_LIST_ELEMENT. An invalid policy fails `start()` before the
+  transport starts.
+- `config.outbox` (`OutboxLimits`, 16 entries and 2,048 octets by default)
+  holds the notifications decided and not yet sent, allocated once at start.
+  A notification that finds no room isn't queued: its subscription is owed
+  one later notification with its current values, sent as room frees. An
+  outbox with no entry or no octet fails `start()`. A notification larger
+  than `octets` is never queued, so size it for the largest notification
+  the database's objects call for; the core gives no figure the endpoint
+  could check at start.
+
+Startup requires a server role and a concrete built-in local Device, as the
+Device-write opt-in does. The Device and identity then advertise SubscribeCOV,
+and the Device lists Active_COV_Subscriptions, read live from the table. It
+doesn't list Active_COV_Multiple_Subscriptions, which belongs to a device that
+executes SubscribeCOVPropertyMultiple (Table 12-13). Without a composed
+identity, the Device object supplies what the notifications carry of it: its
+identifier, as the initiating device, and for a confirmed one its
+Max_APDU_Length_Accepted. SubscribeCOVProperty and
+SubscribeCOVPropertyMultiple stay refused with UNRECOGNIZED_SERVICE, as
+SubscribeCOV is on a session without the opt-in. No event notification
+follows a change: the endpoint runs no event pass.
+
+Known defect (#2508): with an unconfirmed subscription, if two changes to one
+object come before the session's task sends, and the second returns the object
+to the values the subscriber last received, only the first is sent, and the
+subscriber keeps it until a later change.
+
+`stop()` stops sending, drops what is still queued and gives back every
+invoke ID a notification holds.
+
+On paused time over an in-memory link, an endpoint and a `BACnetServer` with
+the same Device and object answer and notify with the same octets through a
+subscription, changes, a renewal, a cancellation and a lifetime running out,
+and list the same Active_COV_Subscriptions; their confirmed notifications carry
+the same parameters.
 
 ### Direct endpoint WriteProperty and source WRITE reporting
 

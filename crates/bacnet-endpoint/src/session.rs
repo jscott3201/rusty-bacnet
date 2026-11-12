@@ -85,6 +85,8 @@ mod startup;
 #[path = "device_writes.rs"]
 mod device_writes;
 pub use device_writes::{RESPONDER_OPT_IN_SERVICES, RESPONDER_SERVICES, ResponderOptIn};
+mod cov;
+pub use cov::COV_CONFIRMED_IN_FLIGHT;
 mod local_writes;
 #[path = "registered_port.rs"]
 mod registered_port;
@@ -337,6 +339,8 @@ pub struct EndpointSession<T: TransportPort + 'static = bacnet_transport::any::A
     pub(crate) mstp_diagnostics: Option<bacnet_transport::mstp::MstpDiagnostics>,
     /// The SC transport's events and link status, when the SC builder built it.
     pub(crate) sc_link: Option<bacnet_transport::sc::ScLinkMonitor>,
+    /// COV reporting, when enabled (#2490).
+    cov: cov::CovRole,
 }
 
 /// Terminal state of the session dispatch task.
@@ -434,6 +438,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             bip_status: None,
             mstp_diagnostics: None,
             sc_link: None,
+            cov: cov::CovRole::default(),
         })
     }
 
@@ -657,6 +662,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 NotificationTransactions::observe(Some(result));
             }
         }
+        self.cov.stop().await;
         if !self.ingress_stopped {
             if let Some(ingress) = self.ingress.as_mut()
                 && let Err(error) = ingress.stop().await
@@ -917,6 +923,7 @@ impl<T: TransportPort + 'static> Drop for EndpointSession<T> {
         if let Some(task) = self.durable_settlement.take() {
             task.abort();
         }
+        self.cov.abort();
         // The session's own handle, kept through stop(), goes off the
         // runtime if it is the last (#1561). Every other endpoint holder
         // (responder, source Audit, the aborted tasks' handles) lets go the
@@ -941,11 +948,13 @@ struct DispatchParts {
     local_network: LocalNetworkNumber,
     /// Routed source Audit bindings' routers, learned from traffic (#2371).
     source_routers: Option<Arc<crate::source_audit::routers::SourceRouters>>,
+    /// COV reporting, which the answers to its notifications go to (#2490).
+    cov: Option<Arc<cov::CovHost>>,
 }
 
 #[path = "session_dispatch.rs"]
 mod dispatch;
-use dispatch::{DispatchEvent, next_event};
+use dispatch::{DispatchEvent, handle_ingress_policy, handle_terminal, next_event};
 
 async fn dispatch_loop(mut parts: DispatchParts, mut cancel: oneshot::Receiver<()>) -> SessionExit {
     // One consumer retains all receivers and joins; cancellation stays first.
@@ -1015,114 +1024,6 @@ async fn handle_inbound(parts: &mut DispatchParts, received: ReceivedApdu) {
             counters.responder_declined += 1;
         }
     }
-}
-
-async fn handle_terminal(parts: &mut DispatchParts, received: ReceivedApdu) {
-    let Some(apdu) = decode_terminal(&received) else {
-        let mut counters = parts.shared.counters.lock().await;
-        counters.unclaimed_terminal += 1;
-        if let Some(reply_tx) = received.reply_tx {
-            drop(reply_tx);
-        }
-        return;
-    };
-    // Inbound server transactions never allocate here: requests are not
-    // terminal traffic. A Confirmed/Unconfirmed request in this queue is a
-    // classifier violation → policy-owned, no coordinator interaction.
-    if matches!(
-        apdu,
-        Apdu::ConfirmedRequest(_) | Apdu::UnconfirmedRequest(_)
-    ) {
-        let mut counters = parts.shared.counters.lock().await;
-        counters.unclaimed_terminal += 1;
-        if let Some(reply_tx) = received.reply_tx {
-            drop(reply_tx);
-        }
-        return;
-    }
-    // Exactly one shared-coordinator admit per terminal APDU (exact-once
-    // terminal claim). Equal numeric IDs are unambiguous: the admitted
-    // lease owner selects requester vs notification.
-    let outcome = admit_once(
-        &parts.coordinator,
-        &received,
-        parts.local_network.get(),
-        &apdu,
-    );
-    let admission = match outcome {
-        Ok(AdmissionOutcome::Admitted(admission)) => {
-            if let Some(routers) = &parts.source_routers {
-                routers.observe(&received);
-            }
-            admission
-        }
-        Ok(_) => {
-            let mut counters = parts.shared.counters.lock().await;
-            counters.unclaimed_terminal += 1;
-            if let Some(reply_tx) = received.reply_tx {
-                drop(reply_tx);
-            }
-            return;
-        }
-        Err(CoordinatorError::StatePoisoned) => {
-            let mut counters = parts.shared.counters.lock().await;
-            counters.unclaimed_terminal += 1;
-            if let Some(reply_tx) = received.reply_tx {
-                drop(reply_tx);
-            }
-            return;
-        }
-    };
-    if is_requester_lease(&admission) {
-        let Some(requester) = parts.requester.as_ref() else {
-            // Lease was admitted but has no consumer: release the exact
-            // lease so exhaustion → release → reuse still holds.
-            let _ = parts.coordinator.release(admission.token());
-            let mut counters = parts.shared.counters.lock().await;
-            counters.no_client_role += 1;
-            if let Some(reply_tx) = received.reply_tx {
-                drop(reply_tx);
-            }
-            return;
-        };
-        // `complete_pre_admitted` delivers via the exact token without
-        // re-admitting; a `false` means the TSM no longer owns it (lost
-        // consumer / stale), the coordinator lease was already completed
-        // inside the TSM path on success.
-        let _ = requester
-            .complete_pre_admitted(admission, apdu, received)
-            .await;
-    } else {
-        let Some(notifications) = parts.notifications.as_ref() else {
-            let _ = parts.coordinator.release(admission.token());
-            let mut counters = parts.shared.counters.lock().await;
-            counters.no_client_role += 1;
-            if let Some(reply_tx) = received.reply_tx {
-                drop(reply_tx);
-            }
-            return;
-        };
-        let _ = notifications.complete_pre_admitted(admission, &apdu);
-        // Notification replies carry no reply sender; drop one if present.
-        if let Some(reply_tx) = received.reply_tx {
-            drop(reply_tx);
-        }
-    }
-}
-
-async fn handle_ingress_policy(shared: &Arc<SessionShared>, outcome: PolicyOutcome) {
-    // Policy-outcome ownership: the session counts every classifier outcome
-    // (malformed/unsupported/route-full/route-closed) instead of dropping it.
-    let mut counters = shared.counters.lock().await;
-    counters.ingress_policy += 1;
-    let _ = outcome.reason;
-    // Policy outcomes own the full envelope including a possible one-use
-    // reply sender; releasing here preserves single-consumer + one-use
-    // ownership without sending bytes.
-    if let Some(reply_tx) = outcome.received.reply_tx {
-        drop(reply_tx);
-    }
-    let _ = PolicyReason::MalformedApdu;
 }
 
 #[cfg(test)]

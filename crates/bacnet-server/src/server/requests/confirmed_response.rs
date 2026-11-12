@@ -4,35 +4,6 @@ use bacnet_device_core::cov::active::LiveDeviceCov;
 use bacnet_device_core::read::{self, LiveLists, ReadFailure, ReadScope};
 use bacnet_services::read_property::ReadPropertyRequest;
 
-/// ReadProperty under the narrow responder's actual RP[/WP/ReinitializeDevice] execution
-/// profile, within the responder's configured read work limit.
-pub(super) async fn read_property_response(
-    db: &RwLock<ObjectDatabase>,
-    request: &ConfirmedRequestPdu,
-    writes: bool,
-    reinitialize: bool,
-    registered_port: Option<ObjectIdentifier>,
-    work_limit: usize,
-    identity: Option<&bacnet_objects::DeviceIdentity>,
-) -> Apdu {
-    read_property_response_observed(
-        db,
-        None,
-        ReadProfile {
-            execution: DeviceExecution::Endpoint {
-                writes,
-                reinitialize,
-            },
-            registered_port,
-            work_limit,
-            identity,
-        },
-        request,
-        |_, _, _, _| {},
-    )
-    .await
-}
-
 /// The server tables a read samples the selected Device's server-owned lists
 /// from: the COV table for its COV lists, the binding table for its
 /// Device_Address_Binding (#1369).
@@ -139,6 +110,9 @@ pub(super) struct ReadProfile<'a> {
     pub(super) registered_port: Option<ObjectIdentifier>,
     pub(super) work_limit: usize,
     pub(super) identity: Option<&'a bacnet_objects::DeviceIdentity>,
+    /// An endpoint's COV reporting, which serves its Device's
+    /// Active_COV_Subscriptions when no server tables do (#2490).
+    pub(super) cov: Option<&'a dyn crate::endpoint_cov::EndpointCov>,
 }
 
 /// ReadProperty under one database read guard, planned before any table is
@@ -187,6 +161,7 @@ pub(super) async fn read_property_response_observed(
                         (Some(tables), Some(selection)) => {
                             Some(Box::pin(active_cov_snapshot(&db, tables, selection)).await)
                         }
+                        (None, Some(selection)) => profile.cov.map(|cov| cov.live(&db, selection)),
                         _ => None,
                     };
                     let view = view.with_live(live.as_ref());

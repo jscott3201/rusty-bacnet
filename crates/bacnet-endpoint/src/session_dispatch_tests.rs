@@ -64,6 +64,7 @@ fn fixture() -> (
             shared,
             source_routers: None,
             local_network: LocalNetworkNumber::default(),
+            cov: None,
         },
         inbound_tx,
         terminal_tx,

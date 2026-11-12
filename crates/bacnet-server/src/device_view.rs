@@ -29,7 +29,13 @@ use std::sync::OnceLock;
 #[derive(Clone, Copy)]
 pub(crate) enum DeviceExecution {
     FullServer,
-    Endpoint { writes: bool, reinitialize: bool },
+    /// An endpoint's responder: ReadProperty, and each service its session
+    /// enabled. `cov` is SubscribeCOV (#2490).
+    Endpoint {
+        writes: bool,
+        reinitialize: bool,
+        cov: bool,
+    },
 }
 
 impl DeviceExecution {
@@ -39,6 +45,7 @@ impl DeviceExecution {
             Self::Endpoint {
                 writes,
                 reinitialize,
+                cov,
             } => {
                 let mut services = vec![ServiceSupported::READ_PROPERTY];
                 if writes {
@@ -46,6 +53,9 @@ impl DeviceExecution {
                 }
                 if reinitialize {
                     services.push(ServiceSupported::REINITIALIZE_DEVICE);
+                }
+                if cov {
+                    services.push(ServiceSupported::SUBSCRIBE_COV);
                 }
                 services
             }
@@ -58,6 +68,22 @@ impl DeviceExecution {
                         | ServiceSupported::UTC_TIME_SYNCHRONIZATION
                 )
         })
+    }
+
+    /// The Device's COV subscription lists this execution serves: both for
+    /// the full server; for an endpoint that runs SubscribeCOV only
+    /// Active_COV_Subscriptions, since Active_COV_Multiple_Subscriptions
+    /// belongs to a device that runs SubscribeCOVPropertyMultiple (Table
+    /// 12-13, notes 9 and 18).
+    fn cov_lists(self) -> &'static [P] {
+        match self {
+            Self::FullServer => &[
+                P::ACTIVE_COV_SUBSCRIPTIONS,
+                P::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS,
+            ],
+            Self::Endpoint { cov: true, .. } => &[P::ACTIVE_COV_SUBSCRIPTIONS],
+            Self::Endpoint { cov: false, .. } => &[],
+        }
     }
 }
 
@@ -157,8 +183,8 @@ impl DeviceReadView<'_> {
     fn is_device(&self) -> bool {
         self.object.object_identifier().object_type() == ObjectType::DEVICE
     }
-    fn cov_present(&self) -> bool {
-        matches!(self.context.execution, DeviceExecution::FullServer)
+    fn cov_present(&self, property: P) -> bool {
+        self.context.execution.cov_lists().contains(&property)
     }
 }
 
@@ -213,7 +239,7 @@ impl BACnetObject for DeviceReadView<'_> {
                 .live
                 .and_then(|live| live.resolve(self.object_identifier(), property))
                 .unwrap_or_else(|| PropertyValue::List(Vec::new()))),
-            _ if self.cov_present() => Ok(self
+            _ if self.cov_present(property) => Ok(self
                 .context
                 .live
                 .and_then(|live| live.resolve(self.object_identifier(), property))
@@ -258,18 +284,13 @@ impl BACnetObject for DeviceReadView<'_> {
                 PropertyWriteCapability::ReadOnly,
             ));
         }
-        if self.cov_present() {
-            for property in [
-                P::ACTIVE_COV_SUBSCRIPTIONS,
-                P::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS,
-            ] {
-                rows.push(PropertyMetadata::new(
-                    property,
-                    PropertyConformance::Optional,
-                    None,
-                    PropertyWriteCapability::ReadOnly,
-                ));
-            }
+        for &property in self.context.execution.cov_lists() {
+            rows.push(PropertyMetadata::new(
+                property,
+                PropertyConformance::Optional,
+                None,
+                PropertyWriteCapability::ReadOnly,
+            ));
         }
         rows.sort_by_key(|row| row.property_identifier.to_raw());
         Cow::Owned(rows)
