@@ -1101,8 +1101,53 @@ load raises BacnetError.
 ### BACnetServer.add_load_control
 
 ```python
-def add_load_control(self, instance: int, name: str) -> None
+def add_load_control(
+    self,
+    instance: int,
+    name: str,
+    *,
+    shed_levels: Optional[Sequence[tuple[int, str]]] = None,
+    shed: Optional[Callable[[ShedRequest], ShedStatus]] = None,
+    stop: Optional[Callable[[], object]] = None,
+    full_duty_baseline: Optional[float] = None,
+    state_description: Optional[str] = None,
+    agreed_duty_window: Optional[int] = None,
+) -> None
 ```
+
+Add a Load Control object (#2479).
+
+`shed_levels` sets Shed\_Levels and Shed\_Level\_Descriptions as
+`(level, description)` pairs in order of increasing shed; a level
+of 0, the no-shed level, raises BacnetProtocolError with
+VALUE\_OUT\_OF\_RANGE. Clients may rewrite a level but not resize the
+array.
+
+`shed` is the application's route for the loads. The object calls
+it with a `ShedRequest` each time it looks at a request, on every
+write that changes it and on the server's once-a-second pass while
+one is pending or under way, and it answers `(progress, expected, actual)`: `"waiting"`, `"shedding"` or `"compliant"`, then
+the expected and actual levels as `ShedLevel` mappings in the
+requested choice. `stop` (optional, needs `shed`) is called with
+no arguments once a request `shed` was asked about ends, removal
+of the object included. Without `shed` nothing is shed: a request
+runs SHED\_NON\_COMPLIANT from Start\_Time to its end.
+
+Both run with the server's object database locked: they must return
+at once, may not await, and may not start a binding operation (it
+raises RuntimeError), nor wait on the event loop or another thread
+for one. An exception, or an answer of another shape (a coroutine
+included), is shown through `sys.unraisablehook`; `shed` then
+counts as nothing shed, and the request ends anyway after `stop`.
+A callable that isn't callable raises TypeError, and `stop`
+without `shed` ValueError.
+
+`full_duty_baseline` (kilowatts, finite and not negative, or
+BacnetProtocolError) and `state_description` serve those optional
+properties, read-only; the baseline reaches `shed` as
+`ShedRequest.full_duty_baseline`. `agreed_duty_window` (minutes,
+0 when omitted) is the Duty\_Window a request takes when no client
+wrote one, and the one a finished request returns to.
 
 ### BACnetServer.add_program
 
@@ -2825,6 +2870,21 @@ Properties:
 - `source_network: Optional[int]`: The originating network of a routed request, else None.
 - `source_address: Optional[bytes]`: The originating MAC of a routed request, else None.
 - `invoke_id: int`
+
+## ShedRequest
+
+A Load Control shed request handed to the `shed` callable of
+`BACnetServer.add_load_control` (#2479). Not copyable or picklable.
+
+Properties:
+
+- `requested: ShedLevel`: Requested\_Shed\_Level.
+- `shed_level: Optional[int]`: For a level request, the index in `shed_levels` of the level whose action it selects: the one requested, or the nearest below. None for a percent or an amount, or with no level at or below it.
+- `start_time: tuple[BACnetDate, BACnetTime]`: Start\_Time.
+- `shed_duration: int`: Shed\_Duration, in minutes.
+- `duty_window: int`: Duty\_Window, in minutes.
+- `full_duty_baseline: Optional[float]`: Full\_Duty\_Baseline in kilowatts, or None while none is served.
+- `started: bool`: Whether Start\_Time has come.
 
 ## MutationContext
 

@@ -232,9 +232,56 @@ impl BACnetServer {
     }
 
     /// Add a Load Control object to the server (before starting).
-    #[pyo3(signature = (instance, name))]
-    fn add_load_control(&self, instance: u32, name: &str) -> PyResult<()> {
-        let obj = LoadControlObject::new(instance, name).map_err(to_py_err)?;
+    ///
+    /// `shed_levels` sets Shed_Levels and Shed_Level_Descriptions together,
+    /// as `(level, description)` pairs in order of increasing shed; a level
+    /// of 0, the no-shed level, raises BacnetProtocolError. `shed` and `stop`
+    /// are the application's route for the loads (#2479, see
+    /// [`crate::load_shedder`]): `shed` gets a `ShedRequest` and answers how
+    /// the loads stand, and `stop` hears that a request it was asked about
+    /// ended. Without `shed` nothing is shed. `full_duty_baseline`
+    /// (kilowatts) and `state_description` serve those optional properties,
+    /// and `agreed_duty_window` (minutes) is the Duty_Window a request takes
+    /// when no client wrote one.
+    #[pyo3(signature = (
+        instance,
+        name,
+        *,
+        shed_levels=None,
+        shed=None,
+        stop=None,
+        full_duty_baseline=None,
+        state_description=None,
+        agreed_duty_window=None
+    ))]
+    fn add_load_control(
+        &self,
+        instance: u32,
+        name: &str,
+        shed_levels: Option<Vec<(u64, String)>>,
+        shed: Option<&Bound<'_, PyAny>>,
+        stop: Option<&Bound<'_, PyAny>>,
+        full_duty_baseline: Option<f64>,
+        state_description: Option<String>,
+        agreed_duty_window: Option<u64>,
+    ) -> PyResult<()> {
+        let shedder = crate::load_shedder::PyLoadShedder::parse(shed, stop)?;
+        let mut obj = LoadControlObject::new(instance, name).map_err(to_py_err)?;
+        if let Some(levels) = shed_levels {
+            obj.set_shed_levels(levels).map_err(to_py_err)?;
+        }
+        if let Some(kilowatts) = full_duty_baseline {
+            // A value past REAL's range rounds to infinity, which is refused.
+            obj.set_full_duty_baseline(Some(kilowatts as f32))
+                .map_err(to_py_err)?;
+        }
+        obj.set_state_description(state_description);
+        if let Some(minutes) = agreed_duty_window {
+            obj.set_agreed_duty_window(minutes);
+        }
+        if let Some(shedder) = shedder {
+            obj.set_shedder(Arc::new(shedder));
+        }
         self.push_pending(Box::new(obj))
     }
 

@@ -875,6 +875,19 @@ Keys:
 - `name: str`
 - `value: NotRequired[PropertyValue | None]`
 
+## ShedLevel
+
+`class ShedLevel(TypedDict)`
+
+A Load Control shed level (`BACnetShedLevel`), the form a typed
+read of Requested\_Shed\_Level gives: a `percent` or a `level` with an
+`int` value, or an `amount` of kilowatts with a `float`.
+
+Keys:
+
+- `kind: Literal["percent", "level", "amount"]`
+- `value: int | float`
+
 ## CalendarDate
 
 `class CalendarDate(TypedDict)`
@@ -1352,6 +1365,14 @@ A date `(year, month, day, day_of_week)` with the full year, and a time `(hour, 
 ```python
 BACnetTime = tuple[int, int, int, int]
 ```
+
+## ShedStatus
+
+```python
+ShedStatus = tuple[Literal["waiting", "shedding", "compliant"], ShedLevel, ShedLevel]
+```
+
+What a Load Control's `shed` callable answers (#2479): where the loads stand, then the expected and the actual level, in the requested choice.
 
 ## TimeValue
 

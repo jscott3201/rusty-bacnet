@@ -2024,6 +2024,20 @@ class NameValue(TypedDict):
 # ``(hour, minute, second, hundredths)``; 255 marks an unspecified field.
 BACnetDate = tuple[int, int, int, int]
 BACnetTime = tuple[int, int, int, int]
+
+
+class ShedLevel(TypedDict):
+    """A Load Control shed level (``BACnetShedLevel``), the form a typed
+    read of Requested_Shed_Level gives: a ``percent`` or a ``level`` with an
+    ``int`` value, or an ``amount`` of kilowatts with a ``float``."""
+
+    kind: Literal["percent", "level", "amount"]
+    value: int | float
+
+
+# What a Load Control's ``shed`` callable answers (#2479): where the loads
+# stand, then the expected and the actual level, in the requested choice.
+ShedStatus = tuple[Literal["waiting", "shedding", "compliant"], ShedLevel, ShedLevel]
 # One Weekly_Schedule or exception entry: the time and the value from then.
 TimeValue = tuple[BACnetTime, PropertyValue]
 
@@ -5085,6 +5099,50 @@ class ReinitializeRequest:
     def __repr__(self) -> str: ...
 
 
+class ShedRequest:
+    """A Load Control shed request handed to the ``shed`` callable of
+    ``BACnetServer.add_load_control`` (#2479). Not copyable or picklable."""
+
+    @property
+    def requested(self) -> ShedLevel:
+        """Requested_Shed_Level."""
+        ...
+
+    @property
+    def shed_level(self) -> Optional[int]:
+        """For a level request, the index in ``shed_levels`` of the level
+        whose action it selects: the one requested, or the nearest below.
+        None for a percent or an amount, or with no level at or below it."""
+        ...
+
+    @property
+    def start_time(self) -> tuple[BACnetDate, BACnetTime]:
+        """Start_Time."""
+        ...
+
+    @property
+    def shed_duration(self) -> int:
+        """Shed_Duration, in minutes."""
+        ...
+
+    @property
+    def duty_window(self) -> int:
+        """Duty_Window, in minutes."""
+        ...
+
+    @property
+    def full_duty_baseline(self) -> Optional[float]:
+        """Full_Duty_Baseline in kilowatts, or None while none is served."""
+        ...
+
+    @property
+    def started(self) -> bool:
+        """Whether Start_Time has come."""
+        ...
+
+    def __repr__(self) -> str: ...
+
+
 ReinitializeHandler = Callable[
     [ReinitializeRequest], Union[None, bool, tuple[ErrorClass, ErrorCode]]
 ]
@@ -6014,7 +6072,54 @@ class BACnetServer:
         load raises BacnetError.
         """
         ...
-    def add_load_control(self, instance: int, name: str) -> None: ...
+    def add_load_control(
+        self,
+        instance: int,
+        name: str,
+        *,
+        shed_levels: Optional[Sequence[tuple[int, str]]] = None,
+        shed: Optional[Callable[[ShedRequest], ShedStatus]] = None,
+        stop: Optional[Callable[[], object]] = None,
+        full_duty_baseline: Optional[float] = None,
+        state_description: Optional[str] = None,
+        agreed_duty_window: Optional[int] = None,
+    ) -> None:
+        """Add a Load Control object (#2479).
+
+        ``shed_levels`` sets Shed_Levels and Shed_Level_Descriptions as
+        ``(level, description)`` pairs in order of increasing shed; a level
+        of 0, the no-shed level, raises BacnetProtocolError with
+        VALUE_OUT_OF_RANGE. Clients may rewrite a level but not resize the
+        array.
+
+        ``shed`` is the application's route for the loads. The object calls
+        it with a ``ShedRequest`` each time it looks at a request, on every
+        write that changes it and on the server's once-a-second pass while
+        one is pending or under way, and it answers ``(progress, expected,
+        actual)``: ``"waiting"``, ``"shedding"`` or ``"compliant"``, then
+        the expected and actual levels as ``ShedLevel`` mappings in the
+        requested choice. ``stop`` (optional, needs ``shed``) is called with
+        no arguments once a request ``shed`` was asked about ends, removal
+        of the object included. Without ``shed`` nothing is shed: a request
+        runs SHED_NON_COMPLIANT from Start_Time to its end.
+
+        Both run with the server's object database locked: they must return
+        at once, may not await, and may not start a binding operation (it
+        raises RuntimeError), nor wait on the event loop or another thread
+        for one. An exception, or an answer of another shape (a coroutine
+        included), is shown through ``sys.unraisablehook``; ``shed`` then
+        counts as nothing shed, and the request ends anyway after ``stop``.
+        A callable that isn't callable raises TypeError, and ``stop``
+        without ``shed`` ValueError.
+
+        ``full_duty_baseline`` (kilowatts, finite and not negative, or
+        BacnetProtocolError) and ``state_description`` serve those optional
+        properties, read-only; the baseline reaches ``shed`` as
+        ``ShedRequest.full_duty_baseline``. ``agreed_duty_window`` (minutes,
+        0 when omitted) is the Duty_Window a request takes when no client
+        wrote one, and the one a finished request returns to.
+        """
+        ...
     def add_program(self, instance: int, name: str) -> None: ...
 
     # --- Lighting ---
