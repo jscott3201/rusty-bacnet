@@ -120,16 +120,25 @@ async fn members_due_together_while_the_database_is_held_both_go() {
     assert_eq!(slot8(&h, ao(2)).await, PropertyValue::Real(80.0));
 }
 
-/// The same with a waiting writer: AO-2 here comes due while AO-1 there
-/// waits for the database to keep the datatype its read learned, and that
-/// write guard, granted to an unpolled future, held the database for good.
+/// The same with a waiting writer. AO-1's datatype read is answered while a
+/// reader holds the database and before AO-2's 100 ms, so keeping that
+/// datatype waits for the write guard and AO-2 comes due behind it. Once the
+/// reader lets go the guard goes to AO-1's future, which the run polls while
+/// it writes AO-2, so AO-2 is written without waiting for AO-1's answer. A
+/// loop that awaited AO-2's write on its own left that guard with an
+/// unpolled future and the database locked for good (#1343). The checks on
+/// when the read goes out keep a run that wrote the members here first,
+/// which never forms that state, from passing (#2514).
 #[tokio::test(start_paused = true)]
 async fn a_member_here_due_while_one_there_waits_for_the_database_goes_through() {
     let mut h = start().await;
+    let started = tokio::time::Instant::now();
     write_channel(&mut h, 5, &PropertyValue::Real(80.0), Some(8))
         .await
         .unwrap();
     let [(invoke_id, request)]: [_; 1] = next_reads(&h, 1).await.try_into().unwrap();
+    // AO-1's read goes out when the distribution starts, AO-2 still unwritten.
+    assert_eq!(slot8(&h, ao(2)).await, PropertyValue::Null);
     // A reader, such as a client's ReadProperty, holds the database when the
     // datatype read is answered, so keeping the datatype waits for it.
     let reader = h.server.database().read().await;
@@ -146,15 +155,26 @@ async fn a_member_here_due_while_one_there_waits_for_the_database_goes_through()
     })
     .await
     .expect("the run waits for the database to keep AO-1's datatype");
+    assert!(
+        started.elapsed() < Duration::from_millis(100),
+        "AO-1 waits for the database before AO-2 is due"
+    );
     // AO-2's 100 ms pass while the reader still holds it.
     tokio::time::sleep(Duration::from_millis(150)).await;
     drop(reader);
 
+    // AO-2 goes through once the reader lets go, with AO-1's write unanswered.
+    tokio::time::timeout(Duration::from_millis(50), async {
+        while slot8(&h, ao(2)).await != PropertyValue::Real(80.0) {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("AO-2 is written once the database is free");
     let (invoke_id, written) = next_request(&h, ao(1)).await;
     assert_eq!(written, [0x44, 0x42, 0xA0, 0x00, 0x00]);
     h.respond(ack(invoke_id)).await;
     assert_eq!(settled(&mut h, 5).await, WriteStatus::SUCCESSFUL);
-    assert_eq!(slot8(&h, ao(2)).await, PropertyValue::Real(80.0));
 }
 
 #[tokio::test(start_paused = true)]

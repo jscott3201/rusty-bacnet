@@ -539,6 +539,10 @@ async fn network_number_held_database_cancels_control_before_endpoint_settlement
     }
 }
 
+/// The SimpleAck to a reserved audit notification is admitted while the
+/// control learning network 19 waits behind a reader for the database's
+/// write guard: the answer path reads the published number, so it waits on
+/// neither the control nor the database (#2514).
 #[tokio::test]
 async fn network_number_endpoint_held_learning_preserves_audit_ack_progress() {
     use bacnet_endpoint_core::coordinator::CanonicalPeer;
