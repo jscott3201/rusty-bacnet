@@ -27,7 +27,7 @@ use tracing::error;
 /// [`Error::Encoding`] and makes none.
 pub(in crate::server) fn local_runtime() -> Result<tokio::runtime::Handle, Error> {
     tokio::runtime::Handle::try_current()
-        .map_err(|_| Error::Encoding("Local writes require a Tokio runtime".into()))
+        .map_err(|_| Error::Encoding("Local mutation requires a Tokio runtime".into()))
 }
 
 impl<T: TransportPort + 'static> BACnetServer<T> {

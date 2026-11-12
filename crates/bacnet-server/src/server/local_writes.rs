@@ -183,13 +183,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// property the object saves before it serves (a Device's Description,
     /// say) is staged first, with the guard dropped while the save runs.
     /// Dropped then, or while waiting for the guard to commit, the future
-    /// lets go of the stage from a task of its own on the runtime it ran on,
-    /// as soon as the guard is free: the object keeps serving its old value
-    /// and queues the save of that value, so storage agrees with it, and the
-    /// next write on the object is not held up. Nothing waits for the
-    /// stage's lifetime to run out. Once it has committed, the work the write owes (the event pass, the COV
-    /// fanout, a re-evaluated Schedule's target fanout, a Staging plan, and
-    /// the Command or Channel runs it started) runs as a task of its own in
+    /// lets go of the stage at once if the guard is free, and otherwise from
+    /// a task of its own on the runtime it ran on as soon as the guard is
+    /// free: the object keeps serving its old value and queues the save of
+    /// that value, so storage agrees with it, and the next write on the
+    /// object is not held up. Nothing waits for the stage's lifetime to run
+    /// out, as long as the caller's runtime keeps running. The writes a
+    /// Command, Channel or Timer run makes hold their stage the same way, so
+    /// a run task that panics or that `stop()` aborts mid-save lets go of it
+    /// at once too. Once the write has committed, the work it owes (the
+    /// event pass, the COV fanout, a re-evaluated Schedule's target fanout,
+    /// a Staging plan, and the Command or Channel runs it started) runs as a
+    /// task of its own in
     /// the server's request task set, which this future only waits for, so
     /// dropping the future skips none of it (#1367): subscribers hear of the
     /// change, and a run ends as it would have, reported to its property

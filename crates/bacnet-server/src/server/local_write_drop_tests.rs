@@ -141,6 +141,17 @@ async fn let_the_release_run() {
     }
 }
 
+/// Return once a writer waits for the database guard.
+async fn writer_is_queued(server: &BACnetServer<TestTransport>) {
+    tokio::time::timeout(HANG, async {
+        while server.database().try_read().is_ok() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("a writer never queued");
+}
+
 /// What the Device serves for its Description.
 async fn served(server: &BACnetServer<TestTransport>) -> String {
     let db = server.database().read().await;
@@ -185,11 +196,9 @@ async fn a_write_local_dropped_during_its_save_releases_the_stage_at_once() {
         _ = write_description(&server, "lobby") => panic!("the held save finished"),
         started = started => started.unwrap(),
     }
-    assert!(staged(&server).await, "the write staged its Description");
 
-    // The release needs the guard, not the save, so it lands while the save
-    // is still held.
-    let_the_release_run().await;
+    // The guard was free, so the stage went as the call dropped, while the
+    // save is still held: no yield was needed.
     assert!(!staged(&server).await, "the dropped write left its stage");
     assert_eq!(served(&server).await, before, "the Device serves old text");
 
@@ -207,8 +216,8 @@ async fn a_write_local_dropped_waiting_for_the_guard_releases_the_stage_at_once(
     let (started, go) = storage.hold_next();
 
     // While the save of "lobby" is held the stage has dropped the guard, so
-    // the test takes it. The write then has nothing left but the guard to
-    // wait for.
+    // the test takes a read guard. Once the save is through, the write has
+    // nothing left but its own write guard to wait for.
     let guard;
     {
         let mut call = std::pin::pin!(write_description(&server, "lobby"));
@@ -216,15 +225,16 @@ async fn a_write_local_dropped_waiting_for_the_guard_releases_the_stage_at_once(
             _ = &mut call => panic!("the held save finished"),
             started = started => started.unwrap(),
         }
-        guard = server.database().write().await;
+        guard = server.database().read().await;
         drop(go);
-        storage.holds(Some("lobby")).await;
-        // Polled until it waits on the guard; it must not finish.
+        // Tokio's lock is fair: a reader is refused once a writer is queued,
+        // so this ends when the write waits for the guard, whatever the
+        // save's timing.
         tokio::select! {
             _ = &mut call => panic!("the write finished under the test's guard"),
-            () = let_the_release_run() => {}
+            () = writer_is_queued(&server) => {}
         }
-        // Dropped here, still waiting for the guard.
+        // Dropped here, still waiting for the guard, which is taken.
     }
     drop(guard);
 
@@ -236,7 +246,28 @@ async fn a_write_local_dropped_waiting_for_the_guard_releases_the_stage_at_once(
 }
 
 #[tokio::test]
-async fn a_write_local_that_completes_releases_nothing_twice() {
+async fn a_write_task_aborted_during_its_save_has_released_when_the_abort_is_joined() {
+    let storage = Arc::new(Storage::default());
+    let server = Arc::new(server(&storage).await);
+    let before = served(&server).await;
+    let (started, go) = storage.hold_next();
+    let writing = tokio::spawn({
+        let server = Arc::clone(&server);
+        async move { write_description(&server, "lobby").await }
+    });
+    started.await.unwrap();
+    writing.abort();
+    assert!(writing.await.unwrap_err().is_cancelled());
+    // No yield since the join: the stage went as the task dropped, with the
+    // guard free, so `stop()` joining an aborted run task has nothing of its
+    // write left to settle.
+    assert!(!staged(&server).await, "the aborted task left its stage");
+    drop(go);
+    storage.holds(kept(&before)).await;
+}
+
+#[tokio::test]
+async fn a_completed_write_local_saves_once_and_leaves_nothing_staged() {
     let storage = Arc::new(Storage::default());
     let server = server(&storage).await;
     write_description(&server, "lobby").await.unwrap();

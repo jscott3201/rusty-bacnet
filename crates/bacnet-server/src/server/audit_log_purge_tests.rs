@@ -433,3 +433,56 @@ async fn a_paused_clock_stands_still_while_a_purge_commits() {
     assert_eq!(held(server.database()).await, [1]);
     stop(server).await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_purge_dropped_during_its_commit_leaves_the_log_served_and_storage_put_back() {
+    let storage = Arc::new(HeldStorage::default());
+    let server = server(&storage).await;
+    let db = Arc::clone(server.database());
+    assert!(matches!(notify(&db, 1).await, Apdu::SimpleAck(_)));
+    let before = storage.committed();
+    let busy = super::super::durable_writes::busy_waits(&db);
+    let log = audit_log();
+
+    // The purge's commit starts, and the caller drops the purge there.
+    let (started_rx, go) = storage.hold();
+    tokio::select! {
+        _ = server.purge_audit_log(&log) => panic!("the held commit finished"),
+        _started = started(started_rx) => {}
+    }
+    // The log never served the purge, and what the purge staged is gone: the
+    // log queued a commit of what it serves behind the held one.
+    assert_eq!(held(&db).await, [1]);
+    drop(go);
+    let wanted = before.clone();
+    let probe = Arc::clone(&storage);
+    let put_back = tokio::task::spawn_blocking(move || {
+        let deadline = std::time::Instant::now() + WAIT;
+        while std::time::Instant::now() < deadline {
+            let saved = probe.committed();
+            if saved.records == wanted.records
+                && saved.total_record_count == wanted.total_record_count
+            {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        false
+    })
+    .await
+    .unwrap();
+    assert!(put_back, "storage kept a purge the log never served");
+
+    // The next purge finds the log free and goes through.
+    tokio::time::timeout(WAIT, server.purge_audit_log(&audit_log()))
+        .await
+        .expect("the next purge ends")
+        .unwrap();
+    assert_eq!(
+        super::super::durable_writes::busy_waits(&db),
+        busy,
+        "the next purge found the log busy with a forgotten stage"
+    );
+    assert_eq!(held(&db).await, [2]);
+    stop(server).await;
+}

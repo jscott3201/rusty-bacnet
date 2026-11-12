@@ -38,12 +38,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ///
     /// The future must be awaited inside a Tokio runtime, which the release
     /// task needs: outside one it fails with [`Error::Encoding`] before
-    /// anything is staged.
+    /// anything is staged or looked up, so an unknown object gets that error
+    /// too, not UNKNOWN_OBJECT.
     ///
     /// [`AuditLogObject::purge`]: bacnet_objects::audit::AuditLogObject::purge
     pub async fn purge_audit_log(&self, oid: &ObjectIdentifier) -> Result<(), Error> {
-        self.active_network()?;
         super::local_writes::local_runtime()?;
+        self.active_network()?;
         let staged =
             durable_writes::stage_held(&self.db, durable_writes::DurableTarget::purge(*oid)).await;
         let mut db = self.db.write().await;
