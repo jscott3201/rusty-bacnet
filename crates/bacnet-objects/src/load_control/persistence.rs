@@ -38,8 +38,10 @@ pub const MAX_WRITTEN_SHED_LEVELS: usize = 1024;
 ///
 /// [`Default`] is an idle object's: SHED_INACTIVE, level 0, Start_Time
 /// unspecified, the three durations zero, enabled, no Description and no
-/// written levels.
+/// written levels. More may join it, so outside the crate it is built from
+/// [`Default`] with its fields then set (#2502).
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct LoadControlSnapshot {
     /// Present_Value. A rebuilt object takes any state but SHED_INACTIVE as
     /// a request to look at again: it starts SHED_REQUEST_PENDING. One

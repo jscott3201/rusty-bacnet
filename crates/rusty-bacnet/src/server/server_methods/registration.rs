@@ -255,11 +255,15 @@ impl BACnetServer {
     /// description are configuration the file does not keep: give them as
     /// keywords here at every start, so a restored request is put to `shed`
     /// with them. A written Shed_Levels element wins over the keyword's level
-    /// for it, and `set_load_control_shed_levels_local` drops the written
-    /// ones. The `set_load_control_*_local` methods work only once the server
-    /// runs, after that first look, so use them for changes while it runs.
-    /// Give each Load Control its own file; one that holds another object's
-    /// request raises BacnetError.
+    /// for it, one past the end of the keyword's array is dropped, and
+    /// `set_load_control_shed_levels_local` drops the written ones;
+    /// `clear_written_shed_levels=True` drops them first, so the keyword
+    /// applies whole. Without `shed_levels` the written ones are neither
+    /// served nor dropped: the file keeps them for a start that gives the
+    /// levels. The `set_load_control_*_local` methods work only once the
+    /// server runs, after that first look, so use them for changes while it
+    /// runs. Give each Load Control its own file; one that holds another
+    /// object's request raises BacnetError.
     #[pyo3(signature = (
         instance,
         name,
@@ -270,7 +274,8 @@ impl BACnetServer {
         full_duty_baseline=None,
         state_description=None,
         agreed_duty_window=None,
-        storage_path=None
+        storage_path=None,
+        clear_written_shed_levels=false
     ))]
     fn add_load_control(
         &self,
@@ -283,12 +288,19 @@ impl BACnetServer {
         state_description: Option<String>,
         agreed_duty_window: Option<u64>,
         storage_path: Option<&str>,
+        clear_written_shed_levels: bool,
     ) -> PyResult<()> {
         let shedder = crate::load_shedder::PyLoadShedder::parse(shed, stop)?;
         let mut obj = match storage_path {
             Some(path) => {
                 let storage = Arc::new(FileLoadControlPersistence::new(path).map_err(to_py_err)?);
-                LoadControlObject::with_persistence(instance, name, storage).map_err(to_py_err)?
+                let mut obj = LoadControlObject::with_persistence(instance, name, storage)
+                    .map_err(to_py_err)?;
+                // Before the levels are set, so `shed_levels` applies whole.
+                if clear_written_shed_levels {
+                    obj.clear_written_shed_levels().map_err(to_py_err)?;
+                }
+                obj
             }
             None => LoadControlObject::new(instance, name).map_err(to_py_err)?,
         };

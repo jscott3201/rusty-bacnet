@@ -4290,7 +4290,12 @@ them, so give them as keywords at every start: a restored request is put to
 Shed_Levels element a client wrote wins over the `shed_levels` keyword's level
 for it, one past the end of the keyword's array is dropped, and
 `set_load_control_shed_levels_local` replaces the written ones, which the file
-then drops. The
+then drops; if that save fails, the file keeps them until a later save
+succeeds (the object tries again at its next look, then with each change).
+`clear_written_shed_levels=True` drops them at start-up, before the keyword is
+applied, so it applies whole. Without `shed_levels` the written ones are
+neither served nor dropped: the file keeps them for a start that gives the
+levels. The
 `set_load_control_*_local` methods work only once the server runs, after that
 first look, so they are for changes while it runs. Give each Load Control its
 own file. These methods are not audited, as `set_reliability_local` is not.

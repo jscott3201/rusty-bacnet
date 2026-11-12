@@ -80,7 +80,9 @@ class SignatureTests(unittest.TestCase):
             with self.subTest(name=name):
                 parameters = inspect.signature(getattr(BACnetServer, name)).parameters
                 self.assertEqual(list(parameters), ["self", "object_id", second])
-        self.assertIn("storage_path", inspect.signature(BACnetServer.add_load_control).parameters)
+        parameters = inspect.signature(BACnetServer.add_load_control).parameters
+        self.assertIn("storage_path", parameters)
+        self.assertIs(parameters["clear_written_shed_levels"].default, False)
 
     def test_a_server_not_started_refuses(self):
         async def run():
@@ -315,6 +317,41 @@ class StorageTests(unittest.IsolatedAsyncioTestCase):
                                      V.list([V.unsigned(1), V.unsigned(2), V.unsigned(3)]))
             finally:
                 await node.stop()
+
+    async def test_clear_written_shed_levels_applies_the_keyword_whole(self):
+        keywords = [(1, "lights"), (2, "chillers")]
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "lc1.bin")
+
+            async def serve(**clear):
+                node = server()
+                node.add_load_control(1, "LC-1", shed_levels=keywords, storage_path=path,
+                                      **clear)
+                await node.start()
+                return node
+
+            node = await serve()
+            client = BACnetClient(interface="127.0.0.1", port=0, apdu_timeout_ms=2000)
+            await client.__aenter__()
+            try:
+                async with asyncio.timeout(10):
+                    address = await node.local_address()
+                    await client.write_property(address, LC1, P.SHED_LEVELS,
+                                                V.list([V.unsigned(4), V.unsigned(8)]))
+            finally:
+                await client.stop()
+                await node.stop()
+            # The keyword drops what the client wrote before the levels
+            # apply, and the file forgets it for the starts after.
+            for clear in ({"clear_written_shed_levels": True}, {}):
+                with self.subTest(clear=clear):
+                    node = await serve(**clear)
+                    try:
+                        async with asyncio.timeout(10):
+                            self.assertEqual(await node.read_property(LC1, P.SHED_LEVELS),
+                                             V.list([V.unsigned(1), V.unsigned(2)]))
+                    finally:
+                        await node.stop()
 
     async def test_a_file_that_is_not_this_objects_request_raises(self):
         with tempfile.TemporaryDirectory() as directory:

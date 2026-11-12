@@ -302,3 +302,131 @@ fn saved_levels_no_write_leaves_fail_the_build() {
         );
     }
 }
+
+fn attempts(store: &Store) -> u32 {
+    store.attempts.load(Ordering::SeqCst)
+}
+
+/// A look at the request with nothing changed, as the once-a-second pass
+/// makes one.
+fn look(lc: &mut LoadControlObject) {
+    lc.advance_monotonic_time(Duration::ZERO);
+    lc.wait_for_saves();
+}
+
+fn drop_by_route(lc: &mut LoadControlObject) {
+    let setting = LoadControlSetting::ShedLevels(vec![(6, "six".into()), (7, "seven".into())]);
+    lc.apply_local_input(LocalInputValue::LoadControl(setting))
+        .unwrap();
+    lc.wait_for_saves();
+}
+
+#[test]
+fn a_failed_save_of_the_routes_drop_is_tried_again_at_the_next_look() {
+    let (store, clock) = (Arc::new(Store::default()), test_clock());
+    let app = TestShedder::new(ShedProgress::Compliant, 2, 2);
+    let mut lc = kept(&store, &clock, &app);
+    lc.write_property(P::SHED_LEVELS, Some(1), PropertyValue::Unsigned(4), None)
+        .unwrap();
+    store.fail.store(true, Ordering::SeqCst);
+    drop_by_route(&mut lc);
+    assert_eq!(store.held().shed_levels, [(1, 4)], "the drop's save failed");
+    // Storage is back: the next look saves what the object serves, though
+    // nothing changed since.
+    store.fail.store(false, Ordering::SeqCst);
+    look(&mut lc);
+    assert!(store.held().shed_levels.is_empty());
+    power_off(lc);
+    let lc = kept(&store, &clock, &app);
+    assert_eq!(levels(&lc), unsigned(&[1, 2]));
+}
+
+#[test]
+fn a_store_that_keeps_failing_is_tried_once_more_then_at_each_change() {
+    let (store, clock) = (Arc::new(Store::default()), test_clock());
+    let app = TestShedder::new(ShedProgress::Compliant, 2, 2);
+    let mut lc = kept(&store, &clock, &app);
+    lc.write_property(P::SHED_LEVELS, Some(1), PropertyValue::Unsigned(4), None)
+        .unwrap();
+    store.fail.store(true, Ordering::SeqCst);
+    let before = attempts(&store);
+    drop_by_route(&mut lc);
+    assert_eq!(attempts(&store), before + 1);
+    // One more try at the next look, then none while nothing changes.
+    for _ in 0..3 {
+        look(&mut lc);
+    }
+    assert_eq!(attempts(&store), before + 2);
+    // Back again, a look still waits for a change: until then storage holds
+    // the written levels, which a restart would serve.
+    store.fail.store(false, Ordering::SeqCst);
+    look(&mut lc);
+    assert_eq!(attempts(&store), before + 2);
+    assert_eq!(store.held().shed_levels, [(1, 4)]);
+    // A later change saves everything the object serves, the drop included.
+    lc.set_agreed_duty_window(9);
+    lc.wait_for_saves();
+    assert_eq!(attempts(&store), before + 3);
+    assert!(store.held().shed_levels.is_empty());
+    power_off(lc);
+    let lc = kept(&store, &clock, &app);
+    assert_eq!(levels(&lc), unsigned(&[1, 2]));
+}
+
+#[test]
+fn a_staged_element_past_a_shorter_array_set_meanwhile_is_refused() {
+    let (store, clock) = (Arc::new(Store::default()), test_clock());
+    let app = TestShedder::new(ShedProgress::Compliant, 2, 2);
+    let mut lc = kept(&store, &clock, &app);
+    lc.wait_for_saves();
+    let value = PropertyValue::Unsigned(9);
+    let write = PendingWrite {
+        property: P::SHED_LEVELS,
+        array_index: Some(2),
+        value: value.clone(),
+    };
+    let StageStep::Staged(wait) = lc.stage_writes(&[write]) else {
+        panic!("a Shed_Levels write stages");
+    };
+    wait.block();
+    assert_eq!(store.held().shed_levels, [(2, 9)]);
+    // The application gives one level before the write is made.
+    let setting = LoadControlSetting::ShedLevels(vec![(5, "five".into())]);
+    lc.apply_local_input(LocalInputValue::LoadControl(setting))
+        .unwrap();
+    let error = lc
+        .write_property(P::SHED_LEVELS, Some(2), value, None)
+        .unwrap_err();
+    assert_eq!(error_code(error), ErrorCode::INVALID_ARRAY_INDEX);
+    lc.release_staged_write(&wait);
+    lc.wait_for_saves();
+    assert_eq!(levels(&lc), unsigned(&[5]));
+    assert!(store.held().shed_levels.is_empty(), "storage was put back");
+    assert!(!lc.has_staged_write());
+}
+
+#[test]
+fn exactly_as_many_written_levels_as_storage_keeps_save() {
+    let (store, clock) = (Arc::new(Store::default()), test_clock());
+    let app = TestShedder::new(ShedProgress::Compliant, 2, 2);
+    let mut lc = kept(&store, &clock, &app);
+    let most = MAX_WRITTEN_SHED_LEVELS as u64;
+    let configured = |size: u64| (1..=size).map(|level| (level, String::new())).collect();
+    lc.set_shed_levels(configured(most)).unwrap();
+    let all = PropertyValue::List((1..=most).map(PropertyValue::Unsigned).collect());
+    lc.write_property(P::SHED_LEVELS, None, all, None).unwrap();
+    lc.wait_for_saves();
+    assert_eq!(store.held().shed_levels.len(), MAX_WRITTEN_SHED_LEVELS);
+    // One more element would pass the cap; one already written doesn't.
+    lc.set_shed_levels(configured(most + 1)).unwrap();
+    let past = u32::try_from(most + 1).unwrap();
+    let error = lc
+        .write_property(P::SHED_LEVELS, Some(past), PropertyValue::Unsigned(2), None)
+        .unwrap_err();
+    assert_eq!(error_code(error), ErrorCode::NO_SPACE_TO_WRITE_PROPERTY);
+    lc.write_property(P::SHED_LEVELS, Some(1), PropertyValue::Unsigned(2), None)
+        .unwrap();
+    lc.wait_for_saves();
+    assert_eq!(store.held().shed_levels.len(), MAX_WRITTEN_SHED_LEVELS);
+    assert_eq!(store.held().shed_levels[0], (1, 2));
+}

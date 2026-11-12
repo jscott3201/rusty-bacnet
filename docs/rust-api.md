@@ -7061,9 +7061,13 @@ not the levels the application gives: after a restart `set_shed_levels`
 takes the application's array and serves each written element in place of
 its level, dropping any past the array's end, so call it before the
 object's first look and a restored request is put to the shedder with the
-written levels. `clear_written_shed_levels` drops them first, so the next
+written levels. Without a `set_shed_levels` call the restored elements are
+neither served nor dropped: storage keeps them for a start that gives the
+array. `clear_written_shed_levels` drops them first, so the next
 `set_shed_levels` applies whole; the running server's
 `set_load_control_shed_levels_local` replaces them and storage drops them.
+`LoadControlSnapshot` is non-exhaustive: a backend of its own builds one from
+`Default` and sets its fields.
 `LoadShedder::stop` should be idempotent: it can come with no loads shed, for
 a restored request this process never offered, and twice with no `shed`
 between (an object replaced before its first look, then its successor's
@@ -7126,8 +7130,12 @@ the object's setters before it joins the server, so a restored request is put
 to the shedder with them as the server starts. The one exception is a
 Shed_Levels element a peer wrote, which storage keeps and which wins over the
 setter's level at a restart (#2502); the route's levels replace those, and
-storage drops them in a save nobody waits for. The routes work only on a
-running server, after that first look, so they are for changes while it runs.
+storage drops them in a save nobody waits for. A failed queued save is logged
+and not taken as saved: storage keeps what it held, the written elements
+included, until a later save succeeds. The object tries once more at its next
+look, then with each later change of what it keeps, so a restart inside that
+window serves the written elements again. The routes work only on a running
+server, after that first look, so they are for changes while it runs.
 
 Load Control supports COV (Table 13-1). Its SubscribeCOV report carries
 Present_Value, Status_Flags, Requested_Shed_Level, Start_Time, Shed_Duration

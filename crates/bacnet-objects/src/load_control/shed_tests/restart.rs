@@ -11,11 +11,13 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 mod levels;
 mod setting;
 
-/// Storage in memory, counting its saves, and refusing them while `fail`.
+/// Storage in memory, counting its saves and the calls to save, and
+/// refusing them while `fail`.
 #[derive(Default)]
 struct Store {
     saved: Mutex<Option<LoadControlSnapshot>>,
     saves: AtomicU32,
+    attempts: AtomicU32,
     fail: AtomicBool,
 }
 
@@ -25,6 +27,7 @@ impl LoadControlPersistence for Store {
     }
 
     fn save(&self, _: ObjectIdentifier, snapshot: &LoadControlSnapshot) -> Result<(), Error> {
+        self.attempts.fetch_add(1, Ordering::SeqCst);
         if self.fail.load(Ordering::SeqCst) {
             return Err(Error::Encoding("the disk is full".into()));
         }

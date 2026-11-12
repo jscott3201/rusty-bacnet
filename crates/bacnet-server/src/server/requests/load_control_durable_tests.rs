@@ -66,6 +66,14 @@ fn write_element(
     request.freeze()
 }
 
+/// An idle object's snapshot with `set` applied: the snapshot is
+/// non-exhaustive, so it is built from its default.
+fn kept(set: impl FnOnce(&mut LoadControlSnapshot)) -> LoadControlSnapshot {
+    let mut snapshot = LoadControlSnapshot::default();
+    set(&mut snapshot);
+    snapshot
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn each_kept_write_saves_off_the_lock_and_survives_a_rebuild() {
     for (property, octets, served, kept) in [
@@ -73,37 +81,25 @@ async fn each_kept_write_saves_off_the_lock_and_survives_a_rebuild() {
             P::REQUESTED_SHED_LEVEL,
             vec![0x09, 80],
             PropertyValue::ApplicationData(vec![0x09, 80]),
-            LoadControlSnapshot {
-                requested_shed_level: BACnetShedLevel::Percent(80),
-                ..LoadControlSnapshot::default()
-            },
+            kept(|s| s.requested_shed_level = BACnetShedLevel::Percent(80)),
         ),
         (
             P::DUTY_WINDOW,
             value(PropertyValue::Unsigned(15)),
             PropertyValue::Unsigned(15),
-            LoadControlSnapshot {
-                duty_window: 15,
-                ..LoadControlSnapshot::default()
-            },
+            kept(|s| s.duty_window = 15),
         ),
         (
             P::ENABLE,
             value(PropertyValue::Boolean(false)),
             PropertyValue::Boolean(false),
-            LoadControlSnapshot {
-                enable: false,
-                ..LoadControlSnapshot::default()
-            },
+            kept(|s| s.enable = false),
         ),
         (
             P::DESCRIPTION,
             value(PropertyValue::CharacterString("Chillers".into())),
             PropertyValue::CharacterString("Chillers".into()),
-            LoadControlSnapshot {
-                description: Some("Chillers".into()),
-                ..LoadControlSnapshot::default()
-            },
+            kept(|s| s.description = Some("Chillers".into())),
         ),
     ] {
         let storage = Arc::new(ShedStorage::default());
@@ -163,7 +159,7 @@ fn levels(values: &[u64]) -> PropertyValue {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_shed_levels_element_saves_off_the_lock_and_survives_a_rebuild() {
+async fn shed_levels_whole_or_one_element_save_off_the_lock_and_survive_a_rebuild() {
     let storage = Arc::new(ShedStorage::default());
     let (fixture, oid) = with_levels(&storage).await;
     let service = ConfirmedServiceChoice::WRITE_PROPERTY;
@@ -193,7 +189,16 @@ async fn a_shed_levels_element_saves_off_the_lock_and_survives_a_rebuild() {
     assert_eq!(storage.saves.load(Ordering::SeqCst), 1);
     assert_eq!(storage.load_saved().unwrap().shed_levels, [(2, 9)]);
     assert_eq!(fixture.read(oid, P::SHED_LEVELS).await, levels(&[1, 9]));
+    // The whole array, the same way: one save, off the lock.
+    let mut whole = value(PropertyValue::Unsigned(3));
+    whole.extend(value(PropertyValue::Unsigned(7)));
+    let request = write_property(oid, P::SHED_LEVELS, whole);
+    let (response, available) = while_saving(&fixture, &storage, service, request, WAIT).await;
+    assert_eq!(response, SIMPLE_ACK_WRITE);
+    assert!(available, "the database was held while the array saved");
+    assert_eq!(storage.saves.load(Ordering::SeqCst), 2);
+    assert_eq!(storage.load_saved().unwrap().shed_levels, [(1, 3), (2, 7)]);
     drop(fixture);
     let (rebuilt, oid) = with_levels(&storage).await;
-    assert_eq!(rebuilt.read(oid, P::SHED_LEVELS).await, levels(&[1, 9]));
+    assert_eq!(rebuilt.read(oid, P::SHED_LEVELS).await, levels(&[3, 7]));
 }

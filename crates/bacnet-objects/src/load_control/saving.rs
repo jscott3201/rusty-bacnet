@@ -21,7 +21,10 @@
 //!   or ending: at its time, cancelled, by Enable FALSE, or as the object is
 //!   removed from its database) and what the application's setters change
 //!   are saved with nobody waiting, a newer change replacing one not yet
-//!   begun.
+//!   begun. Such a save that fails is logged and not taken as saved
+//!   (#2502): the next look saves the served state again, once, and each
+//!   later change does too, so storage holds its old state only until a
+//!   save succeeds.
 //!
 //! A staged save holds the request as the writes leave it once the state
 //! machine's own rules have run on it after each write the live object
@@ -67,7 +70,9 @@
 //! is the application's newer word: it drops every written element and
 //! serves the levels it is given, saved with nobody waiting.
 //! [`clear_written_shed_levels`] drops them before the object joins a
-//! database, so the next [`set_shed_levels`] applies whole.
+//! database, so the next [`set_shed_levels`] applies whole. An object never
+//! given levels serves none and drops none: storage keeps them for a later
+//! start that gives the array.
 //!
 //! [`Timed::start_output`]: crate::traits::Timed::start_output
 //! [`set_shed_levels`]: LoadControlObject::set_shed_levels
@@ -79,6 +84,7 @@
 
 use crate::prelude::*;
 use alloc::sync::Arc;
+use core::sync::atomic::{AtomicBool, Ordering};
 use core::time::Duration;
 
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier, ShedState};
@@ -107,8 +113,15 @@ type Storage = StagedSaves<LoadControlSnapshot, LoadControlSnapshot>;
 pub(super) struct Durable {
     storage: Option<Storage>,
     /// What the object last handed storage: what it holds once the saves
-    /// queued so far have run.
+    /// queued so far have run, unless one failed.
     saved: LoadControlSnapshot,
+    /// The writer sets this when a save fails and clears it when one
+    /// succeeds: storage may then not hold `saved` (#2502).
+    save_failed: Arc<AtomicBool>,
+    /// The served state was handed storage again after a failed save with
+    /// nothing changed; the next try waits for a change, so storage that
+    /// keeps failing isn't asked on every look.
+    retried: bool,
     /// Kept writes made so far, so a staged write is taken only if no other
     /// came between.
     writes: u64,
@@ -149,21 +162,18 @@ impl Durable {
         &self.levels_written
     }
 
-    /// The application set an array of `size` levels: with storage, the
-    /// written elements past its end go, or all of them unless `keep`, and a
-    /// write staged before this gives way, since it was checked against the
-    /// array as it stood.
+    /// The application set an array of `size` levels: the written elements
+    /// past its end go, or all of them unless `keep`. A write staged before
+    /// this, checked against the array as it stood, is checked again as the
+    /// object makes it, and one refused then leaves storage to be put back
+    /// to what the object serves once its request lets the stage go.
     pub(super) fn levels_configured(&mut self, size: usize, keep: bool) {
-        if !self.is_kept() {
-            return;
-        }
         if keep {
             self.levels_written
                 .retain(|&(index, _)| usize::try_from(index).is_ok_and(|index| index <= size));
         } else {
             self.levels_written.clear();
         }
-        self.writes = self.writes.wrapping_add(1);
     }
 
     /// Take storage away for a while, so nothing the object does meanwhile
@@ -237,7 +247,9 @@ impl LoadControlObject {
     /// leaves (an index of 0 or out of order, a level of 0, more than
     /// [`MAX_WRITTEN_SHED_LEVELS`]). The written levels it restores are
     /// served once [`set_shed_levels`](Self::set_shed_levels) gives the
-    /// array they belong to (see the `saving` module).
+    /// array they belong to (see the `saving` module); until then they are
+    /// neither served nor dropped, so an object never given levels keeps
+    /// them in storage for a later start that gives them.
     ///
     /// [`Retirement::Released`]: crate::traits::Retirement::Released
     pub fn with_persistence(
@@ -250,10 +262,12 @@ impl LoadControlObject {
         if let Some(saved) = persistence.load(oid)? {
             object.restore(saved)?;
         }
+        let failed = Arc::clone(&object.durable.save_failed);
         let writer = SaveWriter::new(
             format!("bacnet-lc-{instance}-save"),
             move |snapshot: &LoadControlSnapshot| persistence.save(oid, snapshot),
             move |_, result| {
+                failed.store(result.is_err(), Ordering::Release);
                 if let Err(error) = result {
                     log_warn!(object = %oid, %error, "Failed to save a Load Control's shed request");
                 }
@@ -386,14 +400,23 @@ impl LoadControlObject {
     /// save of what the object serves, unless a staged write holds storage,
     /// in which case it keeps that to put back should it be dropped. A
     /// dropped staged write is corrected the same way.
+    ///
+    /// A save nobody waited for that failed isn't taken as saved (#2502):
+    /// the next call queues the served state again though nothing changed,
+    /// once, and after that each change does, as always. So storage that
+    /// keeps failing is asked once per change and once more, not on every
+    /// look, and until a save succeeds it holds what it held before.
     pub(super) fn follow_storage(&mut self) {
         let Some(mut storage) = self.durable.storage.take() else {
             return;
         };
         let served = self.snapshot();
-        if storage.take_correction() || (!storage.is_staged() && served != self.durable.saved) {
+        let changed = served != self.durable.saved;
+        let retry = !self.durable.retried && self.durable.save_failed.load(Ordering::Acquire);
+        if storage.take_correction() || (!storage.is_staged() && (changed || retry)) {
             storage.submit_coalescing(served.clone());
             self.durable.saved = served;
+            self.durable.retried = !changed;
         } else {
             storage.correct(|| served);
         }
