@@ -1,5 +1,5 @@
-//! AcknowledgeAlarm (Clause 13.5): the acknowledgement of one committed
-//! transition (Clause 13.2.3), and the ACK_NOTIFICATION it may send.
+//! AcknowledgeAlarm (Clause 13.5) sets one committed transition's
+//! Acked_Transitions bit (Clause 13.2.3); an ACK_NOTIFICATION may follow.
 
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::event::EventStateChange;
