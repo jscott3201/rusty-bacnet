@@ -20,7 +20,7 @@ pub type IntrinsicCommit = Result<CommittedIntrinsicTransition, IntrinsicCommitR
 /// The detector fires at once only when `Time_Delay` is 0. For a nonzero
 /// delay it seeds a pending transition due `Time_Delay` seconds after
 /// `now` and proposes nothing, so this returns `None`; the [`sweep`] at or
-/// after [`next_due`] fires it. A committed transition changes
+/// after its due instant ([`next_due`]) fires it. A committed transition changes
 /// Status_Flags, so the caller owes the object a COV look afterwards.
 pub fn after_write(
     db: &mut ObjectDatabase,
@@ -73,15 +73,23 @@ pub fn sweep(
     committed
 }
 
-/// The earliest instant any object's pending transition is due: when a
-/// host should run [`sweep`] next, if it sweeps no sooner anyway. `None`
-/// with nothing pending. A due instant already passed is returned too; the
-/// sweep that runs next fires it.
-pub fn next_due(db: &ObjectDatabase) -> Option<Instant> {
+/// The earliest instant after `after` at which an object's pending
+/// transition is due: when a host should run [`sweep`] next, if it sweeps no
+/// sooner anyway. Pass the `now` of the sweep just run. `None` with nothing
+/// due after it.
+///
+/// A due instant at or before `after` is left out. The sweep at `after`
+/// has seen it, and it is still pending only because it was seeded there
+/// (a Time_Delay of 0 the sweep noticed, which fires at the next sweep) or
+/// because its commit failed; either way the host's own cadence retries
+/// it. Returning it would keep a host from waking for any later due
+/// instant, or wake it over and over for one it can't fire.
+pub fn next_due(db: &ObjectDatabase, after: Instant) -> Option<Instant> {
     bacnet_time::earliest(db.iter_objects().map(|(_, object)| {
         object
             .event_reporting()
             .and_then(|reporting| reporting.next_due())
+            .filter(|due| *due > after)
     }))
 }
 

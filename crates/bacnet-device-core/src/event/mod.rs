@@ -5,7 +5,7 @@
 //!   the transition it proposes; [`sweep`] does so for every object once a
 //!   pass, firing each Time_Delay that has ended by its `now` and turning
 //!   a Reliability change into a FAULT transition. [`next_due`] is when the
-//!   next delay ends: a host sweeps then too. Both commit through [`commit_intrinsic_transition`]:
+//!   next delay after the last sweep ends: a host sweeps then too. Both commit through [`commit_intrinsic_transition`]:
 //!   Event_State, Acked_Transitions, the timestamp and the message text at
 //!   once (Clause 13.2.2.1.4), before Event_Enable decides whether the
 //!   transition goes out (Clause 13.2.5).

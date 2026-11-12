@@ -1602,8 +1602,15 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
     windows and the write filter, the parity corpus and the image row.
     - `PendingTransition` holds `due` (when the condition was first seen
       plus the delay); `EventReporting`'s two evaluations take `now`;
-      `next_due` reports the instant, and `event::next_due(db)` the
-      earliest. `bacnet-objects` takes `bacnet-time`, without std.
+      `next_due` reports the instant, and `event::next_due(db, after)` the
+      earliest strictly after the instant it is given, the last sweep's
+      `now`. A due instant that sweep has seen and not fired (a delay of 0
+      it noticed, which fires at the next sweep, or a commit that failed)
+      is left out: it would hide every later one from a host that wakes
+      only for instants still ahead, and keep waking one that doesn't.
+      `bacnet-objects` takes `bacnet-time`, without std, and re-exports its
+      `Instant` and `Duration` from `event`, so a custom `EventReporting`
+      needs no dependency of its own.
     - Only the tick fires a pending transition. The evaluation after a
       write still seeds or cancels and fires only a delay of 0, as
       before; a host sweeps at `next_due`, which the server does, so
@@ -1614,16 +1621,31 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
       at the next sweep.
     - The server's sweep keeps its one-second cadence for the standing
       duties (FAULT from Reliability, inhibit references) and adds a wake
-      at the next due instant when that falls after now and before the
-      next sweep. A due instant already passed (a commit that keeps
-      failing) waits for the cadence, so the task can't spin. Each wake
-      runs the whole sweep, the same function the `Reporter` will run at
-      its deadline, so the two fire at the same instants; an extra sweep
-      only sees sooner what a whole-second sweep would have seen.
+      at the next due instant before the next periodic sweep, no sooner
+      than 100 ms after the last sweep: each wake runs the whole sweep and
+      a second pass for `next_due` (about 0.4 ms at 10,000 Analog Inputs,
+      measured in review), and staggered delays could otherwise wake it a
+      thousand times a second. So a transition goes out within 100 ms of
+      its due instant. A due instant that passes while the task sends goes
+      out at its next wake, floor permitting, rather than at the next
+      second. Each wake runs the whole sweep, the same function the
+      `Reporter` will run at its deadline, so the two fire at the same
+      instants; an extra sweep only sees sooner what a whole-second sweep
+      would have seen.
+    - The task isn't told about writes. It needn't be: it never sleeps
+      past the next periodic sweep, a write seeds a due instant at least
+      one second (the shortest nonzero Time_Delay) after the write, and the
+      write path and the sweep take the same database lock, so a sweep
+      always runs between the write and its due instant and recomputes
+      when to wake. That breaks if the period ever exceeds the shortest
+      nonzero delay: part two's `ReportConfig::sweep` must stay at or under
+      one second, or the `Reporter` must look at `next_due` after every
+      write.
     - A custom `EventReporting` that counted ticks now sees more than one
       a second when other objects' delays end; the migration note says to
       compare `now` with its own due instant and report it through
-      `next_due`.
+      `next_due`, and that a wrapper which doesn't forward `next_due`
+      leaves its delays to the whole-second sweeps.
     - `InvokeIds::take` names the confirmed service (lead, for #2490 PR 2
       and the event path).
     - Size (`check-firmware-link.sh`, Rust 1.99.0, flash in octets, dev

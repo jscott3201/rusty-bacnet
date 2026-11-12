@@ -42,16 +42,19 @@ fn peer() -> SubscriberEndpoint {
     SubscriberEndpoint::new(&[0x0A, 0, 0, 5, 0xBA, 0xC0], None)
 }
 
-/// Invoke IDs from 0 up, at most `limit` taken at once.
+/// Invoke IDs from 0 up, at most `limit` taken at once, noting the service
+/// each was asked for.
 #[derive(Default)]
 struct Ids {
     taken: Vec<(BACnetAddress, u8)>,
     next: u8,
     limit: usize,
+    services: Vec<ConfirmedServiceChoice>,
 }
 
 impl InvokeIds for Ids {
-    fn take(&mut self, to: &BACnetAddress, _: ConfirmedServiceChoice) -> Option<u8> {
+    fn take(&mut self, to: &BACnetAddress, service: ConfirmedServiceChoice) -> Option<u8> {
+        self.services.push(service);
         if self.taken.len() >= self.limit {
             return None;
         }
@@ -333,6 +336,20 @@ fn a_report_without_room_is_owed_until_room_frees() {
     let (second, apdu) = device.pop(T0).expect("the owed one");
     assert_ne!(first.token, second.token);
     assert_eq!(Device::reported_pv(&apdu), PropertyValue::Real(10.0));
+}
+
+/// The host lends a confirmed COV report its invoke ID for the service it
+/// goes out as (#2303).
+#[test]
+fn a_confirmed_report_names_its_service_to_the_invoke_ids() {
+    let mut device = Device::new(OutboxLimits::default());
+    device.subscribe(1, true, T0);
+    let (initial, _) = device.pop(T0).unwrap();
+    assert!(initial.invoke_id.is_some());
+    assert_eq!(
+        device.ids.services,
+        [ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION]
+    );
 }
 
 #[test]

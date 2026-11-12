@@ -1,6 +1,9 @@
 //! A custom implementation using only public object-contract types.
 use super::*;
-use bacnet_objects::event::{EventTransitionCommit, EventTransitionCommitError, TransitionOutcome};
+use bacnet_objects::event::{
+    Duration as Delay, EventTransitionCommit, EventTransitionCommitError, Instant,
+    TransitionOutcome,
+};
 use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_services::alarm_event::NotificationParameters;
 use bacnet_types::bitstring::EventTransitionBits;
@@ -13,7 +16,9 @@ struct CustomProposal {
     oid: ObjectIdentifier,
     state: EventState,
     delay: u32,
-    remaining: Option<u32>,
+    /// When the pending transition is due, counted from the write that
+    /// began the condition, as a custom object keeps it (#2303).
+    due: Option<Instant>,
     acknowledged: EventTransitionBits,
     timestamps: [BACnetTimeStamp; 3],
     messages: [String; 3],
@@ -138,29 +143,24 @@ impl BACnetObject for CustomProposal {
 }
 
 impl bacnet_objects::traits::EventReporting for CustomProposal {
-    fn evaluate_intrinsic_reporting(
-        &mut self,
-        _now: bacnet_time::Instant,
-    ) -> Option<TransitionOutcome> {
+    fn evaluate_intrinsic_reporting(&mut self, now: Instant) -> Option<TransitionOutcome> {
         if self.delay == 0 {
             return self.proposal();
         }
         if self.state == EventState::NORMAL {
-            self.remaining.get_or_insert(self.delay);
+            self.due
+                .get_or_insert(now + Delay::from_secs(u64::from(self.delay)));
         }
         None
     }
-    fn tick_intrinsic_reporting(
-        &mut self,
-        _now: bacnet_time::Instant,
-    ) -> Option<TransitionOutcome> {
-        let remaining = self.remaining.as_mut()?;
-        *remaining = remaining.saturating_sub(1);
-        if *remaining == 0 {
-            self.proposal()
-        } else {
-            None
+    fn tick_intrinsic_reporting(&mut self, now: Instant) -> Option<TransitionOutcome> {
+        if now < self.due? {
+            return None;
         }
+        self.proposal()
+    }
+    fn next_due(&self) -> Option<Instant> {
+        self.due
     }
     fn commit_event_transition(
         &mut self,
@@ -189,7 +189,7 @@ impl bacnet_objects::traits::EventReporting for CustomProposal {
         if let Some(message) = &commit.message_text {
             self.messages[index] = message.clone();
         }
-        self.remaining = None;
+        self.due = None;
         self.commits.lock().unwrap().push(commit);
         Ok(())
     }
@@ -251,7 +251,7 @@ fn database(
         oid: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
         state: EventState::NORMAL,
         delay,
-        remaining: None,
+        due: None,
         acknowledged: EventTransitionBits::all(),
         timestamps: std::array::from_fn(|_| BACnetTimeStamp::SequenceNumber(99)),
         messages: std::array::from_fn(|_| "initial".into()),

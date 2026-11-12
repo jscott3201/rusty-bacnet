@@ -97,7 +97,7 @@ the database guard, the transport, addressing and time.
   `bacnet-server` (#2303). `after_write` evaluates and commits one changed
   object's transition, `sweep` does so for every object once a pass and
   fires each Time_Delay that has ended by its `now`, `next_due` says when
-  the next one ends, and
+  the next one after a given instant ends, and
   `distribute_event` builds the EventNotification, picks its recipients by
   day, window and transition and records it in the Event Logs; the host
   sends it. The timestamps (the Device clock's, or a sequence number), the

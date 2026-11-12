@@ -152,7 +152,7 @@ impl ChangeOfStateReporting {
     }
 
     /// Back to the starting event state with detection turned off: NORMAL,
-    /// every transition acknowledged, no countdown and an empty history
+    /// every transition acknowledged, nothing pending and an empty history
     /// (Clause 12.32.34 asks for the initial values while it stays off).
     fn reset(&mut self) {
         self.event_detector.event_state = EventState::NORMAL;
@@ -201,8 +201,8 @@ impl ChangeOfStateReporting {
     }
 
     /// Commit one transition through the shared kernel, then settle the
-    /// detector's countdown and fault edge. With detection off the kernel
-    /// refuses every commit.
+    /// detector's pending transition and fault edge. With detection off the
+    /// kernel refuses every commit.
     pub(crate) fn commit(
         &mut self,
         commit: EventTransitionCommit,

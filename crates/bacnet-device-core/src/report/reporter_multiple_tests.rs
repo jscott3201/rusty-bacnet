@@ -390,6 +390,20 @@ fn a_confirmed_report_is_retired_by_its_ack() {
     assert!(device.ids.taken.is_empty());
 }
 
+/// A confirmed COV-multiple report asks for its invoke ID as a
+/// ConfirmedCOVNotificationMultiple (#2303).
+#[test]
+fn a_confirmed_multiple_report_names_its_service_to_the_invoke_ids() {
+    let (mut device, _clock) = device();
+    device.subscribe_multiple(1, true, &[(ai(), true)], 1476, T0);
+    let (initial, _) = device.pop_multiple(T0).expect("the initial report");
+    assert!(initial.invoke_id.is_some());
+    assert_eq!(
+        device.ids.services,
+        [ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION_MULTIPLE]
+    );
+}
+
 #[test]
 fn a_refused_confirmed_report_goes_out_again_after_its_hold_off() {
     let (mut device, clock) = device();

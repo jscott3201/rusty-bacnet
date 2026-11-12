@@ -4,34 +4,60 @@ use super::super::event_notifications::logged_intrinsic_commit;
 use super::*;
 use bacnet_device_core::event::{next_due, sweep};
 
+/// The sweep's period: the standing duties (FAULT from Reliability,
+/// Event_Algorithm_Inhibit references) run this often. It must not exceed
+/// the shortest nonzero Time_Delay, one second; see [`run`].
+const SWEEP_PERIOD: Duration = Duration::from_secs(1);
+
+/// The least time from one sweep to the next when the next is woken for a
+/// due instant rather than by the period. Each wake runs the whole sweep and
+/// a second pass over the database for `next_due` (about 0.4 ms at 10,000
+/// Analog Inputs, measured in review), and staggered delays could otherwise
+/// wake the task a thousand times a second. So a transition can go out up
+/// to this long after its due instant.
+const DUE_WAKE_FLOOR: Duration = Duration::from_millis(100);
+
+/// The intrinsic-reporting task (#2303).
+///
+/// It sweeps every [`SWEEP_PERIOD`], and between those sweeps when the
+/// database's next Time_Delay ends ([`next_due`]), no sooner than
+/// [`DUE_WAKE_FLOOR`] after the last sweep, so a transition goes out when
+/// its delay ends rather than at the next whole second.
+///
+/// The task isn't told about writes, and needn't be. It never sleeps past
+/// the next periodic sweep; a write seeds a due instant at least one second
+/// (the shortest nonzero Time_Delay) after the write; and the write path
+/// and the sweep take the same database lock. So a sweep always runs after
+/// the write and before its due instant, sees it, and recomputes when to
+/// wake. That holds only while the period is no longer than the shortest
+/// nonzero delay: a host that sweeps less often must also wake on writes.
+///
+/// A sweep at or after the periodic instant moves the cadence on: the next
+/// periodic sweep is a period after the instant it replaced when it ran on
+/// time, and a period after it ran when it ran late, so a stall runs one
+/// sweep, not one per missed second. A sweep woken for a due instant leaves
+/// the cadence as it was.
 pub(super) async fn run<T: TransportPort + 'static>(
     fanout: CovFanout<T>,
     learned_routers: Arc<Mutex<LearnedRouterCache>>,
     device_bindings: Arc<RwLock<DeviceBindingTable>>,
 ) {
-    // The sweep runs once a second, as it always has: it follows
-    // Event_Algorithm_Inhibit references and re-derives FAULT from
-    // Reliability, which no write may report. Between those sweeps it also
-    // runs when the database's next Time_Delay ends, so a transition fires at
-    // its due instant rather than the next whole second (#2303). A late wake
-    // runs one sweep, not one per missed second, and the cadence restarts a
-    // period after it, as `MissedTickBehavior::Delay` did.
-    let period = Duration::from_secs(1);
     let mut next_sweep = tokio::time::Instant::now();
+    let mut last_sweep = next_sweep;
     let mut due: Option<tokio::time::Instant> = None;
     loop {
-        let now = tokio::time::Instant::now();
         let wake = match due {
-            Some(due) if due > now && due < next_sweep => due,
+            Some(due) if due < next_sweep => due.max(last_sweep + DUE_WAKE_FLOOR).min(next_sweep),
             _ => next_sweep,
         };
         tokio::time::sleep_until(wake).await;
         let woke = tokio::time::Instant::now();
+        last_sweep = woke;
         if woke >= next_sweep {
             next_sweep = if woke > next_sweep {
-                woke + period
+                woke + SWEEP_PERIOD
             } else {
-                next_sweep + period
+                next_sweep + SWEEP_PERIOD
             };
         }
         // DCC gates the outbound sender, not event-state detection or
@@ -50,7 +76,8 @@ pub(super) async fn run<T: TransportPort + 'static>(
             // A proposal can commit and still have its projection rejected,
             // so owe the fanout for every proposal; COV criteria drop it if
             // nothing changed.
-            let swept = sweep(&mut db, crate::runtime_clock::core_now(), |db, oid| {
+            let swept_at = crate::runtime_clock::core_now();
+            let swept = sweep(&mut db, swept_at, |db, oid| {
                 commit.before_change(db, oid);
                 commit.changed(oid);
             });
@@ -62,8 +89,8 @@ pub(super) async fn run<T: TransportPort + 'static>(
                     out.push((oid, resolved));
                 }
             }
-            // When the next delay ends, on tokio's clock.
-            due = next_due(&db)
+            // When the next delay after this sweep ends, on tokio's clock.
+            due = next_due(&db, swept_at)
                 .and_then(|due| crate::runtime_clock::core_clock().to_std(due))
                 .map(tokio::time::Instant::from_std);
             // Each committed transition changes Status_Flags. Timestamped

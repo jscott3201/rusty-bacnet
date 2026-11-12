@@ -4630,13 +4630,17 @@ whole. Custom objects that hold a vendor list should return
 
 Intrinsic reporting uses one proposal/commit contract, on the
 `EventReporting` capability. Both evaluations take `now`, the host's
-monotonic `bacnet_time::Instant` (#2303). `evaluate_intrinsic_reporting`,
+monotonic instant (`bacnet_objects::event::Instant`, which re-exports
+`bacnet_time::Instant`, #2303). `evaluate_intrinsic_reporting`,
 run after a write, seeds a pending transition due `Time_Delay` seconds after
 `now` (or proposes it at once for a delay of 0) and never fires a pending
 one; `tick_intrinsic_reporting` fires a pending transition at the first
 call at or after its due instant, and `next_due` says when that is, so a
 host calls the tick then and on a cadence of its own (the server: once a
-second, which also re-derives FAULT and follows inhibit references).
+second, which also re-derives FAULT and follows inhibit references, and at
+each due instant, no sooner than 100 ms after its last sweep). An object
+that wraps another must forward `next_due` too: the default, `None`, leaves
+its delays to the next whole-second sweep.
 Its
 `evaluate_intrinsic_reporting` and `tick_intrinsic_reporting` return a
 fire-ready `TransitionOutcome` while leaving event state, acknowledgment bits,
@@ -8662,9 +8666,13 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   string, takes a lock or reads a clock: `after_write` and `sweep` take
   the host's monotonic `now`, a `bacnet_time::Instant`. A Time_Delay a
   write seeds is due its delay after that `now`, and the `sweep` at or
-  after it fires the transition; `next_due(db)` is the earliest such
-  instant, so a host sweeps then as well as on its own cadence (the
-  server sweeps once a second and at `next_due`).
+  after it fires the transition; `next_due(db, after)` is the earliest
+  such instant after the given one (pass the last sweep's `now`: a due
+  instant it has seen and not fired, a delay of 0 it noticed or a commit
+  that failed, waits for the host's cadence), so a host sweeps then as well
+  as on its own cadence. The server sweeps once a second and at
+  `next_due`, no sooner than 100 ms after its last sweep, so a transition
+  goes out within 100 ms of its due instant.
 - `clock` (#2321): the Device's clock, for firmware with none of its own.
   `SyncedClock` holds a `bacnet_time::Instant`, the UTC date and time it
   stood for and the `Zone` (UTC_Offset, minutes west, and

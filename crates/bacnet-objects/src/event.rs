@@ -7,7 +7,10 @@
 use crate::prelude::*;
 use core::ops::ControlFlow;
 
-use bacnet_time::Instant;
+/// The host's monotonic timeline the detectors' `now` and due instants are
+/// on, re-exported so an `EventReporting` implementor needs no dependency of
+/// its own on `bacnet-time` (#2303).
+pub use bacnet_time::{Duration, Instant};
 use bacnet_types::bitstring::{EventTransitionBits, LimitEnable};
 use bacnet_types::enums::{EventState, EventType, NotifyType, Reliability};
 use bacnet_types::primitives::BACnetTimeStamp;
@@ -411,9 +414,9 @@ impl OutOfRangeDetector {
     /// When the direction-appropriate delay (`delay_toward`) is zero the
     /// transition is confirmed immediately and `event_state` is updated,
     /// preserving the legacy instant-transition behavior. Otherwise a
-    /// [`PendingTransition`] is seeded (or cleared if the condition
-    /// reverted) and `None` is returned; the periodic [`Self::tick`]
-    /// advances and eventually confirms it.
+    /// [`PendingTransition`] is seeded, due when the delay ends (or cleared
+    /// if the condition reverted), and `None` is returned; the periodic
+    /// [`Self::tick`] at or after that instant confirms it.
     pub fn probe(
         &mut self,
         present_value: f32,
@@ -1078,6 +1081,8 @@ pub(crate) use history::commit_test_proposal;
 pub(crate) use history::impl_builtin_intrinsic_reporting;
 pub(crate) use state_reporting::impl_change_of_state_reporting;
 
+#[cfg(test)]
+mod due_instant_tests;
 #[cfg(all(test, feature = "event-reporting"))]
 mod fault_reporting_tests;
 #[cfg(test)]

@@ -99,9 +99,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ///
     /// This is the per-write entry point: it probes the detector, which fires
     /// immediately only when `Time_Delay == 0`. For a nonzero delay the probe
-    /// seeds a pending transition (returning `None`, so no notification is
-    /// sent here) and the one-second [`intrinsic_reporting_task`](Self::start)
-    /// advances the countdown and sends the notification on expiry.
+    /// seeds a pending transition due when the delay ends (returning `None`,
+    /// so no notification is sent here), and the intrinsic-reporting task
+    /// ([`start`](Self::start)) sweeps at that instant and sends the
+    /// notification.
     ///
     /// A caller owes the object a COV fanout afterwards, as the periodic task
     /// gives one, since a proposal can commit (changing Status_Flags) even
