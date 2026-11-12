@@ -232,12 +232,18 @@ async fn rebind(pki: &Pki, addr: &str) -> ScHub {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unreachable_primary_builds_on_the_failover_hub_and_restores_later() {
     let pki = Pki::new();
-    // An address nobody listens on until the primary starts there: bound but
-    // never listening, so dials are refused, and held until just before the
-    // primary binds it so no other process can take it meanwhile (#2216).
-    let held = tokio::net::TcpSocket::new_v4().unwrap();
-    held.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    // An address with no hub until the primary starts there. Held until just
+    // before the primary binds it, so no other process can take it
+    // meanwhile (#2216), and it hangs up on every connection, so each dial
+    // fails at once. A port only bound refuses nothing on macOS (the SYN
+    // goes unanswered), so each dial waited out its timeout (#2463).
+    let held = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let primary_addr = held.local_addr().unwrap();
+    let held = tokio::spawn(async move {
+        while let Ok((socket, _)) = held.accept().await {
+            drop(socket);
+        }
+    });
     let mut failover = pki.hub(1, "127.0.0.1:0", FAILOVER_VMAC).await.unwrap();
     let mut client = BACnetClient::sc_builder()
         .hub_url(&format!("wss://localhost:{}", primary_addr.port()))
@@ -262,7 +268,9 @@ async fn an_unreachable_primary_builds_on_the_failover_hub_and_restores_later() 
     let mut events = transport.connection_events();
     let mut seen = Vec::new();
 
-    drop(held);
+    // Ending the task closes the listener.
+    held.abort();
+    assert!(held.await.unwrap_err().is_cancelled());
     let mut primary = rebind(&pki, &primary_addr.to_string()).await;
     until_event(&mut events, &mut seen, |e| {
         matches!(e, ScEvent::PrimaryRestored)
