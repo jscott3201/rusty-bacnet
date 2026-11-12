@@ -1,15 +1,33 @@
 //! Intrinsic event reporting (Clause 13.2), behind the `event-reporting`
-//! feature: the timestamps a transition commits and a notification carries
-//! ([`stage_event_timestamp`], [`sample_event_timestamp`]), the message text
-//! an intrinsic transition commits ([`intrinsic_event_message_text`]), the
-//! Event Values a committed transition reports (Table 13-3,
-//! [`project_intrinsic_payload`], [`project_event_enrollment_payload`]), and
-//! the profile a transition is distributed by ([`NotificationTransition`]).
+//! feature, as staged functions a host calls under its database guard:
 //!
-//! Plain functions over a borrowed `ObjectDatabase`: no lock, clock or
-//! async. A host calls them under its own database guard and sends what
-//! they build after the guard drops. `bacnet-server` runs its intrinsic
-//! reporting on them.
+//! - [`after_write`] evaluates one changed object's detector and commits
+//!   the transition it proposes; [`sweep`] does so for every object once a
+//!   pass, advancing Time_Delay and turning a Reliability change into a
+//!   FAULT transition. Both commit through [`commit_intrinsic_transition`]:
+//!   Event_State, Acked_Transitions, the timestamp and the message text at
+//!   once (Clause 13.2.2.1.4), before Event_Enable decides whether the
+//!   transition goes out (Clause 13.2.5).
+//! - [`distribute_event`] builds a transition's EventNotification (Table
+//!   13-3), resolves its priority and Ack_Required from the Notification
+//!   Class, selects the recipients whose days, window and transitions
+//!   match, and records it in the device's Event Log objects. The host
+//!   sends it once its guard is dropped.
+//! - The timestamps a commit and a notification carry
+//!   ([`stage_event_timestamp`], [`sample_event_timestamp`]), the
+//!   committed message text ([`intrinsic_event_message_text`]) and the
+//!   Event Values ([`project_intrinsic_payload`],
+//!   [`project_event_enrollment_payload`]).
+//! - AcknowledgeAlarm ([`handle_acknowledge_alarm`], Clause 13.5) and the
+//!   ACK_NOTIFICATION it may send, GetEventInformation
+//!   ([`handle_get_event_information_configured`], Clauses 13.2.4 and
+//!   13.12), and the fault pass ([`fault_pass`]).
+//!
+//! No lock, clock, async or formatting: what a step would have logged comes
+//! back as a value ([`IntrinsicCommitRefusal`], [`DistributionOutcome`],
+//! [`EventSummaryProblem`], [`FaultPass::failures`]). `bacnet-server` runs
+//! its intrinsic reporting on these, once a second for the sweep, so
+//! Time_Delay still counts sweeps.
 
 mod acknowledge;
 mod commit;

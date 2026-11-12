@@ -8595,6 +8595,42 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   The split, its inputs and the read cache (`cov::multiple_items`,
   `cov::multiple_reads`, `cov::multiple_chunks`) are private to the
   crate, as are the calls of `cov::timed` only these steps need.
+- `event` (#2303, behind the `event-reporting` feature, which `std` turns
+  on and which turns on `bacnet-objects`' own): intrinsic event reporting
+  as staged functions over a borrowed database, moved from `bacnet-server`,
+  which runs its events on them. `after_write(db, oid)` follows the
+  object's Event_Algorithm_Inhibit reference, evaluates its detector and
+  commits what it proposes; `sweep(db, before_commit)` does that for every
+  object once a pass, advancing Time_Delay, with `before_commit` called
+  just ahead of each commit. Both return `commit_intrinsic_transition`'s
+  result: a `CommittedIntrinsicTransition` (states, Event Type, the
+  Event_Enable decision, the committed timestamp and message text, Event
+  Values) or an `IntrinsicCommitRefusal`. `distribute_event(db, device,
+  oid, transition, fallback)` builds the EventNotification, resolves the
+  class's priority and Ack_Required, selects the recipients by day, window
+  and transition (with `fallback` as the day and time when the Device clock
+  gives none) and records it in the Event Log objects, returning an
+  `EventDistribution`: the clock it read, and whether the object was gone,
+  the lookup failed closed, or a notification was built. The timestamps
+  (`stage_event_timestamp`, `confirm_event_timestamp`,
+  `sample_event_timestamp`), the message text, and the Event Values
+  (`project_intrinsic_payload`, and `project_event_enrollment_payload`,
+  which the server's Event Enrollment uses) are public too.
+  `handle_acknowledge_alarm` runs AcknowledgeAlarm, and
+  `AcceptedAcknowledgeAlarm::into_notification` gives the ACK_NOTIFICATION
+  to send after the SimpleACK. `handle_get_event_information`,
+  `handle_get_event_information_with_budget` and
+  `handle_get_event_information_configured` (within a
+  `GetEventInformationBudget`) run GetEventInformation; a summary that
+  doesn't project is `EventInformationFailure::Projection`, an
+  `EventSummaryProblem` naming the object and what failed, which the
+  server logs before it answers OPERATIONAL_PROBLEM. `fault_pass(db)` visits
+  every object's reliability evaluation once and returns the
+  `ReliabilityChange`s and the hook failures; `bacnet_server`'s
+  `FaultDetector` keeps the warning dedup over it. Nothing here formats a
+  string, takes a lock or reads a clock. Time_Delay still counts the
+  sweeps a host runs (one a second in the server); due instants are the
+  next part of #2303.
 - `clock` (#2321): the Device's clock, for firmware with none of its own.
   `SyncedClock` holds a `bacnet_time::Instant`, the UTC date and time it
   stood for and the `Zone` (UTC_Offset, minutes west, and
