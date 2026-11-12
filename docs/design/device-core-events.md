@@ -140,7 +140,7 @@ decides to send, so nothing reads the database after the guard drops.
 ```rust
 pub enum Destination {
     Subscriber(SubscriberEndpoint), // the route a subscription arrived on (cov/identity.rs:8-23, moved)
-    Recipient(BACnetRecipient),     // a Notification Class destination
+    Recipient(BACnetAddress),       // a Notification Class destination's address, a Device resolved through Bindings (decision 21)
 }
 pub enum NotifyService { Cov, CovMultiple, Event }  // CovMultiple since #2320 PR 2b
 pub struct Notification {
@@ -179,9 +179,11 @@ COV-multiple entry isn't evicted, since it holds its context's send turn.
 An evicted report a later change was measured from also owes that
 subscription a look (#2508), so it ends current. A confirmed event
 notification that finds no invoke ID can't be worked out again later, as a
-COV report can: it goes back to its place in the outbox, held, and IDs
-coming back serve held notifications first, oldest first, then the COV
-reports owed one (decision 21).
+COV report can: it goes back to its place in the outbox, held. Each
+recipient hears its events in order: every `pop` tries the held
+notifications first, each recipient's oldest, before anything newer can
+take a free ID, and an event notification to a recipient with one held
+waits behind it; COV notifications aren't held back (decision 21).
 
 `next_deadline` is the earliest of: the next delay due (§6.1), the next
 sweep, pass or fault pass, the earliest expiry, hold-off end and flight
@@ -890,7 +892,9 @@ It is the costliest feature for an image: it reads Event_Parameters with
 object's `ReliabilityEval` every 10 s while `enable_fault_detection` is on
 (off by default, `config.rs:272`). It moves with its warning dedup turned
 into a returned list and its unused `comm_timeout` dropped. The objects
-whose Reliability changed feed COV and `after_write` in the same call.
+whose Reliability changed feed COV in the same call; the next sweep turns
+the changed Reliability into its FAULT transition, as the server's task
+does (decision 21).
 
 ### 6.8 Event-state persistence
 
@@ -1693,12 +1697,15 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
 **#2303 PR 3b, part two, 2026-11-12:**
 
 21. The `Reporter`'s event path.
-    - Off unless `ReportConfig::with_sweep` sets a period, so the
-      endpoint, which builds its `Reporter` without one, runs as before
-      with `event-reporting` on; AcknowledgeAlarm and GetEventInformation
-      are then rejected as unrecognized, as they were. `changed` and
-      `on_deadline` take `&mut ObjectDatabase`; the endpoint takes the
-      write guard for its deadline, in the order it took the read guard.
+    - Off unless `ReportConfig::with_sweep` sets a period. The endpoint
+      refuses a sweep or fault pass at start, as it sends no event
+      notification and routes no AcknowledgeAlarm; without them
+      AcknowledgeAlarm and GetEventInformation are rejected as
+      unrecognized, as they were. `changed` and `on_deadline` take
+      `&mut ObjectDatabase`; `on_cov_deadline` does a reporter without the
+      event path's deadline over a shared one, which the endpoint calls
+      under its read guard, as before. The hold and event routes compile
+      only with `event-reporting`.
     - The sweep rule: the `Reporter` is told of every write and change, so
       it takes each changed object's due instant then, kept only when
       after the last sweep's `now` (decision 20), and wakes for the
@@ -1711,14 +1718,29 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
       so never a past instant. A period under the floor is taken as the
       floor. So a firmware host sweeps at most ten times a second plus
       once per period, and a transition goes out within 100 ms of its due
-      instant once the host calls `on_deadline` then.
+      instant once the host calls `on_deadline` then. The exception: a
+      FAULT from a Reliability nobody reported, the fault pass's included,
+      waits for the next periodic sweep. `Reporter::new` refuses a fault
+      pass without a sweep.
     - The owed rule for events: a confirmed event notification refused an
       invoke ID at `pop` stays in its place in the outbox, held, keeping
-      its octets; `pop` passes it by. It is counted owed once.
-      `owes_invoke_id` holds while any is held or any COV reference is
-      owed an ID, and `ids_freed` (its own `give_back`s and the host's
-      `invoke_ids_released(free)`) is spent at `on_deadline` on held
-      notifications first, oldest first, then on owed references.
+      its octets, its Device recipient resolved once to the address it
+      keeps. It is counted owed once. `owes_invoke_id` holds while any is
+      held or any COV reference is owed an ID.
+    - Order per recipient (fix round, from review): every `pop`, before
+      the outbox's next entry, tries the held notifications oldest first,
+      each recipient's oldest only (one scan of the outbox and at most one
+      `InvokeIds::take` per recipient held), so no newer notification takes
+      an ID ahead of a held one, whoever freed it; an event notification,
+      confirmed or not, to a recipient with one held is held behind it.
+      COV notifications aren't held back. A held one waits only while
+      `take` refuses, with no cutoff of its own: held ones can fill the
+      outbox, and new events are then dropped and counted. At
+      `on_deadline`, IDs counted free go to owed COV references only past
+      the number of confirmed events held.
+    - DCC: the `Reporter` doesn't know it. While initiation is disabled a
+      host keeps popping and reports each notification NotSent; one that
+      stops popping lets events fill the outbox and evict COV.
     - Eviction: the newest live COVNotification goes first, confirmed or
       not; it ends NotSent at the table (a confirmed one through the
       confirmed path, no hold-off) and its subscription is owed, counted
@@ -1727,13 +1749,15 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
       only counted. Deleting an object doesn't end its event
       notifications, as the server's workers don't. A confirmed one's
       cutoff runs from its first send.
-    - A Device recipient is resolved through `Bindings` at `pop`, this
+    - `Destination::Recipient` carries the resolved `BACnetAddress`, not
+      the `BACnetRecipient` §4.2 first named. A Device recipient is
+      resolved through `Bindings` at `pop`, this
       device's own included (the server forwards those locally; the
       `Reporter` has no local forwarding); an unresolved one is dropped
       and counted.
-    - The fault pass feeds COV only, as the server's task does; the sweep
-      then turns a changed Reliability into its FAULT transition (§6.7
-      said "and after_write").
+    - The fault pass feeds COV only, as the server's task does; the next
+      sweep turns a changed Reliability into its FAULT transition (§6.7
+      now says so).
     - Windows: `distribute_event` takes a `RecipientWindow`. The server
       passes `Frame { fallback: Some(system UTC) }`, unchanged; the
       `Reporter` passes `Given(SyncedClock::window(now))` with a clock and

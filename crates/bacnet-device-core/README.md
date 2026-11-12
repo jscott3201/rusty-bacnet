@@ -102,9 +102,14 @@ the database guard, the transport, addressing and time.
   resolved through `Bindings`) through the same outbox and confirmed
   table, ahead of the COV ones of the same change; one that finds the
   outbox full evicts the newest COV notification, whose subscription is
-  owed a look, and one refused an invoke ID waits in its place for the
-  first ID back. Without a sweep the path is off, as the endpoint hosts
-  it.
+  owed a look. Each recipient hears its events in order: one refused an
+  invoke ID waits in its place, every `pop` tries it first, and later ones
+  to its recipient wait behind it (COV notifications don't). It waits only
+  while `InvokeIds` has none, with no cutoff of its own; held ones fill the
+  outbox at worst, and new events are then dropped and counted. Under
+  DeviceCommunicationControl keep popping and report `NotSent`. Without a
+  sweep the path is off; the endpoint refuses one, and its deadlines use
+  `on_cov_deadline` over a shared database.
 - `event` (behind `event-reporting`, which `std` turns on): intrinsic
   event reporting as staged functions under the host's guard, from
   `bacnet-server` (#2303). `after_write` evaluates and commits one changed

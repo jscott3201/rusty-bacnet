@@ -8,6 +8,7 @@
 use bacnet_time::Instant;
 use bacnet_types::constructed::BACnetAddress;
 
+#[cfg(feature = "event-reporting")]
 use super::super::outbox::Entry;
 use super::Reporter;
 use crate::cov::{CovSubscriptionKey, Token};
@@ -76,11 +77,12 @@ impl Reporter {
         }
     }
 
+    #[cfg(feature = "event-reporting")]
     /// Hold the confirmed event notification `entry`, which `pop` took from
     /// `at` and found no invoke ID for, in that place until one comes back
-    /// (#2303): IDs serve held notifications first, oldest first, then the
-    /// references owed one. It is counted owed once, however often it is
-    /// refused.
+    /// (#2303): each `pop` tries the held notifications first, oldest
+    /// first, then anything newer. It is counted owed once, however often
+    /// it is refused.
     pub(super) fn hold_event(&mut self, at: usize, entry: Entry, params: &[u8]) {
         if !self.owes_invoke_id() {
             self.ids_freed = 0;
@@ -88,7 +90,7 @@ impl Reporter {
         if !entry.counted {
             self.counters.owed += 1;
         }
-        self.outbox.hold(at, entry, params);
+        self.outbox.hold(at, entry, params, true);
     }
 
     /// Owe nothing more to the references `gone` names, for room or an ID.

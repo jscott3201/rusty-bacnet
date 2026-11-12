@@ -13,10 +13,12 @@
 use super::*;
 use crate::runtime_clock;
 use bacnet_device_core::cov::Delivery;
+use bacnet_device_core::event::{MessageTexts, read_committed_history_snapshot};
 use bacnet_device_core::report::{Bindings, Destination, InvokeIds};
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_npdu::NetworkPriority;
 use bacnet_objects::analog::AnalogValueObject;
+use bacnet_objects::event::EventTransition;
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::alarm_event::AcknowledgeAlarmRequest;
@@ -136,6 +138,9 @@ fn alarm_value(
     }
     let mut class = NotificationClass::new(1, "NC-1").unwrap();
     class.ack_required = EventTransitionBits::TO_OFFNORMAL;
+    // Event priorities other than 255, so the network priority is compared
+    // (Table 13-6: critical equipment, then normal).
+    class.priority = [100, 200, 255];
     for destination in destinations {
         class.add_destination(destination).unwrap();
     }
@@ -505,9 +510,10 @@ async fn acknowledgements_and_event_information_match() {
     assert!(matches!(reply, Apdu::ComplexAck(_)), "{reply:?}");
     let noon = at(12, 0);
     let (reply, sent) = both
-        .acknowledge("the wrong state", 3_300, EventState::NORMAL, noon)
+        .acknowledge("the wrong state", 3_300, EventState::LOW_LIMIT, noon)
         .await;
-    assert!(matches!(reply, Apdu::Error(_)), "{reply:?}");
+    let wrong_state = |reply: &Apdu| matches!(reply, Apdu::Error(error) if error.error_code == ErrorCode::INVALID_EVENT_STATE);
+    assert!(wrong_state(&reply), "{reply:?}");
     assert_eq!(sent, 0);
     let (reply, sent) = both
         .acknowledge(
@@ -580,4 +586,18 @@ async fn without_a_clock_timestamps_are_sequence_numbers_and_windows_fail_closed
     assert!(matches!(reply, Apdu::SimpleAck(_)), "{reply:?}");
     assert_eq!(sent, 2, "{what}: the server's");
     assert_eq!(both.event_states().await, (high_limit(), high_limit()));
+    // No clock: the transition is stamped with a sequence number on both.
+    let stamp = |db: &ObjectDatabase| {
+        let coordinate = EventTransition::for_target_state(EventState::HIGH_LIMIT);
+        let object = db.get(&av()).unwrap();
+        read_committed_history_snapshot(object, coordinate, MessageTexts::Optional)
+            .unwrap()
+            .timestamp
+    };
+    let server = stamp(&*both.parity.server.database().read().await);
+    assert!(
+        matches!(server, BACnetTimeStamp::SequenceNumber(_)),
+        "{server:?}"
+    );
+    assert_eq!(server, stamp(&both.parity.db));
 }

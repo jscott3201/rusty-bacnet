@@ -13,6 +13,9 @@ use bacnet_types::constructed::{BACnetDestination, BACnetRecipient};
 use bacnet_types::enums::UnconfirmedServiceChoice;
 use bacnet_types::primitives::Time;
 
+#[path = "reporter_event_order_tests.rs"]
+mod order;
+
 /// The intrinsic Analog Input: high limit 80, low limit 0, deadband 1,
 /// reading 10.
 fn alarm() -> ObjectIdentifier {
@@ -90,10 +93,21 @@ fn device(
     destinations: Vec<BACnetDestination>,
     sweep: u64,
 ) -> Device {
+    device_at(outbox, delay, (destinations, [255; 3]), sweep)
+}
+
+/// [`device`], the Notification Class's Priority `priority`.
+fn device_at(
+    outbox: OutboxLimits,
+    delay: u64,
+    (destinations, priority): (Vec<BACnetDestination>, [u8; 3]),
+    sweep: u64,
+) -> Device {
     let identity = DeviceIdentity::new(9, 0x105)
         .unwrap()
         .with_services(SERVICES);
     let mut class = NotificationClass::new(0, "NC-0").unwrap();
+    class.priority = priority;
     for destination in destinations {
         class.add_destination(destination).unwrap();
     }
@@ -433,4 +447,91 @@ fn a_local_acknowledgement_of_the_wrong_state_is_refused() {
     let code = crate::reply::error_fields(&error).1;
     assert_eq!(code, bacnet_types::enums::ErrorCode::INVALID_EVENT_STATE);
     assert!(device.pop(ms(20)).is_none());
+}
+
+#[test]
+fn a_fault_pass_without_a_sweep_is_refused() {
+    let identity = DeviceIdentity::new(9, 0x105).unwrap();
+    let responder = Responder::new(identity, crate::responder::Limits::default()).unwrap();
+    let config = ReportConfig::default().with_fault_detection(Duration::from_secs(10));
+    assert!(Reporter::new(responder, config).is_err());
+}
+
+#[test]
+fn a_notification_class_priority_sets_the_network_priority() {
+    // TO_OFFNORMAL at event priority 10: life safety, by Table 13-6.
+    let destinations = (vec![address_destination(false)], [10, 255, 255]);
+    let mut device = device_at(OutboxLimits::default(), 0, destinations, 1);
+    device.raise(alarm(), ms(10));
+    let (sent, _) = device.pop(ms(10)).expect("the transition");
+    assert_eq!(sent.priority, NetworkPriority::LifeSafety);
+}
+
+/// An Analog Value with no limits enabled, whose fault limits (-100 to
+/// 100) only the fault pass evaluates, reporting through class 0.
+fn faulting_value() -> Box<dyn BACnetObject> {
+    use bacnet_objects::analog::AnalogValueObject;
+    let mut value = AnalogValueObject::new(1, "AV-1", EngineeringUnits::NO_UNITS).unwrap();
+    value.configure_fault_out_of_range(-100.0, 100.0).unwrap();
+    let enable = PropertyValue::BitString {
+        unused_bits: 5,
+        data: vec![0xE0],
+    };
+    value
+        .write_property(P::EVENT_ENABLE, None, enable, None)
+        .unwrap();
+    Box::new(value)
+}
+
+#[test]
+fn the_fault_pass_reports_to_cov_and_the_sweep_sends_the_fault() {
+    let identity = DeviceIdentity::new(9, 0x105)
+        .unwrap()
+        .with_services(SERVICES);
+    let mut class = NotificationClass::new(0, "NC-0").unwrap();
+    class.add_destination(address_destination(false)).unwrap();
+    let objects = vec![faulting_value(), Box::new(class) as Box<dyn BACnetObject>];
+    let db = build_database_with_extra(&identity, objects).unwrap();
+    let responder = Responder::new(identity, crate::responder::Limits::default()).unwrap();
+    let config = ReportConfig::new(crate::cov::CovPolicy::default())
+        .with_sweep(Duration::from_secs(1))
+        .with_fault_detection(Duration::from_millis(2_500));
+    let mut device = Device {
+        reporter: Reporter::new(responder, config).unwrap(),
+        db,
+        ids: Ids::default(),
+        invoke_id: 0,
+    };
+    device
+        .reporter
+        .on_deadline(&mut device.db, &mut device.ids, T0);
+    let av = ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 1).unwrap();
+    device.subscribe_to(av, 1, false, T0);
+    let (initial, _) = device.pop(T0).expect("the initial report");
+    device
+        .reporter
+        .delivered(initial.token, Delivery::Sent, &mut device.ids, T0);
+    // The application's sample, out of the fault range: COV now; only the
+    // fault pass evaluates the range.
+    let sample = LocalValue::Real(150.0);
+    let applied = device
+        .reporter
+        .command(&mut device.db, av, 16, sample, ms(100));
+    assert!(applied.is_ok(), "{applied:?}");
+    let (change, _) = device.pop(ms(100)).expect("the value's report");
+    device
+        .reporter
+        .delivered(change.token, Delivery::Sent, &mut device.ids, ms(100));
+    device.run_until(ms(2_499));
+    assert!(device.pop(ms(2_499)).is_none(), "nothing has looked yet");
+    // The pass finds the fault: COV at once.
+    assert!(device.run_until(ms(2_500)).contains(&ms(2_500)));
+    let (cov, _) = device.pop(ms(2_500)).expect("the fault's COV report");
+    assert_eq!(cov.service, NotifyService::Cov);
+    assert!(device.pop(ms(2_500)).is_none(), "the transition waits");
+    // The next sweep turns the Reliability into its FAULT transition.
+    device.run_until(ms(3_000));
+    let (fault, apdu) = device.pop(ms(3_000)).expect("the FAULT transition");
+    assert_eq!(fault.service, NotifyService::Event);
+    assert!(is_event(&apdu), "{apdu:?}");
 }

@@ -112,11 +112,21 @@ pub struct Reporter {
 
 impl Reporter {
     /// A reporter answering requests with `responder`, under `config`, at
-    /// first holding no subscription. Its outbox is allocated here.
+    /// first holding no subscription. Its outbox is allocated here. Refused
+    /// when the identity's Max_APDU_Length_Accepted encodes no header, or
+    /// when `config` asks for a fault pass without a sweep.
     pub fn new(responder: Responder, config: ReportConfig) -> Result<Self, Error> {
         let identity = responder.identity();
         let device = identity.device_oid();
         let max_apdu = max_apdu_header_at_or_below(u32::from(identity.max_apdu_length()))?;
+        #[cfg(feature = "event-reporting")]
+        if config.fault_detection.is_some() && config.sweep.is_none() {
+            // The pass would report its changes to COV, and the FAULT
+            // transitions would wait for a sweep that never runs.
+            return Err(Error::Encoding(
+                "a fault pass needs the event path: set a sweep too".into(),
+            ));
+        }
         #[cfg(feature = "cov-multiple")]
         let multiple = multiple::Multiple::new(usize::from(identity.max_apdu_length()));
         #[cfg(feature = "event-reporting")]
@@ -375,6 +385,28 @@ impl Reporter {
     /// event path's sweep and fault pass when due, and look again at the
     /// references owed one.
     pub fn on_deadline(&mut self, db: &mut ObjectDatabase, ids: &mut dyn InvokeIds, now: Instant) {
+        self.expire_and_time_out(ids, now);
+        #[cfg(feature = "event-reporting")]
+        self.event_deadline(db, now);
+        self.look_owed(db, now);
+    }
+
+    /// [`on_deadline`](Self::on_deadline) over a shared database, for a
+    /// reporter with no event path (no [`ReportConfig`] sweep), whose
+    /// deadlines commit nothing: a host that serves reads meanwhile, as the
+    /// endpoint does, needn't take the database exclusively. With the event
+    /// path on, its sweep and fault pass wait for `on_deadline`, so call
+    /// that instead.
+    pub fn on_cov_deadline(&mut self, db: &ObjectDatabase, ids: &mut dyn InvokeIds, now: Instant) {
+        #[cfg(feature = "event-reporting")]
+        debug_assert!(self.events.is_none(), "the event path needs on_deadline");
+        self.expire_and_time_out(ids, now);
+        self.look_owed(db, now);
+    }
+
+    /// Expire lifetimes and abandoned reports, and time out unanswered
+    /// notifications, at `now`.
+    fn expire_and_time_out(&mut self, ids: &mut dyn InvokeIds, now: Instant) {
         self.last = now;
         self.release(ids);
         self.table.expire(now);
@@ -383,8 +415,10 @@ impl Reporter {
             self.give_back(ids, &out.peer, out.invoke_id);
             self.end_confirmed(out.token, Delivery::Failed, now);
         }
-        #[cfg(feature = "event-reporting")]
-        self.event_deadline(db, now);
+    }
+
+    /// Look again at the references owed a look at `now`.
+    fn look_owed(&mut self, db: &ObjectDatabase, now: Instant) {
         let mut keys = core::mem::take(&mut self.looks);
         // Contexts whose pending changes reached their deadline.
         #[cfg(feature = "cov-multiple")]
@@ -394,7 +428,8 @@ impl Reporter {
         // references, ahead of those owed room; one refused again waits
         // for the next.
         let freed = core::mem::take(&mut self.ids_freed);
-        let freed = freed - self.outbox.wake(freed);
+        // Held event notifications take theirs at the next `pop`.
+        let freed = freed.saturating_sub(self.outbox.held());
         let freed = freed.min(self.owed_ids.len());
         keys.extend_from_slice(&self.owed_ids[..freed]);
         let mut owed = 0;

@@ -446,6 +446,20 @@ pub fn lookup_notification_recipients(
     today: DaysOfWeek,
     current_time: &Time,
 ) -> RecipientLookupOutcome {
+    let window = Some((today, *current_time));
+    lookup_notification_recipients_at(db, notification_class, transition, window)
+}
+
+/// [`lookup_notification_recipients`] for a device that may not know the
+/// day and time: with `window` `None` (no clock, or one not yet set), only a
+/// destination open every day, all day ([`always_in_window`]) is selected,
+/// so a destination's window is never judged on a guessed time (#2303).
+pub fn lookup_notification_recipients_at(
+    db: &ObjectDatabase,
+    notification_class: u32,
+    transition: EventTransition,
+    window: Option<(DaysOfWeek, Time)>,
+) -> RecipientLookupOutcome {
     let Some(nc) = find_notification_class(db, notification_class) else {
         return RecipientLookupOutcome::NotificationClassMissing;
     };
@@ -461,60 +475,11 @@ pub fn lookup_notification_recipients(
         return RecipientLookupOutcome::NoConfiguredDestinations;
     }
 
-    let recipients = filter_destinations(destinations, transition, today, current_time);
+    let recipients = filter_destinations(destinations, transition, window);
     if recipients.is_empty() {
         RecipientLookupOutcome::NoMatchingDestinations
     } else {
         RecipientLookupOutcome::Matched(recipients)
-    }
-}
-
-/// [`lookup_notification_recipients`] for a device that may not know the
-/// day and time: with `window` `None` (no clock, or one not yet set), only a
-/// destination open every day, all day ([`always_in_window`]) is selected,
-/// so a destination's window is never judged on a guessed time (#2303).
-pub fn lookup_notification_recipients_at(
-    db: &ObjectDatabase,
-    notification_class: u32,
-    transition: EventTransition,
-    window: Option<(DaysOfWeek, Time)>,
-) -> RecipientLookupOutcome {
-    match window {
-        Some((today, time)) => {
-            lookup_notification_recipients(db, notification_class, transition, today, &time)
-        }
-        None => {
-            let Some(nc) = find_notification_class(db, notification_class) else {
-                return RecipientLookupOutcome::NotificationClassMissing;
-            };
-            let Ok(value) = nc.read_property(PropertyIdentifier::RECIPIENT_LIST, None) else {
-                return RecipientLookupOutcome::RecipientListUnavailable;
-            };
-            let destinations = match routed_destinations(&value) {
-                Ok(destinations) => destinations,
-                Err(outcome) => return outcome,
-            };
-            if destinations.is_empty() {
-                return RecipientLookupOutcome::NoConfiguredDestinations;
-            }
-            let mask = transition.bit_mask();
-            let recipients: Vec<_> = destinations
-                .into_iter()
-                .filter(|dest| always_in_window(dest) && dest.transitions.intersects(mask))
-                .map(|dest| {
-                    (
-                        dest.recipient,
-                        dest.process_identifier,
-                        dest.issue_confirmed_notifications,
-                    )
-                })
-                .collect();
-            if recipients.is_empty() {
-                RecipientLookupOutcome::NoMatchingDestinations
-            } else {
-                RecipientLookupOutcome::Matched(recipients)
-            }
-        }
     }
 }
 
@@ -614,13 +579,15 @@ fn routed_destinations(
 fn filter_destinations(
     destinations: Vec<BACnetDestination>,
     transition: EventTransition,
-    today: DaysOfWeek,
-    current_time: &Time,
+    window: Option<(DaysOfWeek, Time)>,
 ) -> Vec<(BACnetRecipient, u32, bool)> {
     let transition_mask = transition.bit_mask();
     destinations
         .into_iter()
-        .filter(|dest| in_window(dest, today, current_time))
+        .filter(|dest| match &window {
+            Some((today, now)) => in_window(dest, *today, now),
+            None => always_in_window(dest),
+        })
         .filter(|dest| dest.transitions.intersects(transition_mask))
         .map(|dest| {
             (
@@ -649,7 +616,7 @@ pub fn filter_recipient_list(
     let Ok(destinations) = routed_destinations(recipient_list_value) else {
         return Vec::new();
     };
-    filter_destinations(destinations, transition, today, current_time)
+    filter_destinations(destinations, transition, Some((today, *current_time)))
 }
 
 #[cfg(test)]

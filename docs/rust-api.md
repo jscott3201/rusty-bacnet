@@ -8516,11 +8516,15 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   `relinquish` write Present_Value as the local Device, as
   `BACnetServer::write_local` does, and add no refusal of their own. With
   the `event-reporting` feature, `ReportConfig::with_sweep(period)` turns
-  on the event path (#2303), off by default and off in the endpoint: after
+  on the event path (#2303), off by default; the endpoint refuses a
+  `ReportConfig` with a sweep or fault pass at start, and `Reporter::new`
+  refuses a fault pass without a sweep. After
   each write and change it evaluates intrinsic reporting and takes the due
   instant it seeds, it sweeps at the period and when a Time_Delay ends (no
   sooner than `report::SWEEP_FLOOR`, 100 ms, after its last sweep, so a
-  period longer than the delays delays nothing), runs the fault pass every
+  period longer than the delays delays no transition the host reported;
+  a FAULT from a Reliability nobody reported, the fault pass's included,
+  waits for the next periodic sweep), runs the fault pass every
   `with_fault_detection(period)`, and answers AcknowledgeAlarm and
   GetEventInformation (list `report::EVENT_SERVICES` too).
   `acknowledge_local(db, object, state, now)` acknowledges the latest
@@ -8535,11 +8539,20 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   otherwise by the database's clock frame, failing closed without one. An
   event that finds the outbox full evicts the newest queued
   COVNotification, whose subscription is owed a look (counted `evicted`),
-  and is dropped (`events_dropped`) only when none is left. A confirmed
-  event notification that finds no invoke ID waits in its place, held, and
-  IDs coming back serve held notifications first, then the COV reports
-  owed one; `owes_invoke_id` covers both. `changed` and `on_deadline`
-  take `&mut ObjectDatabase`. The outbox is one
+  and is dropped (`events_dropped`) only when none is left. Each recipient
+  hears its events in order: a confirmed event notification that finds no
+  invoke ID waits in its place, held; every `pop` tries the held ones
+  first (each recipient's oldest), before anything newer can take a free
+  ID, and an event notification to a recipient with one held waits behind
+  it. COV notifications aren't held back. A held one waits only while
+  `InvokeIds` gives none, with no cutoff of its own; held ones can fill the
+  outbox, and new events are then dropped and counted. `owes_invoke_id`
+  covers held events and COV reports owed an ID. While
+  DeviceCommunicationControl disables initiation, keep popping and report
+  each notification `NotSent`: a host that stops popping lets events fill
+  the outbox and evict COV. `changed` and `on_deadline` take
+  `&mut ObjectDatabase`; `on_cov_deadline(db, ids, now)` does a reporter
+  without the event path's deadline over a shared one. The outbox is one
   buffer and one queue allocated at build (`OutboxLimits`: entries and
   octets). A subscription holds one unconfirmed entry: a newer report
   replaces it in its turn, so one that changes faster than the link sends

@@ -17,17 +17,20 @@
 //! COVNotification, confirmed or not, then the next newest, until it fits;
 //! the reporter owes each evicted subscription a later look. One that fits
 //! nowhere even then is dropped. A COV-multiple notification isn't evicted:
-//! it holds its context's turn. A confirmed event notification that finds
-//! no invoke ID goes back to its place, held, and waits there for one
-//! ([`Outbox::wake`]): it can't be worked out again later, as a COV report
-//! can.
+//! it holds its context's turn, and neither is a held event notification.
+//! A confirmed event notification that finds no invoke ID goes back to its
+//! place, held, and waits there for one: it can't be worked out again
+//! later, as a COV report can. A later one to the same recipient is held
+//! behind it, so each recipient hears its events in order.
 
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
+#[cfg(feature = "event-reporting")]
 use bacnet_encoding::npdu::view::NetworkPriority;
 use bacnet_time::Instant;
-use bacnet_types::constructed::BACnetRecipient;
+#[cfg(feature = "event-reporting")]
+use bacnet_types::constructed::{BACnetAddress, BACnetRecipient};
 
 use super::NotifyService;
 use crate::cov::{CovSubscriptionKey, SubscriberEndpoint, Token};
@@ -64,7 +67,7 @@ pub(super) enum Route {
     },
     /// A Notification Class recipient, resolved at `pop`, at the network
     /// priority its event priority gives.
-    #[cfg_attr(not(feature = "event-reporting"), allow(dead_code))]
+    #[cfg(feature = "event-reporting")]
     Event {
         to: BACnetRecipient,
         priority: NetworkPriority,
@@ -88,9 +91,10 @@ pub(super) struct Entry {
     len: usize,
     live: bool,
     /// A confirmed event notification waiting in its place for an invoke
-    /// ID: `pop` passes it by until [`Outbox::wake`].
+    /// ID, or behind one to its recipient that is: `pop` passes it by.
     held: bool,
     /// It has waited for an ID before, and was counted owed then.
+    #[cfg(feature = "event-reporting")]
     pub(super) counted: bool,
 }
 
@@ -99,6 +103,7 @@ impl Entry {
     pub(super) fn key(&self) -> Option<&CovSubscriptionKey> {
         match &self.route {
             Route::Cov { key, .. } => Some(key),
+            #[cfg(feature = "event-reporting")]
             Route::Event { .. } => None,
         }
     }
@@ -258,6 +263,7 @@ impl Outbox {
             len: params.len(),
             live: true,
             held: false,
+            #[cfg(feature = "event-reporting")]
             counted: false,
         };
         match at {
@@ -320,6 +326,7 @@ impl Outbox {
             len: 0,
             live: true,
             held: false,
+            #[cfg(feature = "event-reporting")]
             counted: false,
         };
         self.insert(None, entry, params);
@@ -327,14 +334,15 @@ impl Outbox {
         pushed
     }
 
+    #[cfg(feature = "event-reporting")]
     /// Put `entry`, with `params`, at `at` in the queue (at its end for
     /// `None`), live; the caller has checked it fits.
-    fn insert(&mut self, mut at: Option<usize>, mut entry: Entry, params: &[u8]) {
+    fn insert(&mut self, at: Option<usize>, mut entry: Entry, params: &[u8]) {
         if self.entries.len() == self.limits.entries {
+            // A held entry goes back where `pop` just took it from, so only
+            // a new one finds every slot used.
+            debug_assert!(at.is_none(), "a slot is free where it left");
             // Dead entries give back their slots: no allocation.
-            if let Some(at) = at.as_mut() {
-                *at -= self.entries.iter().take(*at).filter(|e| !e.live).count();
-            }
             self.entries.retain(|entry| entry.live);
         }
         if self.buf.len() + params.len() > self.limits.octets {
@@ -352,39 +360,64 @@ impl Outbox {
         self.live_octets += params.len();
     }
 
+    #[cfg(feature = "event-reporting")]
     /// Put back an event notification [`pop`](Self::pop) took from `at`,
-    /// held in that place until [`wake`](Self::wake): it found no invoke
-    /// ID. It fits, having just left.
-    pub(super) fn hold(&mut self, at: usize, mut entry: Entry, params: &[u8]) {
+    /// held in that place: it found no invoke ID (`refused`, counted owed
+    /// once), or an older one to its recipient is held. `pop` passes held
+    /// entries by; [`held_entries`](Self::held_entries) and
+    /// [`take_at`](Self::take_at) serve them. It fits, having just left.
+    pub(super) fn hold(&mut self, at: usize, mut entry: Entry, params: &[u8], refused: bool) {
         entry.held = true;
-        entry.counted = true;
+        entry.counted |= refused;
         self.insert(Some(at), entry, params);
     }
 
-    /// Event notifications held for an invoke ID.
+    /// Confirmed event notifications held, each waiting for an invoke ID or
+    /// behind one that is.
     pub(super) fn held(&self) -> usize {
-        self.entries
-            .iter()
-            .filter(|entry| entry.live && entry.held)
-            .count()
+        #[cfg(feature = "event-reporting")]
+        return self
+            .held_entries()
+            .filter(|(_, entry)| entry.confirmed)
+            .count();
+        #[cfg(not(feature = "event-reporting"))]
+        0
     }
 
-    /// Let the `ids` oldest held notifications go at the next `pop`; how
-    /// many it let go.
-    pub(super) fn wake(&mut self, ids: usize) -> usize {
-        let mut woken = 0;
-        for entry in self
-            .entries
-            .iter_mut()
-            .filter(|entry| entry.live && entry.held)
-        {
-            if woken == ids {
-                break;
-            }
-            entry.held = false;
-            woken += 1;
+    #[cfg(feature = "event-reporting")]
+    /// The held entries, oldest first, with their places.
+    pub(super) fn held_entries(&self) -> impl Iterator<Item = (usize, &Entry)> {
+        self.entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.live && entry.held)
+    }
+
+    #[cfg(feature = "event-reporting")]
+    /// Whether an event notification to `peer` is held.
+    pub(super) fn holds_for(&self, peer: &BACnetAddress) -> bool {
+        self.held_entries().any(|(_, entry)| match &entry.route {
+            Route::Event {
+                to: BACnetRecipient::Address(address),
+                ..
+            } => address == peer,
+            _ => false,
+        })
+    }
+
+    #[cfg(feature = "event-reporting")]
+    /// Take the live entry at `at` out, with its parameters.
+    pub(super) fn take_at(&mut self, at: usize) -> (Entry, Vec<u8>) {
+        let entry = self.entries.remove(at).expect("a held entry's place");
+        debug_assert!(entry.live);
+        let params = self.buf[entry.start..entry.start + entry.len].to_vec();
+        self.live -= 1;
+        self.live_octets -= entry.len;
+        if self.live == 0 {
+            self.entries.clear();
+            self.buf.clear();
         }
-        woken
+        (entry, params)
     }
 
     /// Move the live entries' parameters to the start of the buffer. Each

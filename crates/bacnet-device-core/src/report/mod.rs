@@ -38,7 +38,15 @@
 //! [`NotifyService::Event`] to a [`Destination::Recipient`], through the
 //! same outbox and confirmed table as COV, ahead of the COV notifications
 //! of the same change; one that finds the outbox full evicts the newest COV
-//! notification queued, whose subscription is owed a later look.
+//! notification queued, whose subscription is owed a later look. Each
+//! recipient hears its events in order: one held for an invoke ID is tried
+//! first at every [`Reporter::pop`], and later ones to its recipient wait
+//! behind it.
+//!
+//! While DeviceCommunicationControl disables initiation, keep popping and
+//! report each notification [`Delivery::NotSent`](crate::cov::Delivery):
+//! a host that stops popping lets event notifications fill the outbox and
+//! evict the COV ones.
 
 use bacnet_encoding::npdu::view::NetworkPriority;
 #[cfg(feature = "event-reporting")]
@@ -212,8 +220,10 @@ impl ReportConfig {
     /// the standing duties run: FAULT from a Reliability no write reported,
     /// and Event_Algorithm_Inhibit references. It looks at the due instants
     /// after every write and change it is given, so a period longer than
-    /// the shortest delay delays no transition. Whatever `period` and the
-    /// delays, it sweeps no sooner than
+    /// the shortest delay delays no transition the host reported; a FAULT
+    /// from a Reliability nobody reported, the fault pass's included, waits
+    /// for the next periodic sweep. Whatever `period` and the delays, it
+    /// sweeps no sooner than
     /// [`SWEEP_FLOOR`] after its last sweep.
     #[cfg(feature = "event-reporting")]
     pub fn with_sweep(mut self, period: Duration) -> Self {
@@ -222,7 +232,9 @@ impl ReportConfig {
     }
 
     /// This configuration with a fault pass every `period`; see
-    /// [`fault_detection`](Self::fault_detection).
+    /// [`fault_detection`](Self::fault_detection). [`Reporter::new`] refuses
+    /// it without [`with_sweep`](Self::with_sweep), which turns its faults
+    /// into transitions.
     #[cfg(feature = "event-reporting")]
     pub fn with_fault_detection(mut self, period: Duration) -> Self {
         self.fault_detection = Some(period);
