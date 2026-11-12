@@ -33,6 +33,8 @@ use crate::reply::{self, SEGMENTED, emit};
 use crate::responder::{Access, Inbound, Outcome, Responder, Written};
 use crate::write::{WriteCommitObserver, WriteTarget};
 
+#[path = "reporter_ids.rs"]
+mod ids;
 #[path = "reporter_local.rs"]
 mod local;
 #[cfg(feature = "cov-multiple")]
@@ -81,6 +83,13 @@ pub struct Reporter {
     /// An entry left the outbox since the owed references were last looked
     /// at.
     room_freed: bool,
+    /// References whose confirmed report found no invoke ID, oldest first,
+    /// looked at again only as IDs come back (#2512).
+    owed_ids: Vec<CovSubscriptionKey>,
+    /// Invoke IDs given back since those were last looked at: this
+    /// reporter's own, and those the host reports
+    /// ([`invoke_ids_released`](Self::invoke_ids_released)).
+    ids_freed: usize,
     /// References [`look`](Self::look) evaluated, for the tests.
     #[cfg(test)]
     looked: usize,
@@ -118,6 +127,8 @@ impl Reporter {
             looks: Vec::new(),
             owed: Vec::new(),
             room_freed: false,
+            owed_ids: Vec::new(),
+            ids_freed: 0,
             #[cfg(test)]
             looked: 0,
             releases: Vec::new(),
@@ -305,7 +316,7 @@ impl Reporter {
         let Some(out) = self.confirmed.answered(from, invoke_id) else {
             return false;
         };
-        ids.release(&out.peer, out.invoke_id);
+        self.give_back(ids, &out.peer, out.invoke_id);
         self.end_confirmed(out.token, outcome, now);
         true
     }
@@ -316,7 +327,9 @@ impl Reporter {
     /// changes pending, or the latest `now` it gave when references are owed
     /// a look.
     pub fn next_deadline(&self) -> Option<Instant> {
-        let looks = !self.looks.is_empty() || (!self.owed.is_empty() && self.room_freed);
+        let looks = !self.looks.is_empty()
+            || (!self.owed.is_empty() && self.room_freed)
+            || (!self.owed_ids.is_empty() && self.ids_freed > 0);
         let resend = self.confirmed.resend_due();
         bacnet_time::earliest([
             self.table.next_expiry(),
@@ -336,13 +349,17 @@ impl Reporter {
         self.table.expire(now);
         self.settle();
         for out in self.confirmed.time_out(now) {
-            ids.release(&out.peer, out.invoke_id);
+            self.give_back(ids, &out.peer, out.invoke_id);
             self.end_confirmed(out.token, Delivery::Failed, now);
         }
         let mut keys = core::mem::take(&mut self.looks);
         // Contexts whose pending changes reached their deadline.
         #[cfg(feature = "cov-multiple")]
         keys.extend(self.multiple_due(now));
+        // As many references owed an ID as IDs came back, ahead of those
+        // owed room; one refused again waits for the next.
+        let freed = core::mem::take(&mut self.ids_freed).min(self.owed_ids.len());
+        keys.extend_from_slice(&self.owed_ids[..freed]);
         let mut owed = 0;
         if core::mem::take(&mut self.room_freed) {
             // The oldest owed references, as many as there are free
@@ -420,7 +437,7 @@ impl Reporter {
                     // No invoke ID to send it under: it ends unsent, and the
                     // change is looked at again later.
                     self.end_confirmed(token, Delivery::NotSent, now);
-                    self.owe(key);
+                    self.owe_id(key);
                     continue;
                 };
                 self.encode_confirmed(invoke_id, service, &params, out);
@@ -495,7 +512,7 @@ impl Reporter {
                 return;
             }
             let out = self.confirmed.take(token).expect("held above");
-            ids.release(&out.peer, out.invoke_id);
+            self.give_back(ids, &out.peer, out.invoke_id);
             self.end_confirmed(token, outcome, now);
             return;
         }
@@ -505,7 +522,9 @@ impl Reporter {
             self.settle();
             return;
         }
-        self.table.delivered(token, outcome, now);
+        // One not sent that a change was measured from owes a look (#2508).
+        let owed = self.table.delivered(token, outcome, now);
+        self.looks.extend(owed);
         self.settle();
     }
 
@@ -639,7 +658,7 @@ impl Reporter {
                 let sub = self.table.get_subscription(key);
                 match sub.filter(|sub| self.table.is_current(sub, now)) {
                     Some(sub) => subs.push(sub.clone()),
-                    None => self.owed.retain(|owed| owed != key),
+                    None => self.forgive(|owed| owed == key),
                 }
             }
             #[cfg(test)]
@@ -649,7 +668,7 @@ impl Reporter {
             match db.get(&object) {
                 Some(stored) if !subs.is_empty() => self.report(stored, &subs, false, now),
                 Some(_) => {}
-                None => self.owed.retain(|owed| owed.object() != object),
+                None => self.forgive(|owed| owed.object() == object),
             }
         }
     }
@@ -672,7 +691,7 @@ impl Reporter {
         let outbox = &self.outbox;
         let mut refused = Vec::new();
         // Owed references admitted: the budget may still drop their reports.
-        let owed = &self.owed;
+        let (owed, owed_ids) = (&self.owed, &self.owed_ids);
         let mut admitted = Vec::new();
         let evaluation = Evaluation {
             device: self.device,
@@ -690,7 +709,7 @@ impl Reporter {
                 // of octets: owing it would only see it refused again.
                 let hopeless = limits.entries == 0 || octets > limits.octets || octets > max_octets;
                 if !hopeless && room.take(octets, outbox.queued(sub.key())) {
-                    if owed.contains(sub.key()) {
+                    if owed.contains(sub.key()) || owed_ids.contains(sub.key()) {
                         admitted.push(sub.key().clone());
                     }
                     return Some(());
@@ -700,7 +719,7 @@ impl Reporter {
             },
         );
         self.settle();
-        if !self.owed.is_empty() {
+        if !self.owed.is_empty() || !self.owed_ids.is_empty() {
             self.keep_owed(subs, &reports, &refused, &admitted, &budget);
         }
         for report in reports {
@@ -748,7 +767,7 @@ impl Reporter {
         let spent = budget
             .is_exhausted()
             .then(|| reports.last().map_or(0, |report| report.index + 1));
-        self.owed.retain(|key| {
+        let keep = |key: &CovSubscriptionKey| {
             let Some(at) = subs.iter().position(|sub| sub.key() == key) else {
                 return true;
             };
@@ -759,7 +778,11 @@ impl Reporter {
                 return !hopeless;
             }
             admitted.contains(key) || spent.is_some_and(|from| at >= from)
-        });
+        };
+        self.owed.retain(keep);
+        // One refused room now is owed room, not an ID.
+        let refused_room = |key: &CovSubscriptionKey| refused.iter().any(|(again, _)| again == key);
+        self.owed_ids.retain(|key| keep(key) && !refused_room(key));
     }
 
     /// Owe `key` a later look, after those owed already; counted once,
@@ -822,12 +845,13 @@ impl Reporter {
                 self.releases.push((out.peer, out.invoke_id));
             }
         }
-        self.owed.retain(|key| !fenced.removed.contains(key));
+        self.forgive(|key| fenced.removed.contains(key));
         self.looks.extend(fenced.revisit);
     }
 
     /// Give back the invoke IDs of fenced notifications.
     fn release(&mut self, ids: &mut dyn InvokeIds) {
+        self.count_freed(self.releases.len());
         for (peer, id) in self.releases.drain(..) {
             ids.release(&peer, id);
         }

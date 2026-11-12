@@ -341,6 +341,49 @@ fn a_part_that_is_not_sent_stops_its_report_and_leaves_the_rest_owed() {
     assert_eq!(device.reporter.next_deadline(), lifetime_end());
 }
 
+/// A report waiting for an invoke ID doesn't hide the Max_Notification_Delay
+/// backstop (#2512): with the host refusing every ID, the deadline is the
+/// context's, and at it the owed reference is reported while the confirmed
+/// report still waits.
+#[test]
+fn the_backstop_comes_due_while_a_report_waits_for_an_id() {
+    let (mut device, _) = device();
+    device.ids.limit = 0;
+    device.subscribe_to(ai2(), 9, true, T0);
+    assert!(device.pop(T0).is_none(), "no ID for it");
+    assert!(device.reporter.next_deadline().is_some_and(|due| due > T0));
+    device.subscribe_multiple(1, false, &[(ai(), false), (ai2(), false)], 50, T0);
+    let (first, _) = device.pop_multiple(T0).expect("the first part");
+    device.sent(&first, T0);
+    let (second, _) = device.pop_multiple(T0).expect("the second part");
+    device
+        .reporter
+        .delivered(second.token, Delivery::NotSent, &mut device.ids, secs(1));
+    assert_eq!(device.reporter.next_deadline(), Some(secs(1 + DELAY)));
+    device.deadline();
+    assert_eq!(device.drain(secs(1 + DELAY)), [[(2, 0.0, None)]]);
+    let later = |due: Instant| due > secs(1 + DELAY);
+    assert!(device.reporter.next_deadline().is_none_or(later));
+}
+
+/// A confirmed COV-multiple report that found no invoke ID is owed one; when
+/// one comes back, the context's look sends it and owes it nothing more.
+#[test]
+fn a_multiple_report_owed_an_id_is_owed_nothing_once_it_goes() {
+    let (mut device, _) = device();
+    device.ids.limit = 0;
+    device.subscribe_multiple(1, true, &[(ai(), false)], 1476, T0);
+    assert!(device.pop(T0).is_none(), "no ID for it");
+    assert_eq!(device.reporter.owed_ids.len(), 1);
+    device.ids.limit = 1;
+    device.reporter.invoke_ids_released(1);
+    device.deadline();
+    let (sent, rows) = device.pop_multiple(T0).expect("the report");
+    assert!(sent.invoke_id.is_some());
+    assert_eq!(rows, [(1, 10.0, None)]);
+    assert!(device.reporter.owed_ids.is_empty(), "owed nothing more");
+}
+
 #[test]
 fn a_first_part_that_is_not_sent_takes_the_queued_rest_with_it() {
     // To a 50-octet subscriber a timestamped change goes out one value per

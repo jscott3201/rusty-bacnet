@@ -208,3 +208,169 @@ fn an_owed_report_the_byte_budget_drops_after_admission_stays_owed() {
     );
     assert!(device.reporter.owed.is_empty());
 }
+
+/// Reports owed for an invoke ID are kept apart from those owed room
+/// (#2512): while one waits for an ID, nothing comes due for it, and the
+/// reporter's own ID coming back, here with an Ack, gives it its turn.
+#[test]
+fn a_report_owed_an_id_waits_for_one_without_coming_due() {
+    let mut device = Device::new(OutboxLimits::default());
+    device.ids.limit = 1;
+    device.subscribe(1, true, T0);
+    let (out, _) = device.pop(T0).unwrap();
+    device.subscribe(2, true, T0);
+    assert!(device.pop(T0).is_none(), "no ID for 2's report");
+    let answer = T0 + Duration::from_secs(3);
+    assert_eq!(device.reporter.next_deadline(), Some(answer), "1's answer");
+    assert!(device.ack(out.invoke_id.unwrap(), T0));
+    assert_eq!(device.reporter.next_deadline(), Some(T0), "2's turn");
+    device.deadline();
+    let (second, apdu) = device.pop(T0).unwrap();
+    assert!(second.invoke_id.is_some());
+    assert_eq!(reported(&apdu).0, 2);
+}
+
+/// While a report waits for an ID, one owed room still goes as room frees:
+/// the outbox's one entry passes from one unconfirmed subscriber to the
+/// next with no other change, and nothing comes due for the ID.
+#[test]
+fn a_report_owed_room_goes_while_one_waits_for_an_id() {
+    let mut device = Device::new(OutboxLimits {
+        entries: 1,
+        octets: 256,
+    });
+    device.ids.limit = 0;
+    device.subscribe(1, true, T0);
+    assert!(device.pop(T0).is_none());
+    device.subscribe_to(ai2(), 2, false, T0);
+    device.subscribe_to(ai2(), 3, false, T0);
+    assert_eq!(send(&mut device, T0), Some(2));
+    assert_eq!(device.reporter.next_deadline(), Some(T0), "room freed");
+    device.deadline();
+    assert_eq!(send(&mut device, T0), Some(3));
+    assert!(
+        device.reporter.next_deadline().is_none_or(|due| due > T0),
+        "the ID wait comes due for nothing"
+    );
+}
+
+/// A confirmed notification's own deadline: its answer's, then its cutoff
+/// while a resend waits, then the resend's answer's; none once answered.
+#[test]
+fn each_notification_out_has_its_deadline() {
+    let mut device = Device::new(OutboxLimits::default());
+    device.subscribe(1, true, T0);
+    let (out, _) = device.pop(T0).unwrap();
+    let after = |seconds| T0 + Duration::from_secs(seconds);
+    let deadline = |device: &Device| device.reporter.notification_deadline(out.token);
+    assert_eq!(deadline(&device), Some(after(3)));
+    device.deadline();
+    // Three seconds a try, one retry: the cutoff is two tries and a half.
+    assert_eq!(deadline(&device), Some(T0 + Duration::from_millis(7_500)));
+    device.pop(after(3)).unwrap();
+    assert_eq!(deadline(&device), Some(after(6)));
+    assert!(device.ack(out.invoke_id.unwrap(), after(4)));
+    assert_eq!(deadline(&device), None);
+}
+
+/// An ID a fence frees counts for the reports owed one: with one ID, A's
+/// confirmed report holds it and B's waits; A renewing for unconfirmed
+/// notifications fences A's report, and B goes. (A cancellation fences
+/// nothing: the cancelled report runs on, as on the server, and its ID
+/// comes back with its answer or its timeout.)
+#[test]
+fn an_id_a_fence_frees_lets_an_owed_report_go() {
+    let mut device = Device::new(OutboxLimits::default());
+    device.ids.limit = 1;
+    device.subscribe(1, true, T0);
+    assert!(device.pop(T0).is_some(), "A's report out");
+    device.subscribe(2, true, T0);
+    assert!(device.pop(T0).is_none(), "B's waits for the ID");
+    device.subscribe(1, false, T0);
+    let (initial, _) = device.pop(T0).unwrap();
+    assert_eq!(initial.invoke_id, None, "A renewed, unconfirmed");
+    assert_eq!(device.reporter.next_deadline(), Some(T0), "B's turn");
+    device.deadline();
+    let (b, apdu) = device.pop(T0).expect("B goes");
+    assert!(b.invoke_id.is_some());
+    assert_eq!(reported(&apdu).0, 2);
+}
+
+/// An ID counts only while a report waits for one: A's Ack, with nothing
+/// owed, counts for nothing when C is refused an ID later, so the next
+/// look is A's own and C stays owed. And the host's word that IDs are free
+/// names how many are, so the one the reporter gave back itself isn't
+/// counted twice: one look at those owed, for one free ID.
+#[test]
+fn ids_count_only_while_a_report_waits_and_only_once() {
+    let mut device = Device::new(OutboxLimits::default());
+    device.ids.limit = 1;
+    device.subscribe(1, true, T0);
+    let (a, _) = device.pop(T0).unwrap();
+    assert!(device.ack(a.invoke_id.unwrap(), T0), "nothing owed yet");
+    device.subscribe(2, true, T0);
+    let (b, _) = device.pop(T0).expect("B takes the free ID");
+    device.subscribe(3, true, T0);
+    assert!(device.pop(T0).is_none(), "C's waits");
+    let looked = device.reporter.looked;
+    device.deadline();
+    assert_eq!(device.reporter.looked - looked, 1, "A's look alone");
+    assert_eq!(device.reporter.owed_ids.len(), 1, "C still owed");
+
+    device.subscribe(4, true, T0);
+    assert!(device.pop(T0).is_none(), "D's waits too");
+    assert!(device.ack(b.invoke_id.unwrap(), T0));
+    device.reporter.invoke_ids_released(1);
+    device.deadline();
+    // C looked at, D still owed: counted twice, both would be.
+    assert_eq!(device.reporter.owed_ids.len(), 1, "one free ID, one look");
+}
+
+/// Three reports owed an ID and the host's word that three are free: all
+/// three go from the one look it brings, with no further call.
+#[test]
+fn as_many_owed_reports_go_as_ids_are_free() {
+    let mut device = Device::new(OutboxLimits::default());
+    device.ids.limit = 0;
+    for process in 1..=3 {
+        device.subscribe(process, true, T0);
+        assert!(device.pop(T0).is_none(), "{process} waits for an ID");
+    }
+    assert!(device.reporter.owes_invoke_id());
+    device.ids.limit = 3;
+    device.reporter.invoke_ids_released(3);
+    device.deadline();
+    let mut sent = Vec::new();
+    while let Some((notification, apdu)) = device.pop(T0) {
+        assert!(notification.invoke_id.is_some());
+        sent.push(reported(&apdu).0);
+    }
+    assert_eq!(sent, [1, 2, 3]);
+    assert!(!device.reporter.owes_invoke_id());
+}
+
+/// Three reports owed an ID and one ID free at a time: each word from the
+/// host lets the oldest still owed go, and the others keep waiting, owed,
+/// with nothing due until the next.
+#[test]
+fn one_free_id_lets_one_owed_report_go_each_time() {
+    let mut device = Device::new(OutboxLimits::default());
+    device.ids.limit = 0;
+    for process in 1..=3 {
+        device.subscribe(process, true, T0);
+        assert!(device.pop(T0).is_none());
+    }
+    for process in 1..=3 {
+        device.ids.limit += 1;
+        device.reporter.invoke_ids_released(1);
+        device.deadline();
+        let (_, apdu) = device.pop(T0).expect("the oldest owed goes");
+        assert_eq!(reported(&apdu).0, process);
+        assert!(device.pop(T0).is_none(), "one ID, one report");
+        assert_eq!(device.reporter.owes_invoke_id(), process < 3);
+        assert!(
+            device.reporter.next_deadline().is_none_or(|due| due > T0),
+            "nothing due until the host's next word"
+        );
+    }
+}

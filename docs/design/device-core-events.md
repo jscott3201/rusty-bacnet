@@ -165,7 +165,14 @@ then initial notifications.
 The outbox is bounded by entry count and by octets, inside one buffer
 allocated when it is built, so a storm can't grow the heap (§9). When it is
 full, a COV notification isn't queued and its subscription is marked owed
-(one later notification with the current values); an event notification
+(one later notification with the current values), looked at again as room
+frees. A confirmed one that finds no invoke ID at `pop` is owed apart from
+those, and looked at again only as IDs come back: the `Reporter`'s own, and
+those the host reports with `invoke_ids_released` while `owes_invoke_id`
+holds, up to as many owed reports as IDs are free, each going if it can take
+one (#2512). The host's other work isn't held back for them. So
+`next_deadline` never comes due for a report waiting for an ID, and a host
+that bounds its IDs needs no special case. An event notification
 evicts the newest COV entry, whose subscription becomes owed the same way,
 and is dropped and counted only when no COV entry is left to evict.
 
@@ -222,6 +229,11 @@ impl Reporter {
     pub fn acknowledge_local(&mut self, db: &mut ObjectDatabase, object: ObjectIdentifier,
         state: EventState, now: Instant) -> Result<(), Error>;   // §6.4
     pub fn next_deadline(&self) -> Option<Instant>;
+    /// Whether a report waits for an invoke ID (#2512).
+    pub fn owes_invoke_id(&self) -> bool;
+    /// IDs came back from outside the reporter (#2512).
+    pub fn invoke_ids_released(&mut self, free: usize);
+    pub fn notification_deadline(&self, token: Token) -> Option<Instant>;
     pub fn on_deadline(&mut self, db: &mut ObjectDatabase, ids: &mut dyn InvokeIds, now: Instant);
     /// The next notification, addressed and, if confirmed, with its invoke ID.
     pub fn pop(&mut self, bindings: &dyn Bindings, ids: &mut dyn InvokeIds,
@@ -370,8 +382,14 @@ Status_Flags, then the Table 13-1 row (`CovReportedProperty`: a trigger
 sends, a value rides along); property subscriptions use their own
 increment, else the object's for a numeric Present_Value, else any change
 (Table 13-1a); commandable values add Table 13-1a-2's properties; Life
-Safety objects compare whole snapshots. The comparison is with the last
-*delivered* observation, and `evaluate` applies the per-input budget
+Safety objects compare whole snapshots. The comparison is with the newest
+observation decided for the subscription: an unconfirmed report not yet
+sent when there is one, else the last *delivered* one (#2508). A report
+still queued gives way to a newer one, so a change back ends current. An
+observation becomes the baseline only once its notification has been sent
+(#826), and a report that ends unsent leaves the change measured from it
+owed a fresh look. `evaluate`
+applies the per-input budget
 (`EventBudget`, `cov_notifications.rs:13-76`: 64 notifications, 65,536
 octets).
 
@@ -1239,7 +1257,9 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
     evaluation that reports it or finds nothing to report ends the debt,
     and a look drops one whose object or subscription is gone and hands a
     still-free entry to the next. A report too large for the outbox, or
-    for one input's budget of octets, is counted and not owed. The owed
+    for one input's budget of octets, is counted and not owed. A
+    confirmed report `pop` finds no invoke ID for is owed apart, looked at
+    again only as IDs come back (#2512). The owed
     queue is the `Reporter`'s alone: the server has no outbox, and the
     parity tests' outbox (64 entries, 65,536 octets) never owes, so the
     core tests, not parity, hold these paths. A subscription holds

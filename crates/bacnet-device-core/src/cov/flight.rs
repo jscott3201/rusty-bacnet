@@ -491,19 +491,23 @@ impl CovTable {
     ///
     /// An unconfirmed report that was [`Sent`](Delivery::Sent) commits its
     /// observation, unless a later report of its subscription completed
-    /// first. An [`Acknowledged`](Delivery::Acknowledged) confirmed report
+    /// first. One that ended otherwise returns its reference when a later
+    /// evaluation measured a change from it and found nothing to report: that
+    /// change is owed a fresh look, from what was delivered (#2508). An
+    /// [`Acknowledged`](Delivery::Acknowledged) confirmed report
     /// commits the observations it carried, and returns the references owed
     /// a fresh look: changes to them were held while it was outstanding.
     /// They are those it completed or, for a COV-multiple context, every
-    /// reference of the context. Every other outcome returns none.
+    /// reference of the context. Every other confirmed outcome returns
+    /// none.
     pub fn delivered(
         &mut self,
         token: Token,
         outcome: Delivery,
         now: Instant,
     ) -> Vec<CovSubscriptionKey> {
-        if self.deliver_unconfirmed(token, outcome, now) {
-            return Vec::new();
+        if let Some(owed) = self.deliver_unconfirmed(token, outcome, now) {
+            return owed;
         }
         let hold_off = self.timing.hold_off();
         let Some(state) = self.flights.get_mut(&token.flight) else {

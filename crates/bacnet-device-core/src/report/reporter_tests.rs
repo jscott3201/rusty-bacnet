@@ -18,6 +18,8 @@ use bacnet_time::Duration;
 use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier as P};
 use bacnet_types::primitives::PropertyValue;
 
+#[path = "reporter_change_back_tests.rs"]
+mod change_back;
 #[path = "reporter_local_tests.rs"]
 mod local;
 #[cfg(feature = "cov-multiple")]
@@ -359,7 +361,10 @@ fn a_confirmed_report_with_no_invoke_id_ends_unsent_and_is_owed() {
     device.subscribe(1, true, T0);
     assert!(device.pop(T0).is_none());
     assert_eq!(device.reporter.counters().cov.notifications_sent, 0);
+    // Owed for an ID, it isn't due again until one comes back (#2512).
+    assert!(device.reporter.next_deadline().is_none_or(|due| due > T0));
     device.ids.limit = 1;
+    device.reporter.invoke_ids_released(1);
     device.deadline();
     assert!(device.pop(T0).unwrap().0.invoke_id.is_some());
 }
