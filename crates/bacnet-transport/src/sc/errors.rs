@@ -40,10 +40,13 @@ pub enum ScWebSocketErrorKind {
     /// or wrong. The WebSocket library names the header (the message keeps
     /// it) but not whether it was absent or held a wrong value (#2463).
     WebSocketHeader,
-    /// The answer to the upgrade was not a well-formed HTTP/1.1 response: it
-    /// did not parse, or its status line or a header held bytes HTTP does
-    /// not allow, or it named an HTTP version below 1.1 (#2463).
+    /// The answer to the upgrade was not a well-formed HTTP response: it did
+    /// not parse, or a header held bytes HTTP does not allow (#2463).
     UpgradeResponseSyntax,
+    /// The answer to the upgrade parsed, but its status line held a value
+    /// the upgrade cannot use: an HTTP version below 1.1, or a status code
+    /// outside 100 to 999 (#2463).
+    UpgradeResponseValue,
     /// The hub's answer to the upgrade named a subprotocol other than the
     /// BACnet/SC hub subprotocol.
     HubSubprotocol,
@@ -84,6 +87,7 @@ impl ScWebSocketErrorKind {
             | Self::WebSocketHandshake
             | Self::WebSocketHeader
             | Self::UpgradeResponseSyntax
+            | Self::UpgradeResponseValue
             | Self::HubSubprotocol
             | Self::DirectSubprotocol
             | Self::HubSubprotocolMissing
@@ -111,6 +115,7 @@ impl fmt::Display for ScWebSocketErrorKind {
             Self::WebSocketHandshake => "websocket-handshake",
             Self::WebSocketHeader => "websocket-header",
             Self::UpgradeResponseSyntax => "upgrade-response-syntax",
+            Self::UpgradeResponseValue => "upgrade-response-value",
             Self::HubSubprotocol => "hub-subprotocol",
             Self::DirectSubprotocol => "direct-subprotocol",
             Self::HubSubprotocolMissing => "hub-subprotocol-missing",

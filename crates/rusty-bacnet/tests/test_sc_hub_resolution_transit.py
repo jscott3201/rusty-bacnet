@@ -115,9 +115,8 @@ class HubResolutionTransitTests(mtls.MtlsFixture):
                 await self.register(oversized, 0x44)
                 await self.send(oversized[1], bytes([function, 4, 0, 0]) + av + b"x" * (5706 - 10))
                 header = await asyncio.wait_for(oversized[0].readexactly(2), 3)
-                self.assertEqual(header[0], 0x88)  # Close, never a BVLC Result
-                self.assertLessEqual(header[1], 125)
-                await asyncio.wait_for(oversized[0].readexactly(header[1]), 3)
+                # Close, never a BVLC Result: the peer's fault, so no status (#2463).
+                self.assertEqual(header, b"\x88\0")
             finally:
                 await self.close_peer(oversized)
             for endpoint in endpoints:

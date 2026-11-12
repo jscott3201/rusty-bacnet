@@ -107,12 +107,13 @@ pub(super) async fn serve(
         #[cfg(test)]
         deadline.close_started.store(true, Ordering::Release);
         lease.cleanup(&clients, &write).await;
-    } else if expired {
+    } else if expired || lease.hub_ends() {
         let grace = Instant::now() + std::time::Duration::from_secs(1);
         #[cfg(test)]
         deadline.close_started.store(true, Ordering::Release);
-        // The hub gives up on a peer that sent no Connect-Request in time:
-        // an orderly close (#2463), unless the peer's fault ended it first.
+        // The hub gives up on a peer that sent no Connect-Request in time,
+        // or refused the one it sent (after the NAK, if any): an orderly
+        // close (#2463), unless the peer's fault ended it first.
         let close = lease.close_message();
         let _ = before(grace, async { write.lock().await.send(close).await }).await;
     }

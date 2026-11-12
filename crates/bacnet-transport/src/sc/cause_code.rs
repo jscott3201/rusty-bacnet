@@ -117,6 +117,7 @@ fn websocket_code(kind: ScWebSocketErrorKind) -> Option<ErrorCode> {
         // the table's row for any other header fault: this stack's reading.
         ScWebSocketErrorKind::WebSocketHeader => ErrorCode::HTTP_WEBSOCKET_HEADER_ERROR,
         ScWebSocketErrorKind::UpgradeResponseSyntax => ErrorCode::HTTP_RESPONSE_SYNTAX_ERROR,
+        ScWebSocketErrorKind::UpgradeResponseValue => ErrorCode::HTTP_RESPONSE_VALUE_ERROR,
         // The upgrade answer had no Sec-WebSocket-Protocol header at all, or
         // one whose value is not the subprotocol asked for. AB.7.5.1's HTTP
         // table names no header; giving a missing one the missing-header code
@@ -292,6 +293,10 @@ mod tests {
             (
                 ScWebSocketErrorKind::UpgradeResponseSyntax,
                 ErrorCode::HTTP_RESPONSE_SYNTAX_ERROR,
+            ),
+            (
+                ScWebSocketErrorKind::UpgradeResponseValue,
+                ErrorCode::HTTP_RESPONSE_VALUE_ERROR,
             ),
         ] {
             assert_eq!(code(ws_error(kind, None)), Some(expected), "{kind}");

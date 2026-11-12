@@ -1,5 +1,6 @@
 //! BACnet/SC connection state machine.
 
+use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::Error;
 use bytes::Bytes;
 use tracing::{debug, warn};
@@ -449,6 +450,7 @@ impl ScConnection {
                         error_code,
                         ..
                     }) => {
+                        // Class and code by name, the number as fallback (#2463).
                         if self.malformed_diag.should_emit_now() {
                             let suppressed = self.malformed_diag.take_suppressed();
                             if suppressed > 0 {
@@ -456,16 +458,16 @@ impl ScConnection {
                                     "BACnet/SC BVLC-Result NAK: function={:#x} \
                                      error_class={} error_code={} (suppressed {suppressed} similar diagnostics)",
                                     result_for.to_raw(),
-                                    error_class,
-                                    error_code
+                                    ErrorClass::from_raw(error_class),
+                                    ErrorCode::from_raw(error_code)
                                 );
                             } else {
                                 warn!(
                                     "BACnet/SC BVLC-Result NAK: function={:#x} \
                                      error_class={} error_code={}",
                                     result_for.to_raw(),
-                                    error_class,
-                                    error_code
+                                    ErrorClass::from_raw(error_class),
+                                    ErrorCode::from_raw(error_code)
                                 );
                             }
                         }

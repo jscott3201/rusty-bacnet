@@ -191,7 +191,7 @@ fn read(fault: &Fault) -> (Option<Phase>, String, String) {
              WebSocket upgrades through does this: let it pass them, or dial the hub directly."
                 .into(),
         ),
-        Fault::WebSocket(K::UpgradeResponseSyntax) => (
+        Fault::WebSocket(K::UpgradeResponseSyntax | K::UpgradeResponseValue) => (
             Phase::WebSocket,
             "the upgrade answer was not HTTP/1.1",
             "The answer to the upgrade could not be read as an HTTP/1.1 response. The port \
@@ -555,6 +555,10 @@ mod tests {
             (Fault::WebSocket(K::WebSocketHeader), Some(Phase::WebSocket)),
             (
                 Fault::WebSocket(K::UpgradeResponseSyntax),
+                Some(Phase::WebSocket),
+            ),
+            (
+                Fault::WebSocket(K::UpgradeResponseValue),
                 Some(Phase::WebSocket),
             ),
             (

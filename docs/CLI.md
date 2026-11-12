@@ -708,8 +708,9 @@ untrusted CA, an expired or future-dated certificate (with clock skew when it
 is close), a key mismatch, a missing client-authentication key usage, a proxy
 that drops the upgrade or refuses it with an HTTP status (which the hint
 names), an upgrade answer with a bad WebSocket header or one that is not
-HTTP/1.1, an address with no route (#2463), a dial that stalls (placed on the step it stalled in), a hub that
-never answers the Connect-Request, or a duplicate VMAC. Below the hint it
+HTTP/1.1, an address with no route (#2463), a dial that stalls (placed on
+the step it stalled in), a hub that never answers the Connect-Request, or a
+duplicate VMAC. Below the hint it
 names the failure's BACnet error code (Annex AB.7.5), such as
 `TCP_CONNECTION_REFUSED` or `WEBSOCKET_ENDPOINT_LEAVES` for a hub that closed
 the WebSocket going away, and the timeline's line for a failure ends with it

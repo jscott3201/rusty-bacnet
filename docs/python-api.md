@@ -1355,7 +1355,11 @@ adds text for `websocket`, `tls` and `other`. A `dial_timeout` is a dial
 the Connect-Request. An `upgrade_refused` is a server, often a proxy, that
 answered the WebSocket upgrade with the HTTP status in `http_status` (#1839).
 A `websocket_closed` is a hub that closed the WebSocket with the status in
-`close_status`, such as 1001 for a hub going away (#2438).
+`close_status`, such as 1001 for a hub going away (#2438). This stack's hub
+sends a status on every close it means (#2463): 1001 for a graceful
+shutdown and 1000 otherwise, such as for a replaced or retired node. A
+connected node still reads a graceful shutdown as `peer_close`, since the
+hub's Disconnect-Request comes first.
 
 `cause_code` names the cause with an `ErrorCode` member where one applies
 (#2438): a NAK's own code, or the BACnet/SC connection code Annex AB.7.5

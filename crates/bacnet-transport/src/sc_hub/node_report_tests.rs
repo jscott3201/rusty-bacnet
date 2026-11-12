@@ -2,9 +2,10 @@
 //! connection (#2463), over real mutual TLS on loopback.
 //!
 //! The hub's orderly closes say 1000, which a node reads as
-//! `WEBSOCKET_CLOSED_BY_PEER`. A graceful shutdown of a connected node is
-//! the exception: the hub's Disconnect-Request comes before the close, and
-//! that is what the node reports.
+//! `WEBSOCKET_CLOSED_BY_PEER`, and its graceful shutdown says 1001, which a
+//! node reads as `WEBSOCKET_ENDPOINT_LEAVES`. A connected node reads a
+//! graceful shutdown by the Disconnect-Request that comes before the close,
+//! and a refused one by the hub's NAK, which comes before the close too.
 use super::deadline_test_support::*;
 use super::*;
 use crate::port::TransportPort;
@@ -77,9 +78,9 @@ async fn disconnected(events: &mut tokio::sync::broadcast::Receiver<ScEvent>) ->
 }
 
 /// A node whose WebSocket is up but which has not connected yet gets the
-/// hub's graceful shutdown as a close with status 1000.
+/// hub's graceful shutdown as a close with status 1001.
 #[tokio::test]
-async fn a_graceful_hub_shutdown_reads_as_closed_by_peer_before_connect() {
+async fn a_graceful_hub_shutdown_reads_as_endpoint_leaves_before_connect() {
     let tls = TestTls::new();
     let mut hub = graceful_hub(&tls).await;
     let ws = dial(&tls, &hub).await;
@@ -96,12 +97,12 @@ async fn a_graceful_hub_shutdown_reads_as_closed_by_peer_before_connect() {
     let cause = ScDisconnectCause::from_error(&error);
     assert_eq!(
         cause,
-        ScDisconnectCause::WebSocketClosed { close_status: 1000 },
+        ScDisconnectCause::WebSocketClosed { close_status: 1001 },
         "{error}"
     );
     assert_eq!(
         cause.error_code(),
-        Some(ErrorCode::WEBSOCKET_CLOSED_BY_PEER)
+        Some(ErrorCode::WEBSOCKET_ENDPOINT_LEAVES)
     );
 }
 
@@ -144,29 +145,78 @@ async fn a_graceful_hub_shutdown_reads_as_a_disconnect_request_once_connected() 
     assert_eq!(cause.error_code(), None);
 }
 
-/// The hub's NAK to a Connect-Request names its class and code in the
-/// connect error's message, not their numbers.
+/// Each refusal reads as it did before the hub began closing refused
+/// connections with 1000 (#2463): the node reads the NAK, which comes
+/// first, so its class and code surface and the close does not mask them;
+/// the connect error names both. A Disconnect-Request answered before any
+/// Connect reads the close.
 #[tokio::test]
-async fn a_connect_nak_names_its_error_class_and_code() {
-    let tls = TestTls::new();
-    let mut hub = graceful_hub(&tls).await;
-    // Another device holds the VMAC this node asks for.
-    let mut holder = tls.websocket(hub.local_addr().unwrap()).await;
-    holder.send(request(NODE_VMAC, [0x77; 16])).await.unwrap();
-    assert!(matches!(poll_io(holder.next()).await,
-        Some(Ok(Message::Binary(data))) if data[0] == 7));
-    let mut transport =
-        ScTransport::new(dial(&tls, &hub).await, NODE_VMAC).with_device_uuid(NODE_UUID);
-    let error = match tokio::time::timeout(WAIT, transport.start()).await {
-        Ok(Err(error)) => error,
-        Ok(Ok(_)) => panic!("a duplicate VMAC cannot connect"),
-        Err(_) => panic!("the connect did not end"),
-    };
-    let shown = error.to_string();
-    assert!(
-        shown.contains("error_class=COMMUNICATION error_code=NODE_DUPLICATE_VMAC"),
-        "{shown}"
-    );
-    transport.stop().await.unwrap();
-    hub.stop().await;
+async fn a_refused_node_reports_the_nak_not_the_close() {
+    use super::close_status_tests::{Refusal, refusing_hub};
+    for refusal in Refusal::ALL {
+        let tls = TestTls::new();
+        let (mut hub, _incumbent) = refusing_hub(&tls).await;
+        match refusal.nak() {
+            Some((class, code)) => {
+                let mut transport = ScTransport::new(dial(&tls, &hub).await, refusal.vmac())
+                    .with_device_uuid([0x43; 16]);
+                let error = match tokio::time::timeout(WAIT, transport.start()).await {
+                    Ok(Err(error)) => error,
+                    Ok(Ok(_)) => panic!("{refusal:?}: a refused node cannot connect"),
+                    Err(_) => panic!("{refusal:?}: the connect did not end"),
+                };
+                let cause = ScDisconnectCause::from_error(&error);
+                assert!(
+                    matches!(cause, ScDisconnectCause::Nak { error_class, error_code, .. }
+                        if (error_class, error_code) == (class, code)),
+                    "{refusal:?}: {cause:?}"
+                );
+                assert_eq!(cause.error_code(), Some(code), "{refusal:?}");
+                let shown = error.to_string();
+                assert!(
+                    shown.contains(&format!("error_class={class} error_code={code}")),
+                    "{refusal:?}: {shown}"
+                );
+                transport.stop().await.unwrap();
+            }
+            None => {
+                let ws = dial(&tls, &hub).await;
+                let request = ScMessage {
+                    function: ScFunction::DisconnectRequest,
+                    message_id: 0x0102,
+                    originating_vmac: None,
+                    destination_vmac: None,
+                    dest_options: Vec::new(),
+                    data_options: Vec::new(),
+                    payload: Bytes::new(),
+                };
+                let mut sent = BytesMut::new();
+                encode_sc_message(&mut sent, &request);
+                ws.send(&sent).await.unwrap();
+                let ack = tokio::time::timeout(WAIT, ws.recv())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    decode_sc_message(&ack).unwrap().function,
+                    ScFunction::DisconnectAck
+                );
+                let error = tokio::time::timeout(WAIT, ws.recv())
+                    .await
+                    .expect("the hub's close did not arrive")
+                    .unwrap_err();
+                let cause = ScDisconnectCause::from_error(&error);
+                assert_eq!(
+                    cause,
+                    ScDisconnectCause::WebSocketClosed { close_status: 1000 },
+                    "{refusal:?}: {error}"
+                );
+                assert_eq!(
+                    cause.error_code(),
+                    Some(ErrorCode::WEBSOCKET_CLOSED_BY_PEER)
+                );
+            }
+        }
+        hub.stop().await;
+    }
 }

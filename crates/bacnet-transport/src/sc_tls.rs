@@ -338,21 +338,6 @@ fn tls_server_name_from_uri(
     })
 }
 
-#[cfg(test)]
-fn map_websocket_handshake_error(error: TungsteniteError) -> Error {
-    let kind = match &error {
-        TungsteniteError::Io(_) => ScWebSocketErrorKind::WebSocketHandshake,
-        TungsteniteError::Tls(_) => ScWebSocketErrorKind::TlsHandshake,
-        TungsteniteError::Protocol(_)
-        | TungsteniteError::Http(_)
-        | TungsteniteError::HttpFormat(_) => ScWebSocketErrorKind::WebSocketHandshake,
-        TungsteniteError::Url(_) => ScWebSocketErrorKind::InvalidUrl,
-        _ => ScWebSocketErrorKind::WebSocketHandshake,
-    };
-    ScConnectError::websocket(kind, format!("WebSocket connect failed: {error}"))
-        .into_bacnet_error()
-}
-
 impl WebSocketPort for TlsWebSocket {
     async fn send(&self, data: &[u8]) -> Result<(), Error> {
         let mut write = self.write.lock().await;
@@ -555,9 +540,14 @@ mod tests {
 
     #[test]
     fn websocket_handshake_error_maps_to_typed_variant() {
-        let err = map_websocket_handshake_error(TungsteniteError::Protocol(
-            tokio_tungstenite::tungstenite::error::ProtocolError::HandshakeIncomplete,
-        ));
+        // The connection ended before the answer was whole: no more
+        // specific kind applies.
+        let err = map_websocket_upgrade_error(
+            TungsteniteError::Protocol(
+                tokio_tungstenite::tungstenite::error::ProtocolError::HandshakeIncomplete,
+            ),
+            BACNET_SC_HUB_SUBPROTOCOL,
+        );
 
         assert!(matches!(
             ScConnectError::from_error(&err),

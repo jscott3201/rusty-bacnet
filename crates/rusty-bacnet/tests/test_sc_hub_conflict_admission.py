@@ -48,8 +48,9 @@ class HubConflictAdmissionTests(mtls.MtlsFixture):
                         self.assertEqual(response[:4], b"\x07\0\x22\x33")
                         # Default Annex AB accepts known UUID, then closes its
                         # incumbent; capacity1 does not prevent replacement.
-                        header = await asyncio.wait_for(old[0].readexactly(2), 3)
-                        self.assertEqual(header[0], 0x88)
+                        # A replacement is an orderly close: status 1000 (#2463).
+                        close = await asyncio.wait_for(old[0].readexactly(4), 3)
+                        self.assertEqual(close, b"\x88\x02\x03\xe8")
                         live, live_vmac, denied = incoming, new_vmac, 0
                     else:
                         self.assertEqual(response, b"\0\0\x22\x33\x06\1\0\0\3\0\0")

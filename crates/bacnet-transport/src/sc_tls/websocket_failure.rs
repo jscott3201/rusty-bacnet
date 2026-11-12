@@ -34,14 +34,16 @@ pub(super) fn tcp_dial_kind(kind: std::io::ErrorKind) -> ScWebSocketErrorKind {
 ///
 /// tungstenite also tells apart (#2463): a fault in the answer's `Upgrade`,
 /// `Connection` or `Sec-WebSocket-Accept` header (without saying whether
-/// the header was absent or wrong), and an answer that is not HTTP/1.1 it
-/// can parse. Each gets its own kind. What it does not tell apart stays
+/// the header was absent or wrong), an answer it cannot parse, and one
+/// whose status line names an HTTP version below 1.1 or a status code out
+/// of range. Each gets its own kind. What it does not tell apart stays
 /// `WebSocketHandshake`: the connection ending before the answer was
 /// complete, an I/O error, more than its header limit, an answer it reads
 /// as an attack (too large, or in too many small pieces), and a
 /// subprotocol value that is not text.
 pub(super) fn map_websocket_upgrade_error(error: TungsteniteError, subprotocol: &str) -> Error {
     use tokio_tungstenite::tungstenite::error::{ProtocolError, SubProtocolError};
+    use tokio_tungstenite::tungstenite::http::status::InvalidStatusCode;
     let kind = match &error {
         TungsteniteError::Protocol(ProtocolError::SecWebSocketSubProtocolError(fault)) => {
             let (wrong, missing) = subprotocol_faults(subprotocol);
@@ -55,9 +57,14 @@ pub(super) fn map_websocket_upgrade_error(error: TungsteniteError, subprotocol: 
             | ProtocolError::MissingConnectionUpgradeHeader
             | ProtocolError::SecWebSocketAcceptKeyMismatch,
         ) => ScWebSocketErrorKind::WebSocketHeader,
-        TungsteniteError::Protocol(
-            ProtocolError::HttparseError(_) | ProtocolError::WrongHttpVersion,
-        )
+        // A status line that parsed but holds an unusable version or code.
+        TungsteniteError::Protocol(ProtocolError::WrongHttpVersion) => {
+            ScWebSocketErrorKind::UpgradeResponseValue
+        }
+        TungsteniteError::HttpFormat(format) if format.is::<InvalidStatusCode>() => {
+            ScWebSocketErrorKind::UpgradeResponseValue
+        }
+        TungsteniteError::Protocol(ProtocolError::HttparseError(_))
         | TungsteniteError::HttpFormat(_) => ScWebSocketErrorKind::UpgradeResponseSyntax,
         TungsteniteError::Io(_)
         | TungsteniteError::Tls(_)

@@ -114,9 +114,10 @@ async fn a_hub_answering_the_upgrade_with_503_reports_temporary_unavailable() {
     assert_eq!(code_of(&error), Some(ErrorCode::HTTP_TEMPORARY_UNAVAILABLE));
 }
 
-/// A 101 answer with a missing or wrong WebSocket header, and an answer
-/// that is not HTTP/1.1, each report their own code rather than the
-/// general upgrade failure (#2463). tungstenite checks Upgrade, then
+/// A 101 answer with a missing or wrong WebSocket header, an answer that
+/// does not parse, and one whose status line holds an unusable version or
+/// code each report their own code rather than the general upgrade
+/// failure (#2463). tungstenite checks Upgrade, then
 /// Connection, then Sec-WebSocket-Accept, so each answer gets the ones
 /// before right and the one under test wrong.
 #[tokio::test]
@@ -129,7 +130,11 @@ async fn a_bad_upgrade_answer_reports_a_header_or_syntax_code() {
         ScWebSocketErrorKind::UpgradeResponseSyntax,
         ErrorCode::HTTP_RESPONSE_SYNTAX_ERROR,
     );
-    let cases: [(&'static [u8], _, &str); 6] = [
+    let value = (
+        ScWebSocketErrorKind::UpgradeResponseValue,
+        ErrorCode::HTTP_RESPONSE_VALUE_ERROR,
+    );
+    let cases: [(&'static [u8], _, &str); 7] = [
         // No Upgrade header (a proxy that strips hop-by-hop headers).
         (
             b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\n\r\n",
@@ -156,9 +161,11 @@ async fn a_bad_upgrade_answer_reports_a_header_or_syntax_code() {
         (b"HTTP/1.1 abc Nope\r\n\r\n", syntax, "httparse"),
         (
             b"HTTP/1.0 101 Switching Protocols\r\n\r\n",
-            syntax,
+            value,
             "version",
         ),
+        // Three digits, so it parses, but no status is below 100.
+        (b"HTTP/1.1 099 Odd\r\n\r\n", value, "status"),
     ];
     for (answer, (kind, code), named) in cases {
         let shown = String::from_utf8_lossy(answer);

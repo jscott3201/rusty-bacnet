@@ -62,8 +62,8 @@ async fn reciprocal(ws: &mut ClientWs) {
     // AB.7.5.5: hub Closes after the Ack; flush the queued Close reply to
     // complete the handshake (an explicit second Close is SendAfterClosing).
     let frame = next_frame(ws).await;
-    // An orderly close, so it says 1000 (#2463).
-    assert_eq!(frame, closed_normally(), "expected Close 1000 after Ack");
+    // The hub is going away, so the close says 1001 (#2463).
+    assert_eq!(frame, closed_going_away(), "expected Close 1001 after Ack");
     ws.flush().await.unwrap();
 }
 
@@ -302,8 +302,8 @@ async fn half_handshake_gets_silent_close_never_disconnect() {
         let peer_side = async {
             let frame = next_frame(&mut ws).await;
             match frame {
-                // Silent means no BVLC message: the close still says 1000.
-                Message::Close(_) => assert_eq!(frame, closed_normally()),
+                // Silent means no BVLC message: the close still says 1001.
+                Message::Close(_) => assert_eq!(frame, closed_going_away()),
                 Message::Binary(data) => {
                     let message = decode(&data);
                     assert_ne!(
