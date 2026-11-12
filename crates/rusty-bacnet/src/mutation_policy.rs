@@ -125,17 +125,20 @@ impl PyMutationPolicy {
     pub(crate) fn decide(&self, context: &MutationAuthorizationContext) -> bool {
         let context = PyMutationContext::new(context);
         crate::py_async::attach(|py| {
-            let callable = self.callable.bind(py);
-            let returned =
-                crate::py_async::under_native_lock(|| callable.call1((context,)));
-            Ok(match returned.and_then(|value| verdict(&value, self.keyword)) {
-                Ok(allow) => allow,
-                Err(error) => {
-                    // Shown through sys.unraisablehook, as asyncio shows a
-                    // callback's exception.
-                    error.write_unraisable(py, Some(callable));
-                    false
-                }
+            // The verdict is read under the same refusal as the call: reading
+            // it can run Python code too.
+            crate::py_async::under_native_lock(|| {
+                let callable = self.callable.bind(py);
+                let returned = callable.call1((context,));
+                Ok(match returned.and_then(|value| verdict(&value, self.keyword)) {
+                    Ok(allow) => allow,
+                    Err(error) => {
+                        // Shown through sys.unraisablehook, as asyncio shows
+                        // a callback's exception.
+                        error.write_unraisable(py, Some(callable));
+                        false
+                    }
+                })
             })
         })
         // The interpreter is exiting: nobody can decide, so deny.

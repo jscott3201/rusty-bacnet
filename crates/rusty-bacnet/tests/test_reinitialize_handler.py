@@ -261,6 +261,37 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(failures), 1)
         self.assertIn("cannot start a binding operation", failures[0])
 
+    async def test_reading_the_answer_cannot_reenter_the_bindings_either(self):
+        """Reading the answer runs user code too: an awaitable's close() is
+        called, and its binding operation is refused like the callable's."""
+        owner = None
+
+        async def probe():
+            return await owner.comm_state()
+
+        class Mistaken:
+            def __await__(self):
+                yield
+
+            def close(self):
+                asyncio.run(probe())
+
+        owner = server(on_reinitialize=lambda request: Mistaken())
+        seen = []
+        previous = sys.unraisablehook
+        sys.unraisablehook = lambda hook_args: seen.append(hook_args.exc_value)
+
+        async def exchange(address):
+            self.assertEqual(await self.peer.ask(address, 1, S.WARMSTART),
+                             error(1, *SERVICES_OTHER))
+        try:
+            await self.run_server(owner, exchange)
+        finally:
+            sys.unraisablehook = previous
+        self.assertEqual(len(seen), 1, seen)
+        self.assertIsInstance(seen[0], RuntimeError)
+        self.assertIn("cannot start a binding operation", str(seen[0]))
+
     async def test_after_reinitialize_runs_once_the_reply_is_on_the_link(self):
         """The hook runs only after the server sent the reply. Whether the
         reply already sits in the peer's socket then is up to the platform:
