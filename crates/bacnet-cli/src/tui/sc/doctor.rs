@@ -162,6 +162,14 @@ fn read(fault: &Fault) -> (Option<Phase>, String, String) {
              and that the hub is running. A firewall that rejects connections does this too."
                 .into(),
         ),
+        Fault::WebSocket(K::AddressUnreachable) => (
+            Phase::Tcp,
+            "no route to the hub's address",
+            "This computer found no route to that address: the host or its network is \
+             unreachable. Check the address, this computer's network link, and any VPN or \
+             gateway the hub sits behind."
+                .into(),
+        ),
         Fault::WebSocket(K::TlsHandshake) => (
             Phase::Tls,
             "the TLS handshake failed",
@@ -173,6 +181,22 @@ fn read(fault: &Fault) -> (Option<Phase>, String, String) {
             "TLS worked, but the HTTP upgrade did not. A proxy or load balancer in the path \
              may drop WebSocket upgrades; let it pass them through, or dial the hub directly. \
              Check the URL path too."
+                .into(),
+        ),
+        Fault::WebSocket(K::WebSocketHeader) => (
+            Phase::WebSocket,
+            "the upgrade answer had a bad WebSocket header",
+            "The server answered 101, but its Upgrade, Connection or Sec-WebSocket-Accept \
+             header was missing or wrong; the detail names which. A proxy that does not pass \
+             WebSocket upgrades through does this: let it pass them, or dial the hub directly."
+                .into(),
+        ),
+        Fault::WebSocket(K::UpgradeResponseSyntax) => (
+            Phase::WebSocket,
+            "the upgrade answer was not HTTP/1.1",
+            "The answer to the upgrade could not be read as an HTTP/1.1 response. The port \
+             may serve something other than a web server, or an old proxy sits in the path; \
+             check the port in the URL."
                 .into(),
         ),
         Fault::UpgradeRefused(status) => {
@@ -527,6 +551,12 @@ mod tests {
             ),
             (Fault::WebSocket(K::HubSubprotocol), Some(Phase::WebSocket)),
             (Fault::WebSocket(K::TcpRefused), Some(Phase::Tcp)),
+            (Fault::WebSocket(K::AddressUnreachable), Some(Phase::Tcp)),
+            (Fault::WebSocket(K::WebSocketHeader), Some(Phase::WebSocket)),
+            (
+                Fault::WebSocket(K::UpgradeResponseSyntax),
+                Some(Phase::WebSocket),
+            ),
             (
                 Fault::WebSocket(K::HubSubprotocolMissing),
                 Some(Phase::WebSocket),
@@ -665,6 +695,16 @@ mod tests {
         assert_ne!(missing.summary, subprotocol.summary);
         let refused = diagnose(&Fault::WebSocket(ScWebSocketErrorKind::TcpRefused));
         assert!(refused.summary.contains("refused"), "{}", refused.summary);
+        // #2463: no route, and an upgrade answer with a bad header.
+        let unreachable = diagnose(&Fault::WebSocket(ScWebSocketErrorKind::AddressUnreachable));
+        assert!(unreachable.summary.contains("no route"));
+        let header = diagnose(&Fault::WebSocket(ScWebSocketErrorKind::WebSocketHeader));
+        assert!(
+            header.hint.contains("Sec-WebSocket-Accept"),
+            "{}",
+            header.hint
+        );
+        assert!(header.hint.contains("proxy"), "{}", header.hint);
         let closed = diagnose(&Fault::WebSocketClosed(1001));
         assert!(closed.summary.contains("status 1001"), "{}", closed.summary);
         assert!(closed.hint.contains("going away"), "{}", closed.hint);

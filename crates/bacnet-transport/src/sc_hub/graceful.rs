@@ -508,8 +508,9 @@ fn is_nak_for_disconnect(msg: &ScMessage) -> bool {
     }
 }
 
-/// AB.7.5.5 close handshake after an observed Ack: send Close, await the
-/// peer Close echo within the per-close bound. Returns true on echo.
+/// AB.7.5.5 close handshake after an observed Ack: send Close with status
+/// 1000 (#2463), await the peer Close echo within the per-close bound.
+/// Returns true on echo.
 async fn close_handshake(
     peer_addr: SocketAddr,
     read: &mut futures_util::stream::SplitStream<
@@ -520,7 +521,7 @@ async fn close_handshake(
 ) -> bool {
     let send = tokio::time::timeout(ctx.timeouts.ws_close(), async {
         let mut sink = write.lock().await;
-        sink.send(Message::Close(None)).await
+        sink.send(super::retirement::orderly_close()).await
     })
     .await;
     if !matches!(send, Ok(Ok(()))) {
@@ -540,7 +541,8 @@ async fn close_handshake(
     matches!(echo, Ok(true))
 }
 
-/// Silent Close for half-handshakes: never a Disconnect-Request.
+/// Silent Close for half-handshakes: never a Disconnect-Request. Silent
+/// means no BVLC message; the close frame still says 1000 (#2463).
 async fn silent_close(
     peer_addr: SocketAddr,
     read: &mut futures_util::stream::SplitStream<
@@ -551,7 +553,7 @@ async fn silent_close(
 ) -> bool {
     let send = tokio::time::timeout(ctx.timeouts.ws_close(), async {
         let mut sink = write.lock().await;
-        sink.send(Message::Close(None)).await
+        sink.send(super::retirement::orderly_close()).await
     })
     .await;
     if !matches!(send, Ok(Ok(()))) {

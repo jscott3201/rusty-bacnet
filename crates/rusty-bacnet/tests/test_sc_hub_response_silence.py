@@ -54,7 +54,9 @@ class HubResponseSilenceTests(mtls.MtlsFixture):
                     self.websocket, address, "client", read_property=True), "TLSv1.3")
             await self.send(writer, b"\x08\0\x77\x88")
             self.assertEqual(await self.binary(reader), b"\x09\0\x77\x88")
-            self.assertEqual(await asyncio.wait_for(reader.readexactly(2), 3), b"\x88\0")
+            # The hub's orderly close carries status 1000 (#2463).
+            self.assertEqual(await asyncio.wait_for(reader.readexactly(4), 3),
+                             b"\x88\x02\x03\xe8")
         finally:
             writer.close()
             try:

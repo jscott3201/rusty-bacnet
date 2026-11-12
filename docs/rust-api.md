@@ -1662,9 +1662,14 @@ BACnet/SC connection codes 152-199 (`DNS_ERROR`, `TCP_CONNECT_TIMEOUT`,
 `TLS_SERVER_CERTIFICATE_EXPIRED`, `HTTP_TEMPORARY_UNAVAILABLE` and so on,
 Annex AB.7.5) for a DNS, TCP, TLS, HTTP-upgrade or WebSocket failure; `None`
 for a local close, a Disconnect-Request and the timeouts with no code of
-their own. A refused TCP connection is `TCP_CONNECTION_REFUSED`, an upgrade
-answer with no `Sec-WebSocket-Protocol` header or another subprotocol is
-`HTTP_RESPONSE_MISSING_HEADER` or `HTTP_RESPONSE_VALUE_ERROR`, and a WebSocket
+their own. A refused TCP connection is `TCP_CONNECTION_REFUSED`, a dial with
+no route to the address (`AddressUnreachable`) is `IP_ADDRESS_NOT_REACHABLE`,
+an upgrade answer with no `Sec-WebSocket-Protocol` header or another
+subprotocol is `HTTP_RESPONSE_MISSING_HEADER` or `HTTP_RESPONSE_VALUE_ERROR`,
+one with a missing or wrong `Upgrade`, `Connection` or `Sec-WebSocket-Accept`
+header (`WebSocketHeader`) is `HTTP_WEBSOCKET_HEADER_ERROR`, one that is not
+HTTP/1.1 (`UpgradeResponseSyntax`) is `HTTP_RESPONSE_SYNTAX_ERROR` (#2463),
+and a WebSocket
 the hub ends maps its close status by Annex AB.7.5.5's table: a close frame
 without a status is `WEBSOCKET_ERROR`, and an end with no close frame is
 `WEBSOCKET_CLOSED_ABNORMALLY` (#2438).
@@ -2053,6 +2058,15 @@ five-second sink acquisition/I/O bound after retiring the matching registration.
 Close without Disconnect-Ack still yields a forced graceful-shutdown outcome;
 forceful abort may forgo the reply. Tests cover the WebSocket replies, not TLS
 `close_notify` behavior.
+
+A connection the Hub ends on purpose gets a close frame with status 1000: a
+graceful shutdown (after the Disconnect-Ack, or at once for an upgraded peer
+that never sent Connect), an answered Disconnect-Request, a retirement (a
+same-UUID replacement or a failed liveness probe) and an expired Connect
+wait. A peer reads it as `WEBSOCKET_CLOSED_BY_PEER`. A connection the peer's
+fault ends (a receive error, a second Connect-Request) keeps the close with
+no status, and a non-binary data frame still gets 1003 (#2463). A node's
+direct-connection acceptor closes an idle or retired link with 1000 too.
 
 `ScHubTlsConfig::with_relay_send_budget(Duration)` validates this separate
 transit budget; `validate_relay_send_budget` supports preflight before

@@ -2,6 +2,8 @@
 //! reports (#2438): a hub that answers the upgrade with 503, or with no
 //! subprotocol or another one, and a peer that ends the WebSocket with a
 //! close status, with a close frame that has none, or with no close frame.
+//! Since #2463 also an upgrade answer with a bad WebSocket header or one
+//! that is not HTTP/1.1, and a dial to an address with no route.
 
 use super::*;
 use crate::port::TransportPort;
@@ -69,10 +71,9 @@ async fn drain(mut ws: ServerWs) {
     while let Some(Ok(_)) = ws.next().await {}
 }
 
-/// A hub (or a proxy before it) out of connections answers the upgrade
-/// with 503, and the code says so.
-#[tokio::test]
-async fn a_hub_answering_the_upgrade_with_503_reports_temporary_unavailable() {
+/// Dial a TLS server that reads the upgrade request and writes `answer`
+/// back verbatim, and return the dial's error.
+async fn upgrade_answered_with(answer: &'static [u8]) -> Error {
     let (node, server) = test_tls_pair();
     let (listener, url) = listener().await;
     let hub = tokio::spawn(async move {
@@ -85,25 +86,92 @@ async fn a_hub_answering_the_upgrade_with_503_reports_temporary_unavailable() {
             assert!(n > 0, "the upgrade request ended early");
             request.extend_from_slice(&buf[..n]);
         }
-        tls.write_all(
-            b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-        )
-        .await
-        .unwrap();
-        // The client may have closed first; the 503 is already sent.
+        tls.write_all(answer).await.unwrap();
+        // The client may have closed first; the answer is already sent.
         let _ = tls.shutdown().await;
     });
     let error = match tokio::time::timeout(WAIT, TlsWebSocket::connect(&url, node)).await {
         Ok(Err(error)) => error,
-        Ok(Ok(_)) => panic!("a refused upgrade cannot connect"),
+        Ok(Ok(_)) => panic!("a bad upgrade answer cannot connect"),
         Err(_) => panic!("the dial did not end"),
     };
     hub.await.unwrap();
+    error
+}
+
+/// A hub (or a proxy before it) out of connections answers the upgrade
+/// with 503, and the code says so.
+#[tokio::test]
+async fn a_hub_answering_the_upgrade_with_503_reports_temporary_unavailable() {
+    let error = upgrade_answered_with(
+        b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    )
+    .await;
     assert_eq!(
         ScDisconnectCause::from_error(&error),
         ScDisconnectCause::UpgradeRefused { http_status: 503 }
     );
     assert_eq!(code_of(&error), Some(ErrorCode::HTTP_TEMPORARY_UNAVAILABLE));
+}
+
+/// A 101 answer with a missing or wrong WebSocket header, and an answer
+/// that is not HTTP/1.1, each report their own code rather than the
+/// general upgrade failure (#2463). tungstenite checks Upgrade, then
+/// Connection, then Sec-WebSocket-Accept, so each answer gets the ones
+/// before right and the one under test wrong.
+#[tokio::test]
+async fn a_bad_upgrade_answer_reports_a_header_or_syntax_code() {
+    let header = (
+        ScWebSocketErrorKind::WebSocketHeader,
+        ErrorCode::HTTP_WEBSOCKET_HEADER_ERROR,
+    );
+    let syntax = (
+        ScWebSocketErrorKind::UpgradeResponseSyntax,
+        ErrorCode::HTTP_RESPONSE_SYNTAX_ERROR,
+    );
+    let cases: [(&'static [u8], _, &str); 6] = [
+        // No Upgrade header (a proxy that strips hop-by-hop headers).
+        (
+            b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\n\r\n",
+            header,
+            "Upgrade",
+        ),
+        // An upgrade to some other protocol.
+        (
+            b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: h2c\r\nConnection: Upgrade\r\n\r\n",
+            header,
+            "Upgrade",
+        ),
+        (
+            b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\r\n",
+            header,
+            "Connection",
+        ),
+        (
+            b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+              Sec-WebSocket-Accept: bm90IHRoZSBrZXk=\r\n\r\n",
+            header,
+            "Sec-WebSocket-Accept",
+        ),
+        (b"HTTP/1.1 abc Nope\r\n\r\n", syntax, "httparse"),
+        (
+            b"HTTP/1.0 101 Switching Protocols\r\n\r\n",
+            syntax,
+            "version",
+        ),
+    ];
+    for (answer, (kind, code), named) in cases {
+        let shown = String::from_utf8_lossy(answer);
+        let error = upgrade_answered_with(answer).await;
+        assert_eq!(
+            ScDisconnectCause::from_error(&error),
+            ScDisconnectCause::WebSocket(kind),
+            "{shown}: {error}"
+        );
+        assert_eq!(code_of(&error), Some(code), "{shown}");
+        // The message keeps the library's word for the part at fault.
+        assert!(error.to_string().contains(named), "{shown}: {error}");
+    }
 }
 
 /// An upgrade answer with no Sec-WebSocket-Protocol header is told from
@@ -138,6 +206,39 @@ async fn an_upgrade_answer_without_or_with_another_subprotocol_says_which() {
         );
         assert_eq!(code_of(&error), Some(code), "{answer:?}");
     }
+}
+
+/// An address the OS will not route a TCP connect to, so the dial fails at
+/// once with an unreachable error: Linux answers a connect to a multicast
+/// address with ENETUNREACH, and macOS one to a 0.0.0.0/8 address with
+/// EHOSTUNREACH. Windows has no such address known to fail the same way.
+#[cfg(target_os = "linux")]
+const UNROUTABLE: &str = "224.0.0.1:47808";
+#[cfg(target_os = "macos")]
+const UNROUTABLE: &str = "0.0.0.1:47808";
+
+/// A dial with no route to the hub's address reports the IP table's code,
+/// not the general TCP one (#2463).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[tokio::test]
+async fn a_dial_with_no_route_reports_ip_address_not_reachable() {
+    let (node, _) = test_tls_pair();
+    let url = format!("wss://{UNROUTABLE}");
+    let error = match tokio::time::timeout(WAIT, TlsWebSocket::connect(&url, node)).await {
+        Ok(Err(error)) => error,
+        Ok(Ok(_)) => panic!("{UNROUTABLE} cannot connect"),
+        Err(_) => panic!("the dial to {UNROUTABLE} did not fail at once"),
+    };
+    assert_eq!(
+        ScDisconnectCause::from_error(&error),
+        ScDisconnectCause::WebSocket(ScWebSocketErrorKind::AddressUnreachable),
+        "{error}"
+    );
+    assert_eq!(code_of(&error), Some(ErrorCode::IP_ADDRESS_NOT_REACHABLE));
+    assert_eq!(
+        code_of(&error).unwrap().to_string(),
+        "IP_ADDRESS_NOT_REACHABLE"
+    );
 }
 
 /// How the peer ended a live WebSocket: with a close status, with a close
@@ -200,6 +301,38 @@ async fn a_websocket_the_peer_ends_reports_how_it_ended() {
 /// `Disconnected` with that status, and its code names a peer going away.
 #[tokio::test]
 async fn a_hub_closing_with_a_status_reports_it_on_the_disconnect() {
+    let away = CloseFrame {
+        code: CloseCode::Away,
+        reason: "".into(),
+    };
+    let cause = disconnect_after(Some(away)).await;
+    assert_eq!(
+        cause,
+        ScDisconnectCause::WebSocketClosed { close_status: 1001 }
+    );
+    assert_eq!(
+        cause.error_code(),
+        Some(ErrorCode::WEBSOCKET_ENDPOINT_LEAVES)
+    );
+}
+
+/// A hub that closes a live connection with a close frame and no status
+/// reads as it did before this stack's hub began sending 1000 (#2463): a
+/// status-less close and the WebSocket catch-all code. Other vendors' hubs
+/// may still close that way.
+#[tokio::test]
+async fn a_hub_closing_without_a_status_reports_the_websocket_catch_all() {
+    let cause = disconnect_after(None).await;
+    assert_eq!(
+        cause,
+        ScDisconnectCause::WebSocket(ScWebSocketErrorKind::Closed)
+    );
+    assert_eq!(cause.error_code(), Some(ErrorCode::WEBSOCKET_ERROR));
+}
+
+/// Connect a node to a peer that accepts it and then closes with `close`,
+/// and return the cause the node's `Disconnected` event names.
+async fn disconnect_after(close: Option<CloseFrame>) -> ScDisconnectCause {
     const HUB_VMAC: [u8; 6] = [0x10; 6];
     let (node, server) = test_tls_pair();
     let (listener, url) = listener().await;
@@ -229,12 +362,7 @@ async fn a_hub_closing_with_a_status_reports_it_on_the_disconnect() {
         let mut buf = BytesMut::new();
         encode_sc_message(&mut buf, &accept);
         ws.send(Message::Binary(buf.freeze())).await.unwrap();
-        ws.close(Some(CloseFrame {
-            code: CloseCode::Away,
-            reason: "".into(),
-        }))
-        .await
-        .unwrap();
+        ws.close(close).await.unwrap();
         drain(ws).await;
     });
     let ws = tokio::time::timeout(WAIT, TlsWebSocket::connect(&url, node))
@@ -256,14 +384,7 @@ async fn a_hub_closing_with_a_status_reports_it_on_the_disconnect() {
         } => cause,
         other => panic!("expected Disconnected, got {other:?}"),
     };
-    assert_eq!(
-        cause,
-        ScDisconnectCause::WebSocketClosed { close_status: 1001 }
-    );
-    assert_eq!(
-        cause.error_code(),
-        Some(ErrorCode::WEBSOCKET_ENDPOINT_LEAVES)
-    );
     transport.stop().await.unwrap();
     hub.await.unwrap();
+    cause
 }

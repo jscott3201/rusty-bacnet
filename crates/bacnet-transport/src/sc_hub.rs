@@ -625,3 +625,9 @@ mod relay_budget_tests;
 
 #[cfg(test)]
 mod peer_close_tests;
+
+#[cfg(test)]
+mod close_status_tests;
+
+#[cfg(test)]
+mod node_report_tests;

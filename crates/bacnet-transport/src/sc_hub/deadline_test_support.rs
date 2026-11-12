@@ -70,6 +70,17 @@ pub(super) async fn rebind(address: SocketAddr, attempt: usize) -> Option<TcpLis
     }
 }
 
+/// The close frame the hub sends when it ends a connection on purpose:
+/// status 1000 and no reason (#2463). Built here, not from the hub's own
+/// helper, so a test of the hub cannot agree with a broken helper.
+pub(super) fn closed_normally() -> Message {
+    use tokio_tungstenite::tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
+    Message::Close(Some(CloseFrame {
+        code: CloseCode::Normal,
+        reason: "".into(),
+    }))
+}
+
 pub(super) fn request(vmac: Vmac, uuid: DeviceUuid) -> Message {
     let mut wire = crate::sc_frame::connect_test_support::valid_connect(6, vmac);
     wire[10..26].copy_from_slice(&uuid);

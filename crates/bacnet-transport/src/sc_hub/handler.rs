@@ -89,15 +89,9 @@ pub(super) async fn run(
                     admission.connection_warning,
                     "Hub: non-binary frame from {peer_addr}, closing with 1003"
                 );
+                lease.note_fault();
                 let mut w = write.lock().await;
-                let _ = w
-                    .send(Message::Close(Some(
-                        tokio_tungstenite::tungstenite::protocol::CloseFrame {
-                            code: tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Unsupported,
-                            reason: "BACnet/SC requires binary frames".into(),
-                        },
-                    )))
-                    .await;
+                let _ = w.send(super::retirement::non_binary_close()).await;
                 break;
             }
             Err(e) => {
@@ -105,6 +99,9 @@ pub(super) async fn run(
                     admission.connection_warning,
                     "Hub: recv error from {peer_addr}: {e}"
                 );
+                // Not an orderly end: a frame past the size limit, a
+                // WebSocket protocol fault or a lost link (#2463).
+                lease.note_fault();
                 break;
             }
         };
@@ -397,6 +394,8 @@ pub(super) async fn run(
             ScFunction::ConnectRequest => {
                 if let Some(registered_vmac) = lease.vmac {
                     refused(ConnectRefusal::AlreadyConnected(registered_vmac));
+                    // A protocol fault, not an orderly end: no 1000 (#2463).
+                    lease.note_fault();
                     let mut w = write.lock().await;
                     let _ = w.send(Message::Close(None)).await;
                     break;

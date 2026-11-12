@@ -204,9 +204,10 @@ async fn hub_upgraded_idle_peer_gets_close_at_connect_deadline() {
     tokio::time::advance(Duration::from_millis(2)).await;
     let result = poll_io(ws.next()).await;
     poll_io(hub.stop()).await;
+    // Giving up on a silent peer is an orderly close: 1000 (#2463).
     assert!(
-        matches!(result, Some(Ok(Message::Close(_)))),
-        "Connect wait must expire with Close, got {result:?}"
+        matches!(result, Some(Ok(ref frame)) if *frame == closed_normally()),
+        "Connect wait must expire with Close 1000, got {result:?}"
     );
     assert_eq!(
         hub.status().await.outcomes,

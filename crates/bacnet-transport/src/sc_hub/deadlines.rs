@@ -111,10 +111,10 @@ pub(super) async fn serve(
         let grace = Instant::now() + std::time::Duration::from_secs(1);
         #[cfg(test)]
         deadline.close_started.store(true, Ordering::Release);
-        let _ = before(grace, async {
-            write.lock().await.send(Message::Close(None)).await
-        })
-        .await;
+        // The hub gives up on a peer that sent no Connect-Request in time:
+        // an orderly close (#2463), unless the peer's fault ended it first.
+        let close = lease.close_message();
+        let _ = before(grace, async { write.lock().await.send(close).await }).await;
     }
 }
 

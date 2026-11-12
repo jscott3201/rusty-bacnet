@@ -13,8 +13,33 @@ use super::tls_failure;
 use crate::sc::{ScConnectError, ScWebSocketErrorKind};
 use crate::sc_frame::{BACNET_SC_DIRECT_SUBPROTOCOL, BACNET_SC_HUB_SUBPROTOCOL};
 
+/// The kind for a failed TCP dial, from the OS error's kind: a refusal and
+/// no route each have their own code (Annex AB.7.5.1's TCP and IP tables).
+/// The standard library gives these kinds for the Unix and Winsock errors
+/// alike (`ECONNREFUSED`, `EHOSTUNREACH`, `ENETUNREACH` and their `WSAE`
+/// twins), so the test is the same on every OS (#2463).
+pub(super) fn tcp_dial_kind(kind: std::io::ErrorKind) -> ScWebSocketErrorKind {
+    use std::io::ErrorKind;
+    match kind {
+        ErrorKind::ConnectionRefused => ScWebSocketErrorKind::TcpRefused,
+        ErrorKind::HostUnreachable | ErrorKind::NetworkUnreachable => {
+            ScWebSocketErrorKind::AddressUnreachable
+        }
+        _ => ScWebSocketErrorKind::TcpDial,
+    }
+}
+
 /// Map a failed upgrade that offered `subprotocol`. tungstenite checks the
 /// answer's subprotocol itself, so a missing or wrong one fails here.
+///
+/// tungstenite also tells apart (#2463): a fault in the answer's `Upgrade`,
+/// `Connection` or `Sec-WebSocket-Accept` header (without saying whether
+/// the header was absent or wrong), and an answer that is not HTTP/1.1 it
+/// can parse. Each gets its own kind. What it does not tell apart stays
+/// `WebSocketHandshake`: the connection ending before the answer was
+/// complete, an I/O error, more than its header limit, an answer it reads
+/// as an attack (too large, or in too many small pieces), and a
+/// subprotocol value that is not text.
 pub(super) fn map_websocket_upgrade_error(error: TungsteniteError, subprotocol: &str) -> Error {
     use tokio_tungstenite::tungstenite::error::{ProtocolError, SubProtocolError};
     let kind = match &error {
@@ -25,11 +50,19 @@ pub(super) fn map_websocket_upgrade_error(error: TungsteniteError, subprotocol: 
                 _ => wrong,
             }
         }
+        TungsteniteError::Protocol(
+            ProtocolError::MissingUpgradeWebSocketHeader
+            | ProtocolError::MissingConnectionUpgradeHeader
+            | ProtocolError::SecWebSocketAcceptKeyMismatch,
+        ) => ScWebSocketErrorKind::WebSocketHeader,
+        TungsteniteError::Protocol(
+            ProtocolError::HttparseError(_) | ProtocolError::WrongHttpVersion,
+        )
+        | TungsteniteError::HttpFormat(_) => ScWebSocketErrorKind::UpgradeResponseSyntax,
         TungsteniteError::Io(_)
         | TungsteniteError::Tls(_)
         | TungsteniteError::Protocol(_)
-        | TungsteniteError::Http(_)
-        | TungsteniteError::HttpFormat(_) => ScWebSocketErrorKind::WebSocketHandshake,
+        | TungsteniteError::Http(_) => ScWebSocketErrorKind::WebSocketHandshake,
         TungsteniteError::Url(_) => ScWebSocketErrorKind::InvalidUrl,
         _ => ScWebSocketErrorKind::WebSocketHandshake,
     };
@@ -202,6 +235,40 @@ mod tests {
                 .ends_with(r"status 1001: bye\u{1b}[2J\u{1b}[31mred\r\nfake: line\u{202e}txt\u{7}"),
             "{shown}"
         );
+    }
+
+    /// The OS errors for a refused dial and for no route reach the same
+    /// kinds on every OS: the standard library decodes the Unix and Winsock
+    /// numbers alike, and the classifier reads only the kind (#2463).
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn os_dial_errors_classify_the_same_on_every_os() {
+        use std::io::{Error as IoError, ErrorKind};
+        #[cfg(unix)]
+        let (refused, host, network) = (libc::ECONNREFUSED, libc::EHOSTUNREACH, libc::ENETUNREACH);
+        #[cfg(windows)]
+        let (refused, host, network) = {
+            use windows_sys::Win32::Networking::WinSock as ws;
+            (ws::WSAECONNREFUSED, ws::WSAEHOSTUNREACH, ws::WSAENETUNREACH)
+        };
+        for (code, kind) in [
+            (refused, ScWebSocketErrorKind::TcpRefused),
+            (host, ScWebSocketErrorKind::AddressUnreachable),
+            (network, ScWebSocketErrorKind::AddressUnreachable),
+        ] {
+            assert_eq!(
+                tcp_dial_kind(IoError::from_raw_os_error(code).kind()),
+                kind,
+                "OS error {code}"
+            );
+        }
+        for other in [
+            ErrorKind::TimedOut,
+            ErrorKind::NetworkDown,
+            ErrorKind::Other,
+        ] {
+            assert_eq!(tcp_dial_kind(other), ScWebSocketErrorKind::TcpDial);
+        }
     }
 
     /// A long reason is cut at the bound, and says so.
