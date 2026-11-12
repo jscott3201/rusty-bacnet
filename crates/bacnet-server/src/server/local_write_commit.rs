@@ -35,6 +35,9 @@ fn change(write: LocalWrite<'_>, value: PropertyValue) -> LocalChange {
         LocalWrite::ApplicationProgramState => LocalInputValue::ProgramState(value),
         LocalWrite::ApplicationAccessInput(input) => LocalInputValue::AccessControl(input.clone()),
         LocalWrite::ApplicationPulses(pulses) => LocalInputValue::Pulses(pulses),
+        LocalWrite::ApplicationLoadControl(setting) => {
+            LocalInputValue::LoadControl(setting.clone())
+        }
         LocalWrite::ApplicationReliability(reliability) => {
             return LocalChange::Reliability(reliability);
         }

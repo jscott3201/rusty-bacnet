@@ -680,3 +680,6 @@ async fn a_clock_set_back_before_start_time_reports_the_request_pending_again() 
     );
     h.server.stop().await.unwrap();
 }
+
+#[path = "load_control_setters_tests.rs"]
+mod setters;

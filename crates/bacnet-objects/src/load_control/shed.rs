@@ -26,7 +26,9 @@ const HUNDREDTHS_PER_MINUTE: i64 = 60 * 100;
 ///
 /// Install one with [`LoadControlObject::set_shedder`]. The object asks it
 /// through [`shed`](Self::shed) each time it looks at a request: on every
-/// write or setter call that changes the request, and on each pass of the
+/// write or setter call that changes the request (a change of Shed_Levels
+/// or Full_Duty_Baseline included, also while the server runs, #2497), and on
+/// each pass of the
 /// server's operation task (once a second) while a request is pending or
 /// being shed. It tells it through [`stop`](Self::stop) when a request ends.
 ///
