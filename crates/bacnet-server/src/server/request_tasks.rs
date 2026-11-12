@@ -1,3 +1,4 @@
+use super::durable_writes::StageReleases;
 use super::request_admission::{Admission, Class, Rejection};
 use super::{RequestAdmissionCounters, RequestAdmissionPolicy};
 use bacnet_device_core::write::Unfinished;
@@ -39,14 +40,17 @@ impl IdleReap {
 /// workers started by services. The optional DCC bucket shares this
 /// native-server lifetime, independent of task registrations.
 ///
-/// The last field holds the runs let go of while the database was busy
+/// The fourth field holds the runs let go of while the database was busy
 /// (#1252), for `stop()` to end once every task here is joined. It has its
 /// own lock: a task the runtime refuses can be dropped while `State` is held.
+/// The last counts the tasks that let go of a dropped local write's stage,
+/// which `stop()` waits for before it settles staged writes (#2495).
 pub(super) struct RequestTasks(
     Mutex<State>,
     Admission,
     Option<super::dcc_disable_rate::Bucket>,
     Mutex<Vec<Unfinished>>,
+    Arc<StageReleases>,
 );
 
 impl Default for RequestTasks {
@@ -103,6 +107,14 @@ impl RequestTaskSpawner {
             .position(|left| left.is(source, generation))?;
         Some(stranded.swap_remove(at))
     }
+
+    /// The owner's count of stage release tasks, or a fresh one nothing
+    /// waits for once the owner is gone.
+    pub(super) fn stage_releases(&self) -> Arc<StageReleases> {
+        self.0
+            .upgrade()
+            .map_or_else(Arc::default, |owner| Arc::clone(&owner.4))
+    }
 }
 
 impl RequestTasks {
@@ -141,12 +153,18 @@ impl RequestTasks {
             Admission::new(policy)?,
             None,
             Mutex::default(),
+            Arc::default(),
         ))
     }
 
     /// The runs stranded so far, for `stop()` to end.
     pub(super) fn take_stranded(&self) -> Vec<Unfinished> {
         std::mem::take(&mut *self.3.lock().unwrap())
+    }
+
+    /// The tasks releasing what dropped local writes staged (#2495).
+    pub(super) fn stage_releases(&self) -> &Arc<StageReleases> {
+        &self.4
     }
 
     pub(super) fn counters(&self) -> RequestAdmissionCounters {

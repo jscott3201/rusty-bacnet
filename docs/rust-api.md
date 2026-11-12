@@ -10442,7 +10442,12 @@ storage holds what they serve (#1363). That wait has no limit: storage that
 stalls holds `stop()` up, and a warning naming the objects still saving is
 logged after 5 s and every 30 s after that. `stop()` doesn't wait while the
 application holds the database; the objects then settle once it lets go, and
-put storage back when they are dropped. An abort lands when a request's task
+put storage back when they are dropped. A local write dropped while another
+task held the database guard lets go of its stage from a task of its own
+(#2493), and `stop()` waits up to 5 s for such tasks before it settles, so
+none of them holds the guard then (#2495). One still waiting after that is
+behind a guard the application holds, and its stage settles with the others
+once the guard is free. An abort lands when a request's task
 next yields, so a request already running when `stop()` begins can still make
 its write; its answer is sealed, but the object serves that write and storage
 holds it (#1457).

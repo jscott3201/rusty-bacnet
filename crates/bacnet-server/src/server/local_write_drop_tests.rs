@@ -1,7 +1,9 @@
 //! A `write_local` dropped while its durable save runs, or while it waits
 //! for the database guard to commit, lets go of what it staged at once
 //! (#2493): storage goes back to what the Device serves, and the next write
-//! on it is not held up for the stage's lifetime.
+//! on it is not held up for the stage's lifetime. A drop that finds the
+//! guard taken leaves the release to a task, and `stop()` waits for it, for
+//! a bounded time, before it settles the objects (#2495).
 //!
 //! The Device keeps its Description in storage (#2364). The first save the
 //! storage sees is held until the test lets it go; the rest run at once.
@@ -264,6 +266,151 @@ async fn a_write_task_aborted_during_its_save_has_released_when_the_abort_is_joi
     assert!(!staged(&server).await, "the aborted task left its stage");
     drop(go);
     storage.holds(kept(&before)).await;
+}
+
+/// Drop a `write_local` of "lobby" while it waits for the guard, which the
+/// test holds with the returned reader: its save has run, and the release of
+/// its stage goes to a task that waits behind the reader.
+async fn drop_waiting_for_the_guard(
+    server: &BACnetServer<TestTransport>,
+    storage: &Storage,
+) -> tokio::sync::OwnedRwLockReadGuard<ObjectDatabase> {
+    let (started, go) = storage.hold_next();
+    let mut call = std::pin::pin!(write_description(server, "lobby"));
+    tokio::select! {
+        _ = &mut call => panic!("the held save finished"),
+        started = started => started.unwrap(),
+    }
+    let guard = Arc::clone(server.database()).read_owned().await;
+    drop(go);
+    tokio::select! {
+        _ = &mut call => panic!("the write finished under the test's guard"),
+        () = writer_is_queued(server) => {}
+    }
+    guard
+}
+
+/// Return once `stop()` waits for a release task.
+async fn stop_waits_for(releases: &super::super::durable_writes::StageReleases) {
+    tokio::time::timeout(HANG, async {
+        while releases.waits() == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("stop() never waited for the release task");
+}
+
+#[tokio::test]
+async fn stop_waits_for_a_release_task_that_holds_the_guard_as_it_settles() {
+    let storage = Arc::new(Storage::default());
+    let mut server = server(&storage).await;
+    let before = served(&server).await;
+    let releases = Arc::clone(server.request_tasks.stage_releases());
+    let (reached, release_go) = releases.hold_next();
+    let reader = drop_waiting_for_the_guard(&server, &storage).await;
+    assert_eq!(
+        releases.outstanding(),
+        1,
+        "the release task was not counted"
+    );
+    // The reader goes, and the release task takes the guard and holds it at
+    // its gate, before it releases: as a release still running when
+    // `stop()` settles would.
+    drop(reader);
+    tokio::time::timeout(HANG, reached)
+        .await
+        .expect("the release task never took the guard")
+        .unwrap();
+    assert_eq!(storage.latest(), Some(Some("lobby".to_owned())));
+
+    let mut release_go = Some(release_go);
+    let waited = {
+        let mut stopping = std::pin::pin!(server.stop());
+        let waited = tokio::select! {
+            result = &mut stopping => {
+                result.unwrap();
+                false
+            }
+            () = stop_waits_for(&releases) => true,
+        };
+        if waited {
+            // Let the release through while `stop()` waits for it.
+            drop(release_go.take());
+            tokio::time::timeout(HANG, stopping)
+                .await
+                .expect("stop() hung after the release")
+                .unwrap();
+        }
+        waited
+    };
+    // What storage holds the moment `stop()` returns, before anything else
+    // runs.
+    let at_stop = storage.latest();
+    drop(release_go);
+    assert_eq!(
+        at_stop,
+        Some(kept(&before).map(str::to_owned)),
+        "stop() returned before storage went back to what the Device serves"
+    );
+    assert!(waited, "stop() did not wait for the release task");
+    assert_eq!(releases.outstanding(), 0);
+    assert!(!staged(&server).await, "the stage outlived stop()");
+    assert_eq!(served(&server).await, before);
+}
+
+#[tokio::test]
+async fn stop_waits_for_a_release_behind_an_application_guard_only_so_long() {
+    use super::super::durable_writes::stage_releases::RELEASE_WAIT;
+    let storage = Arc::new(Storage::default());
+    let mut server = server(&storage).await;
+    let before = served(&server).await;
+    let releases = Arc::clone(server.request_tasks.stage_releases());
+    // The application holds the database across `stop()`.
+    let reader = drop_waiting_for_the_guard(&server, &storage).await;
+    assert_eq!(
+        releases.outstanding(),
+        1,
+        "the release task was not counted"
+    );
+
+    tokio::time::pause();
+    let started = tokio::time::Instant::now();
+    tokio::time::timeout(HANG, server.stop())
+        .await
+        .expect("stop() waited on the application's guard")
+        .unwrap();
+    let waited = started.elapsed();
+    assert!(
+        waited >= RELEASE_WAIT && waited < RELEASE_WAIT + Duration::from_secs(1),
+        "stop() waited {waited:?} for the release task"
+    );
+    // Storage still leads the Device, as when nothing was waited for.
+    assert_eq!(releases.outstanding(), 1);
+    assert_eq!(storage.latest(), Some(Some("lobby".to_owned())));
+
+    // Once the application lets go, the release and the settle run, and
+    // storage goes back to what the Device serves.
+    tokio::time::resume();
+    drop(reader);
+    storage.holds(kept(&before)).await;
+    assert!(!staged(&server).await, "the stage outlived the guard");
+    assert_eq!(releases.outstanding(), 0);
+    assert_eq!(served(&server).await, before);
+}
+
+#[tokio::test]
+async fn run_writes_count_their_release_tasks_where_stop_waits() {
+    let storage = Arc::new(Storage::default());
+    let server = server(&storage).await;
+    let own = server.request_tasks.stage_releases();
+    // Runs a request or WriteGroup starts get the server's count through
+    // the task spawner, and those `write_local` starts through the server.
+    let spawned = server.request_tasks.spawner().stage_releases();
+    assert!(Arc::ptr_eq(&spawned, own));
+    let runner = super::super::command_runs::CommandRunner::for_server(&server);
+    assert!(Arc::ptr_eq(runner.writer().stage_releases, own));
+    assert!(Arc::ptr_eq(server.local_writer().stage_releases, own));
 }
 
 #[tokio::test]

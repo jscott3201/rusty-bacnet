@@ -42,7 +42,7 @@ async fn a_held_stage_dropped_off_the_runtime_under_a_guard_still_releases() {
     let db = Arc::new(RwLock::new(db));
     let value = PropertyValue::CharacterString("lobby".into());
     let targets = DurableTarget::local(device(), PropertyIdentifier::DESCRIPTION, None, &value);
-    let held = stage_held(&db, targets).await;
+    let held = stage_held(&db, None, targets).await;
     assert!(staged(&db).await, "the Description is staged");
 
     // Dropped on a plain thread while a reader holds the guard.
@@ -71,7 +71,7 @@ async fn a_held_stage_dropped_with_the_guard_free_has_released_when_the_drop_ret
     let db = Arc::new(RwLock::new(db));
     let value = PropertyValue::CharacterString("lobby".into());
     let targets = DurableTarget::local(device(), PropertyIdentifier::DESCRIPTION, None, &value);
-    let held = stage_held(&db, targets).await;
+    let held = stage_held(&db, None, targets).await;
     assert!(staged(&db).await, "the Description is staged");
 
     // No task runs between the drop and the check on this current-thread

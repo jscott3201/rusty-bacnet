@@ -52,7 +52,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// (#1541). That wait has no limit:
     /// storage that stalls holds stop up, and a warning naming the objects
     /// still saving is logged after 5 s and every 30 s after that. Stop does
-    /// not wait while the application holds the database: the objects then
+    /// not wait while the application holds the database, but for the
+    /// bounded wait for release tasks described below: the objects then
     /// settle from a task once it lets go, and put storage back when they
     /// are dropped. That task lets go of its handle through
     /// [`drop_database_off_runtime`], so if it holds the last one the
@@ -64,11 +65,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// and storage holds it (#1457).
     ///
     /// A local write aborted with its request (a Command or Channel run
-    /// writing) lets go of its stage as it drops, at once when the database
-    /// guard is free. One that finds the guard taken leaves the release to a
-    /// task that stop does not join, so if that task holds the guard just as
-    /// stop settles, the objects settle from a task once it is free (see
-    /// above) and storage is put back just after stop returns (#2493).
+    /// writing) or dropped by the application lets go of its stage as it
+    /// drops, at once when the database guard is free (#2493). One that finds
+    /// the guard taken leaves the release to a task, and stop waits for such
+    /// tasks before it settles, for at most 5 s (#2495). A task still waiting
+    /// then is behind a guard the application holds: the objects settle from
+    /// a task once it is free (see above), and storage is put back after stop
+    /// returns. A local write dropped once that wait is over is not waited
+    /// for.
     ///
     /// [`DurableWrites::settle_forgotten_writes`]:bacnet_objects::durable::DurableWrites::settle_forgotten_writes
     ///
@@ -144,6 +148,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         stop_producer(&mut self.binary_lighting_operation_task).await;
         stop_producer(&mut self.cov_purge_task).await;
         stop_producer(&mut self.cov_revisit_task).await;
+        // A local write dropped while the guard was taken lets go of its
+        // stage from a task of its own (#2493). Let those finish, so none
+        // holds the guard as the objects settle (#2495), but for a bounded
+        // time: one behind an application's guard must not hold stop up.
+        self.request_tasks.stage_releases().wait_at_stop().await;
         // No request is left to take or release a staged save, and the
         // operation task that would drop one is gone: put storage back to
         // what each object serves before stop returns (#1363). A

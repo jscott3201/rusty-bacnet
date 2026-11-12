@@ -61,6 +61,9 @@ pub(super) struct CommandRunner<T: TransportPort + 'static> {
     event_suppressions: Arc<super::event_suppression::EventSuppressions>,
     config: Arc<ServerConfig>,
     tasks: RequestTaskSpawner,
+    /// The count `stop()` waits on of tasks releasing a dropped write's
+    /// stage (#2495).
+    stage_releases: Arc<super::durable_writes::StageReleases>,
 }
 
 impl<T: TransportPort + 'static> Clone for CommandRunner<T> {
@@ -77,6 +80,7 @@ impl<T: TransportPort + 'static> Clone for CommandRunner<T> {
             event_suppressions: Arc::clone(&self.event_suppressions),
             config: Arc::clone(&self.config),
             tasks: self.tasks.clone(),
+            stage_releases: Arc::clone(&self.stage_releases),
         }
     }
 }
@@ -96,6 +100,7 @@ impl<T: TransportPort + 'static> CommandRunner<T> {
             event_suppressions: Arc::clone(&services.event_suppressions),
             config: Arc::clone(&services.config),
             tasks: tasks.clone(),
+            stage_releases: tasks.stage_releases(),
         }
     }
 
@@ -113,6 +118,7 @@ impl<T: TransportPort + 'static> CommandRunner<T> {
             event_suppressions: Arc::clone(&services.event_suppressions),
             config: Arc::clone(&services.config),
             tasks: services.tasks.clone(),
+            stage_releases: services.tasks.stage_releases(),
         }
     }
 
@@ -131,6 +137,7 @@ impl<T: TransportPort + 'static> CommandRunner<T> {
             event_suppressions: Arc::clone(writer.event_suppressions),
             config: Arc::clone(writer.config),
             tasks: server.request_tasks.spawner(),
+            stage_releases: Arc::clone(writer.stage_releases),
         }
     }
 
@@ -220,6 +227,7 @@ impl<T: TransportPort + 'static> CommandRunner<T> {
             device_bindings: &self.device_bindings,
             event_suppressions: &self.event_suppressions,
             config: &self.config,
+            stage_releases: &self.stage_releases,
         }
     }
 }

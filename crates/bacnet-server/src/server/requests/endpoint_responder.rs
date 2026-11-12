@@ -523,7 +523,10 @@ impl EndpointResponder {
             } => DurableTarget::local(oid, *property, *array_index, value),
             _ => Vec::new(),
         };
-        let staged = durable_writes::stage_held(db, durable).await;
+        // No count: an endpoint's stop awaits the guard to settle, so a
+        // release task that holds or awaits it goes first, and a stage whose
+        // task has not run yet is settled there (#2495).
+        let staged = durable_writes::stage_held(db, None, durable).await;
         let mut guard = db.write().await;
         let result = commit(&mut guard, change);
         staged.release(&mut guard);

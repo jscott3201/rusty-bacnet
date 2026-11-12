@@ -589,7 +589,9 @@ pub(super) const SLOW_SAVE_REPEAT: Duration = Duration::from_secs(30);
 ///
 /// An application holding the database is not waited for, as with the
 /// Command runs `stop()` ends: the objects then settle from a task once it
-/// lets go, and in any case put storage back when they are dropped.
+/// lets go, and in any case put storage back when they are dropped. A task
+/// releasing a dropped local write's stage would look the same, so `stop()`
+/// waits for those first ([`StageReleases`], #2495).
 pub(super) async fn settle_forgotten(db: &Arc<RwLock<ObjectDatabase>>) {
     for _ in 0..2 {
         let waits = match db.try_write() {
@@ -795,14 +797,18 @@ async fn stage_into(
 /// server's `write_local`, #2493), whose caller may drop it at any await:
 /// what an object stages is held from that moment in a [`HeldStage`], which
 /// releases it even then. It runs on a Tokio runtime, as [`stage`] does, and
-/// the stage keeps that runtime's handle.
+/// the stage keeps that runtime's handle. A server passes its `releases`, so
+/// `stop()` waits for a release the stage hands to a task (#2495); an
+/// endpoint passes none.
 pub(super) async fn stage_held(
     db: &Arc<RwLock<ObjectDatabase>>,
+    releases: Option<&Arc<StageReleases>>,
     targets: Vec<DurableTarget>,
 ) -> HeldStage {
     let mut held = HeldStage {
         db: Arc::downgrade(db),
         runtime: tokio::runtime::Handle::current(),
+        releases: releases.cloned(),
         staged: Vec::new(),
     };
     stage_into(db, &targets, &mut held.staged).await;
@@ -816,11 +822,14 @@ pub(super) async fn stage_held(
 /// staged on, whatever thread drops it, once the guard is free; either way
 /// the object queues the save of what it serves.
 ///
-/// Limit: a drop that finds the guard taken leaves the release to that task,
-/// which `stop()` does not join. If the task holds the guard just as
-/// `stop()` settles, `settle_forgotten` finds the guard busy and takes its
-/// settle-when-free path, so storage is put back just after `stop()`
-/// returns, as when an application holds the database.
+/// A server counts that task in its [`StageReleases`] until it ends, and
+/// `stop()` waits for the count to reach zero before it settles the objects
+/// (#2495), so the task never holds the guard as they settle. Limit: the
+/// wait lasts at most [`RELEASE_WAIT`](stage_releases::RELEASE_WAIT). A task
+/// still waiting then waits behind a guard `stop()` does not own, as when an
+/// application holds the database across `stop()`: the objects then settle
+/// from a task once it is free, and storage is put back after `stop()`
+/// returns. A local write dropped after that wait is not waited for either.
 /// An endpoint has no pass that expires a forgotten stage, and its dispatch
 /// task waits for the next write that stages on the object; a server's pass
 /// takes about 10 s, during which storage leads what the object serves and a
@@ -828,6 +837,8 @@ pub(super) async fn stage_held(
 pub(super) struct HeldStage {
     db: std::sync::Weak<RwLock<ObjectDatabase>>,
     runtime: tokio::runtime::Handle,
+    /// The server's count of release tasks; `None` on an endpoint.
+    releases: Option<Arc<StageReleases>>,
     staged: Vec<(ObjectIdentifier, SaveWait)>,
 }
 
@@ -856,14 +867,26 @@ impl Drop for HeldStage {
             drop(super::drop_database_off_runtime(db));
             return;
         }
-        // Otherwise a task waits for the guard. A runtime that has shut down
-        // drops the task, and with it a stage nothing could still take.
+        // Otherwise a task waits for the guard, counted from before it is
+        // spawned so `stop()` waits for it (#2495). A runtime that has shut
+        // down drops the task, and with it its place in the count and a
+        // stage nothing could still take.
+        let release = self.releases.as_ref().map(StageReleases::register);
         self.runtime.spawn(async move {
-            staged.release(&mut *db.write().await);
+            let mut guard = db.write().await;
+            #[cfg(test)]
+            stage_releases::gate(release.as_ref()).await;
+            staged.release(&mut guard);
+            drop(guard);
             drop(super::drop_database_off_runtime(db));
+            drop(release);
         });
     }
 }
+
+#[path = "stage_releases.rs"]
+pub(super) mod stage_releases;
+pub(super) use stage_releases::StageReleases;
 
 #[cfg(test)]
 #[path = "held_stage_tests.rs"]
