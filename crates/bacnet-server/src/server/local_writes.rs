@@ -555,6 +555,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             device_bindings: &self.device_bindings,
             event_suppressions: &self.event_suppressions,
             config: &self.config,
+            stage_releases: self.request_tasks.stage_releases(),
         }
     }
 
@@ -586,6 +587,9 @@ pub(super) struct LocalWriter<'a, T: TransportPort + 'static> {
     /// The server's config, which a run's task shares rather than copies
     /// (#1521).
     pub(super) config: &'a Arc<ServerConfig>,
+    /// The count `stop()` waits on of tasks releasing a dropped write's
+    /// stage (#2495).
+    pub(super) stage_releases: &'a Arc<super::durable_writes::StageReleases>,
 }
 
 impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
@@ -693,7 +697,8 @@ impl<'a, T: TransportPort + 'static> LocalWriter<'a, T> {
         // Held: a caller dropped at an await below releases the stage at
         // once, from a task of its own, instead of leaving it to expire
         // (#2493).
-        let staged = super::durable_writes::stage_held(self.db, durable).await;
+        let staged =
+            super::durable_writes::stage_held(self.db, Some(self.stage_releases), durable).await;
         {
             // Owned, so the rest of the write can take it to a task of its
             // own with no wait between the commit and the hand-off (#1367).

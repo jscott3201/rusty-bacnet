@@ -45,8 +45,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     pub async fn purge_audit_log(&self, oid: &ObjectIdentifier) -> Result<(), Error> {
         super::local_writes::local_runtime()?;
         self.active_network()?;
-        let staged =
-            durable_writes::stage_held(&self.db, durable_writes::DurableTarget::purge(*oid)).await;
+        let staged = durable_writes::stage_held(
+            &self.db,
+            Some(self.request_tasks.stage_releases()),
+            durable_writes::DurableTarget::purge(*oid),
+        )
+        .await;
         let mut db = self.db.write().await;
         let result = match db.get_mut(oid) {
             None => Err(protocol_error(
