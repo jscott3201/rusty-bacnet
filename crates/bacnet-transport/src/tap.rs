@@ -34,6 +34,19 @@
 //! frames are taken before TLS encrypts them on the way out and after it
 //! decrypts them on the way in.
 //!
+//! # Order
+//!
+//! A receiver gets frames in the order the transport hands them over, and
+//! a reply never comes ahead of the request that drew it (#2519). On B/IP,
+//! B/IPv6, BACnet/SC and Ethernet one task sends while another receives, so
+//! a send is handed over just before the socket writes it, and a received
+//! frame just after the read: an answer that comes back while the send has
+//! yet to return still follows it. Frames that cross on the wire, neither
+//! answering the other, may come either way round. A sent frame is reported
+//! even if its write then fails or is given up; the sender learns of the
+//! failure as before. On MS/TP one task writes and reads the line, so a
+//! frame is reported once written, before the station reads on.
+//!
 //! # Cost and loss
 //!
 //! With nobody subscribed, a frame costs the transport one atomic load and
@@ -106,7 +119,8 @@ pub enum TapPeer {
 #[non_exhaustive]
 pub struct TappedFrame {
     /// Wall-clock time the transport handed the frame to the tap: just
-    /// after the send returned, or just after the receive did.
+    /// before the socket write for a sent frame (on MS/TP, just after it),
+    /// just after the read for a received one. See [Order](crate::tap#order).
     pub timestamp: SystemTime,
     /// Sent or received.
     pub direction: TapDirection,

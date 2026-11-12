@@ -185,24 +185,30 @@ impl Bip6Socket {
         Ok(self.local_address()?.port())
     }
 
+    /// Send one datagram. The tap sees it just before the socket does, so
+    /// that an answer the receive loop reports can't come ahead of it however
+    /// long the send takes to return (#2519).
     pub async fn send_to(&self, bytes: &[u8], peer: impl Into<SocketAddr>) -> io::Result<usize> {
         let peer = peer.into();
-        let sent = match (self.selection, &self.sender, peer) {
-            (Some(link), Some(sender), SocketAddr::V6(peer)) => {
-                sender.send(&self.udp, bytes, peer, link).await
+        let tap = || {
+            let to = || TapPeer::Udp(peer);
+            self.tap
+                .record(TapDirection::Outbound, DataLink::Bip6, to, bytes);
+        };
+        match (self.selection, &self.sender, peer) {
+            (Some(link), Some(sender), SocketAddr::V6(to)) => {
+                tap();
+                sender.send(&self.udp, bytes, to, link).await
             }
-            (None, None, peer) => self.udp.send_to(bytes, peer).await,
+            (None, None, peer) => {
+                tap();
+                self.udp.send_to(bytes, peer).await
+            }
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "invalid selected IPv6 socket destination",
             )),
-        };
-        if sent.is_ok() {
-            let to = || TapPeer::Udp(peer);
-            self.tap
-                .record(TapDirection::Outbound, DataLink::Bip6, to, bytes);
         }
-        sent
     }
 
     /// Read the next datagram. In normal mode one the selected link doesn't

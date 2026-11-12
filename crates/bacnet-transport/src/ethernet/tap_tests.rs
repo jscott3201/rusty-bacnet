@@ -126,22 +126,32 @@ fn a_frame_the_transport_ignores_is_not_tapped() {
     assert_eq!(station.tap.counters().delivered, 0);
 }
 
-/// A sent frame is tapped once it went, whole, with its destination as the
-/// peer; one that failed, or went short, is not.
+/// A sent frame is tapped whole, with its destination as the peer, before
+/// the socket sends it (#2519): an answer the receive loop taps while the
+/// send has yet to return comes after it. One that then fails, or goes
+/// short, has been tapped too.
 #[test]
-fn a_frame_is_tapped_once_it_went() {
+fn a_frame_is_tapped_before_it_goes() {
     let tap = FrameTap::new();
     let mut frames = tap.subscribe();
     for destination in [STATION, ETHERNET_BROADCAST] {
         let mut buf = BytesMut::new();
         encode_ethernet_frame(&mut buf, &destination, &LOCAL, &WHO_IS);
-        send_tapped(&tap, &destination, &buf, |f| Ok(f.len())).unwrap();
-        assert_tapped(&next(&mut frames), Outbound, destination, &buf);
+        let mut tapped = None;
+        let send = |f: &[u8]| {
+            tapped = frames.try_recv();
+            Ok(f.len())
+        };
+        send_tapped(&tap, &destination, &buf, send).unwrap();
+        assert_tapped(&tapped.expect("tapped first"), Outbound, destination, &buf);
     }
     let unsent = frame(STATION, LOCAL, LLC_CONTROL_UI, &WHO_IS);
     let refused = |_: &[u8]| Err(io::Error::from(io::ErrorKind::OutOfMemory));
     assert!(send_tapped(&tap, &STATION, &unsent, refused).is_err());
     assert!(send_tapped(&tap, &STATION, &unsent, |f| Ok(f.len() - 1)).is_err());
+    for _ in 0..2 {
+        assert_tapped(&next(&mut frames), Outbound, STATION, &unsent);
+    }
     assert!(frames.try_recv().is_none());
 }
 

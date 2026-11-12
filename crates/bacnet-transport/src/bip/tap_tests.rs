@@ -1,8 +1,9 @@
 //! What a B/IP transport's frame tap sees on the receive side (#957): a
 //! broadcast listener's datagram only when the node keeps it, by the same
 //! verdict as the node's own listener check; a unicast sent as its header
-//! and the NPDU is tapped whole; and a transport's receiver ends once the
-//! transport is dropped.
+//! and the NPDU is tapped whole; a datagram is tapped before the socket
+//! tries it (#2519); and a transport's receiver ends once the transport is
+//! dropped.
 
 use super::*;
 use crate::tap::{FrameTap, TapDirection, TapPeer};
@@ -168,6 +169,30 @@ async fn a_unicast_sent_in_parts_is_tapped_whole() {
     assert_eq!(&tapped[0].bytes[..], wire);
     assert_eq!(tapped[0].peer, TapPeer::Udp(SocketAddr::V4(peer_address)));
     transport.stop().await.unwrap();
+}
+
+/// A datagram reaches the tap before the socket tries it (#2519), so an
+/// answer the receive loop taps while the send has yet to return comes
+/// after it. A socket without SO_BROADCAST refuses a broadcast on every OS
+/// (as in `send_observer`): the refused datagram has been tapped all the
+/// same, once.
+#[tokio::test]
+async fn a_datagram_is_tapped_before_the_socket_tries_it() {
+    let tap = FrameTap::new();
+    let mut frames = tap.subscribe();
+    let socket = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let socket = BipSocket::new(socket, None).tapped(tap.clone());
+    let datagram = raw_frame(BvlcFunction::ORIGINAL_BROADCAST_NPDU, NPDU);
+    let target = SocketAddrV4::new(Ipv4Addr::BROADCAST, 0xBAC0);
+    assert!(socket.send_to(&datagram, target).await.is_err());
+
+    let frame = frames.try_recv().expect("tapped before the try");
+    assert_eq!(frame.direction, TapDirection::Outbound);
+    assert_eq!(frame.peer, TapPeer::Udp(SocketAddr::V4(target)));
+    assert_eq!(&frame.bytes[..], &datagram[..]);
+    assert!(frames.try_recv().is_none());
 }
 
 /// Stopped, a transport's receiver waits on; dropped, it ends.

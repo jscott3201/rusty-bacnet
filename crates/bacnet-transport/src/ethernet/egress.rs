@@ -35,20 +35,21 @@ pub(super) fn send_whole_frame(
     }
 }
 
-/// Send `frame`, addressed to `destination`, whole with `send`
-/// ([`send_whole_frame`]), and once it went, hand it to `tap` (#1856). Every
-/// frame the transport sends goes through here: NPDUs, and XID and TEST
-/// responses. A frame that failed to go out is not tapped.
+/// Hand `frame`, addressed to `destination`, to `tap` (#1856), then send it
+/// whole with `send` ([`send_whole_frame`]). Every frame the transport sends
+/// goes through here: NPDUs, and XID and TEST responses. The tap sees the
+/// frame before the socket does, so that an answer the receive loop taps
+/// can't come ahead of it however long the send takes to return (#2519); a
+/// frame that then fails to go out, or goes short, has been tapped.
 pub(super) fn send_tapped(
     tap: &FrameTap,
     destination: &[u8; 6],
     frame: &[u8],
     send: impl FnMut(&[u8]) -> io::Result<usize>,
 ) -> io::Result<()> {
-    send_whole_frame(frame, send)?;
     let peer = || TapPeer::Ethernet(*destination);
     tap.record(TapDirection::Outbound, DataLink::Ethernet, peer, frame);
-    Ok(())
+    send_whole_frame(frame, send)
 }
 
 /// Which LLC command a reply answers.
