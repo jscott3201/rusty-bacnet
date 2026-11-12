@@ -259,6 +259,31 @@ class MutationCallbackTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse([w for w in caught_warnings
                                   if "never awaited" in str(w.message)])
 
+    async def test_reading_the_verdict_cannot_start_a_binding_operation(self):
+        """Reading the verdict runs user code too: an awaitable's close() is
+        called, and its binding operation is refused like the callable's."""
+        server = None
+
+        async def probe():
+            return await server.local_address()
+
+        class Mistaken:
+            def __await__(self):
+                yield
+
+            def close(self):
+                asyncio.run(probe())
+
+        server, client, address = await self.serve(lambda context: Mistaken())
+        with UnraisableCapture() as capture:
+            async with asyncio.timeout(10):
+                with self.assertRaises(BacnetProtocolError) as caught:
+                    await client.write_property(address, AV1, PV, PropertyValue.real(5.0))
+                self.assert_denied(caught)
+        self.assertEqual(len(capture.seen), 1)
+        self.assertIsInstance(capture.seen[0].exc_value, RuntimeError)
+        self.assertIn("cannot start a binding operation", str(capture.seen[0].exc_value))
+
 
 if __name__ == "__main__":
     unittest.main()

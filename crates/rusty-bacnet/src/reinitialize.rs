@@ -195,18 +195,21 @@ impl PyReinitialize {
 
     fn decide(&self, context: &ReinitializeContext) -> Result<(), Error> {
         let request = PyReinitializeRequest::new(context);
+        // The answer is read under the same refusal as the call: reading it
+        // can run Python code too, such as an enum conversion or a close().
         let answer = crate::py_async::attach(|py| {
-            let returned = crate::py_async::under_native_lock(|| {
-                self.on_reinitialize.bind(py).call1((request.clone(),))
-            });
-            Ok(match returned.and_then(|value| answer(&value)) {
-                Ok(answer) => answer,
-                Err(error) => {
-                    // Shown through sys.unraisablehook, as asyncio shows a
-                    // callback's exception.
-                    error.write_unraisable(py, Some(self.on_reinitialize.bind(py)));
-                    Answer::Failed
-                }
+            crate::py_async::under_native_lock(|| {
+                let callable = self.on_reinitialize.bind(py);
+                let returned = callable.call1((request.clone(),));
+                Ok(match returned.and_then(|value| answer(&value)) {
+                    Ok(answer) => answer,
+                    Err(error) => {
+                        // Shown through sys.unraisablehook, as asyncio shows
+                        // a callback's exception.
+                        error.write_unraisable(py, Some(callable));
+                        Answer::Failed
+                    }
+                })
             })
         })
         // The interpreter is exiting: nobody can carry the request out.
