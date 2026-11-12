@@ -416,7 +416,7 @@ impl Reporter {
                     continue;
                 }
                 let peer = peer_address(&to);
-                let Some(invoke_id) = ids.take(&peer) else {
+                let Some(invoke_id) = ids.take(&peer, service.confirmed()) else {
                     // No invoke ID to send it under: it ends unsent, and the
                     // change is looked at again later.
                     self.end_confirmed(token, Delivery::NotSent, now);

@@ -408,7 +408,7 @@ pub struct Summary {
 struct Ids(u8);
 
 impl InvokeIds for Ids {
-    fn take(&mut self, _: &BACnetAddress) -> Option<u8> {
+    fn take(&mut self, _: &BACnetAddress, _: ConfirmedServiceChoice) -> Option<u8> {
         let id = self.0;
         self.0 = self.0.wrapping_add(1);
         Some(id)

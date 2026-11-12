@@ -51,7 +51,7 @@ struct Ids {
 }
 
 impl InvokeIds for Ids {
-    fn take(&mut self, to: &BACnetAddress) -> Option<u8> {
+    fn take(&mut self, to: &BACnetAddress, _: ConfirmedServiceChoice) -> Option<u8> {
         if self.taken.len() >= self.limit {
             return None;
         }
