@@ -31,15 +31,22 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// - The stopped-server error once [`stop`](Self::stop) has run.
     ///
     /// On any error the log is left as it was. A purge whose future is
-    /// dropped before it finishes is handled as an abandoned write request
-    /// is: the log keeps serving its state, drops the staged purge once it
-    /// has waited long enough, and sets storage back to that state.
+    /// dropped before it commits changes nothing the log serves: the staged
+    /// purge is let go from a task of its own as soon as the database guard
+    /// is free, and storage is set back to the state the log serves (#2493).
+    /// One dropped after the commit has purged the log.
+    ///
+    /// The future must be awaited inside a Tokio runtime, which the release
+    /// task needs: outside one it fails with [`Error::Encoding`] before
+    /// anything is staged or looked up, so an unknown object gets that error
+    /// too, not UNKNOWN_OBJECT.
     ///
     /// [`AuditLogObject::purge`]: bacnet_objects::audit::AuditLogObject::purge
     pub async fn purge_audit_log(&self, oid: &ObjectIdentifier) -> Result<(), Error> {
+        super::local_writes::local_runtime()?;
         self.active_network()?;
         let staged =
-            durable_writes::stage(&self.db, durable_writes::DurableTarget::purge(*oid)).await;
+            durable_writes::stage_held(&self.db, durable_writes::DurableTarget::purge(*oid)).await;
         let mut db = self.db.write().await;
         let result = match db.get_mut(oid) {
             None => Err(protocol_error(

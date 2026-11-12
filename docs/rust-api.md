@@ -6003,9 +6003,8 @@ saves in place, and a write it makes that the class refuses leaves a staged
 write alone (#1424). A staged write
 its request releases without making (an earlier WritePropertyMultiple attempt
 failed, say) is dropped, and the class saves the list it serves at once. A
-staged write whose request vanished without releasing it (`stop()` aborted
-the request, or an application dropped a `write_local` future) is dropped the
-same way once 10 s have passed since its save finished: by the next write
+staged write whose request vanished without releasing it (a handler
+panicked between its stage and its release) is dropped the same way once 10 s have passed since its save finished: by the next write
 that stages, or within a further second by the server's once-a-second
 operation task, which measures the time on its own monotonic clock. The
 forwarder's operation task applies the same bound. Neither check runs once

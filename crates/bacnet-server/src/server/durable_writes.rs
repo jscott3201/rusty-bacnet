@@ -791,10 +791,11 @@ async fn stage_into(
     }
 }
 
-/// [`stage`] for an endpoint session's local write (#2468), whose caller
-/// may drop it at any await: what an object stages is held from that moment
-/// in a [`HeldStage`], which releases it even then. It runs on a Tokio
-/// runtime, as [`stage`] does, and the stage keeps that runtime's handle.
+/// [`stage`] for a local write (an endpoint session's, #2468, or the
+/// server's `write_local`, #2493), whose caller may drop it at any await:
+/// what an object stages is held from that moment in a [`HeldStage`], which
+/// releases it even then. It runs on a Tokio runtime, as [`stage`] does, and
+/// the stage keeps that runtime's handle.
 pub(super) async fn stage_held(
     db: &Arc<RwLock<ObjectDatabase>>,
     targets: Vec<DurableTarget>,
@@ -808,14 +809,22 @@ pub(super) async fn stage_held(
     held
 }
 
-/// What an endpoint session's local write staged. [`release`](Self::release)
+/// What a local write staged. [`release`](Self::release)
 /// lets it go under the guard of the write's commit. Dropped first, as when
-/// the caller drops the call while a save runs, it releases from a task of
-/// its own on the runtime it staged on, whatever thread drops it, once the
-/// guard is free, so the object queues the save of what it serves at once.
+/// the caller drops the call while a save runs, it releases at once if the
+/// guard is free, and otherwise from a task of its own on the runtime it
+/// staged on, whatever thread drops it, once the guard is free; either way
+/// the object queues the save of what it serves.
+///
+/// Limit: a drop that finds the guard taken leaves the release to that task,
+/// which `stop()` does not join. If the task holds the guard just as
+/// `stop()` settles, `settle_forgotten` finds the guard busy and takes its
+/// settle-when-free path, so storage is put back just after `stop()`
+/// returns, as when an application holds the database.
 /// An endpoint has no pass that expires a forgotten stage, and its dispatch
-/// task waits for the next write that stages on the object, so the stage
-/// must not wait out its lifetime.
+/// task waits for the next write that stages on the object; a server's pass
+/// takes about 10 s, during which storage leads what the object serves and a
+/// later write on it waits. So the stage must not wait out its lifetime.
 pub(super) struct HeldStage {
     db: std::sync::Weak<RwLock<ObjectDatabase>>,
     runtime: tokio::runtime::Handle,
@@ -838,8 +847,17 @@ impl Drop for HeldStage {
             return;
         };
         let staged = StagedWrites(std::mem::take(&mut self.staged));
-        // A runtime that has shut down drops the task, and with it a stage
-        // nothing could still take.
+        // A free guard is taken here, so a write task `stop()` aborts has put
+        // storage back by the time `stop()` joins it, and `settle_forgotten`
+        // finds nothing of the write's in flight.
+        if let Ok(mut guard) = Arc::clone(&db).try_write_owned() {
+            staged.release(&mut guard);
+            drop(guard);
+            drop(super::drop_database_off_runtime(db));
+            return;
+        }
+        // Otherwise a task waits for the guard. A runtime that has shut down
+        // drops the task, and with it a stage nothing could still take.
         self.runtime.spawn(async move {
             staged.release(&mut *db.write().await);
             drop(super::drop_database_off_runtime(db));

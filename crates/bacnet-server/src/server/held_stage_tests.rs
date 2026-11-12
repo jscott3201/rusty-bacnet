@@ -58,3 +58,24 @@ async fn a_held_stage_dropped_off_the_runtime_under_a_guard_still_releases() {
     }
     panic!("the dropped stage was never released");
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_held_stage_dropped_with_the_guard_free_has_released_when_the_drop_returns() {
+    let config = DeviceConfig {
+        identity: bacnet_objects::DeviceIdentity::new(123, 0).unwrap(),
+        ..Default::default()
+    };
+    let object = DeviceObject::with_tags_persistence(config, Arc::new(Discard)).unwrap();
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(object)).unwrap();
+    let db = Arc::new(RwLock::new(db));
+    let value = PropertyValue::CharacterString("lobby".into());
+    let targets = DurableTarget::local(device(), PropertyIdentifier::DESCRIPTION, None, &value);
+    let held = stage_held(&db, targets).await;
+    assert!(staged(&db).await, "the Description is staged");
+
+    // No task runs between the drop and the check on this current-thread
+    // runtime, so only a release made by the drop itself shows.
+    drop(held);
+    assert!(!staged(&db).await, "the drop left the release to a task");
+}
