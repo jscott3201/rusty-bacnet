@@ -5965,7 +5965,9 @@ service, where a client's simulated value is in force, and while
 Reliability_Evaluation_Inhibit is TRUE; a value outside BACnetReliability is
 PROPERTY / VALUE_OUT_OF_RANGE, and an object that takes none OBJECT /
 OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. It is not audited, as the other
-`*_local` inputs aren't. Python has no binding for it yet.
+`*_local` inputs aren't. The Python binding is
+`BACnetServer.set_reliability_local` (#2469), and an endpoint session has its
+own (see [Endpoint local writes](#endpoint-local-writes)).
 
 #### Schedule & Notification (6)
 
@@ -12013,6 +12015,81 @@ no invoke ID, through the source Reporter and its Audit_Level and
 Auditable_Operations filters. Without a source Reporter it records nothing.
 It fails when the session is not running, and returns once the record is
 admitted, so call it before restarting.
+
+### Endpoint local writes
+
+`EndpointSession::write_local`, `set_present_value_local` and
+`set_reliability_local` (#2468) are the session's counterparts of the
+`BACnetServer` calls of the same names: the application changes an object of
+its own database through bacnet-device-core's `write::local::apply`, under the
+database guard the responder reads under, so a request sees the object before
+the change or after it. Each is refused where the server's call is, with the
+same error. They work in any role while the session runs with a database;
+before `start()`, once `stop()` has begun (a cancelled `stop()` included) or
+without a database they fail with `Error::Encoding` and change nothing.
+
+```rust
+use bacnet_device_core::write::local::LocalCommandSource;
+
+session.set_present_value_local(&sensor, PropertyValue::Real(21.5)).await?;
+session.set_reliability_local(&sensor, Reliability::NO_SENSOR).await?;
+session
+    .write_local(&output, PropertyIdentifier::PRESENT_VALUE, None,
+        PropertyValue::Real(40.0), Some(8), LocalCommandSource::ServerDevice)
+    .await?;
+```
+
+What doesn't follow on an endpoint: it serves no COV subscriptions and runs no
+event pass, so it sends no COV or event notification after a local change (COV
+on the endpoint is #2490), and Event_State stays as it is: a fault set here
+shows FAULT in Status_Flags without the IN_ALARM the server's event pass adds.
+No task makes the writes a change starts either. Each run ends at once, unmade,
+as bacnet-device-core's `Responder` ends one a client's write starts, so none
+leaves its object busy, but what it leaves differs by object:
+
+- A Command's Present_Value write that selects a list with actions ends it with
+  In_Process and All_Writes_Successful FALSE, and no action is written; one
+  that selects no list, or an empty one, starts no run.
+- A Channel's Present_Value write to a Channel with members ends its
+  distribution with Write_Status FAILED, Reliability PROCESS_ERROR and
+  Status_Flags FAULT, and no member is written; with no members it starts no
+  run and Write_Status stays IDLE.
+- A write that starts or moves a Timer gives it its new state, but the
+  State_Change_Values writes the transition owes aren't made (Reliability
+  PROCESS_ERROR, FAULT), and with no Timer task a running Timer never expires.
+- A Schedule's targets aren't written, nor a Staging object's.
+
+A client's next read sees the change.
+
+A call dropped before it commits has changed nothing the object serves. A save
+it had staged by then is let go of from a task of its own as soon as the guard
+is free, so storage comes back to what the object serves soon after and the
+next write to the object, a client's included, isn't held up behind it. Once
+the commit begins it runs to its end under the guard, with no await.
+
+Saving and auditing follow the endpoint's network writes, property by
+property:
+
+- A property its object saves first is staged and saved before the call
+  returns, with the guard dropped, as the endpoint saves a Description a client
+  writes to a Device built with `DeviceObject::with_tags_persistence`; a
+  failed save refuses the write with DEVICE / OPERATIONAL_PROBLEM. The table of
+  such properties is the server's own, so every property
+  `BACnetServer::write_local` saves first (a Notification Class's
+  Recipient_List, say) is saved first here too, never under the guard.
+- A write of the Device's Audit_Notification_Recipient takes the route an
+  authorized network write and `write_audit_recipient` take, through the source
+  Audit runtime: the old and the new recipient each get the record, which names
+  this Device with no invoke ID. Without a running source Reporter the Device
+  has no such property (PROPERTY / UNKNOWN_PROPERTY).
+- Nothing else is audited, as no other network write to the endpoint is. Here
+  the endpoint differs from the server, which audits a local write when target
+  Audit reporting is configured.
+
+The local-write cases the server and bacnet-device-core run side by side run on
+the endpoint too, compared by result and by the properties read back; the event
+pass and the Command, Channel and Timer runs are the differences pinned by
+tests.
 
 ### Direct endpoint WriteProperty and source WRITE reporting
 

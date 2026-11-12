@@ -21,6 +21,8 @@ struct Storage {
     saved: Mutex<Option<TagsSnapshot>>,
     saves: AtomicUsize,
     fail: AtomicBool,
+    /// While set, a save waits before it stores anything.
+    hold: AtomicBool,
     database: OnceLock<Weak<RwLock<ObjectDatabase>>>,
     saved_under_the_guard: AtomicBool,
 }
@@ -56,6 +58,9 @@ impl TagsPersistence for Storage {
                 }
                 std::thread::yield_now();
             }
+        }
+        while self.hold.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(1));
         }
         if self.fail.load(Ordering::SeqCst) {
             return Err(Error::Encoding("storage unavailable".into()));
@@ -169,6 +174,117 @@ async fn a_description_the_endpoint_cannot_save_is_refused_with_the_old_one_serv
     assert_eq!(ack.property_value, text("lobby"));
     assert_eq!(storage.description().as_deref(), Some("lobby"));
     assert!(!storage.saved_under_the_guard.load(Ordering::SeqCst));
+    client.stop().await.unwrap();
+    session.stop().await.unwrap();
+}
+
+/// A local write of the Description (#2468) is saved as a client's is:
+/// before the call returns and off the database guard, and refused with
+/// the old text served when the save fails.
+#[tokio::test(start_paused = true)]
+async fn a_description_written_locally_is_saved_first() {
+    let storage = Arc::new(Storage::default());
+    let (mut session, _) = session_on(&storage).await;
+    let source = bacnet_device_core::write::local::LocalCommandSource::ServerDevice;
+    let device = oid(123);
+    let write =
+        |text: &str| session.write_local(&device, DESCRIPTION, None, served(text), None, source);
+    write("lobby").await.unwrap();
+    assert_eq!(storage.description().as_deref(), Some("lobby"));
+    assert_eq!(storage.saves.load(Ordering::SeqCst), 1);
+    assert!(!storage.saved_under_the_guard.load(Ordering::SeqCst));
+    assert_eq!(read(&session, DESCRIPTION).await, served("lobby"));
+    storage.fail.store(true, Ordering::SeqCst);
+    let refused = write("hall").await.unwrap_err();
+    assert!(
+        matches!(
+            refused,
+            Error::Remote(RemoteError::Error { class, code })
+                if class == ErrorClass::DEVICE && code == ErrorCode::OPERATIONAL_PROBLEM
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(read(&session, DESCRIPTION).await, served("lobby"));
+    assert_eq!(storage.description().as_deref(), Some("lobby"));
+    assert!(!storage.saved_under_the_guard.load(Ordering::SeqCst));
+    session.stop().await.unwrap();
+}
+
+/// Whether Device 123 holds a write staged for a request.
+async fn staged(session: &EndpointSession<BusPort>) -> bool {
+    let mut db = session.database.as_ref().unwrap().write().await;
+    let device = db.get_mut(&oid(123)).unwrap();
+    device.durable_writes().unwrap().has_staged_write()
+}
+
+/// Wait for `done` to hold, polled every 5 ms. The bound only ends a test
+/// that would otherwise hang; the states, not the time, are what it checks.
+async fn until<F: std::future::Future<Output = bool>>(what: &str, mut done: impl FnMut() -> F) {
+    let poll = async {
+        while !done().await {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(30), poll)
+        .await
+        .unwrap_or_else(|_| panic!("never: {what}"));
+}
+
+/// A local write dropped while its save runs (#2468 review) lets go of
+/// what it staged: the Device drops the stage while the save is still held,
+/// storage then comes back to the Description the Device serves, and a
+/// client's next Description write and an unrelated read both land. Real
+/// time, so the drop lands while the held save runs on the Device's writer
+/// thread.
+#[tokio::test]
+async fn a_local_write_dropped_during_its_save_lets_go_of_the_stage() {
+    let storage = Arc::new(Storage::default());
+    let (mut session, mac) = session_on(&storage).await;
+    let mut client = bus_client().await;
+    let device = oid(123);
+    let source = bacnet_device_core::write::local::LocalCommandSource::ServerDevice;
+    storage.hold.store(true, Ordering::SeqCst);
+    let write = session.write_local(&device, DESCRIPTION, None, served("lobby"), None, source);
+    let dropped = tokio::time::timeout(Duration::from_millis(50), write).await;
+    assert!(
+        dropped.is_err(),
+        "the held save keeps the write from ending"
+    );
+    // Released while its save is still held, not left to its lifetime.
+    until("the stage released, the save held", || async {
+        !staged(&session).await
+    })
+    .await;
+    assert_eq!(storage.saves.load(Ordering::SeqCst), 0, "the save is held");
+    storage.hold.store(false, Ordering::SeqCst);
+
+    // The held save stores the dropped text, then the save the release
+    // queued puts back what the Device serves: the configured text, which
+    // storage keeps as no written one.
+    until("storage back to what the Device serves", || async {
+        storage.saves.load(Ordering::SeqCst) >= 2 && storage.description().is_none()
+    })
+    .await;
+    assert_eq!(read(&session, DESCRIPTION).await, served("configured"));
+
+    assert!(
+        !staged(&session).await,
+        "nothing staged before the client's write"
+    );
+    let name = PropertyIdentifier::OBJECT_NAME;
+    let both = async {
+        tokio::join!(
+            client.write_property(&mac, device, DESCRIPTION, None, text("hall"), None),
+            client.read_property(&mac, device, name, None),
+        )
+    };
+    let (written, name) = tokio::time::timeout(Duration::from_secs(30), both)
+        .await
+        .expect("the client's write and read end");
+    written.unwrap();
+    name.unwrap();
+    assert_eq!(storage.description().as_deref(), Some("hall"));
+    assert_eq!(read(&session, DESCRIPTION).await, served("hall"));
     client.stop().await.unwrap();
     session.stop().await.unwrap();
 }

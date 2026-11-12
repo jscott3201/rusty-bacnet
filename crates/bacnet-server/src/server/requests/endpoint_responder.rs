@@ -5,6 +5,7 @@ use crate::mutation::{
     DeviceWriteAuthorizer, MutationAuthorizationContext, MutationTarget, MutationTrust,
 };
 use bacnet_device_core::reply;
+use bacnet_device_core::write::local::LocalChange;
 use bacnet_encoding::apdu::{decode_apdu, encode_apdu};
 use bacnet_endpoint_core::endpoint_ingress::{EndpointApduDestination, EndpointEgress};
 use bacnet_network::layer::ReceivedApdu;
@@ -489,6 +490,44 @@ impl EndpointResponder {
     #[doc(hidden)]
     pub fn close(&self) {
         self.open.store(false, Ordering::Release);
+    }
+
+    /// An endpoint session's local write (#2468), staged as the server
+    /// stages its own `write_local` and as this responder stages a written
+    /// Description: a property write `change` to `oid` makes whose object
+    /// saves it first is staged and saved with the guard dropped, then
+    /// `commit` gets the database guard and the change, and what was staged
+    /// is released under that guard once `commit` returns, whatever it
+    /// returns. An input or a Reliability stages nothing.
+    ///
+    /// `commit` runs under the guard with no await, so a caller dropped
+    /// before it runs has changed nothing the object serves. What it staged
+    /// by then is released from a task of its own as soon as the guard is
+    /// free, so the object puts storage back to what it serves at once
+    /// rather than holding the stage, and the next write that stages on it,
+    /// for the stage's lifetime.
+    #[doc(hidden)]
+    pub async fn local_commit<R>(
+        db: &Arc<RwLock<ObjectDatabase>>,
+        oid: ObjectIdentifier,
+        change: LocalChange,
+        commit: impl FnOnce(&mut ObjectDatabase, LocalChange) -> R,
+    ) -> R {
+        use crate::server::durable_writes::{self, DurableTarget};
+        let durable = match &change {
+            LocalChange::Property {
+                property,
+                array_index,
+                value,
+                ..
+            } => DurableTarget::local(oid, *property, *array_index, value),
+            _ => Vec::new(),
+        };
+        let staged = durable_writes::stage_held(db, durable).await;
+        let mut guard = db.write().await;
+        let result = commit(&mut guard, change);
+        staged.release(&mut guard);
+        result
     }
 }
 

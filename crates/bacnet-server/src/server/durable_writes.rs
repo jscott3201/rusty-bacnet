@@ -745,6 +745,17 @@ pub(super) async fn stage(
     targets: Vec<DurableTarget>,
 ) -> StagedWrites {
     let mut staged = Vec::new();
+    stage_into(db, &targets, &mut staged).await;
+    StagedWrites(staged)
+}
+
+/// [`stage`]'s steps, each object's wait put in `staged` as soon as the
+/// object stages, ahead of the wait for its save.
+async fn stage_into(
+    db: &Arc<RwLock<ObjectDatabase>>,
+    targets: &[DurableTarget],
+    staged: &mut Vec<(ObjectIdentifier, SaveWait)>,
+) {
     // Each object stages once, with all of the request's changes to it.
     for group in targets.chunk_by(|a, b| a.oid == b.oid) {
         loop {
@@ -754,8 +765,8 @@ pub(super) async fn stage(
             };
             match step {
                 Some(StageStep::Staged(wait)) => {
-                    saved(wait.clone()).await;
-                    staged.push((group[0].oid, wait));
+                    staged.push((group[0].oid, wait.clone()));
+                    saved(wait).await;
                     break;
                 }
                 Some(StageStep::Busy(wait)) => {
@@ -766,5 +777,64 @@ pub(super) async fn stage(
             }
         }
     }
-    StagedWrites(staged)
 }
+
+/// [`stage`] for an endpoint session's local write (#2468), whose caller
+/// may drop it at any await: what an object stages is held from that moment
+/// in a [`HeldStage`], which releases it even then. It runs on a Tokio
+/// runtime, as [`stage`] does, and the stage keeps that runtime's handle.
+pub(super) async fn stage_held(
+    db: &Arc<RwLock<ObjectDatabase>>,
+    targets: Vec<DurableTarget>,
+) -> HeldStage {
+    let mut held = HeldStage {
+        db: Arc::downgrade(db),
+        runtime: tokio::runtime::Handle::current(),
+        staged: Vec::new(),
+    };
+    stage_into(db, &targets, &mut held.staged).await;
+    held
+}
+
+/// What an endpoint session's local write staged. [`release`](Self::release)
+/// lets it go under the guard of the write's commit. Dropped first, as when
+/// the caller drops the call while a save runs, it releases from a task of
+/// its own on the runtime it staged on, whatever thread drops it, once the
+/// guard is free, so the object queues the save of what it serves at once.
+/// An endpoint has no pass that expires a forgotten stage, and its dispatch
+/// task waits for the next write that stages on the object, so the stage
+/// must not wait out its lifetime.
+pub(super) struct HeldStage {
+    db: std::sync::Weak<RwLock<ObjectDatabase>>,
+    runtime: tokio::runtime::Handle,
+    staged: Vec<(ObjectIdentifier, SaveWait)>,
+}
+
+impl HeldStage {
+    /// Release what was staged, under the guard of the write's commit.
+    pub(super) fn release(mut self, db: &mut ObjectDatabase) {
+        StagedWrites(std::mem::take(&mut self.staged)).release(db);
+    }
+}
+
+impl Drop for HeldStage {
+    fn drop(&mut self) {
+        if self.staged.is_empty() {
+            return;
+        }
+        let Some(db) = self.db.upgrade() else {
+            return;
+        };
+        let staged = StagedWrites(std::mem::take(&mut self.staged));
+        // A runtime that has shut down drops the task, and with it a stage
+        // nothing could still take.
+        self.runtime.spawn(async move {
+            staged.release(&mut *db.write().await);
+            drop(super::drop_database_off_runtime(db));
+        });
+    }
+}
+
+#[cfg(test)]
+#[path = "held_stage_tests.rs"]
+mod held_stage_tests;
