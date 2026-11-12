@@ -579,16 +579,27 @@ async fn a_staged_write_whose_request_vanished_is_put_back_within_its_lifetime_a
     let served = [destination(1)];
     write_local(&server, nc, &served).await.unwrap();
     let (started, go) = storage.hold();
+    // A network request's stage: a `write_local` is dropped with its stage
+    // released at once (#2493), so only a request task `stop()` aborts, or
+    // one that vanished otherwise, leaves it for the pass.
     let writing = tokio::spawn({
-        let server = Arc::clone(&server);
-        async move { write_local(&server, nc, &[destination(2)]).await }
+        let db = Arc::clone(server.database());
+        async move {
+            let targets = crate::server::durable_writes::DurableTarget::local(
+                nc,
+                RECIPIENT_LIST,
+                None,
+                &framed(&[destination(2)]),
+            );
+            drop(crate::server::durable_writes::stage(&db, targets).await);
+        }
     });
     tokio::task::spawn_blocking(move || started.recv_timeout(WAIT))
         .await
         .unwrap()
         .expect("the save started");
-    // The request goes while its save is held, as when stop() aborts it or
-    // an application drops the future. Its staged write stays behind.
+    // The request goes while its save is held, as when stop() aborts it. Its
+    // staged write stays behind.
     writing.abort();
     assert!(writing.await.unwrap_err().is_cancelled());
     // The save lands, so storage holds a list the class never served. The

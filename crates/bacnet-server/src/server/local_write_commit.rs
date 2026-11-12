@@ -4,7 +4,7 @@
 //! as the object step ends, ahead of Audit's record of it.
 
 use super::*;
-use crate::server::durable_writes::StagedWrites;
+use crate::server::durable_writes::HeldStage;
 use bacnet_device_core::write::local::{self, LocalChange, Observed};
 use bacnet_objects::traits::LocalInputValue;
 
@@ -48,7 +48,7 @@ fn change(write: LocalWrite<'_>, value: PropertyValue) -> LocalChange {
 /// it releases as the object step ends.
 struct LocalObserver<'a, T: TransportPort> {
     audit: Option<audit_reporter::WriteAudit<'a, T>>,
-    staged: Option<StagedWrites>,
+    staged: Option<HeldStage>,
 }
 
 impl<T: TransportPort> LocalObserver<'_, T> {
@@ -103,7 +103,7 @@ impl<T: TransportPort + 'static> LocalWriter<'_, T> {
         oid: &ObjectIdentifier,
         write: LocalWrite<'_>,
         value: PropertyValue,
-        staged: StagedWrites,
+        staged: HeldStage,
     ) -> Result<Applied, Error> {
         let audit = match write {
             LocalWrite::Property { property, .. } => {

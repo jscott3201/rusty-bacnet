@@ -72,9 +72,20 @@ async fn every_profile_object_puts_back_a_staged_write_whose_request_vanished() 
         write_local(&server, oid, FLOOR).await.unwrap();
         assert!(comes_to_hold(&storage, floor()).await, "{kind:?}");
         let (started, go) = storage.hold();
+        // A network request's stage: a `write_local` is dropped with its
+        // stage released at once (#2493), so only a request task `stop()`
+        // aborts, or one that vanished otherwise, leaves it for the pass.
         let writing = tokio::spawn({
-            let server = Arc::clone(&server);
-            async move { write_local(&server, oid, EXHAUST).await }
+            let db = Arc::clone(server.database());
+            async move {
+                let targets = crate::server::durable_writes::DurableTarget::local(
+                    oid,
+                    TAGS,
+                    None,
+                    &PropertyValue::ApplicationData(EXHAUST.to_vec()),
+                );
+                drop(crate::server::durable_writes::stage(&db, targets).await);
+            }
         });
         tokio::task::spawn_blocking(move || started.recv_timeout(WAIT))
             .await
