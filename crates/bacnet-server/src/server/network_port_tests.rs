@@ -79,6 +79,10 @@ async fn registered_port_keeps_lease(stop_first: bool) -> std::io::Result<()> {
     std::net::UdpSocket::bind(address).map(drop)
 }
 
+/// The server's twin of the endpoint test: the SimpleAck to a reserved audit
+/// notification is admitted while the learning control waits behind a reader
+/// for the write guard, with neither the control nor the database in its way
+/// (#2514), and stop aborts that control without waiting for the reader.
 #[tokio::test]
 async fn network_number_server_held_learning_preserves_audit_ack_progress() {
     use bacnet_endpoint_core::coordinator::CanonicalPeer;
