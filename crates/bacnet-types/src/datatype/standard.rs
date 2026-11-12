@@ -201,7 +201,8 @@ const fn by_identifier(property: P) -> Option<ValueType> {
         | P::MODEL_NAME
         | P::VENDOR_NAME
         | P::FILE_TYPE
-        | P::NODE_SUBTYPE => single(D::CharacterString),
+        | P::NODE_SUBTYPE
+        | P::STATE_DESCRIPTION => single(D::CharacterString),
         P::OUT_OF_SERVICE
         | P::EVENT_DETECTION_ENABLE
         | P::EVENT_ALGORITHM_INHIBIT
@@ -328,6 +329,7 @@ const fn by_identifier(property: P) -> Option<ValueType> {
         | P::MAX_PRES_VALUE
         | P::DEFAULT_RAMP_RATE
         | P::DEFAULT_STEP_INCREMENT
+        | P::FULL_DUTY_BASELINE
         | P::ADJUST_VALUE => single(D::Real),
         P::OBJECT_TYPE
         | P::EVENT_STATE

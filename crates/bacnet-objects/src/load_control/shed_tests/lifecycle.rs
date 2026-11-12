@@ -216,3 +216,28 @@ fn a_replaced_shedder_hears_only_of_requests_it_was_asked_about() {
     assert_eq!(second.take().last(), Some(&Told::Stop));
     assert!(first.take().is_empty());
 }
+
+#[test]
+fn the_shedder_reads_the_full_duty_baseline_and_hears_it_change() {
+    let (mut lc, _clock) = object();
+    let app = TestShedder::new(ShedProgress::Compliant, 2, 2);
+    lc.set_shedder(app.clone());
+    // Idle: a new baseline is configuration, and nobody is asked.
+    lc.set_full_duty_baseline(Some(400.0)).unwrap();
+    assert!(app.take().is_empty());
+    write_start(&mut lc, at(0));
+    assert!(matches!(&app.take()[..],
+        [Told::Shed(r)] if r.full_duty_baseline == Some(400.0)));
+    // During a request the application is asked again with the new value,
+    // and with none once it is cleared (#2479).
+    lc.set_full_duty_baseline(Some(350.0)).unwrap();
+    assert!(matches!(&app.take()[..],
+        [Told::Shed(r)] if r.full_duty_baseline == Some(350.0)));
+    lc.set_full_duty_baseline(None).unwrap();
+    assert!(matches!(&app.take()[..],
+        [Told::Shed(r)] if r.full_duty_baseline.is_none()));
+    // A refused value changes nothing and asks nothing.
+    assert!(lc.set_full_duty_baseline(Some(-5.0)).is_err());
+    assert!(app.take().is_empty());
+    assert_eq!(present_value(&lc), COMPLIANT);
+}

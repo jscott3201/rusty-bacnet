@@ -243,6 +243,7 @@ fn the_application_moves_a_shed_between_compliant_and_non_compliant() {
             start_time: at(5),
             shed_duration: 30,
             duty_window: 10,
+            full_duty_baseline: None,
             started: false,
         })]
     );
@@ -378,6 +379,7 @@ fn a_write_during_a_shed_reconfigures_it_through_pending() {
             start_time: at(20),
             shed_duration: 40,
             duty_window: 5,
+            full_duty_baseline: None,
             started: true,
         };
         assert!(!pass(&mut lc, &clock, 21));
@@ -479,6 +481,7 @@ fn enable_false_ends_a_request_and_keeps_only_the_level_and_window_written_meanw
             start_time: at(14),
             shed_duration: 20,
             duty_window: 5,
+            full_duty_baseline: None,
             started: false,
         })]
     );

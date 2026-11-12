@@ -51,7 +51,10 @@ pub use shed::{LoadShedder, ShedProgress, ShedRequest, ShedStatus};
 /// [`BACnetShedLevel`] values and go out in that CHOICE's context-tagged form
 /// (Clause 21). Shed_Levels and Shed_Level_Descriptions start empty; the
 /// embedder sets them with [`set_shed_levels`](Self::set_shed_levels). The
-/// module docs describe the state machine and the application route.
+/// optional Full_Duty_Baseline and State_Description are served only once
+/// the embedder sets them ([`set_full_duty_baseline`](Self::set_full_duty_baseline),
+/// [`set_state_description`](Self::set_state_description)). The module docs
+/// describe the state machine and the application route.
 #[derive(Clone)]
 pub struct LoadControlObject {
     oid: ObjectIdentifier,
@@ -73,6 +76,10 @@ pub struct LoadControlObject {
     enable: bool,
     shed_levels: Vec<u64>,
     shed_level_descriptions: Vec<String>,
+    /// Full_Duty_Baseline in kilowatts; the row is absent while `None`.
+    full_duty_baseline: Option<f32>,
+    /// State_Description; the row is absent while `None`.
+    state_description: Option<String>,
     status_flags: StatusFlags,
     /// Event_State.
     event_state: EventState,
@@ -108,6 +115,8 @@ impl LoadControlObject {
             enable: true,
             shed_levels: Vec::new(),
             shed_level_descriptions: Vec::new(),
+            full_duty_baseline: None,
+            state_description: None,
             status_flags: StatusFlags::empty(),
             event_state: EventState::NORMAL,
             reliability: Reliability::NO_FAULT_DETECTED,
@@ -237,6 +246,36 @@ impl LoadControlObject {
         (self.shed_levels, self.shed_level_descriptions) = levels.into_iter().unzip();
         self.settle(shed::Prompt::Look);
         Ok(())
+    }
+
+    /// Set Full_Duty_Baseline, in kilowatts: the fixed baseline a PERCENT or
+    /// AMOUNT request is reckoned from (Clauses 12.28.10 and 12.28.15, Table
+    /// 12-33), or `None` for none. The property is optional and read-only to
+    /// clients: the object serves it, and lists it in Property_List, only
+    /// while one is set.
+    ///
+    /// A negative or non-finite baseline fails with PROPERTY /
+    /// VALUE_OUT_OF_RANGE and changes nothing. The [`LoadShedder`] reads it
+    /// as [`ShedRequest::full_duty_baseline`], and a request under way is
+    /// put to it again with the new value.
+    pub fn set_full_duty_baseline(&mut self, kilowatts: Option<f32>) -> Result<(), Error> {
+        if let Some(kilowatts) = kilowatts {
+            common::reject_non_finite(kilowatts)?;
+            if kilowatts < 0.0 {
+                return Err(common::value_out_of_range_error());
+            }
+        }
+        self.full_duty_baseline = kilowatts;
+        self.settle(shed::Prompt::Look);
+        Ok(())
+    }
+
+    /// Set State_Description, a note for operators on the shed state
+    /// (Clause 12.28.6), or `None` for none. Like Full_Duty_Baseline it is
+    /// optional and read-only to clients, served and listed in
+    /// Property_List only while set.
+    pub fn set_state_description(&mut self, text: Option<String>) {
+        self.state_description = text;
     }
 
     /// A WriteProperty of Shed_Levels: the array whole, keeping its size, or
@@ -377,6 +416,14 @@ impl BACnetObject for LoadControlObject {
             p if p == PropertyIdentifier::PRESENT_VALUE => {
                 Ok(PropertyValue::Enumerated(self.state.to_raw()))
             }
+            p if p == PropertyIdentifier::STATE_DESCRIPTION => match &self.state_description {
+                Some(text) => Ok(PropertyValue::CharacterString(text.clone())),
+                None => Err(common::unknown_property_error()),
+            },
+            p if p == PropertyIdentifier::FULL_DUTY_BASELINE => match self.full_duty_baseline {
+                Some(kilowatts) => Ok(PropertyValue::Real(kilowatts)),
+                None => Err(common::unknown_property_error()),
+            },
             p if p == PropertyIdentifier::REQUESTED_SHED_LEVEL => {
                 Ok(shed_level_value(&self.requested_shed_level))
             }

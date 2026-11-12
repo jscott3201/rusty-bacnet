@@ -7051,7 +7051,13 @@ refuses a level of 0, the no-shed level, with VALUE_OUT_OF_RANGE; clients may
 rewrite a level (0 refused the same way) but not resize the array, and only
 read the descriptions. `set_start_time`, `set_shed_duration`,
 `set_duty_window` and `set_enable` make the network writes' changes locally.
-The object doesn't serve Full_Duty_Baseline or State_Description.
+The optional Full_Duty_Baseline (kilowatts) and State_Description are served,
+read-only, and listed in Property_List only once the application sets them
+with `set_full_duty_baseline` and `set_state_description` (`None` takes the
+row away again, #2479). A negative or non-finite baseline is refused with
+VALUE_OUT_OF_RANGE. The shedder reads the baseline as
+`ShedRequest::full_duty_baseline`, the reference for PERCENT and AMOUNT
+requests, and a new baseline during a request is put to it at once.
 
 Load Control supports COV (Table 13-1). Its SubscribeCOV report carries
 Present_Value, Status_Flags, Requested_Shed_Level, Start_Time, Shed_Duration

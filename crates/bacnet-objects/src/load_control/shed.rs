@@ -77,6 +77,10 @@ pub struct ShedRequest {
     pub shed_duration: u64,
     /// Duty_Window: the window over which compliance is judged, in minutes.
     pub duty_window: u64,
+    /// Full_Duty_Baseline, in kilowatts, while the object serves one: the
+    /// baseline a PERCENT or AMOUNT request is reckoned from (Table 12-33).
+    /// The object doesn't check a request against it.
+    pub full_duty_baseline: Option<f32>,
     /// Whether Start_Time has come.
     pub started: bool,
 }
@@ -348,6 +352,7 @@ impl LoadControlObject {
             start_time: self.start_time,
             shed_duration: self.shed_duration,
             duty_window: self.duty_window,
+            full_duty_baseline: self.full_duty_baseline,
             started,
         };
         let status = match &self.shedder {

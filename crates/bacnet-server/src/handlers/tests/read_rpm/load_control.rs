@@ -216,7 +216,8 @@ fn rpm_load_control_indexed_reads_and_bytes_are_unchanged() {
                     Err(ErrorCode::INVALID_ARRAY_INDEX),
                 )
             },
-            // The optional rows this object leaves out stay unknown.
+            // The optional rows this object leaves out until the embedder
+            // sets them stay unknown.
             (
                 P::FULL_DUTY_BASELINE,
                 None,
@@ -325,5 +326,96 @@ fn rpm_load_control_indexed_reads_and_bytes_are_unchanged() {
             Err(ReadFailure::Bytes)
         ));
         assert_eq!(&prefix[..], b"prefix");
+    }
+}
+
+#[test]
+fn rpm_load_control_optional_rows_read_once_the_embedder_sets_them() {
+    let mut object = LoadControlObject::new(7, "LC-7").unwrap();
+    object.set_state_description(Some("Idle".into()));
+    object.set_full_duty_baseline(Some(120.0)).unwrap();
+    let oid = object.object_identifier();
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(object)).unwrap();
+    type ExpectedRead = Result<&'static [u8], ErrorCode>;
+    let cases: &[(P, Option<u32>, ExpectedRead)] = &[
+        // REAL 120.0 kW and the CharacterString "Idle" (#2479).
+        (P::FULL_DUTY_BASELINE, None, Ok(&[0x44, 0x42, 0xf0, 0, 0])),
+        (
+            P::FULL_DUTY_BASELINE,
+            Some(0),
+            Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+        ),
+        (
+            P::STATE_DESCRIPTION,
+            None,
+            Ok(&[0x75, 5, 0, b'I', b'd', b'l', b'e']),
+        ),
+        (
+            P::STATE_DESCRIPTION,
+            Some(1),
+            Err(ErrorCode::PROPERTY_IS_NOT_AN_ARRAY),
+        ),
+        // Each is listed after its table neighbour: State_Description (222)
+        // third, after Present_Value, and Full_Duty_Baseline (215)
+        // fourteenth, after Enable.
+        (P::PROPERTY_LIST, Some(0), Ok(&[0x21, 16])),
+        (P::PROPERTY_LIST, Some(3), Ok(&[0x91, 222])),
+        (P::PROPERTY_LIST, Some(13), Ok(&[0x91, 133])),
+        (P::PROPERTY_LIST, Some(14), Ok(&[0x91, 215])),
+        (P::PROPERTY_LIST, Some(16), Ok(&[0x91, 220])),
+        (
+            P::PROPERTY_LIST,
+            Some(17),
+            Err(ErrorCode::INVALID_ARRAY_INDEX),
+        ),
+    ];
+    let mut request = BytesMut::new();
+    ReadPropertyMultipleRequest {
+        list_of_read_access_specs: vec![ReadAccessSpecification {
+            object_identifier: oid,
+            list_of_property_references: cases
+                .iter()
+                .map(|&(p, i, _)| PropertyReference {
+                    property_identifier: p,
+                    property_array_index: i,
+                })
+                .collect(),
+        }],
+    }
+    .encode(&mut request)
+    .unwrap();
+    let mut ack = BytesMut::new();
+    handle_read_property_multiple(&db, &request, &mut ack).unwrap();
+    let ack = ReadPropertyMultipleACK::decode(&ack).unwrap();
+    let results = &ack.list_of_read_access_results[0].list_of_results;
+    assert_eq!(results.len(), cases.len());
+    for (result, &(p, i, expected)) in results.iter().zip(cases) {
+        let mut rp_request = BytesMut::new();
+        ReadPropertyRequest {
+            object_identifier: oid,
+            property_identifier: p,
+            property_array_index: i,
+        }
+        .encode(&mut rp_request);
+        let mut response = BytesMut::new();
+        let rp = handle_read_property(&db, &rp_request, &mut response);
+        match expected {
+            Ok(bytes) => {
+                assert_eq!(result.property_value.as_deref(), Some(bytes), "{p:?} {i:?}");
+                rp.unwrap();
+                assert_eq!(
+                    ReadPropertyACK::decode(&response).unwrap().property_value,
+                    bytes
+                );
+            }
+            Err(code) => {
+                assert_eq!(result.error, Some((ErrorClass::PROPERTY, code)), "{p:?}");
+                assert!(matches!(
+                    rp,
+                    Err(Error::Remote(RemoteError::Error { code: got, .. })) if got == code
+                ));
+            }
+        }
     }
 }
