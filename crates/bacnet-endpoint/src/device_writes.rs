@@ -137,7 +137,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// `config.outbox` the notifications queued at once, in entries and
     /// octets, allocated at start. A notification with no room waits, and
     /// goes with the subscription's current values once room frees. At most
-    /// [`COV_CONFIRMED_IN_FLIGHT`](crate::session::COV_CONFIRMED_IN_FLIGHT)
+    /// [`COV_CONFIRMED_IN_FLIGHT`]
     /// (64) confirmed notifications are out at once, all subscribers
     /// together, so the client role keeps three quarters of the 256 invoke
     /// IDs however many subscribers stop answering; a report past it waits
