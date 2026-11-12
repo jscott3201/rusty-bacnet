@@ -39,11 +39,12 @@ use std::time::Duration;
 
 use bacnet_client::client::{BACnetClient, ClientConfig};
 use bacnet_client::discovery::RoutedDeviceConfig;
+use bacnet_device_core::event::GetEventInformationBudget;
 use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject};
 use bacnet_objects::device_identity::{DeviceIdentity, build_database_with_extra};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_ops::engine::Engine;
-use bacnet_server::server::{BACnetServer, GetEventInformationBudget};
+use bacnet_server::server::BACnetServer;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
 use bacnet_types::enums::{EngineeringUnits, PropertyIdentifier, Segmentation};

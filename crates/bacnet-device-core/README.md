@@ -15,6 +15,9 @@ the database guard, the transport, addressing and time.
   writes are refused with WRITE_ACCESS_DENIED, and a firmware image is
   about 20 KB of flash smaller. The metadata rows still call those
   properties writable, so list them as read-only in such a build's PICS.
+- `event-reporting`, which `std` turns on, has intrinsic event reporting
+  (`event`, #2303) and turns on `bacnet-objects`' feature of the same
+  name. No firmware image turns it on yet.
 - `cov-multiple`, which `std` turns on, has the SubscribeCOVPropertyMultiple
   path (#2320): the service with its checks
   (`cov::subscribe_cov_property_multiple`), the capture of timestamped
@@ -89,6 +92,18 @@ the database guard, the transport, addressing and time.
   `bacnet-objects`' `event-reporting` on, a fault leaves an intrinsic
   reporter's Event_State as it was, so Status_Flags and the COV
   notification carry FAULT without the IN_ALARM `bacnet-server` reports.
+- `event` (behind `event-reporting`, which `std` turns on): intrinsic
+  event reporting as staged functions under the host's guard, from
+  `bacnet-server` (#2303). `after_write` evaluates and commits one changed
+  object's transition, `sweep` does so for every object once a pass, and
+  `distribute_event` builds the EventNotification, picks its recipients by
+  day, window and transition and records it in the Event Logs; the host
+  sends it. The timestamps (the Device clock's, or a sequence number), the
+  committed message text and the Event Values are here, as are
+  AcknowledgeAlarm (`handle_acknowledge_alarm`), GetEventInformation
+  within a `GetEventInformationBudget`, and the fault pass (`fault_pass`).
+  What a step would have logged comes back as a value. `bacnet-server`
+  runs its intrinsic reporting on it; the `Reporter` doesn't yet.
 - `clock`: the Device's clock for firmware with none of its own (#2321).
   `SyncedClock` is plain data on the host's monotonic timeline: until
   set it counts from local midnight, 1990-01-01, as a device does after a

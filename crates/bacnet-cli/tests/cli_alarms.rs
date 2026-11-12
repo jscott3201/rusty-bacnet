@@ -6,8 +6,9 @@ mod support;
 
 use std::net::Ipv4Addr;
 
+use bacnet_device_core::event::GetEventInformationBudget;
 use bacnet_objects::notification_class::NotificationClass;
-use bacnet_server::server::{BACnetServer, GetEventInformationBudget};
+use bacnet_server::server::BACnetServer;
 use bacnet_transport::bip::BipTransport;
 use bacnet_types::enums::{EventState, NotifyType, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};

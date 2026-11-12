@@ -1,12 +1,16 @@
-//! AcknowledgeAlarm service handler.
-//!
-//! One file per service so the Batch 4 handler PRs do not serialize
-//! on a single module.
+//! AcknowledgeAlarm (Clause 13.5) sets one committed transition's
+//! Acked_Transitions bit (Clause 13.2.3); an ACK_NOTIFICATION may follow.
 
-use super::super::*;
+use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::event::EventStateChange;
 use bacnet_objects::traits::no_alarm_configured;
+use bacnet_services::alarm_event::AcknowledgeAlarmRequest;
 use bacnet_types::bitstring::EventTransitionBits;
+use bacnet_types::enums::{ErrorClass, ErrorCode, EventType, PropertyIdentifier};
+use bacnet_types::error::Error;
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+
+use super::NotificationTransition;
 
 /// Exact context the bundled server can use for ACK_NOTIFICATION distribution.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,4 +96,20 @@ pub fn handle_acknowledge_alarm(
         event_object_identifier: request.event_object_identifier,
         notification,
     })
+}
+
+impl AcceptedAcknowledgeAlarm {
+    /// The ACK_NOTIFICATION to distribute for it, with its object: `None`
+    /// when the object gave no exact transition or Event_Enable leaves the
+    /// transition out. A host sends it after the SimpleACK.
+    pub fn into_notification(self) -> Option<(ObjectIdentifier, NotificationTransition)> {
+        let notification = self.notification?;
+        if !notification.distribute {
+            return None;
+        }
+        Some((
+            self.event_object_identifier,
+            NotificationTransition::acknowledgment(notification.change, notification.event_type),
+        ))
+    }
 }

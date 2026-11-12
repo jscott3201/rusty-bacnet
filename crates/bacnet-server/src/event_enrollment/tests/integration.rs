@@ -159,7 +159,7 @@ fn foreign_reference_does_not_evaluate_same_numbered_local_object() {
             .unwrap(),
         PropertyValue::Enumerated(EventState::NORMAL.to_raw())
     );
-    let reference = super::super::decode_reference_value(
+    let reference = bacnet_device_core::event::decode_reference_value(
         &db.get(&ee_oid)
             .unwrap()
             .read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)

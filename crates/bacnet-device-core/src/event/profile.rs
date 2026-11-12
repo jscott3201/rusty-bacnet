@@ -1,50 +1,62 @@
 //! Transition profiles consumed by the shared EventNotification sender.
 
+use alloc::string::String;
 use bacnet_objects::event::EventStateChange;
 use bacnet_types::enums::EventType;
 use bacnet_types::primitives::BACnetTimeStamp;
 
-use super::super::event_notification_payload::CommittedNotificationPayload;
-use super::super::event_timestamp::SampledEventClock;
+use super::payload::CommittedNotificationPayload;
+use super::timestamp::SampledEventClock;
 
 /// One exact transition-coordinate projection from object-owned event history.
 #[derive(Debug, Clone, PartialEq)]
-pub(in crate::server) struct CommittedHistorySnapshot {
-    pub(in crate::server) timestamp: BACnetTimeStamp,
-    pub(in crate::server) message_text: Option<String>,
+pub struct CommittedHistorySnapshot {
+    /// The transition's Event_Time_Stamps entry.
+    pub timestamp: BACnetTimeStamp,
+    /// Its Event_Message_Texts entry, `None` when empty.
+    pub message_text: Option<String>,
 }
 
 /// The source boundary for the notification's timestamp and message.
-pub(in crate::server) enum NotificationHistorySource {
+pub enum NotificationHistorySource {
     /// Non-intrinsic events and acknowledgment notices sample at distribution.
     SendTime,
     /// Atomic transitions use the exact history coordinate read after commit.
     Committed {
+        /// What the commit wrote at the transition's coordinate.
         snapshot: CommittedHistorySnapshot,
+        /// The Device clock the commit's timestamp came from.
         recipient_clock: SampledEventClock,
     },
 }
 
 /// Whether the sender builds an ordinary event or an acknowledgment notice.
-pub(in crate::server) enum NotificationConstruction {
+pub enum NotificationConstruction {
+    /// An ALARM or EVENT notification, by the object's Notify_Type.
     Event,
+    /// An ACK_NOTIFICATION.
     Acknowledgment,
 }
 
-pub(in crate::server) struct NotificationTransition {
-    pub(in crate::server) change: EventStateChange,
-    pub(in crate::server) event_type: EventType,
-    pub(in crate::server) history_source: NotificationHistorySource,
-    pub(in crate::server) ack_required: Option<bool>,
-    pub(in crate::server) event_values: Option<CommittedNotificationPayload>,
-    pub(in crate::server) construction: NotificationConstruction,
+/// One transition to notify, as distribution takes it.
+pub struct NotificationTransition {
+    /// The states it moved between.
+    pub change: EventStateChange,
+    /// The notification's Event Type.
+    pub event_type: EventType,
+    /// Where its timestamp and message text come from.
+    pub history_source: NotificationHistorySource,
+    /// Ack_Required as committed; `None` reads it from the class.
+    pub ack_required: Option<bool>,
+    /// The Event Values, projected when it committed.
+    pub event_values: Option<CommittedNotificationPayload>,
+    /// An ordinary event or an acknowledgment.
+    pub construction: NotificationConstruction,
 }
 
 impl NotificationTransition {
-    pub(in crate::server) fn acknowledgment(
-        change: EventStateChange,
-        event_type: EventType,
-    ) -> Self {
+    /// The ACK_NOTIFICATION for an accepted acknowledgement of `change`.
+    pub fn acknowledgment(change: EventStateChange, event_type: EventType) -> Self {
         Self {
             change,
             event_type,
@@ -70,14 +82,22 @@ impl From<(EventStateChange, EventType)> for NotificationTransition {
 }
 
 /// One intrinsic transition committed under the database write guard.
-pub(in crate::server) struct CommittedIntrinsicTransition {
-    pub(in crate::server) change: EventStateChange,
-    pub(in crate::server) event_type: EventType,
-    pub(in crate::server) distribute: bool,
-    pub(in crate::server) history_snapshot: CommittedHistorySnapshot,
-    pub(in crate::server) recipient_clock: SampledEventClock,
-    pub(in crate::server) ack_required: bool,
-    pub(in crate::server) event_values: Option<CommittedNotificationPayload>,
+pub struct CommittedIntrinsicTransition {
+    /// The states it moved between.
+    pub change: EventStateChange,
+    /// Its Event Type.
+    pub event_type: EventType,
+    /// Whether Event_Enable lets it be distributed (Clause 13.2.5).
+    pub distribute: bool,
+    /// The timestamp and message text it committed.
+    pub history_snapshot: CommittedHistorySnapshot,
+    /// The Device clock its timestamp came from.
+    pub recipient_clock: SampledEventClock,
+    /// The class's Ack_Required for its transition, as committed.
+    pub ack_required: bool,
+    /// Its Event Values; `None` when they don't project, and then it is
+    /// committed but not distributed.
+    pub event_values: Option<CommittedNotificationPayload>,
 }
 
 impl From<CommittedIntrinsicTransition> for NotificationTransition {

@@ -16,7 +16,7 @@ use super::EventEnrollmentReliabilityCause;
 use super::LocalConfigurationReadError;
 use super::algorithms::extract_real;
 use super::commit::{EnrollmentUpdate, ReliabilityUpdate};
-use crate::server::event_notification_payload::CapturedReferencedValue;
+use bacnet_device_core::event::CapturedReferencedValue;
 
 pub(super) enum SetpointRead {
     Value(f32),

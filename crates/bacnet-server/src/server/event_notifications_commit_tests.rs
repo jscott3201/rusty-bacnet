@@ -1,4 +1,5 @@
 use super::*;
+use bacnet_device_core::event::commit_intrinsic_transition;
 use bacnet_objects::event::EventStateChange;
 use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_objects::traits::BACnetObject;
@@ -111,12 +112,7 @@ fn unsupported_fault_reindication_is_retryable_without_sequence_consumption() {
         .expect("lends event reporting")
         .evaluate_intrinsic_reporting()
         .unwrap();
-    assert!(BACnetServer::<TestTransport>::commit_intrinsic_transition(
-        &mut db,
-        &oid,
-        proposal.clone(),
-    )
-    .is_none());
+    assert!(commit_intrinsic_transition(&mut db, &oid, proposal.clone()).is_err());
     assert_eq!(db.reserve_event_sequence_number().number(), 0);
     assert_eq!(
         db.get_mut(&oid)
@@ -226,8 +222,7 @@ async fn committed_ack_required_snapshot_survives_notification_class_replacement
             .expect("lends event reporting")
             .evaluate_intrinsic_reporting()
             .unwrap();
-        BACnetServer::<TestTransport>::commit_intrinsic_transition(&mut guard, &oid, outcome)
-            .unwrap()
+        commit_intrinsic_transition(&mut guard, &oid, outcome).unwrap()
     };
 
     {

@@ -123,7 +123,7 @@ pub(super) struct Budgets {
     pub atomic_read_file_budget: server::AtomicReadFileBudget,
     pub atomic_write_file_budget: server::AtomicWriteFileBudget,
     pub read_range_budget: server::ReadRangeBudget,
-    pub get_event_information_budget: server::GetEventInformationBudget,
+    pub get_event_information_budget: bacnet_device_core::event::GetEventInformationBudget,
 }
 
 /// Build and validate the budgets. The first one the Rust validation refuses
@@ -171,7 +171,7 @@ pub(super) fn budgets(keywords: BudgetKeywords) -> PyResult<Budgets> {
     };
     atomic_write_file_budget.validate().map_err(invalid)?;
     read_range_budget.validate().map_err(invalid)?;
-    let get_event_information_budget = server::GetEventInformationBudget {
+    let get_event_information_budget = bacnet_device_core::event::GetEventInformationBudget {
         max_objects: keywords.event_information_max_objects,
         max_returned_summaries: keywords.event_information_max_returned_summaries,
         max_service_ack_bytes: keywords.event_information_max_service_ack_bytes,
