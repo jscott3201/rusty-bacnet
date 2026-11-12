@@ -1,4 +1,6 @@
 use super::super::*;
+#[cfg(feature = "event-reporting")]
+use crate::event::test_clock::{test_now, test_tick};
 use crate::property_metadata::is_writable_property;
 #[cfg(feature = "event-reporting")]
 use crate::traits::EventReporting as _;
@@ -212,11 +214,11 @@ fn ai_intrinsic_reporting_triggers_on_present_value_change() {
 
     // Normal value — no transition
     ai.set_present_value(50.0);
-    assert!(ai.evaluate_intrinsic_reporting().is_none());
+    assert!(ai.evaluate_intrinsic_reporting(test_now()).is_none());
 
     // Go above high limit
     ai.set_present_value(81.0);
-    let proposal = ai.evaluate_intrinsic_reporting().unwrap();
+    let proposal = ai.evaluate_intrinsic_reporting(test_now()).unwrap();
     let outcome = crate::event::commit_test_proposal(&mut ai, proposal);
     let change = outcome.change;
     assert_eq!(change.from, EventState::NORMAL);
@@ -231,7 +233,7 @@ fn ai_intrinsic_reporting_triggers_on_present_value_change() {
 
     // Drop below deadband threshold → back to NORMAL
     ai.set_present_value(77.0);
-    let change = ai.evaluate_intrinsic_reporting().unwrap().change;
+    let change = ai.evaluate_intrinsic_reporting(test_now()).unwrap().change;
     assert_eq!(change.to, EventState::NORMAL);
 }
 
@@ -716,9 +718,9 @@ fn ai_time_delay_normal_gates_the_return_to_normal() {
     .unwrap();
 
     ai.set_present_value(81.0);
-    assert_eq!(ai.evaluate_intrinsic_reporting(), None);
-    assert_eq!(ai.tick_intrinsic_reporting(), None);
-    let proposal = ai.tick_intrinsic_reporting().unwrap();
+    assert_eq!(ai.evaluate_intrinsic_reporting(test_now()), None);
+    assert_eq!(ai.tick_intrinsic_reporting(test_tick()), None);
+    let proposal = ai.tick_intrinsic_reporting(test_tick()).unwrap();
     let outcome = crate::event::commit_test_proposal(&mut ai, proposal);
     assert_eq!(
         outcome.change.to,
@@ -728,18 +730,18 @@ fn ai_time_delay_normal_gates_the_return_to_normal() {
 
     ai.set_present_value(50.0); // back inside (high_limit - deadband) = 78.0
     assert_eq!(
-        ai.evaluate_intrinsic_reporting(),
+        ai.evaluate_intrinsic_reporting(test_now()),
         None,
         "condition (e): return to NORMAL only seeds the countdown"
     );
     for _ in 0..3 {
         assert_eq!(
-            ai.tick_intrinsic_reporting(),
+            ai.tick_intrinsic_reporting(test_tick()),
             None,
             "Time_Delay_Normal = 4 must hold the NORMAL state off"
         );
     }
-    let outcome = ai.tick_intrinsic_reporting().unwrap();
+    let outcome = ai.tick_intrinsic_reporting(test_tick()).unwrap();
     assert_eq!(outcome.change.from, EventState::HIGH_LIMIT);
     assert_eq!(outcome.change.to, EventState::NORMAL);
 }

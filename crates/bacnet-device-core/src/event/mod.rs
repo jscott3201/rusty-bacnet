@@ -3,8 +3,9 @@
 //!
 //! - [`after_write`] evaluates one changed object's detector and commits
 //!   the transition it proposes; [`sweep`] does so for every object once a
-//!   pass, advancing Time_Delay and turning a Reliability change into a
-//!   FAULT transition. Both commit through [`commit_intrinsic_transition`]:
+//!   pass, firing each Time_Delay that has ended by its `now` and turning
+//!   a Reliability change into a FAULT transition. [`next_due`] is when the
+//!   next delay after the last sweep ends: a host sweeps then too. Both commit through [`commit_intrinsic_transition`]:
 //!   Event_State, Acked_Transitions, the timestamp and the message text at
 //!   once (Clause 13.2.2.1.4), before Event_Enable decides whether the
 //!   transition goes out (Clause 13.2.5).
@@ -25,9 +26,9 @@
 //!
 //! No lock, clock, async or formatting: what a step would have logged comes
 //! back as a value ([`IntrinsicCommitRefusal`], [`DistributionOutcome`],
-//! [`EventSummaryProblem`], [`FaultPass::failures`]). `bacnet-server` runs
-//! its intrinsic reporting on these, once a second for the sweep, so
-//! Time_Delay still counts sweeps.
+//! [`EventSummaryProblem`], [`FaultPass::failures`]). Every instant is the
+//! host's monotonic `now`. `bacnet-server` runs its intrinsic reporting on
+//! these, sweeping once a second and at [`next_due`].
 
 mod acknowledge;
 mod commit;
@@ -56,7 +57,7 @@ pub use event_information::{
     handle_get_event_information, handle_get_event_information_configured,
 };
 pub use fault::{FaultPass, ReliabilityChange, fault_pass};
-pub use intrinsic::{IntrinsicCommit, after_write, sweep};
+pub use intrinsic::{IntrinsicCommit, after_write, next_due, sweep};
 
 pub use message::intrinsic_event_message_text;
 pub use payload::{

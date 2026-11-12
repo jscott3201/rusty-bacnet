@@ -1,5 +1,6 @@
 //! Event_Algorithm_Inhibit follows the property its reference names (#1329).
 
+use crate::event::test_clock::test_now;
 use bacnet_encoding::constructed::encode_object_property_reference;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier as P, Reliability};
@@ -162,7 +163,7 @@ fn an_enumerated_one_inhibits_only_as_a_binary_pv_active() {
     let fault = input
         .event_reporting_mut()
         .expect("lends event reporting")
-        .evaluate_intrinsic_reporting()
+        .evaluate_intrinsic_reporting(test_now())
         .expect("into FAULT");
     crate::event::commit_test_proposal(input, fault);
     for property in [P::RELIABILITY, P::EVENT_STATE] {

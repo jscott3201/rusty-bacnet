@@ -715,6 +715,7 @@ impl MultiStateValueObject {
 #[cfg(test)]
 mod detection_enable_tests {
     use super::*;
+    use crate::event::test_clock::{test_now, test_tick};
     use crate::traits::EventReporting as _;
 
     #[test]
@@ -735,7 +736,7 @@ mod detection_enable_tests {
             &crate::command_source::test_origin(),
         )
         .unwrap();
-        assert_eq!(msv.evaluate_intrinsic_reporting(), None);
+        assert_eq!(msv.evaluate_intrinsic_reporting(test_now()), None);
         assert!(msv.event_detector.pending.is_some());
 
         msv.event_detector.event_state = bacnet_types::enums::EventState::OFFNORMAL;
@@ -770,8 +771,8 @@ mod detection_enable_tests {
         );
         assert!(msv.event_detector.pending.is_none());
         assert!(msv.event_detector.fault_reliability.is_none());
-        assert_eq!(msv.evaluate_intrinsic_reporting(), None);
-        assert_eq!(msv.tick_intrinsic_reporting(), None);
+        assert_eq!(msv.evaluate_intrinsic_reporting(test_now()), None);
+        assert_eq!(msv.tick_intrinsic_reporting(test_tick()), None);
         assert!(
             msv.event_detector.pending.is_none(),
             "evaluate/tick re-armed a countdown while detection is disabled"

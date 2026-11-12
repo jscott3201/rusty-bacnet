@@ -585,7 +585,7 @@ impl Leases {
 }
 
 impl InvokeIds for Leases {
-    fn take(&mut self, to: &BACnetAddress) -> Option<u8> {
+    fn take(&mut self, to: &BACnetAddress, service: ConfirmedServiceChoice) -> Option<u8> {
         // At the bound a report waits, as it does for an empty pool.
         if self.out.len() >= COV_CONFIRMED_IN_FLIGHT {
             self.starved = Starved::Bound;
@@ -595,7 +595,6 @@ impl InvokeIds for Leases {
             0 => CanonicalPeer::direct(&to.mac_address),
             network => CanonicalPeer::routed(network, &to.mac_address),
         };
-        let service = ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION;
         let reserved = self
             .coordinator
             .reserve(LeaseMetadata::notification(peer, service));

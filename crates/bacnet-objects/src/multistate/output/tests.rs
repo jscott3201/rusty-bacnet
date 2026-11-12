@@ -1,4 +1,5 @@
 use super::*;
+use crate::event::test_clock::{test_now, test_tick};
 use crate::property_metadata::is_writable_property;
 use crate::traits::EventReporting as _;
 use bacnet_types::enums::{EventState, EventType};
@@ -93,7 +94,7 @@ fn fresh_object_reports_nothing_when_detection_is_enabled() {
     let mut mso = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();
     set_detection_enabled(&mut mso, true);
 
-    assert_eq!(mso.evaluate_intrinsic_reporting(), None);
+    assert_eq!(mso.evaluate_intrinsic_reporting(test_now()), None);
     assert_eq!(
         mso.read_property(PropertyIdentifier::EVENT_STATE, None)
             .unwrap(),
@@ -128,7 +129,7 @@ fn oversized_feedback_value_is_rejected_rather_than_wrapped_into_agreement() {
             .unwrap(),
         PropertyValue::Unsigned(1)
     );
-    let outcome = mso.evaluate_intrinsic_reporting().unwrap();
+    let outcome = mso.evaluate_intrinsic_reporting(test_now()).unwrap();
     assert_eq!(outcome.change.to, EventState::OFFNORMAL);
     assert_eq!(outcome.event_type, EventType::COMMAND_FAILURE);
 }
@@ -140,13 +141,13 @@ fn command_failure_uses_present_and_feedback() {
     set_detection_enabled(&mut mso, true);
     write_unsigned(&mut mso, PropertyIdentifier::PRESENT_VALUE, 2);
 
-    let proposal = mso.evaluate_intrinsic_reporting().unwrap();
+    let proposal = mso.evaluate_intrinsic_reporting(test_now()).unwrap();
     let outcome = crate::event::commit_test_proposal(&mut mso, proposal);
     assert_eq!(outcome.change.to, EventState::OFFNORMAL);
     assert_eq!(outcome.event_type, EventType::COMMAND_FAILURE);
 
     write_unsigned(&mut mso, PropertyIdentifier::FEEDBACK_VALUE, 2);
-    let returned = mso.evaluate_intrinsic_reporting().unwrap();
+    let returned = mso.evaluate_intrinsic_reporting(test_now()).unwrap();
     assert_eq!(returned.change.from, EventState::OFFNORMAL);
     assert_eq!(returned.change.to, EventState::NORMAL);
     assert_eq!(returned.event_type, EventType::COMMAND_FAILURE);
@@ -159,9 +160,9 @@ fn time_delay_gates_command_failure() {
     write_unsigned(&mut mso, PropertyIdentifier::TIME_DELAY, 2);
     write_unsigned(&mut mso, PropertyIdentifier::PRESENT_VALUE, 2);
 
-    assert_eq!(mso.evaluate_intrinsic_reporting(), None);
-    assert_eq!(mso.tick_intrinsic_reporting(), None);
-    let outcome = mso.tick_intrinsic_reporting().unwrap();
+    assert_eq!(mso.evaluate_intrinsic_reporting(test_now()), None);
+    assert_eq!(mso.tick_intrinsic_reporting(test_tick()), None);
+    let outcome = mso.tick_intrinsic_reporting(test_tick()).unwrap();
     assert_eq!(outcome.change.to, EventState::OFFNORMAL);
     assert_eq!(outcome.event_type, EventType::COMMAND_FAILURE);
 }
@@ -183,7 +184,9 @@ fn event_enable_to_offnormal_bit_controls_distribution() {
         .unwrap();
         write_unsigned(&mut mso, PropertyIdentifier::PRESENT_VALUE, 2);
         assert_eq!(
-            mso.evaluate_intrinsic_reporting().unwrap().distribute,
+            mso.evaluate_intrinsic_reporting(test_now())
+                .unwrap()
+                .distribute,
             expected
         );
     }
@@ -266,8 +269,8 @@ fn detection_enable_is_a_disabled_by_default_invariant() {
     let mut mso = MultiStateOutputObject::new(1, "MSO-1", 3).unwrap();
     write_unsigned(&mut mso, PropertyIdentifier::PRESENT_VALUE, 2);
 
-    assert_eq!(mso.evaluate_intrinsic_reporting(), None);
-    assert_eq!(mso.tick_intrinsic_reporting(), None);
+    assert_eq!(mso.evaluate_intrinsic_reporting(test_now()), None);
+    assert_eq!(mso.tick_intrinsic_reporting(test_tick()), None);
     assert_eq!(
         mso.read_property(PropertyIdentifier::EVENT_STATE, None)
             .unwrap(),
@@ -284,7 +287,10 @@ fn detection_enable_is_a_disabled_by_default_invariant() {
 
     set_detection_enabled(&mut mso, true);
     assert_eq!(
-        mso.evaluate_intrinsic_reporting().unwrap().change.to,
+        mso.evaluate_intrinsic_reporting(test_now())
+            .unwrap()
+            .change
+            .to,
         EventState::OFFNORMAL
     );
     mso.event_detector.acked_transitions = bacnet_types::bitstring::EventTransitionBits::empty();
@@ -303,8 +309,8 @@ fn detection_enable_is_a_disabled_by_default_invariant() {
             data: vec![0xe0],
         }
     );
-    assert_eq!(mso.evaluate_intrinsic_reporting(), None);
-    assert_eq!(mso.tick_intrinsic_reporting(), None);
+    assert_eq!(mso.evaluate_intrinsic_reporting(test_now()), None);
+    assert_eq!(mso.tick_intrinsic_reporting(test_tick()), None);
 
     mso.reliability = Reliability::NO_SENSOR;
     assert_eq!(

@@ -8,6 +8,7 @@
 //! so the fallback must be visible as such: `None`.
 
 use super::*;
+use crate::event::test_clock::{test_now, test_tick};
 
 const NO_FAULT: Reliability = Reliability::NO_FAULT_DETECTED;
 const FAULTED: Reliability = Reliability::OVER_RANGE;
@@ -37,35 +38,35 @@ fn time_delay_normal_selects_the_return_to_normal_delay() {
     // TD=5 / TDN=10: the offnormal indication fires after 5 ticks; the
     // NORMAL indication needs 10 — Clause 13.3.6 (a)/(b) versus (e).
     let mut det = make_asymmetric_detector(5, 10);
-    assert!(det.probe(81.0, NO_FAULT).is_none());
+    assert!(det.probe(81.0, NO_FAULT, test_now()).is_none());
     assert_eq!(
-        det.pending.as_ref().expect("pending seeded").remaining,
+        det.pending.as_ref().expect("pending seeded").remaining(),
         5,
         "the offnormal direction is seeded from Time_Delay, not Time_Delay_Normal"
     );
     for _ in 0..4 {
-        assert!(det.tick(81.0, NO_FAULT).is_none());
+        assert!(det.tick(81.0, NO_FAULT, test_tick()).is_none());
         assert_eq!(det.event_state, EventState::NORMAL);
     }
-    let change = det.tick(81.0, NO_FAULT).unwrap().change; // 5th tick fires
+    let change = det.tick(81.0, NO_FAULT, test_tick()).unwrap().change; // 5th tick fires
     assert_eq!(change.to, EventState::HIGH_LIMIT);
 
     // Return path: drop below (high_limit - deadband) = 78.0 and hold.
-    assert!(det.probe(50.0, NO_FAULT).is_none());
+    assert!(det.probe(50.0, NO_FAULT, test_now()).is_none());
     assert_eq!(
         det.pending
             .as_ref()
             .expect("return-to-normal pending seeded")
-            .remaining,
+            .remaining(),
         10,
         "the NORMAL direction is seeded from Time_Delay_Normal"
     );
     for _ in 0..9 {
-        let outcome = det.tick(50.0, NO_FAULT);
+        let outcome = det.tick(50.0, NO_FAULT, test_tick());
         assert!(outcome.is_none(), "NORMAL must wait out pTimeDelayNormal");
         assert_eq!(det.event_state, EventState::HIGH_LIMIT);
     }
-    let change = det.tick(50.0, NO_FAULT).unwrap().change; // 10th tick fires
+    let change = det.tick(50.0, NO_FAULT, test_tick()).unwrap().change; // 10th tick fires
     assert_eq!(change.from, EventState::HIGH_LIMIT);
     assert_eq!(change.to, EventState::NORMAL);
     assert!(det.pending.is_none());
@@ -77,28 +78,28 @@ fn time_delay_normal_absent_falls_back_to_time_delay() {
     // any Time_Delay_Normal configured (= pre-#225 behavior).
     let mut det = make_delayed_detector(4);
     assert!(det.time_delay_normal.is_none());
-    assert!(det.probe(81.0, NO_FAULT).is_none());
+    assert!(det.probe(81.0, NO_FAULT, test_now()).is_none());
     for _ in 0..3 {
-        assert!(det.tick(81.0, NO_FAULT).is_none());
+        assert!(det.tick(81.0, NO_FAULT, test_tick()).is_none());
     }
     assert_eq!(
-        det.tick(81.0, NO_FAULT).unwrap().change.to,
+        det.tick(81.0, NO_FAULT, test_tick()).unwrap().change.to,
         EventState::HIGH_LIMIT
     );
-    assert!(det.probe(50.0, NO_FAULT).is_none());
+    assert!(det.probe(50.0, NO_FAULT, test_now()).is_none());
     assert_eq!(
         det.pending
             .as_ref()
             .expect("return pending seeded")
-            .remaining,
+            .remaining(),
         4,
         "absent Time_Delay_Normal takes on Time_Delay's value"
     );
     for _ in 0..3 {
-        assert!(det.tick(50.0, NO_FAULT).is_none());
+        assert!(det.tick(50.0, NO_FAULT, test_tick()).is_none());
     }
     assert_eq!(
-        det.tick(50.0, NO_FAULT).unwrap().change.to,
+        det.tick(50.0, NO_FAULT, test_tick()).unwrap().change.to,
         EventState::NORMAL
     );
 }
@@ -109,17 +110,17 @@ fn time_delay_normal_zero_fires_the_return_to_normal_immediately() {
     // direction still waits out pTimeDelay.
     let mut det = make_asymmetric_detector(5, 0);
     det.event_state = EventState::HIGH_LIMIT;
-    let change = det.probe(50.0, NO_FAULT).unwrap().change;
+    let change = det.probe(50.0, NO_FAULT, test_now()).unwrap().change;
     assert_eq!(change.to, EventState::NORMAL);
     assert!(det.pending.is_none());
 
     // ...and the offnormal direction still waits 5 ticks.
-    assert!(det.probe(81.0, NO_FAULT).is_none());
+    assert!(det.probe(81.0, NO_FAULT, test_now()).is_none());
     for _ in 0..4 {
-        assert!(det.tick(81.0, NO_FAULT).is_none());
+        assert!(det.tick(81.0, NO_FAULT, test_tick()).is_none());
     }
     assert_eq!(
-        det.tick(81.0, NO_FAULT).unwrap().change.to,
+        det.tick(81.0, NO_FAULT, test_tick()).unwrap().change.to,
         EventState::HIGH_LIMIT
     );
 }
@@ -131,21 +132,22 @@ fn time_delay_normal_does_not_govern_offnormal_to_offnormal() {
     // Time_Delay_Normal configured.
     let mut det = make_asymmetric_detector(5, 30);
     det.event_state = EventState::HIGH_LIMIT;
-    assert!(det.probe(19.0, NO_FAULT).is_none());
+    assert!(det.probe(19.0, NO_FAULT, test_now()).is_none());
     let pending = det
         .pending
         .as_ref()
         .expect("direct re-cross seeded pending");
     assert_eq!(pending.state, EventState::LOW_LIMIT);
     assert_eq!(
-        pending.remaining, 5,
+        pending.remaining(),
+        5,
         "offnormal→offnormal uses pTimeDelay, not pTimeDelayNormal"
     );
     for _ in 0..4 {
-        assert!(det.tick(19.0, NO_FAULT).is_none());
+        assert!(det.tick(19.0, NO_FAULT, test_tick()).is_none());
     }
     assert_eq!(
-        det.tick(19.0, NO_FAULT).unwrap().change.to,
+        det.tick(19.0, NO_FAULT, test_tick()).unwrap().change.to,
         EventState::LOW_LIMIT
     );
 }
@@ -157,23 +159,23 @@ fn time_delay_normal_mid_delay_reseed_uses_the_current_targets_delay() {
     // the transition being counted, not to whichever was pending first.
     let mut det = make_asymmetric_detector(5, 10);
     det.event_state = EventState::HIGH_LIMIT;
-    assert!(det.probe(19.0, NO_FAULT).is_none());
+    assert!(det.probe(19.0, NO_FAULT, test_now()).is_none());
     let pending = det.pending.as_ref().expect("re-cross pending seeded");
     assert_eq!(pending.state, EventState::LOW_LIMIT);
-    assert_eq!(pending.remaining, 5);
+    assert_eq!(pending.remaining(), 5);
 
-    assert!(det.probe(50.0, NO_FAULT).is_none());
+    assert!(det.probe(50.0, NO_FAULT, test_now()).is_none());
     let pending = det
         .pending
         .as_ref()
         .expect("re-seeded toward NORMAL with pTimeDelayNormal");
     assert_eq!(pending.state, EventState::NORMAL);
-    assert_eq!(pending.remaining, 10);
+    assert_eq!(pending.remaining(), 10);
     for _ in 0..9 {
-        assert!(det.tick(50.0, NO_FAULT).is_none());
+        assert!(det.tick(50.0, NO_FAULT, test_tick()).is_none());
     }
     assert_eq!(
-        det.tick(50.0, NO_FAULT).unwrap().change.to,
+        det.tick(50.0, NO_FAULT, test_tick()).unwrap().change.to,
         EventState::NORMAL
     );
 }
@@ -184,9 +186,11 @@ fn fault_transitions_ignore_both_delays() {
     // countdown is dropped and FAULT fires on the evaluation itself, whatever
     // Time_Delay / Time_Delay_Normal say.
     let mut det = make_asymmetric_detector(30, 30);
-    assert!(det.probe(81.0, NO_FAULT).is_none());
+    assert!(det.probe(81.0, NO_FAULT, test_now()).is_none());
     assert!(det.pending.is_some());
-    let outcome = det.tick(81.0, FAULTED).expect("FAULT fires immediately");
+    let outcome = det
+        .tick(81.0, FAULTED, test_tick())
+        .expect("FAULT fires immediately");
     assert_eq!(outcome.change.to, EventState::FAULT);
     assert_eq!(
         outcome.event_type,
@@ -207,24 +211,27 @@ fn time_delay_normal_change_of_state_asymmetric_round_trip() {
         time_delay_normal: Some(4),
         ..Default::default()
     };
-    assert!(det.probe(1, NO_FAULT).is_none());
-    assert_eq!(det.pending.as_ref().unwrap().remaining, 2);
-    assert!(det.tick(1, NO_FAULT).is_none());
+    assert!(det.probe(1, NO_FAULT, test_now()).is_none());
+    assert_eq!(det.pending.as_ref().unwrap().remaining(), 2);
+    assert!(det.tick(1, NO_FAULT, test_tick()).is_none());
     assert_eq!(
-        det.tick(1, NO_FAULT).unwrap().change.to,
+        det.tick(1, NO_FAULT, test_tick()).unwrap().change.to,
         EventState::OFFNORMAL
     );
 
-    assert!(det.probe(0, NO_FAULT).is_none());
+    assert!(det.probe(0, NO_FAULT, test_now()).is_none());
     assert_eq!(
-        det.pending.as_ref().unwrap().remaining,
+        det.pending.as_ref().unwrap().remaining(),
         4,
         "Clause 13.3.2 (b) waits pTimeDelayNormal"
     );
     for _ in 0..3 {
-        assert!(det.tick(0, NO_FAULT).is_none());
+        assert!(det.tick(0, NO_FAULT, test_tick()).is_none());
     }
-    assert_eq!(det.tick(0, NO_FAULT).unwrap().change.to, EventState::NORMAL);
+    assert_eq!(
+        det.tick(0, NO_FAULT, test_tick()).unwrap().change.to,
+        EventState::NORMAL
+    );
 }
 
 #[test]
@@ -237,24 +244,24 @@ fn time_delay_normal_command_failure_asymmetric_round_trip() {
         time_delay_normal: Some(3),
         ..Default::default()
     };
-    assert!(det.probe(1, 0, NO_FAULT).is_none()); // mismatch → pending OFFNORMAL
-    assert_eq!(det.pending.as_ref().unwrap().remaining, 1);
+    assert!(det.probe(1, 0, NO_FAULT, test_now()).is_none()); // mismatch → pending OFFNORMAL
+    assert_eq!(det.pending.as_ref().unwrap().remaining(), 1);
     assert_eq!(
-        det.tick(1, 0, NO_FAULT).unwrap().change.to,
+        det.tick(1, 0, NO_FAULT, test_tick()).unwrap().change.to,
         EventState::OFFNORMAL
     );
 
-    assert!(det.probe(1, 1, NO_FAULT).is_none()); // agree → pending NORMAL
+    assert!(det.probe(1, 1, NO_FAULT, test_now()).is_none()); // agree → pending NORMAL
     assert_eq!(
-        det.pending.as_ref().unwrap().remaining,
+        det.pending.as_ref().unwrap().remaining(),
         3,
         "Clause 13.3.4 (b) waits pTimeDelayNormal"
     );
     for _ in 0..2 {
-        assert!(det.tick(1, 1, NO_FAULT).is_none());
+        assert!(det.tick(1, 1, NO_FAULT, test_tick()).is_none());
     }
     assert_eq!(
-        det.tick(1, 1, NO_FAULT).unwrap().change.to,
+        det.tick(1, 1, NO_FAULT, test_tick()).unwrap().change.to,
         EventState::NORMAL
     );
 }
@@ -268,12 +275,12 @@ fn time_delay_normal_delayed_return_still_cancels_on_revert() {
     // not a new indication and needs no countdown.
     let mut det = make_asymmetric_detector(5, 10);
     det.event_state = EventState::HIGH_LIMIT;
-    assert!(det.probe(50.0, NO_FAULT).is_none());
+    assert!(det.probe(50.0, NO_FAULT, test_now()).is_none());
     for _ in 0..5 {
-        assert!(det.tick(50.0, NO_FAULT).is_none());
+        assert!(det.tick(50.0, NO_FAULT, test_tick()).is_none());
     }
     assert!(
-        det.tick(81.0, NO_FAULT).is_none(),
+        det.tick(81.0, NO_FAULT, test_tick()).is_none(),
         "revert cancels, no fire"
     );
     assert_eq!(det.event_state, EventState::HIGH_LIMIT);

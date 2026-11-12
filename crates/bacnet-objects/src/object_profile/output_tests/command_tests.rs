@@ -1,5 +1,7 @@
 use super::*;
 use crate::command_source::CommandOrigin;
+#[cfg(feature = "event-reporting")]
+use crate::event::test_clock::test_now;
 use bacnet_encoding::constructed::decode_value_source;
 use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_types::constructed::{BACnetDeviceObjectReference, BACnetValueSource};
@@ -269,7 +271,7 @@ fn profile_writes_preserve_command_failure_and_out_of_range_transitions() {
             let proposal = output
                 .event_reporting_mut()
                 .expect("lends event reporting")
-                .evaluate_intrinsic_reporting()
+                .evaluate_intrinsic_reporting(test_now())
                 .unwrap();
             assert_eq!(proposal.change.to, target);
             assert_eq!(proposal.event_type, algorithm);
@@ -296,7 +298,7 @@ fn profile_writes_preserve_command_failure_and_out_of_range_transitions() {
             let proposal = output
                 .event_reporting_mut()
                 .expect("lends event reporting")
-                .evaluate_intrinsic_reporting()
+                .evaluate_intrinsic_reporting(test_now())
                 .unwrap();
             assert_eq!(proposal.change.from, target);
             assert_eq!(proposal.change.to, EventState::NORMAL);
