@@ -807,6 +807,13 @@ pub(super) async fn stage_held(
         staged: Vec::new(),
     };
     stage_into(db, &targets, &mut held.staged).await;
+    // Every save has run. A server's local write asks for the guard next,
+    // with no wait in between, so a test can tell when that write, and not
+    // one of the server's own tasks, waits for it (#2504).
+    #[cfg(test)]
+    if let Some(releases) = releases {
+        releases.note_stage_saved();
+    }
     held
 }
 
