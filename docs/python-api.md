@@ -298,6 +298,15 @@ For `life_safety_operation`. Constants: `NONE`, `SILENCE`, `SILENCE_AUDIBLE`, `S
 op = LifeSafetyOperation.SILENCE
 ```
 
+### Reliability
+
+For `BACnetServer.set_reliability_local` (#2469). Constants: `NO_FAULT_DETECTED`, `NO_SENSOR`, `OVER_RANGE`, `UNDER_RANGE`, `OPEN_LOOP`, `SHORTED_LOOP`, `NO_OUTPUT`, `UNRELIABLE_OTHER`, `PROCESS_ERROR`, `MULTI_STATE_FAULT`, `CONFIGURATION_ERROR`, `COMMUNICATION_FAILURE`, `MEMBER_FAULT`, `MONITORED_OBJECT_FAULT`, `TRIPPED`, `LAMP_FAILURE`, `ACTIVATION_FAILURE`, `RENEW_DHCP_FAILURE`, `RENEW_FD_REGISTRATION_FAILURE`, `RESTART_AUTO_NEGOTIATION_FAILURE`, `RESTART_FAILURE`, `PROPRIETARY_COMMAND_FAILURE`, `FAULTS_LISTED`, `REFERENCED_OBJECT_FAULT`, `MULTI_STATE_OUT_OF_RANGE`. Vendor values run from 64 to 65535 (`Reliability.from_raw(64)`). A Reliability read back is still an Enumerated `PropertyValue`, and a change-of-reliability notification still gives the number.
+
+```python
+fault = Reliability.NO_SENSOR
+assert fault.to_raw() == 1
+```
+
 ### EventState
 
 BACnet event states. Constants: `NORMAL`, `FAULT`, `OFFNORMAL`, `HIGH_LIMIT`, `LOW_LIMIT`, `LIFE_SAFETY_ALARM`.
@@ -2336,9 +2345,9 @@ body) as received, as a log record's unknown choice reads (#2474, #2483).
 Status flags and other bit strings are
 `BitString`s; a property state is a `(choice_tag, value)` pair, as in
 [Event_Parameters](#typed-constructed-values); a life safety operation is a
-`LifeSafetyOperation`; the enumerations Python has no class for (life safety
-states and modes, reliabilities, access events, timer states and
-transitions) are their numbers. A value the standard leaves open (a
+`LifeSafetyOperation`; life safety states and modes, reliabilities, access
+events, timer states and transitions are their numbers
+(`Reliability.from_raw(n)` names a reliability). A value the standard leaves open (a
 command-failure's commanded and feedback values, a discrete value, a status
 flags change's present value, a reported property value) is a
 `PropertyValue`, or a list of them. Dates and times are `(date, time)` pairs,
@@ -5359,6 +5368,35 @@ doesn't configure endpoint Device-write authorization, which the endpoints'
 own `device_write_policy` callable decides (see
 [Endpoint](#endpoint-one-transport-both-roles)). See [Server authorization policy](mutation-policy.md) for exact
 service coverage, validation precedence and exclusions.
+
+#### `set_reliability_local(object_id, reliability)`
+
+Set the Reliability the application works out for one of its objects, such
+as `Reliability.NO_SENSOR` when its hardware reports a missing sensor (#2469),
+as the Rust server's `set_reliability_local` does (#2446). The built-in
+Inputs, Outputs and Values, the Integer Value, Loop, Schedule, Life Safety
+Point and Zone, Access Zone, Credential Data Input and Accumulator take it.
+Status_Flags FAULT follows Reliability, so the change goes through the same
+event and COV processing as `set_present_value_local` and a COV subscriber is
+notified of it. The value stays until the application sets another: the
+object's own evaluation doesn't clear it. Like the other `*_local` inputs it
+is not audited, and like them it bypasses `mutation_policy`.
+
+It raises `BacnetProtocolError` with PROPERTY / WRITE_ACCESS_DENIED while
+Out_Of_Service is set (a client may be simulating a fault then) or
+Reliability_Evaluation_Inhibit is TRUE, and with PROPERTY /
+VALUE_OUT_OF_RANGE for a value outside BACnetReliability (11, 26 to 63, or
+past 65535). An unknown object raises OBJECT / UNKNOWN_OBJECT and one that
+takes no Reliability OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. Nothing
+changes and nothing is sent when it raises. A server that is not running
+raises `RuntimeError`.
+
+```python
+sensor = ObjectIdentifier(ObjectType.ANALOG_INPUT, 1)
+await server.set_reliability_local(sensor, Reliability.NO_SENSOR)
+# ... and once the sensor is back:
+await server.set_reliability_local(sensor, Reliability.NO_FAULT_DETECTED)
+```
 
 #### `purge_audit_log(object_id)`
 
