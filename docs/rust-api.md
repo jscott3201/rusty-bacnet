@@ -5965,7 +5965,9 @@ service, where a client's simulated value is in force, and while
 Reliability_Evaluation_Inhibit is TRUE; a value outside BACnetReliability is
 PROPERTY / VALUE_OUT_OF_RANGE, and an object that takes none OBJECT /
 OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. It is not audited, as the other
-`*_local` inputs aren't. Python has no binding for it yet.
+`*_local` inputs aren't. The Python binding is
+`BACnetServer.set_reliability_local` (#2469), and an endpoint session has its
+own (see [Endpoint local writes](#endpoint-local-writes)).
 
 #### Schedule & Notification (6)
 
