@@ -1754,6 +1754,53 @@ class LifeSafetyOperation:
         ...
 
 
+class Reliability:
+    """BACnet reliability (Clause 12), for ``BACnetServer.set_reliability_local``.
+
+    Vendor values run from 64 to 65535; use ``Reliability.from_raw(n)`` for one.
+    """
+
+    NO_FAULT_DETECTED: Reliability
+    NO_SENSOR: Reliability
+    OVER_RANGE: Reliability
+    UNDER_RANGE: Reliability
+    OPEN_LOOP: Reliability
+    SHORTED_LOOP: Reliability
+    NO_OUTPUT: Reliability
+    UNRELIABLE_OTHER: Reliability
+    PROCESS_ERROR: Reliability
+    MULTI_STATE_FAULT: Reliability
+    CONFIGURATION_ERROR: Reliability
+    COMMUNICATION_FAILURE: Reliability
+    MEMBER_FAULT: Reliability
+    MONITORED_OBJECT_FAULT: Reliability
+    TRIPPED: Reliability
+    LAMP_FAILURE: Reliability
+    ACTIVATION_FAILURE: Reliability
+    RENEW_DHCP_FAILURE: Reliability
+    RENEW_FD_REGISTRATION_FAILURE: Reliability
+    RESTART_AUTO_NEGOTIATION_FAILURE: Reliability
+    RESTART_FAILURE: Reliability
+    PROPRIETARY_COMMAND_FAILURE: Reliability
+    FAULTS_LISTED: Reliability
+    REFERENCED_OBJECT_FAULT: Reliability
+    MULTI_STATE_OUT_OF_RANGE: Reliability
+
+    @staticmethod
+    def from_raw(value: int) -> Reliability: ...
+    def to_raw(self) -> int: ...
+    @property
+    def name(self) -> str | None:
+        """The constant's name (``"NO_SENSOR"``), or None for a value without one."""
+        ...
+    def __repr__(self) -> str: ...
+    def __eq__(self, other: object) -> bool: ...
+    def __hash__(self) -> int: ...
+    def __reduce__(self) -> tuple[Any, tuple[int]]:
+        """Rebuild with ``from_raw(to_raw())``, for ``copy`` and ``pickle``."""
+        ...
+
+
 # ---------------------------------------------------------------------------
 # Core types
 # ---------------------------------------------------------------------------
@@ -6872,6 +6919,31 @@ class BACnetServer:
         not Out_Of_Service is set, since clients never write its Present_Value;
         Tracking_Value, Silenced and Operation_Expected stay as they are. Other
         object types are not writable through this method.
+        """
+        ...
+
+    def set_reliability_local(
+        self,
+        object_id: ObjectIdentifier,
+        reliability: Reliability,
+    ) -> Awaitable[None]:
+        """Set the Reliability the application works out for an object, such as
+        NO_SENSOR when its hardware reports a missing sensor.
+
+        The built-in Inputs, Outputs and Values, the Integer Value, Loop,
+        Schedule, Life Safety Point and Zone, Access Zone, Credential Data Input
+        and Accumulator take it. Status_Flags' FAULT follows the change, and a
+        COV subscriber is notified of it. The value stays until the application
+        sets another: the object's own evaluation doesn't clear it. Like the
+        other ``*_local`` inputs it is not audited.
+
+        An object with Out_Of_Service set, whose Reliability a client may be
+        simulating, raises WRITE_ACCESS_DENIED, and so does one whose
+        Reliability_Evaluation_Inhibit is TRUE. A value outside
+        BACnetReliability (11, 26 to 63, or past 65535) raises
+        VALUE_OUT_OF_RANGE. An unknown object raises UNKNOWN_OBJECT and one that
+        takes no Reliability OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. Raises
+        RuntimeError before ``start()``.
         """
         ...
 

@@ -2224,6 +2224,34 @@ not Out\_Of\_Service is set, since clients never write its Present\_Value;
 Tracking\_Value, Silenced and Operation\_Expected stay as they are. Other
 object types are not writable through this method.
 
+### BACnetServer.set_reliability_local
+
+```python
+def set_reliability_local(
+    self,
+    object_id: ObjectIdentifier,
+    reliability: Reliability,
+) -> Awaitable[None]
+```
+
+Set the Reliability the application works out for an object, such as
+NO\_SENSOR when its hardware reports a missing sensor.
+
+The built-in Inputs, Outputs and Values, the Integer Value, Loop,
+Schedule, Life Safety Point and Zone, Access Zone, Credential Data Input
+and Accumulator take it. Status\_Flags' FAULT follows the change, and a
+COV subscriber is notified of it. The value stays until the application
+sets another: the object's own evaluation doesn't clear it. Like the
+other `*_local` inputs it is not audited.
+
+An object with Out\_Of\_Service set, whose Reliability a client may be
+simulating, raises WRITE\_ACCESS\_DENIED, and so does one whose
+Reliability\_Evaluation\_Inhibit is TRUE. A value outside
+BACnetReliability (11, 26 to 63, or past 65535) raises
+VALUE\_OUT\_OF\_RANGE. An unknown object raises UNKNOWN\_OBJECT and one that
+takes no Reliability OPTIONAL\_FUNCTIONALITY\_NOT\_SUPPORTED. Raises
+RuntimeError before `start()`.
+
 ### BACnetServer.report_access_event_local
 
 ```python
