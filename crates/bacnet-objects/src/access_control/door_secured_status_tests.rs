@@ -5,6 +5,8 @@
 //! to service all show through.
 
 #[cfg(feature = "event-reporting")]
+use crate::event::test_clock::test_now;
+#[cfg(feature = "event-reporting")]
 use crate::traits::EventReporting as _;
 use crate::traits::Timed;
 use std::time::Duration;
@@ -143,7 +145,7 @@ fn access_door_secured_status_follows_door_and_lock_status() {
 /// commit whatever transition that proposes.
 fn report(door: &mut AccessDoorObject, state: DoorAlarmState) {
     door.set_door_alarm_state(state).unwrap();
-    let outcome = door.evaluate_intrinsic_reporting().unwrap();
+    let outcome = door.evaluate_intrinsic_reporting(test_now()).unwrap();
     commit_test_proposal(door, outcome);
 }
 

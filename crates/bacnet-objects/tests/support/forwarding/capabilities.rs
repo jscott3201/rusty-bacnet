@@ -298,7 +298,7 @@ pub const CAPABILITY_ROWS: &[(&str, Row)] = &[
         Row::Command(|o| {
             let outcome = o
                 .event_reporting_mut()
-                .map(|r| r.evaluate_intrinsic_reporting());
+                .map(|r| r.evaluate_intrinsic_reporting(bacnet_time::Instant::from_secs(3)));
             format!("{outcome:?}")
         }),
     ),
@@ -307,7 +307,7 @@ pub const CAPABILITY_ROWS: &[(&str, Row)] = &[
         Row::Command(|o| {
             let outcome = o
                 .event_reporting_mut()
-                .map(|r| r.tick_intrinsic_reporting());
+                .map(|r| r.tick_intrinsic_reporting(bacnet_time::Instant::from_secs(4)));
             format!("{outcome:?}")
         }),
     ),
@@ -346,6 +346,13 @@ pub const CAPABILITY_ROWS: &[(&str, Row)] = &[
         Row::Query(|o| {
             let report = o.event_reporting().map(|r| r.buffer_ready_report());
             format!("{report:?}")
+        }),
+    ),
+    (
+        "EventReporting::next_due",
+        Row::Query(|o| {
+            let due = o.event_reporting().map(|r| r.next_due());
+            format!("{due:?}")
         }),
     ),
     (

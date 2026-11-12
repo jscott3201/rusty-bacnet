@@ -427,7 +427,7 @@ mod tests {
                 .unwrap()
                 .event_reporting_mut()
                 .expect("lends event reporting")
-                .evaluate_intrinsic_reporting()
+                .evaluate_intrinsic_reporting(crate::runtime_clock::core_now())
                 .expect("range Reliability must be observed as an intrinsic fault");
             assert_eq!(proposal.change.from, EventState::NORMAL);
             assert_eq!(proposal.change.to, EventState::FAULT);

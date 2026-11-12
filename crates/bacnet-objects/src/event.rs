@@ -7,13 +7,26 @@
 use crate::prelude::*;
 use core::ops::ControlFlow;
 
+/// The host's monotonic timeline the detectors' `now` and due instants are
+/// on, re-exported so an `EventReporting` implementor needs no dependency of
+/// its own on `bacnet-time` (#2303).
+pub use bacnet_time::{Duration, Instant};
 use bacnet_types::bitstring::{EventTransitionBits, LimitEnable};
 use bacnet_types::enums::{EventState, EventType, NotifyType, Reliability};
 use bacnet_types::primitives::BACnetTimeStamp;
 
 pub(crate) mod history;
 pub(crate) mod options;
+mod pending;
 pub(crate) mod state_reporting;
+// A test-only clock for the detectors' instants (#2303): every test thread
+// starts at its own zero, and one `test_tick` is one second, so a test that
+// counts ticks keeps its meaning.
+#[cfg(test)]
+pub(crate) mod test_clock;
+
+pub use pending::PendingTransition;
+use pending::{delay_toward, inhibited_target};
 
 /// A detected change in event state.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -186,75 +199,6 @@ pub enum EventTransitionCommitError {
     DetectionDisabled,
 }
 
-/// Pending (delayed) intrinsic-reporting transition state, shared by every
-/// detector that honors [`OutOfRangeDetector::time_delay`] and its peers.
-///
-/// Per ASHRAE 135-2020 Clause 13.3, a transition to a new `EventState` is
-/// delayed by `Time_Delay` seconds. While the delay counts down the
-/// observable `event_state` stays at the *old* (confirmed) state; if the
-/// triggering condition clears before the delay elapses the pending
-/// transition is cancelled and no notification is sent.
-///
-/// The countdown advances once per elapsed wall-clock second via
-/// the detector's `tick` (for example [`OutOfRangeDetector::tick`]), never per `probe` call — so a fast poll
-/// loop writing the same out-of-range value cannot shorten the delay.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PendingTransition {
-    /// The state the detector wants to transition to once the delay elapses.
-    pub state: EventState,
-    /// Seconds remaining; seeded with the direction-appropriate delay (see
-    /// `delay_toward`) and decremented per tick.
-    pub remaining: u32,
-}
-
-impl PendingTransition {
-    /// Begin a pending transition to `state`, seeded with `delay` seconds.
-    fn seed(state: EventState, delay: u32) -> Self {
-        Self {
-            state,
-            remaining: delay,
-        }
-    }
-}
-
-/// Select the delay governing a transition toward `target`.
-///
-/// ASHRAE 135-2020 Clause 13.3 gives the event algorithms two independent
-/// delays. pTimeDelay measures the required persistence of an offnormal
-/// condition in seconds before indicating that state: it governs
-/// every indication into an OFFNORMAL state, including offnormal→offnormal
-/// re-indication (CHANGE_OF_STATE (c) at 13.3.2, OUT_OF_RANGE (d)/(g) at
-/// 13.3.6, COMMAND_FAILURE (a) at 13.3.4). pTimeDelayNormal measures the
-/// required persistence of a Normal condition in seconds and gates only the
-/// sustained-condition return to
-/// NORMAL (CHANGE_OF_STATE (b), COMMAND_FAILURE (b), OUT_OF_RANGE (e)/(h)).
-///
-/// An absent pTimeDelayNormal uses pTimeDelay as its fallback, so `None`
-/// behaves exactly as `time_delay`, never as an error or a zero.
-///
-/// FAULT never reaches this selector: Clause 13.2.2 fault precedence runs
-/// ahead of the event algorithm and carries no delay term.
-fn delay_toward(time_delay: u32, time_delay_normal: Option<u32>, target: EventState) -> u32 {
-    if target == EventState::NORMAL {
-        time_delay_normal.unwrap_or(time_delay)
-    } else {
-        time_delay
-    }
-}
-
-/// What an algorithm proposes while Event_Algorithm_Inhibit is TRUE, once
-/// fault precedence has had its say (Clauses 13.2.2.1 and 13.2.2.1.5): its
-/// own result is ignored and any countdown dropped, so a condition has to
-/// last its whole delay again once the inhibit clears, and an offnormal
-/// state goes back to NORMAL at once. `None` when already NORMAL.
-fn inhibited_target(
-    event_state: EventState,
-    pending: &mut Option<PendingTransition>,
-) -> Option<EventState> {
-    *pending = None;
-    (event_state != EventState::NORMAL).then_some(EventState::NORMAL)
-}
-
 /// What Clause 13.2.2's fault-precedence rule dictates for a single evaluation.
 ///
 /// ASHRAE 135-2020 Clause 13.2.2 assigns normal/offnormal selection to the
@@ -362,10 +306,11 @@ pub(crate) fn fault_precedence(
 ///
 /// `Time_Delay` (and `Time_Delay_Normal` for the NORMAL direction) is
 /// honored via the split [`Self::probe`] / [`Self::tick`] entry points: a
-/// present-value write calls `probe`, which seeds a pending transition (or
-/// fires immediately when the direction-appropriate delay is zero,
-/// `delay_toward`); a one-second periodic task calls `tick` to advance the
-/// countdown and fire on expiry.
+/// present-value write calls `probe`, which seeds a pending transition due
+/// when the delay ends (or fires immediately when the direction-appropriate
+/// delay is zero, `delay_toward`); a periodic task calls `tick`, which fires
+/// it at the first call at or after that instant. [`Self::next_due`] says
+/// when that is. Every call takes `now` on the host's monotonic timeline.
 #[derive(Debug, Clone)]
 pub struct OutOfRangeDetector {
     /// High_Limit; a present value above it is a HIGH_LIMIT condition.
@@ -429,16 +374,17 @@ impl OutOfRangeDetector {
     ///
     /// This is the per-write entry point: it seeds a pending delayed
     /// transition (or fires immediately when the direction-appropriate delay
-    /// is zero) but never advances the countdown — so repeated writes to the
-    /// same value do not shorten the delay. Returns `Some(TransitionOutcome)`
+    /// is zero) but never fires a pending one, and repeated writes of the
+    /// same value keep its due instant. Returns `Some(TransitionOutcome)`
     /// whenever a transition fires; the outcome's `distribute` flag carries
     /// the `event_enable` bit rather than withholding the transition.
     pub fn evaluate(
         &mut self,
         present_value: f32,
         reliability: Reliability,
+        now: Instant,
     ) -> Option<TransitionOutcome> {
-        self.probe(present_value, reliability)
+        self.probe(present_value, reliability, now)
     }
 
     /// Apply Clause 13.2.2 fault precedence ahead of the event algorithm.
@@ -468,15 +414,16 @@ impl OutOfRangeDetector {
     /// When the direction-appropriate delay (`delay_toward`) is zero the
     /// transition is confirmed immediately and `event_state` is updated,
     /// preserving the legacy instant-transition behavior. Otherwise a
-    /// [`PendingTransition`] is seeded (or cleared if the condition
-    /// reverted) and `None` is returned; the periodic [`Self::tick`]
-    /// advances and eventually confirms it.
+    /// [`PendingTransition`] is seeded, due when the delay ends (or cleared
+    /// if the condition reverted), and `None` is returned; the periodic
+    /// [`Self::tick`] at or after that instant confirms it.
     pub fn probe(
         &mut self,
         present_value: f32,
         reliability: Reliability,
+        now: Instant,
     ) -> Option<TransitionOutcome> {
-        let outcome = self.propose(present_value, reliability, false);
+        let outcome = self.propose(present_value, reliability, false, now);
         if let Some(ref outcome) = outcome {
             self.confirm_transition(&outcome.change, reliability);
         }
@@ -489,6 +436,7 @@ impl OutOfRangeDetector {
         present_value: f32,
         reliability: Reliability,
         inhibited: bool,
+        now: Instant,
     ) -> Option<TransitionOutcome> {
         if let ControlFlow::Break(result) = self.fault_proposal(reliability) {
             return result;
@@ -510,39 +458,43 @@ impl OutOfRangeDetector {
         }
         // Nonzero delay: seed a pending transition only when there is none to
         // the same target. A redundant write of the same qualifying value must
-        // NOT restart the countdown (ASHRAE 135-2020 Clause 13.3 times the
+        // NOT move its due instant (ASHRAE 135-2020 Clause 13.3 times the
         // delay from when the condition began to hold); re-seeding here would
-        // let writes faster than the 1s tick pin the transition forever. The
-        // periodic `tick` advances it.
+        // let a stream of writes pin the transition forever. The periodic
+        // `tick` fires it once it is due.
         if self.pending.as_ref().is_none_or(|p| p.state != desired) {
-            self.pending = Some(PendingTransition::seed(desired, delay));
+            self.pending = Some(PendingTransition::seed(desired, delay, now));
         }
         None
     }
 
-    /// Periodic tick: advance the countdown and fire on expiry.
+    /// Periodic tick: fire a pending transition that is due.
     ///
-    /// Returns `Some(TransitionOutcome)` when the pending transition's delay
-    /// elapses this tick, or `None` if still counting down / no pending
-    /// transition / the condition reverted (which cancels the pending).
+    /// Returns `Some(TransitionOutcome)` when the pending transition is due
+    /// at `now` (its due instant at or before it), or `None` if it isn't yet
+    /// / there is no pending transition / the condition reverted (which
+    /// cancels the pending). A condition no write reported is seeded here,
+    /// due its delay after `now`.
     pub fn tick(
         &mut self,
         present_value: f32,
         reliability: Reliability,
+        now: Instant,
     ) -> Option<TransitionOutcome> {
-        let outcome = self.tick_proposal(present_value, reliability, false);
+        let outcome = self.tick_proposal(present_value, reliability, false, now);
         if let Some(ref outcome) = outcome {
             self.confirm_transition(&outcome.change, reliability);
         }
         outcome
     }
 
-    /// Advance a pending countdown, leaving a fire-ready transition retryable.
+    /// Fire a pending transition that is due, leaving it retryable.
     pub(crate) fn tick_proposal(
         &mut self,
         present_value: f32,
         reliability: Reliability,
         inhibited: bool,
+        now: Instant,
     ) -> Option<TransitionOutcome> {
         if let ControlFlow::Break(result) = self.fault_proposal(reliability) {
             return result;
@@ -556,10 +508,9 @@ impl OutOfRangeDetector {
             self.pending = None;
             return None;
         }
-        match &mut self.pending {
+        match &self.pending {
             Some(p) if p.state == desired => {
-                if p.remaining > 1 {
-                    p.remaining -= 1;
+                if now < p.due {
                     return None;
                 }
                 self.proposal(desired)
@@ -568,10 +519,16 @@ impl OutOfRangeDetector {
                 // Condition changed target mid-delay, or no pending yet: re-seed
                 // with the delay for the CURRENT target's direction.
                 let delay = delay_toward(self.time_delay, self.time_delay_normal, desired);
-                self.pending = Some(PendingTransition::seed(desired, delay));
+                self.pending = Some(PendingTransition::seed(desired, delay, now));
                 None
             }
         }
+    }
+
+    /// When the pending transition is due, if one is pending: the instant a
+    /// host should call `tick` by.
+    pub fn next_due(&self) -> Option<Instant> {
+        self.pending.as_ref().map(|pending| pending.due)
     }
 
     /// Confirm a transition to `new_state`: mutate `event_state` and report the
@@ -722,8 +679,9 @@ impl ChangeOfStateDetector {
         &mut self,
         present_value: u32,
         reliability: Reliability,
+        now: Instant,
     ) -> Option<TransitionOutcome> {
-        self.probe(present_value, reliability)
+        self.probe(present_value, reliability, now)
     }
 
     /// Clause 13.2.2 fault precedence; see [`OutOfRangeDetector::fault_proposal`].
@@ -745,8 +703,9 @@ impl ChangeOfStateDetector {
         &mut self,
         present_value: u32,
         reliability: Reliability,
+        now: Instant,
     ) -> Option<TransitionOutcome> {
-        let outcome = self.propose(present_value, reliability, false);
+        let outcome = self.propose(present_value, reliability, false, now);
         if let Some(ref outcome) = outcome {
             self.confirm_transition(&outcome.change, reliability);
         }
@@ -759,6 +718,7 @@ impl ChangeOfStateDetector {
         present_value: u32,
         reliability: Reliability,
         inhibited: bool,
+        now: Instant,
     ) -> Option<TransitionOutcome> {
         if let ControlFlow::Break(result) = self.fault_proposal(reliability) {
             return result;
@@ -776,33 +736,36 @@ impl ChangeOfStateDetector {
         if delay == 0 {
             return self.proposal(desired);
         }
-        // See [`OutOfRangeDetector::probe`]: do not restart an in-flight
-        // countdown to the same target on a redundant qualifying write.
+        // See [`OutOfRangeDetector::probe`]: do not move an in-flight
+        // transition's due instant on a redundant qualifying write.
         if self.pending.as_ref().is_none_or(|p| p.state != desired) {
-            self.pending = Some(PendingTransition::seed(desired, delay));
+            self.pending = Some(PendingTransition::seed(desired, delay, now));
         }
         None
     }
 
-    /// Periodic tick: advance the countdown and fire on expiry.
+    /// Periodic tick: fire a pending transition that is due; see
+    /// [`OutOfRangeDetector::tick`].
     pub fn tick(
         &mut self,
         present_value: u32,
         reliability: Reliability,
+        now: Instant,
     ) -> Option<TransitionOutcome> {
-        let outcome = self.tick_proposal(present_value, reliability, false);
+        let outcome = self.tick_proposal(present_value, reliability, false, now);
         if let Some(ref outcome) = outcome {
             self.confirm_transition(&outcome.change, reliability);
         }
         outcome
     }
 
-    /// Advance a pending countdown, leaving a fire-ready transition retryable.
+    /// Fire a pending transition that is due, leaving it retryable.
     pub(crate) fn tick_proposal(
         &mut self,
         present_value: u32,
         reliability: Reliability,
         inhibited: bool,
+        now: Instant,
     ) -> Option<TransitionOutcome> {
         if let ControlFlow::Break(result) = self.fault_proposal(reliability) {
             return result;
@@ -816,10 +779,9 @@ impl ChangeOfStateDetector {
             self.pending = None;
             return None;
         }
-        match &mut self.pending {
+        match &self.pending {
             Some(p) if p.state == desired => {
-                if p.remaining > 1 {
-                    p.remaining -= 1;
+                if now < p.due {
                     return None;
                 }
                 self.proposal(desired)
@@ -827,10 +789,16 @@ impl ChangeOfStateDetector {
             _ => {
                 // Re-seed with the delay for the CURRENT target's direction.
                 let delay = delay_toward(self.time_delay, self.time_delay_normal, desired);
-                self.pending = Some(PendingTransition::seed(desired, delay));
+                self.pending = Some(PendingTransition::seed(desired, delay, now));
                 None
             }
         }
+    }
+
+    /// When the pending transition is due, if one is pending: the instant a
+    /// host should call `tick` by.
+    pub fn next_due(&self) -> Option<Instant> {
+        self.pending.as_ref().map(|pending| pending.due)
     }
 
     /// Confirm a transition to `new_state`, reporting whether `Event_Enable`
@@ -935,8 +903,9 @@ impl CommandFailureDetector {
         present_value: u32,
         feedback_value: u32,
         reliability: Reliability,
+        now: Instant,
     ) -> Option<TransitionOutcome> {
-        self.probe(present_value, feedback_value, reliability)
+        self.probe(present_value, feedback_value, reliability, now)
     }
 
     /// Clause 13.2.2 fault precedence; see [`OutOfRangeDetector::fault_proposal`].
@@ -959,8 +928,9 @@ impl CommandFailureDetector {
         present_value: u32,
         feedback_value: u32,
         reliability: Reliability,
+        now: Instant,
     ) -> Option<TransitionOutcome> {
-        let outcome = self.propose(present_value, feedback_value, reliability, false);
+        let outcome = self.propose(present_value, feedback_value, reliability, false, now);
         if let Some(ref outcome) = outcome {
             self.confirm_transition(&outcome.change, reliability);
         }
@@ -974,6 +944,7 @@ impl CommandFailureDetector {
         feedback_value: u32,
         reliability: Reliability,
         inhibited: bool,
+        now: Instant,
     ) -> Option<TransitionOutcome> {
         if let ControlFlow::Break(result) = self.fault_proposal(reliability) {
             return result;
@@ -991,35 +962,38 @@ impl CommandFailureDetector {
         if delay == 0 {
             return self.proposal(desired);
         }
-        // See [`OutOfRangeDetector::probe`]: do not restart an in-flight
-        // countdown to the same target on a redundant qualifying write.
+        // See [`OutOfRangeDetector::probe`]: do not move an in-flight
+        // transition's due instant on a redundant qualifying write.
         if self.pending.as_ref().is_none_or(|p| p.state != desired) {
-            self.pending = Some(PendingTransition::seed(desired, delay));
+            self.pending = Some(PendingTransition::seed(desired, delay, now));
         }
         None
     }
 
-    /// Periodic tick: advance the countdown and fire on expiry.
+    /// Periodic tick: fire a pending transition that is due; see
+    /// [`OutOfRangeDetector::tick`].
     pub fn tick(
         &mut self,
         present_value: u32,
         feedback_value: u32,
         reliability: Reliability,
+        now: Instant,
     ) -> Option<TransitionOutcome> {
-        let outcome = self.tick_proposal(present_value, feedback_value, reliability, false);
+        let outcome = self.tick_proposal(present_value, feedback_value, reliability, false, now);
         if let Some(ref outcome) = outcome {
             self.confirm_transition(&outcome.change, reliability);
         }
         outcome
     }
 
-    /// Advance a pending countdown, leaving a fire-ready transition retryable.
+    /// Fire a pending transition that is due, leaving it retryable.
     pub(crate) fn tick_proposal(
         &mut self,
         present_value: u32,
         feedback_value: u32,
         reliability: Reliability,
         inhibited: bool,
+        now: Instant,
     ) -> Option<TransitionOutcome> {
         if let ControlFlow::Break(result) = self.fault_proposal(reliability) {
             return result;
@@ -1033,10 +1007,9 @@ impl CommandFailureDetector {
             self.pending = None;
             return None;
         }
-        match &mut self.pending {
+        match &self.pending {
             Some(p) if p.state == desired => {
-                if p.remaining > 1 {
-                    p.remaining -= 1;
+                if now < p.due {
                     return None;
                 }
                 self.proposal(desired)
@@ -1044,10 +1017,16 @@ impl CommandFailureDetector {
             _ => {
                 // Re-seed with the delay for the CURRENT target's direction.
                 let delay = delay_toward(self.time_delay, self.time_delay_normal, desired);
-                self.pending = Some(PendingTransition::seed(desired, delay));
+                self.pending = Some(PendingTransition::seed(desired, delay, now));
                 None
             }
         }
+    }
+
+    /// When the pending transition is due, if one is pending: the instant a
+    /// host should call `tick` by.
+    pub fn next_due(&self) -> Option<Instant> {
+        self.pending.as_ref().map(|pending| pending.due)
     }
 
     /// Confirm a transition to `new_state`, reporting whether `Event_Enable`
@@ -1102,6 +1081,8 @@ pub(crate) use history::commit_test_proposal;
 pub(crate) use history::impl_builtin_intrinsic_reporting;
 pub(crate) use state_reporting::impl_change_of_state_reporting;
 
+#[cfg(test)]
+mod due_instant_tests;
 #[cfg(all(test, feature = "event-reporting"))]
 mod fault_reporting_tests;
 #[cfg(test)]

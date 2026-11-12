@@ -82,6 +82,8 @@ targets = []
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
+# The instants intrinsic reporting's delays are due at (#2303).
+bacnet-time = { workspace = true }
 bacnet-types = { workspace = true }
 bacnet-encoding = { workspace = true }
 bytes = { workspace = true }

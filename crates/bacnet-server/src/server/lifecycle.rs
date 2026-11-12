@@ -754,20 +754,21 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
         }));
 
-        // One-second intrinsic-reporting task: advances the `Time_Delay`
-        // countdown for any object with a pending delayed transition and sends
-        // the EventNotification when the delay elapses. The per-write path
-        // only *seeds* a pending transition (see `fire_event_notifications`);
-        // this task is the sole confirmer, so repeated writes cannot shorten
-        // the delay (ASHRAE 135-2020 Clause 13.3). Runs unconditionally like the
-        // trend-log task — a no-pending tick is a cheap empty iteration.
+        // Intrinsic-reporting task: once a second, and when a pending
+        // transition's `Time_Delay` ends, it fires the transitions that are due
+        // and sends their EventNotifications. The per-write path only *seeds* a
+        // pending transition, due its delay after the write (see
+        // `fire_event_notifications`); this task is the sole confirmer, so
+        // repeated writes cannot shorten the delay (ASHRAE 135-2020 Clause
+        // 13.3). Runs unconditionally like the trend-log task — a no-pending
+        // sweep is a cheap empty iteration.
         //
         // It is also what carries Reliability into event-state-detection. Per
         // Clause 13.2.2 the FAULT determination is a standing condition, so each
-        // tick re-derives it from the object's current `Reliability` rather than
+        // sweep re-derives it from the object's current `Reliability` rather than
         // reacting to a change event. Whoever writes Reliability — an object's
         // opt-in evaluation hook, a local write, or a network write — reaches
-        // detection through this tick. The fault detector above only fans COV
+        // detection through this sweep. The fault detector above only fans COV
         // out for the Status_Flags change it causes (#889); it signals nothing
         // to event detection. `enable_fault_detection` therefore governs only
         // whether those object-owned hooks run every 10 seconds, never whether

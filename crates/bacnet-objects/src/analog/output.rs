@@ -444,7 +444,7 @@ mod detection_enable_reset_tests {
         ao.event_detector.acked_transitions = bacnet_types::bitstring::EventTransitionBits::empty();
         ao.event_detector.pending = Some(crate::event::PendingTransition {
             state: bacnet_types::enums::EventState::HIGH_LIMIT,
-            remaining: 2,
+            due: crate::event::test_clock::in_seconds(2),
         });
         ao.event_detector.fault_reliability = Some(bacnet_types::enums::Reliability::NO_SENSOR);
         ao.event_history.time_stamps = [

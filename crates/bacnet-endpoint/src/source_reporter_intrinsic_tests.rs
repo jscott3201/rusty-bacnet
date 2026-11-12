@@ -37,7 +37,7 @@ fn intrinsic_proposals_and_commit_results_survive_wrapping() {
         let evaluated = object
             .event_reporting_mut()
             .expect("lends event reporting")
-            .evaluate_intrinsic_reporting();
+            .evaluate_intrinsic_reporting(bacnet_time::Instant::from_secs(0));
         let proposal = if delay == 0 {
             evaluated.unwrap()
         } else {
@@ -45,7 +45,7 @@ fn intrinsic_proposals_and_commit_results_survive_wrapping() {
             object
                 .event_reporting_mut()
                 .expect("lends event reporting")
-                .tick_intrinsic_reporting()
+                .tick_intrinsic_reporting(bacnet_time::Instant::from_secs(1))
                 .unwrap()
         };
         assert_eq!(
@@ -94,14 +94,14 @@ fn intrinsic_proposals_and_commit_results_survive_wrapping() {
             object
                 .event_reporting_mut()
                 .expect("lends event reporting")
-                .evaluate_intrinsic_reporting()
+                .evaluate_intrinsic_reporting(bacnet_time::Instant::from_secs(0))
                 .is_none()
         );
         assert!(
             object
                 .event_reporting_mut()
                 .expect("lends event reporting")
-                .tick_intrinsic_reporting()
+                .tick_intrinsic_reporting(bacnet_time::Instant::from_secs(1))
                 .is_none()
         );
     }

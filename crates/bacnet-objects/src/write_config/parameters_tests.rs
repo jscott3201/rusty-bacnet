@@ -8,6 +8,7 @@
 //! `access_parameters_tests`, and an Event Enrollment's in
 //! `enrollment_parameters_tests`.
 
+use crate::event::test_clock::{test_now, test_tick};
 use alloc::sync::Arc;
 
 use bacnet_types::bitstring::LimitEnable;
@@ -162,7 +163,7 @@ fn set_value(object: &mut dyn BACnetObject, value: f32) {
 pub(super) fn evaluated(object: &mut dyn BACnetObject) -> Option<EventState> {
     let reporting = object.event_reporting_mut().unwrap();
     reporting
-        .evaluate_intrinsic_reporting()
+        .evaluate_intrinsic_reporting(test_now())
         .map(|outcome| outcome.change.to)
 }
 
@@ -170,7 +171,7 @@ pub(super) fn evaluated(object: &mut dyn BACnetObject) -> Option<EventState> {
 pub(super) fn ticked(object: &mut dyn BACnetObject) -> Option<EventState> {
     let reporting = object.event_reporting_mut().unwrap();
     reporting
-        .tick_intrinsic_reporting()
+        .tick_intrinsic_reporting(test_tick())
         .map(|outcome| outcome.change.to)
 }
 

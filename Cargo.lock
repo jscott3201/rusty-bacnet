@@ -553,6 +553,7 @@ name = "bacnet-objects"
 version = "0.15.0"
 dependencies = [
  "bacnet-encoding",
+ "bacnet-time",
  "bacnet-types",
  "bytes",
  "hashbrown 0.17.1",

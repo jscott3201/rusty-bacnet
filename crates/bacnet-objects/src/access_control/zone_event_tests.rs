@@ -3,6 +3,7 @@
 //!
 //! Configuration goes through `write_property`, the route a client takes.
 
+use crate::event::test_clock::{test_now, test_tick};
 use crate::traits::EventReporting as _;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::PropertyIdentifier as P;
@@ -246,10 +247,10 @@ fn access_zone_goes_offnormal_after_time_delay_and_back_to_normal() {
     adjust(&mut zone, 6);
     assert_eq!(zone.occupancy_state(), S::ABOVE_UPPER_LIMIT);
     // The write seeds the countdown; nothing fires until it runs out.
-    assert_eq!(zone.evaluate_intrinsic_reporting(), None);
-    assert_eq!(zone.tick_intrinsic_reporting(), None);
+    assert_eq!(zone.evaluate_intrinsic_reporting(test_now()), None);
+    assert_eq!(zone.tick_intrinsic_reporting(test_tick()), None);
     assert_eq!(event_state(&zone), enumerated(EventState::NORMAL));
-    let offnormal = zone.tick_intrinsic_reporting().unwrap();
+    let offnormal = zone.tick_intrinsic_reporting(test_tick()).unwrap();
     assert_eq!(
         offnormal,
         TransitionOutcome {
@@ -268,16 +269,16 @@ fn access_zone_goes_offnormal_after_time_delay_and_back_to_normal() {
         }
     );
     // Staying in alarm proposes nothing more.
-    assert_eq!(zone.evaluate_intrinsic_reporting(), None);
-    assert_eq!(zone.tick_intrinsic_reporting(), None);
+    assert_eq!(zone.evaluate_intrinsic_reporting(test_now()), None);
+    assert_eq!(zone.tick_intrinsic_reporting(test_tick()), None);
 
     // Back below the limit: Time_Delay_Normal, unset, falls back to
     // Time_Delay.
     adjust(&mut zone, -3);
     assert_eq!(zone.occupancy_state(), S::NORMAL);
-    assert_eq!(zone.evaluate_intrinsic_reporting(), None);
-    assert_eq!(zone.tick_intrinsic_reporting(), None);
-    let normal = zone.tick_intrinsic_reporting().unwrap();
+    assert_eq!(zone.evaluate_intrinsic_reporting(test_now()), None);
+    assert_eq!(zone.tick_intrinsic_reporting(test_tick()), None);
+    let normal = zone.tick_intrinsic_reporting(test_tick()).unwrap();
     assert_eq!(
         normal.change,
         change(EventState::OFFNORMAL, EventState::NORMAL)
@@ -306,8 +307,8 @@ fn access_zone_time_delay_normal_governs_only_the_return_to_normal() {
 
     // Into alarm on Time_Delay's single second.
     adjust(&mut zone, 6);
-    assert_eq!(zone.evaluate_intrinsic_reporting(), None);
-    let offnormal = zone.tick_intrinsic_reporting().unwrap();
+    assert_eq!(zone.evaluate_intrinsic_reporting(test_now()), None);
+    let offnormal = zone.tick_intrinsic_reporting(test_tick()).unwrap();
     assert_eq!(
         offnormal.change,
         change(EventState::NORMAL, EventState::OFFNORMAL)
@@ -316,11 +317,11 @@ fn access_zone_time_delay_normal_governs_only_the_return_to_normal() {
 
     // Out of it only after Time_Delay_Normal's three.
     adjust(&mut zone, -3);
-    assert_eq!(zone.evaluate_intrinsic_reporting(), None);
-    assert_eq!(zone.tick_intrinsic_reporting(), None);
-    assert_eq!(zone.tick_intrinsic_reporting(), None);
+    assert_eq!(zone.evaluate_intrinsic_reporting(test_now()), None);
+    assert_eq!(zone.tick_intrinsic_reporting(test_tick()), None);
+    assert_eq!(zone.tick_intrinsic_reporting(test_tick()), None);
     assert_eq!(
-        zone.tick_intrinsic_reporting()
+        zone.tick_intrinsic_reporting(test_tick())
             .map(|outcome| outcome.change),
         Some(change(EventState::OFFNORMAL, EventState::NORMAL))
     );
@@ -350,13 +351,13 @@ fn access_zone_alarm_values_past_the_cap_are_no_space() {
 fn access_zone_condition_cleared_within_time_delay_reports_nothing() {
     let mut zone = alarming_zone(3);
     adjust(&mut zone, 6);
-    assert_eq!(zone.evaluate_intrinsic_reporting(), None);
-    assert_eq!(zone.tick_intrinsic_reporting(), None);
+    assert_eq!(zone.evaluate_intrinsic_reporting(test_now()), None);
+    assert_eq!(zone.tick_intrinsic_reporting(test_tick()), None);
     adjust(&mut zone, -1);
     assert_eq!(zone.occupancy_state(), S::AT_UPPER_LIMIT);
-    assert_eq!(zone.evaluate_intrinsic_reporting(), None);
+    assert_eq!(zone.evaluate_intrinsic_reporting(test_now()), None);
     for _ in 0..5 {
-        assert_eq!(zone.tick_intrinsic_reporting(), None);
+        assert_eq!(zone.tick_intrinsic_reporting(test_tick()), None);
     }
     assert_eq!(event_state(&zone), enumerated(EventState::NORMAL));
 }
@@ -372,12 +373,12 @@ fn access_zone_event_enable_gates_distribution_not_the_transition() {
     )
     .unwrap();
     adjust(&mut zone, 6);
-    let offnormal = zone.evaluate_intrinsic_reporting().unwrap();
+    let offnormal = zone.evaluate_intrinsic_reporting(test_now()).unwrap();
     assert!(!offnormal.distribute);
     commit_test_proposal(&mut zone, offnormal);
     assert_eq!(event_state(&zone), enumerated(EventState::OFFNORMAL));
     adjust(&mut zone, 0);
-    let normal = zone.evaluate_intrinsic_reporting().unwrap();
+    let normal = zone.evaluate_intrinsic_reporting(test_now()).unwrap();
     assert_eq!(
         normal.change,
         change(EventState::OFFNORMAL, EventState::NORMAL)
@@ -389,7 +390,7 @@ fn access_zone_event_enable_gates_distribution_not_the_transition() {
 fn access_zone_event_detection_enable_suspends_and_resets_reporting() {
     let mut zone = alarming_zone(0);
     adjust(&mut zone, 6);
-    let offnormal = zone.evaluate_intrinsic_reporting().unwrap();
+    let offnormal = zone.evaluate_intrinsic_reporting(test_now()).unwrap();
     let stamp = BACnetTimeStamp::SequenceNumber(9);
     zone.commit_event_transition(EventTransitionCommit {
         change: offnormal.change.clone(),
@@ -425,8 +426,8 @@ fn access_zone_event_detection_enable_suspends_and_resets_reporting() {
         );
     }
     // Still above the limit, but detection is off.
-    assert_eq!(zone.evaluate_intrinsic_reporting(), None);
-    assert_eq!(zone.tick_intrinsic_reporting(), None);
+    assert_eq!(zone.evaluate_intrinsic_reporting(test_now()), None);
+    assert_eq!(zone.tick_intrinsic_reporting(test_tick()), None);
     assert_protocol_error(
         zone.acknowledge_alarm(EventState::OFFNORMAL, &stamp)
             .map(|_| ()),
@@ -451,7 +452,7 @@ fn access_zone_event_detection_enable_suspends_and_resets_reporting() {
     )
     .unwrap();
     assert_eq!(
-        zone.evaluate_intrinsic_reporting()
+        zone.evaluate_intrinsic_reporting(test_now())
             .map(|outcome| outcome.change),
         Some(change(EventState::NORMAL, EventState::OFFNORMAL))
     );
@@ -461,7 +462,7 @@ fn access_zone_event_detection_enable_suspends_and_resets_reporting() {
 fn access_zone_acknowledges_its_latest_offnormal_transition() {
     let mut zone = alarming_zone(0);
     adjust(&mut zone, 6);
-    let offnormal = zone.evaluate_intrinsic_reporting().unwrap();
+    let offnormal = zone.evaluate_intrinsic_reporting(test_now()).unwrap();
     let stamp = BACnetTimeStamp::SequenceNumber(41);
     zone.commit_event_transition(EventTransitionCommit {
         change: offnormal.change,
@@ -506,7 +507,7 @@ fn access_zone_simulated_fault_and_count_drive_the_event_state() {
         PropertyValue::Enumerated(Reliability::UNRELIABLE_OTHER.to_raw()),
     )
     .unwrap();
-    let fault = zone.evaluate_intrinsic_reporting().unwrap();
+    let fault = zone.evaluate_intrinsic_reporting(test_now()).unwrap();
     assert_eq!(fault.change, change(EventState::NORMAL, EventState::FAULT));
     assert_eq!(fault.event_type, EventType::CHANGE_OF_RELIABILITY);
     commit_test_proposal(&mut zone, fault);
@@ -518,7 +519,7 @@ fn access_zone_simulated_fault_and_count_drive_the_event_state() {
         PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw()),
     )
     .unwrap();
-    let recovered = zone.evaluate_intrinsic_reporting().unwrap();
+    let recovered = zone.evaluate_intrinsic_reporting(test_now()).unwrap();
     assert_eq!(
         recovered.change,
         change(EventState::FAULT, EventState::NORMAL)
@@ -529,7 +530,7 @@ fn access_zone_simulated_fault_and_count_drive_the_event_state() {
     // (Clause 12.32.10).
     write(&mut zone, P::OCCUPANCY_COUNT, PropertyValue::Unsigned(9)).unwrap();
     assert_eq!(
-        zone.evaluate_intrinsic_reporting()
+        zone.evaluate_intrinsic_reporting(test_now())
             .map(|outcome| outcome.change),
         Some(change(EventState::NORMAL, EventState::OFFNORMAL))
     );
