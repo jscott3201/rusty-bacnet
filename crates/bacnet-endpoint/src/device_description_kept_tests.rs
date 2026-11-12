@@ -21,6 +21,8 @@ struct Storage {
     saved: Mutex<Option<TagsSnapshot>>,
     saves: AtomicUsize,
     fail: AtomicBool,
+    /// While set, a save waits before it stores anything.
+    hold: AtomicBool,
     database: OnceLock<Weak<RwLock<ObjectDatabase>>>,
     saved_under_the_guard: AtomicBool,
 }
@@ -56,6 +58,9 @@ impl TagsPersistence for Storage {
                 }
                 std::thread::yield_now();
             }
+        }
+        while self.hold.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(1));
         }
         if self.fail.load(Ordering::SeqCst) {
             return Err(Error::Encoding("storage unavailable".into()));
@@ -202,5 +207,58 @@ async fn a_description_written_locally_is_saved_first() {
     assert_eq!(read(&session, DESCRIPTION).await, served("lobby"));
     assert_eq!(storage.description().as_deref(), Some("lobby"));
     assert!(!storage.saved_under_the_guard.load(Ordering::SeqCst));
+    session.stop().await.unwrap();
+}
+
+/// A local write dropped while its save runs (#2468 review) lets go of
+/// what it staged: storage comes back to the Description the Device serves
+/// soon after, and a client's next Description write and an unrelated read
+/// aren't held up behind the stage. Real time, so the drop lands while the
+/// held save runs on the Device's writer thread.
+#[tokio::test]
+async fn a_local_write_dropped_during_its_save_lets_go_of_the_stage() {
+    let storage = Arc::new(Storage::default());
+    let (mut session, mac) = session_on(&storage).await;
+    let mut client = bus_client().await;
+    let device = oid(123);
+    let source = bacnet_device_core::write::local::LocalCommandSource::ServerDevice;
+    storage.hold.store(true, Ordering::SeqCst);
+    let write = session.write_local(&device, DESCRIPTION, None, served("lobby"), None, source);
+    let dropped = tokio::time::timeout(Duration::from_millis(50), write).await;
+    assert!(
+        dropped.is_err(),
+        "the held save keeps the write from ending"
+    );
+    storage.hold.store(false, Ordering::SeqCst);
+
+    // The held save stores the dropped text, then the save the release
+    // queued puts back what the Device serves: the configured text, which
+    // storage keeps as no written one.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while storage.saves.load(Ordering::SeqCst) < 2 || storage.description().is_some() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "storage holds {:?}, the Device serves {:?}",
+            storage.description(),
+            read(&session, DESCRIPTION).await
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(read(&session, DESCRIPTION).await, served("configured"));
+
+    let started = std::time::Instant::now();
+    let name = PropertyIdentifier::OBJECT_NAME;
+    let (written, name) = tokio::join!(
+        client.write_property(&mac, device, DESCRIPTION, None, text("hall"), None),
+        client.read_property(&mac, device, name, None),
+    );
+    written.unwrap();
+    name.unwrap();
+    let took = started.elapsed();
+    // A stage left to its 10 s lifetime holds these up for most of it.
+    assert!(took < Duration::from_secs(4), "held up {took:?}");
+    assert_eq!(storage.description().as_deref(), Some("hall"));
+    assert_eq!(read(&session, DESCRIPTION).await, served("hall"));
+    client.stop().await.unwrap();
     session.stop().await.unwrap();
 }

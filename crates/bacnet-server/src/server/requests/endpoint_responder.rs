@@ -501,8 +501,11 @@ impl EndpointResponder {
     /// returns. An input or a Reliability stages nothing.
     ///
     /// `commit` runs under the guard with no await, so a caller dropped
-    /// before it runs has changed nothing; a save it staged and then forgot
-    /// is settled as any forgotten stage is.
+    /// before it runs has changed nothing the object serves. What it staged
+    /// by then is released from a task of its own as soon as the guard is
+    /// free, so the object puts storage back to what it serves at once
+    /// rather than holding the stage, and the next write that stages on it,
+    /// for the stage's lifetime.
     #[doc(hidden)]
     pub async fn local_commit<R>(
         db: &Arc<RwLock<ObjectDatabase>>,
@@ -520,7 +523,7 @@ impl EndpointResponder {
             } => DurableTarget::local(oid, *property, *array_index, value),
             _ => Vec::new(),
         };
-        let staged = durable_writes::stage(db, durable).await;
+        let staged = durable_writes::stage_held(db, durable).await;
         let mut guard = db.write().await;
         let result = commit(&mut guard, change);
         staged.release(&mut guard);

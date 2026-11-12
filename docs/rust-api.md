@@ -12015,8 +12015,8 @@ its own database through bacnet-device-core's `write::local::apply`, under the
 database guard the responder reads under, so a request sees the object before
 the change or after it. Each is refused where the server's call is, with the
 same error. They work in any role while the session runs with a database;
-before `start()`, once `stop()` begins (checked again under the guard) or
-without a database they fail with `Error::Encoding` and change nothing.
+before `start()`, after `stop()` or without a database they fail with
+`Error::Encoding` and change nothing.
 
 ```rust
 use bacnet_device_core::write::local::LocalCommandSource;
@@ -12029,14 +12029,31 @@ session
     .await?;
 ```
 
-Nothing follows a change. The endpoint serves no COV subscriptions and runs no
+What doesn't follow on an endpoint: it serves no COV subscriptions and runs no
 event pass, so it sends no COV or event notification after a local change (COV
 on the endpoint is #2490), and Event_State stays as it is: a fault set here
 shows FAULT in Status_Flags without the IN_ALARM the server's event pass adds.
-A Command or Channel run that a `write_local` starts ends at once, unmade and
-unsuccessful, as bacnet-device-core's `Responder` ends one a client's write
-starts, so the object isn't left busy; a Staging object's targets aren't
-written. A client's next read sees the change.
+No task makes the writes a change starts either. Each run ends at once, unmade,
+as bacnet-device-core's `Responder` ends one a client's write starts, so none
+leaves its object busy, but what it leaves differs by object:
+
+- A Command's Present_Value write ends its list with In_Process and
+  All_Writes_Successful FALSE, and no action is written.
+- A Channel's Present_Value write ends its distribution with Write_Status
+  FAILED, Reliability PROCESS_ERROR and Status_Flags FAULT, and no member is
+  written.
+- A write that starts or moves a Timer gives it its new state, but the
+  State_Change_Values writes the transition owes aren't made (Reliability
+  PROCESS_ERROR, FAULT), and with no Timer task a running Timer never expires.
+- A Schedule's targets aren't written, nor a Staging object's.
+
+A client's next read sees the change.
+
+A call dropped before it commits has changed nothing the object serves. A save
+it had staged by then is let go of from a task of its own as soon as the guard
+is free, so storage comes back to what the object serves soon after and the
+next write to the object, a client's included, isn't held up behind it. Once
+the commit begins it runs to its end under the guard, with no await.
 
 Saving and auditing follow the endpoint's network writes, property by
 property:
@@ -12059,7 +12076,8 @@ property:
 
 The local-write cases the server and bacnet-device-core run side by side run on
 the endpoint too, compared by result and by the properties read back; the event
-pass and the Command run are the differences pinned by tests.
+pass and the Command, Channel and Timer runs are the differences pinned by
+tests.
 
 ### Direct endpoint WriteProperty and source WRITE reporting
 

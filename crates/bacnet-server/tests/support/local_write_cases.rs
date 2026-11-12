@@ -1,7 +1,9 @@
 //! The local-write cases (#2446, #2468), one list for every host that
 //! makes the application's own writes: the server and bacnet-device-core,
-//! side by side in `local_write`, and the endpoint session, whose
-//! `local_write_tests` in `bacnet-endpoint` includes this file by path.
+//! side by side in the parity tests' `local_write`, and the endpoint
+//! session, whose `local_write_tests` in `bacnet-endpoint` includes this
+//! file by path, as `bacnet-server` includes `bacnet-endpoint`'s
+//! `tests/support/port_retry.rs`.
 //!
 //! Both crates call every case function here, so a case added for one
 //! host that the other doesn't run is dead code there, which the lint gate

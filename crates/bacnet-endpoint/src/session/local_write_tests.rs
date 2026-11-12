@@ -7,21 +7,30 @@
 //! with the result the list gives and the same properties read back. The
 //! server's own run of the list holds it to the core's rows, so the three
 //! hosts agree. What the endpoint does differently by design is pinned
-//! below: no event pass, and a Command's run ended unmade.
+//! below: no event pass; a Command's, Channel's or Timer's run ended
+//! unmade; and no Timer task.
 
 use super::*;
 use crate::DeviceIdentity;
 use crate::session::bus_port::BusPort;
 use crate::session::device_write_tests::bus_client;
+use bacnet_objects::analog::AnalogOutputObject;
+use bacnet_objects::channel::ChannelObject;
 use bacnet_objects::clock::{ClockFrame, ClockReader};
 use bacnet_objects::command::CommandObject;
-use bacnet_types::constructed::{BACnetActionCommand, BACnetActionList};
-use bacnet_types::enums::{ErrorClass, ErrorCode, ObjectType};
+use bacnet_objects::timer::TimerObject;
+use bacnet_types::constructed::{
+    BACnetActionCommand, BACnetActionList, BACnetDeviceObjectPropertyReference,
+    BACnetTimerStateChangeValue,
+};
+use bacnet_types::enums::{
+    EngineeringUnits, ErrorClass, ErrorCode, ObjectType, Reliability, TimerState, WriteStatus,
+};
 use bacnet_types::primitives::{Date, Time};
 use cases::{Change, READ_BACK, Step};
 use std::net::Ipv4Addr;
 
-#[path = "../../../bacnet-server/src/server/device_core_parity_tests/cov/local_write/cases.rs"]
+#[path = "../../../bacnet-server/tests/support/local_write_cases.rs"]
 mod cases;
 
 const P_PV: PropertyIdentifier = PropertyIdentifier::PRESENT_VALUE;
@@ -282,6 +291,128 @@ async fn a_command_run_a_local_write_starts_ends_unmade() {
             PropertyValue::Enumerated(0)
         );
     }
+    session.stop().await.unwrap();
+}
+
+fn ao1() -> ObjectIdentifier {
+    cases::oid(ObjectType::ANALOG_OUTPUT, 1)
+}
+
+/// The cases' database with AO-1 and `more` besides.
+fn with_output(more: Box<dyn bacnet_objects::traits::BACnetObject>) -> ObjectDatabase {
+    let mut db = fixture();
+    let output = AnalogOutputObject::new(1, "AO-1", EngineeringUnits::NO_UNITS).unwrap();
+    db.add(Box::new(output)).unwrap();
+    db.add(more).unwrap();
+    db
+}
+
+/// AO-1 as no write has left it: Present_Value at its default, no slot
+/// commanded.
+async fn assert_ao1_unwritten(session: &EndpointSession<BusPort>) {
+    assert_eq!(read(session, ao1(), P_PV).await, PropertyValue::Real(0.0));
+    let db = session.database.as_ref().unwrap().read().await;
+    let slots = db
+        .get(&ao1())
+        .unwrap()
+        .read_property(PropertyIdentifier::PRIORITY_ARRAY, None)
+        .unwrap();
+    let PropertyValue::List(slots) = slots else {
+        panic!("a Priority_Array: {slots:?}")
+    };
+    assert!(
+        slots.iter().all(|slot| *slot == PropertyValue::Null),
+        "{slots:?}"
+    );
+}
+
+/// Pinned to differ from the server by design: a Channel's Present_Value
+/// write starts a distribution the endpoint has no task to make, so it
+/// ends at once, unmade, as bacnet-device-core's `Responder` ends one:
+/// Write_Status FAILED, Reliability PROCESS_ERROR with FAULT, and no
+/// member written. The server writes the members.
+#[tokio::test(start_paused = true)]
+async fn a_channel_write_ends_its_distribution_failed_with_no_member_written() {
+    let ch1 = cases::oid(ObjectType::CHANNEL, 1);
+    let mut channel = ChannelObject::new(1, "CH-1", 7).unwrap();
+    let member = BACnetDeviceObjectPropertyReference::new_local(ao1(), P_PV.to_raw());
+    channel.set_members(vec![member]).unwrap();
+    let (mut session, _) = endpoint(with_output(Box::new(channel))).await;
+    let source = LocalCommandSource::ServerDevice;
+    let value = PropertyValue::Real(40.0);
+    session
+        .write_local(&ch1, P_PV, None, value, Some(8), source)
+        .await
+        .unwrap();
+    assert_eq!(
+        read(&session, ch1, PropertyIdentifier::WRITE_STATUS).await,
+        PropertyValue::Enumerated(WriteStatus::FAILED.to_raw())
+    );
+    assert_eq!(
+        read(&session, ch1, PropertyIdentifier::RELIABILITY).await,
+        PropertyValue::Enumerated(Reliability::PROCESS_ERROR.to_raw())
+    );
+    assert_eq!(
+        read(&session, ch1, PropertyIdentifier::STATUS_FLAGS).await,
+        flags(0b0100)
+    );
+    assert_ao1_unwritten(&session).await;
+    session.stop().await.unwrap();
+}
+
+/// Pinned to differ from the server by design: a Timer started by a local
+/// write runs, but the State_Change_Values write its start owes ends at
+/// once, unmade (Reliability PROCESS_ERROR with FAULT, AO-1 unwritten), and
+/// with no Timer task on the endpoint it never expires; stopped, it goes
+/// IDLE with that write unmade too. The server writes AO-1 and expires the
+/// Timer at its time.
+#[tokio::test(start_paused = true)]
+async fn a_timer_started_locally_writes_nothing_and_never_expires() {
+    let tmr1 = cases::oid(ObjectType::TIMER, 1);
+    let mut timer = TimerObject::new(1, "TMR-1").unwrap();
+    timer.set_pres_value_range(100, 600_000).unwrap();
+    let real = |value| BACnetTimerStateChangeValue::Primitive(PropertyValue::Real(value));
+    let target = BACnetDeviceObjectPropertyReference::new_local(ao1(), P_PV.to_raw());
+    timer
+        .set_state_change(core::array::from_fn(|_| real(10.0)), vec![target], 9)
+        .unwrap();
+    let (mut session, _) = endpoint(with_output(Box::new(timer))).await;
+    let source = LocalCommandSource::ServerDevice;
+    let time = PropertyValue::Unsigned(300);
+    session
+        .write_local(&tmr1, P_PV, None, time, None, source)
+        .await
+        .unwrap();
+    let running = PropertyValue::Enumerated(TimerState::RUNNING.to_raw());
+    assert_eq!(
+        read(&session, tmr1, PropertyIdentifier::TIMER_STATE).await,
+        running
+    );
+    assert_eq!(
+        read(&session, tmr1, PropertyIdentifier::RELIABILITY).await,
+        PropertyValue::Enumerated(Reliability::PROCESS_ERROR.to_raw())
+    );
+    assert_eq!(
+        read(&session, tmr1, PropertyIdentifier::STATUS_FLAGS).await,
+        flags(0b0100)
+    );
+    assert_ao1_unwritten(&session).await;
+    // Well past its 300 ms, it still runs.
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    assert_eq!(
+        read(&session, tmr1, PropertyIdentifier::TIMER_STATE).await,
+        running
+    );
+    assert_ao1_unwritten(&session).await;
+    // Stopped, it goes IDLE, and that transition's write isn't made either.
+    let idle = PropertyValue::Enumerated(TimerState::IDLE.to_raw());
+    let state = PropertyIdentifier::TIMER_STATE;
+    session
+        .write_local(&tmr1, state, None, idle.clone(), None, source)
+        .await
+        .unwrap();
+    assert_eq!(read(&session, tmr1, state).await, idle);
+    assert_ao1_unwritten(&session).await;
     session.stop().await.unwrap();
 }
 

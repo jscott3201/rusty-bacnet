@@ -504,3 +504,64 @@ async fn a_local_write_of_the_recipient_tells_the_old_and_the_new_one() {
     old.stop().await.unwrap();
     new.stop().await.unwrap();
 }
+
+/// A local write of the recipient the Device refuses (#2468 review) changes
+/// nothing and sends no record to the old recipient or the new one: a
+/// value of another datatype, one that names no Device, and one naming the
+/// new recipient at a priority outside 1 to 16.
+#[tokio::test(start_paused = true)]
+async fn a_refused_local_write_of_the_recipient_sends_nothing() {
+    let (mut old, mut old_records) = network().await;
+    let (mut new, mut new_records) = network().await;
+    let mut db = database(false);
+    db.set_clock_reader(None);
+    let mut session = session(db, SessionRole::Both, &old);
+    session.start().await.unwrap();
+    let before = current(&session).await;
+    let wildcard = BACnetRecipient::Device(oid(ObjectType::DEVICE, ObjectIdentifier::MAX_INSTANCE));
+    let next = PropertyValue::ApplicationData(value(&direct(&new)));
+    let property = (ErrorClass::PROPERTY, ErrorCode::INVALID_DATA_TYPE);
+    for (value, priority, expected) in [
+        (PropertyValue::Unsigned(1), None, property),
+        (
+            PropertyValue::ApplicationData(value(&wildcard)),
+            None,
+            (ErrorClass::PROPERTY, ErrorCode::INVALID_DATA_ENCODING),
+        ),
+        (
+            next,
+            Some(17),
+            (ErrorClass::SERVICES, ErrorCode::PARAMETER_OUT_OF_RANGE),
+        ),
+    ] {
+        let refused = session
+            .write_local(
+                &oid(ObjectType::DEVICE, 123),
+                PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT,
+                None,
+                value,
+                priority,
+                bacnet_device_core::write::local::LocalCommandSource::ServerDevice,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(refused, Error::Remote(bacnet_types::error::RemoteError::Error { class, code })
+                if (class, code) == expected),
+            "{refused:?}"
+        );
+    }
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        old_records.try_recv().is_err(),
+        "a record to the old recipient"
+    );
+    assert!(
+        new_records.try_recv().is_err(),
+        "a record to the new recipient"
+    );
+    assert_eq!(current(&session).await, before);
+    session.stop().await.unwrap();
+    old.stop().await.unwrap();
+    new.stop().await.unwrap();
+}

@@ -174,7 +174,8 @@ async fn main() -> Result<(), bacnet_types::error::Error> {
   change an object of the session's database under its guard, as the
   server's calls of the same names do, saved and audited as the endpoint's
   network writes are. No COV or event notification follows: the endpoint
-  serves no subscriptions and runs no event pass.
+  serves no subscriptions and runs no event pass, and a Command, Channel or
+  Timer run a write starts ends at once, unmade.
 
 ## Data-link support matrix (explicit, not silent)
 

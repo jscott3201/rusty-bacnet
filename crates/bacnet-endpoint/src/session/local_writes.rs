@@ -3,10 +3,11 @@
 //! ([`apply`](bacnet_device_core::write::local::apply)) under the session's
 //! database guard, staged as `bacnet-server` stages its own.
 //!
-//! What follows a change on the server, its event pass, COV fanout and the
-//! Command, Channel and Staging work, has nothing to run on here: the
-//! endpoint serves no COV subscriptions and runs no event pass (COV on the
-//! endpoint is #2490). A change is seen by the next read.
+//! What follows a change on the server, its event pass, COV fanout, and the
+//! Command, Channel, Timer, Schedule and Staging work, has nothing to run on
+//! here: the endpoint serves no COV subscriptions and runs no event pass
+//! (COV on the endpoint is #2490), and no task makes a run's writes or
+//! times a Timer. A change is seen by the next read.
 
 use super::*;
 use bacnet_device_core::write::local::{self, LocalChange, LocalCommandSource};
@@ -29,12 +30,23 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// succeeds and changes nothing (#1396). `source` names the local
     /// Device or an object of it as the command's initiator.
     ///
-    /// **No notification follows.** The endpoint sends no COV or event
-    /// notification after a local change and runs no event pass, so
-    /// Event_State stays as it is (COV on the endpoint is #2490). A Command
-    /// or Channel run the write starts ends at once, unmade and
-    /// unsuccessful, as bacnet-device-core's `Responder` ends one a client's
-    /// write starts; a Staging object's targets aren't written.
+    /// **What doesn't follow on an endpoint.** The endpoint sends no COV or
+    /// event notification after a local change and runs no event pass, so
+    /// Event_State stays as it is (COV on the endpoint is #2490). No task
+    /// makes the writes a change starts either; each run ends at once,
+    /// unmade, as bacnet-device-core's `Responder` ends one a client's write
+    /// starts, so none leaves its object busy, but what it leaves differs:
+    ///
+    /// - a Command's Present_Value write ends its list with In_Process and
+    ///   All_Writes_Successful FALSE and no action written;
+    /// - a Channel's Present_Value write ends its distribution with
+    ///   Write_Status FAILED, Reliability PROCESS_ERROR and Status_Flags
+    ///   FAULT, and no member written;
+    /// - a write that starts or moves a Timer gives it its new state, but the
+    ///   State_Change_Values writes it owes aren't made (Reliability
+    ///   PROCESS_ERROR, FAULT), and with no Timer task a running Timer never
+    ///   expires;
+    /// - a Schedule's targets aren't written, nor a Staging object's.
     ///
     /// **Saved first.** A property its object keeps in storage, such as the
     /// Description of a Device built with
@@ -56,13 +68,17 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     ///
     /// # Errors
     /// [`Error::Encoding`] when the session is not running (before
-    /// [`start`](Self::start), or once [`stop`](Self::stop) begins, checked
-    /// again under the guard) or has no database; nothing changes then.
-    /// Otherwise the refusal above, with nothing changed.
+    /// [`start`](Self::start) or after [`stop`](Self::stop)) or has no
+    /// database; nothing changes then. Otherwise the refusal above, with
+    /// nothing changed.
     ///
     /// # Cancellation
-    /// Dropped before it commits, the call has changed nothing. The commit
-    /// and everything after it run under the guard with no await.
+    /// Dropped before it commits, the call has changed nothing the object
+    /// serves. A save it had staged by then is let go of from a task of its
+    /// own once the database guard is free, so storage comes back to what
+    /// the object serves soon after, and the next write to the object
+    /// isn't held up behind it. Once the commit begins it runs to its end
+    /// under the guard, with no await.
     pub async fn write_local(
         &self,
         oid: &ObjectIdentifier,
@@ -96,12 +112,17 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// included. A Value that tracks
     /// its source then names this session's Device as Value_Source.
     ///
-    /// **No notification follows:** the endpoint sends no COV or event
-    /// notification after a local change and runs no event pass (#2490).
-    /// An input is not audited and saves nothing first.
+    /// **What doesn't follow on an endpoint:** no COV or event
+    /// notification and no event pass (#2490), as for
+    /// [`write_local`](Self::write_local). An input is not audited and saves
+    /// nothing first.
     ///
     /// # Errors
     /// As [`write_local`](Self::write_local).
+    ///
+    /// # Cancellation
+    /// Dropped before it commits, the call has changed nothing; an input
+    /// stages no save, so it leaves nothing behind.
     pub async fn set_present_value_local(
         &self,
         oid: &ObjectIdentifier,
@@ -124,14 +145,18 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// an object that takes none refuses it with OBJECT /
     /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. Status_Flags' FAULT follows it.
     ///
-    /// **No notification follows:** the endpoint sends no COV or event
-    /// notification after a local change and runs no event pass, so an
-    /// object that reports faults keeps its Event_State and its
-    /// Status_Flags show FAULT without IN_ALARM, where the server's event
-    /// pass would add it (#2490). Not audited.
+    /// **What doesn't follow on an endpoint:** no COV or event
+    /// notification and no event pass (#2490), as for
+    /// [`write_local`](Self::write_local), so an object that reports faults
+    /// keeps its Event_State and its Status_Flags show FAULT without
+    /// IN_ALARM, where the server's event pass would add it. Not audited.
     ///
     /// # Errors
     /// As [`write_local`](Self::write_local).
+    ///
+    /// # Cancellation
+    /// Dropped before it commits, the call has changed nothing; a
+    /// Reliability stages no save, so it leaves nothing behind.
     pub async fn set_reliability_local(
         &self,
         oid: &ObjectIdentifier,
@@ -153,13 +178,15 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             .as_ref()
             .ok_or_else(|| Error::Encoding("endpoint session has no local database".into()))?;
         EndpointResponder::local_commit(database, oid, change, |db, change| {
-            // Stop may have begun while the write waited for the guard.
+            // A defence only: `stop` takes `&mut self`, which this call's
+            // borrow of the session excludes, so the session can't stop
+            // while the call runs.
             if !self.is_running() {
                 return Err(not_running());
             }
             if local::apply(db, oid, change, None)? == Applied::Written {
-                // Nothing here runs a Command's or Channel's run; end it now
-                // rather than leave the object busy.
+                // Nothing here makes a Command's, Channel's or Timer's run;
+                // end it now rather than leave the object busy.
                 end_unmade(db, &[oid]);
             }
             Ok(())
@@ -171,3 +198,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
 #[cfg(test)]
 #[path = "local_write_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "local_staged_release_tests.rs"]
+mod staged_release_tests;
