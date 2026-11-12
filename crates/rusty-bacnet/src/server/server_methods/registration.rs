@@ -243,6 +243,20 @@ impl BACnetServer {
     /// (kilowatts) and `state_description` serve those optional properties,
     /// and `agreed_duty_window` (minutes) is the Duty_Window a request takes
     /// when no client wrote one.
+    ///
+    /// With `storage_path` (a `str`), the object keeps its shed request in
+    /// that file (#2497): the request properties, the agreed Duty_Window,
+    /// the shed state, Enable and a Description a client wrote. A rebuilt
+    /// object looks at a request that was pending or being shed again, as
+    /// though Start_Time had just been written, and calls `shed` for it; one
+    /// that was being shed calls `stop` when it ends. A write that cannot be
+    /// saved is refused with DEVICE / OPERATIONAL_PROBLEM. The shed levels,
+    /// baseline and state description are configuration the file does not
+    /// keep: give them as keywords here at every start, so a restored
+    /// request is put to `shed` with them. The `set_load_control_*_local`
+    /// methods work only once the server runs, after that first look, so use
+    /// them for changes while it runs. Give each Load Control its own file;
+    /// one that holds another object's request raises BacnetError.
     #[pyo3(signature = (
         instance,
         name,
@@ -252,7 +266,8 @@ impl BACnetServer {
         stop=None,
         full_duty_baseline=None,
         state_description=None,
-        agreed_duty_window=None
+        agreed_duty_window=None,
+        storage_path=None
     ))]
     fn add_load_control(
         &self,
@@ -264,9 +279,16 @@ impl BACnetServer {
         full_duty_baseline: Option<f64>,
         state_description: Option<String>,
         agreed_duty_window: Option<u64>,
+        storage_path: Option<&str>,
     ) -> PyResult<()> {
         let shedder = crate::load_shedder::PyLoadShedder::parse(shed, stop)?;
-        let mut obj = LoadControlObject::new(instance, name).map_err(to_py_err)?;
+        let mut obj = match storage_path {
+            Some(path) => {
+                let storage = Arc::new(FileLoadControlPersistence::new(path).map_err(to_py_err)?);
+                LoadControlObject::with_persistence(instance, name, storage).map_err(to_py_err)?
+            }
+            None => LoadControlObject::new(instance, name).map_err(to_py_err)?,
+        };
         if let Some(levels) = shed_levels {
             obj.set_shed_levels(levels).map_err(to_py_err)?;
         }
