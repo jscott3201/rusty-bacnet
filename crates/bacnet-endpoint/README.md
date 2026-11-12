@@ -160,7 +160,19 @@ async fn main() -> Result<(), bacnet_types::error::Error> {
   installed source Audit recipient, and explicit
   [`EndpointSession::with_reinitialize`](session::EndpointSession::with_reinitialize)
   enables ReinitializeDevice through an application handler, each with
-  deterministic and real B/IP loopback tests. Full `bacnet-server`
+  deterministic and real B/IP loopback tests. Explicit
+  [`EndpointSession::with_cov`](session::EndpointSession::with_cov) enables
+  SubscribeCOV over bacnet-device-core's `Reporter`, with unconfirmed and
+  confirmed COV notifications whose octets and parameters match
+  `bacnet-server`'s on paused-time in-memory tests. Its confirmed
+  notifications share the client role's 256 invoke IDs but hold at most
+  [`COV_CONFIRMED_IN_FLIGHT`](session::COV_CONFIRMED_IN_FLIGHT) (64) at once,
+  so subscribers that stop answering can't leave the client role without one;
+  four silent subscribers fill it at the default per-subscriber limit.
+  Unconfirmed notifications don't count against it, though while the session
+  is at the bound one that found the outbox full goes at the task's next wake,
+  which can be seconds later: size the outbox for the subscriptions expected.
+  Full `bacnet-server`
   dispatch parity is out of scope. Accepted-direct replies preserve the original
   sealed response capability through the bounded endpoint queue, before any
   prompt reply channel. Retired/invalid authority never falls back by address;
@@ -173,9 +185,10 @@ async fn main() -> Result<(), bacnet_types::error::Error> {
   and [`set_reliability_local`](session::EndpointSession::set_reliability_local)
   change an object of the session's database under its guard, as the
   server's calls of the same names do, saved and audited as the endpoint's
-  network writes are. No COV or event notification follows: the endpoint
-  serves no subscriptions and runs no event pass, and a Command, Channel or
-  Timer run a write starts ends at once, unmade.
+  network writes are. With `with_cov`, a change that writes is reported to
+  its COV subscribers. No event notification follows: the endpoint runs no
+  event pass, and a Command, Channel or Timer run a write starts ends at
+  once, unmade.
 
 ## Data-link support matrix (explicit, not silent)
 

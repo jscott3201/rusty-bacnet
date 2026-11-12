@@ -8,6 +8,8 @@ mod committed_cov;
 pub mod cov;
 pub mod device_communication_control;
 mod device_view;
+#[doc(hidden)]
+pub mod endpoint_cov;
 pub mod event_enrollment;
 pub mod fault_detection;
 pub mod handlers;
