@@ -89,8 +89,8 @@ impl ReplyFailures {
     }
 
     /// Send `reply`, a `kind` reply to `destination`, with `send`, handing
-    /// it to `tap` once it went; on a failed or short send, count and log
-    /// it. Returns the failures reported when it warns.
+    /// it to `tap` just before ([`send_tapped`]); on a failed or short send,
+    /// count and log it. Returns the failures reported when it warns.
     pub(super) fn send_reply(
         &self,
         kind: LlcReply,

@@ -324,6 +324,30 @@ mod claim_tests;
 mod tests {
     use super::*;
 
+    /// A datagram is tapped as it is handed to the socket (#2519), whether
+    /// or not the socket then sends it: one to port 0, which macOS refuses
+    /// with EADDRNOTAVAIL, is tapped all the same, whatever another OS does
+    /// with it.
+    #[tokio::test]
+    async fn a_datagram_is_tapped_whether_or_not_the_socket_sends_it() {
+        let tap = FrameTap::new();
+        let mut frames = tap.subscribe();
+        let socket = Bip6Socket::bind(Ipv6Addr::LOCALHOST, 0, PortUse::Claimed, Role::Normal)
+            .await
+            .unwrap()
+            .tapped(tap.clone());
+        let to = SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 0, 0, 0));
+        let datagram = [0x82, 0x01, 0x00, 0x0A, 0x01, 0x02, 0x03, 0x01, 0x00, 0x10];
+        // Refused or sent, the tap must hold it.
+        let _ = socket.send_to(&datagram, to).await;
+        let frame = frames.try_recv().expect("tapped as it is handed over");
+        assert_eq!(frame.direction, TapDirection::Outbound);
+        assert_eq!(frame.link, DataLink::Bip6);
+        assert_eq!(frame.peer, TapPeer::Udp(to));
+        assert_eq!(&frame.bytes[..], &datagram[..]);
+        assert!(frames.try_recv().is_none());
+    }
+
     #[test]
     fn arrival_interface_and_selected_destination_are_required_before_learning() {
         let link = SelectedLink {

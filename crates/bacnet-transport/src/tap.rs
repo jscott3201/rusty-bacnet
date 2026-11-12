@@ -45,7 +45,8 @@
 //! answering the other, may come either way round. A sent frame is reported
 //! even if its write then fails or is given up; the sender learns of the
 //! failure as before. On MS/TP one task writes and reads the line, so a
-//! frame is reported once written, before the station reads on.
+//! frame is reported once written, before the station reads on, and a frame
+//! whose write fails is not reported.
 //!
 //! # Cost and loss
 //!
@@ -91,7 +92,8 @@ pub const DEFAULT_TAP_CAPACITY: usize = 1024;
 pub enum TapDirection {
     /// Received by this node.
     Inbound,
-    /// Sent by this node.
+    /// Handed to the socket by this node to send: on MS/TP, written to the
+    /// line. See [Order](crate::tap#order) for a send that then fails.
     Outbound,
 }
 
@@ -240,14 +242,17 @@ impl FrameTap {
     #[cold]
     #[inline(never)]
     fn publish(&self, direction: TapDirection, link: DataLink, peer: TapPeer, bytes: &[u8]) {
+        let bytes = Bytes::copy_from_slice(bytes);
+        let mut sinks = self.lock_sinks();
+        // Stamped under the lock, so that frames two threads report at once
+        // are queued in the order of their timestamps.
         let frame = TappedFrame {
             timestamp: SystemTime::now(),
             direction,
             link,
             peer,
-            bytes: Bytes::copy_from_slice(bytes),
+            bytes,
         };
-        let mut sinks = self.lock_sinks();
         sinks.retain(|sink| match sink.tx.try_send(frame.clone()) {
             Ok(()) => {
                 self.shared.delivered.fetch_add(1, Ordering::Relaxed);

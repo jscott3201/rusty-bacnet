@@ -9029,7 +9029,8 @@ Frames arrive in the order the transport hands them over: a sent frame just
 before the socket writes it (on MS/TP, once written), a received one just after
 the read. So a reply never comes ahead of the request that drew it, even when
 the send returns late (#2519); frames that cross on the wire may come either
-way round. A sent frame whose write then fails has still been reported.
+way round. A sent frame whose write then fails, or is abandoned, has still
+been reported, except on MS/TP, where a failed write is not.
 
 Each receiver has a bounded queue (`DEFAULT_TAP_CAPACITY`, 1024 frames, or
 `subscribe_with_capacity(n)`). The transport never waits for one: a frame that
