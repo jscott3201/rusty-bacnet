@@ -158,6 +158,101 @@ async fn the_hub_connection_is_tapped_from_connect_to_disconnect() {
     assert_eq!((counters.delivered, counters.dropped), (7, 0));
 }
 
+/// A socket whose next send, once armed, keeps its caller waiting after the
+/// message has gone, until the test lets it return: the window between a
+/// socket write and the code after it (#2519).
+struct HeldAfterSend {
+    inner: LoopbackWebSocket,
+    hold: std::sync::Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>>,
+}
+
+impl WebSocketPort for HeldAfterSend {
+    async fn send(&self, data: &[u8]) -> Result<(), Error> {
+        self.inner.send(data).await?;
+        let hold = self.hold.lock().unwrap().take();
+        if let Some(release) = hold {
+            release.await.unwrap();
+        }
+        Ok(())
+    }
+
+    async fn recv(&self) -> Result<Vec<u8>, Error> {
+        self.inner.recv().await
+    }
+}
+
+/// An answer that comes back, and is taken, while the send of its request
+/// has yet to return is still tapped after the request (#2519): the tap
+/// reports a message before the socket writes it, so how long the send
+/// takes to return cannot put the answer first.
+#[tokio::test(start_paused = true)]
+async fn an_answer_taken_before_its_send_returns_is_tapped_after_it() {
+    let (socket, hub) = LoopbackWebSocket::pair();
+    let hold = std::sync::Arc::default();
+    let socket = HeldAfterSend {
+        inner: socket,
+        hold: std::sync::Arc::clone(&hold),
+    };
+    let mut transport = ScTransport::new(socket, NODE).with_device_uuid([1; 16]);
+    let mut frames = transport.frame_tap().subscribe();
+    let hub_task = tokio::spawn(async move {
+        accept(&hub).await;
+        hub
+    });
+    let mut npdus = transport.start().await.unwrap();
+    let hub = hub_task.await.unwrap();
+
+    let (release, held) = tokio::sync::oneshot::channel();
+    *hold.lock().unwrap() = Some(held);
+    let sending = tokio::spawn(async move {
+        transport.send_unicast(&REQUEST, &PEER).await.unwrap();
+        transport
+    });
+    // The request is on the wire and answered, and the node has taken the
+    // answer, all before the send returns.
+    let sent = decode_sc_message(&hub.recv().await.unwrap()).unwrap();
+    assert_eq!(&sent.payload[..], REQUEST);
+    let answer = message(ScFunction::EncapsulatedNpdu, 9, Some(PEER), &ANSWER);
+    hub.send(&answer).await.unwrap();
+    assert_eq!(&npdus.recv().await.unwrap().npdu[..], ANSWER);
+    assert!(!sending.is_finished());
+    release.send(()).unwrap();
+    let mut transport = sending.await.unwrap();
+
+    let tapped: Vec<_> = std::iter::from_fn(|| frames.try_recv())
+        .map(|frame| {
+            let message = decode_sc_message(&frame.bytes).unwrap();
+            let npdu =
+                (message.function == ScFunction::EncapsulatedNpdu).then_some(message.payload);
+            (frame.direction, message.function, npdu)
+        })
+        .collect();
+    let npdu = |bytes: &'static [u8]| Some(Bytes::from_static(bytes));
+    assert_eq!(
+        tapped,
+        [
+            (TapDirection::Outbound, ScFunction::ConnectRequest, None),
+            (TapDirection::Inbound, ScFunction::ConnectAccept, None),
+            (
+                TapDirection::Outbound,
+                ScFunction::EncapsulatedNpdu,
+                npdu(&REQUEST)
+            ),
+            (
+                TapDirection::Inbound,
+                ScFunction::EncapsulatedNpdu,
+                npdu(&ANSWER)
+            ),
+        ]
+    );
+
+    let stopping = tokio::spawn(async move { transport.stop().await.unwrap() });
+    let disconnect = decode_sc_message(&hub.recv().await.unwrap()).unwrap();
+    assert_eq!(disconnect.function, ScFunction::DisconnectRequest);
+    drop(hub);
+    stopping.await.unwrap();
+}
+
 /// Sockets a reconnect or failover connector dials are tapped too, and
 /// labelled with their hub.
 #[tokio::test(start_paused = true)]
