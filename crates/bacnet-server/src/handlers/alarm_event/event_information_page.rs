@@ -6,8 +6,17 @@ use bacnet_encoding::{primitives, tags};
 #[derive(Debug)]
 pub(crate) enum EventInformationFailure {
     Service(Error),
+    /// An object's summary didn't project: the request answers
+    /// OPERATIONAL_PROBLEM, and the host can say which object and why.
+    Projection(EventSummaryProblem),
     Objects,
     Bytes,
+}
+
+impl From<EventSummaryProblem> for EventInformationFailure {
+    fn from(problem: EventSummaryProblem) -> Self {
+        Self::Projection(problem)
+    }
 }
 
 impl From<Error> for EventInformationFailure {

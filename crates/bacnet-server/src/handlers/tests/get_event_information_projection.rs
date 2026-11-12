@@ -202,6 +202,9 @@ fn response(
             (Err(expected), Err(EventInformationFailure::Service(actual))) => {
                 assert_eq!(expected.to_string(), actual.to_string())
             }
+            (Err(expected), Err(EventInformationFailure::Projection(problem))) => {
+                assert_eq!(expected.to_string(), problem.to_error().to_string())
+            }
             (expected, actual) => panic!("legacy/configured mismatch: {expected:?} / {actual:?}"),
         }
     }

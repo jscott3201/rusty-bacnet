@@ -3,12 +3,13 @@
 //! The [`FaultDetector`] periodically invokes each object's opt-in,
 //! object-owned reliability evaluation hook.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::traits::ReliabilityEvaluation;
 use bacnet_types::enums::Reliability;
+use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 
 /// A reliability change detected by the fault detector.
@@ -74,11 +75,13 @@ impl FaultDetector {
             .remove(oid);
     }
 
-    fn prune_internal_failures(&self, db: &ObjectDatabase) {
+    fn noted_internal_failures(&self) -> Vec<ObjectIdentifier> {
         self.warned_internal_failures
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .retain(|oid, _| db.get(oid).is_some());
+            .keys()
+            .copied()
+            .collect()
     }
 
     /// Evaluate reliability for all objects in the database.
@@ -91,48 +94,71 @@ impl FaultDetector {
     ///
     /// Returns a list of changes that object hooks successfully applied.
     pub fn evaluate(&self, db: &mut ObjectDatabase) -> Vec<ReliabilityChange> {
-        let mut changes = Vec::new();
-        db.for_each_object_mut(|oid, object| {
-            // An object that lends no evaluation changes nothing: the old
-            // `Unchanged` default.
-            let Some(evaluation) = object.reliability_eval() else {
+        let pass = fault_pass(db);
+        // The pass visited every object, so a failure noted before that
+        // didn't recur has recovered, lends no evaluation, is inhibited or
+        // is gone: forget it, so it warns again if it fails again.
+        let failed: HashSet<ObjectIdentifier> = pass.failures.iter().map(|(oid, _)| *oid).collect();
+        for oid in self.noted_internal_failures() {
+            if !failed.contains(&oid) {
                 self.clear_internal_failure(&oid);
-                return;
-            };
-            if evaluation.reliability_evaluation_inhibited() {
-                self.clear_internal_failure(&oid);
-                return;
             }
-            match evaluation.evaluate_reliability() {
-                Ok(ReliabilityEvaluation::Unchanged) => {
-                    self.clear_internal_failure(&oid);
-                }
-                Ok(ReliabilityEvaluation::Changed {
+        }
+        for (oid, error) in &pass.failures {
+            if self.should_warn_internal_failure(*oid, &error.to_string()) {
+                tracing::warn!(
+                    object = %oid,
+                    error = %error,
+                    "Fault detection object-owned reliability evaluation failed"
+                );
+            }
+        }
+        pass.changes
+    }
+}
+
+/// What one [`fault_pass`] found.
+#[derive(Debug, Default)]
+pub struct FaultPass {
+    /// The changes object hooks applied, in visiting order.
+    pub changes: Vec<ReliabilityChange>,
+    /// The objects whose hook failed this pass, with its error, in visiting
+    /// order. Each made no change; a host decides what to log.
+    pub failures: Vec<(ObjectIdentifier, Error)>,
+}
+
+/// Visit every object's opt-in reliability evaluation once.
+///
+/// An object that lends no evaluation, or whose evaluation is inhibited, is
+/// left alone. Only a hook result of [`ReliabilityEvaluation::Changed`]
+/// produces a [`ReliabilityChange`].
+pub fn fault_pass(db: &mut ObjectDatabase) -> FaultPass {
+    let mut pass = FaultPass::default();
+    db.for_each_object_mut(|oid, object| {
+        // An object that lends no evaluation changes nothing: the old
+        // `Unchanged` default.
+        let Some(evaluation) = object.reliability_eval() else {
+            return;
+        };
+        if evaluation.reliability_evaluation_inhibited() {
+            return;
+        }
+        match evaluation.evaluate_reliability() {
+            Ok(ReliabilityEvaluation::Unchanged) => {}
+            Ok(ReliabilityEvaluation::Changed {
+                old_reliability,
+                new_reliability,
+            }) => {
+                pass.changes.push(ReliabilityChange {
+                    object_id: oid,
                     old_reliability,
                     new_reliability,
-                }) => {
-                    self.clear_internal_failure(&oid);
-                    changes.push(ReliabilityChange {
-                        object_id: oid,
-                        old_reliability,
-                        new_reliability,
-                    });
-                }
-                Err(error) => {
-                    let error_text = error.to_string();
-                    if self.should_warn_internal_failure(oid, &error_text) {
-                        tracing::warn!(
-                            object = %oid,
-                            error = %error,
-                            "Fault detection object-owned reliability evaluation failed"
-                        );
-                    }
-                }
+                });
             }
-        });
-        self.prune_internal_failures(db);
-        changes
-    }
+            Err(error) => pass.failures.push((oid, error)),
+        }
+    });
+    pass
 }
 
 #[cfg(test)]

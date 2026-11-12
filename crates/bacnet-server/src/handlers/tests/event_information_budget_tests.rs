@@ -241,8 +241,9 @@ fn get_event_information_configured_late_errors_win_and_normals_do_not_imply_mor
                 ..Default::default()
             };
             assert!(
-                matches!(configured(&db, None, budget), Err(EventInformationFailure::Service(Error::Remote(RemoteError::Error { class, code })))
-                if class == ErrorClass::DEVICE && code == ErrorCode::OPERATIONAL_PROBLEM)
+                matches!(configured(&db, None, budget), Err(EventInformationFailure::Projection(problem))
+                if matches!(problem.to_error(), Error::Remote(RemoteError::Error { class, code })
+                    if class == ErrorClass::DEVICE && code == ErrorCode::OPERATIONAL_PROBLEM))
             );
             assert!(handle_get_event_information(&db, &[], &mut BytesMut::new()).is_err());
         }
@@ -341,7 +342,7 @@ fn get_event_information_configured_mixed_types_missing_cursor_and_class_errors(
     add_class(&mut db, 98, [2, 3, 4]);
     assert!(matches!(
         configured(&db, None, GetEventInformationBudget::default()),
-        Err(EventInformationFailure::Service(_))
+        Err(EventInformationFailure::Projection(_))
     ));
     let mut missing = ObjectDatabase::new();
     missing
@@ -349,6 +350,6 @@ fn get_event_information_configured_mixed_types_missing_cursor_and_class_errors(
         .unwrap();
     assert!(matches!(
         configured(&missing, None, GetEventInformationBudget::default()),
-        Err(EventInformationFailure::Service(_))
+        Err(EventInformationFailure::Projection(_))
     ));
 }

@@ -48,6 +48,18 @@ pub(super) async fn response(
         Err(handlers::EventInformationFailure::Service(error)) => {
             bacnet_device_core::reply::error_apdu(request.invoke_id, request.service_choice, &error)
         }
+        Err(handlers::EventInformationFailure::Projection(problem)) => {
+            warn!(
+                object_identifier = ?problem.object_identifier,
+                reason = %describe(&problem.fault),
+                "GetEventInformation projection failed"
+            );
+            bacnet_device_core::reply::error_apdu(
+                request.invoke_id,
+                request.service_choice,
+                &problem.to_error(),
+            )
+        }
         Err(failure) => Apdu::Abort(AbortPdu {
             sent_by_server: true,
             invoke_id: request.invoke_id,
@@ -76,6 +88,53 @@ pub(super) fn unsegmented_complex_ack_service_budget(
     let mut encoded = BytesMut::new();
     encode_apdu(&mut encoded, &envelope).expect("valid empty ComplexACK encoding");
     usize::from(max_apdu).saturating_sub(encoded.len())
+}
+
+/// The reason a summary failed, as the projection once logged it.
+fn describe(fault: &handlers::EventSummaryFault) -> String {
+    use handlers::EventSummaryFault as F;
+    let coordinate = |transition: &bacnet_objects::event::EventTransition| match transition {
+        bacnet_objects::event::EventTransition::ToOffnormal => "TO_OFFNORMAL",
+        bacnet_objects::event::EventTransition::ToFault => "TO_FAULT",
+        bacnet_objects::event::EventTransition::ToNormal => "TO_NORMAL",
+    };
+    match fault {
+        F::Unreadable { property, error } => {
+            format!("required property {property:?} is unreadable: {error}")
+        }
+        F::NotEnumerated(property) => format!("required property {property:?} is not Enumerated"),
+        F::ExceedsUnsigned32(property) => {
+            format!("required property {property:?} exceeds Unsigned32")
+        }
+        F::NotUnsigned(property) => format!("required property {property:?} is not Unsigned"),
+        F::NotTransitionBits(property) => {
+            format!("required property {property:?} is not a canonical three-bit BitString")
+        }
+        F::DetectionEnableNotBoolean => "Event_Detection_Enable is not Boolean".to_owned(),
+        F::TimestampsNotList => "Event_Time_Stamps is not a three-item List".to_owned(),
+        F::TimestampsNotThree => {
+            "Event_Time_Stamps does not contain exactly three items".to_owned()
+        }
+        F::InvalidTimestamp(transition) => {
+            format!("invalid {} event timestamp", coordinate(transition))
+        }
+        F::DuplicateClass(class) => {
+            format!("multiple Notification Class objects match {class}")
+        }
+        F::MissingClass(class) => format!("no Notification Class object matches {class}"),
+        F::PriorityNotList => "Notification Class Priority is not a three-item List".to_owned(),
+        F::PriorityNotThree => {
+            "Notification Class Priority does not contain exactly three items".to_owned()
+        }
+        F::PriorityOver255(transition) => format!(
+            "Notification Class {} Priority exceeds 255",
+            coordinate(transition)
+        ),
+        F::PriorityNotUnsigned(transition) => format!(
+            "Notification Class {} Priority is not Unsigned",
+            coordinate(transition)
+        ),
+    }
 }
 
 #[cfg(test)]

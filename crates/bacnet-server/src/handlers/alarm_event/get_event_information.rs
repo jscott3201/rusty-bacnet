@@ -2,6 +2,7 @@
 
 use super::super::*;
 use bacnet_encoding::primitives::decode_timestamp_choice;
+use bacnet_objects::event::EventTransition;
 use bacnet_objects::property_metadata::has_property;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::bitstring::EventTransitionBits;
@@ -20,6 +21,69 @@ const EVENT_SUMMARY_SIGNATURE: [PropertyIdentifier; 6] = [
     PropertyIdentifier::NOTIFICATION_CLASS,
 ];
 
+/// Why one event-initiating object's summary could not be projected. The
+/// request it was projected for answers OPERATIONAL_PROBLEM.
+#[derive(Debug)]
+pub(crate) struct EventSummaryProblem {
+    /// The object whose summary failed.
+    pub(crate) object_identifier: ObjectIdentifier,
+    /// What was wrong with it.
+    pub(crate) fault: EventSummaryFault,
+}
+
+/// What was wrong with an event-initiating object's summary.
+#[derive(Debug)]
+pub(crate) enum EventSummaryFault {
+    /// A required property didn't read.
+    Unreadable {
+        /// The property.
+        property: PropertyIdentifier,
+        /// Its read error.
+        error: Error,
+    },
+    /// A required property isn't Enumerated.
+    NotEnumerated(PropertyIdentifier),
+    /// A required Unsigned property is past Unsigned32.
+    ExceedsUnsigned32(PropertyIdentifier),
+    /// A required property isn't Unsigned.
+    NotUnsigned(PropertyIdentifier),
+    /// A required property isn't a canonical three-bit BitString.
+    NotTransitionBits(PropertyIdentifier),
+    /// Event_Detection_Enable isn't Boolean.
+    DetectionEnableNotBoolean,
+    /// Event_Time_Stamps isn't a List.
+    TimestampsNotList,
+    /// Event_Time_Stamps doesn't hold exactly three items.
+    TimestampsNotThree,
+    /// The Event_Time_Stamps entry for this transition isn't a timestamp.
+    InvalidTimestamp(EventTransition),
+    /// More than one Notification Class object has this class number.
+    DuplicateClass(u32),
+    /// No Notification Class object has this class number.
+    MissingClass(u32),
+    /// The class's Priority isn't a List.
+    PriorityNotList,
+    /// The class's Priority doesn't hold exactly three items.
+    PriorityNotThree,
+    /// The class's priority for this transition is past 255.
+    PriorityOver255(EventTransition),
+    /// The class's priority for this transition isn't Unsigned.
+    PriorityNotUnsigned(EventTransition),
+}
+
+impl EventSummaryProblem {
+    /// The error the request answers with: DEVICE, OPERATIONAL_PROBLEM.
+    pub(crate) fn to_error(&self) -> Error {
+        Error::protocol(ErrorClass::DEVICE, ErrorCode::OPERATIONAL_PROBLEM)
+    }
+}
+
+impl From<EventSummaryProblem> for Error {
+    fn from(problem: EventSummaryProblem) -> Self {
+        problem.to_error()
+    }
+}
+
 enum EventSummaryProjectionResult {
     NotEventInitiating,
     Excluded,
@@ -33,7 +97,7 @@ enum EventSummaryProjectionResult {
 fn project_event_summary(
     object: &dyn BACnetObject,
     db: &ObjectDatabase,
-) -> Result<EventSummaryProjectionResult, Error> {
+) -> Result<EventSummaryProjectionResult, EventSummaryProblem> {
     let advertised = object.property_metadata();
     if !EVENT_SUMMARY_SIGNATURE
         .iter()
@@ -54,7 +118,7 @@ fn project_event_summary(
             _ => {
                 return Err(operational_problem(
                     object_identifier,
-                    "Event_Detection_Enable is not Boolean",
+                    EventSummaryFault::DetectionEnableNotBoolean,
                 ));
             }
         }
@@ -215,11 +279,11 @@ fn read_required(
     object: &dyn BACnetObject,
     object_identifier: ObjectIdentifier,
     property: PropertyIdentifier,
-) -> Result<PropertyValue, Error> {
+) -> Result<PropertyValue, EventSummaryProblem> {
     object.read_property(property, None).map_err(|error| {
         operational_problem(
             object_identifier,
-            format!("required property {property:?} is unreadable: {error}"),
+            EventSummaryFault::Unreadable { property, error },
         )
     })
 }
@@ -228,12 +292,12 @@ fn read_enumerated(
     object: &dyn BACnetObject,
     object_identifier: ObjectIdentifier,
     property: PropertyIdentifier,
-) -> Result<u32, Error> {
+) -> Result<u32, EventSummaryProblem> {
     match read_required(object, object_identifier, property)? {
         PropertyValue::Enumerated(value) => Ok(value),
         _ => Err(operational_problem(
             object_identifier,
-            format!("required property {property:?} is not Enumerated"),
+            EventSummaryFault::NotEnumerated(property),
         )),
     }
 }
@@ -242,17 +306,17 @@ fn read_unsigned_u32(
     object: &dyn BACnetObject,
     object_identifier: ObjectIdentifier,
     property: PropertyIdentifier,
-) -> Result<u32, Error> {
+) -> Result<u32, EventSummaryProblem> {
     match read_required(object, object_identifier, property)? {
         PropertyValue::Unsigned(value) => u32::try_from(value).map_err(|_| {
             operational_problem(
                 object_identifier,
-                format!("required property {property:?} exceeds Unsigned32"),
+                EventSummaryFault::ExceedsUnsigned32(property),
             )
         }),
         _ => Err(operational_problem(
             object_identifier,
-            format!("required property {property:?} is not Unsigned"),
+            EventSummaryFault::NotUnsigned(property),
         )),
     }
 }
@@ -261,7 +325,7 @@ fn read_transition_bits(
     object: &dyn BACnetObject,
     object_identifier: ObjectIdentifier,
     property: PropertyIdentifier,
-) -> Result<EventTransitionBits, Error> {
+) -> Result<EventTransitionBits, EventSummaryProblem> {
     match read_required(object, object_identifier, property)? {
         PropertyValue::BitString { unused_bits, data }
             if unused_bits == 5 && data.len() == 1 && data[0] & 0x1f == 0 =>
@@ -270,7 +334,7 @@ fn read_transition_bits(
         }
         _ => Err(operational_problem(
             object_identifier,
-            format!("required property {property:?} is not a canonical three-bit BitString"),
+            EventSummaryFault::NotTransitionBits(property),
         )),
     }
 }
@@ -278,7 +342,7 @@ fn read_transition_bits(
 fn read_event_timestamps(
     object: &dyn BACnetObject,
     object_identifier: ObjectIdentifier,
-) -> Result<[BACnetTimeStamp; 3], Error> {
+) -> Result<[BACnetTimeStamp; 3], EventSummaryProblem> {
     let PropertyValue::List(items) = read_required(
         object,
         object_identifier,
@@ -287,26 +351,28 @@ fn read_event_timestamps(
     else {
         return Err(operational_problem(
             object_identifier,
-            "Event_Time_Stamps is not a three-item List",
+            EventSummaryFault::TimestampsNotList,
         ));
     };
     let [offnormal, fault, normal] = items.as_slice() else {
         return Err(operational_problem(
             object_identifier,
-            "Event_Time_Stamps does not contain exactly three items",
+            EventSummaryFault::TimestampsNotThree,
         ));
     };
 
+    let decode = |value, transition| {
+        decode_event_timestamp(value).ok_or_else(|| {
+            operational_problem(
+                object_identifier,
+                EventSummaryFault::InvalidTimestamp(transition),
+            )
+        })
+    };
     Ok([
-        decode_event_timestamp(offnormal).ok_or_else(|| {
-            operational_problem(object_identifier, "invalid TO_OFFNORMAL event timestamp")
-        })?,
-        decode_event_timestamp(fault).ok_or_else(|| {
-            operational_problem(object_identifier, "invalid TO_FAULT event timestamp")
-        })?,
-        decode_event_timestamp(normal).ok_or_else(|| {
-            operational_problem(object_identifier, "invalid TO_NORMAL event timestamp")
-        })?,
+        decode(offnormal, EventTransition::ToOffnormal)?,
+        decode(fault, EventTransition::ToFault)?,
+        decode(normal, EventTransition::ToNormal)?,
     ])
 }
 
@@ -314,7 +380,7 @@ fn read_notification_class_priorities(
     db: &ObjectDatabase,
     event_object_identifier: ObjectIdentifier,
     notification_class: u32,
-) -> Result<[u32; 3], Error> {
+) -> Result<[u32; 3], EventSummaryProblem> {
     let mut matching = None;
     for class_oid in db.find_by_type(ObjectType::NOTIFICATION_CLASS) {
         let Some(class_object) = db.get(&class_oid) else {
@@ -326,14 +392,14 @@ fn read_notification_class_priorities(
         if class_number == notification_class && matching.replace(class_object).is_some() {
             return Err(operational_problem(
                 event_object_identifier,
-                format!("multiple Notification Class objects match {notification_class}"),
+                EventSummaryFault::DuplicateClass(notification_class),
             ));
         }
     }
     let class_object = matching.ok_or_else(|| {
         operational_problem(
             event_object_identifier,
-            format!("no Notification Class object matches {notification_class}"),
+            EventSummaryFault::MissingClass(notification_class),
         )
     })?;
 
@@ -345,20 +411,24 @@ fn read_notification_class_priorities(
     else {
         return Err(operational_problem(
             event_object_identifier,
-            "Notification Class Priority is not a three-item List",
+            EventSummaryFault::PriorityNotList,
         ));
     };
     let [offnormal, fault, normal] = priorities.as_slice() else {
         return Err(operational_problem(
             event_object_identifier,
-            "Notification Class Priority does not contain exactly three items",
+            EventSummaryFault::PriorityNotThree,
         ));
     };
 
     Ok([
-        read_priority_coordinate(event_object_identifier, offnormal, "TO_OFFNORMAL")?,
-        read_priority_coordinate(event_object_identifier, fault, "TO_FAULT")?,
-        read_priority_coordinate(event_object_identifier, normal, "TO_NORMAL")?,
+        read_priority_coordinate(
+            event_object_identifier,
+            offnormal,
+            EventTransition::ToOffnormal,
+        )?,
+        read_priority_coordinate(event_object_identifier, fault, EventTransition::ToFault)?,
+        read_priority_coordinate(event_object_identifier, normal, EventTransition::ToNormal)?,
     ])
 }
 
@@ -375,27 +445,29 @@ fn read_notification_class_number(object: &dyn BACnetObject) -> Option<u32> {
 fn read_priority_coordinate(
     object_identifier: ObjectIdentifier,
     value: &PropertyValue,
-    coordinate: &str,
-) -> Result<u32, Error> {
+    transition: EventTransition,
+) -> Result<u32, EventSummaryProblem> {
     match value {
         PropertyValue::Unsigned(priority) if *priority <= 255 => Ok(*priority as u32),
         PropertyValue::Unsigned(_) => Err(operational_problem(
             object_identifier,
-            format!("Notification Class {coordinate} Priority exceeds 255"),
+            EventSummaryFault::PriorityOver255(transition),
         )),
         _ => Err(operational_problem(
             object_identifier,
-            format!("Notification Class {coordinate} Priority is not Unsigned"),
+            EventSummaryFault::PriorityNotUnsigned(transition),
         )),
     }
 }
 
 fn operational_problem(
     object_identifier: ObjectIdentifier,
-    detail: impl std::fmt::Display,
-) -> Error {
-    tracing::warn!(?object_identifier, reason = %detail, "GetEventInformation projection failed");
-    Error::protocol(ErrorClass::DEVICE, ErrorCode::OPERATIONAL_PROBLEM)
+    fault: EventSummaryFault,
+) -> EventSummaryProblem {
+    EventSummaryProblem {
+        object_identifier,
+        fault,
+    }
 }
 
 fn decode_event_timestamp(value: &PropertyValue) -> Option<BACnetTimeStamp> {
