@@ -21,10 +21,16 @@
 //!   or ending: at its time, cancelled, by Enable FALSE, or as the object is
 //!   removed from its database) and what the application's setters change
 //!   are saved with nobody waiting, a newer change replacing one not yet
-//!   begun. Such a save that fails is logged and not taken as saved
-//!   (#2502): the next look saves the served state again, once, and each
-//!   later change does too, so storage holds its old state only until a
-//!   save succeeds.
+//!   begun. When the last of these saves fails it is logged, and storage
+//!   holds the older state until a save succeeds (#2502): once the writer
+//!   has nothing left to run, the next look of the once-a-second pass saves
+//!   the served state again, and further tries back off from
+//!   [`RETRY_FIRST_BACKOFF`] apart, doubling to once every
+//!   [`RETRY_MAX_BACKOFF`], until one succeeds. A change saves at once, as
+//!   always, and starts the schedule again. Nothing retries without those
+//!   looks, as on an object no running server holds. So on storage that
+//!   keeps failing, a staged write costs its staged save, the save that
+//!   puts storage back as it is refused, and then the tries.
 //!
 //! A staged save holds the request as the writes leave it once the state
 //! machine's own rules have run on it after each write the live object
@@ -103,6 +109,14 @@ use crate::durable::staged::{self, StagedSaves};
 use crate::durable::{DurableWrites, PendingWrite, SaveWait, SaveWriter, StageStep};
 use crate::write_config::description;
 
+/// How long after the first try of a failed save the second may run, on the
+/// looks' monotonic clock (#2502). Each later wait doubles it.
+const RETRY_FIRST_BACKOFF: Duration = Duration::from_secs(2);
+
+/// The longest wait between tries of a failed save: storage that stays
+/// down is asked once a minute or so, not on every look.
+const RETRY_MAX_BACKOFF: Duration = Duration::from_secs(64);
+
 /// The object's writer and the write staged on it; each step holds the
 /// request a write leaves.
 type Storage = StagedSaves<LoadControlSnapshot, LoadControlSnapshot>;
@@ -116,12 +130,15 @@ pub(super) struct Durable {
     /// queued so far have run, unless one failed.
     saved: LoadControlSnapshot,
     /// The writer sets this when a save fails and clears it when one
-    /// succeeds: storage may then not hold `saved` (#2502).
+    /// succeeds: once the writer is idle, storage may not hold `saved`
+    /// (#2502).
     save_failed: Arc<AtomicBool>,
-    /// The served state was handed storage again after a failed save with
-    /// nothing changed; the next try waits for a change, so storage that
-    /// keeps failing isn't asked on every look.
-    retried: bool,
+    /// The monotonic time before which a failed save isn't tried again;
+    /// `None` to try at the next look.
+    retry_at: Option<Duration>,
+    /// The wait after the next try: zero before the first, then from
+    /// [`RETRY_FIRST_BACKOFF`] doubling to [`RETRY_MAX_BACKOFF`].
+    backoff: Duration,
     /// Kept writes made so far, so a staged write is taken only if no other
     /// came between.
     writes: u64,
@@ -250,6 +267,12 @@ impl LoadControlObject {
     /// array they belong to (see the `saving` module); until then they are
     /// neither served nor dropped, so an object never given levels keeps
     /// them in storage for a later start that gives them.
+    ///
+    /// A save nobody waits for that fails is tried again at the looks of a
+    /// running server's once-a-second pass, backing off to once every 64 s
+    /// until one succeeds (see the `saving` module). Without a running
+    /// server nothing looks, so nothing is tried again: storage holds the
+    /// older state until a change saves.
     ///
     /// [`Retirement::Released`]: crate::traits::Retirement::Released
     pub fn with_persistence(
@@ -401,26 +424,64 @@ impl LoadControlObject {
     /// in which case it keeps that to put back should it be dropped. A
     /// dropped staged write is corrected the same way.
     ///
-    /// A save nobody waited for that failed isn't taken as saved (#2502):
-    /// the next call queues the served state again though nothing changed,
-    /// once, and after that each change does, as always. So storage that
-    /// keeps failing is asked once per change and once more, not on every
-    /// look, and until a save succeeds it holds what it held before.
+    /// A change saved here starts the schedule of tries again, should its
+    /// save fail ([`retry_failed_save`](Self::retry_failed_save)).
     pub(super) fn follow_storage(&mut self) {
         let Some(mut storage) = self.durable.storage.take() else {
             return;
         };
         let served = self.snapshot();
-        let changed = served != self.durable.saved;
-        let retry = !self.durable.retried && self.durable.save_failed.load(Ordering::Acquire);
-        if storage.take_correction() || (!storage.is_staged() && (changed || retry)) {
+        if storage.take_correction() || (!storage.is_staged() && served != self.durable.saved) {
             storage.submit_coalescing(served.clone());
             self.durable.saved = served;
-            self.durable.retried = !changed;
+            self.durable.retry_at = None;
+            self.durable.backoff = Duration::ZERO;
         } else {
             storage.correct(|| served);
         }
         self.durable.storage = Some(storage);
+    }
+
+    /// At a look at monotonic `now`: when the last save failed and the
+    /// writer has nothing left to run, so that no queued save can still
+    /// land, save the served state again, if the schedule allows (#2502).
+    /// The first try runs at the next look; each later one waits
+    /// [`RETRY_FIRST_BACKOFF`], then twice as long, up to
+    /// [`RETRY_MAX_BACKOFF`]. A save that succeeds ends the tries. A `now`
+    /// further behind the time due than the longest wait, as from a clock
+    /// that moved back, tries at once. Only the looks
+    /// (`advance_monotonic_time`) call this: every other path, the
+    /// operation task's `expire_staged` included, saves only changes and
+    /// corrections, so none tries faster than the schedule.
+    pub(super) fn retry_failed_save(&mut self, now: Duration) {
+        if !self.durable.save_failed.load(Ordering::Acquire) {
+            self.durable.retry_at = None;
+            self.durable.backoff = Duration::ZERO;
+            return;
+        }
+        let waiting = self
+            .durable
+            .retry_at
+            .is_some_and(|at| now < at && at - now <= RETRY_MAX_BACKOFF);
+        let busy = self
+            .durable
+            .storage
+            .as_mut()
+            .is_none_or(|storage| storage.is_staged() || !storage.idle().is_ready());
+        if waiting || busy {
+            return;
+        }
+        let served = self.snapshot();
+        let storage = self.durable.storage.as_mut().expect("checked above");
+        storage.submit_coalescing(served.clone());
+        self.durable.saved = served;
+        let wait = if self.durable.backoff.is_zero() {
+            RETRY_FIRST_BACKOFF
+        } else {
+            (self.durable.backoff * 2).min(RETRY_MAX_BACKOFF)
+        };
+        self.durable.retry_at = Some(now + wait);
+        self.durable.backoff = wait;
     }
 
     /// Run `f` on storage, then follow what it did ([`follow_storage`]).

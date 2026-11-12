@@ -701,9 +701,12 @@ impl crate::traits::Timed for LoadControlObject {
     }
 
     /// Look at the request against the Device clock: its Start_Time and end
-    /// are wall-clock moments, so the monotonic `now` isn't used.
-    fn advance_monotonic_time(&mut self, _now: core::time::Duration) -> bool {
-        self.settle(shed::Prompt::Look)
+    /// are wall-clock moments. The monotonic `now` paces the tries of a
+    /// save that failed (#2502).
+    fn advance_monotonic_time(&mut self, now: core::time::Duration) -> bool {
+        let changed = self.settle(shed::Prompt::Look);
+        self.retry_failed_save(now);
+        changed
     }
 
     /// The device is starting: look at a request restored from storage as

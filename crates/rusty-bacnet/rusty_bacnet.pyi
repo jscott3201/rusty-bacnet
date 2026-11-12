@@ -6141,7 +6141,9 @@ class BACnetServer:
         ``shed_levels`` keyword's level for it, one past the end of the
         keyword's array is dropped, and ``set_load_control_shed_levels_local``
         drops them all; ``clear_written_shed_levels=True`` drops them first,
-        so the keyword applies whole. Without ``shed_levels`` the written ones
+        so the keyword applies whole (a refused level raises with the file
+        untouched; without ``storage_path`` the keyword does nothing).
+        Without ``shed_levels`` the written ones
         are neither served nor dropped: the file keeps them for a start that
         gives the levels. The
         ``set_load_control_*_local`` methods work only once the server runs,
@@ -7231,10 +7233,10 @@ class BACnetServer:
         keywords at every start, so a restored request is put to ``shed``
         with them. These replace the written elements, which win over the
         keywords' levels until then, and storage drops those in a save
-        nobody waits for. If that save fails, storage keeps the written
-        elements until a later save succeeds: the object tries once more at
-        its next look, then with each later change of what it keeps, and a
-        restart before then serves them. Not audited, like
+        nobody waits for. If that save fails, the file holds the older state,
+        written elements included, until a retry succeeds, and a restart
+        before then serves them: the running server's next look tries again,
+        and later tries back off to once every 64 s. Not audited, like
         ``set_reliability_local``.
         """
         ...

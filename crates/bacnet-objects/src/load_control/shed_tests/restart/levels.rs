@@ -303,10 +303,6 @@ fn saved_levels_no_write_leaves_fail_the_build() {
     }
 }
 
-fn attempts(store: &Store) -> u32 {
-    store.attempts.load(Ordering::SeqCst)
-}
-
 /// A look at the request with nothing changed, as the once-a-second pass
 /// makes one.
 fn look(lc: &mut LoadControlObject) {
@@ -335,38 +331,6 @@ fn a_failed_save_of_the_routes_drop_is_tried_again_at_the_next_look() {
     // nothing changed since.
     store.fail.store(false, Ordering::SeqCst);
     look(&mut lc);
-    assert!(store.held().shed_levels.is_empty());
-    power_off(lc);
-    let lc = kept(&store, &clock, &app);
-    assert_eq!(levels(&lc), unsigned(&[1, 2]));
-}
-
-#[test]
-fn a_store_that_keeps_failing_is_tried_once_more_then_at_each_change() {
-    let (store, clock) = (Arc::new(Store::default()), test_clock());
-    let app = TestShedder::new(ShedProgress::Compliant, 2, 2);
-    let mut lc = kept(&store, &clock, &app);
-    lc.write_property(P::SHED_LEVELS, Some(1), PropertyValue::Unsigned(4), None)
-        .unwrap();
-    store.fail.store(true, Ordering::SeqCst);
-    let before = attempts(&store);
-    drop_by_route(&mut lc);
-    assert_eq!(attempts(&store), before + 1);
-    // One more try at the next look, then none while nothing changes.
-    for _ in 0..3 {
-        look(&mut lc);
-    }
-    assert_eq!(attempts(&store), before + 2);
-    // Back again, a look still waits for a change: until then storage holds
-    // the written levels, which a restart would serve.
-    store.fail.store(false, Ordering::SeqCst);
-    look(&mut lc);
-    assert_eq!(attempts(&store), before + 2);
-    assert_eq!(store.held().shed_levels, [(1, 4)]);
-    // A later change saves everything the object serves, the drop included.
-    lc.set_agreed_duty_window(9);
-    lc.wait_for_saves();
-    assert_eq!(attempts(&store), before + 3);
     assert!(store.held().shed_levels.is_empty());
     power_off(lc);
     let lc = kept(&store, &clock, &app);

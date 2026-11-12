@@ -341,6 +341,20 @@ class StorageTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await client.stop()
                 await node.stop()
+            # A refused level raises before the clear saves: the file is
+            # left as it was.
+            with open(path, "rb") as handle:
+                before = handle.read()
+            with self.assertRaises(BacnetProtocolError) as caught:
+                server().add_load_control(1, "LC-1", shed_levels=[(1, "a"), (0, "b")],
+                                          storage_path=path, clear_written_shed_levels=True)
+            assert_code(self, caught.exception, ErrorClass.PROPERTY, ErrorCode.VALUE_OUT_OF_RANGE)
+            gc.collect()
+            with open(path, "rb") as handle:
+                self.assertEqual(handle.read(), before)
+            # Without a file the keyword does nothing.
+            server().add_load_control(2, "LC-2", shed_levels=keywords,
+                                      clear_written_shed_levels=True)
             # The keyword drops what the client wrote before the levels
             # apply, and the file forgets it for the starts after.
             for clear in ({"clear_written_shed_levels": True}, {}):

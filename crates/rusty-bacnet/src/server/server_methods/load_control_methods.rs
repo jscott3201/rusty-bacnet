@@ -22,8 +22,9 @@ impl BACnetServer {
     /// keywords at every start, so a restored request is put to `shed` with
     /// them. They replace the elements a client wrote, which storage keeps
     /// over the keywords' levels until then, and storage drops those
-    /// (#2502); a failed save of that keeps them until a later one
-    /// succeeds. Like `set_reliability_local`, it is not audited.
+    /// (#2502); if that save fails, the file holds them until a retry
+    /// succeeds, the tries backing off to once every 64 s. Like
+    /// `set_reliability_local`, it is not audited.
     #[pyo3(signature = (object_id, shed_levels))]
     fn set_load_control_shed_levels_local<'py>(
         &self,

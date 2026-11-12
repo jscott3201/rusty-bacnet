@@ -43,11 +43,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// elements a client wrote (#2502), which win over the setter's at a
     /// restart; the levels given here are the application's newer word, so
     /// they replace those, and storage drops them in a save nobody waits
-    /// for. If that save fails it is logged, and storage keeps the written
-    /// elements until a later save succeeds: the object tries once more at
-    /// its next look, then with each later change of what it keeps, and a
-    /// restart before then serves the written elements again. This route
-    /// works only on a running server, after that first look.
+    /// for. If that save fails it is logged, and storage holds the older
+    /// state, written elements included, until a retry succeeds: the next
+    /// look of the once-a-second pass tries again, later tries back off to
+    /// once every 64 s, and a change saves at once. A restart before then
+    /// serves the written elements again. This route works only on a running
+    /// server, after that first look.
     ///
     /// Like [`write_local`](Self::write_local), it must be awaited inside a
     /// Tokio runtime, failing before anything is written outside one, and a

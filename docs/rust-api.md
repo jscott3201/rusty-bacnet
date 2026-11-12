@@ -7144,11 +7144,14 @@ to the shedder with them as the server starts. The one exception is a
 Shed_Levels element a peer wrote, which storage keeps and which wins over the
 setter's level at a restart (#2502); the route's levels replace those, and
 storage drops them in a save nobody waits for. A failed queued save is logged
-and not taken as saved: storage keeps what it held, the written elements
-included, until a later save succeeds. The object tries once more at its next
-look, then with each later change of what it keeps, so a restart inside that
-window serves the written elements again. The routes work only on a running
-server, after that first look, so they are for changes while it runs.
+and not taken as saved: storage holds the older state, the written elements
+included, until a retry succeeds, so a restart inside that window serves the
+written elements again. Once the writer is idle the next look of the
+once-a-second pass tries again; later tries wait 2 s, then twice as long each
+time up to once every 64 s, and a change saves at once and starts that
+schedule again. Without a running server nothing looks, so nothing retries.
+The routes work only on a running server, after that first look, so they are
+for changes while it runs.
 
 Load Control supports COV (Table 13-1). Its SubscribeCOV report carries
 Present_Value, Status_Flags, Requested_Shed_Level, Start_Time, Shed_Duration

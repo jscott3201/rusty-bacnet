@@ -9,16 +9,19 @@ use crate::traits::{BACnetObject, Retirement};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 mod levels;
+mod retry;
 mod setting;
 
-/// Storage in memory, counting its saves and the calls to save, and
-/// refusing them while `fail`.
+/// Storage in memory, counting its saves and the calls to save, refusing
+/// them while `fail`, and, once held, making each call report on one
+/// channel and wait for the other.
 #[derive(Default)]
 struct Store {
     saved: Mutex<Option<LoadControlSnapshot>>,
     saves: AtomicU32,
     attempts: AtomicU32,
     fail: AtomicBool,
+    hold: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
 }
 
 impl LoadControlPersistence for Store {
@@ -27,6 +30,10 @@ impl LoadControlPersistence for Store {
     }
 
     fn save(&self, _: ObjectIdentifier, snapshot: &LoadControlSnapshot) -> Result<(), Error> {
+        if let Some((started, go)) = &*self.hold.lock().unwrap() {
+            let _ = started.send(());
+            let _ = go.recv();
+        }
         self.attempts.fetch_add(1, Ordering::SeqCst);
         if self.fail.load(Ordering::SeqCst) {
             return Err(Error::Encoding("the disk is full".into()));

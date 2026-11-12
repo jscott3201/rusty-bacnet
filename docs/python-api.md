@@ -4290,10 +4290,13 @@ them, so give them as keywords at every start: a restored request is put to
 Shed_Levels element a client wrote wins over the `shed_levels` keyword's level
 for it, one past the end of the keyword's array is dropped, and
 `set_load_control_shed_levels_local` replaces the written ones, which the file
-then drops; if that save fails, the file keeps them until a later save
-succeeds (the object tries again at its next look, then with each change).
+then drops; if that save fails, the file holds the older state, written
+elements included, until a retry succeeds (the running server's next look
+tries again, and later tries back off to once every 64 s).
 `clear_written_shed_levels=True` drops them at start-up, before the keyword is
-applied, so it applies whole. Without `shed_levels` the written ones are
+applied, so it applies whole; a refused level raises with the file untouched,
+and without `storage_path` the keyword does nothing. Without `shed_levels` the
+written ones are
 neither served nor dropped: the file keeps them for a start that gives the
 levels. The
 `set_load_control_*_local` methods work only once the server runs, after that

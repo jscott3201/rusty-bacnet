@@ -258,7 +258,9 @@ impl BACnetServer {
     /// for it, one past the end of the keyword's array is dropped, and
     /// `set_load_control_shed_levels_local` drops the written ones;
     /// `clear_written_shed_levels=True` drops them first, so the keyword
-    /// applies whole. Without `shed_levels` the written ones are neither
+    /// applies whole (a refused level raises with the file untouched; the
+    /// keyword does nothing without `storage_path`). Without `shed_levels`
+    /// the written ones are neither
     /// served nor dropped: the file keeps them for a start that gives the
     /// levels. The `set_load_control_*_local` methods work only once the
     /// server runs, after that first look, so use them for changes while it
@@ -294,16 +296,19 @@ impl BACnetServer {
         let mut obj = match storage_path {
             Some(path) => {
                 let storage = Arc::new(FileLoadControlPersistence::new(path).map_err(to_py_err)?);
-                let mut obj = LoadControlObject::with_persistence(instance, name, storage)
-                    .map_err(to_py_err)?;
-                // Before the levels are set, so `shed_levels` applies whole.
-                if clear_written_shed_levels {
-                    obj.clear_written_shed_levels().map_err(to_py_err)?;
-                }
-                obj
+                LoadControlObject::with_persistence(instance, name, storage).map_err(to_py_err)?
             }
             None => LoadControlObject::new(instance, name).map_err(to_py_err)?,
         };
+        // Before the levels are set, so `shed_levels` applies whole. The
+        // levels are checked first, so a refused one leaves the file as it
+        // was. Without storage there is nothing to clear.
+        if clear_written_shed_levels {
+            if let Some(levels) = &shed_levels {
+                obj.set_shed_levels(levels.clone()).map_err(to_py_err)?;
+            }
+            obj.clear_written_shed_levels().map_err(to_py_err)?;
+        }
         if let Some(levels) = shed_levels {
             obj.set_shed_levels(levels).map_err(to_py_err)?;
         }
