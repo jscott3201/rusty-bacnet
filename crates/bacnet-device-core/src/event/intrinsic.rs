@@ -34,12 +34,14 @@ pub fn after_write(db: &mut ObjectDatabase, oid: &ObjectIdentifier) -> Option<In
 /// reference, advance each detector's countdown and commit each transition
 /// it proposes, in the database's order.
 ///
-/// `before_commit` runs for each object just before its proposal commits,
-/// under the same borrow, so a host can keep what it must from before the
-/// change (the server snapshots Life Safety state and owes the object a COV
-/// look). Event_Enable gates distribution only (Clause 12.12), so every
-/// proposal commits; the caller sends those whose `distribute` is set and
-/// whose Event Values projected.
+/// `before_commit` runs for each object that proposes a transition, after
+/// its detector ran and before the proposal commits, under the same borrow:
+/// it sees the object's Event_State, Status_Flags and history as they were
+/// before the commit. That order is part of the contract: a host keeps what
+/// it must from before the change there (the server snapshots Life Safety
+/// state and owes the object a COV look). Event_Enable gates distribution
+/// only (Clause 13.2.5), so every proposal commits; the caller sends those
+/// whose `distribute` is set and whose Event Values projected.
 pub fn sweep(
     db: &mut ObjectDatabase,
     mut before_commit: impl FnMut(&ObjectDatabase, ObjectIdentifier),
@@ -61,3 +63,7 @@ pub fn sweep(
     }
     committed
 }
+
+#[cfg(test)]
+#[path = "intrinsic_tests.rs"]
+mod tests;

@@ -189,4 +189,52 @@ mod budget_tests {
             }
         }
     }
+
+    /// A summary that doesn't project answers the request with an Error PDU,
+    /// DEVICE / OPERATIONAL_PROBLEM, under the request's invoke ID: here an
+    /// Analog Input names Notification Class 0 and the database has none.
+    #[tokio::test]
+    async fn get_event_information_projection_failure_answers_operational_problem() {
+        let mut database = ObjectDatabase::new();
+        database
+            .add(Box::new(
+                bacnet_objects::analog::AnalogInputObject::new(
+                    1,
+                    "AI-1",
+                    bacnet_types::enums::EngineeringUnits::DEGREES_CELSIUS,
+                )
+                .unwrap(),
+            ))
+            .unwrap();
+        let request = ConfirmedRequestPdu {
+            segmented: false,
+            more_follows: false,
+            segmented_response_accepted: true,
+            max_segments: None,
+            max_apdu_length: 1476,
+            invoke_id: 78,
+            sequence_number: None,
+            proposed_window_size: None,
+            service_choice: ConfirmedServiceChoice::GET_EVENT_INFORMATION,
+            service_request: Bytes::new(),
+        };
+        let response = response(
+            &RwLock::new(database),
+            &request,
+            GetEventInformationBudget::default(),
+            1476,
+            true,
+        )
+        .await;
+        let Apdu::Error(error) = response else {
+            panic!("expected a GetEventInformation Error PDU, got {response:?}");
+        };
+        assert_eq!(error.invoke_id, 78);
+        assert_eq!(
+            error.service_choice,
+            ConfirmedServiceChoice::GET_EVENT_INFORMATION
+        );
+        assert_eq!(error.error_class, ErrorClass::DEVICE);
+        assert_eq!(error.error_code, ErrorCode::OPERATIONAL_PROBLEM);
+    }
 }

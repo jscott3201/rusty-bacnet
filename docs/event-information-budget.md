@@ -49,9 +49,10 @@ server Abort `BUFFER_OVERFLOW` only after the strict scan finds no service error
 There is no oversized-first-item fallback in configured dispatch.
 
 The public `handle_get_event_information` remains an unconfigured, full-result
-handler, now in `bacnet_device_core::event` (#2303). The optional-byte
-`handle_get_event_information_with_budget` retains its historical first-item
-fallback for compatibility tests; configured dispatch does not use it. A summary
+handler, now in `bacnet_device_core::event` (#2303). The optional-byte form,
+`handle_get_event_information_with_budget`, is a hidden hook behind the core's
+`test-support` feature: it keeps its historical first-item fallback for the
+server's compatibility tests, and configured dispatch does not use it. A summary
 that doesn't project answers OPERATIONAL_PROBLEM; the configured handler returns
 it as `EventInformationFailure::Projection`, naming the object and what failed,
 which the server logs as a warning before it answers.

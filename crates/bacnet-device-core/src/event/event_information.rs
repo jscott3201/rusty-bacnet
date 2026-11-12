@@ -189,7 +189,21 @@ pub fn handle_get_event_information(
     service_data: &[u8],
     buf: &mut BytesMut,
 ) -> Result<(), Error> {
-    handle_get_event_information_with_budget(db, service_data, buf, None)
+    within_byte_budget(db, service_data, buf, None)
+}
+
+/// [`handle_get_event_information`] within an optional service-ACK byte
+/// budget, for hosts' tests only: it pins the configured handler to the
+/// unbounded one. Behind the `test-support` feature.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn handle_get_event_information_with_budget(
+    db: &ObjectDatabase,
+    service_data: &[u8],
+    buf: &mut BytesMut,
+    max_service_ack_bytes: Option<usize>,
+) -> Result<(), Error> {
+    within_byte_budget(db, service_data, buf, max_service_ack_bytes)
 }
 
 /// Build a GetEventInformation ACK within an optional service-ACK byte budget.
@@ -198,7 +212,7 @@ pub fn handle_get_event_information(
 /// complete summary does not fit, it is retained so dispatch's generic
 /// segmentation/Abort path remains authoritative and cannot emit an empty page
 /// with `More_Events` set.
-pub fn handle_get_event_information_with_budget(
+fn within_byte_budget(
     db: &ObjectDatabase,
     service_data: &[u8],
     buf: &mut BytesMut,

@@ -8618,9 +8618,8 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   which the server's Event Enrollment uses) are public too.
   `handle_acknowledge_alarm` runs AcknowledgeAlarm, and
   `AcceptedAcknowledgeAlarm::into_notification` gives the ACK_NOTIFICATION
-  to send after the SimpleACK. `handle_get_event_information`,
-  `handle_get_event_information_with_budget` and
-  `handle_get_event_information_configured` (within a
+  to send after the SimpleACK. `handle_get_event_information` (unbounded)
+  and `handle_get_event_information_configured` (within a
   `GetEventInformationBudget`) run GetEventInformation; a summary that
   doesn't project is `EventInformationFailure::Projection`, an
   `EventSummaryProblem` naming the object and what failed, which the

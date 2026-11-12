@@ -1563,10 +1563,14 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
 19. PR 3 splits as PR 2 did: 3a moves, 3b changes logic (due instants,
     `next_due`, `acknowledge_local`, clockless windows, the `Reporter`'s
     event path, the parity corpus, the image row).
-    - No further cut. Rebuilt against the tree, Appendix A.3's items came to
-      about 1,960 non-test lines moved, under the 2,300 split point, so 3a
-      moves all of them, the fault pass, AcknowledgeAlarm and
-      GetEventInformation included.
+    - One PR, no further cut (lead, 2026-11-12). Rebuilt against the tree,
+      Appendix A.3's items came to about 1,960 non-test lines moved from the
+      server; the core's `event/` module ends at about 2,416 non-test lines,
+      with its docs and the outcome types, past the 2,300 split point. The
+      fault pass, AcknowledgeAlarm and GetEventInformation stay in it all
+      the same: the acknowledgement's notification is the core's
+      `NotificationTransition`, so that half can't land alone, and the docs
+      describe both halves.
     - `event-reporting` turns on `bacnet-objects/event-reporting` only:
       `bacnet-time` is a plain dependency of the core already (§3.2).
     - Where moved code logged, it returns what the log said and the server

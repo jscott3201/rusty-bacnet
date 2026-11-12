@@ -48,10 +48,12 @@ pub use commit::{
     read_committed_history_snapshot,
 };
 pub use distribute::{DistributionOutcome, EventDistribution, distribute_event};
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub use event_information::handle_get_event_information_with_budget;
 pub use event_information::{
     EventInformationFailure, EventSummaryFault, EventSummaryProblem, GetEventInformationBudget,
     handle_get_event_information, handle_get_event_information_configured,
-    handle_get_event_information_with_budget,
 };
 pub use fault::{FaultPass, ReliabilityChange, fault_pass};
 pub use intrinsic::{IntrinsicCommit, after_write, sweep};

@@ -6,7 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Sans-IO BACnet request core: answers ReadProperty, ReadPropertyMultiple, WriteProperty, WritePropertyMultiple, Who-Is and Who-Has from an ObjectDatabase and keeps the COV subscription table, for firmware and the bacnet-server executor"
+description = "Sans-IO BACnet request core: answers ReadProperty, ReadPropertyMultiple, WriteProperty, WritePropertyMultiple, Who-Is and Who-Has from an ObjectDatabase, keeps the COV subscription table and runs intrinsic event reporting, for firmware and the bacnet-server executor"
 keywords = ["bacnet", "building-automation", "sans-io", "embedded", "no-std"]
 categories = ["network-programming", "embedded", "no-std"]
 
@@ -66,9 +66,10 @@ cov-multiple = []
 # it; no firmware image does yet.
 event-reporting = ["bacnet-objects/event-reporting"]
 # Hidden hooks for hosts' own tests (the COV table's generation counter, so
-# bacnet-server's table tests reach generation exhaustion, and an event
-# payload built without a projection). bacnet-server turns it on for its
-# tests only, through a dev-dependency; never enable it in a product build.
+# bacnet-server's table tests reach generation exhaustion, an event payload
+# built without a projection, and GetEventInformation within a byte budget).
+# bacnet-server turns it on for its tests only, through a dev-dependency;
+# never enable it in a product build.
 test-support = []
 
 # The release that first publishes this crate. Until the website names that

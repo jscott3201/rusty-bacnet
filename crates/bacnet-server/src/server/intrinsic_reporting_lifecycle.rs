@@ -24,7 +24,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
         // drop it before sending (never hold the db lock across a
         // network send — matches the per-write notification path).
         //
-        // Event_Enable gates distribution only (Clause 12.12), so every
+        // Event_Enable gates distribution only (Clause 13.2.5), so every
         // proposal is committed locally before a suppressed
         // transition is omitted from the outbound work list.
         let (fired, committed) = {
