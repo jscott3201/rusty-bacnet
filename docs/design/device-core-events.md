@@ -1626,7 +1626,13 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
       `next_due`.
     - `InvokeIds::take` names the confirmed service (lead, for #2490 PR 2
       and the event path).
-    - Size: no image runs intrinsic reporting yet, so no row moved.
+    - Size (`check-firmware-link.sh`, Rust 1.99.0, flash in octets, dev
+      7f52442ef then this part): no image runs intrinsic reporting yet, and
+      the rows moved only by codegen around the changed detectors and
+      `take`: `objects` 145,068 to 145,220 (thumbv7m), 145,192 to 145,048
+      (thumbv7em), 174,538 to 174,258 (riscv32imac); `reporting` 200,400 to
+      199,896, 200,612 to 199,500, 240,362 to 239,730. RAM unchanged
+      (16,480 and 24,680), no `core::fmt` or 64-bit division.
 
 ## 12. Evidence
 
