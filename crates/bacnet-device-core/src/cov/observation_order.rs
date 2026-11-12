@@ -203,7 +203,7 @@ impl CovTable {
     pub(super) fn newest_pending(
         &self,
         snapshot: &CovSubscriptionSnapshot,
-    ) -> Option<(u64, CovObservation)> {
+    ) -> Option<(u64, &CovObservation)> {
         self.pending
             .iter()
             .filter(|report| {
@@ -212,7 +212,7 @@ impl CovTable {
                     && report.completion.key == snapshot.key
             })
             .max_by_key(|report| report.token.ticket)
-            .map(|report| (report.token.ticket, report.completion.observation.clone()))
+            .map(|report| (report.token.ticket, &report.completion.observation))
     }
 
     /// An evaluation measured a change of `snapshot`'s entry from its

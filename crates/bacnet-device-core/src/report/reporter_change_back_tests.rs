@@ -7,6 +7,7 @@
 use super::*;
 use crate::report::LocalValue;
 use crate::write::local::LocalChange;
+use bacnet_objects::analog::AnalogValueObject;
 use bacnet_objects::binary::BinaryInputObject;
 use bacnet_objects::life_safety::LifeSafetyPointObject;
 use bacnet_objects::traits::{BACnetObject, LocalInputValue};
@@ -21,7 +22,12 @@ fn lsp() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::LIFE_SAFETY_POINT, 1).unwrap()
 }
 
-/// AI-1 at 10.0 with COV_Increment `increment`, BI-1 and LSP-1.
+fn av() -> ObjectIdentifier {
+    ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 1).unwrap()
+}
+
+/// AI-1 at 10.0 with COV_Increment `increment`, BI-1, LSP-1 and AV-1, a
+/// commandable value.
 fn device(increment: f32) -> Device {
     let identity = DeviceIdentity::new(9, 0x105)
         .unwrap()
@@ -33,6 +39,7 @@ fn device(increment: f32) -> Device {
         Box::new(sensor),
         Box::new(BinaryInputObject::new(1, "BI-1").unwrap()),
         Box::new(LifeSafetyPointObject::new(1, "LSP-1").unwrap()),
+        Box::new(AnalogValueObject::new(1, "AV-1", EngineeringUnits::NO_UNITS).unwrap()),
     ];
     let db = build_database_with_extra(&identity, objects).unwrap();
     let responder = Responder::new(identity, crate::responder::Limits::default()).unwrap();
@@ -117,7 +124,8 @@ fn a_change_back_while_a_report_is_out_follows_it() {
 
 /// With COV_Increment 2.0 a change is measured from the queued report's
 /// value: 15.0 then 14.0 sends 15.0, within the increment of the object;
-/// 15.0 then 11.0 sends 11.0 in its place.
+/// from 15.0 delivered, 18.0 then 15.5 sends 15.5 in 18.0's place, though
+/// 15.5 is within the increment of what was delivered.
 #[test]
 fn the_increment_is_measured_from_the_queued_report() {
     let mut device = device(2.0);
@@ -228,4 +236,80 @@ fn a_confirmed_change_back_follows_the_ack() {
     device.deadline();
     let (_, apdu) = device.pop(T0).unwrap();
     assert_eq!(Device::reported_pv(&apdu), real(10.0));
+}
+
+/// The comparison is with the newest report still to go, not the oldest:
+/// 15.0 is out, 10.0 queued behind it, then back to 15.0. Measured from the
+/// queued 10.0, 15.0 takes its place, and the subscriber ends at 15.0, not
+/// at 10.0 once the first send ends.
+#[test]
+fn a_change_is_measured_from_the_newest_report_still_to_go() {
+    let mut device = device(0.0);
+    device.subscribed(ai(), 1, false);
+    device.input(ai(), real(15.0));
+    let (out, _) = device.pop(T0).unwrap();
+    device.input(ai(), real(10.0));
+    device.input(ai(), real(15.0));
+    device
+        .reporter
+        .delivered(out.token, Delivery::Sent, &mut device.ids, T0);
+    assert_eq!(device.send_all(), [real(15.0)]);
+}
+
+/// A property subscription to a commandable value's Value_Source (Table
+/// 13-1a-2): a command at 8 and its relinquish before the host sends end
+/// where the subscriber started, with the commanding priority and the
+/// source the first notification gave.
+#[test]
+fn a_value_source_change_back_sends_the_current_source() {
+    let mut device = device(0.0);
+    let mut body = BytesMut::new();
+    SubscribeCOVPropertyRequest {
+        subscriber_process_identifier: 1,
+        monitored_object_identifier: av(),
+        issue_confirmed_notifications: Some(false),
+        lifetime: Some(300),
+        monitored_property_identifier: P::VALUE_SOURCE,
+        monitored_property_array_index: None,
+        cov_increment: None,
+    }
+    .encode(&mut body)
+    .unwrap();
+    let service = ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY;
+    let reply = device.request(service, &body, T0);
+    assert!(matches!(reply, Apdu::SimpleAck(_)), "{reply:?}");
+    let source = |device: &mut Device| {
+        let mut sent = Vec::new();
+        while let Some((notification, apdu)) = device.pop(T0) {
+            let Apdu::UnconfirmedRequest(request) = apdu else {
+                panic!("unconfirmed")
+            };
+            let values = COVNotificationRequest::decode(&request.service_request)
+                .unwrap()
+                .list_of_values;
+            let wanted = [P::VALUE_SOURCE, P::CURRENT_COMMAND_PRIORITY];
+            sent.push(
+                values
+                    .into_iter()
+                    .filter(|value| wanted.contains(&value.property_identifier))
+                    .map(|value| value.value)
+                    .collect::<Vec<_>>(),
+            );
+            device
+                .reporter
+                .delivered(notification.token, Delivery::Sent, &mut device.ids, T0);
+        }
+        sent
+    };
+    let initial = source(&mut device);
+    assert_eq!(initial.len(), 1);
+    device
+        .reporter
+        .command(&mut device.db, av(), 8, LocalValue::Real(5.0), T0)
+        .unwrap();
+    device
+        .reporter
+        .relinquish(&mut device.db, av(), 8, T0)
+        .unwrap();
+    assert_eq!(source(&mut device), initial, "back where it started");
 }

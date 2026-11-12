@@ -8491,11 +8491,15 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   as room frees. A confirmed report `pop` finds no invoke ID for is owed
   one instead, looked at again only as IDs come back (#2512): those the
   reporter gives back itself, and those the host reports with
-  `invoke_ids_released(count)` when the IDs it shares with other work come
-  back. A host that refuses IDs past a bound of its own needn't report
-  anything, and `next_deadline` never comes due for a report waiting for an
-  ID. `notification_deadline(token)` is a confirmed notification's own
-  deadline: its answer's, or its cutoff when that comes first. A confirmed
+  `invoke_ids_released(free)` when the IDs it shares with other work come
+  back. `free` is how many are free then, not how many came back, so an ID
+  the reporter gave back itself isn't counted twice; IDs counted while no
+  report waited for one don't count. A host that refuses IDs past a bound
+  of its own needn't report anything, and `next_deadline` never comes due
+  for a report waiting for an ID. `notification_deadline(token)` is a
+  confirmed notification's own deadline: its answer's, or its cutoff when
+  that comes first, and its cutoff alone while a resend waits for the next
+  `pop`. A confirmed
   report's answers are cut off at `FlightTiming::cutoff` from when the
   table began it, however late `pop` sent it, as the server's worker's
   are. `pop(bindings, ids, now, out)` appends the next

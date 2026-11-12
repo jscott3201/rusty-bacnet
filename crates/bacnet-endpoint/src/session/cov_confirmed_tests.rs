@@ -334,9 +334,8 @@ async fn stop_gives_back_every_invoke_id_and_sends_nothing_more() {
     assert!(node.next_within(Duration::from_secs(30)).await.is_none());
 }
 
-/// With every invoke ID leased elsewhere, a confirmed report waits, looking
-/// again now and then without spinning, and goes as soon as an ID comes
-/// back.
+/// With every invoke ID leased elsewhere, a confirmed report waits without
+/// looking again or spinning, and goes as soon as an ID comes back.
 #[tokio::test(start_paused = true)]
 async fn a_report_waits_for_an_invoke_id() {
     use bacnet_endpoint_core::coordinator::TerminalPolicy;
@@ -476,5 +475,66 @@ async fn at_the_bound_an_unconfirmed_report_goes_at_once() {
         assert!(heard.is_some(), "subscriber {subscriber} hears it");
     }
     assert_eq!(tokio::time::Instant::now(), at, "with no time passing");
+    session.stop().await.unwrap();
+}
+
+/// An ID that comes back while the task is still sending, after a report
+/// found the pool empty and before the task waits again, isn't lost: the
+/// coordinator's wake-up reaches only a waiter already registered, so the
+/// task registers, then looks at the pool. Here every ID is leased, AI-1's
+/// confirmed report waits for one, and the subscriber to LSP-1 gives one
+/// back on hearing the first of five notifications the same pass sends.
+#[tokio::test(start_paused = true)]
+async fn an_id_back_while_the_task_sends_is_not_lost() {
+    use bacnet_device_core::write::local::LocalCommandSource;
+    use bacnet_endpoint_core::coordinator::TerminalPolicy;
+    let (mut watcher, mut releaser) = (Node::new().await, Node::new().await);
+    let mut session = endpoint(SessionRole::ServerOnly, Some(ReportConfig::default())).await;
+    let to = mac_of(&session);
+    let coordinator = session.coordinator();
+    let lease = || {
+        let peer = CanonicalPeer::direct(&[9]);
+        LeaseMetadata::requester(peer, READ_PROPERTY, TerminalPolicy::ComplexAck)
+    };
+    let mut held: Vec<_> = (0..256)
+        .map(|_| coordinator.reserve(lease()).unwrap())
+        .collect();
+    let body = subscribe(1, Some(true), Some(300));
+    watcher.request(&to, 1, SUBSCRIBE_COV, &body).await;
+    assert_eq!(watcher.quiet(&to).await, [acked(1)], "no ID for its report");
+    for process in 1..=5u8 {
+        let body = subscribe_to(lsp1(), process.into(), Some(false), Some(300));
+        releaser.request(&to, process, SUBSCRIBE_COV, &body).await;
+        assert_eq!(releaser.quiet(&to).await.len(), 2);
+    }
+    let given = held.pop().unwrap();
+    let back = Arc::clone(&coordinator);
+    let subscriber = tokio::spawn(async move {
+        let first = releaser.next_within(Duration::from_secs(1)).await;
+        back.release(given).unwrap();
+        first.is_some()
+    });
+    // One change to each: AI-1's report is refused an ID again, then
+    // LSP-1's five go, and the ID comes back while they do.
+    let real = PropertyValue::Real(30.0);
+    session.set_present_value_local(&ai1(), real).await.unwrap();
+    let (oos, source) = (
+        PropertyIdentifier::OUT_OF_SERVICE,
+        LocalCommandSource::ServerDevice,
+    );
+    let value = PropertyValue::Boolean(true);
+    session
+        .write_local(&lsp1(), oos, None, value, None, source)
+        .await
+        .unwrap();
+    assert!(subscriber.await.unwrap(), "LSP-1's subscriber heard it");
+    let (_, apdu) = watcher
+        .next_within(Duration::from_secs(250))
+        .await
+        .expect("AI-1's report took the ID that came back");
+    confirmed_notification(&apdu);
+    for token in held {
+        coordinator.release(token).unwrap();
+    }
     session.stop().await.unwrap();
 }

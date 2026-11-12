@@ -228,7 +228,7 @@ impl Reporter {
         state: EventState, now: Instant) -> Result<(), Error>;   // §6.4
     pub fn next_deadline(&self) -> Option<Instant>;
     /// IDs came back from outside the reporter (#2512).
-    pub fn invoke_ids_released(&mut self, count: usize);
+    pub fn invoke_ids_released(&mut self, free: usize);
     pub fn notification_deadline(&self, token: Token) -> Option<Instant>;
     pub fn on_deadline(&mut self, db: &mut ObjectDatabase, ids: &mut dyn InvokeIds, now: Instant);
     /// The next notification, addressed and, if confirmed, with its invoke ID.
@@ -380,10 +380,11 @@ increment, else the object's for a numeric Present_Value, else any change
 (Table 13-1a); commandable values add Table 13-1a-2's properties; Life
 Safety objects compare whole snapshots. The comparison is with the newest
 observation decided for the subscription: an unconfirmed report not yet
-sent when there is one, else the last *delivered* one (#2508). A queued
-report the change still differs from is replaced, so a change back ends
-current; one sent stays the baseline only once delivered (#826), and one
-that ends unsent owes the change measured from it a fresh look. `evaluate`
+sent when there is one, else the last *delivered* one (#2508). A report
+still queued gives way to a newer one, so a change back ends current. An
+observation becomes the baseline only once its notification has been sent
+(#826), and a report that ends unsent leaves the change measured from it
+owed a fresh look. `evaluate`
 applies the per-input budget
 (`EventBudget`, `cov_notifications.rs:13-76`: 64 notifications, 65,536
 octets).

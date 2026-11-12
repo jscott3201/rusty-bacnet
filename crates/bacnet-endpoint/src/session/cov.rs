@@ -37,6 +37,7 @@ use bacnet_device_core::write::Applied;
 use bacnet_encoding::apdu::{Apdu, decode_apdu};
 use bacnet_endpoint_core::coordinator::{
     Admission, CanonicalPeer, LeaseMetadata, LeaseToken, OutboundTransactionCoordinator,
+    ReserveError,
 };
 use bacnet_endpoint_core::endpoint_ingress::{
     EndpointApduDestination, EndpointEgress, EndpointEgressAdmissionError,
@@ -316,6 +317,14 @@ impl CovHost {
             // `Notified` already made, polled or not).
             let released = self.coordinator.released();
             let (deadline, pool) = self.next_wake();
+            // Registered, now check: an ID that came back while `step` ran,
+            // before `released` existed, woke nobody (the coordinator's
+            // `notify_waiters` stores no permit).
+            if pool && self.pool_has_room() {
+                self.ids_came_back();
+                self.step(&db).await;
+                continue;
+            }
             let due = async {
                 match deadline {
                     Some(at) => tokio::time::sleep_until(at).await,
@@ -360,6 +369,13 @@ impl CovHost {
             .and_then(|at| self.clock.to_std(at))
             .map(tokio::time::Instant::from_std);
         (deadline, state.leases.pool_empty)
+    }
+
+    /// Whether the session's pool has a free invoke ID now.
+    fn pool_has_room(&self) -> bool {
+        self.coordinator
+            .active_count()
+            .is_ok_and(|active| active < INVOKE_IDS)
     }
 
     /// Invoke IDs came back to the session's pool while a report waited for
@@ -552,9 +568,15 @@ impl InvokeIds for Leases {
         let reserved = self
             .coordinator
             .reserve(LeaseMetadata::notification(peer, service));
-        let Ok(token) = reserved else {
-            self.pool_empty = true;
-            return None;
+        let token = match reserved {
+            Ok(token) => token,
+            // Only an empty pool fills again as IDs come back; a poisoned
+            // or spent coordinator never does, so nothing waits on it.
+            Err(ReserveError::Exhausted) => {
+                self.pool_empty = true;
+                return None;
+            }
+            Err(_) => return None,
         };
         self.pool_empty = false;
         self.out.push(Lease {

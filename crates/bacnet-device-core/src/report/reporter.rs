@@ -851,7 +851,7 @@ impl Reporter {
 
     /// Give back the invoke IDs of fenced notifications.
     fn release(&mut self, ids: &mut dyn InvokeIds) {
-        self.ids_freed += self.releases.len();
+        self.count_freed(self.releases.len());
         for (peer, id) in self.releases.drain(..) {
             ids.release(&peer, id);
         }

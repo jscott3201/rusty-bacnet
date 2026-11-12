@@ -128,22 +128,26 @@ pub fn evaluate<L>(
         .then(|| Ordinary::capture(object))
         .flatten();
     for (index, sub) in subscriptions.iter().enumerate() {
-        let pending = table.newest_pending(sub);
-        let last = pending
-            .as_ref()
-            .map(|(_, observation)| observation)
-            .or(sub.last_notified_observation.as_ref());
-        let decided = match sub.monitored_property {
-            None => ordinary
-                .as_ref()
-                .filter(|ordinary| ordinary.reports(sub, last, evaluation.force))
-                .map(Ordinary::report),
-            Some(property) => property_report(object, sub, last, property, evaluation.force),
+        // Measured from the newest report still to go, borrowed from the
+        // table until the decision is made.
+        let (decided, pending) = {
+            let pending = table.newest_pending(sub);
+            let last = pending
+                .map(|(_, observation)| observation)
+                .or(sub.last_notified_observation.as_ref());
+            let decided = match sub.monitored_property {
+                None => ordinary
+                    .as_ref()
+                    .filter(|ordinary| ordinary.reports(sub, last, evaluation.force))
+                    .map(Ordinary::report),
+                Some(property) => property_report(object, sub, last, property, evaluation.force),
+            };
+            (decided, pending.map(|(ticket, _)| ticket))
         };
         let Some((values, observation)) = decided else {
             // Nothing new against a report still to go: should that one
             // end unsent, this change is owed a fresh look.
-            if let Some((ticket, _)) = pending {
+            if let Some(ticket) = pending {
                 table.rely_on_pending(sub, ticket);
             }
             continue;

@@ -272,3 +272,56 @@ fn each_notification_out_has_its_deadline() {
     assert!(device.ack(out.invoke_id.unwrap(), after(4)));
     assert_eq!(deadline(&device), None);
 }
+
+/// An ID a fence frees counts for the reports owed one: with one ID, A's
+/// confirmed report holds it and B's waits; A renewing for unconfirmed
+/// notifications fences A's report, and B goes. (A cancellation fences
+/// nothing: the cancelled report runs on, as on the server, and its ID
+/// comes back with its answer or its timeout.)
+#[test]
+fn an_id_a_fence_frees_lets_an_owed_report_go() {
+    let mut device = Device::new(OutboxLimits::default());
+    device.ids.limit = 1;
+    device.subscribe(1, true, T0);
+    assert!(device.pop(T0).is_some(), "A's report out");
+    device.subscribe(2, true, T0);
+    assert!(device.pop(T0).is_none(), "B's waits for the ID");
+    device.subscribe(1, false, T0);
+    let (initial, _) = device.pop(T0).unwrap();
+    assert_eq!(initial.invoke_id, None, "A renewed, unconfirmed");
+    assert_eq!(device.reporter.next_deadline(), Some(T0), "B's turn");
+    device.deadline();
+    let (b, apdu) = device.pop(T0).expect("B goes");
+    assert!(b.invoke_id.is_some());
+    assert_eq!(reported(&apdu).0, 2);
+}
+
+/// An ID counts only while a report waits for one: A's Ack, with nothing
+/// owed, counts for nothing when C is refused an ID later, so the next
+/// look is A's own and C stays owed. And the host's word that IDs are free
+/// names how many are, so the one the reporter gave back itself isn't
+/// counted twice: one look at those owed, for one free ID.
+#[test]
+fn ids_count_only_while_a_report_waits_and_only_once() {
+    let mut device = Device::new(OutboxLimits::default());
+    device.ids.limit = 1;
+    device.subscribe(1, true, T0);
+    let (a, _) = device.pop(T0).unwrap();
+    assert!(device.ack(a.invoke_id.unwrap(), T0), "nothing owed yet");
+    device.subscribe(2, true, T0);
+    let (b, _) = device.pop(T0).expect("B takes the free ID");
+    device.subscribe(3, true, T0);
+    assert!(device.pop(T0).is_none(), "C's waits");
+    let looked = device.reporter.looked;
+    device.deadline();
+    assert_eq!(device.reporter.looked - looked, 1, "A's look alone");
+    assert_eq!(device.reporter.owed_ids.len(), 1, "C still owed");
+
+    device.subscribe(4, true, T0);
+    assert!(device.pop(T0).is_none(), "D's waits too");
+    assert!(device.ack(b.invoke_id.unwrap(), T0));
+    device.reporter.invoke_ids_released(1);
+    device.deadline();
+    // C looked at, D still owed: counted twice, both would be.
+    assert_eq!(device.reporter.owed_ids.len(), 1, "one free ID, one look");
+}

@@ -14,16 +14,17 @@ use crate::report::InvokeIds;
 
 impl Reporter {
     /// Invoke IDs came back to the host's pool from outside this reporter,
-    /// such as the device's own client requests ending: the reports owed
-    /// for want of one are looked at again at the next
-    /// [`on_deadline`](Self::on_deadline), as many as came back. The
-    /// reporter counts the IDs it gives back itself; a host need report
-    /// only the others, and only while a report waits for one (a
-    /// [`pop`](Self::pop) found [`InvokeIds::take`] refusing). A host that
-    /// refuses IDs past a bound of its own needn't report anything: only
-    /// this reporter's own notifications ending free a place under it.
-    pub fn invoke_ids_released(&mut self, count: usize) {
-        self.ids_freed = self.ids_freed.saturating_add(count);
+    /// such as the device's own client requests ending, and `free` are free
+    /// now: as many of the reports owed one are looked at again at the
+    /// next [`on_deadline`](Self::on_deadline). `free` is how many the host
+    /// has, not how many came back, so one this reporter gave back itself,
+    /// which it counts, isn't counted twice. A host need report only while
+    /// a report waits for an ID (a [`pop`](Self::pop) found
+    /// [`InvokeIds::take`] refusing), and a host that refuses IDs past a
+    /// bound of its own needn't report anything: only this reporter's own
+    /// notifications ending free a place under it.
+    pub fn invoke_ids_released(&mut self, free: usize) {
+        self.ids_freed = self.ids_freed.max(free);
     }
 
     /// When the confirmed notification `token` names next times out, if it
@@ -40,12 +41,24 @@ impl Reporter {
     /// reports owed one.
     pub(super) fn give_back(&mut self, ids: &mut dyn InvokeIds, peer: &BACnetAddress, id: u8) {
         ids.release(peer, id);
-        self.ids_freed = self.ids_freed.saturating_add(1);
+        self.count_freed(1);
+    }
+
+    /// Count `count` IDs given back. Only those counted while a report
+    /// waits for one matter: the first report owed one drops the rest
+    /// ([`owe_id`](Self::owe_id)).
+    pub(super) fn count_freed(&mut self, count: usize) {
+        self.ids_freed = self.ids_freed.saturating_add(count);
     }
 
     /// Owe `key` a look once an invoke ID comes back; counted as
     /// [`owe`](Self::owe) counts.
     pub(super) fn owe_id(&mut self, key: CovSubscriptionKey) {
+        // IDs counted while nothing was owed one, or for reports owed
+        // before and since served or gone, say nothing of this one.
+        if self.owed_ids.is_empty() {
+            self.ids_freed = 0;
+        }
         if !self.owed_ids.contains(&key) && !self.owed.contains(&key) {
             self.counters.owed += 1;
             self.owed_ids.push(key);
