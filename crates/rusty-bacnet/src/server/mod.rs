@@ -252,6 +252,7 @@ mod server_methods {
     mod policy_dict;
     mod program_methods;
     mod registration;
+    mod reliability_methods;
     mod request_admission;
     mod sc_npdu;
     mod time_sync_policy;

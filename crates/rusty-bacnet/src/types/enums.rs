@@ -123,6 +123,7 @@ py_bacnet_enum!(
     bacnet_enums::LifeSafetyOperation,
     u32
 );
+py_bacnet_enum!("Reliability", PyReliability, bacnet_enums::Reliability, u32);
 py_bacnet_enum!("EventState", PyEventState, bacnet_enums::EventState, u32);
 py_bacnet_enum!(
     "AcknowledgmentFilter",

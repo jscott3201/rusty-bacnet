@@ -541,4 +541,31 @@ def from_raw(value: int) -> LifeSafetyOperation
 ```python
 def to_raw(self) -> int
 ```
+
+## Reliability
+
+BACnet reliability (Clause 12), for `BACnetServer.set_reliability_local`.
+
+Vendor values run from 64 to 65535; use `Reliability.from_raw(n)` for one.
+
+25 constants:
+
+`NO_FAULT_DETECTED`, `NO_SENSOR`, `OVER_RANGE`, `UNDER_RANGE`, `OPEN_LOOP`, `SHORTED_LOOP`, `NO_OUTPUT`, `UNRELIABLE_OTHER`, `PROCESS_ERROR`, `MULTI_STATE_FAULT`, `CONFIGURATION_ERROR`, `COMMUNICATION_FAILURE`, `MEMBER_FAULT`, `MONITORED_OBJECT_FAULT`, `TRIPPED`, `LAMP_FAILURE`, `ACTIVATION_FAILURE`, `RENEW_DHCP_FAILURE`, `RENEW_FD_REGISTRATION_FAILURE`, `RESTART_AUTO_NEGOTIATION_FAILURE`, `RESTART_FAILURE`, `PROPRIETARY_COMMAND_FAILURE`, `FAULTS_LISTED`, `REFERENCED_OBJECT_FAULT`, `MULTI_STATE_OUT_OF_RANGE`
+
+Properties:
+
+- `name: str | None`: The constant's name (`"NO_SENSOR"`), or None for a value without one.
+
+### Reliability.from_raw
+
+```python
+@staticmethod
+def from_raw(value: int) -> Reliability
+```
+
+### Reliability.to_raw
+
+```python
+def to_raw(self) -> int
+```
 <!-- generated:end -->

@@ -130,6 +130,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyLifeSafetyOperation>()?;
     PyLifeSafetyOperation::register_constants(&m.getattr("LifeSafetyOperation")?)?;
 
+    m.add_class::<PyReliability>()?;
+    PyReliability::register_constants(&m.getattr("Reliability")?)?;
+
     m.add_class::<PyEventState>()?;
     PyEventState::register_constants(&m.getattr("EventState")?)?;
 
