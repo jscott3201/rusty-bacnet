@@ -6,12 +6,14 @@ use std::collections::VecDeque;
 use std::task::{Context, Poll, Waker};
 
 use bacnet_endpoint_core::coordinator::CanonicalPeer;
+use bacnet_network::layer::ReceivedNetworkControl;
 use bacnet_transport::loopback::LoopbackTransport;
+use bacnet_transport::port::TransportProvenance;
 use bacnet_types::enums::{ObjectType, Segmentation};
 use bacnet_types::primitives::ObjectIdentifier;
 
 use super::dispatch_turn::{APDUS_BEFORE_CLEANUP, Turn, TurnOrder};
-use super::lifecycle::DEVICE_PURGE_INTERVAL;
+use super::lifecycle::{Controls, DEVICE_PURGE_INTERVAL};
 use super::*;
 
 /// Queues standing in for the loop's sources, counting each receiver's polls.
@@ -112,7 +114,7 @@ fn a_steady_stream_of_apdus_lets_a_cleanup_through_after_the_bound() {
 
 #[test]
 fn a_cleanup_first_turn_with_no_cleanup_takes_the_apdu_and_polls_the_queue_once() {
-    let sources = Sources::with_apdus(0..=APDUS_BEFORE_CLEANUP);
+    let sources = Sources::with_apdus(0..APDUS_BEFORE_CLEANUP + 2);
     let mut order = TurnOrder::default();
     for apdu in 0..APDUS_BEFORE_CLEANUP {
         assert_eq!(
@@ -126,7 +128,14 @@ fn a_cleanup_first_turn_with_no_cleanup_takes_the_apdu_and_polls_the_queue_once(
         Poll::Ready(Turn::Apdu(Some(APDUS_BEFORE_CLEANUP)))
     );
     assert_eq!(sources.cleanup_polls.get(), 1);
-    // That ended the run: a turn with nothing polls the queue once more.
+    // The empty poll ended the run, so the next APDU turn doesn't poll the
+    // queue first again.
+    assert_eq!(
+        sources.turn(&mut order),
+        Poll::Ready(Turn::Apdu(Some(APDUS_BEFORE_CLEANUP + 1)))
+    );
+    assert_eq!(sources.cleanup_polls.get(), 1);
+    // A turn with nothing polls the queue once more.
     assert_eq!(sources.turn(&mut order), Poll::Pending);
     assert_eq!(sources.cleanup_polls.get(), 2);
 }
@@ -348,4 +357,66 @@ async fn stopping_or_dropping_the_client_ends_the_device_purge() {
     })
     .await
     .expect("dropping the client aborts the purge task");
+}
+
+fn control(ingress_sequence: u64) -> ReceivedNetworkControl {
+    ReceivedNetworkControl {
+        npdu: Npdu::default(),
+        source_mac: MacAddr::from_slice(&PEER_MAC),
+        link_layer_group: false,
+        data_attributes: Vec::new(),
+        provenance: TransportProvenance::unverified(),
+        ingress_sequence,
+    }
+}
+
+#[test]
+fn controls_are_read_only_once_the_ingress_sequence_moves_or_at_its_maximum() {
+    let (tx, rx) = mpsc::channel(4);
+    let mut controls = Controls::new(rx, 5);
+    // Queued without the sequence moving, as no real layer does: not read.
+    tx.try_send(control(5)).unwrap();
+    assert!(controls.take(5).is_none());
+    assert_eq!(controls.take(6).map(|c| c.ingress_sequence), Some(5));
+    assert!(controls.take(6).is_none(), "the queue is empty at 6 now");
+    tx.try_send(control(6)).unwrap();
+    assert!(controls.take(6).is_none());
+
+    // At its maximum the sequence stops moving, so the queue is read every time.
+    let (tx, rx) = mpsc::channel(4);
+    let mut controls = Controls::new(rx, u64::MAX);
+    tx.try_send(control(u64::MAX)).unwrap();
+    tx.try_send(control(u64::MAX)).unwrap();
+    assert!(controls.take(u64::MAX).is_some());
+    assert!(controls.take(u64::MAX).is_some());
+    assert!(controls.take(u64::MAX).is_none());
+    tx.try_send(control(u64::MAX)).unwrap();
+    assert!(controls.take(u64::MAX).is_some());
+
+    // A closed queue is read no more.
+    drop(tx);
+    assert!(controls.take(u64::MAX).is_none());
+    assert!(!controls.open);
+}
+
+#[tokio::test]
+async fn the_device_purge_ends_with_the_dispatch_loop() {
+    let (client_transport, peer) = LoopbackTransport::pair(&CLIENT_MAC[..], &PEER_MAC[..]);
+    let mut client = BACnetClient::generic_builder()
+        .transport(client_transport)
+        .build()
+        .await
+        .unwrap();
+    let dispatch = client.dispatch_task.as_ref().unwrap().abort_handle();
+    let purge = client.device_purge_task.as_ref().unwrap().abort_handle();
+    // With the peer gone the receive queue closes, and the loop ends.
+    drop(peer);
+    timeout(Duration::from_secs(1), async {
+        while !(dispatch.is_finished() && purge.is_finished()) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the purge task outlived the dispatch loop");
+    client.stop().await.unwrap();
 }

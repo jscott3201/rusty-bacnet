@@ -57,15 +57,15 @@ async fn join_owned_task(slot: &mut Option<JoinHandle<()>>) {
 
 /// The dispatch loop's network controls, read without waiting: see the
 /// [`dispatch_turn`] docs for why they need no waker.
-struct Controls {
+pub(super) struct Controls {
     rx: mpsc::Receiver<ReceivedNetworkControl>,
-    open: bool,
+    pub(super) open: bool,
     /// The layer's ingress sequence when the queue was last found empty.
     drained_at: u64,
 }
 
 impl Controls {
-    fn new(rx: mpsc::Receiver<ReceivedNetworkControl>, admitted: u64) -> Self {
+    pub(super) fn new(rx: mpsc::Receiver<ReceivedNetworkControl>, admitted: u64) -> Self {
         Self {
             rx,
             open: true,
@@ -78,7 +78,7 @@ impl Controls {
     /// this task's APDU receive, so while it stands where the queue was last
     /// found empty there is nothing to take and the queue isn't read. At
     /// `u64::MAX` it stops advancing, and the queue is read every time.
-    fn take(&mut self, admitted: u64) -> Option<ReceivedNetworkControl> {
+    pub(super) fn take(&mut self, admitted: u64) -> Option<ReceivedNetworkControl> {
         if !self.open || (admitted == self.drained_at && admitted != u64::MAX) {
             return None;
         }
@@ -98,7 +98,8 @@ impl Controls {
 
 /// Every [`DEVICE_PURGE_INTERVAL`], drop the devices not heard from in
 /// [`DEVICE_MAX_AGE`] and announce each as lost. A task of its own, so the
-/// dispatch loop doesn't poll this timer on every turn (#1978 item 8).
+/// dispatch loop doesn't poll this timer on every turn (#1978 item 8); the
+/// loop ends it when it ends itself, and `stop()` and drop abort both.
 fn spawn_device_purge(
     device_table: Arc<SyncMutex<DeviceTable>>,
     device_tx: broadcast::Sender<DeviceEvent>,
@@ -215,6 +216,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let response_warning_hook = Arc::clone(&response_warning);
 
         let device_purge_task = spawn_device_purge(Arc::clone(&device_table), device_tx.clone());
+        let device_purge = device_purge_task.abort_handle();
         let dispatch_task = tokio::spawn(async move {
             let mut seg_state: HashMap<SegKey, SegmentedReceiveState> = HashMap::new();
             let mut controls = Controls::new(
@@ -350,6 +352,9 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                     }
                 }
             }
+            // The receive queue closed: no device can be heard from again,
+            // so the purge ends with the loop, as it did inside it.
+            device_purge.abort();
         });
 
         // Shared: each paced request's guard keeps the pacer it reports to.

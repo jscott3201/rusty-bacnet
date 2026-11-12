@@ -1552,6 +1552,11 @@ against its own baseline
   times the run-to-run floor, where the rule asks for more than three
   times. The change was dropped; nothing else moved.
 
+These counts were taken locally, in Docker on the laptop. The official
+count, the manual Perf counts workflow on GitHub's arm64 runner, is still
+to come. Wall-clock time was not measured: other builds shared the machine
+throughout, so timings from it would not compare.
+
 The kernel's side of the vectored B/IP send (section 10.9) is not in these
 counts, as callgrind sees only the program's own instructions. Weighing it
 needs a wall-clock comparison of `bip_latency` and `bip_throughput` on a

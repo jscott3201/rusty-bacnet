@@ -15,9 +15,11 @@ clean builds of the baseline) from the same matrix; A and A' were
 byte-identical in every run. Each run built like the release with the
 fixed allocator settings, in local Docker on an Apple M5 laptop, image
 `rb-perf-counts:ac28c4cf5d0a` (libc6 2.39-0ubuntu8.9, Valgrind 3.22.0,
-Rust 1.99.0), in the order A B A' A' B A three times. Two other builds
-were running on the laptop throughout; instruction counts don't depend on
-that, wall-clock time would.
+Rust 1.99.0), in the order A B A' A' B A three times. These are local
+counts; the official count on GitHub's arm64 runner is still to come.
+Wall-clock time was not measured: two other builds shared the laptop
+throughout, so timings from it would not compare. Instruction counts don't
+depend on that.
 
 ## What was left
 
