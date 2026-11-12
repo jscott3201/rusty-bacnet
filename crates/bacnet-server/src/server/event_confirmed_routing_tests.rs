@@ -12,7 +12,7 @@
 //! feed acks through the same correlation entry point the dispatch loop uses.
 
 use super::device_bindings::{DeviceBindingTable, OBSERVED_BINDING_TTL};
-use super::event_notifications::CommittedIntrinsicTransition;
+use super::event_notifications::{CommittedIntrinsicTransition, commit_intrinsic_transition};
 use super::event_notifications_tests::local_broadcast_destination;
 use super::event_recipient_routing_tests::{address_recipient, destination_for, is_who_is};
 use super::*;
@@ -146,7 +146,7 @@ impl Harness {
     ) -> CommittedIntrinsicTransition {
         let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
         let mut db = self.db.write().await;
-        BACnetServer::<TestTransport>::commit_intrinsic_transition(
+        commit_intrinsic_transition(
             &mut db,
             &oid,
             bacnet_objects::event::TransitionOutcome {

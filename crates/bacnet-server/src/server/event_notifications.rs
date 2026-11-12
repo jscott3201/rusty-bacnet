@@ -13,7 +13,10 @@ use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_objects::event::{
     EventTransition, EventTransitionCommit, EventTransitionCommitError, TransitionOutcome,
 };
+use bacnet_objects::notification_class::RecipientLookupOutcome;
 use bacnet_objects::traits::BACnetObject;
+use bacnet_types::bitstring::DaysOfWeek;
+use bacnet_types::primitives::Time;
 
 use crate::event_enrollment::{CommittedEventEnrollmentDelivery, CommittedEventEnrollmentResult};
 
@@ -123,85 +126,286 @@ pub(super) fn resolve_committed_event_enrollment_transition(
     ))
 }
 
-impl<T: TransportPort + 'static> BACnetServer<T> {
-    /// Resolve policy and atomically commit one intrinsic proposal.
-    pub(super) fn commit_intrinsic_transition(
-        db: &mut ObjectDatabase,
-        oid: &ObjectIdentifier,
-        outcome: TransitionOutcome,
-    ) -> Option<CommittedIntrinsicTransition> {
-        let coordinate = outcome.change.transition();
-        let notification_class = db
-            .get(oid)?
-            .read_property(PropertyIdentifier::NOTIFICATION_CLASS, None)
-            .ok()
-            .and_then(|value| match value {
-                PropertyValue::Unsigned(number) => Some(number as u32),
-                _ => None,
-            })
-            .unwrap_or(0);
-        let (_, ack_required) = resolve_transition_priority_ack(db, notification_class, coordinate);
-        let staged_timestamp = stage_event_timestamp(db);
-        let message_text = intrinsic_event_message_text(oid, &outcome.change);
-        let commit = EventTransitionCommit {
-            change: outcome.change.clone(),
-            coordinate,
-            ack_required,
-            timestamp: staged_timestamp.sample.timestamp.clone(),
-            message_text: Some(message_text),
-        };
+/// Why [`commit_intrinsic_transition`] committed nothing to distribute.
+#[derive(Debug)]
+pub(super) enum IntrinsicCommitRefusal {
+    /// The object is gone.
+    Gone,
+    /// The object refused the commit; its event state is unchanged.
+    Rejected(EventTransitionCommitError),
+    /// The transition committed, but its timestamp or message text at
+    /// `coordinate` doesn't read back, so no notification can be built.
+    HistoryUnreadable(EventTransition),
+}
 
-        let committed = db
-            .get_mut(oid)?
-            .event_reporting_mut()
-            .map_or(Err(EventTransitionCommitError::Unsupported), |reporting| {
-                reporting.commit_event_transition(commit)
-            });
-        if let Err(error) = committed {
-            debug!(%oid, ?error, "Intrinsic transition commit rejected");
-            return None;
-        }
+/// Resolve policy and atomically commit one intrinsic proposal.
+///
+/// A committed transition whose Event Values don't project comes back with
+/// `event_values` empty: committed, but not to be distributed.
+pub(super) fn commit_intrinsic_transition(
+    db: &mut ObjectDatabase,
+    oid: &ObjectIdentifier,
+    outcome: TransitionOutcome,
+) -> Result<CommittedIntrinsicTransition, IntrinsicCommitRefusal> {
+    let coordinate = outcome.change.transition();
+    let notification_class = db
+        .get(oid)
+        .ok_or(IntrinsicCommitRefusal::Gone)?
+        .read_property(PropertyIdentifier::NOTIFICATION_CLASS, None)
+        .ok()
+        .and_then(|value| match value {
+            PropertyValue::Unsigned(number) => Some(number as u32),
+            _ => None,
+        })
+        .unwrap_or(0);
+    let (_, ack_required) = resolve_transition_priority_ack(db, notification_class, coordinate);
+    let staged_timestamp = stage_event_timestamp(db);
+    let message_text = intrinsic_event_message_text(oid, &outcome.change);
+    let commit = EventTransitionCommit {
+        change: outcome.change.clone(),
+        coordinate,
+        ack_required,
+        timestamp: staged_timestamp.sample.timestamp.clone(),
+        message_text: Some(message_text),
+    };
 
-        let recipient_clock = confirm_event_timestamp(db, staged_timestamp).clock;
-        let history_snapshot = match db.get(oid).and_then(|object| {
+    db.get_mut(oid)
+        .ok_or(IntrinsicCommitRefusal::Gone)?
+        .event_reporting_mut()
+        .map_or(Err(EventTransitionCommitError::Unsupported), |reporting| {
+            reporting.commit_event_transition(commit)
+        })
+        .map_err(IntrinsicCommitRefusal::Rejected)?;
+
+    let recipient_clock = confirm_event_timestamp(db, staged_timestamp).clock;
+    let history_snapshot = db
+        .get(oid)
+        .and_then(|object| {
             read_committed_history_snapshot(object, coordinate, MessageTexts::Required)
-        }) {
-            Some(snapshot) => snapshot,
-            None => {
+        })
+        .ok_or(IntrinsicCommitRefusal::HistoryUnreadable(coordinate))?;
+    let event_type = outcome.change.event_type(outcome.event_type);
+    let device = db.local_device().identifier();
+    let event_values = db
+        .get(oid)
+        .and_then(|object| project_intrinsic_payload(object, &outcome.change, event_type, device));
+    Ok(CommittedIntrinsicTransition {
+        change: outcome.change,
+        event_type,
+        distribute: outcome.distribute,
+        history_snapshot,
+        recipient_clock,
+        ack_required,
+        event_values,
+    })
+}
+
+/// Log why an intrinsic commit gave nothing to distribute, as the commit
+/// once did itself, and keep what it committed.
+pub(super) fn logged_intrinsic_commit(
+    oid: &ObjectIdentifier,
+    result: Result<CommittedIntrinsicTransition, IntrinsicCommitRefusal>,
+) -> Option<CommittedIntrinsicTransition> {
+    match result {
+        Ok(committed) => {
+            if committed.event_values.is_none() {
                 debug!(
                     %oid,
-                    ?coordinate,
-                    "Committed intrinsic history projection rejected; suppressing distribution"
-                );
-                return None;
-            }
-        };
-        let event_type = outcome.change.event_type(outcome.event_type);
-        let device = db.local_device().identifier();
-        let event_values = db
-            .get(oid)
-            .and_then(|object| {
-                project_intrinsic_payload(object, &outcome.change, event_type, device)
-            })
-            .or_else(|| {
-                debug!(
-                    %oid,
-                    ?event_type,
+                    event_type = ?committed.event_type,
                     "Committed intrinsic Event Values projection rejected; suppressing distribution"
                 );
-                None
-            });
-        Some(CommittedIntrinsicTransition {
-            change: outcome.change,
-            event_type,
-            distribute: outcome.distribute,
-            history_snapshot,
+            }
+            Some(committed)
+        }
+        Err(IntrinsicCommitRefusal::Gone) => None,
+        Err(IntrinsicCommitRefusal::Rejected(error)) => {
+            debug!(%oid, ?error, "Intrinsic transition commit rejected");
+            None
+        }
+        Err(IntrinsicCommitRefusal::HistoryUnreadable(coordinate)) => {
+            debug!(
+                %oid,
+                ?coordinate,
+                "Committed intrinsic history projection rejected; suppressing distribution"
+            );
+            None
+        }
+    }
+}
+
+/// What [`distribute_event`] made of one transition, under the caller's
+/// database guard.
+pub(super) struct EventDistribution {
+    /// The Device clock the recipient filter read. Anything but
+    /// [`SampledEventClock::Valid`] means the filter used the fallback.
+    pub(super) clock: SampledEventClock,
+    /// Whether a notification was built, and for whom.
+    pub(super) outcome: DistributionOutcome,
+}
+
+/// The end of one [`distribute_event`] call.
+pub(super) enum DistributionOutcome {
+    /// The event object is gone.
+    Gone,
+    /// The Notification Class lookup failed closed: nothing was built or
+    /// logged, and the transition goes to nobody.
+    Refused {
+        /// The class the object names.
+        notification_class: u32,
+        /// The transition's coordinate.
+        transition: EventTransition,
+        /// Why the lookup failed.
+        lookup: RecipientLookupOutcome,
+    },
+    /// Built and logged to the Event Logs. `lookup` holds the recipients
+    /// ([`RecipientLookupOutcome::Matched`]) or says why there are none.
+    Built {
+        /// The notification, Process Identifier 0.
+        notification: EventNotificationRequest,
+        /// The class the object names.
+        notification_class: u32,
+        /// The transition's coordinate.
+        transition: EventTransition,
+        /// The selection.
+        lookup: RecipientLookupOutcome,
+    },
+}
+
+/// Build the EventNotification for one transition under the database
+/// guard, select its recipients and log it to the device's Event Log
+/// objects. `fallback` is the day and time the recipient filter uses when
+/// the Device clock gives none.
+pub(super) fn distribute_event(
+    db: &mut ObjectDatabase,
+    device: ObjectIdentifier,
+    oid: &ObjectIdentifier,
+    transition: NotificationTransition,
+    fallback: (DaysOfWeek, Time),
+) -> EventDistribution {
+    let NotificationTransition {
+        change,
+        event_type,
+        history_source,
+        ack_required: ack_required_snapshot,
+        event_values,
+        construction,
+    } = transition;
+
+    let (timestamp, message_text, recipient_clock) = match history_source {
+        NotificationHistorySource::SendTime => {
+            let sample = sample_event_timestamp(db);
+            (sample.timestamp, None, sample.clock)
+        }
+        NotificationHistorySource::Committed {
+            snapshot,
             recipient_clock,
-            ack_required,
-            event_values,
+        } => (snapshot.timestamp, snapshot.message_text, recipient_clock),
+    };
+
+    let (today, current_time) = match recipient_clock {
+        SampledEventClock::Valid(clock_frame) => (
+            clock_frame
+                .day_of_week()
+                .expect("validated ClockFrame has a day of week"),
+            clock_frame.local_time,
+        ),
+        SampledEventClock::Unavailable | SampledEventClock::Invalid => fallback,
+    };
+    let distribution = |outcome| EventDistribution {
+        clock: recipient_clock,
+        outcome,
+    };
+
+    let object = match db.get_mut(oid) {
+        Some(o) => o,
+        None => return distribution(DistributionOutcome::Gone),
+    };
+
+    let notification_class = object
+        .read_property(PropertyIdentifier::NOTIFICATION_CLASS, None)
+        .ok()
+        .and_then(|v| match v {
+            PropertyValue::Unsigned(n) => Some(n as u32),
+            _ => None,
         })
+        .unwrap_or(0);
+
+    let notify_type = match construction {
+        NotificationConstruction::Acknowledgment => NotifyType::ACK_NOTIFICATION,
+        NotificationConstruction::Event => object
+            .read_property(PropertyIdentifier::NOTIFY_TYPE, None)
+            .ok()
+            .and_then(|v| match v {
+                PropertyValue::Enumerated(n) => Some(NotifyType::from_raw(n)),
+                _ => None,
+            })
+            .unwrap_or(NotifyType::ALARM),
+    };
+
+    let transition = change.transition();
+
+    // Resolve the per-transition Priority and Ack_Required from the
+    // referenced NotificationClass (ASHRAE 135-2020 §13.2.1), falling
+    // back to the BACnet defaults (Priority 255, no ack) when the
+    // class is missing.
+    let (priority, resolved_ack_required) =
+        resolve_transition_priority_ack(db, notification_class, transition);
+    let ack_required = ack_required_snapshot.unwrap_or(resolved_ack_required);
+
+    let lookup =
+        lookup_notification_recipients(db, notification_class, transition, today, &current_time);
+    if matches!(
+        lookup,
+        RecipientLookupOutcome::NotificationClassMissing
+            | RecipientLookupOutcome::RecipientListUnavailable
+            | RecipientLookupOutcome::RecipientListInvalid
+            | RecipientLookupOutcome::RecipientListTooLong
+    ) {
+        return distribution(DistributionOutcome::Refused {
+            notification_class,
+            transition,
+            lookup,
+        });
     }
 
+    let notification = EventNotificationRequest {
+        process_identifier: 0,
+        initiating_device_identifier: device,
+        event_object_identifier: *oid,
+        timestamp,
+        notification_class,
+        priority,
+        event_type,
+        message_text,
+        notify_type,
+        // ack_required is only meaningful for ALARM/EVENT notify types
+        // (ACK_NOTIFICATION omits the field on the wire). Per §13.2.1 the
+        // value is the NotificationClass's per-transition Ack_Required,
+        // not a function of Notify_Type alone.
+        ack_required: if notify_type == NotifyType::ACK_NOTIFICATION {
+            false
+        } else {
+            ack_required
+        },
+        from_state: change.from,
+        to_state: change.to,
+        event_values: if notify_type == NotifyType::ACK_NOTIFICATION {
+            None
+        } else {
+            event_values.map(CommittedNotificationPayload::into_parameters)
+        },
+    };
+
+    db.log_event_notification(&notification);
+    distribution(DistributionOutcome::Built {
+        notification,
+        notification_class,
+        transition,
+        lookup,
+    })
+}
+
+impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Evaluate intrinsic reporting on an object and send event notifications
     /// to the recipients the object's NotificationClass names.
     /// DCC gates network-message initiation (Clause 16.1), not the local
@@ -231,8 +435,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 .get_mut(oid)
                 .and_then(|object| object.event_reporting_mut())
                 .and_then(|reporting| reporting.evaluate_intrinsic_reporting());
-            let resolved = outcome
-                .and_then(|outcome| Self::commit_intrinsic_transition(&mut db, oid, outcome));
+            let resolved = outcome.and_then(|outcome| {
+                logged_intrinsic_commit(oid, commit_intrinsic_transition(&mut db, oid, outcome))
+            });
             // A committed transition changes Status_Flags: capture it at its
             // own time for timestamped COV-multiple references.
             if resolved.is_some() {
@@ -303,133 +508,52 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             return;
         }
 
-        let NotificationTransition {
-            change,
-            event_type,
-            history_source,
-            ack_required: ack_required_snapshot,
-            event_values,
-            construction,
-        } = transition.into();
         let system_utc = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default();
+        let fallback = system_utc_recipient_filter_time(system_utc);
         let (notification, recipients) = {
             let mut db = db.write().await;
-
-            let (timestamp, message_text, recipient_clock) = match history_source {
-                NotificationHistorySource::SendTime => {
-                    let sample = sample_event_timestamp(&mut db);
-                    (sample.timestamp, None, sample.clock)
-                }
-                NotificationHistorySource::Committed {
-                    snapshot,
-                    recipient_clock,
-                } => (snapshot.timestamp, snapshot.message_text, recipient_clock),
-            };
-
-            let device_oid = ctx.device;
-
-            let (today, current_time) = match recipient_clock {
-                SampledEventClock::Valid(clock_frame) => (
-                    clock_frame
-                        .day_of_week()
-                        .expect("validated ClockFrame has a day of week"),
-                    clock_frame.local_time,
-                ),
+            let distribution =
+                distribute_event(&mut db, ctx.device, oid, transition.into(), fallback);
+            match distribution.clock {
+                SampledEventClock::Valid(_) => {}
                 SampledEventClock::Unavailable => {
                     debug!("Using system UTC to filter recipients without a Device clock");
-                    system_utc_recipient_filter_time(system_utc)
                 }
                 SampledEventClock::Invalid => {
                     debug!(
                         "Using system UTC to filter recipients with an invalid Device clock frame"
                     );
-                    system_utc_recipient_filter_time(system_utc)
                 }
-            };
-
-            let object = match db.get_mut(oid) {
-                Some(o) => o,
-                None => return,
-            };
-
-            let notification_class = object
-                .read_property(PropertyIdentifier::NOTIFICATION_CLASS, None)
-                .ok()
-                .and_then(|v| match v {
-                    PropertyValue::Unsigned(n) => Some(n as u32),
-                    _ => None,
-                })
-                .unwrap_or(0);
-
-            let notify_type = match construction {
-                NotificationConstruction::Acknowledgment => NotifyType::ACK_NOTIFICATION,
-                NotificationConstruction::Event => object
-                    .read_property(PropertyIdentifier::NOTIFY_TYPE, None)
-                    .ok()
-                    .and_then(|v| match v {
-                        PropertyValue::Enumerated(n) => Some(NotifyType::from_raw(n)),
-                        _ => None,
-                    })
-                    .unwrap_or(NotifyType::ALARM),
-            };
-
-            let transition = change.transition();
-
-            // Resolve the per-transition Priority and Ack_Required from the
-            // referenced NotificationClass (ASHRAE 135-2020 §13.2.1), falling
-            // back to the BACnet defaults (Priority 255, no ack) when the
-            // class is missing.
-            let (priority, resolved_ack_required) =
-                resolve_transition_priority_ack(&db, notification_class, transition);
-            let ack_required = ack_required_snapshot.unwrap_or(resolved_ack_required);
-
-            let Some(recipients) = matched_recipients_or_log(
-                lookup_notification_recipients(
-                    &db,
+            }
+            match distribution.outcome {
+                DistributionOutcome::Gone => return,
+                DistributionOutcome::Refused {
                     notification_class,
                     transition,
-                    today,
-                    &current_time,
-                ),
-                notification_class,
-                transition,
-                suppressions,
-            ) else {
-                return;
-            };
-
-            let base_notification = EventNotificationRequest {
-                process_identifier: 0,
-                initiating_device_identifier: device_oid,
-                event_object_identifier: *oid,
-                timestamp,
-                notification_class,
-                priority,
-                event_type,
-                message_text,
-                notify_type,
-                // ack_required is only meaningful for ALARM/EVENT notify types
-                // (ACK_NOTIFICATION omits the field on the wire). Per §13.2.1 the
-                // value is the NotificationClass's per-transition Ack_Required,
-                // not a function of Notify_Type alone.
-                ack_required: if notify_type == NotifyType::ACK_NOTIFICATION {
-                    false
-                } else {
-                    ack_required
-                },
-                from_state: change.from,
-                to_state: change.to,
-                event_values: if notify_type == NotifyType::ACK_NOTIFICATION {
-                    None
-                } else {
-                    event_values.map(CommittedNotificationPayload::into_parameters)
-                },
-            };
-
-            db.log_event_notification(&base_notification);
-            (base_notification, recipients)
+                    lookup,
+                } => {
+                    matched_recipients_or_log(lookup, notification_class, transition, suppressions);
+                    return;
+                }
+                DistributionOutcome::Built {
+                    notification,
+                    notification_class,
+                    transition,
+                    lookup,
+                } => {
+                    let Some(recipients) = matched_recipients_or_log(
+                        lookup,
+                        notification_class,
+                        transition,
+                        suppressions,
+                    ) else {
+                        return;
+                    };
+                    (notification, recipients)
+                }
+            }
         };
 
         if !recipients.is_empty() {

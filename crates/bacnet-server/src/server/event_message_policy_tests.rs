@@ -1,5 +1,7 @@
 use super::*;
-use crate::server::event_notifications::CommittedIntrinsicTransition;
+use crate::server::event_notifications::{
+    CommittedIntrinsicTransition, commit_intrinsic_transition,
+};
 use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use bacnet_objects::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use bacnet_objects::event::TransitionOutcome;
@@ -59,7 +61,7 @@ fn commit(
     to: EventState,
     distribute: bool,
 ) -> Option<CommittedIntrinsicTransition> {
-    BACnetServer::<TestTransport>::commit_intrinsic_transition(
+    commit_intrinsic_transition(
         db,
         &oid,
         TransitionOutcome {
@@ -68,6 +70,7 @@ fn commit(
             distribute,
         },
     )
+    .ok()
 }
 
 fn message_slots(db: &ObjectDatabase, oid: ObjectIdentifier) -> [String; 3] {

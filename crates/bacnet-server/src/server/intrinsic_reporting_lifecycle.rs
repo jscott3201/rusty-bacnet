@@ -1,5 +1,6 @@
 //! Periodic intrinsic notification owner; uses the server's effective raw acceptance.
 use super::super::cov_fanout::CovFanout;
+use super::super::event_notifications::{commit_intrinsic_transition, logged_intrinsic_commit};
 use super::*;
 
 pub(super) async fn run<T: TransportPort + 'static>(
@@ -45,8 +46,10 @@ pub(super) async fn run<T: TransportPort + 'static>(
                 // nothing changed.
                 commit.before_change(&db, oid);
                 commit.changed(oid);
-                let resolved =
-                    BACnetServer::<T>::commit_intrinsic_transition(&mut db, &oid, outcome);
+                let resolved = logged_intrinsic_commit(
+                    &oid,
+                    commit_intrinsic_transition(&mut db, &oid, outcome),
+                );
                 if let Some(resolved) = resolved
                     && resolved.distribute
                     && resolved.event_values.is_some()

@@ -4,6 +4,7 @@ use crate::event_enrollment::{
     EventEnrollmentReliabilityCause, EventEnrollmentReliabilityResult, EventEnrollmentTransition,
 };
 use crate::server::event_notification_payload::CommittedNotificationPayload;
+use crate::server::event_notifications::commit_intrinsic_transition;
 use crate::server::event_timestamp::SampledEventClock;
 use bacnet_objects::event::{
     EventStateChange, EventTransitionCommit, EventTransitionCommitError, TransitionOutcome,
@@ -209,7 +210,7 @@ async fn commit_and_capture_history_notification(
     let (db, oid) = atomic_history_database(timestamps, messages, clocked);
     let committed = {
         let mut guard = db.write().await;
-        BACnetServer::<TestTransport>::commit_intrinsic_transition(
+        commit_intrinsic_transition(
             &mut guard,
             &oid,
             TransitionOutcome {
@@ -218,6 +219,7 @@ async fn commit_and_capture_history_notification(
                 distribute: true,
             },
         )
+        .ok()
     };
 
     let (transport, sent) = recording_transport();
@@ -469,7 +471,7 @@ fn malformed_or_missing_required_projection_commits_locally_but_cannot_emit() {
         }))
         .unwrap();
 
-        let committed = BACnetServer::<TestTransport>::commit_intrinsic_transition(
+        let committed = commit_intrinsic_transition(
             &mut db,
             &oid,
             TransitionOutcome {
