@@ -31,6 +31,7 @@
 //! | [`tags`] | [`TagsSnapshot`] | `RBNTAG01` | 1, 2 (1, 2) | `FileTagsPersistence` |
 //! | [`color`] | [`ColorOutputSnapshot`] | `RBNCLR02` | 1 (`RBNCLR01`), 2, 3 (2, 3) | `FileColorOutputPersistence` |
 //! | [`access_rights`] | [`AccessRightsSnapshot`] | `RBNACR01` | 1, 2 (1, 2) | `FileAccessRightsPersistence` |
+//! | [`load_control`] | [`LoadControlSnapshot`] | `RBNLCT01` | 1 (1) | `FileLoadControlPersistence` |
 //!
 //! A written Description (#2364) takes the newest version (or kind) in each
 //! row it changed: log schema version 3, write configuration kind 5, the
@@ -127,12 +128,14 @@
 //! [`TagsSnapshot`]: crate::object_profile::TagsSnapshot
 //! [`ColorOutputSnapshot`]: crate::color::ColorOutputSnapshot
 //! [`AccessRightsSnapshot`]: crate::access_control::AccessRightsSnapshot
+//! [`LoadControlSnapshot`]: crate::load_control::LoadControlSnapshot
 
 pub mod access_rights;
 pub mod audit_log;
 pub mod color;
 mod error;
 pub(crate) mod framing;
+pub mod load_control;
 pub mod log;
 pub mod notification_class;
 pub mod notification_forwarder;

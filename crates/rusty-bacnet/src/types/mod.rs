@@ -48,6 +48,7 @@ mod property_value;
 mod read_value;
 mod rpm_wpm;
 mod schedule;
+mod shed_level;
 mod timestamp;
 
 pub(crate) use access_credential::{
@@ -84,6 +85,7 @@ pub(crate) use rpm_wpm::{
 pub(crate) use schedule::{
     calendar_entries_from_py, date_range_from_py, special_events_from_py, weekly_schedule_from_py,
 };
+pub(crate) use shed_level::{shed_level_from_py, shed_level_to_py};
 pub use timestamp::PyBACnetTimeStamp;
 pub(crate) use timestamp::{date_time_tuple, time_value};
 

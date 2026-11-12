@@ -55,6 +55,9 @@ use bacnet_objects::color::{
 use bacnet_objects::event_enrollment::{AlertEnrollmentObject, EventEnrollmentObject};
 use bacnet_objects::event_log::EventLogObject;
 use bacnet_objects::lighting::LightingOutputObject;
+use bacnet_objects::load_control::{
+    FileLoadControlPersistence, LoadControlObject, LoadControlPersistence, LoadControlSnapshot,
+};
 use bacnet_objects::log_persistence::{FileLogPersistence, LogPersistence};
 use bacnet_objects::multistate::MultiStateInputObject;
 use bacnet_objects::notification_class::{
@@ -111,6 +114,7 @@ enum Kind {
     DoorReportingWriteConfig,
     ZoneReportingWriteConfig,
     EnrollmentReportingWriteConfig,
+    LoadControl,
 }
 
 /// Where a check's storage lives. Each method opens one backend on it; a
@@ -124,6 +128,7 @@ pub trait Medium: Sized {
     fn color(&self) -> FileColorOutputPersistence;
     fn rights(&self) -> FileAccessRightsPersistence;
     fn write_config(&self) -> FileWriteConfigPersistence;
+    fn load_control(&self) -> FileLoadControlPersistence;
     /// Empty storage of the same kind, for the round trip.
     fn fresh(&self) -> Self;
     /// What each of the format's files holds now, `None` for a missing one.
@@ -169,6 +174,9 @@ impl Medium for Files {
     }
     fn write_config(&self) -> FileWriteConfigPersistence {
         FileWriteConfigPersistence::new(&self.base).unwrap()
+    }
+    fn load_control(&self) -> FileLoadControlPersistence {
+        FileLoadControlPersistence::new(&self.base).unwrap()
     }
     /// A sibling base, with its files removed.
     fn fresh(&self) -> Self {
@@ -221,6 +229,12 @@ impl Format {
                 oid(ObjectType::NOTIFICATION_FORWARDER),
                 M::forwarder,
                 |store| NotificationForwarderObject::with_persistence(1, "NF", store).map(drop),
+            ),
+            Kind::LoadControl => check_file(
+                medium,
+                oid(ObjectType::LOAD_CONTROL),
+                M::load_control,
+                |store| LoadControlObject::with_persistence(1, "LC", store).map(drop),
             ),
             Kind::NotificationClass => check_file(
                 medium,
@@ -598,6 +612,7 @@ one_file! {
     FileColorOutputPersistence => ColorOutputPersistence, ColorOutputSnapshot;
     FileAccessRightsPersistence => AccessRightsPersistence, AccessRightsSnapshot;
     FileWriteConfigPersistence => WriteConfigPersistence, WriteConfigSnapshot;
+    FileLoadControlPersistence => LoadControlPersistence, LoadControlSnapshot;
 }
 
 fn check_file<M: Medium, S: OneFile>(

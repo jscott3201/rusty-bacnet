@@ -21,8 +21,8 @@ pub use capabilities::{
 };
 pub use capabilities::{
     Clocks, CovReportedProperty, CovReporting, DeadlineWaker, DurableWrites, EventReporting,
-    LifeSafety, LocalInput, LocalInputValue, MonotonicClock, ReliabilityEval, ScheduleRunner,
-    Timed, no_alarm_configured, not_supported,
+    LifeSafety, LocalInput, LocalInputValue, MonotonicClock, ReliabilityEval, Retirement,
+    ScheduleRunner, Timed, no_alarm_configured, not_supported,
 };
 pub(crate) use capabilities::{
     impl_audit_policy, impl_log_buffer, lend_audit_policy, lend_cov_reporting,

@@ -6,7 +6,7 @@ use bacnet_types::primitives::PropertyValue;
 #[test]
 fn pics_load_control_property_metadata_is_exact() {
     // Independent (identifier, optional, writable) rows in declaration order; PICS sorts by property ID.
-    let expected = [
+    let base = [
         (P::OBJECT_IDENTIFIER, false, false),
         (P::OBJECT_NAME, false, false),
         (P::DESCRIPTION, true, true),
@@ -29,7 +29,13 @@ fn pics_load_control_property_metadata_is_exact() {
     ];
     for configured in [false, true] {
         let mut object = LoadControlObject::new(7, "LC-7").unwrap();
+        let mut expected = base.to_vec();
         if configured {
+            // The optional rows the embedder sets are read-only (#2479).
+            object.set_state_description(Some("Idle".into()));
+            object.set_full_duty_baseline(Some(120.0)).unwrap();
+            expected.push((P::STATE_DESCRIPTION, true, false));
+            expected.push((P::FULL_DUTY_BASELINE, true, false));
             object
                 .write_property(
                     P::DESCRIPTION,

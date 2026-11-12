@@ -83,6 +83,19 @@ pub(crate) fn same_handle<T: ?Sized>(held: Option<&Arc<T>>, offered: Option<&Arc
     }
 }
 
+/// How an object leaves its database, for [`Timed::retire`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Retirement {
+    /// Removed for good: what the object keeps in storage follows the end
+    /// of what it ran.
+    Removed,
+    /// Let go with its storage left as it was, for what comes next: an
+    /// object put in its place, which may restore from the same storage,
+    /// or the next start after one that failed.
+    Released,
+}
+
 /// An object whose state moves with time: it stamps the wall clock, or
 /// runs timers, fades, ramps or expiries off the monotonic clock.
 ///
@@ -131,6 +144,17 @@ pub trait Timed {
     /// shares the database. The Color and Color Temperature objects drive an
     /// output nothing has driven yet to its default (#1526).
     fn start_output(&mut self) {}
+
+    /// The object is leaving its database (#2479): `retirement` says how.
+    /// End what it runs outside the database, such as a Load Control's
+    /// shed, whose application is told to stop. The database calls this
+    /// before it hands a removed object back or drops a replaced one, and a
+    /// host whose start fails calls it on every object
+    /// ([`release_outputs`]); dropping an object, or a copy of one, calls
+    /// nothing.
+    ///
+    /// [`release_outputs`]: crate::database::ObjectDatabase::release_outputs
+    fn retire(&mut self, _retirement: Retirement) {}
 
     /// A frozen copy of the COV-readable state, taken while the host still
     /// holds the object, for the COV report of an advance that changed it.

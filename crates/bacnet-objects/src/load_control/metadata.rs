@@ -14,8 +14,11 @@ use crate::property_metadata::{
 // descriptions PDF pp. 347-349).
 // Order keeps the earlier rows' order; the rows served since #2464 follow
 // Event_State in table order, and PROPERTY_LIST comes last. Only implemented
-// rows are described: the optional Full_Duty_Baseline and State_Description,
-// and the event/audit/tags/value-source/profile rows, stay absent.
+// rows are described: the event/audit/tags/value-source/profile rows stay
+// absent. The optional State_Description and Full_Duty_Baseline (#2479) are
+// rows only while the embedder sets them (`for_object`), next to their table
+// neighbours Present_Value and Enable; both carry the table O code and no
+// network write, so Optional/ReadOnly.
 // Object_Identifier, Object_Name, Object_Type, Present_Value,
 // Expected_Shed_Level, Actual_Shed_Level, Status_Flags, Event_State and
 // Shed_Level_Descriptions carry the table R code and have no network write
@@ -48,8 +51,38 @@ const BASE: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::PROPERTY_LIST, RequiredRead, None, ReadOnly),
 ];
 
-pub(super) fn for_object(_object: &LoadControlObject) -> Cow<'_, [PropertyMetadata]> {
-    Cow::Borrowed(BASE)
+/// The rows, with State_Description and Full_Duty_Baseline only while the
+/// embedder sets them: an optional property with no value to serve is left
+/// out, so it reads as unknown.
+pub(super) fn for_object(object: &LoadControlObject) -> Cow<'_, [PropertyMetadata]> {
+    let configured = [
+        (
+            object.state_description.is_some(),
+            P::PRESENT_VALUE,
+            P::STATE_DESCRIPTION,
+        ),
+        (
+            object.full_duty_baseline.is_some(),
+            P::ENABLE,
+            P::FULL_DUTY_BASELINE,
+        ),
+    ];
+    if !configured.iter().any(|&(set, _, _)| set) {
+        return Cow::Borrowed(BASE);
+    }
+    let mut rows = BASE.to_vec();
+    for (_, after, property) in configured.into_iter().filter(|&(set, _, _)| set) {
+        let at = rows
+            .iter()
+            .position(|row| row.property_identifier == after)
+            .expect("a base row")
+            + 1;
+        rows.insert(
+            at,
+            PropertyMetadata::new(property, Optional, None, ReadOnly),
+        );
+    }
+    Cow::Owned(rows)
 }
 
 #[cfg(test)]
@@ -319,7 +352,8 @@ mod tests {
         );
         // Unserved rows stay unknown on read and on write: Table 12-32 has
         // no Out_Of_Service at all (#1064), and the object leaves out the
-        // optional Full_Duty_Baseline and State_Description.
+        // optional Full_Duty_Baseline and State_Description until the
+        // embedder sets them.
         for p in [
             P::OUT_OF_SERVICE,
             P::FULL_DUTY_BASELINE,
@@ -338,5 +372,108 @@ mod tests {
             );
         }
         assert_eq!(object.property_metadata().as_ref(), original);
+    }
+
+    #[test]
+    fn property_metadata_load_control_optional_rows_follow_their_setters() {
+        let mut object = LoadControlObject::new(1, "LC-1").unwrap();
+        let base = object.property_metadata().into_owned();
+        let listed = |object: &LoadControlObject| {
+            let PropertyValue::List(items) = object.read_property(P::PROPERTY_LIST, None).unwrap()
+            else {
+                panic!("Property_List is an array");
+            };
+            items
+        };
+        let position = |object: &LoadControlObject, p: P| {
+            listed(object)
+                .iter()
+                .position(|item| *item == PropertyValue::Enumerated(p.to_raw()))
+        };
+        object.set_state_description(Some("Shedding stage 2".into()));
+        object.set_full_duty_baseline(Some(250.5)).unwrap();
+        let metadata = object.property_metadata();
+        assert!(matches!(metadata, Cow::Owned(_)));
+        assert_eq!(metadata.len(), base.len() + 2);
+        for (p, after) in [
+            (P::STATE_DESCRIPTION, P::PRESENT_VALUE),
+            (P::FULL_DUTY_BASELINE, P::ENABLE),
+        ] {
+            let row = metadata
+                .iter()
+                .find(|row| row.property_identifier == p)
+                .unwrap();
+            assert_eq!(
+                (row.conformance, row.write_capability),
+                (Optional, ReadOnly),
+                "{p:?}"
+            );
+            assert!(!crate::property_metadata::is_writable_property(&object, p));
+            // Listed after its table neighbour, among the optional rows.
+            assert_eq!(
+                position(&object, p),
+                position(&object, after).map(|at| at + 1),
+                "{p:?}"
+            );
+            assert!(!crate::test_rows::required(&metadata).contains(&p));
+        }
+        drop(metadata);
+        assert_eq!(listed(&object).len(), 16);
+        assert_eq!(
+            object.read_property(P::STATE_DESCRIPTION, None).unwrap(),
+            PropertyValue::CharacterString("Shedding stage 2".into())
+        );
+        assert_eq!(
+            object.read_property(P::FULL_DUTY_BASELINE, None).unwrap(),
+            PropertyValue::Real(250.5)
+        );
+        // Clients only read them: a write is refused, changing nothing.
+        for (p, value) in [
+            (
+                P::STATE_DESCRIPTION,
+                PropertyValue::CharacterString("other".into()),
+            ),
+            (P::FULL_DUTY_BASELINE, PropertyValue::Real(1.0)),
+        ] {
+            assert_error(
+                object.write_property(p, None, value, None).unwrap_err(),
+                ErrorCode::WRITE_ACCESS_DENIED,
+            );
+        }
+        assert_eq!(
+            object.read_property(P::FULL_DUTY_BASELINE, None).unwrap(),
+            PropertyValue::Real(250.5)
+        );
+        // A baseline below zero, or not a number, is refused and the one set
+        // stays.
+        for refused in [-1.0, f32::NAN, f32::INFINITY] {
+            assert_error(
+                object.set_full_duty_baseline(Some(refused)).unwrap_err(),
+                ErrorCode::VALUE_OUT_OF_RANGE,
+            );
+        }
+        assert_eq!(
+            object.read_property(P::FULL_DUTY_BASELINE, None).unwrap(),
+            PropertyValue::Real(250.5)
+        );
+        // One alone brings only its own row; clearing both restores the base.
+        object.set_full_duty_baseline(None).unwrap();
+        assert_eq!(object.property_metadata().len(), base.len() + 1);
+        assert_eq!(position(&object, P::FULL_DUTY_BASELINE), None);
+        assert_error(
+            object
+                .read_property(P::FULL_DUTY_BASELINE, None)
+                .unwrap_err(),
+            ErrorCode::UNKNOWN_PROPERTY,
+        );
+        object.set_state_description(None);
+        assert!(matches!(object.property_metadata(), Cow::Borrowed(_)));
+        assert_eq!(object.property_metadata().as_ref(), base);
+        for p in [P::STATE_DESCRIPTION, P::FULL_DUTY_BASELINE] {
+            assert_error(
+                object.read_property(p, None).unwrap_err(),
+                ErrorCode::UNKNOWN_PROPERTY,
+            );
+        }
     }
 }

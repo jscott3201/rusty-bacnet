@@ -164,24 +164,7 @@ impl Decoded {
                 dict.set_item("mac_address", PyBytes::new(py, &mac_address))?;
                 dict.into_any().unbind()
             }
-            Self::ShedLevel(level) => {
-                let dict = PyDict::new(py);
-                match level {
-                    BACnetShedLevel::Percent(percent) => {
-                        dict.set_item("kind", "percent")?;
-                        dict.set_item("value", percent)?;
-                    }
-                    BACnetShedLevel::Level(level) => {
-                        dict.set_item("kind", "level")?;
-                        dict.set_item("value", level)?;
-                    }
-                    BACnetShedLevel::Amount(amount) => {
-                        dict.set_item("kind", "amount")?;
-                        dict.set_item("value", f64::from(amount))?;
-                    }
-                }
-                dict.into_any().unbind()
-            }
+            Self::ShedLevel(level) => super::shed_level_to_py(py, &level)?.into_any().unbind(),
             // The triple `report_credential_read_local` takes.
             Self::AuthenticationFactor(factor) => any(
                 py,

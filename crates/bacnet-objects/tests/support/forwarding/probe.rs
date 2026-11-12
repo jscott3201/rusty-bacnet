@@ -316,6 +316,9 @@ impl Timed for Probe {
     fn start_output(&mut self) {
         self.called("Timed::start_output", ());
     }
+    fn retire(&mut self, retirement: bacnet_objects::traits::Retirement) {
+        self.called("Timed::retire", (retirement,));
+    }
     fn cov_snapshot(&self) -> Option<Box<dyn BACnetObject>> {
         self.called("Timed::cov_snapshot", ());
         Some(Box::new(

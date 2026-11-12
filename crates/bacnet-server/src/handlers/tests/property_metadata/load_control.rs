@@ -26,6 +26,8 @@ fn load_control_object(configured: bool) -> LoadControlObject {
         object
             .write_property(P::SHED_DURATION, None, PropertyValue::Unsigned(3600), None)
             .unwrap();
+        object.set_state_description(Some("Idle".into()));
+        object.set_full_duty_baseline(Some(120.0)).unwrap();
     }
     object
 }
@@ -68,18 +70,38 @@ fn rpm_load_control_metadata_selectors_preserve_bytes_and_budgets() {
         P::SHED_LEVELS,
         P::SHED_LEVEL_DESCRIPTIONS,
     ];
-    // Table 12-32 has no Out_Of_Service (#1064), and this object leaves out
-    // Full_Duty_Baseline and State_Description.
+    // Table 12-32 has no Out_Of_Service (#1064), and this object serves
+    // State_Description and Full_Duty_Baseline only once they are set
+    // (#2479).
     let optional = [P::DESCRIPTION, P::RELIABILITY];
+    let configured_all = [
+        &all[..5],
+        &[P::STATE_DESCRIPTION],
+        &all[5..15],
+        &[P::FULL_DUTY_BASELINE],
+        &all[15..],
+    ]
+    .concat();
+    let configured_optional = [
+        P::DESCRIPTION,
+        P::STATE_DESCRIPTION,
+        P::RELIABILITY,
+        P::FULL_DUTY_BASELINE,
+    ];
     for configured in [false, true] {
+        let (all, optional) = if configured {
+            (configured_all.as_slice(), configured_optional.as_slice())
+        } else {
+            (all.as_slice(), optional.as_slice())
+        };
         let object = load_control_object(configured);
         let oid = object.object_identifier();
         let mut db = ObjectDatabase::new();
         db.add(Box::new(object)).unwrap();
         for (selector, expected) in [
-            (P::ALL, all.as_slice()),
+            (P::ALL, all),
             (P::REQUIRED, required.as_slice()),
-            (P::OPTIONAL, optional.as_slice()),
+            (P::OPTIONAL, optional),
             (P::PROPERTY_LIST, &[P::PROPERTY_LIST]),
         ] {
             assert_rpm_selector_bytes(&db, oid, selector, expected);

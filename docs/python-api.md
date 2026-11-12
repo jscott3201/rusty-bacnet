@@ -4173,7 +4173,26 @@ server.add_timer(
     priority_for_writing=8,
     storage_path="/application/state/timer-1",  # optional; see below
 )
-server.add_load_control(instance=1, name="Load Control")
+def shed(request):
+    # Shed for request.requested; report where the loads stand.
+    return ("compliant", request.requested, request.requested)
+
+
+def stop_shedding():
+    pass  # put the loads back
+
+
+server.add_load_control(
+    instance=1,
+    name="Load Control",
+    # (level, description) pairs, in order of increasing shed.
+    shed_levels=[(1, "Dim the lights"), (2, "Raise cooling setpoints")],
+    shed=shed,  # the application's route for the loads; see below
+    stop=stop_shedding,
+    full_duty_baseline=250.0,  # kilowatts; optional
+    state_description="Normal operation",  # optional
+    agreed_duty_window=15,  # minutes
+)
 server.add_program(instance=1, name="Program")
 server.add_averaging(
     instance=1,
@@ -4209,6 +4228,37 @@ Program_State is read-only on the network, and `write_property_local` refuses
 it with WRITE_ACCESS_DENIED too. A running server's application reports it with
 `await server.set_program_state_local(program_id, PropertyValue.enumerated(2))`
 (RUNNING), an Enumerated BACnetProgramState from 0 to 5 (#2258).
+
+A Load Control runs the shed state machine of Clause 12.28 (see
+[Building Control](rust-api.md#building-control-7)); a client writes
+Requested_Shed_Level, Shed_Duration and Duty_Window, then Start_Time.
+`add_load_control`'s `shed` callable is the application's route for the loads
+(#2479). The object calls it with a `ShedRequest` (`requested`, a
+`ShedLevel` mapping; `shed_level`, the index in `shed_levels` a level request
+selects; `start_time`, `shed_duration`, `duty_window`, `full_duty_baseline`
+and `started`) each time it looks at a request, on every write that changes
+it and on the server's once-a-second pass while one is pending or under way.
+It answers `(progress, expected, actual)`: `"waiting"`, `"shedding"` or
+`"compliant"`, then the expected and actual levels as
+`{"kind": ..., "value": ...}` mappings in the requested choice. The optional
+`stop` is called with no arguments once a request `shed` was asked about
+ends, a DeleteObject of the Load Control and a start that fails or is
+cancelled included; it needs `shed`. Make it idempotent: it may come with no
+loads shed, and twice with no `shed` between. Without
+`shed` nothing is shed, and a request runs SHED_NON_COMPLIANT from Start_Time
+to its end. Both callables run with the server's object database locked, as
+`on_reinitialize` does: they must return at once, may not await or start a
+binding operation (RuntimeError), and must not wait on the event loop or
+another thread for one. An exception or an answer of another shape, a
+coroutine from either callable included (closed unawaited), goes to
+`sys.unraisablehook`; a failed `shed` counts as nothing shed, and a request
+ends after a failed `stop` all the same.
+`shed_levels` is `(level, description)` pairs; a level of 0 raises
+BacnetProtocolError, and clients may rewrite a level but not resize the
+array. `full_duty_baseline` (kilowatts, finite and not negative) and
+`state_description` serve those optional properties, read-only, and are
+absent when omitted; `agreed_duty_window` is the Duty_Window a request takes
+when no client wrote one.
 
 `add_command`'s keyword-only `action` sets the Command's Action array: one list
 per element, each a list of `ActionCommand` mappings with

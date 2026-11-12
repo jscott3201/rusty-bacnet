@@ -45,7 +45,6 @@ not-modelled life-safety-point floor-number,setting | Table 12-18 rows
 not-modelled life-safety-zone floor-number | Table 12-19 row
 not-modelled lift higher-deck,lower-deck | Table 12-77 rows
 not-modelled lighting-output instantaneous-power,max-actual-value,min-actual-value,power | Table 12-64 rows
-not-modelled load-control full-duty-baseline,state-description | Table 12-32 rows
 not-modelled loop bias,error-limit,maximum-output,minimum-output | Table 12-20 rows
 not-modelled network-port auto-slave-discovery,command,ip-dhcp-enable,ip-dhcp-lease-time,ip-dhcp-lease-time-remaining,ip-dhcp-server,ipv6-auto-addressing-enable,ipv6-dhcp-lease-time,ipv6-dhcp-lease-time-remaining,ipv6-dhcp-server,ipv6-zone-index,link-speed-autonegotiate,max-info-frames,max-master,network-interface-name,reference-port,slave-proxy-enable | Table 12-71 rows
 not-modelled program description-of-halt,instance-of,program-location | Table 12-26 rows
