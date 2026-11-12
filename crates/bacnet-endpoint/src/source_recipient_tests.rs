@@ -464,3 +464,43 @@ async fn source_recipient_unresolved_device_preserves_read_and_rejects_live_chan
     sink.stop().await.unwrap();
     peer.stop().await.unwrap();
 }
+
+/// A local write of the recipient (#2468) takes the route a client's write
+/// and `write_audit_recipient` take: one record to the old recipient and
+/// one to the new, from this Device with no invoke ID, in either role.
+#[tokio::test(start_paused = true)]
+async fn a_local_write_of_the_recipient_tells_the_old_and_the_new_one() {
+    let (mut old, mut old_records) = network().await;
+    let (mut new, mut new_records) = network().await;
+    for role in [SessionRole::ClientOnly, SessionRole::Both] {
+        let mut db = database(false);
+        db.set_clock_reader(None);
+        let mut session = session(db, role, &old);
+        session.start().await.unwrap();
+        let next = direct(&new);
+        session
+            .write_local(
+                &oid(ObjectType::DEVICE, 123),
+                PropertyIdentifier::AUDIT_NOTIFICATION_RECIPIENT,
+                None,
+                PropertyValue::ApplicationData(value(&next)),
+                None,
+                bacnet_device_core::write::local::LocalCommandSource::ServerDevice,
+            )
+            .await
+            .unwrap();
+        let (first, _) = notification(&receive(&mut old_records).await, false);
+        let (second, _) = notification(&receive(&mut new_records).await, false);
+        assert_eq!(first, second);
+        assert_record(&first, &device(999), &next, device(123), None, 0);
+        assert_eq!(
+            current(&session).await,
+            PropertyValue::ApplicationData(value(&next))
+        );
+        assert!(old_records.try_recv().is_err());
+        assert!(new_records.try_recv().is_err());
+        session.stop().await.unwrap();
+    }
+    old.stop().await.unwrap();
+    new.stop().await.unwrap();
+}

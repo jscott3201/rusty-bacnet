@@ -172,3 +172,35 @@ async fn a_description_the_endpoint_cannot_save_is_refused_with_the_old_one_serv
     client.stop().await.unwrap();
     session.stop().await.unwrap();
 }
+
+/// A local write of the Description (#2468) is saved as a client's is:
+/// before the call returns and off the database guard, and refused with
+/// the old text served when the save fails.
+#[tokio::test(start_paused = true)]
+async fn a_description_written_locally_is_saved_first() {
+    let storage = Arc::new(Storage::default());
+    let (mut session, _) = session_on(&storage).await;
+    let source = bacnet_device_core::write::local::LocalCommandSource::ServerDevice;
+    let device = oid(123);
+    let write =
+        |text: &str| session.write_local(&device, DESCRIPTION, None, served(text), None, source);
+    write("lobby").await.unwrap();
+    assert_eq!(storage.description().as_deref(), Some("lobby"));
+    assert_eq!(storage.saves.load(Ordering::SeqCst), 1);
+    assert!(!storage.saved_under_the_guard.load(Ordering::SeqCst));
+    assert_eq!(read(&session, DESCRIPTION).await, served("lobby"));
+    storage.fail.store(true, Ordering::SeqCst);
+    let refused = write("hall").await.unwrap_err();
+    assert!(
+        matches!(
+            refused,
+            Error::Remote(RemoteError::Error { class, code })
+                if class == ErrorClass::DEVICE && code == ErrorCode::OPERATIONAL_PROBLEM
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(read(&session, DESCRIPTION).await, served("lobby"));
+    assert_eq!(storage.description().as_deref(), Some("lobby"));
+    assert!(!storage.saved_under_the_guard.load(Ordering::SeqCst));
+    session.stop().await.unwrap();
+}
