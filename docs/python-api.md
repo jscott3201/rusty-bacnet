@@ -4260,6 +4260,32 @@ array. `full_duty_baseline` (kilowatts, finite and not negative) and
 absent when omitted; `agreed_duty_window` is the Duty_Window a request takes
 when no client wrote one.
 
+A running Load Control's configuration changes through three methods (#2497):
+`await server.set_load_control_shed_levels_local(load_control_id, [(1, "Dim"),
+(3, "Shut down")])` replaces Shed_Levels and their descriptions together, and
+may change their number; `set_load_control_full_duty_baseline_local(id,
+kilowatts)` and `set_load_control_state_description_local(id, text)` set the
+optional rows, or clear them with `None`. They raise the errors of the
+`add_load_control` keywords, UNKNOWN_OBJECT for an unknown object and
+OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED for another type. A change of the levels
+or the baseline puts a request under way to `shed` again, and the request
+keeps its state unless the answer moves it (Clause 12.28 names only a write of
+the four request properties as reconfiguring one); what the answer moves is
+reported through COV and saved. A change of the state description is reported
+to a SubscribeCOVProperty on it and does not look at the request. They run
+under the same refusal as the callables: a `shed` that calls one raises
+RuntimeError.
+
+`storage_path` on `add_load_control` keeps the object's request in that file
+across a restart: the four request properties, the agreed Duty_Window, the
+shed state, Enable and a Description a client wrote. A rebuilt object looks at
+a pending or shed request again as the server starts and calls `shed` for it;
+one that was being shed calls `stop` when it ends. A write that cannot be
+saved is refused with DEVICE / OPERATIONAL_PROBLEM. The shed levels, baseline
+and state description are configuration, not request: the file does not keep
+them, so the keywords (or these methods) set them again at each start. Give
+each Load Control its own file.
+
 `add_command`'s keyword-only `action` sets the Command's Action array: one list
 per element, each a list of `ActionCommand` mappings with
 `object_identifier`, `property_identifier` and `property_value`, and optionally

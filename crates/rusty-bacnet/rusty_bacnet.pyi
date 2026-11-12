@@ -6083,6 +6083,7 @@ class BACnetServer:
         full_duty_baseline: Optional[float] = None,
         state_description: Optional[str] = None,
         agreed_duty_window: Optional[int] = None,
+        storage_path: Optional[str] = None,
     ) -> None:
         """Add a Load Control object (#2479).
 
@@ -6121,6 +6122,18 @@ class BACnetServer:
         ``ShedRequest.full_duty_baseline``. ``agreed_duty_window`` (minutes,
         0 when omitted) is the Duty_Window a request takes when no client
         wrote one, and the one a finished request returns to.
+
+        With ``storage_path`` the object keeps its shed request in that file
+        (#2497): the request properties, the agreed Duty_Window, the shed
+        state, Enable and a Description a client wrote. A rebuilt object
+        looks at a request that was pending or being shed again, as though
+        Start_Time had just been written, and calls ``shed`` for it; one
+        that was being shed calls ``stop`` when it ends. A write that cannot
+        be saved is refused with DEVICE / OPERATIONAL_PROBLEM. The shed
+        levels, baseline and state description are configuration the file
+        does not keep: the keywords, or the ``set_load_control_*_local``
+        methods, apply them at each start. Give each Load Control its own
+        file; one that holds another object's request raises BacnetError.
         """
         ...
     def add_program(self, instance: int, name: str) -> None: ...
@@ -7181,6 +7194,52 @@ class BACnetServer:
         larger number raises VALUE_OUT_OF_RANGE and another datatype
         INVALID_DATA_TYPE. An unknown object raises UNKNOWN_OBJECT and any
         object other than a Program OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED.
+        """
+        ...
+
+    def set_load_control_shed_levels_local(
+        self,
+        object_id: ObjectIdentifier,
+        shed_levels: Sequence[tuple[int, str]],
+    ) -> Awaitable[None]:
+        """Replace a running Load Control's Shed_Levels and Shed_Level_Descriptions (#2497).
+
+        ``shed_levels`` is the ``add_load_control`` shape, ``(level,
+        description)`` pairs in order of increasing shed, and may be a
+        different number from before. A level of 0 raises
+        BacnetProtocolError with VALUE_OUT_OF_RANGE and changes nothing; an
+        unknown object raises UNKNOWN_OBJECT and any object other than a
+        Load Control OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. A request under
+        way is put to ``shed`` again, and stays in its state unless the
+        answer moves it; what that moves is reported through COV and saved
+        with the request. Storage does not keep the levels.
+        """
+        ...
+
+    def set_load_control_full_duty_baseline_local(
+        self,
+        object_id: ObjectIdentifier,
+        kilowatts: Optional[float],
+    ) -> Awaitable[None]:
+        """Set a running Load Control's Full_Duty_Baseline in kilowatts, or clear it with None (#2497).
+
+        A negative or non-finite value raises VALUE_OUT_OF_RANGE; the other
+        errors are those of ``set_load_control_shed_levels_local``. A request
+        under way is put to ``shed`` again with the new
+        ``ShedRequest.full_duty_baseline``.
+        """
+        ...
+
+    def set_load_control_state_description_local(
+        self,
+        object_id: ObjectIdentifier,
+        text: Optional[str],
+    ) -> Awaitable[None]:
+        """Set a running Load Control's State_Description, or clear it with None (#2497).
+
+        The errors are those of ``set_load_control_shed_levels_local``. A
+        SubscribeCOVProperty on State_Description hears of the change; the
+        request is not looked at again.
         """
         ...
 

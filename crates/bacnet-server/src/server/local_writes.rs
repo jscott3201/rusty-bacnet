@@ -19,6 +19,9 @@ mod access_inputs;
 
 #[path = "local_staging_plans.rs"]
 mod staging_plans;
+
+#[path = "local_load_control.rs"]
+mod load_control;
 pub(super) use finish::Committed;
 pub(super) use finish::local_runtime;
 
@@ -77,6 +80,9 @@ pub(super) enum LocalWrite<'s> {
     ApplicationPulses(u64),
     /// The application setting the Reliability it worked out (#2446).
     ApplicationReliability(Reliability),
+    /// The application setting a Load Control's Shed_Levels,
+    /// Full_Duty_Baseline or State_Description (#2497).
+    ApplicationLoadControl(&'s bacnet_objects::load_control::LoadControlSetting),
     /// One value of an inbound WriteGroup for a Channel's `Present_Value`, at
     /// the priority the request gave it (Clause 15.11). Under the write guard
     /// the Channel takes it only while its Control_Groups still holds `group`

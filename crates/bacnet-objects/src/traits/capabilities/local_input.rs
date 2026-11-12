@@ -6,6 +6,7 @@ use bacnet_types::primitives::PropertyValue;
 
 use crate::access_control::AccessControlInput;
 use crate::command_source::CommandOrigin;
+use crate::load_control::LoadControlSetting;
 
 /// One locally sourced input, named for what it sets.
 ///
@@ -53,6 +54,11 @@ pub enum LocalInputValue {
     /// BACnetProgramState. The property is read-only on the network
     /// (Clause 12.22.4), so this is the application's only route (#2258).
     ProgramState(PropertyValue),
+    /// A configuration property of a Load Control: its Shed_Levels with
+    /// their descriptions, its Full_Duty_Baseline or its State_Description
+    /// (#2497). Only the first is writable over the network, and only per
+    /// element; the application sets all three whole.
+    LoadControl(LoadControlSetting),
 }
 
 impl LocalInputValue {
@@ -93,7 +99,9 @@ impl LocalInputValue {
 /// - an access-control record: the Access Point, Credential Data Input and
 ///   Access Door, each its own kind of record;
 /// - input pulses: the Accumulator;
-/// - Program_State: the Program.
+/// - Program_State: the Program;
+/// - Shed_Levels, Full_Duty_Baseline and State_Description: the Load
+///   Control.
 pub trait LocalInput {
     /// Apply `input`, or leave the object unchanged and return an error.
     ///
