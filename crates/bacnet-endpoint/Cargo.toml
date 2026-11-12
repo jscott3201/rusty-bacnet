@@ -47,6 +47,9 @@ sc-tls = [
 ]
 
 [dev-dependencies]
+# The control-writer count, to tell a control's queued write from the
+# server's own tasks' (#2507).
+bacnet-server = { workspace = true, features = ["test-support"] }
 # The B/IPv6 Network Port tests run on a real Bip6Transport (#1940); the
 # dedicated-thread MS/TP tests run their node on the test's paused time
 # (`test-support`, #2284).
