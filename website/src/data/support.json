@@ -724,7 +724,7 @@
     {
       "bit": 5,
       "clientSends": true,
-      "endpoint": null,
+      "endpoint": "with_cov",
       "kind": "confirmed",
       "label": "SubscribeCOV",
       "name": "SUBSCRIBE_COV",

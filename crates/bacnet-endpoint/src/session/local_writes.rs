@@ -3,11 +3,12 @@
 //! ([`apply`](bacnet_device_core::write::local::apply)) under the session's
 //! database guard, staged as `bacnet-server` stages its own.
 //!
-//! What follows a change on the server, its event pass, COV fanout, and the
-//! Command, Channel, Timer, Schedule and Staging work, has nothing to run on
-//! here: the endpoint serves no COV subscriptions and runs no event pass
-//! (COV on the endpoint is #2490), and no task makes a run's writes or
-//! times a Timer. A change is seen by the next read.
+//! A change that writes is reported to the session's COV subscribers when
+//! COV is enabled ([`EndpointSession::with_cov`], #2490). What else follows
+//! a change on the server, its event pass and the Command, Channel, Timer,
+//! Schedule and Staging work, has nothing to run on here: the endpoint runs
+//! no event pass, and no task makes a run's writes or times a Timer. A
+//! change is seen by the next read.
 
 use super::*;
 use bacnet_device_core::write::local::{self, LocalChange, LocalCommandSource};
@@ -30,9 +31,13 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// succeeds and changes nothing (#1396). `source` names the local
     /// Device or an object of it as the command's initiator.
     ///
-    /// **What doesn't follow on an endpoint.** The endpoint sends no COV or
-    /// event notification after a local change and runs no event pass, so
-    /// Event_State stays as it is (COV on the endpoint is #2490). No task
+    /// **COV.** With [`with_cov`](Self::with_cov), a change that writes is
+    /// reported to the subscribers of `oid` once its run, if any, has
+    /// ended as below.
+    ///
+    /// **What doesn't follow on an endpoint.** The endpoint sends no event
+    /// notification after a local change and runs no event pass, so
+    /// Event_State stays as it is. No task
     /// makes the writes a change starts either; each run ends at once,
     /// unmade, as bacnet-device-core's `Responder` ends one a client's write
     /// starts, so none leaves its object busy, but what it leaves differs:
@@ -115,10 +120,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// included. A Value that tracks
     /// its source then names this session's Device as Value_Source.
     ///
-    /// **What doesn't follow on an endpoint:** no COV or event
-    /// notification and no event pass (#2490), as for
-    /// [`write_local`](Self::write_local). An input is not audited and saves
-    /// nothing first.
+    /// **What follows on an endpoint:** a COV notification with
+    /// [`with_cov`](Self::with_cov), but no event notification and no event
+    /// pass, as for [`write_local`](Self::write_local). An input is not
+    /// audited and saves nothing first.
     ///
     /// # Errors
     /// As [`write_local`](Self::write_local).
@@ -148,9 +153,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// an object that takes none refuses it with OBJECT /
     /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. Status_Flags' FAULT follows it.
     ///
-    /// **What doesn't follow on an endpoint:** no COV or event
-    /// notification and no event pass (#2490), as for
-    /// [`write_local`](Self::write_local), so an object that reports faults
+    /// **What follows on an endpoint:** a COV notification with
+    /// [`with_cov`](Self::with_cov), but no event notification and no event
+    /// pass, as for [`write_local`](Self::write_local), so an object that reports faults
     /// keeps its Event_State and its Status_Flags show FAULT without
     /// IN_ALARM, where the server's event pass would add it. Not audited.
     ///
@@ -170,7 +175,8 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     }
 
     /// Make `change` to `oid` under the database guard, staged as the
-    /// server stages its local writes, while the session runs.
+    /// server stages its local writes, while the session runs, and report
+    /// it to COV subscribers.
     async fn apply_local(&self, oid: ObjectIdentifier, change: LocalChange) -> Result<(), Error> {
         let not_running = || Error::Encoding("endpoint session is not running".into());
         if !self.is_running() {
@@ -187,12 +193,20 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             if !self.is_running() {
                 return Err(not_running());
             }
-            if local::apply(db, oid, change, None)? == Applied::Written {
-                // Nothing here makes a Command's, Channel's or Timer's run;
-                // end it now rather than leave the object busy.
-                end_unmade(db, &[oid]);
+            let apply = |db: &mut ObjectDatabase| {
+                let applied = local::apply(db, oid, change, None)?;
+                if applied == Applied::Written {
+                    // Nothing here makes a Command's, Channel's or Timer's
+                    // run; end it now rather than leave the object busy.
+                    end_unmade(db, &[oid]);
+                }
+                Ok(applied)
+            };
+            match self.cov.host() {
+                Some(cov) => cov.local(db, oid, apply),
+                None => apply(db),
             }
-            Ok(())
+            .map(|_| ())
         })
         .await
     }

@@ -13,6 +13,7 @@ use bacnet_services::write_property::WritePropertyRequest;
 
 use super::confirmed_response;
 use super::*;
+use crate::endpoint_cov::EndpointCov;
 
 #[allow(dead_code)]
 fn shutdown_error() -> Error {
@@ -21,6 +22,16 @@ fn shutdown_error() -> Error {
 
 fn property_error(class: ErrorClass, code: ErrorCode) -> Error {
     Error::protocol(class, code)
+}
+
+/// Tells the session's COV reporting, as it drops, that a SubscribeCOV's
+/// reply has gone or won't: the first notification may follow it now.
+struct Replied<'a>(&'a dyn EndpointCov);
+
+impl Drop for Replied<'_> {
+    fn drop(&mut self) {
+        self.0.replied();
+    }
 }
 
 /// Check existence, scope and typed authority under the database write guard.
@@ -69,7 +80,8 @@ fn device_write_target<'a>(
 ///
 /// Handles `ReadProperty`, optionally authorized local Device
 /// Description/active recipient `WriteProperty`, optionally `ReinitializeDevice`
-/// through its handler, plus `Reject`/`Abort`. Full service parity is a later
+/// through its handler, optionally `SubscribeCOV` through its session's COV
+/// reporting (#2490), plus `Reject`/`Abort`. Full service parity is a later
 /// packet. Inbound transactions reuse the
 /// wire invoke ID directly and NEVER allocate from the shared outbound
 /// client ID pool, so equal inbound/outbound numeric IDs stay unambiguous
@@ -86,6 +98,7 @@ pub struct EndpointResponder {
     registered_port: Option<(ObjectIdentifier, std::sync::Weak<()>)>,
     read_work_limit: usize,
     identity: Option<bacnet_objects::DeviceIdentity>,
+    cov: Option<Arc<dyn EndpointCov>>,
 }
 
 impl Drop for EndpointResponder {
@@ -114,6 +127,7 @@ impl EndpointResponder {
             registered_port: None,
             read_work_limit: bacnet_device_core::read::ReadPropertyMultipleBudget::default()
                 .max_result_elements,
+            cov: None,
         }
     }
 
@@ -181,6 +195,15 @@ impl EndpointResponder {
         audit: reinitialize::EndpointReinitializeAudit,
     ) -> Self {
         self.reinitialize_audit = Some(audit);
+        self
+    }
+
+    /// Run SubscribeCOV through `cov`, which then serves the Device's
+    /// Active_COV_Subscriptions and hears of each object a Device write
+    /// changes (#2490).
+    #[doc(hidden)]
+    pub fn with_cov(mut self, cov: Arc<dyn EndpointCov>) -> Self {
+        self.cov = Some(cov);
         self
     }
 
@@ -266,6 +289,9 @@ impl EndpointResponder {
         let mut db = self.db().write().await;
         let result = self.commit_device_write(&mut db, *device, write, value, request, received);
         staged.release(&mut db);
+        if let (Ok(()), Some(cov)) = (&result, &self.cov) {
+            cov.changed(&db, &[write.object_identifier]);
+        }
         result
     }
 
@@ -349,19 +375,41 @@ impl EndpointResponder {
             .as_ref()
             .filter(|_| request.service_choice == ConfirmedServiceChoice::REINITIALIZE_DEVICE);
         let mut after_reply = reinitialize::AfterReply::default();
+        // Set by SubscribeCOV: what it queued goes once this drops, after
+        // the reply has been handed off or abandoned.
+        let mut _replied = None;
         let response = if request.segmented {
             reply::refuse_segmented(invoke_id)
         } else if request.service_choice == ConfirmedServiceChoice::READ_PROPERTY {
-            confirmed_response::read_property_response(
+            let profile = confirmed_response::ReadProfile {
+                execution: crate::device_view::DeviceExecution::Endpoint {
+                    writes: self.device_writes.is_some(),
+                    reinitialize: self.reinitialize.is_some(),
+                    cov: self.cov.is_some(),
+                },
+                registered_port: self.registered_port.as_ref().map(|(oid, _)| *oid),
+                work_limit: self.read_work_limit,
+                identity: self.identity.as_ref(),
+                cov: self.cov.as_deref(),
+            };
+            confirmed_response::read_property_response_observed(
                 self.db(),
+                None,
+                profile,
                 &request,
-                self.device_writes.is_some(),
-                self.reinitialize.is_some(),
-                self.registered_port.as_ref().map(|(oid, _)| *oid),
-                self.read_work_limit,
-                self.identity.as_ref(),
+                |_, _, _, _| {},
             )
             .await
+        } else if let Some(cov) = self
+            .cov
+            .as_deref()
+            .filter(|_| request.service_choice == ConfirmedServiceChoice::SUBSCRIBE_COV)
+        {
+            let mut db = self.db().write().await;
+            self.ensure_open()?;
+            let reply = cov.subscribe(&mut db, &received);
+            _replied = Some(Replied(cov));
+            reply.unwrap_or_else(|| reply::unrecognized_service(invoke_id))
         } else if let Some((handler, password)) = reinitialization {
             let requester = reinitialize::Requester::new(
                 &received.source_mac,

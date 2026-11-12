@@ -129,6 +129,7 @@ fn endpoint_services_do_not_sample_the_clock() {
                 DeviceExecution::Endpoint {
                     writes,
                     reinitialize,
+                    cov: false,
                 },
             );
             let value = services(&context, &db);

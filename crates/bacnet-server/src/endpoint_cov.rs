@@ -1,0 +1,45 @@
+//! The seam through which an endpoint session's COV reporting joins its
+//! responder (#2490).
+//!
+//! `bacnet-endpoint` keeps a `bacnet-device-core` `Reporter` for the objects
+//! of its session's database and implements [`EndpointCov`] over it. The
+//! endpoint responder, once given one
+//! ([`EndpointResponder::with_cov`](crate::server::__endpoint_EndpointResponder::with_cov)),
+//! hands it each SubscribeCOV, each read of the Device's
+//! Active_COV_Subscriptions and each object a network write changed. It is
+//! not an interface for applications.
+
+use bacnet_device_core::cov::active::LiveDeviceCov;
+use bacnet_device_core::read::LiveLists;
+use bacnet_encoding::apdu::Apdu;
+use bacnet_network::layer::ReceivedApdu;
+use bacnet_objects::database::ObjectDatabase;
+use bacnet_types::primitives::ObjectIdentifier;
+
+/// The COV reporting an endpoint session runs beside its responder.
+///
+/// The responder calls each method with the database guard held: the write
+/// guard for [`subscribe`](Self::subscribe), the read or the write guard for
+/// the rest. An implementation takes its own state after that guard, never
+/// before, and never waits.
+#[doc(hidden)]
+pub trait EndpointCov: Send + Sync {
+    /// Run the SubscribeCOV request `received` carries against `db` and
+    /// return the reply, `None` when it wrote none. What it queues, the
+    /// first notification of an accepted subscription, stays queued until
+    /// [`replied`](Self::replied), so that it follows the reply onto the
+    /// wire. Each call is followed by one `replied`, whatever it returned.
+    fn subscribe(&self, db: &mut ObjectDatabase, received: &ReceivedApdu) -> Option<Apdu>;
+
+    /// The reply to one [`subscribe`](Self::subscribe) has been handed off,
+    /// or never will be: what that call queued may go.
+    fn replied(&self);
+
+    /// The Device's subscription lists `selection` names, live now and
+    /// projected against `db`.
+    fn live(&self, db: &ObjectDatabase, selection: LiveLists) -> LiveDeviceCov;
+
+    /// A network write committed changes to `objects` in `db`: queue what
+    /// they report.
+    fn changed(&self, db: &ObjectDatabase, objects: &[ObjectIdentifier]);
+}

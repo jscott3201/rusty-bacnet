@@ -77,13 +77,18 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             } else {
                 (None, None)
             };
-        let (responder, server_handle) =
+        let (responder, server_handle, cov) =
             if matches!(self.role, SessionRole::ServerOnly | SessionRole::Both) {
                 let db = self
                     .database
                     .get_or_insert_with(|| Arc::new(RwLock::new(ObjectDatabase::new())));
                 let mut responder = EndpointResponder::new(Arc::clone(db), egress.clone())
                     .with_read_work_limit(self.config.read_work_limit);
+                // COV reporting, with its sending task, when enabled (#2490).
+                let cov = self.cov.start(&self.coordinator, &egress, db);
+                if let Some(cov) = &cov {
+                    responder = responder.with_cov(Arc::clone(cov) as _);
+                }
                 if let Some(identity) = &self.identity {
                     responder = responder.with_device(identity.clone());
                 }
@@ -117,9 +122,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                     Arc::clone(&responder),
                     Arc::clone(notifications.as_ref().expect("server worker owner")),
                 );
-                (Some(responder), Some(handle))
+                (Some(responder), Some(handle), cov)
             } else {
-                (None, None)
+                (None, None, None)
             };
 
         // Routed source Audit bindings' routers, which traffic and router
@@ -195,6 +200,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             shared: Arc::clone(&self.shared),
             local_network: egress.local_network_number().clone(),
             source_routers,
+            cov,
         };
         let audit_lease = source_recipient
             .as_ref()

@@ -34,6 +34,10 @@ pub const RESPONDER_OPT_IN_SERVICES: &[ResponderOptIn] = &[
         service: ServiceSupported::REINITIALIZE_DEVICE,
         method: "with_reinitialize",
     },
+    ResponderOptIn {
+        service: ServiceSupported::SUBSCRIBE_COV,
+        method: "with_cov",
+    },
 ];
 
 impl<T: TransportPort + 'static> EndpointSession<T> {
@@ -107,6 +111,51 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         self
     }
 
+    /// Enables SubscribeCOV for the objects of the session's database, and
+    /// the COV notifications its subscriptions call for (#2490), under
+    /// `config`.
+    ///
+    /// The session runs bacnet-device-core's
+    /// [`Reporter`](bacnet_device_core::report::Reporter) over its database:
+    /// a subscription, its renewal and its cancellation, and the lifetime
+    /// running out on the session's clock. A subscriber hears first of the
+    /// object's values when it subscribes, after the SubscribeCOV's reply,
+    /// then of each change the application makes through
+    /// [`write_local`](Self::write_local),
+    /// [`set_present_value_local`](Self::set_present_value_local) and
+    /// [`set_reliability_local`](Self::set_reliability_local), and of each
+    /// change a Device write makes. A change the application makes to the
+    /// database by other means reports nothing. A confirmed notification
+    /// leases its invoke ID from the pool the client role uses, is sent
+    /// again on the timeout and retries of `config.confirmed`, and a
+    /// subscriber that refuses it or never answers is held off for one
+    /// retry cycle. The Device lists the subscriptions in
+    /// Active_COV_Subscriptions.
+    ///
+    /// `config` bounds the work: `config.cov` caps the subscriptions (in
+    /// all, per subscriber, indefinite ones and confirmed notifications in
+    /// flight per subscriber) and what one change may send, and
+    /// `config.outbox` the notifications queued at once, in entries and
+    /// octets, allocated at start. A notification with no room waits, and
+    /// goes with the subscription's current values once room frees.
+    /// [`stop`](Self::stop) drops what is still queued and gives back every
+    /// invoke ID a notification holds.
+    ///
+    /// SubscribeCOVProperty and SubscribeCOVPropertyMultiple stay refused.
+    /// Startup requirements and the advertised services are those of
+    /// [`with_device_writes`](Self::with_device_writes); without a composed
+    /// identity, the notifications name the Device by its own
+    /// Vendor_Identifier and Max_APDU_Length_Accepted. An invalid
+    /// `config.cov` fails startup before the transport starts.
+    ///
+    /// # Panics
+    /// Panics if startup has already consumed the session configuration.
+    pub fn with_cov(mut self, config: bacnet_device_core::report::ReportConfig) -> Self {
+        self.assert_configurable();
+        self.cov.config = Some(config);
+        self
+    }
+
     /// Sets the password a ReinitializeDevice request must carry.
     ///
     /// It takes effect only with [`with_reinitialize`](Self::with_reinitialize):
@@ -156,6 +205,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         let enabled = |service: ServiceSupported| {
             (service == ServiceSupported::WRITE_PROPERTY && self.device_write_authorizer.is_some())
                 || (service == ServiceSupported::REINITIALIZE_DEVICE && self.reinitialize.is_some())
+                || (service == ServiceSupported::SUBSCRIBE_COV && self.cov.config.is_some())
         };
         let opt_in = RESPONDER_OPT_IN_SERVICES
             .iter()
@@ -222,16 +272,21 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
             )));
         }
         // Names the enabled capabilities that need the Device.
-        let (capability, subject) = match (writes, reinitialize) {
-            (true, true) => (
-                "Device writes and ReinitializeDevice",
-                "Device writes and ReinitializeDevice require",
-            ),
-            (true, false) => ("Device writes", "Device writes require"),
-            (false, _) => ("ReinitializeDevice", "ReinitializeDevice requires"),
+        let enabled: Vec<_> = [
+            (writes, "Device writes"),
+            (reinitialize, "ReinitializeDevice"),
+            (self.cov.config.is_some(), "SubscribeCOV"),
+        ]
+        .into_iter()
+        .filter_map(|(on, name)| on.then_some(name))
+        .collect();
+        let capability = enabled.join(" and ");
+        let subject = match enabled[..] {
+            ["ReinitializeDevice"] | ["SubscribeCOV"] => format!("{capability} requires"),
+            _ => format!("{capability} require"),
         };
         if self.role == SessionRole::ClientOnly {
-            return if writes || reinitialize {
+            return if !enabled.is_empty() {
                 Err(Error::Encoding(format!("{subject} a server role")))
             } else {
                 Ok(None)
@@ -251,7 +306,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 "Endpoint identity services do not match the responder's services".into(),
             ));
         }
-        if !writes && !reinitialize {
+        if enabled.is_empty() {
             return Ok(None);
         }
         let db = self
@@ -286,6 +341,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
                 "{subject} the built-in Device authority"
             )));
         }
+        self.cov.prepare(self.identity.as_ref(), db, oid)?;
         Ok(Some(oid))
     }
 

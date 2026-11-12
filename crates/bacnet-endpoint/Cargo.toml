@@ -30,6 +30,8 @@ bacnet-client.workspace = true
 # object it wraps (#2215); `std` implies them.
 bacnet-objects = { workspace = true, features = ["std", "event-reporting", "durable-writes"] }
 bacnet-device-core = { workspace = true, features = ["std"] }
+# The COV Reporter's timeline is Tokio's clock (#2490).
+bacnet-time = { workspace = true, features = ["std"] }
 bacnet-server.workspace = true
 bytes = { workspace = true, features = ["std"] }
 tracing.workspace = true
