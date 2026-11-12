@@ -30,7 +30,7 @@
 //! Max_Notification_Delay deadline to [`Reporter::next_deadline`] (#2320).
 //!
 //! With the `event-reporting` feature and a sweep period
-//! ([`ReportConfig::with_sweep`]) the reporter runs intrinsic event
+//! (`ReportConfig::with_sweep`) the reporter runs intrinsic event
 //! reporting too (#2303): the evaluation after each write and change, the
 //! sweep at its period and at each Time_Delay's end, AcknowledgeAlarm and
 //! GetEventInformation, and the fault pass when configured. Each event
@@ -214,7 +214,7 @@ impl ReportConfig {
     /// after every write and change it is given, so a period longer than
     /// the shortest delay delays no transition. Whatever `period` and the
     /// delays, it sweeps no sooner than
-    /// [`SWEEP_FLOOR`](crate::report::SWEEP_FLOOR) after its last sweep.
+    /// [`SWEEP_FLOOR`] after its last sweep.
     #[cfg(feature = "event-reporting")]
     pub fn with_sweep(mut self, period: Duration) -> Self {
         self.sweep = Some(period);

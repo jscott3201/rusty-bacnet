@@ -20,7 +20,7 @@ impl Reporter {
     /// unsent, and its subscription is owed a later look; an event one
     /// waits in its place until an ID comes back, passed by meanwhile.
     /// `bindings` resolves an event notification's Device recipient; one it
-    /// can't is dropped and counted ([`ReporterCounters::unresolved`]).
+    /// can't is dropped and counted ([`ReporterCounters::unresolved`](super::super::ReporterCounters::unresolved)).
     pub fn pop(
         &mut self,
         bindings: &dyn Bindings,
