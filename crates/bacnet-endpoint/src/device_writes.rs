@@ -136,13 +136,26 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// flight per subscriber) and what one change may send, and
     /// `config.outbox` the notifications queued at once, in entries and
     /// octets, allocated at start. A notification with no room waits, and
-    /// goes with the subscription's current values once room frees. At most
-    /// [`COV_CONFIRMED_IN_FLIGHT`]
-    /// (64) confirmed notifications are out at once, all subscribers
-    /// together, so the client role keeps three quarters of the 256 invoke
-    /// IDs however many subscribers stop answering; a report past it waits
-    /// for one to end. [`stop`](Self::stop) drops what is still queued and
-    /// gives back every invoke ID a notification holds.
+    /// goes with the subscription's current values once room frees; one
+    /// larger than `config.outbox.octets` is never queued, so size them for
+    /// the largest notification the database's objects call for (the core
+    /// gives no figure to check at start). At most
+    /// [`COV_CONFIRMED_IN_FLIGHT`] (64) confirmed notifications are out at
+    /// once, all subscribers together, so the client role keeps three
+    /// quarters of the 256 invoke IDs however many subscribers stop
+    /// answering. Four silent subscribers fill it at the default
+    /// `config.cov.max_confirmed_in_flight_per_peer` of 16; a confirmed
+    /// report past it waits, oldest owed first, until one of them ends,
+    /// which for a silent subscriber is when its retries run out. Lower that
+    /// limit when many confirmed subscribers are expected. Unconfirmed
+    /// notifications don't count against it. [`stop`](Self::stop) drops what
+    /// is still queued and gives back every invoke ID a notification holds.
+    ///
+    /// Known defect (#2508): with an unconfirmed subscription, if two
+    /// changes to one object come before the session's task sends and the
+    /// second returns the object to the values the subscriber last received,
+    /// only the first is sent, and the subscriber keeps it until a later
+    /// change.
     ///
     /// SubscribeCOVProperty and SubscribeCOVPropertyMultiple stay refused.
     /// Startup requirements and the advertised services are those of

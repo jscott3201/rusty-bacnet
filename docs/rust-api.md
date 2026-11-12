@@ -12210,10 +12210,17 @@ one comes back.
 At most `bacnet_endpoint::session::COV_CONFIRMED_IN_FLIGHT` (64) confirmed
 notifications are out at once, all subscribers together: a quarter of the 256
 invoke IDs. A subscriber that never answers holds an ID per notification until
-its retries run out, so without the bound sixteen silent subscribers could
-lease every ID and leave the client role none for its own requests. A report
-past the bound waits for one of them to end, as it waits for an empty pool;
-nothing is dropped.
+its retries run out, up to `CovPolicy::max_confirmed_in_flight_per_peer` of
+them (16 by default), so without the bound sixteen silent subscribers could
+lease every ID and leave the client role none for its own requests. With it,
+four silent subscribers fill the bound at the default limits. A confirmed
+report past it then waits, oldest owed first, until one of the notifications
+out ends: answered, or failed once its retries run out (12 s at the default
+timing). Nothing is dropped. Unconfirmed notifications don't count against the
+bound, though one that found the outbox full while it holds goes at the
+task's next wake: a change, an answer or a timeout. When many confirmed
+subscribers are expected, lower `max_confirmed_in_flight_per_peer`, so that
+more silent subscribers are needed to fill the bound.
 
 `config` bounds the work:
 
@@ -12228,7 +12235,10 @@ nothing is dropped.
   holds the notifications decided and not yet sent, allocated once at start.
   A notification that finds no room isn't queued: its subscription is owed
   one later notification with its current values, sent as room frees. An
-  outbox with no entry or no octet fails `start()`.
+  outbox with no entry or no octet fails `start()`. A notification larger
+  than `octets` is never queued, so size it for the largest notification
+  the database's objects call for; the core gives no figure the endpoint
+  could check at start.
 
 Startup requires a server role and a concrete built-in local Device, as the
 Device-write opt-in does. The Device and identity then advertise SubscribeCOV,
@@ -12241,6 +12251,11 @@ Max_APDU_Length_Accepted. SubscribeCOVProperty and
 SubscribeCOVPropertyMultiple stay refused with UNRECOGNIZED_SERVICE, as
 SubscribeCOV is on a session without the opt-in. No event notification
 follows a change: the endpoint runs no event pass.
+
+Known defect (#2508): with an unconfirmed subscription, if two changes to one
+object come before the session's task sends, and the second returns the object
+to the values the subscriber last received, only the first is sent, and the
+subscriber keeps it until a later change.
 
 `stop()` stops sending, drops what is still queued and gives back every
 invoke ID a notification holds.

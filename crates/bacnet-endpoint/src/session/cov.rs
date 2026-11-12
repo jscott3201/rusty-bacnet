@@ -65,10 +65,16 @@ const STARVED_RETRY: std::time::Duration = std::time::Duration::from_millis(50);
 /// [`with_cov`](super::EndpointSession::with_cov) has out at once, all
 /// subscribers together: a quarter of the 256 invoke IDs its client role
 /// draws from too. A silent subscriber holds an ID for each notification
-/// until its retries run out, so without this bound a few of them could
-/// lease every ID, and every request of the client role would fail for
-/// want of one. At the bound a report waits for one of them to end, as it
-/// waits when the pool is empty, and nothing is dropped.
+/// until its retries run out, up to `CovPolicy::max_confirmed_in_flight_per_peer`
+/// of them (16 by default), so without this bound sixteen silent
+/// subscribers could lease every ID and every request of the client role
+/// would fail for want of one. With it, four of them fill the bound at the
+/// default limits; a confirmed report past it waits, oldest owed first,
+/// until one of the notifications out ends, which for a silent subscriber
+/// is when its retries run out (12 s at the default timing). Nothing is
+/// dropped, and unconfirmed notifications don't count against it. Lower
+/// `max_confirmed_in_flight_per_peer` when many confirmed subscribers are
+/// expected, so that more silent ones are needed to fill the bound.
 pub const COV_CONFIRMED_IN_FLIGHT: usize = 64;
 
 /// The session's COV opt-in and, once it starts, what runs it.
@@ -124,6 +130,7 @@ impl CovRole {
         db: &Arc<RwLock<ObjectDatabase>>,
     ) -> Option<Arc<CovHost>> {
         let reporter = self.reporter.take()?;
+        let timeout = self.config.as_ref()?.confirmed.timeout;
         let origin = tokio::time::Instant::now().into_std();
         let host = Arc::new(CovHost {
             state: Mutex::new(CovState {
@@ -131,7 +138,8 @@ impl CovRole {
                 leases: Leases {
                     coordinator: Arc::clone(coordinator),
                     out: Vec::new(),
-                    starved: false,
+                    starved: Starved::No,
+                    timeout,
                 },
                 held: 0,
                 closed: false,
@@ -140,6 +148,8 @@ impl CovRole {
             clock: HostClock::new(origin).reading(|| tokio::time::Instant::now().into_std()),
             coordinator: Arc::clone(coordinator),
             egress: egress.clone(),
+            #[cfg(test)]
+            passes: std::sync::atomic::AtomicUsize::new(0),
         });
         let db = HeldDatabase::new(Arc::clone(db));
         self.task = Some(tokio::spawn(Arc::clone(&host).run(db)));
@@ -205,6 +215,9 @@ pub(crate) struct CovHost {
     clock: HostClock,
     coordinator: Arc<OutboundTransactionCoordinator>,
     egress: EndpointEgress,
+    /// How many times the task has woken to work, for the tests.
+    #[cfg(test)]
+    passes: std::sync::atomic::AtomicUsize,
 }
 
 struct CovState {
@@ -271,8 +284,8 @@ impl CovHost {
             .leases
             .out
             .iter()
-            .find(|(_, held)| *held == token)
-            .map(|(to, _)| to.clone())
+            .find(|lease| lease.token == token)
+            .map(|lease| lease.to.clone())
         else {
             return false;
         };
@@ -292,8 +305,8 @@ impl CovHost {
         let mut state = self.lock();
         state.closed = true;
         let leases = &mut state.leases;
-        for (_, token) in leases.out.drain(..) {
-            let _ = leases.coordinator.cancel(token);
+        for lease in leases.out.drain(..) {
+            let _ = leases.coordinator.cancel(lease.token);
         }
     }
 
@@ -304,7 +317,7 @@ impl CovHost {
             // still wakes the task (Tokio delivers `notify_waiters` to every
             // `Notified` already made, polled or not).
             let released = self.coordinator.released();
-            let (deadline, starved) = self.next_wake();
+            let (deadline, pool) = self.next_wake();
             let due = async {
                 match deadline {
                     Some(at) => tokio::time::sleep_until(at).await,
@@ -312,7 +325,7 @@ impl CovHost {
                 }
             };
             let released = async {
-                if starved {
+                if pool {
                     released.await;
                 } else {
                     std::future::pending::<()>().await;
@@ -328,26 +341,36 @@ impl CovHost {
         }
     }
 
-    /// When the task should look again, and whether a report waits for an
-    /// invoke ID. A held reply waits for its `replied`, so no deadline then.
+    /// When the task should look again, and whether it also waits for an
+    /// invoke ID to come back to the session's pool. A held reply waits for
+    /// its `replied`, so no deadline then.
     fn next_wake(&self) -> (Option<tokio::time::Instant>, bool) {
         let state = self.lock();
         if state.held > 0 || state.closed {
             return (None, false);
         }
-        let starved = state.leases.starved;
-        let deadline = state
-            .reporter
-            .next_deadline()
+        let leases = &state.leases;
+        let bound = leases.starved == Starved::Bound && leases.out.len() >= COV_CONFIRMED_IN_FLIGHT;
+        let deadline = if bound {
+            // Only one of this host's own notifications ending frees an ID:
+            // an answer wakes the task, and its timeout is one of these
+            // deadlines. A report owed meanwhile, due again at once, would
+            // only be refused again, so it waits for one of them.
+            bacnet_time::earliest([state.reporter.table().next_expiry(), leases.next_due()])
+        } else {
+            state.reporter.next_deadline()
+        };
+        let deadline = deadline
             .and_then(|at| self.clock.to_std(at))
             .map(tokio::time::Instant::from_std);
-        // A report owed for want of an invoke ID is due again at once; it
-        // waits for one to come back instead, or a short while.
+        // With the pool empty, a report owed for want of an ID is due again
+        // at once; it waits for one to come back instead, or a short while.
+        let pool = leases.starved == Starved::Pool;
         let deadline = match deadline {
-            Some(at) if starved => Some(at.max(tokio::time::Instant::now() + STARVED_RETRY)),
+            Some(at) if pool => Some(at.max(tokio::time::Instant::now() + STARVED_RETRY)),
             deadline => deadline,
         };
-        (deadline, starved)
+        (deadline, pool)
     }
 
     /// Send what is queued, one notification at a time, telling the
@@ -355,6 +378,9 @@ impl CovHost {
     /// due, before the next send: a steady stream of changes can't hold
     /// back a retry or an expiry.
     async fn step(&self, db: &RwLock<ObjectDatabase>) {
+        #[cfg(test)]
+        self.passes
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         loop {
             let due = {
                 let state = self.lock();
@@ -400,6 +426,11 @@ impl CovHost {
         loop {
             let mut apdu = BytesMut::new();
             let notification = reporter.pop(&NoBindings, leases, now, &mut apdu)?;
+            if let Some(id) = notification.invoke_id {
+                // Its answer is overdue a timeout from now, as the
+                // `Reporter` reckons it, on a first send and a resend alike.
+                leases.sent(id, now.saturating_add(leases.timeout));
+            }
             let to = match &notification.to {
                 Destination::Subscriber(to) => destination(to),
                 // Device recipients come with event notifications (#2303).
@@ -498,16 +529,57 @@ impl EndpointCov for CovHost {
 /// most [`COV_CONFIRMED_IN_FLIGHT`] of them.
 struct Leases {
     coordinator: Arc<OutboundTransactionCoordinator>,
-    out: Vec<(BACnetAddress, LeaseToken)>,
-    /// The last `take` found none free, or the bound reached.
-    starved: bool,
+    out: Vec<Lease>,
+    /// Why the last `take` found no ID.
+    starved: Starved,
+    /// How long a confirmed notification waits for its answer.
+    timeout: bacnet_time::Duration,
+}
+
+/// One invoke ID a confirmed notification holds.
+struct Lease {
+    to: BACnetAddress,
+    token: LeaseToken,
+    /// When its current attempt's answer is overdue, once it has gone.
+    due: Option<bacnet_time::Instant>,
+}
+
+/// Why a confirmed report found no invoke ID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Starved {
+    /// It found one.
+    No,
+    /// The session's pool was empty: the client role may give one back
+    /// at any time.
+    Pool,
+    /// This host held [`COV_CONFIRMED_IN_FLIGHT`]: only one of its own
+    /// notifications ending frees one.
+    Bound,
+}
+
+impl Leases {
+    /// The notification holding `id` went, its answer overdue at `due`.
+    fn sent(&mut self, id: u8, due: bacnet_time::Instant) {
+        if let Some(lease) = self
+            .out
+            .iter_mut()
+            .find(|lease| lease.token.invoke_id() == id)
+        {
+            lease.due = Some(due);
+        }
+    }
+
+    /// When the first answer still awaited is overdue.
+    fn next_due(&self) -> Option<bacnet_time::Instant> {
+        self.out.iter().filter_map(|lease| lease.due).min()
+    }
 }
 
 impl InvokeIds for Leases {
     fn take(&mut self, to: &BACnetAddress) -> Option<u8> {
         // At the bound a report waits, as it does for an empty pool.
         if self.out.len() >= COV_CONFIRMED_IN_FLIGHT {
-            self.starved = true;
+            self.starved = Starved::Bound;
             return None;
         }
         let peer = match to.network_number {
@@ -518,18 +590,24 @@ impl InvokeIds for Leases {
         let reserved = self
             .coordinator
             .reserve(LeaseMetadata::notification(peer, service));
-        self.starved = reserved.is_err();
-        let token = reserved.ok()?;
-        self.out.push((to.clone(), token));
+        let Ok(token) = reserved else {
+            self.starved = Starved::Pool;
+            return None;
+        };
+        self.starved = Starved::No;
+        self.out.push(Lease {
+            to: to.clone(),
+            token,
+            due: None,
+        });
         Some(token.invoke_id())
     }
 
     fn release(&mut self, to: &BACnetAddress, id: u8) {
-        let held =
-            |(peer, token): &(BACnetAddress, LeaseToken)| peer == to && token.invoke_id() == id;
+        let held = |lease: &Lease| lease.to == *to && lease.token.invoke_id() == id;
         if let Some(at) = self.out.iter().position(held) {
-            let (_, token) = self.out.swap_remove(at);
-            let _ = self.coordinator.release(token);
+            let lease = self.out.swap_remove(at);
+            let _ = self.coordinator.release(lease.token);
         }
     }
 }

@@ -230,8 +230,10 @@ async fn the_bounds_hold() {
 
 /// However many subscribers stop answering, their confirmed notifications
 /// hold at most `COV_CONFIRMED_IN_FLIGHT` invoke IDs: the client role still
-/// gets one and its read completes, and a report held at the bound goes
-/// as soon as one of them comes back.
+/// gets one and its reads complete. At the bound the task sleeps: neither
+/// the client role's transactions ending nor time passing wakes it to look
+/// again at the reports it holds back. One Ack lets a held report go at
+/// once, with no time passing.
 #[tokio::test(start_paused = true)]
 async fn silent_subscribers_leave_the_client_role_its_invoke_ids() {
     use crate::session::COV_CONFIRMED_IN_FLIGHT;
@@ -270,20 +272,40 @@ async fn silent_subscribers_leave_the_client_role_its_invoke_ids() {
     assert_eq!(out.len(), COV_CONFIRMED_IN_FLIGHT);
     assert_eq!(session.active_leases(), COV_CONFIRMED_IN_FLIGHT);
 
+    let host = Arc::clone(session.cov.host().unwrap());
+    let passes = || host.passes.load(std::sync::atomic::Ordering::Relaxed);
+    let before = passes();
     let client = session.client().unwrap();
-    let read = client.read_property(
-        server.local_mac(),
-        ai1(),
-        PropertyIdentifier::PRESENT_VALUE,
-        None,
-    );
-    let answer = read.await.expect("the client role gets an invoke ID");
-    assert_eq!(answer.object_identifier, ai1());
+    for _ in 0..3 {
+        let read = client.read_property(
+            server.local_mac(),
+            ai1(),
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+        );
+        let answer = read.await.expect("the client role gets an invoke ID");
+        assert_eq!(answer.object_identifier, ai1());
+    }
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(passes(), before, "asleep at the bound");
 
+    let at = tokio::time::Instant::now();
     node.send(&to, &ack(out[0])).await;
-    let (_, apdu) = node.next_within(Duration::from_millis(10)).await.unwrap();
+    let (_, apdu) = node.next_within(Duration::from_secs(1)).await.unwrap();
+    assert_eq!(tokio::time::Instant::now(), at, "with no time passing");
     let (next, _) = confirmed_notification(&apdu);
     assert!(!out[1..].contains(&next), "an ID that came back");
+    assert_eq!(session.active_leases(), COV_CONFIRMED_IN_FLIGHT);
+
+    // A held notification's own timeout still wakes the task: the other 63
+    // fail at their minute, and as many held reports take their IDs.
+    tokio::time::sleep(Duration::from_millis(59_500)).await;
+    let mut refilled = 0;
+    while let Some((_, apdu)) = node.next_within(Duration::from_millis(100)).await {
+        confirmed_notification(&apdu);
+        refilled += 1;
+    }
+    assert_eq!(refilled, COV_CONFIRMED_IN_FLIGHT - 1);
     assert_eq!(session.active_leases(), COV_CONFIRMED_IN_FLIGHT);
     session.stop().await.unwrap();
     server.stop().await.unwrap();
