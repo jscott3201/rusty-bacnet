@@ -34,7 +34,7 @@
 
 use bacnet_encoding::npdu::view::NetworkPriority;
 use bacnet_types::constructed::BACnetAddress;
-use bacnet_types::enums::ServiceSupported;
+use bacnet_types::enums::{ConfirmedServiceChoice, ServiceSupported};
 use bacnet_types::primitives::ObjectIdentifier;
 
 use crate::cov::{CovCounters, CovPolicy, FlightTiming, SubscriberEndpoint, Token};
@@ -171,14 +171,16 @@ pub trait Bindings {
 
 /// The host's invoke IDs, shared with the device's own client requests.
 pub trait InvokeIds {
-    /// An invoke ID free for a request to `to`, now taken; `None` when none
-    /// is. Hand them out in turn rather than reusing one just released, as
-    /// the server's coordinator does: a late answer to an ended request
-    /// would otherwise match the next one sent under its ID. A report
-    /// refused one waits until IDs come back: those the reporter gives
-    /// back itself, and those the host reports with
-    /// [`Reporter::invoke_ids_released`] (#2512).
-    fn take(&mut self, to: &BACnetAddress) -> Option<u8>;
+    /// An invoke ID free for a `service` request to `to`, now taken; `None`
+    /// when none is. `service` is the confirmed service it will go out as
+    /// (ConfirmedCOVNotification, or ConfirmedCOVNotificationMultiple), for
+    /// a host that keeps its transactions by service. Hand them out in turn
+    /// rather than reusing one just released, as the server's coordinator
+    /// does: a late answer to an ended request would otherwise match the
+    /// next one sent under its ID. A report refused one waits until IDs
+    /// come back: those the reporter gives back itself, and those the host
+    /// reports with [`Reporter::invoke_ids_released`] (#2512).
+    fn take(&mut self, to: &BACnetAddress, service: ConfirmedServiceChoice) -> Option<u8>;
     /// Give back `id`, taken for `to`: its request has ended.
     fn release(&mut self, to: &BACnetAddress, id: u8);
 }

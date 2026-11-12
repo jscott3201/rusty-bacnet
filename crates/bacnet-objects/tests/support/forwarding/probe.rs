@@ -7,6 +7,8 @@ use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use bacnet_time::Instant;
+
 use super::fixtures::{METADATA, address, noon, oid, property_error};
 use bacnet_objects::access_control::{AccessEventReport, CommittedAccessEvent};
 use bacnet_objects::analog::AnalogValueObject;
@@ -488,8 +490,8 @@ fn own_record_error() -> Error {
 /// The probe's event reporting, logged under `EventReporting::`: every
 /// method answers unlike its default.
 impl EventReporting for Probe {
-    fn evaluate_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
-        self.called("EventReporting::evaluate_intrinsic_reporting", ());
+    fn evaluate_intrinsic_reporting(&mut self, now: Instant) -> Option<TransitionOutcome> {
+        self.called("EventReporting::evaluate_intrinsic_reporting", (now,));
         Some(TransitionOutcome {
             change: EventStateChange {
                 from: EventState::NORMAL,
@@ -499,8 +501,8 @@ impl EventReporting for Probe {
             distribute: true,
         })
     }
-    fn tick_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
-        self.called("EventReporting::tick_intrinsic_reporting", ());
+    fn tick_intrinsic_reporting(&mut self, now: Instant) -> Option<TransitionOutcome> {
+        self.called("EventReporting::tick_intrinsic_reporting", (now,));
         Some(TransitionOutcome {
             change: EventStateChange {
                 from: EventState::HIGH_LIMIT,
@@ -542,6 +544,10 @@ impl EventReporting for Probe {
             previous_notification: 4,
             current_notification: 9,
         })
+    }
+    fn next_due(&self) -> Option<Instant> {
+        self.called("EventReporting::next_due", ());
+        Some(Instant::from_secs(7))
     }
     fn event_algorithm_inhibit_reference(&self) -> Option<BACnetObjectPropertyReference> {
         self.called("EventReporting::event_algorithm_inhibit_reference", ());

@@ -1,6 +1,9 @@
 //! A custom implementation using only public object-contract types.
 use super::*;
-use bacnet_objects::event::{EventTransitionCommit, EventTransitionCommitError, TransitionOutcome};
+use bacnet_objects::event::{
+    Duration as Delay, EventTransitionCommit, EventTransitionCommitError, Instant,
+    TransitionOutcome,
+};
 use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_services::alarm_event::NotificationParameters;
 use bacnet_types::bitstring::EventTransitionBits;
@@ -13,7 +16,9 @@ struct CustomProposal {
     oid: ObjectIdentifier,
     state: EventState,
     delay: u32,
-    remaining: Option<u32>,
+    /// When the pending transition is due, counted from the write that
+    /// began the condition, as a custom object keeps it (#2303).
+    due: Option<Instant>,
     acknowledged: EventTransitionBits,
     timestamps: [BACnetTimeStamp; 3],
     messages: [String; 3],
@@ -138,23 +143,24 @@ impl BACnetObject for CustomProposal {
 }
 
 impl bacnet_objects::traits::EventReporting for CustomProposal {
-    fn evaluate_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
+    fn evaluate_intrinsic_reporting(&mut self, now: Instant) -> Option<TransitionOutcome> {
         if self.delay == 0 {
             return self.proposal();
         }
         if self.state == EventState::NORMAL {
-            self.remaining.get_or_insert(self.delay);
+            self.due
+                .get_or_insert(now + Delay::from_secs(u64::from(self.delay)));
         }
         None
     }
-    fn tick_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
-        let remaining = self.remaining.as_mut()?;
-        *remaining = remaining.saturating_sub(1);
-        if *remaining == 0 {
-            self.proposal()
-        } else {
-            None
+    fn tick_intrinsic_reporting(&mut self, now: Instant) -> Option<TransitionOutcome> {
+        if now < self.due? {
+            return None;
         }
+        self.proposal()
+    }
+    fn next_due(&self) -> Option<Instant> {
+        self.due
     }
     fn commit_event_transition(
         &mut self,
@@ -183,7 +189,7 @@ impl bacnet_objects::traits::EventReporting for CustomProposal {
         if let Some(message) = &commit.message_text {
             self.messages[index] = message.clone();
         }
-        self.remaining = None;
+        self.due = None;
         self.commits.lock().unwrap().push(commit);
         Ok(())
     }
@@ -223,11 +229,14 @@ impl BACnetObject for UnsupportedProposal {
 }
 
 impl bacnet_objects::traits::EventReporting for UnsupportedProposal {
-    fn evaluate_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
-        self.0.evaluate_intrinsic_reporting()
+    fn evaluate_intrinsic_reporting(
+        &mut self,
+        now: bacnet_time::Instant,
+    ) -> Option<TransitionOutcome> {
+        self.0.evaluate_intrinsic_reporting(now)
     }
-    fn tick_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
-        self.0.tick_intrinsic_reporting()
+    fn tick_intrinsic_reporting(&mut self, now: bacnet_time::Instant) -> Option<TransitionOutcome> {
+        self.0.tick_intrinsic_reporting(now)
     }
 }
 
@@ -242,7 +251,7 @@ fn database(
         oid: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap(),
         state: EventState::NORMAL,
         delay,
-        remaining: None,
+        due: None,
         acknowledged: EventTransitionBits::all(),
         timestamps: std::array::from_fn(|_| BACnetTimeStamp::SequenceNumber(99)),
         messages: std::array::from_fn(|_| "initial".into()),
@@ -373,7 +382,7 @@ async fn unsupported_custom_proposal_runtime_is_silent_unchanged_and_retryable()
             .unwrap()
             .event_reporting_mut()
             .expect("lends event reporting")
-            .evaluate_intrinsic_reporting()
+            .evaluate_intrinsic_reporting(crate::runtime_clock::core_now())
             .unwrap();
         let sent = broadcasts_from_per_write_path(&db, DccState::Enable).await;
         assert!(
@@ -389,7 +398,7 @@ async fn unsupported_custom_proposal_runtime_is_silent_unchanged_and_retryable()
                 .unwrap()
                 .event_reporting_mut()
                 .expect("lends event reporting")
-                .evaluate_intrinsic_reporting(),
+                .evaluate_intrinsic_reporting(crate::runtime_clock::core_now()),
             Some(proposal)
         );
         assert!(commits.lock().unwrap().is_empty());
@@ -455,7 +464,7 @@ async fn delayed_runtime(fail_first: bool, unsupported: bool) {
             .unwrap()
             .event_reporting_mut()
             .expect("lends event reporting")
-            .evaluate_intrinsic_reporting()
+            .evaluate_intrinsic_reporting(crate::runtime_clock::core_now())
             .is_none()
     );
     assert_eq!(snapshot(&db), before);
@@ -488,7 +497,7 @@ async fn delayed_runtime(fail_first: bool, unsupported: bool) {
                 .unwrap()
                 .event_reporting_mut()
                 .expect("lends event reporting")
-                .tick_intrinsic_reporting()
+                .tick_intrinsic_reporting(crate::runtime_clock::core_now())
                 .unwrap();
             assert_eq!(proposal.change.from, EventState::NORMAL);
             assert_eq!(proposal.change.to, EventState::HIGH_LIMIT);

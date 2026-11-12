@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::event::test_clock::{test_now, test_tick};
 use crate::property_metadata::is_writable_property;
 use crate::traits::EventReporting as _;
 
@@ -93,7 +94,7 @@ fn bv_detection_enable_resets_and_gates_intrinsic_reporting() {
         &crate::command_source::test_origin(),
     )
     .unwrap();
-    assert_eq!(bv.evaluate_intrinsic_reporting(), None);
+    assert_eq!(bv.evaluate_intrinsic_reporting(test_now()), None);
     assert!(bv.event_detector.pending.is_some());
 
     bv.event_detector.event_state = bacnet_types::enums::EventState::OFFNORMAL;
@@ -127,8 +128,8 @@ fn bv_detection_enable_resets_and_gates_intrinsic_reporting() {
     );
     assert!(bv.event_detector.pending.is_none());
     assert!(bv.event_detector.fault_reliability.is_none());
-    assert_eq!(bv.evaluate_intrinsic_reporting(), None);
-    assert_eq!(bv.tick_intrinsic_reporting(), None);
+    assert_eq!(bv.evaluate_intrinsic_reporting(test_now()), None);
+    assert_eq!(bv.tick_intrinsic_reporting(test_tick()), None);
     assert!(
         bv.event_detector.pending.is_none(),
         "evaluate/tick re-armed a countdown while detection is disabled"

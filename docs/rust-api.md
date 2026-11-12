@@ -4323,8 +4323,8 @@ The capabilities, with what each accessor's `None` means:
   an object that reports events: an intrinsic reporter, an Event or Alert
   Enrollment, or a log reporting BUFFER_READY. The shared accessor serves the
   queries the server makes under a read guard (the Event_Algorithm_Inhibit_Ref
-  the database follows, and GetEnrollmentSummary); the mutable one serves
-  `evaluate_intrinsic_reporting`, `tick_intrinsic_reporting`,
+  the database follows, GetEnrollmentSummary and `next_due`); the mutable
+  one serves `evaluate_intrinsic_reporting`, `tick_intrinsic_reporting`,
   `commit_event_transition`, `acknowledge_alarm` and
   `follow_event_algorithm_inhibit`. An object lends both or neither; the
   proposal and commit contract is set out below.
@@ -4629,7 +4629,19 @@ whole. Custom objects that hold a vendor list should return
 `PropertyValue::List`, one value per item.
 
 Intrinsic reporting uses one proposal/commit contract, on the
-`EventReporting` capability. Its
+`EventReporting` capability. Both evaluations take `now`, the host's
+monotonic instant (`bacnet_objects::event::Instant`, which re-exports
+`bacnet_time::Instant`, #2303). `evaluate_intrinsic_reporting`,
+run after a write, seeds a pending transition due `Time_Delay` seconds after
+`now` (or proposes it at once for a delay of 0) and never fires a pending
+one; `tick_intrinsic_reporting` fires a pending transition at the first
+call at or after its due instant, and `next_due` says when that is, so a
+host calls the tick then and on a cadence of its own (the server: once a
+second, which also re-derives FAULT and follows inhibit references, and at
+each due instant, no sooner than 100 ms after its last sweep). An object
+that wraps another must forward `next_due` too: the default, `None`, leaves
+its delays to the next whole-second sweep.
+Its
 `evaluate_intrinsic_reporting` and `tick_intrinsic_reporting` return a
 fire-ready `TransitionOutcome` while leaving event state, acknowledgment bits,
 history, and the ready proposal unchanged until commit succeeds. Implement
@@ -5425,6 +5437,7 @@ fn acknowledge_alarm_correlated_detailed_internal(
 
 // After: lend the capability.
 use bacnet_objects::traits::EventReporting;
+use bacnet_time::Instant;
 
 // In `impl BACnetObject for MyAlarm`:
 fn event_reporting(&self) -> Option<&dyn EventReporting> {
@@ -5435,8 +5448,8 @@ fn event_reporting_mut(&mut self) -> Option<&mut dyn EventReporting> {
 }
 
 impl EventReporting for MyAlarm {
-    fn evaluate_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
-        self.detector.propose(self.value)
+    fn evaluate_intrinsic_reporting(&mut self, now: Instant) -> Option<TransitionOutcome> {
+        self.detector.propose(self.value, now)
     }
     fn commit_event_transition(
         &mut self,
@@ -6544,7 +6557,7 @@ Event_Message_Texts and Event_Detection_Enable, with local setters for the
 first four of the writable ones (`set_notification_threshold`,
 `set_notification_class`, `set_event_enable`, `set_notify_type`). Once
 Notification_Threshold is set (0, the default, reports nothing), the server's
-one-second intrinsic pass, or a write to the log, commits a NORMAL to NORMAL
+intrinsic sweep (once a second), or a write to the log, commits a NORMAL to NORMAL
 transition each time that many records have been collected since
 Last_Notify_Record, and the recipients of the log's Notification Class get a
 BUFFER_READY notification naming the log's Log_Buffer in this device with the
@@ -6580,8 +6593,8 @@ serves Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair
   device (the datatype has no device member) for the inhibit to follow, and
   the inhibit is then read-only. The server reads the property, through
   `ObjectDatabase::follow_event_algorithm_inhibit`, each time it evaluates
-  the object: on a write to it and on the one-second tick, so a change
-  reaches the inhibit within a second. A Boolean TRUE inhibits, and so does
+  the object: on a write to it and on each sweep (once a second, and when a
+  delay ends), so a change reaches the inhibit within a second. A Boolean TRUE inhibits, and so does
   ACTIVE read from a property known to hold a BinaryPV: Present_Value,
   Relinquish_Default, a Priority_Array element, Alarm_Value and
   Feedback_Value of the binary types, and an Access Credential's
@@ -8499,11 +8512,10 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   for a report waiting for an ID. `notification_deadline(token)` is a
   confirmed notification's own deadline: its answer's, or its cutoff when
   that comes first, and its cutoff alone while a resend waits for the next
-  `pop`. A confirmed
-  report's answers are cut off at `FlightTiming::cutoff` from when the
-  table began it, however late `pop` sent it, as the server's worker's
-  are. `pop(bindings, ids, now, out)` appends the next
-  APDU and returns a `Notification` (token, `Destination`, `NotifyService`,
+  `pop`. A confirmed report's answers are cut off at `FlightTiming::cutoff`
+  from when the table began it, however late `pop` sent it, as the server's
+  worker's are. `pop(bindings, ids, now, out)` appends the next APDU and
+  returns a `Notification` (token, `Destination`, `NotifyService`,
   invoke ID, priority); a confirmed one takes an invoke ID from the host's
   `InvokeIds`, which the device's own requests share. `reply(from, apdu,
   ids, now)` matches a SimpleACK, Error, Reject or Abort by invoke ID and
@@ -8668,9 +8680,16 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   every object's reliability evaluation once and returns the
   `ReliabilityChange`s and the hook failures; `bacnet_server`'s
   `FaultDetector` keeps the warning dedup over it. Nothing here formats a
-  string, takes a lock or reads a clock. Time_Delay still counts the
-  sweeps a host runs (one a second in the server); due instants are the
-  next part of #2303.
+  string, takes a lock or reads a clock: `after_write` and `sweep` take
+  the host's monotonic `now`, a `bacnet_time::Instant`. A Time_Delay a
+  write seeds is due its delay after that `now`, and the `sweep` at or
+  after it fires the transition; `next_due(db, after)` is the earliest
+  such instant after the given one (pass the last sweep's `now`: a due
+  instant it has seen and not fired, a delay of 0 it noticed or a commit
+  that failed, waits for the host's cadence), so a host sweeps then as well
+  as on its own cadence. The server sweeps once a second and at
+  `next_due`, no sooner than 100 ms after its last sweep, so a transition
+  goes out within 100 ms of its due instant.
 - `clock` (#2321): the Device's clock, for firmware with none of its own.
   `SyncedClock` holds a `bacnet_time::Instant`, the UTC date and time it
   stood for and the `Zone` (UTC_Offset, minutes west, and

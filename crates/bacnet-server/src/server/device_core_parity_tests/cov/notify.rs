@@ -37,7 +37,7 @@ pub(super) struct Ids {
 }
 
 impl InvokeIds for Ids {
-    fn take(&mut self, to: &BACnetAddress) -> Option<u8> {
+    fn take(&mut self, to: &BACnetAddress, _: ConfirmedServiceChoice) -> Option<u8> {
         let id = (0..=u8::MAX)
             .map(|step| self.next.wrapping_add(step))
             .find(|id| !self.taken.contains(&(to.clone(), *id)))?;

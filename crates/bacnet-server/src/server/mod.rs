@@ -711,6 +711,8 @@ mod empty_array_wire_tests;
 #[cfg(test)]
 mod event_confirmed_routing_tests;
 #[cfg(test)]
+mod event_delay_timing_tests;
+#[cfg(test)]
 mod event_enable_distribution_tests;
 #[cfg(test)]
 mod event_enrollment_task_tests;

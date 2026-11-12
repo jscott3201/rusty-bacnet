@@ -1,6 +1,7 @@
 //! The event-reporting capability: intrinsic reporting's proposals and
 //! commits, alarm acknowledgment and Event_Algorithm_Inhibit_Ref following.
 
+use bacnet_time::Instant;
 use bacnet_types::constructed::BACnetObjectPropertyReference;
 use bacnet_types::enums::{ErrorClass, ErrorCode, EventState};
 use bacnet_types::error::Error;
@@ -34,18 +35,21 @@ pub fn no_alarm_configured() -> Error {
 /// only proposes a transition, and the object's event properties change
 /// when the host commits it through
 /// [`commit_event_transition`](Self::commit_event_transition). The bundled
-/// server runs the evaluation after a write and once a second, commits each
-/// proposal while it holds the database's write guard, and sends the
-/// notifications only after it has released that guard.
+/// server runs the evaluation after a write, and the periodic tick once a
+/// second and whenever [`next_due`](Self::next_due) says a delay ends; it
+/// commits each proposal while it holds the database's write guard, and
+/// sends the notifications only after it has released that guard. Every
+/// `now` is the host's monotonic instant (`bacnet_time::Instant`), one
+/// timeline for every object.
 pub trait EventReporting {
     /// Evaluate intrinsic reporting after a Present_Value change.
     ///
     /// This is the per-write entry point: it seeds (or cancels) a pending
-    /// delayed transition and fires immediately only when `Time_Delay == 0`.
-    /// It never advances the `Time_Delay` countdown, so repeated writes of
-    /// the same value don't shorten the delay: the countdown, counted in
-    /// seconds (Clause 13.3), advances once per elapsed second through
-    /// [`tick_intrinsic_reporting`](Self::tick_intrinsic_reporting).
+    /// delayed transition, due `Time_Delay` seconds after `now` (Clause
+    /// 13.3), and fires immediately only when `Time_Delay == 0`. It never
+    /// fires a pending transition, and a repeated write of the same value
+    /// keeps the due instant it has:
+    /// [`tick_intrinsic_reporting`](Self::tick_intrinsic_reporting) fires it.
     ///
     /// Returns `Some(TransitionOutcome)` whenever a transition is ready to be
     /// committed, or `None` when none is (no change, a delay seeded, or no
@@ -57,21 +61,36 @@ pub trait EventReporting {
     /// succeeds. Clause 13.2.2.1.4's transition actions run either way, and
     /// `Event_Enable` disables only external distribution, downstream in the
     /// notification-distribution process (Clause 13.2.5).
-    fn evaluate_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
+    fn evaluate_intrinsic_reporting(&mut self, _now: Instant) -> Option<TransitionOutcome> {
         None
     }
 
-    /// Advance the `Time_Delay` countdown for a pending transition.
+    /// The periodic evaluation: fire a pending transition that is due.
     ///
-    /// Called by the server's one-second intrinsic-reporting task. Fires the
-    /// pending transition when its delay elapses this tick, cancels it if the
-    /// triggering condition reverted, and returns `Some(TransitionOutcome)`
-    /// when a transition is ready. A fire-ready proposal must remain
-    /// retryable until the commit succeeds. As with
+    /// Called by the server's intrinsic-reporting task. Fires the pending
+    /// transition when its due instant is at or before `now`, cancels it if
+    /// the triggering condition reverted, seeds one for a condition no write
+    /// reported (due its delay after `now`), and returns
+    /// `Some(TransitionOutcome)` when a transition is ready. A fire-ready
+    /// proposal must remain retryable until the commit succeeds. As with
     /// [`evaluate_intrinsic_reporting`](Self::evaluate_intrinsic_reporting),
     /// `Event_Enable` is reported via `distribute`, not by returning `None`.
     /// Objects without a delayed transition return `None`, the default.
-    fn tick_intrinsic_reporting(&mut self) -> Option<TransitionOutcome> {
+    fn tick_intrinsic_reporting(&mut self, _now: Instant) -> Option<TransitionOutcome> {
+        None
+    }
+
+    /// When this object's pending transition is due, if one is: the latest
+    /// instant a host should call
+    /// [`tick_intrinsic_reporting`](Self::tick_intrinsic_reporting) by for
+    /// the delay to end on time. `None` with nothing pending, the default.
+    ///
+    /// The bundled server reads it at each sweep, so it wakes early only for
+    /// a transition already pending at its last sweep. A transition a write
+    /// seeds less than a second before it is due is served by the next
+    /// periodic sweep instead, up to a second late. The built-in detectors
+    /// seed whole seconds of Time_Delay, so theirs are never that close.
+    fn next_due(&self) -> Option<Instant> {
         None
     }
 

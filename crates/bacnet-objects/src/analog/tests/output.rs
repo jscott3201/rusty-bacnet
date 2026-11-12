@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::event::test_clock::test_now;
 use crate::property_metadata::is_writable_property;
 use crate::traits::EventReporting as _;
 use bacnet_encoding::primitives::encode_property_value;
@@ -182,7 +183,7 @@ fn ao_intrinsic_reporting_after_priority_write() {
         &crate::command_source::test_origin(),
     )
     .unwrap();
-    let change = ao.evaluate_intrinsic_reporting().unwrap().change;
+    let change = ao.evaluate_intrinsic_reporting(test_now()).unwrap().change;
     assert_eq!(change.to, EventState::HIGH_LIMIT);
 }
 

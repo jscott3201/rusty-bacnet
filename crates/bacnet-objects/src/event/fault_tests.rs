@@ -7,6 +7,7 @@
 //! implying a citation exists.
 
 use super::*;
+use crate::event::test_clock::{test_now, test_tick};
 use crate::traits::EventReporting as _;
 
 const NO_FAULT: Reliability = Reliability::NO_FAULT_DETECTED;
@@ -117,7 +118,7 @@ fn any_non_zero_reliability_faults_not_just_a_known_one() {
     for reliability in [OVER_RANGE, SHORTED_LOOP, Reliability::from_raw(9999)] {
         let mut det = detector();
         assert_eq!(
-            det.probe(50.0, reliability).unwrap().change.to,
+            det.probe(50.0, reliability, test_now()).unwrap().change.to,
             EventState::FAULT
         );
     }
@@ -128,7 +129,9 @@ fn any_non_zero_reliability_faults_not_just_a_known_one() {
 #[test]
 fn bad_reliability_drives_event_state_to_fault() {
     let mut det = detector();
-    let outcome = det.probe(50.0, OVER_RANGE).expect("fault transition");
+    let outcome = det
+        .probe(50.0, OVER_RANGE, test_now())
+        .expect("fault transition");
     assert_eq!(outcome.change.from, EventState::NORMAL);
     assert_eq!(outcome.change.to, EventState::FAULT);
     assert_eq!(det.event_state, EventState::FAULT);
@@ -141,7 +144,7 @@ fn fault_takes_precedence_over_the_algorithm() {
     // normal/offnormal evaluation.
     let mut det = detector();
     assert_eq!(
-        det.probe(99.0, OVER_RANGE).unwrap().change.to,
+        det.probe(99.0, OVER_RANGE, test_now()).unwrap().change.to,
         EventState::FAULT
     );
 }
@@ -154,7 +157,7 @@ fn fault_entry_ignores_time_delay() {
     let mut det = detector();
     det.time_delay = 10;
     let outcome = det
-        .probe(50.0, OVER_RANGE)
+        .probe(50.0, OVER_RANGE, test_now())
         .expect("fault fires immediately");
     assert_eq!(outcome.change.to, EventState::FAULT);
     assert!(det.pending.is_none());
@@ -168,11 +171,14 @@ fn fault_entry_cancels_an_in_flight_countdown() {
     // resuming a partial one.
     let mut det = detector();
     det.time_delay = 5;
-    assert!(det.probe(99.0, NO_FAULT).is_none(), "countdown seeded");
+    assert!(
+        det.probe(99.0, NO_FAULT, test_now()).is_none(),
+        "countdown seeded"
+    );
     assert_eq!(det.pending.as_ref().unwrap().state, EventState::HIGH_LIMIT);
 
     assert_eq!(
-        det.probe(99.0, OVER_RANGE).unwrap().change.to,
+        det.probe(99.0, OVER_RANGE, test_now()).unwrap().change.to,
         EventState::FAULT
     );
     assert!(
@@ -201,15 +207,15 @@ fn holding_fault_blocks_a_state_independent_algorithm() {
         ..Default::default()
     };
     assert_eq!(
-        det.probe(1, SHORTED_LOOP).unwrap().change.to,
+        det.probe(1, SHORTED_LOOP, test_now()).unwrap().change.to,
         EventState::FAULT
     );
     assert!(
-        det.probe(0, SHORTED_LOOP).is_none(),
+        det.probe(0, SHORTED_LOOP, test_now()).is_none(),
         "a non-alarm value must not recover the object while Reliability is bad"
     );
     assert_eq!(det.event_state, EventState::FAULT);
-    assert!(det.tick(0, SHORTED_LOOP).is_none());
+    assert!(det.tick(0, SHORTED_LOOP, test_tick()).is_none());
     assert_eq!(det.event_state, EventState::FAULT);
 }
 
@@ -223,11 +229,11 @@ fn holding_fault_reports_no_further_transitions() {
     // if the re-entry condition is widened to fire whenever the object is faulted
     // rather than only when the value changed.
     let mut det = detector();
-    assert!(det.probe(50.0, OVER_RANGE).is_some());
-    assert!(det.probe(50.0, OVER_RANGE).is_none());
-    assert!(det.tick(50.0, OVER_RANGE).is_none());
+    assert!(det.probe(50.0, OVER_RANGE, test_now()).is_some());
+    assert!(det.probe(50.0, OVER_RANGE, test_now()).is_none());
+    assert!(det.tick(50.0, OVER_RANGE, test_tick()).is_none());
     assert!(
-        det.probe(99.0, OVER_RANGE).is_none(),
+        det.probe(99.0, OVER_RANGE, test_now()).is_none(),
         "the standing fault must not report another transition"
     );
     assert_eq!(det.event_state, EventState::FAULT);
@@ -237,15 +243,15 @@ fn holding_fault_reports_no_further_transitions() {
 fn out_of_range_reenters_fault_only_when_reliability_changes() {
     let mut det = detector();
 
-    let mut outcomes = usize::from(det.probe(50.0, OVER_RANGE).is_some());
+    let mut outcomes = usize::from(det.probe(50.0, OVER_RANGE, test_now()).is_some());
     for _ in 0..4 {
-        outcomes += usize::from(det.tick(50.0, OVER_RANGE).is_some());
+        outcomes += usize::from(det.tick(50.0, OVER_RANGE, test_tick()).is_some());
     }
     assert_eq!(outcomes, 1, "an unchanged fault must not flood");
     assert_eq!(det.fault_reliability, Some(OVER_RANGE));
 
     let reentry = det
-        .probe(50.0, NO_SENSOR)
+        .probe(50.0, NO_SENSOR, test_now())
         .expect("changed reliability re-enters FAULT");
     assert_eq!(reentry.change.from, EventState::FAULT);
     assert_eq!(reentry.change.to, EventState::FAULT);
@@ -255,15 +261,15 @@ fn out_of_range_reenters_fault_only_when_reliability_changes() {
         EventTransition::ToFault
     );
     assert_eq!(det.fault_reliability, Some(NO_SENSOR));
-    assert!(det.tick(50.0, NO_SENSOR).is_none());
+    assert!(det.tick(50.0, NO_SENSOR, test_tick()).is_none());
 
     assert_eq!(
-        det.probe(50.0, NO_FAULT).unwrap().change.to,
+        det.probe(50.0, NO_FAULT, test_now()).unwrap().change.to,
         EventState::NORMAL
     );
     assert_eq!(det.fault_reliability, None);
     assert_eq!(
-        det.probe(50.0, NO_SENSOR).unwrap().change.to,
+        det.probe(50.0, NO_SENSOR, test_now()).unwrap().change.to,
         EventState::FAULT
     );
 }
@@ -276,15 +282,15 @@ fn change_of_state_reenters_fault_only_when_reliability_changes() {
         ..Default::default()
     };
 
-    let mut outcomes = usize::from(det.probe(0, OVER_RANGE).is_some());
+    let mut outcomes = usize::from(det.probe(0, OVER_RANGE, test_now()).is_some());
     for _ in 0..4 {
-        outcomes += usize::from(det.tick(0, OVER_RANGE).is_some());
+        outcomes += usize::from(det.tick(0, OVER_RANGE, test_tick()).is_some());
     }
     assert_eq!(outcomes, 1, "an unchanged fault must not flood");
     assert_eq!(det.fault_reliability, Some(OVER_RANGE));
 
     let reentry = det
-        .probe(0, NO_SENSOR)
+        .probe(0, NO_SENSOR, test_now())
         .expect("changed reliability re-enters FAULT");
     assert_eq!(reentry.change.from, EventState::FAULT);
     assert_eq!(reentry.change.to, EventState::FAULT);
@@ -294,15 +300,15 @@ fn change_of_state_reenters_fault_only_when_reliability_changes() {
         EventTransition::ToFault
     );
     assert_eq!(det.fault_reliability, Some(NO_SENSOR));
-    assert!(det.tick(0, NO_SENSOR).is_none());
+    assert!(det.tick(0, NO_SENSOR, test_tick()).is_none());
 
     assert_eq!(
-        det.probe(0, NO_FAULT).unwrap().change.to,
+        det.probe(0, NO_FAULT, test_now()).unwrap().change.to,
         EventState::NORMAL
     );
     assert_eq!(det.fault_reliability, None);
     assert_eq!(
-        det.probe(0, NO_SENSOR).unwrap().change.to,
+        det.probe(0, NO_SENSOR, test_now()).unwrap().change.to,
         EventState::FAULT
     );
 }
@@ -314,15 +320,15 @@ fn command_failure_reenters_fault_only_when_reliability_changes() {
         ..Default::default()
     };
 
-    let mut outcomes = usize::from(det.probe(0, 0, OVER_RANGE).is_some());
+    let mut outcomes = usize::from(det.probe(0, 0, OVER_RANGE, test_now()).is_some());
     for _ in 0..4 {
-        outcomes += usize::from(det.tick(0, 0, OVER_RANGE).is_some());
+        outcomes += usize::from(det.tick(0, 0, OVER_RANGE, test_tick()).is_some());
     }
     assert_eq!(outcomes, 1, "an unchanged fault must not flood");
     assert_eq!(det.fault_reliability, Some(OVER_RANGE));
 
     let reentry = det
-        .probe(0, 0, NO_SENSOR)
+        .probe(0, 0, NO_SENSOR, test_now())
         .expect("changed reliability re-enters FAULT");
     assert_eq!(reentry.change.from, EventState::FAULT);
     assert_eq!(reentry.change.to, EventState::FAULT);
@@ -332,15 +338,15 @@ fn command_failure_reenters_fault_only_when_reliability_changes() {
         EventTransition::ToFault
     );
     assert_eq!(det.fault_reliability, Some(NO_SENSOR));
-    assert!(det.tick(0, 0, NO_SENSOR).is_none());
+    assert!(det.tick(0, 0, NO_SENSOR, test_tick()).is_none());
 
     assert_eq!(
-        det.probe(0, 0, NO_FAULT).unwrap().change.to,
+        det.probe(0, 0, NO_FAULT, test_now()).unwrap().change.to,
         EventState::NORMAL
     );
     assert_eq!(det.fault_reliability, None);
     assert_eq!(
-        det.probe(0, 0, NO_SENSOR).unwrap().change.to,
+        det.probe(0, 0, NO_SENSOR, test_now()).unwrap().change.to,
         EventState::FAULT
     );
 }
@@ -359,11 +365,13 @@ fn recovery_from_fault_enters_normal_not_the_algorithm_state() {
     // state machine does not define. This test is what fails under that design.
     let mut det = detector();
     assert_eq!(
-        det.probe(99.0, OVER_RANGE).unwrap().change.to,
+        det.probe(99.0, OVER_RANGE, test_now()).unwrap().change.to,
         EventState::FAULT
     );
 
-    let outcome = det.probe(99.0, NO_FAULT).expect("recovery transition");
+    let outcome = det
+        .probe(99.0, NO_FAULT, test_now())
+        .expect("recovery transition");
     assert_eq!(outcome.change.from, EventState::FAULT);
     assert_eq!(
         outcome.change.to,
@@ -378,11 +386,13 @@ fn algorithm_reasserts_offnormal_after_recovery() {
     // object out of NORMAL under its own conditions — so the out-of-range value
     // is not swallowed, merely re-detected from the state machine's real state.
     let mut det = detector();
-    det.probe(99.0, OVER_RANGE);
-    det.probe(99.0, NO_FAULT);
+    det.probe(99.0, OVER_RANGE, test_now());
+    det.probe(99.0, NO_FAULT, test_now());
     assert_eq!(det.event_state, EventState::NORMAL);
 
-    let outcome = det.probe(99.0, NO_FAULT).expect("algorithm re-detects");
+    let outcome = det
+        .probe(99.0, NO_FAULT, test_now())
+        .expect("algorithm re-detects");
     assert_eq!(outcome.change.from, EventState::NORMAL);
     assert_eq!(outcome.change.to, EventState::HIGH_LIMIT);
 }
@@ -395,15 +405,18 @@ fn recovery_honors_time_delay_on_the_subsequent_offnormal_transition() {
     // delay again before it produces a transition.
     let mut det = detector();
     det.time_delay = 3;
-    det.probe(99.0, OVER_RANGE);
+    det.probe(99.0, OVER_RANGE, test_now());
 
     assert_eq!(
-        det.probe(99.0, NO_FAULT).unwrap().change.to,
+        det.probe(99.0, NO_FAULT, test_now()).unwrap().change.to,
         EventState::NORMAL,
         "recovery itself is not delayed"
     );
-    assert!(det.probe(99.0, NO_FAULT).is_none(), "offnormal is delayed");
-    assert_eq!(det.pending.as_ref().unwrap().remaining, 3);
+    assert!(
+        det.probe(99.0, NO_FAULT, test_now()).is_none(),
+        "offnormal is delayed"
+    );
+    assert_eq!(det.pending.as_ref().unwrap().remaining(), 3);
 }
 
 // --- what the transition carries ---
@@ -414,14 +427,14 @@ fn fault_transitions_report_change_of_reliability() {
     // unreachable until now, so this is the first test to exercise it through a
     // transition an object can actually produce.
     let mut det = detector();
-    let into = det.probe(50.0, OVER_RANGE).unwrap().change;
+    let into = det.probe(50.0, OVER_RANGE, test_now()).unwrap().change;
     assert_eq!(
         into.event_type(OutOfRangeDetector::ALGORITHM),
         EventType::CHANGE_OF_RELIABILITY
     );
     assert_eq!(into.transition(), EventTransition::ToFault);
 
-    let out = det.probe(50.0, NO_FAULT).unwrap().change;
+    let out = det.probe(50.0, NO_FAULT, test_now()).unwrap().change;
     assert_eq!(
         out.event_type(OutOfRangeDetector::ALGORITHM),
         EventType::CHANGE_OF_RELIABILITY
@@ -432,8 +445,8 @@ fn fault_transitions_report_change_of_reliability() {
 #[test]
 fn fault_override_wins_in_both_directions_for_every_detector_algorithm() {
     let mut out_of_range = detector();
-    let into = out_of_range.probe(50.0, OVER_RANGE).unwrap();
-    let out = out_of_range.probe(50.0, NO_FAULT).unwrap();
+    let into = out_of_range.probe(50.0, OVER_RANGE, test_now()).unwrap();
+    let out = out_of_range.probe(50.0, NO_FAULT, test_now()).unwrap();
     assert_eq!(into.event_type, EventType::CHANGE_OF_RELIABILITY);
     assert_eq!(out.event_type, EventType::CHANGE_OF_RELIABILITY);
 
@@ -442,8 +455,8 @@ fn fault_override_wins_in_both_directions_for_every_detector_algorithm() {
         event_enable: EventTransitionBits::all(),
         ..Default::default()
     };
-    let into = change_of_state.probe(0, OVER_RANGE).unwrap();
-    let out = change_of_state.probe(0, NO_FAULT).unwrap();
+    let into = change_of_state.probe(0, OVER_RANGE, test_now()).unwrap();
+    let out = change_of_state.probe(0, NO_FAULT, test_now()).unwrap();
     assert_eq!(into.event_type, EventType::CHANGE_OF_RELIABILITY);
     assert_eq!(out.event_type, EventType::CHANGE_OF_RELIABILITY);
 
@@ -451,15 +464,15 @@ fn fault_override_wins_in_both_directions_for_every_detector_algorithm() {
         event_enable: EventTransitionBits::all(),
         ..Default::default()
     };
-    let into = command_failure.probe(0, 0, OVER_RANGE).unwrap();
-    let out = command_failure.probe(0, 0, NO_FAULT).unwrap();
+    let into = command_failure.probe(0, 0, OVER_RANGE, test_now()).unwrap();
+    let out = command_failure.probe(0, 0, NO_FAULT, test_now()).unwrap();
     assert_eq!(into.event_type, EventType::CHANGE_OF_RELIABILITY);
     assert_eq!(out.event_type, EventType::CHANGE_OF_RELIABILITY);
 }
 
 #[test]
 fn out_of_range_detector_reports_its_algorithm_for_non_fault_transition() {
-    let outcome = detector().probe(99.0, NO_FAULT).unwrap();
+    let outcome = detector().probe(99.0, NO_FAULT, test_now()).unwrap();
     assert_eq!(outcome.change.to, EventState::HIGH_LIMIT);
     assert_eq!(outcome.event_type, EventType::OUT_OF_RANGE);
 }
@@ -471,7 +484,7 @@ fn change_of_state_detector_reports_its_algorithm_for_non_fault_transition() {
         event_enable: EventTransitionBits::all(),
         ..Default::default()
     };
-    let outcome = detector.probe(1, NO_FAULT).unwrap();
+    let outcome = detector.probe(1, NO_FAULT, test_now()).unwrap();
     assert_eq!(outcome.change.to, EventState::OFFNORMAL);
     assert_eq!(outcome.event_type, EventType::CHANGE_OF_STATE);
 }
@@ -482,7 +495,7 @@ fn command_failure_offnormal_reports_command_failure_not_change_of_state() {
         event_enable: EventTransitionBits::all(),
         ..Default::default()
     };
-    let outcome = detector.probe(1, 0, NO_FAULT).unwrap();
+    let outcome = detector.probe(1, 0, NO_FAULT, test_now()).unwrap();
     assert_eq!(outcome.change.to, EventState::OFFNORMAL);
     assert_eq!(outcome.event_type, EventType::COMMAND_FAILURE);
 }
@@ -493,11 +506,13 @@ fn fault_distribution_honors_the_to_fault_event_enable_bit() {
     // transition is reported either way; only `distribute` changes.
     let mut det = detector();
     det.event_enable = TO_FAULT;
-    assert!(det.probe(50.0, OVER_RANGE).unwrap().distribute);
+    assert!(det.probe(50.0, OVER_RANGE, test_now()).unwrap().distribute);
 
     let mut det = detector();
     det.event_enable = TO_OFFNORMAL | TO_NORMAL;
-    let outcome = det.probe(50.0, OVER_RANGE).expect("still detected");
+    let outcome = det
+        .probe(50.0, OVER_RANGE, test_now())
+        .expect("still detected");
     assert!(!outcome.distribute);
     assert_eq!(
         det.event_state,
@@ -513,7 +528,9 @@ fn out_of_range_distribution_selects_the_to_normal_bit() {
         det.event_state = EventState::HIGH_LIMIT;
         det.event_enable = event_enable;
 
-        let outcome = det.probe(50.0, NO_FAULT).expect("TO_NORMAL transition");
+        let outcome = det
+            .probe(50.0, NO_FAULT, test_now())
+            .expect("TO_NORMAL transition");
         assert_eq!(outcome.change.to, EventState::NORMAL);
         assert_eq!(outcome.distribute, expected, "Event_Enable {event_enable}");
     }
@@ -525,7 +542,9 @@ fn out_of_range_distribution_selects_the_to_offnormal_bit() {
         let mut det = detector();
         det.event_enable = event_enable;
 
-        let outcome = det.probe(90.0, NO_FAULT).expect("TO_OFFNORMAL transition");
+        let outcome = det
+            .probe(90.0, NO_FAULT, test_now())
+            .expect("TO_OFFNORMAL transition");
         assert_eq!(outcome.change.to, EventState::HIGH_LIMIT);
         assert_eq!(outcome.distribute, expected, "Event_Enable {event_enable}");
     }
@@ -541,7 +560,9 @@ fn change_of_state_distribution_selects_the_to_normal_bit() {
             ..Default::default()
         };
 
-        let outcome = det.probe(0, NO_FAULT).expect("TO_NORMAL transition");
+        let outcome = det
+            .probe(0, NO_FAULT, test_now())
+            .expect("TO_NORMAL transition");
         assert_eq!(outcome.change.to, EventState::NORMAL);
         assert_eq!(outcome.distribute, expected, "Event_Enable {event_enable}");
     }
@@ -556,7 +577,9 @@ fn change_of_state_distribution_selects_the_to_offnormal_bit() {
             ..Default::default()
         };
 
-        let outcome = det.probe(1, NO_FAULT).expect("TO_OFFNORMAL transition");
+        let outcome = det
+            .probe(1, NO_FAULT, test_now())
+            .expect("TO_OFFNORMAL transition");
         assert_eq!(outcome.change.to, EventState::OFFNORMAL);
         assert_eq!(outcome.distribute, expected, "Event_Enable {event_enable}");
     }
@@ -571,7 +594,9 @@ fn command_failure_distribution_selects_the_to_normal_bit() {
             ..Default::default()
         };
 
-        let outcome = det.probe(1, 1, NO_FAULT).expect("TO_NORMAL transition");
+        let outcome = det
+            .probe(1, 1, NO_FAULT, test_now())
+            .expect("TO_NORMAL transition");
         assert_eq!(outcome.change.to, EventState::NORMAL);
         assert_eq!(outcome.distribute, expected, "Event_Enable {event_enable}");
     }
@@ -585,7 +610,9 @@ fn command_failure_distribution_selects_the_to_offnormal_bit() {
             ..Default::default()
         };
 
-        let outcome = det.probe(1, 0, NO_FAULT).expect("TO_OFFNORMAL transition");
+        let outcome = det
+            .probe(1, 0, NO_FAULT, test_now())
+            .expect("TO_OFFNORMAL transition");
         assert_eq!(outcome.change.to, EventState::OFFNORMAL);
         assert_eq!(outcome.distribute, expected, "Event_Enable {event_enable}");
     }
@@ -603,12 +630,12 @@ fn change_of_state_detector_applies_fault_precedence() {
         ..Default::default()
     };
     assert_eq!(
-        det.probe(0, SHORTED_LOOP).unwrap().change.to,
+        det.probe(0, SHORTED_LOOP, test_now()).unwrap().change.to,
         EventState::FAULT
     );
     // Recovery enters NORMAL even though the present value is an alarm value.
     assert_eq!(
-        det.probe(1, NO_FAULT).unwrap().change.to,
+        det.probe(1, NO_FAULT, test_now()).unwrap().change.to,
         EventState::NORMAL
     );
 }
@@ -622,7 +649,7 @@ fn command_failure_detector_applies_fault_precedence() {
         ..Default::default()
     };
     assert_eq!(
-        det.probe(1, 1, SHORTED_LOOP).unwrap().change.to,
+        det.probe(1, 1, SHORTED_LOOP, test_now()).unwrap().change.to,
         EventState::FAULT
     );
 }
@@ -638,20 +665,26 @@ fn change_of_state_fault_entry_discards_an_in_flight_countdown() {
         event_state: EventState::NORMAL,
         ..Default::default()
     };
-    assert!(det.probe(1, NO_FAULT).is_none(), "countdown seeded");
+    assert!(
+        det.probe(1, NO_FAULT, test_now()).is_none(),
+        "countdown seeded"
+    );
     assert_eq!(det.pending.as_ref().unwrap().state, EventState::OFFNORMAL);
     assert_eq!(
-        det.probe(1, SHORTED_LOOP).unwrap().change.to,
+        det.probe(1, SHORTED_LOOP, test_now()).unwrap().change.to,
         EventState::FAULT
     );
     assert!(det.pending.is_none(), "pre-fault countdown is discarded");
 
     assert_eq!(
-        det.probe(1, NO_FAULT).unwrap().change.to,
+        det.probe(1, NO_FAULT, test_now()).unwrap().change.to,
         EventState::NORMAL
     );
-    assert!(det.tick(1, NO_FAULT).is_none(), "a fresh countdown starts");
-    assert_eq!(det.pending.as_ref().unwrap().remaining, 2);
+    assert!(
+        det.tick(1, NO_FAULT, test_tick()).is_none(),
+        "a fresh countdown starts"
+    );
+    assert_eq!(det.pending.as_ref().unwrap().remaining(), 2);
 }
 
 #[test]
@@ -663,11 +696,11 @@ fn command_failure_holds_fault_while_reliability_remains_bad() {
         ..Default::default()
     };
     assert_eq!(
-        det.probe(1, 1, SHORTED_LOOP).unwrap().change.to,
+        det.probe(1, 1, SHORTED_LOOP, test_now()).unwrap().change.to,
         EventState::FAULT
     );
-    assert!(det.probe(1, 1, SHORTED_LOOP).is_none());
-    assert!(det.tick(1, 1, SHORTED_LOOP).is_none());
+    assert!(det.probe(1, 1, SHORTED_LOOP, test_now()).is_none());
+    assert!(det.tick(1, 1, SHORTED_LOOP, test_tick()).is_none());
     assert_eq!(det.event_state, EventState::FAULT);
 }
 
@@ -679,16 +712,16 @@ fn command_failure_recovers_to_normal_before_rerunning_its_algorithm() {
         ..Default::default()
     };
     assert_eq!(
-        det.probe(1, 1, SHORTED_LOOP).unwrap().change.to,
+        det.probe(1, 1, SHORTED_LOOP, test_now()).unwrap().change.to,
         EventState::FAULT
     );
     let recovery = det
-        .tick(1, 0, NO_FAULT)
+        .tick(1, 0, NO_FAULT, test_tick())
         .expect("healthy reliability recovers through the periodic path");
     assert_eq!(recovery.change.from, EventState::FAULT);
     assert_eq!(recovery.change.to, EventState::NORMAL);
     assert_eq!(
-        det.probe(1, 0, NO_FAULT).unwrap().change.to,
+        det.probe(1, 0, NO_FAULT, test_now()).unwrap().change.to,
         EventState::OFFNORMAL
     );
 }
@@ -701,10 +734,13 @@ fn command_failure_fault_entry_discards_an_in_flight_countdown() {
         event_state: EventState::NORMAL,
         ..Default::default()
     };
-    assert!(det.probe(1, 0, NO_FAULT).is_none(), "countdown seeded");
+    assert!(
+        det.probe(1, 0, NO_FAULT, test_now()).is_none(),
+        "countdown seeded"
+    );
     assert_eq!(det.pending.as_ref().unwrap().state, EventState::OFFNORMAL);
     assert_eq!(
-        det.tick(1, 0, SHORTED_LOOP).unwrap().change.to,
+        det.tick(1, 0, SHORTED_LOOP, test_tick()).unwrap().change.to,
         EventState::FAULT
     );
     assert!(det.pending.is_none(), "pre-fault countdown is discarded");
@@ -728,7 +764,7 @@ fn writing_reliability_on_an_object_drives_event_state_to_fault() {
     let mut ai =
         AnalogInputObject::new(1, "ai-1", EngineeringUnits::DEGREES_CELSIUS).expect("construct");
     assert!(
-        ai.evaluate_intrinsic_reporting().is_none(),
+        ai.evaluate_intrinsic_reporting(test_now()).is_none(),
         "healthy object has no transition to report"
     );
 
@@ -748,7 +784,7 @@ fn writing_reliability_on_an_object_drives_event_state_to_fault() {
     .expect("reliability is writable");
 
     let outcome = ai
-        .evaluate_intrinsic_reporting()
+        .evaluate_intrinsic_reporting(test_now())
         .expect("reliability must drive a transition");
     assert_eq!(outcome.change.to, EventState::FAULT);
     assert_eq!(
@@ -768,7 +804,9 @@ fn command_failure_to_fault_distribution_is_no_longer_hardcoded_off() {
         ..Default::default()
     };
     assert!(
-        det.probe(1, 1, SHORTED_LOOP).unwrap().distribute,
+        det.probe(1, 1, SHORTED_LOOP, test_now())
+            .unwrap()
+            .distribute,
         "TO_FAULT distribution must follow Event_Enable like the other two directions"
     );
 
@@ -778,5 +816,9 @@ fn command_failure_to_fault_distribution_is_no_longer_hardcoded_off() {
         event_state: EventState::NORMAL,
         ..Default::default()
     };
-    assert!(!det.probe(1, 1, SHORTED_LOOP).unwrap().distribute);
+    assert!(
+        !det.probe(1, 1, SHORTED_LOOP, test_now())
+            .unwrap()
+            .distribute
+    );
 }

@@ -7,6 +7,7 @@
 //! writable, so the transition bits were stuck at (F, F, F).
 
 use super::*;
+use crate::event::test_clock::test_now;
 use crate::property_metadata::is_writable_property;
 use crate::traits::EventReporting as _;
 use bacnet_encoding::primitives::{decode_timestamp_choice, encode_timestamp_choice};
@@ -372,7 +373,7 @@ fn fresh_binary_input_is_default_armed_for_active() {
     let mut bi = BinaryInputObject::new(1, "BI-1").unwrap();
     bi.set_present_value(1);
     let outcome = bi
-        .evaluate_intrinsic_reporting()
+        .evaluate_intrinsic_reporting(test_now())
         .expect("ACTIVE is the default Alarm_Value");
     assert_eq!(outcome.change.to, EventState::OFFNORMAL);
 }

@@ -4,6 +4,8 @@
 //! the Door_Alarm_State they admit, CHANGE_OF_STATE on Door_Alarm_State and
 //! the FAULT_STATE check behind Reliability.
 
+#[cfg(feature = "event-reporting")]
+use crate::event::test_clock::{test_now, test_tick};
 use crate::traits::EventReporting as _;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::PropertyIdentifier as P;
@@ -334,9 +336,9 @@ fn access_door_goes_offnormal_after_time_delay_and_back_to_normal() {
     let mut door = alarming_door(2);
     // The application's door logic finds the door held open too long.
     door.set_door_alarm_state(S::DOOR_OPEN_TOO_LONG).unwrap();
-    assert_eq!(door.evaluate_intrinsic_reporting(), None);
-    assert_eq!(door.tick_intrinsic_reporting(), None);
-    let offnormal = door.tick_intrinsic_reporting().unwrap();
+    assert_eq!(door.evaluate_intrinsic_reporting(test_now()), None);
+    assert_eq!(door.tick_intrinsic_reporting(test_tick()), None);
+    let offnormal = door.tick_intrinsic_reporting(test_tick()).unwrap();
     assert_eq!(
         offnormal,
         TransitionOutcome {
@@ -356,13 +358,13 @@ fn access_door_goes_offnormal_after_time_delay_and_back_to_normal() {
     );
     // Another alarm value keeps OFFNORMAL without a new transition.
     door.set_door_alarm_state(S::FORCED_OPEN).unwrap();
-    assert_eq!(door.evaluate_intrinsic_reporting(), None);
-    assert_eq!(door.tick_intrinsic_reporting(), None);
+    assert_eq!(door.evaluate_intrinsic_reporting(test_now()), None);
+    assert_eq!(door.tick_intrinsic_reporting(test_tick()), None);
 
     door.set_door_alarm_state(S::NORMAL).unwrap();
-    assert_eq!(door.evaluate_intrinsic_reporting(), None);
-    assert_eq!(door.tick_intrinsic_reporting(), None);
-    let normal = door.tick_intrinsic_reporting().unwrap();
+    assert_eq!(door.evaluate_intrinsic_reporting(test_now()), None);
+    assert_eq!(door.tick_intrinsic_reporting(test_tick()), None);
+    let normal = door.tick_intrinsic_reporting(test_tick()).unwrap();
     assert_eq!(
         normal.change,
         change(EventState::OFFNORMAL, EventState::NORMAL)
@@ -388,7 +390,7 @@ fn access_door_fault_values_report_multi_state_fault() {
         status_flags(StatusFlags::FAULT)
     );
     // A fault waits for no Time_Delay.
-    let fault = door.evaluate_intrinsic_reporting().unwrap();
+    let fault = door.evaluate_intrinsic_reporting(test_now()).unwrap();
     assert_eq!(fault.change, change(EventState::NORMAL, EventState::FAULT));
     assert_eq!(fault.event_type, EventType::CHANGE_OF_RELIABILITY);
     commit_test_proposal(&mut door, fault);
@@ -402,7 +404,7 @@ fn access_door_fault_values_report_multi_state_fault() {
         read(&door, P::RELIABILITY),
         enumerated(Reliability::NO_FAULT_DETECTED.to_raw())
     );
-    let recovered = door.evaluate_intrinsic_reporting().unwrap();
+    let recovered = door.evaluate_intrinsic_reporting(test_now()).unwrap();
     assert_eq!(
         recovered.change,
         change(EventState::FAULT, EventState::NORMAL)
@@ -441,7 +443,7 @@ fn access_door_simulated_reliability_holds_until_the_return_to_service() {
     )
     .unwrap();
     assert_eq!(read(&door, P::RELIABILITY), unreliable);
-    let fault = door.evaluate_intrinsic_reporting().unwrap();
+    let fault = door.evaluate_intrinsic_reporting(test_now()).unwrap();
     assert_eq!(fault.change, change(EventState::NORMAL, EventState::FAULT));
     commit_test_proposal(&mut door, fault);
     for (value, code) in [
@@ -462,7 +464,7 @@ fn access_door_simulated_reliability_holds_until_the_return_to_service() {
         enumerated(Reliability::NO_FAULT_DETECTED.to_raw())
     );
     assert_eq!(
-        door.evaluate_intrinsic_reporting()
+        door.evaluate_intrinsic_reporting(test_now())
             .map(|outcome| outcome.change),
         Some(change(EventState::FAULT, EventState::NORMAL))
     );

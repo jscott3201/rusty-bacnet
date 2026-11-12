@@ -554,7 +554,7 @@ struct Lease {
 }
 
 impl InvokeIds for Leases {
-    fn take(&mut self, to: &BACnetAddress) -> Option<u8> {
+    fn take(&mut self, to: &BACnetAddress, service: ConfirmedServiceChoice) -> Option<u8> {
         // At the bound a report waits for one of these to end, which the
         // `Reporter` sees for itself.
         if self.out.len() >= COV_CONFIRMED_IN_FLIGHT {
@@ -564,7 +564,6 @@ impl InvokeIds for Leases {
             0 => CanonicalPeer::direct(&to.mac_address),
             network => CanonicalPeer::routed(network, &to.mac_address),
         };
-        let service = ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION;
         let reserved = self
             .coordinator
             .reserve(LeaseMetadata::notification(peer, service));

@@ -141,6 +141,7 @@ macro_rules! impl_builtin_intrinsic_reporting {
 
             fn evaluate_intrinsic_reporting(
                 &mut self,
+                now: bacnet_time::Instant,
             ) -> Option<$crate::event::TransitionOutcome> {
                 if !self.$event_detection_enable_field {
                     return None;
@@ -149,10 +150,14 @@ macro_rules! impl_builtin_intrinsic_reporting {
                     $(self.$input_field,)+
                     self.$reliability_field,
                     self.$history_field.options.inhibited(),
+                    now,
                 )
             }
 
-            fn tick_intrinsic_reporting(&mut self) -> Option<$crate::event::TransitionOutcome> {
+            fn tick_intrinsic_reporting(
+                &mut self,
+                now: bacnet_time::Instant,
+            ) -> Option<$crate::event::TransitionOutcome> {
                 if !self.$event_detection_enable_field {
                     return None;
                 }
@@ -160,7 +165,15 @@ macro_rules! impl_builtin_intrinsic_reporting {
                     $(self.$input_field,)+
                     self.$reliability_field,
                     self.$history_field.options.inhibited(),
+                    now,
                 )
+            }
+
+            fn next_due(&self) -> Option<bacnet_time::Instant> {
+                if !self.$event_detection_enable_field {
+                    return None;
+                }
+                self.$detector_field.next_due()
             }
 
             fn event_algorithm_inhibit_reference(
