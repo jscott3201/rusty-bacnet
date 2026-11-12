@@ -376,7 +376,7 @@ fn omitted_tags_rejected_and_deprecated_or_reserved_ones_kept() {
                 );
             }
             Err(err) if matches!(tag, 6 | 19) => assert!(
-                format!("{err}").contains("carries no parameters"),
+                format!("{err}").contains("out on purpose"),
                 "tag [{tag}]: unexpected error {err}"
             ),
             other => panic!("tag [{tag}]: {other:?}"),
@@ -389,7 +389,7 @@ fn omitted_tags_rejected_and_deprecated_or_reserved_ones_kept() {
         tags::encode_tag(&mut data, tag, crate::tags::TagClass::Context, 0);
         let err = decode_event_parameter(&data, 0).unwrap_err();
         let expected = if matches!(tag, 6 | 19) {
-            "carries no parameters"
+            "out on purpose"
         } else {
             "invalid primitive alternative"
         };

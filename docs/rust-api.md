@@ -6638,7 +6638,8 @@ or 23 and up) decode the same way, primitive or constructed, as
 notification stays usable; tag 20, which matches the event type that reports
 no values, is still refused. Event_Parameters keeps tags 7 and 12 as
 `BACnetEventParameter::Opaque` too, as it keeps 23 and up (#2483), and still
-refuses 6 and 19, whose event types carry no parameters.
+refuses 6 and 19, which Clause 21 leaves out on purpose (complex-event-type's
+parameters are proprietary; change-of-reliability has none).
 `LogDatum::try_from(LogValue)` replaces the old `From`: an opaque member
 value has no Trend Log datum and comes back as the error.
 
@@ -6658,7 +6659,8 @@ An Audit Log record nests one level less deep again, since an
 AuditLogQuery-ACK carries it inside its record list and the result's own
 field (#2483): `AuditLogObject::add_record` and the stored audit
 notifications refuse a deeper one, and a saved Audit Log snapshot drops one
-the same way, each older record's sequence number moving up by one.
+the same way, each older record's sequence number moving up by the number of newer records
+dropped.
 
 Trend Log Multiple, Trend Log and Event Log objects list `Log_Buffer` in their
 Property_List, but ReadProperty and ReadPropertyMultiple answer it with

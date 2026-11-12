@@ -42,10 +42,10 @@ use super::{
     encode_property_state, validate_extended_parameters, validate_tlv_sequence,
 };
 
-/// Context tags the Clause 21 production leaves out because their event
-/// types carry no parameters (complex-event-type and change-of-reliability):
-/// a value under one is malformed, not newer, so these are hard errors
-/// rather than Opaque shadows.
+/// Context tags the Clause 21 production leaves out on purpose:
+/// complex-event-type's parameters are proprietary and not exchanged this
+/// way, and change-of-reliability has none. A value under one is malformed,
+/// not newer, so these are hard errors rather than Opaque shadows.
 const OMITTED_EVENT_TAGS: [u8; 2] = [6, 19];
 
 /// Whether an alternative under `tag` is kept as
@@ -416,7 +416,7 @@ pub fn decode_event_parameter(
         return Err(DecodeError::new(
             DecodingKind::InvalidEncoding,
             offset,
-            "BACnetEventParameter: context tag [{}] carries no parameters in Clause 21",
+            "BACnetEventParameter: Clause 21 leaves context tag [{}] out on purpose",
         )
         .with_value(tag.number.into())
         .into());

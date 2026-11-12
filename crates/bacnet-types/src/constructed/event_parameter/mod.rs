@@ -286,7 +286,8 @@ pub enum BACnetEventParameter {
     ///
     /// `data` is the complete SEQUENCE body. The framed encoder rejects the
     /// assigned tags in this variant, and 6 and 19, which Clause 21 leaves
-    /// out because their event types carry no parameters; tag 255 is the
+    /// out on purpose (complex-event-type's parameters are proprietary,
+    /// change-of-reliability has none); tag 255 is the
     /// internal marker of a legacy raw-octet value.
     Opaque {
         /// The unrecognized algorithm tag.
