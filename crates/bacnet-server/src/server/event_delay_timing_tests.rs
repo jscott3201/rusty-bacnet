@@ -216,11 +216,14 @@ async fn a_due_wake_waits_out_the_floor() {
     }
 }
 
-/// An object that counts the sweeps and always reports a due instant long
-/// past, as a transition whose commit keeps failing would.
+/// An object that counts the sweeps and always reports the same past due
+/// instant, as a transition whose commit keeps failing would.
 struct SweepCounter {
     oid: ObjectIdentifier,
     sweeps: Arc<std::sync::atomic::AtomicUsize>,
+    /// A due instant before the first sweep, close to the clock so it maps
+    /// to the host's timeline on every platform.
+    past: bacnet_objects::event::Instant,
 }
 
 impl BACnetObject for SweepCounter {
@@ -274,7 +277,7 @@ impl bacnet_objects::traits::EventReporting for SweepCounter {
         None
     }
     fn next_due(&self) -> Option<bacnet_objects::event::Instant> {
-        Some(bacnet_objects::event::Instant::from_nanos(0))
+        Some(self.past)
     }
 }
 
@@ -289,6 +292,8 @@ async fn a_past_due_instant_adds_no_sweep() {
     db.add(Box::new(SweepCounter {
         oid: ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 99).unwrap(),
         sweeps: Arc::clone(&sweeps),
+        past: crate::runtime_clock::core_now()
+            .saturating_sub(bacnet_objects::event::Duration::from_secs(2)),
     }))
     .unwrap();
     let _server = BACnetServer::start(ServerConfig::default(), db, transport)
@@ -299,4 +304,33 @@ async fn a_past_due_instant_adds_no_sweep() {
     tokio::time::sleep_until(start + Duration::from_millis(3_500)).await;
     // The sweeps at 0, 1, 2 and 3 s.
     assert_eq!(sweeps.load(Ordering::SeqCst), 4);
+}
+
+/// The floor never delays the periodic sweep: after a sweep woken at 1.95 s
+/// for one delay, a second delay ending at 1.98 s goes out with the
+/// periodic sweep at 2 s, not at 2.05 s.
+#[tokio::test(start_paused = true)]
+async fn the_floor_never_delays_the_periodic_sweep() {
+    let (transport, sent) = recording_transport();
+    let (db, oids) = database(&[1, 1]);
+    let server = BACnetServer::start(ServerConfig::default(), db, transport)
+        .await
+        .expect("server should start");
+    let start = tokio::time::Instant::now();
+    let at = |millis| start + Duration::from_millis(millis);
+
+    tokio::time::sleep_until(at(950)).await;
+    begin_condition(&server, &oids[0]).await; // due at 1.95 s
+    tokio::time::sleep_until(at(980)).await;
+    begin_condition(&server, &oids[1]).await; // due at 1.98 s
+
+    for (millis, expected) in [
+        (1_940, &[][..]),
+        (1_960, &[1]),
+        (1_990, &[1]),
+        (2_010, &[1, 2]),
+    ] {
+        tokio::time::sleep_until(at(millis)).await;
+        assert_eq!(notified(&sent), expected, "at {millis} ms");
+    }
 }

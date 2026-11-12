@@ -1635,12 +1635,19 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
     - The task isn't told about writes. It needn't be: it never sleeps
       past the next periodic sweep, a write seeds a due instant at least
       one second (the shortest nonzero Time_Delay) after the write, and the
-      write path and the sweep take the same database lock, so a sweep
-      always runs between the write and its due instant and recomputes
-      when to wake. That breaks if the period ever exceeds the shortest
+      write path and the sweep take the same database lock, so a sweep runs
+      between the write and its due instant and recomputes when to wake.
+      That holds unless a long send or lock wait delays the task past the
+      due instant; the transition then goes out late, at the next sweep,
+      and is never lost. It breaks if the period ever exceeds the shortest
       nonzero delay: part two's `ReportConfig::sweep` must stay at or under
       one second, or the `Reporter` must look at `next_due` after every
-      write.
+      write. That look keeps `after` at the last sweep's `now`: the write's
+      `now` would hide a due instant that passed with no sweep since.
+    - A custom `EventReporting` that seeds a due instant less than a second
+      after a write is served by the next periodic sweep, up to a second
+      late: the server reads `next_due` only at its sweeps. The built-in
+      detectors seed whole seconds.
     - A custom `EventReporting` that counted ticks now sees more than one
       a second when other objects' delays end; the migration note says to
       compare `now` with its own due instant and report it through

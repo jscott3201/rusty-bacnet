@@ -84,6 +84,12 @@ pub trait EventReporting {
     /// instant a host should call
     /// [`tick_intrinsic_reporting`](Self::tick_intrinsic_reporting) by for
     /// the delay to end on time. `None` with nothing pending, the default.
+    ///
+    /// The bundled server reads it at each sweep, so it wakes early only for
+    /// a transition already pending at its last sweep. A transition a write
+    /// seeds less than a second before it is due is served by the next
+    /// periodic sweep instead, up to a second late. The built-in detectors
+    /// seed whole seconds of Time_Delay, so theirs are never that close.
     fn next_due(&self) -> Option<Instant> {
         None
     }

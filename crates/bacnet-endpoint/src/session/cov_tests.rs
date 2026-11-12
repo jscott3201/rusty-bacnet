@@ -676,3 +676,37 @@ async fn a_routed_subscriber_is_notified_and_answered() {
     crate::session::eventually::eventually(Duration::from_secs(1), "the Ack ends it", ended).await;
     session.stop().await.unwrap();
 }
+
+/// A lease records the confirmed service `take` is given (#2303): the
+/// coordinator matches the answer by it, so a COV-multiple report's Ack is
+/// admitted against a ConfirmedCOVNotificationMultiple lease.
+#[test]
+fn a_lease_takes_the_service_it_is_given() {
+    use bacnet_endpoint_core::coordinator::AdmissionOutcome;
+    use bacnet_types::enums::ConfirmedServiceChoice;
+
+    let coordinator = Arc::new(OutboundTransactionCoordinator::new());
+    let mut leases = Leases {
+        coordinator: Arc::clone(&coordinator),
+        out: Vec::new(),
+        starved: Starved::No,
+        timeout: bacnet_time::Duration::from_secs(3),
+    };
+    let mac = [0x0A, 0, 0, 5, 0xBA, 0xC0];
+    let to = BACnetAddress {
+        network_number: 0,
+        mac_address: MacAddr::from_slice(&mac),
+    };
+    let service = ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION_MULTIPLE;
+    let id = leases.take(&to, service).expect("an invoke ID");
+    let ack = Apdu::SimpleAck(bacnet_encoding::apdu::SimpleAck {
+        invoke_id: id,
+        service_choice: service,
+    });
+    let Ok(AdmissionOutcome::Admitted(admission)) =
+        coordinator.admit(&CanonicalPeer::direct(&mac), &ack)
+    else {
+        panic!("the Ack matches the lease");
+    };
+    assert_eq!(admission.metadata().service_choice(), service);
+}
