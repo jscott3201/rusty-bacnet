@@ -232,7 +232,8 @@ mod tests {
             atomic_read_file_budget: server::AtomicReadFileBudget::default(),
             atomic_write_file_budget: server::AtomicWriteFileBudget::default(),
             read_range_budget: server::ReadRangeBudget::default(),
-            get_event_information_budget: server::GetEventInformationBudget::default(),
+            get_event_information_budget:
+                bacnet_device_core::event::GetEventInformationBudget::default(),
             cov_policy: bacnet_device_core::cov::CovPolicy::default(),
             time_sync_policy: server::TimeSyncPolicy::default(),
             clock_zone: server::ClockConfig::default(),

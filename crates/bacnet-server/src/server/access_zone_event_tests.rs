@@ -241,9 +241,8 @@ async fn access_zone_fault_notification_reports_occupancy_state() {
 
 #[tokio::test(start_paused = true)]
 async fn access_zone_in_alarm_is_listed_by_the_summary_services() {
-    use crate::handlers::{
-        handle_get_alarm_summary, handle_get_enrollment_summary, handle_get_event_information,
-    };
+    use crate::handlers::{handle_get_alarm_summary, handle_get_enrollment_summary};
+    use bacnet_device_core::event::handle_get_event_information;
     use bacnet_services::alarm_event::{GetEventInformationAck, GetEventInformationRequest};
     use bacnet_services::alarm_summary::GetAlarmSummaryAck;
     use bacnet_services::enrollment_summary::{

@@ -74,6 +74,8 @@ bacnet-encoding = { workspace = true, features = ["std"] }
 bacnet-objects = { workspace = true, features = ["std"] }
 bytes = { workspace = true, features = ["std"] }
 bacnet-server.workspace = true
+# GetEventInformationBudget, for the alarm tests' server (#2303).
+bacnet-device-core = { workspace = true, features = ["std"] }
 tempfile = "3"
 tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread", "test-util"] }
 

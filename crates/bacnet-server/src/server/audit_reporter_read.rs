@@ -122,7 +122,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
             let mut db = db.write().await;
             for intent in &mut intents {
                 intent.0.notification.target_timestamp =
-                    Some(super::super::event_timestamp::sample_event_timestamp(&mut db).timestamp);
+                    Some(bacnet_device_core::event::sample_event_timestamp(&mut db).timestamp);
             }
         }
         for intent in intents {

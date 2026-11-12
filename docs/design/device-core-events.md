@@ -1558,6 +1558,42 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
       send's end by, and the `Reporter`'s numbering of tickets differs
       from the server's, which nothing on the wire shows.
 
+**#2303 PR 3a, 2026-11-12:**
+
+19. PR 3 splits as PR 2 did: 3a moves, 3b changes logic (due instants,
+    `next_due`, `acknowledge_local`, clockless windows, the `Reporter`'s
+    event path, the parity corpus, the image row).
+    - One PR, no further cut (lead, 2026-11-12). Rebuilt against the tree,
+      Appendix A.3's items came to about 1,960 non-test lines moved from the
+      server; the core's `event/` module ends at about 2,416 non-test lines,
+      with its docs and the outcome types, past the 2,300 split point. The
+      fault pass, AcknowledgeAlarm and GetEventInformation stay in it all
+      the same: the acknowledgement's notification is the core's
+      `NotificationTransition`, so that half can't land alone, and the docs
+      describe both halves.
+    - `event-reporting` turns on `bacnet-objects/event-reporting` only:
+      `bacnet-time` is a plain dependency of the core already (§3.2).
+    - Where moved code logged, it returns what the log said and the server
+      logs it with the same text: the intrinsic commit's
+      `IntrinsicCommitRefusal`, distribution's clock and lookup
+      (`DistributionOutcome`), GetEventInformation's `EventSummaryProblem`
+      (a new `EventInformationFailure::Projection`), the fault pass's hook
+      failures. These changes went in server-side commits ahead of the
+      moves, since a move into a crate with no `tracing` would not build;
+      `format!` came out after the moves, each with a test holding the text
+      to what the server formatted.
+    - The fault pass's warning dedup stays in the server's `FaultDetector`:
+      it compares each failure's text. The pass returns every failure.
+    - `GetEventInformationBudget` moves with the configured handler that
+      takes it; the server's builder setters stay. The Event Enrollment
+      projection moves with the payload, and with it
+      `decode_reference_value`; the evaluator stays hosted until #2319.
+    - The handlers keep their names (`handle_acknowledge_alarm`,
+      `handle_get_event_information*`), so the server's tests changed in
+      their imports only; §4.3's `event::acknowledge` and
+      `get_event_information` are left to 3b or later.
+    - Size: no image turns the feature on, so no row moved.
+
 ## 12. Evidence
 
 Code read at dev `c308eda25`. Sizes (§8): the `objects` image built with

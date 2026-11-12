@@ -21,6 +21,8 @@ compile_error!(
 pub mod clock;
 pub mod cov;
 pub mod discovery;
+#[cfg(feature = "event-reporting")]
+pub mod event;
 pub mod read;
 pub mod reply;
 pub mod report;

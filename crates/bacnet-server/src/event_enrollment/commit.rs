@@ -10,12 +10,10 @@ use bacnet_types::enums::{EventState, EventType, PropertyIdentifier, Reliability
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::EventEnrollmentTransition;
-use crate::server::event_notification_payload::{
+use bacnet_device_core::event::{
     CapturedReferencedValue, CommittedNotificationPayload, EventEnrollmentProjectionSnapshot,
-    project_event_enrollment_payload,
-};
-use crate::server::event_timestamp::{
-    SampledEventClock, confirm_event_timestamp, stage_event_timestamp,
+    SampledEventClock, confirm_event_timestamp, project_event_enrollment_payload,
+    stage_event_timestamp,
 };
 
 /// Stage at which an Event Enrollment observation or commit was evaluated.

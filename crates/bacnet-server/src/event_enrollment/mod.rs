@@ -99,7 +99,6 @@ use fault::{
 };
 #[cfg(test)]
 use reference::MonitoredReference;
-pub(crate) use reference::decode_reference_value;
 use reference::{params_fingerprint, read_object_property_ref};
 use support::*;
 
@@ -109,7 +108,7 @@ enum LocalConfigurationReadError {
     Unavailable,
 }
 
-use crate::server::event_notification_payload::{
+use bacnet_device_core::event::{
     CapturedReferencedValue, EventEnrollmentProjectionSnapshot, capture_status_flags,
 };
 use bacnet_objects::database::ObjectDatabase;
