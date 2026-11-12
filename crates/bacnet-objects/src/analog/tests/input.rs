@@ -1,4 +1,5 @@
 use super::super::*;
+#[cfg(feature = "event-reporting")]
 use crate::event::test_clock::{test_now, test_tick};
 use crate::property_metadata::is_writable_property;
 #[cfg(feature = "event-reporting")]

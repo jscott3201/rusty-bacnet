@@ -1,6 +1,7 @@
 //! Multi-state Number_Of_States configuration and object-owned Reliability.
 
 use super::super::*;
+#[cfg(feature = "event-reporting")]
 use crate::event::test_clock::test_now;
 use crate::property_metadata::is_writable_property;
 #[cfg(feature = "event-reporting")]

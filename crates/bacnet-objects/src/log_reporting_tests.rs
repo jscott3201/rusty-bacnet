@@ -3,6 +3,7 @@ use super::*;
 use crate::clock::{ClockFrame, ClockReader};
 #[cfg(feature = "event-reporting")]
 use crate::event::commit_test_proposal;
+#[cfg(feature = "event-reporting")]
 use crate::event::test_clock::{test_now, test_tick};
 use crate::event_log::EventLogObject;
 use crate::traits::BACnetObject;

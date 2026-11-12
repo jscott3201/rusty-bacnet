@@ -1,5 +1,6 @@
 use super::*;
 use crate::command_source::CommandOrigin;
+#[cfg(feature = "event-reporting")]
 use crate::event::test_clock::test_now;
 use bacnet_encoding::constructed::decode_value_source;
 use bacnet_encoding::primitives::decode_timestamp_choice;

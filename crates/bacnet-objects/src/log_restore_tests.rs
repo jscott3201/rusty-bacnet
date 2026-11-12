@@ -1,5 +1,6 @@
 //! Restoring or seeding a log's buffer and Total_Record_Count (#1537).
 use super::*;
+#[cfg(feature = "event-reporting")]
 use crate::event::test_clock::test_now;
 
 const MAX: u64 = u32::MAX as u64;

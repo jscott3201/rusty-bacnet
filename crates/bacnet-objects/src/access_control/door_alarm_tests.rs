@@ -4,6 +4,7 @@
 //! the Door_Alarm_State they admit, CHANGE_OF_STATE on Door_Alarm_State and
 //! the FAULT_STATE check behind Reliability.
 
+#[cfg(feature = "event-reporting")]
 use crate::event::test_clock::{test_now, test_tick};
 use crate::traits::EventReporting as _;
 use bacnet_types::bitstring::EventTransitionBits;

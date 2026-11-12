@@ -6,6 +6,7 @@
 
 #[cfg(feature = "event-reporting")]
 use crate::event::test_clock::test_now;
+#[cfg(feature = "event-reporting")]
 use crate::traits::EventReporting as _;
 use crate::traits::Timed;
 use std::time::Duration;

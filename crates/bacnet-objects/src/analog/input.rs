@@ -419,7 +419,9 @@ impl crate::traits::LocalInput for AnalogInputObject {
 #[cfg(test)]
 mod detection_enable_reset_tests {
     use super::*;
-    use crate::event::test_clock::{test_now, test_tick};
+    use crate::event::test_clock::test_now;
+    #[cfg(feature = "event-reporting")]
+    use crate::event::test_clock::test_tick;
     use crate::traits::EventReporting as _;
     use bacnet_types::error::RemoteError;
 
