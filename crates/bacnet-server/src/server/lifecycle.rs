@@ -69,12 +69,21 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // (#1526). The database isn't shared yet, so no lock is taken. This
         // runs before `network_port::start`, which can still fail; that's
         // harmless, since the drive is what any start does, and a later
-        // start over the same objects drives them the same way again.
+        // start over the same objects drives them the same way again. What
+        // a start began elsewhere, such as a restored Load Control shed, is
+        // released if the start fails (#2479).
         db.start_outputs();
         let membership = crate::membership::install_waker(&mut db);
 
-        let (network, mut apdu_rx, audit_routes, network_controls) =
-            boxed(|| super::network_port::start(&mut db, &config, transport, audit_routes)).await?;
+        let started =
+            boxed(|| super::network_port::start(&mut db, &config, transport, audit_routes)).await;
+        let (network, mut apdu_rx, audit_routes, network_controls) = match started {
+            Ok(started) => started,
+            Err(error) => {
+                db.release_outputs();
+                return Err(error);
+            }
+        };
         let local_mac = MacAddr::from_slice(network.local_mac());
 
         let network = Arc::new(network);
@@ -114,6 +123,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let target_audit = match target_audit {
             Ok(runtime) => runtime,
             Err(error) => {
+                db.write().await.release_outputs();
                 let network = Arc::try_unwrap(network).map_err(|_| {
                     Error::Encoding("startup cleanup has an unexpected network owner".into())
                 })?;

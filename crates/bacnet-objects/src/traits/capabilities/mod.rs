@@ -85,7 +85,7 @@ pub(crate) use schedule_runner::lend_schedule_runner;
 #[doc(hidden)]
 pub use staging_source::StagingSource;
 pub(crate) use timed::same_handle;
-pub use timed::{Clocks, DeadlineWaker, MonotonicClock, Timed};
+pub use timed::{Clocks, DeadlineWaker, MonotonicClock, Retirement, Timed};
 
 /// OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED: what an object answers for
 /// an input or operation it doesn't model, and what a host answers for an

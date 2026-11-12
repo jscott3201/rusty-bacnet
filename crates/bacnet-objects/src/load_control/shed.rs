@@ -54,6 +54,13 @@ pub trait LoadShedder: Send + Sync {
     /// stopped: one cancelled by the write that started it never reaches
     /// the application. Dropping the object, or a copy of it, outside its
     /// database calls nothing.
+    ///
+    /// With persistence, a stop may come for a request this process never
+    /// offered: one restored by
+    /// [`with_persistence`](LoadControlObject::with_persistence) that was
+    /// being shed when the device went down, and that ends before `shed` is
+    /// asked about it, as when its time ran out meanwhile. Loads still shed
+    /// from before the restart are released then.
     fn stop(&self) {}
 }
 
@@ -316,7 +323,9 @@ impl LoadControlObject {
     /// left half there. The application is told to stop only when it was
     /// asked about the request.
     fn end_request(&mut self) {
-        if core::mem::take(&mut self.offered)
+        // A request restored as it was being shed owes a stop too (#2479).
+        let restored = self.shed_before_restart.take().is_some();
+        if (core::mem::take(&mut self.offered) || restored)
             && let Some(shedder) = &self.shedder
             && crate::catch_panic(|| shedder.stop()).is_none()
         {
@@ -331,20 +340,22 @@ impl LoadControlObject {
     }
 
     /// The Device clock's local moment now, if it has one.
-    fn now(&self) -> Option<i64> {
+    pub(super) fn now(&self) -> Option<i64> {
         clock::current_datetime(self.clock.as_deref()).and_then(clock::local_moment)
     }
 
     /// The moment a request starting at `start` ends.
     fn end_of(&self, start: i64) -> i64 {
-        let minutes = i64::try_from(self.shed_duration).unwrap_or(i64::MAX);
-        start.saturating_add(minutes.saturating_mul(HUNDREDTHS_PER_MINUTE))
+        request_end(start, self.shed_duration)
     }
 
     /// Ask the application how the loads stand, and serve the levels it
     /// reports. From here on the request counts as offered to it.
     fn ask(&mut self, started: bool) -> ShedProgress {
         self.offered = true;
+        // The shedder now knows of a restored request, and its end reaches
+        // it through `offered`.
+        self.shed_before_restart = None;
         let request = ShedRequest {
             requested: self.requested_shed_level.clone(),
             shed_level: match self.requested_shed_level {
@@ -381,6 +392,12 @@ impl LoadControlObject {
             choice_default(&self.requested_shed_level)
         }
     }
+}
+
+/// The moment a request starting at `start` and lasting `minutes` ends.
+pub(super) fn request_end(start: i64, minutes: u64) -> i64 {
+    let minutes = i64::try_from(minutes).unwrap_or(i64::MAX);
+    start.saturating_add(minutes.saturating_mul(HUNDREDTHS_PER_MINUTE))
 }
 
 /// The position in `levels` of the element a LEVEL request for `requested`

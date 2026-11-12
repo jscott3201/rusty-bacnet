@@ -238,4 +238,12 @@ pub const FORMATS: &[Format] = &[
         sample: samples::described_state_text_reporting_write_config,
         kind: Kind::MultiStateReportingWriteConfig,
     },
+    // A Load Control's shed request with Enable and a written Description
+    // (#2479). Last for the same reason.
+    Format {
+        name: "load_control",
+        two_slot: false,
+        sample: samples::load_control,
+        kind: Kind::LoadControl,
+    },
 ];

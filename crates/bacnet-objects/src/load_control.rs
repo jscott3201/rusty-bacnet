@@ -102,6 +102,13 @@ pub struct LoadControlObject {
     /// Whether the request under way has been offered to the shedder, so
     /// that its end is reported to it.
     offered: bool,
+    /// The shed state a restored request was saved in, while the
+    /// application may still hold loads shed for it before the restart:
+    /// COMPLIANT or NON_COMPLIANT (#2479). Its end owes a stop though the
+    /// shedder was never asked about it here. Cleared once the request is
+    /// offered or ends; storage keeps reading this state meanwhile, so a
+    /// second restart still owes the stop.
+    shed_before_restart: Option<ShedState>,
     /// Where the request is kept, with persistence (#2479).
     durable: saving::Durable,
 }
@@ -138,6 +145,7 @@ impl LoadControlObject {
             clock: None,
             shedder: None,
             offered: false,
+            shed_before_restart: None,
             durable: saving::Durable::default(),
         })
     }
@@ -293,15 +301,24 @@ impl LoadControlObject {
         self.state_description = text;
     }
 
-    /// A WriteProperty of one of the four request properties, through its
-    /// setter: Requested_Shed_Level, Start_Time, Shed_Duration or
-    /// Duty_Window.
+    /// A WriteProperty of a property storage keeps, through its setter:
+    /// one of the four request properties or Enable, or, with storage, a
+    /// written Description.
     fn write_request(
         &mut self,
         property: PropertyIdentifier,
         value: PropertyValue,
     ) -> Result<(), Error> {
         match property {
+            p if p == PropertyIdentifier::ENABLE => {
+                self.set_enable(boolean_write(value)?);
+                Ok(())
+            }
+            p if p == PropertyIdentifier::DESCRIPTION => {
+                self.description = crate::write_config::description::written(&value)?;
+                self.durable.description_written();
+                Ok(())
+            }
             p if p == PropertyIdentifier::REQUESTED_SHED_LEVEL => {
                 self.set_requested_shed_level(decode_shed_level_write(value)?)
             }
@@ -368,6 +385,14 @@ fn check_start_time(start_time: (Date, Time)) -> Result<(), Error> {
         return Err(common::value_out_of_range_error());
     }
     Ok(())
+}
+
+/// Decode a write of a BOOLEAN, or PROPERTY / INVALID_DATA_TYPE.
+fn boolean_write(value: PropertyValue) -> Result<bool, Error> {
+    match value {
+        PropertyValue::Boolean(value) => Ok(value),
+        _ => Err(common::invalid_data_type_error()),
+    }
 }
 
 /// Decode a write of an Unsigned, or PROPERTY / INVALID_DATA_TYPE.
@@ -527,19 +552,16 @@ impl BACnetObject for LoadControlObject {
         _priority: Option<u8>,
     ) -> Result<(), Error> {
         crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
+        // With storage, the request, Enable and a written Description are
+        // saved before they are served (#2479).
+        if self.durable.is_kept() && saving::kept(property, &value) {
+            return self.write_kept(property, value);
+        }
         if let Some(result) = common::write_description(&mut self.description, property, &value) {
             return result;
         }
         match property {
-            p if saving::kept(p) && self.durable.is_kept() => self.write_kept(p, value),
-            p if saving::kept(p) => self.write_request(p, value),
-            p if p == PropertyIdentifier::ENABLE => match value {
-                PropertyValue::Boolean(enable) => {
-                    self.set_enable(enable);
-                    Ok(())
-                }
-                _ => Err(common::invalid_data_type_error()),
-            },
+            p if saving::kept(p, &value) => self.write_request(p, value),
             p if p == PropertyIdentifier::SHED_LEVELS => self.write_shed_levels(array_index, value),
             _ => Err(crate::common::unhandled_write_error(
                 self.property_metadata().as_ref(),
@@ -586,11 +608,19 @@ impl crate::traits::Timed for LoadControlObject {
         self.settle(shed::Prompt::Look);
     }
 
-    /// Removed from its database or replaced there: a request under way
-    /// ends as a cancelled one does, so the application is told to stop and
-    /// the object handed back reads SHED_INACTIVE (#2479).
-    fn retire(&mut self) {
+    /// Leaving its database: a request under way ends as a cancelled one
+    /// does, so the application is told to stop and the object reads
+    /// SHED_INACTIVE (#2479). Removed, its storage saves the ended request;
+    /// released (replaced, or let go after a failed start), it leaves
+    /// storage as it was, for the object or start that comes next.
+    fn retire(&mut self, retirement: crate::traits::Retirement) {
+        if retirement == crate::traits::Retirement::Removed {
+            self.settle(shed::Prompt::Retire);
+            return;
+        }
+        let storage = self.durable.detach();
         self.settle(shed::Prompt::Retire);
+        self.durable.attach(storage);
     }
 
     fn cov_snapshot(&self) -> Option<Box<dyn BACnetObject>> {

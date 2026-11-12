@@ -2,9 +2,10 @@
 //! saved, and how a rebuilt object looks at the request again.
 
 use super::*;
+use crate::database::ObjectDatabase;
 use crate::durable::{DurableWrites, PendingWrite, StageStep};
 use crate::load_control::{LoadControlPersistence, LoadControlSnapshot};
-use crate::traits::BACnetObject;
+use crate::traits::{BACnetObject, Retirement};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 /// Storage in memory, counting its saves, and refusing them while `fail`.
@@ -147,14 +148,15 @@ fn a_request_whose_time_ran_out_while_down_ends_at_once() {
     write_start(&mut lc, at(0));
     power_off(lc);
     app.take();
-    // Back at 10:45, past 10:30: the request is over and the application,
-    // never asked about it since the restart, hears nothing.
+    // Back at 10:45, past 10:30: the request is over. It was being shed when
+    // it was saved, so the application, never asked about it since the
+    // restart, is told to stop once: loads it still holds shed go.
     clock.set(at(45));
     let mut lc = kept(&store, &clock, &app);
     assert_eq!(present_value(&lc), PENDING);
     lc.start_output();
     assert_idle(&lc, 15);
-    assert!(app.take().is_empty());
+    assert_eq!(app.take(), [Told::Stop]);
     lc.wait_for_saves();
     let idle = store.held();
     assert_eq!(
@@ -305,11 +307,198 @@ fn removing_the_object_saves_its_ended_request() {
     let app = TestShedder::new(ShedProgress::Compliant, 2, 2);
     let mut lc = kept(&store, &clock, &app);
     write_start(&mut lc, at(0));
-    lc.retire();
+    lc.retire(Retirement::Removed);
     assert_eq!(app.take().last(), Some(&Told::Stop));
     lc.wait_for_saves();
     assert_eq!(store.held().state, INACTIVE);
     // A copy, such as a COV snapshot, saves nothing of its own.
     let copy = lc.cov_snapshot().unwrap();
     assert!(copy.read_property(P::PRESENT_VALUE, None).is_ok());
+}
+
+#[test]
+fn a_pending_request_that_ran_out_while_down_ends_silently() {
+    let (store, clock) = (Arc::new(Store::default()), test_clock());
+    let app = TestShedder::new(ShedProgress::Waiting, 2, 0);
+    let mut lc = kept(&store, &clock, &app);
+    write_start(&mut lc, at(5));
+    assert_eq!(present_value(&lc), PENDING);
+    power_off(lc);
+    app.take();
+    // Nothing was shed for it, so its end owes the application nothing.
+    clock.set(at(45));
+    let mut lc = kept(&store, &clock, &app);
+    lc.start_output();
+    assert_idle(&lc, 0);
+    assert!(app.take().is_empty());
+}
+
+#[test]
+fn a_stop_still_owed_survives_a_second_restart() {
+    let (store, clock) = (Arc::new(Store::default()), test_clock());
+    let app = TestShedder::new(ShedProgress::Compliant, 2, 2);
+    let mut lc = kept(&store, &clock, &app);
+    write_start(&mut lc, at(0));
+    power_off(lc);
+    // Up and down again before any look with a clock: what is saved still
+    // says the loads were shed.
+    let mut lc = LoadControlObject::with_persistence(1, "LC-1", store.clone()).unwrap();
+    lc.set_shedder(app.clone());
+    lc.set_shed_levels(vec![(1, "one".into())]).unwrap();
+    power_off(lc);
+    assert_eq!(store.held().state, COMPLIANT);
+    app.take();
+    clock.set(at(45));
+    let mut lc = kept(&store, &clock, &app);
+    lc.start_output();
+    assert_eq!(app.take(), [Told::Stop]);
+    // Once the restored request is offered, its end reaches the application
+    // as any other's does, once.
+    lc.set_requested_shed_level(BACnetShedLevel::Level(2))
+        .unwrap();
+    lc.set_shed_duration(30);
+    write_start(&mut lc, at(40));
+    power_off(lc);
+    app.take();
+    let mut lc = kept(&store, &clock, &app);
+    lc.start_output();
+    assert!(matches!(&app.take()[..], [Told::Shed(r)] if r.started));
+    // It ends at 11:10, 10:40 plus 30.
+    assert!(pass(&mut lc, &clock, 70));
+    assert_eq!(app.take(), [Told::Stop]);
+}
+
+#[test]
+fn enable_and_a_written_description_come_back() {
+    let (store, clock) = (Arc::new(Store::default()), test_clock());
+    let app = TestShedder::new(ShedProgress::Compliant, 2, 2);
+    let mut lc = kept(&store, &clock, &app);
+    // A NULL changes nothing, so nothing is saved for it.
+    lc.wait_for_saves();
+    let saves = store.saves.load(Ordering::SeqCst);
+    lc.write_property(P::DESCRIPTION, None, PropertyValue::Null, None)
+        .unwrap();
+    lc.wait_for_saves();
+    assert_eq!(store.saves.load(Ordering::SeqCst), saves);
+    assert_eq!(store.held().description, None);
+    lc.write_property(
+        P::DESCRIPTION,
+        None,
+        PropertyValue::CharacterString("Chillers".into()),
+        None,
+    )
+    .unwrap();
+    // One past 16 KiB is refused before anything is saved.
+    let long = PropertyValue::CharacterString("x".repeat(16 * 1024 + 1));
+    assert!(matches!(
+        lc.write_property(P::DESCRIPTION, None, long, None),
+        Err(Error::Remote(RemoteError::Error { code, .. }))
+            if code == ErrorCode::NO_SPACE_TO_WRITE_PROPERTY
+    ));
+    lc.write_property(P::ENABLE, None, PropertyValue::Boolean(false), None)
+        .unwrap();
+    power_off(lc);
+    let lc = kept(&store, &clock, &app);
+    assert_eq!(
+        lc.read_property(P::DESCRIPTION, None).unwrap(),
+        PropertyValue::CharacterString("Chillers".into())
+    );
+    assert_eq!(
+        lc.read_property(P::ENABLE, None).unwrap(),
+        PropertyValue::Boolean(false)
+    );
+}
+
+#[test]
+fn a_request_restored_disabled_ends_as_a_written_false_ends_one() {
+    let (store, clock) = (Arc::new(Store::default()), test_clock());
+    let app = TestShedder::new(ShedProgress::Compliant, 2, 2);
+    // Storage of another backend's, holding a shed under way with Enable
+    // FALSE, which no save of this object writes.
+    *store.saved.lock().unwrap() = Some(LoadControlSnapshot {
+        state: COMPLIANT,
+        requested_shed_level: BACnetShedLevel::Level(2),
+        start_time: at(0),
+        shed_duration: 30,
+        duty_window: 10,
+        enable: false,
+        ..LoadControlSnapshot::default()
+    });
+    let mut lc = kept(&store, &clock, &app);
+    lc.start_output();
+    // Over with a stop, as a written FALSE leaves a shed, and no new one
+    // starts while disabled.
+    assert_idle(&lc, 0);
+    assert_eq!(app.take(), [Told::Stop]);
+    write_start(&mut lc, at(1));
+    assert_eq!(present_value(&lc), INACTIVE);
+    assert_eq!(start_time(&lc), UNSPECIFIED_DATETIME);
+}
+
+#[test]
+fn a_replaced_object_leaves_its_storage_to_its_successor() {
+    let (store, clock) = (Arc::new(Store::default()), test_clock());
+    let app = TestShedder::new(ShedProgress::Compliant, 2, 2);
+    let mut lc = kept(&store, &clock, &app);
+    write_start(&mut lc, at(0));
+    lc.wait_for_saves();
+    let oid = lc.object_identifier();
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(lc)).unwrap();
+    app.take();
+    // The successor restores the request; the object it replaces stops its
+    // loads but doesn't save its own end over the request.
+    let successor = kept(&store, &clock, &app);
+    db.add(Box::new(successor)).unwrap();
+    assert_eq!(app.take(), [Told::Stop]);
+    assert_eq!(store.held().state, COMPLIANT);
+    assert_eq!(store.held().start_time, at(0));
+    // Removed for good, the successor saves the request's end.
+    let removed = db.remove(&oid).unwrap().unwrap();
+    drop(removed);
+    assert_eq!(store.held().state, INACTIVE);
+}
+
+#[test]
+fn a_staged_save_is_what_the_object_serves_after_the_writes() {
+    let (store, clock) = (Arc::new(Store::default()), test_clock());
+    let app = TestShedder::new(ShedProgress::Compliant, 2, 2);
+    let mut lc = kept(&store, &clock, &app);
+    lc.set_shed_duration(0);
+    lc.wait_for_saves();
+    // Start_Time now with no Shed_Duration yet: the request ends at once,
+    // so the Shed_Duration after it is idle configuration, not a shed.
+    let writes = [
+        (
+            P::START_TIME,
+            PropertyValue::List(vec![
+                PropertyValue::Date(at(0).0),
+                PropertyValue::Time(at(0).1),
+            ]),
+        ),
+        (P::SHED_DURATION, PropertyValue::Unsigned(30)),
+    ];
+    let pending: Vec<_> = writes
+        .iter()
+        .map(|(property, value)| PendingWrite {
+            property: *property,
+            array_index: None,
+            value: value.clone(),
+        })
+        .collect();
+    let StageStep::Staged(wait) = lc.stage_writes(&pending) else {
+        panic!("the writes stage");
+    };
+    wait.block();
+    let staged = store.held();
+    for (property, value) in writes {
+        lc.write_property(property, None, value, None).unwrap();
+    }
+    lc.release_staged_write(&wait);
+    assert_eq!(present_value(&lc), INACTIVE);
+    assert_eq!(staged.state, INACTIVE);
+    assert_eq!(staged.start_time, UNSPECIFIED_DATETIME);
+    assert_eq!(staged.shed_duration, 30);
+    lc.wait_for_saves();
+    assert_eq!(store.held(), staged);
 }

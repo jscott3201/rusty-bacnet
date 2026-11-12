@@ -11,6 +11,9 @@ use std::time::Duration;
 
 use PropertyIdentifier as P;
 
+// std: the file backend.
+#[cfg(feature = "std")]
+mod file;
 mod lifecycle;
 mod removal;
 // std: the saves run on the writer thread.

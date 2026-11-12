@@ -133,7 +133,10 @@ pub const CAPABILITY_ROWS: &[(&str, Row)] = &[
     ),
     (
         "Timed::retire",
-        Row::Command(|o| format!("{:?}", o.timed().map(|t| t.retire()))),
+        Row::Command(|o| {
+            let retirement = bacnet_objects::traits::Retirement::Released;
+            format!("{:?}", o.timed().map(|t| t.retire(retirement)))
+        }),
     ),
     (
         "Timed::cov_snapshot",

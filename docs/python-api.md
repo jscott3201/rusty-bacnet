@@ -4248,8 +4248,9 @@ to its end. Both callables run with the server's object database locked, as
 `on_reinitialize` does: they must return at once, may not await or start a
 binding operation (RuntimeError), and must not wait on the event loop or
 another thread for one. An exception or an answer of another shape, a
-coroutine included, goes to `sys.unraisablehook`; a failed `shed` counts as
-nothing shed, and a request ends after a failed `stop` all the same.
+coroutine from either callable included (closed unawaited), goes to
+`sys.unraisablehook`; a failed `shed` counts as nothing shed, and a request
+ends after a failed `stop` all the same.
 `shed_levels` is `(level, description)` pairs; a level of 0 raises
 BacnetProtocolError, and clients may rewrite a level but not resize the
 array. `full_duty_baseline` (kilowatts, finite and not negative) and

@@ -1,10 +1,10 @@
 //! A peer-written Description, kept in the storage the object already has
 //! (#2364): the write-configuration storage of a Timer, a Channel and an
 //! intrinsic reporter, the snapshot formats of the three logs, a
-//! Notification Class, a Notification Forwarder and an Access Rights
-//! object, the Tags storage of a Device, a Lighting Output and a Binary
-//! Lighting Output, and the output storage of a Color and a Color
-//! Temperature object.
+//! Notification Class, a Notification Forwarder, an Access Rights object and
+//! a Load Control (#2479), the Tags storage of a Device, a Lighting Output
+//! and a Binary Lighting Output, and the output storage of a Color and a
+//! Color Temperature object.
 //!
 //! Clause 12 says nothing about restarts, so keeping Description is this
 //! stack's choice, as for the rest of that storage: a head end that labelled

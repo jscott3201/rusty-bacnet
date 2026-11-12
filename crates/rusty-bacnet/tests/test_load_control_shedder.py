@@ -3,11 +3,14 @@ and agreed duty window come from add_load_control, and the shed and stop
 callables answer for the loads, under the server's lock, over real B/IP."""
 
 import asyncio
+import collections.abc
 import copy
 import datetime
+import gc
 import pickle
 import sys
 import unittest
+import warnings
 
 from rusty_bacnet import (
     BACnetClient,
@@ -264,6 +267,58 @@ class LoadControlTests(unittest.IsolatedAsyncioTestCase):
             await self.request(client, address)
         self.assertTrue(failures)
         self.assertIn("cannot start a binding operation", failures[0])
+
+    async def test_reading_the_answer_cannot_start_a_binding_operation_either(self):
+        failures = []
+
+        class Level(collections.abc.Mapping):
+            """A level whose reading tries a binding operation."""
+
+            def __init__(self):
+                self.items = level(2)
+
+            def __getitem__(self, key):
+                try:
+                    node.read_property(LC1, P.PRESENT_VALUE)
+                except RuntimeError as error:
+                    failures.append(str(error))
+                return self.items[key]
+
+            def __iter__(self):
+                return iter(self.items)
+
+            def __len__(self):
+                return len(self.items)
+
+        node, client, address = await self.serve(
+            Shedder(lambda request: ("compliant", Level(), level(2))))
+        async with asyncio.timeout(10):
+            await self.request(client, address)
+            self.assertEqual(await self.state(node), COMPLIANT)
+        self.assertTrue(failures)
+        self.assertIn("cannot start a binding operation", failures[0])
+
+    async def test_a_coroutine_stop_is_refused_and_closed(self):
+        shedder = Shedder()
+        stopped = []
+
+        async def stop():
+            stopped.append(True)
+        shedder.stop = stop
+        node, client, address = await self.serve(shedder)
+        with UnraisableCapture() as capture, warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            async with asyncio.timeout(10):
+                await self.request(client, address)
+                await client.write_property(address, LC1, P.START_TIME, UNSPECIFIED_START)
+                # The request ends all the same.
+                self.assertEqual(await self.state(node), INACTIVE)
+            gc.collect()
+        self.assertIsInstance(capture.seen[0].exc_value, TypeError)
+        self.assertIn("coroutine", str(capture.seen[0].exc_value))
+        # Closed, never run, and never warned about as never awaited.
+        self.assertEqual(stopped, [])
+        self.assertFalse([w for w in caught if issubclass(w.category, RuntimeWarning)])
 
 
 if __name__ == "__main__":

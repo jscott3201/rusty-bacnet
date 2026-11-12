@@ -1137,8 +1137,9 @@ Both run with the server's object database locked: they must return
 at once, may not await, and may not start a binding operation (it
 raises RuntimeError), nor wait on the event loop or another thread
 for one. An exception, or an answer of another shape (a coroutine
-included), is shown through `sys.unraisablehook`; `shed` then
-counts as nothing shed, and the request ends anyway after `stop`.
+from either callable included, closed unawaited), is shown through
+`sys.unraisablehook`; `shed` then counts as nothing shed, and the
+request ends anyway after `stop`.
 A callable that isn't callable raises TypeError, and `stop`
 without `shed` ValueError.
 

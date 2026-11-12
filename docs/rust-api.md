@@ -7028,16 +7028,28 @@ A Load Control from `LoadControlObject::with_persistence` keeps its request
 across a restart (Clause 12.28, #2479) in storage the application gives it:
 `load_control::LoadControlPersistence`, or `FileLoadControlPersistence` for a
 file (the `snapshot::load_control` format). It keeps Requested_Shed_Level,
-Start_Time, Shed_Duration, Duty_Window, the agreed Duty_Window and the shed
-state. A peer's write of one of the four request properties is saved before
-it is answered: the server stages it, and one that can't be saved is refused
-with DEVICE / OPERATIONAL_PROBLEM. What the state machine and the setters
-change is saved afterwards with nobody waiting. A rebuilt object brings a
-request that was pending or being shed back as SHED_REQUEST_PENDING, and the
-first look decides it as a Start_Time write would: the server's start
-(`Timed::start_output`), a write or the next pass. A request whose time ran
-out while the device was down ends at once, with no `stop`. An object from
-`new` keeps nothing and starts SHED_INACTIVE with the idle values.
+Start_Time, Shed_Duration, Duty_Window, the agreed Duty_Window, the shed
+state, Enable and a written Description. A peer's write of one of the four
+request properties, of Enable or of Description is saved before it is
+answered: the server stages it, and one that can't be saved is refused with
+DEVICE / OPERATIONAL_PROBLEM (a Description past 16 KiB with RESOURCES /
+NO_SPACE_TO_WRITE_PROPERTY). The staged save holds what the object will
+serve once the state machine's own rules have run (Enable FALSE, a cancel, an
+end already past); whether a request that goes on sheds follows in a save
+nobody waits for, as do the changes time and the setters make. A rebuilt
+object brings a request that was pending or being shed back as
+SHED_REQUEST_PENDING, and the first look decides it as a Start_Time write
+would: the server's start (`Timed::start_output`), a write or the next pass.
+One restored with Enable FALSE ends as a written FALSE ends it. A request whose
+time ran out while the device was down ends at once; if it was being shed
+when it was saved, `stop` is called then, so loads still shed from before
+the restart are let go, though `shed` was never asked about it in this
+process. A server whose start fails after that look releases what it began
+(`ObjectDatabase::release_outputs`), with storage left for the next start.
+Give each object its own storage. Removing the object saves the ended
+request; replacing it leaves storage as it was (`Retirement::Released`), so a
+replacement built first from the same storage keeps the request. An object
+from `new` keeps nothing and starts SHED_INACTIVE with the idle values.
 
 Enable FALSE ends a request and takes no new one. While it is FALSE, writes
 of Start_Time and Shed_Duration are acknowledged but not kept, so both read
@@ -7054,7 +7066,7 @@ request selects, the times, and whether Start_Time has come) and returns a
 levels), and `stop` says that a request it was asked about ended. Removing
 the object from its database, or replacing it there, during a request ends
 the request and calls `stop` (#2479), through the `Timed::retire` hook the
-database calls on an object leaving it. Replacing the shedder doesn't: the
+database calls on an object leaving it, with a `Retirement` saying how. Replacing the shedder doesn't: the
 old one isn't told, and the new one hears of the request's end only once it
 has been asked about it. Both run under
 the database's write guard, so they must return quickly and not touch the

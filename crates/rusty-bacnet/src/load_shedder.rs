@@ -17,7 +17,9 @@
 //! an exception or an answer of the wrong shape (shown through
 //! `sys.unraisablehook`), and an exiting interpreter, leave the loads
 //! waiting with both levels at the requested choice's no-shed default. An
-//! exception from `stop` is shown the same way, and the request ends anyway.
+//! exception from `stop`, or a coroutine it returns (closed unawaited), is
+//! shown the same way, and the request ends anyway. Reading `shed`'s answer
+//! runs under the same refusal as the call, since it can run Python code.
 
 use bacnet_objects::load_control::{LoadShedder, ShedProgress, ShedRequest, ShedStatus};
 use pyo3::exceptions::{PyTypeError, PyValueError};
@@ -144,17 +146,21 @@ impl LoadShedder for PyLoadShedder {
         let argument = PyShedRequest {
             inner: request.clone(),
         };
+        // The answer is read under the same refusal as the call: reading it
+        // can run Python code too, such as a mapping's `__getitem__`.
         crate::py_async::attach(|py| {
-            let shed = self.shed.bind(py);
-            let returned = crate::py_async::under_native_lock(|| shed.call1((argument,)));
-            Ok(match returned.and_then(|value| status(&value)) {
-                Ok(status) => Some(status),
-                Err(error) => {
-                    // Shown through sys.unraisablehook, as asyncio shows a
-                    // callback's exception.
-                    error.write_unraisable(py, Some(shed));
-                    None
-                }
+            crate::py_async::under_native_lock(|| {
+                let shed = self.shed.bind(py);
+                let returned = shed.call1((argument,));
+                Ok(match returned.and_then(|value| status(&value)) {
+                    Ok(status) => Some(status),
+                    Err(error) => {
+                        // Shown through sys.unraisablehook, as asyncio shows
+                        // a callback's exception.
+                        error.write_unraisable(py, Some(shed));
+                        None
+                    }
+                })
             })
         })
         .ok()
@@ -169,33 +175,43 @@ impl LoadShedder for PyLoadShedder {
         };
         // An exiting interpreter has nobody to tell.
         let _ = crate::py_async::attach(|py| {
-            let stop = stop.bind(py);
-            if let Err(error) = crate::py_async::under_native_lock(|| stop.call0()) {
-                error.write_unraisable(py, Some(stop));
-            }
+            crate::py_async::under_native_lock(|| {
+                let stop = stop.bind(py);
+                let returned = stop.call0();
+                if let Err(error) = returned.and_then(|value| plain(&value, "stop")) {
+                    error.write_unraisable(py, Some(stop));
+                }
+            });
             Ok(())
         });
     }
 }
 
-/// The `shed` callable's answer: `(progress, expected, actual)`, the
-/// progress `"waiting"`, `"shedding"` or `"compliant"` and the two levels
-/// shed-level mappings. Anything else, a coroutine included, raises.
-fn status(value: &Bound<'_, PyAny>) -> PyResult<ShedStatus> {
+/// Refuse what the callable `keyword` returned if it is awaitable: it must
+/// be a plain function. An awaitable is closed first, so it never warns that
+/// it was never awaited.
+fn plain(value: &Bound<'_, PyAny>, keyword: &str) -> PyResult<()> {
     let py = value.py();
     if py
         .import(intern!(py, "inspect"))?
         .call_method1(intern!(py, "isawaitable"), (value,))?
         .is_truthy()?
     {
-        // Closed, so it never warns that it was never awaited.
         if value.hasattr(intern!(py, "close"))? {
             value.call_method0(intern!(py, "close"))?;
         }
-        return Err(PyTypeError::new_err(
-            "the shed callable must be a plain function, not a coroutine",
-        ));
+        return Err(PyTypeError::new_err(format!(
+            "the {keyword} callable must be a plain function, not a coroutine"
+        )));
     }
+    Ok(())
+}
+
+/// The `shed` callable's answer: `(progress, expected, actual)`, the
+/// progress `"waiting"`, `"shedding"` or `"compliant"` and the two levels
+/// shed-level mappings. Anything else, a coroutine included, raises.
+fn status(value: &Bound<'_, PyAny>) -> PyResult<ShedStatus> {
+    plain(value, "shed")?;
     let shape = || {
         PyTypeError::new_err("the shed callable must return a (progress, expected, actual) tuple")
     };

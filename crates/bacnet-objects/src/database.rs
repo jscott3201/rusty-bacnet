@@ -10,7 +10,7 @@ use bacnet_types::primitives::ObjectIdentifier;
 
 use crate::clock::{ClockFrame, ClockReader};
 use crate::event_enrollment::EventEnrollmentMonitoredSource;
-use crate::traits::{BACnetObject, Clocks, DeadlineWaker, MonotonicClock};
+use crate::traits::{BACnetObject, Clocks, DeadlineWaker, MonotonicClock, Retirement};
 
 mod averaging_sampling;
 mod event_algorithm_inhibit;
@@ -119,8 +119,12 @@ impl ObjectDatabase {
     /// Reliability changes is queued for the server's COV fanout. A Schedule
     /// holding a refused reference to it is queued for the server to retry
     /// that reference (#1440). A Schedule replaced gives up the slots it
-    /// held, as [`remove`](Self::remove) has it do (#2264), and an object
-    /// replaced retires as a removed one does (#2479).
+    /// held, as [`remove`](Self::remove) has it do (#2264). A timed object
+    /// replaced retires as [`Retirement::Released`] (#2479): it ends what it
+    /// runs but leaves its storage as it was, since the object put in its
+    /// place may restore from the same storage. It is dropped here, under
+    /// the caller's borrow, and dropping an object with storage waits for
+    /// the saves it queued earlier (see [`crate::durable`]).
     pub fn add(&mut self, mut object: Box<dyn BACnetObject>) -> Result<(), Error> {
         let identifier = object.object_identifier();
         ObjectIdentifier::new_addressable(identifier.object_type(), identifier.instance_number())?;
@@ -152,9 +156,10 @@ impl ObjectDatabase {
         self.trend_poll.retire(&oid);
         // A Schedule or Staging object replaced gives up the slots it held,
         // as a removed one does (#2264, #2265), and a timed one retires
-        // (#2479); the new object starts from what it holds.
+        // with its storage left alone (#2479); the new object starts from
+        // what it holds.
         if let Some(mut replaced) = self.objects.insert(oid, object) {
-            retire(replaced.as_mut());
+            retire(replaced.as_mut(), Retirement::Released);
             self.commander_removed(oid, replaced.as_mut());
         }
         self.audit_membership_changed(oid, true);
@@ -378,9 +383,10 @@ impl ObjectDatabase {
     /// Schedule gives up the slots it holds on its targets: the NULLs are
     /// queued for the server, which writes them under its next guard and
     /// fans COV out (#2264). Without a server they wait in the queue. A
-    /// timed object retires ([`Timed::retire`]) before it is handed back, so
-    /// a Load Control ends a request under way and tells its application to
-    /// stop (#2479).
+    /// timed object retires ([`Timed::retire`], as
+    /// [`Retirement::Removed`]) before it is handed back, so a Load Control
+    /// ends a request under way, tells its application to stop and saves
+    /// the ended request (#2479).
     ///
     /// [`Timed::retire`]: crate::traits::Timed::retire
     pub fn remove(
@@ -413,7 +419,7 @@ impl ObjectDatabase {
                     type_set.retain(|o| o != oid);
                 }
                 self.audit_membership_changed(*oid, false);
-                retire(obj.as_mut());
+                retire(obj.as_mut(), Retirement::Removed);
                 self.commander_removed(*oid, obj.as_mut());
                 self.membership_changed(*oid, false);
                 Ok(Some(obj))
@@ -496,6 +502,19 @@ impl ObjectDatabase {
             if let Some(timed) = object.timed() {
                 timed.start_output();
             }
+        }
+    }
+
+    /// The device isn't starting after all: call [`Timed::retire`] as
+    /// [`Retirement::Released`] on every timed object, so what a start
+    /// began ([`start_outputs`](Self::start_outputs)) ends, while what the
+    /// objects keep in storage stays for the next start (#2479). The bundled
+    /// server calls it when its start fails after driving the outputs.
+    ///
+    /// [`Timed::retire`]: crate::traits::Timed::retire
+    pub fn release_outputs(&mut self) {
+        for object in self.objects.values_mut() {
+            retire(object.as_mut(), Retirement::Released);
         }
     }
 
@@ -595,11 +614,10 @@ impl ObjectDatabase {
     }
 }
 
-/// Tell an object leaving the database, removed or replaced, that it is
-/// going (#2479).
-fn retire(object: &mut dyn BACnetObject) {
+/// Tell an object leaving the database that it is going, and how (#2479).
+fn retire(object: &mut dyn BACnetObject, retirement: Retirement) {
     if let Some(timed) = object.timed() {
-        timed.retire();
+        timed.retire(retirement);
     }
 }
 

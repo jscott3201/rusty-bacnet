@@ -15,7 +15,7 @@
 //! objects, a Timer, a Channel, the three logs, a Notification Class or
 //! Forwarder, an Access Rights object, a Device, the two lighting outputs
 //! and the two colour objects a written Description (#2364), and a Load
-//! Control the shed request a peer writes (#2479),
+//! Control the shed request, Enable and Description a peer writes (#2479),
 //! before serving it, and refuses the write if the save fails. So
 //! that the save never runs while the database guard is held, a request
 //! that makes such a write stages it first ([`DurableWrites`]): under the
@@ -116,7 +116,8 @@ enum TargetValue {
 /// the three logs, a Notification Class, a forwarder, an Access Rights
 /// object, a Device, a Lighting Output, a Binary Lighting Output and the
 /// two colour objects keep a written Description too (#2364). A Load
-/// Control keeps its four request properties (#2479).
+/// Control keeps its four request properties, Enable and a written
+/// Description (#2479).
 /// Under a policy that decides mutations, every attempt of a
 /// WritePropertyMultiple is decided ahead of the handler (#2032); of
 /// those allowed, these are the ones staged (#1321).
@@ -220,6 +221,8 @@ fn may_save(oid: ObjectIdentifier, property: PropertyIdentifier) -> bool {
                 | PropertyIdentifier::START_TIME
                 | PropertyIdentifier::SHED_DURATION
                 | PropertyIdentifier::DUTY_WINDOW
+                | PropertyIdentifier::ENABLE
+                | PropertyIdentifier::DESCRIPTION
         ),
         _ => false,
     }

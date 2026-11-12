@@ -1,8 +1,8 @@
 //! A Load Control's shed request (`RBNLCT01`), as
 //! `FileLoadControlPersistence` (with std) writes its file (#2479).
 //!
-//! After the magic tag and the four-octet object identifier, a body of 45
-//! octets, each field big-endian:
+//! After the magic tag and the four-octet object identifier, the body, each
+//! field big-endian:
 //!
 //! - the shed state (Present_Value), four octets;
 //! - Requested_Shed_Level: one octet naming the choice (0 percent, 1 level,
@@ -13,12 +13,18 @@
 //!   the time's hour, minute, second and hundredths, an octet each, 255 for
 //!   an unspecified field;
 //! - Shed_Duration, Duty_Window and the agreed Duty_Window, eight octets
-//!   each.
+//!   each;
+//! - Enable, one octet, 0 or 1;
+//! - a presence octet, 0 or 1, for a written Description, and after a 1
+//!   the Description: its length in four octets, then at most 16 KiB of
+//!   UTF-8.
 //!
-//! The body must be exactly that long. A state outside the four shed
+//! The body ends where its last field does. A state outside the four shed
 //! states, a choice past 2, a percent over 100, an amount that is negative
-//! or not finite, and a Start_Time that is neither a moment nor wholly
-//! unspecified are what no save writes, so they are damage.
+//! or not finite, a Start_Time that is neither a moment nor wholly
+//! unspecified, an Enable or presence octet other than 0 or 1, octets past
+//! the end, and a Description past its cap or not UTF-8 are what no save
+//! writes, so they are damage.
 
 use crate::prelude::*;
 use bacnet_types::constructed::BACnetShedLevel;
@@ -29,13 +35,16 @@ use super::SnapshotError;
 use super::framing;
 use crate::clock::{UNSPECIFIED_DATETIME, local_moment};
 use crate::load_control::LoadControlSnapshot;
+use crate::write_config::description::MAX_OCTETS as MAX_DESCRIPTION_OCTETS;
 
 /// The format's tag, version 1.
 pub const MAGIC: [u8; 8] = *b"RBNLCT01";
-/// The body's length.
-const BODY_LEN: usize = 4 + 9 + 8 + 3 * 8;
-/// The most octets a file may take: the header and the body.
-pub const MAX_LEN: usize = framing::HEADER_LEN + BODY_LEN;
+/// The fixed fields' length: the state, the level, Start_Time, the three
+/// durations, Enable and the Description's presence octet.
+const FIXED_LEN: usize = 4 + 9 + 8 + 3 * 8 + 2;
+/// The most octets a file may take: the header, the fixed fields and the
+/// longest Description.
+pub const MAX_LEN: usize = framing::HEADER_LEN + FIXED_LEN + 4 + MAX_DESCRIPTION_OCTETS;
 
 /// The file octets for `snapshot`, saved for the Load Control `object`.
 ///
@@ -45,11 +54,16 @@ pub fn encode(
     object: ObjectIdentifier,
     snapshot: &LoadControlSnapshot,
 ) -> Result<Vec<u8>, SnapshotError> {
+    encode_body(snapshot)
+        .map(|body| framing::seal(&MAGIC, object, &body))
+        .map_err(|error| error.in_format("Load Control snapshot"))
+}
+
+fn encode_body(snapshot: &LoadControlSnapshot) -> Result<Vec<u8>, SnapshotError> {
     if !sound(snapshot) {
-        return Err(SnapshotError::out_of_range("holds a value no write leaves")
-            .in_format("Load Control snapshot"));
+        return Err(SnapshotError::out_of_range("holds a value no write leaves"));
     }
-    let mut body = Vec::with_capacity(BODY_LEN);
+    let mut body = Vec::with_capacity(FIXED_LEN);
     body.extend_from_slice(&snapshot.state.to_raw().to_be_bytes());
     let (choice, value) = match snapshot.requested_shed_level {
         BACnetShedLevel::Percent(percent) => (0, percent),
@@ -68,13 +82,19 @@ pub fn encode(
     ] {
         body.extend_from_slice(&minutes.to_be_bytes());
     }
-    Ok(framing::seal(&MAGIC, object, &body))
+    body.push(u8::from(snapshot.enable));
+    body.push(u8::from(snapshot.description.is_some()));
+    if let Some(text) = &snapshot.description {
+        framing::put_description(&mut body, text)?;
+    }
+    Ok(body)
 }
 
 /// The snapshot a file's `octets` hold for the Load Control `object`.
 ///
 /// Refuses octets past [`MAX_LEN`], without the tag, saved for another
-/// object, a body of another length, and a value no save writes.
+/// object, cut short, going on past the body's end, and a value no save
+/// writes.
 pub fn decode(
     object: ObjectIdentifier,
     octets: &[u8],
@@ -87,15 +107,18 @@ fn decode_file(
     octets: &[u8],
 ) -> Result<LoadControlSnapshot, SnapshotError> {
     let (_, body) = framing::open(octets, &MAGIC, None, MAX_LEN, object)?;
-    let body: &[u8; BODY_LEN] = match body.len() {
-        BODY_LEN => body.try_into().expect("checked length"),
-        len if len < BODY_LEN => return Err(SnapshotError::truncated("is cut short")),
-        _ => return Err(SnapshotError::damaged("goes on past its body")),
+    let Some((fixed, rest)) = body.split_first_chunk::<FIXED_LEN>() else {
+        return Err(SnapshotError::truncated("is cut short"));
     };
-    let word = |at: usize| u64::from_be_bytes(body[at..at + 8].try_into().expect("eight octets"));
-    let state = u32::from_be_bytes(body[..4].try_into().expect("four octets"));
+    let word = |at: usize| u64::from_be_bytes(fixed[at..at + 8].try_into().expect("eight octets"));
+    let flag = |at: usize| match fixed[at] {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(SnapshotError::damaged("holds a flag other than 0 or 1")),
+    };
+    let state = u32::from_be_bytes(fixed[..4].try_into().expect("four octets"));
     let value = word(5);
-    let requested_shed_level = match body[4] {
+    let requested_shed_level = match fixed[4] {
         0 => BACnetShedLevel::Percent(value),
         1 => BACnetShedLevel::Level(value),
         2 if value <= u64::from(u32::MAX) => BACnetShedLevel::Amount(f32::from_bits(value as u32)),
@@ -103,18 +126,28 @@ fn decode_file(
     };
     let start_time = (
         Date {
-            year: body[13],
-            month: body[14],
-            day: body[15],
-            day_of_week: body[16],
+            year: fixed[13],
+            month: fixed[14],
+            day: fixed[15],
+            day_of_week: fixed[16],
         },
         Time {
-            hour: body[17],
-            minute: body[18],
-            second: body[19],
-            hundredths: body[20],
+            hour: fixed[17],
+            minute: fixed[18],
+            second: fixed[19],
+            hundredths: fixed[20],
         },
     );
+    let enable = flag(45)?;
+    let (description, rest) = if flag(46)? {
+        let (text, rest) = framing::take_description(rest)?;
+        (Some(text), rest)
+    } else {
+        (None, rest)
+    };
+    if !rest.is_empty() {
+        return Err(SnapshotError::damaged("goes on past its body"));
+    }
     let snapshot = LoadControlSnapshot {
         state: ShedState::from_raw(state),
         requested_shed_level,
@@ -122,6 +155,8 @@ fn decode_file(
         shed_duration: word(21),
         duty_window: word(29),
         agreed_duty_window: word(37),
+        enable,
+        description,
     };
     if !sound(&snapshot) {
         return Err(SnapshotError::damaged("holds a value no write leaves"));
@@ -130,7 +165,8 @@ fn decode_file(
 }
 
 /// Whether `snapshot` holds only what the object serves: a shed state, a
-/// level a write takes, and a Start_Time that names a moment or none.
+/// level a write takes, and a Start_Time that names a moment or none. A
+/// Description past its cap is refused as it is written.
 fn sound(snapshot: &LoadControlSnapshot) -> bool {
     let state = snapshot.state.to_raw() <= ShedState::SHED_NON_COMPLIANT.to_raw();
     let level = match snapshot.requested_shed_level {
@@ -174,11 +210,15 @@ mod tests {
             shed_duration: 30,
             duty_window: 10,
             agreed_duty_window: 15,
+            enable: true,
+            description: Some("Chillers".into()),
         }
     }
 
+    const HEADER: usize = framing::HEADER_LEN;
+
     #[test]
-    fn each_choice_round_trips_in_a_fixed_body() {
+    fn each_choice_round_trips() {
         for level in [
             BACnetShedLevel::Percent(80),
             BACnetShedLevel::Level(u64::MAX),
@@ -189,14 +229,26 @@ mod tests {
                 ..shedding()
             };
             let octets = encode(oid(1), &snapshot).unwrap();
-            assert_eq!(octets.len(), MAX_LEN);
+            assert_eq!(octets.len(), HEADER + FIXED_LEN + 4 + "Chillers".len());
             assert_eq!(octets[..8], MAGIC);
             assert_eq!(decode(oid(1), &octets).unwrap(), snapshot);
         }
-        let idle = LoadControlSnapshot::default();
+        for snapshot in [
+            LoadControlSnapshot::default(),
+            LoadControlSnapshot {
+                enable: false,
+                description: Some(String::new()),
+                ..LoadControlSnapshot::default()
+            },
+        ] {
+            let octets = encode(oid(1), &snapshot).unwrap();
+            assert_eq!(decode(oid(1), &octets).unwrap(), snapshot);
+        }
         assert_eq!(
-            decode(oid(1), &encode(oid(1), &idle).unwrap()).unwrap(),
-            idle
+            encode(oid(1), &LoadControlSnapshot::default())
+                .unwrap()
+                .len(),
+            HEADER + FIXED_LEN
         );
     }
 
@@ -208,34 +260,64 @@ mod tests {
             decode(oid(2), &octets).unwrap_err().kind(),
             SnapshotErrorKind::OtherObject
         );
-        assert_eq!(kind(&octets[..MAX_LEN - 1]), SnapshotErrorKind::Truncated);
+        // Cut short in the fixed fields, and inside the Description.
+        assert_eq!(kind(&octets[..HEADER + 10]), SnapshotErrorKind::Truncated);
+        assert_eq!(
+            kind(&octets[..octets.len() - 1]),
+            SnapshotErrorKind::Truncated
+        );
+        // An octet past the end, after a Description and after none.
         let mut longer = octets.clone();
         longer.push(0);
-        assert_eq!(kind(&longer), SnapshotErrorKind::TooLarge);
-        let header = framing::HEADER_LEN;
-        // A state past the four, a fourth choice, and an hour unspecified
-        // alone.
-        for (at, octet) in [(header + 3, 9), (header + 4, 3), (header + 17, 0xFF)] {
+        assert_eq!(kind(&longer), SnapshotErrorKind::Damaged);
+        let mut plain = encode(oid(1), &LoadControlSnapshot::default()).unwrap();
+        plain.push(0);
+        assert_eq!(kind(&plain), SnapshotErrorKind::Damaged);
+        let mut huge = octets.clone();
+        huge.resize(MAX_LEN + 1, 0);
+        assert_eq!(kind(&huge), SnapshotErrorKind::TooLarge);
+        // A state past the four, a fourth choice, an hour unspecified
+        // alone, an Enable of 2 and a presence octet of 2.
+        for (at, octet) in [
+            (HEADER + 3, 9),
+            (HEADER + 4, 3),
+            (HEADER + 17, 0xFF),
+            (HEADER + 45, 2),
+            (HEADER + 46, 2),
+        ] {
             let mut damaged = octets.clone();
             damaged[at] = octet;
             assert_eq!(kind(&damaged), SnapshotErrorKind::Damaged, "octet {at}");
         }
+        // A Description that isn't UTF-8.
+        let mut text = octets.clone();
+        *text.last_mut().unwrap() = 0xFF;
+        assert_eq!(kind(&text), SnapshotErrorKind::Damaged);
         // A percent over 100, which a write refuses.
         let mut percent = encode(oid(1), &LoadControlSnapshot::default()).unwrap();
-        percent[header + 4] = 0;
-        percent[header + 12] = 101;
+        percent[HEADER + 4] = 0;
+        percent[HEADER + 12] = 101;
         assert_eq!(kind(&percent), SnapshotErrorKind::Damaged);
         for refused in [
-            BACnetShedLevel::Percent(101),
-            BACnetShedLevel::Amount(-1.0),
-            BACnetShedLevel::Amount(f32::NAN),
-        ] {
-            let snapshot = LoadControlSnapshot {
-                requested_shed_level: refused,
+            LoadControlSnapshot {
+                requested_shed_level: BACnetShedLevel::Percent(101),
                 ..shedding()
-            };
+            },
+            LoadControlSnapshot {
+                requested_shed_level: BACnetShedLevel::Amount(-1.0),
+                ..shedding()
+            },
+            LoadControlSnapshot {
+                requested_shed_level: BACnetShedLevel::Amount(f32::NAN),
+                ..shedding()
+            },
+            LoadControlSnapshot {
+                description: Some("x".repeat(MAX_DESCRIPTION_OCTETS + 1)),
+                ..shedding()
+            },
+        ] {
             assert_eq!(
-                encode(oid(1), &snapshot).unwrap_err().kind(),
+                encode(oid(1), &refused).unwrap_err().kind(),
                 SnapshotErrorKind::OutOfRange
             );
         }

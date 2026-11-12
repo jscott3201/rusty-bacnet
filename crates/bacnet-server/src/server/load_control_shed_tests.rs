@@ -518,6 +518,54 @@ async fn a_request_written_over_the_wire_survives_a_restart() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_start_that_fails_lets_a_restored_shed_go() {
+    use crate::server::test_transport::{StartMode, TestTransport};
+    use bacnet_objects::device::{DeviceConfig, DeviceObject};
+    // A century from the harness's day, so the request is under way on the
+    // system clock, which a start reads.
+    const CENTURY: u64 = 100 * 365 * 24 * 60;
+    let app = app();
+    app.answer(ShedProgress::Compliant, 2);
+    let frame = clock_at(0);
+    let saved = LoadControlSnapshot {
+        state: bacnet_types::enums::ShedState::SHED_COMPLIANT,
+        requested_shed_level: BACnetShedLevel::Level(2),
+        start_time: (frame.local_date, frame.local_time),
+        shed_duration: CENTURY,
+        ..LoadControlSnapshot::default()
+    };
+    let store = Arc::new(Store::default());
+    *store.saved.lock().unwrap() = Some(saved.clone());
+    let mut object = LoadControlObject::with_persistence(1, "LC-1", store.clone()).unwrap();
+    object.set_shedder(app.clone());
+    let identity = bacnet_objects::DeviceIdentity::new(856, 0).unwrap();
+    let mut db = ObjectDatabase::new();
+    db.add(Box::new(
+        DeviceObject::new(DeviceConfig {
+            identity: identity.clone(),
+            ..DeviceConfig::default()
+        })
+        .unwrap(),
+    ))
+    .unwrap();
+    db.add(Box::new(object)).unwrap();
+    let config = ServerConfig {
+        device: identity,
+        ..ServerConfig::default()
+    };
+    // A transport whose start fails: its one receiver is already gone.
+    let transport = TestTransport::builder()
+        .start(StartMode::Inbound(None))
+        .build();
+    assert!(BACnetServer::start(config, db, transport).await.is_err());
+    // The start offered the restored request to the application, then let
+    // it go as it failed (#2479); storage keeps it for the next start.
+    assert!(!app.asked.lock().unwrap().is_empty());
+    assert_eq!(*app.stops.lock().unwrap(), 1);
+    assert_eq!(*store.saved.lock().unwrap(), Some(saved));
+}
+
+#[tokio::test(start_paused = true)]
 async fn a_delete_object_during_a_shed_stops_the_loads() {
     let app = app();
     app.answer(ShedProgress::Compliant, 2);

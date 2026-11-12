@@ -13,6 +13,9 @@ use bacnet_objects::audit::{
 use bacnet_objects::color::{
     ColorOutputPersistence, ColorOutputSnapshot, ColorOutputValue, FileColorOutputPersistence,
 };
+use bacnet_objects::load_control::{
+    FileLoadControlPersistence, LoadControlPersistence, LoadControlSnapshot,
+};
 use bacnet_objects::log_persistence::{
     FileLogPersistence, LogAcquisitionSettings, LogPersistence, LogReportingSettings, LogSnapshot,
 };
@@ -82,6 +85,38 @@ fn save_forwarder(path: &Path, snapshot: ForwarderSnapshot) {
     FileNotificationForwarderPersistence::new(path)
         .unwrap()
         .save(oid(ObjectType::NOTIFICATION_FORWARDER), &snapshot)
+        .expect("the sample saves");
+}
+
+/// A Load Control shedding a percent short of compliance, with a written
+/// Description: every field of `RBNLCT01` present (#2479).
+pub fn load_control(path: &Path) {
+    let snapshot = LoadControlSnapshot {
+        state: bacnet_types::enums::ShedState::SHED_NON_COMPLIANT,
+        requested_shed_level: bacnet_types::constructed::BACnetShedLevel::Percent(80),
+        start_time: (
+            Date {
+                year: 126,
+                month: 11,
+                day: 11,
+                day_of_week: 3,
+            },
+            Time {
+                hour: 10,
+                minute: 5,
+                second: 0,
+                hundredths: 0,
+            },
+        ),
+        shed_duration: 30,
+        duty_window: 10,
+        agreed_duty_window: 15,
+        enable: true,
+        description: Some("Chillers".into()),
+    };
+    FileLoadControlPersistence::new(path)
+        .unwrap()
+        .save(oid(ObjectType::LOAD_CONTROL), &snapshot)
         .expect("the sample saves");
 }
 

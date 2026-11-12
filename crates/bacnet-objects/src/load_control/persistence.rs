@@ -12,6 +12,7 @@
 //!
 //! [`NotificationClassPersistence`]: crate::notification_class::NotificationClassPersistence
 
+use crate::prelude::*;
 #[cfg(feature = "std")]
 use std::path::Path;
 
@@ -27,14 +28,18 @@ use crate::durable::file::ObjectFile;
 use crate::snapshot::load_control as format;
 
 /// What a Load Control keeps across a restart: its shed request as it
-/// stands, its agreed Duty_Window, and its shed state.
+/// stands, its agreed Duty_Window, its shed state, Enable, and a written
+/// Description.
 ///
 /// [`Default`] is an idle object's: SHED_INACTIVE, level 0, Start_Time
-/// unspecified and the three durations zero.
+/// unspecified, the three durations zero, enabled, and no Description.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LoadControlSnapshot {
     /// Present_Value. A rebuilt object takes any state but SHED_INACTIVE as
-    /// a request to look at again: it starts SHED_REQUEST_PENDING.
+    /// a request to look at again: it starts SHED_REQUEST_PENDING. One
+    /// saved SHED_COMPLIANT or SHED_NON_COMPLIANT was being shed, so its
+    /// end calls [`LoadShedder::stop`](super::LoadShedder::stop) even if
+    /// the shedder is never asked about it.
     pub state: ShedState,
     /// Requested_Shed_Level.
     pub requested_shed_level: BACnetShedLevel,
@@ -47,6 +52,13 @@ pub struct LoadControlSnapshot {
     /// The agreed Duty_Window, in minutes
     /// ([`set_agreed_duty_window`](super::LoadControlObject::set_agreed_duty_window)).
     pub agreed_duty_window: u64,
+    /// Enable. A rebuilt object restored FALSE holds no request, as a
+    /// written FALSE leaves it.
+    pub enable: bool,
+    /// Description, once a write has set it (#2364); at most 16 KiB of
+    /// UTF-8, as an object with storage refuses a longer write. `None`
+    /// until then.
+    pub description: Option<String>,
 }
 
 impl Default for LoadControlSnapshot {
@@ -58,6 +70,8 @@ impl Default for LoadControlSnapshot {
             shed_duration: 0,
             duty_window: 0,
             agreed_duty_window: 0,
+            enable: true,
+            description: None,
         }
     }
 }
