@@ -1,7 +1,7 @@
-//! The fields the three log record codecs share: the constructed timestamp,
-//! the three-bit log status, the error pair, bit-string checks, the
-//! any-value wrapper and an alternative under a tag the CHOICE doesn't
-//! assign.
+//! The fields the log record codecs share: the constructed timestamp, the
+//! three-bit log status, the error pair, bit-string checks, the any-value
+//! wrapper, an alternative under a tag the CHOICE doesn't assign (which the
+//! event values reuse) and the whole-record depth check.
 //!
 //! Every record of Clause 21's BACnetLogRecord, BACnetEventLogRecord and
 //! BACnetLogMultipleRecord opens with context 0 around an application Date
@@ -179,19 +179,19 @@ pub(super) fn decode_any_value(body: &[u8]) -> Result<Vec<u8>, Error> {
 }
 
 /// The alternative whose tag `tag` starts at `start` in `data`, kept as
-/// received when the tag is above `last`, the highest its CHOICE assigns:
-/// `None` for any other tag, which the caller decodes or refuses. A
-/// constructed one's body must be complete tagged values with every context
-/// tag balanced, the rule an any-value's body follows, so a malformed or
-/// truncated one still fails, as does nesting past the tag decoder's depth
-/// limit.
+/// received when `kept` says its CHOICE gives that tag no alternative (for
+/// a log record CHOICE, every tag above the highest it assigns): `None` for
+/// any other tag, which the caller decodes or refuses. A constructed one's
+/// body must be complete tagged values with every context tag balanced, the
+/// rule an any-value's body follows, so a malformed or truncated one still
+/// fails, as does nesting past the tag decoder's depth limit.
 pub(super) fn decode_opaque(
     data: &[u8],
     tag: &tags::Tag,
     start: usize,
-    last: u8,
+    kept: fn(u8) -> bool,
 ) -> Result<Option<(OpaqueChoice, usize)>, Error> {
-    if tag.class != tags::TagClass::Context || tag.is_closing || tag.number <= last {
+    if tag.class != tags::TagClass::Context || tag.is_closing || !kept(tag.number) {
         return Ok(None);
     }
     let (data, end) = if tag.is_opening {
@@ -211,13 +211,14 @@ pub(super) fn decode_opaque(
 
 /// Write an alternative [`decode_opaque`] kept back as it came: under its
 /// own tag, primitive or between an opening and closing tag pair. Refuses a
-/// tag up to `last`, which its CHOICE assigns, or 255, a primitive longer
-/// than the tag decoder takes, and a constructed body that isn't complete
-/// tagged values. `what` names the field in errors.
+/// tag `kept` doesn't keep (one its CHOICE assigns, which would decode as
+/// its own variant or not at all) or 255, a primitive longer than the tag
+/// decoder takes, and a constructed body that isn't complete tagged values.
+/// `what` names the field in errors.
 pub(super) fn encode_opaque(
     buf: &mut BytesMut,
     opaque: &OpaqueChoice,
-    last: u8,
+    kept: fn(u8) -> bool,
     what: &'static str,
 ) -> Result<(), Error> {
     let OpaqueChoice {
@@ -225,7 +226,7 @@ pub(super) fn encode_opaque(
         constructed,
         ref data,
     } = *opaque;
-    if tag <= last || tag == u8::MAX {
+    if !kept(tag) || tag == u8::MAX {
         return Err(
             EncodeError::new("tag [{}] cannot carry an opaque alternative")
                 .within(what)
@@ -257,28 +258,39 @@ pub(super) fn encode_opaque(
 
 /// What a record encoder's refusal of a record nested too deep says, which
 /// [`is_record_too_deep`] knows it by.
-const TOO_DEEP: &str = "nests {} tags deep, past what a ReadRange-ACK carries";
+const TOO_DEEP: &str = "nests {} tags deep, past what a log read's reply carries";
 
-/// Refuse a whole written record that a reader couldn't take back.
+/// How deep a Trend Log, Trend Log Multiple or Event Log record may nest. A
+/// ReadRange-ACK carries records inside its item-data frame, and the tag
+/// decoder counts its nesting limit from that frame, so a record may nest
+/// one level less deep than the limit.
+pub(super) const IN_ITEM_DATA: usize = tags::MAX_CONTEXT_NESTING_DEPTH - 1;
+
+/// How deep an Audit Log record may nest (#2483): an AuditLogQuery-ACK
+/// carries each one inside two frames, its record list and the result's
+/// log-record field, one more than a ReadRange-ACK's item data, so an Audit
+/// Log record nests one level less deep than the other logs' records.
+pub(super) const IN_AUDIT_RESULT: usize = tags::MAX_CONTEXT_NESTING_DEPTH - 2;
+
+/// Refuse a whole written record that a reader couldn't take back: one
+/// nested deeper than `deepest`, [`IN_ITEM_DATA`] or [`IN_AUDIT_RESULT`].
 ///
 /// Each field was checked as it was written; what only the whole record
 /// shows is how deep it nests, an any-value's or an opaque alternative's body
-/// under the record's own levels. A ReadRange-ACK carries records inside its
-/// item-data frame, and the tag decoder counts its nesting limit from that
-/// frame, so a record may nest one level less deep than the limit. A stored
-/// record past that would break every page of the log, and a persisted
-/// snapshot holding it would not load.
+/// (or an audit notification's values) under the record's own levels. A
+/// stored record past what the replies carry would break every page of the
+/// log that holds it, and a persisted snapshot holding it would not load.
 ///
 /// The walk only follows the tags: no allocation, no recursion, and it
 /// stops at the first opening tag past the limit.
-pub(super) fn check_record(record: &[u8], what: &'static str) -> Result<(), Error> {
+pub(super) fn check_record(record: &[u8], deepest: usize, what: &'static str) -> Result<(), Error> {
     let (mut depth, mut pos) = (0usize, 0usize);
     while pos < record.len() {
         let (tag, next) = tags::decode_tag(record, pos).map_err(Error::into_encode_refusal)?;
         pos = next;
         if tag.is_opening {
             depth += 1;
-            if depth >= tags::MAX_CONTEXT_NESTING_DEPTH {
+            if depth > deepest {
                 return Err(EncodeError::new(TOO_DEEP)
                     .within(what)
                     .with_value(depth as u32)
@@ -297,9 +309,9 @@ pub(super) fn check_record(record: &[u8], what: &'static str) -> Result<(), Erro
 }
 
 /// Whether `error` is a log record encoder's refusal of a record nested
-/// deeper than a ReadRange-ACK's item data carries (#2474): a record every
-/// field of which is sound, so a reader may drop it and keep the rest, as
-/// the log snapshot loader does with one an older build saved.
+/// deeper than the replies that read the log carry (#2474, #2483): a record
+/// every field of which is sound, so a reader may drop it and keep the
+/// rest, as the log snapshot loaders do with one an older build saved.
 pub fn is_record_too_deep(error: &Error) -> bool {
     matches!(error, Error::Encode(refusal) if refusal.label == TOO_DEEP)
 }

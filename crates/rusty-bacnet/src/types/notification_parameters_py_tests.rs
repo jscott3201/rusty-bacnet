@@ -6,7 +6,7 @@ use std::ffi::CString;
 use bacnet_encoding::constructed::{encode_authentication_factor, encode_bacnet_property_value};
 use bacnet_types::constructed::{
     BACnetAuthenticationFactor, BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference,
-    BACnetPropertyStates,
+    BACnetPropertyStates, OpaqueChoice,
 };
 use bacnet_types::enums::{
     AccessEvent, AuthenticationFactorType, LifeSafetyMode, LifeSafetyOperation, LifeSafetyState,
@@ -330,29 +330,35 @@ fn every_event_type_reads_as_a_mapping_without_bytes() {
     });
 }
 
-/// A choice under a tag the standard doesn't assign reads as Event_Parameters'
-/// unassigned algorithm does: `other`, its tag and its body as received
-/// (#2474).
+/// A choice under a tag the standard doesn't assign reads as a log record's
+/// unknown choice does: `other`, its tag, its form and its octets as
+/// received (#2474, #2483).
 #[test]
 fn an_unassigned_choice_reads_as_other_with_its_body() {
     Python::initialize();
     Python::attach(|py| {
-        let read = notification_parameters_to_py(
-            py,
-            &NotificationParameters::Opaque {
-                tag: 30,
-                data: vec![0x09, 0x1E],
-            },
-        )
-        .unwrap();
-        let expected = py
-            .eval(
-                c"{'kind': 'other', 'tag': 30, 'data': b'\x09\x1e'}",
-                None,
-                None,
+        for (constructed, expected) in [
+            (
+                true,
+                c"{'kind': 'other', 'tag': 30, 'constructed': True, 'data': b'\x09\x1e'}",
+            ),
+            (
+                false,
+                c"{'kind': 'other', 'tag': 30, 'constructed': False, 'data': b'\x09\x1e'}",
+            ),
+        ] {
+            let read = notification_parameters_to_py(
+                py,
+                &NotificationParameters::Opaque(OpaqueChoice {
+                    tag: 30,
+                    constructed,
+                    data: vec![0x09, 0x1E],
+                }),
             )
             .unwrap();
-        assert!(read.as_any().eq(&expected).unwrap(), "{read}");
+            let expected = py.eval(expected, None, None).unwrap();
+            assert!(read.as_any().eq(&expected).unwrap(), "{read}");
+        }
     });
 }
 

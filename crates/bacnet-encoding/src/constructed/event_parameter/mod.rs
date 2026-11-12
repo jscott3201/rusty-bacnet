@@ -14,10 +14,12 @@
 //! kept as its encoded items, each checked to be an application value or a
 //! `[0]`-framed reference.
 //!
-//! Tags 6, 7, 12 and 19 carry no alternative (Clause 21 omits 6 and 19,
-//! deprecates 7 and reserves 12), so decoding one is an error. An
-//! alternative under a tag the 2020 production doesn't assign (23 and up) is
-//! preserved byte-for-byte as [`BACnetEventParameter::Opaque`].
+//! Tags 6 and 19 carry no alternative: Clause 21 leaves them out because
+//! their event types have no parameters, so decoding one is an error. An
+//! alternative under a tag the 2020 production doesn't assign, 7 (which it
+//! deprecates), 12 (which it reserves for a later addendum) or 23 and up, is
+//! preserved byte-for-byte as [`BACnetEventParameter::Opaque`] (#2483), as
+//! the notification decoder keeps the same tags.
 
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
@@ -36,18 +38,23 @@ use super::tagged::{
     decode_ctx_real, decode_ctx_unsigned, expect_closing, expect_opening, next_is_closing,
 };
 use super::{
-    decode_dopr_body, decode_property_state, encode_dopr_body, encode_property_state,
-    validate_extended_parameters, validate_tlv_sequence, MAX_FRAMED_ITEMS,
+    MAX_FRAMED_ITEMS, decode_dopr_body, decode_property_state, encode_dopr_body,
+    encode_property_state, validate_extended_parameters, validate_tlv_sequence,
 };
 
-/// Context tags the Clause 21 production omits, deprecates, or reserves.
-/// Decoding one means the peer is speaking something other than the 135-2020
-/// production, so these are hard errors rather than Opaque shadows.
-const RESERVED_EVENT_TAGS: [u8; 4] = [6, 7, 12, 19];
+/// Context tags the Clause 21 production leaves out because their event
+/// types carry no parameters (complex-event-type and change-of-reliability):
+/// a value under one is malformed, not newer, so these are hard errors
+/// rather than Opaque shadows.
+const OMITTED_EVENT_TAGS: [u8; 2] = [6, 19];
 
-/// The highest tag the 2020 production assigns or reserves: every tag up to
-/// it has a variant or is rejected, so none of them is [`BACnetEventParameter::Opaque`].
-const LAST_ASSIGNED_TAG: u8 = 22;
+/// Whether an alternative under `tag` is kept as
+/// [`BACnetEventParameter::Opaque`]: 7 (deprecated), 12 (reserved for a
+/// later addendum) or 23 and up. Every other tag up to 22 has a variant or
+/// is refused, and 255 is the legacy raw-octet marker.
+fn is_opaque_tag(tag: u8) -> bool {
+    matches!(tag, 7 | 12 | 23..=254)
+}
 
 /// Encode a [`BACnetEventParameter`] as its full CHOICE framing.
 ///
@@ -59,8 +66,7 @@ pub fn encode_event_parameter(
 ) -> Result<(), Error> {
     let mut encoded = BytesMut::new();
     encode_event_parameter_into(&mut encoded, value)?;
-    validate_tlv_sequence(&encoded, "BACnetEventParameter")
-        .map_err(Error::into_encode_refusal)?;
+    validate_tlv_sequence(&encoded, "BACnetEventParameter").map_err(Error::into_encode_refusal)?;
     buf.extend_from_slice(&encoded);
     Ok(())
 }
@@ -175,7 +181,7 @@ fn encode_event_parameter_into(
             // Legacy pre-framing EventEnrollment values used an Octet String.
             primitives::encode_app_octet_string(buf, data);
         }
-        BACnetEventParameter::Opaque { tag, .. } if *tag <= LAST_ASSIGNED_TAG => {
+        BACnetEventParameter::Opaque { tag, .. } if !is_opaque_tag(*tag) => {
             return Err(
                 EncodeError::new("tag [{}] cannot use an opaque constructed body")
                     .within("BACnetEventParameter")
@@ -209,7 +215,11 @@ fn encode_event_parameter_into(
         } => {
             tags::encode_opening_tag(buf, 8);
             primitives::encode_ctx_unsigned(buf, 0, *time_delay as u64);
-            encode_enumerations(buf, 1, list_of_life_safety_alarm_values.iter().map(|s| s.to_raw()));
+            encode_enumerations(
+                buf,
+                1,
+                list_of_life_safety_alarm_values.iter().map(|s| s.to_raw()),
+            );
             encode_enumerations(buf, 2, list_of_alarm_values.iter().map(|s| s.to_raw()));
             encode_reference(buf, 3, mode_property_reference);
             tags::encode_closing_tag(buf, 8);
@@ -347,9 +357,9 @@ fn encode_enumerations(buf: &mut BytesMut, tag: u8, values: impl Iterator<Item =
 /// Decode one framed [`BACnetEventParameter`] CHOICE alternative at `offset`.
 ///
 /// Returns the value and the offset past its encoding. An alternative under a
-/// tag the 2020 production doesn't assign is preserved as
-/// [`BACnetEventParameter::Opaque`]; the omitted/deprecated/reserved tags 6,
-/// 7, 12, 19 are rejected.
+/// tag the 2020 production doesn't assign (7, 12, or 23 and up) is preserved
+/// as [`BACnetEventParameter::Opaque`]; the omitted tags 6 and 19 are
+/// rejected.
 pub fn decode_event_parameter(
     data: &[u8],
     offset: usize,
@@ -402,11 +412,11 @@ pub fn decode_event_parameter(
         ));
     }
 
-    if RESERVED_EVENT_TAGS.contains(&tag.number) {
+    if OMITTED_EVENT_TAGS.contains(&tag.number) {
         return Err(DecodeError::new(
             DecodingKind::InvalidEncoding,
             offset,
-            "BACnetEventParameter: context tag [{}] is omitted/deprecated/reserved in Clause 21",
+            "BACnetEventParameter: context tag [{}] carries no parameters in Clause 21",
         )
         .with_value(tag.number.into())
         .into());
@@ -582,8 +592,9 @@ pub fn decode_event_parameter(
         }
         n @ (3 | 8 | 10 | 11 | 13..=18 | 21 | 22) => members::decode(data, pos, n)?,
         n => {
-            // A tag the 2020 production doesn't assign: preserve the SEQUENCE
-            // body verbatim after validating its nested tag structure.
+            // A tag the 2020 production doesn't assign (7, 12, or 23 and up;
+            // every other is matched above): preserve the SEQUENCE body
+            // verbatim after validating its nested tag structure.
             let (body, p) = tags::extract_context_value(data, pos, n)?;
             validate_tlv_sequence(body, "opaque event parameters")?;
             (

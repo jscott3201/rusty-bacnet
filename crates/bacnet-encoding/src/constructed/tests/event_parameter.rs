@@ -353,29 +353,48 @@ fn legacy_opaque_sentinel_stays_local_to_event_parameters() {
 // --- Negatives ----------------------------------------------------------------
 
 #[test]
-fn reserved_and_deprecated_tags_rejected() {
+fn omitted_tags_rejected_and_deprecated_or_reserved_ones_kept() {
     // Clause 21 omits [6] (proprietary parallel) and [19]
-    // (change-of-reliability has no parameters), deprecated [7], and
-    // reserves [12]; decoding any of them is a hard error, not an Opaque.
+    // (change-of-reliability has no parameters): decoding either is a hard
+    // error, not an Opaque. It deprecates [7] and reserves [12], which are
+    // kept as received (#2483), as the notification decoder keeps them.
     // Constructed form (opening tag):
     for tag in [6u8, 7, 12, 19] {
         let mut data = BytesMut::new();
         tags::encode_opening_tag(&mut data, tag);
         data.extend_from_slice(&[0x09, 0x01]);
         tags::encode_closing_tag(&mut data, tag);
-        let err = decode_event_parameter(&data, 0).unwrap_err();
-        assert!(
-            format!("{err}").contains("omitted/deprecated/reserved"),
-            "tag [{tag}]: unexpected error {err}"
-        );
+        match decode_event_parameter(&data, 0) {
+            Ok((value, end)) if matches!(tag, 7 | 12) => {
+                assert_eq!(end, data.len());
+                assert_eq!(
+                    value,
+                    BACnetEventParameter::Opaque {
+                        tag,
+                        data: vec![0x09, 0x01]
+                    }
+                );
+            }
+            Err(err) if matches!(tag, 6 | 19) => assert!(
+                format!("{err}").contains("carries no parameters"),
+                "tag [{tag}]: unexpected error {err}"
+            ),
+            other => panic!("tag [{tag}]: {other:?}"),
+        }
     }
-    // Primitive form (zero-length contents under the reserved tag number).
+    // Primitive form (zero-length contents under the tag number): only
+    // none [20] is primitive.
     for tag in [6u8, 7, 12, 19] {
         let mut data = BytesMut::new();
         tags::encode_tag(&mut data, tag, crate::tags::TagClass::Context, 0);
         let err = decode_event_parameter(&data, 0).unwrap_err();
+        let expected = if matches!(tag, 6 | 19) {
+            "carries no parameters"
+        } else {
+            "invalid primitive alternative"
+        };
         assert!(
-            format!("{err}").contains("omitted/deprecated/reserved"),
+            format!("{err}").contains(expected),
             "primitive tag [{tag}]: unexpected error {err}"
         );
     }

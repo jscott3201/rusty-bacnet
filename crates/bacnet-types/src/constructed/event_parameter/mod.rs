@@ -86,10 +86,10 @@ pub enum ChangeOfValueCriteria {
 /// Structured `Event_Parameters` for an EventEnrollment object.
 ///
 /// Models every algorithm alternative of the Clause 21 `BACnetEventParameter`
-/// `CHOICE`. A context tag the 2020 production doesn't assign (a later
-/// addendum's or a vendor's) is preserved verbatim via
-/// [`BACnetEventParameter::Opaque`], so values written by a remote client
-/// are never silently discarded.
+/// `CHOICE`. A context tag the 2020 production doesn't assign (one it
+/// deprecates or reserves, a later addendum's or a vendor's) is preserved
+/// verbatim via [`BACnetEventParameter::Opaque`], so values written by a
+/// remote client are never silently discarded.
 ///
 /// The wire form is the full ASN.1 CHOICE framing of the Clause 21
 /// production, produced by
@@ -281,11 +281,13 @@ pub enum BACnetEventParameter {
         update_time_reference: BACnetDeviceObjectPropertyReference,
     },
     /// Preserves an alternative under a context tag the 2020 production
-    /// doesn't assign.
+    /// doesn't assign: 7 (deprecated), 12 (reserved for a later addendum),
+    /// or 23 and up (#2483).
     ///
     /// `data` is the complete SEQUENCE body. The framed encoder rejects the
-    /// assigned, omitted, deprecated and reserved tags in this variant; tag
-    /// 255 is the internal marker of a legacy raw-octet value.
+    /// assigned tags in this variant, and 6 and 19, which Clause 21 leaves
+    /// out because their event types carry no parameters; tag 255 is the
+    /// internal marker of a legacy raw-octet value.
     Opaque {
         /// The unrecognized algorithm tag.
         tag: u8,

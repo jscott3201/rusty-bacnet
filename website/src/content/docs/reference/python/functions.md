@@ -43,9 +43,9 @@ same name holds its value: `log_status` (a `BitString` naming
 snake case, `out_of_range`, with each value under its member's name;
 see docs/python-api.md) or `audit_notification` (an Audit
 Log record, as `audit_log_query` shows it). A choice under a tag the
-standard doesn't assign, a datum or a member value, is `other` with
-`tag`, `constructed` and `data` (its octets as received), and
-event values of such a type are `other` with `tag` and `data`. A
+standard doesn't assign, a datum, a member value or event values, is
+`other` with `tag`, `constructed` and `data` (its octets as
+received). A
 Trend Log record adds `status_flags` (a `BitString` naming
 `IN_ALARM`, `FAULT`, `OVERRIDDEN`, `OUT_OF_SERVICE`), or None.
 

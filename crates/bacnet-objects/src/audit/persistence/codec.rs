@@ -10,7 +10,9 @@
 //! completed receipts. Every integer is big-endian.
 
 use crate::prelude::*;
-use bacnet_encoding::constructed::{decode_audit_log_record, encode_audit_log_record};
+use bacnet_encoding::constructed::{
+    decode_audit_log_record, encode_audit_log_record, is_record_too_deep,
+};
 use bacnet_types::bitstring::LogStatus;
 use bacnet_types::constructed::{
     BACnetAuditLogDatum, BACnetAuditLogRecord, BACnetAuditLogRecordResult, BACnetRecipient,
@@ -245,7 +247,7 @@ fn decode_payload(
         return Err(SnapshotError::damaged("payload has trailing bytes"));
     }
 
-    let snapshot = AuditLogSnapshot {
+    let mut snapshot = AuditLogSnapshot {
         object_identifier,
         generation,
         capacity,
@@ -254,8 +256,61 @@ fn decode_payload(
         records,
         completed_receipts,
     };
+    // A record that decodes but would not encode again could never be
+    // served, so such a snapshot is damaged. The exception is a record an
+    // older build saved nested deeper than an AuditLogQuery-ACK carries
+    // (#2483): every field of it is sound, so it is dropped and the rest
+    // restores. Only a snapshot that fails its check pays for the search.
+    if check(&snapshot).is_err() {
+        drop_too_deep(&mut snapshot);
+    }
     check(&snapshot).map_err(SnapshotError::damaging)?;
     Ok(snapshot)
+}
+
+/// Drop the records of `snapshot` that fail only the whole-record depth
+/// check, logging a warning when there are any. The sequence numbers stay
+/// contiguous up to Total_Record_Count: each record older than a dropped
+/// one takes the next number up, as the other logs' records do. A record
+/// that fails for any other reason stays, for the snapshot check to refuse.
+pub(super) fn drop_too_deep(snapshot: &mut AuditLogSnapshot) {
+    let mut scratch = record_buffer(snapshot.records.len());
+    let mut dropped = 0u64;
+    let mut kept = Vec::with_capacity(snapshot.records.len());
+    // Newest first, so each kept record knows how many newer ones went.
+    for mut result in core::mem::take(&mut snapshot.records).into_iter().rev() {
+        scratch.clear();
+        if check_record_dynamic_size(&result.record).is_some()
+            && encode_audit_log_record(&result.record, &mut scratch)
+                .is_err_and(|error| is_record_too_deep(&error))
+        {
+            dropped += 1;
+            continue;
+        }
+        result.sequence_number = advance(result.sequence_number, dropped);
+        kept.push(result);
+    }
+    kept.reverse();
+    snapshot.records = kept;
+    if dropped != 0 {
+        log_warn!(
+            audit_log = %snapshot.object_identifier,
+            dropped,
+            "Dropping saved audit records nested too deep for an AuditLogQuery-ACK to carry"
+        );
+    }
+}
+
+/// `sequence_number` moved `by` places on, wrapping from the largest
+/// Unsigned64 to 1 as Total_Record_Count does. Zero, which no record may
+/// hold, stays zero for the snapshot check to refuse.
+fn advance(sequence_number: u64, by: u64) -> u64 {
+    let Some(from_zero) = sequence_number.checked_sub(1) else {
+        return 0;
+    };
+    let moved = (u128::from(from_zero) + u128::from(by)) % u128::from(u64::MAX);
+    // Below u64::MAX by the modulus, so the cast keeps it.
+    moved as u64 + 1
 }
 
 /// Recover the log status a v1 or v2 snapshot meant to store.
@@ -386,8 +441,15 @@ pub(crate) fn record_len(
 /// `Some` when the variable-length parts of `record` fit the record cap
 /// together, before anything is encoded.
 fn check_record_dynamic_size(record: &BACnetAuditLogRecord) -> Option<()> {
-    let BACnetAuditLogDatum::AuditNotification(notification) = &record.datum else {
-        return Some(());
+    let notification = match &record.datum {
+        BACnetAuditLogDatum::AuditNotification(notification) => notification,
+        // A datum kept as received (#2483) is only its octets.
+        BACnetAuditLogDatum::Opaque(opaque) => {
+            return (opaque.data.len() <= MAX_RECORD_BYTES).then_some(());
+        }
+        BACnetAuditLogDatum::LogStatus(_) | BACnetAuditLogDatum::TimeChange(_) => {
+            return Some(());
+        }
     };
     let recipient_size = |recipient: &BACnetRecipient| match recipient {
         BACnetRecipient::Device(_) => 4,

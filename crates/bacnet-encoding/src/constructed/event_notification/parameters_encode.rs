@@ -1,5 +1,5 @@
 use super::*;
-use crate::constructed::log_fields::check_bit_string;
+use crate::constructed::log_fields::{check_bit_string, encode_opaque};
 use bacnet_types::error::EncodeError;
 
 /// Encode a context-tagged `BACnetStatusFlags`: four defined bits, so four unused bits, with
@@ -27,7 +27,9 @@ pub fn encode_notification_parameters(
         let (_, next) = tags::extract_context_value(&encoded, content_start, 6)
             .map_err(Error::into_encode_refusal)?;
         if next != encoded.len() {
-            return Err(Error::encode("ComplexEventType has trailing encoded fields"));
+            return Err(Error::encode(
+                "ComplexEventType has trailing encoded fields",
+            ));
         }
     } else {
         validate_tlv_sequence(&encoded, "NotificationParameters")
@@ -138,9 +140,11 @@ fn encode_into(params: &NotificationParameters, buf: &mut BytesMut) -> Result<()
         }
         NotificationParameters::ComplexEventType { property_values } => {
             if property_values.len() > MAX_FRAMED_ITEMS {
-                return Err(EncodeError::new("ComplexEventType exceeds {} property values")
-                    .with_value(MAX_FRAMED_ITEMS as u32)
-                    .into());
+                return Err(
+                    EncodeError::new("ComplexEventType exceeds {} property values")
+                        .with_value(MAX_FRAMED_ITEMS as u32)
+                        .into(),
+                );
             }
             tags::encode_opening_tag(buf, 6);
             for property_value in property_values {
@@ -148,7 +152,9 @@ fn encode_into(params: &NotificationParameters, buf: &mut BytesMut) -> Result<()
                     .priority
                     .is_some_and(|priority| !(1..=16).contains(&priority))
                 {
-                    return Err(Error::encode("ComplexEventType property priority must be in 1..=16"));
+                    return Err(Error::encode(
+                        "ComplexEventType property priority must be in 1..=16",
+                    ));
                 }
                 validate_tlv_sequence(&property_value.value, "ComplexEventType property value")
                     .map_err(Error::into_encode_refusal)?;
@@ -379,20 +385,10 @@ fn encode_into(params: &NotificationParameters, buf: &mut BytesMut) -> Result<()
             }
             tags::encode_closing_tag(buf, 22);
         }
-        NotificationParameters::Opaque { tag, data } => {
-            // Only a tag the decoder keeps opaque: any other would decode as
-            // its own variant, or not at all, so it couldn't round-trip.
-            if !is_opaque_tag(*tag) {
-                return Err(EncodeError::new("tag [{}] cannot use an opaque body")
-                    .within("NotificationParameters")
-                    .with_value((*tag).into())
-                    .into());
-            }
-            validate_tlv_sequence(data, "opaque NotificationParameters")
-                .map_err(Error::into_encode_refusal)?;
-            tags::encode_opening_tag(buf, *tag);
-            buf.extend_from_slice(data);
-            tags::encode_closing_tag(buf, *tag);
+        // Only under a tag the decoder keeps opaque: any other would decode
+        // as its own variant, or not at all, so it couldn't round-trip.
+        NotificationParameters::Opaque(opaque) => {
+            encode_opaque(buf, opaque, is_opaque_tag, "NotificationParameters")?;
         }
     }
     Ok(())

@@ -4,6 +4,7 @@
 use bacnet_encoding::constructed::{encode_authentication_factor, encode_bacnet_property_value};
 use bacnet_types::constructed::{
     BACnetAuthenticationFactor, BACnetDeviceObjectPropertyReference, BACnetPropertyStates,
+    OpaqueChoice,
 };
 use bacnet_types::enums::{
     AccessEvent, AuthenticationFactorType, LifeSafetyMode, LifeSafetyOperation, LifeSafetyState,
@@ -394,14 +395,19 @@ fn absent_and_undecodable_values() {
 }
 
 /// A choice under a tag the standard doesn't assign (#2474): the tag as the
-/// event type, with no name, and the body by context tag, hex in the data,
-/// as an unassigned Event_Parameters algorithm shows.
+/// event type, with no name, and a constructed body by context tag, hex in
+/// the data, as an unassigned Event_Parameters algorithm shows; a primitive
+/// one (#2483) its contents.
 #[test]
 fn an_unassigned_choice_shows_its_tag_and_body() {
-    let values = EventValues::new(&NotificationParameters::Opaque {
-        tag: 30,
-        data: vec![0x09, 0x1E, 0x1E, 0x21, 0x05, 0x1F],
-    });
+    let opaque = |tag, constructed, data: &[u8]| {
+        NotificationParameters::Opaque(OpaqueChoice {
+            tag,
+            constructed,
+            data: data.to_vec(),
+        })
+    };
+    let values = EventValues::new(&opaque(30, true, &[0x09, 0x1E, 0x1E, 0x21, 0x05, 0x1F]));
     assert_eq!(values.event_type, "30");
     assert_eq!(values.text(), "30: [0] [raw 1e], [1] (5)");
     assert_eq!(
@@ -411,22 +417,28 @@ fn an_unassigned_choice_shows_its_tag_and_body() {
             "text": "30: [0] [raw 1e], [1] (5)",
             "fields": {
                 "event_type": {"value": 30},
+                "constructed": true,
                 "data": {"raw": "091e1e21051f"},
             },
         })
     );
     // An empty body shows the tag alone; tags 7 and 12, which Clause 21
     // deprecates and reserves, have no name either.
-    let values = EventValues::new(&NotificationParameters::Opaque {
-        tag: 254,
-        data: vec![],
-    });
-    assert_eq!(values.text(), "254");
+    assert_eq!(EventValues::new(&opaque(254, true, &[])).text(), "254");
     for tag in [7, 12] {
-        let values = EventValues::new(&NotificationParameters::Opaque {
-            tag,
-            data: vec![0x09, 0x01],
-        });
+        let values = EventValues::new(&opaque(tag, true, &[0x09, 0x01]));
         assert_eq!(values.text(), format!("{tag}: [0] [raw 01]"));
     }
+    // A primitive one: its contents as octets, empty ones not at all.
+    let values = EventValues::new(&opaque(30, false, &[0x01, 0x02]));
+    assert_eq!(values.text(), "30: [raw 01 02]");
+    assert_eq!(
+        json_of(&values)["fields"],
+        json!({
+            "event_type": {"value": 30},
+            "constructed": false,
+            "data": {"raw": "0102"},
+        })
+    );
+    assert_eq!(EventValues::new(&opaque(12, false, &[])).text(), "12");
 }

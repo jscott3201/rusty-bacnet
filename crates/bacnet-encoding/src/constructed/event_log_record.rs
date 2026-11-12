@@ -10,8 +10,8 @@
 //! kept as [`EventLogDatum::Opaque`] and written back unchanged.
 
 use super::log_fields::{
-    check_record, decode_log_status, decode_opaque, decode_timestamp, encode_log_status,
-    encode_opaque, encode_timestamp,
+    IN_ITEM_DATA, check_record, decode_log_status, decode_opaque, decode_timestamp,
+    encode_log_status, encode_opaque, encode_timestamp,
 };
 use super::tagged::{contents, decode_ctx_constructed, expect_end};
 use super::{decode_event_notification_tolerant, encode_event_notification};
@@ -28,6 +28,12 @@ const LOG_STATUS: u8 = 0;
 const NOTIFICATION: u8 = 1;
 const TIME_CHANGE: u8 = 2;
 
+/// Whether the log-datum CHOICE gives `tag` no alternative: above
+/// time-change, the last it assigns.
+fn unassigned(tag: u8) -> bool {
+    tag > TIME_CHANGE
+}
+
 /// Encode one Event Log record.
 ///
 /// Fails, leaving `buf` unchanged, for a notification that would not encode,
@@ -41,7 +47,7 @@ pub fn encode_event_log_record(
     // Straight into `buf`, cut back on failure: no staging buffer (#2233).
     let start = buf.len();
     write_event_log_record(record, buf)
-        .and_then(|()| check_record(&buf[start..], RECORD))
+        .and_then(|()| check_record(&buf[start..], IN_ITEM_DATA, RECORD))
         .inspect_err(|_| buf.truncate(start))
 }
 
@@ -58,7 +64,7 @@ fn write_event_log_record(record: &BACnetEventLogRecord, out: &mut BytesMut) -> 
         EventLogDatum::TimeChange(seconds) => {
             primitives::encode_ctx_real(out, TIME_CHANGE, *seconds)
         }
-        EventLogDatum::Opaque(opaque) => encode_opaque(out, opaque, TIME_CHANGE, DATUM)?,
+        EventLogDatum::Opaque(opaque) => encode_opaque(out, opaque, unassigned, DATUM)?,
     }
     tags::encode_closing_tag(out, 1);
     Ok(())
@@ -91,7 +97,7 @@ pub fn decode_event_log_record(
 
 fn decode_datum(data: &[u8], offset: usize) -> Result<EventLogDatum, Error> {
     let (tag, start) = tags::decode_tag(data, 0)?;
-    let (datum, end) = if let Some((opaque, end)) = decode_opaque(data, &tag, start, TIME_CHANGE)? {
+    let (datum, end) = if let Some((opaque, end)) = decode_opaque(data, &tag, start, unassigned)? {
         (EventLogDatum::Opaque(opaque), end)
     } else if tag.is_context(LOG_STATUS) {
         let (octets, end) = contents(data, start, tag.length)?;

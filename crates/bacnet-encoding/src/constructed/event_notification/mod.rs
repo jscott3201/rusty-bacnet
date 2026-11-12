@@ -8,7 +8,7 @@
 
 use bacnet_types::constructed::{
     BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference, BACnetPropertyStates,
-    ChangeOfValueChoice, EventNotificationRequest, NotificationParameters,
+    ChangeOfValueChoice, EventNotificationRequest, NotificationParameters, OpaqueChoice,
 };
 use bacnet_types::enums::{
     AccessEvent, EventState, EventType, LifeSafetyMode, LifeSafetyOperation, LifeSafetyState,
@@ -20,8 +20,8 @@ use bytes::BytesMut;
 
 use super::tagged::{misplaced, misplaced_tag, unclosed_kind};
 use super::{
-    decode_bacnet_property_value_in_list, encode_bacnet_property_value, validate_tlv_sequence,
-    MAX_FRAMED_ITEMS,
+    MAX_FRAMED_ITEMS, decode_bacnet_property_value_in_list, encode_bacnet_property_value,
+    validate_tlv_sequence,
 };
 use crate::{primitives, tags};
 use decode_helpers::{
@@ -40,11 +40,12 @@ mod structured;
 mod tolerant;
 
 /// Whether a NotificationParameters alternative under `tag` is kept as
-/// [`NotificationParameters::Opaque`]: a tag the 2020 production gives no
-/// alternative, 7 (deprecated), 12 (reserved for a later addendum) or 23 and
-/// up (a later revision's), short of 255, which no tag may use. Tag 20 isn't
-/// one: it pairs with the event type that reports no values, so a choice
-/// under it is refused. Every other tag has its own variant.
+/// [`NotificationParameters::Opaque`], primitive or constructed: a tag the
+/// 2020 production gives no alternative, 7 (deprecated), 12 (reserved for a
+/// later addendum) or 23 and up (a later revision's), short of 255, which no
+/// tag may use. Tag 20 isn't one: it pairs with the event type that reports
+/// no values, so a choice under it is refused. Every other tag has its own
+/// variant.
 fn is_opaque_tag(tag: u8) -> bool {
     matches!(tag, 7 | 12 | 23..=254)
 }
@@ -60,8 +61,7 @@ pub fn encode_event_notification(
 ) -> Result<(), Error> {
     let mut encoded = BytesMut::new();
     encode_into(request, &mut encoded)?;
-    validate_tlv_sequence(&encoded, "EventNotification")
-        .map_err(Error::into_encode_refusal)?;
+    validate_tlv_sequence(&encoded, "EventNotification").map_err(Error::into_encode_refusal)?;
     buf.extend_from_slice(&encoded);
     Ok(())
 }
@@ -99,11 +99,12 @@ fn encode_into(request: &EventNotificationRequest, buf: &mut BytesMut) -> Result
     primitives::encode_ctx_enumerated(buf, 11, request.to_state.to_raw());
     // [12] eventValues — optional
     if request.notify_type != NotifyType::ACK_NOTIFICATION
-        && let Some(ref params) = request.event_values {
-            tags::encode_opening_tag(buf, 12);
-            encode_notification_parameters(params, buf)?;
-            tags::encode_closing_tag(buf, 12);
-        }
+        && let Some(ref params) = request.event_values
+    {
+        tags::encode_opening_tag(buf, 12);
+        encode_notification_parameters(params, buf)?;
+        tags::encode_closing_tag(buf, 12);
+    }
     Ok(())
 }
 
