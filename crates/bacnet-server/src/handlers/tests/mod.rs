@@ -1,4 +1,8 @@
 use super::*;
+use bacnet_device_core::event::{
+    EventInformationFailure, handle_acknowledge_alarm, handle_get_event_information,
+    handle_get_event_information_configured, handle_get_event_information_with_budget,
+};
 use bacnet_device_core::write::{self, Applied, WpmOutcome, decode_write_property_value};
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::traits::BACnetObject;

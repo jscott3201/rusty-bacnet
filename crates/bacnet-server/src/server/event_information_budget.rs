@@ -1,49 +1,6 @@
-//! GetEventInformation admission and response-page limits.
+//! GetEventInformation admission and response-page limits: the builder
+//! setters for `bacnet_device_core::event::GetEventInformationBudget`.
 use super::*;
-
-/// Positive local limits; callback allocations, CPU and RSS are not bounded.
-/// Every remaining object's strict projection is validated on admitted requests.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct GetEventInformationBudget {
-    /// Total database objects, including classes and objects before the cursor.
-    pub max_objects: usize,
-    /// Maximum summaries retained in a response page.
-    pub max_returned_summaries: usize,
-    /// Complete encoded service ACK, excluding APDU/NPDU envelopes.
-    pub max_service_ack_bytes: usize,
-}
-
-impl Default for GetEventInformationBudget {
-    fn default() -> Self {
-        Self {
-            max_objects: 4096,
-            max_returned_summaries: 256,
-            max_service_ack_bytes: 16384,
-        }
-    }
-}
-
-impl GetEventInformationBudget {
-    /// Reject zero configuration before startup or SC dialing.
-    pub fn validate(&self) -> Result<(), Error> {
-        for (name, value) in [
-            ("event_information_max_objects", self.max_objects),
-            (
-                "event_information_max_returned_summaries",
-                self.max_returned_summaries,
-            ),
-            (
-                "event_information_max_service_ack_bytes",
-                self.max_service_ack_bytes,
-            ),
-        ] {
-            if value == 0 {
-                return Err(Error::Encoding(format!("{name} must be positive")));
-            }
-        }
-        Ok(())
-    }
-}
 
 impl<T: TransportPort + 'static> ServerBuilder<T> {
     /// Set GetEventInformation limits, validated before startup.

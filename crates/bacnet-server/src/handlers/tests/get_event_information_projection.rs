@@ -191,7 +191,7 @@ fn response(
             db,
             &request(cursor),
             &mut configured,
-            crate::server::GetEventInformationBudget {
+            bacnet_device_core::event::GetEventInformationBudget {
                 max_objects: usize::MAX,
                 max_returned_summaries: usize::MAX,
                 max_service_ack_bytes: usize::MAX,
@@ -201,6 +201,9 @@ fn response(
             (Ok(()), Ok(())) => assert_eq!(encoded, configured),
             (Err(expected), Err(EventInformationFailure::Service(actual))) => {
                 assert_eq!(expected.to_string(), actual.to_string())
+            }
+            (Err(expected), Err(EventInformationFailure::Projection(problem))) => {
+                assert_eq!(expected.to_string(), problem.to_error().to_string())
             }
             (expected, actual) => panic!("legacy/configured mismatch: {expected:?} / {actual:?}"),
         }

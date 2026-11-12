@@ -7,6 +7,7 @@ use crate::access_control::{
     AccessControlInput, AccessEventReport, CredentialReadReport, DoorStateReport,
 };
 use crate::catalogue::representatives;
+use crate::load_control::LoadControlSetting;
 use crate::traits::{BACnetObject, LocalInputValue, not_supported};
 use bacnet_types::constructed::BACnetAuthenticationFactor;
 use bacnet_types::enums::{AccessEvent, AuthenticationFactorType, ObjectType};
@@ -59,6 +60,12 @@ fn inputs() -> Vec<(&'static str, LocalInputValue)> {
             "ProgramState",
             LocalInputValue::ProgramState(PropertyValue::Enumerated(2)),
         ),
+        (
+            "LoadControl",
+            LocalInputValue::LoadControl(LoadControlSetting::StateDescription(Some(
+                "shedding".into(),
+            ))),
+        ),
     ]
 }
 
@@ -89,6 +96,7 @@ const MODELS: &[(ObjectType, &[&str])] = &[
     (ObjectType::ACCESS_DOOR, &["DoorState"]),
     (ObjectType::ACCUMULATOR, &["Pulses"]),
     (ObjectType::PROGRAM, &["ProgramState"]),
+    (ObjectType::LOAD_CONTROL, &["LoadControl"]),
 ];
 
 /// Every property the object lists, read whole.

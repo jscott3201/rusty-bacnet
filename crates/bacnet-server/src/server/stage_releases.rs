@@ -139,6 +139,16 @@ impl StageReleases {
     pub(in crate::server) fn when_idle(&self, check: impl FnOnce() + Send + 'static) {
         *self.hooks.idle_check.lock().unwrap() = Some(Box::new(check));
     }
+
+    /// Note that a stage counted here has seen all its saves run.
+    pub(super) fn note_stage_saved(&self) {
+        self.hooks.stages_saved.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// How many stages counted here have seen all their saves run.
+    pub(in crate::server) fn stages_saved(&self) -> usize {
+        self.hooks.stages_saved.load(Ordering::Acquire)
+    }
 }
 
 #[cfg(test)]
@@ -155,6 +165,7 @@ mod hooks {
     pub(super) struct Hooks {
         pub(super) gate: Mutex<Option<Gate>>,
         pub(super) waits: AtomicUsize,
+        pub(super) stages_saved: AtomicUsize,
         pub(super) idle_check: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     }
 

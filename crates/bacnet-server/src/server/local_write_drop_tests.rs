@@ -143,15 +143,55 @@ async fn let_the_release_run() {
     }
 }
 
-/// Return once a writer waits for the database guard.
-async fn writer_is_queued(server: &BACnetServer<TestTransport>) {
+/// Drop a `write_local` of "lobby" while it waits for the guard, which the
+/// test holds with the returned reader: its save has run, and the release of
+/// its stage goes to a task that waits behind the reader.
+///
+/// Seeing some writer queued for the guard is not enough: the server's own
+/// tasks queue for it too, the Schedule, intrinsic reporting, operation and
+/// Trend Log passes soon after the server starts (#2504). The write would
+/// then be dropped while its save still runs, before storage held "lobby".
+async fn drop_waiting_for_the_guard(
+    server: &BACnetServer<TestTransport>,
+    storage: &Storage,
+) -> tokio::sync::OwnedRwLockReadGuard<ObjectDatabase> {
+    let releases = server.request_tasks.stage_releases();
+    let (started, go) = storage.hold_next();
+    let mut call = std::pin::pin!(write_description(server, "lobby"));
+    tokio::select! {
+        _ = &mut call => panic!("the held save finished"),
+        started = started => started.unwrap(),
+    }
+    // While the save is held the stage has dropped the guard, so the test
+    // can take a reader. Once the save is through, the write has nothing
+    // left but the guard to wait for.
+    let guard = Arc::clone(server.database()).read_owned().await;
+    let saved = releases.stages_saved();
+    drop(go);
+    // The write notes its stage saved, then asks for the guard in that same
+    // poll, so it is queued behind the reader by the time this ends.
+    tokio::select! {
+        _ = &mut call => panic!("the write finished under the test's guard"),
+        () = stage_saved(releases, saved) => {}
+    }
+    assert!(
+        server.database().try_read().is_err(),
+        "the write is not waiting for the guard"
+    );
+    assert_eq!(storage.latest(), Some(Some("lobby".to_owned())));
+    guard
+}
+
+/// Return once a stage counted in `releases` has seen its saves run since
+/// `before` stages had.
+async fn stage_saved(releases: &super::super::durable_writes::StageReleases, before: usize) {
     tokio::time::timeout(HANG, async {
-        while server.database().try_read().is_ok() {
+        while releases.stages_saved() == before {
             tokio::task::yield_now().await;
         }
     })
     .await
-    .expect("a writer never queued");
+    .expect("the write's save never finished");
 }
 
 /// What the Device serves for its Description.
@@ -215,29 +255,7 @@ async fn a_write_local_dropped_waiting_for_the_guard_releases_the_stage_at_once(
     let storage = Arc::new(Storage::default());
     let server = server(&storage).await;
     let before = served(&server).await;
-    let (started, go) = storage.hold_next();
-
-    // While the save of "lobby" is held the stage has dropped the guard, so
-    // the test takes a read guard. Once the save is through, the write has
-    // nothing left but its own write guard to wait for.
-    let guard;
-    {
-        let mut call = std::pin::pin!(write_description(&server, "lobby"));
-        tokio::select! {
-            _ = &mut call => panic!("the held save finished"),
-            started = started => started.unwrap(),
-        }
-        guard = server.database().read().await;
-        drop(go);
-        // Tokio's lock is fair: a reader is refused once a writer is queued,
-        // so this ends when the write waits for the guard, whatever the
-        // save's timing.
-        tokio::select! {
-            _ = &mut call => panic!("the write finished under the test's guard"),
-            () = writer_is_queued(&server) => {}
-        }
-        // Dropped here, still waiting for the guard, which is taken.
-    }
+    let guard = drop_waiting_for_the_guard(&server, &storage).await;
     drop(guard);
 
     let_the_release_run().await;
@@ -266,28 +284,6 @@ async fn a_write_task_aborted_during_its_save_has_released_when_the_abort_is_joi
     assert!(!staged(&server).await, "the aborted task left its stage");
     drop(go);
     storage.holds(kept(&before)).await;
-}
-
-/// Drop a `write_local` of "lobby" while it waits for the guard, which the
-/// test holds with the returned reader: its save has run, and the release of
-/// its stage goes to a task that waits behind the reader.
-async fn drop_waiting_for_the_guard(
-    server: &BACnetServer<TestTransport>,
-    storage: &Storage,
-) -> tokio::sync::OwnedRwLockReadGuard<ObjectDatabase> {
-    let (started, go) = storage.hold_next();
-    let mut call = std::pin::pin!(write_description(server, "lobby"));
-    tokio::select! {
-        _ = &mut call => panic!("the held save finished"),
-        started = started => started.unwrap(),
-    }
-    let guard = Arc::clone(server.database()).read_owned().await;
-    drop(go);
-    tokio::select! {
-        _ = &mut call => panic!("the write finished under the test's guard"),
-        () = writer_is_queued(server) => {}
-    }
-    guard
 }
 
 /// Return once `stop()` waits for a release task.
@@ -355,6 +351,71 @@ async fn stop_waits_for_a_release_task_that_holds_the_guard_as_it_settles() {
     );
     assert!(waited, "stop() did not wait for the release task");
     assert_eq!(releases.outstanding(), 0);
+    assert!(!staged(&server).await, "the stage outlived stop()");
+    assert_eq!(served(&server).await, before);
+}
+
+/// The earlier drop the test above could once make by accident (#2504): the
+/// write goes while its save still runs and the guard is taken, so its
+/// stage is released from a task with the save unfinished. Storage takes
+/// the held save, then the served value, and `stop()` returns only after
+/// both.
+#[tokio::test]
+async fn stop_waits_for_the_save_of_a_write_dropped_during_it_under_a_guard() {
+    let storage = Arc::new(Storage::default());
+    let mut server = server(&storage).await;
+    let before = served(&server).await;
+    let releases = Arc::clone(server.request_tasks.stage_releases());
+    let (reached, release_go) = releases.hold_next();
+    let (started, go) = storage.hold_next();
+    let reader = {
+        let mut call = std::pin::pin!(write_description(&server, "lobby"));
+        tokio::select! {
+            _ = &mut call => panic!("the held save finished"),
+            started = started => started.unwrap(),
+        }
+        Arc::clone(server.database()).read_owned().await
+        // Dropped here, its save held, with the guard taken.
+    };
+    assert_eq!(
+        releases.outstanding(),
+        1,
+        "the release task was not counted"
+    );
+    drop(reader);
+    tokio::time::timeout(HANG, reached)
+        .await
+        .expect("the release task never took the guard")
+        .unwrap();
+    assert_eq!(storage.latest(), None, "the held save landed");
+
+    {
+        let mut stopping = std::pin::pin!(server.stop());
+        tokio::select! {
+            _ = &mut stopping => panic!("stop() did not wait for the release task"),
+            () = stop_waits_for(&releases) => {}
+        }
+        // The release goes with the save still held, and `stop()` moves on
+        // to the saves the Device has queued.
+        drop(release_go);
+        tokio::select! {
+            _ = &mut stopping => panic!("stop() returned while the dropped write still saved"),
+            () = let_the_release_run() => {}
+        }
+        assert_eq!(releases.outstanding(), 0);
+        drop(go);
+        tokio::time::timeout(HANG, stopping)
+            .await
+            .expect("stop() hung after the save")
+            .unwrap();
+    }
+    // The held save first, then the served value queued behind it.
+    let kept_before = kept(&before).map(str::to_owned);
+    assert_eq!(
+        *storage.saved.lock().unwrap(),
+        [Some("lobby".to_owned()), kept_before],
+        "storage does not end at what the Device serves"
+    );
     assert!(!staged(&server).await, "the stage outlived stop()");
     assert_eq!(served(&server).await, before);
 }

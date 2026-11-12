@@ -1,13 +1,75 @@
 //! Bounded retained encoding with full strict projection validation.
 use super::*;
-use crate::server::GetEventInformationBudget;
+use alloc::string::String;
+use alloc::vec;
 use bacnet_encoding::{primitives, tags};
 
+/// Positive local limits; callback allocations, CPU and RSS are not bounded.
+/// Every remaining object's strict projection is validated on admitted requests.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GetEventInformationBudget {
+    /// Total database objects, including classes and objects before the cursor.
+    pub max_objects: usize,
+    /// Maximum summaries retained in a response page.
+    pub max_returned_summaries: usize,
+    /// Complete encoded service ACK, excluding APDU/NPDU envelopes.
+    pub max_service_ack_bytes: usize,
+}
+
+impl Default for GetEventInformationBudget {
+    fn default() -> Self {
+        Self {
+            max_objects: 4096,
+            max_returned_summaries: 256,
+            max_service_ack_bytes: 16384,
+        }
+    }
+}
+
+impl GetEventInformationBudget {
+    /// Reject zero configuration before startup or SC dialing.
+    pub fn validate(&self) -> Result<(), Error> {
+        for (name, value) in [
+            ("event_information_max_objects", self.max_objects),
+            (
+                "event_information_max_returned_summaries",
+                self.max_returned_summaries,
+            ),
+            (
+                "event_information_max_service_ack_bytes",
+                self.max_service_ack_bytes,
+            ),
+        ] {
+            if value == 0 {
+                // Built from fragments: the core formats nothing (#2187).
+                let mut message = String::from(name);
+                message.push_str(" must be positive");
+                return Err(Error::Encoding(message));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Why a configured GetEventInformation built no page.
 #[derive(Debug)]
-pub(crate) enum EventInformationFailure {
+pub enum EventInformationFailure {
+    /// The request was refused: it didn't decode, or the page wouldn't
+    /// encode. The host answers with this error.
     Service(Error),
+    /// An object's summary didn't project: the request answers
+    /// OPERATIONAL_PROBLEM, and the host can say which object and why.
+    Projection(EventSummaryProblem),
+    /// The database holds more objects than the budget admits.
     Objects,
+    /// Not even one summary fits the byte budget.
     Bytes,
+}
+
+impl From<EventSummaryProblem> for EventInformationFailure {
+    fn from(problem: EventSummaryProblem) -> Self {
+        Self::Projection(problem)
+    }
 }
 
 impl From<Error> for EventInformationFailure {
@@ -16,7 +78,9 @@ impl From<Error> for EventInformationFailure {
     }
 }
 
-pub(crate) fn handle_get_event_information_configured(
+/// Build a GetEventInformation ACK page within `budget`: the objects
+/// admitted, the summaries retained and the octets of the service ACK.
+pub fn handle_get_event_information_configured(
     db: &ObjectDatabase,
     service_data: &[u8],
     buf: &mut BytesMut,
@@ -150,6 +214,41 @@ mod tests {
             event_enable: EventTransitionBits::all(),
             event_priorities: [0, 100, 255],
         }
+    }
+
+    /// The refusal reads as it did when the server formatted it.
+    #[test]
+    fn zero_limits_are_refused_with_the_formatted_text() {
+        let default = GetEventInformationBudget::default();
+        for (name, budget) in [
+            (
+                "event_information_max_objects",
+                GetEventInformationBudget {
+                    max_objects: 0,
+                    ..default
+                },
+            ),
+            (
+                "event_information_max_returned_summaries",
+                GetEventInformationBudget {
+                    max_returned_summaries: 0,
+                    ..default
+                },
+            ),
+            (
+                "event_information_max_service_ack_bytes",
+                GetEventInformationBudget {
+                    max_service_ack_bytes: 0,
+                    ..default
+                },
+            ),
+        ] {
+            let Err(Error::Encoding(message)) = budget.validate() else {
+                panic!("a zero {name} must be refused");
+            };
+            assert_eq!(message, format!("{name} must be positive"));
+        }
+        default.validate().unwrap();
     }
 
     #[test]

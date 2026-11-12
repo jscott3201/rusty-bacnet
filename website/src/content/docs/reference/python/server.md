@@ -1112,6 +1112,7 @@ def add_load_control(
     full_duty_baseline: Optional[float] = None,
     state_description: Optional[str] = None,
     agreed_duty_window: Optional[int] = None,
+    storage_path: Optional[str] = None,
 ) -> None
 ```
 
@@ -1125,7 +1126,10 @@ array.
 
 `shed` is the application's route for the loads. The object calls
 it with a `ShedRequest` each time it looks at a request, on every
-write that changes it and on the server's once-a-second pass while
+write that changes it, on a change of its shed levels or baseline
+through `set_load_control_shed_levels_local` or
+`set_load_control_full_duty_baseline_local`, and on the server's
+once-a-second pass while
 one is pending or under way, and it answers `(progress, expected, actual)`: `"waiting"`, `"shedding"` or `"compliant"`, then
 the expected and actual levels as `ShedLevel` mappings in the
 requested choice. `stop` (optional, needs `shed`) is called with
@@ -1151,6 +1155,21 @@ properties, read-only; the baseline reaches `shed` as
 `ShedRequest.full_duty_baseline`. `agreed_duty_window` (minutes,
 0 when omitted) is the Duty\_Window a request takes when no client
 wrote one, and the one a finished request returns to.
+
+With `storage_path` the object keeps its shed request in that file
+(#2497): the request properties, the agreed Duty\_Window, the shed
+state, Enable and a Description a client wrote. A rebuilt object
+looks at a request that was pending or being shed again, as though
+Start\_Time had just been written, and calls `shed` for it; one
+that was being shed calls `stop` when it ends. A write that cannot
+be saved is refused with DEVICE / OPERATIONAL\_PROBLEM. The shed
+levels, baseline and state description are configuration the file
+does not keep: give them as keywords at every start, so a restored
+request is put to `shed` with them. The
+`set_load_control_*_local` methods work only once the server runs,
+after that first look, so use them for changes while it runs. Give
+each Load Control its own file; one that holds another object's
+request raises BacnetError.
 
 ### BACnetServer.add_program
 
@@ -2431,6 +2450,64 @@ is an Enumerated BACnetProgramState from 0 (IDLE) to 5 (UNLOADING): a
 larger number raises VALUE\_OUT\_OF\_RANGE and another datatype
 INVALID\_DATA\_TYPE. An unknown object raises UNKNOWN\_OBJECT and any
 object other than a Program OPTIONAL\_FUNCTIONALITY\_NOT\_SUPPORTED.
+
+### BACnetServer.set_load_control_shed_levels_local
+
+```python
+def set_load_control_shed_levels_local(
+    self,
+    object_id: ObjectIdentifier,
+    shed_levels: Sequence[tuple[int, str]],
+) -> Awaitable[None]
+```
+
+Replace a running Load Control's Shed\_Levels and Shed\_Level\_Descriptions (#2497).
+
+`shed_levels` is the `add_load_control` shape, `(level, description)` pairs in order of increasing shed, and may be a
+different number from before. A level of 0 raises
+BacnetProtocolError with VALUE\_OUT\_OF\_RANGE and changes nothing; an
+unknown object raises UNKNOWN\_OBJECT and any object other than a
+Load Control OPTIONAL\_FUNCTIONALITY\_NOT\_SUPPORTED. A request under
+way is put to `shed` again, and stays in its state unless the
+answer moves it; what that moves is reported through COV and saved
+with the request. Storage does not keep the levels: give them as
+`add_load_control` keywords at every start, so a restored request
+is put to `shed` with them. Not audited, like
+`set_reliability_local`.
+
+### BACnetServer.set_load_control_full_duty_baseline_local
+
+```python
+def set_load_control_full_duty_baseline_local(
+    self,
+    object_id: ObjectIdentifier,
+    kilowatts: Optional[float],
+) -> Awaitable[None]
+```
+
+Set a running Load Control's Full\_Duty\_Baseline in kilowatts, or clear it with None (#2497).
+
+A negative or non-finite value raises VALUE\_OUT\_OF\_RANGE; the other
+errors are those of `set_load_control_shed_levels_local`. A request
+under way is put to `shed` again with the new
+`ShedRequest.full_duty_baseline`. Not audited.
+
+### BACnetServer.set_load_control_state_description_local
+
+```python
+def set_load_control_state_description_local(
+    self,
+    object_id: ObjectIdentifier,
+    text: Optional[str],
+) -> Awaitable[None]
+```
+
+Set a running Load Control's State\_Description, or clear it with None (#2497).
+
+The errors are those of `set_load_control_shed_levels_local`. A
+SubscribeCOVProperty on State\_Description hears of the change; the
+request is not looked at again. Clearing it sends a subscriber
+nothing, and the call is not audited.
 
 ### BACnetServer.report_device_reset_local
 

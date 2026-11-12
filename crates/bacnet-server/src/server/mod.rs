@@ -37,9 +37,6 @@ use bacnet_encoding::segmentation::{
 use bacnet_network::layer::NetworkLayer;
 use bacnet_npdu::NetworkPriority;
 use bacnet_objects::database::ObjectDatabase;
-use bacnet_objects::notification_class::{
-    lookup_notification_recipients, resolve_transition_priority_ack,
-};
 use bacnet_services::alarm_event::EventNotificationRequest;
 // The server's tests name these through `use super::*`; the Single fanout
 // that used them here builds its notifications in bacnet-device-core now.
@@ -55,12 +52,12 @@ use bacnet_transport::port::TransportPort;
 use bacnet_transport::warn_throttle::WarnThrottle;
 use bacnet_transport::warn_throttled;
 use bacnet_types::MacAddr;
-#[cfg(test)]
-use bacnet_types::enums::RejectReason;
 use bacnet_types::enums::{
-    AbortReason, ConfirmedServiceChoice, ErrorClass, ErrorCode, LifeSafetyOperation, NotifyType,
-    ObjectType, PropertyIdentifier, Segmentation, UnconfirmedServiceChoice,
+    AbortReason, ConfirmedServiceChoice, ErrorClass, ErrorCode, LifeSafetyOperation, ObjectType,
+    PropertyIdentifier, Segmentation, UnconfirmedServiceChoice,
 };
+#[cfg(test)]
+use bacnet_types::enums::{NotifyType, RejectReason};
 use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
@@ -74,6 +71,7 @@ use crate::{handlers, runtime_clock};
 use bacnet_device_core::cov::CovNotificationKind;
 use bacnet_device_core::cov::{CovCounters, CovPolicy};
 use bacnet_device_core::cov::{CovSubscription, CovSubscriptionSnapshot};
+use bacnet_device_core::event::GetEventInformationBudget;
 use confirmed_request_tracker::{
     ConfirmedRequestAdmission, ConfirmedRequestTracker, PendingConfirmedRequest,
 };
@@ -521,8 +519,6 @@ mod event_enrollment_lifecycle;
 mod event_forwarding;
 pub use event_forwarding::MAX_FORWARDED_DESTINATIONS;
 mod event_forwarding_repeats;
-mod event_message_policy;
-pub(crate) mod event_notification_payload;
 mod event_notifications;
 mod event_recipient_route;
 mod event_send;
@@ -531,7 +527,8 @@ pub use event_suppression::EventNotificationCounters;
 mod received_event_log;
 pub use received_event_log::{RECEIVED_EVENT_LOG_RATE, RECEIVED_EVENT_LOG_SOURCES};
 mod confirmed_answer;
-pub(crate) mod event_timestamp;
+#[cfg(test)]
+mod event_timestamp_tests;
 mod handles;
 mod learned_router_cache;
 mod lifecycle;
@@ -589,9 +586,8 @@ mod atomic_read_file_budget;
 mod atomic_write_file_budget;
 mod read_range_budget;
 pub use read_range_budget::ReadRangeBudget;
-mod event_information_budget;
-pub use event_information_budget::GetEventInformationBudget;
 mod enrollment_summary_budget;
+mod event_information_budget;
 pub use atomic_read_file_budget::AtomicReadFileBudget;
 pub use atomic_write_file_budget::AtomicWriteFileBudget;
 pub use enrollment_summary_budget::GetEnrollmentSummaryBudget;

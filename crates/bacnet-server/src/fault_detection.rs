@@ -3,24 +3,12 @@
 //! The [`FaultDetector`] periodically invokes each object's opt-in,
 //! object-owned reliability evaluation hook.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
+use bacnet_device_core::event::{ReliabilityChange, fault_pass};
 use bacnet_objects::database::ObjectDatabase;
-use bacnet_objects::traits::ReliabilityEvaluation;
-use bacnet_types::enums::Reliability;
 use bacnet_types::primitives::ObjectIdentifier;
-
-/// A reliability change detected by the fault detector.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ReliabilityChange {
-    /// The object whose reliability changed.
-    pub object_id: ObjectIdentifier,
-    /// Previous reliability value.
-    pub old_reliability: Reliability,
-    /// New reliability value.
-    pub new_reliability: Reliability,
-}
 
 /// Fault detection engine.
 ///
@@ -29,29 +17,15 @@ pub struct ReliabilityChange {
 /// objects opt in by lending
 /// [`BACnetObject::reliability_eval`](bacnet_objects::traits::BACnetObject::reliability_eval).
 /// An object that lends none is left alone.
+#[derive(Default)]
 pub struct FaultDetector {
-    /// Timeout after which an object is considered to have a communication
-    /// failure. Set to `None` to disable communication-failure detection.
-    pub comm_timeout: Option<std::time::Duration>,
     warned_internal_failures: Mutex<HashMap<ObjectIdentifier, String>>,
 }
 
-impl Default for FaultDetector {
-    fn default() -> Self {
-        Self {
-            comm_timeout: Some(std::time::Duration::from_secs(60)),
-            warned_internal_failures: Mutex::new(HashMap::new()),
-        }
-    }
-}
-
 impl FaultDetector {
-    /// Create a new fault detector with the given communication timeout.
-    pub fn new(comm_timeout: Option<std::time::Duration>) -> Self {
-        Self {
-            comm_timeout,
-            warned_internal_failures: Mutex::new(HashMap::new()),
-        }
+    /// Create a new fault detector.
+    pub fn new() -> Self {
+        Self::default()
     }
 
     fn should_warn_internal_failure(&self, oid: ObjectIdentifier, error: &str) -> bool {
@@ -74,11 +48,13 @@ impl FaultDetector {
             .remove(oid);
     }
 
-    fn prune_internal_failures(&self, db: &ObjectDatabase) {
+    fn noted_internal_failures(&self) -> Vec<ObjectIdentifier> {
         self.warned_internal_failures
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .retain(|oid, _| db.get(oid).is_some());
+            .keys()
+            .copied()
+            .collect()
     }
 
     /// Evaluate reliability for all objects in the database.
@@ -86,52 +62,32 @@ impl FaultDetector {
     /// Each object owns both the decision and any mutation. Engineering
     /// `Min_Pres_Value` / `Max_Pres_Value` metadata is not a reliability fault
     /// algorithm. Only a successful hook result of
-    /// [`ReliabilityEvaluation::Changed`] produces a [`ReliabilityChange`].
+    /// [`ReliabilityEvaluation::Changed`](bacnet_objects::traits::ReliabilityEvaluation::Changed)
+    /// produces a [`ReliabilityChange`].
     /// Hook errors are rate-limited per object and produce no change record.
     ///
     /// Returns a list of changes that object hooks successfully applied.
     pub fn evaluate(&self, db: &mut ObjectDatabase) -> Vec<ReliabilityChange> {
-        let mut changes = Vec::new();
-        db.for_each_object_mut(|oid, object| {
-            // An object that lends no evaluation changes nothing: the old
-            // `Unchanged` default.
-            let Some(evaluation) = object.reliability_eval() else {
+        let pass = fault_pass(db);
+        // The pass visited every object, so a failure noted before that
+        // didn't recur has recovered, lends no evaluation, is inhibited or
+        // is gone: forget it, so it warns again if it fails again.
+        let failed: HashSet<ObjectIdentifier> = pass.failures.iter().map(|(oid, _)| *oid).collect();
+        for oid in self.noted_internal_failures() {
+            if !failed.contains(&oid) {
                 self.clear_internal_failure(&oid);
-                return;
-            };
-            if evaluation.reliability_evaluation_inhibited() {
-                self.clear_internal_failure(&oid);
-                return;
             }
-            match evaluation.evaluate_reliability() {
-                Ok(ReliabilityEvaluation::Unchanged) => {
-                    self.clear_internal_failure(&oid);
-                }
-                Ok(ReliabilityEvaluation::Changed {
-                    old_reliability,
-                    new_reliability,
-                }) => {
-                    self.clear_internal_failure(&oid);
-                    changes.push(ReliabilityChange {
-                        object_id: oid,
-                        old_reliability,
-                        new_reliability,
-                    });
-                }
-                Err(error) => {
-                    let error_text = error.to_string();
-                    if self.should_warn_internal_failure(oid, &error_text) {
-                        tracing::warn!(
-                            object = %oid,
-                            error = %error,
-                            "Fault detection object-owned reliability evaluation failed"
-                        );
-                    }
-                }
+        }
+        for (oid, error) in &pass.failures {
+            if self.should_warn_internal_failure(*oid, &error.to_string()) {
+                tracing::warn!(
+                    object = %oid,
+                    error = %error,
+                    "Fault detection object-owned reliability evaluation failed"
+                );
             }
-        });
-        self.prune_internal_failures(db);
-        changes
+        }
+        pass.changes
     }
 }
 
@@ -143,8 +99,8 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
-    use bacnet_objects::traits::{BACnetObject, ReliabilityEval};
-    use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier};
+    use bacnet_objects::traits::{BACnetObject, ReliabilityEval, ReliabilityEvaluation};
+    use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier, Reliability};
     use bacnet_types::error::Error;
     use bacnet_types::primitives::PropertyValue;
     use tracing::span::{Attributes, Id, Record};

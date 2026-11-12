@@ -35,7 +35,10 @@ Foundations
   bacnet-device-core    Sans-IO request core over a borrowed ObjectDatabase: the read
                         and write paths, discovery, the COV subscription table, COV
                         evaluation, the COV-multiple service, capture, histories
-                        and report decisions, and the reply map the server runs on,
+                        and report decisions, intrinsic event reporting
+                        (commit, sweep, distribution, AcknowledgeAlarm,
+                        GetEventInformation, the fault pass), and the reply map
+                        the server runs on,
                         and a Responder, a COV Reporter and a
                         TimeSynchronization-set Device clock for firmware
                         (no_std + alloc where atomics allow, #2178, #2303, #2321,
@@ -432,8 +435,8 @@ The `BACnetServer` spawns several background tasks:
 |------|---------|----------|
 | Dispatch | Receives APDUs, routes to service handlers | Event-driven |
 | COV purge | Removes expired COV subscriptions, and ends confirmed reports past their deadline whose worker never reported (#2303) | 30s |
-| Fault detection | Evaluates analog objects for over/under-range | 10s |
-| Intrinsic reporting | Advances Time_Delay countdowns and fires confirmed transitions via `tick_intrinsic_reporting` | 1s |
+| Fault detection | Runs each object's reliability evaluation through `bacnet-device-core`'s `event::fault_pass`, logging a hook's failure once until it changes (#2303) | 10s |
+| Intrinsic reporting | Advances Time_Delay countdowns and commits the transitions they confirm through `bacnet-device-core`'s `event::sweep`, then sends what `event::distribute_event` builds once the guard is dropped (#2303) | 1s |
 | Event enrollment | Evaluates Event Enrollment objects against their monitored properties | 10s |
 | Trend log | Records data samples for trend log objects | Per-object interval |
 | Schedule tick | Evaluates Schedule objects (exceptions by period and priority, weekly schedule, Schedule_Default, within Effective_Period) against one Device clock frame and Calendar states, and writes changes at Priority_For_Writing; a write that commits to a Schedule runs its pass at once, which also sends on a Present_Value written while out of service and relinquishes slots a change of references or priority left behind; each target's result feeds the Schedule's Reliability | 60s |

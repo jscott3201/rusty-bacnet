@@ -4,7 +4,7 @@
 
 use super::super::*;
 use super::*;
-use crate::server::event_notification_payload::CommittedNotificationPayload;
+use bacnet_device_core::event::CommittedNotificationPayload;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_services::alarm_event::NotificationParameters;
 use bacnet_types::primitives::StatusFlags;

@@ -29,6 +29,11 @@
 //! one looks at it again as though Start_Time had just been written (Clause
 //! 12.28, #2479). The `saving` module says when it saves. An object from
 //! [`new`](LoadControlObject::new) keeps nothing: it starts SHED_INACTIVE.
+//! Shed_Levels, Full_Duty_Baseline and State_Description are configuration the
+//! application sets with the object's setters before it joins a server, so a
+//! restored request is put to the shedder with them as the server starts, or
+//! changes while the server runs ([`LoadControlSetting`], #2497); storage
+//! keeps none of them.
 
 use crate::prelude::*;
 use alloc::borrow::Cow;
@@ -57,6 +62,23 @@ mod tests;
 pub use persistence::FileLoadControlPersistence;
 pub use persistence::{LoadControlPersistence, LoadControlSnapshot};
 pub use shed::{LoadShedder, ShedProgress, ShedRequest, ShedStatus};
+
+/// One configuration property of a running Load Control, as the application
+/// changes it through the server (#2497). Each variant is the argument of
+/// the matching setter ([`LoadControlObject::set_shed_levels`],
+/// [`set_full_duty_baseline`](LoadControlObject::set_full_duty_baseline),
+/// [`set_state_description`](LoadControlObject::set_state_description)), and
+/// is checked and takes effect as that setter does.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum LoadControlSetting {
+    /// Shed_Levels with their Shed_Level_Descriptions, a pair for each level.
+    ShedLevels(Vec<(u64, String)>),
+    /// Full_Duty_Baseline in kilowatts, or `None` to clear it.
+    FullDutyBaseline(Option<f32>),
+    /// State_Description, or `None` to clear it.
+    StateDescription(Option<String>),
+}
 
 /// BACnet Load Control object — demand-response load shedding.
 ///
@@ -584,12 +606,38 @@ impl BACnetObject for LoadControlObject {
         Some(self)
     }
 
+    fn local_input(&mut self) -> Option<&mut dyn crate::traits::LocalInput> {
+        Some(self)
+    }
+
     // Table 13-1 lists Load Control, so it takes SubscribeCOV; the shed
     // rows it reports are that row's (the default).
     crate::traits::lend_cov_reporting!();
 }
 
 impl crate::traits::CovReporting for LoadControlObject {}
+
+/// The application's route to the configuration of a running object: the
+/// setters, behind the server's local routes (#2497). They are not storage's
+/// business (the module docs of `saving` say what it keeps), but a change
+/// that moves a request under way is saved like any the state machine makes.
+impl crate::traits::LocalInput for LoadControlObject {
+    fn apply_local_input(&mut self, input: crate::traits::LocalInputValue) -> Result<(), Error> {
+        let crate::traits::LocalInputValue::LoadControl(setting) = input else {
+            return Err(crate::traits::not_supported());
+        };
+        match setting {
+            LoadControlSetting::ShedLevels(levels) => self.set_shed_levels(levels),
+            LoadControlSetting::FullDutyBaseline(kilowatts) => {
+                self.set_full_duty_baseline(kilowatts)
+            }
+            LoadControlSetting::StateDescription(text) => {
+                self.set_state_description(text);
+                Ok(())
+            }
+        }
+    }
+}
 
 impl crate::traits::Timed for LoadControlObject {
     fn bind_clocks(&mut self, clocks: &crate::traits::Clocks) {

@@ -103,6 +103,12 @@ echo "==> bacnet-device-core (no_std with alloc and cov-multiple$label)"
 cargo_for clippy -p bacnet-device-core --all-targets --no-default-features --features alloc,cov-multiple --locked -- -D warnings
 cargo_for doc -p bacnet-device-core --no-default-features --features alloc,cov-multiple --no-deps --locked --document-private-items
 
+# Its event reporting (#2303) alone with alloc, which `std` turns on: a doc
+# link into the `event` module, or out of it, fails here.
+echo "==> bacnet-device-core (no_std with alloc and event-reporting$label)"
+cargo_for clippy -p bacnet-device-core --all-targets --no-default-features --features alloc,event-reporting --locked -- -D warnings
+cargo_for doc -p bacnet-device-core --no-default-features --features alloc,event-reporting --no-deps --locked --document-private-items
+
 # The rustdoc of the MS/TP and B/IP crates with each storage feature alone,
 # and of the router core with each glue feature alone. Their defaults have
 # none, and the workspace runs turn on all of them, so an intra-doc link to
