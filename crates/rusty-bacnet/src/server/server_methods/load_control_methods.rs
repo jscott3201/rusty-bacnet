@@ -18,8 +18,9 @@ impl BACnetServer {
     /// unknown object raises UNKNOWN_OBJECT and any object other than a Load
     /// Control OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED. A request under way is
     /// put to `shed` again and stays in its state unless the answer moves
-    /// it. Storage does not keep the levels: set them again when the object
-    /// is built.
+    /// it. Storage does not keep the levels: give them as `add_load_control`
+    /// keywords at every start, so a restored request is put to `shed` with
+    /// them. Like `set_reliability_local`, it is not audited.
     #[pyo3(signature = (object_id, shed_levels))]
     fn set_load_control_shed_levels_local<'py>(
         &self,
@@ -47,7 +48,7 @@ impl BACnetServer {
     /// A negative or non-finite value raises VALUE_OUT_OF_RANGE (one past
     /// REAL's range rounds to infinity), and the other errors are those of
     /// `set_load_control_shed_levels_local`. A request under way is put to
-    /// `shed` again with the new `full_duty_baseline`.
+    /// `shed` again with the new `full_duty_baseline`. Not audited.
     #[pyo3(signature = (object_id, kilowatts))]
     fn set_load_control_full_duty_baseline_local<'py>(
         &self,
@@ -74,7 +75,8 @@ impl BACnetServer {
     ///
     /// The errors are those of `set_load_control_shed_levels_local`. A
     /// SubscribeCOVProperty on State_Description hears of the change; the
-    /// request is not looked at again.
+    /// request is not looked at again. Clearing it sends a subscriber
+    /// nothing, and the call is not audited.
     #[pyo3(signature = (object_id, text))]
     fn set_load_control_state_description_local<'py>(
         &self,

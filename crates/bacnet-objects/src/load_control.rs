@@ -30,8 +30,10 @@
 //! 12.28, #2479). The `saving` module says when it saves. An object from
 //! [`new`](LoadControlObject::new) keeps nothing: it starts SHED_INACTIVE.
 //! Shed_Levels, Full_Duty_Baseline and State_Description are configuration the
-//! application sets each time it builds the object, or changes while it runs
-//! ([`LoadControlSetting`], #2497); storage keeps none of them.
+//! application sets with the object's setters before it joins a server, so a
+//! restored request is put to the shedder with them as the server starts, or
+//! changes while the server runs ([`LoadControlSetting`], #2497); storage
+//! keeps none of them.
 
 use crate::prelude::*;
 use alloc::borrow::Cow;

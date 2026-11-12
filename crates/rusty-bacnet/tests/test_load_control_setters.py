@@ -5,6 +5,7 @@ a request across a restart."""
 
 import asyncio
 import datetime
+import gc
 import inspect
 import os
 import tempfile
@@ -13,6 +14,7 @@ import unittest
 from rusty_bacnet import (
     BACnetClient,
     BACnetServer,
+    BacnetError,
     BacnetProtocolError,
     ErrorClass,
     ErrorCode,
@@ -269,13 +271,22 @@ class StorageTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await node.stop()
 
-    async def test_a_file_that_is_not_a_load_control_request_raises(self):
+    async def test_a_file_that_is_not_this_objects_request_raises(self):
         with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "other.bin")
-            with open(path, "wb") as handle:
+            garbage = os.path.join(directory, "other.bin")
+            with open(garbage, "wb") as handle:
                 handle.write(b"not a load control file")
-            with self.assertRaises(Exception):
-                server().add_load_control(1, "LC-1", storage_path=path)
+            with self.assertRaises(BacnetError):
+                server().add_load_control(1, "LC-1", storage_path=garbage)
+            # A file another Load Control saved is refused too.
+            theirs = os.path.join(directory, "lc1.bin")
+            first = server()
+            first.add_load_control(1, "LC-1", agreed_duty_window=15, storage_path=theirs)
+            del first
+            gc.collect()
+            self.assertTrue(os.path.getsize(theirs) > 0)
+            with self.assertRaises(BacnetError):
+                server().add_load_control(2, "LC-2", storage_path=theirs)
 
 
 if __name__ == "__main__":

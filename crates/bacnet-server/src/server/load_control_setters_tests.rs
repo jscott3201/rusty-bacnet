@@ -338,5 +338,44 @@ async fn a_state_description_follows_the_state_and_reaches_property_subscribers(
             .await
             .is_none()
     );
+    // The property is gone, so its subscriber hears nothing of that.
+    h.no_notification().await;
+    h.server.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_change_that_moves_nothing_sends_no_report() {
+    let app = app();
+    let mut h = harness(&app).await;
+    complying(&mut h, &app).await;
+    // The loads answer as before, so neither a new array nor a new
+    // baseline moves anything the SubscribeCOV row carries.
+    let asked = app.asked.lock().unwrap().len();
+    h.server
+        .set_load_control_shed_levels_local(&lc1(), vec![(1, "a".into()), (2, "b".into())])
+        .await
+        .unwrap();
+    h.server
+        .set_load_control_full_duty_baseline_local(&lc1(), Some(100.0))
+        .await
+        .unwrap();
+    assert_eq!(app.asked.lock().unwrap().len(), asked + 2, "both looked");
+    h.no_notification().await;
+    h.server.stop().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_restored_request_is_put_to_the_shedder_with_the_levels_given_at_build() {
+    let app = app();
+    app.answer(ShedProgress::Compliant, 2);
+    let (_, _, store, _) = restored(&app);
+    // As the Python keywords and the object's setters give them, before the
+    // object joins the server: the first look at the restored request has
+    // its level.
+    let mut h = kept_harness(&app, &store).await;
+    {
+        let asked = app.asked.lock().unwrap();
+        assert_eq!(asked.first().unwrap().shed_level, Some(1));
+    }
     h.server.stop().await.unwrap();
 }

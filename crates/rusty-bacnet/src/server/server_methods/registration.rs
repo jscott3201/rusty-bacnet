@@ -252,9 +252,11 @@ impl BACnetServer {
     /// that was being shed calls `stop` when it ends. A write that cannot be
     /// saved is refused with DEVICE / OPERATIONAL_PROBLEM. The shed levels,
     /// baseline and state description are configuration the file does not
-    /// keep: the keywords, or the `set_load_control_*_local` methods, apply
-    /// them at each start. Give each Load Control its own file; one that
-    /// holds another object's request raises BacnetError.
+    /// keep: give them as keywords here at every start, so a restored
+    /// request is put to `shed` with them. The `set_load_control_*_local`
+    /// methods work only once the server runs, after that first look, so use
+    /// them for changes while it runs. Give each Load Control its own file;
+    /// one that holds another object's request raises BacnetError.
     #[pyo3(signature = (
         instance,
         name,

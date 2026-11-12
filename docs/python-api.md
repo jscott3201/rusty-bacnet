@@ -4237,7 +4237,8 @@ Requested_Shed_Level, Shed_Duration and Duty_Window, then Start_Time.
 `ShedLevel` mapping; `shed_level`, the index in `shed_levels` a level request
 selects; `start_time`, `shed_duration`, `duty_window`, `full_duty_baseline`
 and `started`) each time it looks at a request, on every write that changes
-it and on the server's once-a-second pass while one is pending or under way.
+it, on a change of the levels or baseline (below) and on the server's
+once-a-second pass while one is pending or under way.
 It answers `(progress, expected, actual)`: `"waiting"`, `"shedding"` or
 `"compliant"`, then the expected and actual levels as
 `{"kind": ..., "value": ...}` mappings in the requested choice. The optional
@@ -4283,8 +4284,11 @@ a pending or shed request again as the server starts and calls `shed` for it;
 one that was being shed calls `stop` when it ends. A write that cannot be
 saved is refused with DEVICE / OPERATIONAL_PROBLEM. The shed levels, baseline
 and state description are configuration, not request: the file does not keep
-them, so the keywords (or these methods) set them again at each start. Give
-each Load Control its own file.
+them, so give them as keywords at every start: a restored request is put to
+`shed` as the server starts, with whatever the object holds then. The
+`set_load_control_*_local` methods work only once the server runs, after that
+first look, so they are for changes while it runs. Give each Load Control its
+own file. These methods are not audited, as `set_reliability_local` is not.
 
 `add_command`'s keyword-only `action` sets the Command's Action array: one list
 per element, each a list of `ActionCommand` mappings with

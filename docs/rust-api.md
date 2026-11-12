@@ -7108,8 +7108,13 @@ since Clause 12.28 names only a write of the four request properties as
 reconfiguring a request. What the look moves goes to SubscribeCOV subscribers
 and, with storage, is saved like any change the state machine makes. A change
 of State_Description alone is reported to a SubscribeCOVProperty and looks at
-nothing. Storage keeps the request, not this configuration: the application
-sets the levels, baseline and description again each time it builds the object.
+nothing; clearing State_Description sends a property subscriber nothing. A
+request that changed nothing a SubscribeCOV report carries sends none. The
+routes are not audited, as `set_reliability_local` is not. Storage keeps the
+request, not this configuration: set the levels, baseline and description with
+the object's setters before it joins the server, so a restored request is put
+to the shedder with them as the server starts. The routes work only on a
+running server, after that first look, so they are for changes while it runs.
 
 Load Control supports COV (Table 13-1). Its SubscribeCOV report carries
 Present_Value, Status_Flags, Requested_Shed_Level, Start_Time, Shed_Duration

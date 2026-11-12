@@ -29,12 +29,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// (it names only writes of the four request properties as
     /// reconfiguring one, Figure 12-5), so the request neither restarts nor
     /// ends: it stays in its state unless the shedder's answer moves it.
-    /// What the look changes (the shed state, the expected and actual
-    /// levels) is reported through the object's COV and saved with the
-    /// request, as the application's other setters' changes are. The
-    /// levels themselves are configuration, not part of the request: an
-    /// object with storage does not keep them, so set them again when the
-    /// object is built.
+    /// What the look changes is saved with the request, as the application's
+    /// other setters' changes are. A SubscribeCOV subscriber hears of a move
+    /// of the shed state (Table 13-1's Load Control row carries Present_Value,
+    /// Status_Flags and the four request properties); Expected_Shed_Level and
+    /// Actual_Shed_Level reach only a property subscription on them. A look
+    /// that moves nothing the row carries sends no SubscribeCOV report. The
+    /// route is not audited, as with `set_reliability_local`. The levels
+    /// themselves are configuration, not part of the request: an object with
+    /// storage does not keep them, so set them with the object's setters
+    /// before it joins the server, where a restored request is put to the
+    /// shedder with them as the server starts. This route works only on a
+    /// running server, after that first look.
     ///
     /// Like [`write_local`](Self::write_local), it must be awaited inside a
     /// Tokio runtime, failing before anything is written outside one, and a
@@ -62,8 +68,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// 12.28.10); the clause does not say that a new baseline reconfigures
     /// a request, so it stays in its state unless the shedder's answer
     /// moves it. A change of state is reported and saved as for the
-    /// levels. The baseline itself is configuration, which storage does not
-    /// keep: set it again when the object is built.
+    /// levels, and the route is not audited. The baseline itself is
+    /// configuration, which storage does not keep: set it with the object's
+    /// setter before the object joins the server.
     ///
     /// The task and drop rules are those of
     /// [`BACnetServer::set_load_control_shed_levels_local`].
@@ -85,8 +92,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// The errors are
     /// [`BACnetServer::set_load_control_shed_levels_local`]'s. The change
     /// reaches a SubscribeCOVProperty on State_Description once the
-    /// database lock is released; the request is not looked at again. The
-    /// text is configuration, which storage does not keep.
+    /// database lock is released; the request is not looked at again.
+    /// Clearing it sends a property subscriber nothing, since the property
+    /// is gone. The route is not audited. The text is configuration, which
+    /// storage does not keep.
     ///
     /// The task and drop rules are those of
     /// [`BACnetServer::set_load_control_shed_levels_local`].
