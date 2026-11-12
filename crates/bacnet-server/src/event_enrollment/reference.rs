@@ -1,8 +1,8 @@
-use bacnet_encoding::constructed::decode_device_object_property_reference;
+use bacnet_device_core::event::decode_reference_value;
 use bacnet_objects::traits::BACnetObject;
-use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetEventParameter};
+use bacnet_types::constructed::BACnetEventParameter;
 use bacnet_types::enums::{EventType, PropertyIdentifier};
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bacnet_types::primitives::ObjectIdentifier;
 
 use super::LocalConfigurationReadError;
 use super::support::classify_required_property_read_error;
@@ -29,22 +29,6 @@ impl MonitoredReference {
             device_identifier: None,
         }
     }
-}
-
-/// The reference an Event Enrollment's Object_Property_Reference read holds:
-/// exactly one BACnetDeviceObjectPropertyReference in its Clause 21 encoding
-/// (#1182). Any property identifier counts, ASHRAE's above 4194303 included
-/// (#887). Anything else is `None`, and so is the unset form an enrollment
-/// without a reference reads as, its object or Device at the reserved
-/// instance 4194303 (#1417).
-pub(crate) fn decode_reference_value(
-    value: &PropertyValue,
-) -> Option<BACnetDeviceObjectPropertyReference> {
-    let PropertyValue::ApplicationData(bytes) = value else {
-        return None;
-    };
-    let (reference, end) = decode_device_object_property_reference(bytes, 0).ok()?;
-    (end == bytes.len() && !reference.is_unset()).then_some(reference)
 }
 
 /// Read the object-property reference from an Event Enrollment object.

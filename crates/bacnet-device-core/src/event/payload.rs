@@ -4,7 +4,10 @@
 //! server still owns the database write guard. The resulting private wrapper
 //! is the immutable payload carried to all recipients and confirmed retries.
 
-use bacnet_encoding::constructed::{encode_bacnet_property_value, encode_property_state};
+use alloc::vec::Vec;
+use bacnet_encoding::constructed::{
+    decode_device_object_property_reference, encode_bacnet_property_value, encode_property_state,
+};
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_encoding::{constructed::validate_tlv_sequence, tags};
 use bacnet_objects::database::ObjectDatabase;
@@ -21,30 +24,42 @@ use bytes::BytesMut;
 
 /// One validated notification-parameter value captured for a committed event.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct CommittedNotificationPayload(NotificationParameters);
+pub struct CommittedNotificationPayload(NotificationParameters);
 
+/// The monitored object's Status_Flags as an Event Enrollment read them.
 #[derive(Clone, Copy)]
-pub(crate) enum CapturedStatusFlags {
+pub enum CapturedStatusFlags {
+    /// A well-formed value.
     Value(StatusFlags),
+    /// The object serves none.
     Unavailable,
+    /// The value isn't a four-bit BitString.
     Malformed,
 }
 
+/// The monitored property's value an Event Enrollment evaluated, for a
+/// CHANGE_OF_RELIABILITY report.
 #[derive(Clone)]
-pub(crate) enum CapturedReferencedValue {
+pub enum CapturedReferencedValue {
+    /// Not evaluated: the projection reads it.
     NotEvaluated,
+    /// The value evaluated.
     Value(PropertyValue),
+    /// It couldn't be read: the report leaves it out.
     Unavailable,
 }
 
 impl CapturedReferencedValue {
-    pub(crate) fn from_evaluated(value: Option<&PropertyValue>) -> Self {
+    /// The value an evaluation read, or [`Self::NotEvaluated`] for none.
+    pub fn from_evaluated(value: Option<&PropertyValue>) -> Self {
         value.cloned().map_or(Self::NotEvaluated, Self::Value)
     }
 }
 
+/// What an Event Enrollment's evaluation read, for its committed
+/// transition's Event Values.
 #[derive(Clone)]
-pub(crate) struct EventEnrollmentProjectionSnapshot {
+pub struct EventEnrollmentProjectionSnapshot {
     reference: MonitoredReference,
     monitored_value: PropertyValue,
     parameters: BACnetEventParameter,
@@ -56,7 +71,9 @@ pub(crate) struct EventEnrollmentProjectionSnapshot {
 }
 
 impl EventEnrollmentProjectionSnapshot {
-    pub(crate) fn new(
+    /// Capture the monitored reference, its value, the event parameters, the
+    /// monitored Status_Flags and a FLOATING_LIMIT setpoint.
+    pub fn new(
         object_identifier: ObjectIdentifier,
         property_identifier: PropertyIdentifier,
         array_index: Option<u32>,
@@ -80,12 +97,15 @@ impl EventEnrollmentProjectionSnapshot {
 }
 
 impl CommittedNotificationPayload {
-    pub(super) fn into_parameters(self) -> NotificationParameters {
+    /// The notification parameters it carries.
+    pub fn into_parameters(self) -> NotificationParameters {
         self.0
     }
 
-    #[cfg(test)]
-    pub(crate) fn for_test(parameters: NotificationParameters) -> Self {
+    /// Wrap parameters without projecting them, for hosts' tests only.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn for_test(parameters: NotificationParameters) -> Self {
         Self(parameters)
     }
 }
@@ -106,7 +126,7 @@ enum OptionalProjectionValue {
 /// Project an intrinsic source after its transition commit. `device` is this
 /// device's identifier, which a log's BUFFER_READY report names its buffer
 /// with.
-pub(crate) fn project_intrinsic_payload(
+pub fn project_intrinsic_payload(
     object: &dyn BACnetObject,
     change: &EventStateChange,
     event_type: EventType,
@@ -169,7 +189,7 @@ fn project_buffer_ready(
 }
 
 /// Project an Event Enrollment source after its transition commit.
-pub(crate) fn project_event_enrollment_payload(
+pub fn project_event_enrollment_payload(
     db: &ObjectDatabase,
     enrollment_oid: ObjectIdentifier,
     expected_monitored_oid: Option<ObjectIdentifier>,
@@ -557,7 +577,7 @@ fn read_monitored_reference(
     let value = enrollment
         .read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)
         .ok()?;
-    let reference = crate::event_enrollment::decode_reference_value(&value)?;
+    let reference = decode_reference_value(&value)?;
     Some((
         value,
         MonitoredReference {
@@ -566,6 +586,22 @@ fn read_monitored_reference(
             array_index: reference.property_array_index,
         },
     ))
+}
+
+/// The reference an Event Enrollment's Object_Property_Reference read holds:
+/// exactly one BACnetDeviceObjectPropertyReference in its Clause 21 encoding
+/// (#1182). Any property identifier counts, ASHRAE's above 4194303 included
+/// (#887). Anything else is `None`, and so is the unset form an enrollment
+/// without a reference reads as, its object or Device at the reserved
+/// instance 4194303 (#1417).
+pub fn decode_reference_value(
+    value: &PropertyValue,
+) -> Option<BACnetDeviceObjectPropertyReference> {
+    let PropertyValue::ApplicationData(bytes) = value else {
+        return None;
+    };
+    let (reference, end) = decode_device_object_property_reference(bytes, 0).ok()?;
+    (end == bytes.len() && !reference.is_unset()).then_some(reference)
 }
 
 fn property_state_for_value(
@@ -647,7 +683,8 @@ fn required_status_flags(object: &dyn BACnetObject) -> Option<StatusFlags> {
     status_flags(&value)
 }
 
-pub(crate) fn capture_status_flags(object: &dyn BACnetObject) -> CapturedStatusFlags {
+/// Read an object's Status_Flags for an Event Enrollment's projection.
+pub fn capture_status_flags(object: &dyn BACnetObject) -> CapturedStatusFlags {
     match object.read_property(PropertyIdentifier::STATUS_FLAGS, None) {
         Ok(value) => status_flags(&value)
             .map(CapturedStatusFlags::Value)
@@ -752,5 +789,5 @@ fn append_property_value(
 }
 
 #[cfg(test)]
-#[path = "event_notification_payload_tests.rs"]
+#[path = "payload_tests.rs"]
 mod tests;

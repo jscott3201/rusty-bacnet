@@ -1,14 +1,11 @@
-use super::event_message_policy::intrinsic_event_message_text;
-use super::event_notification_payload::{CommittedNotificationPayload, project_intrinsic_payload};
-#[path = "event_notification_profile.rs"]
-mod profile;
-use self::profile::{CommittedHistorySnapshot, NotificationConstruction, NotificationTransition};
-pub(super) use self::profile::{CommittedIntrinsicTransition, NotificationHistorySource};
 use super::event_recipient_route::system_utc_recipient_filter_time;
-use super::event_timestamp::{
-    SampledEventClock, confirm_event_timestamp, sample_event_timestamp, stage_event_timestamp,
-};
 use super::*;
+use bacnet_device_core::event::{
+    CommittedHistorySnapshot, CommittedIntrinsicTransition, CommittedNotificationPayload,
+    NotificationConstruction, NotificationHistorySource, NotificationTransition, SampledEventClock,
+    confirm_event_timestamp, intrinsic_event_message_text, project_intrinsic_payload,
+    sample_event_timestamp, stage_event_timestamp,
+};
 use bacnet_encoding::primitives::decode_timestamp_choice;
 use bacnet_objects::event::{
     EventTransition, EventTransitionCommit, EventTransitionCommitError, TransitionOutcome,

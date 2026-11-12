@@ -3,9 +3,8 @@ use crate::event_enrollment::{
     CommittedEventEnrollmentDelivery, CommittedEventEnrollmentResult,
     EventEnrollmentReliabilityCause, EventEnrollmentReliabilityResult, EventEnrollmentTransition,
 };
-use crate::server::event_notification_payload::CommittedNotificationPayload;
 use crate::server::event_notifications::commit_intrinsic_transition;
-use crate::server::event_timestamp::SampledEventClock;
+use bacnet_device_core::event::{CommittedNotificationPayload, SampledEventClock};
 use bacnet_objects::event::{
     EventStateChange, EventTransitionCommit, EventTransitionCommitError, TransitionOutcome,
 };
@@ -356,9 +355,8 @@ fn event_enrollment_projection_reads_committed_message_without_mutation() {
                 ),
             );
         let message_text = resolved.map(|(_, _, transition)| match transition.history_source {
-            crate::server::event_notifications::NotificationHistorySource::Committed {
-                snapshot,
-                ..
+            bacnet_device_core::event::NotificationHistorySource::Committed {
+                snapshot, ..
             } => snapshot.message_text,
             _ => panic!("an enrollment projects its committed history"),
         });

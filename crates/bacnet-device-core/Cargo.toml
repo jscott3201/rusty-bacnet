@@ -27,6 +27,7 @@ std = [
     "bytes/std",
     "structured-writes",
     "cov-multiple",
+    "event-reporting",
 ]
 # no_std with a global allocator.
 alloc = [
@@ -58,10 +59,16 @@ structured-writes = []
 # maps and sorts are trimmed (#2215's rule for keeping a feature; design
 # note, decision 18).
 cov-multiple = []
+# Intrinsic event reporting (#2303): the `event` module, with the
+# timestamps, message text, Event Values and distribution profile of a
+# committed transition. It turns on bacnet-objects' `event-reporting`, so
+# the objects lend their detectors. `std` turns it on, so bacnet-server has
+# it; no firmware image does yet.
+event-reporting = ["bacnet-objects/event-reporting"]
 # Hidden hooks for hosts' own tests (the COV table's generation counter, so
-# bacnet-server's table tests reach generation exhaustion). bacnet-server
-# turns it on for its tests only, through a dev-dependency; never enable it
-# in a product build.
+# bacnet-server's table tests reach generation exhaustion, and an event
+# payload built without a projection). bacnet-server turns it on for its
+# tests only, through a dev-dependency; never enable it in a product build.
 test-support = []
 
 # The release that first publishes this crate. Until the website names that

@@ -629,7 +629,7 @@ impl<T: TransportPort + 'static> WriteAudit<'_, T> {
         // A later response-send timeout cannot change the recorded outcome.
         pending.notification.result = result;
         pending.notification.target_timestamp =
-            Some(super::event_timestamp::sample_event_timestamp(db).timestamp);
+            Some(bacnet_device_core::event::sample_event_timestamp(db).timestamp);
         self.admit(*pending);
     }
 

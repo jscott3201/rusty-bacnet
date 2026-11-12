@@ -521,8 +521,6 @@ mod event_enrollment_lifecycle;
 mod event_forwarding;
 pub use event_forwarding::MAX_FORWARDED_DESTINATIONS;
 mod event_forwarding_repeats;
-mod event_message_policy;
-pub(crate) mod event_notification_payload;
 mod event_notifications;
 mod event_recipient_route;
 mod event_send;
@@ -531,7 +529,8 @@ pub use event_suppression::EventNotificationCounters;
 mod received_event_log;
 pub use received_event_log::{RECEIVED_EVENT_LOG_RATE, RECEIVED_EVENT_LOG_SOURCES};
 mod confirmed_answer;
-pub(crate) mod event_timestamp;
+#[cfg(test)]
+mod event_timestamp_tests;
 mod handles;
 mod learned_router_cache;
 mod lifecycle;
