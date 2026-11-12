@@ -131,7 +131,12 @@ fn service_request() -> Bytes {
 
 fn full_service_ack() -> Bytes {
     let mut encoded = BytesMut::new();
-    handlers::handle_get_event_information(&database(), &service_request(), &mut encoded).unwrap();
+    bacnet_device_core::event::handle_get_event_information(
+        &database(),
+        &service_request(),
+        &mut encoded,
+    )
+    .unwrap();
     encoded.freeze()
 }
 

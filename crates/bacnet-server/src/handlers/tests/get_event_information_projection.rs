@@ -191,7 +191,7 @@ fn response(
             db,
             &request(cursor),
             &mut configured,
-            crate::server::GetEventInformationBudget {
+            bacnet_device_core::event::GetEventInformationBudget {
                 max_objects: usize::MAX,
                 max_returned_summaries: usize::MAX,
                 max_service_ack_bytes: usize::MAX,

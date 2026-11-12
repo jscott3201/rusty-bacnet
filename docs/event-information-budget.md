@@ -1,7 +1,9 @@
 # GetEventInformation local budgets
 
 Server dispatch uses `ServerConfig::get_event_information_budget`, a
-`GetEventInformationBudget` with positive defaults:
+`bacnet_device_core::event::GetEventInformationBudget` with positive
+defaults (it moved from `bacnet_server::server` with the handlers that take
+it, #2303):
 
 | Rust field | Python keyword-only constructor argument | Default |
 | --- | --- | --- |
@@ -47,8 +49,12 @@ server Abort `BUFFER_OVERFLOW` only after the strict scan finds no service error
 There is no oversized-first-item fallback in configured dispatch.
 
 The public `handle_get_event_information` remains an unconfigured, full-result
-handler. The old crate-internal optional-byte helper retains its historical
-first-item fallback for compatibility tests; configured dispatch does not use it.
+handler, now in `bacnet_device_core::event` (#2303). The optional-byte
+`handle_get_event_information_with_budget` retains its historical first-item
+fallback for compatibility tests; configured dispatch does not use it. A summary
+that doesn't project answers OPERATIONAL_PROBLEM; the configured handler returns
+it as `EventInformationFailure::Projection`, naming the object and what failed,
+which the server logs as a warning before it answers.
 
 These are local retained-encoding and database-cardinality policies, not BACnet
 mandated numeric limits or an RSS/CPU guarantee. At default limits at most 256

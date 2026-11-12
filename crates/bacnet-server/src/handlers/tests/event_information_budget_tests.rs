@@ -1,5 +1,5 @@
 use super::*;
-use crate::server::GetEventInformationBudget;
+use bacnet_device_core::event::GetEventInformationBudget;
 use bacnet_objects::property_metadata::PropertyMetadata;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::error::RemoteError;

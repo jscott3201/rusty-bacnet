@@ -1,4 +1,7 @@
 use super::*;
+use bacnet_device_core::event::{
+    EventInformationFailure, EventSummaryFault, handle_get_event_information_configured,
+};
 
 pub(super) fn can_segment(segmentation: Segmentation) -> bool {
     matches!(
@@ -30,7 +33,7 @@ pub(super) async fn response(
     }
     let mut service_ack = BytesMut::new();
     let db = db.read().await;
-    match handlers::handle_get_event_information_configured(
+    match handle_get_event_information_configured(
         &db,
         &request.service_request,
         &mut service_ack,
@@ -45,10 +48,10 @@ pub(super) async fn response(
             service_choice: request.service_choice,
             service_ack: service_ack.freeze(),
         }),
-        Err(handlers::EventInformationFailure::Service(error)) => {
+        Err(EventInformationFailure::Service(error)) => {
             bacnet_device_core::reply::error_apdu(request.invoke_id, request.service_choice, &error)
         }
-        Err(handlers::EventInformationFailure::Projection(problem)) => {
+        Err(EventInformationFailure::Projection(problem)) => {
             warn!(
                 object_identifier = ?problem.object_identifier,
                 reason = %describe(&problem.fault),
@@ -64,7 +67,7 @@ pub(super) async fn response(
             sent_by_server: true,
             invoke_id: request.invoke_id,
             abort_reason: match failure {
-                handlers::EventInformationFailure::Objects => AbortReason::OUT_OF_RESOURCES,
+                EventInformationFailure::Objects => AbortReason::OUT_OF_RESOURCES,
                 _ => AbortReason::BUFFER_OVERFLOW,
             },
         }),
@@ -91,8 +94,8 @@ pub(super) fn unsegmented_complex_ack_service_budget(
 }
 
 /// The reason a summary failed, as the projection once logged it.
-fn describe(fault: &handlers::EventSummaryFault) -> String {
-    use handlers::EventSummaryFault as F;
+fn describe(fault: &EventSummaryFault) -> String {
+    use EventSummaryFault as F;
     let coordinate = |transition: &bacnet_objects::event::EventTransition| match transition {
         bacnet_objects::event::EventTransition::ToOffnormal => "TO_OFFNORMAL",
         bacnet_objects::event::EventTransition::ToFault => "TO_FAULT",

@@ -1,15 +1,16 @@
 //! AcknowledgeAlarm mutation and requester-response construction.
 
 use super::*;
+use bacnet_device_core::event::{AcceptedAcknowledgeAlarm, handle_acknowledge_alarm};
 
 pub(super) async fn response(
     db: &RwLock<ObjectDatabase>,
     request: &ConfirmedRequestPdu,
-    accepted: &mut Option<handlers::AcceptedAcknowledgeAlarm>,
+    accepted: &mut Option<AcceptedAcknowledgeAlarm>,
 ) -> Apdu {
     let result = {
         let mut db = db.write().await;
-        handlers::handle_acknowledge_alarm(&mut db, &request.service_request)
+        handle_acknowledge_alarm(&mut db, &request.service_request)
     };
 
     match result {

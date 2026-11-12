@@ -8,9 +8,8 @@ use std::collections::HashSet;
 use bacnet_encoding::npdu::NpduAddress;
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_objects::database::ObjectDatabase;
-use bacnet_services::alarm_event::{
-    AcknowledgeAlarmRequest, EventSummary, GetEventInformationAck, GetEventInformationRequest,
-};
+#[cfg(test)]
+use bacnet_services::alarm_event::{GetEventInformationAck, GetEventInformationRequest};
 use bacnet_services::device_mgmt::{DeviceCommunicationControlRequest, ReinitializeDeviceRequest};
 use bacnet_services::object_mgmt::{CreateObjectRequest, DeleteObjectRequest, ObjectSpecifier};
 #[cfg(test)]
@@ -25,12 +24,15 @@ use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::MacAddr;
 #[cfg(test)]
 use bacnet_types::constructed::BACnetObjectPropertyReference;
+#[cfg(test)]
+use bacnet_types::enums::EventType;
 use bacnet_types::enums::{
-    EnableDisable, ErrorClass, ErrorCode, EventState, EventType, ObjectType, PropertyIdentifier,
-    RejectReason,
+    EnableDisable, ErrorClass, ErrorCode, EventState, ObjectType, PropertyIdentifier, RejectReason,
 };
 use bacnet_types::error::{Error, ErrorDetail};
-use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue};
+#[cfg(test)]
+use bacnet_types::primitives::BACnetTimeStamp;
+use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use bytes::BytesMut;
 

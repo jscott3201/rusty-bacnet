@@ -11,19 +11,31 @@
 //! they build after the guard drops. `bacnet-server` runs its intrinsic
 //! reporting on them.
 
+mod acknowledge;
 mod commit;
 mod distribute;
+mod event_information;
+mod fault;
 mod intrinsic;
 mod message;
 mod payload;
 mod profile;
 mod timestamp;
 
+pub use acknowledge::{
+    AcceptedAcknowledgeAlarm, AcknowledgmentNotificationContext, handle_acknowledge_alarm,
+};
 pub use commit::{
     IntrinsicCommitRefusal, MessageTexts, commit_intrinsic_transition,
     read_committed_history_snapshot,
 };
 pub use distribute::{DistributionOutcome, EventDistribution, distribute_event};
+pub use event_information::{
+    EventInformationFailure, EventSummaryFault, EventSummaryProblem, GetEventInformationBudget,
+    handle_get_event_information, handle_get_event_information_configured,
+    handle_get_event_information_with_budget,
+};
+pub use fault::{FaultPass, ReliabilityChange, fault_pass};
 pub use intrinsic::{IntrinsicCommit, after_write, sweep};
 
 pub use message::intrinsic_event_message_text;

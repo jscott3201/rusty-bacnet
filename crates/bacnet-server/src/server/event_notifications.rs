@@ -1,9 +1,10 @@
 use super::event_recipient_route::system_utc_recipient_filter_time;
 use super::*;
 use bacnet_device_core::event::{
-    CommittedIntrinsicTransition, DistributionOutcome, IntrinsicCommit, IntrinsicCommitRefusal,
-    MessageTexts, NotificationConstruction, NotificationHistorySource, NotificationTransition,
-    SampledEventClock, after_write, distribute_event, read_committed_history_snapshot,
+    AcceptedAcknowledgeAlarm, CommittedIntrinsicTransition, DistributionOutcome, IntrinsicCommit,
+    IntrinsicCommitRefusal, MessageTexts, NotificationConstruction, NotificationHistorySource,
+    NotificationTransition, SampledEventClock, after_write, distribute_event,
+    read_committed_history_snapshot,
 };
 
 use crate::event_enrollment::{CommittedEventEnrollmentDelivery, CommittedEventEnrollmentResult};
@@ -242,19 +243,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// response path has completed.
     pub(super) async fn send_acknowledgment_notification_with_bindings(
         ctx: &EventDelivery<'_, T>,
-        accepted: handlers::AcceptedAcknowledgeAlarm,
+        accepted: AcceptedAcknowledgeAlarm,
     ) {
-        let Some(notification) = accepted.notification else {
+        let Some((oid, transition)) = accepted.into_notification() else {
             return;
         };
-        if !notification.distribute {
-            return;
-        }
-        Self::build_and_send_event_notification_with_bindings(
-            ctx,
-            &accepted.event_object_identifier,
-            NotificationTransition::acknowledgment(notification.change, notification.event_type),
-        )
-        .await;
+        Self::build_and_send_event_notification_with_bindings(ctx, &oid, transition).await;
     }
 }

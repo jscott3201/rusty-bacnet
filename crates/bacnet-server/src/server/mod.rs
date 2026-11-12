@@ -71,6 +71,7 @@ use crate::{handlers, runtime_clock};
 use bacnet_device_core::cov::CovNotificationKind;
 use bacnet_device_core::cov::{CovCounters, CovPolicy};
 use bacnet_device_core::cov::{CovSubscription, CovSubscriptionSnapshot};
+use bacnet_device_core::event::GetEventInformationBudget;
 use confirmed_request_tracker::{
     ConfirmedRequestAdmission, ConfirmedRequestTracker, PendingConfirmedRequest,
 };
@@ -585,9 +586,8 @@ mod atomic_read_file_budget;
 mod atomic_write_file_budget;
 mod read_range_budget;
 pub use read_range_budget::ReadRangeBudget;
-mod event_information_budget;
-pub use event_information_budget::GetEventInformationBudget;
 mod enrollment_summary_budget;
+mod event_information_budget;
 pub use atomic_read_file_budget::AtomicReadFileBudget;
 pub use atomic_write_file_budget::AtomicWriteFileBudget;
 pub use enrollment_summary_budget::GetEnrollmentSummaryBudget;

@@ -1,16 +1,28 @@
-//! GetEventInformation service handler.
+//! GetEventInformation (Clauses 13.2.4, 13.12): the event-initiating
+//! objects in an active event state, from a cursor, one page at a time.
 
-use super::super::*;
+use alloc::vec::Vec;
 use bacnet_encoding::primitives::decode_timestamp_choice;
+use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::event::EventTransition;
 use bacnet_objects::property_metadata::has_property;
 use bacnet_objects::traits::BACnetObject;
+use bacnet_services::alarm_event::{
+    EventSummary, GetEventInformationAck, GetEventInformationRequest,
+};
 use bacnet_types::bitstring::EventTransitionBits;
-use bacnet_types::enums::NotifyType;
+use bacnet_types::enums::{
+    ErrorClass, ErrorCode, EventState, NotifyType, ObjectType, PropertyIdentifier,
+};
+use bacnet_types::error::Error;
+use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue};
+use bytes::BytesMut;
 
 #[path = "event_information_page.rs"]
 mod page;
-pub(crate) use page::{EventInformationFailure, handle_get_event_information_configured};
+pub use page::{
+    EventInformationFailure, GetEventInformationBudget, handle_get_event_information_configured,
+};
 
 const EVENT_SUMMARY_SIGNATURE: [PropertyIdentifier; 6] = [
     PropertyIdentifier::EVENT_STATE,
@@ -24,16 +36,16 @@ const EVENT_SUMMARY_SIGNATURE: [PropertyIdentifier; 6] = [
 /// Why one event-initiating object's summary could not be projected. The
 /// request it was projected for answers OPERATIONAL_PROBLEM.
 #[derive(Debug)]
-pub(crate) struct EventSummaryProblem {
+pub struct EventSummaryProblem {
     /// The object whose summary failed.
-    pub(crate) object_identifier: ObjectIdentifier,
+    pub object_identifier: ObjectIdentifier,
     /// What was wrong with it.
-    pub(crate) fault: EventSummaryFault,
+    pub fault: EventSummaryFault,
 }
 
 /// What was wrong with an event-initiating object's summary.
 #[derive(Debug)]
-pub(crate) enum EventSummaryFault {
+pub enum EventSummaryFault {
     /// A required property didn't read.
     Unreadable {
         /// The property.
@@ -73,7 +85,7 @@ pub(crate) enum EventSummaryFault {
 
 impl EventSummaryProblem {
     /// The error the request answers with: DEVICE, OPERATIONAL_PROBLEM.
-    pub(crate) fn to_error(&self) -> Error {
+    pub fn to_error(&self) -> Error {
         Error::protocol(ErrorClass::DEVICE, ErrorCode::OPERATIONAL_PROBLEM)
     }
 }
@@ -186,7 +198,7 @@ pub fn handle_get_event_information(
 /// complete summary does not fit, it is retained so dispatch's generic
 /// segmentation/Abort path remains authoritative and cannot emit an empty page
 /// with `More_Events` set.
-pub(crate) fn handle_get_event_information_with_budget(
+pub fn handle_get_event_information_with_budget(
     db: &ObjectDatabase,
     service_data: &[u8],
     buf: &mut BytesMut,
