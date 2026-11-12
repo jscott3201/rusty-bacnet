@@ -1,5 +1,7 @@
 //! Local completion order for whole observations: unconfirmed reports complete
 //! once sent (#826), confirmed ones once acknowledged (#896).
+use alloc::vec::Vec;
+
 use crate::cov::{CovObservation, CovSubscriptionKey, CovTimeRemaining, Token};
 use bacnet_time::Instant;
 
@@ -34,6 +36,10 @@ impl Completion {
 pub(super) struct Pending {
     token: Token,
     completion: Completion,
+    /// A later evaluation measured a change from this report and found
+    /// nothing to report: should it end unsent, that change is owed a
+    /// fresh look (#2508).
+    relied_on: bool,
 }
 
 /// A completion ticket: its issue order. Issued tickets start at one; zero
@@ -185,31 +191,72 @@ impl CovTable {
         self.pending.push(Pending {
             token,
             completion: Completion::new(snapshot, observation),
+            relied_on: false,
         });
         token
     }
 
+    /// The newest unconfirmed report of `snapshot`'s entry still to be
+    /// sent, if any: its ticket and the observation it carries, which an
+    /// evaluation measures a change from (#2508). Call it after
+    /// [`prune_pending`](Self::prune_pending), as `evaluate` does.
+    pub(super) fn newest_pending(
+        &self,
+        snapshot: &CovSubscriptionSnapshot,
+    ) -> Option<(u64, &CovObservation)> {
+        self.pending
+            .iter()
+            .filter(|report| {
+                report.token.flight == snapshot.flight
+                    && report.completion.generation == snapshot.generation
+                    && report.completion.key == snapshot.key
+            })
+            .max_by_key(|report| report.token.ticket)
+            .map(|report| (report.token.ticket, &report.completion.observation))
+    }
+
+    /// An evaluation measured a change of `snapshot`'s entry from its
+    /// pending report `ticket` and found nothing to report.
+    pub(super) fn rely_on_pending(&mut self, snapshot: &CovSubscriptionSnapshot, ticket: u64) {
+        let report = self
+            .pending
+            .iter_mut()
+            .find(|report| report.token.flight == snapshot.flight && report.token.ticket == ticket);
+        if let Some(report) = report {
+            report.relied_on = true;
+        }
+    }
+
     /// End an unconfirmed report `token` names, committing its observation
-    /// if it was sent. False when no unconfirmed report has that token.
+    /// if it was sent: the references then owed a fresh look, or `None`
+    /// when no unconfirmed report has that token. One not sent that an
+    /// evaluation relied on ([`rely_on_pending`](Self::rely_on_pending))
+    /// owes its reference one, measured from what was delivered.
     pub(super) fn deliver_unconfirmed(
         &mut self,
         token: Token,
         outcome: super::Delivery,
         now: Instant,
-    ) -> bool {
+    ) -> Option<Vec<CovSubscriptionKey>> {
         // Usually nothing is pending: a confirmed report's end, or the last
         // send of a fanout, finds out at once.
         if self.pending.is_empty() {
-            return false;
+            return None;
         }
-        let Some(at) = self.pending.iter().position(|report| report.token == token) else {
-            return false;
-        };
+        let at = self
+            .pending
+            .iter()
+            .position(|report| report.token == token)?;
         let report = self.pending.swap_remove(at);
         if outcome == super::Delivery::Sent {
             self.complete(token, false, report.completion, now);
+            return Some(Vec::new());
         }
-        true
+        Some(if report.relied_on {
+            alloc::vec![report.completion.key]
+        } else {
+            Vec::new()
+        })
     }
 }
 

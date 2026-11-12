@@ -148,18 +148,14 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// report past it waits, oldest owed first, until one of them ends,
     /// which for a silent subscriber is when its retries run out. Lower that
     /// limit when many confirmed subscribers are expected. Unconfirmed
-    /// notifications don't count against it, though while the session is at
-    /// the bound one that found the outbox full goes at the task's next wake
-    /// (a change, an answer or a timeout), which can be seconds later: size
-    /// the outbox for the subscriptions expected. [`stop`](Self::stop) drops
-    /// what is still queued and gives back every invoke ID a notification
-    /// holds.
+    /// notifications don't count against it. [`stop`](Self::stop) drops what
+    /// is still queued and gives back every invoke ID a notification holds.
     ///
-    /// Known defect (#2508): with an unconfirmed subscription, if two
-    /// changes to one object come before the session's task sends and the
-    /// second returns the object to the values the subscriber last received,
-    /// only the first is sent, and the subscriber keeps it until a later
-    /// change.
+    /// A subscriber ends with the current value even when a change takes
+    /// the object back to what it last heard before the last change's
+    /// notification went (#2508): an unconfirmed notification still queued
+    /// gives way to the newer one, and a confirmed one's Ack brings a fresh
+    /// look.
     ///
     /// SubscribeCOVProperty and SubscribeCOVPropertyMultiple stay refused.
     /// Startup requirements and the advertised services are those of

@@ -177,7 +177,11 @@ pub trait InvokeIds {
     /// a host that keeps its transactions by service. Hand them out in turn
     /// rather than reusing one just released, as the server's coordinator
     /// does: a late answer to an ended request would otherwise match the
-    /// next one sent under its ID.
+    /// next one sent under its ID. A report refused one is looked at again
+    /// as IDs come back, those the reporter gives back itself and those the
+    /// host reports with [`Reporter::invoke_ids_released`] while
+    /// [`Reporter::owes_invoke_id`] holds, and goes once it can take one; a
+    /// host needn't hold its other requests back for it (#2512).
     fn take(&mut self, to: &BACnetAddress, service: ConfirmedServiceChoice) -> Option<u8>;
     /// Give back `id`, taken for `to`: its request has ended.
     fn release(&mut self, to: &BACnetAddress, id: u8);
