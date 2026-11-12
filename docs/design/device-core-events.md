@@ -169,7 +169,8 @@ full, a COV notification isn't queued and its subscription is marked owed
 frees. A confirmed one that finds no invoke ID at `pop` is owed apart from
 those, and looked at again only as IDs come back: the `Reporter`'s own, and
 those the host reports with `invoke_ids_released` while `owes_invoke_id`
-holds, up to as many owed reports as IDs are free (#2512). So
+holds, up to as many owed reports as IDs are free, each going if it can take
+one (#2512). The host's other work isn't held back for them. So
 `next_deadline` never comes due for a report waiting for an ID, and a host
 that bounds its IDs needs no special case. An event notification
 evicts the newest COV entry, whose subscription becomes owed the same way,

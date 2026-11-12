@@ -75,8 +75,9 @@ the database guard, the transport, addressing and time.
   subscription, the newest, measured from the one it replaces, so a change
   back ends current, #2508), hands them out through `pop`
   (a confirmed one under an invoke ID the host lends through `InvokeIds`;
-  one that finds none waits until IDs come back, its own or those the host
-  reports with `invoke_ids_released` while `owes_invoke_id` holds, #2512),
+  one that finds none is looked at again as IDs come back, its own or those
+  the host reports with `invoke_ids_released` while `owes_invoke_id` holds,
+  and goes once it can take one, #2512),
   matches each answer (`reply`), resends or gives up at the deadline
   (`on_deadline`), and answers the Device's subscription lists from its
   table (`cov::active::ActiveCovOverlay`). Build the database with

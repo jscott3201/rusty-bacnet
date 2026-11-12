@@ -8492,8 +8492,8 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   commits what `begin_confirmed` kept and names the references owed a
   fresh look. An unconfirmed report that ends unsent names its reference
   when a later change was measured from it and reported nothing, so that
-  change gets its look from what was delivered. The values a notification carries are in `cov::prepare`,
-  `flags`, `reported`, `value_source` and `life_safety`, and the Device's
+  change gets its look from what was delivered. The values a notification
+  carries are in `cov::prepare`, `flags`, `reported`, `value_source` and `life_safety`, and the Device's
   two subscription lists in `cov::active`, with `ActiveCovOverlay`, which
   answers both from a `CovTable` through any read that takes a
   `ReadOverlay`. `bacnet_server::cov` keeps `CovSubscriptionTable` with its
@@ -8532,10 +8532,11 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   back, for as long as `owes_invoke_id()` holds (one report getting an ID
   doesn't end the wait for the others). `free` is how many are free then,
   not how many came back, so an ID the reporter gave back itself isn't
-  counted twice, and up to that many owed reports go from the one look;
-  IDs counted while no report waited for one don't count. A host that refuses IDs past a bound
-  of its own needn't report anything, and `next_deadline` never comes due
-  for a report waiting for an ID. `notification_deadline(token)` is a
+  counted twice, and up to that many owed reports are looked at again in
+  one pass, each going if it can take an ID; IDs counted while no report
+  waited for one don't count. A host that refuses IDs past a bound of its
+  own needn't report anything, and `next_deadline` never comes due for a
+  report waiting for an ID. `notification_deadline(token)` is a
   confirmed notification's own deadline: its answer's, or its cutoff when
   that comes first, and its cutoff alone while a resend waits for the next
   `pop`. A confirmed report's answers are cut off at `FlightTiming::cutoff`
@@ -12302,9 +12303,10 @@ answers come back through the session's one admission. They are sent again
 on `config.confirmed` (three seconds and three retries by default, apart from
 the client role's `SessionConfig` timer), and a subscriber that refuses one or
 never answers is held off for one retry cycle. A change made while a report is
-out waits for its answer. With every invoke ID leased, a report waits until
-one comes back, and each report waiting goes as an ID comes back for it, not
-only the first.
+out waits for its answer. With every invoke ID leased, a confirmed report
+waits, and goes once it can take an ID that comes back. The client role isn't
+held back for it: its requests fail at once when no ID is free, so a client
+role that keeps every ID leased keeps the report waiting.
 
 At most `bacnet_endpoint::session::COV_CONFIRMED_IN_FLIGHT` (64) confirmed
 notifications are out at once, all subscribers together: a quarter of the 256

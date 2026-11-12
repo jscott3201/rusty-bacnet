@@ -1,5 +1,5 @@
 ---
-section: Fixed
+section: Changed
 ---
 - **Breaking (Rust API):** the device core's `Reporter` keeps reports owed an
   invoke ID apart from those owed outbox room and looks at them again only as

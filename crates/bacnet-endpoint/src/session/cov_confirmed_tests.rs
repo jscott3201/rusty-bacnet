@@ -568,8 +568,9 @@ async fn each_owed_report_goes_as_an_id_comes_back() {
         assert_eq!(node.quiet(&to).await, [acked(process)], "owed an ID");
     }
     let mut heard = Vec::new();
+    let start = tokio::time::Instant::now();
     for at in [0, 500, 1_000] {
-        tokio::time::sleep_until(tokio::time::Instant::now() + Duration::from_millis(at)).await;
+        tokio::time::sleep_until(start + Duration::from_millis(at)).await;
         let back = tokio::time::Instant::now();
         coordinator.release(held.pop().unwrap()).unwrap();
         let (_, apdu) = node
@@ -644,5 +645,65 @@ async fn a_spent_coordinator_is_not_watched() {
     }
     assert!(node.next_within(Duration::from_secs(1)).await.is_none());
     assert_eq!(passes(), before, "no pass for IDs coming back");
+    session.stop().await.unwrap();
+}
+
+/// IDs that come back count for the `Reporter` only up to the session's
+/// bound: with 63 notifications out and the rest of the pool leased
+/// elsewhere, three reports wait for an ID, and ten coming back at once let
+/// one go, into the bound's last place. The other two aren't looked at only
+/// to be refused at the bound and owed again.
+#[tokio::test(start_paused = true)]
+async fn ids_back_past_the_bound_count_only_to_it() {
+    use crate::session::COV_CONFIRMED_IN_FLIGHT;
+    use bacnet_device_core::cov::FlightTiming;
+    use bacnet_endpoint_core::coordinator::TerminalPolicy;
+    // One subscriber with room for all of them, and a minute's timeout, so
+    // nothing ends on its own.
+    let policy = CovPolicy {
+        max_subscriptions_per_peer: 256,
+        max_confirmed_in_flight_per_peer: 256,
+        ..CovPolicy::default()
+    };
+    let minute = FlightTiming::new(bacnet_time::Duration::from_secs(60), 0);
+    let config = ReportConfig::new(policy).with_confirmed(minute);
+    let mut node = Node::new().await;
+    let mut session = endpoint(SessionRole::ServerOnly, Some(config)).await;
+    let to = mac_of(&session);
+    let out = COV_CONFIRMED_IN_FLIGHT as u8 - 1;
+    for process in 0..out {
+        let body = subscribe(process.into(), Some(true), Some(300));
+        node.request(&to, process, SUBSCRIBE_COV, &body).await;
+        assert_eq!(node.quiet(&to).await.len(), 2, "its Ack and report");
+    }
+    let coordinator = session.coordinator();
+    let lease = || {
+        let peer = CanonicalPeer::direct(&[9]);
+        LeaseMetadata::requester(peer, READ_PROPERTY, TerminalPolicy::ComplexAck)
+    };
+    let mut held = Vec::new();
+    while let Ok(token) = coordinator.reserve(lease()) {
+        held.push(token);
+    }
+    assert_eq!(held.len(), 256 - usize::from(out));
+    for process in out..out + 3 {
+        let body = subscribe(process.into(), Some(true), Some(300));
+        node.request(&to, process, SUBSCRIBE_COV, &body).await;
+        assert_eq!(node.quiet(&to).await, [acked(process)], "owed an ID");
+    }
+    let host = Arc::clone(session.cov.host().unwrap());
+    let owed = || host.lock().reporter.counters().owed;
+    let before = owed();
+    for token in held.drain(..10) {
+        coordinator.release(token).unwrap();
+    }
+    let sent = node.quiet(&to).await;
+    assert_eq!(sent.len(), 1, "the bound's last place");
+    confirmed_notification(&sent[0]);
+    assert_eq!(owed(), before, "none looked at only to be owed again");
+    assert!(host.lock().reporter.owes_invoke_id(), "two still wait");
+    for token in held {
+        coordinator.release(token).unwrap();
+    }
     session.stop().await.unwrap();
 }

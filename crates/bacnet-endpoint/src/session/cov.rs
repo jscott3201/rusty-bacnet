@@ -561,8 +561,9 @@ impl Leases {
     /// come back, and the task watches for them while a report waits; any
     /// other refusal lasts, so nothing is watched for after it.
     fn refused(&mut self, error: ReserveError) {
-        if error != ReserveError::Exhausted {
-            self.spent = true;
+        match error {
+            ReserveError::Exhausted => {}
+            ReserveError::GenerationExhausted | ReserveError::StatePoisoned => self.spent = true,
         }
     }
 }
