@@ -1594,6 +1594,40 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
       `get_event_information` are left to 3b or later.
     - Size: no image turns the feature on, so no row moved.
 
+**#2303 PR 3b, part one, 2026-11-12:**
+
+20. PR 3b splits in two. Part one moves the delays onto instants and the
+    server onto them, the series' one wire change, reviewed apart. Part
+    two is the `Reporter`'s event path, `acknowledge_local`, the clockless
+    windows and the write filter, the parity corpus and the image row.
+    - `PendingTransition` holds `due` (when the condition was first seen
+      plus the delay); `EventReporting`'s two evaluations take `now`;
+      `next_due` reports the instant, and `event::next_due(db)` the
+      earliest. `bacnet-objects` takes `bacnet-time`, without std.
+    - Only the tick fires a pending transition. The evaluation after a
+      write still seeds or cancels and fires only a delay of 0, as
+      before; a host sweeps at `next_due`, which the server does, so
+      nothing waits on a write to fire.
+    - A condition the tick seeds (no write reported it) is due its delay
+      after that tick and never fires in the same call, so the
+      countdown's timing for those holds, Time_Delay 0 included: it fires
+      at the next sweep.
+    - The server's sweep keeps its one-second cadence for the standing
+      duties (FAULT from Reliability, inhibit references) and adds a wake
+      at the next due instant when that falls after now and before the
+      next sweep. A due instant already passed (a commit that keeps
+      failing) waits for the cadence, so the task can't spin. Each wake
+      runs the whole sweep, the same function the `Reporter` will run at
+      its deadline, so the two fire at the same instants; an extra sweep
+      only sees sooner what a whole-second sweep would have seen.
+    - A custom `EventReporting` that counted ticks now sees more than one
+      a second when other objects' delays end; the migration note says to
+      compare `now` with its own due instant and report it through
+      `next_due`.
+    - `InvokeIds::take` names the confirmed service (lead, for #2490 PR 2
+      and the event path).
+    - Size: no image runs intrinsic reporting yet, so no row moved.
+
 ## 12. Evidence
 
 Code read at dev `c308eda25`. Sizes (§8): the `objects` image built with
