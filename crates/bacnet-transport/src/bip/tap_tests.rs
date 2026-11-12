@@ -1,8 +1,9 @@
 //! What a B/IP transport's frame tap sees on the receive side (#957): a
 //! broadcast listener's datagram only when the node keeps it, by the same
 //! verdict as the node's own listener check; a unicast sent as its header
-//! and the NPDU is tapped whole; and a transport's receiver ends once the
-//! transport is dropped.
+//! and the NPDU is tapped whole; a datagram is tapped before the socket
+//! tries it (#2519); and a transport's receiver ends once the transport is
+//! dropped.
 
 use super::*;
 use crate::tap::{FrameTap, TapDirection, TapPeer};
@@ -168,6 +169,56 @@ async fn a_unicast_sent_in_parts_is_tapped_whole() {
     assert_eq!(&tapped[0].bytes[..], wire);
     assert_eq!(tapped[0].peer, TapPeer::Udp(SocketAddr::V4(peer_address)));
     transport.stop().await.unwrap();
+}
+
+/// A datagram reaches the tap before the socket tries it (#2519), so an
+/// answer the receive loop taps while the send has yet to return comes
+/// after it: at each try the tap already holds the datagram, once. A
+/// socket without SO_BROADCAST refuses a broadcast on every OS (as in
+/// `send_observer`), and the refused datagram has been tapped all the same.
+#[tokio::test]
+async fn a_datagram_is_tapped_before_the_socket_tries_it() {
+    let tap = FrameTap::new();
+    let frames = Arc::new(std::sync::Mutex::new(tap.subscribe()));
+    let peer = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let SocketAddr::V4(peer_address) = peer.local_addr().unwrap() else {
+        unreachable!("bound to an IPv4 address")
+    };
+    let socket = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let socket = BipSocket::new(socket, None).tapped(tap.clone());
+    let at_try = Arc::new(std::sync::Mutex::new(Vec::new()));
+    *socket.on_try.lock().unwrap() = Some(Box::new({
+        let (frames, at_try) = (Arc::clone(&frames), Arc::clone(&at_try));
+        move || {
+            at_try
+                .lock()
+                .unwrap()
+                .push(frames.lock().unwrap().try_recv())
+        }
+    }));
+
+    let unicast = raw_frame(BvlcFunction::ORIGINAL_UNICAST_NPDU, NPDU);
+    socket.send_to(&unicast, peer_address).await.unwrap();
+    let broadcast = raw_frame(BvlcFunction::ORIGINAL_BROADCAST_NPDU, NPDU);
+    let everyone = SocketAddrV4::new(Ipv4Addr::BROADCAST, 0xBAC0);
+    assert!(socket.send_to(&broadcast, everyone).await.is_err());
+
+    let at_try = std::mem::take(&mut *at_try.lock().unwrap());
+    assert_eq!(at_try.len(), 2, "one try per send");
+    for (frame, (bytes, to)) in at_try
+        .into_iter()
+        .zip([(&unicast, peer_address), (&broadcast, everyone)])
+    {
+        let frame = frame.expect("tapped before the try");
+        assert_eq!(frame.direction, TapDirection::Outbound);
+        assert_eq!(frame.peer, TapPeer::Udp(SocketAddr::V4(to)));
+        assert_eq!(&frame.bytes[..], &bytes[..]);
+    }
+    assert!(frames.lock().unwrap().try_recv().is_none());
 }
 
 /// Stopped, a transport's receiver waits on; dropped, it ends.

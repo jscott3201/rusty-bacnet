@@ -34,6 +34,20 @@
 //! frames are taken before TLS encrypts them on the way out and after it
 //! decrypts them on the way in.
 //!
+//! # Order
+//!
+//! A receiver gets frames in the order the transport hands them over, and
+//! a reply never comes ahead of the request that drew it (#2519). On B/IP,
+//! B/IPv6, BACnet/SC and Ethernet one task sends while another receives, so
+//! a send is handed over just before the socket writes it, and a received
+//! frame just after the read: an answer that comes back while the send has
+//! yet to return still follows it. Frames that cross on the wire, neither
+//! answering the other, may come either way round. A sent frame is reported
+//! even if its write then fails or is given up; the sender learns of the
+//! failure as before. On MS/TP one task writes and reads the line, so a
+//! frame is reported once written, before the station reads on, and a frame
+//! whose write fails is not reported.
+//!
 //! # Cost and loss
 //!
 //! With nobody subscribed, a frame costs the transport one atomic load and
@@ -78,7 +92,8 @@ pub const DEFAULT_TAP_CAPACITY: usize = 1024;
 pub enum TapDirection {
     /// Received by this node.
     Inbound,
-    /// Sent by this node.
+    /// Handed to the socket by this node to send: on MS/TP, written to the
+    /// line. See [Order](crate::tap#order) for a send that then fails.
     Outbound,
 }
 
@@ -106,7 +121,8 @@ pub enum TapPeer {
 #[non_exhaustive]
 pub struct TappedFrame {
     /// Wall-clock time the transport handed the frame to the tap: just
-    /// after the send returned, or just after the receive did.
+    /// before the socket write for a sent frame (on MS/TP, just after it),
+    /// just after the read for a received one. See [Order](crate::tap#order).
     pub timestamp: SystemTime,
     /// Sent or received.
     pub direction: TapDirection,
@@ -226,14 +242,17 @@ impl FrameTap {
     #[cold]
     #[inline(never)]
     fn publish(&self, direction: TapDirection, link: DataLink, peer: TapPeer, bytes: &[u8]) {
+        let bytes = Bytes::copy_from_slice(bytes);
+        let mut sinks = self.lock_sinks();
+        // Stamped under the lock, so that frames two threads report at once
+        // are queued in the order of their timestamps.
         let frame = TappedFrame {
             timestamp: SystemTime::now(),
             direction,
             link,
             peer,
-            bytes: Bytes::copy_from_slice(bytes),
+            bytes,
         };
-        let mut sinks = self.lock_sinks();
         sinks.retain(|sink| match sink.tx.try_send(frame.clone()) {
             Ok(()) => {
                 self.shared.delivered.fetch_add(1, Ordering::Relaxed);

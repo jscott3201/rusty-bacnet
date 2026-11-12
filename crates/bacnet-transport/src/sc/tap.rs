@@ -47,11 +47,13 @@ impl<W> TappedSocket<W> {
 }
 
 impl<W: WebSocketPort> WebSocketPort for TappedSocket<W> {
-    /// Send, then report the message once the socket has taken it.
+    /// Report the message, then send it. An answer to it can come back, and
+    /// the reader report it, before this send returns, but not before the
+    /// message itself is reported here, so a request is always ahead of its
+    /// answer (#2519). A message whose send then fails has been reported.
     async fn send(&self, data: &[u8]) -> Result<(), Error> {
-        self.inner.send(data).await?;
         self.record(TapDirection::Outbound, data);
-        Ok(())
+        self.inner.send(data).await
     }
 
     /// Receive, reporting the message before handing it on. Reporting

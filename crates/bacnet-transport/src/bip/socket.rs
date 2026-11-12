@@ -633,6 +633,10 @@ pub(super) struct BipSocket {
     /// drive [`SendTo`]'s boxed wait on a real socket.
     #[cfg(test)]
     pub(super) block_next_try: std::sync::atomic::AtomicBool,
+    /// Runs at each try just before the socket write, so a test can see
+    /// what the tap holds at that moment (#2519).
+    #[cfg(test)]
+    pub(super) on_try: std::sync::Mutex<Option<Box<dyn FnMut() + Send>>>,
 }
 
 impl BipSocket {
@@ -645,6 +649,8 @@ impl BipSocket {
             sink: None,
             #[cfg(test)]
             block_next_try: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            on_try: std::sync::Mutex::new(None),
         }
     }
 
@@ -670,7 +676,8 @@ impl BipSocket {
     }
 
     /// Send one datagram. Every send of the transport goes through here,
-    /// and the tap sees each one sent.
+    /// and the tap sees each one as it is handed to the socket, whether or
+    /// not the socket then sends it.
     #[cfg(not(test))]
     pub(super) fn send_to<'a>(&'a self, buf: &'a [u8], target: SocketAddrV4) -> SendTo<'a> {
         self.send_datagram(OutgoingDatagram::whole(buf), target)
@@ -712,8 +719,8 @@ impl BipSocket {
             if sink.yields() {
                 tokio::task::yield_now().await;
             }
-            let sent = sink.send(&datagram.joined(), target);
-            return self.recorded(sent, &datagram, target);
+            self.tap_outbound(&datagram, target);
+            return sink.send(&datagram.joined(), target);
         }
         self.send_to_socket(datagram, target).await
     }
@@ -741,18 +748,19 @@ impl BipSocket {
         {
             return Err(io::ErrorKind::WouldBlock.into());
         }
+        #[cfg(test)]
+        if let Some(hook) = self.on_try.lock().unwrap().as_mut() {
+            hook();
+        }
         datagram.try_send(&self.socket, target)
     }
 
-    /// `sent`, after the tap sees `datagram` if it was sent. A datagram in
-    /// parts is put in one buffer only when the tap has a subscriber.
-    fn recorded(
-        &self,
-        sent: io::Result<usize>,
-        datagram: &OutgoingDatagram<'_>,
-        target: SocketAddrV4,
-    ) -> io::Result<usize> {
-        if sent.is_ok() && self.tap.is_active() {
+    /// Report `datagram`, about to be sent, to the tap. It goes before the
+    /// first try, so that an answer the receive loop reports can't come
+    /// ahead of it however long the send takes to return (#2519). A datagram
+    /// in parts is put in one buffer only when the tap has a subscriber.
+    fn tap_outbound(&self, datagram: &OutgoingDatagram<'_>, target: SocketAddrV4) {
+        if self.tap.is_active() {
             let peer = || TapPeer::Udp(target.into());
             let record = |bytes: &[u8]| {
                 self.tap
@@ -764,11 +772,10 @@ impl BipSocket {
                 record(&datagram.joined());
             }
         }
-        sent
     }
 }
 
-/// Sending one datagram on a [`BipSocket`], then recording it.
+/// Reporting one datagram to the tap, then sending it on a [`BipSocket`].
 ///
 /// A datagram almost always goes at once, so the first poll tries the send,
 /// and only a socket that would block waits, in a boxed `UdpSocket::send_to`.
@@ -805,6 +812,8 @@ impl std::future::Future for SendTo<'_> {
                 // awaited send did, so a task that only sends (the BBMD
                 // fanout worker) still yields to its neighbours.
                 let coop = std::task::ready!(tokio::task::coop::poll_proceed(cx));
+                // Once, here: a later poll has `blocked`.
+                socket.tap_outbound(&datagram, target);
                 match socket.try_send(&datagram, target) {
                     Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                         // The boxed send keeps its own budget.
@@ -828,7 +837,7 @@ impl std::future::Future for SendTo<'_> {
         };
         this.done = true;
         this.blocked = None;
-        std::task::Poll::Ready(socket.recorded(sent, &datagram, target))
+        std::task::Poll::Ready(sent)
     }
 }
 

@@ -9055,6 +9055,13 @@ The tap is in-process. On B/IP, B/IPv6, BACnet/SC and Ethernet it shows only
 this node's own traffic, so it does not replace a wire capture. A BACnet/SC message
 is taken in plaintext, before TLS encrypts it and after TLS decrypts it.
 
+Frames arrive in the order the transport hands them over: a sent frame just
+before the socket writes it (on MS/TP, once written), a received one just after
+the read. So a reply never comes ahead of the request that drew it, even when
+the send returns late (#2519); frames that cross on the wire may come either
+way round. A sent frame whose write then fails, or is abandoned, has still
+been reported, except on MS/TP, where a failed write is not.
+
 Each receiver has a bounded queue (`DEFAULT_TAP_CAPACITY`, 1024 frames, or
 `subscribe_with_capacity(n)`). The transport never waits for one: a frame that
 finds a queue full is dropped for that receiver and counted in

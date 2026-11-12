@@ -856,7 +856,8 @@ sources:
   the ChmodBPF launch daemon that Wireshark installs, on Linux
   `sudo setcap cap_net_raw,cap_net_admin=eip "$(command -v bacnet)"`. With
   the tap running too, this node's own datagrams appear twice, once from
-  each source. If libpcap stops (no rights, the device gone), the list's
+  each source; one the socket failed to send appears once, from the tap,
+  which takes a datagram as it is handed to the socket. If libpcap stops (no rights, the device gone), the list's
   bottom line says why.
 
 The list shows, from 120 columns, the frame number, the time (UTC), the
