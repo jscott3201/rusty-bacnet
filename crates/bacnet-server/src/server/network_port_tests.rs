@@ -127,6 +127,7 @@ async fn network_number_server_held_learning_preserves_audit_ack_progress() {
         .unwrap();
     let db = server.database().clone();
     let guard = db.read().await;
+    let requested = crate::network_number::control_writers_requested();
     peer.send_to(
         &[
             0x81, 4, 0, 16, 10, 1, 1, 8, 0xba, 0xc0, 1, 0x80, 0x13, 0, 19, 1,
@@ -135,8 +136,10 @@ async fn network_number_server_held_learning_preserves_audit_ack_progress() {
     )
     .await
     .unwrap();
+    // The learning control's own write is the one to wait for: the server's
+    // tasks queue for the guard too, so a queued writer alone proves nothing.
     tokio::time::timeout(Duration::from_secs(1), async {
-        while db.try_read().is_ok() {
+        while crate::network_number::control_writers_requested() == requested {
             tokio::task::yield_now().await;
         }
     })

@@ -7,6 +7,22 @@ use bacnet_types::primitives::ObjectIdentifier;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    static CONTROL_WRITERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many controls on this thread have asked a registered port's database
+/// for the write guard. A test that holds the database and wants to know its
+/// own control is the writer behind it waits for this to rise, not for "some
+/// writer is queued": the server's own tasks queue for the guard too (#2507).
+/// Counted per thread, so it is exact for a test on a current-thread runtime.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn control_writers_requested() -> usize {
+    CONTROL_WRITERS.with(std::cell::Cell::get)
+}
+
 enum State {
     Registered(Arc<RwLock<ObjectDatabase>>, ObjectIdentifier),
     Unregistered(NetworkNumber),
@@ -53,6 +69,10 @@ impl NetworkNumberOwner {
         };
         let state = match &mut self.state {
             State::Registered(db, oid) => {
+                // Counted in the poll that first asks, so a pending guard
+                // means this control is the writer waiting.
+                #[cfg(any(test, feature = "test-support"))]
+                CONTROL_WRITERS.with(|count| count.set(count.get() + 1));
                 let mut db = db.write().await;
                 let state = db.network_number_internal(*oid, announcement)?;
                 publish(state);

@@ -285,6 +285,8 @@ async fn remember<H: RunHost>(
     member: &ChannelMember,
     datatype: Option<MemberDatatype>,
 ) {
+    #[cfg(test)]
+    remember_hook::note_request();
     let mut db = host.database().write().await;
     let runner = db
         .get_mut(&run.source)
@@ -400,4 +402,24 @@ async fn write_member<H: RunHost>(
             Err(failed.failure)
         }
     })
+}
+
+/// Test hook: how many times `remember` asked for the database's write guard
+/// on this thread, so a test that holds the database waits for that ask itself
+/// rather than for any queued writer (#2507).
+#[cfg(test)]
+pub(crate) mod remember_hook {
+    use std::cell::Cell;
+
+    thread_local! {
+        static REQUESTS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(super) fn note_request() {
+        REQUESTS.with(|count| count.set(count.get() + 1));
+    }
+
+    pub(crate) fn requests() -> usize {
+        REQUESTS.with(Cell::get)
+    }
 }

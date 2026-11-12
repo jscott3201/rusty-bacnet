@@ -486,10 +486,12 @@ async fn network_number_held_database_cancels_control_before_endpoint_settlement
         let mut f = Fixture::start(full, true, 0).await;
         let db = f.database();
         let guard = db.read().await;
+        let requested = bacnet_server::network_number::control_writers_requested();
         f.announce(19, 1).await;
-        // Tokio's write-preferring lock makes a queued control writer observable.
+        // Wait for the control's own write guard request: the server's tasks
+        // queue for the guard too, so a queued writer alone proves nothing.
         tokio::time::timeout(Duration::from_secs(1), async {
-            while db.try_read().is_ok() {
+            while bacnet_server::network_number::control_writers_requested() == requested {
                 tokio::task::yield_now().await;
             }
         })
@@ -544,6 +546,7 @@ async fn network_number_endpoint_held_learning_preserves_audit_ack_progress() {
     let mut f = Fixture::start(false, true, 0).await;
     let db = f.database();
     let guard = db.read().await;
+    let requested = bacnet_server::network_number::control_writers_requested();
     let Owner::Endpoint(endpoint) = &f.owner else {
         unreachable!()
     };
@@ -556,8 +559,10 @@ async fn network_number_endpoint_held_learning_preserves_audit_ack_progress() {
         .reserve(CanonicalPeer::direct(&mac), S::CONFIRMED_AUDIT_NOTIFICATION)
         .unwrap();
     f.announce(19, 1).await;
+    // Wait for the control's own write guard request, not any queued
+    // writer: the server's tasks queue for the guard too (#2507).
     tokio::time::timeout(Duration::from_secs(1), async {
-        while db.try_read().is_ok() {
+        while bacnet_server::network_number::control_writers_requested() == requested {
             tokio::task::yield_now().await;
         }
     })
@@ -628,6 +633,7 @@ async fn network_number_endpoint_input_closed_keeps_admitted_control_lease_until
             Fixture::start_options(false, true, 17, Some(gates.clone()), Some(receiver)).await;
         let db = f.database();
         let guard = db.read().await;
+        let requested = bacnet_server::network_number::control_writers_requested();
         input
             .send(ReceivedNpdu {
                 direct_response: None,
@@ -640,8 +646,10 @@ async fn network_number_endpoint_input_closed_keeps_admitted_control_lease_until
             })
             .await
             .unwrap();
+        // Wait for the control's own write guard request, not any queued
+        // writer: the server's tasks queue for the guard too (#2507).
         tokio::time::timeout(Duration::from_secs(1), async {
-            while db.try_read().is_ok() {
+            while bacnet_server::network_number::control_writers_requested() == requested {
                 tokio::task::yield_now().await;
             }
         })
