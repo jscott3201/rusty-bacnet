@@ -8514,10 +8514,32 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   typed `report::LocalValue` (`Real`, `Binary`, `State` or `Integer`;
   `From<f32>`, `From<BinaryPV>` and `From<i32>`). `command` and
   `relinquish` write Present_Value as the local Device, as
-  `BACnetServer::write_local` does, and add no refusal of their own. The
-  `Reporter` reports COV only until #2303's third part gives it the event
-  pass, so a fault doesn't move an intrinsic reporter's Event_State here
-  as it does on the server. The outbox is one
+  `BACnetServer::write_local` does, and add no refusal of their own. With
+  the `event-reporting` feature, `ReportConfig::with_sweep(period)` turns
+  on the event path (#2303), off by default and off in the endpoint: after
+  each write and change it evaluates intrinsic reporting and takes the due
+  instant it seeds, it sweeps at the period and when a Time_Delay ends (no
+  sooner than `report::SWEEP_FLOOR`, 100 ms, after its last sweep, so a
+  period longer than the delays delays nothing), runs the fault pass every
+  `with_fault_detection(period)`, and answers AcknowledgeAlarm and
+  GetEventInformation (list `report::EVENT_SERVICES` too).
+  `acknowledge_local(db, object, state, now)` acknowledges the latest
+  transition to `state` by local means, through the service's own path
+  (`event::acknowledge`) with that transition's committed timestamp. Each
+  event notification goes, ahead of the COV notifications of the same
+  change, as `NotifyService::Event` to a `Destination::Recipient` address:
+  the recipient's own, or its Device's as `Bindings` resolves it at `pop`
+  (one it can't is dropped and counted `unresolved`), at the network
+  priority Table 13-6 gives (`event::network_priority`). Windows are judged
+  by the `Responder`'s clock (`SyncedClock::window`) when it has one,
+  otherwise by the database's clock frame, failing closed without one. An
+  event that finds the outbox full evicts the newest queued
+  COVNotification, whose subscription is owed a look (counted `evicted`),
+  and is dropped (`events_dropped`) only when none is left. A confirmed
+  event notification that finds no invoke ID waits in its place, held, and
+  IDs coming back serve held notifications first, then the COV reports
+  owed one; `owes_invoke_id` covers both. `changed` and `on_deadline`
+  take `&mut ObjectDatabase`. The outbox is one
   buffer and one queue allocated at build (`OutboxLimits`: entries and
   octets). A subscription holds one unconfirmed entry: a newer report
   replaces it in its turn, so one that changes faster than the link sends
@@ -8686,17 +8708,23 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   result: a `CommittedIntrinsicTransition` (states, Event Type, the
   Event_Enable decision, the committed timestamp and message text, Event
   Values) or an `IntrinsicCommitRefusal`. `distribute_event(db, device,
-  oid, transition, fallback)` builds the EventNotification, resolves the
+  oid, transition, window)` builds the EventNotification, resolves the
   class's priority and Ack_Required, selects the recipients by day, window
-  and transition (with `fallback` as the day and time when the Device clock
-  gives none) and records it in the Event Log objects, returning an
+  and transition and records it in the Event Log objects. `window` is a
+  `RecipientWindow`: `Frame { fallback }`, the Device clock's frame or,
+  without a valid one, `fallback` (the server passes the system clock's
+  UTC day and time; `None` sends only to destinations open every day, all
+  day, `notification_class::lookup_notification_recipients_at`), or
+  `Given(window)`, a firmware clock's `SyncedClock::window`. It returns an
   `EventDistribution`: the clock it read, and whether the object was gone,
   the lookup failed closed, or a notification was built. The timestamps
   (`stage_event_timestamp`, `confirm_event_timestamp`,
   `sample_event_timestamp`), the message text, and the Event Values
   (`project_intrinsic_payload`, and `project_event_enrollment_payload`,
   which the server's Event Enrollment uses) are public too.
-  `handle_acknowledge_alarm` runs AcknowledgeAlarm, and
+  `handle_acknowledge_alarm` runs AcknowledgeAlarm, decoding it and
+  calling `acknowledge(db, oid, state, timestamp)`, the path a local
+  acknowledgement runs too, and
   `AcceptedAcknowledgeAlarm::into_notification` gives the ACK_NOTIFICATION
   to send after the SimpleACK. `handle_get_event_information` (unbounded)
   and `handle_get_event_information_configured` (within a

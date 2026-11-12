@@ -174,7 +174,14 @@ one (#2512). The host's other work isn't held back for them. So
 `next_deadline` never comes due for a report waiting for an ID, and a host
 that bounds its IDs needs no special case. An event notification
 evicts the newest COV entry, whose subscription becomes owed the same way,
-and is dropped and counted only when no COV entry is left to evict.
+and is dropped and counted only when no COV entry is left to evict; a
+COV-multiple entry isn't evicted, since it holds its context's send turn.
+An evicted report a later change was measured from also owes that
+subscription a look (#2508), so it ends current. A confirmed event
+notification that finds no invoke ID can't be worked out again later, as a
+COV report can: it goes back to its place in the outbox, held, and IDs
+coming back serve held notifications first, oldest first, then the COV
+reports owed one (decision 21).
 
 `next_deadline` is the earliest of: the next delay due (§6.1), the next
 sweep, pass or fault pass, the earliest expiry, hold-off end and flight
@@ -209,9 +216,9 @@ pub struct ReportConfig {
     pub cov: CovPolicy,                   // moved, cov/policy.rs:16-54; firmware lowers its caps
     pub outbox: OutboxLimits,             // entries and octets (§4.2)
     pub confirmed: Option<Confirmed>,     // APDU timeout and retries, for COV and events
-    pub sweep: Option<Duration>,          // intrinsic sweep (§6.1); the server keeps 1 s
-    pub enrollment_interval: Option<u32>, // seconds; None runs no Event Enrollment pass
-    pub fault_detection: bool,            // the 10 s ReliabilityEval pass
+    pub sweep: Option<Duration>,          // intrinsic sweep (§6.1); None: no event path; the server keeps 1 s
+    pub enrollment_interval: Option<u32>, // seconds; None runs no Event Enrollment pass (#2319)
+    pub fault_detection: Option<Duration>, // the ReliabilityEval pass; the server's is 10 s
 }
 
 pub trait Bindings { fn address_of(&self, device: ObjectIdentifier) -> Option<BACnetAddress>; }
@@ -227,7 +234,7 @@ impl Reporter {
     pub fn reply(&mut self, from: &BACnetAddress, apdu: &[u8], ids: &mut dyn InvokeIds, now: Instant) -> bool;
     pub fn changed(&mut self, db: &mut ObjectDatabase, objects: &[ObjectIdentifier], now: Instant);
     pub fn acknowledge_local(&mut self, db: &mut ObjectDatabase, object: ObjectIdentifier,
-        state: EventState, now: Instant) -> Result<(), Error>;   // §6.4
+        state: EventState, now: Instant) -> Result<(), Error>;   // §6.4, through event::acknowledge
     pub fn next_deadline(&self) -> Option<Instant>;
     /// Whether a report waits for an invoke ID (#2512).
     pub fn owes_invoke_id(&self) -> bool;
@@ -1682,6 +1689,63 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
       (thumbv7em), 174,538 to 174,258 (riscv32imac); `reporting` 200,400 to
       199,896, 200,612 to 199,500, 240,362 to 239,730. RAM unchanged
       (16,480 and 24,680), no `core::fmt` or 64-bit division.
+
+**#2303 PR 3b, part two, 2026-11-12:**
+
+21. The `Reporter`'s event path.
+    - Off unless `ReportConfig::with_sweep` sets a period, so the
+      endpoint, which builds its `Reporter` without one, runs as before
+      with `event-reporting` on; AcknowledgeAlarm and GetEventInformation
+      are then rejected as unrecognized, as they were. `changed` and
+      `on_deadline` take `&mut ObjectDatabase`; the endpoint takes the
+      write guard for its deadline, in the order it took the read guard.
+    - The sweep rule: the `Reporter` is told of every write and change, so
+      it takes each changed object's due instant then, kept only when
+      after the last sweep's `now` (decision 20), and wakes for the
+      earliest. A period longer than the shortest delay delays nothing,
+      so the config isn't validated; the period only paces the standing
+      duties. Wakes keep the server's schedule: the first sweep at the
+      first `on_deadline`, the period's cadence moved on as the server's
+      task moves it, a due wake no sooner than `SWEEP_FLOOR` (100 ms)
+      after the last sweep, and the deadline from `next_due(db, after)`,
+      so never a past instant. A period under the floor is taken as the
+      floor. So a firmware host sweeps at most ten times a second plus
+      once per period, and a transition goes out within 100 ms of its due
+      instant once the host calls `on_deadline` then.
+    - The owed rule for events: a confirmed event notification refused an
+      invoke ID at `pop` stays in its place in the outbox, held, keeping
+      its octets; `pop` passes it by. It is counted owed once.
+      `owes_invoke_id` holds while any is held or any COV reference is
+      owed an ID, and `ids_freed` (its own `give_back`s and the host's
+      `invoke_ids_released(free)`) is spent at `on_deadline` on held
+      notifications first, oldest first, then on owed references.
+    - Eviction: the newest live COVNotification goes first, confirmed or
+      not; it ends NotSent at the table (a confirmed one through the
+      confirmed path, no hold-off) and its subscription is owed, counted
+      `evicted`. COV-multiple entries aren't evicted.
+    - Event tokens are flight 0, which no COV flight uses; their ends are
+      only counted. Deleting an object doesn't end its event
+      notifications, as the server's workers don't. A confirmed one's
+      cutoff runs from its first send.
+    - A Device recipient is resolved through `Bindings` at `pop`, this
+      device's own included (the server forwards those locally; the
+      `Reporter` has no local forwarding); an unresolved one is dropped
+      and counted.
+    - The fault pass feeds COV only, as the server's task does; the sweep
+      then turns a changed Reliability into its FAULT transition (§6.7
+      said "and after_write").
+    - Windows: `distribute_event` takes a `RecipientWindow`. The server
+      passes `Frame { fallback: Some(system UTC) }`, unchanged; the
+      `Reporter` passes `Given(SyncedClock::window(now))` with a clock and
+      `Frame { fallback: None }` without one, failing closed when the
+      frame isn't valid.
+    - Naming (from 3a): the service entries keep `handle_*`;
+      `event::acknowledge(db, oid, state, timestamp)` is the decoded path
+      AcknowledgeAlarm and `acknowledge_local` share.
+    - Table 13-6's projection moved into the core
+      (`event::network_priority`) for both hosts.
+    - Left for a second PR: the clockless `Responder`'s Recipient_List
+      write filter (decision 14) and the `reporting` image row (§8.3).
 
 ## 12. Evidence
 
