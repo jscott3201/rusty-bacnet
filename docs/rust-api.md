@@ -12253,7 +12253,8 @@ report past it then waits, oldest owed first, until one of the notifications
 out ends: answered, or failed once its retries run out (12 s at the default
 timing). Nothing is dropped. Unconfirmed notifications don't count against the
 bound, though one that found the outbox full while it holds goes at the
-task's next wake: a change, an answer or a timeout. When many confirmed
+task's next wake (a change, an answer or a timeout), which can be seconds
+later: size the outbox for the subscriptions expected. When many confirmed
 subscribers are expected, lower `max_confirmed_in_flight_per_peer`, so that
 more silent subscribers are needed to fill the bound.
 

@@ -72,7 +72,10 @@ const STARVED_RETRY: std::time::Duration = std::time::Duration::from_millis(50);
 /// default limits; a confirmed report past it waits, oldest owed first,
 /// until one of the notifications out ends, which for a silent subscriber
 /// is when its retries run out (12 s at the default timing). Nothing is
-/// dropped, and unconfirmed notifications don't count against it. Lower
+/// dropped, and unconfirmed notifications don't count against it, though
+/// while the host is at the bound one that found the outbox full goes at
+/// the task's next wake (a change, an answer or a timeout), which can be
+/// seconds later: size the outbox for the subscriptions expected. Lower
 /// `max_confirmed_in_flight_per_peer` when many confirmed subscribers are
 /// expected, so that more silent ones are needed to fill the bound.
 pub const COV_CONFIRMED_IN_FLIGHT: usize = 64;
@@ -355,7 +358,13 @@ impl CovHost {
             // Only one of this host's own notifications ending frees an ID:
             // an answer wakes the task, and its timeout is one of these
             // deadlines. A report owed meanwhile, due again at once, would
-            // only be refused again, so it waits for one of them.
+            // only be refused again, so it waits for one of them. Not
+            // served here until the next wake (#2512): a report owed for
+            // outbox room, which shares the `Reporter`'s owed flag with
+            // those owed for an ID; the COV-multiple Max_Notification_Delay
+            // backstop; and a report's cutoff, which can come up to just
+            // under a timeout before its attempt deadline when it waited in
+            // the outbox.
             bacnet_time::earliest([state.reporter.table().next_expiry(), leases.next_due()])
         } else {
             state.reporter.next_deadline()
