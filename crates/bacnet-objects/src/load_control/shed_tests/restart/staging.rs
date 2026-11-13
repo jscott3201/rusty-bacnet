@@ -158,3 +158,46 @@ fn a_staged_element_the_application_shrank_away_takes_no_step() {
     assert!(store.held().shed_levels.is_empty(), "storage was put back");
     assert_eq!(read(&lc, P::SHED_LEVELS), unsigned(&[5]));
 }
+
+/// The same refusal with the object dropped before its request lets the
+/// stage go, as when the server is stopped part way: an element past the
+/// shorter array, or a whole array of the old size, took no step, so the
+/// drop puts storage back to the levels the object serves and leaves none
+/// of the refused ones there.
+#[test]
+fn a_shed_levels_write_the_shorter_array_refuses_leaves_storage_on_a_drop() {
+    let old = unsigned(&[7, 8, 9]);
+    for (index, value, code) in [
+        (
+            Some(3),
+            PropertyValue::Unsigned(9),
+            ErrorCode::INVALID_ARRAY_INDEX,
+        ),
+        (None, old, ErrorCode::VALUE_OUT_OF_RANGE),
+    ] {
+        let (store, clock) = (Arc::new(Store::default()), test_clock());
+        let app = TestShedder::new(ShedProgress::Compliant, 2, 2);
+        let mut lc = kept(&store, &clock, &app);
+        let three = (1..=3).map(|level| (level, String::new())).collect();
+        lc.set_shed_levels(three).unwrap();
+        lc.wait_for_saves();
+        let staged = write(P::SHED_LEVELS, index, value.clone());
+        let StageStep::Staged(wait) = lc.stage_writes(&[staged]) else {
+            panic!("a Shed_Levels write stages");
+        };
+        wait.block();
+        assert!(!store.held().shed_levels.is_empty(), "{index:?}");
+        let two = (1..=2).map(|level| (level, String::new())).collect();
+        lc.set_shed_levels(two).unwrap();
+        let error = lc
+            .write_property(P::SHED_LEVELS, index, value, None)
+            .unwrap_err();
+        assert_eq!(error_code(error), code, "{index:?}");
+        drop(wait);
+        drop(lc);
+        assert!(
+            store.held().shed_levels.is_empty(),
+            "{index:?}: storage was put back"
+        );
+    }
+}

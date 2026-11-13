@@ -78,9 +78,12 @@ pub(crate) trait ConfigWrites {
 
     /// Configuration changes counted so far, so a staged step is taken only
     /// if nothing changed it since the stage. Every change to what storage
-    /// keeps is counted: a write ([`install`](Self::install)) and each
-    /// setter. A Channel's learned member datatypes, a cache storage doesn't
-    /// keep, are not.
+    /// keeps, or to what [`next`](Self::next) checks a write against, is
+    /// counted: a write ([`install`](Self::install)) and each setter, a
+    /// Timer's Min_Pres_Value and Max_Pres_Value included, which storage
+    /// doesn't keep but a Default_Timeout write is checked against. A
+    /// Channel's learned member datatypes, a cache neither reads nor keeps,
+    /// are not.
     fn writes(&self) -> u64;
 
     /// What storage keeps of `config`: the parts a write has set.

@@ -105,8 +105,10 @@ fn a_datatype_learned_while_a_write_is_staged_stays() {
     use crate::durable::{DurableWrites, PendingWrite, StageStep};
     use crate::write_config::WriteConfigPersistence;
     use crate::write_config::test_storage::MemoryConfig;
-    let storage = MemoryConfig::new() as alloc::sync::Arc<dyn WriteConfigPersistence>;
-    let mut channel = ChannelObject::with_persistence(1, "CH-1", 7, storage).unwrap();
+    let storage = MemoryConfig::new();
+    let persistence =
+        alloc::sync::Arc::clone(&storage) as alloc::sync::Arc<dyn WriteConfigPersistence>;
+    let mut channel = ChannelObject::with_persistence(1, "CH-1", 7, persistence).unwrap();
     channel.set_members(vec![remote(1), remote(2)]).unwrap();
     let write = PendingWrite {
         property: P::EXECUTION_DELAY,
@@ -117,12 +119,18 @@ fn a_datatype_learned_while_a_write_is_staged_stays() {
         panic!("the delay stages");
     };
     wait.block();
+    let staged = storage.saved();
+    // Learning isn't a counted change, so the write still takes its step:
+    // nothing gives way, and the stage's save is the only one.
     learn(&mut channel, 0, 1);
     channel
         .write_property(write.property, write.array_index, write.value, None)
         .unwrap();
     assert!(!channel.has_staged_write(), "the write took its step");
     channel.release_staged_write(&wait);
+    channel.wait_for_saves();
+    assert_eq!(storage.saves(), 1);
+    assert_eq!(storage.saved(), staged);
     assert_eq!(
         learned(&mut channel),
         [Some(MemberDatatype::Enumerated), None]
