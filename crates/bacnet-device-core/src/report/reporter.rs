@@ -284,7 +284,7 @@ impl Reporter {
     ///
     /// With the event path on, `objects`' intrinsic reporting is evaluated
     /// first and the notifications it fires queued, unless a pass committed
-    /// them already ([`Tail::Committed`]). With `cov-multiple` the
+    /// them already (`Tail::Committed`). With `cov-multiple` the
     /// timestamped references then take the changes. Last, `objects` are
     /// reported to COV, a Life Safety one held in `snapshots` from the
     /// values it changed, so a committed transition's Status_Flags change
