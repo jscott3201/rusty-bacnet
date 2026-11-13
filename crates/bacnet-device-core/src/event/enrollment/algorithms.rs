@@ -560,7 +560,7 @@ fn masked_value_hash(mask: &[u8], value_bits: &[u8]) -> u64 {
 /// value does not have (zero) and an alarm pattern set there does NOT match
 /// (the previous `min(mask, alarm, value)` truncation could report OFFNORMAL
 /// on a prefix match). This is the same zero-fill the pending-condition hash
-/// ([`masked_value_hash`]) and the legacy byte evaluator apply.
+/// (`masked_value_hash`) and the legacy byte evaluator apply.
 pub fn eval_change_of_bitstring_struct(
     bitmask: &(u8, Vec<u8>),
     list_of_values: &[(u8, Vec<u8>)],

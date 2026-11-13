@@ -1,3 +1,6 @@
+//! The property an enrollment monitors, and the fingerprint that tells a
+//! countdown its inputs changed.
+
 use crate::event::decode_reference_value;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::BACnetEventParameter;

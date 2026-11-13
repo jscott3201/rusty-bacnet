@@ -1,3 +1,6 @@
+//! The fault algorithms (Clause 13.4) an enrollment evaluates, and the
+//! reads of its parameters they need.
+
 use bacnet_objects::database::{LocalDevice, ObjectDatabase};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::{BACnetEventParameter, FaultParameters};

@@ -4,11 +4,8 @@
 //! monitored reference, moved from `bacnet-server`'s evaluator unchanged.
 //! The pass that drives them is still the server's.
 
-/// The event algorithms (Clause 13.3) an enrollment evaluates.
 pub mod algorithms;
-/// The fault algorithms (Clause 13.4) and the reads they need.
 pub mod fault;
-/// The monitored reference and the countdown fingerprint.
 pub mod reference;
 
 use bacnet_types::enums::{ErrorClass, ErrorCode};
