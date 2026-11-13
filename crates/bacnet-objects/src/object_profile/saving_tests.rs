@@ -181,6 +181,83 @@ fn ordered_array_steps_save_once_and_each_claim_serves_its_prefix() {
     assert_eq!(state.profile().tags, Some(expected));
 }
 
+/// A staged step keeps only its write, so each write is worked out again on
+/// the Tags served as it is made (#2526): every claim, the later ones
+/// included, serves its request's prefix and takes its step, and storage
+/// ends where the stage saved it, with one save.
+#[cfg(feature = "durable-writes")]
+#[test]
+fn each_claim_makes_its_write_on_the_tags_served() {
+    let store = Arc::new(Memory::default());
+    let mut state = state(&store);
+    let element = |index, name: &str| write(Some(index), framed(&tags(name)));
+    let writes = [
+        write(Some(0), PropertyValue::Unsigned(3)),
+        element(3, "third"),
+        element(1, "first"),
+        element(3, "last"),
+        write(Some(0), PropertyValue::Unsigned(2)),
+    ];
+    fn named(names: &[&str]) -> Vec<BACnetNameValue> {
+        names
+            .iter()
+            .copied()
+            .map(BACnetNameValue::semantic)
+            .collect()
+    }
+    let served = [
+        named(&["configured", "", ""]),
+        named(&["configured", "", "third"]),
+        named(&["first", "", "third"]),
+        named(&["first", "", "last"]),
+        named(&["first", ""]),
+    ];
+    let wait = staged(state.stage_writes(&writes));
+    wait.block();
+    for (at, (write, served)) in writes.iter().zip(&served).enumerate() {
+        apply(&mut state, write).unwrap();
+        assert_eq!(state.profile().tags.as_ref(), Some(served), "write {at}");
+        assert_eq!(
+            state.has_staged_write(),
+            at + 1 < writes.len(),
+            "write {at}"
+        );
+    }
+    state.release_staged_write(&wait);
+    state.wait_for_saves();
+    let last = served[4].clone();
+    assert_eq!(
+        store.saved(),
+        Some(TagsSnapshot {
+            tags: Some(last),
+            description: None
+        })
+    );
+    assert_eq!(store.attempts(), 1);
+}
+
+/// An object dropped part way through a request puts storage back to what
+/// it served then: the writes it made, not the state before the request
+/// nor the one the stage saved. Each claim keeps the served state with the
+/// steps left (#1363, #2526).
+#[cfg(feature = "durable-writes")]
+#[test]
+fn a_drop_part_way_puts_storage_back_to_the_writes_made() {
+    let store = Arc::new(Memory::default());
+    let mut state = state(&store);
+    let writes = [
+        write(Some(1), framed(&tags("made"))),
+        write(Some(1), framed(&tags("never"))),
+    ];
+    let wait = staged(state.stage_writes(&writes));
+    wait.block();
+    assert_eq!(store.saved(), Some(snapshot("never")));
+    apply(&mut state, &writes[0]).unwrap();
+    drop(state);
+    assert_eq!(store.saved(), Some(snapshot("made")));
+    assert_eq!(store.attempts(), 2);
+}
+
 #[cfg(feature = "durable-writes")]
 #[test]
 fn invalid_middle_stops_staging_but_a_null_noop_does_not() {
