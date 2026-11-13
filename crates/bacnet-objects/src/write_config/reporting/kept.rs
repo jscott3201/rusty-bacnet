@@ -498,8 +498,10 @@ pub(crate) fn admit<T: KeepsReporting>(
     array_index: Option<u32>,
     value: &PropertyValue,
 ) -> Result<(), Error> {
-    let object_type = object.object_identifier().object_type();
-    if !kept_write(object_type, property, value) || !object.reporting_store_ref().attached() {
+    // Storage first: an object without it needs no look at the property.
+    if !object.reporting_store_ref().attached()
+        || !kept_write(object.object_identifier().object_type(), property, value)
+    {
         return Ok(());
     }
     admit_kept(object, property, array_index, value)

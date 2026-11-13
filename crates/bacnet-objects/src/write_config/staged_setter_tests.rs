@@ -6,20 +6,25 @@
 //! rows the object serves, and a rebuild serves them too. A setter that
 //! changes only what a write is checked against makes the commit refuse
 //! it, and its release puts storage back. A change the staged rows don't
-//! hold, or one after the commit, saves nothing more.
+//! hold, or one after the commit, saves nothing more. A change only a
+//! request's earlier step sees is caught at its last, a stale stage whose
+//! save in place fails refuses the write, and the labels come back from a
+//! real file too.
 
 use alloc::sync::Arc;
 
 use bacnet_encoding::constructed::encode_object_property_reference;
 use bacnet_types::constructed::{BACnetEventParameter, BACnetObjectPropertyReference};
-use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier as P};
+use bacnet_types::enums::{
+    EngineeringUnits, ErrorClass, ErrorCode, ObjectType, PropertyIdentifier as P,
+};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use bytes::BytesMut;
 
 use super::enrollment_parameters_tests::{event_value, open};
 use super::parameters_tests::{read, saved, write};
-use super::reporting_tests::persistence;
+use super::reporting_tests::{persistence, refused_with};
 use super::state_parameters_tests::labels;
 use super::test_storage::MemoryConfig;
 use crate::analog::AnalogInputObject;
@@ -382,4 +387,114 @@ fn rows_holding_a_limit_that_is_no_number_take_their_step() {
     enrollment.wait_for_reporting_saves();
     assert_eq!(storage.saves(), 2, "the stage's save, and no other");
     assert_eq!(saved(&storage).notification_class, Some(9));
+}
+
+/// A request of two writes, a State_Text element and then
+/// Notification_Class, with the count set before its commit: only the first
+/// step reads the labels, and the last finds the stage stale, so the file
+/// keeps the three labels and the class the object serves, and a rebuild
+/// serves both. The same request with nothing in between saves once.
+#[test]
+fn a_change_only_an_earlier_step_sees_is_caught_at_the_last() {
+    let request = [
+        pending(P::STATE_TEXT, Some(1), text("Low")),
+        pending(P::NOTIFICATION_CLASS, None, count(9)),
+    ];
+    on_each!(|new, Object| {
+        let storage = MemoryConfig::new();
+        let mut object: Object = new(STATES, &storage);
+        commit(&mut object, &request, |object| {
+            object.set_number_of_states(3).unwrap();
+        })
+        .unwrap();
+        object.wait_for_reporting_saves();
+        let kept = relabelled("Low", 3);
+        assert_eq!(read(&object, P::STATE_TEXT), labels(&kept));
+        assert_eq!(saved(&storage).algorithm.state_text, Some(kept.clone()));
+        assert_eq!(saved(&storage).notification_class, Some(9));
+        drop(object);
+        let rebuilt: Object = new(STATES, &storage);
+        assert_eq!(read(&rebuilt, P::STATE_TEXT), labels(&kept));
+        assert_eq!(read(&rebuilt, P::NOTIFICATION_CLASS), count(9));
+
+        let storage = MemoryConfig::new();
+        let mut object: Object = new(STATES, &storage);
+        commit(&mut object, &request, |_| {}).unwrap();
+        object.wait_for_reporting_saves();
+        assert_eq!(storage.saves(), 1);
+        assert_eq!(
+            saved(&storage).algorithm.state_text,
+            Some(relabelled("Low", STATES))
+        );
+    });
+}
+
+/// A stale stage whose save in place fails: the write is refused with
+/// DEVICE / OPERATIONAL_PROBLEM, and the object serves what it did before
+/// it, the application's three labels, none of them written.
+#[test]
+fn a_stale_stage_whose_save_in_place_fails_refuses_the_write() {
+    on_each!(|new, Object| {
+        let storage = MemoryConfig::new();
+        let mut object: Object = new(STATES, &storage);
+        let request = [pending(P::STATE_TEXT, Some(1), text("Low"))];
+        let result = commit(&mut object, &request, |object| {
+            object.set_number_of_states(3).unwrap();
+            storage.fail(true);
+        });
+        assert!(
+            refused_with(&result, ErrorClass::DEVICE, ErrorCode::OPERATIONAL_PROBLEM),
+            "{result:?}"
+        );
+        object.wait_for_reporting_saves();
+        assert_eq!(read(&object, P::NUMBER_OF_STATES), count(3));
+        assert_eq!(
+            read(&object, P::STATE_TEXT),
+            labels(&relabelled("State 1", 3))
+        );
+        assert_eq!(object.written_reporting().algorithm.state_text, None);
+    });
+}
+
+/// The probe on the file backend: the stale stage's correction reaches the
+/// file's octets, and an object built on the file at the next start serves
+/// the three labels.
+#[cfg(feature = "std")]
+#[test]
+fn the_corrected_labels_come_back_from_a_file() {
+    use super::{FileWriteConfigPersistence, WriteConfigPersistence};
+
+    let directory =
+        std::env::temp_dir().join(format!("rusty-staged-setter-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("msv.bin");
+    let open = || {
+        let file: Arc<dyn WriteConfigPersistence> =
+            Arc::new(FileWriteConfigPersistence::new(&path).unwrap());
+        MultiStateValueObject::new(1, "MSV", STATES)
+            .unwrap()
+            .with_reporting_persistence(file)
+            .unwrap()
+    };
+    let mut object = open();
+    let request = [pending(P::STATE_TEXT, Some(1), text("Low"))];
+    commit(&mut object, &request, |object| {
+        object.set_number_of_states(3).unwrap();
+    })
+    .unwrap();
+    drop(object);
+    let kept = relabelled("Low", 3);
+    let octets = std::fs::read(&path).unwrap();
+    let oid = oid(ObjectType::MULTI_STATE_VALUE, 1);
+    match crate::snapshot::write_config::decode(oid, &octets).unwrap() {
+        super::WriteConfigSnapshot::Reporting(file) => {
+            assert_eq!(file.algorithm.state_text, Some(kept.clone()));
+        }
+        other => panic!("the file holds {other:?}"),
+    }
+    let rebuilt = open();
+    assert_eq!(read(&rebuilt, P::NUMBER_OF_STATES), count(3));
+    assert_eq!(read(&rebuilt, P::STATE_TEXT), labels(&kept));
+    drop(rebuilt);
+    std::fs::remove_dir_all(&directory).unwrap();
 }

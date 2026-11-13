@@ -22,7 +22,9 @@
 //! that makes such a write stages it first ([`DurableWrites`]): under the
 //! guard the object queues the save, the request awaits it with the guard
 //! dropped, and then runs as it always has, the object taking the saved
-//! state or refusing the write. The request releases what it staged in the
+//! state or refusing the write; an object whose stage something changed
+//! meanwhile saves the write again under the guard instead, and refuses it
+//! if that save fails (#2431). The request releases what it staged in the
 //! critical section that makes the write. An application's Audit Log purge (#1238) is staged the
 //! same way.
 //!
