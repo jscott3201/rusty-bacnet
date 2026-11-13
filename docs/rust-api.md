@@ -8852,9 +8852,12 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   changes the zone: both properties are read-only to a peer. With
   `event-reporting`, a `Responder` built without a clock refuses a
   Notification Class Recipient_List write that holds a destination not
-  open every day, all day, with PROPERTY / VALUE_OUT_OF_RANGE, before it
-  commits: on WriteProperty, on each write of a WritePropertyMultiple, and
-  on the `Reporter`'s local writes (#2303). A host that runs AddListElement
+  open every day, all day (to 23:59:59.99: an unspecified hundredth counts
+  as .00), with PROPERTY / VALUE_OUT_OF_RANGE, before it commits: on
+  WriteProperty, on each write of a WritePropertyMultiple, and on the
+  `Reporter`'s local writes (#2303). Such a `Reporter` also distributes
+  only to destinations open all day, whatever clock reader the database
+  holds. A host that runs AddListElement
   itself checks the elements with `write::check_clockless_recipients`;
   `notification_class::decode_recipient_list` decodes a whole-list value
   as the class does.

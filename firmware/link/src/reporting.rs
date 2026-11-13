@@ -556,12 +556,16 @@ impl Device {
         while let Some(sent) = self.reporter.pop(&NoBindings, &mut self.ids, now, &mut out) {
             let to = match sent.to {
                 Destination::Subscriber(to) => to,
-                // An event notification, unconfirmed: kept, and sent.
-                _ => {
-                    summary.events.sent.push(out.to_vec());
+                // An event notification: kept with its address and kind.
+                // The scenario's recipient takes them unconfirmed.
+                Destination::Recipient(to) => {
+                    let to = (to.network_number, to.mac_address.to_vec());
+                    let kind = (sent.service, sent.invoke_id.is_some());
+                    summary.events.sent.push((to, kind, out.to_vec()));
                     out.clear();
                     continue;
                 }
+                _ => continue,
             };
             summary.sent.push((to.mac[0], sent.invoke_id, out.len()));
             if keep && kept.is_empty() {

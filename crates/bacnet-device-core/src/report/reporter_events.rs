@@ -344,8 +344,12 @@ impl Reporter {
     /// Notification Class selects, each with its process identifier, at the
     /// network priority Table 13-6 gives its event priority. The window is
     /// the Device clock's when the `Responder` has one, judged by its
-    /// synchronized state; otherwise the database's clock frame, and with no
-    /// valid frame only destinations open every day, all day.
+    /// synchronized state. Without one only destinations open every day,
+    /// all day, are selected, whatever clock reader the database holds: a
+    /// host that lends one without `Responder::with_clock`, an
+    /// unsynchronized `DeviceClock` say, would otherwise open windows on its
+    /// valid 1990 frame for entries the write filter never judged (from the
+    /// build, or restored; decision 22).
     fn distribute(
         &mut self,
         db: &mut ObjectDatabase,
@@ -355,7 +359,7 @@ impl Reporter {
     ) {
         let window = match self.responder.clock() {
             Some(clock) => RecipientWindow::Given(clock.clock().window(now)),
-            None => RecipientWindow::Frame { fallback: None },
+            None => RecipientWindow::Given(None),
         };
         let distribution = distribute_event(db, self.device, &oid, transition, window);
         let DistributionOutcome::Built {

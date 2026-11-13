@@ -39,6 +39,13 @@ impl CovParity {
     /// unconfirmed SubscribeCOV from one subscriber on each object the
     /// changes make.
     async fn start_local() -> Self {
+        Self::start_local_with(false).await
+    }
+
+    /// [`start_local`](Self::start_local), the `Reporter`'s event path on
+    /// when `swept`, with its first sweep made, as the server's task makes
+    /// its own at start.
+    async fn start_local_with(swept: bool) -> Self {
         let mut cov = Self::start_from(CovPolicy::default(), local_fixture).await;
         // Start installs the system clock; serve the fixed one.
         cov.parity
@@ -47,6 +54,24 @@ impl CovParity {
             .write()
             .await
             .set_clock_reader(Some(Arc::new(FixedClock)));
+        if swept {
+            let config = &cov.parity.server.config;
+            let report = ReportConfig::new(config.cov_policy.clone())
+                .with_confirmed(config.cov_flight_timing())
+                .with_outbox(OutboxLimits {
+                    entries: 64,
+                    octets: 65_536,
+                })
+                .with_sweep(bacnet_time::Duration::from_secs(1));
+            let budget = ReadPropertyMultipleBudget::default().max_result_elements;
+            let responder = Responder::new(identity(), Limits::new(budget)).unwrap();
+            let parity = &mut cov.parity;
+            parity.reporter = Reporter::new(responder, report).unwrap();
+            let now = runtime_clock::core_now();
+            parity
+                .reporter
+                .on_deadline(&mut parity.db, &mut cov.ids, now);
+        }
         let a = direct(1);
         let objects = [
             ai(),
@@ -221,15 +246,14 @@ async fn no_device_a_null_and_an_unknown_object_match() {
     CovParity::run_local(cases::no_device_a_null_and_an_unknown_object()).await;
 }
 
-/// Pinned to differ by design until #2303's third part gives the `Reporter`
-/// its event pass, ahead of COV as the server runs it: with AI-1's event
-/// detection on, a fault moves its Event_State to FAULT on the server, so
-/// its Status_Flags read and report IN_ALARM beside FAULT, where the
-/// `Reporter` reports FAULT alone. The results, the other rows and the
-/// number of notifications agree. Once the `Reporter` runs events, this
-/// becomes an ordinary row.
+/// Pinned to differ by design: a `Reporter` without the event path (no
+/// sweep, as the endpoint hosts it) reports a fault as FAULT alone, where
+/// the server, whose event pass moves AI-1's Event_State to FAULT, reports
+/// IN_ALARM beside it. The results, the other rows and the number of
+/// notifications agree. With the event path the two match
+/// (`a_fault_with_the_event_path_matches`).
 #[tokio::test(start_paused = true)]
-async fn a_fault_with_event_detection_on_differs_until_the_reporter_runs_events() {
+async fn a_fault_without_the_event_path_differs() {
     let mut cov = CovParity::start_local().await;
     let what = "a fault, event detection on";
     let change = Change::Reliability(Reliability::NO_SENSOR);
@@ -272,6 +296,30 @@ async fn a_fault_with_event_detection_on_differs_until_the_reporter_runs_events(
     drop(db);
     let except = [P::STATUS_FLAGS, P::EVENT_STATE];
     cov.same_rows(what, ai(), &except).await;
+    cov.stop().await;
+}
+
+/// With the event path on, the `Reporter` commits AI-1's FAULT transition
+/// ahead of COV, as the server does: the same notification, IN_ALARM
+/// beside FAULT on both sides.
+#[tokio::test(start_paused = true)]
+async fn a_fault_with_the_event_path_matches() {
+    let mut cov = CovParity::start_local_with(true).await;
+    let what = "a fault, the event path on";
+    let change = Change::Reliability(Reliability::NO_SENSOR);
+    let applied = cov.local(what, ai(), change, 1).await;
+    assert_eq!(applied, Ok(()));
+    let in_alarm = PropertyValue::BitString {
+        unused_bits: 4,
+        data: vec![0b1100 << 4],
+    };
+    let read = |db: &ObjectDatabase| {
+        let object = db.get(&ai()).expect("both hold AI-1");
+        object.read_property(P::STATUS_FLAGS, None).unwrap()
+    };
+    let server = read(&*cov.parity.server.database().read().await);
+    assert_eq!(server, in_alarm, "IN_ALARM, FAULT");
+    assert_eq!(read(&cov.parity.db), in_alarm, "the core's too");
     cov.stop().await;
 }
 

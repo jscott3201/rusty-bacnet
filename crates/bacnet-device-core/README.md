@@ -144,7 +144,7 @@ the database guard, the transport, addressing and time.
   takes a board's real-time clock. `destination_open` judges a Notification Class destination
   against the clock's window. With `event-reporting`, a `Responder` with no
   clock refuses a Recipient_List write holding a destination not open every
-  day, all day (PROPERTY / VALUE_OUT_OF_RANGE), on WriteProperty,
+  day, all day, to 23:59:59.99 (PROPERTY / VALUE_OUT_OF_RANGE), on WriteProperty,
   WritePropertyMultiple and the `Reporter`'s local writes; a host running
   AddListElement checks with `write::check_clockless_recipients`.
 - `reply`: the reply PDUs, and the one map from an error to its Reject or

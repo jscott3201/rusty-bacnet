@@ -91,8 +91,12 @@ fn encoded(list: &[BACnetDestination]) -> Vec<u8> {
 /// responder for them, with a clock when `clocked`.
 fn device(clocked: bool) -> (Responder, ObjectDatabase) {
     let identity = DeviceIdentity::new(9, 0x105).unwrap();
-    let objects: Vec<Box<dyn BACnetObject>> =
-        vec![Box::new(NotificationClass::new(1, "NC-1").unwrap())];
+    let forwarder =
+        bacnet_objects::notification_forwarder::NotificationForwarderObject::new(1, "NF-1");
+    let objects: Vec<Box<dyn BACnetObject>> = vec![
+        Box::new(NotificationClass::new(1, "NC-1").unwrap()),
+        Box::new(forwarder.unwrap()),
+    ];
     let mut db =
         bacnet_objects::device_identity::build_database_with_extra(&identity, objects).unwrap();
     let responder = Responder::new(identity, Limits::default()).unwrap();
@@ -296,4 +300,31 @@ fn an_add_list_element_host_checks_its_elements_the_same_way() {
     // Another property, or another object, isn't judged.
     let other = PropertyIdentifier::DESCRIPTION;
     assert!(check_clockless_recipients(class(), other, &elements).is_ok());
+}
+
+/// The filter judges a Notification Class's list only: a Notification
+/// Forwarder's Recipient_List, of the same datatype, forwards what others
+/// send and is stored as written.
+#[test]
+fn another_objects_recipient_list_passes_through() {
+    let (mut responder, mut db) = device(false);
+    let forwarder = ObjectIdentifier::new(ObjectType::NOTIFICATION_FORWARDER, 1).unwrap();
+    let mut body = BytesMut::new();
+    WritePropertyRequest {
+        object_identifier: forwarder,
+        property_identifier: PropertyIdentifier::RECIPIENT_LIST,
+        property_array_index: None,
+        property_value: encoded(&[mornings()]),
+        priority: None,
+    }
+    .encode(&mut body)
+    .unwrap();
+    let apdu = request(ConfirmedServiceChoice::WRITE_PROPERTY, &body);
+    let mut out = BytesMut::new();
+    responder.write(&mut db, None, Inbound::new(apdu, 1476), &mut out);
+    let reply = decode_apdu(out.freeze()).unwrap();
+    assert!(matches!(reply, Apdu::SimpleAck(_)), "{reply:?}");
+    let elements = PropertyValue::ApplicationData(encoded(&[mondays()]));
+    let list = PropertyIdentifier::RECIPIENT_LIST;
+    assert!(check_clockless_recipients(forwarder, list, &elements).is_ok());
 }

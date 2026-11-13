@@ -195,7 +195,27 @@ struct EventParity {
 }
 
 impl EventParity {
+    /// Both sides of `fixture`, the core's `Responder` with a Device clock
+    /// set to the fixed clock's date and time and standing there, as the
+    /// server's fixed reader does: windows are judged by its synchronized
+    /// state, and timestamps read alike.
     async fn start(fixture: fn(&bacnet_objects::DeviceIdentity) -> ObjectDatabase) -> Self {
+        Self::start_with(fixture, true).await
+    }
+
+    /// Both sides of `fixture`, the core's `Responder` with no clock: it
+    /// selects only destinations open every day, all day, and refuses
+    /// restricted Recipient_List entries.
+    async fn start_clockless(
+        fixture: fn(&bacnet_objects::DeviceIdentity) -> ObjectDatabase,
+    ) -> Self {
+        Self::start_with(fixture, false).await
+    }
+
+    async fn start_with(
+        fixture: fn(&bacnet_objects::DeviceIdentity) -> ObjectDatabase,
+        clocked: bool,
+    ) -> Self {
         let begun = runtime_clock::core_now();
         let mut parity = Parity::start_from(
             ReadPropertyMultipleBudget::default(),
@@ -219,7 +239,18 @@ impl EventParity {
                 octets: 65_536,
             })
             .with_sweep(bacnet_time::Duration::from_secs(1));
-        let responder = Responder::new(identity, limits).unwrap();
+        let mut responder = Responder::new(identity, limits).unwrap();
+        if clocked {
+            use bacnet_device_core::clock::{Basis, DeviceClock, Zone};
+            let still = move || begun;
+            let clock = DeviceClock::new(Zone::new(0, false).unwrap(), Arc::new(still));
+            responder = responder.with_clock(clock, &mut parity.db);
+            let frame = FixedClock.read_clock().unwrap();
+            let (date, time) = (frame.local_date, frame.local_time);
+            responder
+                .set_time(&mut parity.db, Basis::Local, date, time)
+                .unwrap();
+        }
         parity.reporter = Reporter::new(responder, report).unwrap();
         // The server's task swept when it started.
         parity
@@ -556,7 +587,7 @@ async fn a_local_acknowledgement_notifies_as_the_service_does() {
 
 #[tokio::test(start_paused = true)]
 async fn without_a_clock_timestamps_are_sequence_numbers_and_windows_fail_closed() {
-    let mut both = EventParity::start(undelayed).await;
+    let mut both = EventParity::start_clockless(undelayed).await;
     both.parity
         .server
         .database()
@@ -607,7 +638,7 @@ async fn without_a_clock_timestamps_are_sequence_numbers_and_windows_fail_closed
 /// windows by the system clock without one, stores it (decision 14).
 #[tokio::test(start_paused = true)]
 async fn a_restricted_recipient_list_is_stored_by_the_server_and_refused_by_the_core() {
-    let mut both = EventParity::start(delayed).await;
+    let mut both = EventParity::start_clockless(delayed).await;
     let what = "a restricted Recipient_List without a Device clock";
     let mornings = destination(
         ALWAYS,

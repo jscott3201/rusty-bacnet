@@ -146,10 +146,13 @@ alloc = [
 objects = ["alloc", "dep:bacnet-objects", "dep:bacnet-device-core"]
 
 # `reporting`: the reporting image and its scenario (#2303), the objects
-# image's database and bacnet-device-core's COV `Reporter`, which
-# subscribes, renews, cancels, reports and lists, and makes and reports the
-# application's own changes (#2446), and the core's Device clock, which a
-# UTCTimeSynchronization sets (#2321). Its timeline is
+# image's database and bacnet-device-core's `Reporter`, which subscribes,
+# renews, cancels, reports and lists COV, makes and reports the
+# application's own changes (#2446), and reports intrinsic events
+# (`event-reporting`: a transition, GetEventInformation and a local
+# acknowledgement), and the core's Device clock, which a
+# UTCTimeSynchronization sets (#2321). It is over 256 KiB, so build.rs
+# gives it the 512 KiB layout on every target. Its timeline is
 # bacnet-time's. bacnet-device-core has no `cov` feature: the linker drops
 # the COV code an image doesn't reach, so the objects image is no smaller
 # without it. On by default, as `objects` is, for the host builds.
@@ -167,8 +170,7 @@ points = ["objects"]
 # `cov-multiple` on and one COV-multiple context in its scenario (#2320),
 # for measuring what that path costs an image. Off by default, and
 # scripts/ci/check-firmware-link.sh doesn't build it: the image is over the
-# reporting rows of size-budget.toml and over memory.x's 256 KiB of flash,
-# so build.rs gives it the 512 KiB layout. To measure, per target:
+# reporting rows of size-budget.toml. To measure, per target:
 #   cargo build -p firmware-link --profile firmware --target <triple> \
 #     --no-default-features --features reporting-multiple --lib --bin reporting
 #   python3 scripts/ci/firmware_size.py target/<triple>/firmware/reporting \

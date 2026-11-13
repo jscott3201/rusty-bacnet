@@ -63,7 +63,7 @@ cov-multiple = []
 # timestamps, message text, Event Values and distribution profile of a
 # committed transition. It turns on bacnet-objects' `event-reporting`, so
 # the objects lend their detectors. `std` turns it on, so bacnet-server has
-# it; no firmware image does yet.
+# it, and firmware-link's `reporting` image does.
 event-reporting = ["bacnet-objects/event-reporting"]
 # Hidden hooks for hosts' own tests (the COV table's generation counter, so
 # bacnet-server's table tests reach generation exhaustion, an event payload

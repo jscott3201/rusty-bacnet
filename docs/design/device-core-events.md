@@ -1038,10 +1038,11 @@ image would link:
 | PR 1, measured | 148.4 KB (flash 165.8 KB) | the `objects` image's 127.3 KB, plus the table and the two subscribe services (#2303) |
 | PR 2, measured | 171.4 KB (flash 189.7 KB) | the image through the `Reporter`, trimmed by #2363 (§8.3) |
 | + `event-reporting` (after PR 3) | 172-181 KB estimated; 243.2 KB measured (flash 265.6 KB) | ~2,200 lines, plus the measured objects and encoder share; see §8.3 for what dominates |
-| + `event-enrollment` (#2319) | 207-221 KB | ~2,700 lines, the Event Enrollment object, `decode_event_parameter` |
+| + `event-enrollment` (#2319) | PR 3's measured row + 35-40 KB (the estimate's own step over PR 3's) | ~2,700 lines, the Event Enrollment object, `decode_event_parameter` |
 | + the Multiple path (#2320) | +15-25 KB estimated; +134 KB measured before any trim (decision 18) | ~3,300 lines, the COVNotificationMultiple codec |
 
-Flash runs about 18 KB above `.text`. COV with intrinsic reporting was
+Flash ran about 18 KB above `.text` through PR 2, and 22.3 KB in PR 3's
+row (more `.rodata`: message texts, the event tables). COV with intrinsic reporting was
 expected to fit a 256 KB part with room; measured, it doesn't (265.6 KB of
 flash on thumbv7m, §8.3), so the image takes the 512 KiB layout on every
 target, and with Event Enrollment a 512 KB part is the floor. Each PR replaces its estimate with the measured row; PR 2's
@@ -1133,8 +1134,9 @@ GetEventInformation, and a local acknowledgement and its notification:
 | with `event-reporting`, `.text` / flash | 243,240 / 265,584 | 242,992 / 265,336 | 299,100 / 325,730 |
 | RAM | 24,680 | 24,680 | 24,680 |
 
-So intrinsic reporting costs 63.5 KB of flash on the thumb targets and
-83.3 KB on riscv32imac, against the estimate's 1-10 KB over PR 2's row:
+So intrinsic reporting costs 60.0 KB of `.text` on thumbv7m (63.5 KB of
+flash; 78.3 KB of `.text` on riscv32imac), against the estimate's 1-10 KB
+of `.text` over PR 2's row:
 the estimate counted the core's lines, not the event properties and
 detectors `bacnet-objects`' `event-reporting` adds to every object type,
 nor the encoders. By crate (thumbv7m `.text`) bacnet-device-core holds 73.5
@@ -1838,6 +1840,23 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
       512 KiB layout on every target. With the event path on, AI-2's
       fault commits its FAULT transition, so its COV notification carries
       IN_ALARM, as the server's does.
+    - Without a clock of its own the `Reporter` distributes with
+      `RecipientWindow::Given(None)` (fix round, lead): only destinations
+      open every day, all day, whatever clock reader the database holds.
+      `DeviceClock::lend` and `ObjectDatabase::set_clock_reader` are
+      public, so a host could lend an unsynchronized clock without
+      `with_clock`, and its valid 1990 frame would open windows for
+      restricted entries the filter never judged, from the build or a
+      restore. The parity corpus gives the core's `Responder` a clock set
+      to the fixture's date and time and standing there, so windows are
+      compared through it; the clockless rows use a `Responder` without one.
+    - The filter judges Notification Class objects only: a Notification
+      Forwarder's Recipient_List, of the same datatype, passes. An all-day
+      window must end at 23:59:59.99; an unspecified hundredth counts as .00
+      and is refused.
+    - A swept parity row (`a_fault_with_the_event_path_matches`) shows a
+      fault's COV notification with IN_ALARM on both sides; the unswept row
+      still pins FAULT alone for a `Reporter` without the event path.
     - The parity rows for a Device recipient and a More_Events page are
       left: the server needs a binding fixture (Who-Is, I-Am) and a page
       over its segmented budget, more than the rows are worth here.

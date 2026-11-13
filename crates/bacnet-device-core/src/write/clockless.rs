@@ -14,10 +14,14 @@ use super::{WriteCommitObserver, WriteTarget};
 
 /// Whether a device with no clock refuses writing `value` to `oid`'s
 /// `property`: a Notification Class's whole Recipient_List holding a
-/// destination that isn't open every day, all day. Refused with PROPERTY /
-/// VALUE_OUT_OF_RANGE. A value that doesn't decode as destinations passes,
-/// for the class to refuse as it would. A host that runs AddListElement
-/// itself checks each element list with this before the class takes it.
+/// destination that isn't open every day, all day (one ending at
+/// 23:59:59.99; [`always_in_window`]). Refused with PROPERTY /
+/// VALUE_OUT_OF_RANGE. Any other object or property passes, and so does a
+/// value that doesn't decode as destinations, for the class to refuse as it
+/// would (INVALID_DATA_TYPE, or NO_SPACE_TO_WRITE_PROPERTY past the cap).
+/// A host with no clock that runs AddListElement itself checks each element
+/// list with this before the class takes it; one with a clock doesn't call
+/// it, as such a device stores restricted entries.
 pub fn check_clockless_recipients(
     oid: ObjectIdentifier,
     property: PropertyIdentifier,

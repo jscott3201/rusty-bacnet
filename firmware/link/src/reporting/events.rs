@@ -11,6 +11,7 @@ use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use bacnet_device_core::report::NotifyService;
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::notification_class::NotificationClass;
 use bacnet_objects::traits::BACnetObject;
@@ -29,11 +30,16 @@ use super::{Device, LocalValue, Summary};
 /// ([`SYNC_AT`](super::SYNC_AT)), before the COV-multiple context.
 pub const EVENT_AT: u64 = 30;
 
+/// One event notification sent: `((network, MAC), (service, confirmed),
+/// APDU)`.
+pub type Sent = ((u16, Vec<u8>), (NotifyService, bool), Vec<u8>);
+
 /// What the event scenario sent and was answered.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Events {
-    /// Each event notification's APDU, in order sent.
-    pub sent: Vec<Vec<u8>>,
+    /// Each event notification, in order sent: the network and MAC it
+    /// went to, its service and whether it is confirmed, and its APDU.
+    pub sent: Vec<Sent>,
     /// The reply to the GetEventInformation.
     pub information: Vec<u8>,
     /// Whether `acknowledge_local` took the acknowledgement.
@@ -134,7 +140,7 @@ pub(super) fn run(device: &mut Device, summary: &mut Summary) {
 pub(super) fn expected() -> Events {
     // UnconfirmedEventNotification (0x10, service 3): `[0]` process 1,
     // `[1]` the Device (1234), `[2]` AI-3, `[3]` the Device clock's date
-    // and time (2026-11-04, a Wednesday, 11:31 and the second), `[4]` class
+    // and time (2026-11-04, a Wednesday, 11:30 and the second), `[4]` class
     // 1, `[5]` priority 255, `[6]` OUT_OF_RANGE (5): the head both
     // notifications share but for the stamp's `second`.
     let head = |second: u8| {
@@ -161,8 +167,13 @@ pub(super) fn expected() -> Events {
     // ACK_NOTIFICATION (2), `[11]` to HIGH_LIMIT.
     let mut acknowledgement = head(0x06);
     acknowledgement.extend_from_slice(&[0x89, 0x02, 0xB9, 0x03]);
+    // Both to station 9 on the local network, unconfirmed.
+    let to = || ((0, vec![9]), (NotifyService::Event, false));
     Events {
-        sent: vec![transition, acknowledgement],
+        sent: vec![
+            (to().0, to().1, transition),
+            (to().0, to().1, acknowledgement),
+        ],
         // The ComplexACK (0x30, invoke ID 17, service 29): AI-2 in FAULT,
         // AI-3 at HIGH_LIMIT with TO_OFFNORMAL unacknowledged when it was
         // asked, BV-1 and BV-2 OFFNORMAL from their ACTIVE values; no more
