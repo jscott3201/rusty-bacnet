@@ -412,6 +412,46 @@ fn a_staged_write_commits_first_and_the_cadence_waits_for_it() {
     assert_eq!(stored.reporting.notification_class, Some(9));
 }
 
+/// What the application sets between a stage and its commit, the log
+/// commits at its next look, as any change the cadence holds back
+/// (#2431): the staged commit holds the old Notification_Threshold, and
+/// the interval's commit after the release holds the new one beside the
+/// written class.
+#[test]
+fn a_setter_between_a_stage_and_its_commit_commits_at_the_next_look() {
+    let storage = MemoryLog::<BACnetLogRecord>::new();
+    let mut log = trend_log(&storage);
+    log.set_commit_cadence(LogCommitCadence {
+        records: 0,
+        interval: core::time::Duration::from_secs(1),
+    });
+    let wait = staged(log.stage_writes(&[class_write(9)]));
+    wait.block();
+    log.set_notification_threshold(7);
+    log.write_property(
+        P::NOTIFICATION_CLASS,
+        None,
+        PropertyValue::Unsigned(9),
+        None,
+    )
+    .unwrap();
+    log.release_staged_write(&wait);
+    settled(&log);
+    let stored = || storage.stored.lock().unwrap().clone().unwrap();
+    assert_eq!(storage.commits(), 1);
+    assert_eq!(stored().notification_threshold, 0);
+    for seconds in [10, 20] {
+        crate::traits::Timed::advance_monotonic_time(
+            &mut log,
+            core::time::Duration::from_secs(seconds),
+        );
+    }
+    settled(&log);
+    assert_eq!(storage.commits(), 2);
+    assert_eq!(stored().notification_threshold, 7);
+    assert_eq!(stored().reporting.notification_class, Some(9));
+}
+
 /// A WritePropertyMultiple's settings commit once, together.
 #[test]
 fn a_requests_writes_to_one_log_commit_once() {

@@ -223,6 +223,10 @@ mod state_text_tests;
 #[cfg(all(test, feature = "event-reporting"))]
 #[path = "write_config/reporting_tests.rs"]
 mod reporting_tests;
+// An application setter between a request's stage and its commit (#2431).
+#[cfg(all(test, feature = "event-reporting", feature = "durable-writes"))]
+#[path = "write_config/staged_setter_tests.rs"]
+mod staged_setter_tests;
 // The other object types with intrinsic reporting: Access Door and Zone,
 // Event and Alert Enrollment.
 #[cfg(all(test, feature = "event-reporting"))]

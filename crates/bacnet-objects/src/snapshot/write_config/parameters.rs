@@ -435,6 +435,21 @@ macro_rules! rows {
             }
         }
 
+        /// Whether `saved` is [`only`] of `config` and `mask`, compared
+        /// without the copy (#2431).
+        #[cfg(feature = "event-reporting")]
+        pub(crate) fn is_only(
+            saved: &AlgorithmWriteConfig,
+            config: &AlgorithmWriteConfig,
+            mask: u32,
+        ) -> bool {
+            true $(&& if mask & bit::$name != 0 {
+                saved.$field == config.$field
+            } else {
+                saved.$field.is_none()
+            })*
+        }
+
         /// Put the parameters `saved` holds over those of `onto`.
         #[cfg(feature = "event-reporting")]
         pub(crate) fn overlay(onto: &mut AlgorithmWriteConfig, saved: &AlgorithmWriteConfig) {

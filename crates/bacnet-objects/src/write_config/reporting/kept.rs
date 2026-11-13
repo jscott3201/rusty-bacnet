@@ -241,16 +241,81 @@ impl Kept {
         }
     }
 
+    /// Whether `saved` is what storage keeps of this ([`saved`](Self::saved)),
+    /// compared without the copy (#2431). Debug builds check that the two
+    /// agree.
+    fn is_in(&self, saved: &ReportingWriteConfig) -> bool {
+        let is_in = self.is_in_rows(saved);
+        debug_assert_eq!(is_in, self.saved() == *saved, "is_in and saved disagree");
+        is_in
+    }
+
+    fn is_in_rows(&self, saved: &ReportingWriteConfig) -> bool {
+        let (rows, written) = (&self.rows, self.written);
+        let options = &rows.options;
+        saved.notification_class == written.class.then_some(rows.notification_class)
+            && saved.event_enable == written.enable.then_some(rows.event_enable)
+            && saved.notify_type == written.notify_type.then_some(rows.notify_type)
+            && saved.event_detection_enable
+                == written.detection.then_some(rows.event_detection_enable)
+            && saved.event_message_texts_config.as_ref()
+                == written.texts.then(|| options.message_texts_config())
+            && saved.event_algorithm_inhibit_ref.as_ref()
+                == written
+                    .inhibit_ref
+                    .then(|| options.inhibit_reference())
+                    .flatten()
+            && saved.event_algorithm_inhibit == written.inhibit.then(|| options.inhibited())
+            && saved.description.as_deref()
+                == written.description.then_some(rows.description.as_str())
+            && parameter_format::is_only(&saved.algorithm, &rows.algorithm, written.parameters)
+    }
+
     fn snapshot(&self) -> WriteConfigSnapshot {
         WriteConfigSnapshot::Reporting(self.saved())
+    }
+
+    /// [`snapshot`](Self::snapshot), as storage is handed it.
+    fn stored(&self) -> Saved {
+        Arc::new(self.snapshot())
     }
 }
 
 /// A staged step keeps nothing but its write: what the write leaves is
 /// worked out again from the object when the write is made. So a request's
 /// stage holds the rows a constant number of times, however many writes it
-/// makes (#2414).
-type Storage = StagedSaves<WriteConfigSnapshot, ()>;
+/// makes (#2414). The request's last step also keeps what the stage saved
+/// ([`Saved`]).
+type Storage = StagedSaves<Saved, Option<Saved>>;
+
+/// What a request's stage saved, kept with its last step (#2431). The
+/// object can change between the stage and the writes: a setter such as
+/// `set_number_of_states` resizes the labels a State_Text element write
+/// keeps the rest of, and the server's inhibit follower changes a written
+/// Event_Algorithm_Inhibit. So the request's last write checks that it
+/// leaves the rows storage holds. If it doesn't, its step isn't taken, and
+/// the write saves where it is, as one nobody staged. A change to what a
+/// write is only checked against needs no such check: a write refused
+/// then leaves the request's release to put storage back, and one the
+/// stage refused has no step and saves where it is.
+///
+/// Storage is handed every snapshot shared, so the step keeps the one the
+/// stage's save holds rather than a copy (once the save has run, only the
+/// step does), and the writer's queue moves a pointer, not the rows.
+type Saved = Arc<WriteConfigSnapshot>;
+
+/// Whether `saved`, what a stage saved for `oid`, is what storage keeps of
+/// `next`, the rows its last write leaves as it is made: equal, or, since a
+/// limit that is no number isn't equal to itself, encoded as the same file
+/// octets.
+fn still_saved(oid: ObjectIdentifier, saved: &WriteConfigSnapshot, next: &Kept) -> bool {
+    use crate::snapshot::write_config::encode;
+    matches!(saved, WriteConfigSnapshot::Reporting(saved) if next.is_in(saved))
+        || matches!(
+            (encode(oid, saved), encode(oid, &next.snapshot())),
+            (Ok(saved), Ok(next)) if saved == next
+        )
+}
 
 /// An object's reporting storage: none until it opts in.
 #[derive(Default)]
@@ -347,8 +412,8 @@ fn with_store<T: KeepsReporting, R>(
     result
 }
 
-fn store_snapshot<T: KeepsReporting>(written: &Written, object: &T) -> WriteConfigSnapshot {
-    kept(*written, object).snapshot()
+fn store_snapshot<T: KeepsReporting>(written: &Written, object: &T) -> Saved {
+    kept(*written, object).stored()
 }
 
 /// `object`'s rows as it serves them, `written` those a write set.
@@ -433,10 +498,25 @@ pub(crate) fn admit<T: KeepsReporting>(
     array_index: Option<u32>,
     value: &PropertyValue,
 ) -> Result<(), Error> {
-    let object_type = object.object_identifier().object_type();
-    if !kept_write(object_type, property, value) || !object.reporting_store_ref().attached() {
+    // Storage first: an object without it needs no look at the property.
+    if !object.reporting_store_ref().attached()
+        || !kept_write(object.object_identifier().object_type(), property, value)
+    {
         return Ok(());
     }
+    admit_kept(object, property, array_index, value)
+}
+
+/// [`admit`] of a write the object keeps. Out of line, so the write path
+/// of an object without storage, which passes through `admit` on every
+/// write, doesn't carry it (#2431).
+#[inline(never)]
+fn admit_kept<T: KeepsReporting>(
+    object: &mut T,
+    property: P,
+    array_index: Option<u32>,
+    value: &PropertyValue,
+) -> Result<(), Error> {
     let mut store = core::mem::take(object.reporting_store());
     let current = kept(store.written, object);
     let write = PendingWrite {
@@ -468,30 +548,39 @@ fn admit_to(
     // State_Text). A write the object refuses also leaves another
     // request's staged write alone (#1424).
     let next = current.after(write, object)?;
-    let claimed = storage.claim(
+    // The last step is stale when a change since the stage leaves the
+    // object making it with rows other than those saved (#2431).
+    let stale = |saved: &Option<Saved>| {
+        let oid = object.object_identifier();
+        saved
+            .as_deref()
+            .is_some_and(|saved| !still_saved(oid, saved, &next))
+    };
+    let claimed = storage.claim_unless(
         write.property,
         write.array_index,
         &write.value,
         store.writes,
+        stale,
     );
     match claimed {
-        Some(Ok(())) => {
+        Some(Ok(_)) => {
             // Steps the request has still to take keep, as the state served,
             // the rows this write leaves: should the object go away before
             // the next one, storage goes back to them, this write included.
-            storage.correct(|| next.snapshot());
+            storage.correct(|| next.stored());
         }
         Some(Err(_)) => {
-            storage.correct(|| current.snapshot());
+            storage.correct(|| current.stored());
             return Err(operational_problem());
         }
         None => {
             storage.drop_staged();
             // Storage goes back to the served rows first, should the save
             // below fail.
-            storage.correct(|| current.snapshot());
+            storage.correct(|| current.stored());
             storage
-                .save_now(next.snapshot())
+                .save_now(next.stored())
                 .map_err(|_| operational_problem())?;
         }
     }
@@ -521,7 +610,7 @@ pub(crate) fn stage_writes<T: KeepsReporting>(
         // One working copy of the rows the steps so far leave; a step keeps
         // only its write.
         let mut working: Option<Kept> = None;
-        let steps = staged::steps(writes, |_, write| {
+        let mut steps = staged::steps(writes, |_, write| {
             if !kept_one(write) {
                 return Ok(None);
             }
@@ -531,13 +620,17 @@ pub(crate) fn stage_writes<T: KeepsReporting>(
                 write.array_index,
             )?;
             working = Some(working.as_ref().unwrap_or(&current).after(write, object)?);
-            Ok(Some(()))
+            Ok(Some(None))
         });
         // A step was taken exactly when the working copy was set.
         let Some(last) = working else {
             return StageStep::Skip;
         };
-        storage.stage_built(steps, store.writes, last.snapshot(), current.snapshot())
+        let saved = last.stored();
+        if let Some(step) = steps.last_mut() {
+            step.next = Some(Arc::clone(&saved));
+        }
+        storage.stage_built(steps, store.writes, saved, current.stored())
     })
 }
 
@@ -596,8 +689,8 @@ pub(crate) fn clear<T: KeepsReporting>(object: &mut T) -> Result<(), Error> {
         };
         // A staged step worked out from the written rows gives way.
         storage.drop_staged();
-        storage.correct(|| current.snapshot());
-        storage.save_now(cleared.snapshot())?;
+        storage.correct(|| current.stored());
+        storage.save_now(cleared.stored())?;
         store.written = Written::default();
         store.writes = store.writes.wrapping_add(1);
         Ok(())

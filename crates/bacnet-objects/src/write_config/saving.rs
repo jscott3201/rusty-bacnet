@@ -11,6 +11,7 @@
 //! configuration it leaves, so taking a step is replacing the configuration.
 
 use alloc::sync::Arc;
+use core::borrow::Borrow;
 use core::time::Duration;
 
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
@@ -25,18 +26,19 @@ use crate::durable::{PendingWrite, SaveWait, SaveWriter, StageStep};
 /// An object's writer and the write staged on it.
 pub(crate) type Storage<C> = StagedSaves<WriteConfigSnapshot, C>;
 
-/// The writer that saves `oid`'s configuration in `persistence`.
-pub(crate) fn writer(
+/// The writer that saves `oid`'s configuration in `persistence`, handed
+/// it as `S`: the snapshot itself, or one shared with what keeps it.
+pub(crate) fn writer<S: Borrow<WriteConfigSnapshot> + Send + 'static>(
     oid: ObjectIdentifier,
     persistence: Arc<dyn WriteConfigPersistence>,
-) -> SaveWriter<WriteConfigSnapshot> {
+) -> SaveWriter<S> {
     SaveWriter::new(
         format!(
             "bacnet-config-{}-{}-save",
             oid.object_type().to_raw(),
             oid.instance_number()
         ),
-        move |snapshot: &WriteConfigSnapshot| persistence.save(oid, snapshot),
+        move |snapshot: &S| persistence.save(oid, snapshot.borrow()),
         move |_, result| {
             if let Err(error) = result {
                 log_warn!(object = %oid, %error, "Failed to save a written configuration");

@@ -62,7 +62,12 @@
 //! - a write nobody staged, such as application code writing through the
 //!   database;
 //! - an in-place change to an Audit Log, such as `add_record`, which first
-//!   lets a staged commit land, waiting for it if it is still running.
+//!   lets a staged commit land, waiting for it if it is still running;
+//! - the last write of a request whose stage an object keeping reporting
+//!   rows finds stale: something changed the object between the stage and
+//!   the write (a setter, the inhibit follower), so the rows the write
+//!   leaves aren't those the stage saved. The step isn't taken, and the
+//!   write saves where it is, as one nobody staged (#2431).
 //!
 //! A write nobody staged takes the place of a staged write it doesn't match
 //! only when the object will make it: a write the object refuses leaves the
