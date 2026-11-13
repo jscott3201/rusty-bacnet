@@ -557,3 +557,59 @@ fn the_shared_cov_deadline_refuses_a_reporter_with_the_event_path() {
         .on_cov_deadline(&cov_only.db, &mut cov_only.ids, T0);
     assert!(ran.is_ok());
 }
+
+/// A clock reader at 10:00 on a Monday, which the host lends the database
+/// without giving the `Responder` a clock.
+struct LentClock;
+
+impl bacnet_objects::clock::ClockReader for LentClock {
+    fn read_clock(&self) -> Option<bacnet_objects::clock::ClockFrame> {
+        Some(bacnet_objects::clock::ClockFrame {
+            local_date: bacnet_types::primitives::Date {
+                year: 126,
+                month: 11,
+                day: 2,
+                day_of_week: 1,
+            },
+            local_time: Time {
+                hour: 10,
+                minute: 0,
+                second: 0,
+                hundredths: 0,
+            },
+            utc_offset: 0,
+            daylight_savings_status: false,
+        })
+    }
+}
+
+/// Without a clock of its own the reporter selects only destinations open
+/// every day, all day, though the database's reader gives a valid frame
+/// whose window a restricted entry from the build would open on.
+#[test]
+fn without_a_clock_a_lent_reader_opens_no_window() {
+    let mut mornings = address_destination(false);
+    mornings.to_time = Time {
+        hour: 12,
+        minute: 0,
+        second: 0,
+        hundredths: 0,
+    };
+    mornings.recipient = BACnetRecipient::Address(BACnetAddress {
+        network_number: 0,
+        mac_address: MacAddr::from_slice(&[0x0A, 0, 0, 8, 0xBA, 0xC0]),
+    });
+    let mut device = device(
+        OutboxLimits::default(),
+        0,
+        vec![address_destination(false), mornings],
+        1,
+    );
+    device
+        .db
+        .set_clock_reader(Some(alloc::sync::Arc::new(LentClock)));
+    device.raise(alarm(), ms(10));
+    let (sent, _) = device.pop(ms(10)).expect("the destination open all day");
+    assert_eq!(sent.to, Destination::Recipient(recipient_address()));
+    assert!(device.pop(ms(10)).is_none(), "not the morning one");
+}

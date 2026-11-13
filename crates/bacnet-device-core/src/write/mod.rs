@@ -16,6 +16,8 @@ use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
+#[cfg(feature = "event-reporting")]
+mod clockless;
 mod decode;
 mod executor;
 pub mod local;
@@ -25,6 +27,10 @@ pub mod policy;
 pub mod relinquish;
 mod runs;
 
+#[cfg(feature = "event-reporting")]
+pub(crate) use clockless::ClocklessRecipients;
+#[cfg(feature = "event-reporting")]
+pub use clockless::check_clockless_recipients;
 pub use decode::{decode_write_property_value, gate_and_decode_write};
 pub use executor::{check_executor_owned_write, identity_property, owned};
 pub use local_references::{DeviceQualified, localize, localize_member};

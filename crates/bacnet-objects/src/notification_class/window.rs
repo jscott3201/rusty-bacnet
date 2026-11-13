@@ -58,7 +58,9 @@ pub fn in_window(destination: &BACnetDestination, today: DaysOfWeek, now: &Time)
 /// valid and its window covers the whole day by the test [`in_window`]
 /// applies (an unspecified hour, 00:00:00.00 to 23:59:59.99, or a window
 /// across midnight that leaves no hundredth out). A device that can't tell
-/// the day and time sends only to such destinations.
+/// the day and time sends only to such destinations. A whole day must end
+/// at 23:59:59.99: a `to` whose hundredths are unspecified counts as .00
+/// and leaves the last second out, so it is refused.
 ///
 /// A bound no real time has, an hour of 25 say, can leave `in_window` open
 /// all day while this says no: it fails closed, as it should.

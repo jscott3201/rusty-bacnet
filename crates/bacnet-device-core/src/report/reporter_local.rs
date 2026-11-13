@@ -96,7 +96,18 @@ impl Reporter {
         now: Instant,
     ) -> Result<Applied, Error> {
         self.capture(db, &[oid]);
-        let applied = local::apply(db, oid, change, None);
+        // Without a clock, no Recipient_List entry the device can't honour,
+        // as the `Responder`'s writes refuse (decision 14).
+        #[cfg(feature = "event-reporting")]
+        let mut clockless = crate::write::ClocklessRecipients(None);
+        #[cfg(feature = "event-reporting")]
+        let observed = self.responder.clock().is_none().then_some(local::Observed {
+            observer: &mut clockless,
+            octets: &[],
+        });
+        #[cfg(not(feature = "event-reporting"))]
+        let observed = None;
+        let applied = local::apply(db, oid, change, observed);
         if let Ok(Applied::Written) = applied {
             self.changed(db, &[oid], now);
         } else {
