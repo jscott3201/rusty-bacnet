@@ -36,7 +36,7 @@ fn reference() -> BACnetDeviceObjectPropertyReference {
 
 /// Timer 1 kept in `storage`, built as an application would: its set, then
 /// `timeout` as its Default_Timeout.
-fn timer(storage: &Arc<MemoryConfig>, timeout: u64) -> TimerObject {
+pub(super) fn timer(storage: &Arc<MemoryConfig>, timeout: u64) -> TimerObject {
     let persistence = Arc::clone(storage) as Arc<dyn WriteConfigPersistence>;
     let mut timer = TimerObject::with_persistence(1, "TMR", persistence).unwrap();
     timer
@@ -46,11 +46,11 @@ fn timer(storage: &Arc<MemoryConfig>, timeout: u64) -> TimerObject {
     timer
 }
 
-fn timeout(timer: &TimerObject) -> PropertyValue {
+pub(super) fn timeout(timer: &TimerObject) -> PropertyValue {
     timer.read_property(TIMEOUT, None).unwrap()
 }
 
-fn saved(storage: &MemoryConfig) -> TimerWriteConfig {
+pub(super) fn saved(storage: &MemoryConfig) -> TimerWriteConfig {
     match storage.saved() {
         Some(WriteConfigSnapshot::Timer(config)) => config,
         other => panic!("storage holds {other:?}"),
@@ -250,11 +250,11 @@ fn a_saved_default_timeout_no_timer_takes_is_dropped_at_the_build() {
 
 /// Past the range a new Timer takes (#2312 review): what the application's
 /// range allows.
-const WIDE: u64 = 20_000_000_000;
-const LONG: u64 = 10_000_000_000;
+pub(super) const WIDE: u64 = 20_000_000_000;
+pub(super) const LONG: u64 = 10_000_000_000;
 
 /// Storage holding LONG, written under a range up to WIDE.
-fn holding_long() -> Arc<MemoryConfig> {
+pub(super) fn holding_long() -> Arc<MemoryConfig> {
     let storage = MemoryConfig::new();
     let mut first = timer(&storage, 30_000);
     first.set_pres_value_range(1, WIDE).unwrap();

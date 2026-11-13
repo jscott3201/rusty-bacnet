@@ -62,6 +62,8 @@ mod state_change_tests;
 mod tests;
 #[cfg(test)]
 mod timeout_saving_tests;
+#[cfg(all(test, feature = "durable-writes"))]
+mod unchanged_setter_tests;
 
 use state::Countdown;
 pub use state_change::{MAX_TIMER_REFERENCES, StateChangeValues};
@@ -209,6 +211,11 @@ impl TimerObject {
     /// and kept, if the new range holds it, dropped as above if not. Until a
     /// range is set it stays held: storage keeps it, and the application's
     /// value is served.
+    ///
+    /// The range already served changes nothing a request being saved
+    /// depends on, so it leaves that request alone, unless a held or saved
+    /// Default_Timeout is decided by it: that changes what is served and what
+    /// storage holds, and makes the request give way (#2552).
     pub fn set_pres_value_range(&mut self, min: u64, max: u64) -> Result<(), Error> {
         let saved = self.default_timeout_saved();
         let kept = if saved {
@@ -219,10 +226,18 @@ impl TimerObject {
         if min == 0 || min > max || !(min..=max).contains(&kept) {
             return Err(common::value_out_of_range_error());
         }
+        let unchanged = (self.config.min_pres_value, self.config.max_pres_value) == (min, max);
         self.config.min_pres_value = min;
         self.config.max_pres_value = max;
+        // A held value is decided and a saved one past the range dropped
+        // whatever the range was: either changes what is served and what
+        // storage holds, so those count as a change too (#2552).
+        let decides = self.config.held_timeout.is_some()
+            || (saved && !self.config.in_range(self.config.default_timeout));
         // A staged write worked out under the old range gives way.
-        self.config_changed();
+        if !unchanged || decides {
+            self.config_changed();
+        }
         if let Some(held) = self.config.held_timeout {
             if self.config.in_range(held) {
                 self.config.default_timeout = held;
@@ -257,8 +272,10 @@ impl TimerObject {
             log_debug!(timer = %self.oid, "Saved Default_Timeout kept over a configured one");
             return Ok(());
         }
-        self.config.default_timeout = timeout_ms;
-        self.config_changed();
+        if self.config.default_timeout != timeout_ms {
+            self.config.default_timeout = timeout_ms;
+            self.config_changed();
+        }
         Ok(())
     }
 

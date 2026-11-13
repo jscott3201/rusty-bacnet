@@ -95,6 +95,32 @@ pub(crate) struct TimerSet {
     pub(super) written: bool,
 }
 
+impl TimerSet {
+    /// Whether the set already holds these, as the application gave them:
+    /// the values bit for bit, as their encoding holds them (`==` on a REAL
+    /// fails for a NaN and passes for the two zeros). A set a write made
+    /// isn't the application's, so it never matches (#2552).
+    fn is(
+        &self,
+        values: &StateChangeValues,
+        references: &[BACnetDeviceObjectPropertyReference],
+        priority: u8,
+    ) -> bool {
+        let encoded = |values: &StateChangeValues| {
+            let mut octets = BytesMut::new();
+            // `check_set` has seen every value encode.
+            values
+                .iter()
+                .all(|value| encode_timer_state_change_value(&mut octets, value).is_ok())
+                .then_some(octets)
+        };
+        !self.written
+            && self.priority == priority
+            && self.references == references
+            && encoded(&self.values).is_some_and(|held| encoded(values) == Some(held))
+    }
+}
+
 /// The run the three properties drive. A Timer without them never starts
 /// one.
 pub(super) struct StateChangeRun {
@@ -136,6 +162,13 @@ impl TimerObject {
             log_debug!(timer = %self.oid, "Saved State_Change_Values kept over a configured set");
             return Ok(());
         }
+        // The run restarts either way. It isn't saved and no staged step
+        // is worked out from it, so only a different set is a counted change.
+        let unchanged = self
+            .config
+            .set
+            .as_ref()
+            .is_some_and(|set| set.is(&values, &references, priority));
         self.config.set = Some(TimerSet {
             values,
             references,
@@ -143,7 +176,9 @@ impl TimerObject {
             written: false,
         });
         self.run = StateChangeRun::new();
-        self.config_changed();
+        if !unchanged {
+            self.config_changed();
+        }
         Ok(())
     }
 
