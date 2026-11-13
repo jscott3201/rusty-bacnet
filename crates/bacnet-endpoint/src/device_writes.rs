@@ -42,6 +42,10 @@ pub const RESPONDER_OPT_IN_SERVICES: &[ResponderOptIn] = &[
         service: ServiceSupported::SUBSCRIBE_COV_PROPERTY,
         method: "with_cov",
     },
+    ResponderOptIn {
+        service: ServiceSupported::SUBSCRIBE_COV_PROPERTY_MULTIPLE,
+        method: "with_cov",
+    },
 ];
 
 impl<T: TransportPort + 'static> EndpointSession<T> {
@@ -115,9 +119,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         self
     }
 
-    /// Enables SubscribeCOV and SubscribeCOVProperty for the objects of the
-    /// session's database, and the COV notifications their subscriptions
-    /// call for (#2490), under `config`. The B/IP builder sets it as
+    /// Enables SubscribeCOV, SubscribeCOVProperty and
+    /// SubscribeCOVPropertyMultiple for the objects of the session's
+    /// database, and the COV notifications their subscriptions call for
+    /// (#2490), under `config`. The B/IP builder sets it as
     /// [`BipEndpointBuilder::cov`](crate::bip::BipEndpointBuilder::cov).
     ///
     /// The session runs bacnet-device-core's
@@ -136,7 +141,29 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// uses, is sent again on the timeout and retries of
     /// `config.confirmed`, and a subscriber that refuses it or never
     /// answers is held off for one retry cycle. The Device lists the
-    /// subscriptions in Active_COV_Subscriptions.
+    /// subscriptions in Active_COV_Subscriptions and
+    /// Active_COV_Multiple_Subscriptions.
+    ///
+    /// A SubscribeCOVPropertyMultiple subscription is one context: the
+    /// subscriber's process, its references (each a property with its own
+    /// COV increment and Timestamped flag), a lifetime and a
+    /// Max_Notification_Delay. Its notifications are the COV-multiple ones,
+    /// split to fit the Max-APDU-Length-Accepted the request stated, and
+    /// what a context could not send yet goes out by its
+    /// Max_Notification_Delay at the latest. A timestamped reference needs
+    /// a clock the database reads, and the session installs none: lend the
+    /// database a [`DeviceClock`](bacnet_device_core::clock::DeviceClock)
+    /// before handing it over ([`DeviceClock::new`] over the host's
+    /// monotonic timer, [`set`](bacnet_device_core::clock::DeviceClock::set)
+    /// from its real-time clock, then
+    /// [`lend`](bacnet_device_core::clock::DeviceClock::lend); unset, it
+    /// reads local midnight on 1990-01-01), or pass your own
+    /// [`ClockReader`](bacnet_objects::clock::ClockReader) to
+    /// [`ObjectDatabase::set_clock_reader`]. Without one the reference is
+    /// refused with SERVICES / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED; with
+    /// one its changes carry their time of change.
+    ///
+    /// [`DeviceClock::new`]: bacnet_device_core::clock::DeviceClock::new
     ///
     /// `config` bounds the work: `config.cov` caps the subscriptions (in
     /// all, per subscriber, indefinite ones and confirmed notifications in
@@ -164,11 +191,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// gives way to the newer one, and a confirmed one's Ack brings a fresh
     /// look.
     ///
-    /// The Device itself takes no subscription of either kind, as on
+    /// The Device itself takes no subscription of any kind, as on
     /// `BACnetServer`: it lends no COV reporting, so a client's write to its
     /// Description or Audit_Notification_Recipient
     /// ([`with_device_writes`](Self::with_device_writes)) notifies nobody.
-    /// SubscribeCOVPropertyMultiple stays refused.
     /// Startup requirements and the advertised services are those of
     /// [`with_device_writes`](Self::with_device_writes). Without a composed
     /// identity, the Device object supplies what the notifications carry of
@@ -236,7 +262,9 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         let cov = |service| {
             matches!(
                 service,
-                ServiceSupported::SUBSCRIBE_COV | ServiceSupported::SUBSCRIBE_COV_PROPERTY
+                ServiceSupported::SUBSCRIBE_COV
+                    | ServiceSupported::SUBSCRIBE_COV_PROPERTY
+                    | ServiceSupported::SUBSCRIBE_COV_PROPERTY_MULTIPLE
             )
         };
         let enabled = |service: ServiceSupported| {
@@ -312,7 +340,7 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         let enabled: Vec<_> = [
             (writes, "Device writes"),
             (reinitialize, "ReinitializeDevice"),
-            // SubscribeCOV and SubscribeCOVProperty, enabled together.
+            // The three subscribe services, enabled together.
             (self.cov.config.is_some(), "COV"),
         ]
         .into_iter()

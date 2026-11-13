@@ -238,8 +238,9 @@ impl BipEndpointBuilder {
         self
     }
 
-    /// Enables SubscribeCOV and SubscribeCOVProperty for the objects of the
-    /// database, with the COV notifications they call for, under `config`.
+    /// Enables SubscribeCOV, SubscribeCOVProperty and
+    /// SubscribeCOVPropertyMultiple for the objects of the database, with
+    /// the COV notifications they call for, under `config`.
     /// Its bounds, startup requirements and refusals are those of
     /// [`EndpointSession::with_cov`]. Requires `build_session()`.
     pub fn cov(mut self, config: ReportConfig) -> Self {

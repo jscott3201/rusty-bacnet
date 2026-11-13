@@ -5,9 +5,10 @@
 //! of its session's database and implements [`EndpointCov`] over it. The
 //! endpoint responder, once given one
 //! ([`EndpointResponder::with_cov`](crate::server::__endpoint_EndpointResponder::with_cov)),
-//! hands it each SubscribeCOV and SubscribeCOVProperty and each read of the
-//! Device's Active_COV_Subscriptions. It is not an interface for
-//! applications.
+//! hands it each SubscribeCOV, SubscribeCOVProperty and
+//! SubscribeCOVPropertyMultiple and each read of the Device's
+//! Active_COV_Subscriptions and Active_COV_Multiple_Subscriptions. It is
+//! not an interface for applications.
 
 use bacnet_device_core::cov::active::LiveDeviceCov;
 use bacnet_device_core::read::LiveLists;
@@ -24,10 +25,11 @@ use bacnet_objects::database::ObjectDatabase;
 /// never waits.
 #[doc(hidden)]
 pub trait EndpointCov: Send + Sync {
-    /// Run the SubscribeCOV or SubscribeCOVProperty request `received`
-    /// carries against `db` and return the reply, `None` when it wrote
-    /// none, which a request the responder decoded never draws. What it queues, the
-    /// first notification of an accepted subscription, stays queued until
+    /// Run the SubscribeCOV, SubscribeCOVProperty or
+    /// SubscribeCOVPropertyMultiple request `received` carries against `db`
+    /// and return the reply, `None` when it wrote none, which a request the
+    /// responder decoded never draws. What it queues, the first
+    /// notification of an accepted subscription, stays queued until
     /// [`replied`](Self::replied), so that it follows the reply onto the
     /// wire. Each call is followed by one `replied`, whatever it returned.
     fn subscribe(&self, db: &mut ObjectDatabase, received: &ReceivedApdu) -> Option<Apdu>;

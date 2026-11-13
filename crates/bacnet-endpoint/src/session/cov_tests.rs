@@ -34,6 +34,9 @@ mod confirmed;
 #[path = "cov_property_tests.rs"]
 mod property;
 
+#[path = "cov_multiple_tests.rs"]
+mod multiple;
+
 const DEVICE: u32 = 4321;
 const SUBSCRIBE_COV: ConfirmedServiceChoice = ConfirmedServiceChoice::SUBSCRIBE_COV;
 const READ_PROPERTY: ConfirmedServiceChoice = ConfirmedServiceChoice::READ_PROPERTY;
@@ -317,9 +320,10 @@ fn acked(invoke_id: u8) -> Bytes {
     Bytes::from(vec![0x20, invoke_id, SUBSCRIBE_COV.to_raw()])
 }
 
-/// Off, the opt-in leaves SubscribeCOV and SubscribeCOVProperty refused
-/// exactly as before (a Reject, UNRECOGNIZED_SERVICE), the Device declares
-/// no COV and has no Active_COV_Subscriptions. On, both are answered.
+/// Off, the opt-in leaves SubscribeCOV, SubscribeCOVProperty and
+/// SubscribeCOVPropertyMultiple refused exactly as before (a Reject,
+/// UNRECOGNIZED_SERVICE), the Device declares no COV and has neither
+/// subscription list. On, each is answered.
 #[tokio::test(start_paused = true)]
 async fn cov_is_off_until_the_session_opts_in() {
     let mut node = Node::new().await;
@@ -332,35 +336,47 @@ async fn cov_is_off_until_the_session_opts_in() {
     let body = property::subscribe_property(ai1(), PropertyIdentifier::PRESENT_VALUE, 1, None);
     node.request(&to, 3, property, &body).await;
     assert_eq!(node.quiet(&to).await, [Bytes::from_static(&[0x60, 3, 9])]);
-    node.request(
-        &to,
-        2,
-        READ_PROPERTY,
-        &read_device(PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS),
-    )
-    .await;
-    // Error: PROPERTY (2), UNKNOWN_PROPERTY (32).
-    assert_eq!(
-        node.quiet(&to).await,
-        [Bytes::from_static(&[0x50, 2, 12, 0x91, 2, 0x91, 32])]
-    );
+    let scpm = ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE;
+    let context = multiple::multiple_body(1, false, &[(ai1(), false)], Some((60, 10)));
+    node.request(&to, 4, scpm, &context).await;
+    assert_eq!(node.quiet(&to).await, [Bytes::from_static(&[0x60, 4, 9])]);
+    for list in [
+        PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS,
+        PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS,
+    ] {
+        node.request(&to, 2, READ_PROPERTY, &read_device(list))
+            .await;
+        // Error: PROPERTY (2), UNKNOWN_PROPERTY (32).
+        assert_eq!(
+            node.quiet(&to).await,
+            [Bytes::from_static(&[0x50, 2, 12, 0x91, 2, 0x91, 32])],
+            "{list:?}"
+        );
+    }
     let services = off.executed_services();
     assert!(!services.contains(&ServiceSupported::SUBSCRIBE_COV));
     assert!(!services.contains(&ServiceSupported::SUBSCRIBE_COV_PROPERTY));
+    assert!(!services.contains(&ServiceSupported::SUBSCRIBE_COV_PROPERTY_MULTIPLE));
     off.stop().await.unwrap();
 
     let mut on = endpoint(SessionRole::ServerOnly, Some(ReportConfig::default())).await;
     let to = mac_of(&on);
-    node.request(&to, 3, property, &body).await;
-    let sent = node.quiet(&to).await;
-    assert_eq!(sent.len(), 2, "the reply, then the first notification");
-    assert_eq!(sent[0], Bytes::from(vec![0x20, 3, property.to_raw()]));
+    for (invoke_id, service, body) in [(3, property, body), (4, scpm, context)] {
+        node.request(&to, invoke_id, service, &body).await;
+        let sent = node.quiet(&to).await;
+        assert_eq!(sent.len(), 2, "{service:?}: the reply, then a notification");
+        assert_eq!(
+            sent[0],
+            Bytes::from(vec![0x20, invoke_id, service.to_raw()])
+        );
+    }
     on.stop().await.unwrap();
 }
 
-/// On, the Device declares SubscribeCOV and SubscribeCOVProperty and lists
-/// Active_COV_Subscriptions, but not Active_COV_Multiple_Subscriptions,
-/// whose service it doesn't run (Table 12-13, notes 9 and 18).
+/// On, the Device declares SubscribeCOV, SubscribeCOVProperty and
+/// SubscribeCOVPropertyMultiple, and lists Active_COV_Subscriptions and
+/// Active_COV_Multiple_Subscriptions (Table 12-13, notes 9 and 18), both
+/// empty until a subscription.
 #[tokio::test(start_paused = true)]
 async fn the_device_declares_subscribe_cov_and_its_list() {
     let mut node = Node::new().await;
@@ -400,7 +416,7 @@ async fn the_device_declares_subscribe_cov_and_its_list() {
     assert!(bit(ServiceSupported::READ_PROPERTY));
     assert!(bit(ServiceSupported::SUBSCRIBE_COV));
     assert!(bit(ServiceSupported::SUBSCRIBE_COV_PROPERTY));
-    assert!(!bit(ServiceSupported::SUBSCRIBE_COV_PROPERTY_MULTIPLE));
+    assert!(bit(ServiceSupported::SUBSCRIBE_COV_PROPERTY_MULTIPLE));
     assert!(!bit(ServiceSupported::WRITE_PROPERTY));
 
     let listed = |property: PropertyIdentifier| {
@@ -418,23 +434,20 @@ async fn the_device_declares_subscribe_cov_and_its_list() {
     .await;
     let list = node.quiet(&to).await.remove(0);
     let contains = |needle: &[u8]| list.windows(needle.len()).any(|window| window == needle);
-    assert!(contains(&listed(
-        PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS
-    )));
-    assert!(!contains(&listed(
-        PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS
-    )));
-    node.request(
-        &to,
-        3,
-        READ_PROPERTY,
-        &read_device(PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS),
-    )
-    .await;
-    assert_eq!(
-        node.quiet(&to).await,
-        [Bytes::from_static(&[0x50, 3, 12, 0x91, 2, 0x91, 32])]
-    );
+    for property in [
+        PropertyIdentifier::ACTIVE_COV_SUBSCRIPTIONS,
+        PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS,
+    ] {
+        assert!(contains(&listed(property)), "{property:?} listed");
+        node.request(&to, 3, READ_PROPERTY, &read_device(property))
+            .await;
+        let Ok(Apdu::ComplexAck(ack)) = decode_apdu(node.quiet(&to).await.remove(0)) else {
+            panic!("{property:?} reads")
+        };
+        let ack =
+            bacnet_services::read_property::ReadPropertyACK::decode(&ack.service_ack).unwrap();
+        assert!(ack.property_value.is_empty(), "{property:?} is empty");
+    }
     session.stop().await.unwrap();
 }
 
