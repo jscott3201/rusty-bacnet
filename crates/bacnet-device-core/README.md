@@ -92,10 +92,29 @@ the database guard, the transport, addressing and time.
   `write::local::apply` and queues what it reports, or the typed
   `update`, `set_reliability`, `command` and `relinquish`, which take a
   `LocalValue` (#2446). A change that wrote nothing, or was refused,
-  reports nothing. The `Reporter` runs no event pass yet (#2303): with
-  `bacnet-objects`' `event-reporting` on, a fault leaves an intrinsic
-  reporter's Event_State as it was, so Status_Flags and the COV
-  notification carry FAULT without the IN_ALARM `bacnet-server` reports.
+  reports nothing. With `event-reporting` and `ReportConfig::with_sweep`
+  it reports intrinsic events too (#2303): it evaluates each write and
+  change, sweeps at the period and when a Time_Delay ends (no sooner than
+  `SWEEP_FLOOR` after the last sweep), runs the optional fault pass,
+  answers AcknowledgeAlarm and GetEventInformation (`EVENT_SERVICES`) and
+  acknowledges locally (`acknowledge_local`). Event notifications go to
+  Notification Class recipients (`Destination::Recipient`, a Device one
+  resolved through `Bindings`) through the same outbox and confirmed
+  table, ahead of the COV ones of the same change; one that finds the
+  outbox full evicts the newest COV notification, whose subscription is
+  owed a look. For each address no event notification is first sent before
+  an older one: one refused an invoke ID waits in its place, every `pop`
+  tries it first, and later ones to its address wait behind it, whatever
+  their process identifier or confirmed flag (COV notifications don't). An
+  older one's resend can still follow a newer one, each on its own invoke
+  ID; the receiver orders them by their timestamps. A Device recipient
+  rebound while one of its events waits keeps no order across the
+  rebinding. It waits only
+  while `InvokeIds` has none, with no cutoff of its own; held ones fill the
+  outbox at worst, and new events are then dropped and counted. Under
+  DeviceCommunicationControl keep popping and report `NotSent`. Without a
+  sweep the path is off; the endpoint refuses one, and its deadlines use
+  `on_cov_deadline` over a shared database.
 - `event` (behind `event-reporting`, which `std` turns on): intrinsic
   event reporting as staged functions under the host's guard, from
   `bacnet-server` (#2303). `after_write` evaluates and commits one changed
@@ -109,7 +128,9 @@ the database guard, the transport, addressing and time.
   AcknowledgeAlarm (`handle_acknowledge_alarm`), GetEventInformation
   within a `GetEventInformationBudget`, and the fault pass (`fault_pass`).
   What a step would have logged comes back as a value. `bacnet-server`
-  runs its intrinsic reporting on it; the `Reporter` doesn't yet.
+  runs its intrinsic reporting on it, and so does the `Reporter`, which
+  judges windows by its clock's `SyncedClock::window` (`RecipientWindow`)
+  and, without one, sends only to destinations open every day, all day.
 - `clock`: the Device's clock for firmware with none of its own (#2321).
   `SyncedClock` is plain data on the host's monotonic timeline: until
   set it counts from local midnight, 1990-01-01, as a device does after a

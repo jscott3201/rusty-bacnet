@@ -281,7 +281,7 @@ fn an_unchanged_change_leaves_a_pending_one_unreported() {
     let unchanged = device.reporter.apply_local(&mut device.db, ai(), null, T0);
     assert_eq!(unchanged.unwrap(), Applied::Unchanged);
     assert!(sent(&mut device).is_empty());
-    device.reporter.changed(&device.db, &[ai()], T0);
+    device.reporter.changed(&mut device.db, &[ai()], T0);
     assert_eq!(
         sent(&mut device).len(),
         1,

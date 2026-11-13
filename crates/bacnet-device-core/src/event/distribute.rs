@@ -3,10 +3,11 @@
 //! recipients whose days, window and transitions match, and the record the
 //! device's Event Log objects keep.
 
+use bacnet_encoding::npdu::view::NetworkPriority;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::event::EventTransition;
 use bacnet_objects::notification_class::{
-    RecipientLookupOutcome, lookup_notification_recipients, resolve_transition_priority_ack,
+    RecipientLookupOutcome, lookup_notification_recipients_at, resolve_transition_priority_ack,
 };
 use bacnet_services::alarm_event::EventNotificationRequest;
 use bacnet_types::bitstring::DaysOfWeek;
@@ -55,16 +56,35 @@ pub enum DistributionOutcome {
     },
 }
 
+/// The local day and time a Notification Class destination's window is
+/// judged at (Clause 12.21; §6.3 of the design).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecipientWindow {
+    /// The Device clock's frame when it holds a valid date and time,
+    /// otherwise `fallback`: what the server does, its fallback the system
+    /// clock's UTC day and time.
+    Frame {
+        /// The day and time when the frame gives none; `None` fails closed.
+        fallback: Option<(DaysOfWeek, Time)>,
+    },
+    /// This day and time, whatever the frame reads: a firmware clock's
+    /// [`window`](crate::clock::SyncedClock::window), `None` until it is set.
+    /// An unsynchronized `DeviceClock` serves a valid 1990 frame, which must
+    /// not open a window (decision 14).
+    Given(Option<(DaysOfWeek, Time)>),
+}
+
 /// Build the EventNotification for one transition under the database
 /// guard, select its recipients and log it to the device's Event Log
-/// objects. `fallback` is the day and time the recipient filter uses when
-/// the Device clock gives none.
+/// objects. `window` says the day and time the recipients' windows are
+/// judged at; without one, only a destination open every day, all day, is
+/// selected (fail closed).
 pub fn distribute_event(
     db: &mut ObjectDatabase,
     device: ObjectIdentifier,
     oid: &ObjectIdentifier,
     transition: NotificationTransition,
-    fallback: (DaysOfWeek, Time),
+    window: RecipientWindow,
 ) -> EventDistribution {
     let NotificationTransition {
         change,
@@ -86,14 +106,15 @@ pub fn distribute_event(
         } => (snapshot.timestamp, snapshot.message_text, recipient_clock),
     };
 
-    let (today, current_time) = match recipient_clock {
-        SampledEventClock::Valid(clock_frame) => (
+    let at = match (window, recipient_clock) {
+        (RecipientWindow::Given(at), _) => at,
+        (RecipientWindow::Frame { .. }, SampledEventClock::Valid(clock_frame)) => Some((
             clock_frame
                 .day_of_week()
                 .expect("validated ClockFrame has a day of week"),
             clock_frame.local_time,
-        ),
-        SampledEventClock::Unavailable | SampledEventClock::Invalid => fallback,
+        )),
+        (RecipientWindow::Frame { fallback }, _) => fallback,
     };
     let distribution = |outcome| EventDistribution {
         clock: recipient_clock,
@@ -136,8 +157,7 @@ pub fn distribute_event(
         resolve_transition_priority_ack(db, notification_class, transition);
     let ack_required = ack_required_snapshot.unwrap_or(resolved_ack_required);
 
-    let lookup =
-        lookup_notification_recipients(db, notification_class, transition, today, &current_time);
+    let lookup = lookup_notification_recipients_at(db, notification_class, transition, at);
     if matches!(
         lookup,
         RecipientLookupOutcome::NotificationClassMissing
@@ -187,4 +207,16 @@ pub fn distribute_event(
         transition,
         lookup,
     })
+}
+
+/// The network priority Table 13-6 gives an event notification of event
+/// priority `priority` (Clause 13.2.5.4): 0 to 63 life safety, 64 to 127
+/// critical equipment, 128 to 191 urgent, the rest normal.
+pub fn network_priority(priority: u8) -> NetworkPriority {
+    match priority {
+        0..=63 => NetworkPriority::LifeSafety,
+        64..=127 => NetworkPriority::CriticalEquipment,
+        128..=191 => NetworkPriority::Urgent,
+        192..=255 => NetworkPriority::Normal,
+    }
 }

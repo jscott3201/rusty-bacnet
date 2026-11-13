@@ -131,6 +131,23 @@ pub struct Token {
     pub(super) ticket: u64,
 }
 
+impl Token {
+    /// The token of the `n`th event notification a reporter queues. No COV
+    /// flight is numbered 0, so it never names a COV report.
+    #[cfg(feature = "event-reporting")]
+    pub(crate) fn event(n: u64) -> Self {
+        Self {
+            flight: 0,
+            ticket: n,
+        }
+    }
+
+    /// Whether this names an event notification, not a COV report.
+    pub(crate) fn is_event(self) -> bool {
+        self.flight == 0
+    }
+}
+
 #[cfg(test)]
 impl Token {
     /// A token for tests that need one without a table.

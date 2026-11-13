@@ -105,6 +105,14 @@ impl CovRole {
             return Ok(());
         };
         config.cov.validate()?;
+        // COV only: the session sends no event notification and routes no
+        // AcknowledgeAlarm, so the event path would commit transitions
+        // nobody hears (#2303).
+        if config.sweep.is_some() || config.fault_detection.is_some() {
+            return Err(Error::Encoding(
+                "SubscribeCOV hosts COV only: a ReportConfig sweep or fault pass is refused".into(),
+            ));
+        }
         if config.outbox.entries == 0 || config.outbox.octets == 0 {
             return Err(Error::Encoding(
                 "SubscribeCOV requires an outbox of at least one entry and one octet".into(),
@@ -408,13 +416,16 @@ impl CovHost {
                 !state.closed && state.reporter.next_deadline().is_some_and(|at| at <= now)
             };
             if due {
+                // Shared: `prepare` refuses the event path, so a deadline
+                // commits nothing.
                 let db = db.read().await;
                 let mut state = self.lock();
                 let now = self.now();
                 let CovState {
                     reporter, leases, ..
                 } = &mut *state;
-                reporter.on_deadline(&db, leases, now);
+                let ran = reporter.on_cov_deadline(&db, leases, now);
+                debug_assert!(ran.is_ok(), "prepare refuses the event path");
             }
             let Some(outgoing) = self.pop() else {
                 return;

@@ -6,7 +6,7 @@
 //! the server's.
 
 use super::*;
-use crate::report::{OutboxLimits, SERVICES};
+use crate::report::{Bindings, Destination, Notification, OutboxLimits, SERVICES, peer_address};
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_objects::DeviceIdentity;
 use bacnet_objects::analog::AnalogInputObject;
@@ -20,6 +20,9 @@ use bacnet_types::primitives::PropertyValue;
 
 #[path = "reporter_change_back_tests.rs"]
 mod change_back;
+#[cfg(feature = "event-reporting")]
+#[path = "reporter_events_tests.rs"]
+mod events;
 #[path = "reporter_local_tests.rs"]
 mod local;
 #[cfg(feature = "cov-multiple")]
@@ -240,7 +243,7 @@ impl Device {
 
     fn deadline(&mut self) {
         let now = self.reporter.next_deadline().expect("something due");
-        self.reporter.on_deadline(&self.db, &mut self.ids, now);
+        self.reporter.on_deadline(&mut self.db, &mut self.ids, now);
     }
 }
 
@@ -560,7 +563,7 @@ fn a_hot_subscription_holds_one_entry_and_others_still_report() {
         {
             device
                 .reporter
-                .on_deadline(&device.db, &mut device.ids, now);
+                .on_deadline(&mut device.db, &mut device.ids, now);
         }
         // The link sends one notification a tick.
         if let Some((sent, apdu)) = device.pop(now) {
@@ -647,7 +650,7 @@ fn owed_references_take_freed_room_oldest_first() {
         {
             device
                 .reporter
-                .on_deadline(&device.db, &mut device.ids, now);
+                .on_deadline(&mut device.db, &mut device.ids, now);
         }
         let value = PropertyValue::Real(100.0 + tick as f32);
         device.write(P::PRESENT_VALUE, value, now);

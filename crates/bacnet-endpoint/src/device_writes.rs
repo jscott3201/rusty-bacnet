@@ -162,9 +162,11 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// [`with_device_writes`](Self::with_device_writes). Without a composed
     /// identity, the Device object supplies what the notifications carry of
     /// it: its identifier, as the initiating device, and for a confirmed
-    /// one its Max_APDU_Length_Accepted. An invalid `config.cov`, or a
-    /// `config.outbox` with no entry or no octet, fails startup before the
-    /// transport starts.
+    /// one its Max_APDU_Length_Accepted. An invalid `config.cov`, a
+    /// `config.outbox` with no entry or no octet, or a `config` that turns
+    /// on the `Reporter`'s event path (a sweep) or its fault pass fails
+    /// startup before the transport starts: the session hosts COV only, and
+    /// sends no event notification.
     ///
     /// # Panics
     /// Panics if startup has already consumed the session configuration.

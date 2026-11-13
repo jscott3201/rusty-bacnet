@@ -35,7 +35,7 @@ impl Device {
     fn next_report(&mut self) -> (Instant, Notification, Vec<Row>) {
         loop {
             let now = self.reporter.next_deadline().expect("something due");
-            self.reporter.on_deadline(&self.db, &mut self.ids, now);
+            self.reporter.on_deadline(&mut self.db, &mut self.ids, now);
             if let Some((report, rows)) = self.pop_multiple(now) {
                 return (now, report, rows);
             }
@@ -111,7 +111,7 @@ fn a_cancelled_subscriptions_unanswered_report_leaves_the_new_backstop_alone() {
     // The old report is sent again at second 3, and nobody answers.
     device
         .reporter
-        .on_deadline(&device.db, &mut device.ids, secs(3));
+        .on_deadline(&mut device.db, &mut device.ids, secs(3));
     assert!(device.pop(secs(3)).is_some(), "the old report, resent");
 
     // A change at second 4 whose report can't be sent is due at second 9.
@@ -122,7 +122,7 @@ fn a_cancelled_subscriptions_unanswered_report_leaves_the_new_backstop_alone() {
     // The old report's retries run out at second 6.
     device
         .reporter
-        .on_deadline(&device.db, &mut device.ids, secs(HOLD_OFF));
+        .on_deadline(&mut device.db, &mut device.ids, secs(HOLD_OFF));
     assert_eq!(device.reporter.counters().failed, 1);
     assert!(device.pop(secs(HOLD_OFF)).is_none());
     let (at, _, sent) = device.next_report();
@@ -161,7 +161,7 @@ fn a_refused_backstop_report_goes_out_again_when_its_hold_off_ends() {
     let before = secs(SLOW + HOLD_OFF);
     device
         .reporter
-        .on_deadline(&device.db, &mut device.ids, before);
+        .on_deadline(&mut device.db, &mut device.ids, before);
     assert!(device.pop(before).is_none(), "still held off");
     let (at, again, sent) = device.next_report();
     assert_eq!(at, until, "when the hold-off ends");

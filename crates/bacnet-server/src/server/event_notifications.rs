@@ -3,7 +3,7 @@ use super::*;
 use bacnet_device_core::event::{
     AcceptedAcknowledgeAlarm, CommittedIntrinsicTransition, DistributionOutcome, IntrinsicCommit,
     IntrinsicCommitRefusal, MessageTexts, NotificationConstruction, NotificationHistorySource,
-    NotificationTransition, SampledEventClock, after_write, distribute_event,
+    NotificationTransition, RecipientWindow, SampledEventClock, after_write, distribute_event,
     read_committed_history_snapshot,
 };
 
@@ -193,8 +193,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let fallback = system_utc_recipient_filter_time(system_utc);
         let (notification, recipients) = {
             let mut db = db.write().await;
+            // The Device clock's frame, else the system clock's UTC day and
+            // time, as the server has always judged windows.
+            let window = RecipientWindow::Frame {
+                fallback: Some(fallback),
+            };
             let distribution =
-                distribute_event(&mut db, ctx.device, oid, transition.into(), fallback);
+                distribute_event(&mut db, ctx.device, oid, transition.into(), window);
             match distribution.clock {
                 SampledEventClock::Valid(_) => {}
                 SampledEventClock::Unavailable => {
