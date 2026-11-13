@@ -15,7 +15,7 @@
 use alloc::vec::Vec;
 
 use bacnet_encoding::apdu::{AbortPdu, Apdu, ComplexAck, SimpleAck, decode_apdu};
-use bacnet_encoding::constructed::encode_event_notification_of;
+use bacnet_encoding::constructed::{ALL_NOTIFICATION_FORMS, encode_event_notification_of};
 use bacnet_encoding::npdu::view::NetworkPriority;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::event::EventTransition;
@@ -46,8 +46,14 @@ use crate::responder::{Inbound, Outcome, Written};
 
 /// The event-value forms the reporter's notifications carry: those
 /// intrinsic reporting builds, so an image links no other form's encoder
-/// (#2524). An acknowledgement's notification carries none.
-const REPORTED_FORMS: u32 = INTRINSIC_FORMS;
+/// (#2524), and with `event-enrollment` every form, for the enrollment
+/// pass to distribute (#2319). An acknowledgement's notification carries
+/// none.
+const REPORTED_FORMS: u32 = if cfg!(feature = "event-enrollment") {
+    ALL_NOTIFICATION_FORMS
+} else {
+    INTRINSIC_FORMS
+};
 
 /// The event path's schedule.
 #[derive(Debug)]
