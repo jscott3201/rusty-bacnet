@@ -6,7 +6,7 @@ use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::LocalConfigurationReadError;
-use super::support::classify_required_property_read_error;
+use super::classify_required_property_read_error;
 
 /// Fault algorithms intentionally implemented by the Event Enrollment core.
 ///
@@ -14,29 +14,51 @@ use super::support::classify_required_property_read_error;
 /// representation; it does not claim the full datatype-dependent model in
 /// ASHRAE 135-2020 Clause 13.4.7.
 #[derive(Debug, Clone, PartialEq)]
-pub(super) enum SupportedFaultAlgorithm {
+pub enum SupportedFaultAlgorithm {
+    /// FAULT_NONE: the monitored object's reliability alone.
     None,
-    StatusFlags { object_identifier: ObjectIdentifier },
-    OutOfRange { min_normal: f64, max_normal: f64 },
+    /// FAULT_STATUS_FLAGS: the referenced object's Status_Flags FAULT bit.
+    StatusFlags {
+        /// The object whose Status_Flags is read.
+        object_identifier: ObjectIdentifier,
+    },
+    /// FAULT_OUT_OF_RANGE: a numeric value outside the normal range.
+    OutOfRange {
+        /// The lowest normal value.
+        min_normal: f64,
+        /// The highest normal value.
+        max_normal: f64,
+    },
 }
 
+/// The monitored object's Reliability as a pass read it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum MonitoredReliability {
+pub enum MonitoredReliability {
+    /// It has no Reliability property.
     Absent,
+    /// Its Reliability.
     Value(Reliability),
+    /// The read showed a configuration the pass can't use.
     ConfigurationError,
+    /// The read failed for now.
     ObservationUnavailable,
 }
 
+/// What a fault algorithm found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum FaultAlgorithmEvaluation {
+pub enum FaultAlgorithmEvaluation {
+    /// No fault.
     Healthy,
+    /// A fault, with the Reliability it gives.
     Fault(Reliability),
+    /// The configuration can't be evaluated.
     ConfigurationError,
+    /// The input couldn't be observed this pass.
     ObservationUnavailable,
 }
 
-pub(super) fn read_event_parameters(
+/// Read and decode the enrollment's Event_Parameters.
+pub fn read_event_parameters(
     enrollment: &dyn BACnetObject,
 ) -> Result<BACnetEventParameter, LocalConfigurationReadError> {
     match enrollment.read_property(PropertyIdentifier::EVENT_PARAMETERS, None) {
@@ -53,7 +75,9 @@ pub(super) fn read_event_parameters(
     }
 }
 
-pub(super) fn read_fault_algorithm(
+/// Read the enrollment's Fault_Parameters as the fault algorithm it names,
+/// resolving a reference to `local_device`.
+pub fn read_fault_algorithm(
     enrollment: &dyn BACnetObject,
     local_device: LocalDevice,
 ) -> Result<SupportedFaultAlgorithm, LocalConfigurationReadError> {
@@ -101,7 +125,8 @@ pub(super) fn read_fault_algorithm(
     }
 }
 
-pub(super) fn read_monitored_reliability(object: &dyn BACnetObject) -> MonitoredReliability {
+/// Read the monitored object's Reliability.
+pub fn read_monitored_reliability(object: &dyn BACnetObject) -> MonitoredReliability {
     match object.read_property(PropertyIdentifier::RELIABILITY, None) {
         Ok(PropertyValue::Enumerated(value)) => {
             MonitoredReliability::Value(Reliability::from_raw(value))
@@ -112,7 +137,8 @@ pub(super) fn read_monitored_reliability(object: &dyn BACnetObject) -> Monitored
     }
 }
 
-pub(super) fn evaluate_fault_algorithm(
+/// Run `algorithm` over what the pass read.
+pub fn evaluate_fault_algorithm(
     db: &ObjectDatabase,
     algorithm: &SupportedFaultAlgorithm,
     monitored_value: Option<&PropertyValue>,

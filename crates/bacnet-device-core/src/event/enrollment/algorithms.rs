@@ -17,6 +17,8 @@
 //!
 //! [`BACnetEventParameter`]: bacnet_types::constructed::BACnetEventParameter
 
+use alloc::vec::Vec;
+
 use bacnet_types::constructed::{BACnetPropertyStates, ChangeOfValueCriteria};
 use bacnet_types::enums::{EventState, EventType};
 use bacnet_types::primitives::PropertyValue;
@@ -41,7 +43,7 @@ use bacnet_types::primitives::PropertyValue;
 /// pTimeDelayNormal) carries the enrollment back into the algorithm's state
 /// space. A rewriting client observing pCurrentState in-event gets exactly
 /// the fresh-evaluation view the standard assumes.
-pub(crate) struct ArmEvaluation {
+pub struct ArmEvaluation {
     /// The transition the algorithm indicated, if any condition was true.
     pub indication: Option<Indication>,
     /// A CHANGE_OF_VALUE baseline to install *this cycle, without indicating
@@ -69,7 +71,7 @@ impl ArmEvaluation {
 /// The driver still owes the delay gate (Clause 13.3's persistence requirement
 /// over pTimeDelay / pTimeDelayNormal) before this becomes a fired transition; an
 /// indication only asserts that an algorithm condition is currently true.
-pub(crate) struct Indication {
+pub struct Indication {
     /// The specific BACnetEventState the algorithm returned. Stored verbatim
     /// in `Event_State` when the transition fires (Clause 13.2.2.1.4 requires
     /// the specific result, so HIGH_LIMIT cannot be replaced with OFFNORMAL).
@@ -105,7 +107,7 @@ pub(crate) struct Indication {
 /// 13.3.3); a change has to be measured from it once the inhibit clears. A
 /// NORMAL enrollment keeps its baseline while inhibited, so a change made
 /// meanwhile is reported, after its delay, once the inhibit clears.
-pub(crate) fn inhibited_arm(
+pub fn inhibited_arm(
     params: &bacnet_types::constructed::BACnetEventParameter,
     monitored_value: &PropertyValue,
     current: EventState,
@@ -390,7 +392,7 @@ fn eval_change_of_value(params: &[u8], value: f32, _current: EventState) -> Even
 /// all state-changing, and persistence inside the band satisfies none of
 /// the conditions described in the common introduction), so the hysteresis
 /// result yields an indication only when it differs from the current state.
-pub(crate) fn eval_out_of_range_struct(
+pub fn eval_out_of_range_struct(
     low_limit: f32,
     high_limit: f32,
     deadband: f32,
@@ -409,7 +411,7 @@ pub(crate) fn eval_out_of_range_struct(
 ///
 /// Same indication shape as OUT_OF_RANGE: Clause 13.3.5's conditions are all
 /// state-changing, so persistence inside the deadband yields no indication.
-pub(crate) fn eval_floating_limit_struct(
+pub fn eval_floating_limit_struct(
     setpoint: f32,
     high_diff_limit: f32,
     low_diff_limit: f32,
@@ -444,10 +446,14 @@ fn property_state_matches(state: &BACnetPropertyStates, value: PropertyStateValu
 
 /// Monitored value forms accepted by `BACnetPropertyStates`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PropertyStateValue {
+pub enum PropertyStateValue {
+    /// A BOOLEAN.
     Boolean(bool),
+    /// A Signed.
     Signed(i32),
+    /// An Unsigned.
     Unsigned(u64),
+    /// An Enumerated.
     Enumerated(u32),
 }
 
@@ -485,7 +491,7 @@ impl PropertyStateValue {
 /// the clause requires the monitored value to stay within the pAlarmValues set
 /// for pTimeDelay. Condition (c) retains the matched-value identity because it
 /// requires persistence of the particular replacement alarm value.
-pub(crate) fn eval_change_of_state_struct(
+pub fn eval_change_of_state_struct(
     alarm_values: &[BACnetPropertyStates],
     value: PropertyStateValue,
     current: EventState,
@@ -555,7 +561,7 @@ fn masked_value_hash(mask: &[u8], value_bits: &[u8]) -> u64 {
 /// (the previous `min(mask, alarm, value)` truncation could report OFFNORMAL
 /// on a prefix match). This is the same zero-fill the pending-condition hash
 /// ([`masked_value_hash`]) and the legacy byte evaluator apply.
-pub(crate) fn eval_change_of_bitstring_struct(
+pub fn eval_change_of_bitstring_struct(
     bitmask: &(u8, Vec<u8>),
     list_of_values: &[(u8, Vec<u8>)],
     value_bits: &[u8],
@@ -628,7 +634,7 @@ pub(crate) fn eval_change_of_bitstring_struct(
 /// indication — target NORMAL, with the current sample installed as the
 /// detection baseline when the transition fires (exactly the 13.3.3 rule
 /// for sampling a new baseline at each NORMAL indication).
-pub(crate) fn eval_change_of_value_struct(
+pub fn eval_change_of_value_struct(
     criteria: &ChangeOfValueCriteria,
     monitored_value: &PropertyValue,
     baseline: Option<&PropertyValue>,
@@ -760,7 +766,7 @@ fn eval_legacy_le(
 /// enrollment left offnormal by earlier parameters returns to NORMAL, with
 /// the usual TO_NORMAL transition. NORMAL and FAULT stay as they are; fault
 /// detection runs before this (#1868).
-pub(crate) fn eval_none_arm(current: EventState) -> ArmEvaluation {
+pub fn eval_none_arm(current: EventState) -> ArmEvaluation {
     let offnormal = current != EventState::NORMAL && current != EventState::FAULT;
     ArmEvaluation::simple(offnormal.then(|| Indication::plain(EventState::NORMAL, 0)))
 }
@@ -769,7 +775,7 @@ pub(crate) fn eval_none_arm(current: EventState) -> ArmEvaluation {
 /// evaluators return a bare state, so "result differs from current" is the
 /// only indication signal available — identical to the pre-#166 transition
 /// predicate, so legacy configurations behave exactly as before.
-pub(crate) fn eval_legacy_le_arm(
+pub fn eval_legacy_le_arm(
     data: &[u8],
     monitored_value: &PropertyValue,
     current: EventState,
@@ -780,7 +786,7 @@ pub(crate) fn eval_legacy_le_arm(
 }
 
 /// Extract a real (f32) value from a PropertyValue.
-pub(crate) fn extract_real(pv: &PropertyValue) -> Option<f32> {
+pub fn extract_real(pv: &PropertyValue) -> Option<f32> {
     match pv {
         PropertyValue::Real(v) => Some(*v),
         PropertyValue::Double(v) => Some(*v as f32),
@@ -791,7 +797,7 @@ pub(crate) fn extract_real(pv: &PropertyValue) -> Option<f32> {
 }
 
 /// Extract an enumerated (u32) value from a PropertyValue.
-pub(crate) fn extract_enumerated(pv: &PropertyValue) -> Option<u32> {
+pub fn extract_enumerated(pv: &PropertyValue) -> Option<u32> {
     match pv {
         PropertyValue::Enumerated(v) => Some(*v),
         PropertyValue::Unsigned(v) => u32::try_from(*v).ok(),
@@ -800,7 +806,7 @@ pub(crate) fn extract_enumerated(pv: &PropertyValue) -> Option<u32> {
 }
 
 /// Extract a monitored value accepted by the PropertyStates CHOICE.
-pub(crate) fn extract_property_state_value(pv: &PropertyValue) -> Option<PropertyStateValue> {
+pub fn extract_property_state_value(pv: &PropertyValue) -> Option<PropertyStateValue> {
     match pv {
         PropertyValue::Boolean(value) => Some(PropertyStateValue::Boolean(*value)),
         PropertyValue::Signed(value) => Some(PropertyStateValue::Signed(*value)),
@@ -811,7 +817,7 @@ pub(crate) fn extract_property_state_value(pv: &PropertyValue) -> Option<Propert
 }
 
 /// Extract bitstring bytes from a PropertyValue.
-pub(crate) fn extract_bitstring(pv: &PropertyValue) -> Option<Vec<u8>> {
+pub fn extract_bitstring(pv: &PropertyValue) -> Option<Vec<u8>> {
     match pv {
         PropertyValue::BitString { data, .. } => Some(data.clone()),
         _ => None,
