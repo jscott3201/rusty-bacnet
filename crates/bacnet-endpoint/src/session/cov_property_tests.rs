@@ -122,7 +122,7 @@ fn alone(what: &str, sent: &[Bytes]) -> Bytes {
 impl Pair {
     /// The application writes `value` to `property` of `object` on both
     /// hosts: the notifications that follow, which must match.
-    async fn write(
+    pub(super) async fn write(
         &mut self,
         what: &str,
         object: ObjectIdentifier,

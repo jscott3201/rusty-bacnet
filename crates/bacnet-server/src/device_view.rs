@@ -30,7 +30,8 @@ use std::sync::OnceLock;
 pub(crate) enum DeviceExecution {
     FullServer,
     /// An endpoint's responder: ReadProperty, and each service its session
-    /// enabled. `cov` is SubscribeCOV and SubscribeCOVProperty (#2490).
+    /// enabled. `cov` is SubscribeCOV, SubscribeCOVProperty and
+    /// SubscribeCOVPropertyMultiple (#2490).
     Endpoint {
         writes: bool,
         reinitialize: bool,
@@ -57,6 +58,7 @@ impl DeviceExecution {
                 if cov {
                     services.push(ServiceSupported::SUBSCRIBE_COV);
                     services.push(ServiceSupported::SUBSCRIBE_COV_PROPERTY);
+                    services.push(ServiceSupported::SUBSCRIBE_COV_PROPERTY_MULTIPLE);
                 }
                 services
             }
@@ -72,17 +74,15 @@ impl DeviceExecution {
     }
 
     /// The Device's COV subscription lists this execution serves: both for
-    /// the full server; for an endpoint that runs SubscribeCOV and
-    /// SubscribeCOVProperty only Active_COV_Subscriptions, since
-    /// Active_COV_Multiple_Subscriptions belongs to a device that runs
-    /// SubscribeCOVPropertyMultiple (Table 12-13, notes 9 and 18).
+    /// the full server and for an endpoint with COV on, which runs
+    /// SubscribeCOVPropertyMultiple too (Table 12-13, notes 9 and 18);
+    /// neither for an endpoint without it.
     fn cov_lists(self) -> &'static [P] {
         match self {
-            Self::FullServer => &[
+            Self::FullServer | Self::Endpoint { cov: true, .. } => &[
                 P::ACTIVE_COV_SUBSCRIPTIONS,
                 P::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS,
             ],
-            Self::Endpoint { cov: true, .. } => &[P::ACTIVE_COV_SUBSCRIPTIONS],
             Self::Endpoint { cov: false, .. } => &[],
         }
     }

@@ -24,8 +24,9 @@ fn property_error(class: ErrorClass, code: ErrorCode) -> Error {
     Error::protocol(class, code)
 }
 
-/// Tells the session's COV reporting, as it drops, that a SubscribeCOV's or
-/// SubscribeCOVProperty's reply has gone or won't: the first notification
+/// Tells the session's COV reporting, as it drops, that a subscribe
+/// request's reply (SubscribeCOV, SubscribeCOVProperty or
+/// SubscribeCOVPropertyMultiple) has gone or won't: the first notification
 /// may follow it now.
 struct Replied<'a>(&'a dyn EndpointCov);
 
@@ -81,8 +82,9 @@ fn device_write_target<'a>(
 ///
 /// Handles `ReadProperty`, optionally authorized local Device
 /// Description/active recipient `WriteProperty`, optionally `ReinitializeDevice`
-/// through its handler, optionally `SubscribeCOV` and `SubscribeCOVProperty`
-/// through its session's COV reporting (#2490), plus `Reject`/`Abort`. Full service parity is a later
+/// through its handler, optionally `SubscribeCOV`, `SubscribeCOVProperty`
+/// and `SubscribeCOVPropertyMultiple` through its session's COV reporting
+/// (#2490), plus `Reject`/`Abort`. Full service parity is a later
 /// packet. Inbound transactions reuse the
 /// wire invoke ID directly and NEVER allocate from the shared outbound
 /// client ID pool, so equal inbound/outbound numeric IDs stay unambiguous
@@ -199,8 +201,10 @@ impl EndpointResponder {
         self
     }
 
-    /// Run SubscribeCOV and SubscribeCOVProperty through `cov`, which then
-    /// serves the Device's Active_COV_Subscriptions (#2490).
+    /// Run SubscribeCOV, SubscribeCOVProperty and
+    /// SubscribeCOVPropertyMultiple through `cov`, which then serves the
+    /// Device's Active_COV_Subscriptions and
+    /// Active_COV_Multiple_Subscriptions (#2490).
     #[doc(hidden)]
     pub fn with_cov(mut self, cov: Arc<dyn EndpointCov>) -> Self {
         self.cov = Some(cov);
@@ -372,8 +376,8 @@ impl EndpointResponder {
             .as_ref()
             .filter(|_| request.service_choice == ConfirmedServiceChoice::REINITIALIZE_DEVICE);
         let mut after_reply = reinitialize::AfterReply::default();
-        // Set by SubscribeCOV and SubscribeCOVProperty: what it queued goes
-        // once this drops, after the reply has been handed off or abandoned.
+        // Set by the subscribe services: what one queued goes once this
+        // drops, after the reply has been handed off or abandoned.
         let mut _replied = None;
         let response = if request.segmented {
             reply::refuse_segmented(invoke_id)
@@ -402,6 +406,7 @@ impl EndpointResponder {
                 request.service_choice,
                 ConfirmedServiceChoice::SUBSCRIBE_COV
                     | ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY
+                    | ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE
             )
         }) {
             let mut db = self.db().write().await;
