@@ -4,7 +4,7 @@
 
 use super::super::*;
 use super::*;
-use bacnet_device_core::event::CommittedNotificationPayload;
+use crate::event::CommittedNotificationPayload;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_services::alarm_event::NotificationParameters;
 use bacnet_types::primitives::StatusFlags;
@@ -181,8 +181,9 @@ fn floating_limit_setpoint_naming_another_device_stays_unavailable() {
 fn references_naming_the_identity_device_stay_local_beside_a_lower_one() {
     let identity = bacnet_objects::DeviceIdentity::new(100, 0).unwrap();
     let start = |db: &mut ObjectDatabase| {
-        crate::local_device::bind_database(db, &identity);
-        db.add(crate::local_device::lower_device(50)).unwrap();
+        crate::event::enrollment::pass::tests::helpers::bind_database(db, &identity);
+        db.add(crate::event::enrollment::pass::tests::helpers::lower_device(50))
+            .unwrap();
     };
     let (mut db, _, ai_oid) = super::integration::setup_qualified_reference(&[100], 100);
     start(&mut db);

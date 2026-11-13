@@ -488,3 +488,43 @@ fn offnormal_returns_to_normal_under_none_params() {
     // NORMAL stays put under `none`.
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
 }
+
+/// A transition whose payload can't be projected commits and is reported,
+/// but is not delivered: the pass names it among the suppressed, with its
+/// event type, for the host to log (#2319). OUT_OF_RANGE over an Unsigned
+/// monitored value commits HIGH_LIMIT and has no REAL to project; parameters
+/// rewritten to NONE then return it to NORMAL with nothing to project.
+#[test]
+fn a_transition_with_no_payload_is_suppressed_by_event_type() {
+    let (mut db, ee_oid) = setup_on_notification_class(
+        EventType::OUT_OF_RANGE,
+        BACnetEventParameter::OutOfRange {
+            time_delay: 0,
+            low_limit: 20.0,
+            high_limit: 80.0,
+            deadband: 2.0,
+        },
+        90,
+    );
+    let batch = evaluate_event_enrollments_for_delivery(&mut db, 1);
+    assert_eq!(batch.report.transitions.len(), 1);
+    assert!(
+        batch.deliveries.is_empty(),
+        "nothing to project from an Unsigned"
+    );
+    let suppressed = |event_type| {
+        vec![SuppressedDelivery {
+            enrollment_oid: ee_oid,
+            event_type: Some(event_type),
+        }]
+    };
+    assert_eq!(batch.suppressed, suppressed(EventType::OUT_OF_RANGE));
+    // Event_Parameters written as the NONE algorithm.
+    let none = PropertyValue::ApplicationData(vec![0xF8, 0x14]);
+    db.get_mut(&ee_oid)
+        .unwrap()
+        .write_property(PropertyIdentifier::EVENT_PARAMETERS, None, none, None)
+        .unwrap();
+    let batch = evaluate_event_enrollments_for_delivery(&mut db, 1);
+    assert_eq!(batch.suppressed, suppressed(EventType::NONE));
+}

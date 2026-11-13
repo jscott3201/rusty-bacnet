@@ -66,7 +66,7 @@ fn source_rejection_does_not_suppress_changed_reliability_fault_reentry() {
             None,
             PropertyValue::Real(-1.0),
             Some(1),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -117,7 +117,7 @@ fn source_rejection_does_not_suppress_changed_reliability_fault_reentry() {
     );
 
     // Leave the TO_FAULT bit acknowledged: a FAULT re-entry that owes none.
-    crate::test_event_state::commit_event_state(
+    crate::event::enrollment::pass::tests::helpers::commit_event_state(
         db.get_mut(&enrollment_oid).unwrap(),
         EventState::FAULT,
         false,
@@ -129,7 +129,7 @@ fn source_rejection_does_not_suppress_changed_reliability_fault_reentry() {
             None,
             PropertyValue::Real(11.0),
             Some(1),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
 

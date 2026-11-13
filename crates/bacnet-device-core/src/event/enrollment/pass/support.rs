@@ -15,7 +15,7 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use super::EventEnrollmentReliabilityCause;
 use super::algorithms::extract_real;
 use super::commit::{EnrollmentUpdate, ReliabilityUpdate};
-use bacnet_device_core::event::CapturedReferencedValue;
+use crate::event::CapturedReferencedValue;
 
 pub(super) enum SetpointRead {
     Value(f32),

@@ -348,8 +348,16 @@ fn acked_transitions_bit_sets_when_no_ack_required() {
         .unwrap();
         // Stage an already-owed TO_NORMAL ack: through NORMAL with an ack
         // owed, then back to OFFNORMAL with none.
-        crate::test_event_state::commit_event_state(obj, EventState::NORMAL, true);
-        crate::test_event_state::commit_event_state(obj, EventState::OFFNORMAL, false);
+        crate::event::enrollment::pass::tests::helpers::commit_event_state(
+            obj,
+            EventState::NORMAL,
+            true,
+        );
+        crate::event::enrollment::pass::tests::helpers::commit_event_state(
+            obj,
+            EventState::OFFNORMAL,
+            false,
+        );
     }
     assert_eq!(
         acked_transitions(&db, &ee_oid),

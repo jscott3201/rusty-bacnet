@@ -1,27 +1,9 @@
 use bacnet_objects::database::ObjectDatabase;
-use bacnet_objects::event::EventStateChange;
-use bacnet_types::enums::EventType;
-use bacnet_types::primitives::ObjectIdentifier;
 
-use super::{EventEnrollmentEvaluationReport, evaluate_event_enrollments_for_delivery};
-
-/// A state transition detected during event enrollment evaluation.
-#[derive(Debug, Clone, PartialEq)]
-pub struct EventEnrollmentTransition {
-    /// The EventEnrollment object that detected the transition.
-    pub enrollment_oid: ObjectIdentifier,
-    /// The monitored object whose property triggered the transition.
-    pub monitored_oid: ObjectIdentifier,
-    /// The detected state change. `from == to` is a genuine same-state
-    /// transition emitted by applicable event algorithms.
-    pub change: EventStateChange,
-    /// The event type that was evaluated.
-    pub event_type: EventType,
-    /// Whether `Event_Enable` permits distributing a notification for this
-    /// transition. The transition is reported and `Event_State` persisted
-    /// either way; a cleared bit suppresses only the outbound notification.
-    pub distribute: bool,
-}
+use super::{
+    EventEnrollmentEvaluationReport, EventEnrollmentTransition,
+    evaluate_event_enrollments_for_delivery,
+};
 
 /// Evaluate all EventEnrollment objects in the database.
 ///
@@ -56,5 +38,7 @@ pub fn evaluate_event_enrollments_report(
     db: &mut ObjectDatabase,
     interval_secs: u64,
 ) -> EventEnrollmentEvaluationReport {
-    evaluate_event_enrollments_for_delivery(db, interval_secs).report
+    let evaluation = evaluate_event_enrollments_for_delivery(db, interval_secs);
+    super::log_suppressed_deliveries(&evaluation.suppressed);
+    evaluation.report
 }
