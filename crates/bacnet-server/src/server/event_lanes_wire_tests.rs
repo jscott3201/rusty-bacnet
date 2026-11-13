@@ -223,6 +223,7 @@ async fn a_full_lane_drops_the_newest_and_counts_it() {
         ..ServerConfig::default()
     };
     let rig = Rig::start_with(config, ai_objects).await;
+    let (spy, _guard) = LaneLockSpy::install(&rig.server.notification_transactions);
     rig.hold(true, FAULT);
     let flips = MAX_LANE_ENTRIES + 2;
     for flip in 0..flips {
@@ -240,6 +241,8 @@ async fn a_full_lane_drops_the_newest_and_counts_it() {
     assert_eq!(counters.lane_full, 1, "one past the 64 waiting");
     assert_eq!((counters.lanes_entries_full, counters.lanes_full), (0, 0));
     assert!(counters.cov_wait_expired >= 1);
+    // The drop's warning went out after the lanes' lock was let go.
+    spy.assert_logged_unlocked(1);
     rig.release();
     let wire = rig.wait_wire(flips - 1).await;
     assert_eq!(wire.len(), flips - 1, "the held one and the 64 behind it");

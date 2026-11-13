@@ -81,6 +81,7 @@ async fn a_server_dropped_without_stop_sends_nothing_more() {
 #[tokio::test(start_paused = true)]
 async fn a_send_that_panics_does_not_strand_its_lane() {
     let rig = Rig::start(ai_objects).await;
+    let (spy, _guard) = LaneLockSpy::install(&rig.server.notification_transactions);
     *rig.probe.panic_on.lock().unwrap() = Some(FAULT);
     rig.reliability(Reliability::NO_SENSOR).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -91,6 +92,9 @@ async fn a_send_that_panics_does_not_strand_its_lane() {
     );
     rig.reliability(Reliability::NO_FAULT_DETECTED).await;
     assert_eq!(rig.wait_wire(1).await, [ev(ai1(), NORMAL)]);
+    // The early end's warning, and the panic's as the next push reaps the
+    // task, went out after the lanes' lock was let go.
+    spy.assert_logged_unlocked(2);
     let lanes = lanes(&rig.server.notification_transactions);
     assert_eq!((lanes.open(), lanes.waiting()), (0, 0));
 }

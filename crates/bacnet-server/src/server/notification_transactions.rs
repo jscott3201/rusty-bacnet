@@ -88,7 +88,7 @@ pub struct NotificationTransactions {
     /// each lane drained by a task of its own (#2537). Made on first use (a
     /// push, or the seal at `stop()` or the drop), so a server that sends no
     /// event notification allocates nothing for them.
-    pub(super) event_lanes: std::sync::OnceLock<Box<Mutex<super::event_send::EventLanes>>>,
+    pub(super) event_lanes: std::sync::OnceLock<Box<super::event_send::LaneState>>,
 }
 
 type ReporterFailureQueue = (

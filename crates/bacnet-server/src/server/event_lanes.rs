@@ -11,10 +11,12 @@
 //! its first attempt is handed off; its retries run in its worker.
 //!
 //! The lane map is a `std::sync::Mutex`, taken after the database guard and
-//! never held across an await. A push never waits, so a writer holding the
-//! database guard never blocks here: past [`MAX_LANE_ENTRIES`] on its lane,
-//! [`MAX_LANED_ENTRIES`] in all or [`MAX_LANES`] destinations, the newest
-//! entry is dropped and counted. A lane's task takes no database lock.
+//! never held across an await, nor while anything is logged, since a
+//! subscriber that reads the counters takes it too. A push never waits, so
+//! a writer holding the database guard never blocks here: past
+//! [`MAX_LANE_ENTRIES`] on its lane, [`MAX_LANED_ENTRIES`] in all or
+//! [`MAX_LANES`] destinations, the newest entry is dropped and counted. A
+//! lane's task takes no database lock.
 //!
 //! A writer that reports a change by COV after its event notifications
 //! (#889) gathers its pushes in a [`Settle`]: each entry carries a token,
@@ -188,6 +190,15 @@ pub(in crate::server) async fn settled_within(
     tokio::time::timeout(timeout, receiver).await.is_ok()
 }
 
+/// The lanes behind their lock, made the first time they are needed, and
+/// the throttle on the warning for a dropped notification beside it, so the
+/// warning goes out after the lock is let go.
+#[derive(Default)]
+pub(in crate::server) struct LaneState {
+    lanes: std::sync::Mutex<EventLanes>,
+    warning: bacnet_transport::warn_throttle::WarnThrottle,
+}
+
 /// The lanes: each destination's waiting entries, and the tasks that drain
 /// them, kept with the server's notification transactions.
 #[derive(Default)]
@@ -202,8 +213,6 @@ pub(in crate::server) struct EventLanes {
     /// not with the server's other undelivered-notification counters, so a
     /// server that never sends an event notification keeps nothing for them.
     counts: LaneCounts,
-    /// The throttle on the warning for a dropped notification.
-    warning: bacnet_transport::warn_throttle::WarnThrottle,
 }
 
 /// The lanes' part of [`EventNotificationCounters`], each saturating.
@@ -393,6 +402,18 @@ pub(in crate::server) async fn lanes_drained(transactions: &NotificationTransact
     panic!("a lane is still open");
 }
 
+/// Whether `transactions`' lanes are locked: on a current-thread runtime,
+/// by the caller's own thread. For tests that log through a subscriber.
+#[cfg(test)]
+pub(in crate::server) fn lanes_held(transactions: &NotificationTransactions) -> bool {
+    transactions.event_lanes.get().is_some_and(|state| {
+        matches!(
+            state.lanes.try_lock(),
+            Err(std::sync::TryLockError::WouldBlock)
+        )
+    })
+}
+
 /// Log a lane task that panicked, as it is reaped.
 fn observe(result: Result<(), tokio::task::JoinError>) {
     if let Err(error) = result
@@ -402,16 +423,26 @@ fn observe(result: Result<(), tokio::task::JoinError>) {
     }
 }
 
+/// `transactions`' lane state, made the first time it is needed: one
+/// structure, whichever caller gets there first.
+fn lane_state(transactions: &NotificationTransactions) -> &LaneState {
+    transactions.event_lanes.get_or_init(Box::default)
+}
+
+impl LaneState {
+    fn lock(&self) -> std::sync::MutexGuard<'_, EventLanes> {
+        self.lanes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
 /// `transactions`' lanes, under their lock, made the first time they are
-/// needed: one structure, whichever caller gets there first.
+/// needed. Nothing is logged while the guard is held.
 pub(in crate::server) fn lanes(
     transactions: &NotificationTransactions,
 ) -> std::sync::MutexGuard<'_, EventLanes> {
-    transactions
-        .event_lanes
-        .get_or_init(Box::default)
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    lane_state(transactions).lock()
 }
 
 /// `transactions`' lanes, under their lock, if anything has made them: a
@@ -419,12 +450,7 @@ pub(in crate::server) fn lanes(
 pub(in crate::server) fn made_lanes(
     transactions: &NotificationTransactions,
 ) -> Option<std::sync::MutexGuard<'_, EventLanes>> {
-    let lanes = transactions.event_lanes.get()?;
-    Some(
-        lanes
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner),
-    )
+    Some(transactions.event_lanes.get()?.lock())
 }
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
@@ -436,7 +462,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         entry: LaneEntry,
         handles: &mut LaneHandles<T>,
     ) {
-        let mut lanes = lanes(ctx.notification_transactions);
+        let state = lane_state(ctx.notification_transactions);
+        let mut lanes = state.lock();
+        // What the push has to log, logged once the lock is let go.
+        let mut ended = Vec::new();
+        let mut dropped = None;
         match lanes.push(destination, entry) {
             Pushed::Joined | Pushed::Sealed => {}
             Pushed::Opened => {
@@ -448,19 +478,24 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let destination = destination.clone();
                 // Lanes come and go; reap the tasks that have finished.
                 while let Some(result) = lanes.tasks.try_join_next() {
-                    observe(result);
+                    if result.is_err() {
+                        ended.push(result);
+                    }
                 }
                 lanes
                     .tasks
                     .spawn(async move { Self::drain_lane(owned, destination).await });
             }
-            Pushed::Dropped(bound) => {
-                warn_throttled!(
-                    lanes.warning,
-                    ?bound,
-                    "Event notification lanes full; notification dropped"
-                );
-            }
+            Pushed::Dropped(bound) => dropped = Some(bound),
+        }
+        drop(lanes);
+        ended.into_iter().for_each(observe);
+        if let Some(bound) = dropped {
+            warn_throttled!(
+                state.warning,
+                ?bound,
+                "Event notification lanes full; notification dropped"
+            );
         }
     }
 
@@ -532,28 +567,32 @@ impl<T: TransportPort + 'static> Drop for LaneTask<T> {
         let Some(at) = lanes.position(&self.destination).filter(|_| !lanes.sealed) else {
             return;
         };
-        // Said now, not when the task is reaped. Under Tokio a panicking
-        // task's state drops after the panic is caught, so `panicking()` is
-        // mostly false here; the early end is what shows it.
+        let waiting = lanes.lanes[at].entries.len();
+        let gone = if waiting == 0 || tokio::runtime::Handle::try_current().is_err() {
+            let lane = lanes.lanes.swap_remove(at);
+            lanes.entries -= lane.entries.len();
+            Some(lane)
+        } else {
+            let owned = Arc::clone(&self.owned);
+            let destination = self.destination.clone();
+            lanes
+                .tasks
+                .spawn(async move { BACnetServer::<T>::drain_lane(owned, destination).await });
+            None
+        };
+        drop(lanes);
+        // Said now, not when the task is reaped, and after the lock is let
+        // go. Under Tokio a panicking task's state drops after the panic is
+        // caught, so `panicking()` is mostly false here; the early end is
+        // what shows it.
         warn!(
             destination = ?self.destination,
             panicking = std::thread::panicking(),
-            waiting = lanes.lanes[at].entries.len(),
+            waiting,
             "An event notification lane's task ended before its lane was empty; \
              the entry it was sending is lost"
         );
-        if lanes.lanes[at].entries.is_empty() || tokio::runtime::Handle::try_current().is_err() {
-            let lane = lanes.lanes.swap_remove(at);
-            lanes.entries -= lane.entries.len();
-            drop(lanes);
-            drop(lane);
-            return;
-        }
-        let owned = Arc::clone(&self.owned);
-        let destination = self.destination.clone();
-        lanes
-            .tasks
-            .spawn(async move { BACnetServer::<T>::drain_lane(owned, destination).await });
+        drop(gone);
     }
 }
 

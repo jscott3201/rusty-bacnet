@@ -81,6 +81,72 @@ enum Sent {
     Cov(ObjectIdentifier),
 }
 
+/// A subscriber that, at each event this crate logs, tries the lanes' lock
+/// as a layer reading `event_notification_counters()` would take it, on
+/// the same thread. An event that finds it held would deadlock such a
+/// layer, so the lanes log only after letting it go. Install it on a
+/// current-thread runtime, where only the logging thread can hold it.
+#[derive(Clone)]
+struct LaneLockSpy {
+    transactions: Arc<NotificationTransactions>,
+    /// Events seen, and the messages of those that found the lock held.
+    seen: Arc<StdMutex<(usize, Vec<String>)>>,
+}
+
+impl LaneLockSpy {
+    fn install(
+        transactions: &Arc<NotificationTransactions>,
+    ) -> (Self, tracing::subscriber::DefaultGuard) {
+        let spy = Self {
+            transactions: Arc::clone(transactions),
+            seen: Arc::default(),
+        };
+        let guard = tracing::subscriber::set_default(spy.clone());
+        (spy, guard)
+    }
+
+    /// Every event this crate logged so far, and whether any found the
+    /// lanes' lock held.
+    fn assert_logged_unlocked(&self, at_least: usize) {
+        let (events, held) = &*self.seen.lock().unwrap();
+        assert!(*events >= at_least, "{events} events logged");
+        assert!(held.is_empty(), "logged under the lanes' lock: {held:?}");
+    }
+}
+
+struct Message<'a>(&'a mut String);
+
+impl tracing::field::Visit for Message<'_> {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "message" {
+            *self.0 = format!("{value:?}");
+        }
+    }
+}
+
+impl tracing::Subscriber for LaneLockSpy {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        metadata.target().starts_with("bacnet_server")
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        let held = super::lanes::lanes_held(&self.transactions);
+        let mut seen = self.seen.lock().unwrap();
+        seen.0 += 1;
+        if held {
+            let mut message = String::new();
+            event.record(&mut Message(&mut message));
+            seen.1.push(message);
+        }
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
 /// A broadcast transition of `object` to `to`.
 fn ev(object: ObjectIdentifier, to: u32) -> Sent {
     Sent::Event {
