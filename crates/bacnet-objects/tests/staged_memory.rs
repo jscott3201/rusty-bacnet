@@ -1,6 +1,7 @@
-//! What a staged request holds of an object's kept rows (#2414). A peer can
-//! send thousands of writes to one object in one WritePropertyMultiple; the
-//! stage keeps the rows they leave once, not once a write. Measured in live
+//! What a staged request holds of an object's kept rows (#2414) and of a
+//! log's reporting settings (#2431). A peer can send thousands of writes to
+//! one object in one WritePropertyMultiple; the stage keeps the rows they
+//! leave once, not once a write. Measured in live
 //! heap octets through this binary's own allocator, which counts what is
 //! allocated and not yet freed, on every thread (the save writer's too).
 //! One test, so nothing else in the process allocates meanwhile.
@@ -11,11 +12,14 @@ use std::sync::{Arc, Mutex};
 
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::durable::{PendingWrite, StageStep};
+use bacnet_objects::log_persistence::{LogPersistence, LogSnapshot};
 use bacnet_objects::multistate::{
     MAX_KEPT_STATE_TEXT_OCTETS, MAX_NUMBER_OF_STATES, MultiStateInputObject,
 };
 use bacnet_objects::traits::BACnetObject;
+use bacnet_objects::trend::TrendLogObject;
 use bacnet_objects::write_config::{WriteConfigPersistence, WriteConfigSnapshot};
+use bacnet_types::constructed::BACnetLogRecord;
 use bacnet_types::enums::{EngineeringUnits, PropertyIdentifier as P};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
@@ -143,4 +147,41 @@ fn a_stage_holds_the_rows_once_whatever_its_number_of_writes() {
     eprintln!("Time_Delay, {WRITES} writes: {held} octets held");
     // Kept once a write, the 64 KiB of texts are about 128 MiB.
     assert!(held < 1 << 20, "{held} octets held by the stage");
+
+    // A log keeps its reporting settings the same way (#2431): a Trend Log
+    // whose kept Description and message texts are at their 16 KiB caps,
+    // its Notification_Class written over and over.
+    let mut log =
+        TrendLogObject::with_persistence(1, "TL", 16, Arc::new(LogMemory::default())).unwrap();
+    log.write_property(P::DESCRIPTION, None, long(), None)
+        .unwrap();
+    let texts = PropertyValue::List(vec![long(), long(), long()]);
+    log.write_property(P::EVENT_MESSAGE_TEXTS_CONFIG, None, texts, None)
+        .unwrap();
+    let writes: Vec<PendingWrite> = (0..WRITES)
+        .map(|at| PendingWrite {
+            property: P::NOTIFICATION_CLASS,
+            array_index: None,
+            value: PropertyValue::Unsigned(at as u64),
+        })
+        .collect();
+    let held = staged_octets(&mut log, &writes);
+    eprintln!("Trend Log Notification_Class, {WRITES} writes: {held} octets held");
+    // Kept once a write, the 64 KiB of texts are about 128 MiB.
+    assert!(held < 1 << 20, "{held} octets held by the stage");
+}
+
+/// A log's storage in memory: the last snapshot committed.
+#[derive(Default)]
+struct LogMemory(Mutex<Option<LogSnapshot<BACnetLogRecord>>>);
+
+impl LogPersistence<BACnetLogRecord> for LogMemory {
+    fn load(&self, _: ObjectIdentifier) -> Result<Option<LogSnapshot<BACnetLogRecord>>, Error> {
+        Ok(self.0.lock().unwrap().clone())
+    }
+
+    fn commit(&self, snapshot: &LogSnapshot<BACnetLogRecord>) -> Result<(), Error> {
+        *self.0.lock().unwrap() = Some(snapshot.clone());
+        Ok(())
+    }
 }
