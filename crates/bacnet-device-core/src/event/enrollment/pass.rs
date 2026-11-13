@@ -26,7 +26,7 @@ pub use commit::{
     EventEnrollmentEvaluationBatch,
 };
 use commit::{EnrollmentUpdate, FiredTransition, apply_updates_for_delivery};
-pub use commit::{EventEnrollmentTransition, SuppressedDelivery};
+pub use commit::{EventEnrollmentTransition, SuppressedDelivery, SuppressionCause};
 use fault::{
     FaultAlgorithmEvaluation, MonitoredReliability, SupportedFaultAlgorithm,
     evaluate_fault_algorithm, read_event_parameters, read_fault_algorithm,

@@ -1919,6 +1919,17 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
       notifications. The public surface is the pass, its batch, the
       delivery types and the report types; the algorithms went private,
       and the three legacy encoders only tests use are test-only.
+    - PR 2b: the pass keys its per-enrollment state in B-tree maps, so it
+      needs only `alloc`. Its order is the database's Event Enrollment
+      order, as on dev (the map is only looked up by key): inhibit
+      references are followed in it, commits happen in it, and every list
+      in the batch and every event sequence number follows it; tests pin
+      each. The commit reads back the history it wrote for each delivery
+      (Event_Message_Texts optional), as the intrinsic commit does, so a
+      delivery converts to its notification without the database; one
+      whose history doesn't read back is suppressed with that cause, and
+      the server logs it at debug. What stays in the server: the public
+      wrappers, the log lines, the task and the send.
 
 ## 12. Evidence
 

@@ -12,9 +12,10 @@ use bacnet_types::enums::{EventState, EventType, PropertyIdentifier, Reliability
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use crate::event::{
-    CapturedReferencedValue, CommittedNotificationPayload, EventEnrollmentProjectionSnapshot,
-    SampledEventClock, confirm_event_timestamp, project_event_enrollment_payload,
-    stage_event_timestamp,
+    CapturedReferencedValue, CommittedHistorySnapshot, CommittedNotificationPayload,
+    EventEnrollmentProjectionSnapshot, MessageTexts, NotificationConstruction,
+    NotificationHistorySource, NotificationTransition, SampledEventClock, confirm_event_timestamp,
+    project_event_enrollment_payload, read_committed_history_snapshot, stage_event_timestamp,
 };
 
 /// Stage at which an Event Enrollment observation or commit was evaluated.
@@ -140,7 +141,7 @@ pub enum CommittedEventEnrollmentResult {
 /// One Event Enrollment commit plus policy captured under its database guard.
 ///
 /// Its result may be one the enrollment's `Event_Enable` leaves out: send it
-/// only when the result's `distribute` is set.
+/// only when [`distribute`](Self::distribute) says so.
 #[derive(Debug)]
 pub struct CommittedEventEnrollmentDelivery {
     /// What committed.
@@ -153,6 +154,47 @@ pub struct CommittedEventEnrollmentDelivery {
     pub event_type: EventType,
     /// Its notification payload.
     pub event_values: CommittedNotificationPayload,
+    /// The timestamp and message text the commit wrote at its transition,
+    /// read back under the same guard.
+    pub history_snapshot: CommittedHistorySnapshot,
+}
+
+impl CommittedEventEnrollmentDelivery {
+    /// The enrollment that committed it.
+    pub fn enrollment_oid(&self) -> ObjectIdentifier {
+        match &self.result {
+            CommittedEventEnrollmentResult::Normal(result) => result.enrollment_oid,
+            CommittedEventEnrollmentResult::Reliability(result) => result.enrollment_oid,
+        }
+    }
+
+    /// Whether `Event_Enable` lets it be sent.
+    pub fn distribute(&self) -> bool {
+        match &self.result {
+            CommittedEventEnrollmentResult::Normal(result) => result.distribute,
+            CommittedEventEnrollmentResult::Reliability(result) => result.distribute,
+        }
+    }
+
+    /// The notification to send for it. `None` only for a Reliability
+    /// result with no state change, which a pass never delivers.
+    pub fn into_notification(self) -> Option<NotificationTransition> {
+        let change = match self.result {
+            CommittedEventEnrollmentResult::Normal(result) => result.change,
+            CommittedEventEnrollmentResult::Reliability(result) => result.state_change?,
+        };
+        Some(NotificationTransition {
+            change,
+            event_type: self.event_type,
+            history_source: NotificationHistorySource::Committed {
+                snapshot: self.history_snapshot,
+                recipient_clock: self.recipient_clock,
+            },
+            ack_required: Some(self.ack_required),
+            event_values: Some(self.event_values),
+            construction: NotificationConstruction::Event,
+        })
+    }
 }
 
 /// A state transition detected during event enrollment evaluation.
@@ -191,7 +233,7 @@ pub struct EventEnrollmentEvaluationBatch {
     pub suppressed: Vec<SuppressedDelivery>,
 }
 
-/// A committed transition whose notification payload was refused.
+/// A committed transition whose notification can't be built.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SuppressedDelivery {
     /// The enrollment.
@@ -199,6 +241,18 @@ pub struct SuppressedDelivery {
     /// Its event type for an event transition; `None` for a reliability
     /// (CHANGE_OF_RELIABILITY) one.
     pub event_type: Option<EventType>,
+    /// What couldn't be built.
+    pub cause: SuppressionCause,
+}
+
+/// Why a committed transition isn't delivered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SuppressionCause {
+    /// Its Event Values don't project.
+    Payload,
+    /// The timestamp or message text it committed at this transition
+    /// doesn't read back.
+    History(EventTransition),
 }
 
 /// Coalesced desired mutation for one enrollment and one evaluation pass.
@@ -293,6 +347,21 @@ impl EnrollmentUpdate {
         self.canceled = false;
         self.observation_unavailable = true;
     }
+}
+
+/// Read back what a commit wrote at its transition, for its notification.
+/// Event Enrollment serves Event_Message_Texts as an optional property.
+fn committed_history(
+    db: &ObjectDatabase,
+    oid: &ObjectIdentifier,
+    change: &EventStateChange,
+) -> Result<CommittedHistorySnapshot, SuppressionCause> {
+    let coordinate = change.transition();
+    db.get(oid)
+        .and_then(|object| {
+            read_committed_history_snapshot(object, coordinate, MessageTexts::Optional)
+        })
+        .ok_or(SuppressionCause::History(coordinate))
 }
 
 fn diagnostic(
@@ -510,36 +579,39 @@ pub(super) fn apply_updates_for_delivery(
                 monitored_oid: reliability.monitored_oid,
                 previous_reliability: reliability.previous,
                 new_reliability: reliability.desired,
-                state_change: Some(change),
+                state_change: Some(change.clone()),
                 distribute: reliability.distribute,
                 cause: reliability.cause,
             };
             report.reliability_results.push(result.clone());
             let event_type = EventType::CHANGE_OF_RELIABILITY;
-            if let Some(event_values) = project_event_enrollment_payload(
+            let notification = project_event_enrollment_payload(
                 db,
                 oid,
                 reliability.monitored_oid,
-                result
-                    .state_change
-                    .as_ref()
-                    .expect("committed Reliability delivery has a state change"),
+                &change,
                 event_type,
                 None,
                 Some(&reliability.referenced_value),
-            ) {
-                deliveries.push(CommittedEventEnrollmentDelivery {
-                    result: CommittedEventEnrollmentResult::Reliability(result),
-                    ack_required: reliability.ack_required,
-                    recipient_clock,
-                    event_type,
-                    event_values,
-                });
-            } else {
-                suppressed.push(SuppressedDelivery {
+            )
+            .ok_or(SuppressionCause::Payload)
+            .and_then(|values| Ok((values, committed_history(db, &oid, &change)?)));
+            match notification {
+                Ok((event_values, history_snapshot)) => {
+                    deliveries.push(CommittedEventEnrollmentDelivery {
+                        result: CommittedEventEnrollmentResult::Reliability(result),
+                        ack_required: reliability.ack_required,
+                        recipient_clock,
+                        event_type,
+                        event_values,
+                        history_snapshot,
+                    })
+                }
+                Err(cause) => suppressed.push(SuppressedDelivery {
                     enrollment_oid: oid,
                     event_type: None,
-                });
+                    cause,
+                }),
             }
             continue;
         }
@@ -612,7 +684,7 @@ pub(super) fn apply_updates_for_delivery(
             distribute: fired.distribute,
         };
         report.transitions.push(result.clone());
-        if let Some(event_values) = project_event_enrollment_payload(
+        let notification = project_event_enrollment_payload(
             db,
             oid,
             Some(fired.monitored_oid),
@@ -620,19 +692,25 @@ pub(super) fn apply_updates_for_delivery(
             event_type,
             Some(&fired.projection),
             None,
-        ) {
-            deliveries.push(CommittedEventEnrollmentDelivery {
-                result: CommittedEventEnrollmentResult::Normal(result),
-                ack_required: fired.ack_required,
-                recipient_clock,
-                event_type,
-                event_values,
-            });
-        } else {
-            suppressed.push(SuppressedDelivery {
+        )
+        .ok_or(SuppressionCause::Payload)
+        .and_then(|values| Ok((values, committed_history(db, &oid, &result.change)?)));
+        match notification {
+            Ok((event_values, history_snapshot)) => {
+                deliveries.push(CommittedEventEnrollmentDelivery {
+                    result: CommittedEventEnrollmentResult::Normal(result),
+                    ack_required: fired.ack_required,
+                    recipient_clock,
+                    event_type,
+                    event_values,
+                    history_snapshot,
+                })
+            }
+            Err(cause) => suppressed.push(SuppressedDelivery {
                 enrollment_oid: oid,
                 event_type: Some(event_type),
-            });
+                cause,
+            }),
         }
     }
 

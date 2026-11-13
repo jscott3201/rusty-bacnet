@@ -9,7 +9,7 @@ mod log;
 
 pub use api::{evaluate_event_enrollments, evaluate_event_enrollments_report};
 pub(crate) use bacnet_device_core::event::enrollment::{
-    CommittedEventEnrollmentDelivery, CommittedEventEnrollmentResult, SuppressedDelivery,
+    CommittedEventEnrollmentDelivery, SuppressedDelivery, SuppressionCause,
     evaluate_event_enrollments_for_delivery,
 };
 pub use bacnet_device_core::event::enrollment::{

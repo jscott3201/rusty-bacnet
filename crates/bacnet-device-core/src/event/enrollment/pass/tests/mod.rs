@@ -13,6 +13,7 @@ mod detection_enable;
 mod event_type;
 mod floating_limit;
 mod foreign_state;
+mod history;
 mod inhibit;
 mod integration;
 mod out_of_range;

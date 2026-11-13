@@ -516,6 +516,7 @@ fn a_transition_with_no_payload_is_suppressed_by_event_type() {
         vec![SuppressedDelivery {
             enrollment_oid: ee_oid,
             event_type: Some(event_type),
+            cause: SuppressionCause::Payload,
         }]
     };
     assert_eq!(batch.suppressed, suppressed(EventType::OUT_OF_RANGE));

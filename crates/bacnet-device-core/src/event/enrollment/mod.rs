@@ -15,11 +15,15 @@
 //! A host calls the pass with its database guard held, once per interval,
 //! and gets an `EventEnrollmentEvaluationBatch`: the
 //! `EventEnrollmentEvaluationReport` of what changed, the committed
-//! transitions with a notification payload (`CommittedEventEnrollmentDelivery`)
-//! and the ones whose payload couldn't be built (`SuppressedDelivery`), for
-//! it to log. A delivery is not yet a send: it may be a transition the
-//! enrollment's `Event_Enable` leaves out, so the host sends only those
-//! whose result has `distribute` set, as the server does.
+//! transitions with what their notification needs
+//! (`CommittedEventEnrollmentDelivery`: the payload and the history the
+//! commit wrote, read back under the same guard) and the ones whose payload
+//! or history couldn't be built (`SuppressedDelivery`), for it to log. A
+//! delivery is not yet a send: it may be a transition the enrollment's
+//! `Event_Enable` leaves out, so the host sends only those whose
+//! `distribute()` is true, as the server does, and
+//! `CommittedEventEnrollmentDelivery::into_notification` gives the
+//! notification to send, with nothing more to read from the database.
 //!
 //! A pass works through the enrollments in the database's order, the order
 //! they were added in (`ObjectDatabase::find_by_type`), never by
@@ -93,7 +97,7 @@ pub use pass::{
     EventEnrollmentEvaluationOutcome, EventEnrollmentEvaluationReport,
     EventEnrollmentEvaluationStage, EventEnrollmentReliabilityCause,
     EventEnrollmentReliabilityResult, EventEnrollmentTransition, SuppressedDelivery,
-    evaluate_event_enrollments_for_delivery,
+    SuppressionCause, evaluate_event_enrollments_for_delivery,
 };
 
 use bacnet_types::enums::{ErrorClass, ErrorCode};
