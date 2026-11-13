@@ -179,6 +179,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         source.complete_staging_write_plan(plan.generation, all_succeeded)
                     });
                 if changed {
+                    // No test drives a transition here: the built-in Staging
+                    // object has no event reporting, so only an application's
+                    // own source could commit one.
                     commit_written_transition(&mut database, plan.source, &mut transitions);
                     let capture = cov.cov_table.read().await.timed_capture(plan.source);
                     capture.run(&database);

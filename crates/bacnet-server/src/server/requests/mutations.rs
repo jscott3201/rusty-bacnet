@@ -384,12 +384,15 @@ impl Request<'_> {
             // Each written object's transition commits under this guard too,
             // in the order the objects were written. Its attempts were
             // captured as they committed: an object whose transition commits
-            // is captured again, in place of its latest attempt's row, so the
-            // write and its transition are one row (#2535).
+            // is captured again, in place of the newest row of each reference
+            // its attempts queued one for, so the write and its transition
+            // are one row (#2535). A snapshot fanout that drained such a row
+            // in between (it takes no database guard) leaves this capture to
+            // follow it, as two rows.
             for oid in committed_oids {
                 if commit_written_transition(&mut db, *oid, written_transitions) {
                     let capture = cov_table.read().await.timed_capture(*oid);
-                    capture.run_replacing(&db, observer.last_queued(*oid));
+                    capture.run_replacing(&db, observer.queued(*oid));
                 }
             }
             coarse_cov_oids.extend(

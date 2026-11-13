@@ -72,9 +72,10 @@ pub(super) struct Multiple {
     sending: Vec<Sending>,
     /// Confirmed reports out, each with the claim it lodged.
     lodged: Vec<Lodged>,
-    /// What the write request [`Reporter::handle`] runs queued per object, its
-    /// latest attempt's references, kept from the write to the capture after
-    /// the request's transitions (#2535); empty otherwise.
+    /// What the write request [`Reporter::handle`] runs queued per object, the
+    /// references any attempt on it queued a change for, kept from the write
+    /// to the capture after the request's transitions (#2535); empty
+    /// otherwise.
     pub(super) replacing: Vec<(ObjectIdentifier, Vec<CovSubscriptionKey>)>,
 }
 
@@ -208,9 +209,9 @@ impl Reporter {
     }
 
     /// Capture `committed`, the objects a write request's transitions changed,
-    /// after those transitions: each reference the object's latest attempt
-    /// queued a change for has that change replaced, so the write and its
-    /// transition are one row, as on the server (#2535).
+    /// after those transitions: each reference an attempt on the object
+    /// queued a change for has its newest change replaced, so the write and
+    /// its transition are one row, as on the server (#2535).
     pub(super) fn capture_committed(
         &mut self,
         db: &ObjectDatabase,

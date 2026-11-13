@@ -286,10 +286,10 @@ mod timed {
     }
 
     /// A later attempt that changes nothing a reference conveys queues no
-    /// row: the transition it causes is a row of its own, after the earlier
-    /// attempt's, which it doesn't replace.
+    /// row: the transition it causes takes the place of the row the earlier
+    /// attempt queued, the newest each reference has.
     #[test]
-    fn a_transition_from_a_later_attempt_keeps_the_earlier_row() {
+    fn a_transition_from_a_later_attempt_takes_the_earlier_rows_place() {
         let mut device = timestamped();
         out_of_service(&mut device);
         let writes = [
@@ -298,7 +298,38 @@ mod timed {
         ];
         write_multiple(&mut device, &writes, ms(100));
         let rows = rows(&mut device, ms(100));
-        assert_eq!(rows, [row(50.0, OOS), row(50.0, IN_ALARM | OOS)]);
+        assert_eq!(rows, [row(50.0, IN_ALARM | OOS)]);
+    }
+
+    /// The same value written twice queues one row, and the transition the
+    /// first causes takes its place.
+    #[test]
+    fn a_value_written_twice_and_its_transition_are_one_row() {
+        let mut device = timestamped();
+        out_of_service(&mut device);
+        let writes = [
+            (P::PRESENT_VALUE, PropertyValue::Real(90.0)),
+            (P::PRESENT_VALUE, PropertyValue::Real(90.0)),
+        ];
+        write_multiple(&mut device, &writes, ms(100));
+        let rows = rows(&mut device, ms(100));
+        assert_eq!(rows, [row(90.0, IN_ALARM | OOS)]);
+    }
+
+    /// An attempt on a property no reference conveys, after the one that
+    /// moves the value over the limit, leaves that row to take the
+    /// transition.
+    #[test]
+    fn a_transition_after_an_unconveyed_write_is_one_row() {
+        let mut device = timestamped();
+        out_of_service(&mut device);
+        let writes = [
+            (P::PRESENT_VALUE, PropertyValue::Real(90.0)),
+            (P::DESCRIPTION, PropertyValue::CharacterString("x".into())),
+        ];
+        write_multiple(&mut device, &writes, ms(100));
+        let rows = rows(&mut device, ms(100));
+        assert_eq!(rows, [row(90.0, IN_ALARM | OOS)]);
     }
 
     /// The host's own change is evaluated before it is captured: one row.

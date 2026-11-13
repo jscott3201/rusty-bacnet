@@ -34,8 +34,9 @@
 //! A write and the event-state transition it causes are one row (#2535): a
 //! host that captures the write once its transition has committed queues
 //! one, and one that captured each attempt as it committed captures the
-//! object again after its transition with [`CaptureRead::queue_replacing`],
-//! which replaces the latest attempt's row rather than adding a second.
+//! object again after its transition with [`CaptureRead::queue_replacing`].
+//! For each reference some attempt on the object queued a row for, that
+//! replaces the reference's newest row rather than adding a second.
 use alloc::vec::Vec;
 
 use bacnet_objects::clock::ClockFrame;
@@ -276,11 +277,11 @@ impl CaptureRead {
 
     /// [`Self::queue`] for the capture taken after the event-state transition
     /// a write caused, under the write's guard (#2535). A reference among
-    /// `replace`, the ones the write's own capture queued a change for, has
-    /// that change replaced by this one ([`TimedHistories::replace_latest`]),
-    /// so the write and its transition are one row; one the transition moved
-    /// nothing of keeps the write's row. Any other reference queues a change
-    /// of its own, as `queue` does.
+    /// `replace`, the ones the request's captures of the object queued a
+    /// change for, has its newest change replaced by this one
+    /// ([`TimedHistories::replace_latest`]), so the write and its transition
+    /// are one row; one the transition moved nothing of keeps the write's
+    /// row. Any other reference queues a change of its own, as `queue` does.
     pub fn queue_replacing(
         self,
         histories: &mut TimedHistories,
@@ -363,10 +364,10 @@ pub struct TimedWriteCapture<'a, Q> {
     life_safety: Option<LifeSafetyCovSnapshots>,
     /// Life Safety references some attempt queued a change for.
     life_safety_queued: Vec<CovSubscriptionKey>,
-    /// For each ordinary object, the references the request's latest attempt
-    /// on it queued a change for: what a capture after its transition
-    /// replaces ([`CaptureRead::queue_replacing`]).
-    last_queued: Vec<(ObjectIdentifier, Vec<CovSubscriptionKey>)>,
+    /// For each ordinary object, the references any of the request's
+    /// attempts on it queued a change for: what a capture after its
+    /// transition replaces ([`CaptureRead::queue_replacing`]).
+    queued: Vec<(ObjectIdentifier, Vec<CovSubscriptionKey>)>,
 }
 
 impl<'a, Q: CaptureQueue> TimedWriteCapture<'a, Q> {
@@ -385,24 +386,25 @@ impl<'a, Q: CaptureQueue> TimedWriteCapture<'a, Q> {
             request_life_safety: LifeSafetyCovSnapshots::default(),
             life_safety: None,
             life_safety_queued: Vec::new(),
-            last_queued: Vec::new(),
+            queued: Vec::new(),
         }
     }
 
-    /// The references the request's latest attempt on `oid` queued a change
-    /// for, none when that attempt queued none: what the capture after the
-    /// object's transition replaces (#2535).
-    pub fn last_queued(&self, oid: ObjectIdentifier) -> &[CovSubscriptionKey] {
-        self.last_queued
+    /// The references any of the request's attempts on `oid` queued a
+    /// change for, each once: what the capture after the object's transition
+    /// replaces (#2535). An attempt that queued nothing, writing a value
+    /// again or a property no reference conveys, leaves them as they were.
+    pub fn queued(&self, oid: ObjectIdentifier) -> &[CovSubscriptionKey] {
+        self.queued
             .iter()
             .find(|(object, _)| *object == oid)
             .map_or(&[], |(_, keys)| keys.as_slice())
     }
 
-    /// Take [`Self::last_queued`] for every object, for a host that captures
-    /// the transitions once the write is done.
-    pub fn take_last_queued(&mut self) -> Vec<(ObjectIdentifier, Vec<CovSubscriptionKey>)> {
-        core::mem::take(&mut self.last_queued)
+    /// Take [`Self::queued`] for every object, for a host that captures the
+    /// transitions once the write is done.
+    pub fn take_queued(&mut self) -> Vec<(ObjectIdentifier, Vec<CovSubscriptionKey>)> {
+        core::mem::take(&mut self.queued)
     }
 
     /// Life Safety references whose attempts queued timestamped changes. The
@@ -473,11 +475,18 @@ impl<Q: CaptureQueue> WriteCommitObserver for TimedWriteCapture<'_, Q> {
         if !is_life_safety_object(oid) {
             let capture = self.capture.of_object(oid);
             let queued = self.run(capture, db);
-            // Only the latest attempt's row is the write the object's
-            // transition is folded into.
-            self.last_queued.retain(|(object, _)| *object != oid);
-            if !queued.is_empty() {
-                self.last_queued.push((oid, queued));
+            // Every reference an attempt on the object queued a row for has
+            // its newest row folded into the object's transition.
+            match self.queued.iter_mut().find(|(object, _)| *object == oid) {
+                Some((_, keys)) => {
+                    for key in queued {
+                        if !keys.contains(&key) {
+                            keys.push(key);
+                        }
+                    }
+                }
+                None if !queued.is_empty() => self.queued.push((oid, queued)),
+                None => {}
             }
             return;
         }

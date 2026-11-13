@@ -58,7 +58,8 @@ pub(super) fn logged_intrinsic_commit(
 /// captures the write once the transition has committed, so a reference
 /// records the two as one row (#2535). A WritePropertyMultiple, which
 /// captured each attempt as it committed, captures an object whose
-/// transition committed again, replacing its latest attempt's row. A
+/// transition committed again, replacing the newest row of each reference
+/// its attempts queued one for. A
 /// WriteProperty of a Life Safety object takes its exact capture before
 /// this, as the core's request path does.
 ///

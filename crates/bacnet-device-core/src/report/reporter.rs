@@ -251,7 +251,7 @@ impl Reporter {
                 // Changes the request's exact fanout may not select are
                 // looked at again, ahead of the backstop.
                 self.looks.extend_from_slice(timed.life_safety_queued());
-                self.multiple.replacing = timed.take_last_queued();
+                self.multiple.replacing = timed.take_queued();
                 written
             };
             self.after_change(db, &written.objects, &capture.0, Tail::Request, now);
@@ -319,7 +319,7 @@ impl Reporter {
         if tail == Tail::Request {
             // A request's attempts were captured as each committed; a
             // transition committed since takes the place of its object's
-            // latest row, as on the server (#2535).
+            // newest rows, as on the server (#2535).
             self.capture_committed(db, &committed, now);
         } else {
             self.capture_changed(db, objects, snapshots, now);

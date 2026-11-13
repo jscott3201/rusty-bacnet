@@ -117,8 +117,11 @@ impl<T: TransportPort + 'static> LocalWriter<'_, T> {
         // Under the write's guard, the database, then the COV table: the
         // write is captured once its transition has committed, so a
         // timestamped reference gets one row for the two (#2535). A Life
-        // Safety object's exact capture comes after it too, as the core's
-        // host path takes it after its evaluation.
+        // Safety object's exact capture comes after it too: it selects
+        // references by `changes`, worked out when the write committed, and
+        // reads their values now. The built-in Life Safety objects run no
+        // intrinsic reporting, so for them this order changes nothing on the
+        // wire.
         let capture = {
             let table = self.cov_table.read().await;
             if life_safety {

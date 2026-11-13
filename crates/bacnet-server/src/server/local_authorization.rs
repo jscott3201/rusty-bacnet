@@ -80,13 +80,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .expect("admitted point remains under the same database guard")
             .record_access_event_batch(&reports)?;
         let records = committed.iter().map(|event| event.report.clone()).collect();
-        // The references the last event's row was queued for: a transition
-        // of the point is captured in its place (#2535).
-        let mut last_queued = Vec::new();
+        // The references any event queued a row for: a transition of the
+        // point is captured in place of each one's newest row (#2535).
+        let mut queued = Vec::new();
         for event in &committed {
-            last_queued = table
+            let keys = table
                 .timed_capture(oid)
                 .run_from_snapshot(event.snapshot.as_ref(), event.clock_frame);
+            for key in keys {
+                if !queued.contains(&key) {
+                    queued.push(key);
+                }
+            }
         }
         // No await after the atomic install and capture until post-commit work
         // belongs to the server's task set. The COV read guard excludes admission
@@ -104,7 +109,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let sent = &mut transitions;
             if super::event_notifications::commit_written_transition(&mut db, oid, sent) {
                 let capture = fanout.cov_table.read().await.timed_capture(oid);
-                capture.run_replacing(&db, &last_queued);
+                capture.run_replacing(&db, &queued);
             }
             drop(db);
             let delivery = fanout.event_delivery(&routers, &bindings);

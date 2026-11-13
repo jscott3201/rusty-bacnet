@@ -109,3 +109,19 @@ fn an_older_change_given_back_is_not_replaced() {
     drop(newer);
     assert_eq!(seconds(&store.lock().drain(&k, 1).1), [1, 2, 3]);
 }
+
+/// The replaced row's octets and memory leave its context's bound: the
+/// context holds one row's worth, and nothing once it is drained.
+#[test]
+fn a_replaced_row_leaves_its_contexts_bound() {
+    let mut h = histories(8, 4);
+    let k = key(1, 1);
+    h.reset(&k, 1, 0);
+    h.push(&k, 1, change(1, 4));
+    let one = h.context_held.get(&super::tests::context(1)).copied();
+    assert!(one.is_some(), "the write's row is held");
+    h.replace_latest(&k, 1, change(2, 4));
+    assert_eq!(h.context_held.get(&super::tests::context(1)).copied(), one);
+    h.drain(&k, 1);
+    assert!(h.context_held.is_empty(), "{:?}", h.context_held);
+}

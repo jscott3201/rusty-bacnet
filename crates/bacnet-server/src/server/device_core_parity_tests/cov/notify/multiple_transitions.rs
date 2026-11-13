@@ -1,8 +1,9 @@
 //! A write and the event-state transition it causes are one timestamped
 //! row (#2535): the server and the `Reporter` send the same reports, octet
 //! for octet, for a request's fault and its clear, a value over the high
-//! limit, two writes in one WritePropertyMultiple both ways, and a local
-//! write.
+//! limit by WriteProperty and by a WritePropertyMultiple of one, two writes
+//! in one WritePropertyMultiple both ways, one over the limit followed by a
+//! write no reference conveys, and a local write.
 //!
 //! The fixture's AI-3 reports intrinsically (limits 0 and 80, deadband 1,
 //! Time_Delay 0) with an empty Event_Enable, so a transition commits and
@@ -61,6 +62,12 @@ fn real(value: f32) -> Value {
     let mut octets = vec![0x44];
     octets.extend_from_slice(&value.to_be_bytes());
     (P::PRESENT_VALUE, octets)
+}
+
+fn encoded(value: &PropertyValue) -> Vec<u8> {
+    let mut encoded = BytesMut::new();
+    encode_property_value(&mut encoded, value).unwrap();
+    encoded.to_vec()
 }
 
 /// The values of the COV-multiple reports among `frames`, in order.
@@ -153,50 +160,39 @@ impl CovParity {
 
     /// WriteProperty of AI-3's `property`.
     async fn write_alarm(&mut self, what: &str, property: P, value: PropertyValue) -> Vec<Value> {
-        self.write_multiple(what, &[(property, value)]).await
+        let mut body = BytesMut::new();
+        WritePropertyRequest {
+            object_identifier: alarm(),
+            property_identifier: property,
+            property_array_index: None,
+            property_value: encoded(&value),
+            priority: None,
+        }
+        .encode(&mut body)
+        .unwrap();
+        let service = ConfirmedServiceChoice::WRITE_PROPERTY;
+        self.written(what, service, &body).await
     }
 
-    /// WritePropertyMultiple of AI-3's `writes`, in that order; one write
-    /// goes as a WriteProperty.
+    /// WritePropertyMultiple of AI-3's `writes`, in that order.
     async fn write_multiple(&mut self, what: &str, writes: &[(P, PropertyValue)]) -> Vec<Value> {
-        let encode = |value: &PropertyValue| {
-            let mut encoded = BytesMut::new();
-            encode_property_value(&mut encoded, value).unwrap();
-            encoded.to_vec()
-        };
-        let mut body = BytesMut::new();
-        let service = if let [(property, value)] = writes {
-            WritePropertyRequest {
-                object_identifier: alarm(),
+        let property =
+            |(property, value): &(P, PropertyValue)| bacnet_services::common::BACnetPropertyValue {
                 property_identifier: *property,
                 property_array_index: None,
-                property_value: encode(value),
+                value: encoded(value),
                 priority: None,
-            }
-            .encode(&mut body)
-            .unwrap();
-            ConfirmedServiceChoice::WRITE_PROPERTY
-        } else {
-            WritePropertyMultipleRequest {
-                list_of_write_access_specs: vec![WriteAccessSpecification {
-                    object_identifier: alarm(),
-                    list_of_properties: writes
-                        .iter()
-                        .map(
-                            |(property, value)| bacnet_services::common::BACnetPropertyValue {
-                                property_identifier: *property,
-                                property_array_index: None,
-                                value: encode(value),
-                                priority: None,
-                            },
-                        )
-                        .collect(),
-                }],
-            }
-            .encode(&mut body)
-            .unwrap();
-            ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE
-        };
+            };
+        let mut body = BytesMut::new();
+        WritePropertyMultipleRequest {
+            list_of_write_access_specs: vec![WriteAccessSpecification {
+                object_identifier: alarm(),
+                list_of_properties: writes.iter().map(property).collect(),
+            }],
+        }
+        .encode(&mut body)
+        .unwrap();
+        let service = ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE;
         self.written(what, service, &body).await
     }
 
@@ -272,5 +268,32 @@ async fn a_local_write_and_its_transition_are_one_row() {
     assert_eq!(server, core, "the result, server then core");
     assert_eq!(cov.same_notifications("local", &frames, now), 1);
     assert_eq!(values(&frames), [real(90.0), flags(IN_ALARM)]);
+    cov.stop().await;
+}
+
+/// The same write as a WritePropertyMultiple of one: its attempt is captured
+/// as it commits, and the capture after the transition takes its place.
+#[tokio::test(start_paused = true)]
+async fn a_multiple_write_of_one_over_the_limit_is_one_row() {
+    let mut cov = CovParity::start_alarm().await;
+    cov.out_of_service().await;
+    let writes = [(PV, PropertyValue::Real(90.0))];
+    let values = cov.write_multiple("one over", &writes).await;
+    assert_eq!(values, [real(90.0), flags(IN_ALARM | OOS)]);
+    cov.stop().await;
+}
+
+/// A write of a property no reference conveys, after the one over the
+/// limit, leaves that write's row to take the transition.
+#[tokio::test(start_paused = true)]
+async fn a_transition_after_an_unconveyed_write_is_one_row() {
+    let mut cov = CovParity::start_alarm().await;
+    cov.out_of_service().await;
+    let writes = [
+        (PV, PropertyValue::Real(90.0)),
+        (P::DESCRIPTION, PropertyValue::CharacterString("x".into())),
+    ];
+    let values = cov.write_multiple("over, then description", &writes).await;
+    assert_eq!(values, [real(90.0), flags(IN_ALARM | OOS)]);
     cov.stop().await;
 }
