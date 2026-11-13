@@ -31,7 +31,7 @@ use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
 use super::super::{ReportConfig, SWEEP_FLOOR};
-use super::Reporter;
+use super::{Reporter, Tail};
 use crate::cov::life_safety::LifeSafetyCovSnapshots;
 use crate::cov::{Delivery, Token};
 use crate::event::{
@@ -324,20 +324,18 @@ impl Reporter {
         self.report_committed(db, &changed, &snapshots, now);
     }
 
-    /// Report `objects`, which a background pass changed, to COV.
-    pub(super) fn report_committed(
+    /// Report `objects`, which a background pass changed, to COV, through
+    /// the tail every change runs.
+    fn report_committed(
         &mut self,
-        db: &ObjectDatabase,
+        db: &mut ObjectDatabase,
         objects: &[ObjectIdentifier],
         snapshots: &LifeSafetyCovSnapshots,
         now: Instant,
     ) {
-        if objects.is_empty() {
-            return;
+        if !objects.is_empty() {
+            self.after_change(db, objects, snapshots, Tail::Committed, now);
         }
-        #[cfg(feature = "cov-multiple")]
-        self.capture_changed(db, objects, snapshots, now);
-        self.report_changes(db, objects, snapshots, now);
     }
 
     /// Distribute `transition` of `oid`: one notification per recipient its
