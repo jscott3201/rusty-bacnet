@@ -132,6 +132,13 @@ fn state_change_values_are_the_same_set_bit_for_bit() {
             .unwrap(),
         PropertyValue::Real(-0.0)
     );
+    let PropertyValue::Real(served) = zero
+        .read_property(PropertyIdentifier::STATE_CHANGE_VALUES, Some(1))
+        .unwrap()
+    else {
+        panic!("a REAL");
+    };
+    assert_eq!(served.to_bits(), (-0.0f32).to_bits());
 }
 
 /// An unchanged `set_state_change` still restarts the run: a transition's
@@ -185,4 +192,120 @@ fn an_unchanged_range_still_decides_a_held_default_timeout_and_counts() {
     timer.release_staged_write(&wait);
     timer.wait_for_saves();
     assert_eq!(held::saved(&storage).default_timeout, None);
+}
+
+/// Another priority alone, or other references alone, is another set.
+#[test]
+fn another_priority_or_other_references_make_the_staged_write_give_way() {
+    let calls: [(&str, Call); 2] = [
+        ("priority", |t| {
+            t.set_state_change(values(1.0), vec![reference(1)], 10)
+                .unwrap()
+        }),
+        ("references", |t| {
+            t.set_state_change(values(1.0), vec![reference(2)], 9)
+                .unwrap()
+        }),
+    ];
+    for (name, call) in calls {
+        let storage = MemoryConfig::new();
+        let mut timer = timer(&storage, 1.0);
+        let wait = staged(&mut timer, &request());
+        call(&mut timer);
+        assert!(!timer.has_staged_write(), "{name}");
+        timer.release_staged_write(&wait);
+        timer.wait_for_saves();
+    }
+}
+
+/// Two sets whose values' encodings, joined, are the same octets (a
+/// constructed value whose octets close and reopen the frame) are still two
+/// sets.
+#[test]
+fn sets_whose_joined_encodings_agree_are_not_the_same_set() {
+    use bacnet_types::constructed::BACnetTimerStateChangeValue as V;
+    let a = vec![0x21, 0x01];
+    let mut join = a.clone();
+    join.extend_from_slice(&[0x1F, 0x1E]);
+    join.extend_from_slice(&a);
+    let held = [
+        V::Constructed(join.clone()),
+        V::NoValue,
+        V::NoValue,
+        V::NoValue,
+        V::NoValue,
+        V::Constructed(a.clone()),
+        V::Constructed(a.clone()),
+    ];
+    let given = [
+        V::Constructed(a.clone()),
+        V::Constructed(a.clone()),
+        V::NoValue,
+        V::NoValue,
+        V::NoValue,
+        V::NoValue,
+        V::Constructed(join),
+    ];
+    let storage = MemoryConfig::new();
+    let persistence = alloc::sync::Arc::clone(&storage)
+        as alloc::sync::Arc<dyn crate::write_config::WriteConfigPersistence>;
+    let mut timer = TimerObject::with_persistence(1, "TMR", persistence).unwrap();
+    timer.set_state_change(held, vec![reference(1)], 9).unwrap();
+    let write = pending(
+        PropertyIdentifier::STATE_CHANGE_VALUES,
+        Some(3),
+        PropertyValue::Real(7.0),
+    );
+    let wait = staged(&mut timer, core::slice::from_ref(&write));
+    timer
+        .set_state_change(given, vec![reference(1)], 9)
+        .unwrap();
+    assert!(!timer.has_staged_write());
+    make(&mut timer, &write).unwrap();
+    timer.release_staged_write(&wait);
+    timer.wait_for_saves();
+    let saved = kept(&storage).0.expect("a written set").values;
+    for index in 1..=7 {
+        let served = timer
+            .read_property(PropertyIdentifier::STATE_CHANGE_VALUES, Some(index))
+            .unwrap();
+        let held = &saved[index as usize - 1];
+        let mut octets = bytes::BytesMut::new();
+        bacnet_encoding::constructed::encode_timer_state_change_value(&mut octets, held).unwrap();
+        let held = match held {
+            bacnet_types::constructed::BACnetTimerStateChangeValue::Primitive(v) => v.clone(),
+            _ => PropertyValue::ApplicationData(octets.to_vec()),
+        };
+        assert_eq!(served, held, "element {index}");
+    }
+}
+
+/// An unchanged `set_default_timeout` still remembers the value as the
+/// application's own, which a later range decision falls back to.
+#[test]
+fn an_unchanged_default_timeout_is_still_remembered() {
+    let storage = MemoryConfig::new();
+    let mut timer = timer(&storage, 1.0);
+    let unsigned = PropertyValue::Unsigned;
+    let write = |timer: &mut TimerObject, value| {
+        timer
+            .write_property(
+                PropertyIdentifier::DEFAULT_TIMEOUT,
+                None,
+                unsigned(value),
+                None,
+            )
+            .unwrap()
+    };
+    write(&mut timer, 5_000);
+    timer.clear_written_config().unwrap();
+    timer.set_default_timeout(5_000).unwrap();
+    write(&mut timer, 7_000);
+    timer.set_pres_value_range(1, 6_000).unwrap();
+    assert_eq!(
+        timer
+            .read_property(PropertyIdentifier::DEFAULT_TIMEOUT, None)
+            .unwrap(),
+        unsigned(5_000)
+    );
 }

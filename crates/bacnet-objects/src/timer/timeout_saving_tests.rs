@@ -46,7 +46,7 @@ pub(super) fn timer(storage: &Arc<MemoryConfig>, timeout: u64) -> TimerObject {
     timer
 }
 
-pub(super) fn timeout(timer: &TimerObject) -> PropertyValue {
+fn timeout(timer: &TimerObject) -> PropertyValue {
     timer.read_property(TIMEOUT, None).unwrap()
 }
 
@@ -250,8 +250,8 @@ fn a_saved_default_timeout_no_timer_takes_is_dropped_at_the_build() {
 
 /// Past the range a new Timer takes (#2312 review): what the application's
 /// range allows.
-pub(super) const WIDE: u64 = 20_000_000_000;
-pub(super) const LONG: u64 = 10_000_000_000;
+const WIDE: u64 = 20_000_000_000;
+const LONG: u64 = 10_000_000_000;
 
 /// Storage holding LONG, written under a range up to WIDE.
 pub(super) fn holding_long() -> Arc<MemoryConfig> {

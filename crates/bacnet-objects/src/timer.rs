@@ -213,9 +213,9 @@ impl TimerObject {
     /// value is served.
     ///
     /// The range already served changes nothing a request being saved
-    /// depends on, so it leaves that request alone, unless a held or saved
-    /// Default_Timeout is decided by it: that changes what is served and what
-    /// storage holds, and makes the request give way (#2552).
+    /// depends on, so it leaves that request alone, unless a held
+    /// Default_Timeout is decided by it: storage then drops a value the
+    /// request's save holds, and the request gives way (#2552).
     pub fn set_pres_value_range(&mut self, min: u64, max: u64) -> Result<(), Error> {
         let saved = self.default_timeout_saved();
         let kept = if saved {
@@ -229,11 +229,11 @@ impl TimerObject {
         let unchanged = (self.config.min_pres_value, self.config.max_pres_value) == (min, max);
         self.config.min_pres_value = min;
         self.config.max_pres_value = max;
-        // A held value is decided and a saved one past the range dropped
-        // whatever the range was: either changes what is served and what
-        // storage holds, so those count as a change too (#2552).
-        let decides = self.config.held_timeout.is_some()
-            || (saved && !self.config.in_range(self.config.default_timeout));
+        // With the range unchanged a held value is still dropped (it is past
+        // the range a new Timer takes), and what is served stays. That
+        // still counts: the snapshot saved now lacks the held value that a
+        // staged save holds (#2552).
+        let decides = self.config.held_timeout.is_some();
         // A staged write worked out under the old range gives way.
         if !unchanged || decides {
             self.config_changed();

@@ -97,27 +97,29 @@ pub(crate) struct TimerSet {
 
 impl TimerSet {
     /// Whether the set already holds these, as the application gave them:
-    /// the values bit for bit, as their encoding holds them (`==` on a REAL
-    /// fails for a NaN and passes for the two zeros). A set a write made
-    /// isn't the application's, so it never matches (#2552).
+    /// each value bit for bit, as its own encoding holds it (`==` on a REAL
+    /// fails for a NaN and passes for the two zeros). The encodings are
+    /// compared one by one: joined, two different sets can encode to the
+    /// same octets (#2552).
     fn is(
         &self,
         values: &StateChangeValues,
         references: &[BACnetDeviceObjectPropertyReference],
         priority: u8,
     ) -> bool {
-        let encoded = |values: &StateChangeValues| {
+        let encoded = |value: &BACnetTimerStateChangeValue| {
             let mut octets = BytesMut::new();
             // `check_set` has seen every value encode.
-            values
-                .iter()
-                .all(|value| encode_timer_state_change_value(&mut octets, value).is_ok())
+            encode_timer_state_change_value(&mut octets, value)
+                .is_ok()
                 .then_some(octets)
         };
-        !self.written
-            && self.priority == priority
+        self.priority == priority
             && self.references == references
-            && encoded(&self.values).is_some_and(|held| encoded(values) == Some(held))
+            && self.values.iter().zip(values).all(|(held, given)| {
+                let held = encoded(held);
+                held.is_some() && held == encoded(given)
+            })
     }
 }
 
