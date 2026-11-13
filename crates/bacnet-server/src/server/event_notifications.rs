@@ -82,16 +82,42 @@ pub(super) fn commit_written_transition<'a, T: TransportPort + 'static>(
     oid: ObjectIdentifier,
     settle: &mut Settle,
 ) -> bool {
+    match written_transition(db, oid) {
+        WrittenTransition::None => false,
+        WrittenTransition::Kept => true,
+        WrittenTransition::Distributed(committed) => {
+            let ctx = delivery();
+            BACnetServer::<T>::enqueue_event_notification(&ctx, db, &oid, *committed, Some(settle));
+            true
+        }
+    }
+}
+
+/// What the per-write evaluation committed.
+enum WrittenTransition {
+    /// No transition.
+    None,
+    /// A transition that goes to no one.
+    Kept,
+    /// A transition to distribute; boxed, so the common case returns small.
+    Distributed(Box<CommittedIntrinsicTransition>),
+}
+
+/// The evaluation [`commit_written_transition`] makes, apart from the
+/// transport it sends on: one function every writer calls, as before the
+/// lanes, so a write that commits no transition runs the same code it did.
+#[inline(never)]
+fn written_transition(db: &mut ObjectDatabase, oid: ObjectIdentifier) -> WrittenTransition {
     let Some(committed) = after_write(db, &oid, crate::runtime_clock::core_now())
         .and_then(|result| logged_intrinsic_commit(&oid, result))
     else {
-        return false;
+        return WrittenTransition::None;
     };
     if committed.distribute && committed.event_values.is_some() {
-        let ctx = delivery();
-        BACnetServer::<T>::enqueue_event_notification(&ctx, db, &oid, committed, Some(settle));
+        WrittenTransition::Distributed(Box::new(committed))
+    } else {
+        WrittenTransition::Kept
     }
-    true
 }
 
 impl<T: TransportPort + 'static> BACnetServer<T> {

@@ -24,7 +24,7 @@
 //! every writer waiting on them goes on.
 
 use super::super::event_forwarding::ForwardingBudget;
-use super::super::event_suppression::{EventSuppression, EventSuppressions};
+use super::super::event_suppression::EventNotificationCounters;
 use super::awaited::OwnedDelivery;
 use super::*;
 use bacnet_encoding::constructed::encode_event_notification;
@@ -166,10 +166,11 @@ impl Settle {
 pub(in crate::server) async fn settled(
     settle: Option<oneshot::Receiver<()>>,
     timeout_ms: u64,
-    suppressions: &EventSuppressions,
+    transactions: &NotificationTransactions,
 ) {
     if !settled_within(settle, timeout_ms).await {
-        suppressions.record(EventSuppression::CovWaitExpired);
+        let mut lanes = lanes(transactions);
+        lanes.counts.cov_wait_expired = lanes.counts.cov_wait_expired.saturating_add(1);
     }
 }
 
@@ -197,6 +198,42 @@ pub(in crate::server) struct EventLanes {
     tasks: JoinSet<()>,
     /// Set by `stop()`: nothing more is pushed or drained.
     sealed: bool,
+    /// What the lanes dropped, and the COV waits that ran out: kept here,
+    /// not with the server's other undelivered-notification counters, so a
+    /// server that never sends an event notification keeps nothing for them.
+    counts: LaneCounts,
+    /// The throttle on the warning for a dropped notification.
+    warning: bacnet_transport::warn_throttle::WarnThrottle,
+}
+
+/// The lanes' part of [`EventNotificationCounters`], each saturating.
+#[derive(Clone, Copy, Debug, Default)]
+pub(in crate::server) struct LaneCounts {
+    lane_full: u64,
+    lanes_entries_full: u64,
+    lanes_full: u64,
+    cov_wait_expired: u64,
+}
+
+impl LaneCounts {
+    /// Copy these into `counters`.
+    pub(in crate::server) fn fill(self, counters: &mut EventNotificationCounters) {
+        counters.lane_full = self.lane_full;
+        counters.lanes_entries_full = self.lanes_entries_full;
+        counters.lanes_full = self.lanes_full;
+        counters.cov_wait_expired = self.cov_wait_expired;
+    }
+}
+
+/// Which bound a dropped entry hit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LaneDrop {
+    /// Its destination's lane held [`MAX_LANE_ENTRIES`].
+    OwnLane,
+    /// [`MAX_LANED_ENTRIES`] waited across every lane.
+    AllEntries,
+    /// [`MAX_LANES`] destinations had a lane.
+    Destinations,
 }
 
 struct Lane {
@@ -211,7 +248,7 @@ enum Pushed {
     /// First in a new lane, whose task the caller starts.
     Opened,
     /// Dropped, as counted.
-    Dropped(EventSuppression),
+    Dropped(LaneDrop),
     /// Dropped: the server is stopping.
     Sealed,
 }
@@ -222,18 +259,18 @@ impl EventLanes {
             return Pushed::Sealed;
         }
         if self.entries >= MAX_LANED_ENTRIES {
-            return Pushed::Dropped(EventSuppression::LanesEntriesFull);
+            return self.dropped(LaneDrop::AllEntries);
         }
         match self.position(destination) {
             Some(at) if self.lanes[at].entries.len() >= MAX_LANE_ENTRIES => {
-                Pushed::Dropped(EventSuppression::LaneFull)
+                self.dropped(LaneDrop::OwnLane)
             }
             Some(at) => {
                 self.lanes[at].entries.push_back(entry);
                 self.entries += 1;
                 Pushed::Joined
             }
-            None if self.lanes.len() >= MAX_LANES => Pushed::Dropped(EventSuppression::LanesFull),
+            None if self.lanes.len() >= MAX_LANES => self.dropped(LaneDrop::Destinations),
             None => {
                 self.lanes.push(Lane {
                     destination: destination.clone(),
@@ -256,6 +293,22 @@ impl EventLanes {
             None => drop(self.lanes.swap_remove(at)),
         }
         next
+    }
+
+    /// Count an entry dropped at `bound`.
+    fn dropped(&mut self, bound: LaneDrop) -> Pushed {
+        let count = match bound {
+            LaneDrop::OwnLane => &mut self.counts.lane_full,
+            LaneDrop::AllEntries => &mut self.counts.lanes_entries_full,
+            LaneDrop::Destinations => &mut self.counts.lanes_full,
+        };
+        *count = count.saturating_add(1);
+        Pushed::Dropped(bound)
+    }
+
+    /// What the lanes counted.
+    pub(in crate::server) fn counts(&self) -> LaneCounts {
+        self.counts
     }
 
     fn position(&self, destination: &BACnetRecipient) -> Option<usize> {
@@ -401,12 +454,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     .tasks
                     .spawn(async move { Self::drain_lane(owned, destination).await });
             }
-            Pushed::Dropped(suppression) => {
-                drop(lanes);
-                ctx.suppressions.record(suppression);
+            Pushed::Dropped(bound) => {
                 warn_throttled!(
-                    ctx.suppressions.lane_warning,
-                    ?suppression,
+                    lanes.warning,
+                    ?bound,
                     "Event notification lanes full; notification dropped"
                 );
             }

@@ -167,10 +167,6 @@ pub(crate) enum EventSuppression {
     ReceivedNotForwarded,
     ForwardingCapDropped,
     ReceivedNotLogged,
-    LaneFull,
-    LanesEntriesFull,
-    LanesFull,
-    CovWaitExpired,
 }
 
 impl EventSuppression {
@@ -196,13 +192,10 @@ impl EventSuppression {
 /// The server's shared storage behind [`EventNotificationCounters`].
 #[derive(Debug, Default)]
 pub(crate) struct EventSuppressions {
-    counts: [AtomicU64; 19],
+    counts: [AtomicU64; 15],
     /// The throttle on the warning for a notification that reached the
     /// forwarding cap, one per server (#1950).
     pub(crate) cap_warning: bacnet_transport::warn_throttle::WarnThrottle,
-    /// The throttle on the warning for a notification its lane dropped
-    /// (#2537).
-    pub(crate) lane_warning: bacnet_transport::warn_throttle::WarnThrottle,
 }
 
 impl EventSuppressions {
@@ -233,10 +226,6 @@ impl EventSuppressions {
             received_not_forwarded,
             forwarding_cap_dropped,
             received_not_logged,
-            lane_full,
-            lanes_entries_full,
-            lanes_full,
-            cov_wait_expired,
         ] = self.counts.each_ref().map(|n| n.load(Ordering::Relaxed));
         EventNotificationCounters {
             notification_class_missing,
@@ -254,10 +243,12 @@ impl EventSuppressions {
             received_not_forwarded,
             forwarding_cap_dropped,
             received_not_logged,
-            lane_full,
-            lanes_entries_full,
-            lanes_full,
-            cov_wait_expired,
+            // The lanes keep their own (#2537); see
+            // `BACnetServer::event_notification_counters`.
+            lane_full: 0,
+            lanes_entries_full: 0,
+            lanes_full: 0,
+            cov_wait_expired: 0,
         }
     }
 }
@@ -267,7 +258,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// including after `stop()`. See [`EventNotificationCounters`] for what
     /// each field counts and what is left out.
     pub fn event_notification_counters(&self) -> EventNotificationCounters {
-        self.event_suppressions.snapshot()
+        let mut counters = self.event_suppressions.snapshot();
+        // The lanes count their own drops and expired waits, with the lanes,
+        // which a server that sends no event notification never makes.
+        if let Some(lanes) = super::event_send::made_lanes(&self.notification_transactions) {
+            lanes.counts().fill(&mut counters);
+        }
+        counters
     }
 }
 
@@ -275,7 +272,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 mod tests {
     use super::*;
 
-    const ALL: [EventSuppression; 19] = [
+    const ALL: [EventSuppression; 15] = [
         EventSuppression::NotificationClassMissing,
         EventSuppression::RecipientListUnavailable,
         EventSuppression::RecipientListInvalid,
@@ -291,10 +288,6 @@ mod tests {
         EventSuppression::ReceivedNotForwarded,
         EventSuppression::ForwardingCapDropped,
         EventSuppression::ReceivedNotLogged,
-        EventSuppression::LaneFull,
-        EventSuppression::LanesEntriesFull,
-        EventSuppression::LanesFull,
-        EventSuppression::CovWaitExpired,
     ];
 
     #[test]
@@ -323,10 +316,7 @@ mod tests {
                 received_not_forwarded: 13,
                 forwarding_cap_dropped: 14,
                 received_not_logged: 15,
-                lane_full: 16,
-                lanes_entries_full: 17,
-                lanes_full: 18,
-                cov_wait_expired: 19,
+                ..EventNotificationCounters::default()
             }
         );
     }

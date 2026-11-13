@@ -147,8 +147,8 @@ impl<T: TransportPort + 'static> LocalWriter<'_, T> {
         // Its COV fanout waits for those notifications, capped (#889).
         if let Some(settled) = settle.into_wait() {
             let timeout_ms = self.config.cov_retry_timeout_ms;
-            let suppressions = self.event_suppressions;
-            Box::pin(settled_lanes(Some(settled), timeout_ms, suppressions)).await;
+            let transactions = self.notification_transactions;
+            Box::pin(settled_lanes(Some(settled), timeout_ms, transactions)).await;
         }
         if life_safety {
             for change in changes {

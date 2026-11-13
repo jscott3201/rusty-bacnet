@@ -676,7 +676,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         if issued == issue::Issued::Segmented {
             if settled.is_some() {
                 let timeout_ms = config.cov_retry_timeout_ms;
-                Box::pin(settled_lanes(settled, timeout_ms, event_suppressions)).await;
+                Box::pin(settled_lanes(
+                    settled,
+                    timeout_ms,
+                    notification_transactions,
+                ))
+                .await;
             }
             Self::fire_post_write_cov_notifications(
                 &cov_ctx,
@@ -726,7 +731,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // would size every request's future.
         if settled.is_some() {
             let timeout_ms = config.cov_retry_timeout_ms;
-            Box::pin(settled_lanes(settled, timeout_ms, event_suppressions)).await;
+            Box::pin(settled_lanes(
+                settled,
+                timeout_ms,
+                notification_transactions,
+            ))
+            .await;
         }
         Self::fire_post_write_cov_notifications(
             &cov_ctx,

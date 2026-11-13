@@ -124,7 +124,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             drop(db);
             // The COV fanout waits for it, capped (#889).
             let timeout_ms = delivery.retry_timeout_ms;
-            super::event_send::settled(settle.into_wait(), timeout_ms, delivery.suppressions).await;
+            let transactions = delivery.notification_transactions;
+            super::event_send::settled(settle.into_wait(), timeout_ms, transactions).await;
             for event in committed {
                 Self::fire_cov_notifications_from_snapshot(
                     &fanout.notify_context(),

@@ -19,7 +19,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let wait = settled_lanes(
                 Some(settled),
                 delivery.retry_timeout_ms,
-                delivery.suppressions,
+                delivery.notification_transactions,
             );
             Box::pin(wait).await;
         }

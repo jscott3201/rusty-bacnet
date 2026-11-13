@@ -115,7 +115,12 @@ pub(super) async fn run<T: TransportPort + 'static>(
         if let Some(waiting) = settle.into_wait() {
             let delivery = fanout.event_delivery(&learned_routers, &device_bindings);
             let timeout_ms = delivery.retry_timeout_ms;
-            settled(Some(waiting), timeout_ms, delivery.suppressions).await;
+            settled(
+                Some(waiting),
+                timeout_ms,
+                delivery.notification_transactions,
+            )
+            .await;
         }
         fanout.fire(&committed).await;
     }

@@ -634,7 +634,7 @@ fn a_full_lane_full_lanes_and_too_many_lanes_drop_the_newest() {
     }
     assert!(matches!(
         lanes.push(&device(0), entry()),
-        Pushed::Dropped(EventSuppression::LaneFull)
+        Pushed::Dropped(LaneDrop::OwnLane)
     ));
     for instance in 1..(MAX_LANED_ENTRIES / MAX_LANE_ENTRIES) as u32 {
         for _ in 0..MAX_LANE_ENTRIES {
@@ -644,7 +644,7 @@ fn a_full_lane_full_lanes_and_too_many_lanes_drop_the_newest() {
     assert_eq!(lanes.waiting(), MAX_LANED_ENTRIES);
     assert!(matches!(
         lanes.push(&device(999), entry()),
-        Pushed::Dropped(EventSuppression::LanesEntriesFull)
+        Pushed::Dropped(LaneDrop::AllEntries)
     ));
     let mut lanes = EventLanes::default();
     for instance in 0..MAX_LANES as u32 {
@@ -655,7 +655,7 @@ fn a_full_lane_full_lanes_and_too_many_lanes_drop_the_newest() {
     }
     assert!(matches!(
         lanes.push(&device(MAX_LANES as u32), entry()),
-        Pushed::Dropped(EventSuppression::LanesFull)
+        Pushed::Dropped(LaneDrop::Destinations)
     ));
     assert!(matches!(lanes.push(&device(0), entry()), Pushed::Joined));
     lanes.seal();
