@@ -444,12 +444,10 @@ pub(super) async fn broadcasts_from_per_write_path(
     comm_state.set_for_test(state);
     let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-    let cov_table = RwLock::new(crate::cov::CovSubscriptionTable::new());
     let mut transitions = Vec::new();
     {
         let mut db = db.write().await;
-        let sent = &mut transitions;
-        super::event_notifications::commit_written_transition(&mut db, &cov_table, oid, sent).await;
+        super::event_notifications::commit_written_transition(&mut db, oid, &mut transitions);
     }
 
     BACnetServer::<TestTransport>::send_written_transitions(

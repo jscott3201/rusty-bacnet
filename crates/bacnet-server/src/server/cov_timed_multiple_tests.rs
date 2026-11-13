@@ -7,6 +7,7 @@
 use super::cov_wire_test_support::*;
 use super::*;
 use bacnet_objects::analog::AnalogValueObject;
+use bacnet_objects::clock::{ClockFrame, ClockReader};
 use bacnet_types::enums::EngineeringUnits;
 
 #[tokio::test]
@@ -219,6 +220,92 @@ async fn confirmed_changes_never_transmitted_return_for_the_next_report() {
     h.server.stop().await.unwrap();
 }
 
+/// A Device clock a hundredth later at each read, so no two captures share
+/// a time and a report collapses no row into a later one.
+#[derive(Default)]
+struct Ticking(std::sync::atomic::AtomicU8);
+
+impl ClockReader for Ticking {
+    fn read_clock(&self) -> Option<ClockFrame> {
+        let tick = self.0.fetch_add(1, Ordering::Relaxed);
+        let mut frame = at(10 + tick / 100);
+        frame.local_time.hundredths = tick % 100;
+        Some(frame)
+    }
+}
+
+/// The values of the report a WritePropertyMultiple of AV-1's Present_Value
+/// `values`, in order, sends a context timestamping Present_Value and
+/// Status_Flags, on a clock a hundredth later at each read.
+async fn wpm_report(values: &[f32]) -> Vec<(PropertyIdentifier, Vec<u8>)> {
+    let mut h = Harness::start_with(ServerConfig::default(), high_limit_alarm).await;
+    let specs = vec![(av1(), vec![(PV, true), (SF, true)])];
+    h.subscribe_with_delay(false, specs, 0).await;
+    h.notification().await;
+    let clock = Arc::new(Ticking::default());
+    h.server
+        .database()
+        .write()
+        .await
+        .set_clock_reader(Some(clock));
+    let value = |value: f32| {
+        let mut encoded = BytesMut::new();
+        bacnet_encoding::primitives::encode_property_value(
+            &mut encoded,
+            &PropertyValue::Real(value),
+        )
+        .unwrap();
+        bacnet_services::common::BACnetPropertyValue {
+            property_identifier: PV,
+            property_array_index: None,
+            value: encoded.to_vec(),
+            priority: None,
+        }
+    };
+    let mut body = BytesMut::new();
+    bacnet_services::wpm::WritePropertyMultipleRequest {
+        list_of_write_access_specs: vec![bacnet_services::wpm::WriteAccessSpecification {
+            object_identifier: av1(),
+            list_of_properties: values.iter().map(|v| value(*v)).collect(),
+        }],
+    }
+    .encode(&mut body)
+    .unwrap();
+    h.request(ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE, body)
+        .await;
+    let report = h.notification().await;
+    h.server.stop().await.unwrap();
+    rows(&report)
+        .into_iter()
+        .map(|(property, value, _)| (property, value))
+        .collect()
+}
+
+fn flags(bits: u8) -> (PropertyIdentifier, Vec<u8>) {
+    (SF, vec![0x82, 0x04, bits])
+}
+
+/// Two writes in one WritePropertyMultiple keep a row each (#856), and the
+/// transition the second causes takes the place of that write's row rather
+/// than following it: no row shows 90 still normal (#2535).
+#[tokio::test(start_paused = true)]
+async fn a_transition_is_folded_into_the_row_of_the_wpm_write_that_caused_it() {
+    assert_eq!(
+        wpm_report(&[50.0, 90.0]).await,
+        [(PV, real(50.0)), flags(0), (PV, real(90.0)), flags(0x80)]
+    );
+}
+
+/// The second write of the same value queues no row; the transition the
+/// first causes takes that write's row's place.
+#[tokio::test(start_paused = true)]
+async fn a_value_written_twice_and_its_transition_are_one_row() {
+    assert_eq!(
+        wpm_report(&[90.0, 90.0]).await,
+        [(PV, real(90.0)), flags(0x80)]
+    );
+}
+
 /// AV-1 alarms above 80 and reports through Notification Class 0, whose
 /// local-broadcast recipient makes the event notification observable.
 
@@ -241,16 +328,12 @@ async fn alarm_status_change_carries_its_transition_time() {
         .into_iter()
         .filter(|(property, _, _)| *property == SF)
         .collect();
-    assert_eq!(flags.len(), 2, "normal then in-alarm flags: {flags:?}");
-    assert_ne!(
-        flags[0].1, flags[1].1,
-        "the transition changed Status_Flags"
-    );
-    assert!(
-        flags
-            .iter()
-            .all(|(_, _, time_of_change)| *time_of_change == Some(time(40))),
-        "both captured when committed, not when prepared: {flags:?}"
+    // The write and the transition it caused are one row, captured after
+    // the transition, when committed rather than when prepared (#2535).
+    assert_eq!(
+        flags,
+        [(SF, vec![0x82, 0x04, 0x80], Some(time(40)))],
+        "one row, in alarm: {flags:?}"
     );
     assert_eq!(envelope(&report), Some((at(40).local_date, time(40))));
     h.server.stop().await.unwrap();

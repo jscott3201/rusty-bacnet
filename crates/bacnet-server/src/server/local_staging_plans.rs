@@ -122,21 +122,20 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 origin.as_ref(),
                             ) {
                                 Ok(()) => {
+                                    commit_written_transition(
+                                        &mut database,
+                                        target.object_identifier,
+                                        &mut transitions,
+                                    );
                                     // Timestamped references capture the
-                                    // target change under this guard (#856).
+                                    // target change under this guard (#856),
+                                    // after its transition: one row (#2535).
                                     let capture = cov
                                         .cov_table
                                         .read()
                                         .await
                                         .timed_capture(target.object_identifier);
                                     capture.run(&database);
-                                    commit_written_transition(
-                                        &mut database,
-                                        cov.cov_table,
-                                        target.object_identifier,
-                                        &mut transitions,
-                                    )
-                                    .await;
                                     TargetResult::Applied
                                 }
                                 Err(_) => TargetResult::Failed,
@@ -180,10 +179,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         source.complete_staging_write_plan(plan.generation, all_succeeded)
                     });
                 if changed {
+                    // No test drives a transition here: the built-in Staging
+                    // object has no event reporting, so only an application's
+                    // own source could commit one.
+                    commit_written_transition(&mut database, plan.source, &mut transitions);
                     let capture = cov.cov_table.read().await.timed_capture(plan.source);
                     capture.run(&database);
-                    let (source, sent) = (plan.source, &mut transitions);
-                    commit_written_transition(&mut database, cov.cov_table, source, sent).await;
                 }
                 changed
             };

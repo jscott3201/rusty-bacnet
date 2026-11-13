@@ -20,7 +20,7 @@ use cases::{Change, Outcome, READ_BACK, Step};
 
 /// The cases every host runs, which bacnet-endpoint includes too.
 #[path = "../../../../tests/support/local_write_cases.rs"]
-mod cases;
+pub(super) mod cases;
 mod change_back;
 mod points;
 
@@ -55,22 +55,7 @@ impl CovParity {
             .await
             .set_clock_reader(Some(Arc::new(FixedClock)));
         if swept {
-            let config = &cov.parity.server.config;
-            let report = ReportConfig::new(config.cov_policy.clone())
-                .with_confirmed(config.cov_flight_timing())
-                .with_outbox(OutboxLimits {
-                    entries: 64,
-                    octets: 65_536,
-                })
-                .with_sweep(bacnet_time::Duration::from_secs(1));
-            let budget = ReadPropertyMultipleBudget::default().max_result_elements;
-            let responder = Responder::new(identity(), Limits::new(budget)).unwrap();
-            let parity = &mut cov.parity;
-            parity.reporter = Reporter::new(responder, report).unwrap();
-            let now = runtime_clock::core_now();
-            parity
-                .reporter
-                .on_deadline(&mut parity.db, &mut cov.ids, now);
+            cov.event_path_on();
         }
         let a = direct(1);
         let objects = [
@@ -95,6 +80,27 @@ impl CovParity {
         cov
     }
 
+    /// Turn the `Reporter`'s event path on, with its first sweep made, as
+    /// the server's task makes its own at start.
+    pub(super) fn event_path_on(&mut self) {
+        let config = &self.parity.server.config;
+        let report = ReportConfig::new(config.cov_policy.clone())
+            .with_confirmed(config.cov_flight_timing())
+            .with_outbox(OutboxLimits {
+                entries: 64,
+                octets: 65_536,
+            })
+            .with_sweep(bacnet_time::Duration::from_secs(1));
+        let budget = ReadPropertyMultipleBudget::default().max_result_elements;
+        let responder = Responder::new(identity(), Limits::new(budget)).unwrap();
+        let parity = &mut self.parity;
+        parity.reporter = Reporter::new(responder, report).unwrap();
+        let now = runtime_clock::core_now();
+        parity
+            .reporter
+            .on_deadline(&mut parity.db, &mut self.ids, now);
+    }
+
     /// Make `change` to `object` on both sides at one instant. The results
     /// agree, the notifications match and number `notifications`, and the
     /// [`READ_BACK`] rows read alike afterwards, or the object is on
@@ -116,7 +122,7 @@ impl CovParity {
 
     /// Make `change` to `object` on the server, then the core, at one
     /// instant: each side's result, what the server sent and the instant.
-    async fn both_local(
+    pub(super) async fn both_local(
         &mut self,
         what: &str,
         object: ObjectIdentifier,
