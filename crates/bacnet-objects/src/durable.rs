@@ -258,7 +258,7 @@ impl Event {
 pub struct SaveWait {
     event: Arc<Event>,
     /// A second wait this one also ends after, when an object that keeps
-    /// two kinds of state in storage settles both ([`and`](Self::and)).
+    /// two kinds of state in storage settles both (`and`).
     then: Option<Arc<SaveWait>>,
 }
 
@@ -403,7 +403,7 @@ impl SaveTicket {
     }
 
     /// Whether a staged write waiting on this save has outlived
-    /// [`STAGED_WRITE_LIFETIME`] by now. Never without std, which has no
+    /// `STAGED_WRITE_LIFETIME` by now. Never without std, which has no
     /// clock to tell.
     pub(crate) fn outlived(&self) -> bool {
         #[cfg(feature = "std")]

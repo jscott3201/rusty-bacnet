@@ -239,7 +239,7 @@ impl AuditLogObject {
 
     /// The wait for a staged commit that still holds the log: a batch's
     /// while its commit runs, a write's until its request takes or drops it
-    /// (or [`STAGED_WRITE_LIFETIME`](crate::durable::STAGED_WRITE_LIFETIME)
+    /// (or `STAGED_WRITE_LIFETIME`
     /// after its commit finished). A batch whose commit ran is settled, and a
     /// forgotten write dropped.
     fn make_way(&mut self) -> Option<SaveWait> {

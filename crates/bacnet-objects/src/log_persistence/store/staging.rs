@@ -8,7 +8,7 @@
 //! cadence commits, and refuses the write with DEVICE / OPERATIONAL_PROBLEM
 //! if that commit fails. This follows the pattern of [`crate::durable`]:
 //!
-//! - The server stages the request's writes ([`stage_writes`]). The log
+//! - The server stages the request's writes (`stage_writes`). The log
 //!   works out the settings each leaves and queues one commit of its whole
 //!   state with the last of them, numbered like any other commit, then goes
 //!   on serving the old settings. The request awaits the commit off the

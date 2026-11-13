@@ -11,7 +11,7 @@
 //!
 //! A request can make several writes to one object: a WritePropertyMultiple
 //! that provisions an Access Rights object writes both rule arrays and
-//! Enable. The object folds them into one staged save. [`steps`] works out,
+//! Enable. The object folds them into one staged save. `steps` works out,
 //! in the request's order, the state each write leaves on top of the ones
 //! before it; a write the object will refuse ends the list, since the
 //! request makes no write after it, and a NULL the object refuses as the
@@ -36,7 +36,7 @@
 //! `stop()` aborts requests, and an application can drop a local write's
 //! future. Its staged write then lingers, and storage may hold a state the
 //! object never served. Two checks drop it once
-//! [`STAGED_WRITE_LIFETIME`] has passed since
+//! `STAGED_WRITE_LIFETIME` has passed since
 //! its save finished: the next stage of a write to the object
 //! ([`busy`](StagedSaves::busy)), and the object's call from the server's
 //! once-a-second operation task ([`expire`](StagedSaves::expire)), which
@@ -46,13 +46,13 @@
 //! Neither check runs once the server has stopped, so two more cover the
 //! end of an object's life (#1363). The server's `stop()`, once it has
 //! joined every request, drops what is still staged
-//! ([`drop_forgotten`](StagedSaves::drop_forgotten)) and waits for the
+//! (`drop_forgotten`) and waits for the
 //! correcting save. And an object dropped with a write still staged puts
 //! storage back as it goes: `StagedSaves` keeps, beside the staged write,
 //! the state the object served at its latest storage call, and its `Drop`
 //! saves that state, unless the staged save failed, before the writer's own
 //! drop waits for its thread. An object that stages through `StagedSaves` gets
-//! this without a `Drop` of its own; [`stage`](StagedSaves::stage) takes
+//! this without a `Drop` of its own; `stage` takes
 //! the served state, and [`correct`](StagedSaves::correct) keeps it current.
 
 #[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]

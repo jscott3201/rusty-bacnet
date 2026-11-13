@@ -17,10 +17,10 @@
 //! that list. A staged write whose request vanished without releasing it, as
 //! when a handler panics between its stage and its release, is dropped the
 //! same way once
-//! [`STAGED_WRITE_LIFETIME`](crate::durable::STAGED_WRITE_LIFETIME) has
+//! `STAGED_WRITE_LIFETIME` has
 //! passed since its save finished: by the next write that stages, or by the
 //! server's once-a-second operation task, which calls
-//! [`DurableWrites::expire_staged`]. The class saves nothing else between
+//! `DurableWrites::expire_staged`. The class saves nothing else between
 //! writes.
 //!
 //! Neither runs once the server has stopped. So `stop()`, once it has
