@@ -37,6 +37,13 @@ const fn takes(forms: u32, tag: u32) -> bool {
     forms & (1 << tag) != 0
 }
 
+/// The refusal of a form the mask leaves out. Each arm of [`encode_into`]
+/// checks its own form first, against a constant, so the match stays
+/// exhaustive and an arm the mask drops is dead code in that instantiation.
+fn refused() -> Error {
+    Error::encode("NotificationParameters form this sender doesn't encode")
+}
+
 /// Encode notification parameters into the buffer.
 ///
 /// Each variant is wrapped in its own opening/closing tag pair
@@ -58,7 +65,8 @@ pub fn encode_notification_parameters_of<const FORMS: u32>(
 ) -> Result<(), Error> {
     let mut encoded = BytesMut::new();
     encode_into::<FORMS>(params, &mut encoded)?;
-    if takes(FORMS, 6) && matches!(params, NotificationParameters::ComplexEventType { .. }) {
+    let complex = matches!(params, NotificationParameters::ComplexEventType { .. });
+    if const { takes(FORMS, 6) } && complex {
         let (opening, content_start) =
             tags::decode_tag(&encoded, 0).map_err(Error::into_encode_refusal)?;
         if !opening.is_opening_tag(6) {
@@ -87,7 +95,10 @@ fn encode_into<const FORMS: u32>(
         NotificationParameters::ChangeOfBitstring {
             referenced_bitstring,
             status_flags,
-        } if takes(FORMS, 0) => {
+        } => {
+            if !const { takes(FORMS, 0) } {
+                return Err(refused());
+            }
             let (unused_bits, data) = referenced_bitstring;
             check_bit_string(
                 *unused_bits,
@@ -102,7 +113,10 @@ fn encode_into<const FORMS: u32>(
         NotificationParameters::ChangeOfState {
             new_state,
             status_flags,
-        } if takes(FORMS, 1) => {
+        } => {
+            if !const { takes(FORMS, 1) } {
+                return Err(refused());
+            }
             tags::encode_opening_tag(buf, 1);
             // [0] new-state: BACnetPropertyStates — wrapped in opening/closing [0]
             tags::encode_opening_tag(buf, 0);
@@ -115,7 +129,10 @@ fn encode_into<const FORMS: u32>(
         NotificationParameters::ChangeOfValue {
             new_value,
             status_flags,
-        } if takes(FORMS, 2) => {
+        } => {
+            if !const { takes(FORMS, 2) } {
+                return Err(refused());
+            }
             tags::encode_opening_tag(buf, 2);
             // [0] new-value: CHOICE — wrapped in opening/closing [0]
             tags::encode_opening_tag(buf, 0);
@@ -141,7 +158,10 @@ fn encode_into<const FORMS: u32>(
             command_value,
             status_flags,
             feedback_value,
-        } if takes(FORMS, 3) => {
+        } => {
+            if !const { takes(FORMS, 3) } {
+                return Err(refused());
+            }
             tags::encode_opening_tag(buf, 3);
             // [0] command-value — abstract syntax, encoded as raw octet string
             tags::encode_opening_tag(buf, 0);
@@ -160,7 +180,10 @@ fn encode_into<const FORMS: u32>(
             status_flags,
             setpoint_value,
             error_limit,
-        } if takes(FORMS, 4) => {
+        } => {
+            if !const { takes(FORMS, 4) } {
+                return Err(refused());
+            }
             tags::encode_opening_tag(buf, 4);
             primitives::encode_ctx_real(buf, 0, *reference_value);
             encode_status_flags(buf, 1, *status_flags);
@@ -173,7 +196,10 @@ fn encode_into<const FORMS: u32>(
             status_flags,
             deadband,
             exceeded_limit,
-        } if takes(FORMS, 5) => {
+        } => {
+            if !const { takes(FORMS, 5) } {
+                return Err(refused());
+            }
             tags::encode_opening_tag(buf, 5);
             primitives::encode_ctx_real(buf, 0, *exceeding_value);
             encode_status_flags(buf, 1, *status_flags);
@@ -181,7 +207,10 @@ fn encode_into<const FORMS: u32>(
             primitives::encode_ctx_real(buf, 3, *exceeded_limit);
             tags::encode_closing_tag(buf, 5);
         }
-        NotificationParameters::ComplexEventType { property_values } if takes(FORMS, 6) => {
+        NotificationParameters::ComplexEventType { property_values } => {
+            if !const { takes(FORMS, 6) } {
+                return Err(refused());
+            }
             if property_values.len() > MAX_FRAMED_ITEMS {
                 return Err(
                     EncodeError::new("ComplexEventType exceeds {} property values")
@@ -210,7 +239,10 @@ fn encode_into<const FORMS: u32>(
             new_mode,
             status_flags,
             operation_expected,
-        } if takes(FORMS, 8) => {
+        } => {
+            if !const { takes(FORMS, 8) } {
+                return Err(refused());
+            }
             tags::encode_opening_tag(buf, 8);
             primitives::encode_ctx_enumerated(buf, 0, new_state.to_raw());
             primitives::encode_ctx_enumerated(buf, 1, new_mode.to_raw());
@@ -222,7 +254,10 @@ fn encode_into<const FORMS: u32>(
             vendor_id,
             extended_event_type,
             parameters,
-        } if takes(FORMS, 9) => {
+        } => {
+            if !const { takes(FORMS, 9) } {
+                return Err(refused());
+            }
             tags::encode_opening_tag(buf, 9);
             primitives::encode_ctx_unsigned(buf, 0, *vendor_id as u64);
             primitives::encode_ctx_unsigned(buf, 1, *extended_event_type as u64);
@@ -236,7 +271,10 @@ fn encode_into<const FORMS: u32>(
             buffer_property,
             previous_notification,
             current_notification,
-        } if takes(FORMS, 10) => {
+        } => {
+            if !const { takes(FORMS, 10) } {
+                return Err(refused());
+            }
             tags::encode_opening_tag(buf, 10);
             // [0] buffer-property: BACnetDeviceObjectPropertyReference
             tags::encode_opening_tag(buf, 0);
@@ -259,7 +297,10 @@ fn encode_into<const FORMS: u32>(
             exceeding_value,
             status_flags,
             exceeded_limit,
-        } if takes(FORMS, 11) => {
+        } => {
+            if !const { takes(FORMS, 11) } {
+                return Err(refused());
+            }
             tags::encode_opening_tag(buf, 11);
             primitives::encode_ctx_unsigned(buf, 0, *exceeding_value);
             encode_status_flags(buf, 1, *status_flags);
@@ -273,7 +314,10 @@ fn encode_into<const FORMS: u32>(
             access_event_time,
             access_credential,
             authentication_factor,
-        } if takes(FORMS, 13) => {
+        } => {
+            if !const { takes(FORMS, 13) } {
+                return Err(refused());
+            }
             if let Some(authentication_factor) = authentication_factor {
                 structured::validate_authentication_factor(authentication_factor)
                     .map_err(Error::into_encode_refusal)?;
@@ -311,7 +355,10 @@ fn encode_into<const FORMS: u32>(
             status_flags,
             deadband,
             exceeded_limit,
-        } if takes(FORMS, 14) => {
+        } => {
+            if !const { takes(FORMS, 14) } {
+                return Err(refused());
+            }
             tags::encode_opening_tag(buf, 14);
             primitives::encode_ctx_double(buf, 0, *exceeding_value);
             encode_status_flags(buf, 1, *status_flags);
@@ -324,7 +371,10 @@ fn encode_into<const FORMS: u32>(
             status_flags,
             deadband,
             exceeded_limit,
-        } if takes(FORMS, 15) => {
+        } => {
+            if !const { takes(FORMS, 15) } {
+                return Err(refused());
+            }
             tags::encode_opening_tag(buf, 15);
             primitives::encode_ctx_signed(buf, 0, *exceeding_value);
             encode_status_flags(buf, 1, *status_flags);
@@ -337,7 +387,10 @@ fn encode_into<const FORMS: u32>(
             status_flags,
             deadband,
             exceeded_limit,
-        } if takes(FORMS, 16) => {
+        } => {
+            if !const { takes(FORMS, 16) } {
+                return Err(refused());
+            }
             tags::encode_opening_tag(buf, 16);
             primitives::encode_ctx_unsigned(buf, 0, *exceeding_value);
             encode_status_flags(buf, 1, *status_flags);
@@ -349,7 +402,10 @@ fn encode_into<const FORMS: u32>(
             changed_value,
             status_flags,
             alarm_value,
-        } if takes(FORMS, 17) => {
+        } => {
+            if !const { takes(FORMS, 17) } {
+                return Err(refused());
+            }
             tags::encode_opening_tag(buf, 17);
             primitives::encode_ctx_character_string(buf, 0, changed_value)?;
             encode_status_flags(buf, 1, *status_flags);
@@ -359,7 +415,10 @@ fn encode_into<const FORMS: u32>(
         NotificationParameters::ChangeOfStatusFlags {
             present_value,
             referenced_flags,
-        } if takes(FORMS, 18) => {
+        } => {
+            if !const { takes(FORMS, 18) } {
+                return Err(refused());
+            }
             tags::encode_opening_tag(buf, 18);
             if let Some(present_value) = present_value {
                 // [0] present-value — abstract syntax, raw, optional
@@ -375,7 +434,10 @@ fn encode_into<const FORMS: u32>(
             reliability,
             status_flags,
             property_values,
-        } if takes(FORMS, 19) => {
+        } => {
+            if !const { takes(FORMS, 19) } {
+                return Err(refused());
+            }
             tags::encode_opening_tag(buf, 19);
             primitives::encode_ctx_enumerated(buf, 0, reliability.to_raw());
             encode_status_flags(buf, 1, *status_flags);
@@ -388,7 +450,10 @@ fn encode_into<const FORMS: u32>(
         NotificationParameters::ChangeOfDiscreteValue {
             new_value,
             status_flags,
-        } if takes(FORMS, 21) => {
+        } => {
+            if !const { takes(FORMS, 21) } {
+                return Err(refused());
+            }
             tags::encode_opening_tag(buf, 21);
             // [0] new-value — abstract syntax, raw
             tags::encode_opening_tag(buf, 0);
@@ -405,7 +470,10 @@ fn encode_into<const FORMS: u32>(
             last_state_change,
             initial_timeout,
             expiration_time,
-        } if takes(FORMS, 22) => {
+        } => {
+            if !const { takes(FORMS, 22) } {
+                return Err(refused());
+            }
             tags::encode_opening_tag(buf, 22);
             primitives::encode_ctx_enumerated(buf, 0, new_state.to_raw());
             encode_status_flags(buf, 1, *status_flags);
@@ -430,13 +498,11 @@ fn encode_into<const FORMS: u32>(
         }
         // Only under a tag the decoder keeps opaque: any other would decode
         // as its own variant, or not at all, so it couldn't round-trip.
-        NotificationParameters::Opaque(opaque) if FORMS == ALL_NOTIFICATION_FORMS => {
+        NotificationParameters::Opaque(opaque) => {
+            if const { FORMS != ALL_NOTIFICATION_FORMS } {
+                return Err(refused());
+            }
             encode_opaque(buf, opaque, is_opaque_tag, "NotificationParameters")?;
-        }
-        _ => {
-            return Err(Error::encode(
-                "NotificationParameters form this sender doesn't encode",
-            ));
         }
     }
     Ok(())

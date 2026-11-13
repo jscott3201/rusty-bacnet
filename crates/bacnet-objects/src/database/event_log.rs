@@ -47,7 +47,9 @@ impl ObjectDatabase {
         let logs = self.find_by_type(ObjectType::EVENT_LOG);
         // The step comes from a log that lends its buffer, so an image
         // without one links none of it (#2524). A log that lends none takes
-        // no record anyway.
+        // no record anyway; when none does, the step's debug lines (the
+        // filters', the clock's, "takes no records") aren't written either.
+        // A log lends `log_buffer` with `log_buffer_mut`, which adds them.
         let logger = logs
             .iter()
             .find_map(|oid| Some(self.get(oid)?.log_buffer()?.notification_logger()));

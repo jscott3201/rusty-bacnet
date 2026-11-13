@@ -54,6 +54,9 @@ const REPORTED_FORMS: u32 = if cfg!(feature = "event-enrollment") {
 } else {
     INTRINSIC_FORMS
 };
+// Every form intrinsic reporting builds goes out: one left out of the mask
+// would be refused at the encoder and counted dropped.
+const _: () = assert!(REPORTED_FORMS & INTRINSIC_FORMS == INTRINSIC_FORMS);
 
 /// The event path's schedule.
 #[derive(Debug)]

@@ -1160,14 +1160,17 @@ expected summary):
 | AcknowledgeAlarm and GetEventInformation out of `Reporter::handle` | 1,076 | 1,112 | 1,820 |
 | The Event Log step reached through a log's `LogBuffer` vtable, so an image with no log links none of it | 1,428 | 1,424 | 2,376 |
 | The `Reporter` encodes only the five event-value forms its projections build (`event::INTRINSIC_FORMS`, a mask for bacnet-encoding's `encode_event_notification_of`) | 3,416 | 3,416 | 4,820 |
-| **Total** (flash: 265,088 to 259,156 on thumbv7m, 264,632 to 258,536, 324,874 to 315,802) | **5,932** | **6,096** | **9,072** |
+| **Total** (flash: 265,088 to 259,156 on thumbv7m, 264,632 to 258,544, 324,874 to 315,802; the review round's exhaustive encoder match costs 8 octets of alignment on thumbv7em) | **5,932** | **6,088** | **9,072** |
 
 The tail saves next to nothing, since its two steps were out of line
-already; it is there for #2319, whose enrollment pass joins the changes
-it reports through it (`Tail::Committed`, beside a request's write and
-the host's change). The encoder mask is every form with
-`event-enrollment`, for that pass, and the intrinsic one without it, as
-the image builds. `handle` falls from 25.8 KB to 18.9 KB of `.text`:
+already. What it buys is one copy of #889's order (event notifications,
+then the timestamped capture, then COV) where a request's write, the
+host's change and the background passes each wrote it out. #2319's
+enrollment pass, which keeps the pass model, reports its changes through
+`report_committed`, the background passes' path before #2524 too, which
+now enters the tail as `Tail::Committed`. The encoder mask is every
+form with `event-enrollment`, for that pass, and the intrinsic one
+without it, as the image builds. `handle` falls from 25.8 KB to 18.9 KB of `.text`:
 inlined, the two services had cost about 1 KB more than called.
 
 What remains large (thumbv7m `.text`): `handle` with the `Responder`'s
