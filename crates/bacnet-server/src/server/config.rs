@@ -59,6 +59,14 @@ pub struct ServerConfig {
     /// It is also the base of the COV hold-off after a failed confirmed report,
     /// one full retry cycle: this timeout times the attempts (#896).
     ///
+    /// It also caps how long a change's COV notifications wait for its event
+    /// notifications to be handed off (#889, #2537), past which they go and
+    /// the wait is counted in
+    /// [`EventNotificationCounters::cov_wait_expired`](crate::server::EventNotificationCounters::cov_wait_expired),
+    /// for a peer's write, a local write and the Staging plan a start-up or
+    /// local write starts. It is this server setting, not the Device's
+    /// APDU_Timeout property, which defaults to 6000 ms and isn't read.
+    ///
     /// Starting a server with 0 fails, with an error naming this field:
     /// every report's deadline would be the instant it begins. Any other
     /// value is accepted, but a very small one makes the timing tight. A

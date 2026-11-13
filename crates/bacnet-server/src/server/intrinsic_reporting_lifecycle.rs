@@ -94,7 +94,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
                         &mut db,
                         &oid,
                         resolved,
-                        &mut settle,
+                        Some(&mut settle),
                     );
                 }
             }

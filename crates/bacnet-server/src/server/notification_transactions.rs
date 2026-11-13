@@ -309,8 +309,8 @@ impl NotificationTransactions {
     /// and abort and join their tasks: once this returns, no lane sends
     /// anything more.
     pub(super) async fn shut_lanes(&self) {
-        let mut tasks = super::event_send::lanes(self).seal();
-        tasks.shutdown().await;
+        super::event_send::lanes(self).seal();
+        super::event_send::join_sealed(self).await;
     }
 
     /// Test hook: abort every worker, as a crash would, leaving the owner

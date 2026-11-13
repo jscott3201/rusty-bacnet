@@ -38,6 +38,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             &self.local_event_delivery(),
             &self.local_cov_context(),
             staging_plans,
+            None,
         )
         .await;
         super::command_runs::CommandRunner::for_server(self).start(runs);
@@ -69,10 +70,19 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// before the source writes that slot again. A plan with no targets
     /// takes one guard for that alone. Returns the Command and Channel runs
     /// that work queued, for the caller to start.
+    ///
+    /// Each written target's COV fanout waits, capped, for the event
+    /// notifications its transition pushed (#889, #2537). With `request`, a
+    /// peer request's own settle handle and COV list, a target's
+    /// notifications count in the request's handle and its object joins the
+    /// request's COV fanout, which the request makes after its response, so
+    /// the response never waits on a lane; start-up and local-write plans,
+    /// which have no response, wait here.
     pub(in crate::server) async fn execute_staging_plans(
         delivery: &EventDelivery<'_, T>,
         cov: &CovNotifyContext<'_, T>,
         plans: Vec<StagingWritePlan>,
+        mut request: Option<(&mut Settle, &mut Vec<ObjectIdentifier>)>,
     ) -> TakenRuns {
         let db = delivery.db;
         let mut runs = TakenRuns::default();
@@ -137,11 +147,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                 origin.as_ref(),
                             ) {
                                 Ok(()) => {
+                                    let settle = match request.as_mut() {
+                                        Some((request, _)) => &mut **request,
+                                        None => &mut settle,
+                                    };
                                     commit_written_transition(
                                         || *delivery,
                                         &mut database,
                                         target.object_identifier,
-                                        &mut settle,
+                                        settle,
                                     );
                                     // Timestamped references capture the
                                     // target change under this guard (#856),
@@ -174,10 +188,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 match result {
                     TargetResult::Stale => break,
                     TargetResult::Failed => all_succeeded = false,
-                    TargetResult::Applied => {
-                        Self::settled_for_staging(delivery, settle).await;
-                        Self::fire_cov_notifications(cov, &target.object_identifier).await;
-                    }
+                    TargetResult::Applied => match request.as_mut() {
+                        Some((_, request_cov)) => request_cov.push(target.object_identifier),
+                        None => {
+                            Self::settled_for_staging(delivery, settle).await;
+                            Self::fire_cov_notifications(cov, &target.object_identifier).await;
+                        }
+                    },
                 }
             }
 
@@ -198,20 +215,24 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     // No test drives a transition here: the built-in Staging
                     // object has no event reporting, so only an application's
                     // own source could commit one.
-                    commit_written_transition(
-                        || *delivery,
-                        &mut database,
-                        plan.source,
-                        &mut settle,
-                    );
+                    let settle = match request.as_mut() {
+                        Some((request, _)) => &mut **request,
+                        None => &mut settle,
+                    };
+                    commit_written_transition(|| *delivery, &mut database, plan.source, settle);
                     let capture = cov.cov_table.read().await.timed_capture(plan.source);
                     capture.run(&database);
                 }
                 changed
             };
             if reliability_changed {
-                Self::settled_for_staging(delivery, settle).await;
-                Self::fire_cov_notifications(cov, &plan.source).await;
+                match request.as_mut() {
+                    Some((_, request_cov)) => request_cov.push(plan.source),
+                    None => {
+                        Self::settled_for_staging(delivery, settle).await;
+                        Self::fire_cov_notifications(cov, &plan.source).await;
+                    }
+                }
             }
         }
         runs

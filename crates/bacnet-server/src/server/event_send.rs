@@ -19,8 +19,10 @@ pub(super) use awaited::AwaitingRecipients;
 use awaited::DeviceRoute;
 #[path = "event_lanes.rs"]
 mod lanes;
+#[cfg(test)]
+pub(super) use lanes::lanes_drained;
 pub(super) use lanes::{
-    EventLanes, LaneEntry, LaneHandles, LanePayload, Settle, lanes, settled, settled_within,
+    EventLanes, LaneEntry, LaneHandles, LanePayload, Settle, join_sealed, lanes, settled,
 };
 
 /// Why a confirmed notification ended at an attempt with nothing sent.

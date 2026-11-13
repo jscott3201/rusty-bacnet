@@ -595,19 +595,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         };
 
         let MutationEffects {
-            settle,
-            coarse_cov_oids,
+            mut settle,
+            mut coarse_cov_oids,
             life_safety_cov_changes,
             staging_plans,
             mut command_runs,
             timed_revisits,
         } = effects;
-        // The event notifications the writes' transitions pushed onto their
-        // recipients' lanes under the writes' guards (#2537): the lanes send
-        // them in commit order, with those of the runs and Staging plans this
-        // request starts and of every other writer, and the response never
-        // waits on them. The COV fanout waits, capped (#889).
-        let settled = settle.into_wait();
 
         // LSO-only replay store (server level, never handler/object level).
         // Uniform rule: anything that reaches this admission point and produces
@@ -628,11 +622,21 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // is a no-op); dropping here is intentional.
 
         // Boxed: plans are rare, and their future would size every request's.
+        // The targets' notifications join this request's settle handle and
+        // their objects its COV fanout, made after the response (#2537).
         if !staging_plans.is_empty() {
             let (delivery, cov_ctx) = (services.event_delivery(), services.cov_context());
-            let plans = Self::execute_staging_plans(&delivery, &cov_ctx, staging_plans);
+            let request = Some((&mut settle, &mut coarse_cov_oids));
+            let plans = Self::execute_staging_plans(&delivery, &cov_ctx, staging_plans, request);
             command_runs.extend(Box::pin(plans).await);
         }
+        // The event notifications the writes' transitions, and their Staging
+        // plans' targets', pushed onto their recipients' lanes under the
+        // writes' guards (#2537): the lanes send them in commit order, with
+        // those of the runs this request starts and of every other writer,
+        // and the response never waits on them. The COV fanout waits, capped
+        // (#889).
+        let settled = settle.into_wait();
         // Command lists run beside this request, so its response never waits
         // on their writes or post delays (#1150).
         if !command_runs.is_empty() {

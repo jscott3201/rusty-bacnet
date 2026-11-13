@@ -122,7 +122,7 @@ async fn fire_event(server: &BACnetServer<TestTransport>) {
     let db = Arc::new(RwLock::new(db));
     // Pushed onto its lane, which hands it to its worker; the test holds the
     // worker's first attempt, so nothing here waits for it (#2537).
-    let settle = BACnetServer::<TestTransport>::enqueue_with_guard(
+    BACnetServer::<TestTransport>::enqueue_with_guard(
         &EventDelivery {
             db: &db,
             network: server.test_network(),
@@ -143,9 +143,9 @@ async fn fire_event(server: &BACnetServer<TestTransport>) {
             },
             EventType::OUT_OF_RANGE,
         ),
+        None,
     )
     .await;
-    drop(settle);
 }
 
 async fn fire_cov(server: &BACnetServer<TestTransport>, kind: CovNotificationKind) {

@@ -38,6 +38,8 @@ use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicU8;
 use tokio::sync::{Semaphore, mpsc};
 
+#[path = "event_lanes_fault_tests.rs"]
+mod fault;
 #[path = "event_lanes_hold_time_tests.rs"]
 mod hold_time;
 #[path = "event_lanes_wire_tests.rs"]
@@ -95,6 +97,11 @@ struct Probe {
     hold: StdMutex<Option<(bool, u32)>>,
     held: Semaphore,
     release: Semaphore,
+    /// The next transition whose send panics, by its To State.
+    panic_on: StdMutex<Option<u32>>,
+    /// The SimpleACK to hold in the transport, by invoke ID, and its release.
+    hold_ack: StdMutex<Option<u8>>,
+    release_ack: Semaphore,
     wire: StdMutex<Vec<Sent>>,
 }
 
@@ -104,6 +111,9 @@ impl Default for Probe {
             hold: StdMutex::new(None),
             held: Semaphore::new(0),
             release: Semaphore::new(0),
+            panic_on: StdMutex::new(None),
+            hold_ack: StdMutex::new(None),
+            release_ack: Semaphore::new(0),
             wire: StdMutex::new(Vec::new()),
         }
     }
@@ -111,6 +121,20 @@ impl Default for Probe {
 
 impl Probe {
     async fn on_send(&self, frame: SentFrame) {
+        if let Apdu::SimpleAck(ack) = frame.apdu() {
+            let hold = {
+                let mut slot = self.hold_ack.lock().unwrap();
+                let hold = *slot == Some(ack.invoke_id);
+                if hold {
+                    *slot = None;
+                }
+                hold
+            };
+            if hold {
+                self.release_ack.acquire().await.unwrap().forget();
+            }
+            return;
+        }
         let Apdu::UnconfirmedRequest(request) = frame.apdu() else {
             return;
         };
@@ -130,6 +154,14 @@ impl Probe {
         } else {
             return;
         };
+        if let Sent::Event { to, ack: false, .. } = &sent {
+            let mut slot = self.panic_on.lock().unwrap();
+            if *slot == Some(*to) {
+                *slot = None;
+                drop(slot);
+                panic!("a test transport's send panics");
+            }
+        }
         let hold = match &sent {
             Sent::Event {
                 broadcast,
@@ -583,7 +615,7 @@ fn a_full_lane_full_lanes_and_too_many_lanes_drop_the_newest() {
     };
     let payload = Arc::new(LanePayload::local(notification));
     let mut settle = Settle::default();
-    let mut entry = || LaneEntry::new(&payload, 0, false, &mut settle);
+    let mut entry = || LaneEntry::new(&payload, 0, false, Some(&mut settle));
     let device = |instance| {
         BACnetRecipient::Device(ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap())
     };
@@ -620,7 +652,7 @@ fn a_full_lane_full_lanes_and_too_many_lanes_drop_the_newest() {
         Pushed::Dropped(EventSuppression::LanesFull)
     ));
     assert!(matches!(lanes.push(&device(0), entry()), Pushed::Joined));
-    drop(lanes.seal());
+    lanes.seal();
     assert!(matches!(lanes.push(&device(0), entry()), Pushed::Sealed));
     assert_eq!(lanes.waiting(), 0);
 }

@@ -89,7 +89,7 @@ pub(super) fn commit_written_transition<'a, T: TransportPort + 'static>(
     };
     if committed.distribute && committed.event_values.is_some() {
         let ctx = delivery();
-        BACnetServer::<T>::enqueue_event_notification(&ctx, db, &oid, committed, settle);
+        BACnetServer::<T>::enqueue_event_notification(&ctx, db, &oid, committed, Some(settle));
     }
     true
 }
@@ -98,7 +98,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Build an `EventNotificationRequest` for a committed transition of
     /// `oid`, under `db`, the guard that committed it, and push it onto the
     /// lane of each recipient the object's Notification Class names (#2537),
-    /// counting each push in `settle`. Never waits: the lanes' tasks send.
+    /// counting each push in `settle` for a writer that waits on them. Never
+    /// waits: the lanes' tasks send.
     ///
     /// Shared by every path that commits a transition, the periodic
     /// `Time_Delay` sweep included, so all emit identical notifications.
@@ -122,7 +123,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         db: &mut ObjectDatabase,
         oid: &ObjectIdentifier,
         transition: impl Into<NotificationTransition>,
-        settle: &mut Settle,
+        settle: Option<&mut Settle>,
     ) {
         if ctx.comm_state.initiation_restricted() {
             return;
@@ -174,17 +175,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// [`Self::enqueue_event_notification`] under a database guard of its
     /// own, for a notification no write commits: an accepted
     /// acknowledgment, once its SimpleACK is issued, so the acknowledgment
-    /// follows its transition in its lanes (#2537). The returned [`Settle`]
-    /// resolves once its entries are gone.
+    /// follows its transition in its lanes (#2537). Counted in `settle` when
+    /// one is given.
     pub(super) async fn enqueue_with_guard(
         ctx: &EventDelivery<'_, T>,
         oid: &ObjectIdentifier,
         transition: impl Into<NotificationTransition>,
-    ) -> Settle {
-        let mut settle = Settle::default();
+        settle: Option<&mut Settle>,
+    ) {
         let mut db = ctx.db.write().await;
-        Self::enqueue_event_notification(ctx, &mut db, oid, transition, &mut settle);
-        settle
+        Self::enqueue_event_notification(ctx, &mut db, oid, transition, settle);
     }
 
     /// Build and push a transition's notification, then wait until each of
@@ -195,7 +195,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         oid: &ObjectIdentifier,
         transition: impl Into<NotificationTransition>,
     ) {
-        let settle = Self::enqueue_with_guard(ctx, oid, transition).await;
+        let mut settle = Settle::default();
+        Self::enqueue_with_guard(ctx, oid, transition, Some(&mut settle)).await;
         if let Some(settled) = settle.into_wait() {
             let _ = settled.await;
         }
@@ -203,8 +204,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
     /// Push an accepted acknowledgment's notification onto its recipients'
     /// lanes once its requester's response has gone, behind the transition
-    /// it acknowledges, and wait, capped, until they hand it off, as its
-    /// inline send once did.
+    /// it acknowledges. Nothing waits for it: its lanes send it.
     pub(super) async fn send_acknowledgment_notification_with_bindings(
         ctx: &EventDelivery<'_, T>,
         accepted: AcceptedAcknowledgeAlarm,
@@ -212,7 +212,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let Some((oid, transition)) = accepted.into_notification() else {
             return;
         };
-        let settle = Self::enqueue_with_guard(ctx, &oid, transition).await;
-        super::event_send::settled_within(settle.into_wait(), ctx.retry_timeout_ms).await;
+        Self::enqueue_with_guard(ctx, &oid, transition, None).await;
     }
 }

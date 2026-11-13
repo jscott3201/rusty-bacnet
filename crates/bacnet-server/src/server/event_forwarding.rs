@@ -237,7 +237,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         db: &ObjectDatabase,
         notification: EventNotificationRequest,
         mut recipients: Vec<(BACnetRecipient, u32, bool)>,
-        settle: &mut Settle,
+        mut settle: Option<&mut Settle>,
     ) {
         let local = take_local(&mut recipients, notification.initiating_device_identifier);
         let forwarded = if local.is_empty() {
@@ -255,7 +255,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let payload = Arc::new(LanePayload::local(notification));
             let mut handles = LaneHandles::default();
             for (recipient, process_id, confirmed) in &recipients {
-                let entry = LaneEntry::new(&payload, *process_id, *confirmed, settle);
+                let entry =
+                    LaneEntry::new(&payload, *process_id, *confirmed, settle.as_deref_mut());
                 Self::push_to_lane(ctx, recipient, entry, &mut handles);
             }
         }
@@ -274,19 +275,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Offer a received notification to this device's forwarders, under a
     /// read guard of the database, and push each copy they ask for onto its
     /// destination's lane ([`Self::forward_into_lanes`]). Returns once the
-    /// lanes have handed the copies off, or after the APDU timeout, as its
-    /// inline sends once did; it never reports a delivery outcome.
+    /// copies are pushed; it never waits on or reports their delivery.
     pub(super) async fn forward_event_notification(
         ctx: &EventDelivery<'_, T>,
         offered: Vec<ForwardedEventNotification>,
         origin: ForwardOrigin,
     ) {
-        let mut settle = Settle::default();
-        {
-            let db = ctx.db.read().await;
-            Self::forward_into_lanes(ctx, &db, offered, origin, &mut settle);
-        }
-        super::event_send::settled_within(settle.into_wait(), ctx.retry_timeout_ms).await;
+        let db = ctx.db.read().await;
+        Self::forward_into_lanes(ctx, &db, offered, origin, None);
     }
 
     /// Offer one notification, as `offered` gives it to this device's
@@ -299,7 +295,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         db: &ObjectDatabase,
         offered: Vec<ForwardedEventNotification>,
         origin: ForwardOrigin,
-        settle: &mut Settle,
+        mut settle: Option<&mut Settle>,
     ) {
         if matches!(origin, ForwardOrigin::Received(reception) if reception.global) {
             debug!("Forwarders ignore an event notification sent by global broadcast");
@@ -369,7 +365,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 Arc::clone(&budget),
             ));
             for (recipient, process_id, confirmed) in &recipients {
-                let entry = LaneEntry::new(&payload, *process_id, *confirmed, settle);
+                let entry =
+                    LaneEntry::new(&payload, *process_id, *confirmed, settle.as_deref_mut());
                 Self::push_to_lane(ctx, recipient, entry, &mut handles);
             }
         }

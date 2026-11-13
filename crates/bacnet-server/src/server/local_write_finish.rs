@@ -175,6 +175,7 @@ impl<T: TransportPort + 'static> LocalWriter<'_, T> {
                 &self.event_delivery(),
                 &self.cov_context(),
                 staging_plans,
+                None,
             )
             .await,
         );

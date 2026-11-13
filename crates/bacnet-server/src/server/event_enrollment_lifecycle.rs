@@ -1,4 +1,3 @@
-use super::event_send::Settle;
 use super::*;
 
 /// Owned handles and settings the event-enrollment task moves into its loop.
@@ -67,7 +66,6 @@ pub(super) fn spawn_event_enrollment_task<T: TransportPort + 'static>(
                     local_apdu_capacity: u32::from(config.device.max_apdu_length()),
                     device: crate::local_device::initiating_device(&config.device),
                 };
-                let mut settle = Settle::default();
                 for committed in evaluation.deliveries {
                     if committed.distribute() {
                         BACnetServer::<T>::enqueue_event_notification(
@@ -75,7 +73,7 @@ pub(super) fn spawn_event_enrollment_task<T: TransportPort + 'static>(
                             &mut db_guard,
                             &committed.enrollment_oid(),
                             committed.into_notification(),
-                            &mut settle,
+                            None,
                         );
                     }
                 }

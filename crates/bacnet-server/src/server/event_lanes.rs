@@ -111,18 +111,21 @@ pub(in crate::server) struct LaneEntry {
 }
 
 impl LaneEntry {
-    /// `payload` for `process_id`, confirmed or not, counted in `settle`.
+    /// `payload` for `process_id`, confirmed or not, counted in `settle`
+    /// when its writer waits on it. A writer that doesn't (the Event
+    /// Enrollment pass, an acknowledgment, a relay) passes `None` and makes
+    /// no token.
     pub(in crate::server) fn new(
         payload: &Arc<LanePayload>,
         process_id: u32,
         confirmed: bool,
-        settle: &mut Settle,
+        settle: Option<&mut Settle>,
     ) -> Self {
         Self {
             payload: Arc::clone(payload),
             process_id,
             confirmed,
-            _settle: Some(settle.token()),
+            _settle: settle.map(Settle::token),
         }
     }
 }
@@ -221,11 +224,7 @@ impl EventLanes {
         if self.entries >= MAX_LANED_ENTRIES {
             return Pushed::Dropped(EventSuppression::LanesEntriesFull);
         }
-        let lane = self
-            .lanes
-            .iter()
-            .position(|lane| lane.destination == *destination);
-        match lane {
+        match self.position(destination) {
             Some(at) if self.lanes[at].entries.len() >= MAX_LANE_ENTRIES => {
                 Pushed::Dropped(EventSuppression::LaneFull)
             }
@@ -250,10 +249,7 @@ impl EventLanes {
     /// closes the lane, so the next push opens it again with a task of its
     /// own.
     fn next(&mut self, destination: &BACnetRecipient) -> Option<LaneEntry> {
-        let at = self
-            .lanes
-            .iter()
-            .position(|lane| lane.destination == *destination)?;
+        let at = self.position(destination)?;
         let next = self.lanes[at].entries.pop_front();
         match next {
             Some(_) => self.entries -= 1,
@@ -262,12 +258,26 @@ impl EventLanes {
         next
     }
 
-    /// Seal the lanes, dropping what they hold, and hand back their tasks
-    /// for the caller to abort and join.
-    pub(in crate::server) fn seal(&mut self) -> JoinSet<()> {
+    fn position(&self, destination: &BACnetRecipient) -> Option<usize> {
+        self.lanes
+            .iter()
+            .position(|lane| lane.destination == *destination)
+    }
+
+    /// Seal the lanes, dropping what they hold, and abort their tasks. The
+    /// tasks stay in the set until joined ([`join_sealed`]), so a `stop()`
+    /// cancelled part way leaves them for the next to join. Sealing again
+    /// does nothing more.
+    pub(in crate::server) fn seal(&mut self) {
         self.sealed = true;
         self.lanes.clear();
         self.entries = 0;
+        self.tasks.abort_all();
+    }
+
+    /// The sealed lanes' tasks, for a drop with no runtime to join them on:
+    /// dropping the set aborts them.
+    pub(in crate::server) fn take_tasks(&mut self) -> JoinSet<()> {
         std::mem::take(&mut self.tasks)
     }
 
@@ -292,6 +302,48 @@ pub(in crate::server) struct LaneHandles<T: TransportPort + 'static>(Option<Arc<
 impl<T: TransportPort + 'static> Default for LaneHandles<T> {
     fn default() -> Self {
         Self(None)
+    }
+}
+
+/// Join the tasks of `transactions`' sealed lanes, logging any that
+/// panicked. Taking the lock only for each poll, never across the await, it
+/// can be cancelled and started again.
+pub(in crate::server) async fn join_sealed(transactions: &NotificationTransactions) {
+    while let Some(result) =
+        std::future::poll_fn(|cx| lanes(transactions).tasks.poll_join_next(cx)).await
+    {
+        observe(result);
+    }
+}
+
+/// Wait until no lane is open: every notification pushed so far is handed
+/// off, or waits for its device's I-Am. For tests whose senders no longer
+/// wait on their lanes.
+///
+/// It yields first, which moves no clock, so a test on paused time that
+/// measures a window isn't moved past it; a lane that waits on a timer is
+/// then given time, 1 ms at a step.
+#[cfg(test)]
+pub(in crate::server) async fn lanes_drained(transactions: &NotificationTransactions) {
+    for step in 0..2_000 {
+        if lanes(transactions).lanes.is_empty() {
+            return;
+        }
+        if step < 100 {
+            tokio::task::yield_now().await;
+        } else {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    }
+    panic!("a lane is still open");
+}
+
+/// Log a lane task that panicked, as it is reaped.
+fn observe(result: Result<(), tokio::task::JoinError>) {
+    if let Err(error) = result
+        && error.is_panic()
+    {
+        warn!(%error, "An event notification lane's task panicked");
     }
 }
 
@@ -325,7 +377,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 );
                 let destination = destination.clone();
                 // Lanes come and go; reap the tasks that have finished.
-                while lanes.tasks.try_join_next().is_some() {}
+                while let Some(result) = lanes.tasks.try_join_next() {
+                    observe(result);
+                }
                 lanes
                     .tasks
                     .spawn(async move { Self::drain_lane(owned, destination).await });
@@ -344,9 +398,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
 
     /// Send `destination`'s entries, one at a time, until its lane is empty.
     async fn drain_lane(owned: Arc<OwnedDelivery<T>>, destination: BACnetRecipient) {
+        let mut task = LaneTask {
+            owned: Arc::clone(&owned),
+            destination: destination.clone(),
+            closed: false,
+        };
         let ctx = owned.delivery();
         loop {
             let Some(entry) = lanes(ctx.notification_transactions).next(&destination) else {
+                task.closed = true;
                 return;
             };
             // DeviceCommunicationControl drops what it would refuse,
@@ -377,6 +437,45 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 let _ = handed_off.await;
             }
         }
+    }
+}
+
+/// A lane's task, which leaves its lane to another when it ends before the
+/// lane is empty: a send that panicked, as the reaped task logs, loses the
+/// entry it was sending, and a new task takes the rest, so the lane isn't
+/// left with no task to drain it. With no runtime to start one on, the lane
+/// goes, and its entries with it, which resolves their writers' waits.
+/// Nothing is done for lanes that were sealed: `stop()` or the server's drop
+/// aborted the task.
+struct LaneTask<T: TransportPort + 'static> {
+    owned: Arc<OwnedDelivery<T>>,
+    destination: BACnetRecipient,
+    /// The lane emptied and closed.
+    closed: bool,
+}
+
+impl<T: TransportPort + 'static> Drop for LaneTask<T> {
+    fn drop(&mut self) {
+        if self.closed {
+            return;
+        }
+        let ctx = self.owned.delivery();
+        let mut lanes = lanes(ctx.notification_transactions);
+        let Some(at) = lanes.position(&self.destination).filter(|_| !lanes.sealed) else {
+            return;
+        };
+        if lanes.lanes[at].entries.is_empty() || tokio::runtime::Handle::try_current().is_err() {
+            let lane = lanes.lanes.swap_remove(at);
+            lanes.entries -= lane.entries.len();
+            drop(lanes);
+            drop(lane);
+            return;
+        }
+        let owned = Arc::clone(&self.owned);
+        let destination = self.destination.clone();
+        lanes
+            .tasks
+            .spawn(async move { BACnetServer::<T>::drain_lane(owned, destination).await });
     }
 }
 
