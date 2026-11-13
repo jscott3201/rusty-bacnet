@@ -1,4 +1,3 @@
-use super::cov_notify_context::CovNotifyContext;
 use super::event_forwarding::{ForwardOrigin, Reception};
 use super::received_event_log::log_received_event_notification;
 use super::*;
@@ -151,11 +150,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             cov_table,
             seg_ack_senders: _,
             seg_send_permits: _,
-            cov_in_flight,
+            cov_in_flight: _,
             learned_routers: _,
             notification_transactions,
             device_bindings,
-            comm_state,
+            comm_state: _,
             dcc_timer: _,
             dcc_outcomes: _,
             event_suppressions,
@@ -634,18 +633,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // Non-LSO callers pass `None` (or an untracked guard whose completion
         // is a no-op); dropping here is intentional.
 
-        let cov_ctx = CovNotifyContext {
-            db,
-            network,
-            cov_table,
-            cov_in_flight,
-            notification_transactions,
-            comm_state,
-            config,
-        };
         // Boxed: plans are rare, and their future would size every request's.
         if !staging_plans.is_empty() {
-            let delivery = services.event_delivery();
+            let (delivery, cov_ctx) = (services.event_delivery(), services.cov_context());
             let plans = Self::execute_staging_plans(&delivery, &cov_ctx, staging_plans);
             command_runs.extend(Box::pin(plans).await);
         }
@@ -680,6 +670,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             issue::Issued::Unsegmented { handed_off: true } => after_reply.run(),
             _ => drop(after_reply),
         }
+        // Made here, so the response's wait doesn't hold it.
+        let cov_ctx = services.cov_context();
         if issued == issue::Issued::Segmented {
             if let Some(sent) = sending {
                 let _ = sent.await;
