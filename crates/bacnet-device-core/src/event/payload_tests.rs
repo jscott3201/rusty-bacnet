@@ -427,3 +427,49 @@ fn limit_selection_covers_entries_crossings_and_normal_recovery() {
         );
     }
 }
+
+/// Every form the built-in projections build is in `INTRINSIC_FORMS`, and
+/// encodes under it as under every form; the mask takes no other (#2524).
+#[test]
+fn the_intrinsic_forms_are_the_projected_ones_and_encode_unchanged() {
+    use bacnet_encoding::constructed::{
+        encode_notification_parameters, encode_notification_parameters_of,
+    };
+    use bacnet_encoding::tags::decode_tag;
+
+    let fault = EventStateChange {
+        from: EventState::NORMAL,
+        to: EventState::FAULT,
+    };
+    let mut payloads = Vec::new();
+    for (source, _) in all_eleven_sources() {
+        payloads.push(normal_payload(&source));
+        let reliability = EventType::CHANGE_OF_RELIABILITY;
+        payloads.push(
+            project_intrinsic_payload(&source, &fault, reliability, None)
+                .unwrap()
+                .0,
+        );
+    }
+    // A log's report, whose projection reads the log's own counts.
+    payloads.push(NotificationParameters::BufferReady {
+        buffer_property: BACnetDeviceObjectPropertyReference {
+            object_identifier: ObjectIdentifier::new(ObjectType::TREND_LOG, 1).unwrap(),
+            property_identifier: PropertyIdentifier::LOG_BUFFER.to_raw(),
+            property_array_index: None,
+            device_identifier: None,
+        },
+        previous_notification: 3,
+        current_notification: 9,
+    });
+    let mut projected = 0u32;
+    for params in &payloads {
+        let (mut every, mut intrinsic) = (BytesMut::new(), BytesMut::new());
+        encode_notification_parameters(params, &mut every).unwrap();
+        encode_notification_parameters_of::<INTRINSIC_FORMS>(params, &mut intrinsic).unwrap();
+        assert_eq!(intrinsic, every, "{params:?}");
+        let (opening, _) = decode_tag(&every, 0).unwrap();
+        projected |= 1u32 << opening.number;
+    }
+    assert_eq!(projected, INTRINSIC_FORMS);
+}

@@ -296,6 +296,20 @@ fn a_timestamped_context_reports_each_change_with_its_time() {
     assert_eq!(device.reporter.next_deadline(), lifetime_end());
 }
 
+/// A change the host tells of is captured before it is reported, so the
+/// report that goes out at once retires it: nothing is left pending to go
+/// out again at the context's Max_Notification_Delay (#2524).
+#[test]
+fn a_host_change_is_captured_before_its_report() {
+    let (mut device, clock) = device();
+    device.subscribe_multiple(1, false, &[(ai(), true)], 1476, T0);
+    assert_eq!(device.drain(T0), [[(1, 10.0, Some(1))]]);
+    clock.set(12);
+    device.sample(ai(), 13.0, secs(2));
+    assert_eq!(device.drain(secs(2)), [[(1, 13.0, Some(12))]]);
+    assert_eq!(device.reporter.next_deadline(), lifetime_end());
+}
+
 #[test]
 fn contexts_that_report_at_once_are_queued_in_key_order_from_a_moving_start() {
     let (mut device, _) = device();

@@ -13,6 +13,7 @@ use bacnet_types::primitives::{BACnetTimeStamp, Date, StatusFlags, Time};
 
 mod cut_short;
 mod event_notification_decode;
+mod notification_forms;
 mod notification_parameters;
 mod notification_parameters_boundaries;
 mod notification_parameters_life_safety;

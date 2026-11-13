@@ -4,11 +4,24 @@
 
 use crate::prelude::*;
 
-use bacnet_types::constructed::{BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord};
+use bacnet_types::constructed::{
+    BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord, EventNotificationRequest,
+};
 use bacnet_types::error::Error;
+use bacnet_types::primitives::ObjectIdentifier;
 
 use super::not_supported;
+use crate::database::ObjectDatabase;
 use crate::log_buffer::{LogBufferRecords, LogRecordIdentity};
+
+/// The step that records an event notification this device built in its
+/// Event Logs, `logs`: what
+/// [`ObjectDatabase::log_event_notification`] runs once a log lends its
+/// buffer. It comes from the log ([`LogBuffer::notification_logger`]), so
+/// an image whose objects lend no log buffer links none of it (#2524).
+#[doc(hidden)]
+pub type NotificationLogger =
+    fn(&mut ObjectDatabase, Vec<ObjectIdentifier>, &EventNotificationRequest);
 
 /// A log object whose buffer the host pages and fills.
 ///
@@ -79,6 +92,15 @@ pub trait LogBuffer {
     /// window, does nothing and returns `false`.
     fn refresh_window(&mut self) -> bool {
         false
+    }
+
+    /// The database's step that records the device's own event
+    /// notifications in its Event Logs. It is reached through a log's
+    /// vtable, not called directly, so that only an image holding a log
+    /// object links it. Keep the default.
+    #[doc(hidden)]
+    fn notification_logger(&self) -> NotificationLogger {
+        ObjectDatabase::record_event_notification
     }
 }
 
