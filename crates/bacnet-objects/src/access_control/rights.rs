@@ -48,7 +48,10 @@ pub const MAX_ACCESS_RULES: usize = 1024;
 /// serving it, and serves the saved values when built again (#1392). A saved
 /// value wins over the configured one: the setter for a property a write set
 /// ([`property_saved`](Self::property_saved)) checks its argument but leaves
-/// the property alone. To change a saved value, write the property.
+/// the property alone. To change a saved value, write the property. A
+/// setter that does change a property while a peer's write to the object
+/// is being saved makes that staged write give way: the write is then made
+/// on what the setter left (#2526).
 pub struct AccessRightsObject {
     oid: ObjectIdentifier,
     name: String,
@@ -105,6 +108,7 @@ impl AccessRightsObject {
     pub fn set_enable(&mut self, enable: bool) {
         if !self.keeps_saved(PropertyIdentifier::ENABLE) {
             self.enable = enable;
+            self.changed();
         }
     }
 
@@ -142,6 +146,7 @@ impl AccessRightsObject {
         let rules = checked_rules(rules)?;
         if !self.keeps_saved(PropertyIdentifier::POSITIVE_ACCESS_RULES) {
             self.positive_access_rules = rules;
+            self.changed();
         }
         Ok(())
     }
@@ -156,6 +161,7 @@ impl AccessRightsObject {
         let rules = checked_rules(rules)?;
         if !self.keeps_saved(PropertyIdentifier::NEGATIVE_ACCESS_RULES) {
             self.negative_access_rules = rules;
+            self.changed();
         }
         Ok(())
     }
@@ -199,6 +205,7 @@ impl AccessRightsObject {
         }
         if !self.keeps_saved(PropertyIdentifier::ACCOMPANIMENT) {
             self.accompaniment = accompaniment;
+            self.changed();
         }
         Ok(())
     }
@@ -433,6 +440,11 @@ mod persistence_tests;
 #[cfg(test)]
 #[path = "rights_staging_tests.rs"]
 mod staging_tests;
+
+// std: the stage's save runs on the writer thread (#2526).
+#[cfg(all(test, feature = "std"))]
+#[path = "rights_step_tests.rs"]
+mod step_tests;
 
 #[cfg(test)]
 #[path = "rights_fold_tests.rs"]

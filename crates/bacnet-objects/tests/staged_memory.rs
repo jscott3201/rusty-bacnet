@@ -8,10 +8,6 @@
 //! allocator, which counts what is allocated and not yet freed, on every
 //! thread (the save writer's too). The count is the whole process's, so the
 //! tests take turns ([`one_at_a_time`]).
-//!
-//! Access Rights, whose steps still keep a copy of a rule array, has its
-//! test here, ignored until its fix lands: run it with `--run-ignored only`
-//! to measure (#2526).
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicIsize, Ordering};
@@ -339,7 +335,6 @@ fn a_tags_stage_holds_the_list_once_whatever_its_number_of_writes() {
 /// rules naming a time range and a zone in another Device, so storage and
 /// the served object hold both; the request rewrites a few positive rules.
 #[test]
-#[ignore = "#2526: each staged step still keeps the rule array; run with --run-ignored only"]
 fn an_access_rights_stage_holds_the_rules_once_whatever_its_number_of_writes() {
     let _turn = one_at_a_time();
     let storage = Arc::new(Saved::<AccessRightsSnapshot>::default());
@@ -379,7 +374,11 @@ fn an_access_rights_stage_holds_the_rules_once_whatever_its_number_of_writes() {
     let held = staged_octets(&mut rights, &writes);
     let per_write = held / WRITES as isize;
     eprintln!("Access Rights, {WRITES} writes: {held} octets held, {per_write} a write");
-    assert!(held < 1 << 20, "{held} octets held by the stage");
+    // The stage's copy of both served arrays (128 KiB) and the writes
+    // themselves, each with the rule it sets, about 450 KiB. 768 KiB leaves
+    // about 160 octets a write: a step keeping either array, or a few of
+    // its rules beside its own, would pass it.
+    assert!(held < 768 << 10, "{held} octets held by the stage");
 }
 
 /// References as a whole write of a list of them carries them.
