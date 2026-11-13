@@ -20,7 +20,7 @@
 //! `STAGED_WRITE_LIFETIME` has
 //! passed since its save finished: by the next write that stages, or by the
 //! server's once-a-second operation task, which calls
-//! [`DurableWrites::expire_staged`](crate::durable::DurableWrites::expire_staged). The class saves nothing else between
+//! [`expire_staged`](crate::durable::DurableWrites::expire_staged). The class saves nothing else between
 //! writes.
 //!
 //! Neither runs once the server has stopped. So `stop()`, once it has
