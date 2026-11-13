@@ -322,13 +322,40 @@ fn a_tags_stage_holds_the_list_once_whatever_its_number_of_writes() {
         |at| framed(&[BACnetNameValue::semantic(format!("w{at}"))]),
     );
     // The stage's copy of the served list (storage swaps its old snapshot
-    // for the new one, the same size) and the writes themselves, about 1.3
-    // MiB. 2 MiB leaves about 375 octets a write: a step that kept even one
-    // of these 1 KiB tags beside its change would pass it.
+    // for the new one, the same size) and the writes themselves, about 1.2
+    // MiB: a step holds its write and nothing else (#2546). 1.5 MiB leaves
+    // about 150 octets a write: a step that kept even one of these 1 KiB
+    // tags beside its write would pass it.
     let held = staged_octets(&mut object, &writes);
     let per_write = held / WRITES as isize;
     eprintln!("Tags, {WRITES} writes: {held} octets held, {per_write} a write");
-    assert!(held < 2 << 20, "{held} octets held by the stage");
+    assert!(held < 3 << 19, "{held} octets held by the stage");
+}
+
+/// A request of whole-array Tags writes, each of 1,024 tags with empty
+/// names, about 2 KiB on the wire: a step holds the write, not the list it
+/// writes, which is about 60 KiB decoded, so 2,000 of them held about 120
+/// MiB (#2546).
+#[test]
+fn a_whole_tags_write_holds_its_write_not_its_list() {
+    let _turn = one_at_a_time();
+    let storage = Arc::new(Saved::<TagsSnapshot>::default());
+    let mut object =
+        AnalogInputObject::with_tags_persistence(1, "AI", EngineeringUnits::NO_UNITS, storage)
+            .unwrap();
+    object
+        .set_profile(ObjectProfile {
+            tags: Some(Vec::new()),
+            ..ObjectProfile::default()
+        })
+        .unwrap();
+    let empty = vec![BACnetNameValue::semantic(""); MAX_TAGS];
+    let writes = writes(P::TAGS, |_| None, |_| framed(&empty));
+    let held = staged_octets(&mut object, &writes);
+    let per_write = held / WRITES as isize;
+    eprintln!("Tags, {WRITES} whole writes: {held} octets held, {per_write} a write");
+    // The write's own 2 KiB and its step, and the stage's one list.
+    assert!(per_write < 3 << 10, "{per_write} octets held a write");
 }
 
 /// An Access Rights object's rule arrays, each written once with its 1,024

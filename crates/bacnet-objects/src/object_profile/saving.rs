@@ -3,6 +3,8 @@
 use crate::prelude::*;
 use alloc::sync::Arc;
 #[cfg(feature = "durable-writes")]
+use bytes::BytesMut;
+#[cfg(feature = "durable-writes")]
 use core::time::Duration;
 
 use bacnet_types::constructed::BACnetNameValue;
@@ -10,6 +12,8 @@ use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
+#[cfg(feature = "durable-writes")]
+use super::slot;
 use super::{ObjectProfile, TagsPersistence, TagsSnapshot, write_tags};
 use crate::common;
 use crate::durable::SaveWriter;
@@ -20,66 +24,28 @@ use crate::durable::staged::StagedSaves;
 use crate::durable::{DurableWrites, PendingWrite, SaveWait, StageStep};
 use crate::property_metadata::PropertyMetadata;
 use crate::snapshot::tags::fits;
+#[cfg(feature = "durable-writes")]
+use crate::snapshot::tags::{fits_len, tags_len};
 use crate::write_config::description;
 
 /// What a saved write leaves: the property it sets, as storage holds it.
 enum Next {
     Tags(Vec<BACnetNameValue>),
     Description(String),
-    /// A staged step's Tags write with an index: the change it makes to the
-    /// Tags served as it is taken (#2526). A staged step holds what its
-    /// write sets; for a whole array or a Description, that is the whole
-    /// state it leaves, so such a step holds its list or its text.
+    /// A staged step: nothing beyond its write, which its claim makes again
+    /// on the state served (#2546).
     #[cfg(feature = "durable-writes")]
-    Staged(TagsChange),
+    Staged,
 }
 
-/// What a Tags write with an index sets (#2526).
-#[cfg(feature = "durable-writes")]
-enum TagsChange {
-    /// The size an index-0 write gives the array.
-    Size(usize),
-    /// The tag an element write puts at its zero-based slot.
-    Tag(usize, BACnetNameValue),
-}
-
-#[cfg(feature = "durable-writes")]
-impl TagsChange {
-    /// The change a write at `index` makes, given `tags`, the array it
-    /// leaves: `None` for a whole write.
-    fn of(index: Option<u32>, tags: &[BACnetNameValue]) -> Option<Self> {
-        match index? {
-            0 => Some(Self::Size(tags.len())),
-            index => {
-                let slot = usize::try_from(index.checked_sub(1)?).ok()?;
-                Some(Self::Tag(slot, tags.get(slot)?.clone()))
-            }
-        }
-    }
-
-    /// Make the change on `tags`, the array the write was worked out on. An
-    /// element's slot is inside it: the claim that took the step checked it
-    /// ([`unmakeable`]).
-    fn make(self, tags: &mut Vec<BACnetNameValue>) {
-        match self {
-            Self::Size(size) => tags.resize_with(size, || BACnetNameValue::semantic("")),
-            Self::Tag(slot, tag) => {
-                debug_assert!(slot < tags.len(), "a staged element past the Tags served");
-                if let Some(served) = tags.get_mut(slot) {
-                    *served = tag;
-                }
-            }
-        }
-    }
-}
-
-/// A request's staged steps each hold what their write sets, not the state
-/// it leaves (#2526). An element or index-0 write's step holds only its
-/// change, made on the Tags served as the write is taken, so a request of
-/// such writes holds the list a constant number of times however many it
-/// makes. A whole-array write's step holds the list it writes, and a
-/// Description's its text. The stage works the steps out on one working
-/// copy and saves it once.
+/// A request's staged steps hold nothing beyond their writes (#2546). The
+/// stage makes each write in turn on one working copy of the Tags and the
+/// Description, counting the octets the Tags encode to as it goes, and
+/// saves that copy once; each step's claim makes its write again on the
+/// state served, which is the state the stage made it on. So a staged
+/// write costs what it changes, at its stage and as it is made, and a
+/// request holds the state a constant number of times however many writes
+/// it makes, a whole array's included (#2526).
 type Storage = StagedSaves<TagsSnapshot, Next>;
 
 /// Provisioned served rows, independent saved override, and sole writer.
@@ -120,31 +86,111 @@ fn apply(snapshot: &mut TagsSnapshot, next: &Next) {
         Next::Tags(tags) => snapshot.tags = Some(tags.clone()),
         Next::Description(text) => snapshot.description = Some(text.clone()),
         #[cfg(feature = "durable-writes")]
-        Next::Staged(_) => unreachable!("{WHOLE}"),
+        Next::Staged => unreachable!("{AGAIN}"),
     }
 }
 
-/// Whether a staged step can't be made on `served`, the Tags served as its
-/// write is made: an element past their end. Every change to the served
-/// Tags counts as a write, and a step is taken only while none came between,
-/// so this holds no step back; should one ever be stale, its write isn't
-/// taken and is refused as made on the Tags served, rather than reported
-/// made (#2526).
+/// Why only a claim sees [`Next::Staged`]: every other write is worked
+/// out, and saved, as the whole state it leaves.
 #[cfg(feature = "durable-writes")]
-fn unmakeable(next: &Next, served: Option<&[BACnetNameValue]>) -> bool {
-    matches!(next, Next::Staged(TagsChange::Tag(slot, _)) if *slot >= served.map_or(0, <[_]>::len))
+const AGAIN: &str = "a staged step's write is made again as it is taken";
+
+/// Whether a staged write of Tags at `index` can't be made on `served`, the
+/// Tags served as it is taken: an element past their end. Nothing else a
+/// stage took depends on the state, and every change to the served Tags
+/// counts as a write, so a step is taken only while none came between: this
+/// holds no step back. Should one ever be stale, its write isn't taken and
+/// is refused as made on the Tags served, rather than reported made
+/// (#2526).
+#[cfg(feature = "durable-writes")]
+fn unmakeable(property: P, index: Option<u32>, served: Option<&[BACnetNameValue]>) -> bool {
+    let len = served.map_or(0, <[_]>::len);
+    property == P::TAGS && index.is_some_and(|index| index > 0 && slot(index, len).is_err())
 }
 
 /// Without durable-writes no step is staged, so none is stale.
 #[cfg(not(feature = "durable-writes"))]
-fn unmakeable(_next: &Next, _served: Option<&[BACnetNameValue]>) -> bool {
+fn unmakeable(_property: P, _index: Option<u32>, _served: Option<&[BACnetNameValue]>) -> bool {
     false
 }
 
-/// Why only a staged step holds a [`TagsChange`]: every other write is
-/// worked out, and saved, as the whole state it leaves.
+/// The Tags a stage works its writes out on, and the octets they encode to
+/// ([`tags_len`]), kept current write by write (#2546).
 #[cfg(feature = "durable-writes")]
-const WHOLE: &str = "a write is worked out as the whole state it leaves";
+struct Working {
+    tags: Vec<BACnetNameValue>,
+    len: usize,
+}
+
+#[cfg(feature = "durable-writes")]
+impl Working {
+    /// `tags`, counted.
+    fn of(tags: Vec<BACnetNameValue>, scratch: &mut BytesMut) -> Result<Self, Error> {
+        let len = tags_len(&tags, scratch)?;
+        Ok(Self { tags, len })
+    }
+
+    /// Make a write of `value` at `index` in place, as [`write_tags`] makes
+    /// it, if the Tags it leaves fit a save beside `description`. A write
+    /// refused either way leaves the Tags as they were: [`write_tags`]
+    /// changes nothing it refuses, and a write that doesn't fit is undone.
+    fn write(
+        &mut self,
+        index: Option<u32>,
+        value: &PropertyValue,
+        description: Option<&str>,
+        scratch: &mut BytesMut,
+    ) -> Result<(), Error> {
+        match index {
+            None => {
+                let mut written = Vec::new();
+                write_tags(&mut written, None, value)?;
+                let len = tags_len(&written, scratch)?;
+                fits_len(description, Some(len))?;
+                *self = Self { tags: written, len };
+            }
+            Some(0) => {
+                // A smaller size drops the tags past it: they come out first,
+                // to be counted, and to go back should the write be refused.
+                let before = self.tags.len();
+                let kept = match value {
+                    PropertyValue::Unsigned(size) => {
+                        usize::try_from(*size).map_or(before, |size| size.min(before))
+                    }
+                    _ => before,
+                };
+                let dropped = self.tags.split_off(kept);
+                let len = write_tags(&mut self.tags, Some(0), value).and_then(|()| {
+                    let added = tags_len(&self.tags[kept..], scratch)?;
+                    let len = self.len - tags_len(&dropped, scratch)? + added;
+                    fits_len(description, Some(len)).map(|()| len)
+                });
+                match len {
+                    Ok(len) => self.len = len,
+                    Err(error) => {
+                        self.tags.truncate(kept);
+                        self.tags.extend(dropped);
+                        return Err(error);
+                    }
+                }
+            }
+            Some(index) => {
+                // As write_tags checks it first.
+                let slot = slot(index, self.tags.len())?;
+                let old = self.tags[slot].clone();
+                write_tags(&mut self.tags, Some(index), value)?;
+                let new = tags_len(core::slice::from_ref(&self.tags[slot]), scratch)?;
+                let len = self.len - tags_len(core::slice::from_ref(&old), scratch)? + new;
+                if let Err(error) = fits_len(description, Some(len)) {
+                    self.tags[slot] = old;
+                    return Err(error);
+                }
+                self.len = len;
+            }
+        }
+        Ok(())
+    }
+}
 
 impl ProfileState {
     /// A profile that keeps written Tags in `persistence`, and with
@@ -262,23 +308,91 @@ impl ProfileState {
                     kept.saved.description = Some(text);
                 }
             }
-            // A staged step's change, made on the Tags served: the array the
-            // stage made it on, since no other write came between (#2526).
             #[cfg(feature = "durable-writes")]
-            Next::Staged(change) => {
-                let mut tags = self.profile.tags.take().unwrap_or_default();
-                change.make(&mut tags);
-                return self.install(Next::Tags(tags));
-            }
+            Next::Staged => unreachable!("{AGAIN}"),
         }
         self.writes = self.writes.wrapping_add(1);
     }
 
+    /// Make a staged write of `value` to `property`, Tags at `index` or a
+    /// kept Description, whose step a claim has just taken: again, on the
+    /// state served, which is the state its stage made it on, so it can't
+    /// be refused now; and bring what storage holds for that state, and the
+    /// copy a staged write still to be taken keeps of it, up to date in
+    /// place (#2546).
+    #[cfg(feature = "durable-writes")]
+    fn again(&mut self, property: P, index: Option<u32>, value: &PropertyValue) {
+        let Some(kept) = self.kept.as_deref_mut() else {
+            return;
+        };
+        let Kept { saved, storage, .. } = kept;
+        let follows = |kept: &TagsSnapshot, saved: &TagsSnapshot| {
+            debug_assert!(kept == saved, "the staged write keeps the state served");
+        };
+        if property == P::DESCRIPTION {
+            let text = description::written(value);
+            debug_assert!(text.is_ok(), "a staged Description its stage took");
+            let Ok(text) = text else { return };
+            saved.description = Some(text.clone());
+            storage.correct_with(
+                || saved.clone(),
+                |kept| {
+                    kept.description = Some(text);
+                    follows(kept, saved);
+                },
+            );
+        } else {
+            // A write the stage made on these Tags, so one they take again;
+            // and the Tags storage holds are these, should it hold any.
+            let make = |tags: &mut Vec<BACnetNameValue>| {
+                let made = write_tags(tags, index, value);
+                debug_assert!(made.is_ok(), "a staged Tags write its stage took");
+            };
+            let served = self.profile.tags.get_or_insert_default();
+            make(served);
+            match &mut saved.tags {
+                Some(tags) => make(tags),
+                None => saved.tags = Some(served.clone()),
+            }
+            storage.correct_with(
+                || saved.clone(),
+                |kept| {
+                    match &mut kept.tags {
+                        Some(tags) => make(tags),
+                        None => kept.tags.clone_from(&saved.tags),
+                    }
+                    follows(kept, saved);
+                },
+            );
+        }
+        self.writes = self.writes.wrapping_add(1);
+    }
+
+    /// Take the step a claim took for a write of `value` to `property` at
+    /// `index`: a staged write is made again (by `again`). A step holding
+    /// the state its write leaves installs it, as a write made where it is
+    /// does. No stage makes one now; the path keeps `write_kept` the size
+    /// the firmware images, which claim nothing, are measured at.
+    #[cfg_attr(not(feature = "durable-writes"), expect(unused_variables))]
+    fn take(&mut self, next: Next, property: P, index: Option<u32>, value: &PropertyValue) {
+        #[cfg(feature = "durable-writes")]
+        if let Next::Staged = next {
+            return self.again(property, index, value);
+        }
+        self.install(next);
+        self.with_storage(|_| ());
+    }
+
     /// What a write of `value` to `property`, Tags or a kept Description,
-    /// leaves on top of `staged_tags` and `staged_text`, the Tags and the
-    /// Description the earlier steps of its request leave (`None` for one
-    /// they don't set), or its refusal. With storage, what the write leaves
-    /// must fit a save beside the rest of what storage would then hold.
+    /// leaves on top of `staged_tags` and `staged_text` (`None` for the
+    /// Tags served and the Description saved), or its refusal. With
+    /// storage, what the write leaves must fit a save beside the rest of
+    /// what storage would then hold.
+    ///
+    /// A write made where it is passes `None` for both, and is the only
+    /// caller: a stage works its writes out in place (`Working`, #2546).
+    /// The two stay because the firmware images lay `write_kept` out up to
+    /// 36 octets longer without them.
     fn next(
         &self,
         staged_tags: Option<&[BACnetNameValue]>,
@@ -309,7 +423,7 @@ impl ProfileState {
                     fits(Some(text.as_str()), staged_tags.or(saved.tags.as_deref()))
                 }
                 #[cfg(feature = "durable-writes")]
-                Next::Staged(_) => unreachable!("{WHOLE}"),
+                Next::Staged => unreachable!("{AGAIN}"),
             }?;
         }
         Ok(next)
@@ -369,15 +483,15 @@ impl ProfileState {
         if let Some(kept) = &mut self.kept
             && let Some(claimed) = kept
                 .storage
-                .claim_unless(property, index, value, base, |next| {
-                    unmakeable(next, self.profile.tags.as_deref())
+                .claim_unless(property, index, value, base, |_| {
+                    unmakeable(property, index, self.profile.tags.as_deref())
                 })
         {
-            // Install before correcting, so the steps the request has still
-            // to take keep the state served now.
-            let result = claimed.map(|next| self.install(next)).map_err(refused);
-            self.with_storage(|_| ());
-            return result;
+            // A save that failed dropped every step without leaving storage
+            // anything to correct.
+            return claimed
+                .map(|next| self.take(next, property, index, value))
+                .map_err(refused);
         }
         // A write the object refuses leaves a staged one alone (#1424).
         let next = self.next(None, None, property, index, value)?;
@@ -451,9 +565,13 @@ impl DurableWrites for ProfileState {
         if let Some(wait) = self.with_storage(Storage::busy).flatten() {
             return StageStep::Busy(wait);
         }
-        // One working copy of the Tags and the Description the steps so far
-        // leave; a step holds only what its write sets (#2526).
-        let (mut tags, mut text) = (None, None);
+        // The Description the steps so far leave, and the Tags they work on,
+        // copied from those served when a step first writes them (#2546):
+        // the Tags the steps leave once one of them has been made. And the
+        // octets the saved Tags encode to, counted once a step needs them.
+        let (mut tags, mut text): (Option<Working>, Option<String>) = (None, None);
+        let (mut made, mut saved_len) = (false, None);
+        let mut scratch = BytesMut::new();
         let steps = staged::steps(writes, |_, write| {
             if !self.keeps(write.property, &write.value) {
                 return Ok(None);
@@ -461,24 +579,37 @@ impl DurableWrites for ProfileState {
             if write.property == P::DESCRIPTION && write.array_index.is_some() {
                 return Err(common::property_is_not_an_array_error());
             }
-            let (property, index, value) = (write.property, write.array_index, &write.value);
-            Ok(Some(
-                match self.next(tags.as_deref(), text.as_deref(), property, index, value)? {
-                    Next::Tags(next) => {
-                        let step = match TagsChange::of(index, &next) {
-                            Some(change) => Next::Staged(change),
-                            None => Next::Tags(next.clone()),
-                        };
-                        tags = Some(next);
-                        step
+            let saved = &self.kept.as_ref().expect("a kept write").saved;
+            if write.property == P::DESCRIPTION {
+                // What the write leaves must fit a save beside the Tags the
+                // steps so far leave, or those storage holds.
+                let written = description::written(&write.value)?;
+                let tags_len = match (tags.as_ref().filter(|_| made), saved_len) {
+                    (Some(working), _) => Some(working.len),
+                    (None, Some(len)) => len,
+                    (None, None) => {
+                        let len = saved
+                            .tags
+                            .as_deref()
+                            .map(|tags| tags_len(tags, &mut scratch));
+                        *saved_len.insert(len.transpose()?)
                     }
-                    Next::Description(next) => {
-                        text = Some(next.clone());
-                        Next::Description(next)
+                };
+                fits_len(Some(&written), tags_len)?;
+                text = Some(written);
+            } else {
+                let working = match &mut tags {
+                    Some(working) => working,
+                    None => {
+                        let served = self.profile.tags.clone().unwrap_or_default();
+                        tags.insert(Working::of(served, &mut scratch)?)
                     }
-                    Next::Staged(_) => unreachable!("{WHOLE}"),
-                },
-            ))
+                };
+                let description = text.as_deref().or(saved.description.as_deref());
+                working.write(write.array_index, &write.value, description, &mut scratch)?;
+                made = true;
+            }
+            Ok(Some(Next::Staged))
         });
         if steps.is_empty() {
             return StageStep::Skip;
@@ -486,7 +617,10 @@ impl DurableWrites for ProfileState {
         let base = self.writes;
         let Kept { saved, storage, .. } = &mut **self.kept.as_mut().expect("checked above");
         let snapshot = TagsSnapshot {
-            tags: tags.or_else(|| saved.tags.clone()),
+            tags: tags
+                .filter(|_| made)
+                .map(|working| working.tags)
+                .or_else(|| saved.tags.clone()),
             description: text.or_else(|| saved.description.clone()),
         };
         storage.stage_built(steps, base, snapshot, saved.clone())
@@ -511,3 +645,8 @@ impl DurableWrites for ProfileState {
         self.with_storage(|storage| storage.expire(now));
     }
 }
+
+// The stage's writes, at the cap and made one at a time (#2546).
+#[cfg(all(test, feature = "durable-writes"))]
+#[path = "saving_cost_tests.rs"]
+mod cost_tests;
