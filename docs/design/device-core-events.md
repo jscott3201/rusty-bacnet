@@ -1038,7 +1038,7 @@ image would link:
 | PR 1, measured | 148.4 KB (flash 165.8 KB) | the `objects` image's 127.3 KB, plus the table and the two subscribe services (#2303) |
 | PR 2, measured | 171.4 KB (flash 189.7 KB) | the image through the `Reporter`, trimmed by #2363 (§8.3) |
 | + `event-reporting` (after PR 3) | 172-181 KB estimated; 243.2 KB measured (flash 265.6 KB) | ~2,200 lines, plus the measured objects and encoder share; see §8.3 for what dominates |
-| + `event-enrollment` (#2319) | PR 3's measured row + 35-40 KB (the estimate's own step over PR 3's) | ~2,700 lines, the Event Enrollment object, `decode_event_parameter` |
+| + `event-enrollment` (#2319) | 60-75 KB of flash over PR 3's measured row, estimated; a thumbv7m probe of the algorithms and one Event Enrollment object measured 43.8 KB of `.text`, 48.9 KB of flash (decision 23) | ~2,700 lines, the Event Enrollment object, `decode_event_parameter` |
 | + the Multiple path (#2320) | +15-25 KB estimated; +134 KB measured before any trim (decision 18) | ~3,300 lines, the COVNotificationMultiple codec |
 
 Flash ran about 18 KB above `.text` through PR 2, and 22.3 KB in PR 3's
@@ -1886,13 +1886,28 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
       parts) and the object's own 5.2 KB; most of the algorithms inline
       into their caller. With the pass and commit, PR 3's row is
       estimated at 60-75 KB of flash over today's `reporting` row,
-      about twice the issue's 30-40 KB, for the same reason PR 3's
-      estimate missed: the objects' share and the decoders.
+      about twice the issue's 30-40 KB, for the same reason #2303's PR 3
+      estimate missed: the objects' share and the decoders. The
+      `reporting` image keeps the feature off, so its rows don't move; PR 3
+      adds a separate budgeted image with it on (lead).
     - The timing keeps the pass model: Event Enrollment sees its monitored
       value only at passes (the reference may be in another device, and a
       write the core is told of may not touch it), so its delays count
       passes, never early and up to one interval late, as today. No wire
-      change.
+      change (lead). Due instants for local references could follow as a
+      decision of their own.
+    - References stay local only, as the server has them: one naming
+      another device is an observation gap at each pass (no transition,
+      continuity cleared). A host-supplied reader for remote references is
+      a later decision (lead).
+    - Order against #2524: its trim of the shared write-then-evaluate tail
+      lands before PR 3, since enrollment joins that tail; its trim of the
+      notification-parameter encoders keeps the enrollment forms behind
+      `event-enrollment` (lead).
+    - PR 1's modules are public for `bacnet-server` only, hidden from the
+      documentation, until PR 2a moves the pass (fix round, lead); the
+      legacy parameter encoders write a private layout, not a form the
+      standard defines.
 
 ## 12. Evidence
 

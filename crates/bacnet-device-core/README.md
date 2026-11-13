@@ -21,8 +21,8 @@ the database guard, the transport, addressing and time.
 - `event-enrollment`, which `std` turns on, adds `event::enrollment` on top
   of `event-reporting` (#2319): the event and fault algorithms an Event
   Enrollment object evaluates, and the reads of its parameters and
-  monitored reference. `bacnet-server` runs its evaluation pass on them; no
-  firmware image turns it on yet.
+  monitored reference, internal until the evaluation pass moves too.
+  `bacnet-server` runs its pass on them; no firmware image turns it on yet.
 - `cov-multiple`, which `std` turns on, has the SubscribeCOVPropertyMultiple
   path (#2320): the service with its checks
   (`cov::subscribe_cov_property_multiple`), the capture of timestamped

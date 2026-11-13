@@ -78,8 +78,11 @@ pub fn read_event_parameters(
     }
 }
 
-/// Read the enrollment's Fault_Parameters as the fault algorithm it names,
-/// resolving a reference to `local_device`.
+/// Read the enrollment's Fault_Parameters as the fault algorithm it names:
+/// FAULT_NONE when the property is absent; a FAULT_STATUS_FLAGS reference
+/// only to an object of `local_device` (one naming another device, or not
+/// Status_Flags, is malformed); FAULT_OUT_OF_RANGE with finite, ordered
+/// limits. Any other algorithm is malformed: the evaluator doesn't run it.
 pub fn read_fault_algorithm(
     enrollment: &dyn BACnetObject,
     local_device: LocalDevice,

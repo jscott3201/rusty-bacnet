@@ -45,8 +45,9 @@
 # bacnet-objects' capability features (#2215) each change what it compiles:
 # `alloc` alone has them all off, then each is off alone, then all are on.
 # bacnet-device-core's structured-writes (#2210) likewise: off, then on, then
-# its COV-multiple path alone (#2320), its event reporting alone (#2303), then
-# every feature, its test-support hooks (#2303) included.
+# its COV-multiple path alone (#2320), its event reporting alone (#2303), its
+# Event Enrollment algorithms with alloc (#2319), then every feature, its
+# test-support hooks (#2303) included.
 #
 # To cover another crate or feature set, add a line to `checks`.
 set -euo pipefail

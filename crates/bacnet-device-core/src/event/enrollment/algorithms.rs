@@ -1,10 +1,10 @@
 //! Per-algorithm evaluation for the Event Enrollment evaluator.
 //!
-//! Split out of `mod.rs` so both files stay under the 700-LOC cap: this file
-//! holds the pure evaluation functions — the byte-layout evaluators retained
-//! for the legacy `Opaque` path, and the structured evaluators that consume
-//! [`BACnetEventParameter`] fields directly — while `mod.rs` holds the
-//! database driver, delay gating, and transition actions.
+//! The pure evaluation functions: the byte-layout evaluators retained for
+//! the legacy `Opaque` path, and the structured evaluators that consume
+//! [`BACnetEventParameter`] fields directly. The database driver, delay
+//! gating and transition actions are `bacnet-server`'s evaluation pass
+//! (`event_enrollment/mod.rs`) until it moves here (#2319).
 //!
 //! Every structured evaluator returns an [`ArmEvaluation`]: either the
 //! algorithm *indicated a transition* (possibly to the state the enrollment
@@ -43,6 +43,7 @@ use bacnet_types::primitives::PropertyValue;
 /// pTimeDelayNormal) carries the enrollment back into the algorithm's state
 /// space. A rewriting client observing pCurrentState in-event gets exactly
 /// the fresh-evaluation view the standard assumes.
+#[derive(Debug, Clone, PartialEq)]
 pub struct ArmEvaluation {
     /// The transition the algorithm indicated, if any condition was true.
     pub indication: Option<Indication>,
@@ -71,6 +72,7 @@ impl ArmEvaluation {
 /// The driver still owes the delay gate (Clause 13.3's persistence requirement
 /// over pTimeDelay / pTimeDelayNormal) before this becomes a fired transition; an
 /// indication only asserts that an algorithm condition is currently true.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Indication {
     /// The specific BACnetEventState the algorithm returned. Stored verbatim
     /// in `Event_State` when the transition fires (Clause 13.2.2.1.4 requires
@@ -797,7 +799,7 @@ pub fn extract_real(pv: &PropertyValue) -> Option<f32> {
 }
 
 /// Extract an enumerated (u32) value from a PropertyValue.
-pub fn extract_enumerated(pv: &PropertyValue) -> Option<u32> {
+pub(crate) fn extract_enumerated(pv: &PropertyValue) -> Option<u32> {
     match pv {
         PropertyValue::Enumerated(v) => Some(*v),
         PropertyValue::Unsigned(v) => u32::try_from(*v).ok(),
