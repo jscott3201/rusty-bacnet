@@ -159,7 +159,7 @@ fn foreign_reference_does_not_evaluate_same_numbered_local_object() {
             .unwrap(),
         PropertyValue::Enumerated(EventState::NORMAL.to_raw())
     );
-    let reference = bacnet_device_core::event::decode_reference_value(
+    let reference = crate::event::decode_reference_value(
         &db.get(&ee_oid)
             .unwrap()
             .read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None)
@@ -293,7 +293,7 @@ impl BACnetObject for ReferenceValueObject {
                 array_index,
                 value,
                 priority,
-                &crate::command_source::test_origin(),
+                &crate::event::enrollment::pass::tests::helpers::test_origin(),
             )
         }
     }
@@ -429,7 +429,7 @@ fn failed_source_write_does_not_persist_dependent_state() {
             None,
             PropertyValue::Real(90.0),
             Some(1),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -467,7 +467,7 @@ fn source_write_failure_still_allows_an_immediate_stateless_transition() {
             None,
             PropertyValue::Real(90.0),
             Some(1),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -507,7 +507,7 @@ fn failed_state_reset_clears_source_ownership() {
             None,
             PropertyValue::Real(10.0),
             Some(1),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     target
@@ -516,7 +516,7 @@ fn failed_state_reset_clears_source_ownership() {
             None,
             PropertyValue::Real(90.0),
             Some(2),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();

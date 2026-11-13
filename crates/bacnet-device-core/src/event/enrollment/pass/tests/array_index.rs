@@ -149,7 +149,7 @@ impl BACnetObject for IndexedReadProbe {
             array_index,
             value,
             priority,
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
     }
 
@@ -169,7 +169,7 @@ fn indexed_priority_array_element_drives_evaluation() {
             None,
             PropertyValue::Real(90.0),
             Some(1),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     let value_oid = value.object_identifier();
@@ -295,7 +295,7 @@ fn index_change_restarts_the_pending_delay() {
                 None,
                 PropertyValue::Real(90.0),
                 Some(priority),
-                &crate::command_source::test_origin(),
+                &crate::event::enrollment::pass::tests::helpers::test_origin(),
             )
             .unwrap();
     }
@@ -364,7 +364,7 @@ fn index_change_discards_the_previous_element_baselines() {
                 None,
                 PropertyValue::Real(sample),
                 Some(priority),
-                &crate::command_source::test_origin(),
+                &crate::event::enrollment::pass::tests::helpers::test_origin(),
             )
             .unwrap();
     }
@@ -424,7 +424,7 @@ fn null_indexed_element_interrupts_the_pending_delay() {
             None,
             PropertyValue::Real(90.0),
             Some(1),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     let value_oid = value.object_identifier();
@@ -447,7 +447,7 @@ fn null_indexed_element_interrupts_the_pending_delay() {
             None,
             PropertyValue::Null,
             Some(1),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
@@ -468,7 +468,7 @@ fn null_indexed_element_interrupts_the_pending_delay() {
             None,
             PropertyValue::Real(90.0),
             Some(1),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
@@ -552,7 +552,7 @@ fn null_indexed_floating_setpoint_interrupts_the_pending_delay() {
             None,
             PropertyValue::Real(50.0),
             Some(1),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     let setpoint_oid = setpoint.object_identifier();
@@ -590,7 +590,7 @@ fn null_indexed_floating_setpoint_interrupts_the_pending_delay() {
             None,
             PropertyValue::Null,
             Some(1),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());
@@ -611,7 +611,7 @@ fn null_indexed_floating_setpoint_interrupts_the_pending_delay() {
             None,
             PropertyValue::Real(50.0),
             Some(1),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     assert!(evaluate_event_enrollments(&mut db, 1).is_empty());

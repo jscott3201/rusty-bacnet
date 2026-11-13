@@ -9,8 +9,7 @@ use bacnet_objects::event_enrollment::{EventEnrollmentEvalState, EventEnrollment
 use bacnet_types::enums::{EventState, EventType, PropertyIdentifier, Reliability};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
-use super::EventEnrollmentTransition;
-use bacnet_device_core::event::{
+use crate::event::{
     CapturedReferencedValue, CommittedNotificationPayload, EventEnrollmentProjectionSnapshot,
     SampledEventClock, confirm_event_timestamp, project_event_enrollment_payload,
     stage_event_timestamp,
@@ -126,52 +125,77 @@ pub struct EventEnrollmentEvaluationReport {
     pub diagnostics: Vec<EventEnrollmentEvaluationDiagnostic>,
 }
 
-/// Public result family carried by one private, already-committed delivery.
-pub(crate) enum CommittedEventEnrollmentResult {
+/// What one committed delivery carries: an event transition or a
+/// Reliability change.
+#[derive(Debug)]
+pub enum CommittedEventEnrollmentResult {
+    /// An event transition.
     Normal(EventEnrollmentTransition),
+    /// A reliability change, with any FAULT transition it made.
     Reliability(EventEnrollmentReliabilityResult),
 }
 
 /// One Event Enrollment commit plus policy captured under its database guard.
-pub(crate) struct CommittedEventEnrollmentDelivery {
-    pub(crate) result: CommittedEventEnrollmentResult,
-    pub(crate) ack_required: bool,
-    pub(crate) recipient_clock: SampledEventClock,
-    pub(crate) event_type: EventType,
-    pub(crate) event_values: CommittedNotificationPayload,
+///
+/// Its result may be one the enrollment's `Event_Enable` leaves out: send it
+/// only when the result's `distribute` is set.
+#[derive(Debug)]
+pub struct CommittedEventEnrollmentDelivery {
+    /// What committed.
+    pub result: CommittedEventEnrollmentResult,
+    /// Whether the transition needs acknowledging.
+    pub ack_required: bool,
+    /// The clock its timestamp was taken from.
+    pub recipient_clock: SampledEventClock,
+    /// Its event type.
+    pub event_type: EventType,
+    /// Its notification payload.
+    pub event_values: CommittedNotificationPayload,
 }
 
-/// Public report plus the commit-order stream consumed only by the server.
-pub(crate) struct EventEnrollmentEvaluationBatch {
-    pub(crate) report: EventEnrollmentEvaluationReport,
-    pub(crate) deliveries: Vec<CommittedEventEnrollmentDelivery>,
+/// A state transition detected during event enrollment evaluation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EventEnrollmentTransition {
+    /// The EventEnrollment object that detected the transition.
+    pub enrollment_oid: ObjectIdentifier,
+    /// The monitored object whose property triggered the transition.
+    pub monitored_oid: ObjectIdentifier,
+    /// The detected state change. `from == to` is a genuine same-state
+    /// transition emitted by applicable event algorithms.
+    pub change: EventStateChange,
+    /// The event type that was evaluated.
+    pub event_type: EventType,
+    /// Whether `Event_Enable` permits distributing a notification for this
+    /// transition. The transition is reported and `Event_State` persisted
+    /// either way; a cleared bit suppresses only the outbound notification.
+    pub distribute: bool,
 }
 
-pub(crate) fn log_evaluation_report(report: &EventEnrollmentEvaluationReport) {
-    for result in &report.reliability_results {
-        tracing::debug!(
-            enrollment = %result.enrollment_oid,
-            monitored = ?result.monitored_oid,
-            previous = ?result.previous_reliability,
-            new = ?result.new_reliability,
-            state_change = ?result.state_change,
-            distribute = result.distribute,
-            cause = ?result.cause,
-            "Event enrollment: reliability committed"
-        );
-    }
-    for diagnostic in report
-        .diagnostics
-        .iter()
-        .filter(|diagnostic| diagnostic.outcome.is_failure())
-    {
-        tracing::warn!(
-            enrollment = %diagnostic.enrollment_oid,
-            stage = ?diagnostic.stage,
-            outcome = ?diagnostic.outcome,
-            "Event enrollment: internal commit failed"
-        );
-    }
+/// What one pass returns: its report, and its commits with a payload and
+/// without, each in commit order.
+#[derive(Debug)]
+pub struct EventEnrollmentEvaluationBatch {
+    /// What the pass did.
+    pub report: EventEnrollmentEvaluationReport,
+    /// The committed transitions with a notification payload, in commit
+    /// order. This includes transitions whose `Event_Enable` bit is clear:
+    /// a host sends only those whose result has `distribute` set, as the
+    /// server does.
+    pub deliveries: Vec<CommittedEventEnrollmentDelivery>,
+    /// Committed transitions whose notification payload was refused, so
+    /// they are not distributed, in commit order: what the commit once
+    /// logged itself, for the host to log.
+    pub suppressed: Vec<SuppressedDelivery>,
+}
+
+/// A committed transition whose notification payload was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SuppressedDelivery {
+    /// The enrollment.
+    pub enrollment_oid: ObjectIdentifier,
+    /// Its event type for an event transition; `None` for a reliability
+    /// (CHANGE_OF_RELIABILITY) one.
+    pub event_type: Option<EventType>,
 }
 
 /// Coalesced desired mutation for one enrollment and one evaluation pass.
@@ -342,6 +366,7 @@ pub(super) fn apply_updates_for_delivery(
 ) -> EventEnrollmentEvaluationBatch {
     let mut report = EventEnrollmentEvaluationReport::default();
     let mut deliveries = Vec::new();
+    let mut suppressed = Vec::new();
 
     for &oid in oids {
         let Some(update) = updates.remove(&oid) else {
@@ -508,10 +533,10 @@ pub(super) fn apply_updates_for_delivery(
                     event_values,
                 });
             } else {
-                tracing::debug!(
-                    enrollment = %oid,
-                    "Committed Event Enrollment reliability payload rejected; suppressing distribution"
-                );
+                suppressed.push(SuppressedDelivery {
+                    enrollment_oid: oid,
+                    event_type: None,
+                });
             }
             continue;
         }
@@ -601,13 +626,16 @@ pub(super) fn apply_updates_for_delivery(
                 event_values,
             });
         } else {
-            tracing::debug!(
-                enrollment = %oid,
-                ?event_type,
-                "Committed Event Enrollment payload rejected; suppressing distribution"
-            );
+            suppressed.push(SuppressedDelivery {
+                enrollment_oid: oid,
+                event_type: Some(event_type),
+            });
         }
     }
 
-    EventEnrollmentEvaluationBatch { report, deliveries }
+    EventEnrollmentEvaluationBatch {
+        report,
+        deliveries,
+        suppressed,
+    }
 }

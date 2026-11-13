@@ -19,10 +19,10 @@ the database guard, the transport, addressing and time.
   (`event`, #2303) and turns on `bacnet-objects`' feature of the same
   name. The firmware `reporting` image turns it on.
 - `event-enrollment`, which `std` turns on, adds `event::enrollment` on top
-  of `event-reporting` (#2319): the event and fault algorithms an Event
-  Enrollment object evaluates, and the reads of its parameters and
-  monitored reference, internal until the evaluation pass moves too.
-  `bacnet-server` runs its pass on them; no firmware image turns it on yet.
+  of `event-reporting` (#2319): Event Enrollment's evaluation pass,
+  `evaluate_event_enrollments_for_delivery`, which needs `std` until it
+  keeps its state in ordered maps, with the event and fault algorithms it
+  runs. `bacnet-server` drives it; no firmware image turns it on yet.
 - `cov-multiple`, which `std` turns on, has the SubscribeCOVPropertyMultiple
   path (#2320): the service with its checks
   (`cov::subscribe_cov_property_multiple`), the capture of timestamped

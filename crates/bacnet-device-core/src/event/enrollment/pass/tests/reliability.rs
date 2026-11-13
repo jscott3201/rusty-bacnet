@@ -128,7 +128,7 @@ fn write_target(
             None,
             value,
             None,
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
 }
@@ -345,7 +345,7 @@ fn absent_optional_fault_parameters_preserves_custom_normal_event_evaluation() {
             None,
             PropertyValue::Real(90.0),
             Some(1),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -582,7 +582,7 @@ fn fault_recovery_resets_cached_event_state_once_and_restarts_full_delay_next_pa
             None,
             PropertyValue::Real(90.0),
             Some(1),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -662,7 +662,7 @@ fn rejected_and_mutating_custom_hooks_do_not_escape_tokens_or_consume_sequences(
                 None,
                 PropertyValue::Real(90.0),
                 Some(1),
-                &crate::command_source::test_origin(),
+                &crate::event::enrollment::pass::tests::helpers::test_origin(),
             )
             .unwrap();
         target

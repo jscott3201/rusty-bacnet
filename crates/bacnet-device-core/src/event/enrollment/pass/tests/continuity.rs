@@ -73,7 +73,7 @@ fn set_input_value(object: &mut dyn BACnetObject, value: PropertyValue) {
             None,
             value,
             None,
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
 }
@@ -395,7 +395,7 @@ impl ObservationTarget {
                 None,
                 PropertyValue::Real(90.0),
                 Some(1),
-                &crate::command_source::test_origin(),
+                &crate::event::enrollment::pass::tests::helpers::test_origin(),
             )
             .unwrap();
         Self {
@@ -444,7 +444,7 @@ impl BACnetObject for ObservationTarget {
             array_index,
             value,
             priority,
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
     }
 
