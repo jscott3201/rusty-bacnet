@@ -162,7 +162,9 @@ async fn main() -> Result<(), bacnet_types::error::Error> {
   enables ReinitializeDevice through an application handler, each with
   deterministic and real B/IP loopback tests. Explicit
   [`EndpointSession::with_cov`](session::EndpointSession::with_cov), or
-  [`BipEndpointBuilder::cov`](bip::BipEndpointBuilder::cov), enables
+  the builders' `cov` ([`BipEndpointBuilder::cov`](bip::BipEndpointBuilder::cov),
+  [`MstpEndpointBuilder::cov`](mstp::MstpEndpointBuilder::cov),
+  [`ScEndpointBuilder::cov`](sc::ScEndpointBuilder::cov)), enables
   SubscribeCOV, SubscribeCOVProperty and SubscribeCOVPropertyMultiple over
   bacnet-device-core's `Reporter`, with unconfirmed and confirmed COV
   notifications whose octets and parameters match `bacnet-server`'s on

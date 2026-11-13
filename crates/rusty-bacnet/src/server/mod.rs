@@ -225,6 +225,9 @@ impl BACnetServer {
     }
 }
 
+// The endpoints' `cov` dict reads its `policy` as `cov_policy` is read (#2490).
+pub(crate) use server_methods::{cov_policy, policy_dict};
+
 mod server_methods {
     mod access_control_methods;
     mod access_credential_methods;
@@ -238,7 +241,7 @@ mod server_methods {
     mod constructor;
     mod constructor_budgets;
     mod cov_counters;
-    mod cov_policy;
+    pub(crate) mod cov_policy;
     mod dcc_outcomes;
     mod event_notification_counters;
     mod file_configuration;
@@ -250,7 +253,7 @@ mod server_methods {
     mod loop_methods;
     mod network_port;
     mod notification_forwarder;
-    mod policy_dict;
+    pub(crate) mod policy_dict;
     mod program_methods;
     mod registration;
     mod reliability_methods;

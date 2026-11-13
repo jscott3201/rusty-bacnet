@@ -70,10 +70,11 @@ B/IPv6 has no endpoint builder, as it has no server builder. In Rust, compose an
 | Requester reads | ReadProperty, ReadRange and ReadPropertyMultiple; unsegmented requests/responses |
 | Requester RPM | 1–64 explicit property occurrences; concrete objects; no ALL, REQUIRED, OPTIONAL or wildcard object selectors |
 | Requester writes | Direct IPv4 B/IP WriteProperty only; required commandability declaration; no routed WP or WPM in this profile |
-| Default responder | ReadProperty, with Reject/Abort handling; no responder RPM, COV or full-server parity |
+| Default responder | ReadProperty, with Reject/Abort handling; no responder RPM or full-server parity |
 | Opt-in responder writes | One built-in local Device's Description and, with a complete source profile, Audit_Notification_Recipient; mandatory mutation authorizer |
+| Opt-in COV | SubscribeCOV, SubscribeCOVProperty and SubscribeCOVPropertyMultiple for the hosted objects, notified after the application's local changes; Rust `with_cov` or each builder's `cov`, Python `cov=` |
 
-The Device's advertised services must match the responder. Server-role declarations include RP and cannot add unsupported services; explicit write opt-in advertises RP+WP only after validation. The endpoint responder does not expose Device COV list properties.
+The Device's advertised services must match the responder. Server-role declarations include RP and cannot add unsupported services; explicit write opt-in advertises RP+WP only after validation. The COV opt-in advertises the three subscribe services and lists Active_COV_Subscriptions and Active_COV_Multiple_Subscriptions; without it they stay refused and the Device exposes neither list. A client's write reaches only the Device, which takes no subscription, so it notifies nobody, and a Python endpoint, which has no Device clock, refuses timestamped COV-multiple references.
 
 A requester write's commandability is a declaration about the remote property, not permission to write it. Rust requires `Commandability::{Commandable, Noncommandable}`; Python requires `commandability="commandable"` or `"noncommandable"`. For a first integration, exercise reads before enabling mutations. Consult <a href={`${repository}/blob/v${release}/docs/request-admission.md`}>request admission limits</a> for the shared budgets.
 

@@ -277,6 +277,8 @@ pub struct PyEndpointServer {
     reinitialize: bool,
     /// Whether the endpoint was built with `device_write_policy` (#2033).
     device_writes: bool,
+    /// Whether the endpoint was built with `cov` (#2490).
+    cov: bool,
 }
 
 impl PyEndpointServer {
@@ -284,11 +286,13 @@ impl PyEndpointServer {
         inner: bacnet_endpoint::roles::ServerRoleHandle,
         reinitialize: bool,
         device_writes: bool,
+        cov: bool,
     ) -> Self {
         Self {
             inner,
             reinitialize,
             device_writes,
+            cov,
         }
     }
 
@@ -300,6 +304,13 @@ impl PyEndpointServer {
         }
         if self.reinitialize {
             services.push("reinitialize_device");
+        }
+        if self.cov {
+            services.extend([
+                "subscribe_cov",
+                "subscribe_cov_property",
+                "subscribe_cov_property_multiple",
+            ]);
         }
         services
     }
@@ -326,8 +337,9 @@ impl PyEndpointServer {
 
     /// Narrow service scope: the endpoint server executes ReadProperty,
     /// WriteProperty to its local Device when the endpoint was built with
-    /// `device_write_policy`, and ReinitializeDevice when it was built with
-    /// `on_reinitialize`.
+    /// `device_write_policy`, ReinitializeDevice when it was built with
+    /// `on_reinitialize`, and the three COV subscribe services when it was
+    /// built with `cov`.
     fn service_scope<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let dict = PyDict::new(py);
         dict.set_item("initiates", Vec::<String>::new())?;

@@ -122,8 +122,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Enables SubscribeCOV, SubscribeCOVProperty and
     /// SubscribeCOVPropertyMultiple for the objects of the session's
     /// database, and the COV notifications their subscriptions call for
-    /// (#2490), under `config`. The B/IP builder sets it as
-    /// [`BipEndpointBuilder::cov`](crate::bip::BipEndpointBuilder::cov).
+    /// (#2490), under `config`. The builders set it as
+    /// [`BipEndpointBuilder::cov`](crate::bip::BipEndpointBuilder::cov),
+    /// [`MstpEndpointBuilder::cov`](crate::mstp::MstpEndpointBuilder::cov)
+    /// and [`ScEndpointBuilder::cov`](crate::sc::ScEndpointBuilder::cov).
     ///
     /// The session runs bacnet-device-core's
     /// [`Reporter`](bacnet_device_core::report::Reporter) over its database:
@@ -172,8 +174,13 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// octets, allocated at start. A notification with no room waits, and
     /// goes with the subscription's current values once room frees; one
     /// larger than `config.outbox.octets` is never queued, so size them for
-    /// the largest notification the database's objects call for (the core
-    /// gives no figure to check at start). At most
+    /// the largest notification the database's objects call for, up to the
+    /// Device's Max_APDU_Length_Accepted (the core gives no figure to check
+    /// at start): with too small an outbox a subscription is acknowledged
+    /// and then hears nothing. The outbox holds at most
+    /// [`COV_OUTBOX_MAX_ENTRIES`] entries and [`COV_OUTBOX_MAX_OCTETS`]
+    /// octets, and `config.confirmed.timeout` is 1 ms to
+    /// [`COV_CONFIRMED_TIMEOUT_MAX_MS`]. At most
     /// [`COV_CONFIRMED_IN_FLIGHT`] (64) confirmed notifications are out at
     /// once, all subscribers together, so the client role keeps three
     /// quarters of the 256 invoke IDs however many subscribers stop
@@ -200,10 +207,11 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// identity, the Device object supplies what the notifications carry of
     /// it: its identifier, as the initiating device, and for a confirmed
     /// one its Max_APDU_Length_Accepted. An invalid `config.cov`, a
-    /// `config.outbox` with no entry or no octet, or a `config` that turns
-    /// on the `Reporter`'s event path (a sweep) or its fault pass fails
-    /// startup before the transport starts: the session hosts COV only, and
-    /// sends no event notification.
+    /// `config.outbox` with no entry or no octet or past those bounds, a
+    /// zero or over-long `config.confirmed.timeout` (the server refuses a
+    /// zero one too), or a `config` that turns on the `Reporter`'s event
+    /// path (a sweep) or its fault pass fails startup before the transport
+    /// starts: the session hosts COV only, and sends no event notification.
     ///
     /// # Panics
     /// Panics if startup has already consumed the session configuration.

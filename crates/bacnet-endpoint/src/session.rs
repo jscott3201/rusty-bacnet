@@ -86,7 +86,10 @@ mod startup;
 mod device_writes;
 pub use device_writes::{RESPONDER_OPT_IN_SERVICES, RESPONDER_SERVICES, ResponderOptIn};
 mod cov;
-pub use cov::COV_CONFIRMED_IN_FLIGHT;
+pub use cov::{
+    COV_CONFIRMED_IN_FLIGHT, COV_CONFIRMED_TIMEOUT_MAX_MS, COV_OUTBOX_MAX_ENTRIES,
+    COV_OUTBOX_MAX_OCTETS,
+};
 mod local_writes;
 #[path = "registered_port.rs"]
 mod registered_port;
