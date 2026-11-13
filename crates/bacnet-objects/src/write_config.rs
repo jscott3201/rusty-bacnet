@@ -227,6 +227,10 @@ mod reporting_tests;
 #[cfg(all(test, feature = "event-reporting", feature = "durable-writes"))]
 #[path = "write_config/staged_setter_tests.rs"]
 mod staged_setter_tests;
+// Where storage goes when a superseding write's save fails (#2526).
+#[cfg(all(test, feature = "event-reporting", feature = "durable-writes"))]
+#[path = "write_config/reporting_put_back_tests.rs"]
+mod reporting_put_back_tests;
 // The other object types with intrinsic reporting: Access Door and Zone,
 // Event and Alert Enrollment.
 #[cfg(all(test, feature = "event-reporting"))]

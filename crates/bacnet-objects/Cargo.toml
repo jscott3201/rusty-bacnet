@@ -113,5 +113,11 @@ name = "staged_memory"
 path = "tests/staged_memory.rs"
 required-features = ["event-reporting", "durable-writes"]
 
+# What making a staged request's writes copies, counted the same way (#2526).
+[[test]]
+name = "staged_commit_copies"
+path = "tests/staged_commit_copies.rs"
+required-features = ["event-reporting", "durable-writes"]
+
 [lints]
 workspace = true
