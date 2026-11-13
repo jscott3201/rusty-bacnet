@@ -739,6 +739,33 @@
 # doesn't move. The objects rows didn't move: the clockless Recipient_List
 # filter compiles only with `event-reporting`. The reporting budgets are
 # --suggest's again.
+#
+# On 2026-11-12 (#2524, Rust 1.99.0, dev at c958470e9, which carries
+# #2529's 12 KB; #2532 removes that) the event path is trimmed, each step
+# measured against the one before it, as octets of flash on thumbv7m /
+# thumbv7em / riscv32imac:
+#
+#   every change runs one out-of-line tail                8 /  144 /   52
+#   AcknowledgeAlarm and GetEventInformation out of
+#   Reporter::handle                                   1068 / 1104 / 1836
+#   the Event Log step comes from a log's vtable       1432 / 1440 / 2392
+#   the Reporter encodes the intrinsic forms only      3308 / 3296 / 4584
+#
+# As text / rodata / flash, dev then this change:
+#
+#   thumbv7m             253280 / 23604 / 277908
+#                        247992 / 23076 / 272092
+#   thumbv7em            252896 / 23604 / 277524
+#                        247440 / 23076 / 271540
+#   riscv32imac          311500 / 29300 / 340822
+#                        303332 / 28604 / 331958
+#
+# 5816 / 5984 / 8864 octets of flash; RAM unchanged (24680). core::fmt
+# and the 64-bit division routines stay at 0, and the memmove count
+# doesn't move. The objects rows move by 8 octets of .text on the thumb
+# targets with no function changed in size (alignment), so their budgets
+# stay. The reporting budgets are --suggest's again, which puts them above
+# the last ones: #2529's growth came in after those were set.
 
 [thumbv7m-none-eabi.mstp]
 text = 18320
@@ -840,11 +867,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [thumbv7m-none-eabi.reporting]
-text = 272432
-rodata = 23888
+text = 277760
+rodata = 25856
 data = 64
 bss = 27648
-flash = 297456
+flash = 304752
 ram = 27648
 fmt_functions = 0
 div64_functions = 0
@@ -1137,11 +1164,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [thumbv7em-none-eabihf.reporting]
-text = 272160
-rodata = 23888
+text = 277136
+rodata = 25856
 data = 64
 bss = 27648
-flash = 297184
+flash = 304128
 ram = 27648
 fmt_functions = 0
 div64_functions = 0
@@ -1170,11 +1197,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [riscv32imac-unknown-none-elf.reporting]
-text = 334992
-rodata = 29808
+text = 339744
+rodata = 32048
 data = 64
 bss = 27648
-flash = 364832
+flash = 371792
 ram = 27648
 fmt_functions = 0
 div64_functions = 0
