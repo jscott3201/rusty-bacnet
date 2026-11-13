@@ -116,11 +116,16 @@ async fn a_flags_only_failover_hub_is_used_when_the_primary_is_down() {
     let mut failover = hub(&site, &cert, "127.0.0.1:0", FAILOVER_VMAC)
         .await
         .unwrap();
-    // A primary that refuses the connection: a port bound but never
-    // listening, held so no other process can listen there (#2216).
-    let down = tokio::net::TcpSocket::new_v4().unwrap();
-    down.bind("127.0.0.1:0".parse().unwrap()).unwrap();
-    let primary = format!("wss://{}", down.local_addr().unwrap());
+    // A primary that refuses the connection: a freed port, so nothing
+    // listens there. A port only bound refuses nothing on macOS (the SYN
+    // goes unanswered), so the dial waited out its timeout (#2463). Should
+    // another process take the port first, the session still turns to the
+    // failover hub, only later.
+    let down = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let primary = format!("wss://{down}");
     let dir = tempfile::tempdir().unwrap();
     let mut args = args(dir.path(), &site, &client_leaf(&site), &primary);
     let failover_url = format!("wss://{}", failover.local_addr().unwrap());

@@ -52,7 +52,7 @@ The doctor checks a dial in the order it happens: the URL, DNS, the TCP connecti
 
 ![The connection doctor with every phase passed.](../../../assets/tui/sc-doctor.webp)
 
-When a dial fails, the doctor opens by itself, marks the phase that failed, and says what to try. It recognises an untrusted CA, an expired or future-dated certificate (with clock skew when the dates are close), a key that doesn't match, a certificate without client-authentication key usage, a proxy that drops the upgrade, and a duplicate VMAC. Below the hint it names the failure's BACnet error code, such as `TCP_CONNECTION_REFUSED`.
+When a dial fails, the doctor opens by itself, marks the phase that failed, and says what to try. It recognises an untrusted CA, an expired or future-dated certificate (with clock skew when the dates are close), a key that doesn't match, a certificate without client-authentication key usage, a proxy that drops the upgrade or mangles its WebSocket headers, a hub address with no route, and a duplicate VMAC. Below the hint it names the failure's BACnet error code, such as `TCP_CONNECTION_REFUSED`.
 
 ![The connection doctor after a failed dial: TLS failed because the hub's CA is not trusted.](../../../assets/tui/sc-doctor-failure.webp)
 

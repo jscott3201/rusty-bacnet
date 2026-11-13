@@ -1662,9 +1662,16 @@ BACnet/SC connection codes 152-199 (`DNS_ERROR`, `TCP_CONNECT_TIMEOUT`,
 `TLS_SERVER_CERTIFICATE_EXPIRED`, `HTTP_TEMPORARY_UNAVAILABLE` and so on,
 Annex AB.7.5) for a DNS, TCP, TLS, HTTP-upgrade or WebSocket failure; `None`
 for a local close, a Disconnect-Request and the timeouts with no code of
-their own. A refused TCP connection is `TCP_CONNECTION_REFUSED`, an upgrade
-answer with no `Sec-WebSocket-Protocol` header or another subprotocol is
-`HTTP_RESPONSE_MISSING_HEADER` or `HTTP_RESPONSE_VALUE_ERROR`, and a WebSocket
+their own. A refused TCP connection is `TCP_CONNECTION_REFUSED`, a dial with
+no route to the address (`AddressUnreachable`) is `IP_ADDRESS_NOT_REACHABLE`,
+an upgrade answer with no `Sec-WebSocket-Protocol` header or another
+subprotocol is `HTTP_RESPONSE_MISSING_HEADER` or `HTTP_RESPONSE_VALUE_ERROR`,
+one with a missing or wrong `Upgrade`, `Connection` or `Sec-WebSocket-Accept`
+header (`WebSocketHeader`) is `HTTP_WEBSOCKET_HEADER_ERROR`, one that does
+not parse (`UpgradeResponseSyntax`) is `HTTP_RESPONSE_SYNTAX_ERROR`, one whose
+status line names an HTTP version below 1.1 or a status code out of range
+(`UpgradeResponseValue`) is `HTTP_RESPONSE_VALUE_ERROR` (#2463), and a
+WebSocket
 the hub ends maps its close status by Annex AB.7.5.5's table: a close frame
 without a status is `WEBSOCKET_ERROR`, and an end with no close frame is
 `WEBSOCKET_CLOSED_ABNORMALLY` (#2438).
@@ -2053,6 +2060,29 @@ five-second sink acquisition/I/O bound after retiring the matching registration.
 Close without Disconnect-Ack still yields a forced graceful-shutdown outcome;
 forceful abort may forgo the reply. Tests cover the WebSocket replies, not TLS
 `close_notify` behavior.
+
+A connection the Hub ends on purpose gets a close frame with a status
+(#2463). The Hub sends it and drops the connection without waiting for the
+echo, except in a graceful shutdown, which waits for the echo within its
+bounds. A graceful shutdown says 1001, the server going away (after the
+Disconnect-Ack, at once for an upgraded peer that never sent Connect, and
+after an exchange that failed), which a peer reads as
+`WEBSOCKET_ENDPOINT_LEAVES`. The other ends say 1000, which a peer reads as
+`WEBSOCKET_CLOSED_BY_PEER`: an answered Disconnect-Request, a retirement (a
+same-UUID replacement or a failed liveness probe), an expired Connect wait,
+and a refused Connect-Request (duplicate VMAC, no room, admission denied),
+where the close follows the NAK. A connection the peer's fault ends gets a
+close frame with no status: a receive error, a second Connect-Request, or a
+malformed Connect-Request (a reserved VMAC among them), after its NAK. A
+receive error before registration still drops the connection with no close
+frame, and a non-binary data frame still gets 1003. A node's direct-connection acceptor
+closes an idle or retired link with 1000 too.
+
+What a node of this stack reports follows from the order of what arrives.
+A connected node reads a graceful shutdown by the Disconnect-Request that
+comes first, `PeerClose` with no error code, and a refused node by the NAK
+that comes first, `Nak` with its class and code. A node that upgraded but
+had not connected reads the shutdown's 1001, and a retired node reads 1000.
 
 `ScHubTlsConfig::with_relay_send_budget(Duration)` validates this separate
 transit budget; `validate_relay_send_budget` supports preflight before

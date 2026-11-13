@@ -309,7 +309,7 @@ async fn accept_idle_timeout_cleans_up_without_delivery() {
     let (mut listener, mut rx) =
         start_listener(&ca, |c| c.with_idle_timeout(Duration::from_millis(120))).await;
     let url = direct_url(&listener.local_addr());
-    let (_ws, _conn) = dial_and_handshake(&url, ca.node_config(vec!["node".into()])).await;
+    let (ws, _conn) = dial_and_handshake(&url, ca.node_config(vec!["node".into()])).await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
         if listener.active_connections() == 0 {
@@ -322,6 +322,16 @@ async fn accept_idle_timeout_cleans_up_without_delivery() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     assert!(rx.try_recv().is_err());
+    // Closing an idle link is on purpose, so the close says 1000 (#2463).
+    let closed = tokio::time::timeout(Duration::from_secs(5), ws.recv())
+        .await
+        .expect("the idle close did not arrive")
+        .unwrap_err();
+    assert_eq!(
+        crate::sc::ScDisconnectCause::from_error(&closed),
+        crate::sc::ScDisconnectCause::WebSocketClosed { close_status: 1000 },
+        "{closed}"
+    );
     listener.stop().await;
 }
 

@@ -685,7 +685,8 @@ class NodeIdentityMtlsTests(MtlsFixture):
                         for _ in range(8):
                             opcode, data = await self.frame(reader, False)
                             if opcode == 8:
-                                self.assertEqual(data, b"")  # Hub's replacement Close(None).
+                                # The replacement close says 1000 (#2463).
+                                self.assertEqual(data, b"\x03\xe8")
                                 break
                             self.assertEqual(opcode, 2)
                             self.assertEqual(data[0], 1)

@@ -31,8 +31,6 @@ pub(super) fn relay_failed(clients: &ClientRegistry, target: Vmac) -> Option<u64
 pub(super) enum ConnectRefusal {
     /// The client already registered under this VMAC sent another.
     AlreadyConnected(Vmac),
-    /// It claims a reserved VMAC.
-    ReservedVmac(Vmac),
     /// Its VMAC is the hub's own, or another client's.
     VmacCollision(Vmac),
     /// The certificate bindings or the admission policy denied it.
@@ -52,10 +50,6 @@ pub(super) fn connect_refused(
         ConnectRefusal::AlreadyConnected(vmac) => crate::warn_throttled!(
             warning,
             "Hub: ConnectRequest from already connected client {peer} (vmac={vmac:02x?}), closing"
-        ),
-        ConnectRefusal::ReservedVmac(vmac) => crate::warn_throttled!(
-            warning,
-            "Hub: rejecting reserved VMAC {vmac:02x?} from {peer}"
         ),
         ConnectRefusal::VmacCollision(vmac) => {
             crate::warn_throttled!(warning, "Hub: VMAC collision for {vmac:02x?} from {peer}")

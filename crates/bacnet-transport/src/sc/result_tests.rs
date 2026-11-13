@@ -280,6 +280,12 @@ async fn sc_connect_result_nak_fails_without_timeout() {
         }
         other => panic!("expected HandshakeNak, got {other:?}"),
     }
+    // The class by name; 279 names no code, so it shows as its number (#2463).
+    assert!(
+        err.to_string()
+            .contains("error_class=COMMUNICATION error_code=279 "),
+        "{err}"
+    );
 
     let conn = transport.connection().unwrap();
     assert_eq!(conn.lock().await.state, ScConnectionState::Disconnected);

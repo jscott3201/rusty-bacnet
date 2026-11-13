@@ -16,8 +16,8 @@ mod untrusted_peer;
 mod websocket_failure;
 pub use untrusted_peer::ScUntrustedPeerInfo;
 use websocket_failure::{
-    closed_by_peer, ended_without_close, map_websocket_upgrade_error, verify_direct_subprotocol,
-    verify_hub_subprotocol,
+    closed_by_peer, ended_without_close, map_websocket_upgrade_error, tcp_dial_kind,
+    verify_direct_subprotocol, verify_hub_subprotocol,
 };
 mod tls_config;
 pub use tls_config::ScNodeTlsConfig;
@@ -161,17 +161,15 @@ impl TlsWebSocket {
         let socket = boxed(|| crate::tcp_connect::connect_resolved(&resolved))
             .await
             .map_err(|e| {
-                // A refusal has its own code (Annex AB.7.5.1); connect_resolved
-                // gives it the refused kind on every OS. With several addresses,
-                // a refusal on any one reports the dial refused, even when
-                // another address timed out.
-                let kind = if e.kind() == std::io::ErrorKind::ConnectionRefused {
-                    ScWebSocketErrorKind::TcpRefused
-                } else {
-                    ScWebSocketErrorKind::TcpDial
-                };
-                ScConnectError::websocket(kind, format!("WebSocket TCP dial to {addr} failed: {e}"))
-                    .into_bacnet_error_with_io_kind(e.kind())
+                // A refusal and no route have their own codes (Annex
+                // AB.7.5.1). With several addresses, a refusal on any one
+                // reports the dial refused, even when another address timed
+                // out or had no route.
+                ScConnectError::websocket(
+                    tcp_dial_kind(e.kind()),
+                    format!("WebSocket TCP dial to {addr} failed: {e}"),
+                )
+                .into_bacnet_error_with_io_kind(e.kind())
             })?;
 
         disable_nagle(&socket);
@@ -338,21 +336,6 @@ fn tls_server_name_from_uri(
         )
         .into_bacnet_error()
     })
-}
-
-#[cfg(test)]
-fn map_websocket_handshake_error(error: TungsteniteError) -> Error {
-    let kind = match &error {
-        TungsteniteError::Io(_) => ScWebSocketErrorKind::WebSocketHandshake,
-        TungsteniteError::Tls(_) => ScWebSocketErrorKind::TlsHandshake,
-        TungsteniteError::Protocol(_)
-        | TungsteniteError::Http(_)
-        | TungsteniteError::HttpFormat(_) => ScWebSocketErrorKind::WebSocketHandshake,
-        TungsteniteError::Url(_) => ScWebSocketErrorKind::InvalidUrl,
-        _ => ScWebSocketErrorKind::WebSocketHandshake,
-    };
-    ScConnectError::websocket(kind, format!("WebSocket connect failed: {error}"))
-        .into_bacnet_error()
 }
 
 impl WebSocketPort for TlsWebSocket {
@@ -557,9 +540,14 @@ mod tests {
 
     #[test]
     fn websocket_handshake_error_maps_to_typed_variant() {
-        let err = map_websocket_handshake_error(TungsteniteError::Protocol(
-            tokio_tungstenite::tungstenite::error::ProtocolError::HandshakeIncomplete,
-        ));
+        // The connection ended before the answer was whole: no more
+        // specific kind applies.
+        let err = map_websocket_upgrade_error(
+            TungsteniteError::Protocol(
+                tokio_tungstenite::tungstenite::error::ProtocolError::HandshakeIncomplete,
+            ),
+            BACNET_SC_HUB_SUBPROTOCOL,
+        );
 
         assert!(matches!(
             ScConnectError::from_error(&err),
