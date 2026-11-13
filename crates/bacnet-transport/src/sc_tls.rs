@@ -257,10 +257,12 @@ where
     match read.next().await {
         Some(Ok(Message::Binary(data))) => Ok(DirectFrame::Binary(data.to_vec())),
         Some(Ok(Message::Ping(_) | Message::Pong(_))) => Ok(DirectFrame::Control),
+        // The caller answers it with a 1003 close (Annex AB.7.5.3, #2520).
+        Some(Ok(Message::Text(_) | Message::Frame(_))) => Ok(DirectFrame::NonBinary),
         Some(Err(error)) => Err(Error::Transport(std::io::Error::other(error.to_string()))),
         _ => Err(Error::Transport(std::io::Error::new(
             std::io::ErrorKind::ConnectionAborted,
-            "direct WebSocket ended or carried non-binary data",
+            "direct WebSocket ended",
         ))),
     }
 }
@@ -405,6 +407,25 @@ impl WebSocketPort for TlsWebSocket {
                 }
             }
         }
+    }
+
+    /// Write the close frame and return; the transport drops the socket next,
+    /// so the peer's answering close is never awaited (#2520).
+    async fn close(&self, status: Option<u16>) -> Result<(), Error> {
+        let frame = status.map(
+            |code| tokio_tungstenite::tungstenite::protocol::CloseFrame {
+                code: code.into(),
+                reason: "".into(),
+            },
+        );
+        let mut write = self.write.lock().await;
+        write.send(Message::Close(frame)).await.map_err(|e| {
+            ScConnectError::websocket(
+                ScWebSocketErrorKind::Send,
+                format!("WebSocket close failed: {e}"),
+            )
+            .into_bacnet_error()
+        })
     }
 }
 

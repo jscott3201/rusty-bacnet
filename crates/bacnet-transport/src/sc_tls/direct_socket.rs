@@ -5,12 +5,24 @@ use futures_util::{SinkExt, StreamExt};
 pub(super) trait DirectWs {
     type Read: DirectWsRead;
     async fn send_data(&mut self, data: &[u8]) -> Result<(), ()>;
-    async fn send_close(&mut self) -> Result<(), ()>;
+    /// Send a close frame with status `code` (1000 or 1003, #2520).
+    async fn send_close(&mut self, code: u16) -> Result<(), ()>;
 }
 
 pub(super) enum DirectFrame {
     Binary(Vec<u8>),
     Control,
+    /// A text (or other non-binary) data frame: the connection ends with a
+    /// 1003 close (Annex AB.7.5.3, #2520).
+    NonBinary,
+}
+
+/// Answer a data frame that is not binary with a 1003 close, within the
+/// close grace, as the hub does (Annex AB.7.5.3, #2520). The caller then
+/// drops the connection.
+pub(super) async fn refuse_non_binary<W: DirectWs>(write: &mut W) {
+    let close = write.send_close(crate::sc::CLOSE_DATA_NOT_ACCEPTED);
+    let _ = tokio::time::timeout(crate::sc::CLOSE_GRACE, close).await;
 }
 
 pub(super) trait DirectWsRead {
@@ -18,12 +30,12 @@ pub(super) trait DirectWsRead {
     async fn next_frame(&mut self) -> Option<Result<DirectFrame, String>>;
 
     /// Handshake-only filtering remains inside the caller's Connect timeout.
-    async fn next_data(&mut self) -> Option<Result<Vec<u8>, String>> {
+    /// Skips controls: the frame is binary or [`DirectFrame::NonBinary`].
+    async fn next_data(&mut self) -> Option<Result<DirectFrame, String>> {
         loop {
             match self.next_frame().await? {
-                Ok(DirectFrame::Binary(data)) => return Some(Ok(data)),
                 Ok(DirectFrame::Control) => tokio::task::yield_now().await,
-                Err(error) => return Some(Err(error)),
+                other => return Some(other),
             }
         }
     }
@@ -43,14 +55,14 @@ impl DirectWs
         .await
         .map_err(|_| ())
     }
-    /// Every caller ends the connection on purpose (an idle timeout or a
-    /// retirement after Disconnect-Request), so the frame says 1000, as the
-    /// hub's orderly closes do (#2463).
-    async fn send_close(&mut self) -> Result<(), ()> {
-        use tokio_tungstenite::tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
+    /// 1000 when the acceptor ends the connection on purpose (an idle
+    /// timeout, a retirement, an answered Disconnect-Request), as the hub's
+    /// orderly closes do (#2463), and 1003 after a non-binary frame (#2520).
+    async fn send_close(&mut self, code: u16) -> Result<(), ()> {
+        use tokio_tungstenite::tungstenite::protocol::CloseFrame;
         self.send(tokio_tungstenite::tungstenite::Message::Close(Some(
             CloseFrame {
-                code: CloseCode::Normal,
+                code: code.into(),
                 reason: "".into(),
             },
         )))
@@ -74,7 +86,7 @@ where
                 tokio_tungstenite::tungstenite::Message::Ping(_)
                 | tokio_tungstenite::tungstenite::Message::Pong(_),
             ) => Some(Ok(DirectFrame::Control)),
-            Ok(_) => Some(Err("non-binary".into())),
+            Ok(_) => Some(Ok(DirectFrame::NonBinary)),
             Err(e) => Some(Err(e.to_string())),
         }
     }

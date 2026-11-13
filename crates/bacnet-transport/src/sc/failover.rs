@@ -15,9 +15,94 @@ use tracing::warn;
 use crate::sc_frame::{ScMessage, encode_sc_message};
 
 use super::{
-    HubLimits, ScActiveHub, ScConnection, ScConnectionState, WebSocketConnector, WebSocketPort,
-    connector::dial_connector, handshake::perform_handshake, observability::ScObserver,
+    HubLimits, ScActiveHub, ScConnection, ScConnectionState, ScTransport, TappedSocket,
+    WebSocketConnector, WebSocketPort,
+    connector::{dial_connector, dial_failover_ws},
+    handshake::{close_unanswered, perform_handshake},
+    observability::ScObserver,
 };
+
+/// What `start` hands its first Connect exchange.
+pub(super) struct FirstSockets<'a, W> {
+    pub(super) primary: &'a Arc<TappedSocket<W>>,
+    pub(super) failover: &'a mut Option<Arc<TappedSocket<W>>>,
+    pub(super) failover_connector: &'a Option<WebSocketConnector<TappedSocket<W>>>,
+    pub(super) conn: &'a Arc<Mutex<ScConnection>>,
+    pub(super) state_tx: &'a watch::Sender<ScConnectionState>,
+    pub(super) observer: &'a ScObserver,
+}
+
+impl<W: WebSocketPort> ScTransport<W> {
+    /// The first Connect exchange: on the initial hub's socket and, when
+    /// that fails and the failover hub may be tried, on the failover hub.
+    /// Returns the connected socket and its hub, or the initial hub's error.
+    ///
+    /// A socket whose Connect-Request went unanswered and that the
+    /// transport gives up gets a close with no status (#2520). The primary
+    /// socket stays open after a failover only when a primary restore would
+    /// try the Connect-Request on it again, which it does with reconnect on
+    /// and no primary connector.
+    pub(super) async fn first_connect(
+        &mut self,
+        sockets: FirstSockets<'_, W>,
+    ) -> Result<(Arc<TappedSocket<W>>, ScActiveHub), Error> {
+        let FirstSockets {
+            primary,
+            failover,
+            failover_connector,
+            conn,
+            state_tx,
+            observer,
+        } = sockets;
+        let timeout = self.connect_timeout_ms;
+        let primary_err = match perform_handshake(&**primary, conn, Some(state_tx), timeout).await {
+            Ok(()) => return Ok((primary.clone(), self.initial_hub)),
+            Err(error) => error,
+        };
+        observer.connect_failed(self.initial_hub, &primary_err);
+        let failover = if self.initial_hub == ScActiveHub::Failover
+            || !conn.lock().await.connect_retry_allowed
+        {
+            None
+        } else {
+            dial_failover_ws(failover_connector, failover, timeout).await
+        };
+        let Some(failover) = failover else {
+            self.local_vmac = conn.lock().await.local_vmac;
+            close_unanswered(&**primary, &primary_err).await;
+            return Err(primary_err);
+        };
+        tracing::debug!("BACnet/SC primary connect failed, attempting failover");
+        observer.failover_engaged();
+        // Reset connection state for the retry.
+        {
+            let mut c = conn.lock().await;
+            c.reset_for_connect_retry();
+            state_tx.send_replace(c.state);
+        }
+        match perform_handshake(&*failover, conn, Some(state_tx), timeout).await {
+            Ok(()) => {
+                let reconnect = self.reconnect_config.is_some();
+                let connectors =
+                    [&self.primary_connector, &self.failover_connector].map(Option::is_some);
+                if !super::recovery::retries_lost_socket(
+                    reconnect,
+                    ScActiveHub::Primary,
+                    connectors,
+                ) {
+                    close_unanswered(&**primary, &primary_err).await;
+                }
+                Ok((failover, ScActiveHub::Failover))
+            }
+            Err(error) => {
+                observer.connect_failed(ScActiveHub::Failover, &error);
+                close_unanswered(&*failover, &error).await;
+                close_unanswered(&**primary, &primary_err).await;
+                Err(primary_err)
+            }
+        }
+    }
+}
 
 /// The cadence of primary-restore attempts while the failover hub is active,
 /// first due one `period` from now (#1555).
@@ -49,6 +134,7 @@ pub(super) async fn prepare_primary_restore<W: WebSocketPort>(
     probe: ScConnection,
     connect_timeout_ms: u64,
 ) -> PrimaryCandidate<W> {
+    let fresh = primary_connector.is_some();
     let socket = if let Some(connector) = primary_connector {
         dial_connector(&connector, connect_timeout_ms)
             .await
@@ -59,9 +145,17 @@ pub(super) async fn prepare_primary_restore<W: WebSocketPort>(
     };
     let probe = Arc::new(Mutex::new(probe));
     let socket = match socket {
-        Ok(ws) => perform_handshake(&*ws, &probe, None, connect_timeout_ms)
-            .await
-            .map(|()| ws),
+        Ok(ws) => match perform_handshake(&*ws, &probe, None, connect_timeout_ms).await {
+            Ok(()) => Ok(ws),
+            Err(error) => {
+                // A freshly dialled socket is given up; the kept primary
+                // is tried again at the next restore tick (#2520).
+                if fresh {
+                    close_unanswered(&*ws, &error).await;
+                }
+                Err(error)
+            }
+        },
         Err(e) => Err(e),
     };
     let connection = probe.lock().await.clone();
@@ -125,6 +219,9 @@ pub(super) async fn publish_primary_restore<W: WebSocketPort>(
     Ok(Some(restored_ws))
 }
 
+/// Leave the failover hub once the primary is back: a Disconnect-Request,
+/// then a close with 1000, an orderly end (Annex AB.7.5.5, #2520). Neither
+/// the Disconnect-ACK nor the answering close is awaited.
 async fn send_disconnect_request<W: WebSocketPort>(
     ws: &W,
     disconnect_msg: Option<ScMessage>,
@@ -143,6 +240,7 @@ async fn send_disconnect_request<W: WebSocketPort>(
             }
         }
     }
+    super::close_within_grace(ws, Some(super::CLOSE_NORMAL)).await;
 }
 
 #[cfg(test)]

@@ -27,7 +27,7 @@ impl DirectWs for Write {
             std::future::pending().await
         }
     }
-    async fn send_close(&mut self) -> Result<(), ()> {
+    async fn send_close(&mut self, _code: u16) -> Result<(), ()> {
         Ok(())
     }
 }

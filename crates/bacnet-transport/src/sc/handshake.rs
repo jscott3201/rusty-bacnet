@@ -38,6 +38,17 @@ fn malformed_bvlc_result_error(error: Error) -> Error {
 #[path = "connect_validation_tests.rs"]
 mod tests;
 
+/// Close a socket the transport gives up after [`perform_handshake`]
+/// failed, when the reason was the connect wait running out: the peer never
+/// answered, so the close carries no status, as the hub's does for a peer's
+/// fault (Annex AB.6.2.2, #2520). Bounded by the close grace. A socket that
+/// failed any other way is left to its owner, which drops it.
+pub(super) async fn close_unanswered<W: WebSocketPort>(ws: &W, error: &Error) {
+    if matches!(error, Error::Timeout(_)) {
+        super::close_within_grace(ws, None).await;
+    }
+}
+
 /// Perform the Connect-Request / Connect-Accept handshake on a WebSocket.
 ///
 /// Used for both the initial connection and reconnection attempts.

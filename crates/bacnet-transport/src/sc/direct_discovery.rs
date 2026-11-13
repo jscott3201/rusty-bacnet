@@ -476,11 +476,25 @@ impl<W: WebSocketPort> DirectShared<W> {
         }
     }
 
-    pub(super) async fn shutdown(&self) {
-        self.disable();
+    /// Seal and retire every link like [`Self::disable`], but give each
+    /// worker until `deadline` to send its Disconnect-Request and close
+    /// (#2520); one still sending then is aborted.
+    pub(super) async fn shutdown(&self, deadline: tokio::time::Instant) {
+        {
+            let mut pool = self.pool.lock().unwrap();
+            self.enabled.store(false, Ordering::Release);
+            self.pending_dials.close();
+            pool.clear();
+        }
         let workers = std::mem::take(&mut *self.workers.lock().unwrap());
-        for worker in workers {
-            let _ = worker.await;
+        for mut worker in workers {
+            if tokio::time::timeout_at(deadline, &mut worker)
+                .await
+                .is_err()
+            {
+                worker.abort();
+                let _ = worker.await;
+            }
         }
         #[cfg(feature = "sc-tls")]
         self.intake.lock().unwrap().take();
@@ -730,10 +744,11 @@ impl<W: WebSocketPort> DirectShared<W> {
                 }
                 Arc::new(Mutex::new(c.connect_probe()))
             };
-            if super::handshake::perform_handshake(&ws, &probe, None, connect_timeout_ms.max(1))
-                .await
-                .is_err()
+            if let Err(error) =
+                super::handshake::perform_handshake(&ws, &probe, None, connect_timeout_ms.max(1))
+                    .await
             {
+                super::handshake::close_unanswered(&ws, &error).await;
                 self.note_direct_failure(&uri).await;
                 continue;
             }

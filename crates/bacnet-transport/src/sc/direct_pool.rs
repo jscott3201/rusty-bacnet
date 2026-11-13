@@ -1,5 +1,4 @@
 //! Bounded outbound socket ownership, generation-aware reuse and retirement.
-use super::WebSocketPort;
 use super::direct_discovery::{DIRECT_POOL_IDLE_TTL, DIRECT_POOL_MAX_ENTRIES};
 #[cfg(all(test, feature = "sc-tls"))]
 use super::direct_egress::DirectSendError;
@@ -12,6 +11,7 @@ use super::direct_socket::{DirectFrame, DirectSocket};
 use super::heartbeat;
 #[cfg(feature = "sc-tls")]
 use super::npdu_admission::DirectPeer;
+use super::{CLOSE_NORMAL, WebSocketPort, close_within_grace};
 use crate::sc_frame::{
     ControlRecipient, ScFunction, ScMessage, Vmac, decode_sc_message, encode_sc_message,
     validate_control,
@@ -87,7 +87,7 @@ impl PooledDirect {
             let idle_sleep = tokio::time::sleep_until(idle_deadline);
             let heartbeat_sleep = tokio::time::sleep_until(last_received);
             tokio::pin!(idle_sleep, heartbeat_sleep);
-            let locally_retired = loop {
+            let end = loop {
                 if idle_sleep.deadline() != idle_deadline {
                     idle_sleep.as_mut().reset(idle_deadline);
                 }
@@ -98,13 +98,13 @@ impl PooledDirect {
                 }
                 let event = tokio::select! {
                     biased;
-                    _ = async { if !*retired.borrow_and_update() { let _ = retired.changed().await; } } => break true,
-                    _ = &mut idle_sleep => break true,
+                    _ = async { if !*retired.borrow_and_update() { let _ = retired.changed().await; } } => break LinkEnd::Retired,
+                    _ = &mut idle_sleep => break LinkEnd::Retired,
                     _ = &mut heartbeat_sleep => {
                         // An unanswered probe means the peer is gone: close
                         // without a Disconnect-Request it cannot answer.
                         if pending_heartbeat.is_some() {
-                            break false;
+                            break LinkEnd::Unanswered;
                         }
                         let id = owner.egress.next_message.fetch_add(1, Ordering::Relaxed);
                         let request = bare_control(ScFunction::HeartbeatRequest, id);
@@ -112,11 +112,11 @@ impl PooledDirect {
                         // DirectWrite does.
                         let sent = tokio::select! {
                             biased;
-                            _ = retired.changed() => break true,
+                            _ = retired.changed() => break LinkEnd::Retired,
                             sent = tokio::time::timeout(wait, ws.send(&request)) => sent,
                         };
                         if !matches!(sent, Ok(Ok(()))) {
-                            break false;
+                            break LinkEnd::Lost;
                         }
                         pending_heartbeat = Some(id);
                         continue;
@@ -130,7 +130,7 @@ impl PooledDirect {
                             continue;
                         }
                         if owner.with_current(|| request.mark_started()).is_none() {
-                            break true;
+                            break LinkEnd::Retired;
                         }
                         let result = tokio::select! {
                             biased;
@@ -141,11 +141,11 @@ impl PooledDirect {
                         let failed = result.is_err();
                         let _ = request.done.send(result);
                         if failed {
-                            break true;
+                            break LinkEnd::Retired;
                         }
                         touch(&mut idle_deadline);
                     }
-                    WorkerEvent::Send(None) => break true,
+                    WorkerEvent::Send(None) => break LinkEnd::Retired,
                     WorkerEvent::Received(received) => {
                         prefer_send = true;
                         let wire = match received {
@@ -155,7 +155,9 @@ impl PooledDirect {
                                 tokio::task::yield_now().await;
                                 continue;
                             }
-                            Err(_) => break false,
+                            #[cfg(feature = "sc-tls")]
+                            Ok(DirectFrame::NonBinary) => break LinkEnd::NonBinary,
+                            Err(_) => break LinkEnd::Lost,
                         };
                         if wire.len() > usize::from(local_limits.0) {
                             continue;
@@ -196,7 +198,7 @@ impl PooledDirect {
                                     tokio::time::timeout(wait, ws.send(&reply)).await,
                                     Ok(Ok(()))
                                 ) {
-                                    break false;
+                                    break LinkEnd::Lost;
                                 }
                                 continue;
                             }
@@ -221,7 +223,7 @@ impl PooledDirect {
                                         tokio::time::timeout(wait, ws.send(&bytes)).await,
                                         Ok(Ok(()))
                                     ) {
-                                        break false;
+                                        break LinkEnd::Lost;
                                     }
                                 }
                                 DirectMuDecision::Pass => {
@@ -271,7 +273,7 @@ impl PooledDirect {
                                     tokio::time::timeout(wait, ws.send(&nak)).await,
                                     Ok(Ok(()))
                                 ) {
-                                    break false;
+                                    break LinkEnd::Lost;
                                 }
                                 continue;
                             }
@@ -291,16 +293,12 @@ impl PooledDirect {
                         let mut bytes = bytes::BytesMut::new();
                         encode_sc_message(&mut bytes, &ack);
                         let _ = tokio::time::timeout(wait, ws.send(&bytes)).await;
-                        break false;
+                        break LinkEnd::Answered;
                     }
                 }
             };
             owner.retire();
-            if locally_retired {
-                let mut bytes = bytes::BytesMut::new();
-                encode_sc_message(&mut bytes, &disconnect_request());
-                let _ = tokio::time::timeout(wait, ws.send(&bytes)).await;
-            }
+            end.say_goodbye(&ws, wait).await;
         });
         (
             Self {
@@ -318,6 +316,47 @@ impl PooledDirect {
             .await
     }
 }
+/// How an outbound direct link ended, which decides what goes out before
+/// the socket is dropped (Annex AB.6.2.2, #2520). Each send is bounded.
+enum LinkEnd {
+    /// This node ended it (a stop, a replacement, the idle TTL, a write
+    /// that failed or was cut short): Disconnect-Request, then close 1000.
+    /// The Disconnect-ACK is not awaited.
+    Retired,
+    /// After answering the peer's Disconnect-Request: close 1000.
+    Answered,
+    /// The peer left a heartbeat unanswered: a close with no status, the
+    /// peer's fault, as the hub closes for one.
+    Unanswered,
+    /// The peer sent a data frame that is not binary: close 1003.
+    #[cfg(feature = "sc-tls")]
+    NonBinary,
+    /// The socket failed or the peer closed it: nothing more to send.
+    Lost,
+}
+
+impl LinkEnd {
+    async fn say_goodbye<W: WebSocketPort>(self, ws: &DirectSocket<W>, wait: std::time::Duration) {
+        let status = match self {
+            Self::Retired => {
+                let mut bytes = bytes::BytesMut::new();
+                encode_sc_message(&mut bytes, &disconnect_request());
+                let _ = tokio::time::timeout(wait, ws.send(&bytes)).await;
+                Some(CLOSE_NORMAL)
+            }
+            Self::Answered => Some(CLOSE_NORMAL),
+            Self::Unanswered => None,
+            #[cfg(feature = "sc-tls")]
+            Self::NonBinary => {
+                let _ = ws.refuse_non_binary().await;
+                return;
+            }
+            Self::Lost => return,
+        };
+        close_within_grace(ws, status).await;
+    }
+}
+
 enum WorkerEvent {
     Received(Result<DirectFrame, bacnet_types::error::Error>),
     Send(Option<DirectWrite>),

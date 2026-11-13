@@ -366,9 +366,10 @@ impl DirectListener {
 
     /// Stop admission and await accept-loop cleanup.
     ///
-    /// Signals accepted connections to close; they exit on their next
-    /// frame or shutdown poll. This is forceful local shutdown, not the
-    /// BACnet Disconnect sequence.
+    /// Each established connection gets a Disconnect-Request and a close
+    /// with 1000, within a one-second grace, and is then dropped whether or
+    /// not they went out (#2520). The Disconnect-ACK and the answering close
+    /// are not awaited. A connection still in its handshake is dropped.
     pub async fn stop(&mut self) {
         self.shutdown.send_replace(true);
         if let Some(task) = self.accept_task.take() {
@@ -525,15 +526,47 @@ async fn accept_loop(state: AcceptLoop) {
         peers.spawn(async move {
             let _guard = guard;
             let _active = peer_active;
+            let established = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let serve = serve_connection(
+                tcp,
+                peer_addr,
+                peer_config,
+                peer_shared,
+                (
+                    pending_guard,
+                    Arc::clone(&established),
+                    peer_shutdown.clone(),
+                ),
+            );
+            tokio::pin!(serve);
             tokio::select! {
                 biased;
-                _ = async { if !*peer_shutdown.borrow_and_update() { let _ = peer_shutdown.changed().await; } } => {},
-                _ = serve_connection(tcp, peer_addr, peer_config, peer_shared, pending_guard) => {},
+                _ = raised(&mut peer_shutdown) => {},
+                _ = &mut serve => return,
+            }
+            // An established link sees the shutdown too and sends its
+            // Disconnect-Request and close; one still in its handshake is
+            // dropped (#2520).
+            if established.load(Ordering::Acquire) {
+                let _ = tokio::time::timeout(crate::sc::CLOSE_GRACE, serve).await;
             }
         });
     }
     drop(listener);
+    // Established links say goodbye within the close grace (#2520).
+    let goodbyes = async { while peers.join_next().await.is_some() {} };
+    let _ = tokio::time::timeout(crate::sc::CLOSE_GRACE, goodbyes).await;
     peers.shutdown().await;
+}
+
+/// Resolves once `signal` reads true. A sender gone without setting it
+/// never raises it.
+pub(super) async fn raised(signal: &mut watch::Receiver<bool>) {
+    while !*signal.borrow_and_update() {
+        if signal.changed().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    }
 }
 
 // The chain comes only from rustls after a successful verifying handshake.
@@ -571,7 +604,11 @@ async fn serve_connection(
     peer_addr: SocketAddr,
     config: DirectAcceptConfig,
     shared: ListenerShared,
-    pending: AcceptGuard,
+    (pending, established, shutdown): (
+        AcceptGuard,
+        Arc<std::sync::atomic::AtomicBool>,
+        watch::Receiver<bool>,
+    ),
 ) {
     let ListenerShared {
         npdu_tx,
@@ -650,6 +687,7 @@ async fn serve_connection(
         _ => return,
     };
     drop(pending);
+    established.store(true, Ordering::Release);
     let identity = crate::port::DirectScIdentity::verified(leaf_sha256, member.generation);
     // Socket task owns retirement even if a short-lived send admission holds
     // another strong reference. Capabilities themselves keep only a Weak.
@@ -668,6 +706,7 @@ async fn serve_connection(
                 provenance,
                 response,
                 warnings: &warnings,
+                shutdown,
             },
             &npdu_tx,
             &npdu_admission,
@@ -689,7 +728,15 @@ where
     W: DirectWs,
 {
     let data = match tokio::time::timeout(config.connect_timeout, read.next_data()).await {
-        Ok(Some(Ok(data))) => data,
+        Ok(Some(Ok(DirectFrame::Binary(data)))) => data,
+        Ok(Some(Ok(_))) => {
+            crate::warn_throttled!(
+                warnings.connection,
+                "direct non-binary frame from {peer_addr}, closing with 1003"
+            );
+            socket::refuse_non_binary(write).await;
+            return None;
+        }
         Ok(Some(Err(e))) => {
             crate::warn_throttled!(
                 warnings.connection,
@@ -829,6 +876,8 @@ struct AdmittedDirectPeer<'a> {
     provenance: crate::port::TransportProvenance,
     response: crate::port::DirectResponse,
     warnings: &'a DirectWarnings,
+    /// The listener's shutdown: an orderly end, as a retirement is (#2520).
+    shutdown: watch::Receiver<bool>,
 }
 
 /// The throttles on one listener's warnings about its peers (#1950), shared

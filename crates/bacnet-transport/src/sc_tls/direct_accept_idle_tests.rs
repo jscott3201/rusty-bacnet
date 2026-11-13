@@ -31,7 +31,7 @@ impl DirectWs for Sink {
             .push(decode_sc_message(data).unwrap().function);
         Ok(())
     }
-    async fn send_close(&mut self) -> Result<(), ()> {
+    async fn send_close(&mut self, _code: u16) -> Result<(), ()> {
         Ok(())
     }
 }
@@ -91,6 +91,7 @@ impl Link {
                     ),
                     response,
                     warnings: &warnings,
+                    shutdown: watch::channel(false).1,
                 },
                 &tx,
                 &admission,

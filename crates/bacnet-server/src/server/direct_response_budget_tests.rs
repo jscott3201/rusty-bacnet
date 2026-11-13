@@ -264,13 +264,14 @@ async fn direct_response_budget_too_small_for_abort_finishes_without_fallback() 
             MAX_SEG_SENDERS
         );
     }
-    f.listener.stop().await; // EOF makes absence of buffered application data observable
+    // The goodbye makes absence of buffered application data observable.
+    f.listener.stop().await;
     assert_eq!(
         saved_route.unwrap().max_apdu_length(480, None).unwrap(),
         2,
         "sizing snapshot remains readable after retirement; it grants no send authority"
     );
-    assert!(bounded(peer.ws.recv()).await.is_err());
+    assert_listener_goodbye(&peer.ws).await;
     assert!(f.responses.try_recv().is_err());
     f.stop().await;
 }

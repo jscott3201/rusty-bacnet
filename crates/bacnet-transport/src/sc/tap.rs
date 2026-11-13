@@ -63,6 +63,12 @@ impl<W: WebSocketPort> WebSocketPort for TappedSocket<W> {
         self.record(TapDirection::Inbound, &data);
         Ok(data)
     }
+
+    /// A close frame is a WebSocket control, not a BVLC message, so the tap
+    /// does not see it.
+    async fn close(&self, status: Option<u16>) -> Result<(), Error> {
+        self.inner.close(status).await
+    }
 }
 
 /// `connector`, with each socket it dials wrapped for `hub`.

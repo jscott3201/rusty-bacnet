@@ -1,6 +1,7 @@
 //! Sole accepted socket writer with bounded response/control scheduling.
 use super::*;
 use crate::sc::npdu_admission::DirectPeer;
+use crate::sc::{CLOSE_GRACE, CLOSE_NORMAL};
 
 pub(super) async fn serve_npdu_loop<W>(
     write: &mut W,
@@ -19,6 +20,7 @@ pub(super) async fn serve_npdu_loop<W>(
         provenance,
         response,
         warnings,
+        mut shutdown,
     } = peer;
     let mut retired = member.retirement();
     let mut prefer_send = false;
@@ -26,17 +28,24 @@ pub(super) async fn serve_npdu_loop<W>(
     loop {
         if tokio::time::Instant::now() >= idle_deadline {
             debug!("direct idle timeout, closing {peer_addr}");
-            let _ = tokio::time::timeout(config.connect_timeout, write.send_close()).await;
+            let _ =
+                tokio::time::timeout(config.connect_timeout, write.send_close(CLOSE_NORMAL)).await;
             return;
         }
         let next = tokio::select! {
             biased;
-            _ = async { if !*retired.borrow_and_update() { let _ = retired.changed().await; } } => {
+            // Retired, or the listener stops: an orderly end (#2520).
+            _ = async {
+                tokio::select! {
+                    _ = async { if !*retired.borrow_and_update() { let _ = retired.changed().await; } } => {}
+                    _ = raised(&mut shutdown) => {}
+                }
+            } => {
                 let mut buf = BytesMut::new();
                 encode_sc_message(&mut buf, &crate::sc::direct_membership::disconnect_request());
                 let _ = tokio::time::timeout(config.connect_timeout, async {
                     let _ = write.send_data(&buf).await;
-                    let _ = write.send_close().await;
+                    let _ = write.send_close(CLOSE_NORMAL).await;
                 }).await;
                 return;
             }
@@ -83,6 +92,14 @@ pub(super) async fn serve_npdu_loop<W>(
                 tokio::task::yield_now().await;
                 continue;
             }
+            Ok(Some(Ok(DirectFrame::NonBinary))) => {
+                crate::warn_throttled!(
+                    warnings.frame,
+                    "direct non-binary frame from {peer_addr}, closing with 1003"
+                );
+                socket::refuse_non_binary(write).await;
+                return;
+            }
             Ok(Some(Err(e))) => {
                 crate::warn_throttled!(warnings.frame, "direct recv error from {peer_addr}: {e}");
                 return;
@@ -90,7 +107,9 @@ pub(super) async fn serve_npdu_loop<W>(
             Ok(None) => return,
             Err(_) => {
                 debug!("direct idle timeout, closing {peer_addr}");
-                let _ = tokio::time::timeout(config.connect_timeout, write.send_close()).await;
+                let _ =
+                    tokio::time::timeout(config.connect_timeout, write.send_close(CLOSE_NORMAL))
+                        .await;
                 return;
             }
         };
@@ -162,6 +181,8 @@ pub(super) async fn serve_npdu_loop<W>(
                 let mut buf = BytesMut::new();
                 encode_sc_message(&mut buf, &ack);
                 let _ = tokio::time::timeout(config.connect_timeout, write.send_data(&buf)).await;
+                // Answered, the acceptor closes too (AB.6.2.3, #2520).
+                let _ = tokio::time::timeout(CLOSE_GRACE, write.send_close(CLOSE_NORMAL)).await;
                 return;
             }
             ScFunction::DisconnectAck => return,
