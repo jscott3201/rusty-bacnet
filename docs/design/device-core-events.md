@@ -1958,7 +1958,9 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
       delivery types and the report types; the algorithms went private,
       and the three legacy encoders only tests use are test-only.
     - PR 2b: the pass keys its per-enrollment state in B-tree maps, so it
-      needs only `alloc`. Its order is the database's Event Enrollment
+      needs only `alloc`, and takes its interval as `u32` seconds, so its
+      delay conversion is a 32-bit division (the server's wrappers keep a
+      `u64` and saturate it). Its order is the database's Event Enrollment
       order, as on dev (the map is only looked up by key): inhibit
       references are followed in it, commits happen in it, and every list
       in the batch and every event sequence number follows it; tests pin

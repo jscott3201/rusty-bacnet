@@ -114,7 +114,8 @@ fn a_delivery_without_message_texts_sends_no_text() {
     assert_eq!(batch.deliveries[0].history_snapshot.message_text, None);
 }
 
-/// The Reliability path reads its history back too.
+/// The Reliability path reads its history back too, after its commit: the
+/// delivery carries what the enrollment reads at TO_FAULT after the pass.
 #[test]
 fn a_fault_whose_history_does_not_read_back_is_suppressed() {
     for timestamps_readable in [true, false] {
@@ -123,10 +124,22 @@ fn a_fault_whose_history_does_not_read_back_is_suppressed() {
             max_normal: 10.0,
         };
         let mut db = probe(timestamps_readable, true, Some(fault));
+        // As above: sequence number 0 is used up, so the commit's is 1.
+        let staged = crate::event::stage_event_timestamp(&db);
+        crate::event::confirm_event_timestamp(&mut db, staged);
         let batch = evaluate_event_enrollments_for_delivery(&mut db, 1);
         assert_eq!(batch.report.reliability_results.len(), 1);
         if timestamps_readable {
             assert_eq!(batch.deliveries.len(), 1, "{:?}", batch.suppressed);
+            let object = db.get(&probe_oid()).unwrap();
+            let written = read_committed_history_snapshot(
+                object,
+                EventTransition::ToFault,
+                MessageTexts::Optional,
+            );
+            let carried = &batch.deliveries[0].history_snapshot;
+            assert_eq!(Some(carried), written.as_ref());
+            assert_eq!(carried.timestamp, BACnetTimeStamp::SequenceNumber(1));
             continue;
         }
         assert!(batch.deliveries.is_empty());

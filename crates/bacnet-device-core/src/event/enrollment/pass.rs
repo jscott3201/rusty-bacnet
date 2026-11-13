@@ -57,14 +57,16 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 /// Run one evaluation pass over every Event Enrollment object in `db`,
 /// commit what it finds, and return the report with the commits to send.
 ///
-/// `interval_secs` is the host's time between passes, in seconds (0 counts
-/// as 1): a time delay becomes that many passes, rounded up, so it never
-/// fires early. The batch's `deliveries` include transitions whose
-/// `Event_Enable` bit is clear; send only those whose result has
-/// `distribute` set.
+/// `interval_secs` is the host's time between passes, in whole seconds (0
+/// counts as 1): a time delay becomes that many passes, rounded up, so it
+/// never fires early. A host whose period isn't whole seconds rounds it
+/// down, or delays fire early. It is a `u32` so the conversion is a 32-bit
+/// division, which a 32-bit target does without a library routine. The
+/// batch's `deliveries` include transitions whose `Event_Enable` bit is
+/// clear; send only those whose `distribute()` is true.
 pub fn evaluate_event_enrollments_for_delivery(
     db: &mut ObjectDatabase,
-    interval_secs: u64,
+    interval_secs: u32,
 ) -> EventEnrollmentEvaluationBatch {
     let interval_secs = interval_secs.max(1);
     let oids = db.find_by_type(ObjectType::EVENT_ENROLLMENT);

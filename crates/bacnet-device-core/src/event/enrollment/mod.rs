@@ -27,8 +27,9 @@
 //!
 //! A pass works through the enrollments in the database's order, the order
 //! they were added in (`ObjectDatabase::find_by_type`), never by
-//! identifier: it follows their inhibit references in that order, then
-//! commits in it. Every list in the batch comes out in that order, and
+//! identifier: an enrollment replaced under the same identifier keeps its
+//! place, and one removed and added again goes last. The pass follows their
+//! inhibit references in that order, then commits in it. Every list in the batch comes out in that order, and
 //! without a Device clock the commits take event sequence numbers in it.
 //!
 //! # Algorithms

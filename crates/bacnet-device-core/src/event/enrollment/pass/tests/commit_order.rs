@@ -185,8 +185,9 @@ fn inhibit_references_follow_in_database_order() {
             &super::helpers::test_origin(),
         )
         .unwrap();
-    let first = EventEnrollmentObject::new(10, "EE-10", EventType::OUT_OF_RANGE).unwrap();
-    let later = EventEnrollmentObject::new(11, "EE-11", EventType::OUT_OF_RANGE).unwrap();
+    // EE-11 is added first, so it follows first, though EE-10 sorts first.
+    let first = EventEnrollmentObject::new(11, "EE-11", EventType::OUT_OF_RANGE).unwrap();
+    let later = EventEnrollmentObject::new(10, "EE-10", EventType::OUT_OF_RANGE).unwrap();
     let (first_oid, later_oid) = (first.object_identifier(), later.object_identifier());
     let (mut first, mut later) = (first, later);
     inhibit_from(
@@ -202,7 +203,7 @@ fn inhibit_references_follow_in_database_order() {
     assert!(inhibited(&db, later_oid));
     assert!(
         !inhibited(&db, first_oid),
-        "it read EE-11 before EE-11 followed"
+        "EE-11 read EE-10 before EE-10 followed"
     );
     evaluate_event_enrollments_for_delivery(&mut db, 1);
     assert!(inhibited(&db, first_oid));

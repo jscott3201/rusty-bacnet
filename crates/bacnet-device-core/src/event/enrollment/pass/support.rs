@@ -54,9 +54,10 @@ pub(super) fn read_setpoint(
     }
 }
 
-pub(super) fn passes_for_delay(delay_secs: u32, interval_secs: u64) -> u32 {
-    let passes = (delay_secs as u64).div_ceil(interval_secs.max(1));
-    u32::try_from(passes).unwrap_or(u32::MAX)
+/// The passes a delay of `delay_secs` takes at `interval_secs` between
+/// passes, rounded up. Both are `u32`, so no 64-bit division is linked.
+pub(super) fn passes_for_delay(delay_secs: u32, interval_secs: u32) -> u32 {
+    delay_secs.div_ceil(interval_secs.max(1))
 }
 
 pub(super) fn ack_required_for_transition(

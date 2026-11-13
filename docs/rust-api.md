@@ -8826,10 +8826,11 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   Everything comes out in the database's Event Enrollment order. The
   deliveries include transitions whose `Event_Enable` bit is clear: the
   host sends only those whose `distribute()` is true, as the server does,
-  and `into_notification()` gives the notification to send. `interval_secs` is the time between passes, which turns
-  time delays into a count of passes. The algorithms it runs stay
-  internal. `bacnet-server` drives it on its task and re-exports the
-  report types.
+  and `into_notification()` gives the notification to send.
+  `interval_secs` is the time between passes in whole seconds, a `u32`,
+  which turns time delays into a count of passes (the server's wrappers
+  take a `u64` and saturate it). The algorithms it runs stay internal.
+  `bacnet-server` drives it on its task and re-exports the report types.
   `handle_acknowledge_alarm` runs AcknowledgeAlarm, decoding it and
   calling `acknowledge(db, oid, state, timestamp)`, the path a local
   acknowledgement runs too, and
