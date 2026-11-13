@@ -112,6 +112,21 @@ name = "points"
 path = "tests/points.rs"
 required-features = ["points"]
 
+# The reporting image with bacnet-device-core's Event Enrollment pass on
+# top: a second device whose Event Enrollment reports a transition through
+# its delay, acknowledgement and return, and a fault (#2319).
+[[bin]]
+name = "enrollment"
+path = "src/bin/enrollment.rs"
+test = false
+bench = false
+required-features = ["enrollment"]
+
+[[test]]
+name = "enrollment"
+path = "tests/enrollment.rs"
+required-features = ["enrollment"]
+
 # `alloc`: the apdu image and its scenario, which link bacnet-encoding and
 # bacnet-services with `alloc` (the device image links them without it),
 # and on bare-metal targets
@@ -121,7 +136,7 @@ required-features = ["points"]
 # (`--no-default-features`): with it, the lib links `alloc`, and an image
 # without a global allocator fails to link.
 [features]
-default = ["alloc", "objects", "reporting", "points"]
+default = ["alloc", "objects", "reporting", "points", "enrollment"]
 alloc = [
     "bacnet-types/alloc",
     "bacnet-encoding/alloc",
@@ -157,6 +172,16 @@ objects = ["alloc", "dep:bacnet-objects", "dep:bacnet-device-core"]
 # the COV code an image doesn't reach, so the objects image is no smaller
 # without it. On by default, as `objects` is, for the host builds.
 reporting = ["objects", "dep:bacnet-time", "bacnet-device-core/event-reporting"]
+
+# `enrollment`: the enrollment image and its scenario (#2319), the
+# reporting image's with bacnet-device-core's `event-enrollment` on: the
+# Reporter runs the Event Enrollment pass and sends what it commits. The
+# reporting image builds without it, so its rows are what a device without
+# algorithmic reporting links; this image's less those are what it costs.
+# It gets the reporting image's 512 KiB layout (build.rs keys on
+# `reporting`, which this turns on). On by default, as `reporting` is, for
+# the host builds.
+enrollment = ["reporting", "bacnet-device-core/event-enrollment"]
 
 # `points`: the points image and its scenario (#2445), the objects image's
 # requests answered from a database bacnet-objects' point-list builder
