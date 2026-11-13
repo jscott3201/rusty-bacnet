@@ -12490,10 +12490,10 @@ reaches only the Device's Description and Audit_Notification_Recipient
 the Device takes no subscription of either kind, on the endpoint as on
 `BACnetServer`: it lends no COV reporting, so both services refuse it with
 OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, and a client's write notifies
-nobody. The B/IP builder's `build_transport` refuses `cov`, as it refuses the
-other session-owned options. The MS/TP and BACnet/SC builders take none of
-the service opt-ins (Device writes, ReinitializeDevice, COV), so there
-`with_cov` goes on the session they build.
+nobody. The MS/TP and BACnet/SC builders take `cov(config)` too
+(`MstpEndpointBuilder::cov`, `ScEndpointBuilder::cov`), though not the other
+service opt-ins, and the B/IP and MS/TP builders' `build_transport` refuses
+it, as a bare transport can't keep it.
 
 Confirmed notifications lease their invoke IDs from the coordinator the
 client role draws from, so the two roles never hold one ID at once, and their
