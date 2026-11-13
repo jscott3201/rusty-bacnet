@@ -38,6 +38,7 @@
 
 use std::net::{Ipv4Addr, SocketAddrV4};
 
+use bacnet_device_core::report::ReportConfig;
 use bacnet_objects::database::ObjectDatabase;
 use std::sync::Arc;
 
@@ -67,6 +68,7 @@ pub struct BipEndpointBuilder {
     device_write_authorizer: Option<bacnet_server::mutation::DeviceWriteAuthorizer>,
     reinitialize: Option<bacnet_server::server::ReinitializeHandler>,
     reinit_password: Option<String>,
+    cov: Option<ReportConfig>,
     source_audit_bindings: Vec<(ObjectIdentifier, SocketAddrV4)>,
     source_audit_routed: crate::session::RoutedBindings,
     mode: BipMode,
@@ -97,6 +99,7 @@ impl BipEndpointBuilder {
             device_write_authorizer: None,
             reinitialize: None,
             reinit_password: None,
+            cov: None,
             source_audit_bindings: Vec::new(),
             source_audit_routed: Vec::new(),
             mode: BipMode::Normal,
@@ -235,6 +238,15 @@ impl BipEndpointBuilder {
         self
     }
 
+    /// Enables SubscribeCOV and SubscribeCOVProperty for the objects of the
+    /// database, with the COV notifications they call for, under `config`.
+    /// Its bounds, startup requirements and refusals are those of
+    /// [`EndpointSession::with_cov`]. Requires `build_session()`.
+    pub fn cov(mut self, config: ReportConfig) -> Self {
+        self.cov = Some(config);
+        self
+    }
+
     /// Register one trusted direct IPv4 B/IP route for source Audit delivery.
     /// This is route data only; provision the recipient on the actual Device.
     /// Multiple entries may resolve old/new Device choices. Duplicate keys,
@@ -315,8 +327,8 @@ impl BipEndpointBuilder {
     /// Returns a typed [`Error::Encoding`] when any session-owned
     /// configuration is set, since a bare transport would discard it: a
     /// Network Port registration, Device writes, a ReinitializeDevice handler
-    /// or password (a password alone included), or source Audit route data.
-    /// Those require [`build_session`](Self::build_session).
+    /// or password (a password alone included), COV, or source Audit route
+    /// data. Those require [`build_session`](Self::build_session).
     pub fn build_transport(self) -> Result<BipTransport, Error> {
         if self.registered_network_port.is_some() {
             return Err(Error::Encoding(
@@ -332,6 +344,9 @@ impl BipEndpointBuilder {
             return Err(Error::Encoding(
                 "ReinitializeDevice and its password require build_session()".into(),
             ));
+        }
+        if self.cov.is_some() {
+            return Err(Error::Encoding("COV requires build_session()".into()));
         }
         if !self.source_audit_bindings.is_empty() || !self.source_audit_routed.is_empty() {
             return Err(Error::Encoding(
@@ -396,6 +411,7 @@ impl BipEndpointBuilder {
         let device_write_authorizer = self.device_write_authorizer.take();
         let reinitialize = self.reinitialize.take();
         let reinit_password = self.reinit_password.take();
+        let cov = self.cov.take();
         let bindings = std::mem::take(&mut self.source_audit_bindings);
         let routed = std::mem::take(&mut self.source_audit_routed);
         crate::source_audit::recipient::SourceRoutes::new(
@@ -420,6 +436,9 @@ impl BipEndpointBuilder {
         }
         if let Some(oid) = registered_network_port {
             endpoint = endpoint.with_registered_network_port(oid);
+        }
+        if let Some(config) = cov {
+            endpoint = endpoint.with_cov(config);
         }
         endpoint.reinitialize = reinitialize;
         endpoint.reinit_password = reinit_password;

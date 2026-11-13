@@ -6,7 +6,8 @@
 //! once it starts a [`CovHost`] and the task that sends what the host queues.
 //! The host keeps the `Reporter` under a std mutex, with the invoke IDs its
 //! confirmed notifications hold. The responder reaches it for SubscribeCOV
-//! and for reads of the Device's Active_COV_Subscriptions; the dispatch task
+//! and SubscribeCOVProperty, which the `Reporter` tells apart, and for reads
+//! of the Device's Active_COV_Subscriptions; the dispatch task
 //! for the answers to its confirmed notifications; the local writes for the
 //! changes the application makes.
 //!
@@ -22,7 +23,7 @@
 //!   [`COV_CONFIRMED_IN_FLIGHT`] are out at once, so silent subscribers
 //!   can't take every ID from the client role.
 //! - **Order.** The first notification of a subscription waits until the
-//!   SubscribeCOV's reply has been handed off ([`EndpointCov::replied`]).
+//!   subscribe request's reply has been handed off ([`EndpointCov::replied`]).
 //!
 //! [`EndpointSession::with_cov`]: super::EndpointSession::with_cov
 
@@ -229,7 +230,7 @@ pub(crate) struct CovHost {
 struct CovState {
     reporter: Reporter,
     leases: Leases,
-    /// SubscribeCOV replies not yet handed off: nothing is sent meanwhile,
+    /// Subscribe replies not yet handed off: nothing is sent meanwhile,
     /// so a first notification never overtakes its reply.
     held: usize,
     /// The session stopped: nothing more goes out.
