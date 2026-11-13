@@ -266,23 +266,28 @@ impl Request<'_> {
                     &mut db,
                     std::slice::from_ref(&oid),
                 ));
-                let capture = {
-                    let table = cov_table.read().await;
-                    if bacnet_device_core::cov::life_safety::is_life_safety_object(oid) {
-                        table.timed_capture_exact(&changes)
-                    } else {
-                        table.timed_capture(oid)
-                    }
-                };
-                capture.run(&db);
+                // A Life Safety object is captured exactly as written, ahead
+                // of its transition, as the core's request path captures each
+                // attempt; neither host's capture after a transition selects
+                // a Life Safety reference.
+                let life_safety = bacnet_device_core::cov::life_safety::is_life_safety_object(oid);
+                if life_safety {
+                    let capture = cov_table.read().await.timed_capture_exact(&changes);
+                    capture.run(&db);
+                }
                 // The transition the write causes commits under its guard
                 // too, ahead of a written Schedule's pass (a Schedule has no
-                // intrinsic reporting), so nothing is held across it. WPM and
-                // local writes evaluate after the pass, since a WPM can write
-                // a Schedule and one of its targets; here an application's own
-                // reporting Schedule-type object gets a transition the pass
-                // causes at the next sweep.
-                commit_written_transition(&mut db, cov_table, oid, written_transitions).await;
+                // intrinsic reporting). WPM evaluates after the pass, since it
+                // can write a Schedule and one of its targets; here an
+                // application's own reporting Schedule-type object gets a
+                // transition the pass causes at the next sweep.
+                commit_written_transition(&mut db, oid, written_transitions);
+                // Any other object is captured once the transition has
+                // committed: one row for the write and its transition (#2535).
+                if !life_safety {
+                    let capture = cov_table.read().await.timed_capture(oid);
+                    capture.run(&db);
+                }
             }
             let schedule_cov = match written {
                 Some(oid) => {
@@ -377,9 +382,15 @@ impl Request<'_> {
                 crate::schedule::reevaluate_written(database, &mut db, committed_oids, cov_table)
                     .await;
             // Each written object's transition commits under this guard too,
-            // in the order the objects were written.
+            // in the order the objects were written. Its attempts were
+            // captured as they committed: an object whose transition commits
+            // is captured again, in place of its latest attempt's row, so the
+            // write and its transition are one row (#2535).
             for oid in committed_oids {
-                commit_written_transition(&mut db, cov_table, *oid, written_transitions).await;
+                if commit_written_transition(&mut db, *oid, written_transitions) {
+                    let capture = cov_table.read().await.timed_capture(*oid);
+                    capture.run_replacing(&db, observer.last_queued(*oid));
+                }
             }
             coarse_cov_oids.extend(
                 committed_oids.iter().copied().filter(|oid| {
@@ -569,15 +580,14 @@ impl Request<'_> {
             // Lock order: database, then a short table read, as after a
             // WriteProperty: timestamped references capture the edit now.
             if let Some(oid) = written {
-                let capture = cov_table.read().await.timed_capture(oid);
-                capture.run(&db);
                 // The edit's transition commits under its guard too, ahead
                 // of a written Schedule's pass, as after a WriteProperty (WPM
-                // and local writes evaluate after it); an application's own
-                // reporting Schedule-type object gets a transition the pass
-                // causes at the next sweep.
-                let sent = &mut effects.written_transitions;
-                commit_written_transition(&mut db, cov_table, oid, sent).await;
+                // evaluates after it); an application's own reporting
+                // Schedule-type object gets a transition the pass causes at
+                // the next sweep. The edit is captured after it (#2535).
+                commit_written_transition(&mut db, oid, &mut effects.written_transitions);
+                let capture = cov_table.read().await.timed_capture(oid);
+                capture.run(&db);
             }
             let schedule_cov = match written {
                 Some(oid) => {

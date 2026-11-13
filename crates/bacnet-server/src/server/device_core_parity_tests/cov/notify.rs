@@ -27,6 +27,7 @@ use bacnet_services::write_property::WritePropertyRequest;
 use bacnet_types::constructed::BACnetAddress;
 
 mod multiple;
+mod multiple_transitions;
 
 /// The core side's invoke IDs: the next free one in turn, so a late
 /// answer to an ended report doesn't match the one after it.

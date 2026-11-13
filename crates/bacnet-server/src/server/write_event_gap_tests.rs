@@ -24,6 +24,7 @@ use bacnet_objects::staging::{StagingConfig, StagingObject};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::common::BACnetPropertyValue;
 use bacnet_services::cov::COVNotificationRequest;
+use bacnet_services::cov_multiple::COVNotificationMultipleRequest;
 use bacnet_services::list_manipulation::ListElementRequest;
 use bacnet_services::read_property::{ReadPropertyAckRef, ReadPropertyRequest};
 use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
@@ -480,6 +481,60 @@ impl Gap {
             .collect()
     }
 
+    /// A timestamped COV-multiple reference to `property` of `oid`,
+    /// reported at once (Max_Notification_Delay 0).
+    async fn subscribe_timed(&self, oid: ObjectIdentifier, property: PropertyIdentifier) {
+        let mac = MacAddr::from_slice(&SUBSCRIBER);
+        let context = bacnet_device_core::cov::MultipleContextKey {
+            recipient: bacnet_device_core::cov::CovRecipient::from_endpoint(&mac, None),
+            process_id: 2,
+            confirmed: false,
+        };
+        let route = bacnet_device_core::cov::SubscriberEndpoint::new(&SUBSCRIBER, None);
+        let expires_at = crate::runtime_clock::core_now() + bacnet_time::Duration::from_secs(300);
+        let subscription = CovSubscription {
+            subscriber_mac: mac,
+            subscriber_network: None,
+            subscriber_process_identifier: 2,
+            monitored_object_identifier: oid,
+            issue_confirmed_notifications: false,
+            expires_at: Some(expires_at),
+            last_notified_observation: None,
+            monitored_property: Some(property),
+            monitored_property_array_index: None,
+            cov_increment: None,
+            notification_kind: CovNotificationKind::Multiple,
+            timestamped: true,
+        };
+        let mut table = self.server.cov_table.write().await;
+        let subscriptions = vec![subscription];
+        table
+            .subscribe_multiple(&context, &route, expires_at, 0, None, subscriptions)
+            .unwrap();
+    }
+
+    /// The Status_Flags the timestamped rows the subscriber got carry: one
+    /// per row the write and its transition queued (#2535).
+    fn timed_flags(&self) -> Vec<u8> {
+        let multiple = UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION_MULTIPLE;
+        self.sent
+            .unicasts()
+            .into_iter()
+            .filter(|frame| frame.mac.as_slice() == SUBSCRIBER)
+            .filter_map(|frame| match frame.apdu() {
+                Apdu::UnconfirmedRequest(request) if request.service_choice == multiple => {
+                    let body = &request.service_request;
+                    Some(COVNotificationMultipleRequest::decode(body).unwrap())
+                }
+                _ => None,
+            })
+            .flat_map(|report| report.list_of_cov_notifications)
+            .flat_map(|item| item.list_of_values)
+            .filter(|value| value.property_identifier == PropertyIdentifier::STATUS_FLAGS)
+            .map(|value| value.value[2])
+            .collect()
+    }
+
     /// [`Self::events`] once at least `count` are out, on the paused clock.
     async fn wait_for_events(&self, count: usize) -> Vec<(ObjectIdentifier, EventState)> {
         for _ in 0..1_000 {
@@ -621,6 +676,8 @@ async fn a_read_behind_a_list_edit_sees_no_half_moved_flags() {
     })
     .await;
     let msi1 = ObjectIdentifier::new(ObjectType::MULTI_STATE_INPUT, 1).unwrap();
+    gap.subscribe_timed(msi1, PropertyIdentifier::ALARM_VALUES)
+        .await;
     let mut body = BytesMut::new();
     ListElementRequest {
         object_identifier: msi1,
@@ -636,6 +693,7 @@ async fn a_read_behind_a_list_edit_sees_no_half_moved_flags() {
     gap.acknowledged(&WRITER, id).await;
     assert_eq!(flags, IN_ALARM, "the edit and its transition");
     assert_eq!(gap.event_state(msi1).await, EventState::OFFNORMAL.to_raw());
+    assert_eq!(gap.timed_flags(), [IN_ALARM], "one timestamped row");
 }
 
 /// A peer's write of STG-1 moves it to the stage that turns BV-1 on, and the
@@ -644,11 +702,14 @@ async fn a_read_behind_a_list_edit_sees_no_half_moved_flags() {
 #[tokio::test(start_paused = true)]
 async fn a_read_behind_a_staging_target_write_sees_no_half_moved_flags() {
     let gap = Gap::start_with(staging).await;
+    gap.subscribe_timed(bv1(), PV).await;
     let write = gap.send_write(&WRITER, stg1(), PV, PropertyValue::Real(60.0));
     let (id, flags) = gap.read_behind_second(bv1(), write).await;
     gap.acknowledged(&WRITER, id).await;
     assert_eq!(flags, IN_ALARM, "the target write and its transition");
     assert_eq!(gap.event_state(bv1()).await, EventState::OFFNORMAL.to_raw());
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert_eq!(gap.timed_flags(), [IN_ALARM], "one timestamped row");
 }
 
 /// One WritePropertyMultiple turns BV-1 on at priority 8, then moves STG-1

@@ -1141,6 +1141,7 @@ mod claim;
 mod drops;
 mod follow;
 mod owed;
+mod replace;
 use bound::Held;
 pub(crate) use bound::envelope_len;
 pub(crate) use bound::request_header;
@@ -1153,6 +1154,9 @@ pub use follow::follow_table;
 #[cfg(test)]
 #[path = "timed_test_host.rs"]
 mod host;
+#[cfg(test)]
+#[path = "timed_replace_tests.rs"]
+mod replace_tests;
 #[cfg(test)]
 #[path = "timed_settle_tests.rs"]
 mod settle_tests;

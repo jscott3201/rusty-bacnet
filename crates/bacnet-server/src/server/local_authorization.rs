@@ -80,8 +80,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .expect("admitted point remains under the same database guard")
             .record_access_event_batch(&reports)?;
         let records = committed.iter().map(|event| event.report.clone()).collect();
+        // The references the last event's row was queued for: a transition
+        // of the point is captured in its place (#2535).
+        let mut last_queued = Vec::new();
         for event in &committed {
-            table
+            last_queued = table
                 .timed_capture(oid)
                 .run_from_snapshot(event.snapshot.as_ref(), event.clock_frame);
         }
@@ -98,13 +101,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             // application's own point that does is evaluated here.
             let mut db = db;
             let mut transitions = Vec::new();
-            super::event_notifications::commit_written_transition(
-                &mut db,
-                &fanout.cov_table,
-                oid,
-                &mut transitions,
-            )
-            .await;
+            let sent = &mut transitions;
+            if super::event_notifications::commit_written_transition(&mut db, oid, sent) {
+                let capture = fanout.cov_table.read().await.timed_capture(oid);
+                capture.run_replacing(&db, &last_queued);
+            }
             drop(db);
             let delivery = fanout.event_delivery(&routers, &bindings);
             Self::send_written_transitions(&delivery, transitions).await;
