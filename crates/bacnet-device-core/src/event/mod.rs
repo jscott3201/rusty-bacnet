@@ -33,6 +33,8 @@
 mod acknowledge;
 mod commit;
 mod distribute;
+#[cfg(feature = "event-enrollment")]
+pub mod enrollment;
 mod event_information;
 mod fault;
 mod intrinsic;

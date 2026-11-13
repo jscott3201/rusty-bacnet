@@ -1038,7 +1038,7 @@ image would link:
 | PR 1, measured | 148.4 KB (flash 165.8 KB) | the `objects` image's 127.3 KB, plus the table and the two subscribe services (#2303) |
 | PR 2, measured | 171.4 KB (flash 189.7 KB) | the image through the `Reporter`, trimmed by #2363 (§8.3) |
 | + `event-reporting` (after PR 3) | 172-181 KB estimated; 243.2 KB measured (flash 265.6 KB); 248.0 KB with #2529's growth and #2524's trims (flash 272.1 KB) | ~2,200 lines, plus the measured objects and encoder share; see §8.3 for what dominates |
-| + `event-enrollment` (#2319) | PR 3's measured row + 35-40 KB (the estimate's own step over PR 3's) | ~2,700 lines, the Event Enrollment object, `decode_event_parameter` |
+| + `event-enrollment` (#2319) | 60-75 KB of flash over PR 3's measured row, estimated; a thumbv7m probe of the algorithms and one Event Enrollment object measured 43.8 KB of `.text`, 48.9 KB of flash (decision 23) | ~2,700 lines, the Event Enrollment object, `decode_event_parameter` |
 | + the Multiple path (#2320) | +15-25 KB estimated; +134 KB measured before any trim (decision 18) | ~3,300 lines, the COVNotificationMultiple codec |
 
 Flash ran about 18 KB above `.text` through PR 2, and 22.3 KB in PR 3's
@@ -1896,6 +1896,54 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
     - The parity rows for a Device recipient and a More_Events page are
       left: the server needs a binding fixture (Who-Is, I-Am) and a page
       over its segmented budget, more than the rows are worth here.
+
+**#2319, Event Enrollment, 2026-11-12:**
+
+23. The slice plan (maintainer approved #2319 as the next multi-PR item).
+    - PR 1 moves the pure algorithms: `algorithms.rs`, `fault.rs` and
+      `reference.rs` (with the error type and classifier they share) to
+      `event::enrollment`, behind `event-enrollment` (on top of
+      `event-reporting`; `std` turns it on). The server's pass, commit and
+      support stay hosted and call them. `decode_event_parameter` was in
+      `bacnet-encoding` already, usable under `alloc`.
+    - PR 2 moves the pass and its commit (`mod.rs`, `commit.rs`,
+      `support.rs`, `api.rs`), swaps the hash collections for the B-tree
+      forms and returns what the server logged, as PR 3a and 3b did; with
+      it the hosted server's Event Enrollment runs on the core. Likely
+      split as 2a (moves) and 2b (changes).
+    - PR 3 runs the pass in the `Reporter`
+      (`ReportConfig::enrollment_interval`), distributes through the outbox,
+      adds the parity rows of §7.2 and a budgeted firmware row with the
+      feature on; the `reporting` row stays without it.
+    - Size, from a thumbv7m probe of PR 1's code in the `reporting` image
+      (the algorithms called, an Event Enrollment object in the database,
+      reverted after): 43.8 KB more `.text`, 48.9 KB more flash. Of the
+      named symbols, `decode_event_parameter` is 8.4 KB (22.5 KB with its
+      parts) and the object's own 5.2 KB; most of the algorithms inline
+      into their caller. With the pass and commit, PR 3's row is
+      estimated at 60-75 KB of flash over today's `reporting` row,
+      about twice the issue's 30-40 KB, for the same reason #2303's PR 3
+      estimate missed: the objects' share and the decoders. The
+      `reporting` image keeps the feature off, so its rows don't move; PR 3
+      adds a separate budgeted image with it on (lead).
+    - The timing keeps the pass model: Event Enrollment sees its monitored
+      value only at passes (the reference may be in another device, and a
+      write the core is told of may not touch it), so its delays count
+      passes, never early and up to one interval late, as today. No wire
+      change (lead). Due instants for local references could follow as a
+      decision of their own.
+    - References stay local only, as the server has them: one naming
+      another device is an observation gap at each pass (no transition,
+      continuity cleared). A host-supplied reader for remote references is
+      a later decision (lead).
+    - Order against #2524: its trim of the shared write-then-evaluate tail
+      lands before PR 3, since enrollment joins that tail; its trim of the
+      notification-parameter encoders keeps the enrollment forms behind
+      `event-enrollment` (lead).
+    - PR 1's modules are public for `bacnet-server` only, hidden from the
+      documentation, until PR 2a moves the pass (fix round, lead); the
+      legacy parameter encoders write a private layout, not a form the
+      standard defines.
 
 ## 12. Evidence
 

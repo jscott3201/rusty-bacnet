@@ -740,6 +740,32 @@
 # filter compiles only with `event-reporting`. The reporting budgets are
 # --suggest's again.
 #
+# On 2026-11-12 (#2532, Rust 1.99.0, dev at c958470e9) the staged-save
+# stale check #2529 added to bacnet-objects' reporting store compiles only
+# with its `durable-writes` feature, which the image leaves off: nothing
+# there stages, so no step can be stale. #2529 had linked the check, and
+# through its encoding fallback the write-configuration encoder and the
+# Event Enrollment parameter encoders, which also left the EventNotification
+# encoder inlined into `Reporter::distribute`. As text / rodata / flash,
+# #2528, dev, then this change; RAM unchanged at 24680:
+#
+#   thumbv7m             243316 / 21320 / 265660
+#                        253280 / 23604 / 277908
+#                        242744 / 21320 / 265088
+#   thumbv7em            243080 / 21320 / 265424
+#                        252896 / 23604 / 277524
+#                        242288 / 21320 / 264632
+#   riscv32imac          299228 / 26608 / 325858
+#                        311500 / 29300 / 340822
+#                        298324 / 26528 / 324874
+#
+# So 572 / 792 / 984 octets of flash under #2528, from the rest of #2529:
+# snapshots go to storage behind an Arc, and the store's kept path is
+# outlined from each object's write_property. The 12% headroom of
+# these rows hid the growth (12248 octets on thumbv7m, in about 31 KB of
+# room), so a PR touching the crates this image links reports its rows
+# against dev's. The objects rows didn't move. The reporting budgets are
+# --suggest's again.
 # On 2026-11-12 (#2524, Rust 1.99.0, dev at c958470e9, which carries
 # #2529's 12 KB; #2532 removes that) the event path is trimmed, each step
 # measured against the one before it, as octets of flash on thumbv7m /
@@ -867,11 +893,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [thumbv7m-none-eabi.reporting]
-text = 277760
-rodata = 25856
+text = 271888
+rodata = 23888
 data = 64
 bss = 27648
-flash = 304752
+flash = 296912
 ram = 27648
 fmt_functions = 0
 div64_functions = 0
@@ -1164,11 +1190,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [thumbv7em-none-eabihf.reporting]
-text = 277136
-rodata = 25856
+text = 271376
+rodata = 23888
 data = 64
 bss = 27648
-flash = 304128
+flash = 296400
 ram = 27648
 fmt_functions = 0
 div64_functions = 0
@@ -1197,11 +1223,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [riscv32imac-unknown-none-elf.reporting]
-text = 339744
-rodata = 32048
+text = 334128
+rodata = 29712
 data = 64
 bss = 27648
-flash = 371792
+flash = 363872
 ram = 27648
 fmt_functions = 0
 div64_functions = 0

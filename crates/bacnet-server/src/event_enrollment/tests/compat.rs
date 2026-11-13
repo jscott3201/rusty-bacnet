@@ -4,6 +4,9 @@
 //! Split out of `tests.rs` to keep every file under the 700-LOC cap.
 
 use super::super::*;
+use bacnet_device_core::event::enrollment::algorithms::{
+    encode_change_of_state_params, encode_out_of_range_params,
+};
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::binary::BinaryInputObject;
 use bacnet_objects::event_enrollment::EventEnrollmentObject;
