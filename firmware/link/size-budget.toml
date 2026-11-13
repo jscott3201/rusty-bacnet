@@ -766,32 +766,33 @@
 # room), so a PR touching the crates this image links reports its rows
 # against dev's. The objects rows didn't move. The reporting budgets are
 # --suggest's again.
-# On 2026-11-12 (#2524, Rust 1.99.0, dev at c958470e9, which carries
-# #2529's 12 KB; #2532 removes that) the event path is trimmed, each step
-# measured against the one before it, as octets of flash on thumbv7m /
-# thumbv7em / riscv32imac:
 #
-#   every change runs one out-of-line tail                8 /  144 /   52
+# On 2026-11-12 (#2524, Rust 1.99.0, dev at e454108ea) the event path is
+# trimmed, each step measured against the one before it, as octets of
+# flash on thumbv7m / thumbv7em / riscv32imac:
+#
+#   every change runs one out-of-line tail               12 /  144 /   56
 #   AcknowledgeAlarm and GetEventInformation out of
-#   Reporter::handle                                   1068 / 1104 / 1836
-#   the Event Log step comes from a log's vtable       1432 / 1440 / 2392
-#   the Reporter encodes the intrinsic forms only      3308 / 3296 / 4584
+#   Reporter::handle                                   1076 / 1112 / 1820
+#   the Event Log step comes from a log's vtable       1428 / 1424 / 2376
+#   the Reporter encodes the intrinsic forms only      3416 / 3416 / 4820
 #
 # As text / rodata / flash, dev then this change:
 #
-#   thumbv7m             253280 / 23604 / 277908
-#                        247992 / 23076 / 272092
-#   thumbv7em            252896 / 23604 / 277524
-#                        247440 / 23076 / 271540
-#   riscv32imac          311500 / 29300 / 340822
-#                        303332 / 28604 / 331958
+#   thumbv7m             242744 / 21320 / 265088
+#                        237332 / 20800 / 259156
+#   thumbv7em            242288 / 21320 / 264632
+#                        236712 / 20800 / 258536
+#   riscv32imac          298324 / 26528 / 324874
+#                        289932 / 25848 / 315802
 #
-# 5816 / 5984 / 8864 octets of flash; RAM unchanged (24680). core::fmt
+# 5932 / 6096 / 9072 octets of flash; RAM unchanged (24680). core::fmt
 # and the 64-bit division routines stay at 0, and the memmove count
 # doesn't move. The objects rows move by 8 octets of .text on the thumb
 # targets with no function changed in size (alignment), so their budgets
-# stay. The reporting budgets are --suggest's again, which puts them above
-# the last ones: #2529's growth came in after those were set.
+# stay. The thumb images would fit the 256 KiB layout again, by about
+# 3 KB; they keep the 512 KiB one (docs/design/device-core-events.md,
+# section 8.3). The reporting budgets are --suggest's again.
 
 [thumbv7m-none-eabi.mstp]
 text = 18320
@@ -893,11 +894,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [thumbv7m-none-eabi.reporting]
-text = 271888
-rodata = 23888
+text = 265824
+rodata = 23296
 data = 64
 bss = 27648
-flash = 296912
+flash = 290256
 ram = 27648
 fmt_functions = 0
 div64_functions = 0
@@ -1190,11 +1191,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [thumbv7em-none-eabihf.reporting]
-text = 271376
-rodata = 23888
+text = 265120
+rodata = 23296
 data = 64
 bss = 27648
-flash = 296400
+flash = 289568
 ram = 27648
 fmt_functions = 0
 div64_functions = 0
@@ -1223,11 +1224,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [riscv32imac-unknown-none-elf.reporting]
-text = 334128
-rodata = 29712
+text = 324736
+rodata = 28960
 data = 64
 bss = 27648
-flash = 363872
+flash = 353712
 ram = 27648
 fmt_functions = 0
 div64_functions = 0

@@ -1037,7 +1037,7 @@ image would link:
 |---|---|---|
 | PR 1, measured | 148.4 KB (flash 165.8 KB) | the `objects` image's 127.3 KB, plus the table and the two subscribe services (#2303) |
 | PR 2, measured | 171.4 KB (flash 189.7 KB) | the image through the `Reporter`, trimmed by #2363 (§8.3) |
-| + `event-reporting` (after PR 3) | 172-181 KB estimated; 243.2 KB measured (flash 265.6 KB); 248.0 KB with #2529's growth and #2524's trims (flash 272.1 KB) | ~2,200 lines, plus the measured objects and encoder share; see §8.3 for what dominates |
+| + `event-reporting` (after PR 3) | 172-181 KB estimated; 243.2 KB measured (flash 265.6 KB); 237.3 KB after #2524's trims (flash 259.2 KB) | ~2,200 lines, plus the measured objects and encoder share; see §8.3 for what dominates |
 | + `event-enrollment` (#2319) | 60-75 KB of flash over PR 3's measured row, estimated; a thumbv7m probe of the algorithms and one Event Enrollment object measured 43.8 KB of `.text`, 48.9 KB of flash (decision 23) | ~2,700 lines, the Event Enrollment object, `decode_event_parameter` |
 | + the Multiple path (#2320) | +15-25 KB estimated; +134 KB measured before any trim (decision 18) | ~3,300 lines, the COVNotificationMultiple codec |
 
@@ -1148,42 +1148,41 @@ intrinsic commit 2.4 KB. No `core::fmt`, no 64-bit division. The
 scenario's host heap peaks at 22,360 of its 24 KiB arena. #2524 trimmed
 it (below).
 
-Measured for #2524 (2026-11-12, dev at `c958470e9`, which carries the
-12.2 KB #2529 added and #2532 removes), each trim against the one before
-it, in octets of flash; RAM, `core::fmt`, the 64-bit division routines
-and the memmove count unchanged, and wire bytes unchanged (the core's
-tests, the parity corpus and the image's own expected summary):
+Measured for #2524 (2026-11-12, dev at `e454108ea`), each trim against
+the one before it, in octets of flash; RAM, `core::fmt`, the 64-bit
+division routines and the memmove count unchanged, and wire bytes
+unchanged (the core's tests, the parity corpus and the image's own
+expected summary):
 
 | Trim | thumbv7m | thumbv7em | riscv32imac |
 |---|---|---|---|
-| Every change runs one out-of-line tail, `Reporter::after_change`: a request's write, the host's (and so the local writes), and the background passes | 8 | 144 | 52 |
-| AcknowledgeAlarm and GetEventInformation out of `Reporter::handle` | 1,068 | 1,104 | 1,836 |
-| The Event Log step reached through a log's `LogBuffer` vtable, so an image with no log links none of it | 1,432 | 1,440 | 2,392 |
-| The `Reporter` encodes only the five event-value forms its projections build (`event::INTRINSIC_FORMS`, a mask for bacnet-encoding's `encode_event_notification_of`) | 3,308 | 3,296 | 4,584 |
-| **Total** (flash: 277,908 to 272,092 on thumbv7m, 277,524 to 271,540, 340,822 to 331,958) | **5,816** | **5,984** | **8,864** |
+| Every change runs one out-of-line tail, `Reporter::after_change`: a request's write, the host's (and so the local writes), and the background passes | 12 | 144 | 56 |
+| AcknowledgeAlarm and GetEventInformation out of `Reporter::handle` | 1,076 | 1,112 | 1,820 |
+| The Event Log step reached through a log's `LogBuffer` vtable, so an image with no log links none of it | 1,428 | 1,424 | 2,376 |
+| The `Reporter` encodes only the five event-value forms its projections build (`event::INTRINSIC_FORMS`, a mask for bacnet-encoding's `encode_event_notification_of`) | 3,416 | 3,416 | 4,820 |
+| **Total** (flash: 265,088 to 259,156 on thumbv7m, 264,632 to 258,536, 324,874 to 315,802) | **5,932** | **6,096** | **9,072** |
 
 The tail saves next to nothing, since its two steps were out of line
 already; it is there for #2319, whose enrollment pass joins the changes
 it reports through it (`Tail::Committed`, beside a request's write and
-the host's change). Without `event-enrollment` the encoder mask stays
-the intrinsic one; #2319 PR 3 widens it to every form behind that
-feature. `handle` falls from 25.8 KB to 18.9 KB of `.text`, and inlining
-the two services had cost about 1 KB more than calling them.
+the host's change). The encoder mask is every form with
+`event-enrollment`, for that pass, and the intrinsic one without it, as
+the image builds. `handle` falls from 25.8 KB to 18.9 KB of `.text`:
+inlined, the two services had cost about 1 KB more than called.
 
 What remains large (thumbv7m `.text`): `handle` with the `Responder`'s
 read and write paths and the subscribe services (18.9 KB), the
 scenario's own `run` (15.9 KB), `Reporter::report` (8.0 KB),
-distribution with the encoder (5.9 KB), the GetEventInformation page
-(4.5 KB), and in `bacnet-objects` the write-config code #2532 removes
-(about 13.7 KB), staged-save code linked with `durable-writes` off (about
-2.5 KB, the Notification Class's included) and the Notification Class
-(5.4 KB). The per-type event code is small: about 650 octets for each of
-AI and BV, mostly the detector each inlines, so no table or shared
-generic pays on this image. With #2532's 12.2 KB gone the thumb images
-should come to about 259.8 KB of flash, inside 256 KiB by about 2 KB:
-too little to take the 256 KiB layout back, since the next change to the
-event path would cross it, and Event Enrollment (#2319) needs a 512 KB
-part anyway.
+distribution with the encoder (7.0 KB), the GetEventInformation page
+(4.4 KB), and in `bacnet-objects` the write-config store (7.7 KB),
+staged-save code linked with `durable-writes` off (about 2.5 KB, and
+3.6 KB of the object profile's saving), the Notification Class (5.9 KB)
+and the event code (5.0 KB). The per-type event code is small: about 650
+octets for each of AI and BV, mostly the detector each inlines, so no
+table or shared generic pays on this image. The thumb images would fit
+256 KiB again, by about 3 KB: too little to take that layout back, since
+the next change to the event path would cross it, and Event Enrollment
+(#2319) needs a 512 KB part anyway.
 
 ## 9. Risks
 
