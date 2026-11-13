@@ -15,7 +15,7 @@
 use alloc::vec::Vec;
 
 use bacnet_encoding::apdu::{AbortPdu, Apdu, ComplexAck, SimpleAck, decode_apdu};
-use bacnet_encoding::constructed::encode_event_notification;
+use bacnet_encoding::constructed::encode_event_notification_of;
 use bacnet_encoding::npdu::view::NetworkPriority;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::event::EventTransition;
@@ -35,13 +35,19 @@ use super::{Reporter, Tail};
 use crate::cov::life_safety::LifeSafetyCovSnapshots;
 use crate::cov::{Delivery, Token};
 use crate::event::{
-    DistributionOutcome, EventInformationFailure, GetEventInformationBudget, MessageTexts,
-    NotificationTransition, RecipientWindow, acknowledge, after_write, distribute_event,
-    fault_pass, handle_acknowledge_alarm, handle_get_event_information_configured,
-    network_priority, next_due, read_committed_history_snapshot, sweep,
+    DistributionOutcome, EventInformationFailure, GetEventInformationBudget, INTRINSIC_FORMS,
+    MessageTexts, NotificationTransition, RecipientWindow, acknowledge, after_write,
+    distribute_event, fault_pass, handle_acknowledge_alarm,
+    handle_get_event_information_configured, network_priority, next_due,
+    read_committed_history_snapshot, sweep,
 };
 use crate::reply::{self, SEGMENTED, emit};
 use crate::responder::{Inbound, Outcome, Written};
+
+/// The event-value forms the reporter's notifications carry: those
+/// intrinsic reporting builds, so an image links no other form's encoder
+/// (#2524). An acknowledgement's notification carries none.
+const REPORTED_FORMS: u32 = INTRINSIC_FORMS;
 
 /// The event path's schedule.
 #[derive(Debug)]
@@ -362,7 +368,7 @@ impl Reporter {
             let mut targeted = notification.clone();
             targeted.process_identifier = process_identifier;
             let mut params = BytesMut::new();
-            if encode_event_notification(&targeted, &mut params).is_err() {
+            if encode_event_notification_of::<REPORTED_FORMS>(&targeted, &mut params).is_err() {
                 self.counters.events_dropped += 1;
                 continue;
             }

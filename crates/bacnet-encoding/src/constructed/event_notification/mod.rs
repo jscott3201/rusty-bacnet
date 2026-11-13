@@ -51,7 +51,10 @@ fn is_opaque_tag(tag: u8) -> bool {
 }
 
 pub use parameters_decode::decode_notification_parameters;
-pub use parameters_encode::encode_notification_parameters;
+pub use parameters_encode::{
+    ALL_NOTIFICATION_FORMS, encode_notification_parameters, encode_notification_parameters_of,
+    notification_forms,
+};
 pub use tolerant::decode_event_notification_tolerant;
 
 /// Append the encoded request parameters to `buf`; `buf` is unchanged if validation fails.
@@ -59,14 +62,28 @@ pub fn encode_event_notification(
     request: &EventNotificationRequest,
     buf: &mut BytesMut,
 ) -> Result<(), Error> {
+    encode_event_notification_of::<ALL_NOTIFICATION_FORMS>(request, buf)
+}
+
+/// [`encode_event_notification`] for a sender whose event values take
+/// only the forms the mask `FORMS` takes
+/// ([`encode_notification_parameters_of`]): a request carrying another form
+/// is refused, with `buf` unchanged.
+pub fn encode_event_notification_of<const FORMS: u32>(
+    request: &EventNotificationRequest,
+    buf: &mut BytesMut,
+) -> Result<(), Error> {
     let mut encoded = BytesMut::new();
-    encode_into(request, &mut encoded)?;
+    encode_into::<FORMS>(request, &mut encoded)?;
     validate_tlv_sequence(&encoded, "EventNotification").map_err(Error::into_encode_refusal)?;
     buf.extend_from_slice(&encoded);
     Ok(())
 }
 
-fn encode_into(request: &EventNotificationRequest, buf: &mut BytesMut) -> Result<(), Error> {
+fn encode_into<const FORMS: u32>(
+    request: &EventNotificationRequest,
+    buf: &mut BytesMut,
+) -> Result<(), Error> {
     // [0] processIdentifier
     primitives::encode_ctx_unsigned(buf, 0, request.process_identifier as u64);
     // [1] initiatingDeviceIdentifier
@@ -102,7 +119,7 @@ fn encode_into(request: &EventNotificationRequest, buf: &mut BytesMut) -> Result
         && let Some(ref params) = request.event_values
     {
         tags::encode_opening_tag(buf, 12);
-        encode_notification_parameters(params, buf)?;
+        encode_notification_parameters_of::<FORMS>(params, buf)?;
         tags::encode_closing_tag(buf, 12);
     }
     Ok(())

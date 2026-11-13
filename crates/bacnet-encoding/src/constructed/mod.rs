@@ -120,7 +120,8 @@ alloc_only! {
     pub use event_log_record::{decode_event_log_record, encode_event_log_record};
     pub use event_notification::{
         decode_event_notification, decode_event_notification_tolerant, decode_notification_parameters,
-        encode_event_notification, encode_notification_parameters,
+        encode_event_notification, encode_event_notification_of, encode_notification_parameters,
+        encode_notification_parameters_of, notification_forms, ALL_NOTIFICATION_FORMS,
     };
     pub use event_notification_subscription::{
         decode_event_notification_subscription, encode_event_notification_subscription,
