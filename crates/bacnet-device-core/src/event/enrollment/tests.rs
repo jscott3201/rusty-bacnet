@@ -4,7 +4,6 @@
 
 use alloc::boxed::Box;
 use alloc::vec;
-use alloc::vec::Vec;
 
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::database::ObjectDatabase;
@@ -323,29 +322,26 @@ fn the_fingerprint_follows_each_input_but_the_device() {
         };
     let first = print(&base);
     assert_eq!(first, print(&base.clone()), "stable");
-    let mut changes = Vec::new();
-    changes.push((params(90.0), base.1, base.2, base.3));
-    changes.push((base.0.clone(), 2, base.2, base.3));
-    changes.push((base.0.clone(), base.1, EventType::FLOATING_LIMIT, base.3));
-    changes.push((
-        base.0.clone(),
-        base.1,
-        base.2,
-        MonitoredReference::local(ai(2), pv, None),
-    ));
     let other = PropertyIdentifier::RELIABILITY;
-    changes.push((
-        base.0.clone(),
-        base.1,
-        base.2,
-        MonitoredReference::local(ai(1), other, None),
-    ));
-    changes.push((
-        base.0.clone(),
-        base.1,
-        base.2,
-        MonitoredReference::local(ai(1), pv, Some(0)),
-    ));
+    let reference = |object, property, index| MonitoredReference::local(object, property, index);
+    let changes = [
+        (params(90.0), base.1, base.2, base.3),
+        (base.0.clone(), 2, base.2, base.3),
+        (base.0.clone(), base.1, EventType::FLOATING_LIMIT, base.3),
+        (base.0.clone(), base.1, base.2, reference(ai(2), pv, None)),
+        (
+            base.0.clone(),
+            base.1,
+            base.2,
+            reference(ai(1), other, None),
+        ),
+        (
+            base.0.clone(),
+            base.1,
+            base.2,
+            reference(ai(1), pv, Some(0)),
+        ),
+    ];
     for change in &changes {
         assert_ne!(print(change), first, "{change:?}");
     }
