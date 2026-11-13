@@ -8812,11 +8812,16 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   `sample_event_timestamp`), the message text, and the Event Values
   (`project_intrinsic_payload`, and `project_event_enrollment_payload`,
   which the server's Event Enrollment uses) are public too.
-  With the `event-enrollment` feature (#2319), `event::enrollment` holds
-  Event Enrollment's event and fault algorithms, moved from
-  `bacnet-server`, whose pass calls them. They are internal, public for the
-  server alone and hidden from the documentation, until the pass moves
-  too.
+  With the `event-enrollment` feature and `std` (#2319),
+  `event::enrollment::evaluate_event_enrollments_for_delivery(db,
+  interval_secs)` runs Event Enrollment's evaluation pass, moved from
+  `bacnet-server`, under the host's database guard: it returns an
+  `EventEnrollmentEvaluationBatch` with the `EventEnrollmentEvaluationReport`
+  (transitions, reliability results, diagnostics), the committed
+  transitions to distribute (`CommittedEventEnrollmentDelivery`) and the
+  ones whose payload was refused (`SuppressedDelivery`), which the host
+  logs. The algorithms it runs stay internal. `bacnet-server` drives it on
+  its task and re-exports the report types.
   `handle_acknowledge_alarm` runs AcknowledgeAlarm, decoding it and
   calling `acknowledge(db, oid, state, timestamp)`, the path a local
   acknowledgement runs too, and

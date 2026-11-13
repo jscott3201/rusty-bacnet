@@ -72,8 +72,7 @@ event-reporting = ["bacnet-objects/event-reporting"]
 event-enrollment = ["event-reporting"]
 # Hidden hooks for hosts' own tests (the COV table's generation counter, so
 # bacnet-server's table tests reach generation exhaustion, an event payload
-# built without a projection, GetEventInformation within a byte budget, and
-# `event::enrollment::reference::MonitoredReference::local`).
+# built without a projection, and GetEventInformation within a byte budget).
 # bacnet-server turns it on for its tests only, through a dev-dependency;
 # never enable it in a product build.
 test-support = []

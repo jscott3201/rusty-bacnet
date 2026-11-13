@@ -32,7 +32,7 @@
 //! 13.2.2.1.4's actions even when its target equals the current state — the
 //! specific returned state is stored in `Event_State`, the corresponding
 //! `Acked_Transitions` bit is set/cleared per the referenced Notification
-//! Class's `Ack_Required` (Clause 13.2.3), and the transition is emitted with
+//! Class's `Ack_Required` (Clause 13.2.3); the transition then goes out with
 //! its `Event_Enable`-scoped `distribute` flag. What is NOT here, by design:
 //! `Event_Time_Stamps` and `Event_Message_Texts` are committed atomically
 //! with `Event_State` and `Acked_Transitions`. The server has no message text
@@ -709,10 +709,10 @@ pub fn evaluate_event_enrollments_for_delivery(
             BACnetEventParameter::None => (0, eval_none_arm(current_state)),
             BACnetEventParameter::Opaque { .. } => continue,
             // Extended [9] and the algorithms this evaluator doesn't run
-            // (command-failure, change-of-life-safety, buffer-ready,
-            // unsigned-range, access-event, the typed out-of-range forms,
-            // change-of-characterstring, change-of-status-flags,
-            // change-of-discrete-value, change-of-timer) produce no
+            // (COMMAND_FAILURE, CHANGE_OF_LIFE_SAFETY, BUFFER_READY,
+            // UNSIGNED_RANGE, ACCESS_EVENT, the typed out-of-range forms,
+            // CHANGE_OF_CHARACTERSTRING, CHANGE_OF_STATUS_FLAGS,
+            // CHANGE_OF_DISCRETE_VALUE, CHANGE_OF_TIMER) produce no
             // transition here, as when they were kept as `Opaque` (#2090).
             _ => continue,
         };
