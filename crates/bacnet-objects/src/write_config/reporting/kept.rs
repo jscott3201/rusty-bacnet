@@ -167,6 +167,14 @@ impl DetectorFields {
 }
 
 impl Kept {
+    /// [`into_after`](Self::into_after) on a copy, for a stage, which keeps
+    /// these rows for its next step.
+    // durable-writes: only a stage works a write out on a copy.
+    #[cfg(feature = "durable-writes")]
+    fn after(&self, write: &PendingWrite, object: &dyn KeepsReporting) -> Result<Self, Error> {
+        self.clone().into_after(write, object)
+    }
+
     /// What `write` leaves on top of this, or the object's refusal of it;
     /// `object` answers for what is its own: its Notify_Type rule
     /// ([`KeepsReporting::takes_notify_type`]) and its algorithm parameters
@@ -175,9 +183,17 @@ impl Kept {
     /// storage keeps is refused with RESOURCES / NO_SPACE_TO_WRITE_PROPERTY,
     /// before anything is saved, so every backend gives that answer (#1952),
     /// once the texts are written and so kept.
-    fn after(&self, write: &PendingWrite, object: &dyn KeepsReporting) -> Result<Self, Error> {
-        let mut next = self.clone();
-        let rows = &mut next.rows;
+    ///
+    /// Worked out on these rows themselves, not a copy (#2526): a write made
+    /// as it is admitted needs the rows before it no more. A refused write
+    /// leaves them part changed, so they go with the refusal.
+    fn into_after(
+        mut self,
+        write: &PendingWrite,
+        object: &dyn KeepsReporting,
+    ) -> Result<Self, Error> {
+        let object_type = self.object_type;
+        let rows = &mut self.rows;
         let value = &write.value;
         match write.property {
             P::NOTIFICATION_CLASS | P::EVENT_ENABLE | P::NOTIFY_TYPE => {
@@ -197,7 +213,7 @@ impl Kept {
             },
             // Past its cap it is refused before anything is saved (#2364).
             P::DESCRIPTION => rows.description = description::written(value)?,
-            property if parameters::kept_bit(self.object_type, property).is_some() => {
+            property if parameters::kept_bit(object_type, property).is_some() => {
                 object.parameter_after(&mut rows.algorithm, write)?;
             }
             property => rows
@@ -210,17 +226,17 @@ impl Kept {
                 )
                 .unwrap_or_else(|| Err(common::unknown_property_error()))?,
         }
-        next.written.set(self.object_type, write.property);
+        self.written.set(object_type, write.property);
         // Only texts storage will keep count: a long one the object took
         // before it had storage is no reason to refuse another row.
-        let texts = next.rows.options.message_texts_config();
-        if next.written.texts && texts.iter().any(|text| text.len() > MAX_KEPT_TEXT_OCTETS) {
+        let texts = self.rows.options.message_texts_config();
+        if self.written.texts && texts.iter().any(|text| text.len() > MAX_KEPT_TEXT_OCTETS) {
             return Err(common::protocol_error(
                 ErrorClass::RESOURCES,
                 ErrorCode::NO_SPACE_TO_WRITE_PROPERTY,
             ));
         }
-        Ok(next)
+        Ok(self)
     }
 
     /// What storage keeps of this: the rows a write set.
@@ -425,7 +441,7 @@ fn store_snapshot<T: KeepsReporting>(written: &Written, object: &T) -> Saved {
 }
 
 /// `object`'s rows as it serves them, `written` those a write set.
-fn kept<T: KeepsReporting>(written: Written, object: &T) -> Kept {
+fn kept(written: Written, object: &dyn KeepsReporting) -> Kept {
     Kept {
         rows: object.reporting_rows(),
         written,
@@ -538,6 +554,9 @@ fn admit_kept<T: KeepsReporting>(
 }
 
 /// [`admit`] on the store taken out of its object, whose rows are `current`.
+/// The write is worked out on `current` itself (#2526); should storage go
+/// back to the rows before it, they are worked out again from `object`,
+/// which makes the write only once this returns.
 fn admit_to(
     store: &mut ReportingStore,
     current: Kept,
@@ -555,7 +574,9 @@ fn admit_to(
     // (a crash inside that window leaves a file that loads, with that
     // State_Text). A write the object refuses also leaves another
     // request's staged write alone (#1424).
-    let next = current.after(write, object)?;
+    let written = current.written;
+    let next = current.into_after(write, object)?;
+    let served = || kept(written, object).stored();
     #[cfg(feature = "durable-writes")]
     let claimed = claim(storage, write, store.writes, &next, object);
     // Without durable-writes nothing stages: the built-in objects don't
@@ -578,14 +599,16 @@ fn admit_to(
             storage.correct(|| next.stored());
         }
         Some(Err(_)) => {
-            storage.correct(|| current.stored());
+            // Defensive: a failed claim drops its staged write without
+            // leaving a correction, so `served` isn't called today.
+            storage.correct(served);
             return Err(operational_problem());
         }
         None => {
             storage.drop_staged();
             // Storage goes back to the served rows first, should the save
             // below fail.
-            storage.correct(|| current.stored());
+            storage.correct(served);
             storage
                 .save_now(next.stored())
                 .map_err(|_| operational_problem())?;

@@ -363,7 +363,9 @@ pub(crate) fn state_text_after(
     rows: &mut crate::write_config::AlgorithmWriteConfig,
     write: &crate::durable::PendingWrite,
 ) -> Result<(), Error> {
-    let mut texts = rows.state_text.clone().unwrap_or_else(|| served.to_vec());
+    // Taken, not copied (#2526): on a refusal `rows`, a working copy, are
+    // dropped with it.
+    let mut texts = rows.state_text.take().unwrap_or_else(|| served.to_vec());
     let mut count = u32::try_from(texts.len()).unwrap_or(u32::MAX);
     let alarm_values = rows.alarm_values.iter().flatten().copied();
     let held = held.into_iter().chain(alarm_values);
