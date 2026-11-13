@@ -72,9 +72,9 @@ fn saved_description(storage: &MemoryConfig) -> Option<String> {
         .and_then(|saved| saved.description().map(Into::into))
 }
 
-#[cfg(feature = "durable-writes")]
 /// Run `check` on a Timer, with Default_Timeout as the part it keeps beside
 /// Description, and on a Channel, with Channel_Number.
+#[cfg(feature = "durable-writes")]
 fn on_each_config_object(
     check: impl Fn(&dyn Fn(&Arc<MemoryConfig>) -> Box<dyn KeptObject>, P, PropertyValue),
 ) {
@@ -90,14 +90,24 @@ fn on_each_config_object(
     );
 }
 
-#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
+/// What an object with storage needs beyond `BACnetObject`: its staging, when
+/// the build has it.
+#[cfg(feature = "durable-writes")]
+trait Staging: DurableWrites {}
+#[cfg(feature = "durable-writes")]
+impl<T: DurableWrites> Staging for T {}
+#[cfg(not(feature = "durable-writes"))]
+trait Staging {}
+#[cfg(not(feature = "durable-writes"))]
+impl<T> Staging for T {}
+
 /// An object with storage, as the server reaches it.
-trait KeptObject: BACnetObject + DurableWrites {
+trait KeptObject: BACnetObject + Staging {
     fn object(&self) -> &dyn BACnetObject;
     fn object_mut(&mut self) -> &mut dyn BACnetObject;
 }
 
-impl<T: BACnetObject + DurableWrites> KeptObject for T {
+impl<T: BACnetObject + Staging> KeptObject for T {
     fn object(&self) -> &dyn BACnetObject {
         self
     }
@@ -107,7 +117,6 @@ impl<T: BACnetObject + DurableWrites> KeptObject for T {
     }
 }
 
-#[cfg(feature = "durable-writes")]
 #[test]
 fn a_written_description_survives_a_rebuild() {
     on_each_config_object(|open, _, _| {
@@ -121,7 +130,6 @@ fn a_written_description_survives_a_rebuild() {
     });
 }
 
-#[cfg(feature = "durable-writes")]
 #[test]
 fn a_description_whose_save_fails_is_refused_with_the_old_value_kept() {
     on_each_config_object(|open, _, _| {
@@ -140,7 +148,6 @@ fn a_description_whose_save_fails_is_refused_with_the_old_value_kept() {
     });
 }
 
-#[cfg(feature = "durable-writes")]
 /// A NULL changes nothing and saves nothing; one past the cap, or of
 /// another type, is refused before anything is saved.
 #[test]
@@ -151,10 +158,13 @@ fn a_null_saves_nothing_and_a_refused_description_saves_nothing() {
         write(object.object_mut(), P::DESCRIPTION, text("lobby")).unwrap();
         write(object.object_mut(), P::DESCRIPTION, PropertyValue::Null).unwrap();
         assert_eq!(description(object.object()), text("lobby"));
-        let null = pending(P::DESCRIPTION, PropertyValue::Null);
-        assert!(matches!(object.stage_writes(&[null]), StageStep::Skip));
-        let long = object.stage_writes(&[pending(P::DESCRIPTION, too_long())]);
-        assert!(matches!(long, StageStep::Skip));
+        #[cfg(feature = "durable-writes")]
+        {
+            let null = pending(P::DESCRIPTION, PropertyValue::Null);
+            assert!(matches!(object.stage_writes(&[null]), StageStep::Skip));
+            let long = object.stage_writes(&[pending(P::DESCRIPTION, too_long())]);
+            assert!(matches!(long, StageStep::Skip));
+        }
         let result = write(object.object_mut(), P::DESCRIPTION, too_long());
         assert!(refused_with(
             &result,
@@ -176,9 +186,9 @@ fn a_null_saves_nothing_and_a_refused_description_saves_nothing() {
     });
 }
 
-#[cfg(feature = "durable-writes")]
 /// A request writing Description and another kept part stages one save,
 /// and each write takes it without saving again.
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_request_writing_description_and_another_part_saves_once() {
     on_each_config_object(|open, property, value| {
@@ -332,16 +342,18 @@ mod reporting {
         assert_eq!(description(&plain), text("configured"));
     }
 
-    #[cfg(feature = "durable-writes")]
     #[test]
     fn a_null_or_refused_description_saves_nothing() {
         let storage = MemoryConfig::new();
         let mut object = ai(&storage);
         write(&mut object, P::DESCRIPTION, PropertyValue::Null).unwrap();
-        let null = pending(P::DESCRIPTION, PropertyValue::Null);
-        assert!(matches!(object.stage_writes(&[null]), StageStep::Skip));
-        let long = pending(P::DESCRIPTION, too_long());
-        assert!(matches!(object.stage_writes(&[long]), StageStep::Skip));
+        #[cfg(feature = "durable-writes")]
+        {
+            let null = pending(P::DESCRIPTION, PropertyValue::Null);
+            assert!(matches!(object.stage_writes(&[null]), StageStep::Skip));
+            let long = pending(P::DESCRIPTION, too_long());
+            assert!(matches!(object.stage_writes(&[long]), StageStep::Skip));
+        }
         let result = write(&mut object, P::DESCRIPTION, too_long());
         assert!(refused_with(
             &result,
@@ -373,9 +385,9 @@ mod reporting {
         assert_eq!(storage.saves(), 1);
     }
 
-    #[cfg(feature = "durable-writes")]
     /// A request writing Description and a reporting setting stages one
     /// save, which both writes take.
+    #[cfg(feature = "durable-writes")]
     #[test]
     fn a_request_writing_description_and_a_setting_saves_once() {
         let storage = MemoryConfig::new();

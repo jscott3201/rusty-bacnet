@@ -267,8 +267,8 @@ impl SaveWait {
         Self { event, then: None }
     }
 
-    #[cfg(feature = "durable-writes")]
     /// A wait that ends once both this wait and `other` have.
+    #[cfg(feature = "durable-writes")]
     pub(crate) fn and(self, other: SaveWait) -> SaveWait {
         let then = match self.then {
             Some(then) => SaveWait::clone(&then).and(other),
@@ -381,12 +381,12 @@ impl SaveTicket {
         SaveWait::new(Arc::clone(&self.slot.done))
     }
 
-    #[cfg(feature = "durable-writes")]
     /// Whether `wait` is the one [`wait`](Self::wait) hands out for this
     /// save, or a wait [joined](SaveWait::and) with it, so a request
     /// releasing a staged write can show it staged it. A colour object
     /// stages a Tags write and a default write for one request, and hands
     /// it their two waits joined (#1956).
+    #[cfg(feature = "durable-writes")]
     pub(crate) fn issued(&self, wait: &SaveWait) -> bool {
         Arc::ptr_eq(&self.slot.done, &wait.event)
             || wait.then.as_deref().is_some_and(|then| self.issued(then))

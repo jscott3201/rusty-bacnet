@@ -105,9 +105,9 @@ use super::{
 };
 use crate::clock::UNSPECIFIED_DATETIME;
 use crate::common;
-use crate::durable::staged::StagedSaves;
 #[cfg(feature = "durable-writes")]
-use crate::durable::staged::{self};
+use crate::durable::staged;
+use crate::durable::staged::StagedSaves;
 #[cfg(feature = "durable-writes")]
 use crate::durable::{DurableWrites, SaveWait, StageStep};
 use crate::durable::{PendingWrite, SaveWriter};

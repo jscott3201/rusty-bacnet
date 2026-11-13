@@ -30,8 +30,8 @@ pub(super) struct Held {
     pub(super) go: mpsc::Sender<()>,
 }
 
-#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 /// Long enough for any wait on another thread in these tests.
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 pub(super) const WAIT: Duration = Duration::from_secs(10);
 
 impl MemoryPersistence {
@@ -112,8 +112,8 @@ pub(super) fn persistent(storage: &Arc<MemoryPersistence>) -> NotificationClass 
     .unwrap()
 }
 
-#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 /// Block until `wait` is over, failing after [`WAIT`].
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 pub(super) fn block_on(wait: &SaveWait) {
     let (done, finished) = mpsc::channel();
     let blocking = wait.clone();

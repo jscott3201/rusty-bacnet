@@ -149,9 +149,9 @@ fn a_write_that_cannot_be_saved_is_refused_and_the_old_value_stays() {
     assert!(!channel.saved().groups);
 }
 
-#[cfg(feature = "durable-writes")]
 /// A WritePropertyMultiple's writes to one Channel stage one save of what
 /// they leave together, and each takes its step (#1423).
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_requests_writes_stage_one_save() {
     let storage = MemoryConfig::new();

@@ -218,12 +218,12 @@ impl OutputStorage {
         }
     }
 
-    #[cfg(feature = "durable-writes")]
     /// Stage the writes storage keeps among a request's `writes` (see
     /// [`DurableWrites::stage_writes`](crate::durable::DurableWrites::stage_writes)):
     /// those to `property`, the object's default, for which `decode` gives
     /// the default each leaves or the object's refusal, and those of a
     /// Description other than a NULL (#2364).
+    #[cfg(feature = "durable-writes")]
     pub(super) fn stage_kept(
         &mut self,
         writes: &[PendingWrite],
@@ -352,8 +352,8 @@ impl OutputStorage {
         Ok(())
     }
 
-    #[cfg(feature = "durable-writes")]
     /// See [`DurableWrites::release_staged_write`](crate::durable::DurableWrites::release_staged_write).
+    #[cfg(feature = "durable-writes")]
     pub(super) fn release(&mut self, staged: &SaveWait) {
         if let Some(store) = self.0.as_deref_mut() {
             store.saves.release(staged);
@@ -361,14 +361,14 @@ impl OutputStorage {
         }
     }
 
-    #[cfg(feature = "durable-writes")]
     /// Whether a default or Description write is staged.
+    #[cfg(feature = "durable-writes")]
     pub(super) fn has_staged(&self) -> bool {
         self.0.as_ref().is_some_and(|store| store.saves.is_staged())
     }
 
-    #[cfg(feature = "durable-writes")]
     /// See [`DurableWrites::expire_staged`](crate::durable::DurableWrites::expire_staged).
+    #[cfg(feature = "durable-writes")]
     pub(super) fn expire(&mut self, now: Duration) {
         if let Some(store) = self.0.as_deref_mut() {
             store.saves.expire(now);
@@ -376,10 +376,10 @@ impl OutputStorage {
         }
     }
 
-    #[cfg(feature = "durable-writes")]
     /// Settle, as the server stops: drop a forgotten staged default, queue
     /// the served state again if the last save failed, and return the wait
     /// for every save queued so far. `None` without storage.
+    #[cfg(feature = "durable-writes")]
     pub(super) fn settle(&mut self) -> Option<SaveWait> {
         let store = self.0.as_deref_mut()?;
         store.saves.drop_staged();

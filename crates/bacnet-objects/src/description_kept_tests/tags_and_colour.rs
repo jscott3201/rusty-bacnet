@@ -43,12 +43,6 @@ fn lent(object: &mut dyn BACnetObject) -> Option<&mut dyn DurableWrites> {
     object.durable_writes()
 }
 
-#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
-#[cfg(not(feature = "durable-writes"))]
-fn lent(_: &mut dyn BACnetObject) -> Option<&mut dyn DurableWrites> {
-    None
-}
-
 kept_object!(
     DeviceObject,
     |device| lent(device),
@@ -177,7 +171,6 @@ pub(super) fn cases(saved: Option<&str>) -> Vec<Box<dyn Kept>> {
     ]
 }
 
-#[cfg(feature = "durable-writes")]
 /// A Tags user that keeps its Description elsewhere, or nowhere, refuses
 /// storage holding one, writes nothing to it, and never stages or saves a
 /// Description there: its file stays version 1.
@@ -203,8 +196,11 @@ fn a_tags_user_that_keeps_no_description_refuses_and_never_saves_one() {
     let storage = Memory::holding(None);
     let mut state = ProfileState::persistent(object, storage.clone(), false).unwrap();
     state.provision(configured()).unwrap();
-    let step = state.stage_writes(&[pending(P::DESCRIPTION, text("lobby"))]);
-    assert!(matches!(step, StageStep::Skip));
+    #[cfg(feature = "durable-writes")]
+    {
+        let step = state.stage_writes(&[pending(P::DESCRIPTION, text("lobby"))]);
+        assert!(matches!(step, StageStep::Skip));
+    }
     let mut served = String::new();
     assert!(
         state

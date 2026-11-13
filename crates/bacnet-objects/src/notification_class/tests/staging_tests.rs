@@ -42,9 +42,9 @@ fn busy(step: StageStep) -> SaveWait {
     }
 }
 
-#[cfg(feature = "durable-writes")]
 /// Stage a Recipient_List write of `list`, wait for its save, and return
 /// the wait to release it with.
+#[cfg(feature = "durable-writes")]
 fn stage_saved(nc: &mut NotificationClass, list: &[BACnetDestination]) -> SaveWait {
     let wait = staged(nc.stage_write(P::RECIPIENT_LIST, None, &framed(list)));
     block_on(&wait);

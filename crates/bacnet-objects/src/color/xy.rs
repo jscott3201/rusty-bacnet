@@ -245,9 +245,9 @@ impl ColorObject {
         self.output.clear_written_description()
     }
 
-    #[cfg(feature = "durable-writes")]
     /// Stage the request's Default_Color and Description writes on the
     /// output storage.
+    #[cfg(feature = "durable-writes")]
     fn stage_default(&mut self, writes: &[crate::durable::PendingWrite]) -> StageStep {
         self.output
             .stage_kept(writes, PropertyIdentifier::DEFAULT_COLOR, written_default)

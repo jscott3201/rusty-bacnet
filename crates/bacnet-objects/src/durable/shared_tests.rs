@@ -13,9 +13,9 @@ impl Wake for Flag {
     }
 }
 
-#[cfg(feature = "durable-writes")]
 /// A joined wait ends only once every wait in it has, in either order, and
 /// wakes its task for the later one (#1526).
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_joined_wait_ends_with_the_last_of_its_waits() {
     for first_set in [0, 2] {

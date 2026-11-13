@@ -33,8 +33,8 @@ fn pending(property: P, array_index: Option<u32>, value: PropertyValue) -> Pendi
     }
 }
 
-#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 /// Make `write` as the handler would.
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 fn make(rights: &mut AccessRightsObject, write: &PendingWrite) -> Result<(), Error> {
     super::test_storage::write(
         rights,
@@ -44,9 +44,9 @@ fn make(rights: &mut AccessRightsObject, write: &PendingWrite) -> Result<(), Err
     )
 }
 
-#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 /// A head end provisioning the object: both rule arrays and Enable, then an
 /// element write that edits the array the first write left.
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 fn provisioning() -> Vec<PendingWrite> {
     vec![
         pending(
@@ -60,8 +60,8 @@ fn provisioning() -> Vec<PendingWrite> {
     ]
 }
 
-#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 /// What storage holds once every write of [`provisioning`] is made.
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 fn provisioned() -> AccessRightsSnapshot {
     AccessRightsSnapshot {
         positive_access_rules: Some(vec![zone_rule(1), zone_rule(4)]),

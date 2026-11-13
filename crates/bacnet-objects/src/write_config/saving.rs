@@ -61,8 +61,8 @@ pub(crate) trait ConfigWrites {
     /// The storage, once the object has it.
     fn storage(&mut self) -> &mut Option<Storage<Self::Config>>;
 
-    #[cfg(feature = "durable-writes")]
     /// The storage, for a look.
+    #[cfg(feature = "durable-writes")]
     fn storage_ref(&self) -> Option<&Storage<Self::Config>>;
 
     /// The configuration served now; `None` while the object serves none
@@ -79,8 +79,8 @@ pub(crate) trait ConfigWrites {
     /// What storage keeps of `config`: the parts a write has set.
     fn snapshot(config: Option<&Self::Config>) -> WriteConfigSnapshot;
 
-    #[cfg(feature = "durable-writes")]
     /// Whether storage keeps a write of `property`.
+    #[cfg(feature = "durable-writes")]
     fn saves(property: PropertyIdentifier) -> bool;
 
     /// The configuration `write` leaves on top of `config`, or the
@@ -170,10 +170,10 @@ pub(crate) fn changed<T: ConfigWrites>(object: &mut T) {
     with_storage(object, Storage::drop_staged);
 }
 
-#[cfg(feature = "durable-writes")]
 /// Stage the writes a request makes to `object` (see
 /// [`DurableWrites::stage_writes`](crate::durable::DurableWrites::stage_writes)):
 /// one save of what they leave together (#1423).
+#[cfg(feature = "durable-writes")]
 pub(crate) fn stage_writes<T: ConfigWrites>(object: &mut T, writes: &[PendingWrite]) -> StageStep {
     // A NULL to Description changes nothing, so it stages nothing (#2364).
     let kept = |write: &PendingWrite| {
@@ -201,20 +201,20 @@ pub(crate) fn stage_writes<T: ConfigWrites>(object: &mut T, writes: &[PendingWri
     })
 }
 
-#[cfg(feature = "durable-writes")]
 /// See [`DurableWrites::release_staged_write`](crate::durable::DurableWrites::release_staged_write).
+#[cfg(feature = "durable-writes")]
 pub(crate) fn release<T: ConfigWrites>(object: &mut T, staged: &SaveWait) {
     with_storage(object, |storage| storage.release(staged));
 }
 
-#[cfg(feature = "durable-writes")]
 /// See [`DurableWrites::has_staged_write`](crate::durable::DurableWrites::has_staged_write).
+#[cfg(feature = "durable-writes")]
 pub(crate) fn has_staged<T: ConfigWrites>(object: &T) -> bool {
     object.storage_ref().is_some_and(Storage::is_staged)
 }
 
-#[cfg(feature = "durable-writes")]
 /// See [`DurableWrites::settle_forgotten_writes`](crate::durable::DurableWrites::settle_forgotten_writes).
+#[cfg(feature = "durable-writes")]
 pub(crate) fn settle<T: ConfigWrites>(object: &mut T) -> Option<SaveWait> {
     let mut storage = object.storage().take()?;
     let wait = storage.drop_forgotten(|| T::snapshot(object.config()));
@@ -222,8 +222,8 @@ pub(crate) fn settle<T: ConfigWrites>(object: &mut T) -> Option<SaveWait> {
     Some(wait)
 }
 
-#[cfg(feature = "durable-writes")]
 /// See [`DurableWrites::expire_staged`](crate::durable::DurableWrites::expire_staged).
+#[cfg(feature = "durable-writes")]
 pub(crate) fn expire<T: ConfigWrites>(object: &mut T, now: Duration) {
     with_storage(object, |storage| storage.expire(now));
 }

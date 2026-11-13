@@ -14,7 +14,7 @@ use super::{ObjectProfile, TagsPersistence, TagsSnapshot, write_tags};
 use crate::common;
 use crate::durable::SaveWriter;
 #[cfg(feature = "durable-writes")]
-use crate::durable::staged::{self};
+use crate::durable::staged;
 use crate::durable::staged::{StagedSaves, Step};
 #[cfg(feature = "durable-writes")]
 use crate::durable::{DurableWrites, PendingWrite, SaveWait, StageStep};

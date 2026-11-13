@@ -20,7 +20,7 @@
 //! `STAGED_WRITE_LIFETIME` has
 //! passed since its save finished: by the next write that stages, or by the
 //! server's once-a-second operation task, which calls
-//! `DurableWrites::expire_staged`. The class saves nothing else between
+//! [`DurableWrites::expire_staged`](crate::durable::DurableWrites::expire_staged). The class saves nothing else between
 //! writes.
 //!
 //! Neither runs once the server has stopped. So `stop()`, once it has
@@ -55,9 +55,9 @@ use super::persistence::{NotificationClassPersistence, NotificationClassSnapshot
 use super::{MAX_RECIPIENT_LIST_DESTINATIONS, NotificationClass, recipient_list};
 use crate::common;
 use crate::durable::SaveWriter;
-use crate::durable::staged::StagedSaves;
 #[cfg(feature = "durable-writes")]
-use crate::durable::staged::{self};
+use crate::durable::staged;
+use crate::durable::staged::StagedSaves;
 #[cfg(feature = "durable-writes")]
 use crate::durable::{DurableWrites, PendingWrite, SaveWait, StageStep};
 use crate::write_config::description;

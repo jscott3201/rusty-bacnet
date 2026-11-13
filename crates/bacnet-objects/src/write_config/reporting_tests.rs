@@ -414,9 +414,9 @@ fn saved_class(storage: &MemoryConfig) -> Option<u32> {
     }
 }
 
-#[cfg(feature = "durable-writes")]
 /// A request's writes stage one save before the object serves them; the
 /// writes take it without saving again.
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_staged_write_saves_first_and_the_write_takes_it() {
     let storage = MemoryConfig::new();
@@ -473,10 +473,10 @@ fn a_staged_write_whose_save_fails_is_refused() {
     assert_eq!(object.written_reporting(), ReportingWriteConfig::default());
 }
 
-#[cfg(feature = "durable-writes")]
 /// A staged write its request never makes puts storage back to the rows
 /// served: on release, on expiry, as the server stops, and as the object
 /// drops.
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_staged_write_never_made_puts_storage_back() {
     let storage = MemoryConfig::new();
@@ -508,9 +508,9 @@ fn a_staged_write_never_made_puts_storage_back() {
     assert_eq!(saved_class(&storage), None);
 }
 
-#[cfg(feature = "durable-writes")]
 /// A write nobody staged supersedes a staged one: storage goes back to the
 /// served rows, then takes the new one.
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_write_nobody_staged_supersedes_a_staged_one() {
     let storage = MemoryConfig::new();
@@ -540,9 +540,9 @@ fn a_write_nobody_staged_supersedes_a_staged_one() {
     assert_eq!(saved_class(&storage), Some(9));
 }
 
-#[cfg(feature = "durable-writes")]
 /// Writes of rows the object doesn't keep stage nothing, nor do writes of a
 /// row it refuses.
+#[cfg(feature = "durable-writes")]
 #[test]
 fn only_kept_rows_stage() {
     let storage = MemoryConfig::new();

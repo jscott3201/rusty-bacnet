@@ -149,9 +149,9 @@ fn a_default_timeout_that_cannot_be_saved_is_refused_and_the_old_one_stays() {
     assert_eq!(storage.saves(), 0);
 }
 
-#[cfg(feature = "durable-writes")]
 /// The server's path, on a Timer without the set: the write stages, saves
 /// once, and then takes the saved value.
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_staged_default_timeout_write_takes_the_saved_value() {
     let storage = MemoryConfig::new();

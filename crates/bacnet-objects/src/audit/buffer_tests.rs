@@ -335,18 +335,17 @@ fn a_purge_leaves_one_buffer_purged_record_and_nothing_to_query() {
     );
 }
 
-#[cfg(feature = "durable-writes")]
 #[test]
 fn a_purge_without_a_valid_clock_changes_nothing() {
     let storage = Arc::new(SlowPersistence::default());
     let mut log = AuditLogObject::new(1, "audit", 10, Arc::clone(&storage) as _).unwrap();
     let before = storage.committed();
     assert_operational_problem(log.purge().unwrap_err());
+    #[cfg(feature = "durable-writes")]
     assert!(matches!(log.stage_purge(), StageStep::Skip));
     assert_unchanged(&log, &storage, &before);
 }
 
-#[cfg(feature = "durable-writes")]
 #[test]
 fn a_failing_store_refuses_a_resize_or_purge_and_leaves_the_log_unchanged() {
     let (mut log, storage) = log();
@@ -372,20 +371,23 @@ fn a_failing_store_refuses_a_resize_or_purge_and_leaves_the_log_unchanged() {
     assert_unchanged(&log, &storage, &before);
 
     // Staged, as the server makes them.
-    let wait = staged_write(log.stage_write(
-        PropertyIdentifier::BUFFER_SIZE,
-        None,
-        &PropertyValue::Unsigned(1),
-    ));
-    block_on(wait.clone());
-    assert_operational_problem(resize(&mut log, 1).unwrap_err());
-    log.release_staged_write(&wait);
-    assert_unchanged(&log, &storage, &before);
-    let wait = staged_write(log.stage_purge());
-    block_on(wait.clone());
-    assert_operational_problem(log.commit_purge().unwrap_err());
-    log.release_staged_write(&wait);
-    assert_unchanged(&log, &storage, &before);
+    #[cfg(feature = "durable-writes")]
+    {
+        let wait = staged_write(log.stage_write(
+            PropertyIdentifier::BUFFER_SIZE,
+            None,
+            &PropertyValue::Unsigned(1),
+        ));
+        block_on(wait.clone());
+        assert_operational_problem(resize(&mut log, 1).unwrap_err());
+        log.release_staged_write(&wait);
+        assert_unchanged(&log, &storage, &before);
+        let wait = staged_write(log.stage_purge());
+        block_on(wait.clone());
+        assert_operational_problem(log.commit_purge().unwrap_err());
+        log.release_staged_write(&wait);
+        assert_unchanged(&log, &storage, &before);
+    }
 
     // With storage back the same changes go through.
     storage.fail.store(false, Ordering::SeqCst);
@@ -575,9 +577,9 @@ fn pending(property: PropertyIdentifier, value: PropertyValue) -> PendingWrite {
     }
 }
 
-#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 /// A WritePropertyMultiple that turns logging off, writes Description and
 /// then resizes.
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 fn off_then_resize(size: u64) -> [PendingWrite; 3] {
     [
         pending(PropertyIdentifier::ENABLE, PropertyValue::Boolean(false)),

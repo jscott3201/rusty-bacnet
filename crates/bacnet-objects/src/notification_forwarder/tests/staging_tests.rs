@@ -46,9 +46,9 @@ fn write(
     )
 }
 
-#[cfg(feature = "durable-writes")]
 /// Stage a Subscribed_Recipients write of `list`, wait for its save, and
 /// return the wait to release it with.
+#[cfg(feature = "durable-writes")]
 fn stage_saved(
     nf: &mut NotificationForwarderObject,
     list: &[BACnetEventNotificationSubscription],

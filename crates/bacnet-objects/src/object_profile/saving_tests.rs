@@ -121,7 +121,6 @@ fn load_errors_and_invalid_custom_snapshots_fail_before_a_writer_runs() {
     assert_eq!(store.attempts(), 0);
 }
 
-#[cfg(feature = "durable-writes")]
 #[test]
 fn combined_datetime_is_refused_before_direct_or_staged_save() {
     let store = Arc::new(Memory::default());
@@ -129,6 +128,7 @@ fn combined_datetime_is_refused_before_direct_or_staged_save() {
     let pair = vec![0x0a, 0, b'a', 0xa4, 126, 10, 6, 2, 0xb4, 12, 30, 0, 0];
     for index in [None, Some(1)] {
         let invalid = write(index, PropertyValue::ApplicationData(pair.clone()));
+        #[cfg(feature = "durable-writes")]
         assert!(matches!(
             state.stage_writes(std::slice::from_ref(&invalid)),
             StageStep::Skip

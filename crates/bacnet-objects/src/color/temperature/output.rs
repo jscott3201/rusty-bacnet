@@ -168,9 +168,9 @@ impl ColorTemperatureObject {
         Ok(())
     }
 
-    #[cfg(feature = "durable-writes")]
     /// Stage the request's Default_Color_Temperature and Description writes
     /// on the output storage.
+    #[cfg(feature = "durable-writes")]
     pub(super) fn stage_default(&mut self, writes: &[PendingWrite]) -> StageStep {
         let (min, max) = (self.min_pres_value, self.max_pres_value);
         self.output.stage_kept(

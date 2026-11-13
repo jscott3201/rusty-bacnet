@@ -489,6 +489,7 @@ fn a_null_or_a_refused_description_saves_nothing() {
 
 /// A request writing Description and another kept property stages one
 /// save, and each write takes it without saving again.
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_request_writing_description_and_another_property_saves_once() {
     for case in cases(None) {

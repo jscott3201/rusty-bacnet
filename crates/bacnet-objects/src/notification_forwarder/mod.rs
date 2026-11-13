@@ -65,9 +65,9 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use bytes::BytesMut;
 
 use crate::common::{self, read_common_properties};
-use crate::durable::staged::Step;
 #[cfg(feature = "durable-writes")]
-use crate::durable::staged::{self};
+use crate::durable::staged;
+use crate::durable::staged::Step;
 #[cfg(feature = "durable-writes")]
 use crate::durable::{DurableWrites, PendingWrite, SaveWait, StageStep};
 use crate::notification_class::recipient_list;

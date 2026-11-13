@@ -31,9 +31,9 @@ fn staged(step: StageStep) -> SaveWait {
     }
 }
 
-#[cfg(feature = "durable-writes")]
 /// Stage a write of `value` to `property` at `index`, wait for its save, and
 /// return the wait to release it with.
+#[cfg(feature = "durable-writes")]
 fn stage_saved(
     rights: &mut AccessRightsObject,
     property: P,
@@ -45,8 +45,8 @@ fn stage_saved(
     wait
 }
 
-#[cfg(feature = "durable-writes")]
 /// Stage a whole Positive_Access_Rules write of `rules` and wait for it.
+#[cfg(feature = "durable-writes")]
 fn stage_positive(rights: &mut AccessRightsObject, rules: &[BACnetAccessRule]) -> SaveWait {
     stage_saved(rights, P::POSITIVE_ACCESS_RULES, None, &octets(rules))
 }

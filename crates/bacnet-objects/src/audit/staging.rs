@@ -78,10 +78,10 @@ pub(super) enum StagedKind {
         changed: bool,
     },
     // Built only by staging, which needs `durable-writes`.
-    #[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
     /// The changes one request makes, in its order, all in one commit. The
     /// request makes them one at a time under the guard, and the log takes
     /// each change's step as it is made; `taken` counts the steps taken.
+    #[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
     Changes { steps: VecDeque<Step>, taken: usize },
 }
 
@@ -432,11 +432,11 @@ impl AuditLogObject {
         self.writer.wait_idle();
     }
 
-    #[cfg(feature = "durable-writes")]
     /// Build a step for each of `changes` in turn and queue one commit of
     /// the last. A change that cannot be built here, such as a purge without
     /// a valid clock, ends the steps: made under the guard, it then fails as
     /// it would unstaged, and the request makes no later change.
+    #[cfg(feature = "durable-writes")]
     fn stage_changes(&mut self, changes: &[StagedChange]) -> StageStep {
         let Ok(mut state) = self.snapshot_for_next_generation() else {
             return StageStep::Skip;
@@ -474,7 +474,6 @@ impl AuditLogObject {
     }
 }
 
-#[cfg(feature = "durable-writes")]
 /// The Enable and Buffer_Size changes `writes` make, in order, each
 /// judged as the log will be when the request makes it. A write the log will
 /// refuse ends the list, since the request makes no write after it; a write
@@ -483,6 +482,7 @@ impl AuditLogObject {
 /// the wrong datatype changes nothing either: the server answers it as a
 /// relinquish that leaves the property as it is, and the request goes on
 /// (#1396).
+#[cfg(feature = "durable-writes")]
 fn changes_made(
     mut log_enable: bool,
     mut buffer_size: u32,
