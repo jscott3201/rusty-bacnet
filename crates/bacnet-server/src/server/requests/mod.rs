@@ -681,7 +681,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             _ => drop(after_reply),
         }
         if issued == issue::Issued::Segmented {
-            Self::written_transitions_sent(sending).await;
+            if let Some(sent) = sending {
+                let _ = sent.await;
+            }
             Self::fire_post_write_cov_notifications(
                 &cov_ctx,
                 &coarse_cov_oids,
@@ -726,7 +728,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .await;
         }
 
-        Self::written_transitions_sent(sending).await;
+        // Inline: an async fn here costs every request a call, sent or not.
+        if let Some(sent) = sending {
+            let _ = sent.await;
+        }
         Self::fire_post_write_cov_notifications(
             &cov_ctx,
             &coarse_cov_oids,

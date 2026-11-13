@@ -147,8 +147,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// unconfirmed copy can wait for its route, on BACnet/SC for address
     /// resolution or a connection (#2530). The request awaits the returned
     /// receiver before its COV fanout, so each change's notifications still
-    /// go before it (#889). None, spawning nothing, when there is nothing to
-    /// send. `stop()` aborts the task with the request: the transitions stay
+    /// go before it (#889); the receiver ends once they are sent or the task
+    /// is gone (refused by a stopping server, aborted, or panicked). None,
+    /// spawning nothing, when there is nothing to send. `stop()` aborts the task with the request: the transitions stay
     /// committed, and what wasn't sent by then isn't.
     pub(super) fn spawn_written_transitions(
         services: &Arc<super::request_services::RequestServices<T>>,
@@ -165,15 +166,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let _ = done.send(());
         });
         Some(sent)
-    }
-
-    /// Wait for what [`Self::spawn_written_transitions`] spawned: until it
-    /// is sent, or its task is gone (refused by a stopping server, aborted,
-    /// or panicked).
-    pub(super) async fn written_transitions_sent(sending: Option<oneshot::Receiver<()>>) {
-        if let Some(sent) = sending {
-            let _ = sent.await;
-        }
     }
 
     /// Send the transitions writes committed ([`commit_written_transition`]),
