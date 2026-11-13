@@ -17,7 +17,7 @@ pub mod capabilities;
 #[doc(hidden)]
 pub use capabilities::{
     AccessEvents, AuditLog, AuditPolicy, CalendarState, CommandRunner, EnrollmentEval, LogBuffer,
-    StagingSource,
+    NotificationLogger, StagingSource,
 };
 pub use capabilities::{
     Clocks, CovReportedProperty, CovReporting, DeadlineWaker, DurableWrites, EventReporting,
