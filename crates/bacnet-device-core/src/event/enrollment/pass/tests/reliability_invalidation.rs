@@ -10,7 +10,7 @@ fn held_configuration_error_clears_landed_after_error_invalidation_once() {
             None,
             PropertyValue::Real(50.0),
             Some(1),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();

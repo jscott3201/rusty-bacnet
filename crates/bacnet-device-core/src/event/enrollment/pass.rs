@@ -845,3 +845,9 @@ pub fn evaluate_event_enrollments_for_delivery(
 
     apply_updates_for_delivery(db, &oids, updates, &database_eval_sources)
 }
+
+#[cfg(test)]
+use tests::helpers::{evaluate_event_enrollments, evaluate_event_enrollments_report};
+
+#[cfg(test)]
+mod tests;

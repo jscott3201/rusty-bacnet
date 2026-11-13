@@ -25,8 +25,7 @@ pub struct MonitoredReference {
 
 impl MonitoredReference {
     /// A reference naming no device, for tests.
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
+    #[cfg(test)]
     pub fn local(
         object_identifier: ObjectIdentifier,
         property_identifier: PropertyIdentifier,

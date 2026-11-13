@@ -162,7 +162,7 @@ impl BACnetObject for Variable {
     }
 
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
-        crate::test_rows::rows(
+        crate::event::enrollment::pass::tests::helpers::rows(
             &[PropertyIdentifier::PRESENT_VALUE],
             &[PropertyIdentifier::PRESENT_VALUE],
         )
@@ -202,7 +202,7 @@ fn change_of_value(time_delay: u32) -> (ObjectDatabase, ObjectIdentifier, Object
 /// Put the enrollment in a state CHANGE_OF_VALUE doesn't name, as a rewrite
 /// of Event_Parameters can leave behind.
 fn leave_offnormal(db: &mut ObjectDatabase, ee: ObjectIdentifier) {
-    crate::test_event_state::commit_event_state(
+    crate::event::enrollment::pass::tests::helpers::commit_event_state(
         db.get_mut(&ee).unwrap(),
         EventState::OFFNORMAL,
         false,
