@@ -202,7 +202,7 @@ fn change_of_value(time_delay: u32) -> (ObjectDatabase, ObjectIdentifier, Object
 /// Put the enrollment in a state CHANGE_OF_VALUE doesn't name, as a rewrite
 /// of Event_Parameters can leave behind.
 fn leave_offnormal(db: &mut ObjectDatabase, ee: ObjectIdentifier) {
-    crate::test_event_state::commit_event_state(
+    crate::event::enrollment::pass::tests::helpers::commit_event_state(
         db.get_mut(&ee).unwrap(),
         EventState::OFFNORMAL,
         false,
@@ -483,4 +483,77 @@ fn inhibit_forces_normal_when_the_parameters_cannot_be_fingerprinted() {
         mine(&mut db),
         [(EventState::HIGH_LIMIT, EventState::NORMAL)]
     );
+}
+
+/// A pass follows Event_Algorithm_Inhibit_Ref at its start (#1507): an
+/// inhibit its referenced value set with no write the database saw
+/// inhibits this pass's evaluation, so the enrollment stays NORMAL.
+#[test]
+fn a_pass_follows_the_inhibit_reference_first() {
+    use bacnet_objects::binary::BinaryValueObject;
+    let mut db = ObjectDatabase::new();
+    let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
+    ai.set_present_value(90.0);
+    let ai_oid = ai.object_identifier();
+    db.add(Box::new(ai)).unwrap();
+    let bv = BinaryValueObject::new(1, "BV-1").unwrap();
+    let bv_oid = bv.object_identifier();
+    db.add(Box::new(bv)).unwrap();
+    let mut ee = EventEnrollmentObject::new(1, "EE-1", EventType::OUT_OF_RANGE).unwrap();
+    ee.set_object_property_reference(Some(BACnetDeviceObjectPropertyReference::new_local(
+        ai_oid,
+        PropertyIdentifier::PRESENT_VALUE.to_raw(),
+    )))
+    .unwrap();
+    ee.set_event_parameters(BACnetEventParameter::OutOfRange {
+        time_delay: 0,
+        low_limit: 20.0,
+        high_limit: 80.0,
+        deadband: 2.0,
+    });
+    ee.set_event_enable(EventTransitionBits::all());
+    let mut reference = bytes::BytesMut::new();
+    encode_reference(&mut reference, bv_oid);
+    let reference = PropertyValue::ApplicationData(reference.to_vec());
+    ee.write_property(
+        PropertyIdentifier::EVENT_ALGORITHM_INHIBIT_REF,
+        None,
+        reference,
+        None,
+    )
+    .unwrap();
+    let ee_oid = ee.object_identifier();
+    db.add(Box::new(ee)).unwrap();
+    // BV-1 goes active on its own object: nothing tells the enrollment.
+    let origin = helpers::test_origin();
+    let active = PropertyValue::Enumerated(1);
+    db.get_mut(&bv_oid)
+        .unwrap()
+        .write_property_from(
+            PropertyIdentifier::PRESENT_VALUE,
+            None,
+            active,
+            Some(8),
+            &origin,
+        )
+        .unwrap();
+    assert!(
+        evaluate_event_enrollments(&mut db, 1).is_empty(),
+        "inhibited"
+    );
+    let inhibited = db
+        .get(&ee_oid)
+        .unwrap()
+        .read_property(PropertyIdentifier::EVENT_ALGORITHM_INHIBIT, None)
+        .unwrap();
+    assert_eq!(inhibited, PropertyValue::Boolean(true));
+}
+
+/// Encode a reference to `object`'s Present_Value.
+fn encode_reference(buf: &mut bytes::BytesMut, object: ObjectIdentifier) {
+    let reference = bacnet_types::constructed::BACnetObjectPropertyReference::new(
+        object,
+        PropertyIdentifier::PRESENT_VALUE.to_raw(),
+    );
+    bacnet_encoding::constructed::encode_object_property_reference(buf, &reference);
 }

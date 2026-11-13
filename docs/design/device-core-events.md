@@ -1908,6 +1908,17 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
       documentation, until PR 2a moves the pass (fix round, lead); the
       legacy parameter encoders write a private layout, not a form the
       standard defines.
+    - PR 2a (lead decisions): the pass, commit and support move to
+      `event::enrollment` with `std` (they use the std hash collections
+      until 2b); commit.rs and support.rs mount under pass.rs, so their
+      paths stay. Ahead of the move the commit's two "payload rejected"
+      debug lines became `SuppressedDelivery` values the server logs with
+      the same text (as #2303's PR 3a did). The pass's tests move with it
+      into the core, beside small stand-ins for the server helpers they
+      used; the server keeps its own tests of the task and the
+      notifications. The public surface is the pass, its batch, the
+      delivery types and the report types; the algorithms went private,
+      and the three legacy encoders only tests use are test-only.
 
 ## 12. Evidence
 

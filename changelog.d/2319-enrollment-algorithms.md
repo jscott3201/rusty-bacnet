@@ -1,4 +1,4 @@
 ---
 section: Added
 ---
-- bacnet-device-core gains an `event-enrollment` feature: Event Enrollment's event and fault algorithms move from bacnet-server into its `event::enrollment`, internal until the evaluation pass follows; the server runs its pass on them, unchanged (#2319).
+- bacnet-device-core's `event-enrollment` feature has Event Enrollment's evaluation pass, `event::enrollment::evaluate_event_enrollments_for_delivery`, with its report and delivery types, moved from bacnet-server, which drives it unchanged; with `std` for now (#2319).

@@ -52,6 +52,7 @@ pub(super) fn spawn_event_enrollment_task<T: TransportPort + 'static>(
                     &mut db_guard,
                     evaluation_interval_secs,
                 );
+                crate::event_enrollment::log_suppressed_deliveries(&evaluation.suppressed);
                 let outbound = evaluation
                     .deliveries
                     .into_iter()

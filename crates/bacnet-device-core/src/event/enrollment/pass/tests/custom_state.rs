@@ -25,7 +25,7 @@ fn unreadable_parameters_cancel_pending_countdown() {
             None,
             PropertyValue::Real(90.0),
             Some(1),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -71,7 +71,7 @@ fn source_less_indexed_cov_retains_its_baseline_and_retargets_safely() {
             None,
             PropertyValue::Real(10.0),
             Some(1),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     target
@@ -80,7 +80,7 @@ fn source_less_indexed_cov_retains_its_baseline_and_retargets_safely() {
             None,
             PropertyValue::Real(90.0),
             Some(2),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -120,7 +120,7 @@ fn source_less_indexed_cov_retains_its_baseline_and_retargets_safely() {
             None,
             PropertyValue::Real(20.0),
             Some(1),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
@@ -143,7 +143,7 @@ fn source_less_indexed_cov_retains_its_baseline_and_retargets_safely() {
             None,
             PropertyValue::Real(100.0),
             Some(2),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
@@ -160,7 +160,7 @@ fn failed_indexed_reset_cannot_resume_after_restoring_the_reference() {
             None,
             PropertyValue::Real(90.0),
             Some(1),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -271,7 +271,7 @@ fn source_less_unindexed_cov_does_not_reuse_a_retargeted_baseline() {
             None,
             PropertyValue::Real(100.0),
             None,
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     db.get_mut(&second_oid)
@@ -296,7 +296,7 @@ fn source_write_failure_allows_one_immediate_change_of_state_transition() {
             None,
             PropertyValue::Enumerated(1),
             Some(1),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -331,7 +331,7 @@ fn invalidation_survives_failed_state_and_source_writes() {
             None,
             PropertyValue::Real(90.0),
             Some(1),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -415,7 +415,7 @@ fn source_less_custom_enrollment_retains_indexed_delay_behavior() {
             None,
             PropertyValue::Real(90.0),
             Some(1),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -442,7 +442,7 @@ fn replacing_the_monitored_object_restarts_an_indexed_delay() {
             None,
             PropertyValue::Real(90.0),
             Some(1),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -461,7 +461,7 @@ fn replacing_the_monitored_object_restarts_an_indexed_delay() {
             None,
             PropertyValue::Real(90.0),
             Some(1),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     db.add(Box::new(replacement)).unwrap();
@@ -487,7 +487,7 @@ fn failed_eval_state_write_cannot_leak_an_unreported_event_state() {
             None,
             PropertyValue::Real(90.0),
             Some(1),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -526,7 +526,7 @@ fn custom_enrollment_reports_a_change_of_value_through_the_commit() {
             None,
             PropertyValue::Real(10.0),
             Some(1),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -552,7 +552,7 @@ fn custom_enrollment_reports_a_change_of_value_through_the_commit() {
             None,
             PropertyValue::Real(20.0),
             Some(1),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     assert_eq!(evaluate_event_enrollments(&mut db, 1).len(), 1);
@@ -569,7 +569,7 @@ fn mutation_then_error_is_visible_but_never_reports_a_transition() {
             None,
             PropertyValue::Real(90.0),
             Some(1),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -622,7 +622,7 @@ fn detached_enrollment_does_not_resume_state_after_target_replacement() {
             None,
             PropertyValue::Real(90.0),
             Some(1),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     let target_oid = target.object_identifier();
@@ -647,7 +647,7 @@ fn detached_enrollment_does_not_resume_state_after_target_replacement() {
             None,
             PropertyValue::Real(90.0),
             Some(1),
-            &crate::command_source::test_origin(),
+            &crate::event::enrollment::pass::tests::helpers::test_origin(),
         )
         .unwrap();
     db.add(Box::new(replacement)).unwrap();
