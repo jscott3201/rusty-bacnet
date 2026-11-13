@@ -70,8 +70,8 @@ impl<W: WebSocketPort> WebSocketPort for TappedSocket<W> {
         self.inner.close(status).await
     }
 
-    fn has_close_frame(&self) -> bool {
-        self.inner.has_close_frame()
+    fn awaits_disconnect_ack(&self) -> bool {
+        self.inner.awaits_disconnect_ack()
     }
 }
 

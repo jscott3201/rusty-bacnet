@@ -32,7 +32,22 @@ impl<W: WebSocketPort> ScTransport<W> {
             }
         };
         let hub = self.say_goodbye_to_hub(budget);
-        tokio::join!(direct, hub);
+        // A primary restore's goodbye to the failover hub finishes in the
+        // same budget rather than being cut off (#2520).
+        let restore = self
+            .restore_disconnect_task
+            .lock()
+            .ok()
+            .and_then(|mut task| task.take());
+        let restore = async {
+            if let Some(mut task) = restore
+                && tokio::time::timeout_at(budget, &mut task).await.is_err()
+            {
+                task.abort();
+                let _ = task.await;
+            }
+        };
+        tokio::join!(direct, hub, restore);
         self.direct_intake = advertisement::DirectIntake::default();
 
         let conn_for_state = self.connection.clone();
@@ -81,7 +96,7 @@ impl<W: WebSocketPort> ScTransport<W> {
             let mut buf = BytesMut::new();
             encode_sc_message(&mut buf, &msg);
             let sent = tokio::time::timeout_at(budget, ws.send(&buf)).await;
-            if matches!(sent, Ok(Ok(()))) && ws.has_close_frame() {
+            if matches!(sent, Ok(Ok(()))) && ws.awaits_disconnect_ack() {
                 let answered = states.wait_for(|state| *state == ScConnectionState::Disconnected);
                 let wait = budget.min(tokio::time::Instant::now() + super::CLOSE_GRACE);
                 let _ = tokio::time::timeout_at(wait, answered).await;

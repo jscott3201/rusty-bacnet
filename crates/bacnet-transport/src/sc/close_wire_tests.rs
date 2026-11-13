@@ -403,9 +403,12 @@ enum StopAnswer {
 }
 
 /// However the hub answers, `stop` waits for that answer before it closes,
-/// and the node reports its own close, not the hub's (#2520).
+/// and the node reports its own close, not the hub's (#2520). With
+/// reconnect on, the answer starts no recovery: no warning and no redial.
 #[tokio::test]
 async fn a_stopping_node_reports_a_local_close_however_the_hub_answers() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (logs, _guard) = crate::log_capture::LogCapture::start();
     for answer in [StopAnswer::Ack, StopAnswer::HangUp] {
         let hub = RawPeer::bind().await;
         let (url, tls) = (hub.url(), hub.node_tls());
@@ -430,12 +433,25 @@ async fn a_stopping_node_reports_a_local_close_however_the_hub_answers() {
                 }
             }
         });
-        let mut transport =
-            ScTransport::new(dial(&url, tls).await, NODE_VMAC).with_device_uuid(NODE_UUID);
+        let dials = Arc::new(AtomicUsize::new(0));
+        let redials = dials.clone();
+        let mut transport = ScTransport::new(dial(&url, tls).await, NODE_VMAC)
+            .with_device_uuid(NODE_UUID)
+            .with_reconnect(crate::sc::ScReconnectConfig {
+                initial_delay_ms: 1,
+                max_delay_ms: 1,
+                max_retries: 3,
+            })
+            .with_connector(move || {
+                redials.fetch_add(1, Ordering::SeqCst);
+                std::future::pending::<Result<TlsWebSocket, bacnet_types::error::Error>>()
+            });
         let mut events = connected(&mut transport).await;
         let began = Instant::now();
         transport.stop().await.unwrap();
         assert!(began.elapsed() < crate::sc::CLOSE_GRACE, "{answer:?}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(dials.load(Ordering::SeqCst), 0, "{answer:?}");
         assert_eq!(
             disconnected(&mut events).await,
             ScDisconnectCause::LocalClose,
@@ -443,6 +459,7 @@ async fn a_stopping_node_reports_a_local_close_however_the_hub_answers() {
         );
         tokio::time::timeout(WAIT, hub).await.unwrap().unwrap();
     }
+    assert!(logs.warnings().is_empty(), "{:?}", logs.warnings());
 }
 
 /// How a hub answers the node's Connect-Request, and the close it then

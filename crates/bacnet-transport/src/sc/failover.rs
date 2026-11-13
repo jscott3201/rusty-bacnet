@@ -244,7 +244,7 @@ async fn send_disconnect_request<W: WebSocketPort>(
         let mut buf = BytesMut::new();
         encode_sc_message(&mut buf, &msg);
         match tokio::time::timeout(Duration::from_millis(timeout_ms), ws.send(&buf)).await {
-            Ok(Ok(())) if ws.has_close_frame() => {
+            Ok(Ok(())) if ws.awaits_disconnect_ack() => {
                 let _ = tokio::time::timeout(super::CLOSE_GRACE, disconnect_answered(ws)).await;
             }
             Ok(Ok(())) => {}
@@ -275,15 +275,21 @@ pub(super) async fn disconnect_answered<W: WebSocketPort>(ws: &W) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sc::LoopbackWebSocket;
 
     /// Stop marks the connection Disconnecting before its best-effort send.
     /// A restore already ready in that window must not resurrect it, and a
     /// failed probe must not apply its VMAC/retry metadata to that connection.
+    /// A connected candidate dialled for the attempt is closed with 1000;
+    /// the kept primary is not (#2520).
     #[tokio::test]
     async fn primary_restore_completion_after_shutdown_cannot_publish() {
-        for success in [true, false] {
-            let (live, _hub) = LoopbackWebSocket::pair();
+        use crate::sc::close_test_support::recorder;
+        for (success, fresh, closes) in [
+            (true, true, vec![Some(1000)]),
+            (true, false, vec![]),
+            (false, true, vec![]),
+        ] {
+            let (live, _hub) = recorder();
             let live = Arc::new(live);
             let active = Arc::new(Mutex::new(live.clone()));
             let mut connection = ScConnection::new([1; 6], [1; 16]);
@@ -298,7 +304,7 @@ mod tests {
             probe.state = ScConnectionState::Connected;
             probe.hub_vmac = Some([0x10; 6]);
             probe.connect_retry_allowed = false;
-            let (candidate, _primary_hub) = LoopbackWebSocket::pair();
+            let (candidate, candidate_probe) = recorder();
             let candidate = PrimaryCandidate {
                 socket: if success {
                     Ok(Arc::new(candidate))
@@ -306,7 +312,7 @@ mod tests {
                     Err(Error::Encoding("refused probe".into()))
                 },
                 connection: probe,
-                fresh: true,
+                fresh,
             };
             let result = publish_primary_restore(
                 &PrimaryRestoreContext {
@@ -337,6 +343,7 @@ mod tests {
                 bacnet_npdu::NpduLimits::STANDARD
             );
             assert!(disconnect.lock().unwrap().is_none());
+            assert_eq!(candidate_probe.closes(), closes, "{success} {fresh}");
         }
     }
 }

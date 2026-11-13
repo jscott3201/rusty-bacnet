@@ -73,7 +73,7 @@ impl WebSocketPort for Recorder {
         Ok(())
     }
 
-    fn has_close_frame(&self) -> bool {
+    fn awaits_disconnect_ack(&self) -> bool {
         true
     }
 }

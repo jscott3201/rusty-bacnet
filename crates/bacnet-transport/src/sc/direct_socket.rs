@@ -114,9 +114,9 @@ impl<W: WebSocketPort> WebSocketPort for DirectSocket<W> {
             Self::Verified(ws) => ws.close(status).await,
         }
     }
-    fn has_close_frame(&self) -> bool {
+    fn awaits_disconnect_ack(&self) -> bool {
         match self {
-            Self::Custom(ws) => ws.has_close_frame(),
+            Self::Custom(ws) => ws.awaits_disconnect_ack(),
             #[cfg(feature = "sc-tls")]
             Self::Verified(_) => true,
         }

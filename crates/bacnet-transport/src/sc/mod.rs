@@ -348,6 +348,10 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                     if heartbeat_sleep.deadline() != heartbeat_deadline {
                         heartbeat_sleep.as_mut().reset(heartbeat_deadline);
                     }
+                    // While `stop` waits for its Disconnect-ACK, no heartbeat
+                    // goes out and none can time out (#2520).
+                    let disconnecting =
+                        *connection_states.borrow() == ScConnectionState::Disconnecting;
                     tokio::select! {
                         Some(npdu) = direct_intake.recv() => {
                             // Direct merge shares the hub queue: re-admit under
@@ -478,6 +482,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                         fatal_result,
                                         state_change,
                                         solicited_advertisement,
+                                        answered_own_disconnect,
                                     ) = {
                                         let mut c = conn.lock().await;
                                         let before_state = c.state;
@@ -510,6 +515,9 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                                 && after_state == ScConnectionState::Disconnected,
                                             (after_state != before_state).then_some(after_state),
                                             solicited,
+                                            // Only `stop` enters Disconnecting.
+                                            before_state == ScConnectionState::Disconnecting
+                                                && after_state == ScConnectionState::Disconnected,
                                         )
                                     };
                                     if let Some(state) = state_change {
@@ -568,6 +576,12 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                         }
                                     }
 
+                                    // The ACK (or NAK) to this node's own Disconnect-Request:
+                                    // `stop` closes and ends the task, so no recovery (#2520).
+                                    if answered_own_disconnect {
+                                        debug!("BACnet/SC Disconnect-Request answered; leaving the transport loop");
+                                        break 'transport;
+                                    }
                                     if fatal_result {
                                         warn!("BACnet/SC fatal BVLC-Result received; closing transport loop");
                                         // Refused: an orderly end, 1000 (#2520).
@@ -585,6 +599,9 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                     let cause = if state == ScConnectionState::Disconnecting { Cause::LocalClose } else { Cause::from_error(&e) };
                                     if state == ScConnectionState::Connected { warn!("BACnet/SC recv error: {}", e) } else { debug!("BACnet/SC recv error once disconnecting: {}", e) }
                                     observer.lose(&conn, &state_tx, cause).await;
+                                    if state == ScConnectionState::Disconnecting {
+                                        break 'transport;
+                                    }
                                     break;
                                 }
                             }
@@ -636,7 +653,10 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                             // long its dial/handshake took (#1555).
                             primary_restore_interval.reset();
                         }
-                        _ = &mut heartbeat_sleep => {
+                        _ = &mut heartbeat_sleep, if !disconnecting => {
+                            if *connection_states.borrow() == ScConnectionState::Disconnecting {
+                                continue;
+                            }
                             if pending_heartbeat_id.is_some() {
                                 warn!("BACnet/SC heartbeat timeout — disconnecting");
                                 observer.lose(&conn, &state_tx, Cause::HeartbeatTimeout).await;

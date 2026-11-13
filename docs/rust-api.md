@@ -1688,8 +1688,9 @@ The node closes a WebSocket it is done with (#2520), as Annex AB.7.5.5 asks
 of an intentional close. `stop()` sends the Disconnect-Request when
 connected, waits up to one second for its Disconnect-ACK (or NAK), as the
 requester does in AB.6.2.2, then sends a close with status 1000 and drops the
-socket without waiting for the answering close. A hub that closes instead of
-acknowledging still leaves `LocalClose` as the cause. Those steps, and each
+socket without waiting for the answering close. No heartbeat runs during the
+wait, and neither the answer nor a hub that closes instead of acknowledging
+starts a reconnect: the cause stays `LocalClose`. Those steps, and each
 outbound direct link's own, share a two-second budget, so a hub that never
 reads holds `stop()` up for two seconds at most; the close itself gets at most
 one second wherever it is sent. Leaving the failover hub after a primary
@@ -1704,9 +1705,10 @@ on and no connector for that hub. `abort()` and dropping the transport cannot
 wait, so they send nothing.
 `WebSocketPort::close(status)` is the hook: `TlsWebSocket` writes the frame,
 and the default, for an in-memory port such as `LoopbackWebSocket`, sends
-nothing. `WebSocketPort::has_close_frame()` says which: the ACK wait applies
-only to a port that has a close frame (`false` by default), so a custom port
-that implements `close` should return `true` there too.
+nothing. `WebSocketPort::awaits_disconnect_ack()` turns on the ACK wait; it is
+`false` by default, which keeps a custom port's behaviour from before #2520:
+no wait and, unless it implements `close`, no close frame. A custom port that
+implements `close` usually returns `true` there too.
 
 `ScTransport::connection_status()` returns an `ScLinkStatus` snapshot: the
 connection state, the active hub, the hub VMAC from Connect-Accept, the

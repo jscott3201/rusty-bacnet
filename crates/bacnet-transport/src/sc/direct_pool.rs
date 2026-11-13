@@ -346,7 +346,7 @@ impl LinkEnd {
                 let mut bytes = bytes::BytesMut::new();
                 encode_sc_message(&mut bytes, &disconnect_request());
                 let sent = tokio::time::timeout(wait, ws.send(&bytes)).await;
-                if matches!(sent, Ok(Ok(()))) && ws.has_close_frame() {
+                if matches!(sent, Ok(Ok(()))) && ws.awaits_disconnect_ack() {
                     let answered = async {
                         while let Ok(frame) = ws.next_frame().await {
                             if answers_disconnect(&frame) {

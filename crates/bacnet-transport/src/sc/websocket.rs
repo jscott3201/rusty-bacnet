@@ -37,6 +37,8 @@ pub trait WebSocketPort: Send + Sync + 'static {
     ///
     /// The default sends nothing and succeeds, for a port with no close
     /// frame of its own, such as [`LoopbackWebSocket`](super::LoopbackWebSocket).
+    /// A port that implements it usually returns `true` from
+    /// [`awaits_disconnect_ack`](Self::awaits_disconnect_ack) too.
     fn close(
         &self,
         status: Option<u16>,
@@ -45,12 +47,12 @@ pub trait WebSocketPort: Send + Sync + 'static {
         async { Ok(()) }
     }
 
-    /// Whether [`close`](Self::close) sends a close frame. When it does,
-    /// the transport gives the peer up to the close grace to answer its
-    /// Disconnect-Request before closing, as Annex AB.6.2.2 has the
-    /// requester wait; a port without one is dropped without that wait. The
-    /// default is `false`, matching the default `close`.
-    fn has_close_frame(&self) -> bool {
+    /// Whether the transport, having sent a Disconnect-Request on this
+    /// port, waits up to the close grace for its answer before it closes, as
+    /// Annex AB.6.2.2 has the requester wait (#2520). The default, `false`,
+    /// keeps a port's behaviour from before that wait: no wait, and, unless
+    /// the port implements [`close`](Self::close), no close frame either.
+    fn awaits_disconnect_ack(&self) -> bool {
         false
     }
 }

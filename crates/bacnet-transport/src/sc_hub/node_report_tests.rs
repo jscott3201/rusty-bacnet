@@ -302,3 +302,43 @@ async fn a_nodes_orderly_close_reads_as_an_orderly_end_at_the_hub() {
     hub.stop().await;
     assert!(logs.warnings().is_empty(), "{:?}", logs.warnings());
 }
+
+/// A clean `stop` against this stack's hub with reconnect on (#2520): the
+/// hub answers the Disconnect-Request and closes, and the node neither
+/// warns nor starts recovery, so its connector is never called.
+#[tokio::test]
+async fn a_clean_stop_with_reconnect_on_neither_warns_nor_redials() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (logs, _guard) = crate::log_capture::LogCapture::start();
+    let tls = TestTls::new();
+    let mut hub = graceful_hub(&tls).await;
+    let url = format!("wss://localhost:{}", hub.local_addr().unwrap().port());
+    for _ in 0..5 {
+        let dials = Arc::new(AtomicUsize::new(0));
+        let (redial_count, redial_url, redial_tls) = (dials.clone(), url.clone(), tls.node.clone());
+        let mut transport = ScTransport::new(dial(&tls, &hub).await, NODE_VMAC)
+            .with_device_uuid(NODE_UUID)
+            .with_reconnect(crate::sc::ScReconnectConfig {
+                initial_delay_ms: 1,
+                max_delay_ms: 1,
+                max_retries: 3,
+            })
+            .with_connector(move || {
+                redial_count.fetch_add(1, Ordering::SeqCst);
+                let (url, tls) = (redial_url.clone(), redial_tls.clone());
+                async move { TlsWebSocket::connect(&url, tls).await }
+            });
+        let mut events = transport.connection_events();
+        let _rx = tokio::time::timeout(WAIT, transport.start())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(next(&mut events).await, ScEvent::Connected { .. }));
+        transport.stop().await.unwrap();
+        // Time for a recovery that wrongly started to reach its dial.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(dials.load(Ordering::SeqCst), 0);
+    }
+    hub.stop().await;
+    assert!(logs.warnings().is_empty(), "{:?}", logs.warnings());
+}

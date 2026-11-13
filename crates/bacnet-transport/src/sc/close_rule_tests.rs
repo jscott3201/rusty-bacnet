@@ -384,3 +384,35 @@ async fn an_unanswered_restore_dial_is_closed_without_a_status() {
     assert_eq!(failover_probe.closes(), []);
     transport.stop().await.unwrap();
 }
+
+/// A hub BVLC-Result that ends the connection closes the socket the
+/// transport gives up: 1000 after a NAK that is fatal on the hub link, an
+/// orderly end, and no status after one that does not decode, the hub's
+/// fault.
+#[tokio::test(start_paused = true)]
+async fn a_result_that_ends_the_hub_link_closes_by_what_it_was() {
+    // A NAK to a Heartbeat-Request (class RESOURCES, code OTHER), and a
+    // Result too short to decode.
+    let nak = vec![
+        0x00, 0x00, 0x00, 0x07, 0x0a, 0x01, 0x00, 0x00, 0x03, 0x00, 0x00,
+    ];
+    for (wire, expected) in [(nak, Some(1000)), (vec![0x00, 0x00, 0x07], None)] {
+        let (socket, probe) = recorder();
+        let mut transport = ScTransport::new(socket, NODE_VMAC).with_device_uuid([1; 16]);
+        let mut events = transport.connection_events();
+        started(&mut transport, &probe).await;
+        probe.hub.send(&wire).await.unwrap();
+        loop {
+            let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+                .await
+                .expect("the link did not end")
+                .unwrap();
+            if matches!(event, ScEvent::Disconnected { .. }) {
+                break;
+            }
+        }
+        eventually("the close", || !probe.closes().is_empty()).await;
+        assert_eq!(probe.closes(), [expected], "{wire:02x?}");
+        transport.stop().await.unwrap();
+    }
+}
