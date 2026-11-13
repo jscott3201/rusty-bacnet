@@ -602,6 +602,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             mut command_runs,
             timed_revisits,
         } = effects;
+        // The transitions the writes committed go out first, as soon as their
+        // guard is dropped, then the Staging plans' (which send their own),
+        // then the response (#2530): a peer may hear an EventNotification
+        // before its SimpleACK, but no later transition of the same object
+        // can be sent ahead of one this request committed first.
+        Self::send_written_transitions(&services.event_delivery(), written_transitions).await;
 
         // LSO-only replay store (server level, never handler/object level).
         // Uniform rule: anything that reaches this admission point and produces
@@ -630,9 +636,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             comm_state,
             config,
         };
-        command_runs.extend(
-            Self::execute_staging_plans(&services.event_delivery(), &cov_ctx, staging_plans).await,
-        );
+        // Boxed: plans are rare, and their future would size every request's.
+        if !staging_plans.is_empty() {
+            let delivery = services.event_delivery();
+            let plans = Self::execute_staging_plans(&delivery, &cov_ctx, staging_plans);
+            command_runs.extend(Box::pin(plans).await);
+        }
         // Command lists run beside this request, so its response never waits
         // on their writes or post delays (#1150).
         if !command_runs.is_empty() {
@@ -665,7 +674,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             _ => drop(after_reply),
         }
         if issued == issue::Issued::Segmented {
-            Self::send_written_transitions(&services.event_delivery(), written_transitions).await;
             Self::fire_post_write_cov_notifications(
                 &cov_ctx,
                 &coarse_cov_oids,
@@ -709,8 +717,6 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             )
             .await;
         }
-
-        Self::send_written_transitions(&services.event_delivery(), written_transitions).await;
 
         Self::fire_post_write_cov_notifications(
             &cov_ctx,

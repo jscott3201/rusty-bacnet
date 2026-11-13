@@ -94,21 +94,28 @@ pub(super) fn logged_intrinsic_commit(
 /// that committed the write, before it is dropped (#2530).
 ///
 /// The write and the transition it causes then commit as one step: no
-/// reader, sweep or COV fanout sees the object half updated, with a new
-/// Reliability or value and the Event_State from before. The detector fires
-/// at once only for a `Time_Delay` of 0; a nonzero delay is seeded, due when
-/// it ends, and the intrinsic-reporting task ([`start`](BACnetServer::start))
-/// sweeps then and sends that notification. A committed transition is
-/// captured for timestamped COV-multiple references at its own time, the
-/// table read under `db` (database, then table).
+/// ReadProperty, sweep or ordinary COV fanout sees the object half updated,
+/// with a new Reliability or value and the Event_State from before. The
+/// detector fires at once only for a `Time_Delay` of 0; a nonzero delay is
+/// seeded, due when it ends, and the intrinsic-reporting task
+/// ([`start`](BACnetServer::start)) sweeps then and sends that notification.
+/// A committed transition is captured for timestamped COV-multiple
+/// references at its own time, the table read under `db` (database, then
+/// table). The write's own capture runs before this, so a timestamped
+/// reference still records the write and its transition as two changes.
 ///
 /// A transition to send goes on `to_send`, for
-/// [`BACnetServer::send_written_transitions`] once `db` is dropped, ahead of
-/// the write's COV fanout (#889). One that committed but isn't distributed
-/// goes nowhere: Event_Enable or a refused projection stop only the
-/// notification, not the local transition actions (Clauses 13.2.2.1.4 and
-/// 13.2.5). Either way the caller owes the object its COV fanout, since a
-/// commit changes Status_Flags.
+/// [`BACnetServer::send_written_transitions`] as soon as `db` is dropped,
+/// ahead of the write's COV fanout (#889) and, for a peer, of its response.
+/// One that committed but isn't distributed goes nowhere: Event_Enable or a
+/// refused projection stop only the notification, not the local transition
+/// actions (Clauses 13.2.2.1.4 and 13.2.5). Either way the caller owes the
+/// object its COV fanout, since a commit changes Status_Flags.
+///
+/// Transitions from one task go out in the order they committed. Across
+/// tasks the window is the one between dropping `db` and the send: a later
+/// write of the same object can commit and send its own transition there,
+/// ahead of this one. Nothing orders sends across tasks.
 ///
 /// The transition is moved out before the table read is awaited, so the
 /// write's future holds no transition across it: the write handlers' futures

@@ -10,8 +10,9 @@
 //! Schedule's targets and any Staging plan. `write_local` runs `finish` as a
 //! task of its own in the server's request task set
 //! ([`BACnetServer::finish_in_task`]), so a caller that drops its future (a
-//! timeout, a `select!`, a cancelled Python task) no longer skips any of it. `set_life_safety_operation_expected_local` hands
-//! its capture and fanout to such a task the same way (#1520).
+//! timeout, a `select!`, a cancelled Python task) no longer skips any of it.
+//! `set_life_safety_operation_expected_local` hands its capture and fanout
+//! to such a task the same way (#1520).
 
 use super::local_writes::LocalWriter;
 use super::*;

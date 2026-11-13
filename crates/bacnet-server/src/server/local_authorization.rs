@@ -94,6 +94,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let bindings = Arc::clone(&self.device_bindings);
         self.finish_in_task(&runtime, async move {
             // The point's transition commits under the attempt's guard (#2530).
+            // The built-in Access Point reports no intrinsic events; an
+            // application's own point that does is evaluated here.
             let mut db = db;
             let mut transitions = Vec::new();
             super::event_notifications::commit_written_transition(

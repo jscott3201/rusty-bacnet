@@ -167,7 +167,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
 
             // The source's Reliability and the transition it causes commit
-            // under one guard (#2530).
+            // under one guard (#2530). The built-in Staging object reports no
+            // intrinsic events, so this evaluates only an application's own
+            // source, which `StagingSource` lets any object be.
             let mut transitions = Vec::new();
             let reliability_changed = {
                 let mut database = db.write().await;

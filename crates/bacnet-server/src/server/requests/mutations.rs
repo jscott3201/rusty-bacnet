@@ -275,6 +275,10 @@ impl Request<'_> {
                     }
                 };
                 capture.run(&db);
+                // The transition the write causes commits under its guard
+                // too, ahead of a written Schedule's pass (a Schedule has no
+                // intrinsic reporting), so nothing is held across it.
+                commit_written_transition(&mut db, cov_table, oid, written_transitions).await;
             }
             let schedule_cov = match written {
                 Some(oid) => {
@@ -288,10 +292,6 @@ impl Request<'_> {
                 }
                 None => Default::default(),
             };
-            // The transition the write causes commits under its guard too.
-            if let Some(oid) = written {
-                commit_written_transition(&mut db, cov_table, oid, written_transitions).await;
-            }
             (result.map(|_| written), changes, plans, schedule_cov)
         };
         staging_plans.extend(plans);
@@ -567,6 +567,10 @@ impl Request<'_> {
             if let Some(oid) = written {
                 let capture = cov_table.read().await.timed_capture(oid);
                 capture.run(&db);
+                // The edit's transition commits under its guard too, ahead
+                // of a written Schedule's pass, as after a WriteProperty.
+                let sent = &mut effects.written_transitions;
+                commit_written_transition(&mut db, cov_table, oid, sent).await;
             }
             let schedule_cov = match written {
                 Some(oid) => {
@@ -574,11 +578,6 @@ impl Request<'_> {
                 }
                 None => Default::default(),
             };
-            // The edit's transition commits under its guard too.
-            if let Some(oid) = written {
-                let sent = &mut effects.written_transitions;
-                commit_written_transition(&mut db, cov_table, oid, sent).await;
-            }
             (result, written, schedule_cov)
         };
         // The edited object first, then a Schedule's targets, which the merge
