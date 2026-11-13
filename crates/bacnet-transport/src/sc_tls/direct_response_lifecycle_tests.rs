@@ -64,10 +64,9 @@ async fn direct_response_registered_transport_stop_abort_drop_seal_retained_list
         assert!(listener.membership.current_generations().is_empty());
         assert!(queued.await.is_err());
         assert!(route.send(NPDU, &scope).await.is_err());
-        assert!(
-            peer.recv().await.is_err(),
-            "queued response cannot pass teardown"
-        );
+        // The queued response cannot pass teardown: the peer reads only
+        // the orderly goodbye (#2520).
+        super::direct_close_tests::assert_goodbye(&peer).await;
         listener.stop().await;
     }
 }

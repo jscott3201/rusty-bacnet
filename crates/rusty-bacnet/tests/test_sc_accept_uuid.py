@@ -73,9 +73,13 @@ class AcceptUuidTests(mtls.MtlsFixture):
                     await asyncio.wait_for(drain(), 5)
                 else:
                     # No response is allowed even at native connect timeout.
-                    # Keep this peer alive beyond it.
-                    self.assertEqual(
-                        await asyncio.wait_for(reader.read(1), CONNECT_TIMEOUT + 5), b"")
+                    # Keep this peer alive beyond it. When its connect wait
+                    # runs out, the node gives the socket up with a masked
+                    # close frame that has no status (#2520), then ends it.
+                    header = await asyncio.wait_for(reader.readexactly(2), CONNECT_TIMEOUT + 5)
+                    self.assertEqual(header, b"\x88\x80")
+                    await asyncio.wait_for(reader.readexactly(4), 3)  # The mask.
+                    self.assertEqual(await asyncio.wait_for(reader.read(1), 3), b"")
                 outcome.set_result(None)
             except Exception as error:
                 outcome.set_exception(error)

@@ -377,5 +377,5 @@ async fn registered_listener_membership_survives_discovery_toggles() {
     listener.stop().await;
     assert_eq!(listener.membership.counts(), (0, 0));
     assert_eq!(listener.active_connections(), 0);
-    assert!(old.recv().await.is_err());
+    super::direct_close_tests::assert_goodbye(&old).await;
 }

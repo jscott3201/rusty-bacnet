@@ -1684,6 +1684,32 @@ events behind gets `RecvError::Lagged` and loses the oldest. Subscribe before
 `ScClientBuilder::build_with_events()` and `build_any_with_events()` return a
 receiver subscribed that way (#1909).
 
+The node closes a WebSocket it is done with (#2520), as Annex AB.7.5.5 asks
+of an intentional close. `stop()` sends the Disconnect-Request when
+connected, waits up to one second for its Disconnect-ACK (or NAK), as the
+requester does in AB.6.2.2, then sends a close with status 1000 and drops the
+socket without waiting for the answering close. No heartbeat runs during the
+wait, and neither the answer nor a hub that closes instead of acknowledging
+starts a reconnect: the cause stays `LocalClose`. Those steps, and each
+outbound direct link's own, share a two-second budget, so a hub that never
+reads holds `stop()` up for two seconds at most; the close itself gets at most
+one second wherever it is sent. Leaving the failover hub after a primary
+restore waits for the ACK the same way. The node closes with 1000 after
+answering the hub's Disconnect-Request, after a BVLC-Result NAK that ends the
+connection, and after a Connect-Request NAK. A hub that leaves a heartbeat or
+the Connect-Request unanswered, or answers it with a malformed or unexpected
+reply or sends a malformed BVLC-Result, gets a close with no status, the
+peer's fault. The one socket that gets no close is a lost hub's own when
+recovery will send its next Connect-Request on it, as it does with reconnect
+on and no connector for that hub. `abort()` and dropping the transport cannot
+wait, so they send nothing.
+`WebSocketPort::close(status)` is the hook: `TlsWebSocket` writes the frame,
+and the default, for an in-memory port such as `LoopbackWebSocket`, sends
+nothing. `WebSocketPort::awaits_disconnect_ack()` turns on the ACK wait; it is
+`false` by default, which keeps a custom port's behaviour from before #2520:
+no wait and, unless it implements `close`, no close frame. A custom port that
+implements `close` usually returns `true` there too.
+
 `ScTransport::connection_status()` returns an `ScLinkStatus` snapshot: the
 connection state, the active hub, the hub VMAC from Connect-Accept, the
 heartbeat age (time since the hub last sent anything accepted) and the
@@ -1725,6 +1751,21 @@ physical sockets may exist, including retiring replacements. Values above
 sockets and can therefore reach 2M. Pending/physical saturation drops TCP;
 otherwise a distinct valid Connect at accepted capacity receives the local
 `RESOURCES/OTHER` NAK. Saturation does not guarantee reconnect admission.
+
+Direct links close as hub connections do (#2520). An outbound link closes
+with 1000 after its Disconnect-Request, which `stop()` sends too, once the
+peer answers or one second has passed, or after answering the peer's, and
+with no status after an unanswered heartbeat. A dial gives up a socket as the
+hub connection does: no status after an unanswered Connect-Request, 1000
+after a NAK, and a Disconnect-Request then 1000 when the connected peer turns
+out not to be the node dialled. The acceptor closes with 1000 after answering
+a Disconnect-Request, after a refusal NAK and when the connect wait runs out,
+and with no status after a malformed Connect-Request (its NAK first), a first
+frame that is not a Connect-Request, or one too long or undecodable.
+`DirectListener::stop()` sends each established peer a Disconnect-Request and
+a close with 1000 within one second; a peer still in its handshake is
+dropped. A data frame that is not binary ends a direct link, either side and
+during the Connect exchange too, with 1003 (AB.7.5.3).
 
 An established accepted link closes after `DIRECT_ACCEPT_IDLE_TIMEOUT` (360
 seconds) without a binary (BVLC) frame in either direction; WebSocket Ping and
@@ -2076,7 +2117,8 @@ close frame with no status: a receive error, a second Connect-Request, or a
 malformed Connect-Request (a reserved VMAC among them), after its NAK. A
 receive error before registration still drops the connection with no close
 frame, and a non-binary data frame still gets 1003. A node's direct-connection acceptor
-closes an idle or retired link with 1000 too.
+closes an idle or retired link with 1000 too. The Hub logs a node's own close
+at debug with its status (#2520), so a node's orderly end is not a warning.
 
 What a node of this stack reports follows from the order of what arrives.
 A connected node reads a graceful shutdown by the Disconnect-Request that

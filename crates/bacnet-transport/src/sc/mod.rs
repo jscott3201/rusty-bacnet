@@ -97,7 +97,10 @@ use egress_limits::HubLimits;
 // ---------------------------------------------------------------------------
 
 mod websocket;
+#[cfg(feature = "sc-tls")]
+pub(crate) use websocket::CLOSE_DATA_NOT_ACCEPTED;
 pub use websocket::WebSocketPort;
+pub(crate) use websocket::{CLOSE_GRACE, CLOSE_NORMAL, close_within_grace};
 
 // ---------------------------------------------------------------------------
 // BACnet/SC Transport
@@ -250,62 +253,16 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
         let state_tx = self.state_tx.clone();
         let observer = self.observer.clone();
 
-        // Attempt handshake on the primary WebSocket.
-        let (ws, active_hub) = match perform_handshake(
-            &*primary_ws,
-            &conn,
-            Some(&state_tx),
-            self.connect_timeout_ms,
-        )
-        .await
-        {
-            Ok(()) => (primary_ws.clone(), self.initial_hub),
-            Err(primary_err) => {
-                observer.connect_failed(self.initial_hub, &primary_err);
-                // Primary failed — try failover if configured.
-                if self.initial_hub == ScActiveHub::Failover
-                    || !conn.lock().await.connect_retry_allowed
-                {
-                    self.local_vmac = conn.lock().await.local_vmac;
-                    return Err(primary_err);
-                } else {
-                    match dial_failover_ws(
-                        &failover_connector,
-                        &mut failover_ws,
-                        self.connect_timeout_ms,
-                    )
-                    .await
-                    {
-                        Some(failover) => {
-                            debug!("BACnet/SC primary connect failed, attempting failover");
-                            observer.failover_engaged();
-                            // Reset connection state for the retry.
-                            {
-                                let mut c = conn.lock().await;
-                                c.reset_for_connect_retry();
-                                state_tx.send_replace(c.state);
-                            }
-                            perform_handshake(
-                                &*failover,
-                                &conn,
-                                Some(&state_tx),
-                                self.connect_timeout_ms,
-                            )
-                            .await
-                            .map(|()| (failover, ScActiveHub::Failover))
-                            .map_err(|e| {
-                                observer.connect_failed(ScActiveHub::Failover, &e);
-                                primary_err
-                            })?
-                        }
-                        _ => {
-                            self.local_vmac = conn.lock().await.local_vmac;
-                            return Err(primary_err);
-                        }
-                    }
-                }
-            }
-        };
+        let (ws, active_hub) = self
+            .first_connect(failover::FirstSockets {
+                primary: &primary_ws,
+                failover: &mut failover_ws,
+                failover_connector: &failover_connector,
+                conn: &conn,
+                state_tx: &state_tx,
+                observer: &observer,
+            })
+            .await?;
 
         {
             let c = conn.lock().await;
@@ -355,6 +312,10 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
             // Separate reconnect log budget, retained across episodes. Only
             // per-attempt notices are gated, never lifecycle outcomes or I/O.
             let mut reconnect_diag = diagnostic_throttle::DiagnosticThrottle::new();
+            // Whether recovery keeps a lost hub's socket for its next Connect
+            // rather than giving it up with a close (recovery.rs, #2520).
+            let connectors = [primary_connector.is_some(), failover_connector.is_some()];
+            let keeps = |hub| recovery::retries_lost_socket(restore_enabled, hub, connectors);
 
             'transport: loop {
                 let mut current_reusable = true;
@@ -387,6 +348,10 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                     if heartbeat_sleep.deadline() != heartbeat_deadline {
                         heartbeat_sleep.as_mut().reset(heartbeat_deadline);
                     }
+                    // While `stop` waits for its Disconnect-ACK, no heartbeat
+                    // goes out and none can time out (#2520).
+                    let disconnecting =
+                        *connection_states.borrow() == ScConnectionState::Disconnecting;
                     tokio::select! {
                         Some(npdu) = direct_intake.recv() => {
                             // Direct merge shares the hub queue: re-admit under
@@ -419,6 +384,10 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                                 }
                                             }
                                             observer.lose(&conn, &state_tx, Cause::MalformedResult).await;
+                                            // The hub's fault: a close with no status (#2520).
+                                            if !keeps(active_hub) {
+                                                close_within_grace(&*ws_clone, None).await;
+                                            }
                                             break;
                                         }
                                         Err(e) => {
@@ -513,6 +482,7 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                         fatal_result,
                                         state_change,
                                         solicited_advertisement,
+                                        answered_own_disconnect,
                                     ) = {
                                         let mut c = conn.lock().await;
                                         let before_state = c.state;
@@ -545,6 +515,9 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                                 && after_state == ScConnectionState::Disconnected,
                                             (after_state != before_state).then_some(after_state),
                                             solicited,
+                                            // Only `stop` enters Disconnecting.
+                                            before_state == ScConnectionState::Disconnecting
+                                                && after_state == ScConnectionState::Disconnected,
                                         )
                                     };
                                     if let Some(state) = state_change {
@@ -595,16 +568,40 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                                         if let Err(e) = ws_clone.send(&ack_buf).await {
                                             warn!("BACnet/SC disconnect ack send error: {}", e);
                                         }
+                                        // Answered, the node closes (AB.6.2.2, #2520),
+                                        // unless recovery retries on this socket: a hub
+                                        // may keep it open for that (sc_peer_info tests it).
+                                        if !keeps(active_hub) {
+                                            close_within_grace(&*ws_clone, Some(CLOSE_NORMAL)).await;
+                                        }
                                     }
 
+                                    // The ACK (or NAK) to this node's own Disconnect-Request:
+                                    // `stop` closes and ends the task, so no recovery (#2520).
+                                    if answered_own_disconnect {
+                                        debug!("BACnet/SC Disconnect-Request answered; leaving the transport loop");
+                                        break 'transport;
+                                    }
                                     if fatal_result {
                                         warn!("BACnet/SC fatal BVLC-Result received; closing transport loop");
+                                        // Refused: an orderly end, 1000 (#2520).
+                                        if !keeps(active_hub) {
+                                            close_within_grace(&*ws_clone, Some(CLOSE_NORMAL)).await;
+                                        }
                                         break;
                                     }
                                 }
                                 Err(e) => {
-                                    warn!("BACnet/SC recv error: {}", e);
-                                    observer.lose(&conn, &state_tx, Cause::from_error(&e)).await;
+                                    // A hub that closes rather than answering this
+                                    // node's Disconnect-Request still ends it here,
+                                    // and a close after the link is down is no news.
+                                    let state = conn.lock().await.state;
+                                    let cause = if state == ScConnectionState::Disconnecting { Cause::LocalClose } else { Cause::from_error(&e) };
+                                    if state == ScConnectionState::Connected { warn!("BACnet/SC recv error: {}", e) } else { debug!("BACnet/SC recv error once disconnecting: {}", e) }
+                                    observer.lose(&conn, &state_tx, cause).await;
+                                    if state == ScConnectionState::Disconnecting {
+                                        break 'transport;
+                                    }
                                     break;
                                 }
                             }
@@ -656,10 +653,17 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
                             // long its dial/handshake took (#1555).
                             primary_restore_interval.reset();
                         }
-                        _ = &mut heartbeat_sleep => {
+                        _ = &mut heartbeat_sleep, if !disconnecting => {
+                            if *connection_states.borrow() == ScConnectionState::Disconnecting {
+                                continue;
+                            }
                             if pending_heartbeat_id.is_some() {
                                 warn!("BACnet/SC heartbeat timeout — disconnecting");
                                 observer.lose(&conn, &state_tx, Cause::HeartbeatTimeout).await;
+                                // The hub stopped answering: a close with no status (#2520).
+                                if !keeps(active_hub) {
+                                    close_within_grace(&*ws_clone, None).await;
+                                }
                                 break;
                             }
                             let heartbeat_message_id = match heartbeat::send_request(&conn, &*ws_clone).await {
@@ -871,6 +875,9 @@ mod rb11_npdu_fairness_tests;
 
 #[cfg(test)]
 mod test_waits;
+
+#[cfg(test)]
+mod close_test_support;
 
 #[cfg(test)]
 mod tests;

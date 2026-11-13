@@ -249,6 +249,17 @@ async fn bounded<T>(future: impl std::future::Future<Output = T>) -> T {
         .await
         .expect("fixture made no progress")
 }
+
+/// What a peer reads once the listener stops (#2520): its Disconnect-Request,
+/// which is no application frame, then the close that ends the stream.
+async fn assert_listener_goodbye(ws: &TlsWebSocket) {
+    let request = bounded(ws.recv()).await.expect("no Disconnect-Request");
+    assert_eq!(
+        decode_sc_message(&request).unwrap().function,
+        bacnet_transport::sc_frame::ScFunction::DisconnectRequest
+    );
+    assert!(bounded(ws.recv()).await.is_err());
+}
 fn csv_oid() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::CHARACTERSTRING_VALUE, 1).unwrap()
 }

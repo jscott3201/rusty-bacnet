@@ -318,6 +318,16 @@ async fn direct_handshake_wrong_peer_vmac_never_receives_destination_npdu() {
         ))
         .await
         .unwrap();
+        // The wrong peer gets no NPDU, only the dial's orderly goodbye
+        // (#2520), and then the stream ends.
+        let goodbye = timeout(Duration::from_secs(2), peer.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            decode_sc_message(&goodbye).unwrap().function,
+            ScFunction::DisconnectRequest
+        );
         assert!(
             timeout(Duration::from_secs(2), peer.recv())
                 .await

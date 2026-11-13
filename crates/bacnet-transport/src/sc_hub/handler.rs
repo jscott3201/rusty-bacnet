@@ -82,8 +82,10 @@ pub(super) async fn run(
 
         let data = match msg_result {
             Ok(Message::Binary(data)) => data,
-            Ok(Message::Close(_)) => {
-                debug!("Hub: client {peer_addr} sent close");
+            Ok(Message::Close(frame)) => {
+                // A node's orderly end says 1000 (#2520): debug, as any close.
+                let status = frame.map(|frame| u16::from(frame.code));
+                debug!("Hub: client {peer_addr} sent close, status {status:?}");
                 break;
             }
             Ok(Message::Ping(_) | Message::Pong(_)) => continue,

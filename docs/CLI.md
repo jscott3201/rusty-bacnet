@@ -361,9 +361,11 @@ interface; `0.0.0.0` binds all interfaces.
 **Profiles and connection lifecycle.** Press `p` to open the profile dialog,
 `x` to disconnect or cancel a connection attempt, and `c` to reconnect. A
 profile reconnect opens its preview again. Disconnect must finish before
-another profile can be loaded or edited. Failed connection attempts keep the
-TUI open. Rows, duplicates and running operations are reset between sessions;
-late events from a previous session cannot repopulate the new one. If a
+another profile can be loaded or edited. Disconnecting a BACnet/SC session
+sends the hub a Disconnect-Request and a close with status 1000 (#2520).
+Failed connection attempts keep the TUI open. Rows, duplicates and running
+operations are reset between sessions; late events from a previous session
+cannot repopulate the new one. If a
 Who-Is cancellation cannot enter a command queue, its status shows the
 failure; Ctrl-C retries immediately and `x` disconnects. The queued Who-Is
 may still run until cancellation is accepted or the connection is retired.

@@ -43,7 +43,7 @@ impl DirectWs for Write {
         }
         Ok(())
     }
-    async fn send_close(&mut self) -> Result<(), ()> {
+    async fn send_close(&mut self, _status: Option<u16>) -> Result<(), ()> {
         Ok(())
     }
 }
@@ -135,6 +135,7 @@ async fn worker_warning_to(
             ),
             response: route,
             warnings,
+            shutdown: watch::channel(false).1,
         },
         &tx,
         &admission,
@@ -340,7 +341,7 @@ impl DirectWs for Recorder {
             .push(decode_sc_message(data).unwrap());
         Ok(())
     }
-    async fn send_close(&mut self) -> Result<(), ()> {
+    async fn send_close(&mut self, _status: Option<u16>) -> Result<(), ()> {
         Ok(())
     }
 }
