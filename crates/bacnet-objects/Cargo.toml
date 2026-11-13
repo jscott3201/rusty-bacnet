@@ -54,7 +54,9 @@ std = [
 event-reporting = []
 # `durable-writes`: `durable_writes()`, the staged saves a host makes off
 # the database lock. Off, a write to an object with storage saves on the
-# writer's own path, as one nobody staged does.
+# writer's own path, as one nobody staged does, and the built-in objects
+# don't implement `DurableWrites` at all: an object's staging code is not
+# compiled, which keeps it out of a firmware image (#2538).
 durable-writes = []
 # no_std with a global allocator. Saves run on the caller's thread, and the
 # hash maps, locks and float rounding come from hashbrown, spinning_top and

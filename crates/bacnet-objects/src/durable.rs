@@ -184,10 +184,11 @@ pub use file::MemoryFiles;
 /// It counts from the end of the save, so a slow save never uses it up. Past
 /// it the request is taken to be gone, and the object drops the staged state
 /// at the next stage or operation task call.
-#[cfg(not(test))]
+#[cfg(all(not(test), feature = "durable-writes"))]
 pub(crate) const STAGED_WRITE_LIFETIME: core::time::Duration = core::time::Duration::from_secs(10);
 /// Short in tests, so one can watch a forgotten staged write go.
 #[cfg(test)]
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 pub(crate) const STAGED_WRITE_LIFETIME: core::time::Duration =
     core::time::Duration::from_millis(300);
 
@@ -266,6 +267,7 @@ impl SaveWait {
         Self { event, then: None }
     }
 
+    #[cfg(feature = "durable-writes")]
     /// A wait that ends once both this wait and `other` have.
     pub(crate) fn and(self, other: SaveWait) -> SaveWait {
         let then = match self.then {
@@ -379,6 +381,7 @@ impl SaveTicket {
         SaveWait::new(Arc::clone(&self.slot.done))
     }
 
+    #[cfg(feature = "durable-writes")]
     /// Whether `wait` is the one [`wait`](Self::wait) hands out for this
     /// save, or a wait [joined](SaveWait::and) with it, so a request
     /// releasing a staged write can show it staged it. A colour object
