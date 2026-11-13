@@ -93,13 +93,21 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let routers = Arc::clone(&self.learned_routers);
         let bindings = Arc::clone(&self.device_bindings);
         self.finish_in_task(&runtime, async move {
-            drop(db);
-            Self::fire_event_notifications_with_bindings(
-                &fanout.event_delivery(&routers, &bindings),
+            // The point's transition commits under the attempt's guard (#2530).
+            // The built-in Access Point reports no intrinsic events; an
+            // application's own point that does is evaluated here.
+            let mut db = db;
+            let mut transitions = Vec::new();
+            super::event_notifications::commit_written_transition(
+                &mut db,
                 &fanout.cov_table,
-                &oid,
+                oid,
+                &mut transitions,
             )
             .await;
+            drop(db);
+            let delivery = fanout.event_delivery(&routers, &bindings);
+            Self::send_written_transitions(&delivery, transitions).await;
             for event in committed {
                 Self::fire_cov_notifications_from_snapshot(
                     &fanout.notify_context(),

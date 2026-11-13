@@ -177,6 +177,20 @@ impl<T: TransportPort + 'static> RequestServices<T> {
         }
     }
 
+    /// The COV notification view of these handles, made where a request
+    /// needs it rather than held across its response.
+    pub(super) fn cov_context(&self) -> super::cov_notify_context::CovNotifyContext<'_, T> {
+        super::cov_notify_context::CovNotifyContext {
+            db: &self.db,
+            network: &self.network,
+            cov_table: &self.cov_table,
+            cov_in_flight: &self.cov_in_flight,
+            notification_transactions: &self.notification_transactions,
+            comm_state: &self.comm_state,
+            config: &self.config,
+        }
+    }
+
     /// The tables a read samples the Device's server-owned lists from.
     pub(super) fn live_tables(&self) -> super::requests::confirmed_response::LiveTables<'_> {
         super::requests::confirmed_response::LiveTables {

@@ -3,18 +3,21 @@
 //!
 //! [`LocalWriter::commit`] makes the write under a database guard it keeps
 //! and hands that guard on in a [`Committed`]. [`LocalWriter::finish`] then
-//! takes the timestamped COV capture and re-evaluates a written Schedule
-//! under that same guard, releases it, and runs the event pass, the COV
-//! fanout, the fanout for a re-evaluated Schedule's targets and any Staging
-//! plan. `write_local` runs `finish` as a task of its own in the server's
-//! request task set ([`BACnetServer::finish_in_task`]), so a caller that
-//! drops its future (a timeout, a `select!`, a cancelled Python task) no
-//! longer skips any of it. `set_life_safety_operation_expected_local` hands
-//! its capture and fanout to such a task the same way (#1520).
+//! takes the timestamped COV capture, re-evaluates a written Schedule and
+//! commits the intrinsic transition the write causes, all under that same
+//! guard (#2530), releases it, and sends that transition's event
+//! notifications, then the COV fanout, the fanout for a re-evaluated
+//! Schedule's targets and any Staging plan. `write_local` runs `finish` as a
+//! task of its own in the server's request task set
+//! ([`BACnetServer::finish_in_task`]), so a caller that drops its future (a
+//! timeout, a `select!`, a cancelled Python task) no longer skips any of it.
+//! `set_life_safety_operation_expected_local` hands its capture and fanout
+//! to such a task the same way (#1520).
 
 use super::local_writes::LocalWriter;
 use super::*;
 use crate::command_lists::TakenRuns;
+use crate::server::event_notifications::commit_written_transition;
 use bacnet_device_core::cov::life_safety::LifeSafetyCovChange;
 use bacnet_objects::staging::StagingWritePlan;
 use futures_util::FutureExt;
@@ -121,14 +124,13 @@ impl<T: TransportPort + 'static> LocalWriter<'_, T> {
             self.cov_table,
         )
         .await;
+        // The transition the write causes commits under its guard too, so
+        // nothing sees the object half updated (#2530); it is sent after.
+        let mut transitions = Vec::new();
+        commit_written_transition(&mut db, self.cov_table, oid, &mut transitions).await;
         drop(db);
 
-        BACnetServer::<T>::fire_event_notifications_with_bindings(
-            &self.event_delivery(),
-            self.cov_table,
-            &oid,
-        )
-        .await;
+        BACnetServer::<T>::send_written_transitions(&self.event_delivery(), transitions).await;
         if life_safety {
             for change in changes {
                 BACnetServer::<T>::fire_life_safety_cov_notifications(
