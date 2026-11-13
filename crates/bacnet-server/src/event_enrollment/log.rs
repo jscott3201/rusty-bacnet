@@ -1,7 +1,7 @@
 //! The server's log lines for an Event Enrollment pass: what the pass
 //! reports, logged where the server drives it.
 
-use super::{EventEnrollmentEvaluationReport, SuppressedDelivery};
+use super::{EventEnrollmentEvaluationReport, SuppressedDelivery, SuppressionCause};
 
 pub(crate) fn log_evaluation_report(report: &EventEnrollmentEvaluationReport) {
     for result in &report.reliability_results {
@@ -30,16 +30,22 @@ pub(crate) fn log_evaluation_report(report: &EventEnrollmentEvaluationReport) {
     }
 }
 
-/// Log each committed transition whose notification payload was refused,
-/// as the commit once logged it.
+/// Log each committed transition whose notification can't be built: a
+/// refused payload as the commit once logged it, and a history that
+/// doesn't read back as the intrinsic path logs it.
 pub(crate) fn log_suppressed_deliveries(suppressed: &[SuppressedDelivery]) {
     for delivery in suppressed {
-        match delivery.event_type {
-            None => tracing::debug!(
+        match (delivery.cause, delivery.event_type) {
+            (SuppressionCause::History(coordinate), _) => tracing::debug!(
+                enrollment = %delivery.enrollment_oid,
+                ?coordinate,
+                "Committed Event Enrollment history projection rejected; suppressing distribution"
+            ),
+            (SuppressionCause::Payload, None) => tracing::debug!(
                 enrollment = %delivery.enrollment_oid,
                 "Committed Event Enrollment reliability payload rejected; suppressing distribution"
             ),
-            Some(event_type) => tracing::debug!(
+            (SuppressionCause::Payload, Some(event_type)) => tracing::debug!(
                 enrollment = %delivery.enrollment_oid,
                 ?event_type,
                 "Committed Event Enrollment payload rejected; suppressing distribution"

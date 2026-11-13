@@ -4,8 +4,8 @@
 mod commit;
 mod support;
 
+use alloc::collections::{BTreeMap, BTreeSet};
 use bacnet_objects::property_metadata::is_array_property;
-use std::collections::{HashMap, HashSet};
 
 pub use commit::{
     EventEnrollmentEvaluationDiagnostic, EventEnrollmentEvaluationOutcome,
@@ -26,7 +26,7 @@ pub use commit::{
     EventEnrollmentEvaluationBatch,
 };
 use commit::{EnrollmentUpdate, FiredTransition, apply_updates_for_delivery};
-pub use commit::{EventEnrollmentTransition, SuppressedDelivery};
+pub use commit::{EventEnrollmentTransition, SuppressedDelivery, SuppressionCause};
 use fault::{
     FaultAlgorithmEvaluation, MonitoredReliability, SupportedFaultAlgorithm,
     evaluate_fault_algorithm, read_event_parameters, read_fault_algorithm,
@@ -57,14 +57,16 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 /// Run one evaluation pass over every Event Enrollment object in `db`,
 /// commit what it finds, and return the report with the commits to send.
 ///
-/// `interval_secs` is the host's time between passes, in seconds (0 counts
-/// as 1): a time delay becomes that many passes, rounded up, so it never
-/// fires early. The batch's `deliveries` include transitions whose
-/// `Event_Enable` bit is clear; send only those whose result has
-/// `distribute` set.
+/// `interval_secs` is the host's time between passes, in whole seconds (0
+/// counts as 1): a time delay becomes that many passes, rounded up, so it
+/// never fires early. A host whose period isn't whole seconds rounds it
+/// down, or delays fire early. It is a `u32` so the conversion is a 32-bit
+/// division, which a 32-bit target does without a library routine. The
+/// batch's `deliveries` include transitions whose `Event_Enable` bit is
+/// clear; send only those whose `distribute()` is true.
 pub fn evaluate_event_enrollments_for_delivery(
     db: &mut ObjectDatabase,
-    interval_secs: u64,
+    interval_secs: u32,
 ) -> EventEnrollmentEvaluationBatch {
     let interval_secs = interval_secs.max(1);
     let oids = db.find_by_type(ObjectType::EVENT_ENROLLMENT);
@@ -77,8 +79,8 @@ pub fn evaluate_event_enrollments_for_delivery(
     // one rule: unqualified or naming this device is local (#1184).
     let local_device = db.local_device();
 
-    let mut updates: HashMap<ObjectIdentifier, EnrollmentUpdate> = HashMap::new();
-    let mut database_eval_sources = HashSet::new();
+    let mut updates: BTreeMap<ObjectIdentifier, EnrollmentUpdate> = BTreeMap::new();
+    let mut database_eval_sources = BTreeSet::new();
 
     for oid in &oids {
         let Some(enrollment) = db.get(oid) else {

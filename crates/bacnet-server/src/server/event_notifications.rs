@@ -2,60 +2,13 @@ use super::event_recipient_route::system_utc_recipient_filter_time;
 use super::*;
 use bacnet_device_core::event::{
     AcceptedAcknowledgeAlarm, CommittedIntrinsicTransition, DistributionOutcome, IntrinsicCommit,
-    IntrinsicCommitRefusal, MessageTexts, NotificationConstruction, NotificationHistorySource,
-    NotificationTransition, RecipientWindow, SampledEventClock, after_write, distribute_event,
-    read_committed_history_snapshot,
+    IntrinsicCommitRefusal, NotificationTransition, RecipientWindow, SampledEventClock,
+    after_write, distribute_event,
 };
-
-use crate::event_enrollment::{CommittedEventEnrollmentDelivery, CommittedEventEnrollmentResult};
 
 #[path = "event_recipient_lookup.rs"]
 mod recipient_lookup;
 use recipient_lookup::matched_recipients_or_log;
-
-/// Project an already-committed Event Enrollment result without another
-/// transition commit or timestamp sample.
-pub(super) fn resolve_committed_event_enrollment_transition(
-    db: &ObjectDatabase,
-    committed: CommittedEventEnrollmentDelivery,
-) -> Option<(ObjectIdentifier, bool, NotificationTransition)> {
-    let CommittedEventEnrollmentDelivery {
-        result,
-        ack_required,
-        recipient_clock,
-        event_type,
-        event_values,
-    } = committed;
-    let (oid, change, distribute) = match result {
-        CommittedEventEnrollmentResult::Normal(result) => {
-            (result.enrollment_oid, result.change, result.distribute)
-        }
-        CommittedEventEnrollmentResult::Reliability(result) => {
-            let change = result.state_change.clone()?;
-            (result.enrollment_oid, change, result.distribute)
-        }
-    };
-
-    let coordinate = change.transition();
-    let history_snapshot = db.get(&oid).and_then(|object| {
-        read_committed_history_snapshot(object, coordinate, MessageTexts::Optional)
-    })?;
-    Some((
-        oid,
-        distribute,
-        NotificationTransition {
-            change,
-            event_type,
-            history_source: NotificationHistorySource::Committed {
-                snapshot: history_snapshot,
-                recipient_clock,
-            },
-            ack_required: Some(ack_required),
-            event_values: Some(event_values),
-            construction: NotificationConstruction::Event,
-        },
-    ))
-}
 
 /// Log why an intrinsic commit gave nothing to distribute, as the commit
 /// once did itself, and keep what it committed.

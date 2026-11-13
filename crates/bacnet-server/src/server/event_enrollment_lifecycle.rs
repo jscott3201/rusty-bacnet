@@ -1,5 +1,5 @@
-use super::event_notifications::resolve_committed_event_enrollment_transition;
 use super::*;
+use crate::event_enrollment::CommittedEventEnrollmentDelivery;
 
 /// Owned handles and settings the event-enrollment task moves into its loop.
 pub(super) struct EventEnrollmentTask<T: TransportPort + 'static> {
@@ -31,7 +31,7 @@ pub(super) fn spawn_event_enrollment_task<T: TransportPort + 'static>(
         period,
         config,
     } = task;
-    let evaluation_interval_secs = period.as_secs().max(1);
+    let evaluation_interval_secs = crate::event_enrollment::core_interval(period.as_secs()).max(1);
     let owner = notification_transactions.audit_owner_lease();
     super::heap_futures::spawn_boxed(move || async move {
         let _owner = owner;
@@ -41,11 +41,11 @@ pub(super) fn spawn_event_enrollment_task<T: TransportPort + 'static>(
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             interval.tick().await;
-            // Evaluate, commit, and project every result in enrollment order
-            // while one database guard is held. The projector consumes
-            // committed timestamp/ACK/clock inputs only; it neither stages
-            // another timestamp nor repeats transition actions. The guard is
-            // dropped before the first send.
+            // Evaluate and commit every enrollment, in database order, while
+            // one database guard is held. Each delivery carries the
+            // timestamp, message text, ACK policy and clock it committed, so
+            // sending it stages no timestamp and repeats no transition
+            // action. The guard is dropped before the first send.
             let (report, outbound) = {
                 let mut db_guard = db.write().await;
                 let evaluation = crate::event_enrollment::evaluate_event_enrollments_for_delivery(
@@ -56,11 +56,11 @@ pub(super) fn spawn_event_enrollment_task<T: TransportPort + 'static>(
                 let outbound = evaluation
                     .deliveries
                     .into_iter()
+                    .filter(CommittedEventEnrollmentDelivery::distribute)
                     .filter_map(|committed| {
-                        resolve_committed_event_enrollment_transition(&db_guard, committed)
+                        let oid = committed.enrollment_oid();
+                        Some((oid, committed.into_notification()?))
                     })
-                    .filter(|(_, distribute, _)| *distribute)
-                    .map(|(oid, _, transition)| (oid, transition))
                     .collect::<Vec<_>>();
                 (evaluation.report, outbound)
             };
