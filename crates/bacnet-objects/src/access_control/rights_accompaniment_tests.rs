@@ -3,8 +3,10 @@
 //! refusals; and, with persistence, a written Accompaniment kept across a
 //! restart and saved off the database lock like the rule arrays (#1392).
 
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use super::test_storage::{MemoryPersistence, assert_refused, block_on, persistent, write};
 use super::*;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::durable::{DurableWrites, StageStep};
 use crate::property_metadata::{PropertyConformance, PropertyWriteCapability};
 use crate::property_metadata::{is_array_property, is_writable_property};
@@ -425,6 +427,7 @@ fn a_saved_accompaniment_the_setter_refuses_refuses_the_object() {
     }
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn an_accompaniment_write_stages_only_while_the_row_is_served() {
     let storage = Arc::new(MemoryPersistence::default());

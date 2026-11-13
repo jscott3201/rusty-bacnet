@@ -1,11 +1,13 @@
 use super::test_support::*;
 use super::*;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::durable::{DurableWrites, StageStep};
 // std: only the writer-thread tests use it.
 #[cfg(feature = "std")]
 use crate::traits::BACnetObject;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use std::time::Duration;
 
 #[test]
@@ -119,6 +121,7 @@ fn load_errors_and_invalid_custom_snapshots_fail_before_a_writer_runs() {
     assert_eq!(store.attempts(), 0);
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn combined_datetime_is_refused_before_direct_or_staged_save() {
     let store = Arc::new(Memory::default());
@@ -141,6 +144,7 @@ fn combined_datetime_is_refused_before_direct_or_staged_save() {
     }
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn ordered_array_steps_save_once_and_each_claim_serves_its_prefix() {
     let store = Arc::new(Memory::default());
@@ -177,6 +181,7 @@ fn ordered_array_steps_save_once_and_each_claim_serves_its_prefix() {
     assert_eq!(state.profile().tags, Some(expected));
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn invalid_middle_stops_staging_but_a_null_noop_does_not() {
     for middle in [
@@ -236,6 +241,7 @@ fn refused_or_unrelated_write_does_not_steal_another_stage() {
     assert_eq!(store.attempts(), 1);
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn partial_claim_release_corrects_to_successful_prefix() {
     let store = Arc::new(Memory::default());
@@ -250,6 +256,7 @@ fn partial_claim_release_corrects_to_successful_prefix() {
     assert_eq!(store.attempts(), 2);
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn dropped_forgotten_expired_and_reprovisioned_stages_correct_saved_authority() {
     for action in 0..4 {
@@ -280,6 +287,7 @@ fn dropped_forgotten_expired_and_reprovisioned_stages_correct_saved_authority() 
     }
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn failed_staged_save_never_publishes_or_needs_a_correction() {
     let store = Arc::new(Memory::default());
@@ -380,6 +388,7 @@ fn provisioning_supersedes_a_stage_without_publishing_it_or_detaching_storage() 
     assert_eq!(store.attempts(), 3);
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn an_unstaged_valid_write_supersedes_the_old_stage_in_writer_order() {
     let store = Arc::new(Memory::default());

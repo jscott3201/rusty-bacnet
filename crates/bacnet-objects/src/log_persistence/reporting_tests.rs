@@ -18,8 +18,10 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use bytes::BytesMut;
 
 use super::store::DurableLog;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use super::tests::{MemoryLog, trend_record};
 use super::*;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::durable::{DurableWrites, PendingWrite, STAGED_WRITE_LIFETIME, SaveWait, StageStep};
 use crate::event_log::EventLogObject;
 use crate::traits::BACnetObject;
@@ -332,6 +334,7 @@ fn the_setter_rule_needs_storage_and_holds_on_each_log() {
     assert_eq!(class(&event), PropertyValue::Unsigned(3));
 }
 
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 fn class_write(class: u64) -> PendingWrite {
     PendingWrite {
         property: P::NOTIFICATION_CLASS,
@@ -340,6 +343,7 @@ fn class_write(class: u64) -> PendingWrite {
     }
 }
 
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 fn staged(step: StageStep) -> SaveWait {
     match step {
         StageStep::Staged(wait) => wait,
@@ -347,6 +351,7 @@ fn staged(step: StageStep) -> SaveWait {
     }
 }
 
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 fn stored_class(storage: &MemoryLog<BACnetLogRecord>) -> Option<u32> {
     storage
         .stored
@@ -356,11 +361,13 @@ fn stored_class(storage: &MemoryLog<BACnetLogRecord>) -> Option<u32> {
         .and_then(|snapshot| snapshot.reporting.notification_class)
 }
 
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 /// Wait for the commits the log has queued.
 fn settled(log: &TrendLogObject) {
     DurableLog::store(log).unwrap().idle().block();
 }
 
+#[cfg(feature = "durable-writes")]
 /// A staged write commits before the log serves it; the cadence holds back
 /// while it is staged, and the write itself commits nothing more.
 #[test]
@@ -412,6 +419,7 @@ fn a_staged_write_commits_first_and_the_cadence_waits_for_it() {
     assert_eq!(stored.reporting.notification_class, Some(9));
 }
 
+#[cfg(feature = "durable-writes")]
 /// What the application sets between a stage and its commit, the log
 /// commits at its next look, as any change the cadence holds back
 /// (#2431): the staged commit holds the old Notification_Threshold, and
@@ -452,6 +460,7 @@ fn a_setter_between_a_stage_and_its_commit_commits_at_the_next_look() {
     assert_eq!(stored().reporting.notification_class, Some(9));
 }
 
+#[cfg(feature = "durable-writes")]
 /// A WritePropertyMultiple's settings commit once, together.
 #[test]
 fn a_requests_writes_to_one_log_commit_once() {
@@ -476,6 +485,7 @@ fn a_requests_writes_to_one_log_commit_once() {
     assert_eq!(stored.reporting.notify_type, Some(NotifyType::ALARM));
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_staged_write_whose_commit_fails_is_refused() {
     let storage = MemoryLog::<BACnetLogRecord>::new();
@@ -498,6 +508,7 @@ fn a_staged_write_whose_commit_fails_is_refused() {
     assert_eq!(log.written_reporting(), LogReportingSettings::default());
 }
 
+#[cfg(feature = "durable-writes")]
 /// Another request finds the log busy while a write is staged.
 #[test]
 fn a_second_request_waits_for_a_staged_write() {
@@ -516,6 +527,7 @@ fn a_second_request_waits_for_a_staged_write() {
     ));
 }
 
+#[cfg(feature = "durable-writes")]
 /// A staged write its request never makes leaves storage ahead of the log
 /// until the release, the expiry or the drop puts it back.
 #[test]
@@ -559,6 +571,7 @@ fn a_staged_write_never_made_puts_storage_back() {
     assert!(!log.has_staged_write());
 }
 
+#[cfg(feature = "durable-writes")]
 /// Writes that aren't the log's to keep stage nothing, and a log without
 /// storage stages nothing at all.
 #[test]
@@ -592,6 +605,7 @@ fn only_kept_settings_stage() {
     ));
 }
 
+#[cfg(feature = "durable-writes")]
 /// Event_Detection_Enable written FALSE and then TRUE again restarts the
 /// BUFFER_READY counts in the commit, as on the log.
 #[test]
@@ -625,6 +639,7 @@ fn detection_turned_back_on_commits_the_restarted_counts() {
     );
 }
 
+#[cfg(feature = "durable-writes")]
 /// A write nobody staged supersedes another request's staged write: storage
 /// first goes back to the served settings, then takes the new one, and the
 /// staged request's own write later commits in place.
@@ -662,11 +677,13 @@ fn a_write_nobody_staged_supersedes_a_staged_one() {
     );
 }
 
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 fn no_space(result: &Result<(), Error>) -> bool {
     matches!(result, Err(Error::Remote(RemoteError::Error { class, code }))
         if *class == ErrorClass::RESOURCES && *code == ErrorCode::NO_SPACE_TO_WRITE_PROPERTY)
 }
 
+#[cfg(feature = "durable-writes")]
 /// A message text past what a snapshot keeps is refused as it is written,
 /// before anything stages or commits, with storage that never encodes a
 /// snapshot as with the file backend; the log then still reopens.

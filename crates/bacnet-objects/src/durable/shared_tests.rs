@@ -4,6 +4,7 @@
 use super::*;
 use std::task::Wake;
 
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 struct Flag(std::sync::atomic::AtomicBool);
 
 impl Wake for Flag {
@@ -12,6 +13,7 @@ impl Wake for Flag {
     }
 }
 
+#[cfg(feature = "durable-writes")]
 /// A joined wait ends only once every wait in it has, in either order, and
 /// wakes its task for the later one (#1526).
 #[test]

@@ -19,6 +19,7 @@ use super::test_storage::MemoryConfig;
 use super::{ReportingWriteConfig, TimerWriteConfig, WriteConfigPersistence, WriteConfigSnapshot};
 use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
 use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::durable::{DurableWrites, PendingWrite, STAGED_WRITE_LIFETIME, SaveWait, StageStep};
 use crate::multistate::{MultiStateInputObject, MultiStateOutputObject, MultiStateValueObject};
 use crate::traits::BACnetObject;
@@ -388,6 +389,7 @@ fn storage_holding_what_no_write_leaves_fails_the_build() {
     }
 }
 
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 fn class_write(class: u64) -> PendingWrite {
     PendingWrite {
         property: P::NOTIFICATION_CLASS,
@@ -396,6 +398,7 @@ fn class_write(class: u64) -> PendingWrite {
     }
 }
 
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 fn staged(step: StageStep) -> SaveWait {
     match step {
         StageStep::Staged(wait) => wait,
@@ -403,6 +406,7 @@ fn staged(step: StageStep) -> SaveWait {
     }
 }
 
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 fn saved_class(storage: &MemoryConfig) -> Option<u32> {
     match storage.saved() {
         Some(WriteConfigSnapshot::Reporting(saved)) => saved.notification_class,
@@ -410,6 +414,7 @@ fn saved_class(storage: &MemoryConfig) -> Option<u32> {
     }
 }
 
+#[cfg(feature = "durable-writes")]
 /// A request's writes stage one save before the object serves them; the
 /// writes take it without saving again.
 #[test]
@@ -445,6 +450,7 @@ fn a_staged_write_saves_first_and_the_write_takes_it() {
     );
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_staged_write_whose_save_fails_is_refused() {
     let storage = MemoryConfig::new();
@@ -467,6 +473,7 @@ fn a_staged_write_whose_save_fails_is_refused() {
     assert_eq!(object.written_reporting(), ReportingWriteConfig::default());
 }
 
+#[cfg(feature = "durable-writes")]
 /// A staged write its request never makes puts storage back to the rows
 /// served: on release, on expiry, as the server stops, and as the object
 /// drops.
@@ -501,6 +508,7 @@ fn a_staged_write_never_made_puts_storage_back() {
     assert_eq!(saved_class(&storage), None);
 }
 
+#[cfg(feature = "durable-writes")]
 /// A write nobody staged supersedes a staged one: storage goes back to the
 /// served rows, then takes the new one.
 #[test]
@@ -532,6 +540,7 @@ fn a_write_nobody_staged_supersedes_a_staged_one() {
     assert_eq!(saved_class(&storage), Some(9));
 }
 
+#[cfg(feature = "durable-writes")]
 /// Writes of rows the object doesn't keep stage nothing, nor do writes of a
 /// row it refuses.
 #[test]

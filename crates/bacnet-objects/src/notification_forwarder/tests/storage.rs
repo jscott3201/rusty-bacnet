@@ -32,6 +32,7 @@ pub(super) struct Held {
     pub(super) go: mpsc::Sender<()>,
 }
 
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 /// Long enough for any wait on another thread in these tests.
 pub(super) const WAIT: Duration = Duration::from_secs(10);
 
@@ -104,6 +105,7 @@ pub(super) fn persistent(storage: &Arc<MemoryPersistence>) -> NotificationForwar
     .unwrap()
 }
 
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 struct ThreadWaker(std::thread::Thread);
 
 impl Wake for ThreadWaker {
@@ -112,6 +114,7 @@ impl Wake for ThreadWaker {
     }
 }
 
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 /// Run `future` to completion on this thread, failing after [`WAIT`].
 pub(super) fn block_on<F: Future>(future: F) -> F::Output {
     let waker = Waker::from(Arc::new(ThreadWaker(std::thread::current())));

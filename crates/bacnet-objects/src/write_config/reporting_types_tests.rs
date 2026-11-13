@@ -15,6 +15,7 @@ use super::reporting_tests::{covered, detection, persistence, refused_with};
 use super::test_storage::MemoryConfig;
 use super::{ReportingWriteConfig, WriteConfigSnapshot};
 use crate::access_control::{AccessDoorObject, AccessZoneObject};
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::durable::{DurableWrites, PendingWrite, StageStep};
 use crate::event_enrollment::{AlertEnrollmentObject, EventEnrollmentObject};
 use crate::traits::BACnetObject;
@@ -332,6 +333,7 @@ fn an_access_object_clear_drops_what_was_saved() {
     assert_eq!(read(zone.as_ref(), P::NOTIFICATION_CLASS), class(0));
 }
 
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 fn notify_type(notify_type: NotifyType) -> PendingWrite {
     PendingWrite {
         property: P::NOTIFY_TYPE,
@@ -340,6 +342,7 @@ fn notify_type(notify_type: NotifyType) -> PendingWrite {
     }
 }
 
+#[cfg(feature = "durable-writes")]
 /// An Alert Enrollment takes only ALARM and EVENT as Notify_Type: a staged
 /// ACK_NOTIFICATION stages nothing, as the object refuses it, and storage
 /// holding one fails its build. An Event Enrollment takes all three.
@@ -381,6 +384,7 @@ fn an_alert_enrollment_keeps_only_the_notify_types_it_takes() {
     );
 }
 
+#[cfg(feature = "durable-writes")]
 /// A staged write on an object with no Tags saves first, and the write
 /// takes it without saving again.
 #[test]

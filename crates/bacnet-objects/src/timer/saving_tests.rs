@@ -11,6 +11,7 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use bytes::BytesMut;
 
 use super::{StateChangeValues, TimerObject};
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::durable::{DurableWrites, PendingWrite, StageStep};
 use crate::traits::BACnetObject;
 use crate::write_config::test_storage::MemoryConfig;
@@ -131,6 +132,7 @@ fn a_set_that_cannot_be_saved_is_refused_and_the_old_set_stays() {
     assert_eq!(storage.saves(), 0);
 }
 
+#[cfg(feature = "durable-writes")]
 /// The server's path: the save runs at the stage, and the write then takes
 /// the saved set without saving again.
 #[test]
@@ -158,6 +160,7 @@ fn a_staged_write_takes_the_saved_set() {
     assert_eq!(storage.saves(), 1);
 }
 
+#[cfg(feature = "durable-writes")]
 /// A staged value that isn't equal to itself is still the request's own:
 /// a REAL that is no number, alone at an index and inside the whole array,
 /// takes the save its stage made and saves nothing more (#2331). A
@@ -195,6 +198,7 @@ fn a_staged_value_that_is_not_a_number_takes_its_save() {
     }
 }
 
+#[cfg(feature = "durable-writes")]
 /// A staged set its request never makes is put back: storage then holds
 /// what the Timer serves, here nothing written.
 #[test]
@@ -219,6 +223,7 @@ fn a_staged_set_never_made_puts_storage_back() {
     assert!(!timer.state_change_saved());
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_timer_without_the_set_stages_nothing() {
     let storage = MemoryConfig::new();

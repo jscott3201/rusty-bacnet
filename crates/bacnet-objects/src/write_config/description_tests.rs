@@ -15,6 +15,7 @@ use bacnet_types::primitives::PropertyValue;
 use super::test_storage::MemoryConfig;
 use super::{ChannelWriteConfig, TimerWriteConfig, WriteConfigPersistence, WriteConfigSnapshot};
 use crate::channel::ChannelObject;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::durable::{DurableWrites, PendingWrite, StageStep};
 use crate::timer::TimerObject;
 use crate::traits::BACnetObject;
@@ -40,11 +41,13 @@ fn write(object: &mut dyn BACnetObject, property: P, value: PropertyValue) -> Re
     object.write_property(property, None, value, None)
 }
 
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 fn refused_with(result: &Result<(), Error>, class: ErrorClass, code: ErrorCode) -> bool {
     matches!(result, Err(Error::Remote(RemoteError::Error { class: c, code: e }))
         if *c == class && *e == code)
 }
 
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 fn pending(property: P, value: PropertyValue) -> PendingWrite {
     PendingWrite {
         property,
@@ -57,16 +60,19 @@ fn timer(storage: &Arc<MemoryConfig>) -> TimerObject {
     TimerObject::with_persistence(1, "TMR", persistence(storage)).unwrap()
 }
 
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 fn channel(storage: &Arc<MemoryConfig>) -> ChannelObject {
     ChannelObject::with_persistence(1, "CH", 4, persistence(storage)).unwrap()
 }
 
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 fn saved_description(storage: &MemoryConfig) -> Option<String> {
     storage
         .saved()
         .and_then(|saved| saved.description().map(Into::into))
 }
 
+#[cfg(feature = "durable-writes")]
 /// Run `check` on a Timer, with Default_Timeout as the part it keeps beside
 /// Description, and on a Channel, with Channel_Number.
 fn on_each_config_object(
@@ -84,6 +90,7 @@ fn on_each_config_object(
     );
 }
 
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 /// An object with storage, as the server reaches it.
 trait KeptObject: BACnetObject + DurableWrites {
     fn object(&self) -> &dyn BACnetObject;
@@ -100,6 +107,7 @@ impl<T: BACnetObject + DurableWrites> KeptObject for T {
     }
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_written_description_survives_a_rebuild() {
     on_each_config_object(|open, _, _| {
@@ -113,6 +121,7 @@ fn a_written_description_survives_a_rebuild() {
     });
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_description_whose_save_fails_is_refused_with_the_old_value_kept() {
     on_each_config_object(|open, _, _| {
@@ -131,6 +140,7 @@ fn a_description_whose_save_fails_is_refused_with_the_old_value_kept() {
     });
 }
 
+#[cfg(feature = "durable-writes")]
 /// A NULL changes nothing and saves nothing; one past the cap, or of
 /// another type, is refused before anything is saved.
 #[test]
@@ -166,6 +176,7 @@ fn a_null_saves_nothing_and_a_refused_description_saves_nothing() {
     });
 }
 
+#[cfg(feature = "durable-writes")]
 /// A request writing Description and another kept part stages one save,
 /// and each write takes it without saving again.
 #[test]
@@ -321,6 +332,7 @@ mod reporting {
         assert_eq!(description(&plain), text("configured"));
     }
 
+    #[cfg(feature = "durable-writes")]
     #[test]
     fn a_null_or_refused_description_saves_nothing() {
         let storage = MemoryConfig::new();
@@ -361,6 +373,7 @@ mod reporting {
         assert_eq!(storage.saves(), 1);
     }
 
+    #[cfg(feature = "durable-writes")]
     /// A request writing Description and a reporting setting stages one
     /// save, which both writes take.
     #[test]

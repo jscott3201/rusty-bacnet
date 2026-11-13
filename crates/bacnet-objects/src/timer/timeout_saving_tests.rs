@@ -9,6 +9,7 @@ use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::{DEFAULT_TIMEOUT, StateChangeValues, TimerObject};
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::durable::{DurableWrites, PendingWrite, StageStep};
 use crate::traits::BACnetObject;
 use crate::write_config::test_storage::MemoryConfig;
@@ -148,6 +149,7 @@ fn a_default_timeout_that_cannot_be_saved_is_refused_and_the_old_one_stays() {
     assert_eq!(storage.saves(), 0);
 }
 
+#[cfg(feature = "durable-writes")]
 /// The server's path, on a Timer without the set: the write stages, saves
 /// once, and then takes the saved value.
 #[test]

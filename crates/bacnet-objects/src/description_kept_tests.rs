@@ -125,8 +125,15 @@ macro_rules! kept_object {
                 self
             }
             fn staging(&mut self) -> Option<&mut dyn DurableWrites> {
-                let $staged = self;
-                $staging
+                #[cfg(feature = "durable-writes")]
+                {
+                    let $staged = self;
+                    $staging
+                }
+                #[cfg(not(feature = "durable-writes"))]
+                {
+                    None
+                }
             }
             fn configure(&mut self, $text: &str) {
                 let $set = self;

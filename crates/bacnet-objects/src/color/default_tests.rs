@@ -13,7 +13,9 @@ use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::*;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::durable::{DurableWrites, PendingWrite, StageStep};
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::object_profile::{ObjectProfile, TagsPersistence, TagsSnapshot};
 use crate::traits::BACnetObject;
 
@@ -46,6 +48,7 @@ impl ColorOutputPersistence for Memory {
     }
 }
 
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 /// Tags storage in memory, saves counted.
 #[derive(Default)]
 struct Tags(Mutex<Option<TagsSnapshot>>, AtomicUsize);
@@ -218,6 +221,7 @@ fn a_default_that_cannot_be_saved_is_refused_and_the_old_one_stays() {
     assert_eq!(storage.saves.load(Ordering::SeqCst), 0);
 }
 
+#[cfg(feature = "durable-writes")]
 /// The server's path: the default stages, a Present_Value change while it
 /// is staged waits, and the write takes the saved default; the waiting
 /// change is saved after it.
@@ -259,6 +263,7 @@ fn a_staged_default_is_taken_and_a_waiting_present_value_follows_it() {
     );
 }
 
+#[cfg(feature = "durable-writes")]
 /// A staged default its request never makes: storage goes back to what
 /// the object serves, the waiting Present_Value included.
 #[test]
@@ -288,6 +293,7 @@ fn a_staged_default_never_made_puts_the_served_state_back() {
     assert_eq!(ct.default_color_temperature(), 4000);
 }
 
+#[cfg(feature = "durable-writes")]
 /// One request writing Tags and Default_Color stages both, with one wait,
 /// and the release lets each go.
 #[test]
@@ -347,6 +353,7 @@ fn a_request_writing_tags_and_the_default_stages_both() {
     );
 }
 
+#[cfg(feature = "durable-writes")]
 /// The same joined stage released with neither write made, as when the
 /// request failed first: both staged writes go, and storage keeps what the
 /// object serves.
@@ -425,6 +432,7 @@ fn clearing_a_written_default_lets_the_configured_one_apply() {
     assert_eq!(temperature(&storage).default_color_temperature(), 4000);
 }
 
+#[cfg(feature = "durable-writes")]
 /// A staged default whose save failed is refused, and the Present_Value
 /// change that waited for it is saved at once.
 #[test]

@@ -43,6 +43,7 @@ fn lent(object: &mut dyn BACnetObject) -> Option<&mut dyn DurableWrites> {
     object.durable_writes()
 }
 
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 #[cfg(not(feature = "durable-writes"))]
 fn lent(_: &mut dyn BACnetObject) -> Option<&mut dyn DurableWrites> {
     None
@@ -176,6 +177,7 @@ pub(super) fn cases(saved: Option<&str>) -> Vec<Box<dyn Kept>> {
     ]
 }
 
+#[cfg(feature = "durable-writes")]
 /// A Tags user that keeps its Description elsewhere, or nowhere, refuses
 /// storage holding one, writes nothing to it, and never stages or saves a
 /// Description there: its file stays version 1.

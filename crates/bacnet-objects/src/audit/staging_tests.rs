@@ -11,10 +11,13 @@ use std::time::{Duration, Instant};
 use bacnet_types::constructed::{AuditPropertyReference, BACnetAuditNotification, BACnetRecipient};
 use bacnet_types::enums::{AuditOperation, ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use bacnet_types::primitives::{BACnetTimeStamp, Date, ObjectIdentifier, PropertyValue, Time};
 
 use crate::clock::{ClockFrame, ClockReader};
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::durable::{DurableWrites, PendingWrite, SaveWait, StageStep};
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::traits::BACnetObject;
 
 use super::{
@@ -344,6 +347,7 @@ fn a_duplicate_or_empty_change_stages_nothing() {
     assert_eq!(storage.commits.load(Ordering::SeqCst), commits);
 }
 
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 pub(super) fn staged_write(step: StageStep) -> SaveWait {
     match step {
         StageStep::Staged(wait) => wait,
@@ -385,6 +389,7 @@ fn a_staged_log_enable_write_commits_off_the_lock_and_is_taken_by_the_write() {
     assert!(!storage.committed().log_enable);
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_staged_log_enable_write_its_request_dropped_leaves_storage_with_the_served_log() {
     let (mut log, storage) = log();
@@ -438,6 +443,7 @@ fn a_finished_batch_its_request_forgot_lands_from_the_operation_task() {
     );
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn staging_skips_a_write_with_nothing_to_commit() {
     let (mut log, storage) = log();
@@ -469,6 +475,7 @@ fn reopen(storage: &Arc<SlowPersistence>) -> AuditLogObject {
     AuditLogObject::new(1, "audit", 10, storage.clone()).unwrap()
 }
 
+#[cfg(feature = "durable-writes")]
 fn stage_log_disable(log: &mut AuditLogObject) -> SaveWait {
     staged_write(log.stage_write(
         PropertyIdentifier::ENABLE,
@@ -477,6 +484,7 @@ fn stage_log_disable(log: &mut AuditLogObject) -> SaveWait {
     ))
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_log_dropped_with_a_staged_change_puts_storage_back_to_the_served_log() {
     let (mut log, storage) = log();
@@ -496,6 +504,7 @@ fn a_log_dropped_with_a_staged_change_puts_storage_back_to_the_served_log() {
     assert_eq!(reopened.generation(), generation + 1);
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_log_dropped_after_its_staged_change_was_made_keeps_it() {
     let (mut log, storage) = log();
@@ -514,6 +523,7 @@ fn a_log_dropped_after_its_staged_change_was_made_keeps_it() {
     assert!(!reopen(&storage).log_enable());
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_log_dropped_with_a_staged_change_whose_commit_failed_leaves_storage_alone() {
     let (mut log, storage) = log();
@@ -527,6 +537,7 @@ fn a_log_dropped_with_a_staged_change_whose_commit_failed_leaves_storage_alone()
     assert!(reopen(&storage).log_enable());
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_log_dropped_part_way_through_staged_changes_keeps_the_steps_taken() {
     let (mut log, storage) = log();
