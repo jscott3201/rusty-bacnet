@@ -143,8 +143,9 @@ async fn a_subscriber_that_never_answers_is_asked_again_then_held_off() {
 /// subscriber and `max_subscriptions_global` in all, and refuses the next
 /// with RESOURCES / NO_SPACE_TO_ADD_LIST_ELEMENT; an outbox of one entry
 /// sends a change to three subscriptions one after the other, the later
-/// ones with the current value once room frees. An invalid policy, an empty
-/// outbox and a client-only session fail startup.
+/// ones with the current value once room frees. An invalid policy, an
+/// outbox that is empty or past its bounds, a zero or over-long confirmed
+/// timeout and a client-only session fail startup; at each bound it starts.
 #[tokio::test(start_paused = true)]
 async fn the_bounds_hold() {
     let policy = CovPolicy {
@@ -211,21 +212,77 @@ async fn the_bounds_hold() {
     };
     let empty =
         |entries, octets| ReportConfig::default().with_outbox(OutboxLimits { entries, octets });
-    for (role, config) in [
-        (SessionRole::ServerOnly, ReportConfig::new(invalid)),
-        (SessionRole::ServerOnly, empty(0, 2048)),
-        (SessionRole::ServerOnly, empty(16, 0)),
-        (SessionRole::ClientOnly, ReportConfig::default()),
-    ] {
-        let mut refused = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
+    let timed = |millis| {
+        let timeout = bacnet_time::Duration::from_millis(millis);
+        ReportConfig::default().with_confirmed(FlightTiming::new(timeout, 3))
+    };
+    use crate::session::{
+        COV_CONFIRMED_TIMEOUT_MAX_MS, COV_OUTBOX_MAX_ENTRIES, COV_OUTBOX_MAX_OCTETS,
+    };
+    use bacnet_device_core::cov::FlightTiming;
+    let session = |role, config: &ReportConfig| {
+        BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
             .role(role)
             .database(fixture())
             .build_session_over(BusPort::new())
             .unwrap()
-            .with_cov(config.clone());
-        assert!(refused.start().await.is_err(), "{role:?} {config:?}");
+            .with_cov(config.clone())
+    };
+    for (role, config, says) in [
+        (
+            SessionRole::ServerOnly,
+            ReportConfig::new(invalid),
+            "max_subscriptions_global",
+        ),
+        (
+            SessionRole::ServerOnly,
+            empty(0, 2048),
+            "at least one entry",
+        ),
+        (SessionRole::ServerOnly, empty(16, 0), "at least one entry"),
+        (
+            SessionRole::ServerOnly,
+            empty(COV_OUTBOX_MAX_ENTRIES + 1, 2048),
+            "at most",
+        ),
+        (
+            SessionRole::ServerOnly,
+            empty(16, COV_OUTBOX_MAX_OCTETS + 1),
+            "at most",
+        ),
+        (SessionRole::ServerOnly, timed(0), "confirmed timeout"),
+        (
+            SessionRole::ServerOnly,
+            timed(COV_CONFIRMED_TIMEOUT_MAX_MS + 1),
+            "confirmed timeout",
+        ),
+        (
+            SessionRole::ClientOnly,
+            ReportConfig::default(),
+            "server role",
+        ),
+    ] {
+        let mut refused = session(role, &config);
+        let error = refused.start().await.expect_err("refused at start");
+        assert!(
+            error.to_string().contains(says),
+            "{role:?} {config:?}: {error}"
+        );
         assert!(!refused.is_running());
     }
+    // At each bound the session starts.
+    let widest = ReportConfig::default()
+        .with_outbox(OutboxLimits {
+            entries: COV_OUTBOX_MAX_ENTRIES,
+            octets: COV_OUTBOX_MAX_OCTETS,
+        })
+        .with_confirmed(FlightTiming::new(
+            bacnet_time::Duration::from_millis(COV_CONFIRMED_TIMEOUT_MAX_MS),
+            3,
+        ));
+    let mut widest = session(SessionRole::ServerOnly, &widest);
+    widest.start().await.unwrap();
+    widest.stop().await.unwrap();
 }
 
 /// However many subscribers stop answering, their confirmed notifications

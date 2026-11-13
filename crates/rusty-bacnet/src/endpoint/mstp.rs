@@ -93,6 +93,8 @@ struct MstpEndpointConfig {
     device_writes: crate::mutation_policy::DeviceWritePolicy,
     /// The source Audit Reporter keywords, if any (#2357).
     source_audit: Option<super::source_audit::SourceAuditKeywords>,
+    /// The `cov` keyword's configuration, when COV is on (#2490).
+    cov: Option<bacnet_device_core::report::ReportConfig>,
 }
 
 #[cfg(test)]
@@ -150,16 +152,18 @@ impl MstpEndpointConfig {
         if let Some(source) = &config.source_audit {
             source.provision(&config.identity, &mut db)?;
         }
-        let session = link_builder(serial, &config.link())
+        let mut builder = link_builder(serial, &config.link())
             .role(SessionRole::Both)
             .queue_capacity(config.queue_capacity)
             .read_work_limit(config.read_work_limit)
             .client_timers(config.apdu_timeout_ms, config.apdu_retries)
             .min_request_interval_ms(config.min_request_interval_ms)
             .database(db)
-            .device(config.identity.clone())
-            .build_session()
-            .map_err(to_py_err)?;
+            .device(config.identity.clone());
+        if let Some(cov) = config.cov.clone() {
+            builder = builder.cov(cov);
+        }
+        let session = builder.build_session().map_err(to_py_err)?;
         let session = match &config.source_audit {
             Some(source) => source.select(session),
             None => session,
@@ -246,6 +250,19 @@ impl PyMstpEndpoint {
     ///         `local_address()` gives it, or a routed `"network:0xMAC"`
     ///         (#2371). An address `audit_recipient` takes
     ///         another station: never 255 or this endpoint's own.
+    ///     cov: Keyword-only (default None, no COV). An `EndpointCov` dict
+    ///         turns on SubscribeCOV, SubscribeCOVProperty and
+    ///         SubscribeCOVPropertyMultiple for the endpoint's objects, with
+    ///         the COV notifications their subscriptions call for after
+    ///         `set_present_value_local` and `set_reliability_local` (#2490).
+    ///         Its keys, all optional (`{}` takes the defaults), are
+    ///         `policy` (a `CovPolicy`, as `BACnetServer`'s `cov_policy`),
+    ///         `outbox_entries` (16), `outbox_octets` (2048),
+    ///         `confirmed_timeout_ms` (3000) and `confirmed_retries` (3).
+    ///         An unknown key or a wrong type raises TypeError, and an outbox
+    ///         or timeout outside 1 to the endpoint's bounds (65535 entries,
+    ///         16 MiB, one hour) ValueError. The endpoint has no clock, so
+    ///         a timestamped COV-multiple reference is refused.
     #[new]
     #[pyo3(signature = (
         device_instance,
@@ -278,7 +295,8 @@ impl PyMstpEndpoint {
         device_write_policy=None,
         source_audit_reporter=None,
         audit_recipient=None,
-        audit_device_bindings=None
+        audit_device_bindings=None,
+        cov=None
     ))]
     fn new(
         device_instance: u32,
@@ -311,6 +329,7 @@ impl PyMstpEndpoint {
         source_audit_reporter: Option<crate::types::PyObjectIdentifier>,
         audit_recipient: Option<&Bound<'_, PyAny>>,
         audit_device_bindings: Option<Vec<(crate::types::PyObjectIdentifier, String)>>,
+        cov: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<Self> {
         let reinitialize = crate::reinitialize::EndpointReinitialize::parse(
             on_reinitialize,
@@ -318,6 +337,7 @@ impl PyMstpEndpoint {
             reinit_password,
         )?;
         let device_writes = crate::mutation_policy::DeviceWritePolicy::parse(device_write_policy)?;
+        let cov = super::cov::parse(cov)?;
         if queue_capacity == 0 {
             return Err(PyValueError::new_err(
                 "queue_capacity must be greater than zero",
@@ -401,6 +421,7 @@ impl PyMstpEndpoint {
                 reinitialize,
                 device_writes,
                 source_audit,
+                cov,
             },
         })
     }
@@ -509,6 +530,7 @@ impl PyMstpEndpoint {
         let inner = self.lifecycle.session.clone();
         let reinitialize = self.config.reinitialize.enabled();
         let device_writes = self.config.device_writes.enabled();
+        let cov = self.config.cov.is_some();
         crate::py_async::future_into_py(py, async move {
             let handle = {
                 let guard = inner.lock().await;
@@ -523,7 +545,12 @@ impl PyMstpEndpoint {
                     )
                 })?
             };
-            Ok(PyEndpointServer::new(handle, reinitialize, device_writes))
+            Ok(PyEndpointServer::new(
+                handle,
+                reinitialize,
+                device_writes,
+                cov,
+            ))
         })
     }
 

@@ -420,6 +420,47 @@ async fn the_builder_option_is_the_session_opt_in() {
     );
 }
 
+/// The MS/TP and SC builders take `cov` as the B/IP one does: their
+/// sessions execute the three services, and the MS/TP builder's bare
+/// transport refuses it.
+#[tokio::test]
+async fn the_mstp_and_sc_builders_take_cov_too() {
+    use bacnet_transport::mstp::LoopbackSerial;
+    let (line, _peer) = LoopbackSerial::pair();
+    let mstp = crate::mstp::MstpEndpointBuilder::new(line, 3)
+        .cov(ReportConfig::default())
+        .build_session()
+        .unwrap();
+    let (ws, _hub) = bacnet_transport::sc::LoopbackWebSocket::pair();
+    let sc = crate::sc::ScEndpointBuilder::new([2; 6], [0x11; 16])
+        .cov(ReportConfig::default())
+        .build_loopback_session(ws)
+        .unwrap();
+    for (link, services) in [
+        ("MS/TP", mstp.executed_services()),
+        ("SC", sc.executed_services()),
+    ] {
+        for service in [
+            ServiceSupported::SUBSCRIBE_COV,
+            ServiceSupported::SUBSCRIBE_COV_PROPERTY,
+            ServiceSupported::SUBSCRIBE_COV_PROPERTY_MULTIPLE,
+        ] {
+            assert!(services.contains(&service), "{link} {service:?}");
+        }
+    }
+    let (line, _peer) = LoopbackSerial::pair();
+    let Err(error) = crate::mstp::MstpEndpointBuilder::new(line, 3)
+        .cov(ReportConfig::default())
+        .build_transport()
+    else {
+        panic!("a bare MS/TP transport can't keep COV");
+    };
+    assert!(
+        error.to_string().contains("COV requires build_session()"),
+        "{error}"
+    );
+}
+
 /// A confirmed property subscription's notifications carry the server's
 /// parameters, each holds an invoke ID of the session's pool, and its Ack
 /// gives the ID back.
