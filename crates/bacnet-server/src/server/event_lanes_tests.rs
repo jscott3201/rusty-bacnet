@@ -42,6 +42,8 @@ use tokio::sync::{Semaphore, mpsc};
 mod fault;
 #[path = "event_lanes_hold_time_tests.rs"]
 mod hold_time;
+#[path = "event_lanes_invoke_id_tests.rs"]
+mod invoke_id;
 #[path = "event_lanes_wire_tests.rs"]
 mod wire;
 
@@ -202,6 +204,21 @@ impl Probe {
             if hold {
                 self.release_ack.acquire().await.unwrap().forget();
             }
+            return;
+        }
+        // A confirmed transition's send panics as `panic_on` asks; nothing
+        // else is done with it.
+        if let Apdu::ConfirmedRequest(request) = frame.apdu()
+            && request.service_choice == ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION
+        {
+            let n = decode_event_notification(&request.service_request).unwrap();
+            let mut slot = self.panic_on.lock().unwrap();
+            let once = *slot == Some(n.to_state.to_raw());
+            if once {
+                *slot = None;
+            }
+            drop(slot);
+            assert!(!once, "a test transport's confirmed send panics");
             return;
         }
         let Apdu::UnconfirmedRequest(request) = frame.apdu() else {

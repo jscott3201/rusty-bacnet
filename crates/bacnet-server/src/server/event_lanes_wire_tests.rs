@@ -41,7 +41,7 @@ fn at_hour(hour: u8) -> ClockFrame {
 }
 
 /// Notification Class 0 sending to `destinations` alone.
-fn class_0(db: &mut ObjectDatabase, destinations: Vec<BACnetDestination>) {
+pub(super) fn class_0(db: &mut ObjectDatabase, destinations: Vec<BACnetDestination>) {
     let mut class = NotificationClass::new(0, "NC-0").unwrap();
     for destination in destinations {
         class.add_destination(destination).unwrap();
@@ -67,7 +67,7 @@ fn unicast(to: u32) -> Sent {
 }
 
 /// A SubscribeCOV of AI-1 for [`SUBSCRIBER`], unconfirmed.
-async fn subscribe_cov(rig: &Rig) {
+pub(super) async fn subscribe_cov(rig: &Rig) {
     let mut table = rig.server.cov_table.write().await;
     table
         .subscribe(CovSubscription {

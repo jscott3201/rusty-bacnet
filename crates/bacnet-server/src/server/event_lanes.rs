@@ -8,7 +8,9 @@
 //! handed to the network in the order they were pushed, whichever task
 //! committed them, and a destination that stalls (an offline peer, a slow
 //! route) holds up its own lane only. A confirmed entry holds its lane until
-//! its first attempt is handed off; its retries run in its worker.
+//! its first attempt is handed off; its retries run in its worker. With
+//! every invoke ID leased, it holds the lane, the destination's later
+//! entries behind it, until one comes back.
 //!
 //! The lane map is a `std::sync::Mutex`, taken after the database guard and
 //! never held across an await, nor while anything is logged, since a

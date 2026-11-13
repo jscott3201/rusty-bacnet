@@ -379,6 +379,36 @@ impl NotificationTransactions {
             .reserve(LeaseMetadata::notification(peer, service_choice))
     }
 
+    /// [`Self::reserve`], waiting while every invoke ID is leased: a
+    /// confirmed event notification holds its lane until one comes back
+    /// (#2537). The 256 IDs are one pool for the whole device, shared by
+    /// every destination (and, in an endpoint, its client), so each release
+    /// wakes every waiter, in the order they began to wait; the first to run
+    /// takes the ID, and the rest wait again. Any other refusal returns at
+    /// once. It holds no lock while it waits, so it can be cancelled.
+    pub(super) async fn reserve_waiting(
+        &self,
+        peer: CanonicalPeer,
+        service_choice: ConfirmedServiceChoice,
+    ) -> Result<NotificationReservation, NotificationReserveError> {
+        let mut said = false;
+        loop {
+            // Made before the attempt, so a lease released after it fails
+            // still ends this wait: the coordinator's wake reaches every
+            // waiter already made, polled or not, and stores no permit.
+            let released = self.core.coordinator.released();
+            match self.reserve(peer.clone(), service_choice) {
+                Err(NotificationReserveError::Coordinator(ReserveError::Exhausted)) => {
+                    if !std::mem::replace(&mut said, true) {
+                        tracing::debug!("Every invoke ID is leased; waiting for one to come back");
+                    }
+                    released.await;
+                }
+                result => return result,
+            }
+        }
+    }
+
     /// Lease an invoke ID for a read this server sends, answered by an
     /// unsegmented ComplexAck whose service data reaches the receiver
     /// ([`LeaseMetadata::server_read`]).

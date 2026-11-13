@@ -11599,7 +11599,7 @@ counters.recipient_list_too_long;       // a custom class served more than 32 de
 counters.device_recipient_unbound;      // a Device recipient with no current binding
 counters.recipient_unroutable;          // a recipient no binding or retry can route
 counters.confirmed_broadcast_recipient; // confirmed requested at a broadcast or group address
-counters.confirmed_no_invoke_id;        // no invoke ID free for a confirmed notification
+counters.confirmed_no_invoke_id;        // no invoke ID could be leased at all (one in use waits)
 counters.confirmed_rejected;            // the recipient answered Error, Reject or Abort
 counters.confirmed_unanswered;          // no acknowledgment after the last retry
 counters.unconfirmed_send_failed;       // an unconfirmed send the transport refused

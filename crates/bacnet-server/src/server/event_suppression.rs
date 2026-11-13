@@ -90,9 +90,12 @@ pub struct EventNotificationCounters {
     /// broadcast, and sending one unconfirmed would drop the acknowledgment
     /// the destination asks for. No invoke ID is reserved for them.
     pub confirmed_broadcast_recipient: u64,
-    /// Confirmed notifications not sent because no confirmed transaction
-    /// could be reserved, normally because every invoke ID was in use.
-    /// Reservations refused while the server stops are not counted.
+    /// Confirmed notifications not sent because the server's transaction
+    /// state could lease no invoke ID at all, which only a panic in it (or
+    /// running out of lease generations) brings about. One that finds every
+    /// invoke ID in use waits in its destination's lane for one instead, and
+    /// isn't counted (#2537). Reservations refused while the server stops
+    /// are not counted either.
     pub confirmed_no_invoke_id: u64,
     /// Confirmed notifications the recipient answered with an Error, Reject
     /// or Abort.

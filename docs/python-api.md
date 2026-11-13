@@ -5726,7 +5726,7 @@ counters["confirmed_unanswered"]        # confirmed notifications never acknowle
 | `device_recipient_unbound` | Matched Device recipients skipped because no binding was configured or observed, or the observed one expired, and a targeted Who-Is drew no I-Am within the APDU timeout (or none could go out, within a minute of one that drew nothing); also a confirmed notification ended at a retry because the observed binding had expired by then |
 | `recipient_unroutable` | Matched recipients skipped because they can't be routed as written: a Device identifier that isn't a Device (or a binding unusable on this link), or a MAC on network 65535 |
 | `confirmed_broadcast_recipient` | Matched recipients skipped because they ask for confirmed notifications at a broadcast address, or another group address such as a multicast one, which only unconfirmed requests may use (Clause 6.3) |
-| `confirmed_no_invoke_id` | Confirmed notifications to one recipient not sent because no invoke ID was free |
+| `confirmed_no_invoke_id` | Confirmed notifications to one recipient not sent because the server could lease no invoke ID at all, which only a panic in its transaction state brings about; one that finds every invoke ID in use waits in its destination's lane for one instead (#2537) |
 | `confirmed_rejected` | Confirmed notifications the recipient answered with an Error, Reject or Abort |
 | `confirmed_unanswered` | Confirmed notifications with no acknowledgment after the last retry |
 | `unconfirmed_send_failed` | Unconfirmed notifications the transport refused to send, once per destination; the other destinations are still served |
