@@ -4223,11 +4223,13 @@ neither.
 | Feature | Accessors | Drops |
 | --- | --- | --- |
 | `event-reporting` | `event_reporting`, `event_reporting_mut`, `enrollment_eval`, `enrollment_eval_mut` | intrinsic reporting, the Event and Alert Enrollments' transitions, the logs' buffer-ready reports |
-| `durable-writes` | `durable_writes` | staged saves; writes still save on the writer's own path |
+| `durable-writes` | `durable_writes` | staged saves; writes still save on the writer's own path, and the built-in objects don't implement `DurableWrites` |
 
-On the `firmware/link` objects image, both off save 4,952 / 4,444 / 5,984
-octets of flash on thumbv7m / thumbv7em / riscv32imac: `event-reporting`
-about 2.5 to 3.7 KB, `durable-writes` about 2 KB. Audit, COV and the
+On the `firmware/link` objects image, on thumbv7m / thumbv7em / riscv32imac,
+each feature on alone adds about 13.5 / 13.3 / 16.8 KB (`event-reporting`)
+and 3.4 / 3.7 / 4.5 KB (`durable-writes`) of flash to the both-off image,
+and both on add 38.4 / 38.0 / 48.5 KB, measured by building the image four
+ways. Audit, COV and the
 clock binding would each save under 400 octets there, so they have no
 feature.
 

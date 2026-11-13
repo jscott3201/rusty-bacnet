@@ -184,10 +184,11 @@ pub use file::MemoryFiles;
 /// It counts from the end of the save, so a slow save never uses it up. Past
 /// it the request is taken to be gone, and the object drops the staged state
 /// at the next stage or operation task call.
-#[cfg(not(test))]
+#[cfg(all(not(test), feature = "durable-writes"))]
 pub(crate) const STAGED_WRITE_LIFETIME: core::time::Duration = core::time::Duration::from_secs(10);
 /// Short in tests, so one can watch a forgotten staged write go.
 #[cfg(test)]
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 pub(crate) const STAGED_WRITE_LIFETIME: core::time::Duration =
     core::time::Duration::from_millis(300);
 
@@ -257,7 +258,7 @@ impl Event {
 pub struct SaveWait {
     event: Arc<Event>,
     /// A second wait this one also ends after, when an object that keeps
-    /// two kinds of state in storage settles both ([`and`](Self::and)).
+    /// two kinds of state in storage settles both (`and`).
     then: Option<Arc<SaveWait>>,
 }
 
@@ -267,6 +268,7 @@ impl SaveWait {
     }
 
     /// A wait that ends once both this wait and `other` have.
+    #[cfg(feature = "durable-writes")]
     pub(crate) fn and(self, other: SaveWait) -> SaveWait {
         let then = match self.then {
             Some(then) => SaveWait::clone(&then).and(other),
@@ -384,6 +386,7 @@ impl SaveTicket {
     /// releasing a staged write can show it staged it. A colour object
     /// stages a Tags write and a default write for one request, and hands
     /// it their two waits joined (#1956).
+    #[cfg(feature = "durable-writes")]
     pub(crate) fn issued(&self, wait: &SaveWait) -> bool {
         Arc::ptr_eq(&self.slot.done, &wait.event)
             || wait.then.as_deref().is_some_and(|then| self.issued(then))
@@ -400,7 +403,7 @@ impl SaveTicket {
     }
 
     /// Whether a staged write waiting on this save has outlived
-    /// [`STAGED_WRITE_LIFETIME`] by now. Never without std, which has no
+    /// `STAGED_WRITE_LIFETIME` by now. Never without std, which has no
     /// clock to tell.
     pub(crate) fn outlived(&self) -> bool {
         #[cfg(feature = "std")]

@@ -22,12 +22,15 @@ uses. `std` turns both on, so a hosted build has them; a `no_std` build with
 
 | Feature | Off, the built-in objects lend nothing through | What drops out | Objects image, flash saved (thumbv7m / thumbv7em / riscv32imac) |
 | --- | --- | --- | --- |
-| `event-reporting` | `event_reporting()`, `event_reporting_mut()`, `enrollment_eval()`, `enrollment_eval_mut()` | Intrinsic reporting's evaluation and commits, alarm acknowledgment, the Event and Alert Enrollments' transitions and the logs' buffer-ready reports. The event properties still read and write. | 3,020 / 2,464 / 3,684 octets |
-| `durable-writes` | `durable_writes()` | Staged saves, which a host runs off the database lock. A write to an object with storage still saves, on the writer's own path. | 2,044 / 1,924 / 2,304 octets |
+| `event-reporting` | `event_reporting()`, `event_reporting_mut()`, `enrollment_eval()`, `enrollment_eval_mut()` | Intrinsic reporting's evaluation and commits, alarm acknowledgment, the Event and Alert Enrollments' transitions and the logs' buffer-ready reports. The event properties still read and write. | 13,472 / 13,328 / 16,836 octets |
+| `durable-writes` | `durable_writes()` | Staged saves, which a host runs off the database lock. A write to an object with storage still saves, on the writer's own path, and with the feature off the built-in objects do not implement `DurableWrites`, so a caller that stages needs it on. | 3,400 / 3,708 / 4,544 octets |
 
-With both off, the objects image in `firmware/link` (a Device, two Analog
-Inputs and two Binary Values behind `bacnet-device-core`'s responder) is
-4,952 / 4,444 / 5,984 octets of flash smaller. The object types, their
+Measured on the objects image in `firmware/link` (a Device, two Analog
+Inputs and two Binary Values behind `bacnet-device-core`'s responder): each
+figure is that feature on alone, with the other off, against both off. With
+both on the image is 38,384 / 38,032 / 48,476 octets of flash larger than
+with both off, more than the two figures add up to, because with both on
+the reporting store's staged-save check links the parameter encoders. The object types, their
 properties and the capability traits are the same with either feature on or
 off, so turning one on never breaks another crate's build.
 

@@ -65,7 +65,10 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 use bytes::BytesMut;
 
 use crate::common::{self, read_common_properties};
-use crate::durable::staged::{self, Step};
+#[cfg(feature = "durable-writes")]
+use crate::durable::staged;
+use crate::durable::staged::Step;
+#[cfg(feature = "durable-writes")]
 use crate::durable::{DurableWrites, PendingWrite, SaveWait, StageStep};
 use crate::notification_class::recipient_list;
 use crate::subscribed_recipients::SubscribedRecipients;
@@ -465,6 +468,7 @@ fn kept(property: PropertyIdentifier, value: &PropertyValue) -> bool {
             && !description::null_write(property, value))
 }
 
+#[cfg(feature = "durable-writes")]
 impl DurableWrites for NotificationForwarderObject {
     fn stage_write(
         &mut self,

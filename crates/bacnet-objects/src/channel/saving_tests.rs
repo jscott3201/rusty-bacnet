@@ -11,6 +11,7 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use bytes::BytesMut;
 
 use super::ChannelObject;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::durable::{DurableWrites, PendingWrite, StageStep};
 use crate::traits::BACnetObject;
 use crate::write_config::test_storage::MemoryConfig;
@@ -150,6 +151,7 @@ fn a_write_that_cannot_be_saved_is_refused_and_the_old_value_stays() {
 
 /// A WritePropertyMultiple's writes to one Channel stage one save of what
 /// they leave together, and each takes its step (#1423).
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_requests_writes_stage_one_save() {
     let storage = MemoryConfig::new();

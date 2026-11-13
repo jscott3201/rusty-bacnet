@@ -26,11 +26,13 @@
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use super::buffer::{Timestamp, apply_change, written_buffer_size};
 use super::*;
-use crate::durable::{
-    DurableWrites, Event, PendingWrite, SaveTicket, SaveWait, SaveWriter, StageStep,
-};
+#[cfg(feature = "durable-writes")]
+use crate::durable::DurableWrites;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
+use crate::durable::{Event, PendingWrite, SaveTicket, SaveWait, SaveWriter, StageStep};
 
 /// Outcomes of batches settled before their requests came back for them.
 /// Past it the oldest is dropped and its request is refused with
@@ -75,9 +77,11 @@ pub(super) enum StagedKind {
         outcome: ConfirmedAuditNotificationOutcome,
         changed: bool,
     },
+    // Built only by staging, which needs `durable-writes`.
     /// The changes one request makes, in its order, all in one commit. The
     /// request makes them one at a time under the guard, and the log takes
     /// each change's step as it is made; `taken` counts the steps taken.
+    #[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
     Changes { steps: VecDeque<Step>, taken: usize },
 }
 
@@ -235,7 +239,7 @@ impl AuditLogObject {
 
     /// The wait for a staged commit that still holds the log: a batch's
     /// while its commit runs, a write's until its request takes or drops it
-    /// (or [`STAGED_WRITE_LIFETIME`](crate::durable::STAGED_WRITE_LIFETIME)
+    /// (or `STAGED_WRITE_LIFETIME`
     /// after its commit finished). A batch whose commit ran is settled, and a
     /// forgotten write dropped.
     fn make_way(&mut self) -> Option<SaveWait> {
@@ -432,6 +436,7 @@ impl AuditLogObject {
     /// the last. A change that cannot be built here, such as a purge without
     /// a valid clock, ends the steps: made under the guard, it then fails as
     /// it would unstaged, and the request makes no later change.
+    #[cfg(feature = "durable-writes")]
     fn stage_changes(&mut self, changes: &[StagedChange]) -> StageStep {
         let Ok(mut state) = self.snapshot_for_next_generation() else {
             return StageStep::Skip;
@@ -477,6 +482,7 @@ impl AuditLogObject {
 /// the wrong datatype changes nothing either: the server answers it as a
 /// relinquish that leaves the property as it is, and the request goes on
 /// (#1396).
+#[cfg(feature = "durable-writes")]
 fn changes_made(
     mut log_enable: bool,
     mut buffer_size: u32,
@@ -513,6 +519,7 @@ fn changes_made(
     changes
 }
 
+#[cfg(feature = "durable-writes")]
 impl DurableWrites for AuditLogObject {
     fn stage_write(
         &mut self,

@@ -17,10 +17,10 @@
 //! that list. A staged write whose request vanished without releasing it, as
 //! when a handler panics between its stage and its release, is dropped the
 //! same way once
-//! [`STAGED_WRITE_LIFETIME`](crate::durable::STAGED_WRITE_LIFETIME) has
+//! `STAGED_WRITE_LIFETIME` has
 //! passed since its save finished: by the next write that stages, or by the
 //! server's once-a-second operation task, which calls
-//! [`DurableWrites::expire_staged`]. The class saves nothing else between
+//! [`expire_staged`](crate::durable::DurableWrites::expire_staged). The class saves nothing else between
 //! writes.
 //!
 //! Neither runs once the server has stopped. So `stop()`, once it has
@@ -43,6 +43,7 @@
 
 use crate::prelude::*;
 use alloc::sync::Arc;
+#[cfg(feature = "durable-writes")]
 use core::time::Duration;
 
 use bacnet_types::constructed::BACnetDestination;
@@ -53,8 +54,12 @@ use bacnet_types::primitives::PropertyValue;
 use super::persistence::{NotificationClassPersistence, NotificationClassSnapshot};
 use super::{MAX_RECIPIENT_LIST_DESTINATIONS, NotificationClass, recipient_list};
 use crate::common;
-use crate::durable::staged::{self, StagedSaves};
-use crate::durable::{DurableWrites, PendingWrite, SaveWait, SaveWriter, StageStep};
+use crate::durable::SaveWriter;
+#[cfg(feature = "durable-writes")]
+use crate::durable::staged;
+use crate::durable::staged::StagedSaves;
+#[cfg(feature = "durable-writes")]
+use crate::durable::{DurableWrites, PendingWrite, SaveWait, StageStep};
 use crate::write_config::description;
 
 /// What a saved write leaves: the property it sets, as the class holds it.
@@ -274,6 +279,7 @@ fn apply(snapshot: &mut NotificationClassSnapshot, next: &Next) {
     }
 }
 
+#[cfg(feature = "durable-writes")]
 impl DurableWrites for NotificationClass {
     fn stage_write(
         &mut self,

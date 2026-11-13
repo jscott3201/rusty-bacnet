@@ -43,11 +43,6 @@ fn lent(object: &mut dyn BACnetObject) -> Option<&mut dyn DurableWrites> {
     object.durable_writes()
 }
 
-#[cfg(not(feature = "durable-writes"))]
-fn lent(_: &mut dyn BACnetObject) -> Option<&mut dyn DurableWrites> {
-    None
-}
-
 kept_object!(
     DeviceObject,
     |device| lent(device),
@@ -201,8 +196,11 @@ fn a_tags_user_that_keeps_no_description_refuses_and_never_saves_one() {
     let storage = Memory::holding(None);
     let mut state = ProfileState::persistent(object, storage.clone(), false).unwrap();
     state.provision(configured()).unwrap();
-    let step = state.stage_writes(&[pending(P::DESCRIPTION, text("lobby"))]);
-    assert!(matches!(step, StageStep::Skip));
+    #[cfg(feature = "durable-writes")]
+    {
+        let step = state.stage_writes(&[pending(P::DESCRIPTION, text("lobby"))]);
+        assert!(matches!(step, StageStep::Skip));
+    }
     let mut served = String::new();
     assert!(
         state

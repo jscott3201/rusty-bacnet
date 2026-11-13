@@ -2,21 +2,30 @@
 //! Notification Class stages a list write the way a Notification Forwarder
 //! does (#1270).
 
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use super::super::*;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use super::make_dest_device;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use super::persistence_tests::{assert_refused, framed, write};
 #[cfg(feature = "std")]
 use super::storage::WAIT;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use super::storage::{MemoryPersistence, block_on, persistent};
 #[cfg(feature = "std")]
 use crate::durable::STAGED_WRITE_LIFETIME;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::durable::{DurableWrites, SaveWait, StageStep};
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use std::sync::Arc;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use std::sync::atomic::Ordering;
 #[cfg(feature = "std")]
 use std::time::{Duration, Instant};
 
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 fn staged(step: StageStep) -> SaveWait {
     match step {
         StageStep::Staged(wait) => wait,
@@ -35,6 +44,7 @@ fn busy(step: StageStep) -> SaveWait {
 
 /// Stage a Recipient_List write of `list`, wait for its save, and return
 /// the wait to release it with.
+#[cfg(feature = "durable-writes")]
 fn stage_saved(nc: &mut NotificationClass, list: &[BACnetDestination]) -> SaveWait {
     let wait = staged(nc.stage_write(P::RECIPIENT_LIST, None, &framed(list)));
     block_on(&wait);
@@ -75,6 +85,7 @@ fn a_staged_write_saves_while_the_class_serves_the_old_list() {
     assert_eq!(storage.saves(), 2);
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_staged_write_whose_save_fails_is_refused_and_the_old_list_stays() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -125,6 +136,7 @@ fn a_second_write_waits_until_the_first_has_landed() {
     assert_eq!(storage.saved(), Some(second.to_vec()));
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_staged_write_its_request_never_made_leaves_storage_with_the_served_list() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -142,6 +154,7 @@ fn a_staged_write_its_request_never_made_leaves_storage_with_the_served_list() {
     assert_eq!(persistent(&storage).recipient_list(), served);
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_dropped_staged_write_leaves_configured_destinations_unsaved() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -167,6 +180,7 @@ fn a_dropped_staged_write_leaves_configured_destinations_unsaved() {
     assert_eq!(rebuilt.recipient_list(), [make_dest_device(2)]);
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_write_nobody_staged_supersedes_a_staged_one() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -261,6 +275,7 @@ fn an_operation_task_call_drops_a_forgotten_staged_write_once_its_lifetime_is_ov
     assert_eq!(storage.saves(), 3);
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn staging_skips_writes_the_class_does_not_save_or_will_refuse() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -294,6 +309,7 @@ fn staging_skips_writes_the_class_does_not_save_or_will_refuse() {
 // came back, as when the server stops mid-request and the database is
 // dropped (#1363). Storage then goes back to the list the class served.
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_class_dropped_with_a_staged_write_puts_storage_back_to_the_served_list() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -310,6 +326,7 @@ fn a_class_dropped_with_a_staged_write_puts_storage_back_to_the_served_list() {
     assert_eq!(persistent(&storage).recipient_list(), served);
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_class_dropped_with_a_staged_write_and_no_written_list_saves_none() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -329,6 +346,7 @@ fn a_class_dropped_with_a_staged_write_and_no_written_list_saves_none() {
     assert!(!persistent(&storage).recipient_list_saved());
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_class_dropped_after_its_staged_write_was_made_keeps_the_new_list() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -344,6 +362,7 @@ fn a_class_dropped_after_its_staged_write_was_made_keeps_the_new_list() {
     assert_eq!(persistent(&storage).recipient_list(), new);
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_class_dropped_with_a_staged_write_whose_save_failed_leaves_storage_alone() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -382,6 +401,7 @@ fn a_class_dropped_while_its_staged_save_runs_puts_storage_back_after_it() {
     assert_eq!(storage.saves(), 3);
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn settling_forgotten_writes_puts_storage_back_and_frees_the_class() {
     let storage = Arc::new(MemoryPersistence::default());

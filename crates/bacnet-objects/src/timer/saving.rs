@@ -174,6 +174,7 @@ impl ConfigWrites for TimerObject {
         &mut self.config_storage
     }
 
+    #[cfg(feature = "durable-writes")]
     fn storage_ref(&self) -> Option<&Storage<TimerConfig>> {
         self.config_storage.as_ref()
     }
@@ -216,6 +217,7 @@ impl ConfigWrites for TimerObject {
         })
     }
 
+    #[cfg(feature = "durable-writes")]
     fn saves(property: PropertyIdentifier) -> bool {
         TimerSet::written_by(property)
             || matches!(

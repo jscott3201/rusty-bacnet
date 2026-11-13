@@ -21,6 +21,7 @@ use super::{
 use crate::audit::ObjectAuditPolicy;
 use crate::command_source::{CommandOrigin, SingleValueSource};
 use crate::common::{self, read_identity_properties};
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::durable::StageStep;
 use crate::object_profile::{ObjectProfile, ProfileState, TagsPersistence};
 use crate::traits::BACnetObject;
@@ -246,6 +247,7 @@ impl ColorObject {
 
     /// Stage the request's Default_Color and Description writes on the
     /// output storage.
+    #[cfg(feature = "durable-writes")]
     fn stage_default(&mut self, writes: &[crate::durable::PendingWrite]) -> StageStep {
         self.output
             .stage_kept(writes, PropertyIdentifier::DEFAULT_COLOR, written_default)

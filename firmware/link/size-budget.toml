@@ -830,6 +830,24 @@
 # routines stay at 0 (the pass converts its delays in 32 bits), and the
 # memmove count is the reporting image's. The budgets are --suggest's.
 
+# On 2026-11-13 (#2538, Rust 1.99.0, dev at f94e54541, then 4a02d5a3e) bacnet-objects' staged
+# saves compile only with `durable-writes`, which the image leaves off: the
+# built-in objects don't implement `DurableWrites` without it, and the
+# staging half of `StagedSaves` (the staged write, its ticket, correction
+# and expiry) isn't compiled, so none of it links. The inline save path
+# stays. As flash, dev then this change; RAM unchanged at 24680:
+#
+#   thumbv7m             259156, 255264
+#   thumbv7em            258544, 254496
+#   riscv32imac          315802, 309786
+#
+# The objects image falls by 1764 / 1768 / 2296 octets of flash and the
+# points image by 1588 / 1608 / 2076; their rows keep their old budgets.
+# The enrollment image, which leaves `durable-writes` off too, measures
+# 327556 / 327516 / 397678 octets of flash (thumbv7m / thumbv7em /
+# riscv32imac), about 4 KB under what its budget rows were taken from. The
+# reporting and enrollment budgets are --suggest's again.
+
 [thumbv7m-none-eabi.mstp]
 text = 18320
 rodata = 1184
@@ -930,11 +948,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [thumbv7m-none-eabi.reporting]
-text = 265824
+text = 261456
 rodata = 23296
 data = 64
 bss = 27648
-flash = 290256
+flash = 285904
 ram = 27648
 fmt_functions = 0
 div64_functions = 0
@@ -952,11 +970,11 @@ div64_functions = 0
 memmove_functions = 3
 
 [thumbv7m-none-eabi.enrollment]
-text = 340784
+text = 336304
 rodata = 29424
 data = 64
 bss = 27648
-flash = 371344
+flash = 366864
 ram = 27648
 fmt_functions = 0
 div64_functions = 0
@@ -1238,11 +1256,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [thumbv7em-none-eabihf.reporting]
-text = 265136
+text = 260592
 rodata = 23296
 data = 64
 bss = 27648
-flash = 289584
+flash = 285040
 ram = 27648
 fmt_functions = 0
 div64_functions = 0
@@ -1260,11 +1278,11 @@ div64_functions = 0
 memmove_functions = 3
 
 [thumbv7em-none-eabihf.enrollment]
-text = 340704
+text = 336256
 rodata = 29424
 data = 64
 bss = 27648
-flash = 371264
+flash = 366832
 ram = 27648
 fmt_functions = 0
 div64_functions = 0
@@ -1282,11 +1300,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [riscv32imac-unknown-none-elf.reporting]
-text = 324736
+text = 318000
 rodata = 28960
 data = 64
 bss = 27648
-flash = 353712
+flash = 346960
 ram = 27648
 fmt_functions = 0
 div64_functions = 0
@@ -1304,11 +1322,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [riscv32imac-unknown-none-elf.enrollment]
-text = 415136
+text = 408368
 rodata = 37024
 data = 64
 bss = 27648
-flash = 452160
+flash = 445408
 ram = 27648
 fmt_functions = 0
 div64_functions = 0

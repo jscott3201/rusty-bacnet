@@ -4,15 +4,19 @@
 
 #[cfg(feature = "std")]
 use super::test_storage::WAIT;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use super::test_storage::{
     MemoryPersistence, assert_refused, block_on, octets, persistent, positive_only, write,
     write_positive, zone_rule,
 };
 use super::*;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::durable::{DurableWrites, PendingWrite, SaveWait, StageStep};
 use bacnet_types::enums::PropertyIdentifier as P;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use std::sync::Arc;
 
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 fn staged(step: StageStep) -> SaveWait {
     match step {
         StageStep::Staged(wait) => wait,
@@ -20,6 +24,7 @@ fn staged(step: StageStep) -> SaveWait {
     }
 }
 
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 fn pending(property: P, array_index: Option<u32>, value: PropertyValue) -> PendingWrite {
     PendingWrite {
         property,
@@ -29,6 +34,7 @@ fn pending(property: P, array_index: Option<u32>, value: PropertyValue) -> Pendi
 }
 
 /// Make `write` as the handler would.
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 fn make(rights: &mut AccessRightsObject, write: &PendingWrite) -> Result<(), Error> {
     super::test_storage::write(
         rights,
@@ -40,6 +46,7 @@ fn make(rights: &mut AccessRightsObject, write: &PendingWrite) -> Result<(), Err
 
 /// A head end provisioning the object: both rule arrays and Enable, then an
 /// element write that edits the array the first write left.
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 fn provisioning() -> Vec<PendingWrite> {
     vec![
         pending(
@@ -54,6 +61,7 @@ fn provisioning() -> Vec<PendingWrite> {
 }
 
 /// What storage holds once every write of [`provisioning`] is made.
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 fn provisioned() -> AccessRightsSnapshot {
     AccessRightsSnapshot {
         positive_access_rules: Some(vec![zone_rule(1), zone_rule(4)]),
@@ -107,6 +115,7 @@ fn a_requests_writes_stage_one_save_and_each_takes_its_step() {
     assert!(!rebuilt.enable());
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_request_that_stops_part_way_puts_storage_back_to_the_steps_it_took() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -135,6 +144,7 @@ fn a_request_that_stops_part_way_puts_storage_back_to_the_steps_it_took() {
     assert_eq!(storage.saves(), 3);
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn staging_ends_at_a_write_the_object_will_refuse_and_passes_a_null_by() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -242,6 +252,7 @@ fn a_write_the_object_wont_make_leaves_another_requests_staged_write_alone() {
     assert_eq!(storage.snapshot(), Some(positive_only(&new)));
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_failed_save_of_several_steps_drops_them_all_and_storage_keeps_the_served_state() {
     let storage = Arc::new(MemoryPersistence::default());

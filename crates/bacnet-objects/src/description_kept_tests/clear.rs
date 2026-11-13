@@ -110,6 +110,7 @@ fn a_clear_with_nothing_saved_does_nothing() {
 /// A write staged before a clear gives way to it: the clear's save lands
 /// after the staged one, and the request's write then saves where it is, on
 /// top of the cleared state.
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_clear_supersedes_a_staged_write() {
     for case in clearing(Some("lobby")) {

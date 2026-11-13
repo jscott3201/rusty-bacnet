@@ -12,15 +12,20 @@
 
 use alloc::sync::Arc;
 use core::borrow::Borrow;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use core::time::Duration;
 
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use super::{WriteConfigPersistence, WriteConfigSnapshot, description};
 use crate::common;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::durable::staged::{self, StagedSaves};
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::durable::{PendingWrite, SaveWait, SaveWriter, StageStep};
 
 /// An object's writer and the write staged on it.
@@ -57,6 +62,7 @@ pub(crate) trait ConfigWrites {
     fn storage(&mut self) -> &mut Option<Storage<Self::Config>>;
 
     /// The storage, for a look.
+    #[cfg(feature = "durable-writes")]
     fn storage_ref(&self) -> Option<&Storage<Self::Config>>;
 
     /// The configuration served now; `None` while the object serves none
@@ -74,6 +80,7 @@ pub(crate) trait ConfigWrites {
     fn snapshot(config: Option<&Self::Config>) -> WriteConfigSnapshot;
 
     /// Whether storage keeps a write of `property`.
+    #[cfg(feature = "durable-writes")]
     fn saves(property: PropertyIdentifier) -> bool;
 
     /// The configuration `write` leaves on top of `config`, or the
@@ -166,6 +173,7 @@ pub(crate) fn changed<T: ConfigWrites>(object: &mut T) {
 /// Stage the writes a request makes to `object` (see
 /// [`DurableWrites::stage_writes`](crate::durable::DurableWrites::stage_writes)):
 /// one save of what they leave together (#1423).
+#[cfg(feature = "durable-writes")]
 pub(crate) fn stage_writes<T: ConfigWrites>(object: &mut T, writes: &[PendingWrite]) -> StageStep {
     // A NULL to Description changes nothing, so it stages nothing (#2364).
     let kept = |write: &PendingWrite| {
@@ -194,16 +202,19 @@ pub(crate) fn stage_writes<T: ConfigWrites>(object: &mut T, writes: &[PendingWri
 }
 
 /// See [`DurableWrites::release_staged_write`](crate::durable::DurableWrites::release_staged_write).
+#[cfg(feature = "durable-writes")]
 pub(crate) fn release<T: ConfigWrites>(object: &mut T, staged: &SaveWait) {
     with_storage(object, |storage| storage.release(staged));
 }
 
 /// See [`DurableWrites::has_staged_write`](crate::durable::DurableWrites::has_staged_write).
+#[cfg(feature = "durable-writes")]
 pub(crate) fn has_staged<T: ConfigWrites>(object: &T) -> bool {
     object.storage_ref().is_some_and(Storage::is_staged)
 }
 
 /// See [`DurableWrites::settle_forgotten_writes`](crate::durable::DurableWrites::settle_forgotten_writes).
+#[cfg(feature = "durable-writes")]
 pub(crate) fn settle<T: ConfigWrites>(object: &mut T) -> Option<SaveWait> {
     let mut storage = object.storage().take()?;
     let wait = storage.drop_forgotten(|| T::snapshot(object.config()));
@@ -212,6 +223,7 @@ pub(crate) fn settle<T: ConfigWrites>(object: &mut T) -> Option<SaveWait> {
 }
 
 /// See [`DurableWrites::expire_staged`](crate::durable::DurableWrites::expire_staged).
+#[cfg(feature = "durable-writes")]
 pub(crate) fn expire<T: ConfigWrites>(object: &mut T, now: Duration) {
     with_storage(object, |storage| storage.expire(now));
 }
@@ -220,6 +232,7 @@ pub(crate) fn expire<T: ConfigWrites>(object: &mut T, now: Duration) {
 /// that implements [`ConfigWrites`].
 macro_rules! impl_config_durable {
     ($object:ty) => {
+        #[cfg(feature = "durable-writes")]
         impl $crate::durable::DurableWrites for $object {
             fn stage_write(
                 &mut self,

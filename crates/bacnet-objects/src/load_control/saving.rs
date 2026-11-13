@@ -105,8 +105,12 @@ use super::{
 };
 use crate::clock::UNSPECIFIED_DATETIME;
 use crate::common;
-use crate::durable::staged::{self, StagedSaves};
-use crate::durable::{DurableWrites, PendingWrite, SaveWait, SaveWriter, StageStep};
+#[cfg(feature = "durable-writes")]
+use crate::durable::staged;
+use crate::durable::staged::StagedSaves;
+#[cfg(feature = "durable-writes")]
+use crate::durable::{DurableWrites, SaveWait, StageStep};
+use crate::durable::{PendingWrite, SaveWriter};
 use crate::write_config::description;
 
 /// How long after the first try of a failed save the second may run, on the
@@ -628,6 +632,7 @@ fn decided(request: &mut LoadControlSnapshot, now: Option<i64>) {
     }
 }
 
+#[cfg(feature = "durable-writes")]
 impl DurableWrites for LoadControlObject {
     fn stage_write(
         &mut self,

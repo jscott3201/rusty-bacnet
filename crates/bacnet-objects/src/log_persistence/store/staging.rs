@@ -8,7 +8,7 @@
 //! cadence commits, and refuses the write with DEVICE / OPERATIONAL_PROBLEM
 //! if that commit fails. This follows the pattern of [`crate::durable`]:
 //!
-//! - The server stages the request's writes ([`stage_writes`]). The log
+//! - The server stages the request's writes ([`stage_writes`](crate::durable::DurableWrites::stage_writes)). The log
 //!   works out the settings each leaves and queues one commit of its whole
 //!   state with the last of them, numbered like any other commit, then goes
 //!   on serving the old settings. The request awaits the commit off the
@@ -41,6 +41,7 @@
 //! setter changes meanwhile, the log commits at its next look, as it does
 //! any change the cadence holds back.
 
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use core::time::Duration;
 
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
@@ -49,7 +50,9 @@ use bacnet_types::primitives::PropertyValue;
 
 use super::{DurableLog, LogState, LogStore, SnapshotRecord};
 use crate::common;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::durable::staged;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::durable::{PendingWrite, SaveWait, StageStep};
 use crate::log_persistence::LogReportingSettings;
 use crate::log_persistence::codec::MAX_TEXT_OCTETS;
@@ -161,6 +164,7 @@ fn kept(log: &impl DurableLog, property: P) -> bool {
 
 /// Whether the log keeps `write`: one of the settings [`kept`] names, but
 /// not a NULL to Description, which changes nothing.
+#[cfg(feature = "durable-writes")]
 fn kept_write(log: &impl DurableLog, write: &PendingWrite) -> bool {
     kept(log, write.property) && !description::null_write(write.property, &write.value)
 }
@@ -339,6 +343,7 @@ impl<R: SnapshotRecord> LogStore<R> {
 /// Stage the writes a request makes to `log`
 /// ([`DurableWrites::stage_writes`](crate::durable::DurableWrites::stage_writes)):
 /// one commit of the log's state with the settings they leave together.
+#[cfg(feature = "durable-writes")]
 pub(crate) fn stage_writes<L: DurableLog>(log: &mut L, writes: &[PendingWrite]) -> StageStep {
     if log.store().is_none() || !writes.iter().any(|write| kept_write(log, write)) {
         return StageStep::Skip;
@@ -381,6 +386,7 @@ pub(crate) fn stage_writes<L: DurableLog>(log: &mut L, writes: &[PendingWrite]) 
 }
 
 /// See [`DurableWrites::release_staged_write`](crate::durable::DurableWrites::release_staged_write).
+#[cfg(feature = "durable-writes")]
 pub(crate) fn release<L: DurableLog>(log: &mut L, staged: &SaveWait) {
     if let Some(store) = log.durable_parts().0 {
         store.saves.release(staged);
@@ -389,6 +395,7 @@ pub(crate) fn release<L: DurableLog>(log: &mut L, staged: &SaveWait) {
 }
 
 /// See [`DurableWrites::expire_staged`](crate::durable::DurableWrites::expire_staged).
+#[cfg(feature = "durable-writes")]
 pub(crate) fn expire<L: DurableLog>(log: &mut L, now: Duration) {
     if let Some(store) = log.durable_parts().0 {
         store.saves.expire(now);

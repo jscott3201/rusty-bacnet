@@ -17,7 +17,7 @@
 //! A staged write its request releases without making is dropped, and the
 //! object at once queues a save of what it serves, so storage goes back to
 //! that. A staged write whose request vanished is dropped the same way once
-//! [`STAGED_WRITE_LIFETIME`](crate::durable::STAGED_WRITE_LIFETIME) has
+//! `STAGED_WRITE_LIFETIME` has
 //! passed since its save finished, by the next write that stages or by the
 //! server's once-a-second operation task. The server's `stop()` drops one
 //! still held and waits for the correcting save, and an object dropped with
@@ -38,6 +38,7 @@
 
 use crate::prelude::*;
 use alloc::sync::Arc;
+#[cfg(feature = "durable-writes")]
 use core::time::Duration;
 
 use bacnet_types::constructed::{BACnetAccessRule, BACnetDeviceObjectReference};
@@ -48,8 +49,12 @@ use bacnet_types::primitives::PropertyValue;
 use super::persistence::{AccessRightsPersistence, AccessRightsSnapshot};
 use super::{AccessRightsObject, check_accompaniment, checked_rules};
 use crate::common;
-use crate::durable::staged::{self, StagedSaves, Step};
-use crate::durable::{DurableWrites, PendingWrite, SaveWait, SaveWriter, StageStep};
+use crate::durable::SaveWriter;
+#[cfg(feature = "durable-writes")]
+use crate::durable::staged;
+use crate::durable::staged::{StagedSaves, Step};
+#[cfg(feature = "durable-writes")]
+use crate::durable::{DurableWrites, PendingWrite, SaveWait, StageStep};
 use crate::write_config::description;
 
 /// The state a saved write leaves: the property it sets, as the object
@@ -394,6 +399,7 @@ fn apply(snapshot: &mut AccessRightsSnapshot, next: &NextState) {
     }
 }
 
+#[cfg(feature = "durable-writes")]
 impl DurableWrites for AccessRightsObject {
     fn stage_write(
         &mut self,

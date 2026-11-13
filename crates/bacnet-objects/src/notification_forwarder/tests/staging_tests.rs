@@ -3,15 +3,20 @@
 
 #[cfg(feature = "std")]
 use super::storage::WAIT;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use super::storage::{MemoryPersistence, block_on, persistent};
 use super::*;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::durable::{DurableWrites, STAGED_WRITE_LIFETIME, SaveWait, StageStep};
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::traits::Timed;
 use bacnet_types::enums::PropertyIdentifier as P;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use std::sync::atomic::Ordering;
 #[cfg(feature = "std")]
 use std::time::Instant;
 
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 fn staged(step: StageStep) -> SaveWait {
     match step {
         StageStep::Staged(wait) => wait,
@@ -28,6 +33,7 @@ fn busy(step: StageStep) -> SaveWait {
     }
 }
 
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 fn write(
     nf: &mut NotificationForwarderObject,
     list: &[BACnetEventNotificationSubscription],
@@ -42,6 +48,7 @@ fn write(
 
 /// Stage a Subscribed_Recipients write of `list`, wait for its save, and
 /// return the wait to release it with.
+#[cfg(feature = "durable-writes")]
 fn stage_saved(
     nf: &mut NotificationForwarderObject,
     list: &[BACnetEventNotificationSubscription],
@@ -85,6 +92,7 @@ fn a_staged_write_saves_while_the_forwarder_serves_the_old_list() {
     assert_eq!(storage.saves(), 2);
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_staged_write_whose_save_fails_is_refused_and_the_old_list_stays() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -143,6 +151,7 @@ fn a_second_write_waits_until_the_first_has_landed() {
     assert_eq!(storage.saved(), second);
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_staged_write_its_request_never_made_leaves_storage_with_the_served_list() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -163,6 +172,7 @@ fn a_staged_write_its_request_never_made_leaves_storage_with_the_served_list() {
     assert_eq!(persistent(&storage).subscriptions(), served);
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_released_staged_write_whose_save_failed_saves_nothing_more() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -240,6 +250,7 @@ fn a_slow_save_keeps_its_staged_write_for_a_lifetime_after_it_finishes() {
     assert_eq!(storage.saves(), 1);
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_write_nobody_staged_supersedes_a_staged_one() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -280,6 +291,7 @@ fn a_forgotten_staged_write_frees_the_forwarder() {
     assert_eq!(nf.subscriptions(), list);
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn an_operation_task_call_drops_a_forgotten_staged_write_on_the_store_clock() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -303,6 +315,7 @@ fn an_operation_task_call_drops_a_forgotten_staged_write_on_the_store_clock() {
     assert_eq!(nf.subscriptions(), served);
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn staging_skips_writes_the_forwarder_does_not_save_or_will_refuse() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -416,6 +429,7 @@ fn an_operation_task_save_returns_while_storage_is_held() {
 // came back, as when the server stops mid-request and the database is
 // dropped (#1363). Storage then goes back to the lists it served.
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_forwarder_dropped_with_a_staged_write_puts_storage_back_to_the_served_lists() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -432,6 +446,7 @@ fn a_forwarder_dropped_with_a_staged_write_puts_storage_back_to_the_served_lists
     assert_eq!(persistent(&storage).subscriptions(), served);
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_forwarder_dropped_with_a_staged_recipient_list_keeps_none_written() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -446,6 +461,7 @@ fn a_forwarder_dropped_with_a_staged_recipient_list_keeps_none_written() {
     assert!(!persistent(&storage).recipient_list_saved());
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_forwarder_dropped_after_its_staged_write_was_made_keeps_the_new_lists() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -461,6 +477,7 @@ fn a_forwarder_dropped_after_its_staged_write_was_made_keeps_the_new_lists() {
     assert_eq!(persistent(&storage).subscriptions(), new);
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_forwarder_dropped_with_a_staged_write_whose_save_failed_leaves_storage_alone() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -498,6 +515,7 @@ fn a_forwarder_dropped_while_its_staged_save_runs_puts_storage_back_after_it() {
     assert_eq!(storage.saves(), 3);
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_forwarder_dropped_with_a_staged_write_puts_back_the_lists_it_serves_as_it_goes() {
     let storage = Arc::new(MemoryPersistence::default());
@@ -534,6 +552,7 @@ fn a_forwarder_dropped_with_a_staged_write_puts_back_the_lists_it_serves_as_it_g
     );
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn settling_forgotten_writes_puts_storage_back_and_frees_the_forwarder() {
     let storage = Arc::new(MemoryPersistence::default());

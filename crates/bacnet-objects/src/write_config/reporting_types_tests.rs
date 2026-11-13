@@ -15,6 +15,7 @@ use super::reporting_tests::{covered, detection, persistence, refused_with};
 use super::test_storage::MemoryConfig;
 use super::{ReportingWriteConfig, WriteConfigSnapshot};
 use crate::access_control::{AccessDoorObject, AccessZoneObject};
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::durable::{DurableWrites, PendingWrite, StageStep};
 use crate::event_enrollment::{AlertEnrollmentObject, EventEnrollmentObject};
 use crate::traits::BACnetObject;
@@ -348,6 +349,7 @@ fn an_alert_enrollment_keeps_only_the_notify_types_it_takes() {
     let storage = MemoryConfig::new();
     let mut alert = ae(&storage);
     let ack = notify_type(NotifyType::ACK_NOTIFICATION);
+    #[cfg(feature = "durable-writes")]
     assert!(matches!(
         alert.stage_writes(core::slice::from_ref(&ack)),
         StageStep::Skip
@@ -360,11 +362,14 @@ fn an_alert_enrollment_keeps_only_the_notify_types_it_takes() {
     ));
     assert_eq!(storage.saves(), 0);
 
-    let mut enrollment = ee(&storage);
-    assert!(matches!(
-        enrollment.stage_writes(core::slice::from_ref(&ack)),
-        StageStep::Staged(_)
-    ));
+    #[cfg(feature = "durable-writes")]
+    {
+        let mut enrollment = ee(&storage);
+        assert!(matches!(
+            enrollment.stage_writes(core::slice::from_ref(&ack)),
+            StageStep::Staged(_)
+        ));
+    }
 
     let holding = MemoryConfig::holding(WriteConfigSnapshot::Reporting(ReportingWriteConfig {
         notify_type: Some(NotifyType::ACK_NOTIFICATION),
@@ -383,6 +388,7 @@ fn an_alert_enrollment_keeps_only_the_notify_types_it_takes() {
 
 /// A staged write on an object with no Tags saves first, and the write
 /// takes it without saving again.
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_staged_write_saves_first_and_the_write_takes_it() {
     let storage = MemoryConfig::new();

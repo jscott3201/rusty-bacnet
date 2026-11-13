@@ -2,6 +2,7 @@
 //! feature; see the [parent module](super).
 
 use alloc::sync::Arc;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use core::time::Duration;
 
 use bacnet_types::bitstring::EventTransitionBits;
@@ -11,7 +12,9 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::parameters;
 use crate::common;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::durable::staged::{self, StagedSaves};
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::durable::{PendingWrite, SaveWait, StageStep};
 use crate::event::options::{MAX_KEPT_TEXT_OCTETS, ReportingOptions};
 use crate::prelude::{Box, String};
@@ -555,11 +558,11 @@ fn admit_to(
     let next = current.after(write, object)?;
     #[cfg(feature = "durable-writes")]
     let claimed = claim(storage, write, store.writes, &next, object);
-    // Without durable-writes no server or endpoint stages; only code that
-    // calls `DurableWrites` itself can. Its step is taken with no check for
-    // a stale stage, as before #2431: the check's encoding fallback would
-    // link the write-configuration encoder into images that never stage
-    // (#2532).
+    // Without durable-writes nothing stages: the built-in objects don't
+    // implement `DurableWrites` there, and the stand-in `claim` finds no
+    // step, so there is no stale stage to check for. The check's encoding
+    // fallback would link the write-configuration encoder into images that
+    // never stage (#2532).
     #[cfg(not(feature = "durable-writes"))]
     let claimed = storage.claim(
         write.property,
@@ -623,6 +626,7 @@ fn claim(
 /// Stage the kept rows a request writes to `object`
 /// ([`DurableWrites::stage_writes`](crate::durable::DurableWrites::stage_writes)):
 /// one save of what they leave together.
+#[cfg(feature = "durable-writes")]
 pub(crate) fn stage_writes<T: KeepsReporting>(
     object: &mut T,
     writes: &[PendingWrite],
@@ -666,6 +670,7 @@ pub(crate) fn stage_writes<T: KeepsReporting>(
 }
 
 /// See [`DurableWrites::release_staged_write`](crate::durable::DurableWrites::release_staged_write).
+#[cfg(feature = "durable-writes")]
 pub(crate) fn release<T: KeepsReporting>(object: &mut T, staged: &SaveWait) {
     with_store(object, |store, _| {
         if let Some(storage) = &mut store.storage {
@@ -675,11 +680,13 @@ pub(crate) fn release<T: KeepsReporting>(object: &mut T, staged: &SaveWait) {
 }
 
 /// See [`DurableWrites::has_staged_write`](crate::durable::DurableWrites::has_staged_write).
+#[cfg(feature = "durable-writes")]
 pub(crate) fn has_staged(store: &ReportingStore) -> bool {
     store.storage.as_deref().is_some_and(Storage::is_staged)
 }
 
 /// See [`DurableWrites::settle_forgotten_writes`](crate::durable::DurableWrites::settle_forgotten_writes).
+#[cfg(feature = "durable-writes")]
 pub(crate) fn settle<T: KeepsReporting>(object: &mut T) -> Option<SaveWait> {
     let mut store = core::mem::take(object.reporting_store());
     let written = store.written;
@@ -692,6 +699,7 @@ pub(crate) fn settle<T: KeepsReporting>(object: &mut T) -> Option<SaveWait> {
 }
 
 /// See [`DurableWrites::expire_staged`](crate::durable::DurableWrites::expire_staged).
+#[cfg(feature = "durable-writes")]
 pub(crate) fn expire<T: KeepsReporting>(object: &mut T, now: Duration) {
     with_store(object, |store, _| {
         if let Some(storage) = &mut store.storage {
@@ -741,6 +749,7 @@ pub(crate) fn written<T: KeepsReporting>(object: &T) -> ReportingWriteConfig {
 /// Two stages of one request joined, as the colour objects join Tags and
 /// their default (#1956): a request busy on either waits without holding the
 /// other.
+#[cfg(feature = "durable-writes")]
 pub(crate) fn joined(
     tags: StageStep,
     reporting: StageStep,
