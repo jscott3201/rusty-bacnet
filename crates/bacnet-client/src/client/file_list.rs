@@ -90,37 +90,6 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         }
     }
 
-    /// Acknowledge an alarm on a remote device.
-    ///
-    /// This compatibility helper fabricates sequence-zero timestamps, which
-    /// are not a valid general correlation mechanism. Use
-    /// [`Self::acknowledge_alarm_request`] with the original notification's
-    /// exact timestamp and a caller-selected acknowledgment time.
-    #[deprecated(
-        note = "use acknowledge_alarm_request with caller-supplied correlation timestamps"
-    )]
-    pub async fn acknowledge_alarm(
-        &self,
-        destination_mac: &[u8],
-        acknowledging_process_identifier: u32,
-        event_object_identifier: bacnet_types::primitives::ObjectIdentifier,
-        event_state_acknowledged: bacnet_types::enums::EventState,
-        acknowledgment_source: &str,
-    ) -> Result<(), Error> {
-        use bacnet_services::alarm_event::AcknowledgeAlarmRequest;
-
-        let request = AcknowledgeAlarmRequest {
-            acknowledging_process_identifier,
-            event_object_identifier,
-            event_state_acknowledged,
-            timestamp: bacnet_types::primitives::BACnetTimeStamp::SequenceNumber(0),
-            acknowledgment_source: acknowledgment_source.to_string(),
-            time_of_acknowledgment: bacnet_types::primitives::BACnetTimeStamp::SequenceNumber(0),
-        };
-        self.acknowledge_alarm_request(destination_mac, &request)
-            .await
-    }
-
     /// Read file data from a remote device (stream or record access).
     pub async fn atomic_read_file(
         &self,

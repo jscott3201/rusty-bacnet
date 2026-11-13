@@ -4461,21 +4461,6 @@ class BACnetClient:
         """
         ...
 
-    def acknowledge_alarm(
-        self,
-        address: str,
-        acknowledging_process_identifier: int,
-        event_object_identifier: ObjectIdentifier,
-        event_state_acknowledged: EventState,
-        acknowledgment_source: str,
-    ) -> Awaitable[None]:
-        """Deprecated compatibility method.
-
-        This method fabricates sequence-number zero for both timestamps. Use
-        ``acknowledge_alarm_request`` for a lossless request.
-        """
-        ...
-
     def get_event_information(
         self,
         address: str,

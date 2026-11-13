@@ -2198,22 +2198,6 @@ await client.acknowledge_alarm_request(
 )
 ```
 
-#### `acknowledge_alarm(address, acknowledging_process_identifier, event_object_identifier, event_state_acknowledged, acknowledgment_source)` (deprecated)
-
-Fills in both timestamps itself; prefer `acknowledge_alarm_request`.
-
-```python
-from rusty_bacnet import EventState
-
-await client.acknowledge_alarm(
-    "192.168.1.100:47808",
-    acknowledging_process_identifier=1,
-    event_object_identifier=ObjectIdentifier(ObjectType.ANALOG_INPUT, 1),
-    event_state_acknowledged=EventState.HIGH_LIMIT,
-    acknowledgment_source="operator",
-)
-```
-
 #### `get_event_information(address, last_received_object_identifier=None) -> dict`
 
 One GetEventInformation answer, decoded: `{"summaries": [...], "more_events":
