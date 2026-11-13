@@ -27,9 +27,9 @@ enum Next {
     Tags(Vec<BACnetNameValue>),
     Description(String),
     /// A staged step's Tags write with an index: the change it makes to the
-    /// Tags served as it is taken (#2526). A staged step holds only what its
-    /// write sets; for a whole array or a Description, that is what it
-    /// leaves.
+    /// Tags served as it is taken (#2526). A staged step holds what its
+    /// write sets; for a whole array or a Description, that is the whole
+    /// state it leaves, so such a step holds its list or its text.
     #[cfg(feature = "durable-writes")]
     Staged(TagsChange),
 }
@@ -57,7 +57,9 @@ impl TagsChange {
         }
     }
 
-    /// Make the change on `tags`, the array the write was worked out on.
+    /// Make the change on `tags`, the array the write was worked out on. An
+    /// element's slot is inside it: the claim that took the step checked it
+    /// ([`unmakeable`]).
     fn make(self, tags: &mut Vec<BACnetNameValue>) {
         match self {
             Self::Size(size) => tags.resize_with(size, || BACnetNameValue::semantic("")),
@@ -72,9 +74,12 @@ impl TagsChange {
 }
 
 /// A request's staged steps each hold what their write sets, not the state
-/// it leaves, so its stage holds the Tags a constant number of times however
-/// many writes it makes (#2526): the stage works the steps out on one
-/// working copy, and each write is made on the Tags served as it is taken.
+/// it leaves (#2526). An element or index-0 write's step holds only its
+/// change, made on the Tags served as the write is taken, so a request of
+/// such writes holds the list a constant number of times however many it
+/// makes. A whole-array write's step holds the list it writes, and a
+/// Description's its text. The stage works the steps out on one working
+/// copy and saves it once.
 type Storage = StagedSaves<TagsSnapshot, Next>;
 
 /// Provisioned served rows, independent saved override, and sole writer.
@@ -117,6 +122,23 @@ fn apply(snapshot: &mut TagsSnapshot, next: &Next) {
         #[cfg(feature = "durable-writes")]
         Next::Staged(_) => unreachable!("{WHOLE}"),
     }
+}
+
+/// Whether a staged step can't be made on `served`, the Tags served as its
+/// write is made: an element past their end. Every change to the served
+/// Tags counts as a write, and a step is taken only while none came between,
+/// so this holds no step back; should one ever be stale, its write isn't
+/// taken and is refused as made on the Tags served, rather than reported
+/// made (#2526).
+#[cfg(feature = "durable-writes")]
+fn unmakeable(next: &Next, served: Option<&[BACnetNameValue]>) -> bool {
+    matches!(next, Next::Staged(TagsChange::Tag(slot, _)) if *slot >= served.map_or(0, <[_]>::len))
+}
+
+/// Without durable-writes no step is staged, so none is stale.
+#[cfg(not(feature = "durable-writes"))]
+fn unmakeable(_next: &Next, _served: Option<&[BACnetNameValue]>) -> bool {
+    false
 }
 
 /// Why only a staged step holds a [`TagsChange`]: every other write is
@@ -345,7 +367,11 @@ impl ProfileState {
             |_| common::protocol_error(ErrorClass::DEVICE, ErrorCode::OPERATIONAL_PROBLEM);
         let base = self.writes;
         if let Some(kept) = &mut self.kept
-            && let Some(claimed) = kept.storage.claim(property, index, value, base)
+            && let Some(claimed) = kept
+                .storage
+                .claim_unless(property, index, value, base, |next| {
+                    unmakeable(next, self.profile.tags.as_deref())
+                })
         {
             // Install before correcting, so the steps the request has still
             // to take keep the state served now.

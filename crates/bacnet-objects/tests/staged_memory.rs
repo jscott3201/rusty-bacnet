@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use bacnet_encoding::constructed::{encode_access_rule, encode_name_value};
 use bacnet_objects::access_control::{
-    AccessRightsObject, AccessRightsPersistence, AccessRightsSnapshot,
+    AccessRightsObject, AccessRightsPersistence, AccessRightsSnapshot, MAX_ACCESS_RULES,
 };
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::channel::{ChannelObject, MAX_CHANNEL_MEMBERS, MAX_CONTROL_GROUPS};
@@ -283,14 +283,18 @@ fn a_stage_holds_the_rows_once_whatever_its_number_of_writes() {
     assert!(held < 1 << 20, "{held} octets held by the stage");
 }
 
-/// One tag as a Tags element write carries it.
-fn framed(tag: &BACnetNameValue) -> PropertyValue {
+/// Tags as a write carries them: one for an element write, every one for a
+/// whole one.
+fn framed(tags: &[BACnetNameValue]) -> PropertyValue {
     let mut octets = BytesMut::new();
-    encode_name_value(&mut octets, tag).unwrap();
+    for tag in tags {
+        encode_name_value(&mut octets, tag).unwrap();
+    }
     PropertyValue::ApplicationData(octets.to_vec())
 }
 
-/// The most Tags storage keeps: 1,024 tags whose names fill its 1 MiB, the
+/// The most Tags storage keeps: 1,024 tags whose names fill its 1 MiB,
+/// written once so storage and the served list both hold them, then a
 /// request rewriting a few of them with short names, so the list stays at
 /// the cap. Kept once a write, the list is about 2 GiB (#2526).
 #[test]
@@ -302,29 +306,36 @@ fn a_tags_stage_holds_the_list_once_whatever_its_number_of_writes() {
             .unwrap();
     // Each name encodes in its length plus five octets; 1,024 of them come
     // within a kilobyte of the cap.
-    let tags = (0..MAX_TAGS)
+    let tags: Vec<_> = (0..MAX_TAGS)
         .map(|at| BACnetNameValue::semantic(format!("{at:01018}")))
         .collect();
     object
         .set_profile(ObjectProfile {
-            tags: Some(tags),
+            tags: Some(Vec::new()),
             ..ObjectProfile::default()
         })
+        .unwrap();
+    object
+        .write_property(P::TAGS, None, framed(&tags), None)
         .unwrap();
     let writes = writes(
         P::TAGS,
         |at| Some(at as u32 % 8 + 1),
-        |at| framed(&BACnetNameValue::semantic(format!("w{at}"))),
+        |at| framed(&[BACnetNameValue::semantic(format!("w{at}"))]),
     );
-    // The saved snapshot, the served one and the writes themselves.
+    // The stage's copy of the served list (storage swaps its old snapshot
+    // for the new one, the same size) and the writes themselves, about 1.3
+    // MiB. 2 MiB leaves about 375 octets a write: a step that kept even one
+    // of these 1 KiB tags beside its change would pass it.
     let held = staged_octets(&mut object, &writes);
     let per_write = held / WRITES as isize;
     eprintln!("Tags, {WRITES} writes: {held} octets held, {per_write} a write");
-    assert!(held < 4 << 20, "{held} octets held by the stage");
+    assert!(held < 2 << 20, "{held} octets held by the stage");
 }
 
-/// An Access Rights object's 1,024 positive rules, each naming a time range
-/// and a zone in another Device; the request rewrites a few of them.
+/// An Access Rights object's rule arrays, each written once with its 1,024
+/// rules naming a time range and a zone in another Device, so storage and
+/// the served object hold both; the request rewrites a few positive rules.
 #[test]
 #[ignore = "#2526: each staged step still keeps the rule array; run with --run-ignored only"]
 fn an_access_rights_stage_holds_the_rules_once_whatever_its_number_of_writes() {
@@ -343,9 +354,17 @@ fn an_access_rights_stage_holds_the_rules_once_whatever_its_number_of_writes() {
         );
         BACnetAccessRule::new(Some(schedule), Some(zone), true)
     };
-    rights
-        .set_positive_access_rules((0..1024).map(rule))
-        .unwrap();
+    let rules: Vec<_> = (0..MAX_ACCESS_RULES as u32).map(rule).collect();
+    let mut octets = BytesMut::new();
+    for rule in &rules {
+        encode_access_rule(&mut octets, rule);
+    }
+    let whole = PropertyValue::ApplicationData(octets.to_vec());
+    for property in [P::POSITIVE_ACCESS_RULES, P::NEGATIVE_ACCESS_RULES] {
+        rights
+            .write_property(property, None, whole.clone(), None)
+            .unwrap();
+    }
     let writes = writes(
         P::POSITIVE_ACCESS_RULES,
         |at| Some(at as u32 % 8 + 1),

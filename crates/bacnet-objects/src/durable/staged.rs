@@ -76,15 +76,19 @@ use super::{Event, STAGED_WRITE_LIFETIME, SaveTicket};
 #[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use super::{PendingWrite, SaveWait, SaveWriter, StageStep};
 
-/// One write of a staged save, and the state `N` it leaves.
+/// One write of a staged save, and what the object takes for it, `N`.
 pub(crate) struct Step<N> {
     /// The write as its request makes it. Its array index is part of it, so
     /// a write of the same value to another element of an array can't take
     /// this one's state.
     #[cfg(feature = "durable-writes")]
     write: PendingWrite,
-    /// The state the write leaves, on top of the steps before it, in the
-    /// form the object holds it.
+    /// What the object takes as the write is made, in the form it holds it:
+    /// the state the write leaves on top of the steps before it; or only
+    /// what the write sets, made then on the state served (a Tags element or
+    /// size, #2526); or nothing of its own, for an object that works the
+    /// write out again (a log, #2431, and the reporting rows, #2414, whose
+    /// last step keeps the snapshot its stage saved).
     pub(crate) next: N,
 }
 
@@ -407,10 +411,10 @@ impl<S: Send + 'static, N> StagedSaves<S, N> {
     }
 
     /// [`claim`](Self::claim), for an object whose step keeps what its stage
-    /// saved: once the save has succeeded, a step that `stale` says the
-    /// object would no longer save isn't taken. That is `None`, as for
-    /// another write, so the object drops the staged write and saves where
-    /// it is (#2431).
+    /// saved, or one it might not be able to make: once the save has
+    /// succeeded, a step that `stale` says the object would no longer save,
+    /// or can't make, isn't taken. That is `None`, as for another write, so
+    /// the object makes or refuses the write where it is (#2431, #2526).
     #[cfg(feature = "durable-writes")]
     pub(crate) fn claim_unless(
         &mut self,
@@ -578,6 +582,17 @@ impl<S: Send + 'static, N> StagedSaves<S, N> {
         _array_index: Option<u32>,
         _value: &PropertyValue,
         _base: u64,
+    ) -> Option<Result<N, Error>> {
+        None
+    }
+
+    pub(crate) fn claim_unless(
+        &mut self,
+        _property: PropertyIdentifier,
+        _array_index: Option<u32>,
+        _value: &PropertyValue,
+        _base: u64,
+        _stale: impl FnOnce(&N) -> bool,
     ) -> Option<Result<N, Error>> {
         None
     }
