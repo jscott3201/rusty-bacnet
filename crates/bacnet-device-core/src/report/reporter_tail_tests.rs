@@ -117,9 +117,17 @@ mod timed {
         );
         let clock = std::sync::Arc::new(Ticking::default());
         device.db.set_clock_reader(Some(clock));
-        let reference = |property| COVReference {
+        subscribe(&mut device, 1, &[P::STATUS_FLAGS, P::PRESENT_VALUE], ms(1));
+        device
+    }
+
+    /// Subscribe process `process` to AI-3's `properties`, timestamped, in a
+    /// context of its own with Max_Notification_Delay 0, and send its
+    /// initial report.
+    fn subscribe(device: &mut Device, process: u32, properties: &[P], now: Instant) {
+        let reference = |property: &P| COVReference {
             monitored_property: PropertyReference {
-                property_identifier: property,
+                property_identifier: *property,
                 property_array_index: None,
             },
             cov_increment: None,
@@ -127,30 +135,27 @@ mod timed {
         };
         let mut body = BytesMut::new();
         SubscribeCOVPropertyMultipleRequest {
-            subscriber_process_identifier: 1,
+            subscriber_process_identifier: process,
             issue_confirmed_notifications: false,
             lifetime: Some(300),
             max_notification_delay: Some(0),
             list_of_cov_subscription_specifications: vec![COVSubscriptionSpecification {
                 monitored_object_identifier: alarm(),
-                list_of_cov_references: vec![
-                    reference(P::STATUS_FLAGS),
-                    reference(P::PRESENT_VALUE),
-                ],
+                list_of_cov_references: properties.iter().map(reference).collect(),
             }],
         }
         .encode(&mut body)
         .unwrap();
         let service = ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY_MULTIPLE;
-        let reply = device.request(service, &body, ms(1));
+        let reply = device.request(service, &body, now);
         assert!(matches!(reply, Apdu::SimpleAck(_)), "{reply:?}");
-        values(&mut device, ms(1));
-        device
+        values(device, now);
     }
 
     /// The values of the COV-multiple reports the device sends now, each
-    /// sent, every one with a Time_Of_Change. Event notifications go too.
-    fn values(device: &mut Device, now: Instant) -> Vec<(P, Vec<u8>)> {
+    /// with the process it went to, each report sent, every value with a
+    /// Time_Of_Change. Event notifications go too.
+    fn sent(device: &mut Device, now: Instant) -> Vec<(u32, P, Vec<u8>)> {
         let mut values = Vec::new();
         while let Some((notification, apdu)) = device.pop(now) {
             if notification.service == NotifyService::CovMultiple {
@@ -158,11 +163,13 @@ mod timed {
                     panic!("an unconfirmed report: {apdu:?}");
                 };
                 let report = COVNotificationMultipleRequest::decode(&request.service_request);
-                for item in report.unwrap().list_of_cov_notifications {
+                let report = report.unwrap();
+                let process = report.subscriber_process_identifier;
+                for item in report.list_of_cov_notifications {
                     for value in item.list_of_values {
                         let timed = value.time_of_change.is_some();
                         assert!(timed, "{:?}", value.property_identifier);
-                        values.push((value.property_identifier, value.value));
+                        values.push((process, value.property_identifier, value.value));
                     }
                 }
             }
@@ -171,6 +178,14 @@ mod timed {
                 .delivered(notification.token, Delivery::Sent, &mut device.ids, now);
         }
         values
+    }
+
+    /// [`sent`]'s values, whichever process they went to.
+    fn values(device: &mut Device, now: Instant) -> Vec<(P, Vec<u8>)> {
+        let values = sent(device, now).into_iter();
+        values
+            .map(|(_, property, value)| (property, value))
+            .collect()
     }
 
     /// The rows the device reports now. With a clock that moves at every
@@ -330,6 +345,28 @@ mod timed {
         write_multiple(&mut device, &writes, ms(100));
         let rows = rows(&mut device, ms(100));
         assert_eq!(rows, [row(90.0, IN_ALARM | OOS)]);
+    }
+
+    /// The trade-off the union makes (#2535): a context timestamping only
+    /// Status_Flags gets one row for a request that takes AI-3 out of service
+    /// and then over the limit. The first write's row, out of service, is
+    /// the newest that reference has, so the transition takes its place.
+    #[test]
+    fn an_earlier_writes_row_is_folded_into_a_later_writes_transition() {
+        let mut device = timestamped();
+        subscribe(&mut device, 2, &[P::STATUS_FLAGS], ms(2));
+        let writes = [
+            (P::OUT_OF_SERVICE, PropertyValue::Boolean(true)),
+            (P::PRESENT_VALUE, PropertyValue::Real(90.0)),
+        ];
+        write_multiple(&mut device, &writes, ms(100));
+        let flags_only: Vec<_> = sent(&mut device, ms(100))
+            .into_iter()
+            .filter(|(process, ..)| *process == 2)
+            .map(|(_, property, value)| (property, value))
+            .collect();
+        let in_alarm = vec![0x82, 0x04, IN_ALARM | OOS];
+        assert_eq!(flags_only, [(P::STATUS_FLAGS, in_alarm)]);
     }
 
     /// The host's own change is evaluated before it is captured: one row.

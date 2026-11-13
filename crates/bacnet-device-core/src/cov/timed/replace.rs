@@ -20,7 +20,8 @@ impl TimedHistories {
     /// never a row dropped. The core's `Reporter` runs both captures under
     /// one borrow, so it always replaces, whatever the Max_Notification_Delay.
     /// On bacnet-server a report drained from an object snapshot reads no
-    /// database, so it takes no guard and drains its whole context: one that
+    /// database, so it takes no database guard (only the COV table's write
+    /// lock, briefly) and drains its whole context: one that
     /// runs between a WritePropertyMultiple's attempts and its capture after
     /// the transition, or between a local authorization's events and that
     /// capture, leaves this to append. The replacement keeps the replaced

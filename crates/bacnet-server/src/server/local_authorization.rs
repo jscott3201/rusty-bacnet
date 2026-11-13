@@ -107,6 +107,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let mut db = db;
             let mut transitions = Vec::new();
             let sent = &mut transitions;
+            // No test drives this replacement: the built-in Access Point
+            // reports no intrinsic events, and a test point that did would
+            // need its own detector, commit and event properties.
             if super::event_notifications::commit_written_transition(&mut db, oid, sent) {
                 let capture = fanout.cov_table.read().await.timed_capture(oid);
                 capture.run_replacing(&db, &queued);
