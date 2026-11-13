@@ -17,7 +17,12 @@ the database guard, the transport, addressing and time.
   properties writable, so list them as read-only in such a build's PICS.
 - `event-reporting`, which `std` turns on, has intrinsic event reporting
   (`event`, #2303) and turns on `bacnet-objects`' feature of the same
-  name. No firmware image turns it on yet.
+  name. The firmware `reporting` image turns it on.
+- `event-enrollment`, which `std` turns on, adds `event::enrollment` on top
+  of `event-reporting` (#2319): the event and fault algorithms an Event
+  Enrollment object evaluates, and the reads of its parameters and
+  monitored reference, internal until the evaluation pass moves too.
+  `bacnet-server` runs its pass on them; no firmware image turns it on yet.
 - `cov-multiple`, which `std` turns on, has the SubscribeCOVPropertyMultiple
   path (#2320): the service with its checks
   (`cov::subscribe_cov_property_multiple`), the capture of timestamped

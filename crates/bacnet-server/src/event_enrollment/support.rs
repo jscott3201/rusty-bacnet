@@ -13,7 +13,6 @@ use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::EventEnrollmentReliabilityCause;
-use super::LocalConfigurationReadError;
 use super::algorithms::extract_real;
 use super::commit::{EnrollmentUpdate, ReliabilityUpdate};
 use bacnet_device_core::event::CapturedReferencedValue;
@@ -147,19 +146,6 @@ pub(super) fn invalid_indexed_target_error(error: &Error) -> bool {
                         || code == ErrorCode::UNKNOWN_PROPERTY
                 )
     )
-}
-
-pub(super) fn classify_required_property_read_error(error: &Error) -> LocalConfigurationReadError {
-    if matches!(
-        error,
-        Error::Remote(RemoteError::Error { class, code })
-            if *class == ErrorClass::PROPERTY
-                && *code == ErrorCode::UNKNOWN_PROPERTY
-    ) {
-        LocalConfigurationReadError::Malformed
-    } else {
-        LocalConfigurationReadError::Unavailable
-    }
 }
 
 /// The enrollment under evaluation and the reliability, event state and
