@@ -90,7 +90,8 @@ checks=(
   "bacnet-device-core alloc,structured-writes"
   "bacnet-device-core alloc,cov-multiple"
   "bacnet-device-core alloc,event-reporting"
-  "bacnet-device-core alloc,structured-writes,cov-multiple,event-reporting,test-support"
+  "bacnet-device-core alloc,event-enrollment"
+  "bacnet-device-core alloc,structured-writes,cov-multiple,event-reporting,event-enrollment,test-support"
 )
 default_targets=(thumbv6m-none-eabi thumbv7em-none-eabihf riscv32imac-unknown-none-elf)
 # Crates that need std (or, for tracing, atomics the no_std crates don't
