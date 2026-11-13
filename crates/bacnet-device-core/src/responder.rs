@@ -430,6 +430,15 @@ impl Responder {
         request: Inbound,
         out: &mut BytesMut,
     ) -> Written {
+        // Without a clock, no Recipient_List entry the device can't honour
+        // (decision 14).
+        let mut clockless;
+        let observer: Option<&mut dyn WriteCommitObserver> = if self.clock.is_none() {
+            clockless = write::ClocklessRecipients(observer);
+            Some(&mut clockless)
+        } else {
+            observer.map(|observer| observer as &mut dyn WriteCommitObserver)
+        };
         let origin = request.source.as_ref();
         let confirmed = match decode_apdu(request.apdu) {
             Ok(Apdu::ConfirmedRequest(confirmed)) if confirmed.segmented => {

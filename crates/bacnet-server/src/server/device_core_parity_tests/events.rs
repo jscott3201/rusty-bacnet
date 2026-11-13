@@ -601,3 +601,39 @@ async fn without_a_clock_timestamps_are_sequence_numbers_and_windows_fail_closed
     );
     assert_eq!(server, stamp(&both.parity.db));
 }
+
+/// The core's `Responder` has no Device clock, so it refuses a
+/// Recipient_List entry it couldn't honour; the server, which judges
+/// windows by the system clock without one, stores it (decision 14).
+#[tokio::test(start_paused = true)]
+async fn a_restricted_recipient_list_is_stored_by_the_server_and_refused_by_the_core() {
+    let mut both = EventParity::start(delayed).await;
+    let what = "a restricted Recipient_List without a Device clock";
+    let mornings = destination(
+        ALWAYS,
+        DaysOfWeek::all(),
+        (at(0, 0), at(12, 0)),
+        EventTransitionBits::all(),
+    );
+    let mut list = BytesMut::new();
+    bacnet_encoding::constructed::encode_destination_list(&mut list, &[mornings]).unwrap();
+    let mut body = BytesMut::new();
+    WritePropertyRequest {
+        object_identifier: oid(ObjectType::NOTIFICATION_CLASS, 1),
+        property_identifier: P::RECIPIENT_LIST,
+        property_array_index: None,
+        property_value: list.to_vec(),
+        priority: None,
+    }
+    .encode(&mut body)
+    .unwrap();
+    let apdu = confirmed(1, ConfirmedServiceChoice::WRITE_PROPERTY, &body, 1476);
+    let (server, core) = both.parity.differ(what, apdu, 1476).await;
+    assert!(matches!(server, Some(Apdu::SimpleAck(_))), "{server:?}");
+    let refused = |reply: &Option<Apdu>| {
+        matches!(reply, Some(Apdu::Error(error))
+            if error.error_class == ErrorClass::PROPERTY
+                && error.error_code == ErrorCode::VALUE_OUT_OF_RANGE)
+    };
+    assert!(refused(&core), "{core:?}");
+}

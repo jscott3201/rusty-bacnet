@@ -58,6 +58,15 @@ pub use persistence::{NotificationClassPersistence, NotificationClassSnapshot};
 pub use recipient_list::MAX_RECIPIENT_LIST_DESTINATIONS;
 pub use window::{always_in_window, in_window};
 
+/// Decode `value` as a whole-list Recipient_List write would: the framed
+/// wire form or a list of encoded destinations, refused with PROPERTY /
+/// INVALID_DATA_TYPE otherwise, or past
+/// [`MAX_RECIPIENT_LIST_DESTINATIONS`]. For a host that judges a write's
+/// destinations before the class takes it (#2303).
+pub fn decode_recipient_list(value: &PropertyValue) -> Result<Vec<BACnetDestination>, Error> {
+    recipient_list::decode_write(value.clone())
+}
+
 /// BACnet NotificationClass object.
 ///
 /// Stores notification routing configuration: which priorities, acknowledgement

@@ -50,6 +50,7 @@ const DEVICE: u32 = 4321;
 const DIFFER_EXCHANGES: &[&str] = &[
     "reply over max_reply, segmented response accepted",
     "a Command run's actions",
+    "a restricted Recipient_List without a Device clock",
 ];
 
 struct FixedClock;
