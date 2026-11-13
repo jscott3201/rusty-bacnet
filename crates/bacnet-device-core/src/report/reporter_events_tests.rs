@@ -535,3 +535,25 @@ fn the_fault_pass_reports_to_cov_and_the_sweep_sends_the_fault() {
     assert_eq!(fault.service, NotifyService::Event);
     assert!(is_event(&apdu), "{apdu:?}");
 }
+
+#[test]
+fn the_shared_cov_deadline_refuses_a_reporter_with_the_event_path() {
+    let mut device = device(
+        OutboxLimits::default(),
+        2,
+        vec![address_destination(false)],
+        1,
+    );
+    device.raise(alarm(), ms(100));
+    let due = device.reporter.next_deadline();
+    let refused = device
+        .reporter
+        .on_cov_deadline(&device.db, &mut device.ids, ms(1_000));
+    assert!(refused.is_err());
+    assert_eq!(device.reporter.next_deadline(), due, "nothing ran");
+    let mut cov_only = Device::new(OutboxLimits::default());
+    let ran = cov_only
+        .reporter
+        .on_cov_deadline(&cov_only.db, &mut cov_only.ids, T0);
+    assert!(ran.is_ok());
+}

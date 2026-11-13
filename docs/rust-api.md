@@ -8539,12 +8539,16 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   otherwise by the database's clock frame, failing closed without one. An
   event that finds the outbox full evicts the newest queued
   COVNotification, whose subscription is owed a look (counted `evicted`),
-  and is dropped (`events_dropped`) only when none is left. Each recipient
-  hears its events in order: a confirmed event notification that finds no
-  invoke ID waits in its place, held; every `pop` tries the held ones
-  first (each recipient's oldest), before anything newer can take a free
-  ID, and an event notification to a recipient with one held waits behind
-  it. COV notifications aren't held back. A held one waits only while
+  and is dropped (`events_dropped`) only when none is left. For each
+  address no event notification is first sent before an older one: a
+  confirmed event notification that finds no invoke ID waits in its place,
+  held; every `pop` tries the held ones first (each address's oldest),
+  before anything newer can take a free ID, and an event notification to
+  an address with one held waits behind it, whatever its process
+  identifier or confirmed flag. An older one's resend can still follow a
+  newer one, each on its own invoke ID; the receiver orders them by their
+  timestamps. A Device recipient rebound while one of its events waits
+  keeps no order across the rebinding. COV notifications aren't held back. A held one waits only while
   `InvokeIds` gives none, with no cutoff of its own; held ones can fill the
   outbox, and new events are then dropped and counted. `owes_invoke_id`
   covers held events and COV reports owed an ID. While
@@ -8552,7 +8556,8 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   each notification `NotSent`: a host that stops popping lets events fill
   the outbox and evict COV. `changed` and `on_deadline` take
   `&mut ObjectDatabase`; `on_cov_deadline(db, ids, now)` does a reporter
-  without the event path's deadline over a shared one. The outbox is one
+  without the event path's deadline over a shared one, and refuses one with
+  it, doing nothing. The outbox is one
   buffer and one queue allocated at build (`OutboxLimits`: entries and
   octets). A subscription holds one unconfirmed entry: a newer report
   replaces it in its turn, so one that changes faster than the link sends

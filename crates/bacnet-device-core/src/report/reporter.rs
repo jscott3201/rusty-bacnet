@@ -394,14 +394,25 @@ impl Reporter {
     /// [`on_deadline`](Self::on_deadline) over a shared database, for a
     /// reporter with no event path (no [`ReportConfig`] sweep), whose
     /// deadlines commit nothing: a host that serves reads meanwhile, as the
-    /// endpoint does, needn't take the database exclusively. With the event
-    /// path on, its sweep and fault pass wait for `on_deadline`, so call
-    /// that instead.
-    pub fn on_cov_deadline(&mut self, db: &ObjectDatabase, ids: &mut dyn InvokeIds, now: Instant) {
+    /// endpoint does, needn't take the database exclusively. A reporter
+    /// with the event path on refuses it, doing nothing: its sweep and
+    /// fault pass need [`on_deadline`](Self::on_deadline), and a host that
+    /// went on calling this would find the deadline still due.
+    pub fn on_cov_deadline(
+        &mut self,
+        db: &ObjectDatabase,
+        ids: &mut dyn InvokeIds,
+        now: Instant,
+    ) -> Result<(), Error> {
         #[cfg(feature = "event-reporting")]
-        debug_assert!(self.events.is_none(), "the event path needs on_deadline");
+        if self.events.is_some() {
+            return Err(Error::Encoding(
+                "the event path's deadlines need on_deadline".into(),
+            ));
+        }
         self.expire_and_time_out(ids, now);
         self.look_owed(db, now);
+        Ok(())
     }
 
     /// Expire lifetimes and abandoned reports, and time out unanswered
@@ -423,14 +434,12 @@ impl Reporter {
         // Contexts whose pending changes reached their deadline.
         #[cfg(feature = "cov-multiple")]
         keys.extend(self.multiple_due(now));
-        // As many reports owed an ID as IDs came back: held event
-        // notifications first, as they can't be worked out again, then
-        // references, ahead of those owed room; one refused again waits
-        // for the next.
-        let freed = core::mem::take(&mut self.ids_freed);
-        // Held event notifications take theirs at the next `pop`.
-        let freed = freed.saturating_sub(self.outbox.held());
-        let freed = freed.min(self.owed_ids.len());
+        // As many references owed an ID as IDs came back, ahead of those
+        // owed room; one refused again waits for the next.
+        // Held event notifications need none of these: every `pop` tries
+        // them first, and with IDs counted per peer, reserving for them
+        // would hold a reference to one peer back behind another's.
+        let freed = core::mem::take(&mut self.ids_freed).min(self.owed_ids.len());
         keys.extend_from_slice(&self.owed_ids[..freed]);
         let mut owed = 0;
         if core::mem::take(&mut self.room_freed) {

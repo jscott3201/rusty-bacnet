@@ -102,9 +102,14 @@ the database guard, the transport, addressing and time.
   resolved through `Bindings`) through the same outbox and confirmed
   table, ahead of the COV ones of the same change; one that finds the
   outbox full evicts the newest COV notification, whose subscription is
-  owed a look. Each recipient hears its events in order: one refused an
-  invoke ID waits in its place, every `pop` tries it first, and later ones
-  to its recipient wait behind it (COV notifications don't). It waits only
+  owed a look. For each address no event notification is first sent before
+  an older one: one refused an invoke ID waits in its place, every `pop`
+  tries it first, and later ones to its address wait behind it, whatever
+  their process identifier or confirmed flag (COV notifications don't). An
+  older one's resend can still follow a newer one, each on its own invoke
+  ID; the receiver orders them by their timestamps. A Device recipient
+  rebound while one of its events waits keeps no order across the
+  rebinding. It waits only
   while `InvokeIds` has none, with no cutoff of its own; held ones fill the
   outbox at worst, and new events are then dropped and counted. Under
   DeviceCommunicationControl keep popping and report `NotSent`. Without a

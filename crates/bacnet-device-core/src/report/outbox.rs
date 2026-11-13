@@ -20,8 +20,9 @@
 //! it holds its context's turn, and neither is a held event notification.
 //! A confirmed event notification that finds no invoke ID goes back to its
 //! place, held, and waits there for one: it can't be worked out again
-//! later, as a COV report can. A later one to the same recipient is held
-//! behind it, so each recipient hears its events in order.
+//! later, as a COV report can. A later one to the same address is held
+//! behind it, so no event notification is first sent before an older one
+//! to its address.
 
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
@@ -391,6 +392,28 @@ impl Outbox {
             .iter()
             .enumerate()
             .filter(|(_, entry)| entry.live && entry.held)
+    }
+
+    #[cfg(feature = "event-reporting")]
+    /// The number of entry slots, live or dead.
+    pub(super) fn slots(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// The entry at `at`, when it is live and held.
+    #[cfg(feature = "event-reporting")]
+    pub(super) fn held_at(&self, at: usize) -> Option<&Entry> {
+        self.entries
+            .get(at)
+            .filter(|entry| entry.live && entry.held)
+    }
+
+    /// Mark the held entry at `at` refused an ID; whether it wasn't before,
+    /// and so is to be counted owed.
+    #[cfg(feature = "event-reporting")]
+    pub(super) fn count_held(&mut self, at: usize) -> bool {
+        let entry = &mut self.entries[at];
+        !core::mem::replace(&mut entry.counted, true)
     }
 
     #[cfg(feature = "event-reporting")]

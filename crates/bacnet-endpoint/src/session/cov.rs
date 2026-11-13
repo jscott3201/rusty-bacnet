@@ -424,7 +424,8 @@ impl CovHost {
                 let CovState {
                     reporter, leases, ..
                 } = &mut *state;
-                reporter.on_cov_deadline(&db, leases, now);
+                let ran = reporter.on_cov_deadline(&db, leases, now);
+                debug_assert!(ran.is_ok(), "prepare refuses the event path");
             }
             let Some(outgoing) = self.pop() else {
                 return;

@@ -179,11 +179,15 @@ COV-multiple entry isn't evicted, since it holds its context's send turn.
 An evicted report a later change was measured from also owes that
 subscription a look (#2508), so it ends current. A confirmed event
 notification that finds no invoke ID can't be worked out again later, as a
-COV report can: it goes back to its place in the outbox, held. Each
-recipient hears its events in order: every `pop` tries the held
-notifications first, each recipient's oldest, before anything newer can
-take a free ID, and an event notification to a recipient with one held
-waits behind it; COV notifications aren't held back (decision 21).
+COV report can: it goes back to its place in the outbox, held. For each
+address, no event notification is first sent before an older one: every
+`pop` tries the held notifications first, each address's oldest, before
+anything newer can take a free ID, and an event notification to an
+address with one held waits behind it; COV notifications aren't held back
+(decision 21). That orders first sends only. Each confirmed request runs
+under its own invoke ID (Clause 5.4), so an older one's resend can land
+after a newer one, as the server's can; the receiver orders them by the
+notifications' timestamps or sequence numbers (Clauses 13.8, 13.9).
 
 `next_deadline` is the earliest of: the next delay due (§6.1), the next
 sweep, pass or fault pass, the earliest expiry, hold-off end and flight
@@ -1727,17 +1731,30 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
       its octets, its Device recipient resolved once to the address it
       keeps. It is counted owed once. `owes_invoke_id` holds while any is
       held or any COV reference is owed an ID.
-    - Order per recipient (fix round, from review): every `pop`, before
-      the outbox's next entry, tries the held notifications oldest first,
-      each recipient's oldest only (one scan of the outbox and at most one
-      `InvokeIds::take` per recipient held), so no newer notification takes
-      an ID ahead of a held one, whoever freed it; an event notification,
-      confirmed or not, to a recipient with one held is held behind it.
-      COV notifications aren't held back. A held one waits only while
-      `take` refuses, with no cutoff of its own: held ones can fill the
-      outbox, and new events are then dropped and counted. At
-      `on_deadline`, IDs counted free go to owed COV references only past
-      the number of confirmed events held.
+    - First sends in order per address (fix rounds, from review): every
+      `pop`, before the outbox's next entry, tries the held notifications
+      oldest first, each address's oldest only (a pass over the outbox's
+      entries with a look back over the held ones, at most one
+      `InvokeIds::take` per address held, no allocation), so no newer
+      notification takes an ID ahead of a held one, whoever freed it; an
+      event notification, confirmed or not, to an address with one held
+      is held behind it. The key is the resolved address alone: the
+      process identifier and confirmed flag are ignored, so an unconfirmed
+      event to another process at that address waits behind a held
+      confirmed one, and a Device recipient rebound while one of its
+      events is held keeps no order across the rebinding. Resends aren't
+      ordered (Clause 5.4); the receiver orders by timestamp. COV
+      notifications aren't held back. A held one waits only while `take`
+      refuses, with no cutoff of its own: held ones can fill the outbox,
+      and new events are then dropped and counted. One held behind and
+      then refused is counted owed then, once.
+    - IDs counted free at `on_deadline` all go to owed COV references, with
+      no reservation for held events (lead): `pop` tries those first
+      anyway, and with IDs counted per peer a reservation held one peer's
+      report back behind an event to another, dead, peer.
+    - `on_cov_deadline` refuses a reporter with the event path, doing
+      nothing and returning an error, rather than panic: a host calling it
+      there would otherwise find the deadline still due and spin.
     - DCC: the `Reporter` doesn't know it. While initiation is disabled a
       host keeps popping and reports each notification NotSent; one that
       stops popping lets events fill the outbox and evict COV.

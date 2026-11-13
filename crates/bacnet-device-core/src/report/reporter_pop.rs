@@ -2,7 +2,6 @@
 //! resends and the outbox, addressed, with its invoke ID when confirmed.
 
 use alloc::vec::Vec;
-
 use bacnet_encoding::apdu::{Apdu, UnconfirmedRequest, encode_apdu};
 use bacnet_encoding::npdu::view::NetworkPriority;
 use bacnet_time::Instant;
@@ -26,10 +25,12 @@ impl Reporter {
     /// invoke ID from `ids`. A COV one that gets none ends unsent, and its
     /// subscription is owed a later look; an event one waits in its place,
     /// held. Each `pop` tries the held ones first, oldest first and each
-    /// recipient's oldest only, so none is overtaken by a newer
-    /// notification taking a free ID, and an event notification to a
-    /// recipient with one held is held behind it: each recipient hears its
-    /// events in order. COV notifications aren't held back by them.
+    /// address's oldest only, so none is overtaken by a newer notification
+    /// taking a free ID, and an event notification to an address with one
+    /// held is held behind it: no event notification is first sent before
+    /// an older one to its address, though an older one's resend can follow
+    /// a newer one. The key is the address alone. COV notifications aren't
+    /// held back by them.
     /// `bindings` resolves an event notification's Device recipient, once:
     /// one it can't is dropped and counted
     /// ([`ReporterCounters::unresolved`](super::super::ReporterCounters::unresolved)).
@@ -122,10 +123,12 @@ impl Reporter {
 
     #[cfg(feature = "event-reporting")]
     /// The oldest held event notification that can go now, handed out:
-    /// each recipient's oldest is tried in turn, a confirmed one if `ids`
-    /// gives it an ID, so a recipient whose oldest can't go sends nothing
-    /// newer. One scan of the outbox and at most one `take` per recipient
-    /// held, and none while nothing is held.
+    /// each address's oldest is tried in turn, a confirmed one if `ids`
+    /// gives it an ID, so an address whose oldest can't go sends nothing
+    /// newer. One that is refused is counted owed once. A pass over the
+    /// outbox's entries (at most its entry limit), a look back over the
+    /// held ones for each, at most one `take` per address held, no
+    /// allocation, and nothing while nothing is held.
     fn pop_held(
         &mut self,
         ids: &mut dyn InvokeIds,
@@ -134,41 +137,44 @@ impl Reporter {
     ) -> Option<Notification> {
         // Held unconfirmed ones too: they wait behind a confirmed one.
         self.outbox.held_entries().next()?;
-        let held: Vec<(usize, BACnetAddress, bool)> = self
-            .outbox
-            .held_entries()
-            .filter_map(|(at, entry)| match &entry.route {
-                Route::Event {
-                    to: BACnetRecipient::Address(peer),
-                    ..
-                } => Some((at, peer.clone(), entry.confirmed)),
-                _ => None,
-            })
-            .collect();
-        let mut tried: Vec<BACnetAddress> = Vec::new();
-        for (at, peer, confirmed) in held {
-            if tried.contains(&peer) {
+        let service = ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION;
+        let mut chosen = None;
+        for at in 0..self.outbox.slots() {
+            let Some(entry) = self.outbox.held_at(at) else {
+                continue;
+            };
+            let peer = held_address(entry);
+            // An address's oldest only: an older one to it was refused.
+            let older =
+                |(earlier, other): (usize, &Entry)| earlier < at && held_address(other) == peer;
+            if self.outbox.held_entries().any(older) {
                 continue;
             }
-            let invoke_id = if confirmed {
-                let service = ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION;
-                let Some(invoke_id) = ids.take(&peer, service) else {
-                    tried.push(peer);
-                    continue;
-                };
-                Some(invoke_id)
+            // `Some(None)`: unconfirmed; `Some(Some(id))`: taken; `None`:
+            // refused.
+            let taken = if entry.confirmed {
+                ids.take(peer, service).map(Some)
             } else {
-                None
+                Some(None)
             };
-            let (entry, params) = self.outbox.take_at(at);
-            self.room_freed = true;
-            let Route::Event { priority, .. } = entry.route else {
-                unreachable!("only event notifications are held")
-            };
-            let to = (Destination::Recipient(peer.clone()), peer, priority);
-            return Some(self.hand_out(entry, params, to, invoke_id, now, out));
+            match taken {
+                Some(invoke_id) => {
+                    chosen = Some((at, invoke_id));
+                    break;
+                }
+                None if self.outbox.count_held(at) => self.counters.owed += 1,
+                None => {}
+            }
         }
-        None
+        let (at, invoke_id) = chosen?;
+        let (entry, params) = self.outbox.take_at(at);
+        self.room_freed = true;
+        let peer = held_address(&entry).clone();
+        let Route::Event { priority, .. } = entry.route else {
+            unreachable!("only event notifications are held")
+        };
+        let to = (Destination::Recipient(peer.clone()), peer, priority);
+        Some(self.hand_out(entry, params, to, invoke_id, now, out))
     }
 
     /// Encode `entry` with `params` into `out`, under `invoke_id` when it
@@ -230,6 +236,19 @@ impl Reporter {
             invoke_id,
             priority,
         }
+    }
+}
+
+/// The address a held event notification goes to: `pop` resolved it
+/// before holding it.
+#[cfg(feature = "event-reporting")]
+fn held_address(entry: &Entry) -> &BACnetAddress {
+    match &entry.route {
+        Route::Event {
+            to: BACnetRecipient::Address(address),
+            ..
+        } => address,
+        _ => unreachable!("a held notification keeps its resolved address"),
     }
 }
 

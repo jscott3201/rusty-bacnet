@@ -38,10 +38,15 @@
 //! [`NotifyService::Event`] to a [`Destination::Recipient`], through the
 //! same outbox and confirmed table as COV, ahead of the COV notifications
 //! of the same change; one that finds the outbox full evicts the newest COV
-//! notification queued, whose subscription is owed a later look. Each
-//! recipient hears its events in order: one held for an invoke ID is tried
-//! first at every [`Reporter::pop`], and later ones to its recipient wait
-//! behind it.
+//! notification queued, whose subscription is owed a later look. For each
+//! address, no event notification is first sent before an older one: one
+//! held for an invoke ID is tried first at every [`Reporter::pop`], and
+//! later ones to its address wait behind it. A resend of an older confirmed
+//! one can still land after a newer one, each on its own invoke ID, and the
+//! receiver orders them by their timestamps. The key is the address alone,
+//! whatever the process identifier or confirmed flag, and a Device
+//! recipient rebound while one of its events is held keeps no order across
+//! the rebinding.
 //!
 //! While DeviceCommunicationControl disables initiation, keep popping and
 //! report each notification [`Delivery::NotSent`](crate::cov::Delivery):
@@ -294,7 +299,9 @@ pub struct ReporterCounters {
     /// finds nothing to report, however often it is refused or dropped by
     /// the budget meanwhile. A report that couldn't fit even an empty
     /// outbox, or one input's budget of octets, counts each time, and
-    /// leaves nothing owed.
+    /// leaves nothing owed. A confirmed event notification counts once
+    /// when it is first refused an invoke ID, whether it was held for one
+    /// or behind an older one to its address.
     pub owed: u64,
     /// Confirmed notifications sent again after a timeout.
     pub resent: u64,
