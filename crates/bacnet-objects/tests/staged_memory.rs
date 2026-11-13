@@ -1,28 +1,49 @@
-//! What a staged request holds of an object's kept rows (#2414) and of a
-//! log's reporting settings (#2431). A peer can send thousands of writes to
-//! one object in one WritePropertyMultiple; the stage keeps the rows they
-//! leave once, not once a write. Measured in live
-//! heap octets through this binary's own allocator, which counts what is
-//! allocated and not yet freed, on every thread (the save writer's too).
-//! One test, so nothing else in the process allocates meanwhile.
+//! What a staged request holds of an object's kept rows (#2414), of a
+//! log's reporting settings (#2431) and of each object family that stages
+//! its own state (#2526). A peer can send thousands of writes to one object
+//! in one WritePropertyMultiple: the server takes up to 10,000 (the
+//! request decoder's item cap), and a request of 256 segments carries that
+//! many small writes. The stage should keep what they leave once, not once
+//! a write. Measured in live heap octets through this binary's own
+//! allocator, which counts what is allocated and not yet freed, on every
+//! thread (the save writer's too). The count is the whole process's, so the
+//! tests take turns ([`one_at_a_time`]).
+//!
+//! The families whose steps still keep a copy of their state each have
+//! their test here, ignored until their fix lands: run them with
+//! `--run-ignored only` to measure (#2526).
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicIsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use bacnet_encoding::constructed::{encode_access_rule, encode_name_value};
+use bacnet_objects::access_control::{
+    AccessRightsObject, AccessRightsPersistence, AccessRightsSnapshot,
+};
 use bacnet_objects::analog::AnalogInputObject;
+use bacnet_objects::channel::{ChannelObject, MAX_CHANNEL_MEMBERS, MAX_CONTROL_GROUPS};
 use bacnet_objects::durable::{PendingWrite, StageStep};
+use bacnet_objects::load_control::{
+    LoadControlObject, LoadControlPersistence, LoadControlSnapshot, MAX_WRITTEN_SHED_LEVELS,
+};
 use bacnet_objects::log_persistence::{LogPersistence, LogSnapshot};
 use bacnet_objects::multistate::{
     MAX_KEPT_STATE_TEXT_OCTETS, MAX_NUMBER_OF_STATES, MultiStateInputObject,
 };
+use bacnet_objects::object_profile::{MAX_TAGS, ObjectProfile, TagsPersistence, TagsSnapshot};
+use bacnet_objects::timer::{MAX_TIMER_REFERENCES, TimerObject};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_objects::trend::TrendLogObject;
 use bacnet_objects::write_config::{WriteConfigPersistence, WriteConfigSnapshot};
-use bacnet_types::constructed::BACnetLogRecord;
-use bacnet_types::enums::{EngineeringUnits, PropertyIdentifier as P};
+use bacnet_types::constructed::{
+    BACnetAccessRule, BACnetDeviceObjectPropertyReference, BACnetDeviceObjectReference,
+    BACnetLogRecord, BACnetNameValue, BACnetTimerStateChangeValue,
+};
+use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier as P};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bytes::BytesMut;
 
 static LIVE: AtomicIsize = AtomicIsize::new(0);
 
@@ -53,23 +74,114 @@ fn live() -> isize {
     LIVE.load(Ordering::SeqCst)
 }
 
-/// Storage in memory: the last snapshot saved.
-#[derive(Default)]
-struct Memory(Mutex<Option<WriteConfigSnapshot>>);
+/// Held for a whole test, so no other test in the process allocates
+/// meanwhile (nextest runs each in a process of its own anyway).
+fn one_at_a_time() -> MutexGuard<'static, ()> {
+    static TURN: Mutex<()> = Mutex::new(());
+    TURN.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
-impl WriteConfigPersistence for Memory {
-    fn load(&self, _: ObjectIdentifier) -> Result<Option<WriteConfigSnapshot>, Error> {
+/// The writes one request makes in these tests.
+const WRITES: usize = 2_000;
+
+/// Storage in memory: the last snapshot saved.
+struct Saved<S>(Mutex<Option<S>>);
+
+impl<S> Default for Saved<S> {
+    fn default() -> Self {
+        Self(Mutex::new(None))
+    }
+}
+
+impl<S: Clone> Saved<S> {
+    fn get(&self) -> Result<Option<S>, Error> {
         Ok(self.0.lock().unwrap().clone())
     }
 
-    fn save(&self, _: ObjectIdentifier, snapshot: &WriteConfigSnapshot) -> Result<(), Error> {
+    fn put(&self, snapshot: &S) -> Result<(), Error> {
         *self.0.lock().unwrap() = Some(snapshot.clone());
         Ok(())
     }
 }
 
+/// A Timer's, a Channel's and the reporting rows' storage.
+type Memory = Saved<WriteConfigSnapshot>;
+
+impl WriteConfigPersistence for Memory {
+    fn load(&self, _: ObjectIdentifier) -> Result<Option<WriteConfigSnapshot>, Error> {
+        self.get()
+    }
+
+    fn save(&self, _: ObjectIdentifier, snapshot: &WriteConfigSnapshot) -> Result<(), Error> {
+        self.put(snapshot)
+    }
+}
+
+impl TagsPersistence for Saved<TagsSnapshot> {
+    fn load(&self, _: ObjectIdentifier) -> Result<Option<TagsSnapshot>, Error> {
+        self.get()
+    }
+
+    fn save(&self, _: ObjectIdentifier, snapshot: &TagsSnapshot) -> Result<(), Error> {
+        self.put(snapshot)
+    }
+}
+
+impl AccessRightsPersistence for Saved<AccessRightsSnapshot> {
+    fn load(&self, _: ObjectIdentifier) -> Result<Option<AccessRightsSnapshot>, Error> {
+        self.get()
+    }
+
+    fn save(&self, _: ObjectIdentifier, snapshot: &AccessRightsSnapshot) -> Result<(), Error> {
+        self.put(snapshot)
+    }
+}
+
+impl LoadControlPersistence for Saved<LoadControlSnapshot> {
+    fn load(&self, _: ObjectIdentifier) -> Result<Option<LoadControlSnapshot>, Error> {
+        self.get()
+    }
+
+    fn save(&self, _: ObjectIdentifier, snapshot: &LoadControlSnapshot) -> Result<(), Error> {
+        self.put(snapshot)
+    }
+}
+
 fn text(label: String) -> PropertyValue {
     PropertyValue::CharacterString(label)
+}
+
+/// Description at its 16 KiB cap.
+fn long() -> PropertyValue {
+    text("x".repeat(16 * 1024))
+}
+
+fn oid(object_type: ObjectType, instance: u32) -> ObjectIdentifier {
+    ObjectIdentifier::new(object_type, instance).unwrap()
+}
+
+/// A member in another Device, the most a reference holds.
+fn remote(instance: u32) -> BACnetDeviceObjectPropertyReference {
+    BACnetDeviceObjectPropertyReference::new_remote(
+        oid(ObjectType::ANALOG_VALUE, instance),
+        P::PRESENT_VALUE.to_raw(),
+        oid(ObjectType::DEVICE, 7),
+    )
+}
+
+/// `WRITES` writes of `value(at)` to `property`, at `index(at)`.
+fn writes(
+    property: P,
+    index: impl Fn(usize) -> Option<u32>,
+    value: impl Fn(usize) -> PropertyValue,
+) -> Vec<PendingWrite> {
+    (0..WRITES)
+        .map(|at| PendingWrite {
+            property,
+            array_index: index(at),
+            value: value(at),
+        })
+        .collect()
 }
 
 /// The live octets `object` holds once `writes` are staged on it, beyond
@@ -88,7 +200,7 @@ fn staged_octets(object: &mut dyn BACnetObject, writes: &[PendingWrite]) -> isiz
 
 #[test]
 fn a_stage_holds_the_rows_once_whatever_its_number_of_writes() {
-    const WRITES: usize = 2_000;
+    let _turn = one_at_a_time();
     let storage = Arc::new(Memory::default());
 
     // The largest State_Text a kept object holds: 1,024 labels of 512
@@ -168,6 +280,171 @@ fn a_stage_holds_the_rows_once_whatever_its_number_of_writes() {
     let held = staged_octets(&mut log, &writes);
     eprintln!("Trend Log Notification_Class, {WRITES} writes: {held} octets held");
     // Kept once a write, the 64 KiB of texts are about 128 MiB.
+    assert!(held < 1 << 20, "{held} octets held by the stage");
+}
+
+/// One tag as a Tags element write carries it.
+fn framed(tag: &BACnetNameValue) -> PropertyValue {
+    let mut octets = BytesMut::new();
+    encode_name_value(&mut octets, tag).unwrap();
+    PropertyValue::ApplicationData(octets.to_vec())
+}
+
+/// The most Tags storage keeps: 1,024 tags whose names fill its 1 MiB, the
+/// request rewriting a few of them with short names, so the list stays at
+/// the cap. Kept once a write, the list is about 2 GiB (#2526).
+#[test]
+fn a_tags_stage_holds_the_list_once_whatever_its_number_of_writes() {
+    let _turn = one_at_a_time();
+    let storage = Arc::new(Saved::<TagsSnapshot>::default());
+    let mut object =
+        AnalogInputObject::with_tags_persistence(1, "AI", EngineeringUnits::NO_UNITS, storage)
+            .unwrap();
+    // Each name encodes in its length plus five octets; 1,024 of them come
+    // within a kilobyte of the cap.
+    let tags = (0..MAX_TAGS)
+        .map(|at| BACnetNameValue::semantic(format!("{at:01018}")))
+        .collect();
+    object
+        .set_profile(ObjectProfile {
+            tags: Some(tags),
+            ..ObjectProfile::default()
+        })
+        .unwrap();
+    let writes = writes(
+        P::TAGS,
+        |at| Some(at as u32 % 8 + 1),
+        |at| framed(&BACnetNameValue::semantic(format!("w{at}"))),
+    );
+    // The saved snapshot, the served one and the writes themselves.
+    let held = staged_octets(&mut object, &writes);
+    let per_write = held / WRITES as isize;
+    eprintln!("Tags, {WRITES} writes: {held} octets held, {per_write} a write");
+    assert!(held < 4 << 20, "{held} octets held by the stage");
+}
+
+/// An Access Rights object's 1,024 positive rules, each naming a time range
+/// and a zone in another Device; the request rewrites a few of them.
+#[test]
+#[ignore = "#2526: each staged step still keeps the rule array; run with --run-ignored only"]
+fn an_access_rights_stage_holds_the_rules_once_whatever_its_number_of_writes() {
+    let _turn = one_at_a_time();
+    let storage = Arc::new(Saved::<AccessRightsSnapshot>::default());
+    let mut rights = AccessRightsObject::with_persistence(1, "AR", storage).unwrap();
+    let rule = |instance| {
+        let zone = BACnetDeviceObjectReference {
+            device_identifier: Some(oid(ObjectType::DEVICE, 7)),
+            object_identifier: oid(ObjectType::ACCESS_ZONE, instance),
+        };
+        let schedule = BACnetDeviceObjectPropertyReference::new_remote(
+            oid(ObjectType::SCHEDULE, instance),
+            P::PRESENT_VALUE.to_raw(),
+            oid(ObjectType::DEVICE, 7),
+        );
+        BACnetAccessRule::new(Some(schedule), Some(zone), true)
+    };
+    rights
+        .set_positive_access_rules((0..1024).map(rule))
+        .unwrap();
+    let writes = writes(
+        P::POSITIVE_ACCESS_RULES,
+        |at| Some(at as u32 % 8 + 1),
+        |at| {
+            let mut octets = BytesMut::new();
+            encode_access_rule(&mut octets, &rule(at as u32));
+            PropertyValue::ApplicationData(octets.to_vec())
+        },
+    );
+    let held = staged_octets(&mut rights, &writes);
+    let per_write = held / WRITES as isize;
+    eprintln!("Access Rights, {WRITES} writes: {held} octets held, {per_write} a write");
+    assert!(held < 1 << 20, "{held} octets held by the stage");
+}
+
+/// A Channel with 1,024 members in another Device, 64 control groups and a
+/// kept 16 KiB Description; the request rewrites a few delays.
+#[test]
+#[ignore = "#2526: each staged step still keeps the whole configuration; run with --run-ignored only"]
+fn a_channel_stage_holds_its_configuration_once_whatever_its_number_of_writes() {
+    let _turn = one_at_a_time();
+    let mut channel =
+        ChannelObject::with_persistence(1, "CH", 1, Arc::new(Memory::default())).unwrap();
+    channel
+        .set_members((0..MAX_CHANNEL_MEMBERS as u32).map(remote).collect())
+        .unwrap();
+    channel
+        .set_control_groups((1..=MAX_CONTROL_GROUPS as u32).collect())
+        .unwrap();
+    channel
+        .write_property(P::DESCRIPTION, None, long(), None)
+        .unwrap();
+    let writes = writes(
+        P::EXECUTION_DELAY,
+        |at| Some(at as u32 % 8 + 1),
+        |at| PropertyValue::Unsigned(at as u64),
+    );
+    let held = staged_octets(&mut channel, &writes);
+    let per_write = held / WRITES as isize;
+    eprintln!("Channel, {WRITES} writes: {held} octets held, {per_write} a write");
+    assert!(held < 1 << 20, "{held} octets held by the stage");
+}
+
+/// A Timer with 1,024 references in another Device and a kept 16 KiB
+/// Description; the request writes Default_Timeout over and over.
+#[test]
+#[ignore = "#2526: each staged step still keeps the whole configuration; run with --run-ignored only"]
+fn a_timer_stage_holds_its_configuration_once_whatever_its_number_of_writes() {
+    let _turn = one_at_a_time();
+    let mut timer = TimerObject::with_persistence(1, "T", Arc::new(Memory::default())).unwrap();
+    let value = || BACnetTimerStateChangeValue::Primitive(PropertyValue::Real(1.0));
+    timer
+        .set_state_change(
+            core::array::from_fn(|_| value()),
+            (0..MAX_TIMER_REFERENCES as u32).map(remote).collect(),
+            16,
+        )
+        .unwrap();
+    timer
+        .write_property(P::DESCRIPTION, None, long(), None)
+        .unwrap();
+    let writes = writes(
+        P::DEFAULT_TIMEOUT,
+        |_| None,
+        |at| PropertyValue::Unsigned(1_000 + at as u64),
+    );
+    let held = staged_octets(&mut timer, &writes);
+    let per_write = held / WRITES as isize;
+    eprintln!("Timer, {WRITES} writes: {held} octets held, {per_write} a write");
+    assert!(held < 1 << 20, "{held} octets held by the stage");
+}
+
+/// A Load Control with 1,024 written Shed_Levels elements and a kept 16 KiB
+/// Description; the request writes Duty_Window over and over.
+#[test]
+#[ignore = "#2526: each staged step still keeps a whole snapshot; run with --run-ignored only"]
+fn a_load_control_stage_holds_its_request_once_whatever_its_number_of_writes() {
+    let _turn = one_at_a_time();
+    let storage = Arc::new(Saved::<LoadControlSnapshot>::default());
+    let mut control = LoadControlObject::with_persistence(1, "LC", storage).unwrap();
+    let levels = MAX_WRITTEN_SHED_LEVELS as u64;
+    control
+        .set_shed_levels((1..=levels).map(|level| (level, String::new())).collect())
+        .unwrap();
+    let written = (1..=levels).map(PropertyValue::Unsigned).collect();
+    control
+        .write_property(P::SHED_LEVELS, None, PropertyValue::List(written), None)
+        .unwrap();
+    control
+        .write_property(P::DESCRIPTION, None, long(), None)
+        .unwrap();
+    let writes = writes(
+        P::DUTY_WINDOW,
+        |_| None,
+        |at| PropertyValue::Unsigned(at as u64),
+    );
+    let held = staged_octets(&mut control, &writes);
+    let per_write = held / WRITES as isize;
+    eprintln!("Load Control, {WRITES} writes: {held} octets held, {per_write} a write");
     assert!(held < 1 << 20, "{held} octets held by the stage");
 }
 

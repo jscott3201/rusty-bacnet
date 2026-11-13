@@ -15,7 +15,7 @@ use crate::common;
 use crate::durable::SaveWriter;
 #[cfg(feature = "durable-writes")]
 use crate::durable::staged;
-use crate::durable::staged::{StagedSaves, Step};
+use crate::durable::staged::StagedSaves;
 #[cfg(feature = "durable-writes")]
 use crate::durable::{DurableWrites, PendingWrite, SaveWait, StageStep};
 use crate::property_metadata::PropertyMetadata;
@@ -26,8 +26,55 @@ use crate::write_config::description;
 enum Next {
     Tags(Vec<BACnetNameValue>),
     Description(String),
+    /// A staged step's Tags write with an index: the change it makes to the
+    /// Tags served as it is taken (#2526). A staged step holds only what its
+    /// write sets; for a whole array or a Description, that is what it
+    /// leaves.
+    #[cfg(feature = "durable-writes")]
+    Staged(TagsChange),
 }
 
+/// What a Tags write with an index sets (#2526).
+#[cfg(feature = "durable-writes")]
+enum TagsChange {
+    /// The size an index-0 write gives the array.
+    Size(usize),
+    /// The tag an element write puts at its zero-based slot.
+    Tag(usize, BACnetNameValue),
+}
+
+#[cfg(feature = "durable-writes")]
+impl TagsChange {
+    /// The change a write at `index` makes, given `tags`, the array it
+    /// leaves: `None` for a whole write.
+    fn of(index: Option<u32>, tags: &[BACnetNameValue]) -> Option<Self> {
+        match index? {
+            0 => Some(Self::Size(tags.len())),
+            index => {
+                let slot = usize::try_from(index.checked_sub(1)?).ok()?;
+                Some(Self::Tag(slot, tags.get(slot)?.clone()))
+            }
+        }
+    }
+
+    /// Make the change on `tags`, the array the write was worked out on.
+    fn make(self, tags: &mut Vec<BACnetNameValue>) {
+        match self {
+            Self::Size(size) => tags.resize_with(size, || BACnetNameValue::semantic("")),
+            Self::Tag(slot, tag) => {
+                debug_assert!(slot < tags.len(), "a staged element past the Tags served");
+                if let Some(served) = tags.get_mut(slot) {
+                    *served = tag;
+                }
+            }
+        }
+    }
+}
+
+/// A request's staged steps each hold what their write sets, not the state
+/// it leaves, so its stage holds the Tags a constant number of times however
+/// many writes it makes (#2526): the stage works the steps out on one
+/// working copy, and each write is made on the Tags served as it is taken.
 type Storage = StagedSaves<TagsSnapshot, Next>;
 
 /// Provisioned served rows, independent saved override, and sole writer.
@@ -67,8 +114,15 @@ fn apply(snapshot: &mut TagsSnapshot, next: &Next) {
     match next {
         Next::Tags(tags) => snapshot.tags = Some(tags.clone()),
         Next::Description(text) => snapshot.description = Some(text.clone()),
+        #[cfg(feature = "durable-writes")]
+        Next::Staged(_) => unreachable!("{WHOLE}"),
     }
 }
+
+/// Why only a staged step holds a [`TagsChange`]: every other write is
+/// worked out, and saved, as the whole state it leaves.
+#[cfg(feature = "durable-writes")]
+const WHOLE: &str = "a write is worked out as the whole state it leaves";
 
 impl ProfileState {
     /// A profile that keeps written Tags in `persistence`, and with
@@ -186,29 +240,31 @@ impl ProfileState {
                     kept.saved.description = Some(text);
                 }
             }
+            // A staged step's change, made on the Tags served: the array the
+            // stage made it on, since no other write came between (#2526).
+            #[cfg(feature = "durable-writes")]
+            Next::Staged(change) => {
+                let mut tags = self.profile.tags.take().unwrap_or_default();
+                change.make(&mut tags);
+                return self.install(Next::Tags(tags));
+            }
         }
         self.writes = self.writes.wrapping_add(1);
     }
 
     /// What a write of `value` to `property`, Tags or a kept Description,
-    /// leaves on top of the `earlier` steps of its request, or its refusal.
-    /// With storage, what the write leaves must fit a save beside the rest
-    /// of what storage would then hold.
+    /// leaves on top of `staged_tags` and `staged_text`, the Tags and the
+    /// Description the earlier steps of its request leave (`None` for one
+    /// they don't set), or its refusal. With storage, what the write leaves
+    /// must fit a save beside the rest of what storage would then hold.
     fn next(
         &self,
-        earlier: &[Step<Next>],
+        staged_tags: Option<&[BACnetNameValue]>,
+        staged_text: Option<&str>,
         property: P,
         index: Option<u32>,
         value: &PropertyValue,
     ) -> Result<Next, Error> {
-        let mut staged_tags = None;
-        let mut staged_text = None;
-        for step in earlier {
-            match &step.next {
-                Next::Tags(tags) => staged_tags = Some(tags.as_slice()),
-                Next::Description(text) => staged_text = Some(text.as_str()),
-            }
-        }
         let next = if property == P::DESCRIPTION {
             Next::Description(description::written(value)?)
         } else {
@@ -230,6 +286,8 @@ impl ProfileState {
                 Next::Description(text) => {
                     fits(Some(text.as_str()), staged_tags.or(saved.tags.as_deref()))
                 }
+                #[cfg(feature = "durable-writes")]
+                Next::Staged(_) => unreachable!("{WHOLE}"),
             }?;
         }
         Ok(next)
@@ -296,7 +354,7 @@ impl ProfileState {
             return result;
         }
         // A write the object refuses leaves a staged one alone (#1424).
-        let next = self.next(&[], property, index, value)?;
+        let next = self.next(None, None, property, index, value)?;
         self.with_storage(Storage::drop_staged);
         if let Some(kept) = &mut self.kept {
             let mut snapshot = kept.saved.clone();
@@ -367,19 +425,45 @@ impl DurableWrites for ProfileState {
         if let Some(wait) = self.with_storage(Storage::busy).flatten() {
             return StageStep::Busy(wait);
         }
-        let steps = staged::steps(writes, |earlier, write| {
+        // One working copy of the Tags and the Description the steps so far
+        // leave; a step holds only what its write sets (#2526).
+        let (mut tags, mut text) = (None, None);
+        let steps = staged::steps(writes, |_, write| {
             if !self.keeps(write.property, &write.value) {
                 return Ok(None);
             }
             if write.property == P::DESCRIPTION && write.array_index.is_some() {
                 return Err(common::property_is_not_an_array_error());
             }
-            self.next(earlier, write.property, write.array_index, &write.value)
-                .map(Some)
+            let (property, index, value) = (write.property, write.array_index, &write.value);
+            Ok(Some(
+                match self.next(tags.as_deref(), text.as_deref(), property, index, value)? {
+                    Next::Tags(next) => {
+                        let step = match TagsChange::of(index, &next) {
+                            Some(change) => Next::Staged(change),
+                            None => Next::Tags(next.clone()),
+                        };
+                        tags = Some(next);
+                        step
+                    }
+                    Next::Description(next) => {
+                        text = Some(next.clone());
+                        Next::Description(next)
+                    }
+                    Next::Staged(_) => unreachable!("{WHOLE}"),
+                },
+            ))
         });
+        if steps.is_empty() {
+            return StageStep::Skip;
+        }
         let base = self.writes;
         let Kept { saved, storage, .. } = &mut **self.kept.as_mut().expect("checked above");
-        storage.stage(steps, base, saved.clone(), apply)
+        let snapshot = TagsSnapshot {
+            tags: tags.or_else(|| saved.tags.clone()),
+            description: text.or_else(|| saved.description.clone()),
+        };
+        storage.stage_built(steps, base, snapshot, saved.clone())
     }
 
     fn release_staged_write(&mut self, staged: &SaveWait) {
