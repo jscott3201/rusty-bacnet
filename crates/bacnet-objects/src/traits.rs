@@ -17,7 +17,7 @@ pub mod capabilities;
 #[doc(hidden)]
 pub use capabilities::{
     AccessEvents, AuditLog, AuditPolicy, CalendarState, CommandRunner, EnrollmentEval, LogBuffer,
-    StagingSource,
+    NotificationLogger, StagingSource,
 };
 pub use capabilities::{
     Clocks, CovReportedProperty, CovReporting, DeadlineWaker, DurableWrites, EventReporting,
@@ -690,9 +690,12 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// Borrow a log's buffer for the ReadRange reads the bundled server makes
     /// under a shared database guard. Not public API yet (#2179).
     ///
-    /// The default has none, which leaves ReadRange reading Log_Buffer
-    /// through [`read_property`](Self::read_property) with no record
-    /// identities to select by. See [`LogBuffer`].
+    /// A log lends both this and [`log_buffer_mut`](Self::log_buffer_mut),
+    /// or neither: the event logger finds its step through this one
+    /// ([`LogBuffer::notification_logger`]) and adds the records through the
+    /// other. The default has none, which leaves ReadRange reading
+    /// Log_Buffer through [`read_property`](Self::read_property) with no
+    /// record identities to select by. See [`LogBuffer`].
     #[doc(hidden)]
     fn log_buffer(&self) -> Option<&dyn LogBuffer> {
         None
@@ -702,8 +705,9 @@ pub trait BACnetObject: Send + Sync + object_storage::StoredObject {
     /// the event logger add and the window the poller looks at. Not public
     /// API yet (#2179).
     ///
-    /// The default has none: the trend poller adds nothing to the object,
-    /// and the event logger skips it. See [`LogBuffer`].
+    /// A log lends both this and [`log_buffer`](Self::log_buffer), or
+    /// neither. The default has none: the trend poller adds nothing to the
+    /// object, and the event logger skips it. See [`LogBuffer`].
     #[doc(hidden)]
     fn log_buffer_mut(&mut self) -> Option<&mut dyn LogBuffer> {
         None

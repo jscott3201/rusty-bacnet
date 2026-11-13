@@ -45,9 +45,26 @@ impl ObjectDatabase {
     /// 12.27 leaves that parameter of a locally generated record to the device.
     pub fn log_event_notification(&mut self, notification: &EventNotificationRequest) {
         let logs = self.find_by_type(ObjectType::EVENT_LOG);
-        if logs.is_empty() {
-            return;
+        // The step comes from a log that lends its buffer, so an image
+        // without one links none of it (#2524). A log that lends none takes
+        // no record anyway; when none does, the step's debug lines (the
+        // filters', the clock's, "takes no records") aren't written either.
+        // A log lends `log_buffer` with `log_buffer_mut`, which adds them.
+        let logger = logs
+            .iter()
+            .find_map(|oid| Some(self.get(oid)?.log_buffer()?.notification_logger()));
+        if let Some(logger) = logger {
+            logger(self, logs, notification);
         }
+    }
+
+    /// [`log_event_notification`](Self::log_event_notification) once one of
+    /// `logs` lends its buffer ([`NotificationLogger`](crate::traits::NotificationLogger)).
+    pub(crate) fn record_event_notification(
+        &mut self,
+        logs: Vec<ObjectIdentifier>,
+        notification: &EventNotificationRequest,
+    ) {
         if reports_an_event_log_buffer(notification)
             || self.enrollment_watches_an_event_log(notification.event_object_identifier)
         {
