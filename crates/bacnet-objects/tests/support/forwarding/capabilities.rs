@@ -546,6 +546,14 @@ pub const CAPABILITY_ROWS: &[(&str, Row)] = &[
         "LogBuffer::refresh_window",
         Row::Command(|o| format!("{:?}", o.log_buffer_mut().map(|l| l.refresh_window()))),
     ),
+    // The step itself, by address: a view lends the stored object's.
+    (
+        "LogBuffer::notification_logger",
+        Row::Query(|o| {
+            let logger = o.log_buffer().map(|l| l.notification_logger() as usize);
+            format!("{logger:?}")
+        }),
+    ),
     // The two reads go through the shared accessor, the one AuditLogQuery's
     // and the forwarder's read guards lend, so a read-only view runs them.
     (
