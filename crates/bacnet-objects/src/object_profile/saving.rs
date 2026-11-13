@@ -114,6 +114,29 @@ fn unmakeable(_property: P, _index: Option<u32>, _served: Option<&[BACnetNameVal
     false
 }
 
+/// Whether `kept`, the copy a staged write keeps of what storage holds, is
+/// `saved`: the same Description, and the same tags, each value the same
+/// bit for bit ([`staged::same_written`]). `==` isn't that test: a REAL or
+/// Double tag value that is no number, which a write may set, doesn't
+/// equal itself (#2546).
+#[cfg(feature = "durable-writes")]
+fn same_kept(kept: &TagsSnapshot, saved: &TagsSnapshot) -> bool {
+    let same_tag = |kept: &BACnetNameValue, saved: &BACnetNameValue| {
+        kept.name == saved.name
+            && match (&kept.value, &saved.value) {
+                (Some(kept), Some(saved)) => staged::same_written(kept, saved),
+                (kept, saved) => kept.is_none() && saved.is_none(),
+            }
+    };
+    kept.description == saved.description
+        && match (&kept.tags, &saved.tags) {
+            (Some(kept), Some(saved)) => {
+                kept.len() == saved.len() && kept.iter().zip(saved).all(|(k, s)| same_tag(k, s))
+            }
+            (kept, saved) => kept.is_none() && saved.is_none(),
+        }
+}
+
 /// The Tags a stage works its writes out on, and the octets they encode to
 /// ([`tags_len`]), kept current write by write (#2546).
 #[cfg(feature = "durable-writes")]
@@ -327,7 +350,10 @@ impl ProfileState {
         };
         let Kept { saved, storage, .. } = kept;
         let follows = |kept: &TagsSnapshot, saved: &TagsSnapshot| {
-            debug_assert!(kept == saved, "the staged write keeps the state served");
+            debug_assert!(
+                same_kept(kept, saved),
+                "the staged write keeps the state served"
+            );
         };
         if property == P::DESCRIPTION {
             let text = description::written(value);
@@ -372,7 +398,10 @@ impl ProfileState {
     /// `index`: a staged write is made again (by `again`). A step holding
     /// the state its write leaves installs it, as a write made where it is
     /// does. No stage makes one now; the path keeps `write_kept` the size
-    /// the firmware images, which claim nothing, are measured at.
+    /// the firmware images, which claim nothing, are measured at. Measured
+    /// for #2546: a claim written as a `match` grows the riscv32imac images
+    /// (objects and points +36 octets, reporting +40, enrollment +88), and
+    /// one that doesn't reach `install` the thumbv7m objects image (+28).
     #[cfg_attr(not(feature = "durable-writes"), expect(unused_variables))]
     fn take(&mut self, next: Next, property: P, index: Option<u32>, value: &PropertyValue) {
         #[cfg(feature = "durable-writes")]
@@ -391,8 +420,9 @@ impl ProfileState {
     ///
     /// A write made where it is passes `None` for both, and is the only
     /// caller: a stage works its writes out in place (`Working`, #2546).
-    /// The two stay because the firmware images lay `write_kept` out up to
-    /// 36 octets longer without them.
+    /// The two stay because without them the thumbv7m images grow (objects
+    /// +4 octets, reporting +40), as measured for #2546; the riscv32imac
+    /// ones shrink by 0 and 12.
     fn next(
         &self,
         staged_tags: Option<&[BACnetNameValue]>,

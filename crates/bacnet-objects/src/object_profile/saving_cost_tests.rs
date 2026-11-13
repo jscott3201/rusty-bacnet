@@ -214,6 +214,106 @@ fn a_description_after_a_refused_tags_write_fits_beside_the_saved_tags() {
     state.release_staged_write(&wait);
 }
 
+/// Storage holding a Description and Tags, as a write left them, and an
+/// object that keeps both there, serving those Tags.
+fn kept_state(store: &Arc<Memory>, tags: Vec<BACnetNameValue>) -> ProfileState {
+    *store.saved.lock().unwrap() = Some(TagsSnapshot {
+        tags: Some(tags.clone()),
+        description: Some("before".into()),
+    });
+    let mut state = ProfileState::persistent(oid(), store.clone(), true).unwrap();
+    state
+        .provision(ObjectProfile {
+            tags: Some(tags),
+            ..ObjectProfile::default()
+        })
+        .unwrap();
+    state
+}
+
+/// A tag whose value is a REAL that is no number, which a write may set.
+fn not_a_number() -> BACnetNameValue {
+    let mut tag = BACnetNameValue::semantic("nan");
+    tag.value = Some(PropertyValue::Real(f32::NAN));
+    tag
+}
+
+/// Stage `writes` and make them in turn, the Description served in a
+/// string, the stage released after.
+fn make_all(state: &mut ProfileState, writes: &[Kept]) {
+    let pending: Vec<_> = writes.iter().map(Kept::pending).collect();
+    let wait = staged(state.stage_writes(&pending));
+    wait.block();
+    let mut description = String::new();
+    for write in writes {
+        write.make(state, &mut description).unwrap();
+    }
+    state.release_staged_write(&wait);
+}
+
+/// A request of two Tags element writes, and one of two Description
+/// writes, beside Tags holding a value that is no number: each claim checks
+/// that the staged write still keeps the state served, which compares that
+/// value with itself, bit for bit, so the request is made.
+#[test]
+fn a_request_beside_a_tag_that_is_no_number_is_made() {
+    let element = |name: &str| Kept::Tags(Some(2), framed(&[BACnetNameValue::semantic(name)]));
+    let text = |text: &str| Kept::Description(PropertyValue::CharacterString(text.into()));
+    let cases = [
+        ([element("x"), element("y")], "y", "before"),
+        ([text("one"), text("two")], "b", "two"),
+    ];
+    for (writes, second, description) in cases {
+        let store = Arc::new(Memory::default());
+        let mut state = kept_state(&store, vec![not_a_number(), BACnetNameValue::semantic("b")]);
+        make_all(&mut state, &writes);
+        state.wait_for_saves();
+        let saved = store.saved().unwrap();
+        let tags = saved.tags.unwrap();
+        assert!(matches!(tags[0].value, Some(PropertyValue::Real(real)) if real.is_nan()));
+        assert_eq!(tags[1].name, second);
+        assert_eq!(saved.description.as_deref(), Some(description));
+    }
+}
+
+/// An object dropped after the first of two staged writes puts storage
+/// back to the state it served then, which the copy the staged write keeps
+/// follows write by write: a Tags element written over Tags storage
+/// already held, and a Description over one it held.
+#[test]
+fn a_drop_after_one_of_two_writes_keeps_the_one_made() {
+    let names = |names: &[&str]| -> Vec<_> {
+        names
+            .iter()
+            .copied()
+            .map(BACnetNameValue::semantic)
+            .collect()
+    };
+    let element = |name: &str| Kept::Tags(Some(1), framed(&[BACnetNameValue::semantic(name)]));
+    let text = |text: &str| Kept::Description(PropertyValue::CharacterString(text.into()));
+    let cases = [
+        (
+            [element("made"), element("never")],
+            names(&["made", "b"]),
+            "before",
+        ),
+        ([text("made"), text("never")], names(&["a", "b"]), "made"),
+    ];
+    for (writes, tags, description) in cases {
+        let store = Arc::new(Memory::default());
+        let mut state = kept_state(&store, names(&["a", "b"]));
+        let pending: Vec<_> = writes.iter().map(Kept::pending).collect();
+        staged(state.stage_writes(&pending)).block();
+        writes[0].make(&mut state, &mut String::new()).unwrap();
+        drop(state);
+        let made = TagsSnapshot {
+            tags: Some(tags),
+            description: Some(description.into()),
+        };
+        assert_eq!(store.saved(), Some(made));
+    }
+}
+
 /// Only an element past the Tags served makes a staged Tags write stale.
 #[test]
 fn only_an_element_past_the_tags_served_is_unmakeable() {
