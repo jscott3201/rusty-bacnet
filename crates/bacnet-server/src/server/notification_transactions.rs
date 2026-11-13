@@ -85,8 +85,10 @@ pub struct NotificationTransactions {
     /// queue per device, each drained by a task in this set (#1368).
     pub(super) awaiting_recipients: Mutex<super::event_send::AwaitingRecipients>,
     /// Each destination's event notifications waiting to go out in order,
-    /// each lane drained by a task of its own (#2537).
-    pub(super) event_lanes: Mutex<super::event_send::EventLanes>,
+    /// each lane drained by a task of its own (#2537). Made on first use (a
+    /// push, or the seal at `stop()` or the drop), so a server that sends no
+    /// event notification allocates nothing for them.
+    pub(super) event_lanes: std::sync::OnceLock<Box<Mutex<super::event_send::EventLanes>>>,
 }
 
 type ReporterFailureQueue = (
@@ -204,7 +206,7 @@ impl NotificationTransactions {
             audit_failures: std::sync::OnceLock::new(),
             run_slots: crate::command_lists::RemoteSlots::default(),
             awaiting_recipients: Mutex::default(),
-            event_lanes: Mutex::default(),
+            event_lanes: std::sync::OnceLock::new(),
         })
     }
 

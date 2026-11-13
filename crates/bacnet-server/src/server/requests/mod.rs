@@ -624,11 +624,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // Boxed: plans are rare, and their future would size every request's.
         // The targets' notifications join this request's settle handle and
         // their objects its COV fanout, made after the response (#2537).
+        // The handle goes into the boxed future and back, so it isn't held
+        // across that await in this future's state.
         if !staging_plans.is_empty() {
-            let (delivery, cov_ctx) = (services.event_delivery(), services.cov_context());
-            let request = Some((&mut settle, &mut coarse_cov_oids));
-            let plans = Self::execute_staging_plans(&delivery, &cov_ctx, staging_plans, request);
-            command_runs.extend(Box::pin(plans).await);
+            let cov = &mut coarse_cov_oids;
+            let plans = Self::execute_request_staging_plans(services, staging_plans, settle, cov);
+            let (runs, returned) = Box::pin(plans).await;
+            settle = returned;
+            command_runs.extend(runs);
         }
         // The event notifications the writes' transitions, and their Staging
         // plans' targets', pushed onto their recipients' lanes under the

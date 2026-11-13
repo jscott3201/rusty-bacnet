@@ -298,7 +298,10 @@ impl<T: TransportPort> BACnetServer<T> {
     fn let_database_go(&mut self, tasks: Vec<JoinHandle<()>>) {
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             // Dropping the sealed lanes' set aborts what is left of them.
-            drop(super::event_send::lanes(&self.notification_transactions).take_tasks());
+            if let Some(mut lanes) = super::event_send::made_lanes(&self.notification_transactions)
+            {
+                drop(lanes.take_tasks());
+            }
             return;
         };
         let db = std::mem::take(&mut self.db);

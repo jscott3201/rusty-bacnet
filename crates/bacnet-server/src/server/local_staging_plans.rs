@@ -25,6 +25,21 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }
     }
 
+    /// A peer request's Staging plans ([`Self::execute_staging_plans`]),
+    /// their targets counted in the request's `settle`, which comes back,
+    /// and their objects added to its COV fanout, `cov`.
+    pub(in crate::server) async fn execute_request_staging_plans(
+        services: &super::request_services::RequestServices<T>,
+        plans: Vec<StagingWritePlan>,
+        mut settle: Settle,
+        cov: &mut Vec<ObjectIdentifier>,
+    ) -> (TakenRuns, Settle) {
+        let (delivery, cov_ctx) = (services.event_delivery(), services.cov_context());
+        let request = Some((&mut settle, cov));
+        let runs = Self::execute_staging_plans(&delivery, &cov_ctx, plans, request).await;
+        (runs, settle)
+    }
+
     pub(in crate::server) async fn execute_initial_staging_plans(&self) {
         let staging_oids = {
             let database = self.db.read().await;

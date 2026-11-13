@@ -309,9 +309,11 @@ impl<T: TransportPort + 'static> Default for LaneHandles<T> {
 /// panicked. Taking the lock only for each poll, never across the await, it
 /// can be cancelled and started again.
 pub(in crate::server) async fn join_sealed(transactions: &NotificationTransactions) {
-    while let Some(result) =
-        std::future::poll_fn(|cx| lanes(transactions).tasks.poll_join_next(cx)).await
-    {
+    let next = |cx: &mut std::task::Context<'_>| match made_lanes(transactions) {
+        Some(mut lanes) => lanes.tasks.poll_join_next(cx),
+        None => std::task::Poll::Ready(None),
+    };
+    while let Some(result) = std::future::poll_fn(next).await {
         observe(result);
     }
 }
@@ -347,14 +349,29 @@ fn observe(result: Result<(), tokio::task::JoinError>) {
     }
 }
 
-/// `transactions`' lanes, under their lock.
+/// `transactions`' lanes, under their lock, made the first time they are
+/// needed: one structure, whichever caller gets there first.
 pub(in crate::server) fn lanes(
     transactions: &NotificationTransactions,
 ) -> std::sync::MutexGuard<'_, EventLanes> {
     transactions
         .event_lanes
+        .get_or_init(Box::default)
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// `transactions`' lanes, under their lock, if anything has made them: a
+/// server that never pushed an event notification has none to join.
+pub(in crate::server) fn made_lanes(
+    transactions: &NotificationTransactions,
+) -> Option<std::sync::MutexGuard<'_, EventLanes>> {
+    let lanes = transactions.event_lanes.get()?;
+    Some(
+        lanes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    )
 }
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
