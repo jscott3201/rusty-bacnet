@@ -376,6 +376,22 @@ impl<S: Send + 'static, N> StagedSaves<S, N> {
         value: &PropertyValue,
         base: u64,
     ) -> Option<Result<N, Error>> {
+        self.claim_unless(property, array_index, value, base, |_| false)
+    }
+
+    /// [`claim`](Self::claim), for an object whose step keeps what its stage
+    /// saved: once the save has succeeded, a step that `stale` says the
+    /// object would no longer save isn't taken. That is `None`, as for
+    /// another write, so the object drops the staged write and saves where
+    /// it is (#2431).
+    pub(crate) fn claim_unless(
+        &mut self,
+        property: PropertyIdentifier,
+        array_index: Option<u32>,
+        value: &PropertyValue,
+        base: u64,
+        stale: impl FnOnce(&N) -> bool,
+    ) -> Option<Result<N, Error>> {
         let staged = self.staged.as_mut()?;
         let next = &staged.steps.front()?.write;
         if next.property != property
@@ -388,6 +404,9 @@ impl<S: Send + 'static, N> StagedSaves<S, N> {
         if let Err(error) = staged.ticket.take_outcome() {
             self.staged.take().expect("matched above").released.set();
             return Some(Err(error));
+        }
+        if stale(&staged.steps.front().expect("matched above").next) {
+            return None;
         }
         let step = staged.steps.pop_front().expect("matched above");
         staged.taken = staged.taken.wrapping_add(1);

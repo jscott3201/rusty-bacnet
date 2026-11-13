@@ -26,7 +26,6 @@ use crate::log_reporting::{BufferReadyReporting, records_between};
 use crate::log_window::LogWindow;
 use crate::traits::BACnetObject;
 use crate::trend::CovSettings;
-use staging::LogReporting;
 
 pub(crate) mod staging;
 
@@ -127,9 +126,9 @@ type Commit<R> = Mutex<LogSnapshot<R>>;
 /// decide the next commit.
 pub(crate) struct LogStore<R: SnapshotRecord> {
     oid: ObjectIdentifier,
-    /// The writer, and a staged write's steps: each the reporting settings
-    /// a write leaves (#1952).
-    saves: StagedSaves<Commit<R>, LogReporting>,
+    /// The writer, and a staged write's steps (#1952): each holds only its
+    /// write (#2431).
+    saves: StagedSaves<Commit<R>, ()>,
     /// Writes of the reporting settings the log keeps made so far, so a
     /// staged step is taken only if no other came between (#1952).
     writes: u64,

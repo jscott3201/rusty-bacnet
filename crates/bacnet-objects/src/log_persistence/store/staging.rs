@@ -30,12 +30,16 @@
 //! same text. A NULL to it changes nothing, so it is neither saved nor
 //! staged.
 //!
-//! Each step holds the settings as a write leaves them ([`LogReporting`]);
-//! the write itself is made on the log's own state, so a BUFFER_READY report
-//! committed while the request waited keeps its counts and history. The
-//! steps are taken only while no other write of these settings came between
-//! (`LogStore::writes`), so the settings the write leaves are the ones
-//! committed.
+//! A step holds nothing but its write: the stage works the settings each
+//! write leaves out on one working copy ([`LogReporting`]), so a request of
+//! many writes holds them a constant number of times (#2431), as an
+//! object's kept rows are held (#2414). The write itself is made on the
+//! log's own state, so a BUFFER_READY report committed while the request
+//! waited keeps its counts and history. The steps are taken only while no
+//! other write of these settings came between (`LogStore::writes`), so the
+//! settings the write leaves are the ones committed. What an application
+//! setter changes meanwhile, the log commits at its next look, as it does
+//! any change the cadence holds back.
 
 use core::time::Duration;
 
@@ -56,7 +60,7 @@ use crate::write_config::description;
 /// A log's reporting settings as a write leaves them: a copy of its
 /// BUFFER_READY state, and of a Trend Log's COV settings.
 #[derive(Clone)]
-pub(crate) struct LogReporting {
+struct LogReporting {
     buffer_ready: BufferReadyReporting,
     cov: Option<CovSettings>,
 }
@@ -348,18 +352,22 @@ pub(crate) fn stage_writes<L: DurableLog>(log: &mut L, writes: &[PendingWrite]) 
     let current = LogReporting::of(log);
     let total = state.total_record_count;
     let view: &L = log;
-    let steps = staged::steps(writes, |earlier, write| {
+    // One working copy of the settings the steps so far leave; a step keeps
+    // only its write (#2431).
+    let mut working: Option<LogReporting> = None;
+    let steps = staged::steps(writes, |_, write| {
         if !kept_write(view, write) {
             return Ok(None);
         }
         crate::property_metadata::check_write_array_index(view, write.property, write.array_index)?;
-        let from = earlier.last().map_or(&current, |step| &step.next);
-        from.after(write, total).map(Some)
+        working = Some(working.as_ref().unwrap_or(&current).after(write, total)?);
+        Ok(Some(()))
     });
-    let Some(last) = steps.last() else {
+    // A step was taken exactly when the working copy was set.
+    let Some(last) = working else {
         return StageStep::Skip;
     };
-    let state = state.with_reporting(&last.next);
+    let state = state.with_reporting(&last);
     let (store, buffer) = log.durable_parts();
     let store = store.expect("checked above");
     let snapshot = state.snapshot(store.oid, buffer.records());

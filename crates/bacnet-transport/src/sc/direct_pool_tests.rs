@@ -257,6 +257,16 @@ async fn pooled_reuse_across_sends_dials_once() {
         1
     );
     transport.stop().await.unwrap();
+    // Stop lets the pooled link say goodbye before its worker is gone
+    // (#2520): a Disconnect-Request, then a close a loopback cannot carry.
+    let goodbye = timeout(Duration::from_secs(2), peer.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        decode_sc_message(&goodbye).unwrap().function,
+        ScFunction::DisconnectRequest
+    );
 }
 
 #[tokio::test]

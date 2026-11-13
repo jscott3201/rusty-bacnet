@@ -3,6 +3,8 @@
 //! Moved out of the transport loop file to keep that file within the
 //! repository file-size cap. Registered listener shutdown shares transport teardown.
 
+use std::time::Duration;
+
 use tokio::task::JoinHandle;
 
 use crate::port::TransportPort;
@@ -12,33 +14,41 @@ use crate::sc_frame::encode_sc_message;
 use bacnet_types::error::Error;
 use bytes::BytesMut;
 
+/// How long [`ScTransport::stop`](crate::port::TransportPort::stop) spends
+/// saying goodbye before it drops the sockets: the hub's Disconnect-Request
+/// and close, and each outbound direct link's, all at once. A hub or peer
+/// that never reads cannot hold `stop` longer (#2520).
+pub(super) const STOP_SEND_BUDGET: Duration = Duration::from_secs(2);
+
 impl<W: WebSocketPort> ScTransport<W> {
     pub(super) async fn stop_owned(&mut self) -> Result<(), Error> {
+        let budget = tokio::time::Instant::now() + STOP_SEND_BUDGET;
         self.direct_membership.retire_all();
         self.seal_direct_listener();
-        if let Some(shared) = self.direct.take() {
-            shared.shutdown().await;
-        }
-        self.direct_intake = advertisement::DirectIntake::default();
-        // Attempt clean disconnect: send DisconnectRequest via the WebSocket
-        if let (Some(ws), Some(conn)) = (&self.ws_shared, &self.connection) {
-            let (ws, disconnect_msg) = {
-                let ws = ws.lock().await;
-                let mut c = conn.lock().await;
-                let disconnect_msg = c.build_disconnect_request().ok();
-                if disconnect_msg.is_some() {
-                    self.state_tx.send_replace(c.state);
-                }
-                (ws.clone(), disconnect_msg)
-            };
-            if let Some(msg) = disconnect_msg {
-                let mut buf = BytesMut::new();
-                encode_sc_message(&mut buf, &msg);
-                // Best-effort send — don't block indefinitely
-                let _ =
-                    tokio::time::timeout(std::time::Duration::from_secs(2), ws.send(&buf)).await;
+        let direct = self.direct.take();
+        let direct = async {
+            if let Some(shared) = direct {
+                shared.shutdown(budget).await;
             }
-        }
+        };
+        let hub = self.say_goodbye_to_hub(budget);
+        // A primary restore's goodbye to the failover hub finishes in the
+        // same budget rather than being cut off (#2520).
+        let restore = self
+            .restore_disconnect_task
+            .lock()
+            .ok()
+            .and_then(|mut task| task.take());
+        let restore = async {
+            if let Some(mut task) = restore
+                && tokio::time::timeout_at(budget, &mut task).await.is_err()
+            {
+                task.abort();
+                let _ = task.await;
+            }
+        };
+        tokio::join!(direct, hub, restore);
+        self.direct_intake = advertisement::DirectIntake::default();
 
         let conn_for_state = self.connection.clone();
         let (recv_task, restore_task) = self.abort_background_task_and_drop_sockets();
@@ -59,6 +69,41 @@ impl<W: WebSocketPort> ScTransport<W> {
             self.state_tx.send_replace(c.state);
         }
         Ok(())
+    }
+
+    /// The orderly end of the hub connection, all before `budget`: a
+    /// Disconnect-Request when connected, a wait of at most the close grace
+    /// for its Disconnect-ACK (or NAK), which the receive task reads, then a
+    /// close with 1000, as the requester does in Annex AB.6.2.2. The
+    /// answering close is not awaited. The close also goes out when no
+    /// Disconnect-Request does, as mid-reconnect, so the hub learns the
+    /// socket is done with.
+    async fn say_goodbye_to_hub(&self, budget: tokio::time::Instant) {
+        let (Some(ws), Some(conn)) = (&self.ws_shared, &self.connection) else {
+            return;
+        };
+        let mut states = self.state_tx.subscribe();
+        let (ws, disconnect_msg) = {
+            let ws = ws.lock().await;
+            let mut c = conn.lock().await;
+            let disconnect_msg = c.build_disconnect_request().ok();
+            if disconnect_msg.is_some() {
+                self.state_tx.send_replace(c.state);
+            }
+            (ws.clone(), disconnect_msg)
+        };
+        if let Some(msg) = disconnect_msg {
+            let mut buf = BytesMut::new();
+            encode_sc_message(&mut buf, &msg);
+            let sent = tokio::time::timeout_at(budget, ws.send(&buf)).await;
+            if matches!(sent, Ok(Ok(()))) && ws.awaits_disconnect_ack() {
+                let answered = states.wait_for(|state| *state == ScConnectionState::Disconnected);
+                let wait = budget.min(tokio::time::Instant::now() + super::CLOSE_GRACE);
+                let _ = tokio::time::timeout_at(wait, answered).await;
+            }
+        }
+        let grace = budget.min(tokio::time::Instant::now() + super::CLOSE_GRACE);
+        let _ = tokio::time::timeout_at(grace, ws.close(Some(super::CLOSE_NORMAL))).await;
     }
 
     pub(super) fn seal_direct_listener(&mut self) {
@@ -112,3 +157,15 @@ impl<W: WebSocketPort> Drop for ScTransport<W> {
         self.abort();
     }
 }
+
+#[cfg(all(test, feature = "sc-tls"))]
+#[path = "close_wire_tests.rs"]
+mod close_wire_tests;
+
+#[cfg(test)]
+#[path = "close_rule_tests.rs"]
+mod close_rule_tests;
+
+#[cfg(test)]
+#[path = "disconnect_wait_tests.rs"]
+mod disconnect_wait_tests;

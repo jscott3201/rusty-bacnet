@@ -108,7 +108,7 @@ pub(super) async fn serve(
         deadline.close_started.store(true, Ordering::Release);
         lease.cleanup(&clients, &write).await;
     } else if expired || lease.hub_ends() {
-        let grace = Instant::now() + std::time::Duration::from_secs(1);
+        let grace = Instant::now() + crate::sc::CLOSE_GRACE;
         #[cfg(test)]
         deadline.close_started.store(true, Ordering::Release);
         // The hub gives up on a peer that sent no Connect-Request in time,

@@ -36,6 +36,24 @@ fn jittered_backoff(backoff: Duration, initial: Duration, maximum: Duration) -> 
         )
 }
 
+/// Whether recovery tries its next Connect-Request on the lost `hub`'s own
+/// socket rather than dialling a fresh one: only with reconnect on and no
+/// connector for that hub (`connectors` holds whether the primary and the
+/// failover hub have one). Any other socket the transport stops using is
+/// given up and gets its close frame at once (#2520).
+pub(super) fn retries_lost_socket(
+    reconnect: bool,
+    hub: ScActiveHub,
+    connectors: [bool; 2],
+) -> bool {
+    let [primary, failover] = connectors;
+    reconnect
+        && !match hub {
+            ScActiveHub::Primary => primary,
+            ScActiveHub::Failover => failover,
+        }
+}
+
 pub(super) async fn retire<W: WebSocketPort>(
     current_ws: &Arc<W>,
     primary_ws: &mut Option<Arc<W>>,
@@ -214,6 +232,7 @@ impl<W: WebSocketPort> Recovery<'_, W> {
                 }
                 Err(e) => {
                     self.observer.connect_failed(ScActiveHub::Failover, &e);
+                    handshake::close_failed_connect(&*failover, &e).await;
                     absorb_failed_connect_probe(self.conn, &probe_conn).await;
                     // The terminal exhaustion notice below reports suppression.
                     warn!(%e, "SC failover connection failed");
@@ -271,6 +290,8 @@ impl<W: WebSocketPort> Recovery<'_, W> {
             c.reset_for_connect_retry();
             self.state_tx.send_replace(c.state);
         }
+        // A fresh socket that fails is given up; a reused one is tried again.
+        let mut fresh = true;
         let ws = match dial_reconnect_ws(
             target,
             self.primary_connector,
@@ -280,7 +301,10 @@ impl<W: WebSocketPort> Recovery<'_, W> {
         .await
         {
             Ok(Some(ws)) => ws,
-            Ok(None) => reuse.expect("checked above").clone(),
+            Ok(None) => {
+                fresh = false;
+                reuse.expect("checked above").clone()
+            }
             Err(e) => {
                 self.observer.connect_failed(target, &e);
                 if let Some(suppressed) = self.retry_diagnostic() {
@@ -303,6 +327,9 @@ impl<W: WebSocketPort> Recovery<'_, W> {
             }
             Err(e) => {
                 self.observer.connect_failed(target, &e);
+                if fresh {
+                    handshake::close_failed_connect(&*ws, &e).await;
+                }
                 absorb_failed_connect_probe(self.conn, &probe_conn).await;
                 if !self.conn.lock().await.connect_retry_allowed {
                     if let Some(suppressed) = self.retry_diagnostic() {

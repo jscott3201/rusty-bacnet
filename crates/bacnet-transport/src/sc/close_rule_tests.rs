@@ -1,0 +1,418 @@
+//! Which close each hub socket gets when the transport stops using it, and
+//! how long `stop` may take doing so (#2520). Tokio's paused clock and
+//! in-memory sockets that record each close; `close_wire_tests` shows the
+//! frames on real TLS sockets.
+//!
+//! The rule: a socket the transport gives up gets its close at once, 1000
+//! for an orderly end and none for a peer that stopped answering. The one
+//! socket it keeps is a lost hub's own when recovery will send the next
+//! Connect-Request on it, which it does with reconnect on and no connector
+//! for that hub; that socket gets no close.
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
+
+use tokio::time::Instant;
+
+use super::STOP_SEND_BUDGET;
+use crate::port::TransportPort;
+use crate::sc::close_test_support::{Probe, Recorder, eventually, recorder};
+use crate::sc::data_attribute_tests::hub_accept;
+use crate::sc::test_waits::until;
+use crate::sc::{
+    CLOSE_GRACE, ScDisconnectCause, ScEvent, ScReconnectConfig, ScTransport, WebSocketPort,
+};
+use crate::sc_frame::{ScFunction, decode_sc_message};
+use bacnet_types::error::Error;
+
+const NODE_VMAC: [u8; 6] = [0x01; 6];
+
+fn reconnect() -> ScReconnectConfig {
+    ScReconnectConfig {
+        initial_delay_ms: 25,
+        max_delay_ms: 25,
+        max_retries: 1,
+    }
+}
+
+/// A started transport on `socket`, whose hub has accepted it.
+async fn started(transport: &mut ScTransport<Recorder>, probe: &Probe) {
+    let (started, ()) = tokio::join!(transport.start(), hub_accept(&probe.hub, [0x10; 6]));
+    let _rx = started.unwrap();
+}
+
+/// `stop` spends at most its send budget against a hub that reads nothing:
+/// a Disconnect-Request that never goes out, or one the hub never answers
+/// (the close grace) followed by a close that never goes out. A hub that
+/// only stays silent costs the close grace. Each time `stop` asks for the
+/// close with 1000.
+#[tokio::test(start_paused = true)]
+async fn stop_is_bounded_against_a_hub_that_stopped_reading() {
+    for (hang_send, hang_close, bound) in [
+        (true, true, STOP_SEND_BUDGET),
+        (false, true, STOP_SEND_BUDGET),
+        (false, false, CLOSE_GRACE),
+    ] {
+        let (socket, probe) = recorder();
+        let mut transport = ScTransport::new(socket, NODE_VMAC).with_device_uuid([1; 16]);
+        started(&mut transport, &probe).await;
+        probe.hang_send.store(hang_send, Ordering::Release);
+        probe.hang_close.store(hang_close, Ordering::Release);
+        let began = Instant::now();
+        tokio::time::timeout(Duration::from_secs(60), transport.stop())
+            .await
+            .expect("stop must be bounded")
+            .unwrap();
+        let took = began.elapsed();
+        assert!(
+            took >= bound && took < bound + Duration::from_millis(5),
+            "hang_send={hang_send} hang_close={hang_close}: {took:?}"
+        );
+        assert_eq!(probe.closes(), [Some(1000)], "hang_send={hang_send}");
+    }
+}
+
+/// A heartbeat the hub leaves unanswered ends the connection. The socket
+/// is given up, and closed with no status, unless recovery will send its
+/// next Connect-Request on it.
+#[tokio::test(start_paused = true)]
+async fn a_heartbeat_timeout_closes_the_socket_unless_recovery_reuses_it() {
+    // (reconnect, connector, closes on the lost socket)
+    for (with_reconnect, with_connector, expected) in [
+        (false, false, vec![None]),
+        (true, true, vec![None]),
+        (true, false, vec![]),
+    ] {
+        let (socket, probe) = recorder();
+        let mut transport = ScTransport::new(socket, NODE_VMAC)
+            .with_device_uuid([1; 16])
+            .with_connect_timeout_ms(100)
+            .with_test_heartbeat_timing_ms(100, 300);
+        if with_reconnect {
+            transport = transport.with_reconnect(ScReconnectConfig {
+                max_retries: 2,
+                ..reconnect()
+            });
+        }
+        if with_connector {
+            // Each redial reaches a hub that is already gone.
+            transport = transport.with_connector(|| async { Ok(recorder().0) });
+        }
+        let mut events = transport.connection_events();
+        started(&mut transport, &probe).await;
+        loop {
+            let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+                .await
+                .expect("no heartbeat timeout")
+                .unwrap();
+            if let ScEvent::Disconnected { cause, .. } = event {
+                assert_eq!(cause, ScDisconnectCause::HeartbeatTimeout);
+                break;
+            }
+        }
+        if expected.is_empty() {
+            // Kept: each retry's Connect-Request goes out on this socket,
+            // and one that goes unanswered does not close it either.
+            let mut retries = 0;
+            while retries < 2 {
+                let data = tokio::time::timeout(Duration::from_secs(5), probe.hub.recv())
+                    .await
+                    .expect("no Connect-Request on the kept socket")
+                    .unwrap();
+                if decode_sc_message(&data).unwrap().function == ScFunction::ConnectRequest {
+                    retries += 1;
+                }
+            }
+        } else {
+            until("the lost socket's close", || async {
+                !probe.closes.lock().unwrap().is_empty()
+            })
+            .await;
+        }
+        assert_eq!(
+            probe.closes(),
+            expected,
+            "reconnect={with_reconnect} connector={with_connector}"
+        );
+        transport.stop().await.unwrap();
+    }
+}
+
+/// A primary that never answers the first Connect-Request, with the node
+/// starting on the failover hub: closed with no status when a primary
+/// restore would dial a fresh socket, kept open when it would retry this
+/// one. Once a restore succeeds, the failover hub gets its
+/// Disconnect-Request and a close with 1000.
+#[tokio::test(start_paused = true)]
+async fn the_first_connect_and_a_primary_restore_close_the_sockets_they_give_up() {
+    for with_connector in [true, false] {
+        let (primary, primary_probe) = recorder();
+        let (failover, failover_probe) = recorder();
+        let (dialled_tx, mut dialled) = tokio::sync::mpsc::unbounded_channel();
+        let mut transport = ScTransport::new(primary, NODE_VMAC)
+            .with_device_uuid([1; 16])
+            .with_connect_timeout_ms(100)
+            .with_heartbeat_interval_ms(5_000)
+            .with_reconnect(reconnect())
+            .with_failover(failover);
+        if with_connector {
+            transport = transport.with_connector(move || {
+                let (socket, probe) = recorder();
+                let _ = dialled_tx.send(probe);
+                async { Ok(socket) }
+            });
+        }
+        let (started, ()) = tokio::join!(
+            transport.start(),
+            hub_accept(&failover_probe.hub, [0x20; 6])
+        );
+        let _rx = started.unwrap();
+        let primary_closes: &[Option<u16>] = if with_connector { &[None] } else { &[] };
+        assert_eq!(
+            primary_probe.closes(),
+            primary_closes,
+            "connector={with_connector}"
+        );
+        if with_connector {
+            let restored = tokio::time::timeout(Duration::from_secs(5), dialled.recv())
+                .await
+                .expect("no primary restore dial")
+                .unwrap();
+            hub_accept(&restored.hub, [0x10; 6]).await;
+            let leave = tokio::time::timeout(Duration::from_secs(5), failover_probe.hub.recv())
+                .await
+                .expect("no Disconnect-Request to the failover hub")
+                .unwrap();
+            assert_eq!(
+                decode_sc_message(&leave).unwrap().function,
+                ScFunction::DisconnectRequest
+            );
+            // The failover hub never answers: the close follows the grace.
+            eventually("the failover socket's close", || {
+                !failover_probe.closes().is_empty()
+            })
+            .await;
+            assert_eq!(failover_probe.closes(), [Some(1000)]);
+        } else {
+            // A restore tries the kept primary again, and leaves it open
+            // when that goes unanswered too.
+            for _ in 0..2 {
+                let data = tokio::time::timeout(Duration::from_secs(5), primary_probe.hub.recv())
+                    .await
+                    .expect("no Connect-Request on the kept primary")
+                    .unwrap();
+                let request = decode_sc_message(&data).unwrap();
+                assert_eq!(request.function, ScFunction::ConnectRequest);
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            assert_eq!(primary_probe.closes(), []);
+        }
+        transport.stop().await.unwrap();
+    }
+}
+
+/// How an outbound direct link ended.
+#[derive(Debug, Clone, Copy)]
+enum LinkEnd {
+    /// This node retired it, as `stop` does.
+    Retired,
+    /// The peer sent a Disconnect-Request.
+    Answered,
+    /// The peer left a heartbeat unanswered.
+    Unanswered,
+}
+
+/// An outbound direct link's worker closes its socket by how the link
+/// ended: 1000 after its own Disconnect-Request or after answering the
+/// peer's, no status when the peer stopped answering heartbeats.
+#[tokio::test(start_paused = true)]
+async fn an_outbound_direct_link_closes_by_how_it_ended() {
+    use crate::sc::direct_membership::{DirectMembership, DirectRole, disconnect_request};
+    use crate::sc::direct_pool::PooledDirect;
+    use crate::sc::direct_socket::DirectSocket;
+    for (end, expected) in [
+        (LinkEnd::Retired, Some(1000)),
+        (LinkEnd::Answered, Some(1000)),
+        (LinkEnd::Unanswered, None),
+    ] {
+        let (socket, probe) = recorder();
+        let owner = Arc::new(DirectMembership::default());
+        let member = owner
+            .reserve([2; 16], [2; 6], [1; 16], [1; 6], DirectRole::Outbound, 16)
+            .unwrap()
+            .commit();
+        let permits = Arc::new(tokio::sync::Semaphore::new(1));
+        let (pooled, worker) = PooledDirect::start(
+            DirectSocket::Custom(socket),
+            member,
+            permits.try_acquire_owned().unwrap(),
+            #[cfg(feature = "sc-tls")]
+            None,
+            (1476, 1476),
+            (3_000, 6_000),
+        );
+        match end {
+            LinkEnd::Retired => pooled.member.retire(),
+            LinkEnd::Answered => {
+                let mut wire = bytes::BytesMut::new();
+                crate::sc_frame::encode_sc_message(&mut wire, &disconnect_request());
+                probe.hub.send(&wire).await.unwrap();
+            }
+            // The worker probes at 3 s and gives up at 6 s.
+            LinkEnd::Unanswered => {}
+        }
+        tokio::time::timeout(Duration::from_secs(30), worker)
+            .await
+            .expect("the link did not end")
+            .unwrap();
+        assert_eq!(probe.closes(), [expected], "{end:?}");
+    }
+}
+
+/// A start where neither hub answers its Connect-Request gives up both
+/// sockets, and closes each with no status.
+#[tokio::test(start_paused = true)]
+async fn a_start_that_neither_hub_answers_closes_both_sockets() {
+    let (primary, primary_probe) = recorder();
+    let (failover, failover_probe) = recorder();
+    let mut transport = ScTransport::new(primary, NODE_VMAC)
+        .with_device_uuid([1; 16])
+        .with_connect_timeout_ms(100)
+        .with_failover(failover);
+    let error = match transport.start().await {
+        Err(error) => error,
+        Ok(_) => panic!("no hub answered"),
+    };
+    assert!(matches!(error, Error::Timeout(_)), "{error}");
+    assert_eq!(primary_probe.closes(), [None]);
+    assert_eq!(failover_probe.closes(), [None]);
+}
+
+/// Once the primary's reconnect attempts are used up, a failover hub that
+/// never answers the Connect-Request is given up and closed with no status.
+#[tokio::test(start_paused = true)]
+async fn an_unanswered_failover_after_reconnect_exhaustion_is_closed() {
+    let (socket, probe) = recorder();
+    let (dialled_tx, mut dialled) = tokio::sync::mpsc::unbounded_channel();
+    let mut transport = ScTransport::new(socket, NODE_VMAC)
+        .with_device_uuid([1; 16])
+        .with_connect_timeout_ms(100)
+        .with_test_heartbeat_timing_ms(100, 300)
+        .with_reconnect(reconnect())
+        // The primary's redials reach a hub that is already gone.
+        .with_connector(|| async { Ok(recorder().0) })
+        .with_failover_connector(move || {
+            let (socket, probe) = recorder();
+            let _ = dialled_tx.send(probe);
+            async { Ok(socket) }
+        });
+    started(&mut transport, &probe).await;
+    let failover = tokio::time::timeout(Duration::from_secs(5), dialled.recv())
+        .await
+        .expect("no failover dial")
+        .unwrap();
+    eventually("the failover socket's close", || {
+        !failover.closes().is_empty()
+    })
+    .await;
+    assert_eq!(failover.closes(), [None]);
+    transport.stop().await.unwrap();
+}
+
+/// A connector whose sockets reach hubs that never answer; each dialled
+/// socket's probe goes to the test, which keeps the hub end open.
+fn silent_connector(
+    dialled: tokio::sync::mpsc::UnboundedSender<Probe>,
+) -> impl Fn() -> std::future::Ready<Result<Recorder, Error>> + Send + Sync + 'static {
+    move || {
+        let (socket, probe) = recorder();
+        let _ = dialled.send(probe);
+        std::future::ready(Ok(socket))
+    }
+}
+
+/// A socket a reconnect dials afresh, and whose Connect-Request goes
+/// unanswered, is given up with a close that has no status, as the first
+/// connection's is. Here the hub stops answering heartbeats, then every
+/// redial.
+#[tokio::test(start_paused = true)]
+async fn an_unanswered_reconnect_dial_is_closed_without_a_status() {
+    let (socket, probe) = recorder();
+    let (dialled_tx, mut dialled) = tokio::sync::mpsc::unbounded_channel();
+    let mut transport = ScTransport::new(socket, NODE_VMAC)
+        .with_device_uuid([1; 16])
+        .with_connect_timeout_ms(100)
+        .with_test_heartbeat_timing_ms(100, 300)
+        .with_reconnect(reconnect())
+        .with_connector(silent_connector(dialled_tx));
+    started(&mut transport, &probe).await;
+    let redial = tokio::time::timeout(Duration::from_secs(5), dialled.recv())
+        .await
+        .expect("no redial")
+        .unwrap();
+    eventually("the redial's close", || !redial.closes().is_empty()).await;
+    assert_eq!(redial.closes(), [None]);
+    transport.stop().await.unwrap();
+}
+
+/// So is a socket a primary restore dials afresh: on the failover hub,
+/// each restore dial goes unanswered.
+#[tokio::test(start_paused = true)]
+async fn an_unanswered_restore_dial_is_closed_without_a_status() {
+    let (primary, primary_probe) = recorder();
+    let (failover, failover_probe) = recorder();
+    let (dialled_tx, mut dialled) = tokio::sync::mpsc::unbounded_channel();
+    let mut transport = ScTransport::new(primary, NODE_VMAC)
+        .with_device_uuid([1; 16])
+        .with_connect_timeout_ms(100)
+        .with_heartbeat_interval_ms(5_000)
+        .with_reconnect(reconnect())
+        .with_connector(silent_connector(dialled_tx))
+        .with_failover(failover);
+    let (started, ()) = tokio::join!(
+        transport.start(),
+        hub_accept(&failover_probe.hub, [0x20; 6])
+    );
+    let _rx = started.unwrap();
+    assert_eq!(primary_probe.closes(), [None]);
+    let restore = tokio::time::timeout(Duration::from_secs(5), dialled.recv())
+        .await
+        .expect("no restore dial")
+        .unwrap();
+    eventually("the restore dial's close", || !restore.closes().is_empty()).await;
+    assert_eq!(restore.closes(), [None]);
+    assert_eq!(failover_probe.closes(), []);
+    transport.stop().await.unwrap();
+}
+
+/// A hub BVLC-Result that ends the connection closes the socket the
+/// transport gives up: 1000 after a NAK that is fatal on the hub link, an
+/// orderly end, and no status after one that does not decode, the hub's
+/// fault.
+#[tokio::test(start_paused = true)]
+async fn a_result_that_ends_the_hub_link_closes_by_what_it_was() {
+    // A NAK to a Heartbeat-Request (class RESOURCES, code OTHER), and a
+    // Result too short to decode.
+    let nak = vec![
+        0x00, 0x00, 0x00, 0x07, 0x0a, 0x01, 0x00, 0x00, 0x03, 0x00, 0x00,
+    ];
+    for (wire, expected) in [(nak, Some(1000)), (vec![0x00, 0x00, 0x07], None)] {
+        let (socket, probe) = recorder();
+        let mut transport = ScTransport::new(socket, NODE_VMAC).with_device_uuid([1; 16]);
+        let mut events = transport.connection_events();
+        started(&mut transport, &probe).await;
+        probe.hub.send(&wire).await.unwrap();
+        loop {
+            let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+                .await
+                .expect("the link did not end")
+                .unwrap();
+            if matches!(event, ScEvent::Disconnected { .. }) {
+                break;
+            }
+        }
+        eventually("the close", || !probe.closes().is_empty()).await;
+        assert_eq!(probe.closes(), [expected], "{wire:02x?}");
+        transport.stop().await.unwrap();
+    }
+}

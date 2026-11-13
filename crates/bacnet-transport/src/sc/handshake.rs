@@ -38,6 +38,32 @@ fn malformed_bvlc_result_error(error: Error) -> Error {
 #[path = "connect_validation_tests.rs"]
 mod tests;
 
+/// Close a socket the transport gives up after [`perform_handshake`]
+/// failed, as the initiator does on leaving AWAITING_ACCEPT (Annex
+/// AB.6.2.2, #2520), within the close grace. See [`failed_connect_close`].
+pub(super) async fn close_failed_connect<W: WebSocketPort>(ws: &W, error: &Error) {
+    if let Some(status) = failed_connect_close(error) {
+        super::close_within_grace(ws, status).await;
+    }
+}
+
+/// The close for a failed Connect exchange: 1000 after the hub refused it
+/// with a NAK, an orderly end; no status when the reply never came, did not
+/// decode or made no sense, the peer's fault as the hub reads one. `None`
+/// when sending or receiving failed: the socket is gone already.
+fn failed_connect_close(error: &Error) -> Option<Option<u16>> {
+    if matches!(error, Error::Timeout(_) | Error::Decoding(_)) {
+        return Some(None);
+    }
+    match ScConnectError::from_error(error)? {
+        ScConnectError::HandshakeNak { .. } => Some(Some(super::CLOSE_NORMAL)),
+        ScConnectError::MalformedBvlcResult { .. }
+        | ScConnectError::UnexpectedResultAck { .. }
+        | ScConnectError::ConnectAcceptMismatch => Some(None),
+        _ => None,
+    }
+}
+
 /// Perform the Connect-Request / Connect-Accept handshake on a WebSocket.
 ///
 /// Used for both the initial connection and reconnection attempts.

@@ -7,6 +7,10 @@ pub(crate) enum DirectFrame {
     Binary(Vec<u8>),
     #[cfg(feature = "sc-tls")]
     Control,
+    /// A text (or other non-binary) data frame, which ends the connection
+    /// with a 1003 close (Annex AB.7.5.3, #2520).
+    #[cfg(feature = "sc-tls")]
+    NonBinary,
 }
 pub(crate) enum DirectSocket<W> {
     Custom(W),
@@ -98,7 +102,37 @@ impl<W: WebSocketPort> WebSocketPort for DirectSocket<W> {
             match self.next_frame().await? {
                 DirectFrame::Binary(b) => return Ok(b),
                 DirectFrame::Control => tokio::task::yield_now().await,
+                // During the Connect exchange, as on an established link.
+                DirectFrame::NonBinary => return Err(self.refuse_non_binary().await),
             }
         }
+    }
+    async fn close(&self, status: Option<u16>) -> Result<(), Error> {
+        match self {
+            Self::Custom(ws) => ws.close(status).await,
+            #[cfg(feature = "sc-tls")]
+            Self::Verified(ws) => ws.close(status).await,
+        }
+    }
+    fn awaits_disconnect_ack(&self) -> bool {
+        match self {
+            Self::Custom(ws) => ws.awaits_disconnect_ack(),
+            #[cfg(feature = "sc-tls")]
+            Self::Verified(_) => true,
+        }
+    }
+}
+#[cfg(feature = "sc-tls")]
+impl<W: WebSocketPort> DirectSocket<W> {
+    /// Close with 1003 after a data frame that is not binary (Annex
+    /// AB.7.5.3), within the close grace, as the hub does (#2520). Returns
+    /// the error that ends the connection.
+    pub(crate) async fn refuse_non_binary(&self) -> Error {
+        super::close_within_grace(self, Some(super::CLOSE_DATA_NOT_ACCEPTED)).await;
+        super::ScConnectError::websocket(
+            super::ScWebSocketErrorKind::NonBinaryFrame,
+            "non-binary WebSocket frame received on a direct connection",
+        )
+        .into_bacnet_error()
     }
 }

@@ -54,10 +54,11 @@ async fn direct_response_network_stop_and_server_drop_seal_retained_routes() {
     drop(f.server);
     assert!(queued.await.is_err());
     assert!(issue(&network, &route, 14).await.is_err());
-    // The standalone listener remains independently owned; stop supplies EOF
-    // as a deterministic boundary proving no queued application frame escaped.
+    // The standalone listener remains independently owned; its goodbye on
+    // stop is a deterministic boundary proving no queued application frame
+    // escaped.
     f.listener.stop().await;
-    assert!(a.ws.recv().await.is_err());
+    assert_listener_goodbye(&a.ws).await;
     assert!(f.responses.try_recv().is_err());
 }
 
@@ -86,7 +87,7 @@ async fn direct_response_server_stop_cancels_held_request_and_keeps_listener_han
     assert_eq!(f.server.request_tasks.counters().confirmed_active, 0);
     assert!(f.server.seg_ack_senders.lock().is_empty());
     f.listener.stop().await;
-    assert!(a.ws.recv().await.is_err());
+    assert_listener_goodbye(&a.ws).await;
     assert!(f.responses.try_recv().is_err());
 }
 
@@ -198,10 +199,8 @@ async fn direct_response_router_local_delivery_preserves_matching_capability() {
             .await
             .is_err()
     );
+    // Router retirement cannot leak a direct response.
     f.listener.stop().await;
-    assert!(
-        a.ws.recv().await.is_err(),
-        "router retirement cannot leak a direct response"
-    );
+    assert_listener_goodbye(&a.ws).await;
     f.stop().await;
 }
