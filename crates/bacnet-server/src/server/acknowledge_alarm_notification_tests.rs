@@ -271,17 +271,18 @@ impl Harness {
         })
     }
 
-    /// The frames once at least `count` are out: an acknowledgment's
-    /// notification goes out from its recipients' lanes (#2537), after the
-    /// request returns.
+    /// The frames once at least `count` are out and the lanes have had time
+    /// to send any more: an acknowledgment's notification goes out from its
+    /// recipients' lanes (#2537), after the request returns, and an exact
+    /// count of these still catches a late extra frame.
     async fn frames_after(&self, count: usize) -> Vec<(Vec<u8>, Bytes)> {
         for _ in 0..2_000 {
-            let frames = self.frames();
-            if frames.len() >= count {
-                return frames;
+            if self.frames().len() >= count {
+                break;
             }
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
+        self.quiet().await;
         self.frames()
     }
 

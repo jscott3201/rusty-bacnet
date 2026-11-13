@@ -99,6 +99,8 @@ struct Probe {
     release: Semaphore,
     /// The next transition whose send panics, by its To State.
     panic_on: StdMutex<Option<u32>>,
+    /// Every transition whose send panics, by its To State.
+    panic_always: StdMutex<Option<u32>>,
     /// The SimpleACK to hold in the transport, by invoke ID, and its release.
     hold_ack: StdMutex<Option<u8>>,
     release_ack: Semaphore,
@@ -112,6 +114,7 @@ impl Default for Probe {
             held: Semaphore::new(0),
             release: Semaphore::new(0),
             panic_on: StdMutex::new(None),
+            panic_always: StdMutex::new(None),
             hold_ack: StdMutex::new(None),
             release_ack: Semaphore::new(0),
             wire: StdMutex::new(Vec::new()),
@@ -156,9 +159,12 @@ impl Probe {
         };
         if let Sent::Event { to, ack: false, .. } = &sent {
             let mut slot = self.panic_on.lock().unwrap();
-            if *slot == Some(*to) {
+            let once = *slot == Some(*to);
+            if once {
                 *slot = None;
-                drop(slot);
+            }
+            drop(slot);
+            if once || *self.panic_always.lock().unwrap() == Some(*to) {
                 panic!("a test transport's send panics");
             }
         }

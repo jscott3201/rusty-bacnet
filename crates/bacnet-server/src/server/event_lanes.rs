@@ -464,6 +464,16 @@ impl<T: TransportPort + 'static> Drop for LaneTask<T> {
         let Some(at) = lanes.position(&self.destination).filter(|_| !lanes.sealed) else {
             return;
         };
+        // Said now, not when the task is reaped. Under Tokio a panicking
+        // task's state drops after the panic is caught, so `panicking()` is
+        // mostly false here; the early end is what shows it.
+        warn!(
+            destination = ?self.destination,
+            panicking = std::thread::panicking(),
+            waiting = lanes.lanes[at].entries.len(),
+            "An event notification lane's task ended before its lane was empty; \
+             the entry it was sending is lost"
+        );
         if lanes.lanes[at].entries.is_empty() || tokio::runtime::Handle::try_current().is_err() {
             let lane = lanes.lanes.swap_remove(at);
             lanes.entries -= lane.entries.len();

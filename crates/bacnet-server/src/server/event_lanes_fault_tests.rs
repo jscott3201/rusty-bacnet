@@ -95,6 +95,52 @@ async fn a_send_that_panics_does_not_strand_its_lane() {
     assert_eq!((lanes.open(), lanes.waiting()), (0, 0));
 }
 
+/// A send that panics with entries queued behind it: a new task takes the
+/// rest of the lane, in order, and the lane closes.
+#[tokio::test(start_paused = true)]
+async fn a_new_task_takes_the_entries_behind_a_panicking_send() {
+    let rig = Rig::start(ai_objects).await;
+    rig.hold(true, FAULT);
+    rig.reliability(Reliability::NO_SENSOR).await;
+    rig.holding().await;
+    *rig.probe.panic_on.lock().unwrap() = Some(FAULT);
+    rig.reliability(Reliability::NO_FAULT_DETECTED).await;
+    rig.reliability(Reliability::NO_SENSOR).await;
+    rig.reliability(Reliability::NO_FAULT_DETECTED).await;
+    assert_eq!(lanes(&rig.server.notification_transactions).waiting(), 3);
+    rig.release();
+    let wire = rig.wait_wire(3).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        wire,
+        [ev(ai1(), FAULT), ev(ai1(), NORMAL), ev(ai1(), NORMAL)]
+    );
+    let lanes = lanes(&rig.server.notification_transactions);
+    assert_eq!((lanes.open(), lanes.waiting()), (0, 0), "the lane closed");
+}
+
+/// Every send of one kind panics: each entry gets one try, the others go
+/// out, and the lane closes rather than spinning.
+#[tokio::test(start_paused = true)]
+async fn a_send_that_always_panics_still_lets_the_lane_close() {
+    let rig = Rig::start(ai_objects).await;
+    rig.hold(true, FAULT);
+    rig.reliability(Reliability::NO_SENSOR).await;
+    rig.holding().await;
+    *rig.probe.panic_always.lock().unwrap() = Some(NORMAL);
+    for _ in 0..3 {
+        rig.reliability(Reliability::NO_FAULT_DETECTED).await;
+        rig.reliability(Reliability::NO_SENSOR).await;
+    }
+    assert_eq!(lanes(&rig.server.notification_transactions).waiting(), 6);
+    rig.release();
+    let wire = rig.wait_wire(4).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(wire, vec![ev(ai1(), FAULT); 4]);
+    let lanes = lanes(&rig.server.notification_transactions);
+    assert_eq!((lanes.open(), lanes.waiting()), (0, 0), "the lane closed");
+}
+
 /// A write whose Staging plan commits a transition answers at once while
 /// another writer's notification holds the same lane; the plan target's
 /// COV notification still follows its event notification.
