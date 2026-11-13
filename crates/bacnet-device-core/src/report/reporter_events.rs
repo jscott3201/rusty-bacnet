@@ -127,61 +127,47 @@ impl Reporter {
     ) -> Option<Written> {
         self.events.as_ref()?;
         let service = event_service(&request.apdu)?;
+        Some(if service == ConfirmedServiceChoice::ACKNOWLEDGE_ALARM {
+            self.acknowledge_alarm(db, request, now, out)
+        } else {
+            get_event_information(db, request, out)
+        })
+    }
+
+    /// AcknowledgeAlarm: the reply in `out`, then an accepted
+    /// acknowledgement's notification queued. Out of line, as
+    /// [`get_event_information`] is, so [`handle`](Self::handle) carries
+    /// neither (#2524).
+    #[inline(never)]
+    fn acknowledge_alarm(
+        &mut self,
+        db: &mut ObjectDatabase,
+        request: &Inbound,
+        now: Instant,
+        out: &mut BytesMut,
+    ) -> Written {
+        let service = ConfirmedServiceChoice::ACKNOWLEDGE_ALARM;
         let Ok(Apdu::ConfirmedRequest(confirmed)) = decode_apdu(request.apdu.clone()) else {
-            return Some(Outcome::Silent.into());
+            return Outcome::Silent.into();
         };
         let invoke_id = confirmed.invoke_id;
-        let data = &confirmed.service_request;
-        if service == ConfirmedServiceChoice::ACKNOWLEDGE_ALARM {
-            let (answer, notification) = match handle_acknowledge_alarm(db, data) {
-                Ok(accepted) => {
-                    let ack = SimpleAck {
-                        invoke_id,
-                        service_choice: service,
-                    };
-                    (Apdu::SimpleAck(ack), accepted.into_notification())
-                }
-                Err(error) => (reply::error_apdu(invoke_id, service, &error), None),
-            };
-            let outcome = emit(out, &answer, Outcome::Reply);
-            // After the SimpleACK, as the server sends it.
-            if let Some((oid, transition)) = notification {
-                self.distribute(db, oid, transition, now);
+        let (answer, notification) = match handle_acknowledge_alarm(db, &confirmed.service_request)
+        {
+            Ok(accepted) => {
+                let ack = SimpleAck {
+                    invoke_id,
+                    service_choice: service,
+                };
+                (Apdu::SimpleAck(ack), accepted.into_notification())
             }
-            return Some(outcome.into());
-        }
-        // The reporter never segments: the page fits one APDU.
-        let mut budget = GetEventInformationBudget::default();
-        let header = 3;
-        let room = usize::from(request.max_reply).saturating_sub(header);
-        budget.max_service_ack_bytes = budget.max_service_ack_bytes.min(room);
-        let mut ack = BytesMut::new();
-        let answer = match handle_get_event_information_configured(db, data, &mut ack, budget) {
-            Ok(()) => Apdu::ComplexAck(ComplexAck {
-                segmented: false,
-                more_follows: false,
-                invoke_id,
-                sequence_number: None,
-                proposed_window_size: None,
-                service_choice: service,
-                service_ack: ack.freeze(),
-            }),
-            Err(EventInformationFailure::Service(error)) => {
-                reply::error_apdu(invoke_id, service, &error)
-            }
-            Err(EventInformationFailure::Projection(problem)) => {
-                reply::error_apdu(invoke_id, service, &problem.to_error())
-            }
-            Err(failure) => Apdu::Abort(AbortPdu {
-                sent_by_server: true,
-                invoke_id,
-                abort_reason: match failure {
-                    EventInformationFailure::Objects => AbortReason::OUT_OF_RESOURCES,
-                    _ => AbortReason::BUFFER_OVERFLOW,
-                },
-            }),
+            Err(error) => (reply::error_apdu(invoke_id, service, &error), None),
         };
-        Some(emit(out, &reply::fit(answer, request.max_reply), Outcome::Reply).into())
+        let outcome = emit(out, &answer, Outcome::Reply);
+        // After the SimpleACK, as the server sends it.
+        if let Some((oid, transition)) = notification {
+            self.distribute(db, oid, transition, now);
+        }
+        outcome.into()
     }
 
     /// Acknowledge `object`'s latest transition to `state` by local means, a
@@ -418,6 +404,49 @@ impl Reporter {
         }
         self.settle();
     }
+}
+
+/// GetEventInformation: the page, or the refusal, in `out`. The reporter
+/// never segments, so the page fits one APDU. Out of line (#2524).
+#[inline(never)]
+fn get_event_information(db: &ObjectDatabase, request: &Inbound, out: &mut BytesMut) -> Written {
+    let service = ConfirmedServiceChoice::GET_EVENT_INFORMATION;
+    let Ok(Apdu::ConfirmedRequest(confirmed)) = decode_apdu(request.apdu.clone()) else {
+        return Outcome::Silent.into();
+    };
+    let invoke_id = confirmed.invoke_id;
+    let mut budget = GetEventInformationBudget::default();
+    let header = 3;
+    let room = usize::from(request.max_reply).saturating_sub(header);
+    budget.max_service_ack_bytes = budget.max_service_ack_bytes.min(room);
+    let mut ack = BytesMut::new();
+    let data = &confirmed.service_request;
+    let answer = match handle_get_event_information_configured(db, data, &mut ack, budget) {
+        Ok(()) => Apdu::ComplexAck(ComplexAck {
+            segmented: false,
+            more_follows: false,
+            invoke_id,
+            sequence_number: None,
+            proposed_window_size: None,
+            service_choice: service,
+            service_ack: ack.freeze(),
+        }),
+        Err(EventInformationFailure::Service(error)) => {
+            reply::error_apdu(invoke_id, service, &error)
+        }
+        Err(EventInformationFailure::Projection(problem)) => {
+            reply::error_apdu(invoke_id, service, &problem.to_error())
+        }
+        Err(failure) => Apdu::Abort(AbortPdu {
+            sent_by_server: true,
+            invoke_id,
+            abort_reason: match failure {
+                EventInformationFailure::Objects => AbortReason::OUT_OF_RESOURCES,
+                _ => AbortReason::BUFFER_OVERFLOW,
+            },
+        }),
+    };
+    emit(out, &reply::fit(answer, request.max_reply), Outcome::Reply).into()
 }
 
 /// An event service the reporter runs, read from an unsegmented confirmed
