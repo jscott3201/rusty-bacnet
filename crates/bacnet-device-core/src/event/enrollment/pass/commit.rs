@@ -174,7 +174,8 @@ pub struct EventEnrollmentTransition {
 }
 
 /// What one pass returns: its report, and its commits with a payload and
-/// without, each in commit order.
+/// without, each in commit order: the database's order of its Event
+/// Enrollment objects, the order they were added in.
 #[derive(Debug)]
 pub struct EventEnrollmentEvaluationBatch {
     /// What the pass did.

@@ -21,6 +21,12 @@
 //! enrollment's `Event_Enable` leaves out, so the host sends only those
 //! whose result has `distribute` set, as the server does.
 //!
+//! A pass works through the enrollments in the database's order, the order
+//! they were added in (`ObjectDatabase::find_by_type`), never by
+//! identifier: it follows their inhibit references in that order, then
+//! commits in it. Every list in the batch comes out in that order, and
+//! without a Device clock the commits take event sequence numbers in it.
+//!
 //! # Algorithms
 //!
 //! The pass evaluates OUT_OF_RANGE, FLOATING_LIMIT, CHANGE_OF_STATE,
