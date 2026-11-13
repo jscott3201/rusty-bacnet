@@ -12,6 +12,7 @@ use super::super::persistence::{ColorOutputPersistence, ColorOutputValue};
 use super::super::saving::ColorOutputSaveCounters;
 use super::{ColorTemperatureObject, written_kelvin};
 use crate::common;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::durable::{PendingWrite, StageStep};
 
 /// A written Default_Color_Temperature as storage keeps it: 0, or a
@@ -167,6 +168,7 @@ impl ColorTemperatureObject {
         Ok(())
     }
 
+    #[cfg(feature = "durable-writes")]
     /// Stage the request's Default_Color_Temperature and Description writes
     /// on the output storage.
     pub(super) fn stage_default(&mut self, writes: &[PendingWrite]) -> StageStep {

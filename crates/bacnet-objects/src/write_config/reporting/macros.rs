@@ -144,6 +144,7 @@ macro_rules! impl_reporting_persistence {
             }
         }
 
+        #[cfg(feature = "durable-writes")]
         impl $crate::durable::DurableWrites for $object {
             fn stage_write(
                 &mut self,
@@ -209,6 +210,7 @@ macro_rules! impl_reporting_persistence {
             }
         }
 
+        #[cfg(feature = "durable-writes")]
         impl $crate::durable::DurableWrites for $object {
             fn stage_write(
                 &mut self,

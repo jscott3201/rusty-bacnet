@@ -26,11 +26,13 @@
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use super::buffer::{Timestamp, apply_change, written_buffer_size};
 use super::*;
-use crate::durable::{
-    DurableWrites, Event, PendingWrite, SaveTicket, SaveWait, SaveWriter, StageStep,
-};
+#[cfg(feature = "durable-writes")]
+use crate::durable::DurableWrites;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
+use crate::durable::{Event, PendingWrite, SaveTicket, SaveWait, SaveWriter, StageStep};
 
 /// Outcomes of batches settled before their requests came back for them.
 /// Past it the oldest is dropped and its request is refused with
@@ -75,6 +77,8 @@ pub(super) enum StagedKind {
         outcome: ConfirmedAuditNotificationOutcome,
         changed: bool,
     },
+    // Built only by staging, which needs `durable-writes`.
+    #[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
     /// The changes one request makes, in its order, all in one commit. The
     /// request makes them one at a time under the guard, and the log takes
     /// each change's step as it is made; `taken` counts the steps taken.
@@ -428,6 +432,7 @@ impl AuditLogObject {
         self.writer.wait_idle();
     }
 
+    #[cfg(feature = "durable-writes")]
     /// Build a step for each of `changes` in turn and queue one commit of
     /// the last. A change that cannot be built here, such as a purge without
     /// a valid clock, ends the steps: made under the guard, it then fails as
@@ -469,6 +474,7 @@ impl AuditLogObject {
     }
 }
 
+#[cfg(feature = "durable-writes")]
 /// The Enable and Buffer_Size changes `writes` make, in order, each
 /// judged as the log will be when the request makes it. A write the log will
 /// refuse ends the list, since the request makes no write after it; a write
@@ -513,6 +519,7 @@ fn changes_made(
     changes
 }
 
+#[cfg(feature = "durable-writes")]
 impl DurableWrites for AuditLogObject {
     fn stage_write(
         &mut self,

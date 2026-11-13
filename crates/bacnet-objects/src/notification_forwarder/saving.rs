@@ -55,7 +55,9 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::persistence::{ForwarderSnapshot, NotificationForwarderPersistence};
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::durable::staged::{StagedSaves, Step};
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::durable::{SaveWait, SaveWriter, StageStep};
 use crate::subscribed_recipients::SubscribedRecipients;
 
@@ -169,6 +171,7 @@ impl Storage {
         self.saves.busy_at(now)
     }
 
+    #[cfg(feature = "durable-writes")]
     /// Stage one save of the lists `steps` leave, made from write count
     /// `base` on; `served` holds the lists the forwarder serves meanwhile
     /// (see [`StagedSaves::stage`]).
@@ -192,6 +195,7 @@ impl Storage {
         self.saves.claim(property, None, value, base)
     }
 
+    #[cfg(feature = "durable-writes")]
     /// Whether a list write is staged (see [`StagedSaves::is_staged`]).
     pub(super) fn is_staged(&self) -> bool {
         self.saves.is_staged()
@@ -208,6 +212,7 @@ impl Storage {
         self.saves.save_now(snapshot)
     }
 
+    #[cfg(feature = "durable-writes")]
     /// The request that staged a write and was given `wait` is done. A
     /// staged write another request made is left alone.
     pub(super) fn release(&mut self, wait: &SaveWait) {
@@ -220,6 +225,7 @@ impl Storage {
         self.saves.correct(served);
     }
 
+    #[cfg(feature = "durable-writes")]
     /// No request is left to take or release a staged write (see
     /// [`StagedSaves::drop_forgotten`]).
     pub(super) fn drop_forgotten(

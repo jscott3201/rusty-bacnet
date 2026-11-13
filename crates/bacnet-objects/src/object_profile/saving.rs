@@ -2,6 +2,7 @@
 
 use crate::prelude::*;
 use alloc::sync::Arc;
+#[cfg(feature = "durable-writes")]
 use core::time::Duration;
 
 use bacnet_types::constructed::BACnetNameValue;
@@ -11,8 +12,12 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::{ObjectProfile, TagsPersistence, TagsSnapshot, write_tags};
 use crate::common;
-use crate::durable::staged::{self, StagedSaves, Step};
-use crate::durable::{DurableWrites, PendingWrite, SaveWait, SaveWriter, StageStep};
+use crate::durable::SaveWriter;
+#[cfg(feature = "durable-writes")]
+use crate::durable::staged::{self};
+use crate::durable::staged::{StagedSaves, Step};
+#[cfg(feature = "durable-writes")]
+use crate::durable::{DurableWrites, PendingWrite, SaveWait, StageStep};
 use crate::property_metadata::PropertyMetadata;
 use crate::snapshot::tags::fits;
 use crate::write_config::description;
@@ -337,6 +342,7 @@ impl ProfileState {
     }
 }
 
+#[cfg(feature = "durable-writes")]
 impl DurableWrites for ProfileState {
     fn stage_write(
         &mut self,

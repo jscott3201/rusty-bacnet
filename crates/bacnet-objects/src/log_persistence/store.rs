@@ -503,6 +503,7 @@ pub(crate) trait DurableLog: BACnetObject {
 /// commit, and so does dropping it.
 macro_rules! impl_durable_log {
     ($log:ty) => {
+        #[cfg(feature = "durable-writes")]
         impl $crate::durable::DurableWrites for $log {
             fn stage_write(
                 &mut self,

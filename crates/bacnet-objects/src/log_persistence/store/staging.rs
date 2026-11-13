@@ -41,6 +41,7 @@
 //! setter changes meanwhile, the log commits at its next look, as it does
 //! any change the cadence holds back.
 
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use core::time::Duration;
 
 use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier as P};
@@ -49,7 +50,9 @@ use bacnet_types::primitives::PropertyValue;
 
 use super::{DurableLog, LogState, LogStore, SnapshotRecord};
 use crate::common;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::durable::staged;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::durable::{PendingWrite, SaveWait, StageStep};
 use crate::log_persistence::LogReportingSettings;
 use crate::log_persistence::codec::MAX_TEXT_OCTETS;
@@ -159,6 +162,7 @@ fn kept(log: &impl DurableLog, property: P) -> bool {
     }
 }
 
+#[cfg(feature = "durable-writes")]
 /// Whether the log keeps `write`: one of the settings [`kept`] names, but
 /// not a NULL to Description, which changes nothing.
 fn kept_write(log: &impl DurableLog, write: &PendingWrite) -> bool {
@@ -336,6 +340,7 @@ impl<R: SnapshotRecord> LogStore<R> {
     }
 }
 
+#[cfg(feature = "durable-writes")]
 /// Stage the writes a request makes to `log`
 /// ([`DurableWrites::stage_writes`](crate::durable::DurableWrites::stage_writes)):
 /// one commit of the log's state with the settings they leave together.
@@ -380,6 +385,7 @@ pub(crate) fn stage_writes<L: DurableLog>(log: &mut L, writes: &[PendingWrite]) 
     step
 }
 
+#[cfg(feature = "durable-writes")]
 /// See [`DurableWrites::release_staged_write`](crate::durable::DurableWrites::release_staged_write).
 pub(crate) fn release<L: DurableLog>(log: &mut L, staged: &SaveWait) {
     if let Some(store) = log.durable_parts().0 {
@@ -388,6 +394,7 @@ pub(crate) fn release<L: DurableLog>(log: &mut L, staged: &SaveWait) {
     correct(log);
 }
 
+#[cfg(feature = "durable-writes")]
 /// See [`DurableWrites::expire_staged`](crate::durable::DurableWrites::expire_staged).
 pub(crate) fn expire<L: DurableLog>(log: &mut L, now: Duration) {
     if let Some(store) = log.durable_parts().0 {

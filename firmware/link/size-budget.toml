@@ -896,11 +896,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [thumbv7m-none-eabi.reporting]
-text = 265824
+text = 261456
 rodata = 23296
 data = 64
 bss = 27648
-flash = 290256
+flash = 285904
 ram = 27648
 fmt_functions = 0
 div64_functions = 0
@@ -916,6 +916,21 @@ ram = 32224
 fmt_functions = 0
 div64_functions = 0
 memmove_functions = 3
+
+# On 2026-11-13 (#2538, Rust 1.99.0, dev at f94e54541) bacnet-objects' staged
+# saves compile only with `durable-writes`, which the image leaves off: the
+# built-in objects don't implement `DurableWrites` without it, and the
+# staging half of `StagedSaves` (the staged write, its ticket, correction
+# and expiry) isn't compiled, so none of it links. The inline save path
+# stays. As flash, dev then this change; RAM unchanged at 24680:
+#
+#   thumbv7m             259156, 255264
+#   thumbv7em            258544, 254496
+#   riscv32imac          315802, 309786
+#
+# The objects image falls by 1764 / 1768 / 2296 octets of flash and the
+# points image by 1588 / 1608 / 2076; their rows keep their old budgets.
+# The reporting budgets are --suggest's again.
 
 [thumbv6m-none-eabi.mstp]
 text = 19696
@@ -1193,11 +1208,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [thumbv7em-none-eabihf.reporting]
-text = 265136
+text = 260592
 rodata = 23296
 data = 64
 bss = 27648
-flash = 289584
+flash = 285040
 ram = 27648
 fmt_functions = 0
 div64_functions = 0
@@ -1226,11 +1241,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [riscv32imac-unknown-none-elf.reporting]
-text = 324736
+text = 318000
 rodata = 28960
 data = 64
 bss = 27648
-flash = 353712
+flash = 346960
 ram = 27648
 fmt_functions = 0
 div64_functions = 0

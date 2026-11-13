@@ -31,6 +31,7 @@
 use crate::prelude::*;
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, Ordering};
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use core::time::Duration;
 
 use crate::sync::AtomicU64;
@@ -41,7 +42,9 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::persistence::{ColorOutputPersistence, ColorOutputSnapshot, ColorOutputValue};
 use crate::common;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::durable::staged::{self, StagedSaves};
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::durable::{PendingWrite, SaveWait, SaveWriter, StageStep};
 use crate::write_config::description;
 
@@ -215,6 +218,7 @@ impl OutputStorage {
         }
     }
 
+    #[cfg(feature = "durable-writes")]
     /// Stage the writes storage keeps among a request's `writes` (see
     /// [`DurableWrites::stage_writes`](crate::durable::DurableWrites::stage_writes)):
     /// those to `property`, the object's default, for which `decode` gives
@@ -348,6 +352,7 @@ impl OutputStorage {
         Ok(())
     }
 
+    #[cfg(feature = "durable-writes")]
     /// See [`DurableWrites::release_staged_write`](crate::durable::DurableWrites::release_staged_write).
     pub(super) fn release(&mut self, staged: &SaveWait) {
         if let Some(store) = self.0.as_deref_mut() {
@@ -356,11 +361,13 @@ impl OutputStorage {
         }
     }
 
+    #[cfg(feature = "durable-writes")]
     /// Whether a default or Description write is staged.
     pub(super) fn has_staged(&self) -> bool {
         self.0.as_ref().is_some_and(|store| store.saves.is_staged())
     }
 
+    #[cfg(feature = "durable-writes")]
     /// See [`DurableWrites::expire_staged`](crate::durable::DurableWrites::expire_staged).
     pub(super) fn expire(&mut self, now: Duration) {
         if let Some(store) = self.0.as_deref_mut() {
@@ -369,6 +376,7 @@ impl OutputStorage {
         }
     }
 
+    #[cfg(feature = "durable-writes")]
     /// Settle, as the server stops: drop a forgotten staged default, queue
     /// the served state again if the last save failed, and return the wait
     /// for every save queued so far. `None` without storage.
@@ -484,6 +492,7 @@ impl Drop for OutputStore {
 /// output's saves to the profile's.
 macro_rules! impl_color_durable {
     ($object:ty) => {
+        #[cfg(feature = "durable-writes")]
         impl $crate::durable::DurableWrites for $object {
             fn stage_write(
                 &mut self,

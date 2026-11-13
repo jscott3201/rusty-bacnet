@@ -38,6 +38,7 @@
 
 use crate::prelude::*;
 use alloc::sync::Arc;
+#[cfg(feature = "durable-writes")]
 use core::time::Duration;
 
 use bacnet_types::constructed::{BACnetAccessRule, BACnetDeviceObjectReference};
@@ -48,8 +49,12 @@ use bacnet_types::primitives::PropertyValue;
 use super::persistence::{AccessRightsPersistence, AccessRightsSnapshot};
 use super::{AccessRightsObject, check_accompaniment, checked_rules};
 use crate::common;
-use crate::durable::staged::{self, StagedSaves, Step};
-use crate::durable::{DurableWrites, PendingWrite, SaveWait, SaveWriter, StageStep};
+use crate::durable::SaveWriter;
+#[cfg(feature = "durable-writes")]
+use crate::durable::staged::{self};
+use crate::durable::staged::{StagedSaves, Step};
+#[cfg(feature = "durable-writes")]
+use crate::durable::{DurableWrites, PendingWrite, SaveWait, StageStep};
 use crate::write_config::description;
 
 /// The state a saved write leaves: the property it sets, as the object
@@ -394,6 +399,7 @@ fn apply(snapshot: &mut AccessRightsSnapshot, next: &NextState) {
     }
 }
 
+#[cfg(feature = "durable-writes")]
 impl DurableWrites for AccessRightsObject {
     fn stage_write(
         &mut self,

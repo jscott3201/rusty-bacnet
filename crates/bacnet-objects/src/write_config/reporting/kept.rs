@@ -2,6 +2,7 @@
 //! feature; see the [parent module](super).
 
 use alloc::sync::Arc;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use core::time::Duration;
 
 use bacnet_types::bitstring::EventTransitionBits;
@@ -11,7 +12,9 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::parameters;
 use crate::common;
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::durable::staged::{self, StagedSaves};
+#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::durable::{PendingWrite, SaveWait, StageStep};
 use crate::event::options::{MAX_KEPT_TEXT_OCTETS, ReportingOptions};
 use crate::prelude::{Box, String};
@@ -620,6 +623,7 @@ fn claim(
     )
 }
 
+#[cfg(feature = "durable-writes")]
 /// Stage the kept rows a request writes to `object`
 /// ([`DurableWrites::stage_writes`](crate::durable::DurableWrites::stage_writes)):
 /// one save of what they leave together.
@@ -665,6 +669,7 @@ pub(crate) fn stage_writes<T: KeepsReporting>(
     })
 }
 
+#[cfg(feature = "durable-writes")]
 /// See [`DurableWrites::release_staged_write`](crate::durable::DurableWrites::release_staged_write).
 pub(crate) fn release<T: KeepsReporting>(object: &mut T, staged: &SaveWait) {
     with_store(object, |store, _| {
@@ -674,11 +679,13 @@ pub(crate) fn release<T: KeepsReporting>(object: &mut T, staged: &SaveWait) {
     });
 }
 
+#[cfg(feature = "durable-writes")]
 /// See [`DurableWrites::has_staged_write`](crate::durable::DurableWrites::has_staged_write).
 pub(crate) fn has_staged(store: &ReportingStore) -> bool {
     store.storage.as_deref().is_some_and(Storage::is_staged)
 }
 
+#[cfg(feature = "durable-writes")]
 /// See [`DurableWrites::settle_forgotten_writes`](crate::durable::DurableWrites::settle_forgotten_writes).
 pub(crate) fn settle<T: KeepsReporting>(object: &mut T) -> Option<SaveWait> {
     let mut store = core::mem::take(object.reporting_store());
@@ -691,6 +698,7 @@ pub(crate) fn settle<T: KeepsReporting>(object: &mut T) -> Option<SaveWait> {
     wait
 }
 
+#[cfg(feature = "durable-writes")]
 /// See [`DurableWrites::expire_staged`](crate::durable::DurableWrites::expire_staged).
 pub(crate) fn expire<T: KeepsReporting>(object: &mut T, now: Duration) {
     with_store(object, |store, _| {
@@ -738,6 +746,7 @@ pub(crate) fn written<T: KeepsReporting>(object: &T) -> ReportingWriteConfig {
     kept(store.written, object).saved()
 }
 
+#[cfg(feature = "durable-writes")]
 /// Two stages of one request joined, as the colour objects join Tags and
 /// their default (#1956): a request busy on either waits without holding the
 /// other.
