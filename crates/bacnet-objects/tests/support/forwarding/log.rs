@@ -2,10 +2,13 @@
 //! unlike its default.
 
 use super::{Error, Probe, noon, own_record_error};
+use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::log_buffer::{LogBufferRecords, LogRecordIdentity};
-use bacnet_objects::traits::{BACnetObject, LogBuffer};
-use bacnet_types::constructed::{BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord};
-use bacnet_types::primitives::Date;
+use bacnet_objects::traits::{BACnetObject, LogBuffer, NotificationLogger};
+use bacnet_types::constructed::{
+    BACnetEventLogRecord, BACnetLogMultipleRecord, BACnetLogRecord, EventNotificationRequest,
+};
+use bacnet_types::primitives::{Date, ObjectIdentifier};
 
 impl LogBuffer for Probe {
     fn record_identities(&self) -> Vec<LogRecordIdentity> {
@@ -38,4 +41,11 @@ impl LogBuffer for Probe {
         self.called("LogBuffer::refresh_window", ());
         true
     }
+    fn notification_logger(&self) -> NotificationLogger {
+        self.called("LogBuffer::notification_logger", ());
+        logs_nothing
+    }
 }
+
+/// The probe's notification logger, unlike the default's.
+fn logs_nothing(_: &mut ObjectDatabase, _: Vec<ObjectIdentifier>, _: &EventNotificationRequest) {}

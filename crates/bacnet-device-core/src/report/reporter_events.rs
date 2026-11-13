@@ -15,7 +15,7 @@
 use alloc::vec::Vec;
 
 use bacnet_encoding::apdu::{AbortPdu, Apdu, ComplexAck, SimpleAck, decode_apdu};
-use bacnet_encoding::constructed::encode_event_notification;
+use bacnet_encoding::constructed::{ALL_NOTIFICATION_FORMS, encode_event_notification_of};
 use bacnet_encoding::npdu::view::NetworkPriority;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::event::EventTransition;
@@ -31,17 +31,32 @@ use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
 
 use super::super::{ReportConfig, SWEEP_FLOOR};
-use super::Reporter;
+use super::{Reporter, Tail};
 use crate::cov::life_safety::LifeSafetyCovSnapshots;
 use crate::cov::{Delivery, Token};
 use crate::event::{
-    DistributionOutcome, EventInformationFailure, GetEventInformationBudget, MessageTexts,
-    NotificationTransition, RecipientWindow, acknowledge, after_write, distribute_event,
-    fault_pass, handle_acknowledge_alarm, handle_get_event_information_configured,
-    network_priority, next_due, read_committed_history_snapshot, sweep,
+    DistributionOutcome, EventInformationFailure, GetEventInformationBudget, INTRINSIC_FORMS,
+    MessageTexts, NotificationTransition, RecipientWindow, acknowledge, after_write,
+    distribute_event, fault_pass, handle_acknowledge_alarm,
+    handle_get_event_information_configured, network_priority, next_due,
+    read_committed_history_snapshot, sweep,
 };
 use crate::reply::{self, SEGMENTED, emit};
 use crate::responder::{Inbound, Outcome, Written};
+
+/// The event-value forms the reporter's notifications carry: those
+/// intrinsic reporting builds, so an image links no other form's encoder
+/// (#2524), and with `event-enrollment` every form, for the enrollment
+/// pass to distribute (#2319). An acknowledgement's notification carries
+/// none.
+const REPORTED_FORMS: u32 = if cfg!(feature = "event-enrollment") {
+    ALL_NOTIFICATION_FORMS
+} else {
+    INTRINSIC_FORMS
+};
+// Every form intrinsic reporting builds goes out: one left out of the mask
+// would be refused at the encoder and counted dropped.
+const _: () = assert!(REPORTED_FORMS & INTRINSIC_FORMS == INTRINSIC_FORMS);
 
 /// The event path's schedule.
 #[derive(Debug)]
@@ -127,61 +142,47 @@ impl Reporter {
     ) -> Option<Written> {
         self.events.as_ref()?;
         let service = event_service(&request.apdu)?;
+        Some(if service == ConfirmedServiceChoice::ACKNOWLEDGE_ALARM {
+            self.acknowledge_alarm(db, request, now, out)
+        } else {
+            get_event_information(db, request, out)
+        })
+    }
+
+    /// AcknowledgeAlarm: the reply in `out`, then an accepted
+    /// acknowledgement's notification queued. Out of line, as
+    /// [`get_event_information`] is, so [`handle`](Self::handle) carries
+    /// neither (#2524).
+    #[inline(never)]
+    fn acknowledge_alarm(
+        &mut self,
+        db: &mut ObjectDatabase,
+        request: &Inbound,
+        now: Instant,
+        out: &mut BytesMut,
+    ) -> Written {
+        let service = ConfirmedServiceChoice::ACKNOWLEDGE_ALARM;
         let Ok(Apdu::ConfirmedRequest(confirmed)) = decode_apdu(request.apdu.clone()) else {
-            return Some(Outcome::Silent.into());
+            return Outcome::Silent.into();
         };
         let invoke_id = confirmed.invoke_id;
-        let data = &confirmed.service_request;
-        if service == ConfirmedServiceChoice::ACKNOWLEDGE_ALARM {
-            let (answer, notification) = match handle_acknowledge_alarm(db, data) {
-                Ok(accepted) => {
-                    let ack = SimpleAck {
-                        invoke_id,
-                        service_choice: service,
-                    };
-                    (Apdu::SimpleAck(ack), accepted.into_notification())
-                }
-                Err(error) => (reply::error_apdu(invoke_id, service, &error), None),
-            };
-            let outcome = emit(out, &answer, Outcome::Reply);
-            // After the SimpleACK, as the server sends it.
-            if let Some((oid, transition)) = notification {
-                self.distribute(db, oid, transition, now);
+        let (answer, notification) = match handle_acknowledge_alarm(db, &confirmed.service_request)
+        {
+            Ok(accepted) => {
+                let ack = SimpleAck {
+                    invoke_id,
+                    service_choice: service,
+                };
+                (Apdu::SimpleAck(ack), accepted.into_notification())
             }
-            return Some(outcome.into());
-        }
-        // The reporter never segments: the page fits one APDU.
-        let mut budget = GetEventInformationBudget::default();
-        let header = 3;
-        let room = usize::from(request.max_reply).saturating_sub(header);
-        budget.max_service_ack_bytes = budget.max_service_ack_bytes.min(room);
-        let mut ack = BytesMut::new();
-        let answer = match handle_get_event_information_configured(db, data, &mut ack, budget) {
-            Ok(()) => Apdu::ComplexAck(ComplexAck {
-                segmented: false,
-                more_follows: false,
-                invoke_id,
-                sequence_number: None,
-                proposed_window_size: None,
-                service_choice: service,
-                service_ack: ack.freeze(),
-            }),
-            Err(EventInformationFailure::Service(error)) => {
-                reply::error_apdu(invoke_id, service, &error)
-            }
-            Err(EventInformationFailure::Projection(problem)) => {
-                reply::error_apdu(invoke_id, service, &problem.to_error())
-            }
-            Err(failure) => Apdu::Abort(AbortPdu {
-                sent_by_server: true,
-                invoke_id,
-                abort_reason: match failure {
-                    EventInformationFailure::Objects => AbortReason::OUT_OF_RESOURCES,
-                    _ => AbortReason::BUFFER_OVERFLOW,
-                },
-            }),
+            Err(error) => (reply::error_apdu(invoke_id, service, &error), None),
         };
-        Some(emit(out, &reply::fit(answer, request.max_reply), Outcome::Reply).into())
+        let outcome = emit(out, &answer, Outcome::Reply);
+        // After the SimpleACK, as the server sends it.
+        if let Some((oid, transition)) = notification {
+            self.distribute(db, oid, transition, now);
+        }
+        outcome.into()
     }
 
     /// Acknowledge `object`'s latest transition to `state` by local means, a
@@ -324,20 +325,18 @@ impl Reporter {
         self.report_committed(db, &changed, &snapshots, now);
     }
 
-    /// Report `objects`, which a background pass changed, to COV.
-    pub(super) fn report_committed(
+    /// Report `objects`, which a background pass changed, to COV, through
+    /// the tail every change runs.
+    fn report_committed(
         &mut self,
-        db: &ObjectDatabase,
+        db: &mut ObjectDatabase,
         objects: &[ObjectIdentifier],
         snapshots: &LifeSafetyCovSnapshots,
         now: Instant,
     ) {
-        if objects.is_empty() {
-            return;
+        if !objects.is_empty() {
+            self.after_change(db, objects, snapshots, Tail::Committed, now);
         }
-        #[cfg(feature = "cov-multiple")]
-        self.capture_changed(db, objects, snapshots, now);
-        self.report_changes(db, objects, snapshots, now);
     }
 
     /// Distribute `transition` of `oid`: one notification per recipient its
@@ -378,7 +377,7 @@ impl Reporter {
             let mut targeted = notification.clone();
             targeted.process_identifier = process_identifier;
             let mut params = BytesMut::new();
-            if encode_event_notification(&targeted, &mut params).is_err() {
+            if encode_event_notification_of::<REPORTED_FORMS>(&targeted, &mut params).is_err() {
                 self.counters.events_dropped += 1;
                 continue;
             }
@@ -420,6 +419,49 @@ impl Reporter {
         }
         self.settle();
     }
+}
+
+/// GetEventInformation: the page, or the refusal, in `out`. The reporter
+/// never segments, so the page fits one APDU. Out of line (#2524).
+#[inline(never)]
+fn get_event_information(db: &ObjectDatabase, request: &Inbound, out: &mut BytesMut) -> Written {
+    let service = ConfirmedServiceChoice::GET_EVENT_INFORMATION;
+    let Ok(Apdu::ConfirmedRequest(confirmed)) = decode_apdu(request.apdu.clone()) else {
+        return Outcome::Silent.into();
+    };
+    let invoke_id = confirmed.invoke_id;
+    let mut budget = GetEventInformationBudget::default();
+    let header = 3;
+    let room = usize::from(request.max_reply).saturating_sub(header);
+    budget.max_service_ack_bytes = budget.max_service_ack_bytes.min(room);
+    let mut ack = BytesMut::new();
+    let data = &confirmed.service_request;
+    let answer = match handle_get_event_information_configured(db, data, &mut ack, budget) {
+        Ok(()) => Apdu::ComplexAck(ComplexAck {
+            segmented: false,
+            more_follows: false,
+            invoke_id,
+            sequence_number: None,
+            proposed_window_size: None,
+            service_choice: service,
+            service_ack: ack.freeze(),
+        }),
+        Err(EventInformationFailure::Service(error)) => {
+            reply::error_apdu(invoke_id, service, &error)
+        }
+        Err(EventInformationFailure::Projection(problem)) => {
+            reply::error_apdu(invoke_id, service, &problem.to_error())
+        }
+        Err(failure) => Apdu::Abort(AbortPdu {
+            sent_by_server: true,
+            invoke_id,
+            abort_reason: match failure {
+                EventInformationFailure::Objects => AbortReason::OUT_OF_RESOURCES,
+                _ => AbortReason::BUFFER_OVERFLOW,
+            },
+        }),
+    };
+    emit(out, &reply::fit(answer, request.max_reply), Outcome::Reply).into()
 }
 
 /// An event service the reporter runs, read from an unsegmented confirmed

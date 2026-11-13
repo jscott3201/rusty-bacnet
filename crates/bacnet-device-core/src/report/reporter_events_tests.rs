@@ -15,6 +15,8 @@ use bacnet_types::primitives::Time;
 
 #[path = "reporter_event_order_tests.rs"]
 mod order;
+#[path = "reporter_tail_tests.rs"]
+mod tail;
 
 /// The intrinsic Analog Input: high limit 80, low limit 0, deadband 1,
 /// reading 10.

@@ -766,6 +766,35 @@
 # room), so a PR touching the crates this image links reports its rows
 # against dev's. The objects rows didn't move. The reporting budgets are
 # --suggest's again.
+#
+# On 2026-11-12 (#2524, Rust 1.99.0, dev at e454108ea) the event path is
+# trimmed, each step measured against the one before it, as octets of
+# flash on thumbv7m / thumbv7em / riscv32imac:
+#
+#   every change runs one out-of-line tail               12 /  144 /   56
+#   AcknowledgeAlarm and GetEventInformation out of
+#   Reporter::handle                                   1076 / 1112 / 1820
+#   the Event Log step comes from a log's vtable       1428 / 1424 / 2376
+#   the Reporter encodes the intrinsic forms only      3416 / 3416 / 4820
+#
+# As text / rodata / flash, dev then this change:
+#
+#   thumbv7m             242744 / 21320 / 265088
+#                        237332 / 20800 / 259156
+#   thumbv7em            242288 / 21320 / 264632
+#                        236720 / 20800 / 258544
+#   riscv32imac          298324 / 26528 / 324874
+#                        289932 / 25848 / 315802
+#
+# 5932 / 6088 / 9072 octets of flash; RAM unchanged (24680). Its review
+# round (dev at a988b4432, rows unchanged there) keeps the encoder's match
+# exhaustive, each arm checking the mask first: the rows hold, but for 8
+# octets of alignment on thumbv7em. core::fmt and the 64-bit division
+# routines stay at 0, and the memmove count doesn't move. The objects rows move by 8 octets of .text on the thumb
+# targets with no function changed in size (alignment), so their budgets
+# stay. The thumb images would fit the 256 KiB layout again, by about
+# 3 KB; they keep the 512 KiB one (docs/design/device-core-events.md,
+# section 8.3). The reporting budgets are --suggest's again.
 
 [thumbv7m-none-eabi.mstp]
 text = 18320
@@ -867,11 +896,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [thumbv7m-none-eabi.reporting]
-text = 271888
-rodata = 23888
+text = 265824
+rodata = 23296
 data = 64
 bss = 27648
-flash = 296912
+flash = 290256
 ram = 27648
 fmt_functions = 0
 div64_functions = 0
@@ -1164,11 +1193,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [thumbv7em-none-eabihf.reporting]
-text = 271376
-rodata = 23888
+text = 265136
+rodata = 23296
 data = 64
 bss = 27648
-flash = 296400
+flash = 289584
 ram = 27648
 fmt_functions = 0
 div64_functions = 0
@@ -1197,11 +1226,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [riscv32imac-unknown-none-elf.reporting]
-text = 334128
-rodata = 29712
+text = 324736
+rodata = 28960
 data = 64
 bss = 27648
-flash = 363872
+flash = 353712
 ram = 27648
 fmt_functions = 0
 div64_functions = 0

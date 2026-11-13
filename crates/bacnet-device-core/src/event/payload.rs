@@ -5,7 +5,9 @@
 //! is the immutable payload carried to all recipients and confirmed retries.
 
 use alloc::vec::Vec;
-use bacnet_encoding::constructed::{encode_bacnet_property_value, validate_tlv_sequence};
+use bacnet_encoding::constructed::{
+    encode_bacnet_property_value, notification_forms, validate_tlv_sequence,
+};
 use bacnet_encoding::primitives::encode_property_value;
 use bacnet_objects::event::EventStateChange;
 use bacnet_objects::traits::BACnetObject;
@@ -33,6 +35,18 @@ impl CommittedNotificationPayload {
         Self(parameters)
     }
 }
+
+/// The event-value forms [`project_intrinsic_payload`] builds, as a mask
+/// for `bacnet_encoding`'s `encode_event_notification_of`: a host that
+/// distributes only intrinsic transitions links no other form's encoder
+/// (#2524).
+pub const INTRINSIC_FORMS: u32 = notification_forms(&[
+    EventType::OUT_OF_RANGE,
+    EventType::CHANGE_OF_STATE,
+    EventType::COMMAND_FAILURE,
+    EventType::BUFFER_READY,
+    EventType::CHANGE_OF_RELIABILITY,
+]);
 
 /// Project an intrinsic source after its transition commit. `device` is this
 /// device's identifier, which a log's BUFFER_READY report names its buffer

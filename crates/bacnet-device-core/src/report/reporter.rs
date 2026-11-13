@@ -245,19 +245,7 @@ impl Reporter {
                 self.looks.extend_from_slice(timed.life_safety_queued());
                 written
             };
-            // Event notifications go ahead of the COV ones, which the
-            // transitions committed join: they are among the objects written.
-            #[cfg(feature = "event-reporting")]
-            {
-                let committed = self.object_events(db, &written.objects, now);
-                // A commit changes Status_Flags at its own time, for the
-                // timestamped references, as the server captures it.
-                #[cfg(feature = "cov-multiple")]
-                self.capture_changed(db, &committed, &LifeSafetyCovSnapshots::default(), now);
-                #[cfg(not(feature = "cov-multiple"))]
-                let _ = committed;
-            }
-            self.report_changes(db, &written.objects, &capture.0, now);
+            self.after_change(db, &written.objects, &capture.0, Tail::Request, now);
             written
         } else {
             let overlay = self.overlay(db, now);
@@ -284,12 +272,52 @@ impl Reporter {
     /// and its event notifications queued ahead of the COV ones.
     pub fn changed(&mut self, db: &mut ObjectDatabase, objects: &[ObjectIdentifier], now: Instant) {
         self.last = now;
-        #[cfg(feature = "event-reporting")]
-        self.object_events(db, objects, now);
         let snapshots = core::mem::take(&mut self.snapshots);
+        self.after_change(db, objects, &snapshots, Tail::Host, now);
+    }
+
+    /// The tail every change runs, whichever entry it came through: a
+    /// request's write ([`handle`](Self::handle)), the host's change
+    /// ([`changed`](Self::changed), and so the local writes), or a
+    /// background pass of the event path. Out of line, so the entries
+    /// share one copy (#2524).
+    ///
+    /// With the event path on, `objects`' intrinsic reporting is evaluated
+    /// first and the notifications it fires queued, unless a pass committed
+    /// them already (`Tail::Committed`). With `cov-multiple` the
+    /// timestamped references then take the changes. Last, `objects` are
+    /// reported to COV, a Life Safety one held in `snapshots` from the
+    /// values it changed, so a committed transition's Status_Flags change
+    /// follows its notifications (#889).
+    #[inline(never)]
+    fn after_change(
+        &mut self,
+        db: &mut ObjectDatabase,
+        objects: &[ObjectIdentifier],
+        snapshots: &LifeSafetyCovSnapshots,
+        tail: Tail,
+        now: Instant,
+    ) {
+        #[cfg(feature = "event-reporting")]
+        let committed = if tail == Tail::Committed {
+            Vec::new()
+        } else {
+            self.object_events(db, objects, now)
+        };
+        #[cfg(not(feature = "event-reporting"))]
+        let committed: [ObjectIdentifier; 0] = [];
         #[cfg(feature = "cov-multiple")]
-        self.capture_changed(db, objects, &snapshots, now);
-        self.report_changes(db, objects, &snapshots, now);
+        if tail == Tail::Request {
+            // A request's attempts were captured as each committed; a
+            // transition committed since changes Status_Flags at its own
+            // time, for the timestamped references, as the server captures it.
+            self.capture_changed(db, &committed, &LifeSafetyCovSnapshots::default(), now);
+        } else {
+            self.capture_changed(db, objects, snapshots, now);
+        }
+        #[cfg(not(feature = "cov-multiple"))]
+        let _ = (committed, tail);
+        self.report_changes(db, objects, snapshots, now);
     }
 
     /// The host deleted `object` from its database: drop its subscriptions,
@@ -885,6 +913,20 @@ fn subscribe_service(apdu: &[u8]) -> Option<ConfirmedServiceChoice> {
         ConfirmedServiceChoice::SUBSCRIBE_COV | ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY
     );
     (single || multiple).then_some(service)
+}
+
+/// Which entry a change came through, for [`Reporter::after_change`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tail {
+    /// A request's write, its timestamped changes captured as each attempt
+    /// committed.
+    Request,
+    /// A change the host made or tells of.
+    Host,
+    /// A background pass's changes, its transitions committed and
+    /// distributed already.
+    #[cfg(feature = "event-reporting")]
+    Committed,
 }
 
 /// Add `counts`, one table mutation's, to the running `total`.
