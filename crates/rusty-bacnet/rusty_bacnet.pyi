@@ -5028,6 +5028,10 @@ class EventNotificationCounters(TypedDict):
     received_not_forwarded: int
     forwarding_cap_dropped: int
     received_not_logged: int
+    lane_full: int
+    lanes_entries_full: int
+    lanes_full: int
+    cov_wait_expired: int
 
 class DccOutcomeCounters(TypedDict):
     """Independent u64 lifetime totals, saturating at 2**64-1; not an audit log."""
@@ -7439,7 +7443,13 @@ class BACnetServer:
         because they exceed the local APDU size, received_not_forwarded
         counts received event notifications no Notification Forwarder took,
         and forwarding_cap_dropped counts destinations dropped because one
-        notification already had 64 across the forwarders.
+        notification already had 64 across the forwarders. Each destination's
+        notifications wait in a lane of their own to go out in order:
+        lane_full counts notifications dropped because their destination
+        already had 64 waiting, lanes_entries_full those dropped with 1,024
+        waiting in all, and lanes_full those dropped with 256 destinations
+        waiting. cov_wait_expired counts changes whose COV notifications went
+        out before their event notifications had, past the APDU timeout.
         Fields are sampled independently. Raises
         RuntimeError before start and after stop.
         """

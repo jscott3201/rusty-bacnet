@@ -24,6 +24,10 @@ fn every_event_notification_counter_reaches_python_under_its_rust_name() {
         received_not_forwarded: 13,
         forwarding_cap_dropped: 14,
         received_not_logged: 15,
+        lane_full: 16,
+        lanes_entries_full: 17,
+        lanes_full: 18,
+        cov_wait_expired: 19,
     };
     assert_eq!(
         event_notification_counter_entries(counters),
@@ -43,6 +47,10 @@ fn every_event_notification_counter_reaches_python_under_its_rust_name() {
             ("received_not_forwarded", 13),
             ("forwarding_cap_dropped", 14),
             ("received_not_logged", 15),
+            ("lane_full", 16),
+            ("lanes_entries_full", 17),
+            ("lanes_full", 18),
+            ("cov_wait_expired", 19),
         ])
     );
 }

@@ -1,4 +1,5 @@
 use super::event_forwarding::{ForwardOrigin, Reception};
+use super::event_send::settled as settled_lanes;
 use super::received_event_log::log_received_event_notification;
 use super::*;
 use bacnet_endpoint_core::coordinator::CanonicalPeer;
@@ -245,7 +246,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         let response = match service_choice {
             s if s == ConfirmedServiceChoice::WRITE_PROPERTY => {
                 mutation
-                    .write_property::<T>(db, cov_table, &mut effects, &mut audit)
+                    .write_property::<T>(services, &mut effects, &mut audit)
                     .await
             }
             s if s == ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE => {
@@ -284,7 +285,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             }
             s if s == ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE => {
                 mutation
-                    .write_property_multiple::<T>(db, cov_table, &mut effects, &mut audit)
+                    .write_property_multiple::<T>(services, &mut effects, &mut audit)
                     .await
             }
             s if s == ConfirmedServiceChoice::SUBSCRIBE_COV => {
@@ -384,7 +385,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             {
                 let remove = s == ConfirmedServiceChoice::REMOVE_LIST_ELEMENT;
                 mutation
-                    .list_element::<T>(db, cov_table, &mut effects, &mut audit, remove)
+                    .list_element::<T>(services, &mut effects, &mut audit, remove)
                     .await
             }
             s if s == ConfirmedServiceChoice::GET_ALARM_SUMMARY => {
@@ -594,29 +595,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         };
 
         let MutationEffects {
-            written_transitions,
-            coarse_cov_oids,
+            mut settle,
+            mut coarse_cov_oids,
             life_safety_cov_changes,
             staging_plans,
             mut command_runs,
             timed_revisits,
         } = effects;
-        // The transitions the writes committed (#2530). With no Staging plan,
-        // a task of their own sends them as soon as their guard is dropped, so
-        // the response never waits on their delivery; the COV fanout waits for
-        // it (#889). With plans, they go out here first and the plans send
-        // theirs after. So the order within this request holds for its own
-        // transitions and its Staging plans' only: a Command, Channel or Timer
-        // run it starts below writes through the local path and sends its own
-        // transitions, a separate sender that can overtake a stalled send
-        // here, as on dev; only an ordered send queue would order those, and
-        // sends across requests (#2537).
-        let sending = if staging_plans.is_empty() {
-            Self::spawn_written_transitions(services, request_tasks, written_transitions)
-        } else {
-            Self::send_written_transitions(&services.event_delivery(), written_transitions).await;
-            None
-        };
 
         // LSO-only replay store (server level, never handler/object level).
         // Uniform rule: anything that reaches this admission point and produces
@@ -637,11 +622,24 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // is a no-op); dropping here is intentional.
 
         // Boxed: plans are rare, and their future would size every request's.
+        // The targets' notifications join this request's settle handle and
+        // their objects its COV fanout, made after the response (#2537).
+        // The handle goes into the boxed future and back, so it isn't held
+        // across that await in this future's state.
         if !staging_plans.is_empty() {
-            let (delivery, cov_ctx) = (services.event_delivery(), services.cov_context());
-            let plans = Self::execute_staging_plans(&delivery, &cov_ctx, staging_plans);
-            command_runs.extend(Box::pin(plans).await);
+            let cov = &mut coarse_cov_oids;
+            let plans = Self::execute_request_staging_plans(services, staging_plans, settle, cov);
+            let (runs, returned) = Box::pin(plans).await;
+            settle = returned;
+            command_runs.extend(runs);
         }
+        // The event notifications the writes' transitions, and their Staging
+        // plans' targets', pushed onto their recipients' lanes under the
+        // writes' guards (#2537): the lanes send them in commit order, with
+        // those of the runs this request starts and of every other writer,
+        // and the response never waits on them. The COV fanout waits, capped
+        // (#889).
+        let settled = settle.into_wait();
         // Command lists run beside this request, so its response never waits
         // on their writes or post delays (#1150).
         if !command_runs.is_empty() {
@@ -676,8 +674,14 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // Made here, so the response's wait doesn't hold it.
         let cov_ctx = services.cov_context();
         if issued == issue::Issued::Segmented {
-            if let Some(sent) = sending {
-                let _ = sent.await;
+            if settled.is_some() {
+                let timeout_ms = config.cov_retry_timeout_ms;
+                Box::pin(settled_lanes(
+                    settled,
+                    timeout_ms,
+                    notification_transactions,
+                ))
+                .await;
             }
             Self::fire_post_write_cov_notifications(
                 &cov_ctx,
@@ -723,9 +727,16 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .await;
         }
 
-        // Inline: an async fn here costs every request a call, sent or not.
-        if let Some(sent) = sending {
-            let _ = sent.await;
+        // Boxed, and only for a write that pushed something: the capped wait
+        // would size every request's future.
+        if settled.is_some() {
+            let timeout_ms = config.cov_retry_timeout_ms;
+            Box::pin(settled_lanes(
+                settled,
+                timeout_ms,
+                notification_transactions,
+            ))
+            .await;
         }
         Self::fire_post_write_cov_notifications(
             &cov_ctx,

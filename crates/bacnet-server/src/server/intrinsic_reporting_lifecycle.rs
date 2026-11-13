@@ -1,6 +1,7 @@
 //! Periodic intrinsic notification owner; uses the server's effective raw acceptance.
 use super::super::cov_fanout::CovFanout;
 use super::super::event_notifications::logged_intrinsic_commit;
+use super::super::event_send::{Settle, settled};
 use super::*;
 use bacnet_device_core::event::{next_due, sweep};
 
@@ -69,9 +70,9 @@ pub(super) async fn run<T: TransportPort + 'static>(
         // Event_Enable gates distribution only (Clause 13.2.5), so every
         // proposal is committed locally before a suppressed
         // transition is omitted from the outbound work list.
-        let (fired, committed) = {
+        let (settle, committed) = {
             let mut db = fanout.db.write().await;
-            let mut out = Vec::new();
+            let mut settle = Settle::default();
             let mut commit = BackgroundCommit::new();
             // A proposal can commit and still have its projection rejected,
             // so owe the fanout for every proposal; COV criteria drop it if
@@ -81,12 +82,20 @@ pub(super) async fn run<T: TransportPort + 'static>(
                 commit.before_change(db, oid);
                 commit.changed(oid);
             });
+            // Each distributed transition joins its recipients' lanes under
+            // this guard, in commit order (#2537).
             for (oid, result) in swept {
                 if let Some(resolved) = logged_intrinsic_commit(&oid, result)
                     && resolved.distribute
                     && resolved.event_values.is_some()
                 {
-                    out.push((oid, resolved));
+                    BACnetServer::<T>::enqueue_event_notification(
+                        &fanout.event_delivery(&learned_routers, &device_bindings),
+                        &mut db,
+                        &oid,
+                        resolved,
+                        Some(&mut settle),
+                    );
                 }
             }
             // When the next delay after this sweep ends, on tokio's clock.
@@ -98,15 +107,18 @@ pub(super) async fn run<T: TransportPort + 'static>(
             // it once the guard is dropped, after the event notifications, as
             // on the write path (#889).
             (
-                out,
+                settle,
                 commit.finish(&fanout.db, &mut db, &fanout.cov_table).await,
             )
         };
-        for (oid, resolved) in fired {
-            BACnetServer::<T>::build_and_send_event_notification_with_bindings(
-                &fanout.event_delivery(&learned_routers, &device_bindings),
-                &oid,
-                resolved,
+        // The fanout waits for those notifications, capped (#889).
+        if let Some(waiting) = settle.into_wait() {
+            let delivery = fanout.event_delivery(&learned_routers, &device_bindings);
+            let timeout_ms = delivery.retry_timeout_ms;
+            settled(
+                Some(waiting),
+                timeout_ms,
+                delivery.notification_transactions,
             )
             .await;
         }

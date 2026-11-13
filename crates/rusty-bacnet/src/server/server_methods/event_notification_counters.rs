@@ -29,6 +29,10 @@ fn event_notification_counter_entries(
         received_not_forwarded,
         forwarding_cap_dropped,
         received_not_logged,
+        lane_full,
+        lanes_entries_full,
+        lanes_full,
+        cov_wait_expired,
     } = counters;
     HashMap::from([
         ("notification_class_missing", notification_class_missing),
@@ -49,6 +53,10 @@ fn event_notification_counter_entries(
         ("received_not_forwarded", received_not_forwarded),
         ("forwarding_cap_dropped", forwarding_cap_dropped),
         ("received_not_logged", received_not_logged),
+        ("lane_full", lane_full),
+        ("lanes_entries_full", lanes_entries_full),
+        ("lanes_full", lanes_full),
+        ("cov_wait_expired", cov_wait_expired),
     ])
 }
 

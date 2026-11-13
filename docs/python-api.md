@@ -5734,6 +5734,10 @@ counters["confirmed_unanswered"]        # confirmed notifications never acknowle
 | `received_not_forwarded` | Received event notifications that decoded but that no Notification Forwarder took; a confirmed one is still acknowledged |
 | `forwarding_cap_dropped` | Destinations a notification was not forwarded to because 64 copies were already on their way across the Notification Forwarders, one per destination dropped; destinations the loop rules refuse take no room |
 | `received_not_logged` | Received event notifications an Event Log collecting them would have taken, but their source had used its 5 records for that second; one per notification |
+| `lane_full` | Notifications dropped because their destination already had 64 waiting in its lane to go out in order (#2537); the newest is dropped |
+| `lanes_entries_full` | Notifications dropped because 1,024 were already waiting across every destination's lane |
+| `lanes_full` | Notifications dropped because 256 destinations already had notifications waiting |
+| `cov_wait_expired` | Changes whose COV notifications went out before every event notification the change made, because that wait ran past the APDU timeout |
 
 The first four count event and acknowledgment notifications alike, once per
 transition. A class whose list is empty, or whose destinations all filter the

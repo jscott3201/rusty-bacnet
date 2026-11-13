@@ -40,8 +40,14 @@ use std::sync::atomic::AtomicU64;
 /// too large to send unsegmented, received notifications no forwarder took,
 /// and destinations past the cap on one notification's copies (#1259).
 ///
-/// The last one counts received notifications the Event Logs that collect
+/// The next one counts received notifications the Event Logs that collect
 /// them would have taken but for their source's allowance (#1346).
+///
+/// The last four concern the lanes each destination's notifications wait in
+/// to go out in order (#2537): notifications dropped at a full lane, with
+/// too many waiting in all, or with too many destinations waiting, and
+/// changes whose COV notifications stopped waiting for their event
+/// notifications at the APDU timeout.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EventNotificationCounters {
     /// No Notification Class object has the class number the event object
@@ -125,6 +131,21 @@ pub struct EventNotificationCounters {
     /// in the current second, one per notification whatever the number of
     /// logs. Notifications no Event Log collects are not counted.
     pub received_not_logged: u64,
+    /// Notifications dropped because their destination's lane already held
+    /// 64 waiting to go (#2537): a destination that stalls drops its own
+    /// newest notifications, and the next From State it is sent shows the
+    /// gap.
+    pub lane_full: u64,
+    /// Notifications dropped because 1,024 were already waiting across
+    /// every destination's lane.
+    pub lanes_entries_full: u64,
+    /// Notifications dropped because 256 destinations already had a lane:
+    /// one more destination waits for one of them to empty.
+    pub lanes_full: u64,
+    /// Changes whose COV notifications went out before every event
+    /// notification the change made was handed to the network, because the
+    /// wait for them ran past the APDU timeout (#889, #2537).
+    pub cov_wait_expired: u64,
 }
 
 /// One undelivered event notification, as counted in
@@ -222,6 +243,12 @@ impl EventSuppressions {
             received_not_forwarded,
             forwarding_cap_dropped,
             received_not_logged,
+            // The lanes keep their own (#2537); see
+            // `BACnetServer::event_notification_counters`.
+            lane_full: 0,
+            lanes_entries_full: 0,
+            lanes_full: 0,
+            cov_wait_expired: 0,
         }
     }
 }
@@ -231,7 +258,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// including after `stop()`. See [`EventNotificationCounters`] for what
     /// each field counts and what is left out.
     pub fn event_notification_counters(&self) -> EventNotificationCounters {
-        self.event_suppressions.snapshot()
+        let mut counters = self.event_suppressions.snapshot();
+        // The lanes count their own drops and expired waits, with the lanes,
+        // which a server that sends no event notification never makes.
+        if let Some(lanes) = super::event_send::made_lanes(&self.notification_transactions) {
+            lanes.counts().fill(&mut counters);
+        }
+        counters
     }
 }
 
@@ -283,6 +316,7 @@ mod tests {
                 received_not_forwarded: 13,
                 forwarding_cap_dropped: 14,
                 received_not_logged: 15,
+                ..EventNotificationCounters::default()
             }
         );
     }

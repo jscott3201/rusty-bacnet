@@ -164,6 +164,8 @@ async fn dispatch(
         Some(reply),
     )
     .await;
+    // The copies go out from their lanes once the request is answered.
+    super::event_send::lanes_drained(&services.notification_transactions).await;
     reply_apdu(answered.await.unwrap())
 }
 

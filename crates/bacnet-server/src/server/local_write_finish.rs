@@ -3,11 +3,13 @@
 //!
 //! [`LocalWriter::commit`] makes the write under a database guard it keeps
 //! and hands that guard on in a [`Committed`]. [`LocalWriter::finish`] then
-//! commits the intrinsic transition the write causes, takes the timestamped
+//! commits the intrinsic transition the write causes, pushes its event
+//! notifications onto their recipients' lanes (#2537), takes the timestamped
 //! COV capture after it (#2535) and re-evaluates a written Schedule, all
-//! under that same guard (#2530), releases it, and sends that transition's
-//! event notifications, then the COV fanout, the fanout for a re-evaluated
-//! Schedule's targets and any Staging plan. `write_local` runs `finish` as a
+//! under that same guard (#2530), releases it, waits (capped) for the lanes
+//! to hand those notifications off, then makes the COV fanout, the fanout for
+//! a re-evaluated Schedule's targets and any Staging plan. `write_local` runs
+//! `finish` as a
 //! task of its own in the server's request task set
 //! ([`BACnetServer::finish_in_task`]), so a caller that drops its future (a
 //! timeout, a `select!`, a cancelled Python task) no longer skips any of it.
@@ -18,6 +20,7 @@ use super::local_writes::LocalWriter;
 use super::*;
 use crate::command_lists::TakenRuns;
 use crate::server::event_notifications::commit_written_transition;
+use crate::server::event_send::{Settle, settled as settled_lanes};
 use bacnet_device_core::cov::life_safety::LifeSafetyCovChange;
 use bacnet_objects::staging::StagingWritePlan;
 use futures_util::FutureExt;
@@ -108,12 +111,13 @@ impl<T: TransportPort + 'static> LocalWriter<'_, T> {
             mut command_runs,
         } = committed;
         // The transition the write causes commits under its guard too, so
-        // nothing sees the object half updated (#2530); it is sent after.
-        // It commits ahead of a written Schedule's pass, as after a
+        // nothing sees the object half updated (#2530), and its notification
+        // joins its recipients' lanes under it, in commit order (#2537). It
+        // commits ahead of a written Schedule's pass, as after a
         // WriteProperty: an application's own reporting Schedule-type object
         // gets a transition the pass causes at the next sweep.
-        let mut transitions = Vec::new();
-        commit_written_transition(&mut db, oid, &mut transitions);
+        let mut settle = Settle::default();
+        commit_written_transition(|| self.event_delivery(), &mut db, oid, &mut settle);
         // Under the write's guard, the database, then the COV table: the
         // write is captured once its transition has committed, so a
         // timestamped reference gets one row for the two (#2535). A Life
@@ -140,7 +144,12 @@ impl<T: TransportPort + 'static> LocalWriter<'_, T> {
         .await;
         drop(db);
 
-        BACnetServer::<T>::send_written_transitions(&self.event_delivery(), transitions).await;
+        // Its COV fanout waits for those notifications, capped (#889).
+        if let Some(settled) = settle.into_wait() {
+            let timeout_ms = self.config.cov_retry_timeout_ms;
+            let transactions = self.notification_transactions;
+            Box::pin(settled_lanes(Some(settled), timeout_ms, transactions)).await;
+        }
         if life_safety {
             for change in changes {
                 BACnetServer::<T>::fire_life_safety_cov_notifications(
@@ -166,6 +175,7 @@ impl<T: TransportPort + 'static> LocalWriter<'_, T> {
                 &self.event_delivery(),
                 &self.cov_context(),
                 staging_plans,
+                None,
             )
             .await,
         );

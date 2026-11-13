@@ -1,6 +1,7 @@
 //! The one EventNotification send path: each notification this server
-//! originates, and each copy its Notification Forwarders send on, reaches
-//! its recipients through [`BACnetServer::send_event_notification`].
+//! originates, and each copy its Notification Forwarders send on, waits in
+//! its destination's lane (#2537) and reaches it through
+//! [`BACnetServer::send_to_recipient`].
 
 use super::event_forwarding::ForwardingBudget;
 use super::event_recipient_route::{
@@ -16,6 +17,13 @@ use bacnet_types::constructed::BACnetRecipient;
 mod awaited;
 pub(super) use awaited::AwaitingRecipients;
 use awaited::DeviceRoute;
+#[path = "event_lanes.rs"]
+mod lanes;
+#[cfg(test)]
+pub(super) use lanes::lanes_drained;
+pub(super) use lanes::{
+    LaneEntry, LaneHandles, LanePayload, LaneState, Settle, join_sealed, lanes, made_lanes, settled,
+};
 
 /// Why a confirmed notification ended at an attempt with nothing sent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,68 +66,66 @@ pub(super) struct OutboundNotification<'a> {
 }
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
-    /// Send `outbound` to each recipient, confirmed or not as the recipient
-    /// asks. A recipient whose route cannot carry the notification is
-    /// skipped and counted in [`EventNotificationCounters`]; the rest are
-    /// still served. Nothing is sent while DeviceCommunicationControl
-    /// restricts initiation, a confirmed notification's retries included.
+    /// Send `outbound` to `recipient`, confirmed or not as it asks: its
+    /// destination's lane's next entry (#2537). A recipient whose route
+    /// cannot carry the notification is skipped and counted in
+    /// [`EventNotificationCounters`].
     ///
     /// A Device recipient the server holds no fresh binding for is looked
     /// for with a targeted Who-Is (#1368), and its notification waits for the
     /// I-Am in its device's queue, which a task of its own drains, so the
-    /// other recipients' notifications go out at once. While the queue holds
-    /// anything, the device's next notifications join it, in order.
-    pub(super) async fn send_event_notification(
+    /// lane goes on at once. While the queue holds anything, the device's
+    /// next notifications join it, in order.
+    ///
+    /// For a confirmed notification it returns a receiver that resolves once
+    /// the notification's first attempt is handed to the network, or once it
+    /// ends without one.
+    pub(super) async fn send_to_recipient(
         ctx: &EventDelivery<'_, T>,
         outbound: &OutboundNotification<'_>,
-        recipients: &[(BACnetRecipient, u32, bool)],
-    ) {
-        if ctx.comm_state.initiation_restricted() {
-            return;
-        }
+        recipient: &BACnetRecipient,
+        process_id: u32,
+        confirmed: bool,
+    ) -> Option<oneshot::Receiver<()>> {
         let network = ctx.network;
-        // One reading for every destination of this notification, taken
-        // without the database lock (#1298).
+        // Read without the database lock (#1298).
         let local_network = network.local_network_number().get();
         // The link's own broadcast routes an Address recipient; any group
         // address takes no binding and no confirmed request (#1493).
         let is_link_broadcast = |mac: &[u8]| network.transport().is_broadcast_mac(mac);
         let is_group = |mac: &[u8]| network.transport().is_group_destination(mac);
-
-        for &(ref recipient, process_id, confirmed) in recipients {
-            let route = match recipient {
-                BACnetRecipient::Address(address) => {
-                    RecipientRoute::resolve_address(address, is_link_broadcast)
-                }
-                BACnetRecipient::Device(identifier) => {
-                    match Self::device_route(ctx, outbound, *identifier, process_id, confirmed)
-                        .await
-                    {
-                        DeviceRoute::Now(resolution) => {
-                            RecipientRoute::from_device_resolution(resolution)
-                        }
-                        DeviceRoute::Queued | DeviceRoute::Done => continue,
+        let route = match recipient {
+            BACnetRecipient::Address(address) => {
+                RecipientRoute::resolve_address(address, is_link_broadcast)
+            }
+            BACnetRecipient::Device(identifier) => {
+                match Self::device_route(ctx, outbound, *identifier, process_id, confirmed).await {
+                    DeviceRoute::Now(resolution) => {
+                        RecipientRoute::from_device_resolution(resolution)
                     }
+                    DeviceRoute::Queued | DeviceRoute::Done => return None,
                 }
             }
-            // A recipient on this network by number is sent to as a local
-            // one (#1299).
-            .localize(local_network, is_link_broadcast, is_group);
-            Self::send_on_route(ctx, outbound, route, process_id, confirmed).await;
         }
+        // A recipient on this network by number is sent to as a local one
+        // (#1299).
+        .localize(local_network, is_link_broadcast, is_group);
+        Self::send_on_route(ctx, outbound, route, process_id, confirmed).await
     }
 
     /// Send `outbound` to one recipient, `process_id`, along `route`, its
     /// resolved and localized route, confirmed or not as it asks: the second
-    /// half of [`Self::send_event_notification`], which a notification that
-    /// waited for its device's I-Am takes once it has a route.
+    /// half of [`Self::send_to_recipient`], which a notification that waited
+    /// for its device's I-Am takes once it has a route. For a confirmed one
+    /// whose worker started, a receiver that resolves once its first attempt
+    /// is handed to the network.
     pub(super) async fn send_on_route(
         ctx: &EventDelivery<'_, T>,
         outbound: &OutboundNotification<'_>,
         route: RecipientRoute,
         process_id: u32,
         confirmed: bool,
-    ) {
+    ) -> Option<oneshot::Receiver<()>> {
         let &EventDelivery {
             db: _,
             network,
@@ -140,7 +146,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // counted (#1160); the remaining destinations are still served.
         if let Some(skip) = route.skip(confirmed, notification_class) {
             suppressions.record(skip);
-            return;
+            return None;
         }
         // A confirmed one goes to one device, never to a group address
         // such as a multicast one, where an unconfirmed one may still go.
@@ -155,7 +161,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         "Recipient requests confirmed notifications at a group address; \
                          a confirmed request goes to one device, skipping"
                     );
-                    return;
+                    return None;
                 }
                 // `skip` let only unicast routes through, so this means
                 // the route classification changed: fail closed.
@@ -164,7 +170,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                         notification_class,
                         "Confirmed notification route is unusable"
                     );
-                    return;
+                    return None;
                 }
             }
         } else {
@@ -178,7 +184,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 notification_class,
                 "Forwarding rule keeps the notification off this route"
             );
-            return;
+            return None;
         }
 
         // Cannot fail for a notification that reached this loop: a local
@@ -190,7 +196,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             Ok(bytes) => bytes,
             Err(e) => {
                 warn!(error = %e, "Failed to encode EventNotification");
-                return;
+                return None;
             }
         };
         // Notifications go unsegmented, so one longer than the local APDU
@@ -211,7 +217,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 capacity,
                 "EventNotification is longer than the local APDU capacity; not sent"
             );
-            return;
+            return None;
         }
         // A forwarded copy that would go out draws on its notification's
         // cap (#1259); one past the cap is dropped and counted.
@@ -221,7 +227,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .is_some_and(|budget| !budget.take())
         {
             suppressions.record(EventSuppression::ForwardingCapDropped);
-            return;
+            return None;
         }
 
         if let Some(ConfirmedRecipientRoute {
@@ -240,12 +246,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 // failure, so it is not counted.
                 Err(NotificationReserveError::Closed) => {
                     debug!("Server stopping; confirmed EventNotification not sent");
-                    return;
+                    return None;
                 }
                 Err(error) => {
                     suppressions.record(EventSuppression::ConfirmedNoInvokeId);
                     warn!(%error, "No free invoke ID for confirmed EventNotification");
-                    return;
+                    return None;
                 }
             };
             let id = operation.invoke_id();
@@ -273,8 +279,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             let suppressions = Arc::clone(suppressions);
             let timeout = Duration::from_millis(retry_timeout_ms);
             let apdu_retries = DEFAULT_APDU_RETRIES;
+            // Dropped once the first attempt is handed off, or ends with
+            // none, which lets the lane go on (#2537).
+            let (first_attempt, handed_off) = oneshot::channel::<()>();
+            let mut first_attempt = Some(first_attempt);
             notification_transactions.spawn(async move {
                 let result = run_attempts(operation, result_rx, timeout, apdu_retries, |attempt| {
+                    let first_attempt = first_attempt.take();
                     // DCC and the binding's lifetime are checked
                     // before every attempt, the first and each retry,
                     // and either ends the notification there, its
@@ -294,6 +305,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     let local_target = local_target.clone();
                     let remote = remote.clone();
                     async move {
+                        let _first_attempt = first_attempt;
                         if let Some(withdrawal) = withdrawn {
                             return Attempt::Withdrawn(withdrawal);
                         }
@@ -395,6 +407,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     }
                 }
             });
+            Some(handed_off)
         } else {
             let pdu = Apdu::UnconfirmedRequest(UnconfirmedRequestPdu {
                 service_choice: UnconfirmedServiceChoice::UNCONFIRMED_EVENT_NOTIFICATION,
@@ -457,7 +470,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 RecipientRoute::ContradictoryGlobal
                 | RecipientRoute::UnknownDevice
                 | RecipientRoute::StaleDevice
-                | RecipientRoute::InvalidDevice => return,
+                | RecipientRoute::InvalidDevice => return None,
             };
 
             if let Err(e) = send_result {
@@ -467,6 +480,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     "Failed to send unconfirmed EventNotification"
                 );
             }
+            None
         }
     }
 }

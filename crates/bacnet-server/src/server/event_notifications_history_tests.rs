@@ -1,9 +1,7 @@
 use super::*;
-use crate::event_enrollment::{
-    CommittedEventEnrollmentDelivery, EventEnrollmentReliabilityCause,
-    EventEnrollmentReliabilityResult,
-};
+use crate::event_enrollment::{EventEnrollmentReliabilityCause, EventEnrollmentReliabilityResult};
 use bacnet_device_core::event::commit_intrinsic_transition;
+use bacnet_device_core::event::enrollment::CommittedEventEnrollmentDelivery;
 use bacnet_device_core::event::enrollment::CommittedEventEnrollmentResult;
 use bacnet_device_core::event::{
     CommittedHistorySnapshot, CommittedNotificationPayload, MessageTexts, SampledEventClock,

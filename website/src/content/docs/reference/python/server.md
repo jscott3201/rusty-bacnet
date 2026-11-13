@@ -2723,7 +2723,13 @@ apdu\_too\_large counts notifications not sent to one destination
 because they exceed the local APDU size, received\_not\_forwarded
 counts received event notifications no Notification Forwarder took,
 and forwarding\_cap\_dropped counts destinations dropped because one
-notification already had 64 across the forwarders.
+notification already had 64 across the forwarders. Each destination's
+notifications wait in a lane of their own to go out in order:
+lane\_full counts notifications dropped because their destination
+already had 64 waiting, lanes\_entries\_full those dropped with 1,024
+waiting in all, and lanes\_full those dropped with 256 destinations
+waiting. cov\_wait\_expired counts changes whose COV notifications went
+out before their event notifications had, past the APDU timeout.
 Fields are sampled independently. Raises
 RuntimeError before start and after stop.
 
@@ -3126,6 +3132,10 @@ Keys:
 - `received_not_forwarded: int`
 - `forwarding_cap_dropped: int`
 - `received_not_logged: int`
+- `lane_full: int`
+- `lanes_entries_full: int`
+- `lanes_full: int`
+- `cov_wait_expired: int`
 
 ## DccOutcomeCounters
 
