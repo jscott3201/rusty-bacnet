@@ -44,18 +44,24 @@ pub(super) fn logged_intrinsic_commit(
 }
 
 /// The per-write intrinsic evaluation of `oid`, made under `db`, the guard
-/// that committed the write, before it is dropped (#2530).
+/// that committed the write, before it is dropped (#2530). True when it
+/// committed a transition.
 ///
 /// The write and the transition it causes then commit as one step: no
-/// ReadProperty, sweep or ordinary COV fanout sees the object half updated,
-/// with a new Reliability or value and the Event_State from before. The
-/// detector fires at once only for a `Time_Delay` of 0; a nonzero delay is
-/// seeded, due when it ends, and the intrinsic-reporting task
+/// ReadProperty, sweep or COV fanout sees the object half updated, with a
+/// new Reliability or value and the Event_State from before. The detector
+/// fires at once only for a `Time_Delay` of 0; a nonzero delay is seeded,
+/// due when it ends, and the intrinsic-reporting task
 /// ([`start`](BACnetServer::start)) sweeps then and sends that notification.
-/// A committed transition is captured for timestamped COV-multiple
-/// references at its own time, the table read under `db` (database, then
-/// table). The write's own capture runs before this, so a timestamped
-/// reference still records the write and its transition as two changes.
+///
+/// It captures nothing for timestamped COV-multiple references: the caller
+/// captures the write once the transition has committed, so a reference
+/// records the two as one row (#2535). A WritePropertyMultiple, which
+/// captured each attempt as it committed, captures an object whose
+/// transition committed again, replacing the newest row of each reference
+/// its attempts queued one for. A
+/// WriteProperty of a Life Safety object takes its exact capture before
+/// this, as the core's request path does.
 ///
 /// A transition to send goes on `to_send`, for
 /// [`BACnetServer::send_written_transitions`] as soon as `db` is dropped,
@@ -70,28 +76,20 @@ pub(super) fn logged_intrinsic_commit(
 /// Across tasks the window is the one between dropping `db` and the send: a
 /// later write of the same object can commit and send its own transition
 /// there, ahead of this one. Nothing orders sends across tasks.
-///
-/// The transition is moved out before the table read is awaited, so the
-/// write's future holds no transition across it: the write handlers' futures
-/// sit in every confirmed request's, and would grow by its size.
-pub(super) async fn commit_written_transition(
+pub(super) fn commit_written_transition(
     db: &mut ObjectDatabase,
-    cov_table: &RwLock<CovSubscriptionTable>,
     oid: ObjectIdentifier,
     to_send: &mut Vec<(ObjectIdentifier, CommittedIntrinsicTransition)>,
-) {
-    {
-        let Some(committed) = after_write(db, &oid, crate::runtime_clock::core_now())
-            .and_then(|result| logged_intrinsic_commit(&oid, result))
-        else {
-            return;
-        };
-        if committed.distribute && committed.event_values.is_some() {
-            to_send.push((oid, committed));
-        }
+) -> bool {
+    let Some(committed) = after_write(db, &oid, crate::runtime_clock::core_now())
+        .and_then(|result| logged_intrinsic_commit(&oid, result))
+    else {
+        return false;
+    };
+    if committed.distribute && committed.event_values.is_some() {
+        to_send.push((oid, committed));
     }
-    let capture = cov_table.read().await.timed_capture(oid);
-    capture.run(db);
+    true
 }
 
 impl<T: TransportPort + 'static> BACnetServer<T> {

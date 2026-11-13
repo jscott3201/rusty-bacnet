@@ -166,7 +166,6 @@ impl Fixture {
     }
 
     async fn write_present_value_as(&self, value: PropertyValue) {
-        let cov_table = RwLock::new(crate::cov::CovSubscriptionTable::new());
         let mut transitions = Vec::new();
         {
             let mut db = self.db.write().await;
@@ -181,13 +180,7 @@ impl Fixture {
                 )
                 .expect("Out_Of_Service is TRUE, so Present_Value must be writable");
             let oid = self.oid;
-            super::event_notifications::commit_written_transition(
-                &mut db,
-                &cov_table,
-                oid,
-                &mut transitions,
-            )
-            .await;
+            super::event_notifications::commit_written_transition(&mut db, oid, &mut transitions);
         }
         BACnetServer::<TestTransport>::send_written_transitions(
             &crate::server::event_delivery::EventDelivery {

@@ -72,6 +72,11 @@ pub(super) struct Multiple {
     sending: Vec<Sending>,
     /// Confirmed reports out, each with the claim it lodged.
     lodged: Vec<Lodged>,
+    /// What the write request [`Reporter::handle`] runs queued per object, the
+    /// references any attempt on it queued a change for, kept from the write
+    /// to the capture after the request's transitions (#2535); empty
+    /// otherwise.
+    pub(super) replacing: Vec<(ObjectIdentifier, Vec<CovSubscriptionKey>)>,
 }
 
 /// One unconfirmed report going out.
@@ -119,6 +124,7 @@ impl Multiple {
             histories: TimedHistories::new(local_apdu),
             sending: Vec::new(),
             lodged: Vec::new(),
+            replacing: Vec::new(),
         }
     }
 }
@@ -199,6 +205,28 @@ impl Reporter {
         let changes = snapshots.changes(db, objects);
         if !changes.is_empty() {
             TimedCapture::exact(&self.table, &changes, now).run(db, histories, now);
+        }
+    }
+
+    /// Capture `committed`, the objects a write request's transitions changed,
+    /// after those transitions: each reference an attempt on the object
+    /// queued a change for has its newest change replaced, so the write and
+    /// its transition are one row, as on the server (#2535).
+    pub(super) fn capture_committed(
+        &mut self,
+        db: &ObjectDatabase,
+        committed: &[ObjectIdentifier],
+        now: Instant,
+    ) {
+        let replacing = core::mem::take(&mut self.multiple.replacing);
+        let histories = &mut self.multiple.histories;
+        for &object in committed {
+            let replace = replacing
+                .iter()
+                .find(|(oid, _)| *oid == object)
+                .map_or(&[][..], |(_, keys)| keys.as_slice());
+            TimedCapture::object(&self.table, object, now)
+                .run_replacing(db, histories, now, replace);
         }
     }
 

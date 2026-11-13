@@ -94,6 +94,23 @@ impl StoreCapture {
         }
     }
 
+    /// [`Self::run`] for the capture after the event-state transition a
+    /// write caused, replacing the rows the write queued for `replace`; see
+    /// [`CaptureRead::queue_replacing`](bacnet_device_core::cov::timed_capture::CaptureRead::queue_replacing).
+    pub(crate) fn run_replacing(
+        self,
+        db: &ObjectDatabase,
+        replace: &[CovSubscriptionKey],
+    ) -> Vec<CovSubscriptionKey> {
+        match self.capture.read(db) {
+            Some(read) => {
+                let mut timed = self.store.lock();
+                read.queue_replacing(&mut timed, runtime_clock::core_now(), replace)
+            }
+            None => Vec::new(),
+        }
+    }
+
     /// Capture an intermediate event state; see
     /// [`TimedCapture::read_snapshot`].
     pub(crate) fn run_from_snapshot(

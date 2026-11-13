@@ -3,10 +3,10 @@
 //!
 //! [`LocalWriter::commit`] makes the write under a database guard it keeps
 //! and hands that guard on in a [`Committed`]. [`LocalWriter::finish`] then
-//! takes the timestamped COV capture, re-evaluates a written Schedule and
-//! commits the intrinsic transition the write causes, all under that same
-//! guard (#2530), releases it, and sends that transition's event
-//! notifications, then the COV fanout, the fanout for a re-evaluated
+//! commits the intrinsic transition the write causes, takes the timestamped
+//! COV capture after it (#2535) and re-evaluates a written Schedule, all
+//! under that same guard (#2530), releases it, and sends that transition's
+//! event notifications, then the COV fanout, the fanout for a re-evaluated
 //! Schedule's targets and any Staging plan. `write_local` runs `finish` as a
 //! task of its own in the server's request task set
 //! ([`BACnetServer::finish_in_task`]), so a caller that drops its future (a
@@ -107,7 +107,21 @@ impl<T: TransportPort + 'static> LocalWriter<'_, T> {
             staging_plans,
             mut command_runs,
         } = committed;
-        // Under the write's guard: the database, then the COV table.
+        // The transition the write causes commits under its guard too, so
+        // nothing sees the object half updated (#2530); it is sent after.
+        // It commits ahead of a written Schedule's pass, as after a
+        // WriteProperty: an application's own reporting Schedule-type object
+        // gets a transition the pass causes at the next sweep.
+        let mut transitions = Vec::new();
+        commit_written_transition(&mut db, oid, &mut transitions);
+        // Under the write's guard, the database, then the COV table: the
+        // write is captured once its transition has committed, so a
+        // timestamped reference gets one row for the two (#2535). A Life
+        // Safety object's exact capture comes after it too: it selects
+        // references by `changes`, worked out when the write committed, and
+        // reads their values now. The built-in Life Safety objects run no
+        // intrinsic reporting, so for them this order changes nothing on the
+        // wire.
         let capture = {
             let table = self.cov_table.read().await;
             if life_safety {
@@ -124,10 +138,6 @@ impl<T: TransportPort + 'static> LocalWriter<'_, T> {
             self.cov_table,
         )
         .await;
-        // The transition the write causes commits under its guard too, so
-        // nothing sees the object half updated (#2530); it is sent after.
-        let mut transitions = Vec::new();
-        commit_written_transition(&mut db, self.cov_table, oid, &mut transitions).await;
         drop(db);
 
         BACnetServer::<T>::send_written_transitions(&self.event_delivery(), transitions).await;
