@@ -261,6 +261,42 @@ fn a_description_and_tags_past_the_file_cap_are_refused() {
     assert_eq!(octets.len(), MAX_TAGS_SNAPSHOT_BYTES);
 }
 
+/// The same within one request: its stage checks the Tags against the
+/// Description an earlier write of the request leaves, so it stops before
+/// Tags that wouldn't fit beside it, and they are refused as made, nothing
+/// but the Description saved (#2526: a step keeps only its write, and the
+/// stage's working copy holds the rest).
+#[cfg(feature = "durable-writes")]
+#[test]
+fn a_request_stops_before_tags_past_the_file_cap_beside_its_description() {
+    let storage = Memory::holding(None);
+    let mut output = lighting_output(storage.clone()).unwrap();
+    let full = tag_filling(MAX_TAGS_SNAPSHOT_BYTES - 8);
+    let writes = [
+        pending(P::DESCRIPTION, text("lobby")),
+        pending(P::TAGS, full.clone()),
+    ];
+    let StageStep::Staged(wait) = lent(&mut output).unwrap().stage_writes(&writes) else {
+        panic!("the Description stages");
+    };
+    wait.block();
+    write(&mut output, P::DESCRIPTION, text("lobby")).unwrap();
+    let refused = write(&mut output, P::TAGS, full);
+    assert!(refused_with(
+        &refused,
+        ErrorClass::RESOURCES,
+        ErrorCode::NO_SPACE_TO_WRITE_PROPERTY
+    ));
+    lent(&mut output).unwrap().release_staged_write(&wait);
+    output.wait_for_tag_saves();
+    let lobby = TagsSnapshot {
+        tags: None,
+        description: Some("lobby".into()),
+    };
+    assert_eq!(storage.saved(), Some(lobby));
+    assert_eq!(storage.saves.load(Ordering::SeqCst), 1);
+}
+
 /// A Tags write on an object holding a saved Description keeps it in the
 /// file, and a Present_Value save on a colour object does too.
 #[test]
