@@ -37,3 +37,6 @@ pub fn classify_required_property_read_error(error: &Error) -> LocalConfiguratio
         LocalConfigurationReadError::Unavailable
     }
 }
+
+#[cfg(test)]
+mod tests;

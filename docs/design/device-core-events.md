@@ -1861,6 +1861,39 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
       left: the server needs a binding fixture (Who-Is, I-Am) and a page
       over its segmented budget, more than the rows are worth here.
 
+**#2319, Event Enrollment, 2026-11-12:**
+
+23. The slice plan (maintainer approved #2319 as the next multi-PR item).
+    - PR 1 moves the pure algorithms: `algorithms.rs`, `fault.rs` and
+      `reference.rs` (with the error type and classifier they share) to
+      `event::enrollment`, behind `event-enrollment` (on top of
+      `event-reporting`; `std` turns it on). The server's pass, commit and
+      support stay hosted and call them. `decode_event_parameter` was in
+      `bacnet-encoding` already, usable under `alloc`.
+    - PR 2 moves the pass and its commit (`mod.rs`, `commit.rs`,
+      `support.rs`, `api.rs`), swaps the hash collections for the B-tree
+      forms and returns what the server logged, as PR 3a and 3b did; with
+      it the hosted server's Event Enrollment runs on the core. Likely
+      split as 2a (moves) and 2b (changes).
+    - PR 3 runs the pass in the `Reporter`
+      (`ReportConfig::enrollment_interval`), distributes through the outbox,
+      adds the parity rows of §7.2 and a budgeted firmware row with the
+      feature on; the `reporting` row stays without it.
+    - Size, from a thumbv7m probe of PR 1's code in the `reporting` image
+      (the algorithms called, an Event Enrollment object in the database,
+      reverted after): 43.8 KB more `.text`, 48.9 KB more flash. Of the
+      named symbols, `decode_event_parameter` is 8.4 KB (22.5 KB with its
+      parts) and the object's own 5.2 KB; most of the algorithms inline
+      into their caller. With the pass and commit, PR 3's row is
+      estimated at 60-75 KB of flash over today's `reporting` row,
+      about twice the issue's 30-40 KB, for the same reason PR 3's
+      estimate missed: the objects' share and the decoders.
+    - The timing keeps the pass model: Event Enrollment sees its monitored
+      value only at passes (the reference may be in another device, and a
+      write the core is told of may not touch it), so its delays count
+      passes, never early and up to one interval late, as today. No wire
+      change.
+
 ## 12. Evidence
 
 Code read at dev `c308eda25`. Sizes (§8): the `objects` image built with
