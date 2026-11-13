@@ -85,12 +85,12 @@ pub(crate) struct Step<N> {
     write: PendingWrite,
     /// What the object takes as the write is made, in the form it holds it:
     /// the state the write leaves on top of the steps before it; or only
-    /// what the write sets, made then on the state served (a Tags element or
-    /// size, or an Access Rights rule or array size, #2526); or nothing of
-    /// its own, for an object that works the write out again or makes it on
-    /// its own state (a Channel, a Timer and a Load Control, #2526; a log,
-    /// #2431; and the reporting rows, #2414, whose last step keeps the
-    /// snapshot its stage saved).
+    /// what the write sets, made then on the state served (an Access Rights
+    /// rule or array size, #2526); or nothing of its own, for an object that
+    /// works the write out again or makes it on its own state (Tags and a
+    /// kept Description, #2546; a Channel, a Timer and a Load Control,
+    /// #2526; a log, #2431; and the reporting rows, #2414, whose last step
+    /// keeps the snapshot its stage saved).
     pub(crate) next: N,
 }
 
@@ -136,8 +136,6 @@ fn relinquishes_nothing(value: &PropertyValue, error: &Error) -> bool {
     is_null(value) && *class == ErrorClass::PROPERTY && *code == ErrorCode::INVALID_DATA_TYPE
 }
 
-/// Whether `value` encodes as one application NULL: `Null` itself, the raw
-/// octets a raw-octet property receives for one, or a list of one NULL.
 /// Whether `staged` and `written` are one written value: the same
 /// datatype holding the same bits, element by element through a list.
 ///
@@ -147,7 +145,7 @@ fn relinquishes_nothing(value: &PropertyValue, error: &Error) -> bool {
 /// the two zeros are equal, though a step worked out from one isn't the
 /// state a write of the other leaves.
 #[cfg(feature = "durable-writes")]
-fn same_written(staged: &PropertyValue, written: &PropertyValue) -> bool {
+pub(crate) fn same_written(staged: &PropertyValue, written: &PropertyValue) -> bool {
     match (staged, written) {
         (PropertyValue::Real(staged), PropertyValue::Real(written)) => {
             staged.to_bits() == written.to_bits()
@@ -167,6 +165,8 @@ fn same_written(staged: &PropertyValue, written: &PropertyValue) -> bool {
     }
 }
 
+/// Whether `value` encodes as one application NULL: `Null` itself, the raw
+/// octets a raw-octet property receives for one, or a list of one NULL.
 #[cfg(feature = "durable-writes")]
 fn is_null(value: &PropertyValue) -> bool {
     match value {
@@ -520,10 +520,11 @@ impl<S: Send + 'static, N> StagedSaves<S, N> {
     /// [`correct`](Self::correct), after a storage call that took one staged
     /// step: a staged write still holding the object brings the served state
     /// it keeps up to date with `follow`, in place, rather than having it
-    /// built again (Access Rights, #2526). A correction still due saves
-    /// `served()`, as `correct` does. The copy this saves is a release-build
-    /// property no test pins: the tests run in debug builds, where the
-    /// caller's own check builds the whole state anyway.
+    /// built again (Access Rights, #2526; Tags and a kept Description,
+    /// #2546). A correction still due saves `served()`, as `correct` does.
+    /// For Tags an allocation test pins the copy this saves
+    /// (`staged_commit_copies.rs`). For Access Rights none can: the tests
+    /// run in debug builds, where its own check builds the whole state.
     #[cfg(feature = "durable-writes")]
     pub(crate) fn correct_with(&mut self, served: impl FnOnce() -> S, follow: impl FnOnce(&mut S)) {
         if self.take_correction() {
