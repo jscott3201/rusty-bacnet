@@ -437,7 +437,8 @@ macro_rules! rows {
 
         /// Whether `saved` is [`only`] of `config` and `mask`, compared
         /// without the copy (#2431).
-        #[cfg(feature = "event-reporting")]
+        // A staged step's check alone uses it (#2532).
+        #[cfg(all(feature = "event-reporting", feature = "durable-writes"))]
         pub(crate) fn is_only(
             saved: &AlgorithmWriteConfig,
             config: &AlgorithmWriteConfig,
