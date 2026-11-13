@@ -39,7 +39,7 @@ Foundations
                         (commit, sweep, distribution, AcknowledgeAlarm,
                         GetEventInformation, the fault pass), and the reply map
                         the server runs on,
-                        and a Responder, a COV Reporter and a
+                        and a Responder, a COV and event Reporter and a
                         TimeSynchronization-set Device clock for firmware
                         (no_std + alloc where atomics allow, #2178, #2303, #2321,
                         #2320)

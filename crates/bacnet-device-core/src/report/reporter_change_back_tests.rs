@@ -102,7 +102,7 @@ fn an_analog_change_back_sends_the_current_value() {
     device.input(ai(), real(15.0));
     device.input(ai(), real(10.0));
     assert_eq!(device.send_all(), [real(10.0)], "the newer took its place");
-    device.reporter.changed(&device.db, &[ai()], T0);
+    device.reporter.changed(&mut device.db, &[ai()], T0);
     assert!(device.pop(T0).is_none(), "10.0 is the baseline");
 }
 

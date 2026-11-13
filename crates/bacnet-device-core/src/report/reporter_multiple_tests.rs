@@ -191,7 +191,7 @@ impl Device {
         sensor
             .write_property(P::PRESENT_VALUE, None, PropertyValue::Real(value), None)
             .unwrap();
-        self.reporter.changed(&self.db, &[object], now);
+        self.reporter.changed(&mut self.db, &[object], now);
     }
 
     /// Answer the confirmed COV-multiple notification under `invoke_id`.
@@ -261,7 +261,7 @@ fn an_untimestamped_context_reports_through_the_outbox() {
     device.sample(ai(), 11.0, secs(1));
     assert_eq!(device.drain(secs(1)), [[(1, 11.0, None)]]);
     // Delivered: the same value reports nothing again.
-    device.reporter.changed(&device.db, &[ai()], secs(2));
+    device.reporter.changed(&mut device.db, &[ai()], secs(2));
     assert!(device.pop(secs(2)).is_none());
     assert_eq!(device.reporter.next_deadline(), lifetime_end());
     let counters = device.reporter.counters();
@@ -427,7 +427,7 @@ fn a_confirmed_report_is_retired_by_its_ack() {
     device.deadline();
     device
         .reporter
-        .on_deadline(&device.db, &mut device.ids, secs(60));
+        .on_deadline(&mut device.db, &mut device.ids, secs(60));
     assert!(device.pop(secs(60)).is_none());
     assert_eq!(device.reporter.next_deadline(), lifetime_end());
     assert!(device.ids.taken.is_empty());
@@ -467,7 +467,7 @@ fn a_refused_confirmed_report_goes_out_again_after_its_hold_off() {
     assert_eq!(device.reporter.next_deadline(), Some(secs(8)));
     device
         .reporter
-        .on_deadline(&device.db, &mut device.ids, secs(7));
+        .on_deadline(&mut device.db, &mut device.ids, secs(7));
     assert!(device.pop(secs(7)).is_none(), "still held off");
 
     // At its end the first look hands the context to one follow-up, which
@@ -580,7 +580,7 @@ fn a_deleted_objects_pending_changes_go_with_its_references() {
     assert_eq!(device.reporter.next_deadline(), lifetime_end());
     device
         .reporter
-        .on_deadline(&device.db, &mut device.ids, secs(1 + DELAY));
+        .on_deadline(&mut device.db, &mut device.ids, secs(1 + DELAY));
     assert!(device.pop(secs(1 + DELAY)).is_none());
 }
 
@@ -774,7 +774,7 @@ fn a_popped_part_holds_its_contexts_turn_until_the_host_reports_it() {
     for later in [2 + DELAY, 60, 120] {
         device
             .reporter
-            .on_deadline(&device.db, &mut device.ids, secs(later));
+            .on_deadline(&mut device.db, &mut device.ids, secs(later));
         assert!(device.pop(secs(later)).is_none(), "at {later} s");
     }
     // Reporting it ends the turn, and the follow-up carries what waited.

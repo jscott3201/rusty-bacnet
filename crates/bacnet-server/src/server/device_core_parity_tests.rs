@@ -709,6 +709,7 @@ async fn edge_rows_match_and_the_segmented_reply_differs() {
 mod clock;
 mod cov;
 mod discovery;
+mod events;
 mod rpm;
 mod wpm;
 mod write;

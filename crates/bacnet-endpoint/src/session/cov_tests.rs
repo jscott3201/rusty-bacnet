@@ -527,6 +527,27 @@ fn empty_list(invoke_id: u8) -> [Bytes; 1] {
     [Bytes::from(ack)]
 }
 
+/// The session hosts COV only: a configuration that turns on the
+/// `Reporter`'s event path or its fault pass is refused at start (#2303).
+#[tokio::test(start_paused = true)]
+async fn an_event_path_in_the_cov_config_is_refused_at_start() {
+    let second = bacnet_time::Duration::from_secs(1);
+    let configs = [
+        ReportConfig::default().with_sweep(second),
+        ReportConfig::default().with_fault_detection(second),
+    ];
+    for config in configs {
+        let mut session = BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
+            .role(SessionRole::ServerOnly)
+            .database(fixture())
+            .build_session_over(BusPort::new())
+            .unwrap()
+            .with_cov(config);
+        let error = session.start().await.expect_err("COV only");
+        assert!(error.to_string().contains("COV only"), "{error}");
+    }
+}
+
 /// With COV on, a Device write still answers alone: a written Description
 /// sends nothing beyond its reply, a subscription to AI-1 notwithstanding.
 #[tokio::test(start_paused = true)]
