@@ -8818,9 +8818,12 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   `bacnet-server`, under the host's database guard: it returns an
   `EventEnrollmentEvaluationBatch` with the `EventEnrollmentEvaluationReport`
   (transitions, reliability results, diagnostics), the committed
-  transitions to distribute (`CommittedEventEnrollmentDelivery`) and the
+  transitions with a payload (`CommittedEventEnrollmentDelivery`) and the
   ones whose payload was refused (`SuppressedDelivery`), which the host
-  logs. The algorithms it runs stay internal. `bacnet-server` drives it on
+  logs. The deliveries include transitions whose `Event_Enable` bit is
+  clear: the host sends only those whose result has `distribute` set, as
+  the server does. `interval_secs` is the time between passes, which turns
+  time delays into a count of passes. The algorithms it runs stay internal. `bacnet-server` drives it on
   its task and re-exports the report types.
   `handle_acknowledge_alarm` runs AcknowledgeAlarm, decoding it and
   calling `acknowledge(db, oid, state, timestamp)`, the path a local

@@ -165,8 +165,8 @@ pub fn encode_floating_limit_params(
     buf
 }
 
-#[cfg(test)]
 /// Encode CHANGE_OF_STATE parameters: `[count: u32 LE][alarm_values: u32 LE ...]`
+#[cfg(test)]
 pub fn encode_change_of_state_params(alarm_values: &[u32]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(4 + alarm_values.len() * 4);
     buf.extend_from_slice(&(alarm_values.len() as u32).to_le_bytes());
@@ -176,15 +176,15 @@ pub fn encode_change_of_state_params(alarm_values: &[u32]) -> Vec<u8> {
     buf
 }
 
-#[cfg(test)]
 /// Encode CHANGE_OF_VALUE parameters: `[increment: f32 LE]`
+#[cfg(test)]
 pub fn encode_change_of_value_params(increment: f32) -> Vec<u8> {
     increment.to_le_bytes().to_vec()
 }
 
-#[cfg(test)]
 /// Encode CHANGE_OF_BITSTRING parameters:
 /// `[mask_len: u32 LE][mask_bytes ...][alarm_bits ...]`
+#[cfg(test)]
 pub fn encode_change_of_bitstring_params(mask: &[u8], alarm_bits: &[u8]) -> Vec<u8> {
     let len = mask.len().min(alarm_bits.len());
     let mut buf = Vec::with_capacity(4 + len * 2);

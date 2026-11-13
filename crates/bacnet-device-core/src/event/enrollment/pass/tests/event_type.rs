@@ -122,3 +122,24 @@ fn malformed_reference_and_normal_transition_select_their_model_event_types() {
     assert_eq!(normal.transitions.len(), 1);
     assert_eq!(normal.transitions[0].event_type, EventType::OUT_OF_RANGE);
 }
+
+/// A Reliability result with no payload commits and is reported, but goes
+/// to the suppressed list with no event type, as the server's log line
+/// tells the two apart (#2319): with no monitored reference there is no
+/// Object_Property_Reference to project.
+#[test]
+fn a_fault_with_no_payload_is_suppressed_without_an_event_type() {
+    let mut db = ObjectDatabase::new();
+    let enrollment =
+        EventEnrollmentObject::new(319, "EE-malformed-reference", EventType::OUT_OF_RANGE).unwrap();
+    let enrollment_oid = enrollment.object_identifier();
+    db.add(Box::new(enrollment)).unwrap();
+    let batch = evaluate_event_enrollments_for_delivery(&mut db, 1);
+    assert_eq!(batch.report.reliability_results.len(), 1);
+    assert!(batch.deliveries.is_empty());
+    let expected = SuppressedDelivery {
+        enrollment_oid,
+        event_type: None,
+    };
+    assert_eq!(batch.suppressed, [expected]);
+}

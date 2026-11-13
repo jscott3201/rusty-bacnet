@@ -1,6 +1,8 @@
 //! Event Enrollment algorithmic evaluation. The pass and its commit are
-//! bacnet-device-core's (`event::enrollment`, #2319); the server drives the
-//! pass on its task, logs what it reports, and keeps the public wrappers.
+//! bacnet-device-core's (`event::enrollment`, #2319), and so are their docs:
+//! the algorithms run, the time delays, the transition actions and the
+//! inhibit. The server drives the pass on its task, logs what it reports,
+//! and keeps the public wrappers.
 
 mod api;
 mod log;

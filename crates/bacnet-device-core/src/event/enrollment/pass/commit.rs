@@ -125,7 +125,9 @@ pub struct EventEnrollmentEvaluationReport {
     pub diagnostics: Vec<EventEnrollmentEvaluationDiagnostic>,
 }
 
-/// Public result family carried by one private, already-committed delivery.
+/// What one committed delivery carries: an event transition or a
+/// Reliability change.
+#[derive(Debug)]
 pub enum CommittedEventEnrollmentResult {
     /// An event transition.
     Normal(EventEnrollmentTransition),
@@ -134,6 +136,10 @@ pub enum CommittedEventEnrollmentResult {
 }
 
 /// One Event Enrollment commit plus policy captured under its database guard.
+///
+/// Its result may be one the enrollment's `Event_Enable` leaves out: send it
+/// only when the result's `distribute` is set.
+#[derive(Debug)]
 pub struct CommittedEventEnrollmentDelivery {
     /// What committed.
     pub result: CommittedEventEnrollmentResult,
@@ -165,11 +171,16 @@ pub struct EventEnrollmentTransition {
     pub distribute: bool,
 }
 
-/// Public report plus the commit-order stream consumed only by the server.
+/// What one pass returns: its report, and its commits with a payload and
+/// without, each in commit order.
+#[derive(Debug)]
 pub struct EventEnrollmentEvaluationBatch {
     /// What the pass did.
     pub report: EventEnrollmentEvaluationReport,
-    /// The committed transitions to distribute, in commit order.
+    /// The committed transitions with a notification payload, in commit
+    /// order. This includes transitions whose `Event_Enable` bit is clear:
+    /// a host sends only those whose result has `distribute` set, as the
+    /// server does.
     pub deliveries: Vec<CommittedEventEnrollmentDelivery>,
     /// Committed transitions whose notification payload was refused, so
     /// they are not distributed, in commit order: what the commit once

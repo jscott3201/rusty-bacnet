@@ -1,17 +1,80 @@
 //! Event Enrollment, algorithmic reporting (#2319, behind
-//! `event-enrollment`): the evaluation pass over every Event Enrollment
-//! object, `evaluate_event_enrollments_for_delivery`, with the event and
-//! fault algorithms it runs, the reads of each enrollment's parameters and
-//! monitored reference, and the commit of what it finds. Moved from
+//! `event-enrollment`). Where intrinsic reporting is built into an object
+//! type, an Event Enrollment is an object of its own: it watches a property
+//! of another object and runs an event algorithm over what it reads. This
+//! module holds the evaluation pass over every Event Enrollment object,
+//! `evaluate_event_enrollments_for_delivery`, with the event and fault
+//! algorithms it runs, the reads of each enrollment's parameters and
+//! monitored reference, and the commit of what it finds. It moved from
 //! `bacnet-server`, which drives the pass on its task, logs what it reports
 //! and sends what it commits. The pass needs `std` until it keeps its
 //! per-pass state in ordered maps (#2319 PR 2b); the algorithms don't.
 //!
-//! A host calls the pass with its database guard held and gets an
-//! `EventEnrollmentEvaluationBatch`: the `EventEnrollmentEvaluationReport`
-//! of what changed, the committed transitions to distribute
-//! (`CommittedEventEnrollmentDelivery`) and the ones whose payload was
-//! refused (`SuppressedDelivery`), for it to log.
+//! # Calling the pass
+//!
+//! A host calls the pass with its database guard held, once per interval,
+//! and gets an `EventEnrollmentEvaluationBatch`: the
+//! `EventEnrollmentEvaluationReport` of what changed, the committed
+//! transitions with a notification payload (`CommittedEventEnrollmentDelivery`)
+//! and the ones whose payload couldn't be built (`SuppressedDelivery`), for
+//! it to log. A delivery is not yet a send: it may be a transition the
+//! enrollment's `Event_Enable` leaves out, so the host sends only those
+//! whose result has `distribute` set, as the server does.
+//!
+//! # Algorithms
+//!
+//! The pass evaluates OUT_OF_RANGE, FLOATING_LIMIT, CHANGE_OF_STATE,
+//! CHANGE_OF_BITSTRING and CHANGE_OF_VALUE.
+//!
+//! # Time delays (#163)
+//!
+//! The `Time_Delay` in `Event_Parameters` (pTimeDelay, Table 12-15) holds
+//! back each indicated transition to an offnormal state. The enrollment's
+//! optional `Time_Delay_Normal` (pTimeDelayNormal, Table 12-14), or
+//! pTimeDelay when it is absent (Clause 13.3), holds back the return to
+//! NORMAL. Both count the seconds a condition has lasted (13.3.1), and so
+//! does the pass: a pending countdown, kept in memory on the enrollment
+//! object, starts at the delay over the host's interval, rounded up, and
+//! drops by one each pass. Rounding up means it never fires early: at a
+//! 10-second interval a 5-second delay fires on the second pass, about 10
+//! seconds in, rather than after five passes. Otherwise the countdown acts
+//! as the intrinsic detectors' does (`bacnet_objects::event`, #120, #225),
+//! in code of its own: the condition clearing cancels it, the same target
+//! never restarts it, and a new target starts it again.
+//!
+//! The server fixes its interval when it is built and the countdown isn't
+//! saved, so no countdown is rescaled while running. After a restart the
+//! pass starts again from the confirmed `Event_State` with a fresh
+//! rounded-up count, as the intrinsic detectors do.
+//!
+//! # Transition actions (#166)
+//!
+//! An indicated transition runs its actions (Clause 13.2.2.1.4) even when
+//! its target is the state the enrollment is already in. The state the
+//! algorithm returned goes into `Event_State`, and the matching
+//! `Acked_Transitions` bit is set or cleared from the `Ack_Required` of the
+//! enrollment's Notification Class (Clause 13.2.3). `Event_Time_Stamps` and
+//! `Event_Message_Texts` commit in the same step as `Event_State` and
+//! `Acked_Transitions`. An enrollment has no message text of its own here,
+//! so a transition's text is its entry in `Event_Message_Texts_Config`, sent
+//! as written with no substitution codes, or none when that entry is empty
+//! (#1507). Each committed transition carries a `distribute` flag from
+//! `Event_Enable`, and the host's sending repeats none of these actions.
+//!
+//! # Event_Algorithm_Inhibit (#1507)
+//!
+//! The inhibit holds the algorithm back as it does for intrinsic reporting
+//! (the private `algorithms::inhibited_arm`). A pass that can't read the
+//! monitored value at all has a gap in what it saw and changes no state,
+//! inhibited or not, so a forced return to NORMAL waits for the next pass
+//! that reads it, and its notification carries that value. An enrollment
+//! whose parameters the pass doesn't evaluate (Opaque, Extended, or an
+//! algorithm with no evaluator here) still gets the forced NORMAL, since
+//! leaving an offnormal state under the inhibit doesn't depend on the
+//! algorithm (Clause 13.2.2.1.2). With `Event_Algorithm_Inhibit_Ref` set,
+//! the inhibit is the referenced property's value as of its last refresh:
+//! each write of the enrollment, the host's own refresh (the server's runs
+//! every second) and the start of each pass.
 
 // Without `std` nothing calls them yet: the pass that does needs `std`
 // until #2319 PR 2b.

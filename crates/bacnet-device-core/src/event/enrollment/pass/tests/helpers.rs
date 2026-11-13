@@ -1,17 +1,13 @@
 //! Stand-ins for what these tests used from bacnet-server before they moved
 //! here with the pass (#2319): its public wrappers over the pass, and its
-//! test helpers. Test-only; none is a server concept.
-
-use std::borrow::Cow;
+//! test helpers (the metadata rows are the shared `crate::test_rows`).
+//! Test-only; none is a server concept.
 
 use bacnet_objects::DeviceIdentity;
 use bacnet_objects::command_source::CommandOrigin;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::event::{EventStateChange, EventTransition, EventTransitionCommit};
-use bacnet_objects::property_metadata::{
-    PropertyConformance, PropertyMetadata, PropertyWriteCapability,
-};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier as P};
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue};
@@ -67,40 +63,6 @@ pub(crate) fn commit_event_state(
             message_text: None,
         })
         .expect("the transition commits");
-}
-
-const UNIVERSAL: [P; 3] = [P::OBJECT_IDENTIFIER, P::OBJECT_NAME, P::OBJECT_TYPE];
-
-/// The server's `test_rows::rows`: the universal rows, then `served` in
-/// order, then Property_List; one in `writable` gets a write route.
-pub(crate) fn rows(served: &[P], writable: &[P]) -> Cow<'static, [PropertyMetadata]> {
-    let row = |property: P| {
-        let (conformance, write) = if writable.contains(&property) {
-            (
-                PropertyConformance::RequiredWrite,
-                PropertyWriteCapability::Always,
-            )
-        } else {
-            (
-                PropertyConformance::RequiredRead,
-                PropertyWriteCapability::ReadOnly,
-            )
-        };
-        PropertyMetadata::new(property, conformance, None, write)
-    };
-    let mut properties: Vec<P> = UNIVERSAL.to_vec();
-    for &property in served {
-        if property != P::PROPERTY_LIST && !properties.contains(&property) {
-            properties.push(property);
-        }
-    }
-    properties.push(P::PROPERTY_LIST);
-    Cow::Owned(properties.into_iter().map(row).collect())
-}
-
-/// [`rows`] with no write route.
-pub(crate) fn read_only(served: &[P]) -> Cow<'static, [PropertyMetadata]> {
-    rows(served, &[])
 }
 
 /// The server's `local_device::bind_database`: bind `db` to `identity`'s

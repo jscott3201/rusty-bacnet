@@ -68,7 +68,7 @@ impl BACnetObject for OptionalReliabilityTarget {
     }
 
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
-        crate::event::enrollment::pass::tests::helpers::read_only(&[])
+        crate::test_rows::read_only(&[])
     }
 }
 

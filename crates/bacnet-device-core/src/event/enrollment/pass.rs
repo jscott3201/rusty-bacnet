@@ -1,63 +1,7 @@
-//! Event Enrollment algorithmic evaluation.
-//!
-//! Unlike intrinsic reporting (built into object types), Event Enrollment is a
-//! separate object that monitors another object's property and evaluates an
-//! algorithm against it.
-//!
-//! Supported algorithms: OUT_OF_RANGE, FLOATING_LIMIT, CHANGE_OF_STATE,
-//! CHANGE_OF_BITSTRING, CHANGE_OF_VALUE.
-//!
-//! Delay model (#163): `Event_Parameters.Time_Delay` (pTimeDelay, Table 12-15)
-//! gates every indicated transition into an OFFNORMAL state; the EE object's
-//! optional `Time_Delay_Normal` property (pTimeDelayNormal, Table 12-14 O —
-//! falling back to pTimeDelay per Clause 13.3) gates transitions to NORMAL.
-//! Both delays measure condition persistence in SECONDS (e.g. 13.3.1),
-//! and this evaluator
-//! keeps them in seconds: the pending countdown (owned by the EE object,
-//! in-memory only) is seeded with `ceil(delay_secs / interval_secs)` —
-//! never-fire-early ceiling semantics, so at the default 10s
-//! `event_enrollment_interval_secs` a 5s delay fires on the second pass
-//! (~10s elapsed), not after five passes (~50s) — and advances once per
-//! evaluation pass. Semantics otherwise mirror the intrinsic detectors'
-//! probe/tick (`bacnet_objects::event`, #120/#225) — condition reverted
-//! cancels, same target never restarts, changed target re-seeds — without
-//! sharing code across the objects/server boundary.
-//!
-//! Residual countdown behavior: the interval is builder configuration, not
-//! runtime-mutable, and the countdown is in-memory, so no mid-run rescale
-//! exists; a restart re-evaluates from the confirmed `Event_State` and a
-//! fresh `ceil` conversion, like the intrinsic detectors.
-//!
-//! Transition actions (#166): an *indicated* transition executes Clause
-//! 13.2.2.1.4's actions even when its target equals the current state — the
-//! specific returned state is stored in `Event_State`, the corresponding
-//! `Acked_Transitions` bit is set/cleared per the referenced Notification
-//! Class's `Ack_Required` (Clause 13.2.3); the transition then goes out with
-//! its `Event_Enable`-scoped `distribute` flag. What is NOT here, by design:
-//! `Event_Time_Stamps` and `Event_Message_Texts` are committed atomically
-//! with `Event_State` and `Acked_Transitions`. The server has no message text
-//! of its own for an enrollment, so a transition's text is the matching
-//! `Event_Message_Texts_Config` entry, sent as written (no substitution
-//! codes), or none when that entry is empty (#1507).
-//!
-//! `Event_Algorithm_Inhibit` (#1507) gates the algorithm as it does the
-//! intrinsic reporters: see `algorithms::inhibited_arm`. A pass that can't
-//! read the monitored value at all is an observation gap and changes no
-//! state, inhibited or not, so a forced return to NORMAL waits for the next
-//! readable pass: its notification carries that value. An enrollment whose
-//! parameters this evaluator doesn't run (Opaque, Extended, or another
-//! algorithm without an evaluator here) still gets
-//! the forced NORMAL, since leaving the OffNormal state under the inhibit
-//! doesn't depend on the algorithm (Clause 13.2.2.1.2). With
-//! `Event_Algorithm_Inhibit_Ref` set, the value is the referenced property's
-//! as of the last refresh: each write of the enrollment, the server's
-//! one-second tick and the start of each evaluation pass.
-//! The server lifecycle projects successful commits into its shared
-//! notification sender without repeating these transition actions.
+//! The Event Enrollment evaluation pass and its commit. The module docs of
+//! `event::enrollment` describe what it runs and how.
 
-#[path = "commit.rs"]
 mod commit;
-#[path = "support.rs"]
 mod support;
 
 use bacnet_objects::property_metadata::is_array_property;
@@ -110,7 +54,14 @@ use bacnet_types::constructed::BACnetEventParameter;
 use bacnet_types::enums::{EventState, EventType, ObjectType, PropertyIdentifier, Reliability};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
-/// Evaluate and retain the private commit-order stream for server delivery.
+/// Run one evaluation pass over every Event Enrollment object in `db`,
+/// commit what it finds, and return the report with the commits to send.
+///
+/// `interval_secs` is the host's time between passes, in seconds (0 counts
+/// as 1): a time delay becomes that many passes, rounded up, so it never
+/// fires early. The batch's `deliveries` include transitions whose
+/// `Event_Enable` bit is clear; send only those whose result has
+/// `distribute` set.
 pub fn evaluate_event_enrollments_for_delivery(
     db: &mut ObjectDatabase,
     interval_secs: u64,
