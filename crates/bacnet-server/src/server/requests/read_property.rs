@@ -218,8 +218,8 @@ mod tests {
 
     /// The size of the future `make` returns for borrowed arguments, without
     /// making one; a borrow's lifetime doesn't change it.
-    fn borrowing_future_size<A: 'static, B: 'static, C: 'static, D: 'static, E: 'static, F>(
-        _make: impl FnOnce(&'static A, &'static B, &'static C, &'static mut D, &'static mut E) -> F,
+    fn borrowing_future_size<A: 'static, B: 'static, D: 'static, E: 'static, F>(
+        _make: impl FnOnce(&'static A, &'static B, &'static mut D, &'static mut E) -> F,
     ) -> usize {
         std::mem::size_of::<F>()
     }

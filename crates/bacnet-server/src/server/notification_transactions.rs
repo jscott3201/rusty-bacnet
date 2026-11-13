@@ -84,6 +84,11 @@ pub struct NotificationTransactions {
     /// Event notifications waiting for their Device recipient's I-Am, one
     /// queue per device, each drained by a task in this set (#1368).
     pub(super) awaiting_recipients: Mutex<super::event_send::AwaitingRecipients>,
+    /// Each destination's event notifications waiting to go out in order,
+    /// each lane drained by a task of its own (#2537). Made on first use (a
+    /// push, or the seal at `stop()` or the drop), so a server that sends no
+    /// event notification allocates nothing for them.
+    pub(super) event_lanes: std::sync::OnceLock<Box<super::event_send::LaneState>>,
 }
 
 type ReporterFailureQueue = (
@@ -201,6 +206,7 @@ impl NotificationTransactions {
             audit_failures: std::sync::OnceLock::new(),
             run_slots: crate::command_lists::RemoteSlots::default(),
             awaiting_recipients: Mutex::default(),
+            event_lanes: std::sync::OnceLock::new(),
         })
     }
 
@@ -299,6 +305,14 @@ impl NotificationTransactions {
         if let Some(waiter) = waiter {
             waiter.wake();
         }
+    }
+
+    /// Seal the event notification lanes (#2537), dropping what they hold,
+    /// and abort and join their tasks: once this returns, no lane sends
+    /// anything more.
+    pub(super) async fn shut_lanes(&self) {
+        super::event_send::lanes(self).seal();
+        super::event_send::join_sealed(self).await;
     }
 
     /// Test hook: abort every worker, as a crash would, leaving the owner

@@ -271,6 +271,26 @@ impl Harness {
         })
     }
 
+    /// The frames once at least `count` are out and the lanes have had time
+    /// to send any more: an acknowledgment's notification goes out from its
+    /// recipients' lanes (#2537), after the request returns, and an exact
+    /// count of these still catches a late extra frame.
+    async fn frames_after(&self, count: usize) -> Vec<(Vec<u8>, Bytes)> {
+        for _ in 0..2_000 {
+            if self.frames().len() >= count {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        self.quiet().await;
+        self.frames()
+    }
+
+    /// Long enough for the lanes to send anything they were going to.
+    async fn quiet(&self) {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
     fn frames(&self) -> Vec<(Vec<u8>, Bytes)> {
         self.sent
             .frames()
@@ -331,7 +351,7 @@ async fn simple_ack_precedes_fresh_exact_unconfirmed_ack_notification() {
 
     harness.dispatch(0x31, None).await;
 
-    let frames = harness.frames();
+    let frames = harness.frames_after(2).await;
     assert_eq!(frames.len(), 2);
     assert_eq!(frames[0].0, REQUESTER);
     let requester_npdu = decode_npdu(frames[0].1.clone()).unwrap();
@@ -449,6 +469,11 @@ async fn event_enable_dcc_empty_and_unresolved_recipients_preserve_acceptance_wi
         assert!(harness.acknowledged().await);
         // The unresolved Device is looked for with a Who-Is (#1368), which
         // is no notification.
+        if index == 2 {
+            harness.frames_after(1).await;
+        } else {
+            harness.quiet().await;
+        }
         let (who_is, notifications): (Vec<_>, Vec<_>) = harness
             .sent
             .frames()
@@ -471,6 +496,7 @@ async fn event_enable_dcc_empty_and_unresolved_recipients_preserve_acceptance_wi
         0x43,
     );
     assert!(disable_initiation.acknowledged().await);
+    disable_initiation.quiet().await;
     assert!(disable_initiation.frames().is_empty());
 }
 
@@ -491,7 +517,7 @@ async fn recipient_send_and_reservation_failures_do_not_retract_ack_or_block_oth
         .push(UNCONFIRMED_RECIPIENT.to_vec());
     assert_ack(send_failure.dispatch_with_reply(0x50).await.unwrap(), 0x50);
     assert!(send_failure.acknowledged().await);
-    let attempts = send_failure.frames();
+    let attempts = send_failure.frames_after(2).await;
     assert_eq!(attempts.len(), 2);
     assert_eq!(attempts[0].0, UNCONFIRMED_RECIPIENT);
     assert_eq!(attempts[1].0, CONFIRMED_RECIPIENT);
@@ -518,6 +544,7 @@ async fn recipient_send_and_reservation_failures_do_not_retract_ack_or_block_oth
         0x51,
     );
     assert!(reservation_failure.acknowledged().await);
+    reservation_failure.quiet().await;
     assert!(reservation_failure.frames().is_empty());
     drop(leases);
 }
@@ -545,15 +572,15 @@ async fn pending_duplicate_is_silent_post_issuance_reuse_notifies_and_retry_is_i
     assert!(duplicate.frames().is_empty());
     drop(gate);
     assert_ack(first.await.unwrap(), 0x60);
-    assert_eq!(duplicate.frames().len(), 1);
+    assert_eq!(duplicate.frames_after(1).await.len(), 1);
     assert!(duplicate.acknowledged().await);
     // After reply handoff, reusing the Invoke ID matches the existing new-ID
     // behavior: idempotent acknowledgment state, but another ACK_NOTIFICATION.
     assert_ack(duplicate.dispatch_with_reply(0x60).await.unwrap(), 0x60);
-    assert_eq!(duplicate.frames().len(), 2);
+    assert_eq!(duplicate.frames_after(2).await.len(), 2);
     assert!(duplicate.acknowledged().await);
     assert_ack(duplicate.dispatch_with_reply(0x61).await.unwrap(), 0x61);
-    assert_eq!(duplicate.frames().len(), 3);
+    assert_eq!(duplicate.frames_after(3).await.len(), 3);
     assert!(duplicate.acknowledged().await);
 
     let retry = Harness::new(

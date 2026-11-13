@@ -120,7 +120,9 @@ async fn fire_event(server: &BACnetServer<TestTransport>) {
     ))
     .unwrap();
     let db = Arc::new(RwLock::new(db));
-    BACnetServer::<TestTransport>::build_and_send_event_notification_with_bindings(
+    // Pushed onto its lane, which hands it to its worker; the test holds the
+    // worker's first attempt, so nothing here waits for it (#2537).
+    BACnetServer::<TestTransport>::enqueue_with_guard(
         &EventDelivery {
             db: &db,
             network: server.test_network(),
@@ -141,6 +143,7 @@ async fn fire_event(server: &BACnetServer<TestTransport>) {
             },
             EventType::OUT_OF_RANGE,
         ),
+        None,
     )
     .await;
 }

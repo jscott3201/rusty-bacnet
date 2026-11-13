@@ -362,6 +362,7 @@ async fn run_stale_plan(h: &Harness, edit: impl FnOnce(&mut dyn BACnetObject)) {
         &h.server.local_event_delivery(),
         &h.server.local_cov_context(),
         plans,
+        None,
     )
     .await;
 }

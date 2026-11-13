@@ -87,21 +87,23 @@ async fn confirmed_notification_is_acknowledged_while_its_copy_is_still_sending(
     let sent = transport.sent();
     handle.block_next_send();
     let services = confirmed_services(database(vec![nf]), transport);
+    let transactions = Arc::clone(&services.notification_transactions);
     let (reply, answered) = oneshot::channel();
     let request = notification(5);
     let task = tokio::spawn(dispatch(services, encoded(&request), reply));
 
     // The sender has its acknowledgment while the forwarded copy is held in
-    // the transport.
+    // the transport, and the handler is done: the copy goes out from its
+    // destination's lane (#2537).
     let ack = tokio::time::timeout(Duration::from_secs(5), answered)
         .await
         .expect("acknowledged before forwarding finished")
         .unwrap();
     assert!(is_simple_ack(&reply_apdu(ack)));
     handle.wait_blocked().await;
-    assert!(!task.is_finished(), "the copy is still being sent");
-    handle.release_sends(1);
     task.await.unwrap();
+    handle.release_sends(1);
+    super::event_send::lanes_drained(&transactions).await;
     assert_eq!(
         copies(&sent, &request),
         [unconfirmed(To::Local(PEER_A.to_vec()), 40)]
@@ -143,9 +145,12 @@ async fn confirmed_notification_is_acknowledged_whatever_forwarding_finds() {
     let services = confirmed_services(database(vec![nf]), transport);
     let suppressions = Arc::clone(&services.event_suppressions);
     let bindings = Arc::clone(&services.device_bindings);
+    let transactions = Arc::clone(&services.notification_transactions);
     let (reply, answered) = oneshot::channel();
     dispatch(services, encoded(&notification(5)), reply).await;
     assert!(is_simple_ack(&reply_apdu(answered.await.unwrap())));
+    // The copy's lane asks for the device and leaves it waiting (#1368).
+    super::event_send::lanes_drained(&transactions).await;
     let frames = sent.frames();
     assert!(frames.len() == 1 && super::event_recipient_routing_tests::is_who_is(&frames[0]));
     bindings.write().await.probes.run_out_for_test();

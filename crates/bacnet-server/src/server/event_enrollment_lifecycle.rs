@@ -1,5 +1,4 @@
 use super::*;
-use crate::event_enrollment::CommittedEventEnrollmentDelivery;
 
 /// Owned handles and settings the event-enrollment task moves into its loop.
 pub(super) struct EventEnrollmentTask<T: TransportPort + 'static> {
@@ -46,20 +45,39 @@ pub(super) fn spawn_event_enrollment_task<T: TransportPort + 'static>(
             // timestamp, message text, ACK policy and clock it committed, so
             // sending it stages no timestamp and repeats no transition
             // action. The guard is dropped before the first send.
-            let (report, outbound) = {
+            let report = {
                 let mut db_guard = db.write().await;
                 let evaluation = crate::event_enrollment::evaluate_event_enrollments_for_delivery(
                     &mut db_guard,
                     evaluation_interval_secs,
                 );
                 crate::event_enrollment::log_suppressed_deliveries(&evaluation.suppressed);
-                let outbound = evaluation
-                    .deliveries
-                    .into_iter()
-                    .filter(CommittedEventEnrollmentDelivery::distribute)
-                    .map(|committed| (committed.enrollment_oid(), committed.into_notification()))
-                    .collect::<Vec<_>>();
-                (evaluation.report, outbound)
+                // Each delivery joins its recipients' lanes under this guard,
+                // in commit order (#2537); nothing here waits for them.
+                let delivery = EventDelivery {
+                    db: &db,
+                    network: &network,
+                    comm_state: &comm_state,
+                    learned_routers: &learned_routers,
+                    notification_transactions: &notification_transactions,
+                    device_bindings: &device_bindings,
+                    suppressions: &suppressions,
+                    retry_timeout_ms: config.cov_retry_timeout_ms,
+                    local_apdu_capacity: u32::from(config.device.max_apdu_length()),
+                    device: crate::local_device::initiating_device(&config.device),
+                };
+                for committed in evaluation.deliveries {
+                    if committed.distribute() {
+                        BACnetServer::<T>::enqueue_event_notification(
+                            &delivery,
+                            &mut db_guard,
+                            &committed.enrollment_oid(),
+                            committed.into_notification(),
+                            None,
+                        );
+                    }
+                }
+                evaluation.report
             };
             for transition in &report.transitions {
                 debug!(
@@ -72,25 +90,6 @@ pub(super) fn spawn_event_enrollment_task<T: TransportPort + 'static>(
                 );
             }
             crate::event_enrollment::log_evaluation_report(&report);
-            for (oid, transition) in outbound {
-                BACnetServer::<T>::build_and_send_event_notification_with_bindings(
-                    &EventDelivery {
-                        db: &db,
-                        network: &network,
-                        comm_state: &comm_state,
-                        learned_routers: &learned_routers,
-                        notification_transactions: &notification_transactions,
-                        device_bindings: &device_bindings,
-                        suppressions: &suppressions,
-                        retry_timeout_ms: config.cov_retry_timeout_ms,
-                        local_apdu_capacity: u32::from(config.device.max_apdu_length()),
-                        device: crate::local_device::initiating_device(&config.device),
-                    },
-                    &oid,
-                    transition,
-                )
-                .await;
-            }
         }
     })
 }

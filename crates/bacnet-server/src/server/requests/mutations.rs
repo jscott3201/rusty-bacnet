@@ -5,8 +5,8 @@ use crate::mutation::{
     MutationTarget, MutationTrust,
 };
 use crate::server::event_notifications::commit_written_transition;
+use crate::server::event_send::Settle;
 use bacnet_device_core::cov::life_safety::LifeSafetyCovChange;
-use bacnet_device_core::event::CommittedIntrinsicTransition;
 use bacnet_device_core::write::{self, WpmOutcome};
 use bacnet_objects::staging::StagingWritePlan;
 use bacnet_services::cov::{SubscribeCOVPropertyRequest, SubscribeCOVRequest};
@@ -27,9 +27,10 @@ pub(super) enum InitialCovNotification {
 /// writes to execute and Command runs to start.
 #[derive(Default)]
 pub(super) struct MutationEffects {
-    /// The intrinsic transitions the writes caused, committed under the
-    /// writes' own guard (#2530), in order, to send before the COV fanout.
-    pub(super) written_transitions: Vec<(ObjectIdentifier, CommittedIntrinsicTransition)>,
+    /// The event notifications the writes' transitions pushed onto their
+    /// recipients' lanes under the writes' own guard (#2530, #2537), for the
+    /// COV fanout to wait on (#889).
+    pub(super) settle: Settle,
     pub(super) coarse_cov_oids: Vec<ObjectIdentifier>,
     pub(super) life_safety_cov_changes: Vec<LifeSafetyCovChange>,
     pub(super) staging_plans: Vec<StagingWritePlan>,
@@ -204,13 +205,13 @@ impl Request<'_> {
 
     pub(super) async fn write_property<T: TransportPort + 'static>(
         &self,
-        db: &Arc<RwLock<ObjectDatabase>>,
-        cov_table: &Arc<RwLock<CovSubscriptionTable>>,
+        services: &RequestServices<T>,
         effects: &mut MutationEffects,
         audit: &mut audit_reporter::WriteAudit<'_, T>,
     ) -> Apdu {
+        let (db, cov_table) = (&services.db, &services.cov_table);
         let MutationEffects {
-            written_transitions,
+            settle,
             coarse_cov_oids,
             life_safety_cov_changes,
             staging_plans,
@@ -281,7 +282,7 @@ impl Request<'_> {
                 // can write a Schedule and one of its targets; here an
                 // application's own reporting Schedule-type object gets a
                 // transition the pass causes at the next sweep.
-                commit_written_transition(&mut db, oid, written_transitions);
+                commit_written_transition(|| services.event_delivery(), &mut db, oid, settle);
                 // Any other object is captured once the transition has
                 // committed: one row for the write and its transition (#2535).
                 if !life_safety {
@@ -323,13 +324,13 @@ impl Request<'_> {
 
     pub(super) async fn write_property_multiple<T: TransportPort + 'static>(
         &self,
-        db: &Arc<RwLock<ObjectDatabase>>,
-        cov_table: &Arc<RwLock<CovSubscriptionTable>>,
+        services: &RequestServices<T>,
         effects: &mut MutationEffects,
         audit: &mut audit_reporter::WriteAudit<'_, T>,
     ) -> Apdu {
+        let (db, cov_table) = (&services.db, &services.cov_table);
         let MutationEffects {
-            written_transitions,
+            settle,
             coarse_cov_oids,
             life_safety_cov_changes,
             staging_plans,
@@ -390,7 +391,9 @@ impl Request<'_> {
             // in between (it takes no database guard) leaves this capture to
             // follow it, as two rows.
             for oid in committed_oids {
-                if commit_written_transition(&mut db, *oid, written_transitions) {
+                // The closure is a temporary of the condition, gone before
+                // the capture below awaits the table.
+                if commit_written_transition(|| services.event_delivery(), &mut db, *oid, settle) {
                     let capture = cov_table.read().await.timed_capture(*oid);
                     capture.run_replacing(&db, observer.queued(*oid));
                 }
@@ -542,12 +545,12 @@ impl Request<'_> {
     /// list edit doesn't feed.
     pub(super) async fn list_element<T: TransportPort + 'static>(
         &self,
-        db: &Arc<RwLock<ObjectDatabase>>,
-        cov_table: &Arc<RwLock<CovSubscriptionTable>>,
+        services: &RequestServices<T>,
         effects: &mut MutationEffects,
         audit: &mut super::super::audit_reporter::WriteAudit<'_, T>,
         remove: bool,
     ) -> Apdu {
+        let (db, cov_table) = (&services.db, &services.cov_table);
         if let Err(error) = self
             .authorize(|| {
                 ListElementRequest::decode(&self.req.service_request).map(if remove {
@@ -588,7 +591,8 @@ impl Request<'_> {
                 // evaluates after it); an application's own reporting
                 // Schedule-type object gets a transition the pass causes at
                 // the next sweep. The edit is captured after it (#2535).
-                commit_written_transition(&mut db, oid, &mut effects.written_transitions);
+                let settle = &mut effects.settle;
+                commit_written_transition(|| services.event_delivery(), &mut db, oid, settle);
                 let capture = cov_table.read().await.timed_capture(oid);
                 capture.run(&db);
             }

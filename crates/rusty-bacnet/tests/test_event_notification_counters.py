@@ -1,4 +1,4 @@
-"""Installed-wheel event telemetry: BACnetServer.event_notification_counters() (#1142, #1160, #1196, #1225, #1259, #1346)."""
+"""Installed-wheel event telemetry: BACnetServer.event_notification_counters() (#1142, #1160, #1196, #1225, #1259, #1346, #2537)."""
 import ast
 import asyncio
 import importlib.util
@@ -26,6 +26,10 @@ FIELDS = frozenset({
     "received_not_forwarded",
     "forwarding_cap_dropped",
     "received_not_logged",
+    "lane_full",
+    "lanes_entries_full",
+    "lanes_full",
+    "cov_wait_expired",
 })
 
 

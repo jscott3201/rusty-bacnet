@@ -38,10 +38,9 @@
 //! rules see that local route, and the copy goes with no DNET.
 
 use super::event_recipient_route::{RecipientRoute, system_utc_recipient_filter_time};
-use super::event_send::OutboundNotification;
+use super::event_send::{AdmitsRoute, LaneEntry, LaneHandles, LanePayload, Settle};
 use super::event_suppression::EventSuppression;
 use super::*;
-use bacnet_encoding::constructed::encode_event_notification;
 use bacnet_objects::notification_class::MAX_RECIPIENT_LIST_DESTINATIONS;
 use bacnet_objects::notification_forwarder::{ForwardingInput, forwarding_targets};
 use bacnet_objects::subscribed_recipients::MAX_SUBSCRIBED_RECIPIENTS;
@@ -67,17 +66,37 @@ pub const MAX_FORWARDED_DESTINATIONS: usize =
 
 /// What is left of one notification's [`MAX_FORWARDED_DESTINATIONS`],
 /// shared by every copy it makes. The send path takes room for a copy only
-/// once the copy passed every rule and is about to go out.
+/// once the copy passed every rule and is about to go out. Its copies go out
+/// from their destinations' lanes (#2537), so the warning for those past the
+/// cap is logged once the last of them is gone.
 pub(super) struct ForwardingBudget {
     remaining: AtomicUsize,
     dropped: AtomicUsize,
+    suppressions: Arc<super::event_suppression::EventSuppressions>,
+}
+
+impl Drop for ForwardingBudget {
+    fn drop(&mut self) {
+        // One warning per interval for this server, with the capped
+        // notifications since the last; the rest log at debug (#1950).
+        let dropped = self.dropped();
+        if dropped > 0 {
+            warn_throttled!(
+                self.suppressions.cap_warning,
+                dropped,
+                cap = MAX_FORWARDED_DESTINATIONS,
+                "Event notification reached the forwarding cap; destinations dropped"
+            );
+        }
+    }
 }
 
 impl ForwardingBudget {
-    fn new() -> Self {
+    fn new(suppressions: &Arc<super::event_suppression::EventSuppressions>) -> Self {
         Self {
             remaining: AtomicUsize::new(MAX_FORWARDED_DESTINATIONS),
             dropped: AtomicUsize::new(0),
+            suppressions: Arc::clone(suppressions),
         }
     }
 
@@ -209,42 +228,40 @@ fn take_local(
 }
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
-    /// Send a notification this device generated to the recipients its
-    /// Notification Class selected. Recipients naming this device's own
-    /// Device object take it through the local forwarders instead of the
-    /// network.
-    pub(super) async fn deliver_local_notification(
+    /// Push a notification this device generated, under `db`, the guard
+    /// that built it, onto the lanes of the recipients its Notification
+    /// Class selected (#2537). Recipients naming this device's own Device
+    /// object take it through the local forwarders instead of the network.
+    pub(super) fn push_local_notification(
         ctx: &EventDelivery<'_, T>,
+        db: &ObjectDatabase,
         notification: EventNotificationRequest,
-        recipients: &[(BACnetRecipient, u32, bool)],
+        mut recipients: Vec<(BACnetRecipient, u32, bool)>,
+        mut settle: Option<&mut Settle>,
     ) {
-        let mut remote = recipients.to_vec();
-        let local = take_local(&mut remote, notification.initiating_device_identifier);
-        if !remote.is_empty() {
-            let encode_for = |process_identifier| {
-                let mut targeted = notification.clone();
-                targeted.process_identifier = process_identifier;
-                let mut buf = BytesMut::new();
-                encode_event_notification(&targeted, &mut buf).map(|()| buf.freeze())
-            };
-            let outbound = OutboundNotification {
-                notification_class: notification.notification_class,
-                priority: notification.priority,
-                encode_for: &encode_for,
-                admits: Arc::new(|_| true),
-                budget: None,
-            };
-            Self::send_event_notification(ctx, &outbound, &remote).await;
-        }
-        if local.is_empty() {
-            return;
-        }
-        let forwarded = match ForwardedEventNotification::from_request(&notification) {
-            Ok(forwarded) => forwarded,
-            Err(error) => {
-                warn!(%error, "Failed to encode EventNotification for local forwarding");
-                return;
+        let local = take_local(&mut recipients, notification.initiating_device_identifier);
+        let forwarded = if local.is_empty() {
+            None
+        } else {
+            match ForwardedEventNotification::from_request(&notification) {
+                Ok(forwarded) => Some(forwarded),
+                Err(error) => {
+                    warn!(%error, "Failed to encode EventNotification for local forwarding");
+                    None
+                }
             }
+        };
+        if !recipients.is_empty() {
+            let payload = Arc::new(LanePayload::local(notification));
+            let mut handles = LaneHandles::default();
+            for (recipient, process_id, confirmed) in &recipients {
+                let entry =
+                    LaneEntry::new(&payload, *process_id, *confirmed, settle.as_deref_mut());
+                Self::push_to_lane(ctx, recipient, entry, &mut handles);
+            }
+        }
+        let Some(forwarded) = forwarded else {
+            return;
         };
         // One notification, whatever number of process identifiers names
         // this device: one cap, and one copy per destination.
@@ -252,19 +269,33 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .into_iter()
             .map(|process_identifier| forwarded.retargeted(process_identifier))
             .collect();
-        Self::forward_event_notification(ctx, offered, ForwardOrigin::Local).await;
+        Self::forward_into_lanes(ctx, db, offered, ForwardOrigin::Local, settle);
     }
 
-    /// Offer one notification, as `offered` gives it to this device's
-    /// forwarders (one entry per process identifier it reaches them under),
-    /// and send each copy they ask for, up to [`MAX_FORWARDED_DESTINATIONS`]
-    /// destinations in all. Returns once every unconfirmed copy is sent and
-    /// every confirmed one is handed to its notification worker; it never
-    /// reports a delivery outcome to the caller.
+    /// Offer a received notification to this device's forwarders, under a
+    /// read guard of the database, and push each copy they ask for onto its
+    /// destination's lane ([`Self::forward_into_lanes`]). Returns once the
+    /// copies are pushed; it never waits on or reports their delivery.
     pub(super) async fn forward_event_notification(
         ctx: &EventDelivery<'_, T>,
         offered: Vec<ForwardedEventNotification>,
         origin: ForwardOrigin,
+    ) {
+        let db = ctx.db.read().await;
+        Self::forward_into_lanes(ctx, &db, offered, origin, None);
+    }
+
+    /// Offer one notification, as `offered` gives it to this device's
+    /// forwarders (one entry per process identifier it reaches them under),
+    /// read from `db`, and push each copy they ask for onto its destination's
+    /// lane, up to [`MAX_FORWARDED_DESTINATIONS`] destinations in all, counted
+    /// in `settle`.
+    pub(super) fn forward_into_lanes(
+        ctx: &EventDelivery<'_, T>,
+        db: &ObjectDatabase,
+        offered: Vec<ForwardedEventNotification>,
+        origin: ForwardOrigin,
+        mut settle: Option<&mut Settle>,
     ) {
         if matches!(origin, ForwardOrigin::Received(reception) if reception.global) {
             debug!("Forwarders ignore an event notification sent by global broadcast");
@@ -275,51 +306,49 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         }
         let mut taken = Vec::new();
         let mut sent: Vec<(BACnetRecipient, u32, bool)> = Vec::new();
-        // Shared with the copies that wait for their device's I-Am, which
-        // draw on it when they go out (#1368).
-        let budget = Arc::new(ForwardingBudget::new());
+        // Shared with every copy, in its lane or waiting for its device's
+        // I-Am (#1368), each drawing on it when it goes out.
+        let budget = Arc::new(ForwardingBudget::new(ctx.suppressions));
+        let mut handles = LaneHandles::default();
         // A stack, so each entry's hand-offs within the device run before the
         // next entry; reversed so the entries run in the order given.
         let mut pending = offered;
         pending.reverse();
+        let system_utc = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        let (today, current_time) = match db.clock_frame() {
+            Some(frame) if frame.is_valid_actual_datetime() => (
+                frame
+                    .day_of_week()
+                    .expect("validated ClockFrame has a day of week"),
+                frame.local_time,
+            ),
+            _ => system_utc_recipient_filter_time(system_utc),
+        };
         while let Some(notification) = pending.pop() {
-            let mut recipients = {
-                let db = ctx.db.read().await;
-                let system_utc = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default();
-                let (today, current_time) = match db.clock_frame() {
-                    Some(frame) if frame.is_valid_actual_datetime() => (
-                        frame
-                            .day_of_week()
-                            .expect("validated ClockFrame has a day of week"),
-                        frame.local_time,
-                    ),
-                    _ => system_utc_recipient_filter_time(system_utc),
-                };
-                let input = ForwardingInput {
-                    process_identifier: notification.process_identifier,
-                    to_state: notification.to_state,
-                    locally_initiated: origin == ForwardOrigin::Local,
-                    receiving_port: origin.receiving_port(),
-                    today,
-                    current_time: &current_time,
-                };
-                let targets = forwarding_targets(&db, &input, &taken);
-                if taken.is_empty()
-                    && targets.forwarders.is_empty()
-                    && matches!(origin, ForwardOrigin::Received(_))
-                {
-                    debug!(
-                        process_identifier = notification.process_identifier,
-                        "No Notification Forwarder takes the received event notification"
-                    );
-                    ctx.suppressions
-                        .record(EventSuppression::ReceivedNotForwarded);
-                }
-                taken.extend(targets.forwarders);
-                targets.recipients
+            let input = ForwardingInput {
+                process_identifier: notification.process_identifier,
+                to_state: notification.to_state,
+                locally_initiated: origin == ForwardOrigin::Local,
+                receiving_port: origin.receiving_port(),
+                today,
+                current_time: &current_time,
             };
+            let targets = forwarding_targets(db, &input, &taken);
+            if taken.is_empty()
+                && targets.forwarders.is_empty()
+                && matches!(origin, ForwardOrigin::Received(_))
+            {
+                debug!(
+                    process_identifier = notification.process_identifier,
+                    "No Notification Forwarder takes the received event notification"
+                );
+                ctx.suppressions
+                    .record(EventSuppression::ReceivedNotForwarded);
+            }
+            taken.extend(targets.forwarders);
+            let mut recipients = targets.recipients;
             for process_identifier in take_local(&mut recipients, ctx.device) {
                 pending.push(notification.retargeted(process_identifier));
             }
@@ -328,28 +357,18 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 continue;
             }
             sent.extend(recipients.iter().cloned());
-            let encode_for = |process_identifier| Ok(notification.encode_for(process_identifier));
-            let outbound = OutboundNotification {
-                notification_class: notification.notification_class,
-                priority: notification.priority,
-                encode_for: &encode_for,
-                admits: Arc::new(move |route: &RecipientRoute| origin.admits(Reach::of(route))),
-                budget: Some(Arc::clone(&budget)),
-            };
-            Self::send_event_notification(ctx, &outbound, &recipients).await;
-        }
-        // A copy still waiting for its device's I-Am draws on the cap later;
-        // one dropped then is counted but not in this warning.
-        // One warning per interval for this server, with the capped
-        // notifications since the last; the rest log at debug (#1950).
-        let dropped = budget.dropped();
-        if dropped > 0 {
-            warn_throttled!(
-                ctx.suppressions.cap_warning,
-                dropped,
-                cap = MAX_FORWARDED_DESTINATIONS,
-                "Event notification reached the forwarding cap; destinations dropped"
-            );
+            let admits: AdmitsRoute =
+                Arc::new(move |route: &RecipientRoute| origin.admits(Reach::of(route)));
+            let payload = Arc::new(LanePayload::forwarded(
+                notification,
+                admits,
+                Arc::clone(&budget),
+            ));
+            for (recipient, process_id, confirmed) in &recipients {
+                let entry =
+                    LaneEntry::new(&payload, *process_id, *confirmed, settle.as_deref_mut());
+                Self::push_to_lane(ctx, recipient, entry, &mut handles);
+            }
         }
     }
 }

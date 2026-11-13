@@ -11607,6 +11607,10 @@ counters.apdu_too_large;                // a notification longer than the local 
 counters.received_not_forwarded;        // a received notification no forwarder took
 counters.forwarding_cap_dropped;        // a destination past the forwarding cap
 counters.received_not_logged;           // a received notification past its source's allowance
+counters.lane_full;                     // dropped: its destination's lane held 64
+counters.lanes_entries_full;            // dropped: 1,024 waiting across the lanes
+counters.lanes_full;                    // dropped: 256 destinations waiting
+counters.cov_wait_expired;              // a COV fanout that stopped waiting at the APDU timeout
 ```
 
 The four recipient-list fields count transitions, event and acknowledgment
@@ -11635,6 +11639,18 @@ that no Notification Forwarder took, and `forwarding_cap_dropped` (#1259) the
 destinations a notification was not forwarded to because it already had
 `MAX_FORWARDED_DESTINATIONS` across the forwarders, one per destination (see
 [Notification forwarding](#notification-forwarding)).
+
+Every notification the server makes or forwards waits in its destination's
+lane, filled under the database guard that committed it and drained by one
+task per destination, so one destination's notifications go out in commit
+order whichever task committed them, and a destination that stalls holds up
+only its own lane (#2537). A confirmed one holds its lane until its first
+attempt is handed off. `lane_full`, `lanes_entries_full` and `lanes_full`
+count notifications dropped, the newest, at a lane's 64 entries, 1,024 across
+the lanes and 256 destinations. A change's COV notifications wait for its
+event notifications to be handed off (#889) for at most the APDU timeout
+(`cov_retry_timeout_ms`); `cov_wait_expired` counts the changes for which
+they went out at that limit instead.
 
 The three route fields (#1160) count destinations that matched the transition
 but were skipped while their route was resolved, once per destination; the

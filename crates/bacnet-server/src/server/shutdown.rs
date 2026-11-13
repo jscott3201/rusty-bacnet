@@ -138,6 +138,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         while let Some(result) = self.request_tasks.join_next().await {
             super::request_tasks::RequestTasks::observe(Some(result));
         }
+        // No request is left to push an event notification: seal the lanes
+        // and abort their tasks, dropping what they hold (#2537). A producer
+        // stopped below finds them sealed.
+        self.notification_transactions.shut_lanes().await;
         {
             let mut timer = self.dcc_timer.lock().await;
             super::dcc_timer::cancel(&mut timer).await;
@@ -238,6 +242,11 @@ impl<T: TransportPort> Drop for BACnetServer<T> {
         }
         self.request_tasks.close();
         self.notification_transactions.close();
+        // The lanes' tasks hold the database and the network through the
+        // transactions they belong to; sealing aborts them (#2537), and
+        // they are joined, or with no runtime dropped, before the database
+        // goes.
+        super::event_send::lanes(&self.notification_transactions).seal();
         let mut tasks: Vec<JoinHandle<()>> = [
             &mut self.dispatch_task,
             &mut self.network_number_task,
@@ -272,20 +281,27 @@ impl<T: TransportPort> BACnetServer<T> {
     /// it serves when a write is still staged (#1363). A server dropped in
     /// async code without `stop()` would block a Tokio worker for as long as
     /// storage takes. So when a runtime is current, the server's handle goes
-    /// to a task that waits until `tasks`, aborted, and the server's request
-    /// and notification tasks have let go of theirs; then it lets go of the
-    /// handle through [`drop_database_off_runtime`], so the database drops
-    /// on the blocking pool if nothing else holds it, as DeleteObject drops a
-    /// removed object. The server's drop returns first, so storage may still
-    /// change after it. An application still holding the database lets go
-    /// of the last handle itself, the same way (#1513). With no runtime
-    /// current, the database drops here, as it always has.
+    /// to a task that waits until `tasks`, aborted, and the server's
+    /// request, notification and event lane tasks have let go of theirs;
+    /// then it lets go of the handle through [`drop_database_off_runtime`],
+    /// so the database drops on the blocking pool if nothing else holds it,
+    /// as DeleteObject drops a removed object. The server's drop returns
+    /// first, so storage may still change after it. An application still
+    /// holding the database lets go of the last handle itself, the same way
+    /// (#1513). With no runtime current, the database drops here, as it
+    /// always has, and the sealed lanes' tasks are dropped, which aborts
+    /// them (#2537).
     ///
     /// A DCC timer the drop could not take, because a request or the timer's
     /// own expiry held its slot, is cancelled here once the requests are
     /// joined: with Audit reporting, it holds the database too (#1560).
     fn let_database_go(&mut self, tasks: Vec<JoinHandle<()>>) {
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            // Dropping the sealed lanes' set aborts what is left of them.
+            if let Some(mut lanes) = super::event_send::made_lanes(&self.notification_transactions)
+            {
+                drop(lanes.take_tasks());
+            }
             return;
         };
         let db = std::mem::take(&mut self.db);
@@ -309,6 +325,9 @@ impl<T: TransportPort> BACnetServer<T> {
             while let Some(result) = notifications.join_next().await {
                 NotificationTransactions::observe(Some(result));
             }
+            // The lanes were sealed at the drop; their aborted tasks let go
+            // of their database handles as they are joined.
+            super::event_send::join_sealed(&notifications).await;
             drop(drop_database_off_runtime(db));
         });
     }

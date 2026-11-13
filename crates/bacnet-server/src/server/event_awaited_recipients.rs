@@ -212,9 +212,9 @@ fn awaiting(
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// The handles a device's drain task owns, for an [`EventDelivery`] once the
-/// device has answered.
-struct OwnedDelivery<T: TransportPort + 'static> {
+/// The handles a device's drain task, or a destination's lane task (#2537),
+/// owns, for an [`EventDelivery`] once it has something to send.
+pub(super) struct OwnedDelivery<T: TransportPort + 'static> {
     db: Arc<RwLock<ObjectDatabase>>,
     network: Arc<NetworkLayer<T>>,
     comm_state: Arc<CommState>,
@@ -228,7 +228,7 @@ struct OwnedDelivery<T: TransportPort + 'static> {
 }
 
 impl<T: TransportPort + 'static> OwnedDelivery<T> {
-    fn of(ctx: &EventDelivery<'_, T>) -> Self {
+    pub(super) fn of(ctx: &EventDelivery<'_, T>) -> Self {
         Self {
             db: Arc::clone(ctx.db),
             network: Arc::clone(ctx.network),
@@ -243,7 +243,7 @@ impl<T: TransportPort + 'static> OwnedDelivery<T> {
         }
     }
 
-    fn delivery(&self) -> EventDelivery<'_, T> {
+    pub(super) fn delivery(&self) -> EventDelivery<'_, T> {
         EventDelivery {
             db: &self.db,
             network: &self.network,
