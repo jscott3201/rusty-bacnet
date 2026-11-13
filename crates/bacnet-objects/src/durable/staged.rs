@@ -521,7 +521,9 @@ impl<S: Send + 'static, N> StagedSaves<S, N> {
     /// step: a staged write still holding the object brings the served state
     /// it keeps up to date with `follow`, in place, rather than having it
     /// built again (Access Rights, #2526). A correction still due saves
-    /// `served()`, as `correct` does.
+    /// `served()`, as `correct` does. The copy this saves is a release-build
+    /// property no test pins: the tests run in debug builds, where the
+    /// caller's own check builds the whole state anyway.
     #[cfg(feature = "durable-writes")]
     pub(crate) fn correct_with(&mut self, served: impl FnOnce() -> S, follow: impl FnOnce(&mut S)) {
         if self.take_correction() {

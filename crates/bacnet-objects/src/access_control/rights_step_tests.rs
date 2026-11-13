@@ -44,12 +44,29 @@ fn rule(instance: u32) -> PropertyValue {
     octets(&[zone_rule(instance)])
 }
 
+/// Access Credential `instance` of this device, as an Accompaniment.
+fn credential(instance: u32) -> BACnetDeviceObjectReference {
+    ObjectIdentifier::new(ObjectType::ACCESS_CREDENTIAL, instance)
+        .unwrap()
+        .into()
+}
+
+fn credential_value(instance: u32) -> PropertyValue {
+    let mut octets = bytes::BytesMut::new();
+    bacnet_encoding::constructed::encode_device_object_reference(
+        &mut octets,
+        &credential(instance),
+    );
+    PropertyValue::ApplicationData(octets.to_vec())
+}
+
 /// Every claim, the later ones included, serves its request's prefix and
 /// takes its step, and storage ends where the stage saved it, once.
 #[test]
 fn each_claim_makes_its_write_on_the_rules_served() {
     let storage = Arc::new(MemoryPersistence::default());
     let mut rights = persistent(&storage);
+    rights.set_accompaniment(Some(credential(1))).unwrap();
     write_positive(&mut rights, &[zone_rule(1)]).unwrap();
     let writes = [
         pending(
@@ -58,6 +75,7 @@ fn each_claim_makes_its_write_on_the_rules_served() {
             PropertyValue::Unsigned(3),
         ),
         pending(P::POSITIVE_ACCESS_RULES, Some(3), rule(3)),
+        pending(P::ACCOMPANIMENT, None, credential_value(2)),
         pending(P::POSITIVE_ACCESS_RULES, Some(1), rule(4)),
         pending(P::NEGATIVE_ACCESS_RULES, None, rule(5)),
         pending(P::POSITIVE_ACCESS_RULES, Some(2), rule(6)),
@@ -66,6 +84,7 @@ fn each_claim_makes_its_write_on_the_rules_served() {
     let (z, g) = (zone_rule, grown_rule);
     let served = [
         vec![z(1), g(), g()],
+        vec![z(1), g(), z(3)],
         vec![z(1), g(), z(3)],
         vec![z(4), g(), z(3)],
         vec![z(4), g(), z(3)],
@@ -88,6 +107,7 @@ fn each_claim_makes_its_write_on_the_rules_served() {
         );
     }
     assert_eq!(rights.negative_access_rules(), [z(5)]);
+    assert_eq!(rights.accompaniment(), Some(&credential(2)));
     assert!(!rights.enable());
     rights.release_staged_write(&wait);
     rights.wait_for_saves();
@@ -162,23 +182,70 @@ fn a_later_write_is_checked_against_the_rules_the_earlier_ones_leave() {
 /// the old.
 #[test]
 fn a_setter_during_a_stage_makes_the_staged_write_give_way() {
+    for positive in [true, false] {
+        let storage = Arc::new(MemoryPersistence::default());
+        let mut rights = persistent(&storage);
+        let set = |rights: &mut AccessRightsObject, rules: Vec<BACnetAccessRule>| match positive {
+            true => rights.set_positive_access_rules(rules),
+            false => rights.set_negative_access_rules(rules),
+        };
+        let property = match positive {
+            true => P::POSITIVE_ACCESS_RULES,
+            false => P::NEGATIVE_ACCESS_RULES,
+        };
+        let served = |rights: &AccessRightsObject| match positive {
+            true => rights.positive_access_rules().to_vec(),
+            false => rights.negative_access_rules().to_vec(),
+        };
+        let kept = |storage: &MemoryPersistence| {
+            let snapshot = storage.snapshot().unwrap();
+            match positive {
+                true => snapshot.positive_access_rules,
+                false => snapshot.negative_access_rules,
+            }
+        };
+        set(&mut rights, vec![zone_rule(1), zone_rule(2)]).unwrap();
+        let write = pending(property, Some(1), rule(9));
+        let wait = staged(&mut rights, core::slice::from_ref(&write));
+        set(&mut rights, vec![zone_rule(3), zone_rule(4), zone_rule(5)]).unwrap();
+        make(&mut rights, &write).unwrap();
+        let made = vec![zone_rule(9), zone_rule(4), zone_rule(5)];
+        assert_eq!(served(&rights), made, "{property:?}");
+        rights.release_staged_write(&wait);
+        rights.wait_for_saves();
+        assert_eq!(kept(&storage), Some(made), "{property:?}");
+    }
+}
+
+/// A setter given what is served already changes nothing, so it counts no
+/// change: the staged write stays, and its stage's save is the only one
+/// (#2526). Counting it would make every write of the request save again
+/// where it stands.
+#[test]
+fn an_unchanged_setter_during_a_stage_leaves_the_staged_write() {
     let storage = Arc::new(MemoryPersistence::default());
     let mut rights = persistent(&storage);
+    rights.set_accompaniment(Some(credential(1))).unwrap();
     rights
         .set_positive_access_rules([zone_rule(1), zone_rule(2)])
         .unwrap();
-    let write = pending(P::POSITIVE_ACCESS_RULES, Some(1), rule(9));
-    let wait = staged(&mut rights, core::slice::from_ref(&write));
+    let writes = [
+        pending(P::POSITIVE_ACCESS_RULES, Some(1), rule(9)),
+        pending(P::ENABLE, None, PropertyValue::Boolean(false)),
+    ];
+    let wait = staged(&mut rights, &writes);
+    let saved = storage.snapshot();
+    rights.set_enable(true);
     rights
-        .set_positive_access_rules([zone_rule(3), zone_rule(4), zone_rule(5)])
+        .set_positive_access_rules([zone_rule(1), zone_rule(2)])
         .unwrap();
-    make(&mut rights, &write).unwrap();
-    let made = vec![zone_rule(9), zone_rule(4), zone_rule(5)];
-    assert_eq!(rights.positive_access_rules(), made.as_slice());
+    rights.set_negative_access_rules([]).unwrap();
+    rights.set_accompaniment(Some(credential(1))).unwrap();
+    for write in &writes {
+        make(&mut rights, write).unwrap();
+    }
     rights.release_staged_write(&wait);
     rights.wait_for_saves();
-    assert_eq!(
-        storage.snapshot().unwrap().positive_access_rules,
-        Some(made)
-    );
+    assert_eq!(storage.snapshot(), saved);
+    assert_eq!(storage.saves(), 1);
 }

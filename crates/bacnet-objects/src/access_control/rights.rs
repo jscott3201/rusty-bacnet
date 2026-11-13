@@ -51,7 +51,8 @@ pub const MAX_ACCESS_RULES: usize = 1024;
 /// the property alone. To change a saved value, write the property. A
 /// setter that does change a property while a peer's write to the object
 /// is being saved makes that staged write give way: the write is then made
-/// on what the setter left (#2526).
+/// on what the setter left (#2526). One given the value already served
+/// changes nothing, and leaves the staged write alone.
 pub struct AccessRightsObject {
     oid: ObjectIdentifier,
     name: String,
@@ -106,7 +107,7 @@ impl AccessRightsObject {
     /// a write has set Enable and it was saved, the saved value wins and
     /// this does nothing.
     pub fn set_enable(&mut self, enable: bool) {
-        if !self.keeps_saved(PropertyIdentifier::ENABLE) {
+        if !self.keeps_saved(PropertyIdentifier::ENABLE) && self.enable != enable {
             self.enable = enable;
             self.changed();
         }
@@ -144,7 +145,9 @@ impl AccessRightsObject {
         rules: impl IntoIterator<Item = BACnetAccessRule>,
     ) -> Result<(), Error> {
         let rules = checked_rules(rules)?;
-        if !self.keeps_saved(PropertyIdentifier::POSITIVE_ACCESS_RULES) {
+        if !self.keeps_saved(PropertyIdentifier::POSITIVE_ACCESS_RULES)
+            && self.positive_access_rules != rules
+        {
             self.positive_access_rules = rules;
             self.changed();
         }
@@ -159,7 +162,9 @@ impl AccessRightsObject {
         rules: impl IntoIterator<Item = BACnetAccessRule>,
     ) -> Result<(), Error> {
         let rules = checked_rules(rules)?;
-        if !self.keeps_saved(PropertyIdentifier::NEGATIVE_ACCESS_RULES) {
+        if !self.keeps_saved(PropertyIdentifier::NEGATIVE_ACCESS_RULES)
+            && self.negative_access_rules != rules
+        {
             self.negative_access_rules = rules;
             self.changed();
         }
@@ -203,7 +208,9 @@ impl AccessRightsObject {
         if let Some(reference) = &accompaniment {
             check_accompaniment(reference)?;
         }
-        if !self.keeps_saved(PropertyIdentifier::ACCOMPANIMENT) {
+        if !self.keeps_saved(PropertyIdentifier::ACCOMPANIMENT)
+            && self.accompaniment != accompaniment
+        {
             self.accompaniment = accompaniment;
             self.changed();
         }

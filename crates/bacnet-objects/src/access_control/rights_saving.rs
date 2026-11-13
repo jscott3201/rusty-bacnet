@@ -503,12 +503,14 @@ impl AccessRightsObject {
         None
     }
 
-    /// Whether a staged step can be made on the rules served: a rule's slot
-    /// lies inside its array (#2526). Every change to the served arrays is
-    /// counted, a write or a setter ([`changed`](Self::changed)), and a step
-    /// is taken only while none came between, so this holds no step back;
-    /// should one ever be stale, its write isn't taken and is refused as made
-    /// on the rules served, rather than reported made.
+    /// Whether a staged step can be made on the rules served (#2526). Only a
+    /// rule step can't: one whose slot lies past the end of its array; every
+    /// other step is made whatever the arrays hold. Every change to what is
+    /// served is counted, a write or a setter ([`changed`](Self::changed)),
+    /// and a step is taken only while none came between, so nothing else can
+    /// be stale and this holds no step back. Should one ever be, its write
+    /// isn't taken and is refused as made on the rules served, rather than
+    /// reported made.
     #[cfg(feature = "durable-writes")]
     fn makes(&self, next: &NextState) -> bool {
         match next {
