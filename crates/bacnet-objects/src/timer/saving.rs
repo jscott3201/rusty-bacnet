@@ -170,12 +170,12 @@ impl TimerObject {
 impl ConfigWrites for TimerObject {
     type Config = TimerConfig;
 
-    fn storage(&mut self) -> &mut Option<Storage<TimerConfig>> {
+    fn storage(&mut self) -> &mut Option<Storage> {
         &mut self.config_storage
     }
 
     #[cfg(feature = "durable-writes")]
-    fn storage_ref(&self) -> Option<&Storage<TimerConfig>> {
+    fn storage_ref(&self) -> Option<&Storage> {
         self.config_storage.as_ref()
     }
 

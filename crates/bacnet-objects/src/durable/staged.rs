@@ -87,8 +87,9 @@ pub(crate) struct Step<N> {
     /// the state the write leaves on top of the steps before it; or only
     /// what the write sets, made then on the state served (a Tags element or
     /// size, #2526); or nothing of its own, for an object that works the
-    /// write out again (a log, #2431, and the reporting rows, #2414, whose
-    /// last step keeps the snapshot its stage saved).
+    /// write out again or makes it on its own state (a Channel, a Timer and
+    /// a Load Control, #2526; a log, #2431; and the reporting rows, #2414,
+    /// whose last step keeps the snapshot its stage saved).
     pub(crate) next: N,
 }
 
@@ -299,7 +300,8 @@ impl<S: Send + 'static, N> StagedSaves<S, N> {
     /// which the caller built with every step's state in it, and keeping
     /// `served` beside them: for steps that hold less than the state they
     /// leave, so a stage keeps one copy of it whatever the steps' number
-    /// (the reporting rows, #2414; Tags, #2526).
+    /// (the reporting rows, #2414; Tags, a Channel, a Timer and a Load
+    /// Control, #2526).
     #[cfg(feature = "durable-writes")]
     pub(crate) fn stage_built(
         &mut self,

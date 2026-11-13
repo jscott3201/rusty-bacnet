@@ -148,12 +148,12 @@ impl ChannelObject {
 impl ConfigWrites for ChannelObject {
     type Config = ChannelConfig;
 
-    fn storage(&mut self) -> &mut Option<Storage<ChannelConfig>> {
+    fn storage(&mut self) -> &mut Option<Storage> {
         &mut self.config_storage
     }
 
     #[cfg(feature = "durable-writes")]
-    fn storage_ref(&self) -> Option<&Storage<ChannelConfig>> {
+    fn storage_ref(&self) -> Option<&Storage> {
         self.config_storage.as_ref()
     }
 

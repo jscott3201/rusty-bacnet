@@ -7,8 +7,11 @@
 //!
 //! The object holds its configuration as a [`ConfigWrites::Config`], which
 //! also says which parts a write has set; storage keeps just those
-//! ([`ConfigWrites::snapshot`]). Each write's step is the whole
-//! configuration it leaves, so taking a step is replacing the configuration.
+//! ([`ConfigWrites::snapshot`]). A step keeps nothing but its write, so a
+//! request's stage holds the configuration a constant number of times
+//! however many writes it makes (#2526): the stage works the writes out on
+//! one working copy and saves the last, and each write is worked out again
+//! on the configuration served as it is made.
 
 use alloc::sync::Arc;
 use core::borrow::Borrow;
@@ -28,8 +31,9 @@ use crate::durable::staged::{self, StagedSaves};
 #[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use crate::durable::{PendingWrite, SaveWait, SaveWriter, StageStep};
 
-/// An object's writer and the write staged on it.
-pub(crate) type Storage<C> = StagedSaves<WriteConfigSnapshot, C>;
+/// An object's writer and the write staged on it. A step keeps only its
+/// write (#2526).
+pub(crate) type Storage = StagedSaves<WriteConfigSnapshot, ()>;
 
 /// The writer that saves `oid`'s configuration in `persistence`, handed
 /// it as `S`: the snapshot itself, or one shared with what keeps it.
@@ -59,21 +63,27 @@ pub(crate) trait ConfigWrites {
     type Config: Clone + Send + 'static;
 
     /// The storage, once the object has it.
-    fn storage(&mut self) -> &mut Option<Storage<Self::Config>>;
+    fn storage(&mut self) -> &mut Option<Storage>;
 
     /// The storage, for a look.
     #[cfg(feature = "durable-writes")]
-    fn storage_ref(&self) -> Option<&Storage<Self::Config>>;
+    fn storage_ref(&self) -> Option<&Storage>;
 
     /// The configuration served now; `None` while the object serves none
     /// (a Timer before its set).
     fn config(&self) -> Option<&Self::Config>;
 
-    /// Serve `config`, one write's step, and count the write.
+    /// Serve `config`, what a write leaves, and count the write.
     fn install(&mut self, config: Self::Config);
 
     /// Configuration changes counted so far, so a staged step is taken only
-    /// if nothing changed it since the stage.
+    /// if nothing changed it since the stage. Every change to what storage
+    /// keeps, or to what [`next`](Self::next) checks a write against, is
+    /// counted: a write ([`install`](Self::install)) and each setter, a
+    /// Timer's Min_Pres_Value and Max_Pres_Value included, which storage
+    /// doesn't keep but a Default_Timeout write is checked against. A
+    /// Channel's learned member datatypes, a cache neither reads nor keeps,
+    /// are not.
     fn writes(&self) -> u64;
 
     /// What storage keeps of `config`: the parts a write has set.
@@ -95,7 +105,7 @@ pub(crate) trait ConfigWrites {
 /// queue the save that puts storage back to the served configuration.
 fn with_storage<T: ConfigWrites, R>(
     object: &mut T,
-    f: impl FnOnce(&mut Storage<T::Config>) -> R,
+    f: impl FnOnce(&mut Storage) -> R,
 ) -> Option<R> {
     let mut storage = object.storage().take()?;
     let result = f(&mut storage);
@@ -104,30 +114,32 @@ fn with_storage<T: ConfigWrites, R>(
     Some(result)
 }
 
-/// Make `write`, one storage keeps: take its staged step if it is the next
-/// one, or else work out what it leaves, save that and serve it. A save
-/// that fails refuses the write with DEVICE / OPERATIONAL_PROBLEM, and the
-/// object keeps serving what it did.
+/// Make `write`, one storage keeps: work out what it leaves, then take its
+/// staged step if it is the next one, or else save that and serve it. A
+/// save that fails refuses the write with DEVICE / OPERATIONAL_PROBLEM, and
+/// the object keeps serving what it did.
 pub(crate) fn write<T: ConfigWrites>(object: &mut T, write: PendingWrite) -> Result<(), Error> {
     let refused = |_| common::protocol_error(ErrorClass::DEVICE, ErrorCode::OPERATIONAL_PROBLEM);
-    let base = object.writes();
-    if let Some(mut storage) = object.storage().take() {
-        let claimed = storage
-            .claim(write.property, write.array_index, &write.value, base)
-            .map(|claimed| claimed.map(|config| object.install(config)));
-        // Steps the request has still to take keep the configuration served now.
-        storage.correct(|| T::snapshot(object.config()));
-        *object.storage() = Some(storage);
-        if let Some(taken) = claimed {
-            return taken.map_err(refused);
-        }
-    }
     let Some(config) = object.config() else {
         return Err(common::unknown_property_error());
     };
-    // A write the object refuses leaves another request's staged write
-    // alone (#1424).
+    // Worked out on the configuration served now, as a step keeps only its
+    // write (#2526). A step is taken only while nothing counted changed the
+    // configuration since its stage ([`ConfigWrites::writes`]), so this is
+    // what the stage saved for it. A write the object refuses takes no step
+    // and leaves another request's staged write alone (#1424).
     let next = T::next(config, &write)?;
+    let base = object.writes();
+    let claimed = object
+        .storage()
+        .as_mut()
+        .and_then(|storage| storage.claim(write.property, write.array_index, &write.value, base));
+    if let Some(claimed) = claimed {
+        let taken = claimed.map(|()| object.install(next));
+        // Steps the request has still to take keep the configuration served now.
+        with_storage(object, |_| ());
+        return taken.map_err(refused);
+    }
     if object.storage().is_some() {
         // This write will be made, so it supersedes a staged one: storage
         // goes back to the served configuration ahead of its save.
@@ -186,19 +198,24 @@ pub(crate) fn stage_writes<T: ConfigWrites>(object: &mut T, writes: &[PendingWri
         return StageStep::Busy(wait);
     }
     let current = object.config().expect("checked above");
-    let steps = staged::steps(writes, |earlier, write| {
+    // One working copy of the configuration the steps so far leave; a step
+    // keeps only its write (#2526).
+    let mut working = None;
+    let steps = staged::steps(writes, |_, write| {
         if !kept(write) {
             return Ok(None);
         }
-        let config = earlier.last().map_or(current, |step| &step.next);
-        T::next(config, write).map(Some)
+        working = Some(T::next(working.as_ref().unwrap_or(current), write)?);
+        Ok(Some(()))
     });
-    let served = T::snapshot(object.config());
+    // A step was taken exactly when the working copy was set.
+    let Some(last) = working else {
+        return StageStep::Skip;
+    };
+    let (snapshot, served) = (T::snapshot(Some(&last)), T::snapshot(object.config()));
     let base = object.writes();
     let storage = object.storage().as_mut().expect("checked above");
-    storage.stage(steps, base, served, |snapshot, config| {
-        *snapshot = T::snapshot(Some(config));
-    })
+    storage.stage_built(steps, base, snapshot, served)
 }
 
 /// See [`DurableWrites::release_staged_write`](crate::durable::DurableWrites::release_staged_write).
