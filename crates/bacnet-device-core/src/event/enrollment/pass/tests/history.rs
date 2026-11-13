@@ -39,7 +39,7 @@ fn a_delivery_carries_the_history_its_commit_wrote() {
 
     let (snapshot, clock) = (delivery.history_snapshot.clone(), delivery.recipient_clock);
     let (values, ack_required) = (delivery.event_values.clone(), delivery.ack_required);
-    let notification = delivery.into_notification().expect("a normal transition");
+    let notification = delivery.into_notification();
     assert_eq!(notification.change.to, EventState::HIGH_LIMIT);
     assert_eq!(notification.event_type, EventType::OUT_OF_RANGE);
     assert_eq!(notification.event_values, Some(values));

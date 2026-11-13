@@ -57,10 +57,7 @@ pub(super) fn spawn_event_enrollment_task<T: TransportPort + 'static>(
                     .deliveries
                     .into_iter()
                     .filter(CommittedEventEnrollmentDelivery::distribute)
-                    .filter_map(|committed| {
-                        let oid = committed.enrollment_oid();
-                        Some((oid, committed.into_notification()?))
-                    })
+                    .map(|committed| (committed.enrollment_oid(), committed.into_notification()))
                     .collect::<Vec<_>>();
                 (evaluation.report, outbound)
             };

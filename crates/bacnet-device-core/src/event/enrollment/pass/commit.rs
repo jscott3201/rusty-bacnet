@@ -97,8 +97,9 @@ pub struct EventEnrollmentReliabilityResult {
     pub previous_reliability: Reliability,
     /// Reliability value stored by the commit.
     pub new_reliability: Reliability,
-    /// FAULT entry, re-entry, or recovery committed with Reliability.
-    pub state_change: Option<EventStateChange>,
+    /// The FAULT entry, re-entry or recovery committed with the
+    /// Reliability: a pass commits a Reliability change only with one.
+    pub state_change: EventStateChange,
     /// Whether Event_Enable permits distribution for the transition coordinate.
     pub distribute: bool,
     /// Precedence source that selected `new_reliability`.
@@ -109,11 +110,9 @@ impl EventEnrollmentReliabilityResult {
     /// Select the event type for this committed Reliability result.
     ///
     /// `configured_algorithm` is the Event Enrollment object's configured
-    /// Event_Type. `None` means that the result has no committed state change.
-    pub fn event_type(&self, configured_algorithm: EventType) -> Option<EventType> {
-        self.state_change
-            .as_ref()
-            .map(|change| change.event_type(configured_algorithm))
+    /// Event_Type.
+    pub fn event_type(&self, configured_algorithm: EventType) -> EventType {
+        self.state_change.event_type(configured_algorithm)
     }
 }
 
@@ -176,14 +175,13 @@ impl CommittedEventEnrollmentDelivery {
         }
     }
 
-    /// The notification to send for it. `None` only for a Reliability
-    /// result with no state change, which a pass never delivers.
-    pub fn into_notification(self) -> Option<NotificationTransition> {
+    /// The notification to send for it.
+    pub fn into_notification(self) -> NotificationTransition {
         let change = match self.result {
             CommittedEventEnrollmentResult::Normal(result) => result.change,
-            CommittedEventEnrollmentResult::Reliability(result) => result.state_change?,
+            CommittedEventEnrollmentResult::Reliability(result) => result.state_change,
         };
-        Some(NotificationTransition {
+        NotificationTransition {
             change,
             event_type: self.event_type,
             history_source: NotificationHistorySource::Committed {
@@ -193,7 +191,7 @@ impl CommittedEventEnrollmentDelivery {
             ack_required: Some(self.ack_required),
             event_values: Some(self.event_values),
             construction: NotificationConstruction::Event,
-        })
+        }
     }
 }
 
@@ -579,7 +577,7 @@ pub(super) fn apply_updates_for_delivery(
                 monitored_oid: reliability.monitored_oid,
                 previous_reliability: reliability.previous,
                 new_reliability: reliability.desired,
-                state_change: Some(change.clone()),
+                state_change: change.clone(),
                 distribute: reliability.distribute,
                 cause: reliability.cause,
             };
