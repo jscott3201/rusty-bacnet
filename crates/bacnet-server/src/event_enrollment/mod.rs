@@ -55,20 +55,13 @@
 //! The server lifecycle projects successful commits into its shared
 //! notification sender without repeating these transition actions.
 
-mod algorithms;
 mod api;
 mod commit;
-mod fault;
-mod reference;
 mod support;
 
 use bacnet_objects::property_metadata::is_array_property;
 use std::collections::{HashMap, HashSet};
 
-pub use algorithms::{
-    encode_change_of_bitstring_params, encode_change_of_state_params,
-    encode_change_of_value_params, encode_floating_limit_params, encode_out_of_range_params,
-};
 pub use api::{
     EventEnrollmentTransition, evaluate_event_enrollments, evaluate_event_enrollments_report,
 };
@@ -102,11 +95,9 @@ use reference::MonitoredReference;
 use reference::{params_fingerprint, read_object_property_ref};
 use support::*;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LocalConfigurationReadError {
-    Malformed,
-    Unavailable,
-}
+use bacnet_device_core::event::enrollment::{
+    LocalConfigurationReadError, algorithms, fault, reference,
+};
 
 use bacnet_device_core::event::{
     CapturedReferencedValue, EventEnrollmentProjectionSnapshot, capture_status_flags,

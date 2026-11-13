@@ -28,6 +28,7 @@ std = [
     "structured-writes",
     "cov-multiple",
     "event-reporting",
+    "event-enrollment",
 ]
 # no_std with a global allocator.
 alloc = [
@@ -65,9 +66,14 @@ cov-multiple = []
 # the objects lend their detectors. `std` turns it on, so bacnet-server has
 # it, and firmware-link's `reporting` image does.
 event-reporting = ["bacnet-objects/event-reporting"]
+# Event Enrollment, algorithmic reporting (#2319): `event::enrollment`, the
+# event and fault algorithms an Event Enrollment object evaluates, on top of
+# `event-reporting`. `std` turns it on, so bacnet-server has it.
+event-enrollment = ["event-reporting"]
 # Hidden hooks for hosts' own tests (the COV table's generation counter, so
 # bacnet-server's table tests reach generation exhaustion, an event payload
-# built without a projection, and GetEventInformation within a byte budget).
+# built without a projection, GetEventInformation within a byte budget, and
+# `event::enrollment::reference::MonitoredReference::local`).
 # bacnet-server turns it on for its tests only, through a dev-dependency;
 # never enable it in a product build.
 test-support = []

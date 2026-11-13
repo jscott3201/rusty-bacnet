@@ -244,12 +244,15 @@ impl Kept {
     /// Whether `saved` is what storage keeps of this ([`saved`](Self::saved)),
     /// compared without the copy (#2431). Debug builds check that the two
     /// agree.
+    // durable-writes: only a staged step is checked (#2532).
+    #[cfg(feature = "durable-writes")]
     fn is_in(&self, saved: &ReportingWriteConfig) -> bool {
         let is_in = self.is_in_rows(saved);
         debug_assert_eq!(is_in, self.saved() == *saved, "is_in and saved disagree");
         is_in
     }
 
+    #[cfg(feature = "durable-writes")]
     fn is_in_rows(&self, saved: &ReportingWriteConfig) -> bool {
         let (rows, written) = (&self.rows, self.written);
         let options = &rows.options;
@@ -308,6 +311,8 @@ type Saved = Arc<WriteConfigSnapshot>;
 /// `next`, the rows its last write leaves as it is made: equal, or, since a
 /// limit that is no number isn't equal to itself, encoded as the same file
 /// octets.
+// durable-writes: only a staged step is checked (#2532).
+#[cfg(feature = "durable-writes")]
 fn still_saved(oid: ObjectIdentifier, saved: &WriteConfigSnapshot, next: &Kept) -> bool {
     use crate::snapshot::write_config::encode;
     matches!(saved, WriteConfigSnapshot::Reporting(saved) if next.is_in(saved))
@@ -548,20 +553,19 @@ fn admit_to(
     // State_Text). A write the object refuses also leaves another
     // request's staged write alone (#1424).
     let next = current.after(write, object)?;
-    // The last step is stale when a change since the stage leaves the
-    // object making it with rows other than those saved (#2431).
-    let stale = |saved: &Option<Saved>| {
-        let oid = object.object_identifier();
-        saved
-            .as_deref()
-            .is_some_and(|saved| !still_saved(oid, saved, &next))
-    };
-    let claimed = storage.claim_unless(
+    #[cfg(feature = "durable-writes")]
+    let claimed = claim(storage, write, store.writes, &next, object);
+    // Without durable-writes no server or endpoint stages; only code that
+    // calls `DurableWrites` itself can. Its step is taken with no check for
+    // a stale stage, as before #2431: the check's encoding fallback would
+    // link the write-configuration encoder into images that never stage
+    // (#2532).
+    #[cfg(not(feature = "durable-writes"))]
+    let claimed = storage.claim(
         write.property,
         write.array_index,
         &write.value,
         store.writes,
-        stale,
     );
     match claimed {
         Some(Ok(_)) => {
@@ -587,6 +591,33 @@ fn admit_to(
     store.written = next.written;
     store.writes = store.writes.wrapping_add(1);
     Ok(())
+}
+
+/// The staged step `write`, made at write count `writes`, takes, if it is
+/// the next one: what [`StagedSaves::claim_unless`] gives, with the last
+/// step stale when a change since the stage leaves the object making it
+/// with rows other than those saved, `next` (#2431).
+#[cfg(feature = "durable-writes")]
+fn claim(
+    storage: &mut Storage,
+    write: &PendingWrite,
+    writes: u64,
+    next: &Kept,
+    object: &dyn KeepsReporting,
+) -> Option<Result<Option<Saved>, Error>> {
+    let stale = |saved: &Option<Saved>| {
+        let oid = object.object_identifier();
+        saved
+            .as_deref()
+            .is_some_and(|saved| !still_saved(oid, saved, next))
+    };
+    storage.claim_unless(
+        write.property,
+        write.array_index,
+        &write.value,
+        writes,
+        stale,
+    )
 }
 
 /// Stage the kept rows a request writes to `object`

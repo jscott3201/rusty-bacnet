@@ -1,23 +1,33 @@
-use bacnet_device_core::event::decode_reference_value;
+//! The property an enrollment monitors, and the fingerprint that tells a
+//! countdown its inputs changed.
+
+use crate::event::decode_reference_value;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::constructed::BACnetEventParameter;
 use bacnet_types::enums::{EventType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
 
 use super::LocalConfigurationReadError;
-use super::support::classify_required_property_read_error;
+use super::classify_required_property_read_error;
 
+/// The property an enrollment monitors (Object_Property_Reference).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct MonitoredReference {
-    pub(super) object_identifier: ObjectIdentifier,
-    pub(super) property_identifier: PropertyIdentifier,
-    pub(super) array_index: Option<u32>,
-    pub(super) device_identifier: Option<ObjectIdentifier>,
+pub struct MonitoredReference {
+    /// The object.
+    pub object_identifier: ObjectIdentifier,
+    /// Its property.
+    pub property_identifier: PropertyIdentifier,
+    /// The array index, if any.
+    pub array_index: Option<u32>,
+    /// The device named, if the reference names one.
+    pub device_identifier: Option<ObjectIdentifier>,
 }
 
 impl MonitoredReference {
-    #[cfg(test)]
-    pub(super) fn local(
+    /// A reference naming no device, for tests.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn local(
         object_identifier: ObjectIdentifier,
         property_identifier: PropertyIdentifier,
         array_index: Option<u32>,
@@ -35,7 +45,7 @@ impl MonitoredReference {
 ///
 /// `Malformed` means the required property is absent or does not contain a
 /// usable reference shape. Other read failures remain temporarily unavailable.
-pub(super) fn read_object_property_ref(
+pub fn read_object_property_ref(
     enrollment: &dyn BACnetObject,
 ) -> Result<MonitoredReference, LocalConfigurationReadError> {
     match enrollment.read_property(PropertyIdentifier::OBJECT_PROPERTY_REFERENCE, None) {
@@ -56,7 +66,7 @@ pub(super) fn read_object_property_ref(
 /// Hash the inputs that determine whether an in-flight countdown is still
 /// valid. The device qualifier is excluded because accepted qualified and
 /// unqualified references resolve to the same local target.
-pub(super) fn params_fingerprint(
+pub fn params_fingerprint(
     params: &BACnetEventParameter,
     normal_delay: u64,
     event_type: EventType,
