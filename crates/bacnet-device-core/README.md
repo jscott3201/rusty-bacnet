@@ -21,8 +21,10 @@ the database guard, the transport, addressing and time.
 - `event-enrollment`, which `std` turns on, adds `event::enrollment` on top
   of `event-reporting` (#2319): Event Enrollment's evaluation pass,
   `evaluate_event_enrollments_for_delivery`, with the event and fault
-  algorithms it runs; `alloc` is enough. `bacnet-server` drives it; no
-  firmware image turns it on yet.
+  algorithms it runs; `alloc` is enough. `bacnet-server` drives it on its
+  own task, and the `Reporter` runs it with
+  `ReportConfig::with_event_enrollment`; the firmware `enrollment` image
+  turns it on, the `reporting` image doesn't.
 - `cov-multiple`, which `std` turns on, has the SubscribeCOVPropertyMultiple
   path (#2320): the service with its checks
   (`cov::subscribe_cov_property_multiple`), the capture of timestamped
@@ -119,7 +121,17 @@ the database guard, the transport, addressing and time.
   outbox at worst, and new events are then dropped and counted. Under
   DeviceCommunicationControl keep popping and report `NotSent`. Without a
   sweep the path is off; the endpoint refuses one, and its deadlines use
-  `on_cov_deadline` over a shared database.
+  `on_cov_deadline` over a shared database. With `event-enrollment` and
+  `ReportConfig::with_event_enrollment(period)` on top of the sweep it
+  runs the Event Enrollment pass too (#2319), at `period` rounded down to
+  whole seconds (at least one): the first at the first `on_deadline`, the
+  next a period on (a late call runs one pass, not a burst), and sends
+  each transition the pass commits, if its `Event_Enable` lets it, the way
+  an intrinsic one goes. One it can't send is counted
+  (`enrollments_suppressed`). An enrollment's monitored reference must be
+  local: one naming another device is an observation gap at every pass,
+  as on the server. Its inhibit reference is followed by the sweep and at
+  each pass.
 - `event` (behind `event-reporting`, which `std` turns on): intrinsic
   event reporting as staged functions under the host's guard, from
   `bacnet-server` (#2303). `after_write` evaluates and commits one changed

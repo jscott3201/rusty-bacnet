@@ -795,6 +795,40 @@
 # stay. The thumb images would fit the 256 KiB layout again, by about
 # 3 KB; they keep the 512 KiB one (docs/design/device-core-events.md,
 # section 8.3). The reporting budgets are --suggest's again.
+#
+# On 2026-11-13 (#2319, PR 3, Rust 1.99.0, dev at 4a982f29c) the
+# enrollment image joins: the reporting image's scenario with
+# bacnet-device-core's `event-enrollment` on, then a second device whose
+# `Reporter` sweeps and runs the Event Enrollment pass once a second, with
+# one Event Enrollment (OUT_OF_RANGE with a Time_Delay and
+# FAULT_OUT_OF_RANGE) on an Analog Input: a transition, its local
+# acknowledgement, its return and a fault, five notifications. The
+# reporting image keeps the feature off, and its rows, the objects' and the
+# points' don't move. As text / rodata / flash, the reporting image then
+# this one; RAM 24680 for both, and the host heap's peak 22360 of the same
+# 24 KiB arena:
+#
+#   thumbv7m             237332 / 20800 / 259156
+#                        304260 / 26272 / 331556
+#   thumbv7em            236720 / 20800 / 258544
+#                        304188 / 26272 / 331484
+#   riscv32imac          289932 / 25848 / 315802
+#                        370644 / 33048 / 403714
+#
+# So algorithmic reporting costs 72400 / 72940 / 87912 octets of flash, at
+# the top of the 60-75 KB estimate (design section 8.2). Of the thumbv7m
+# .text: the pass (evaluate_event_enrollments_for_delivery, with its
+# algorithms and commit inlined) 12.4 KB, the scenario's own loop and
+# second database 9.7 KB, decode_event_parameter 8.4 KB and
+# BACnetEventParameter::decode 4.4 KB, decode_fault_parameters 3.4 KB, the
+# Event Enrollment payload projection 2.8 KB, and the Event Enrollment
+# object's constructor inlined into the database builder 4.3 KB; by crate,
+# bacnet-device-core 23.9 KB, bacnet-encoding 20.8 KB, bacnet-objects
+# 10.7 KB and bacnet-types 8.2 KB. The Reporter encodes the intrinsic forms
+# and the six the pass builds, not every form, which keeps 4024 / 4052
+# octets (thumbv7m / riscv32imac) out. core::fmt and the 64-bit division
+# routines stay at 0 (the pass converts its delays in 32 bits), and the
+# memmove count is the reporting image's. The budgets are --suggest's.
 
 [thumbv7m-none-eabi.mstp]
 text = 18320
@@ -916,6 +950,17 @@ ram = 32224
 fmt_functions = 0
 div64_functions = 0
 memmove_functions = 3
+
+[thumbv7m-none-eabi.enrollment]
+text = 340784
+rodata = 29424
+data = 64
+bss = 27648
+flash = 371344
+ram = 27648
+fmt_functions = 0
+div64_functions = 0
+memmove_functions = 4
 
 [thumbv6m-none-eabi.mstp]
 text = 19696
@@ -1214,6 +1259,17 @@ fmt_functions = 0
 div64_functions = 0
 memmove_functions = 3
 
+[thumbv7em-none-eabihf.enrollment]
+text = 340704
+rodata = 29424
+data = 64
+bss = 27648
+flash = 371264
+ram = 27648
+fmt_functions = 0
+div64_functions = 0
+memmove_functions = 4
+
 [riscv32imac-unknown-none-elf.objects]
 text = 172336
 rodata = 20880
@@ -1243,6 +1299,17 @@ data = 64
 bss = 32224
 flash = 255504
 ram = 32224
+fmt_functions = 0
+div64_functions = 0
+memmove_functions = 2
+
+[riscv32imac-unknown-none-elf.enrollment]
+text = 415136
+rodata = 37024
+data = 64
+bss = 27648
+flash = 452160
+ram = 27648
 fmt_functions = 0
 div64_functions = 0
 memmove_functions = 2

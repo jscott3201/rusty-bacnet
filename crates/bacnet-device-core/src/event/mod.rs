@@ -66,7 +66,7 @@ pub use intrinsic::{IntrinsicCommit, after_write, next_due, sweep};
 
 pub use message::intrinsic_event_message_text;
 pub use payload::{
-    CapturedReferencedValue, CapturedStatusFlags, CommittedNotificationPayload,
+    CapturedReferencedValue, CapturedStatusFlags, CommittedNotificationPayload, ENROLLMENT_FORMS,
     EventEnrollmentProjectionSnapshot, INTRINSIC_FORMS, capture_status_flags,
     decode_reference_value, project_event_enrollment_payload, project_intrinsic_payload,
 };

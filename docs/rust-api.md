@@ -8598,7 +8598,13 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   a FAULT from a Reliability nobody reported, the fault pass's included,
   waits for the next periodic sweep), runs the fault pass every
   `with_fault_detection(period)`, and answers AcknowledgeAlarm and
-  GetEventInformation (list `report::EVENT_SERVICES` too).
+  GetEventInformation (list `report::EVENT_SERVICES` too). With the
+  `event-enrollment` feature, `with_event_enrollment(period)` on top of the
+  sweep runs Event Enrollment's pass every `period`, rounded down to whole
+  seconds (#2319): one pass per call however late, each transition it
+  commits sent as an intrinsic one is when its `Event_Enable` lets it, and
+  those it can't send counted (`ReporterCounters::enrollments_suppressed`);
+  `Reporter::new` refuses it without a sweep.
   `acknowledge_local(db, object, state, now)` acknowledges the latest
   transition to `state` by local means, through the service's own path
   (`event::acknowledge`) with that transition's committed timestamp. Each

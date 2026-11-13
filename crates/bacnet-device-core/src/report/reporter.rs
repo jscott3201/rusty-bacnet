@@ -114,7 +114,8 @@ impl Reporter {
     /// A reporter answering requests with `responder`, under `config`, at
     /// first holding no subscription. Its outbox is allocated here. Refused
     /// when the identity's Max_APDU_Length_Accepted encodes no header, or
-    /// when `config` asks for a fault pass without a sweep.
+    /// when `config` asks for a fault or Event Enrollment pass without a
+    /// sweep.
     pub fn new(responder: Responder, config: ReportConfig) -> Result<Self, Error> {
         let identity = responder.identity();
         let device = identity.device_oid();
@@ -125,6 +126,13 @@ impl Reporter {
             // transitions would wait for a sweep that never runs.
             return Err(Error::Encoding(
                 "a fault pass needs the event path: set a sweep too".into(),
+            ));
+        }
+        // Its notifications go out through the event path.
+        #[cfg(feature = "event-enrollment")]
+        if config.event_enrollment.is_some() && config.sweep.is_none() {
+            return Err(Error::Encoding(
+                "an Event Enrollment pass needs the event path: set a sweep too".into(),
             ));
         }
         #[cfg(feature = "cov-multiple")]
@@ -390,7 +398,8 @@ impl Reporter {
     /// When the host should call [`on_deadline`](Self::on_deadline): the
     /// earliest lifetime, report deadline or overdue answer, the earliest
     /// Max_Notification_Delay deadline of a COV-multiple context with
-    /// changes pending, the next sweep or fault pass of the event path, or
+    /// changes pending, the next sweep, fault pass or Event Enrollment pass
+    /// of the event path, or
     /// the latest `now` it gave when references are owed a look.
     pub fn next_deadline(&self) -> Option<Instant> {
         let looks = !self.looks.is_empty()
@@ -410,7 +419,8 @@ impl Reporter {
 
     /// The time `now` has come: expire lifetimes and abandoned reports,
     /// time out unanswered notifications (to resend, or failed), run the
-    /// event path's sweep and fault pass when due, and look again at the
+    /// event path's sweep, fault pass and Event Enrollment pass when due,
+    /// and look again at the
     /// references owed one.
     pub fn on_deadline(&mut self, db: &mut ObjectDatabase, ids: &mut dyn InvokeIds, now: Instant) {
         self.expire_and_time_out(ids, now);

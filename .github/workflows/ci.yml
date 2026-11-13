@@ -408,6 +408,12 @@ jobs:
       - name: bacnet-objects and bacnet-device-core tests (alloc, capability features and structured-writes off)
         if: ${{ !cancelled() }}
         run: cargo nextest run -p bacnet-objects -p bacnet-device-core -p firmware-link --no-default-features --features alloc,firmware-link/reporting,firmware-link/points --locked --profile ci
+      # The enrollment image's host scenario as that image builds it, with
+      # bacnet-device-core's event-enrollment on (#2319): apart from the
+      # step above, which keeps it off for the others.
+      - name: firmware-link enrollment scenario (as its image builds it)
+        if: ${{ !cancelled() }}
+        run: cargo nextest run -p firmware-link --no-default-features --features alloc,firmware-link/enrollment --locked --profile ci
       - name: no_std crates' doctests (alloc, without std)
         if: ${{ !cancelled() }}
         run: cargo test --doc -p bacnet-types -p bacnet-encoding -p bacnet-services -p bacnet-objects -p bacnet-device-core --no-default-features --features alloc,bacnet-objects/event-reporting,bacnet-objects/durable-writes,bacnet-device-core/structured-writes,bacnet-device-core/cov-multiple,bacnet-device-core/event-reporting,bacnet-device-core/event-enrollment --locked

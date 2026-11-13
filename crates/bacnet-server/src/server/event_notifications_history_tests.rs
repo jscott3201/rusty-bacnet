@@ -268,10 +268,10 @@ fn committed_enrollment_reliability(oid: ObjectIdentifier) -> CommittedEventEnro
             monitored_oid: Some(oid),
             previous_reliability: bacnet_types::enums::Reliability::NO_FAULT_DETECTED,
             new_reliability: bacnet_types::enums::Reliability::OVER_RANGE,
-            state_change: Some(EventStateChange {
+            state_change: EventStateChange {
                 from: EventState::NORMAL,
                 to: EventState::FAULT,
-            }),
+            },
             distribute: true,
             cause: EventEnrollmentReliabilityCause::FaultAlgorithm,
         }),
@@ -418,10 +418,7 @@ fn committed_reliability_effective_type_does_not_reread_configured_event_type() 
             .is_some()
         );
         let notification = committed_enrollment_reliability(oid).into_notification();
-        assert_eq!(
-            notification.unwrap().event_type,
-            EventType::CHANGE_OF_RELIABILITY
-        );
+        assert_eq!(notification.event_type, EventType::CHANGE_OF_RELIABILITY);
         assert_eq!(db.reserve_event_sequence_number().number(), 0);
     }
 }

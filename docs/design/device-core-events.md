@@ -223,7 +223,7 @@ pub struct ReportConfig {
     pub outbox: OutboxLimits,             // entries and octets (§4.2)
     pub confirmed: Option<Confirmed>,     // APDU timeout and retries, for COV and events
     pub sweep: Option<Duration>,          // intrinsic sweep (§6.1); None: no event path; the server keeps 1 s
-    pub enrollment_interval: Option<u32>, // seconds; None runs no Event Enrollment pass (#2319)
+    pub event_enrollment: Option<Duration>, // whole seconds, rounded down; None runs no Event Enrollment pass (#2319)
     pub fault_detection: Option<Duration>, // the ReliabilityEval pass; the server's is 10 s
 }
 
@@ -886,7 +886,10 @@ STATUS_FLAGS and FAULT_OUT_OF_RANGE. The move swaps `HashMap` and `HashSet`
 for the B-tree forms, returns the pass report the server logs
 (`commit.rs:152-177`), and takes the interval and `now` as arguments. The
 pass runs every `enrollment_interval` seconds (10 by default,
-`config.rs:274`).
+`config.rs:274`). Done (#2319, PRs 1-3): the pass, commit and support are
+the core's `event::enrollment`, on `alloc`; the server runs them on its
+task, and the `Reporter` at `ReportConfig::with_event_enrollment`'s
+period.
 
 It is the costliest feature for an image: it reads Event_Parameters with
 `decode_event_parameter` (`fault.rs:39-54`, 11,424 octets of thumbv7m
@@ -926,7 +929,7 @@ the tables, with line counts (non-test lines).
 | 1 | The COV table, flights and tickets, subscribe services | ~2,060 | subscribe, renew, cancel, errors, caps | `reporting` image starts: subscribe through staged calls |
 | 2 | Active lists; COV evaluation and notifications; the `Reporter`, outbox and confirmed table; `ActiveCovOverlay` | ~1,585 moved, ~800 new | Active_COV, notifications, increments, flights | the image runs through the `Reporter` |
 | 3 | Intrinsic events with instant delays, distribution, both acknowledgements, GetEventInformation, the fault pass | ~1,990 moved, ~200 new | delays, recipients, acknowledgements | `event-reporting` on |
-| #2319 | Event Enrollment, on §6.6 and Appendix A.4 | ~2,720 | each algorithm | `event-enrollment` on |
+| #2319 | Event Enrollment, on §6.6 and Appendix A.4 (done in PRs 1, 2a, 2b and 3) | ~2,720 | each algorithm | `event-enrollment` on: the `enrollment` image |
 
 #2303 closes on PRs 1-3. #2319 can split its pure algorithm files first,
 the pass and commit second (it passes 2,500 lines). The active lists sit
@@ -981,7 +984,7 @@ stops differing.
 | 1 | Subscribe, renew, cancel, cancel of nothing; every row of §5.8; the caps; a renewal that replaces a route. The facade sends nothing yet, so the flight machine (acknowledged, fenced, an aborted worker settling at its deadline) is tested in the core and through the server's own tests |
 | 2 | Active_COV_Subscriptions before and after an expiry; the initial notification; changes under and over COV_Increment; Status_Flags alone; a Table 13-1 trigger; a property subscription's own increment; a confirmed report acknowledged, refused and timed out (hold-off); a change in flight (revisit); a renewal that fences a flight; an abandoned flight (the server's worker aborted, the facade never told) ending at its deadline, after which the next change is reported; Time_Remaining after time passes |
 | 3 | OUT_OF_RANGE with Time_Delay 2 seeded by a write at 0.9 s (sent at 2.9 s) and back with Time_Delay_Normal; a value that reverts inside the delay; Event_Enable cleared (committed, not sent); recipients by day, window and transition; no clock (sequence numbers, fail-closed windows); AcknowledgeAlarm good, wrong state, wrong timestamp, local acknowledgement, and their notifications; GetEventInformation |
-| #2319 | Each algorithm both ways; a FAULT_OUT_OF_RANGE fault; the pass-count delay at two intervals |
+| #2319 | Each algorithm both ways; a FAULT_OUT_OF_RANGE fault; the pass-count delay at two intervals (`device_core_parity_tests/events_enrollment.rs`, PR 3) |
 | #2320 PR 2b | SubscribeCOVPropertyMultiple, unconfirmed and confirmed: a timestamped reference; its history after a failed send, or held behind an outstanding report; an untimestamped reference; two contexts reporting one change; a report split across APDUs (all parts at once; one part per Ack); the Max_Notification_Delay backstop; a refused confirmed report and the follow-up at its hold-off's end; a cancellation with changes pending; Active_COV_Multiple_Subscriptions. On the fixture's fixed Device clock, so a capture at the wrong moment shows only in the core's own tests |
 
 Mutation checks: PR 1, drop the flight deadline (the aborted-worker tests
@@ -1038,7 +1041,7 @@ image would link:
 | PR 1, measured | 148.4 KB (flash 165.8 KB) | the `objects` image's 127.3 KB, plus the table and the two subscribe services (#2303) |
 | PR 2, measured | 171.4 KB (flash 189.7 KB) | the image through the `Reporter`, trimmed by #2363 (§8.3) |
 | + `event-reporting` (after PR 3) | 172-181 KB estimated; 243.2 KB measured (flash 265.6 KB); 237.3 KB after #2524's trims (flash 259.2 KB) | ~2,200 lines, plus the measured objects and encoder share; see §8.3 for what dominates |
-| + `event-enrollment` (#2319) | 60-75 KB of flash over PR 3's measured row, estimated; a thumbv7m probe of the algorithms and one Event Enrollment object measured 43.8 KB of `.text`, 48.9 KB of flash (decision 23) | ~2,700 lines, the Event Enrollment object, `decode_event_parameter` |
+| + `event-enrollment` (#2319) | 60-75 KB of flash over PR 3's measured row, estimated; a thumbv7m probe of the algorithms and one Event Enrollment object measured 43.8 KB of `.text`, 48.9 KB of flash (decision 23); the `enrollment` image measured 72.4 KB of flash over the `reporting` image (331,556 against 259,156 octets on thumbv7m; `size-budget.toml`) | ~2,700 lines, the Event Enrollment object, `decode_event_parameter` |
 | + the Multiple path (#2320) | +15-25 KB estimated; +134 KB measured before any trim (decision 18) | ~3,300 lines, the COVNotificationMultiple codec |
 
 Flash ran about 18 KB above `.text` through PR 2, and 22.3 KB in PR 3's
@@ -1970,6 +1973,25 @@ All decided on 2026-11-02 (§11); kept here with the options weighed.
       whose history doesn't read back is suppressed with that cause, and
       the server logs it at debug. What stays in the server: the public
       wrappers, the log lines, the task and the send.
+    - PR 3 (lead decisions): the `Reporter` runs the pass at
+      `ReportConfig::with_event_enrollment`'s period, rounded down to
+      whole seconds, at least one; the first at the first `on_deadline`,
+      one per call when late, the next a period after it; each delivery
+      `distribute()` lets go out takes the intrinsic path's distribution
+      and outbox, and the enrollments it committed then go through
+      `report_committed`. Inhibit references need no refresh of their
+      own: the sweep follows every object's, enrollments' included, as the
+      server's one-second intrinsic tick does, and the pass follows them
+      at its start. A Reliability result always has its state change, so
+      `into_notification()` can't fail (a migration note). With
+      `event-enrollment` the Reporter encodes the intrinsic forms and the
+      six the projection builds (`ENROLLMENT_FORMS`), not every form,
+      4 KB less in the image. A monitored reference naming another device
+      is an observation gap at every pass, as on the server: no transition
+      and no Reliability change. The `enrollment` image (the reporting
+      scenario, then a device whose Event Enrollment reports a transition,
+      its acknowledgement, its return and a fault) has its own budget rows;
+      the `reporting` image keeps the feature off and its rows.
 
 ## 12. Evidence
 

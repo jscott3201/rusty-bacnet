@@ -294,7 +294,7 @@ async fn event_enrollment_ack_policy_is_the_commit_time_snapshot() {
             crate::event_enrollment::evaluate_event_enrollments_for_delivery(&mut guard, 1);
         assert_eq!(evaluation.deliveries.len(), 1);
         let committed = evaluation.deliveries.pop().unwrap();
-        committed.into_notification().unwrap()
+        committed.into_notification()
     };
 
     {

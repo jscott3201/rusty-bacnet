@@ -145,10 +145,10 @@ fn source_rejection_does_not_suppress_changed_reliability_fault_reentry() {
     );
     assert_eq!(
         second.reliability_results[0].state_change,
-        Some(EventStateChange {
+        EventStateChange {
             from: EventState::FAULT,
             to: EventState::FAULT,
-        })
+        }
     );
     assert!(
         second

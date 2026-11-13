@@ -2,7 +2,7 @@
 //! #1664, #1667, #1679, #1771).
 //!
 //! Each image links one stack into a bare-metal binary, all but the last
-//! four with no allocator:
+//! five with no allocator:
 //!
 //! - `mstp` ([`mstp::run`]): `bacnet-mstp-codec` and `bacnet-mstp-core`.
 //! - `mstp-extended` ([`mstp_extended::run`]): the same core with extended
@@ -38,6 +38,10 @@
 //!   multi-state types among them, on the objects image's targets. Its size
 //!   less the objects image's is what the builder costs, the Integer Value
 //!   it also covers included.
+//! - `enrollment` (`enrollment::run`, with the `enrollment` feature): the
+//!   reporting image's scenario, then a device whose `Reporter` runs the
+//!   Event Enrollment pass, on the reporting image's targets. Its size less
+//!   the reporting image's is what algorithmic reporting costs.
 //!
 //! One image per stack keeps each stack's flash and RAM separate: within one
 //! LTO image, code can't be attributed to a crate reliably. So `bip` links
@@ -49,12 +53,12 @@
 //! saw, and each module holds the summary of a good run: [`mstp::EXPECTED`],
 //! [`mstp_extended::EXPECTED`], [`bip::EXPECTED`], [`node::expected()`],
 //! [`bbmd::EXPECTED`], [`router::expected()`], `device::expected()`,
-//! `apdu::expected()`, `objects::expected()`, `reporting::expected()` and
-//! `points::expected()`. The
+//! `apdu::expected()`, `objects::expected()`, `reporting::expected()`,
+//! `points::expected()` and `enrollment::expected()`. The
 //! host tests in `tests/` run each scenario natively and compare the whole
 //! summary with it; that is where behaviour is checked. Each image
 //! (`src/bin/`) calls its scenario from its reset entry, so building it
-//! proves that the stack links without `std`, and for all but the last four
+//! proves that the stack links without `std`, and for all but the last five
 //! without an allocator. CI never runs the images. Their emulation build,
 //! with the `emulate` feature and a board's, runs under QEMU by hand: each
 //! image checks its summary against the same expected one and reports
@@ -63,10 +67,11 @@
 //! The `alloc` feature, on by default, brings in the `apdu` module and its
 //! dependencies, and the `objects` feature, also on by default, the
 //! `objects` module and its own; `reporting` and `points`, on by default
-//! too, each add their module to `objects`. The other images build without
+//! too, each add their module to `objects`, and `enrollment`, also on by
+//! default, its own to `reporting`. The other images build without
 //! any of them: with `alloc`, this crate links `alloc`, and an image
-//! without a global allocator fails to link. The `objects`, `reporting` and
-//! `points` images have no emulation build yet.
+//! without a global allocator fails to link. The `objects`, `reporting`,
+//! `points` and `enrollment` images have no emulation build yet.
 //!
 //! The crate is `no_std` on every target, so the host build compiles the
 //! same code as the images.
@@ -82,6 +87,8 @@ pub mod apdu;
 pub mod bbmd;
 pub mod bip;
 pub mod device;
+#[cfg(feature = "enrollment")]
+pub mod enrollment;
 pub mod mstp;
 pub mod mstp_extended;
 pub mod node;
