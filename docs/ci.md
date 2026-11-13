@@ -23,7 +23,7 @@ only when every job under it did (see [Merge evidence](#merge-evidence)).
 | Job | PR to `dev` | PR to `main` | Push to `dev` (merge) | Push to `main`, `v*` tag, weekly, manual |
 | --- | --- | --- | --- | --- |
 | Lint: rustfmt, 700-LOC cap, no-secret scan, script regressions, the `named_codes!` copies, changelog fragments, the [tool pins](#tool-pins), the [fuzz crates' lockfiles](#fuzzing) | ✓ | ✓ | ✓ | ✓ |
-| Clippy and rustdoc, warnings denied: every feature, PyO3 crate, `bacnet-cli` without default features, each published crate with default features for Linux, Windows and macOS, the `no_std` crates on bare-metal targets and their `alloc` tests on the host; the every-feature and PyO3 rustdoc runs include private items. The workspace runs include the [samples](#samples). Also the [firmware link test](#firmware-link-test): the MS/TP, B/IP and MS/TP device images built without an allocator, and the APDU, objects, reporting and points images with one, checked against their size budgets | ✓ | ✓ | ✓ | ✓ |
+| Clippy and rustdoc, warnings denied: every feature, PyO3 crate, `bacnet-cli` without default features, each published crate with default features for Linux, Windows and macOS, the `no_std` crates on bare-metal targets and their `alloc` tests on the host; the every-feature and PyO3 rustdoc runs include private items. The workspace runs include the [samples](#samples). Also the [firmware link test](#firmware-link-test): the MS/TP, B/IP and MS/TP device images built without an allocator, and the APDU, objects, reporting, points and enrollment images with one, checked against their size budgets | ✓ | ✓ | ✓ | ✓ |
 | Test: Linux, every feature (`LINUX_FEATURES`); also the [`no_std` crates](#no_std-checks)' tests and doctests with `alloc` and without `std`, and their tests without either | ✓ | ✓ | ✓ | ✓ |
 | Python bindings: `maturin develop` (maturin at its [pinned](#tool-pins) version), then `python -m unittest discover -s crates/rusty-bacnet/tests`, the website's sample tests (`python -m unittest discover -s website/tests/python`: the loopback lab, and the CLI samples on the pages run against it with a debug `bacnet-cli` build; the root README's samples too (#2105): its quickstart server runs, its Python programs and CLI lines run against it, its MCP host configuration is parsed, its Rust blocks must match the `readme_*` Cargo examples that clippy compiles, and its dependency table must name published crates at the release; the step sets `BACNET_LAB_EXPECTED_VERSION` to the workspace version, since the lab otherwise expects the site's release and the wheel under test can be ahead of it) and the crate's Rust tests (`cargo nextest run -p rusty-bacnet`) | ✓ | ✓ | ✓ | ✓ |
 | MSRV (`RUST_MSRV` in [`.github/ci-pins.env`](../.github/ci-pins.env)), Linux native (`check-msrv.sh --linux-native`), the `no_std` builds included |  | ✓ |  | ✓ |
@@ -329,9 +329,17 @@ credited to a crate reliably within one LTO image:
   objects image's is the builder's price for all ten: about 50 KB of flash
   on `thumbv7m-none-eabi`, of which the builder's own code is about 7 KB,
   the Integer Value about 3.5 KB and the seven more types the rest
-  (`size-budget.toml` has the split).
+  (`size-budget.toml` has the split);
+- `enrollment` runs the reporting image's scenario with
+  `bacnet-device-core`'s `event-enrollment` on, then a device whose
+  `Reporter` runs the Event Enrollment pass (#2319): an Event Enrollment
+  on an Analog Input reports a transition through its delay, its local
+  acknowledgement, its return and a fault, in the reporting image's arena,
+  layout and targets. Its size less the reporting image's is what
+  algorithmic reporting costs, about 72 KB of flash on
+  `thumbv7m-none-eabi` (`size-budget.toml` has the split).
 
-A use of `alloc` anywhere in an image but `apdu`, `objects`, `reporting` and `points`, the device's application layer included, fails its build with "no
+A use of `alloc` anywhere in an image but `apdu`, `objects`, `reporting`, `points` and `enrollment`, the device's application layer included, fails its build with "no
 global memory allocator found". In any image, a symbol that only a hosted
 target or the firmware provides fails the link: an atomic library call, or
 a critical section that nothing implements. A compare-and-swap on ARMv6-M or
@@ -530,7 +538,7 @@ targets, so a crate that needs one builds only with a backend such as
   class) and `thumbv7em-none-eabihf` (Cortex-M4F and M7F, with the
   hard-float ABI, since #1660), in `FIRMWARE_TARGETS` in `ci.yml`, each
   with budget tables of its own; `riscv32imac-unknown-none-elf` joins them
-  for the objects, reporting and points images alone (#2178, #2303, #2445). `thumbv7em-none-eabihf`'s images are a
+  for the objects, reporting, points and enrollment images alone (#2178, #2303, #2445, #2319). `thumbv7em-none-eabihf`'s images are a
   little smaller than `thumbv7m-none-eabi`'s. They share one generic memory
   layout, `firmware/link/memory.x`: 256 KiB of flash at `0x08000000` and 64
   KiB of RAM at `0x20000000`. `riscv32imac-unknown-none-elf` takes
@@ -571,8 +579,9 @@ targets, so a crate that needs one builds only with a backend such as
   default, brings in the objects scenario and image with
   `bacnet-device-core` and `bacnet-objects`; the check builds that image
   with it alone. `reporting` and `points`, on by default too, each add
-  their scenario and image to it, and the check builds each image with its
-  own feature alone.
+  their scenario and image to it, `enrollment`, also on by default, its
+  own to `reporting`, and the check builds each image with its own
+  feature alone.
 - **The check.** `scripts/ci/check-firmware-link.sh` runs, per target,
   clippy on the images' code (a host build compiles it out) and the
   `firmware`-profile build, once without the `alloc` feature for every

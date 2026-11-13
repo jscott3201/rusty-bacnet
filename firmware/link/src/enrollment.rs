@@ -1,7 +1,7 @@
 //! The enrollment image's scenario (#2319).
 //!
 //! [`run`] runs the reporting image's scenario first
-//! ([`reporting::run`](crate::reporting::run)), so the image links what a
+//! ([`reporting::run`]), so the image links what a
 //! device that reports COV and intrinsic events serves, and its size less
 //! the reporting image's is what algorithmic reporting costs. Then it runs a
 //! second device as firmware's main loop would, its `Reporter` sweeping and

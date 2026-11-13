@@ -1,5 +1,6 @@
 //! The [`Reporter`]'s event path (#2303): intrinsic reporting after each
-//! write and change, the sweep, the fault pass, AcknowledgeAlarm and
+//! write and change, the sweep, the fault pass, with `event-enrollment` the
+//! Event Enrollment pass (#2319), AcknowledgeAlarm and
 //! GetEventInformation, strung together as `bacnet-server` runs them, with
 //! each event notification queued in the outbox ahead of the COV
 //! notifications of the same change.
