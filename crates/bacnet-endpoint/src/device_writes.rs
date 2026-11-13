@@ -151,11 +151,19 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// split to fit the Max-APDU-Length-Accepted the request stated, and
     /// what a context could not send yet goes out by its
     /// Max_Notification_Delay at the latest. A timestamped reference needs
-    /// a clock the database reads
-    /// ([`ObjectDatabase::set_clock_reader`]): the session installs none,
-    /// so without one the reference is refused with SERVICES /
-    /// OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, and with one its changes carry
-    /// their time of change.
+    /// a clock the database reads, and the session installs none: lend the
+    /// database a [`DeviceClock`](bacnet_device_core::clock::DeviceClock)
+    /// before handing it over ([`DeviceClock::new`] over the host's
+    /// monotonic timer, [`set`](bacnet_device_core::clock::DeviceClock::set)
+    /// from its real-time clock, then
+    /// [`lend`](bacnet_device_core::clock::DeviceClock::lend); unset, it
+    /// reads local midnight on 1990-01-01), or pass your own
+    /// [`ClockReader`](bacnet_objects::clock::ClockReader) to
+    /// [`ObjectDatabase::set_clock_reader`]. Without one the reference is
+    /// refused with SERVICES / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED; with
+    /// one its changes carry their time of change.
+    ///
+    /// [`DeviceClock::new`]: bacnet_device_core::clock::DeviceClock::new
     ///
     /// `config` bounds the work: `config.cov` caps the subscriptions (in
     /// all, per subscriber, indefinite ones and confirmed notifications in

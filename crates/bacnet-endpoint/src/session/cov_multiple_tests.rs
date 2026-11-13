@@ -26,6 +26,9 @@ const PV: PropertyIdentifier = PropertyIdentifier::PRESENT_VALUE;
 /// Max_Notification_Delay of every context here, in seconds.
 const DELAY: u32 = 10;
 
+#[path = "cov_multiple_timing_tests.rs"]
+mod timing;
+
 /// A SubscribeCOVPropertyMultiple body for `process`: Present_Value of each
 /// of `references`, timestamped or not, for `timing`'s lifetime and
 /// Max_Notification_Delay; a cancellation without `timing`.
@@ -400,6 +403,10 @@ async fn contexts_count_against_the_caps_as_on_the_server() {
             ErrorCode::NO_SPACE_TO_ADD_LIST_ELEMENT
         )
     );
+    // The refused context left nothing behind on either host.
+    let list = read_device(PropertyIdentifier::ACTIVE_COV_MULTIPLE_SUBSCRIPTIONS);
+    pair.both("the first context alone", READ_PROPERTY, &list)
+        .await;
     pair.stop().await;
 }
 

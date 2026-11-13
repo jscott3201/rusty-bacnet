@@ -12451,12 +12451,19 @@ request stated, and what a context could not send yet goes out by its
 Max_Notification_Delay at the latest. A refusal names the first reference it
 couldn't take, and the references before it stay subscribed, as on
 `BACnetServer`. A timestamped reference needs a Device clock: the session
-installs none, so give the database a clock reader
-(`ObjectDatabase::set_clock_reader`) before handing it over. Without one a
-timestamped reference is refused with SERVICES /
-OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, and untimestamped ones are taken. With
-one, each change carries its time of change, and changes made while a
-confirmed report is out wait for its Ack and go together after it.
+installs none, so give the database one before handing it over. Either lend
+it a `bacnet_device_core::clock::DeviceClock`, built over the host's
+monotonic timer (`DeviceClock::new(zone, now)`, with `now` a
+`bacnet_time::HostClock`'s reading, say), `set` from the host's real-time
+clock and bound with `DeviceClock::lend(&mut db)`; unset, it reads local
+midnight on 1990-01-01 and counts on from there, and a `set` after the
+lending reaches the database only when it is lent again. Or implement
+`bacnet_objects::clock::ClockReader` and pass it to
+`ObjectDatabase::set_clock_reader`; a frame counts only when it is a valid
+actual date and time. Without a clock a timestamped reference is refused
+with SERVICES / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, and untimestamped ones
+are taken. With one, each change carries its time of change, and changes made
+while a confirmed report is out wait for its Ack and go together after it.
 
 ```rust
 use bacnet_device_core::cov::CovPolicy;
@@ -12559,10 +12566,13 @@ increment and a COV-multiple context (timestamped and untimestamped
 references, two contexts to one object, a report split for a small
 subscriber), refuse the same subscriptions with the same replies, and list
 the same Active_COV_Subscriptions and Active_COV_Multiple_Subscriptions; their
-confirmed notifications carry the same parameters. A context's
-Max_Notification_Delay backstop after a failed send is compared in
-bacnet-device-core's parity tests, not on the endpoint, whose in-memory link
-can't fail one send.
+confirmed notifications carry the same parameters. Both hosts, each with a
+subscriber of its own, also send at the same instants when a refused report's
+change goes out by the context's Max_Notification_Delay, and through the
+resends, hold-offs and held changes of a subscriber that never answers, over
+the whole lifetime. Only the backstop after a failed send is left to
+bacnet-server's parity tests (`device_core_parity_tests/cov/notify/multiple.rs`),
+since the endpoint's in-memory link can't fail one send.
 
 ### Direct endpoint WriteProperty and source WRITE reporting
 
