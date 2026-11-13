@@ -50,6 +50,11 @@ fn a_superseding_write_whose_save_fails_leaves_storage_with_the_served_rows() {
         .unwrap()
         .with_reporting_persistence(Arc::clone(&storage) as Arc<dyn WriteConfigPersistence>)
         .unwrap();
+    // A row written before the request, which storage keeps throughout.
+    let kept = PropertyValue::CharacterString("kept".into());
+    analog
+        .write_property(P::DESCRIPTION, None, kept, None)
+        .unwrap();
     let staged = PendingWrite {
         property: P::TIME_DELAY,
         array_index: None,
@@ -73,7 +78,10 @@ fn a_superseding_write_whose_save_fails_leaves_storage_with_the_served_rows() {
         ErrorCode::OPERATIONAL_PROBLEM
     ));
     analog.wait_for_reporting_saves();
-    let nothing_written = WriteConfigSnapshot::Reporting(ReportingWriteConfig::default());
-    assert_eq!(*storage.saved.lock().unwrap(), Some(nothing_written));
+    let served = WriteConfigSnapshot::Reporting(ReportingWriteConfig {
+        description: Some("kept".into()),
+        ..ReportingWriteConfig::default()
+    });
+    assert_eq!(*storage.saved.lock().unwrap(), Some(served));
     analog.durable_writes().unwrap().release_staged_write(&wait);
 }

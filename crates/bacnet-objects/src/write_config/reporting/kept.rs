@@ -441,12 +441,7 @@ fn store_snapshot<T: KeepsReporting>(written: &Written, object: &T) -> Saved {
 }
 
 /// `object`'s rows as it serves them, `written` those a write set.
-fn kept<T: KeepsReporting>(written: Written, object: &T) -> Kept {
-    kept_of(written, object)
-}
-
-/// [`kept`], for an object seen through its trait.
-fn kept_of(written: Written, object: &dyn KeepsReporting) -> Kept {
+fn kept(written: Written, object: &dyn KeepsReporting) -> Kept {
     Kept {
         rows: object.reporting_rows(),
         written,
@@ -581,7 +576,7 @@ fn admit_to(
     // request's staged write alone (#1424).
     let written = current.written;
     let next = current.into_after(write, object)?;
-    let current = || kept_of(written, object).stored();
+    let served = || kept(written, object).stored();
     #[cfg(feature = "durable-writes")]
     let claimed = claim(storage, write, store.writes, &next, object);
     // Without durable-writes nothing stages: the built-in objects don't
@@ -604,14 +599,16 @@ fn admit_to(
             storage.correct(|| next.stored());
         }
         Some(Err(_)) => {
-            storage.correct(current);
+            // Defensive: a failed claim drops its staged write without
+            // leaving a correction, so `served` isn't called today.
+            storage.correct(served);
             return Err(operational_problem());
         }
         None => {
             storage.drop_staged();
             // Storage goes back to the served rows first, should the save
             // below fail.
-            storage.correct(current);
+            storage.correct(served);
             storage
                 .save_now(next.stored())
                 .map_err(|_| operational_problem())?;
