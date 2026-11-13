@@ -7,8 +7,8 @@
 //! algorithms it runs, the reads of each enrollment's parameters and
 //! monitored reference, and the commit of what it finds. It moved from
 //! `bacnet-server`, which drives the pass on its task, logs what it reports
-//! and sends what it commits. The pass needs `std` until it keeps its
-//! per-pass state in ordered maps (#2319 PR 2b); the algorithms don't.
+//! and sends what it commits. It needs `alloc`, not `std`: a pass keeps
+//! its per-enrollment state in B-tree maps (#2319 PR 2b).
 //!
 //! # Calling the pass
 //!
@@ -76,18 +76,11 @@
 //! each write of the enrollment, the host's own refresh (the server's runs
 //! every second) and the start of each pass.
 
-// Without `std` nothing calls them yet: the pass that does needs `std`
-// until #2319 PR 2b.
-#[cfg_attr(not(feature = "std"), allow(dead_code))]
 mod algorithms;
-#[cfg_attr(not(feature = "std"), allow(dead_code))]
 mod fault;
-#[cfg_attr(not(feature = "std"), allow(dead_code))]
 mod reference;
 
-#[cfg(feature = "std")]
 mod pass;
-#[cfg(feature = "std")]
 pub use pass::{
     CommittedEventEnrollmentDelivery, CommittedEventEnrollmentResult,
     EventEnrollmentEvaluationBatch, EventEnrollmentEvaluationDiagnostic,
@@ -101,7 +94,6 @@ use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::{Error, RemoteError};
 
 /// Why an enrollment's own configuration couldn't be read for a pass.
-#[cfg_attr(not(feature = "std"), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LocalConfigurationReadError {
     /// The configuration can't be used: a required property is missing, a
@@ -114,7 +106,6 @@ pub(crate) enum LocalConfigurationReadError {
 
 /// Classify a failed read of a required property: UNKNOWN_PROPERTY makes
 /// the configuration malformed, anything else leaves it unavailable.
-#[cfg_attr(not(feature = "std"), allow(dead_code))]
 pub(crate) fn classify_required_property_read_error(error: &Error) -> LocalConfigurationReadError {
     if matches!(
         error,

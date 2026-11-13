@@ -1,4 +1,6 @@
-use std::collections::{HashMap, HashSet};
+use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::string::String;
+use alloc::vec::Vec;
 
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::event::{
@@ -336,7 +338,7 @@ fn reliability_or_state_landed(
 fn clear_source_ownership(
     db: &mut ObjectDatabase,
     oid: ObjectIdentifier,
-    database_eval_sources: &HashSet<ObjectIdentifier>,
+    database_eval_sources: &BTreeSet<ObjectIdentifier>,
 ) {
     if database_eval_sources.contains(&oid) {
         db.set_enrollment_eval_source(oid, None);
@@ -352,8 +354,8 @@ fn clear_source_ownership(
 pub(super) fn apply_updates(
     db: &mut ObjectDatabase,
     oids: &[ObjectIdentifier],
-    updates: HashMap<ObjectIdentifier, EnrollmentUpdate>,
-    database_eval_sources: &HashSet<ObjectIdentifier>,
+    updates: BTreeMap<ObjectIdentifier, EnrollmentUpdate>,
+    database_eval_sources: &BTreeSet<ObjectIdentifier>,
 ) -> EventEnrollmentEvaluationReport {
     apply_updates_for_delivery(db, oids, updates, database_eval_sources).report
 }
@@ -361,8 +363,8 @@ pub(super) fn apply_updates(
 pub(super) fn apply_updates_for_delivery(
     db: &mut ObjectDatabase,
     oids: &[ObjectIdentifier],
-    mut updates: HashMap<ObjectIdentifier, EnrollmentUpdate>,
-    database_eval_sources: &HashSet<ObjectIdentifier>,
+    mut updates: BTreeMap<ObjectIdentifier, EnrollmentUpdate>,
+    database_eval_sources: &BTreeSet<ObjectIdentifier>,
 ) -> EventEnrollmentEvaluationBatch {
     let mut report = EventEnrollmentEvaluationReport::default();
     let mut deliveries = Vec::new();

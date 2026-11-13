@@ -1,5 +1,5 @@
+use alloc::collections::BTreeMap;
 use bacnet_objects::property_metadata::is_array_property;
-use std::collections::HashMap;
 
 use bacnet_objects::database::{LocalDevice, ObjectDatabase};
 use bacnet_objects::event::EventTransition;
@@ -87,7 +87,7 @@ pub(super) fn ack_required_for_transition(
 }
 
 pub(super) fn queue_eval_state_reset(
-    updates: &mut HashMap<ObjectIdentifier, EnrollmentUpdate>,
+    updates: &mut BTreeMap<ObjectIdentifier, EnrollmentUpdate>,
     oid: ObjectIdentifier,
     supported: bool,
     state: &EventEnrollmentEvalState,
@@ -99,7 +99,7 @@ pub(super) fn queue_eval_state_reset(
 }
 
 pub(super) fn queue_pending_cancellation(
-    updates: &mut HashMap<ObjectIdentifier, EnrollmentUpdate>,
+    updates: &mut BTreeMap<ObjectIdentifier, EnrollmentUpdate>,
     oid: ObjectIdentifier,
     supported: bool,
     state: &mut EventEnrollmentEvalState,
@@ -113,7 +113,7 @@ pub(super) fn queue_pending_cancellation(
 }
 
 pub(super) fn queue_eval_source_reset(
-    updates: &mut HashMap<ObjectIdentifier, EnrollmentUpdate>,
+    updates: &mut BTreeMap<ObjectIdentifier, EnrollmentUpdate>,
     oid: ObjectIdentifier,
     source: Option<Option<EventEnrollmentMonitoredSource>>,
 ) {
@@ -123,7 +123,7 @@ pub(super) fn queue_eval_source_reset(
 }
 
 pub(super) fn queue_invalid_reference(
-    updates: &mut HashMap<ObjectIdentifier, EnrollmentUpdate>,
+    updates: &mut BTreeMap<ObjectIdentifier, EnrollmentUpdate>,
     oid: ObjectIdentifier,
     eval_state_supported: bool,
     eval_source: Option<Option<EventEnrollmentMonitoredSource>>,
@@ -160,7 +160,7 @@ pub(super) struct ReliabilitySubject<'a> {
 }
 
 pub(super) fn queue_reliability_transition(
-    updates: &mut HashMap<ObjectIdentifier, EnrollmentUpdate>,
+    updates: &mut BTreeMap<ObjectIdentifier, EnrollmentUpdate>,
     subject: &ReliabilitySubject<'_>,
     monitored_oid: Option<ObjectIdentifier>,
     desired: Reliability,
@@ -201,7 +201,7 @@ pub(super) fn queue_reliability_transition(
 }
 
 pub(super) fn queue_observation_unavailable(
-    updates: &mut HashMap<ObjectIdentifier, EnrollmentUpdate>,
+    updates: &mut BTreeMap<ObjectIdentifier, EnrollmentUpdate>,
     oid: ObjectIdentifier,
 ) {
     updates.entry(oid).or_default().observation_unavailable();
@@ -211,7 +211,7 @@ pub(super) fn queue_observation_unavailable(
 /// that is temporarily unavailable. Coalesce every private coordinate to its
 /// ownerless default before the typed terminal diagnostic is committed.
 pub(super) fn queue_observation_gap(
-    updates: &mut HashMap<ObjectIdentifier, EnrollmentUpdate>,
+    updates: &mut BTreeMap<ObjectIdentifier, EnrollmentUpdate>,
     oid: ObjectIdentifier,
     eval_state_supported: bool,
     eval_source: Option<Option<EventEnrollmentMonitoredSource>>,
@@ -225,7 +225,7 @@ pub(super) fn queue_observation_gap(
 }
 
 pub(super) fn queue_evaluation_ownership(
-    updates: &mut HashMap<ObjectIdentifier, EnrollmentUpdate>,
+    updates: &mut BTreeMap<ObjectIdentifier, EnrollmentUpdate>,
     oid: ObjectIdentifier,
     eval_state_supported: bool,
     reset_state: bool,

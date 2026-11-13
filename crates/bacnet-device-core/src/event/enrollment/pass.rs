@@ -4,8 +4,8 @@
 mod commit;
 mod support;
 
+use alloc::collections::{BTreeMap, BTreeSet};
 use bacnet_objects::property_metadata::is_array_property;
-use std::collections::{HashMap, HashSet};
 
 pub use commit::{
     EventEnrollmentEvaluationDiagnostic, EventEnrollmentEvaluationOutcome,
@@ -77,8 +77,8 @@ pub fn evaluate_event_enrollments_for_delivery(
     // one rule: unqualified or naming this device is local (#1184).
     let local_device = db.local_device();
 
-    let mut updates: HashMap<ObjectIdentifier, EnrollmentUpdate> = HashMap::new();
-    let mut database_eval_sources = HashSet::new();
+    let mut updates: BTreeMap<ObjectIdentifier, EnrollmentUpdate> = BTreeMap::new();
+    let mut database_eval_sources = BTreeSet::new();
 
     for oid in &oids {
         let Some(enrollment) = db.get(oid) else {
