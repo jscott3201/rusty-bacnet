@@ -5,6 +5,7 @@
 use super::super::cov_notify_context::CovNotifyContext;
 use super::super::*;
 use crate::command_lists::TakenRuns;
+use crate::server::event_notifications::commit_written_transition;
 use bacnet_device_core::write::local;
 use bacnet_objects::staging::StagingWritePlan;
 
@@ -43,7 +44,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// Execute local Staging targets one mutation guard at a time.
     ///
     /// Every target mutation is generation-checked in the same database guard
-    /// that applies it. Event/COV work runs only after that guard is released.
+    /// that applies it, and the intrinsic transition it causes commits there
+    /// too (#2530). Event and COV sends run only after that guard is released.
     /// Each guard first does the work the membership queue holds, so a
     /// removed Staging object's NULLs land before one re-added under its
     /// identifier writes (#2265; the Value_Source check can't tell the two
@@ -85,6 +87,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     Stale,
                 }
 
+                // Its transition, committed with it (#2530), still to send.
+                let mut transitions = Vec::new();
+
                 let (result, membership) = {
                     let mut database = db.write().await;
                     let membership = crate::membership::settle_for_staging(
@@ -125,6 +130,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                                         .await
                                         .timed_capture(target.object_identifier);
                                     capture.run(&database);
+                                    commit_written_transition(
+                                        &mut database,
+                                        cov.cov_table,
+                                        target.object_identifier,
+                                        &mut transitions,
+                                    )
+                                    .await;
                                     TargetResult::Applied
                                 }
                                 Err(_) => TargetResult::Failed,
@@ -148,17 +160,17 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     TargetResult::Stale => break,
                     TargetResult::Failed => all_succeeded = false,
                     TargetResult::Applied => {
-                        Self::fire_event_notifications_with_bindings(
-                            delivery,
-                            cov.cov_table,
-                            &target.object_identifier,
-                        )
-                        .await;
+                        Self::send_written_transitions(delivery, transitions).await;
                         Self::fire_cov_notifications(cov, &target.object_identifier).await;
                     }
                 }
             }
 
+            // The source's Reliability and the transition it causes commit
+            // under one guard (#2530). The built-in Staging object reports no
+            // intrinsic events, so this evaluates only an application's own
+            // source, which `StagingSource` lets any object be.
+            let mut transitions = Vec::new();
             let reliability_changed = {
                 let mut database = db.write().await;
                 let changed = database
@@ -170,12 +182,13 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                 if changed {
                     let capture = cov.cov_table.read().await.timed_capture(plan.source);
                     capture.run(&database);
+                    let (source, sent) = (plan.source, &mut transitions);
+                    commit_written_transition(&mut database, cov.cov_table, source, sent).await;
                 }
                 changed
             };
             if reliability_changed {
-                Self::fire_event_notifications_with_bindings(delivery, cov.cov_table, &plan.source)
-                    .await;
+                Self::send_written_transitions(delivery, transitions).await;
                 Self::fire_cov_notifications(cov, &plan.source).await;
             }
         }

@@ -1,4 +1,3 @@
-use super::cov_notify_context::CovNotifyContext;
 use super::event_forwarding::{ForwardOrigin, Reception};
 use super::received_event_log::log_received_event_notification;
 use super::*;
@@ -151,11 +150,11 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             cov_table,
             seg_ack_senders: _,
             seg_send_permits: _,
-            cov_in_flight,
+            cov_in_flight: _,
             learned_routers: _,
             notification_transactions,
             device_bindings,
-            comm_state,
+            comm_state: _,
             dcc_timer: _,
             dcc_outcomes: _,
             event_suppressions,
@@ -595,13 +594,29 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         };
 
         let MutationEffects {
-            written_oids,
+            written_transitions,
             coarse_cov_oids,
             life_safety_cov_changes,
             staging_plans,
             mut command_runs,
             timed_revisits,
         } = effects;
+        // The transitions the writes committed (#2530). With no Staging plan,
+        // a task of their own sends them as soon as their guard is dropped, so
+        // the response never waits on their delivery; the COV fanout waits for
+        // it (#889). With plans, they go out here first and the plans send
+        // theirs after. So the order within this request holds for its own
+        // transitions and its Staging plans' only: a Command, Channel or Timer
+        // run it starts below writes through the local path and sends its own
+        // transitions, a separate sender that can overtake a stalled send
+        // here, as on dev; only an ordered send queue would order those, and
+        // sends across requests (#2537).
+        let sending = if staging_plans.is_empty() {
+            Self::spawn_written_transitions(services, request_tasks, written_transitions)
+        } else {
+            Self::send_written_transitions(&services.event_delivery(), written_transitions).await;
+            None
+        };
 
         // LSO-only replay store (server level, never handler/object level).
         // Uniform rule: anything that reaches this admission point and produces
@@ -621,18 +636,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // Non-LSO callers pass `None` (or an untracked guard whose completion
         // is a no-op); dropping here is intentional.
 
-        let cov_ctx = CovNotifyContext {
-            db,
-            network,
-            cov_table,
-            cov_in_flight,
-            notification_transactions,
-            comm_state,
-            config,
-        };
-        command_runs.extend(
-            Self::execute_staging_plans(&services.event_delivery(), &cov_ctx, staging_plans).await,
-        );
+        // Boxed: plans are rare, and their future would size every request's.
+        if !staging_plans.is_empty() {
+            let (delivery, cov_ctx) = (services.event_delivery(), services.cov_context());
+            let plans = Self::execute_staging_plans(&delivery, &cov_ctx, staging_plans);
+            command_runs.extend(Box::pin(plans).await);
+        }
         // Command lists run beside this request, so its response never waits
         // on their writes or post delays (#1150).
         if !command_runs.is_empty() {
@@ -664,13 +673,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             issue::Issued::Unsegmented { handed_off: true } => after_reply.run(),
             _ => drop(after_reply),
         }
+        // Made here, so the response's wait doesn't hold it.
+        let cov_ctx = services.cov_context();
         if issued == issue::Issued::Segmented {
-            Self::fire_written_event_notifications(
-                &services.event_delivery(),
-                cov_table,
-                &written_oids,
-            )
-            .await;
+            if let Some(sent) = sending {
+                let _ = sent.await;
+            }
             Self::fire_post_write_cov_notifications(
                 &cov_ctx,
                 &coarse_cov_oids,
@@ -715,13 +723,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .await;
         }
 
-        Self::fire_written_event_notifications(
-            &services.event_delivery(),
-            cov_table,
-            &written_oids,
-        )
-        .await;
-
+        // Inline: an async fn here costs every request a call, sent or not.
+        if let Some(sent) = sending {
+            let _ = sent.await;
+        }
         Self::fire_post_write_cov_notifications(
             &cov_ctx,
             &coarse_cov_oids,

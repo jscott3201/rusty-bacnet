@@ -157,29 +157,39 @@ impl Fixture {
         }
     }
 
-    /// Write `Present_Value` and run the per-write notification path once, the
-    /// same two steps a WriteProperty request performs.
+    /// Write `Present_Value` and run the per-write notification path once, as
+    /// a WriteProperty request does: the write and its transition under one
+    /// guard, then the send.
     async fn write_present_value(&self, value: u64) {
         self.write_present_value_as(PropertyValue::Unsigned(value))
             .await;
     }
 
     async fn write_present_value_as(&self, value: PropertyValue) {
-        self.db
-            .write()
-            .await
-            .get_mut(&self.oid)
-            .expect("the MSI is in the database")
-            .write_property_from(
-                PropertyIdentifier::PRESENT_VALUE,
-                None,
-                value,
-                None,
-                &crate::command_source::test_origin(),
+        let cov_table = RwLock::new(crate::cov::CovSubscriptionTable::new());
+        let mut transitions = Vec::new();
+        {
+            let mut db = self.db.write().await;
+            db.get_mut(&self.oid)
+                .expect("the MSI is in the database")
+                .write_property_from(
+                    PropertyIdentifier::PRESENT_VALUE,
+                    None,
+                    value,
+                    None,
+                    &crate::command_source::test_origin(),
+                )
+                .expect("Out_Of_Service is TRUE, so Present_Value must be writable");
+            let oid = self.oid;
+            super::event_notifications::commit_written_transition(
+                &mut db,
+                &cov_table,
+                oid,
+                &mut transitions,
             )
-            .expect("Out_Of_Service is TRUE, so Present_Value must be writable");
-
-        BACnetServer::<TestTransport>::fire_event_notifications_with_bindings(
+            .await;
+        }
+        BACnetServer::<TestTransport>::send_written_transitions(
             &crate::server::event_delivery::EventDelivery {
                 db: &self.db,
                 network: &self.network,
@@ -194,8 +204,7 @@ impl Fixture {
                 local_apdu_capacity: 1476,
                 device: crate::server::event_delivery::fixture_device(&self.db).await,
             },
-            &Arc::new(RwLock::new(crate::cov::CovSubscriptionTable::new())),
-            &self.oid,
+            transitions,
         )
         .await;
     }

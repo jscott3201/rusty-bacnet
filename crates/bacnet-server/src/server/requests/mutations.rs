@@ -4,7 +4,9 @@ use crate::mutation::{
     MutationAuthorizationContext, MutationDecision, MutationDecisions, MutationPolicy,
     MutationTarget, MutationTrust,
 };
+use crate::server::event_notifications::commit_written_transition;
 use bacnet_device_core::cov::life_safety::LifeSafetyCovChange;
+use bacnet_device_core::event::CommittedIntrinsicTransition;
 use bacnet_device_core::write::{self, WpmOutcome};
 use bacnet_objects::staging::StagingWritePlan;
 use bacnet_services::cov::{SubscribeCOVPropertyRequest, SubscribeCOVRequest};
@@ -21,11 +23,13 @@ pub(super) enum InitialCovNotification {
 }
 
 /// Post-write work a mutating service collects while it runs, consumed after
-/// the response is built: written objects for event evaluation, COV changes,
-/// staged writes to execute and Command runs to start.
+/// the response is built: event transitions to send, COV changes, staged
+/// writes to execute and Command runs to start.
 #[derive(Default)]
 pub(super) struct MutationEffects {
-    pub(super) written_oids: Vec<ObjectIdentifier>,
+    /// The intrinsic transitions the writes caused, committed under the
+    /// writes' own guard (#2530), in order, to send before the COV fanout.
+    pub(super) written_transitions: Vec<(ObjectIdentifier, CommittedIntrinsicTransition)>,
     pub(super) coarse_cov_oids: Vec<ObjectIdentifier>,
     pub(super) life_safety_cov_changes: Vec<LifeSafetyCovChange>,
     pub(super) staging_plans: Vec<StagingWritePlan>,
@@ -206,7 +210,7 @@ impl Request<'_> {
         audit: &mut audit_reporter::WriteAudit<'_, T>,
     ) -> Apdu {
         let MutationEffects {
-            written_oids,
+            written_transitions,
             coarse_cov_oids,
             life_safety_cov_changes,
             staging_plans,
@@ -271,6 +275,14 @@ impl Request<'_> {
                     }
                 };
                 capture.run(&db);
+                // The transition the write causes commits under its guard
+                // too, ahead of a written Schedule's pass (a Schedule has no
+                // intrinsic reporting), so nothing is held across it. WPM and
+                // local writes evaluate after the pass, since a WPM can write
+                // a Schedule and one of its targets; here an application's own
+                // reporting Schedule-type object gets a transition the pass
+                // causes at the next sweep.
+                commit_written_transition(&mut db, cov_table, oid, written_transitions).await;
             }
             let schedule_cov = match written {
                 Some(oid) => {
@@ -289,7 +301,6 @@ impl Request<'_> {
         staging_plans.extend(plans);
         let response = match result {
             Ok(Some(oid)) => {
-                written_oids.push(oid);
                 if bacnet_device_core::cov::life_safety::is_life_safety_object(oid) {
                     *life_safety_cov_changes = exact_changes;
                 } else {
@@ -313,7 +324,7 @@ impl Request<'_> {
         audit: &mut audit_reporter::WriteAudit<'_, T>,
     ) -> Apdu {
         let MutationEffects {
-            written_oids,
+            written_transitions,
             coarse_cov_oids,
             life_safety_cov_changes,
             staging_plans,
@@ -365,20 +376,26 @@ impl Request<'_> {
             let schedule_cov =
                 crate::schedule::reevaluate_written(database, &mut db, committed_oids, cov_table)
                     .await;
+            // Each written object's transition commits under this guard too,
+            // in the order the objects were written.
+            for oid in committed_oids {
+                commit_written_transition(&mut db, cov_table, *oid, written_transitions).await;
+            }
+            coarse_cov_oids.extend(
+                committed_oids.iter().copied().filter(|oid| {
+                    !bacnet_device_core::cov::life_safety::is_life_safety_object(*oid)
+                }),
+            );
             (outcome, changes, plans, schedule_cov)
         };
         staging_plans.extend(plans);
         let response = match outcome {
-            WpmOutcome::Success { committed_oids } => {
-                *written_oids = committed_oids;
-                self.simple_ack()
-            }
+            WpmOutcome::Success { .. } => self.simple_ack(),
             WpmOutcome::Error {
                 error,
                 first_failed_write_attempt,
-                committed_oids,
+                ..
             } => {
-                *written_oids = committed_oids;
                 let (error_class, error_code) = bacnet_device_core::reply::error_fields(&error);
                 Apdu::Error(
                     bacnet_services::wpm::WritePropertyMultipleError {
@@ -394,12 +411,6 @@ impl Request<'_> {
                 reject_reason: reason,
             }),
         };
-        coarse_cov_oids.extend(
-            written_oids
-                .iter()
-                .copied()
-                .filter(|oid| !bacnet_device_core::cov::life_safety::is_life_safety_object(*oid)),
-        );
         *life_safety_cov_changes = exact_changes;
         // Targets a written Schedule commanded on re-evaluation.
         schedule_cov.merge_into(coarse_cov_oids, life_safety_cov_changes, command_runs);
@@ -560,6 +571,13 @@ impl Request<'_> {
             if let Some(oid) = written {
                 let capture = cov_table.read().await.timed_capture(oid);
                 capture.run(&db);
+                // The edit's transition commits under its guard too, ahead
+                // of a written Schedule's pass, as after a WriteProperty (WPM
+                // and local writes evaluate after it); an application's own
+                // reporting Schedule-type object gets a transition the pass
+                // causes at the next sweep.
+                let sent = &mut effects.written_transitions;
+                commit_written_transition(&mut db, cov_table, oid, sent).await;
             }
             let schedule_cov = match written {
                 Some(oid) => {
@@ -571,7 +589,6 @@ impl Request<'_> {
         };
         // The edited object first, then a Schedule's targets, which the merge
         // adds only when not already there, as after a WriteProperty.
-        effects.written_oids.extend(written);
         effects.coarse_cov_oids.extend(
             written
                 .filter(|oid| !bacnet_device_core::cov::life_safety::is_life_safety_object(*oid)),
