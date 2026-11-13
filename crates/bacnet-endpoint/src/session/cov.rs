@@ -76,6 +76,21 @@ use crate::held_database::HeldDatabase;
 /// expected, so that more silent ones are needed to fill the bound.
 pub const COV_CONFIRMED_IN_FLIGHT: usize = 64;
 
+/// The most notifications the outbox of a session with
+/// [`with_cov`](super::EndpointSession::with_cov) may hold
+/// (`ReportConfig::outbox.entries`). The outbox is allocated whole at
+/// start, so a larger one is refused there, before the transport starts.
+pub const COV_OUTBOX_MAX_ENTRIES: usize = 65_535;
+
+/// The most octets that outbox may hold (`ReportConfig::outbox.octets`),
+/// 16 MiB, refused past it as [`COV_OUTBOX_MAX_ENTRIES`] is.
+pub const COV_OUTBOX_MAX_OCTETS: usize = 16 * 1024 * 1024;
+
+/// The longest a confirmed notification may wait for its answer
+/// (`ReportConfig::confirmed.timeout`), in milliseconds: one hour. A
+/// longer timeout, or a zero one, is refused at start.
+pub const COV_CONFIRMED_TIMEOUT_MAX_MS: u64 = 3_600_000;
+
 /// The invoke IDs the session's coordinator holds, all roles together.
 const INVOKE_IDS: usize = 256;
 
@@ -95,8 +110,11 @@ impl CovRole {
     /// Build the `Reporter` for the local Device `device` of `db`: under
     /// the session's identity when it has one, otherwise under one read
     /// from the Device object. Does nothing unless COV is enabled. Refuses
-    /// an invalid policy, and an outbox with no entry or no octet, which
-    /// could queue nothing.
+    /// an invalid policy; an outbox with no entry or no octet, which could
+    /// queue nothing, or past [`COV_OUTBOX_MAX_ENTRIES`] or
+    /// [`COV_OUTBOX_MAX_OCTETS`]; and a confirmed timeout of zero, whose
+    /// reports would be due as they begin, or past
+    /// [`COV_CONFIRMED_TIMEOUT_MAX_MS`].
     pub(super) fn prepare(
         &mut self,
         identity: Option<&DeviceIdentity>,
@@ -119,6 +137,22 @@ impl CovRole {
             return Err(Error::Encoding(
                 "COV requires an outbox of at least one entry and one octet".into(),
             ));
+        }
+        if config.outbox.entries > COV_OUTBOX_MAX_ENTRIES
+            || config.outbox.octets > COV_OUTBOX_MAX_OCTETS
+        {
+            return Err(Error::Encoding(format!(
+                "COV allows an outbox of at most {COV_OUTBOX_MAX_ENTRIES} entries and \
+                 {COV_OUTBOX_MAX_OCTETS} octets"
+            )));
+        }
+        let timeout = config.confirmed.timeout;
+        if timeout.is_zero()
+            || timeout > bacnet_time::Duration::from_millis(COV_CONFIRMED_TIMEOUT_MAX_MS)
+        {
+            return Err(Error::Encoding(format!(
+                "COV requires a confirmed timeout of 1 to {COV_CONFIRMED_TIMEOUT_MAX_MS} ms"
+            )));
         }
         let identity = match identity {
             Some(identity) => identity.clone(),

@@ -259,8 +259,9 @@ impl PyMstpEndpoint {
     ///         `policy` (a `CovPolicy`, as `BACnetServer`'s `cov_policy`),
     ///         `outbox_entries` (16), `outbox_octets` (2048),
     ///         `confirmed_timeout_ms` (3000) and `confirmed_retries` (3).
-    ///         An unknown key or a wrong type raises TypeError, and a zero
-    ///         outbox or timeout ValueError. The endpoint has no clock, so
+    ///         An unknown key or a wrong type raises TypeError, and an outbox
+    ///         or timeout outside 1 to the endpoint's bounds (65535 entries,
+    ///         16 MiB, one hour) ValueError. The endpoint has no clock, so
     ///         a timestamped COV-multiple reference is refused.
     #[new]
     #[pyo3(signature = (

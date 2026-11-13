@@ -8,6 +8,10 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
+use bacnet_endpoint::session::{
+    COV_CONFIRMED_TIMEOUT_MAX_MS, COV_OUTBOX_MAX_ENTRIES, COV_OUTBOX_MAX_OCTETS,
+};
+
 use crate::server::{cov_policy, policy_dict};
 
 const COV: &str = "cov";
@@ -21,7 +25,9 @@ const COV: &str = "cov";
 /// `confirmed_retries` (3). An unknown or non-str key and a value of the
 /// wrong type raise TypeError, an integer out of range OverflowError, and
 /// a value the session would refuse at start ValueError, here rather than
-/// at start.
+/// at start: an outbox of no entry or no octet, or past the endpoint's
+/// [`COV_OUTBOX_MAX_ENTRIES`] or [`COV_OUTBOX_MAX_OCTETS`], and a timeout
+/// of zero or past [`COV_CONFIRMED_TIMEOUT_MAX_MS`].
 pub(super) fn parse(dict: Option<&Bound<'_, PyDict>>) -> PyResult<Option<ReportConfig>> {
     let Some(dict) = dict else {
         return Ok(None);
@@ -39,26 +45,26 @@ pub(super) fn parse(dict: Option<&Bound<'_, PyDict>>) -> PyResult<Option<ReportC
             "outbox_octets" => outbox.octets = policy_dict::field(COV, &key, &value)?,
             "confirmed_timeout_ms" => {
                 let ms: u64 = policy_dict::field(COV, &key, &value)?;
+                if !(1..=COV_CONFIRMED_TIMEOUT_MAX_MS).contains(&ms) {
+                    return Err(PyValueError::new_err(format!(
+                        "cov['confirmed_timeout_ms'] must be 1 to {COV_CONFIRMED_TIMEOUT_MAX_MS}"
+                    )));
+                }
                 timing.timeout = bacnet_time::Duration::from_millis(ms);
             }
             "confirmed_retries" => timing.retries = policy_dict::field(COV, &key, &value)?,
             _ => return Err(policy_dict::unexpected_key(COV, &key)),
         }
     }
-    for (key, value) in [
-        ("outbox_entries", outbox.entries),
-        ("outbox_octets", outbox.octets),
+    for (key, value, max) in [
+        ("outbox_entries", outbox.entries, COV_OUTBOX_MAX_ENTRIES),
+        ("outbox_octets", outbox.octets, COV_OUTBOX_MAX_OCTETS),
     ] {
-        if value == 0 {
+        if !(1..=max).contains(&value) {
             return Err(PyValueError::new_err(format!(
-                "cov['{key}'] must be positive"
+                "cov['{key}'] must be 1 to {max}"
             )));
         }
-    }
-    if timing.timeout.is_zero() {
-        return Err(PyValueError::new_err(
-            "cov['confirmed_timeout_ms'] must be positive",
-        ));
     }
     let config = ReportConfig::new(policy.unwrap_or_default())
         .with_outbox(outbox)

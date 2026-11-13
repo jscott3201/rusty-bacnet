@@ -6110,23 +6110,30 @@ Every key is optional, so `cov={}` takes the Rust defaults:
 | Key | Default | What it sets |
 |---|---|---|
 | `policy` | `CovPolicy` defaults | the subscription caps and per-change budget, read as `BACnetServer(cov_policy=...)` is |
-| `outbox_entries` | 16 | notifications queued at once |
-| `outbox_octets` | 2048 | their octets, together |
-| `confirmed_timeout_ms` | 3000 | how long a confirmed notification waits for its answer |
+| `outbox_entries` | 16 | notifications queued at once, 1 to 65,535 |
+| `outbox_octets` | 2048 | their octets, together, 1 to 16,777,216 (16 MiB) |
+| `confirmed_timeout_ms` | 3000 | how long a confirmed notification waits for its answer, 1 to 3,600,000 (an hour) |
 | `confirmed_retries` | 3 | resends after the first |
 
 An unknown key or a value of the wrong type raises `TypeError`, an integer out
-of range `OverflowError`, and a zero outbox or timeout `ValueError`, in the
-constructor. At most 64 confirmed notifications are out at once, so
-subscribers that stop answering can't take every invoke ID from the client
+of range of its type `OverflowError`, and a value outside the ranges above
+`ValueError`, in the constructor. The outbox is allocated whole when the
+endpoint starts. Size `outbox_octets` for the largest notification the
+objects call for, up to the endpoint's `max_apdu`: a notification larger than
+it is never queued, so with too small an outbox a subscription is acknowledged
+and then hears nothing. At most 64 confirmed notifications are out at once,
+so subscribers that stop answering can't take every invoke ID from the client
 role.
 
 ```python
+from rusty_bacnet import BipEndpoint, ObjectIdentifier, ObjectType, PropertyValue
+
+zone_temp = ObjectIdentifier(ObjectType.ANALOG_INPUT, 1)
 endpoint = BipEndpoint(1001, cov={"policy": {"max_subscriptions_global": 256}})
 endpoint.add_analog_input(instance=1, name="Zone Temp", present_value=21.5)
 async with endpoint:
-    # AI-1's subscribers hear of this.
-    await endpoint.set_present_value_local(oid, PropertyValue.real(22.0))
+    # Zone Temp's subscribers hear of this.
+    await endpoint.set_present_value_local(zone_temp, PropertyValue.real(22.0))
 ```
 
 A Python endpoint has no Device clock. A timestamped

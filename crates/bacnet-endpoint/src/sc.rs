@@ -209,6 +209,13 @@ impl ScEndpointBuilder {
     /// [`BipEndpointBuilder::cov`](crate::bip::BipEndpointBuilder::cov)
     /// does. Its bounds, startup requirements and refusals are those of
     /// [`EndpointSession::with_cov`].
+    /// The outbox holds at most
+    /// [`COV_OUTBOX_MAX_ENTRIES`](crate::session::COV_OUTBOX_MAX_ENTRIES)
+    /// entries and
+    /// [`COV_OUTBOX_MAX_OCTETS`](crate::session::COV_OUTBOX_MAX_OCTETS)
+    /// octets, and the confirmed timeout is 1 ms to
+    /// [`COV_CONFIRMED_TIMEOUT_MAX_MS`](crate::session::COV_CONFIRMED_TIMEOUT_MAX_MS);
+    /// past either, startup fails before the transport starts.
     pub fn cov(mut self, config: ReportConfig) -> Self {
         self.cov = Some(config);
         self

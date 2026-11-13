@@ -239,6 +239,12 @@ fn read_name_frame(invoke_id: u8) -> Vec<u8> {
         property_array_index: None,
     }
     .encode(&mut service);
+    request_frame(invoke_id, ConfirmedServiceChoice::READ_PROPERTY, service)
+}
+
+/// The confirmed request `service` with `parameters`, from a requester that
+/// accepts 1476-octet APDUs, in a Data Expecting Reply frame from the peer.
+fn request_frame(invoke_id: u8, service: ConfirmedServiceChoice, parameters: BytesMut) -> Vec<u8> {
     let mut apdu = BytesMut::new();
     encode_apdu(
         &mut apdu,
@@ -251,8 +257,8 @@ fn read_name_frame(invoke_id: u8) -> Vec<u8> {
             invoke_id,
             sequence_number: None,
             proposed_window_size: None,
-            service_choice: ConfirmedServiceChoice::READ_PROPERTY,
-            service_request: service.freeze(),
+            service_choice: service,
+            service_request: parameters.freeze(),
         }),
     )
     .unwrap();
@@ -366,4 +372,117 @@ fn an_extended_endpoint_answers_a_long_read_in_an_extended_frame() {
     let read = ReadPropertyACK::decode(&ack.service_ack).unwrap();
     assert_eq!(read.property_identifier, PropertyIdentifier::OBJECT_NAME);
     assert!(read.property_value.len() > 1_400);
+}
+
+/// The Python wrapper hands `cov` to the MS/TP session (#2490): with it a
+/// peer's SubscribeCOV to AI 1 is answered with a SimpleACK, without it
+/// with the Reject it always got.
+#[test]
+fn the_wrapper_installs_cov_on_the_mstp_session() {
+    use bacnet_services::cov::SubscribeCOVRequest;
+    use bacnet_types::enums::RejectReason;
+    Python::initialize();
+    for cov in [true, false] {
+        let peer = Arc::new(std::sync::Mutex::new(None));
+        let mut built = Python::attach(|py| {
+            let dict = PyDict::new(py);
+            PyMstpEndpoint::new(
+                8011,
+                "injected-serial",
+                "COV",
+                555,
+                38400,
+                SESSION_MAC,
+                127,
+                1,
+                480,
+                None,
+                None,
+                None,
+                16,
+                6000,
+                0,
+                256,
+                0,
+                false,
+                false,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                cov.then_some(&dict),
+            )
+        })
+        .unwrap();
+        built.config.serial_opener = Some(Arc::new({
+            let peer = peer.clone();
+            move |_| {
+                let (serial, other) = LoopbackSerial::pair();
+                *peer.lock().unwrap() = Some(other);
+                Ok(TestSerial::Peer(serial))
+            }
+        }));
+        built
+            .push_pending(PendingObject::AnalogInput {
+                instance: 1,
+                name: "AI 1".into(),
+                units: 62,
+                present_value: 0.0,
+                profile: None,
+                parameters: Default::default(),
+            })
+            .unwrap();
+        let built = Python::attach(|py| Py::new(py, built).unwrap());
+        let run = |script: &std::ffi::CStr| {
+            Python::attach(|py| {
+                let globals = PyDict::new(py);
+                globals.set_item("endpoint", built.clone_ref(py)).unwrap();
+                py.run(script, Some(&globals), None).unwrap();
+            });
+        };
+        run(pyo3::ffi::c_str!(
+            "import asyncio\nasync def go():\n    await endpoint.start()\nasyncio.run(go())\n"
+        ));
+        let peer = peer.lock().unwrap().take().expect("serial opened at start");
+        let mut parameters = BytesMut::new();
+        SubscribeCOVRequest {
+            subscriber_process_identifier: 1,
+            monitored_object_identifier: ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1)
+                .unwrap(),
+            issue_confirmed_notifications: Some(false),
+            lifetime: Some(60),
+        }
+        .encode(&mut parameters)
+        .unwrap();
+        let frame = request_frame(4, ConfirmedServiceChoice::SUBSCRIBE_COV, parameters);
+        let (_, npdu) = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap()
+            .block_on(async {
+                peer.write(&frame).await.unwrap();
+                answer_to_peer(&peer).await
+            });
+        run(pyo3::ffi::c_str!(
+            "import asyncio\nasync def go():\n    await endpoint.close()\nasyncio.run(go())\n"
+        ));
+        let reply = decode_apdu(decode_npdu(npdu.into()).unwrap().payload).unwrap();
+        match (cov, reply) {
+            (true, Apdu::SimpleAck(ack)) => {
+                assert_eq!(ack.invoke_id, 4);
+                assert_eq!(ack.service_choice, ConfirmedServiceChoice::SUBSCRIBE_COV);
+            }
+            (false, Apdu::Reject(reject)) => {
+                assert_eq!(reject.reject_reason, RejectReason::UNRECOGNIZED_SERVICE);
+            }
+            (cov, reply) => panic!("cov {cov}: {reply:?}"),
+        }
+    }
 }

@@ -1314,12 +1314,15 @@ when it has `cov`.
 `BipEndpoint`/`ScEndpoint`/`MstpEndpoint(cov=...)`: turns COV on
 for the endpoint's objects (#2490), checked at construction; omitted keys
 keep their defaults, so `{}` turns it on with them all. `policy` is
-read as `BACnetServer(cov_policy=...)` is. `outbox_entries` (16) and
-`outbox_octets` (2048) bound the notifications queued at once;
-`confirmed_timeout_ms` (3000) and `confirmed_retries` (3) time a
-confirmed notification. An unknown key or a wrong type raises TypeError,
-an integer out of range OverflowError, and a zero outbox or timeout
-ValueError.
+read as `BACnetServer(cov_policy=...)` is. `outbox_entries` (16, 1
+to 65535) and `outbox_octets` (2048, 1 to 16777216) bound the
+notifications queued at once, allocated when the endpoint starts;
+`outbox_octets` must hold the largest notification the objects call
+for, up to `max_apdu`, or a subscription is acknowledged and then hears
+nothing. `confirmed_timeout_ms` (3000, 1 to 3600000) and
+`confirmed_retries` (3) time a confirmed notification. An unknown key
+or a wrong type raises TypeError, an integer out of range of its type
+OverflowError, and a value outside those ranges ValueError.
 
 Keys:
 

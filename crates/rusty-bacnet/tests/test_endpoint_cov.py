@@ -216,6 +216,14 @@ class EndpointCovKeywordTests(unittest.TestCase):
                 self.assertEqual(parameter.kind, inspect.Parameter.KEYWORD_ONLY)
                 self.assertIsNone(parameter.default)
 
+    def test_the_bounds_themselves_are_taken(self):
+        widest = {"outbox_entries": 65_535, "outbox_octets": 16 * 1024 * 1024,
+                  "confirmed_timeout_ms": 3_600_000}
+        for owner in (lambda: endpoint(cov=widest),
+                      lambda: MstpEndpoint(2490, "/tmp/nonexistent", cov=widest)):
+            with self.subTest(owner=owner):
+                owner()
+
     def test_mstp_and_sc_endpoints_take_cov_too(self):
         cov = {"outbox_entries": 4, "confirmed_retries": 0}
         MstpEndpoint(2490, "/tmp/nonexistent", cov=cov)
@@ -233,10 +241,19 @@ class EndpointCovKeywordTests(unittest.TestCase):
              r"^cov\['policy'\] got an unexpected key 'max_subscriptions'$"),
             ({"confirmed_retries": 256}, OverflowError, r"^cov\['confirmed_retries'\]: "),
             ({"confirmed_timeout_ms": -1}, OverflowError, r"^cov\['confirmed_timeout_ms'\]: "),
-            ({"outbox_entries": 0}, ValueError, r"^cov\['outbox_entries'\] must be positive$"),
-            ({"outbox_octets": 0}, ValueError, r"^cov\['outbox_octets'\] must be positive$"),
+            ({"outbox_entries": 0}, ValueError, r"^cov\['outbox_entries'\] must be 1 to 65535$"),
+            ({"outbox_entries": 65_536}, ValueError,
+             r"^cov\['outbox_entries'\] must be 1 to 65535$"),
+            ({"outbox_entries": 2**40}, ValueError,
+             r"^cov\['outbox_entries'\] must be 1 to 65535$"),
+            ({"outbox_octets": 0}, ValueError,
+             r"^cov\['outbox_octets'\] must be 1 to 16777216$"),
+            ({"outbox_octets": 16 * 1024 * 1024 + 1}, ValueError,
+             r"^cov\['outbox_octets'\] must be 1 to 16777216$"),
             ({"confirmed_timeout_ms": 0}, ValueError,
-             r"^cov\['confirmed_timeout_ms'\] must be positive$"),
+             r"^cov\['confirmed_timeout_ms'\] must be 1 to 3600000$"),
+            ({"confirmed_timeout_ms": 3_600_001}, ValueError,
+             r"^cov\['confirmed_timeout_ms'\] must be 1 to 3600000$"),
             ({"policy": {"max_subscriptions_global": 0}}, ValueError,
              r"max_subscriptions_global must be positive$"),
         ]:
