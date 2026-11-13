@@ -451,6 +451,10 @@ impl ObjectDatabase {
     ///
     /// Returns a `Vec` of `ObjectIdentifier`s whose object type matches `object_type`.
     /// Useful for WhoHas, object enumeration, and similar queries.
+    ///
+    /// They come in the order the objects were added: an object replaced
+    /// under the same identifier keeps its place, and one removed and added
+    /// again goes last.
     pub fn find_by_type(&self, object_type: ObjectType) -> Vec<ObjectIdentifier> {
         self.type_index
             .get(&object_type)

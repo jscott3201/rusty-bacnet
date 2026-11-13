@@ -8812,19 +8812,25 @@ bacnet-device-core = { version = "...", default-features = false, features = ["a
   `sample_event_timestamp`), the message text, and the Event Values
   (`project_intrinsic_payload`, and `project_event_enrollment_payload`,
   which the server's Event Enrollment uses) are public too.
-  With the `event-enrollment` feature and `std` (#2319),
+  With the `event-enrollment` feature, on `alloc` alone (#2319),
   `event::enrollment::evaluate_event_enrollments_for_delivery(db,
   interval_secs)` runs Event Enrollment's evaluation pass, moved from
   `bacnet-server`, under the host's database guard: it returns an
   `EventEnrollmentEvaluationBatch` with the `EventEnrollmentEvaluationReport`
   (transitions, reliability results, diagnostics), the committed
-  transitions with a payload (`CommittedEventEnrollmentDelivery`) and the
-  ones whose payload was refused (`SuppressedDelivery`), which the host
-  logs. The deliveries include transitions whose `Event_Enable` bit is
-  clear: the host sends only those whose result has `distribute` set, as
-  the server does. `interval_secs` is the time between passes, which turns
-  time delays into a count of passes. The algorithms it runs stay internal. `bacnet-server` drives it on
-  its task and re-exports the report types.
+  transitions with what their notification needs
+  (`CommittedEventEnrollmentDelivery`: the payload, plus the timestamp and
+  message text the commit wrote, read back under the same guard) and the
+  ones it couldn't build (`SuppressedDelivery`, whose `SuppressionCause`
+  says whether the payload or the history failed), which the host logs.
+  Everything comes out in the database's Event Enrollment order. The
+  deliveries include transitions whose `Event_Enable` bit is clear: the
+  host sends only those whose `distribute()` is true, as the server does,
+  and `into_notification()` gives the notification to send.
+  `interval_secs` is the time between passes in whole seconds, a `u32`,
+  which turns time delays into a count of passes (the server's wrappers
+  take a `u64` and saturate it). The algorithms it runs stay internal.
+  `bacnet-server` drives it on its task and re-exports the report types.
   `handle_acknowledge_alarm` runs AcknowledgeAlarm, decoding it and
   calling `acknowledge(db, oid, state, timestamp)`, the path a local
   acknowledgement runs too, and

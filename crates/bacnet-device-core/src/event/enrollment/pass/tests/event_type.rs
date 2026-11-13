@@ -140,6 +140,7 @@ fn a_fault_with_no_payload_is_suppressed_without_an_event_type() {
     let expected = SuppressedDelivery {
         enrollment_oid,
         event_type: None,
+        cause: SuppressionCause::Payload,
     };
     assert_eq!(batch.suppressed, [expected]);
 }

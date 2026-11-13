@@ -7,19 +7,30 @@
 //! algorithms it runs, the reads of each enrollment's parameters and
 //! monitored reference, and the commit of what it finds. It moved from
 //! `bacnet-server`, which drives the pass on its task, logs what it reports
-//! and sends what it commits. The pass needs `std` until it keeps its
-//! per-pass state in ordered maps (#2319 PR 2b); the algorithms don't.
+//! and sends what it commits. It needs `alloc`, not `std`: a pass keeps
+//! its per-enrollment state in B-tree maps (#2319 PR 2b).
 //!
 //! # Calling the pass
 //!
 //! A host calls the pass with its database guard held, once per interval,
 //! and gets an `EventEnrollmentEvaluationBatch`: the
 //! `EventEnrollmentEvaluationReport` of what changed, the committed
-//! transitions with a notification payload (`CommittedEventEnrollmentDelivery`)
-//! and the ones whose payload couldn't be built (`SuppressedDelivery`), for
-//! it to log. A delivery is not yet a send: it may be a transition the
-//! enrollment's `Event_Enable` leaves out, so the host sends only those
-//! whose result has `distribute` set, as the server does.
+//! transitions with what their notification needs
+//! (`CommittedEventEnrollmentDelivery`: the payload and the history the
+//! commit wrote, read back under the same guard) and the ones whose payload
+//! or history couldn't be built (`SuppressedDelivery`), for it to log. A
+//! delivery is not yet a send: it may be a transition the enrollment's
+//! `Event_Enable` leaves out, so the host sends only those whose
+//! `distribute()` is true, as the server does, and
+//! `CommittedEventEnrollmentDelivery::into_notification` gives the
+//! notification to send, with nothing more to read from the database.
+//!
+//! A pass works through the enrollments in the database's order, the order
+//! they were added in (`ObjectDatabase::find_by_type`), never by
+//! identifier: an enrollment replaced under the same identifier keeps its
+//! place, and one removed and added again goes last. The pass follows their
+//! inhibit references in that order, then commits in it. Every list in the batch comes out in that order, and
+//! without a Device clock the commits take event sequence numbers in it.
 //!
 //! # Algorithms
 //!
@@ -76,32 +87,24 @@
 //! each write of the enrollment, the host's own refresh (the server's runs
 //! every second) and the start of each pass.
 
-// Without `std` nothing calls them yet: the pass that does needs `std`
-// until #2319 PR 2b.
-#[cfg_attr(not(feature = "std"), allow(dead_code))]
 mod algorithms;
-#[cfg_attr(not(feature = "std"), allow(dead_code))]
 mod fault;
-#[cfg_attr(not(feature = "std"), allow(dead_code))]
 mod reference;
 
-#[cfg(feature = "std")]
 mod pass;
-#[cfg(feature = "std")]
 pub use pass::{
     CommittedEventEnrollmentDelivery, CommittedEventEnrollmentResult,
     EventEnrollmentEvaluationBatch, EventEnrollmentEvaluationDiagnostic,
     EventEnrollmentEvaluationOutcome, EventEnrollmentEvaluationReport,
     EventEnrollmentEvaluationStage, EventEnrollmentReliabilityCause,
     EventEnrollmentReliabilityResult, EventEnrollmentTransition, SuppressedDelivery,
-    evaluate_event_enrollments_for_delivery,
+    SuppressionCause, evaluate_event_enrollments_for_delivery,
 };
 
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::{Error, RemoteError};
 
 /// Why an enrollment's own configuration couldn't be read for a pass.
-#[cfg_attr(not(feature = "std"), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LocalConfigurationReadError {
     /// The configuration can't be used: a required property is missing, a
@@ -114,7 +117,6 @@ pub(crate) enum LocalConfigurationReadError {
 
 /// Classify a failed read of a required property: UNKNOWN_PROPERTY makes
 /// the configuration malformed, anything else leaves it unavailable.
-#[cfg_attr(not(feature = "std"), allow(dead_code))]
 pub(crate) fn classify_required_property_read_error(error: &Error) -> LocalConfigurationReadError {
     if matches!(
         error,

@@ -21,7 +21,9 @@ use super::{
 /// seconds; the lifecycle passes its (clamped to >= 1)
 /// `event_enrollment_interval_secs`. The conversion is never-fire-early, and
 /// the pending countdown retains no residual seconds: in-memory state plus
-/// builder-config interval means no mid-run rescale exists.
+/// builder-config interval means no mid-run rescale exists. The core takes
+/// the interval as a `u32`; one above `u32::MAX` goes in as `u32::MAX`,
+/// which rounds every delay to the same passes.
 pub fn evaluate_event_enrollments(
     db: &mut ObjectDatabase,
     interval_secs: u64,
@@ -38,7 +40,19 @@ pub fn evaluate_event_enrollments_report(
     db: &mut ObjectDatabase,
     interval_secs: u64,
 ) -> EventEnrollmentEvaluationReport {
-    let evaluation = evaluate_event_enrollments_for_delivery(db, interval_secs);
+    let evaluation = evaluate_event_enrollments_for_delivery(db, core_interval(interval_secs));
     super::log_suppressed_deliveries(&evaluation.suppressed);
     evaluation.report
 }
+
+/// The server's interval in seconds as the core takes it, saturating at
+/// `u32::MAX`. Saturating changes no delay: every Time_Delay is at most
+/// `u32::MAX` seconds, so above that any non-zero delay is one pass either
+/// way, and zero is none.
+pub(crate) fn core_interval(interval_secs: u64) -> u32 {
+    u32::try_from(interval_secs).unwrap_or(u32::MAX)
+}
+
+#[cfg(test)]
+#[path = "api_tests.rs"]
+mod tests;

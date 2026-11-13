@@ -205,6 +205,10 @@ pub(super) struct ReferenceValueObject {
     pub(super) atomic_commit_supported: bool,
     pub(super) reliability_commit_supported: bool,
     pub(super) reliability_error_after_write: bool,
+    /// Event_Time_Stamps reads fail when false.
+    pub(super) timestamps_readable: bool,
+    /// Event_Message_Texts is an unknown property when false.
+    pub(super) message_texts_served: bool,
 }
 
 impl ReferenceValueObject {
@@ -237,6 +241,8 @@ impl ReferenceValueObject {
             atomic_commit_supported: true,
             reliability_commit_supported: true,
             reliability_error_after_write: false,
+            timestamps_readable: true,
+            message_texts_served: true,
         }
     }
 }
@@ -261,6 +267,16 @@ impl BACnetObject for ReferenceValueObject {
                 .ok_or_else(|| bacnet_types::error::Error::Encoding("reference read failed".into()))
         } else if property == PropertyIdentifier::FAULT_PARAMETERS
             && !self.fault_parameters_supported
+        {
+            Err(bacnet_types::error::Error::protocol(
+                bacnet_types::enums::ErrorClass::PROPERTY,
+                bacnet_types::enums::ErrorCode::UNKNOWN_PROPERTY,
+            ))
+        } else if property == PropertyIdentifier::EVENT_TIME_STAMPS && !self.timestamps_readable {
+            Err(bacnet_types::error::Error::Encoding(
+                "timestamps read failed".into(),
+            ))
+        } else if property == PropertyIdentifier::EVENT_MESSAGE_TEXTS && !self.message_texts_served
         {
             Err(bacnet_types::error::Error::protocol(
                 bacnet_types::enums::ErrorClass::PROPERTY,

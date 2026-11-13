@@ -345,14 +345,14 @@ fn source_and_state_rejection_never_claims_cancellation_committed() {
         None,
     )));
     update.cancel_pending(EventEnrollmentEvalState::default());
-    let mut updates = std::collections::HashMap::new();
+    let mut updates = std::collections::BTreeMap::new();
     updates.insert(enrollment_oid, update);
 
     let report = apply_updates(
         &mut db,
         &[enrollment_oid],
         updates,
-        &std::collections::HashSet::new(),
+        &std::collections::BTreeSet::new(),
     );
 
     assert!(report.transitions.is_empty());

@@ -20,7 +20,7 @@ use super::super::{
 /// The server's `evaluate_event_enrollments`, without its log lines.
 pub(crate) fn evaluate_event_enrollments(
     db: &mut ObjectDatabase,
-    interval_secs: u64,
+    interval_secs: u32,
 ) -> Vec<EventEnrollmentTransition> {
     evaluate_event_enrollments_report(db, interval_secs).transitions
 }
@@ -28,7 +28,7 @@ pub(crate) fn evaluate_event_enrollments(
 /// The server's `evaluate_event_enrollments_report`, without its log lines.
 pub(crate) fn evaluate_event_enrollments_report(
     db: &mut ObjectDatabase,
-    interval_secs: u64,
+    interval_secs: u32,
 ) -> EventEnrollmentEvaluationReport {
     evaluate_event_enrollments_for_delivery(db, interval_secs).report
 }

@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use bacnet_objects::analog::AnalogInputObject;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
+use bacnet_objects::event::EventTransition;
 use bacnet_objects::event_enrollment::EventEnrollmentObject;
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::bitstring::EventTransitionBits;
@@ -17,7 +18,7 @@ use tracing::span::{Attributes, Id, Record};
 use tracing::subscriber::Interest;
 use tracing::{Event, Level, Metadata, Subscriber};
 
-use super::super::SuppressedDelivery;
+use super::super::{SuppressedDelivery, SuppressionCause};
 
 /// One debug event: its message, and its other fields as they print.
 #[derive(Clone, Debug, Default)]
@@ -182,10 +183,17 @@ fn suppressed_deliveries_log_at_debug_with_the_commits_text() {
         SuppressedDelivery {
             enrollment_oid: enrollment,
             event_type: None,
+            cause: SuppressionCause::Payload,
         },
         SuppressedDelivery {
             enrollment_oid: enrollment,
             event_type: Some(EventType::OUT_OF_RANGE),
+            cause: SuppressionCause::Payload,
+        },
+        SuppressedDelivery {
+            enrollment_oid: enrollment,
+            event_type: Some(EventType::OUT_OF_RANGE),
+            cause: SuppressionCause::History(EventTransition::ToOffnormal),
         },
     ]);
     assert_eq!(
@@ -193,6 +201,18 @@ fn suppressed_deliveries_log_at_debug_with_the_commits_text() {
         [
             "Committed Event Enrollment reliability payload rejected; suppressing distribution",
             "Committed Event Enrollment payload rejected; suppressing distribution",
+            "Committed Event Enrollment history projection rejected; suppressing distribution",
         ]
     );
+    // The history line names the enrollment and the transition, as the
+    // intrinsic path's does.
+    let history = messages.logged().pop().unwrap().fields;
+    let expected = [
+        ("enrollment".to_owned(), enrollment.to_string()),
+        (
+            "coordinate".to_owned(),
+            format!("{:?}", EventTransition::ToOffnormal),
+        ),
+    ];
+    assert_eq!(history, expected);
 }

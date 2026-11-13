@@ -109,9 +109,9 @@ echo "==> bacnet-device-core (no_std with alloc and event-reporting$label)"
 cargo_for clippy -p bacnet-device-core --all-targets --no-default-features --features alloc,event-reporting --locked -- -D warnings
 cargo_for doc -p bacnet-device-core --no-default-features --features alloc,event-reporting --no-deps --locked --document-private-items
 
-# Its Event Enrollment algorithms (#2319) with alloc, which `std` turns on
-# (with event-reporting beneath them): a doc link into `event::enrollment`,
-# or out of it, fails here.
+# Its Event Enrollment pass and algorithms (#2319) with alloc, which `std`
+# turns on (with event-reporting beneath them), tests included: a doc link
+# into `event::enrollment`, or out of it, fails here.
 echo "==> bacnet-device-core (no_std with alloc and event-enrollment$label)"
 cargo_for clippy -p bacnet-device-core --all-targets --no-default-features --features alloc,event-enrollment --locked -- -D warnings
 cargo_for doc -p bacnet-device-core --no-default-features --features alloc,event-enrollment --no-deps --locked --document-private-items
