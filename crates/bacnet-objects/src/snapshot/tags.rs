@@ -29,6 +29,8 @@ use super::framing::{self, HEADER_LEN};
 use crate::object_profile::{
     MAX_TAGS, MAX_TAGS_SNAPSHOT_BYTES, TagsSnapshot, check_tags, no_space_error,
 };
+#[cfg(feature = "durable-writes")]
+use crate::write_config::description::MAX_OCTETS as MAX_DESCRIPTION_OCTETS;
 
 /// The format's tag, version 1: a snapshot without a written Description.
 pub const MAGIC: [u8; 8] = *b"RBNTAG01";
@@ -108,6 +110,39 @@ pub(crate) fn fits(
     tags: Option<&[BACnetNameValue]>,
 ) -> Result<(), Error> {
     encode_body(description, tags).map(|_| ())
+}
+
+/// The octets [`encode_body`] gives `tags`, each encoded in turn in
+/// `scratch`: what a stage counts once and keeps current as its writes
+/// change the Tags, rather than encoding the whole body for each (#2546).
+#[cfg(feature = "durable-writes")]
+pub(crate) fn tags_len(tags: &[BACnetNameValue], scratch: &mut BytesMut) -> Result<usize, Error> {
+    tags.iter().try_fold(0, |len, tag| {
+        scratch.clear();
+        encode_name_value(scratch, tag)?;
+        Ok(len + scratch.len())
+    })
+}
+
+/// [`fits`] for a written `description` and Tags whose encodings take
+/// `tags_len` octets ([`tags_len`]; `None` for no written Tags), when every
+/// tag is one a write takes, as every tag served or saved is. The answer is
+/// the same: the body only grows as each tag goes in, so judging its whole
+/// length once judges each length [`encode_body`] judges on the way.
+#[cfg(feature = "durable-writes")]
+pub(crate) fn fits_len(description: Option<&str>, tags_len: Option<usize>) -> Result<(), Error> {
+    // A Description's length in four octets, then its text, as
+    // `framing::put_description` writes it and refuses past its cap.
+    let description_len = match description {
+        Some(text) if text.len() > MAX_DESCRIPTION_OCTETS => return Err(no_space_error()),
+        Some(text) => 4 + text.len(),
+        None => 0,
+    };
+    // The presence octet, then the tags.
+    if description_len + 1 + tags_len.unwrap_or(0) > MAX_LEN - HEADER_LEN {
+        return Err(no_space_error());
+    }
+    Ok(())
 }
 
 fn decode_file(object: ObjectIdentifier, octets: &[u8]) -> Result<TagsSnapshot, SnapshotError> {
