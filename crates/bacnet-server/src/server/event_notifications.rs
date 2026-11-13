@@ -102,8 +102,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     /// receiver before its COV fanout, so each change's notifications still
     /// go before it (#889); the receiver ends once they are sent or the task
     /// is gone (refused by a stopping server, aborted, or panicked). None,
-    /// spawning nothing, when there is nothing to send. `stop()` aborts the task with the request: the transitions stay
-    /// committed, and what wasn't sent by then isn't.
+    /// spawning nothing, when there is nothing to send. `stop()` aborts the
+    /// task with the request: the transitions stay committed, and what
+    /// wasn't sent by then isn't.
     pub(super) fn spawn_written_transitions(
         services: &Arc<super::request_services::RequestServices<T>>,
         tasks: &super::request_tasks::RequestTaskSpawner,

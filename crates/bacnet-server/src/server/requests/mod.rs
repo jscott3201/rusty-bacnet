@@ -605,9 +605,12 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         // a task of their own sends them as soon as their guard is dropped, so
         // the response never waits on their delivery; the COV fanout waits for
         // it (#889). With plans, they go out here first and the plans send
-        // theirs after, so within this request no later transition of an
-        // object goes out ahead of an earlier one; across requests nothing
-        // orders the sends.
+        // theirs after. So the order within this request holds for its own
+        // transitions and its Staging plans' only: a Command, Channel or Timer
+        // run it starts below writes through the local path and sends its own
+        // transitions, a separate sender that can overtake a stalled send
+        // here, as on dev; only an ordered send queue would order those, and
+        // sends across requests (#2537).
         let sending = if staging_plans.is_empty() {
             Self::spawn_written_transitions(services, request_tasks, written_transitions)
         } else {

@@ -1,7 +1,7 @@
 ---
 section: Fixed
 ---
-- A Schedule's target writes and the server's background passes (Binary
-  Lighting Output operations, Access Door relocks, the fault pass) still get
-  their event-state transition at the next sweep, not with the write (#2530,
-  #2535).
+- A Schedule's target writes, membership work (relinquishes for a removed
+  Schedule or Staging object, Pulse Converter Reliability) and the background
+  passes (Binary Lighting Output operations, Access Door relocks, the fault
+  pass) still get their transition at the next sweep (#2530, #2535).
