@@ -15,7 +15,7 @@
 use alloc::vec::Vec;
 
 use bacnet_encoding::apdu::{AbortPdu, Apdu, ComplexAck, SimpleAck, decode_apdu};
-use bacnet_encoding::constructed::{ALL_NOTIFICATION_FORMS, encode_event_notification_of};
+use bacnet_encoding::constructed::encode_event_notification_of;
 use bacnet_encoding::npdu::view::NetworkPriority;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::event::EventTransition;
@@ -35,9 +35,9 @@ use super::{Reporter, Tail};
 use crate::cov::life_safety::LifeSafetyCovSnapshots;
 use crate::cov::{Delivery, Token};
 use crate::event::{
-    DistributionOutcome, EventInformationFailure, GetEventInformationBudget, INTRINSIC_FORMS,
-    MessageTexts, NotificationTransition, RecipientWindow, acknowledge, after_write,
-    distribute_event, fault_pass, handle_acknowledge_alarm,
+    DistributionOutcome, ENROLLMENT_FORMS, EventInformationFailure, GetEventInformationBudget,
+    INTRINSIC_FORMS, MessageTexts, NotificationTransition, RecipientWindow, acknowledge,
+    after_write, distribute_event, fault_pass, handle_acknowledge_alarm,
     handle_get_event_information_configured, network_priority, next_due,
     read_committed_history_snapshot, sweep,
 };
@@ -46,17 +46,29 @@ use crate::responder::{Inbound, Outcome, Written};
 
 /// The event-value forms the reporter's notifications carry: those
 /// intrinsic reporting builds, so an image links no other form's encoder
-/// (#2524), and with `event-enrollment` every form, for the enrollment
-/// pass to distribute (#2319). An acknowledgement's notification carries
-/// none.
+/// (#2524), and with `event-enrollment` those the Event Enrollment pass
+/// builds too (#2319). An acknowledgement's notification carries none.
 const REPORTED_FORMS: u32 = if cfg!(feature = "event-enrollment") {
-    ALL_NOTIFICATION_FORMS
+    INTRINSIC_FORMS | ENROLLMENT_FORMS
 } else {
     INTRINSIC_FORMS
 };
 // Every form intrinsic reporting builds goes out: one left out of the mask
 // would be refused at the encoder and counted dropped.
 const _: () = assert!(REPORTED_FORMS & INTRINSIC_FORMS == INTRINSIC_FORMS);
+
+/// The Event Enrollment pass's schedule (#2319).
+#[cfg(feature = "event-enrollment")]
+#[derive(Debug)]
+struct EnrollmentPass {
+    /// The period in whole seconds, at least one: the interval the pass
+    /// counts its Time_Delays in.
+    secs: u32,
+    /// The same period, as a duration.
+    period: Duration,
+    /// When the next pass runs.
+    next: Instant,
+}
 
 /// The event path's schedule.
 #[derive(Debug)]
@@ -72,6 +84,9 @@ pub(super) struct Events {
     next_fault: Instant,
     /// Event notifications queued so far, which number their tokens.
     queued: u64,
+    /// The Event Enrollment pass, if it runs.
+    #[cfg(feature = "event-enrollment")]
+    enrollment: Option<EnrollmentPass>,
 }
 
 impl Events {
@@ -85,6 +100,17 @@ impl Events {
             due: None,
             next_fault: Instant::ZERO,
             queued: 0,
+            #[cfg(feature = "event-enrollment")]
+            enrollment: config.event_enrollment.map(|period| {
+                // Whole seconds, rounded down, at least one: a period of
+                // 1.5 s counted as 2 would fire a delay early.
+                let secs = u32::try_from(period.as_secs()).unwrap_or(u32::MAX).max(1);
+                EnrollmentPass {
+                    secs,
+                    period: Duration::from_secs(u64::from(secs)),
+                    next: Instant::ZERO,
+                }
+            }),
         })
     }
 
@@ -92,7 +118,12 @@ impl Events {
     /// earliest due instant, floored a [`SWEEP_FLOOR`] after the last; or
     /// the fault pass, when it comes first.
     pub(super) fn deadline(&self) -> Option<Instant> {
-        bacnet_time::earliest([Some(self.wake()), self.fault.map(|_| self.next_fault)])
+        bacnet_time::earliest([
+            Some(self.wake()),
+            self.fault.map(|_| self.next_fault),
+            #[cfg(feature = "event-enrollment")]
+            self.enrollment.as_ref().map(|pass| pass.next),
+        ])
     }
 
     fn wake(&self) -> Instant {
@@ -262,7 +293,8 @@ impl Reporter {
     }
 
     /// The event path's work due at `now`: the fault pass, then the sweep,
-    /// each with the COV notifications of what it changed.
+    /// then the Event Enrollment pass, each with the COV notifications of
+    /// what it changed.
     pub(super) fn event_deadline(&mut self, db: &mut ObjectDatabase, now: Instant) {
         let Some(events) = self.events.as_mut() else {
             return;
@@ -276,12 +308,51 @@ impl Reporter {
         if swept {
             events.swept(now);
         }
+        #[cfg(feature = "event-enrollment")]
+        let enrollment = events.enrollment.as_mut().and_then(|pass| {
+            if now < pass.next {
+                return None;
+            }
+            // On time the cadence holds; late, one pass, and the next a
+            // period after it, as the server's interval does.
+            pass.next = pass.next.max(now).saturating_add(pass.period);
+            Some(pass.secs)
+        });
         if fault {
             self.fault_pass(db, now);
         }
         if swept {
             self.sweep(db, now);
         }
+        #[cfg(feature = "event-enrollment")]
+        if let Some(secs) = enrollment {
+            self.enrollment_pass(db, secs, now);
+        }
+    }
+
+    /// One Event Enrollment pass at `now`, counting delays at `secs` a pass:
+    /// each delivery whose Event_Enable lets it go out is distributed, as
+    /// an intrinsic transition is, and the enrollments it committed are
+    /// reported to COV after their notifications. Those it couldn't send
+    /// are counted (`ReporterCounters::enrollments_suppressed`).
+    #[cfg(feature = "event-enrollment")]
+    fn enrollment_pass(&mut self, db: &mut ObjectDatabase, secs: u32, now: Instant) {
+        use crate::event::enrollment::evaluate_event_enrollments_for_delivery;
+        let batch = evaluate_event_enrollments_for_delivery(db, secs);
+        for delivery in batch.deliveries {
+            if delivery.distribute() {
+                let oid = delivery.enrollment_oid();
+                self.distribute(db, oid, delivery.into_notification(), now);
+            }
+        }
+        self.counters.enrollments_suppressed += batch.suppressed.len() as u64;
+        let report = &batch.report;
+        let transitions = report.transitions.iter().map(|done| done.enrollment_oid);
+        let reliability = report.reliability_results.iter();
+        let changed: Vec<_> = transitions
+            .chain(reliability.map(|done| done.enrollment_oid))
+            .collect();
+        self.report_committed(db, &changed, &LifeSafetyCovSnapshots::default(), now);
     }
 
     /// Sweep every object at `now`, queue what fires, and report each

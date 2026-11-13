@@ -363,8 +363,9 @@ fn append_property_value(
 
 mod enrollment;
 pub use enrollment::{
-    CapturedReferencedValue, CapturedStatusFlags, EventEnrollmentProjectionSnapshot,
-    capture_status_flags, decode_reference_value, project_event_enrollment_payload,
+    CapturedReferencedValue, CapturedStatusFlags, ENROLLMENT_FORMS,
+    EventEnrollmentProjectionSnapshot, capture_status_flags, decode_reference_value,
+    project_event_enrollment_payload,
 };
 
 #[cfg(test)]

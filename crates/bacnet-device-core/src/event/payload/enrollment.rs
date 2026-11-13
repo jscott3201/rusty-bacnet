@@ -144,8 +144,31 @@ pub fn project_event_enrollment_payload(
         }
         project_event_enrollment_normal(snapshot, change, event_type)?
     };
+    // Every form built here is in the mask, checked under each of the
+    // pass's tests (#2319): one missing would be refused at the encoder.
+    #[cfg(test)]
+    {
+        use bacnet_encoding::constructed::encode_notification_parameters_of;
+        let mut scratch = BytesMut::new();
+        let encoded = encode_notification_parameters_of::<ENROLLMENT_FORMS>(&params, &mut scratch);
+        assert!(encoded.is_ok(), "{params:?} is outside ENROLLMENT_FORMS");
+    }
     Some(CommittedNotificationPayload(params))
 }
+
+/// The event-value forms [`project_event_enrollment_payload`] builds, as a
+/// mask for `bacnet_encoding`'s `encode_event_notification_of`: the five
+/// event algorithms the pass evaluates, and CHANGE_OF_RELIABILITY for its
+/// faults. A host that distributes Event Enrollment's transitions too sends
+/// these with [`INTRINSIC_FORMS`](super::INTRINSIC_FORMS) (#2319).
+pub const ENROLLMENT_FORMS: u32 = bacnet_encoding::constructed::notification_forms(&[
+    EventType::OUT_OF_RANGE,
+    EventType::FLOATING_LIMIT,
+    EventType::CHANGE_OF_STATE,
+    EventType::CHANGE_OF_BITSTRING,
+    EventType::CHANGE_OF_VALUE,
+    EventType::CHANGE_OF_RELIABILITY,
+]);
 
 fn project_event_enrollment_normal(
     snapshot: &EventEnrollmentProjectionSnapshot,

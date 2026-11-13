@@ -13,6 +13,9 @@ use bacnet_types::constructed::{BACnetDestination, BACnetRecipient};
 use bacnet_types::enums::UnconfirmedServiceChoice;
 use bacnet_types::primitives::Time;
 
+#[cfg(feature = "event-enrollment")]
+#[path = "reporter_enrollment_tests.rs"]
+mod enrollment;
 #[path = "reporter_event_order_tests.rs"]
 mod order;
 #[path = "reporter_tail_tests.rs"]

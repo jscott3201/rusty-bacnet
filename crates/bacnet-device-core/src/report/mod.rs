@@ -48,6 +48,14 @@
 //! recipient rebound while one of its events is held keeps no order across
 //! the rebinding.
 //!
+//! With the `event-enrollment` feature and an Event Enrollment period
+//! (`ReportConfig::with_event_enrollment`) on top of the sweep, the
+//! reporter also runs the Event Enrollment pass at that period (#2319) and
+//! sends each transition it commits through the same distribution, outbox
+//! and order as an intrinsic one. The pass, and the sweep at its period,
+//! follow each enrollment's Event_Algorithm_Inhibit_Ref; a reference to a
+//! value that changes between them is seen at the next of the two.
+//!
 //! While DeviceCommunicationControl disables initiation, keep popping and
 //! report each notification [`Delivery::NotSent`](crate::cov::Delivery):
 //! a host that stops popping lets event notifications fill the outbox and
@@ -196,6 +204,10 @@ pub struct ReportConfig {
     /// transition.
     #[cfg(feature = "event-reporting")]
     pub fault_detection: Option<Duration>,
+    /// The Event Enrollment pass's period, `None` (the default) for none.
+    /// See [`with_event_enrollment`](Self::with_event_enrollment).
+    #[cfg(feature = "event-enrollment")]
+    pub event_enrollment: Option<Duration>,
 }
 
 impl ReportConfig {
@@ -243,6 +255,24 @@ impl ReportConfig {
     #[cfg(feature = "event-reporting")]
     pub fn with_fault_detection(mut self, period: Duration) -> Self {
         self.fault_detection = Some(period);
+        self
+    }
+
+    /// This configuration with an Event Enrollment pass every `period`
+    /// (`bacnet-server`'s `event_enrollment_interval_secs`, 10 s by
+    /// default): each pass evaluates every Event Enrollment object, commits
+    /// what it finds and queues the notifications its transitions send
+    /// (#2319). An enrollment sees its monitored value only at a pass, and
+    /// a Time_Delay counts passes, rounded up, so it fires no earlier than
+    /// the delay and up to one period later. `period` counts in whole
+    /// seconds: it is rounded down, to at least one. The first pass runs at
+    /// the first [`Reporter::on_deadline`]; a host that calls late gets one
+    /// pass, and the next a period after it. [`Reporter::new`] refuses it
+    /// without [`with_sweep`](Self::with_sweep), whose event path sends
+    /// the notifications.
+    #[cfg(feature = "event-enrollment")]
+    pub fn with_event_enrollment(mut self, period: Duration) -> Self {
+        self.event_enrollment = Some(period);
         self
     }
 }
@@ -318,6 +348,11 @@ pub struct ReporterCounters {
     /// Queued COV notifications an event notification evicted; each left
     /// its subscription owed, as [`owed`](Self::owed) counts.
     pub evicted: u64,
+    /// Event Enrollment transitions a pass committed but couldn't send:
+    /// their Event Values didn't project or their committed history didn't
+    /// read back (`bacnet-server` logs each at debug).
+    #[cfg(feature = "event-enrollment")]
+    pub enrollments_suppressed: u64,
 }
 
 /// The address a subscriber's notifications come back from, and that its
