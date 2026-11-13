@@ -86,7 +86,12 @@ pub(super) fn decode_capped(bytes: &[u8]) -> Result<Vec<BACnetDestination>, Capp
 /// Anything else, a malformed destination included, fails with PROPERTY /
 /// INVALID_DATA_TYPE.
 pub(crate) fn decode_write(value: PropertyValue) -> Result<Vec<BACnetDestination>, Error> {
-    let bytes = common::framed_octets(&value)?;
+    decode_borrowed(&value)
+}
+
+/// [`decode_write`] of a borrowed value.
+pub(crate) fn decode_borrowed(value: &PropertyValue) -> Result<Vec<BACnetDestination>, Error> {
+    let bytes = common::framed_octets(value)?;
     decode_capped(&bytes).map_err(|error| match error {
         CappedListError::Malformed => common::invalid_data_type_error(),
         CappedListError::PastTheCap(index) => past_the_cap(index),

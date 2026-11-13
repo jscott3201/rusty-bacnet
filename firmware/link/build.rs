@@ -1,7 +1,7 @@
 //! Hands the linker the image's memory layout on a bare-metal target: the
 //! generic `memory.x`, which the link test's images use, riscv32imac's
-//! larger `memory-riscv32imac.x` (#2363), which the `reporting-multiple`
-//! measurement build uses on every target (#2320), or in the emulation build the
+//! larger `memory-riscv32imac.x` (#2363), which the `reporting` image uses
+//! on every target since it reports events (#2303), or in the emulation build the
 //! layout of the board its one board feature names, from `boards/`.
 //! The emulation build also gets the board's QEMU machine name and the target
 //! triple, which its images print.
@@ -41,10 +41,11 @@ fn main() {
         None if env::var("TARGET").is_ok_and(|target| target.starts_with("riscv32imac-")) => {
             "memory-riscv32imac.x".to_owned()
         }
-        // The measurement build of the reporting image with the
-        // COV-multiple path (#2320) is over 256 KiB on every target: the
-        // same 512 KiB layout, whose addresses are memory.x's.
-        None if env::var_os("CARGO_FEATURE_REPORTING_MULTIPLE").is_some() => {
+        // The reporting image with intrinsic events (#2303) is over 256
+        // KiB on the Cortex-M targets too, and so is its measurement build
+        // with the COV-multiple path (#2320): the same 512 KiB layout,
+        // whose addresses are memory.x's.
+        None if env::var_os("CARGO_FEATURE_REPORTING").is_some() => {
             "memory-riscv32imac.x".to_owned()
         }
         None => "memory.x".to_owned(),
