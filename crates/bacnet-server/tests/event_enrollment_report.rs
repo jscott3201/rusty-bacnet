@@ -34,24 +34,32 @@ fn reliability_result_is_constructible_and_derives_event_type() {
         monitored_oid: None,
         previous_reliability: Reliability::NO_FAULT_DETECTED,
         new_reliability: Reliability::CONFIGURATION_ERROR,
-        state_change: Some(EventStateChange {
+        state_change: EventStateChange {
             from: EventState::NORMAL,
             to: EventState::FAULT,
-        }),
+        },
         distribute: true,
         cause: EventEnrollmentReliabilityCause::Configuration,
     };
 
     assert_eq!(
         result.event_type(EventType::OUT_OF_RANGE),
-        Some(EventType::CHANGE_OF_RELIABILITY)
+        EventType::CHANGE_OF_RELIABILITY
     );
 
-    let no_state_change = EventEnrollmentReliabilityResult {
-        state_change: None,
+    // Every Reliability result has a state change (#2319); the recovery out
+    // of FAULT is a CHANGE_OF_RELIABILITY too.
+    let recovery = EventEnrollmentReliabilityResult {
+        state_change: EventStateChange {
+            from: EventState::FAULT,
+            to: EventState::NORMAL,
+        },
         ..result
     };
-    assert_eq!(no_state_change.event_type(EventType::OUT_OF_RANGE), None);
+    assert_eq!(
+        recovery.event_type(EventType::OUT_OF_RANGE),
+        EventType::CHANGE_OF_RELIABILITY
+    );
 }
 
 #[test]

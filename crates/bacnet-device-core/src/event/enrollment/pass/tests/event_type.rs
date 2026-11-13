@@ -8,10 +8,10 @@ fn assert_reliability_event_type(
     from: EventState,
     to: EventState,
 ) {
-    assert_eq!(result.state_change, Some(EventStateChange { from, to }));
+    assert_eq!(result.state_change, EventStateChange { from, to });
     assert_eq!(
         result.event_type(EventType::OUT_OF_RANGE),
-        Some(EventType::CHANGE_OF_RELIABILITY)
+        EventType::CHANGE_OF_RELIABILITY
     );
 }
 

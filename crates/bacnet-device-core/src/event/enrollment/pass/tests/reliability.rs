@@ -270,10 +270,10 @@ fn configuration_precedes_monitored_reliability_and_monitored_precedes_algorithm
     );
     assert_eq!(
         report.reliability_results[0].state_change,
-        Some(EventStateChange {
+        EventStateChange {
             from: EventState::FAULT,
             to: EventState::FAULT,
-        })
+        }
     );
     assert_eq!(reliability(&db, enrollment_oid), Reliability::UNDER_RANGE);
 }
@@ -502,10 +502,10 @@ fn normalized_out_of_range_holds_reindicates_changed_cause_and_recovers() {
     let report = evaluate_event_enrollments_report(&mut db, 1);
     assert_eq!(
         report.reliability_results[0].state_change,
-        Some(EventStateChange {
+        EventStateChange {
             from: EventState::FAULT,
             to: EventState::FAULT,
-        })
+        }
     );
     assert_eq!(
         report.reliability_results[0].new_reliability,

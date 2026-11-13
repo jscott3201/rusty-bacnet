@@ -28,6 +28,9 @@ use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipien
 use bacnet_types::enums::EventState;
 use bacnet_types::primitives::BACnetTimeStamp;
 
+#[path = "events_enrollment.rs"]
+mod enrollment;
+
 /// What differs by design: without a Device clock the server judges a
 /// destination's window by the system clock's UTC day and time, and the
 /// core, which has no wall clock, sends only to a destination open every
@@ -200,7 +203,7 @@ impl EventParity {
     /// server's fixed reader does: windows are judged by its synchronized
     /// state, and timestamps read alike.
     async fn start(fixture: fn(&bacnet_objects::DeviceIdentity) -> ObjectDatabase) -> Self {
-        Self::start_with(fixture, true).await
+        Self::start_with(fixture, true, None).await
     }
 
     /// Both sides of `fixture`, the core's `Responder` with no clock: it
@@ -209,18 +212,24 @@ impl EventParity {
     async fn start_clockless(
         fixture: fn(&bacnet_objects::DeviceIdentity) -> ObjectDatabase,
     ) -> Self {
-        Self::start_with(fixture, false).await
+        Self::start_with(fixture, false, None).await
     }
 
+    /// Both sides of `fixture`, clocked, each running the Event Enrollment
+    /// pass every `enrollment` seconds when given (#2319); without it the
+    /// server keeps its default and the `Reporter` runs none.
     async fn start_with(
         fixture: fn(&bacnet_objects::DeviceIdentity) -> ObjectDatabase,
         clocked: bool,
+        enrollment: Option<u64>,
     ) -> Self {
         let begun = runtime_clock::core_now();
-        let mut parity = Parity::start_from(
+        let interval = enrollment.unwrap_or(ServerConfig::default().event_enrollment_interval_secs);
+        let mut parity = Parity::start_enrolling(
             ReadPropertyMultipleBudget::default(),
             Segmentation::NO_SEGMENTATION,
             fixture,
+            interval,
         )
         .await;
         let settled = begun + bacnet_time::Duration::from_millis(50);
@@ -239,6 +248,10 @@ impl EventParity {
                 octets: 65_536,
             })
             .with_sweep(bacnet_time::Duration::from_secs(1));
+        let report = match enrollment {
+            Some(secs) => report.with_event_enrollment(bacnet_time::Duration::from_secs(secs)),
+            None => report,
+        };
         let mut responder = Responder::new(identity, limits).unwrap();
         if clocked {
             use bacnet_device_core::clock::{Basis, DeviceClock, Zone};
@@ -400,11 +413,23 @@ impl EventParity {
     }
 
     async fn write(&mut self, what: &str, millis: u64, property: P, value: PropertyValue) -> usize {
+        self.write_to(what, millis, (av(), property), value).await
+    }
+
+    /// Write `value` to `property` of `object` on both at `millis`; how
+    /// many event notifications the server sent with the reply.
+    async fn write_to(
+        &mut self,
+        what: &str,
+        millis: u64,
+        (object, property): (ObjectIdentifier, P),
+        value: PropertyValue,
+    ) -> usize {
         let mut encoded = BytesMut::new();
         encode_property_value(&mut encoded, &value).unwrap();
         let mut body = BytesMut::new();
         WritePropertyRequest {
-            object_identifier: av(),
+            object_identifier: object,
             property_identifier: property,
             property_array_index: None,
             property_value: encoded.to_vec(),
