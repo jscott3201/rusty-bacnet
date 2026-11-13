@@ -277,7 +277,11 @@ impl Request<'_> {
                 capture.run(&db);
                 // The transition the write causes commits under its guard
                 // too, ahead of a written Schedule's pass (a Schedule has no
-                // intrinsic reporting), so nothing is held across it.
+                // intrinsic reporting), so nothing is held across it. WPM and
+                // local writes evaluate after the pass, since a WPM can write
+                // a Schedule and one of its targets; here an application's own
+                // reporting Schedule-type object gets a transition the pass
+                // causes at the next sweep.
                 commit_written_transition(&mut db, cov_table, oid, written_transitions).await;
             }
             let schedule_cov = match written {
@@ -568,7 +572,10 @@ impl Request<'_> {
                 let capture = cov_table.read().await.timed_capture(oid);
                 capture.run(&db);
                 // The edit's transition commits under its guard too, ahead
-                // of a written Schedule's pass, as after a WriteProperty.
+                // of a written Schedule's pass, as after a WriteProperty (WPM
+                // and local writes evaluate after it); an application's own
+                // reporting Schedule-type object gets a transition the pass
+                // causes at the next sweep.
                 let sent = &mut effects.written_transitions;
                 commit_written_transition(&mut db, cov_table, oid, sent).await;
             }

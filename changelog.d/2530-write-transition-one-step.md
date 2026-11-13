@@ -1,7 +1,7 @@
 ---
 section: Fixed
 ---
-- **Wire:** a write and the event-state transition it causes commit
-  together, so ReadProperty and ordinary COV notifications never show IN_ALARM
-  without FAULT after a fault clears, and a read after the write sees the new
-  Event_State; a peer's EventNotification may now precede its SimpleACK (#2530).
+- A peer WriteProperty, WritePropertyMultiple or Add/RemoveListElement, the
+  local write API (and the Command, Channel, Timer and WriteGroup writes made
+  through it), Staging target writes and local access authorization commit the
+  event-state transition with the write (#2530).

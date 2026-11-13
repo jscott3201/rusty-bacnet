@@ -112,10 +112,11 @@ pub(super) fn logged_intrinsic_commit(
 /// actions (Clauses 13.2.2.1.4 and 13.2.5). Either way the caller owes the
 /// object its COV fanout, since a commit changes Status_Flags.
 ///
-/// Transitions from one task go out in the order they committed. Across
-/// tasks the window is the one between dropping `db` and the send: a later
-/// write of the same object can commit and send its own transition there,
-/// ahead of this one. Nothing orders sends across tasks.
+/// Transitions from one task are handed off in the order they committed
+/// (each confirmed recipient's copy then goes through a worker of its own).
+/// Across tasks the window is the one between dropping `db` and the send: a
+/// later write of the same object can commit and send its own transition
+/// there, ahead of this one. Nothing orders sends across tasks.
 ///
 /// The transition is moved out before the table read is awaited, so the
 /// write's future holds no transition across it: the write handlers' futures
@@ -141,12 +142,47 @@ pub(super) async fn commit_written_transition(
 }
 
 impl<T: TransportPort + 'static> BACnetServer<T> {
+    /// [`Self::send_written_transitions`] in a task of the request task set,
+    /// so a confirmed request's response never waits on their delivery: an
+    /// unconfirmed copy can wait for its route, on BACnet/SC for address
+    /// resolution or a connection (#2530). The request awaits the returned
+    /// receiver before its COV fanout, so each change's notifications still
+    /// go before it (#889). None, spawning nothing, when there is nothing to
+    /// send. `stop()` aborts the task with the request: the transitions stay
+    /// committed, and what wasn't sent by then isn't.
+    pub(super) fn spawn_written_transitions(
+        services: &Arc<super::request_services::RequestServices<T>>,
+        tasks: &super::request_tasks::RequestTaskSpawner,
+        written: Vec<(ObjectIdentifier, CommittedIntrinsicTransition)>,
+    ) -> Option<oneshot::Receiver<()>> {
+        if written.is_empty() {
+            return None;
+        }
+        let (done, sent) = oneshot::channel();
+        let services = Arc::clone(services);
+        tasks.spawn(async move {
+            Self::send_written_transitions(&services.event_delivery(), written).await;
+            let _ = done.send(());
+        });
+        Some(sent)
+    }
+
+    /// Wait for what [`Self::spawn_written_transitions`] spawned: until it
+    /// is sent, or its task is gone (refused by a stopping server, aborted,
+    /// or panicked).
+    pub(super) async fn written_transitions_sent(sending: Option<oneshot::Receiver<()>>) {
+        if let Some(sent) = sending {
+            let _ = sent.await;
+        }
+    }
+
     /// Send the transitions writes committed ([`commit_written_transition`]),
-    /// in the order they committed, before the COV fanout of those writes. A
-    /// confirmed service (WriteProperty, WritePropertyMultiple, AddListElement
-    /// and RemoveListElement) has already put every object it wrote, Life
-    /// Safety objects aside, in that fanout, so a committed transition's
-    /// Status_Flags change reaches subscribers.
+    /// handed off in the order they committed, before the COV fanout of
+    /// those writes. A confirmed service (WriteProperty,
+    /// WritePropertyMultiple, AddListElement and RemoveListElement) has
+    /// already put every object it wrote, Life Safety objects aside, in that
+    /// fanout, so a committed transition's Status_Flags change reaches
+    /// subscribers.
     pub(super) async fn send_written_transitions(
         ctx: &EventDelivery<'_, T>,
         written: Vec<(ObjectIdentifier, CommittedIntrinsicTransition)>,
