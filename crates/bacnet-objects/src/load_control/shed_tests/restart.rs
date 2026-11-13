@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 mod levels;
 mod retry;
 mod setting;
+mod staging;
 
 /// Storage in memory, counting its saves and the calls to save, refusing
 /// them while `fail`, and, once held, making each call report on one

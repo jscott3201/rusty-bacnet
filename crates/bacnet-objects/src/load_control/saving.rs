@@ -121,9 +121,11 @@ const RETRY_FIRST_BACKOFF: Duration = Duration::from_secs(2);
 /// down is asked once a minute or so, not on every look.
 const RETRY_MAX_BACKOFF: Duration = Duration::from_secs(64);
 
-/// The object's writer and the write staged on it; each step holds the
-/// request a write leaves.
-type Storage = StagedSaves<LoadControlSnapshot, LoadControlSnapshot>;
+/// The object's writer and the write staged on it. A step keeps nothing but
+/// its write (#2526): the write is made on the object's own state as it is
+/// taken, so a request's stage holds its request once however many writes it
+/// makes.
+type Storage = StagedSaves<LoadControlSnapshot, ()>;
 
 /// Where a Load Control keeps its request, with persistence. A copy of the
 /// object keeps none: storage belongs to one object.
@@ -498,8 +500,9 @@ impl LoadControlObject {
     }
 
     /// Make a kept write with storage, saving what it leaves before the
-    /// object takes it: a staged write takes what is already saved; any
-    /// other saves now. One that can't be saved is refused with DEVICE /
+    /// object takes it: a staged write takes what is already saved, unless
+    /// the object can no longer make it ([`can_make`]); any other saves
+    /// now. One that can't be saved is refused with DEVICE /
     /// OPERATIONAL_PROBLEM and changes nothing.
     pub(super) fn write_kept(
         &mut self,
@@ -515,7 +518,8 @@ impl LoadControlObject {
             .storage
             .as_mut()
             .expect("a kept write has storage");
-        match storage.claim(property, array_index, &value, self.durable.writes) {
+        let stale = |_: &()| !can_make(size, property, array_index, &value);
+        match storage.claim_unless(property, array_index, &value, self.durable.writes, stale) {
             Some(Err(error)) => {
                 self.follow_storage();
                 return Err(refused(error));
@@ -539,6 +543,22 @@ impl LoadControlObject {
         self.durable.writes = self.durable.writes.wrapping_add(1);
         self.write_request(property, array_index, value)
     }
+}
+
+/// Whether a write a stage took can still be made on the object (#2526). A
+/// Shed_Levels write is checked against the array of `size` levels the
+/// application gives, which it can change between a request's stage and
+/// its writes without counting a write; every other check looks at the
+/// value alone. A write that can't takes no step and is refused as one
+/// nobody staged, and the request's release puts storage back.
+fn can_make(
+    size: usize,
+    property: PropertyIdentifier,
+    array_index: Option<u32>,
+    value: &PropertyValue,
+) -> bool {
+    property != PropertyIdentifier::SHED_LEVELS
+        || shed_levels_write(size, array_index, value.clone()).is_ok()
 }
 
 /// What `write` leaves of `request`, the object's refusal of it checked as
@@ -660,25 +680,29 @@ impl DurableWrites for LoadControlObject {
         let served = self.snapshot();
         let now = self.now();
         let size = self.shed_levels.len();
-        let steps = staged::steps(writes, |earlier, write| {
+        // One working copy of the request the steps so far leave; a step
+        // keeps only its write (#2526).
+        let mut working = None;
+        let steps = staged::steps(writes, |_, write| {
             if !listed(write) {
                 return Ok(None);
             }
             if write.array_index.is_some() && write.property != PropertyIdentifier::SHED_LEVELS {
                 return Err(common::property_is_not_an_array_error());
             }
-            let request = earlier.last().map_or(&served, |step| &step.next);
-            next_request(request, size, now, write).map(Some)
+            let request = working.as_ref().unwrap_or(&served);
+            working = Some(next_request(request, size, now, write)?);
+            Ok(Some(()))
         });
-        let Some(last) = steps.last().map(|step| step.next.clone()) else {
+        // A step was taken exactly when the working copy was set.
+        let Some(last) = working else {
             return StageStep::Skip;
         };
         let base = self.durable.writes;
+        let saved = last.clone();
         let storage = self.durable.storage.as_mut().expect("checked above");
-        let step = storage.stage(steps, base, served, |snapshot, next| {
-            *snapshot = next.clone();
-        });
-        self.durable.saved = last;
+        let step = storage.stage_built(steps, base, last, served);
+        self.durable.saved = saved;
         step
     }
 

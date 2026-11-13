@@ -126,8 +126,10 @@ pub(crate) struct ChannelConfig {
     pub(super) members: Vec<BACnetDeviceObjectPropertyReference>,
     /// The datatype the server learned for each member in another device,
     /// slot by slot with `members`; a slot whose member is replaced forgets
-    /// it (#1342). A cache: a step staged before a datatype was learned
-    /// drops it when taken, and the next distribution learns it again.
+    /// it (#1342). A cache storage doesn't keep, so learning one isn't a
+    /// counted change: a staged write is worked out on the configuration
+    /// served as it is made (#2526), and keeps what was learned meanwhile
+    /// for every member it doesn't replace.
     pub(super) learned: Vec<Option<MemberDatatype>>,
     pub(super) execution_delay: Vec<u32>,
     pub(super) channel_number: u16,

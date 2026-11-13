@@ -100,7 +100,7 @@ pub struct TimerObject {
     /// The run the set drives, and how the last one ended.
     run: state_change::StateChangeRun,
     /// Where a written configuration is saved, with persistence.
-    config_storage: Option<crate::write_config::saving::Storage<TimerConfig>>,
+    config_storage: Option<crate::write_config::saving::Storage>,
     /// Changes to the set so far, so a staged write can tell whether
     /// another came between.
     config_writes: u64,

@@ -8,16 +8,14 @@
 //! allocator, which counts what is allocated and not yet freed, on every
 //! thread (the save writer's too). The count is the whole process's, so the
 //! tests take turns ([`one_at_a_time`]).
-//!
-//! The families whose steps still keep a copy of their state each have
-//! their test here, ignored until their fix lands: run them with
-//! `--run-ignored only` to measure (#2526).
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use bacnet_encoding::constructed::{encode_access_rule, encode_name_value};
+use bacnet_encoding::constructed::{
+    encode_access_rule, encode_device_object_property_reference, encode_name_value,
+};
 use bacnet_objects::access_control::{
     AccessRightsObject, AccessRightsPersistence, AccessRightsSnapshot, MAX_ACCESS_RULES,
 };
@@ -337,7 +335,6 @@ fn a_tags_stage_holds_the_list_once_whatever_its_number_of_writes() {
 /// rules naming a time range and a zone in another Device, so storage and
 /// the served object hold both; the request rewrites a few positive rules.
 #[test]
-#[ignore = "#2526: each staged step still keeps the rule array; run with --run-ignored only"]
 fn an_access_rights_stage_holds_the_rules_once_whatever_its_number_of_writes() {
     let _turn = one_at_a_time();
     let storage = Arc::new(Saved::<AccessRightsSnapshot>::default());
@@ -377,26 +374,57 @@ fn an_access_rights_stage_holds_the_rules_once_whatever_its_number_of_writes() {
     let held = staged_octets(&mut rights, &writes);
     let per_write = held / WRITES as isize;
     eprintln!("Access Rights, {WRITES} writes: {held} octets held, {per_write} a write");
-    assert!(held < 1 << 20, "{held} octets held by the stage");
+    // The stage's copy of both served arrays (128 KiB) and the writes
+    // themselves, each with the rule it sets, about 450 KiB. 768 KiB leaves
+    // about 160 octets a write: a step keeping either array, or a few of
+    // its rules beside its own, would pass it.
+    assert!(held < 768 << 10, "{held} octets held by the stage");
 }
 
-/// A Channel with 1,024 members in another Device, 64 control groups and a
-/// kept 16 KiB Description; the request rewrites a few delays.
+/// References as a whole write of a list of them carries them.
+fn references(
+    references: impl IntoIterator<Item = BACnetDeviceObjectPropertyReference>,
+) -> PropertyValue {
+    let mut octets = BytesMut::new();
+    for reference in references {
+        encode_device_object_property_reference(&mut octets, &reference);
+    }
+    PropertyValue::ApplicationData(octets.to_vec())
+}
+
+fn unsigned_list(values: impl IntoIterator<Item = u64>) -> PropertyValue {
+    PropertyValue::List(values.into_iter().map(PropertyValue::Unsigned).collect())
+}
+
+/// A Channel whose 1,024 members in another Device, their delays, its 64
+/// control groups and a 16 KiB Description were each written once, so
+/// storage and the served configuration hold them all; the request
+/// rewrites a few delays (#2526).
 #[test]
-#[ignore = "#2526: each staged step still keeps the whole configuration; run with --run-ignored only"]
 fn a_channel_stage_holds_its_configuration_once_whatever_its_number_of_writes() {
     let _turn = one_at_a_time();
     let mut channel =
         ChannelObject::with_persistence(1, "CH", 1, Arc::new(Memory::default())).unwrap();
-    channel
-        .set_members((0..MAX_CHANNEL_MEMBERS as u32).map(remote).collect())
-        .unwrap();
-    channel
-        .set_control_groups((1..=MAX_CONTROL_GROUPS as u32).collect())
-        .unwrap();
-    channel
-        .write_property(P::DESCRIPTION, None, long(), None)
-        .unwrap();
+    let members = (0..MAX_CHANNEL_MEMBERS as u32)
+        .map(|at| references([remote(at)]))
+        .collect();
+    for (property, value) in [
+        (
+            P::LIST_OF_OBJECT_PROPERTY_REFERENCES,
+            PropertyValue::List(members),
+        ),
+        (
+            P::EXECUTION_DELAY,
+            unsigned_list(1..=MAX_CHANNEL_MEMBERS as u64),
+        ),
+        (
+            P::CONTROL_GROUPS,
+            unsigned_list(1..=MAX_CONTROL_GROUPS as u64),
+        ),
+        (P::DESCRIPTION, long()),
+    ] {
+        channel.write_property(property, None, value, None).unwrap();
+    }
     let writes = writes(
         P::EXECUTION_DELAY,
         |at| Some(at as u32 % 8 + 1),
@@ -405,27 +433,30 @@ fn a_channel_stage_holds_its_configuration_once_whatever_its_number_of_writes() 
     let held = staged_octets(&mut channel, &writes);
     let per_write = held / WRITES as isize;
     eprintln!("Channel, {WRITES} writes: {held} octets held, {per_write} a write");
-    assert!(held < 1 << 20, "{held} octets held by the stage");
+    // The stage's copy of what storage keeps of the served state and the
+    // writes themselves, about 150 KiB. 512 KiB leaves about 180 octets a
+    // write: a step keeping any of the lists above would pass it.
+    assert!(held < 512 << 10, "{held} octets held by the stage");
 }
 
-/// A Timer with 1,024 references in another Device and a kept 16 KiB
-/// Description; the request writes Default_Timeout over and over.
+/// A Timer whose 1,024 references in another Device and 16 KiB Description
+/// were each written once, so storage and the served configuration hold
+/// them; the request writes Default_Timeout over and over (#2526).
 #[test]
-#[ignore = "#2526: each staged step still keeps the whole configuration; run with --run-ignored only"]
 fn a_timer_stage_holds_its_configuration_once_whatever_its_number_of_writes() {
     let _turn = one_at_a_time();
     let mut timer = TimerObject::with_persistence(1, "T", Arc::new(Memory::default())).unwrap();
     let value = || BACnetTimerStateChangeValue::Primitive(PropertyValue::Real(1.0));
     timer
-        .set_state_change(
-            core::array::from_fn(|_| value()),
-            (0..MAX_TIMER_REFERENCES as u32).map(remote).collect(),
-            16,
-        )
+        .set_state_change(core::array::from_fn(|_| value()), vec![remote(0)], 16)
         .unwrap();
-    timer
-        .write_property(P::DESCRIPTION, None, long(), None)
-        .unwrap();
+    let all = references((0..MAX_TIMER_REFERENCES as u32).map(remote));
+    for (property, value) in [
+        (P::LIST_OF_OBJECT_PROPERTY_REFERENCES, all),
+        (P::DESCRIPTION, long()),
+    ] {
+        timer.write_property(property, None, value, None).unwrap();
+    }
     let writes = writes(
         P::DEFAULT_TIMEOUT,
         |_| None,
@@ -434,13 +465,16 @@ fn a_timer_stage_holds_its_configuration_once_whatever_its_number_of_writes() {
     let held = staged_octets(&mut timer, &writes);
     let per_write = held / WRITES as isize;
     eprintln!("Timer, {WRITES} writes: {held} octets held, {per_write} a write");
-    assert!(held < 1 << 20, "{held} octets held by the stage");
+    // The stage's copy of what storage keeps of the served state and the
+    // writes themselves, about 150 KiB. 512 KiB leaves about 180 octets a
+    // write: a step keeping any of the lists above would pass it.
+    assert!(held < 512 << 10, "{held} octets held by the stage");
 }
 
-/// A Load Control with 1,024 written Shed_Levels elements and a kept 16 KiB
-/// Description; the request writes Duty_Window over and over.
+/// A Load Control whose 1,024 Shed_Levels elements and 16 KiB Description
+/// were written, so storage and the served request hold them; the request
+/// writes Duty_Window over and over (#2526).
 #[test]
-#[ignore = "#2526: each staged step still keeps a whole snapshot; run with --run-ignored only"]
 fn a_load_control_stage_holds_its_request_once_whatever_its_number_of_writes() {
     let _turn = one_at_a_time();
     let storage = Arc::new(Saved::<LoadControlSnapshot>::default());
@@ -464,7 +498,10 @@ fn a_load_control_stage_holds_its_request_once_whatever_its_number_of_writes() {
     let held = staged_octets(&mut control, &writes);
     let per_write = held / WRITES as isize;
     eprintln!("Load Control, {WRITES} writes: {held} octets held, {per_write} a write");
-    assert!(held < 1 << 20, "{held} octets held by the stage");
+    // The stage's copy of what storage keeps of the served state and the
+    // writes themselves, about 150 KiB. 512 KiB leaves about 180 octets a
+    // write: a step keeping any of the lists above would pass it.
+    assert!(held < 512 << 10, "{held} octets held by the stage");
 }
 
 /// A log's storage in memory: the last snapshot committed.

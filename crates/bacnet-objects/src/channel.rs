@@ -136,7 +136,7 @@ pub struct ChannelObject {
     /// Allow_Group_Delay_Inhibit.
     config: ChannelConfig,
     /// Where written configuration is saved, with persistence.
-    config_storage: Option<crate::write_config::saving::Storage<ChannelConfig>>,
+    config_storage: Option<crate::write_config::saving::Storage>,
     /// Configuration changes so far, so a staged write can tell whether
     /// another came between.
     config_writes: u64,
