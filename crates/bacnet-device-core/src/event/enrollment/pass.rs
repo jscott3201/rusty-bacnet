@@ -55,17 +55,14 @@
 //! The server lifecycle projects successful commits into its shared
 //! notification sender without repeating these transition actions.
 
-mod api;
+#[path = "commit.rs"]
 mod commit;
-mod log;
+#[path = "support.rs"]
 mod support;
 
 use bacnet_objects::property_metadata::is_array_property;
 use std::collections::{HashMap, HashSet};
 
-pub use api::{
-    EventEnrollmentTransition, evaluate_event_enrollments, evaluate_event_enrollments_report,
-};
 pub use commit::{
     EventEnrollmentEvaluationDiagnostic, EventEnrollmentEvaluationOutcome,
     EventEnrollmentEvaluationReport, EventEnrollmentEvaluationStage,
@@ -78,30 +75,27 @@ use algorithms::{
     eval_out_of_range_struct, extract_bitstring, extract_property_state_value, extract_real,
     inhibited_arm,
 };
-pub(crate) use commit::SuppressedDelivery;
 #[cfg(test)]
 use commit::apply_updates;
-pub(crate) use commit::{
+pub use commit::{
     CommittedEventEnrollmentDelivery, CommittedEventEnrollmentResult,
     EventEnrollmentEvaluationBatch,
 };
 use commit::{EnrollmentUpdate, FiredTransition, apply_updates_for_delivery};
+pub use commit::{EventEnrollmentTransition, SuppressedDelivery};
 use fault::{
     FaultAlgorithmEvaluation, MonitoredReliability, SupportedFaultAlgorithm,
     evaluate_fault_algorithm, read_event_parameters, read_fault_algorithm,
     read_monitored_reliability,
 };
-pub(crate) use log::{log_evaluation_report, log_suppressed_deliveries};
 #[cfg(test)]
 use reference::MonitoredReference;
 use reference::{params_fingerprint, read_object_property_ref};
 use support::*;
 
-use bacnet_device_core::event::enrollment::{
-    LocalConfigurationReadError, algorithms, fault, reference,
-};
+use super::{LocalConfigurationReadError, algorithms, fault, reference};
 
-use bacnet_device_core::event::{
+use crate::event::{
     CapturedReferencedValue, EventEnrollmentProjectionSnapshot, capture_status_flags,
 };
 use bacnet_objects::database::ObjectDatabase;
@@ -117,7 +111,7 @@ use bacnet_types::enums::{EventState, EventType, ObjectType, PropertyIdentifier,
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 /// Evaluate and retain the private commit-order stream for server delivery.
-pub(crate) fn evaluate_event_enrollments_for_delivery(
+pub fn evaluate_event_enrollments_for_delivery(
     db: &mut ObjectDatabase,
     interval_secs: u64,
 ) -> EventEnrollmentEvaluationBatch {
@@ -851,6 +845,3 @@ pub(crate) fn evaluate_event_enrollments_for_delivery(
 
     apply_updates_for_delivery(db, &oids, updates, &database_eval_sources)
 }
-
-#[cfg(test)]
-mod tests;

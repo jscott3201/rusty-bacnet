@@ -9,8 +9,7 @@ use bacnet_objects::event_enrollment::{EventEnrollmentEvalState, EventEnrollment
 use bacnet_types::enums::{EventState, EventType, PropertyIdentifier, Reliability};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
-use super::EventEnrollmentTransition;
-use bacnet_device_core::event::{
+use crate::event::{
     CapturedReferencedValue, CommittedNotificationPayload, EventEnrollmentProjectionSnapshot,
     SampledEventClock, confirm_event_timestamp, project_event_enrollment_payload,
     stage_event_timestamp,
@@ -127,38 +126,65 @@ pub struct EventEnrollmentEvaluationReport {
 }
 
 /// Public result family carried by one private, already-committed delivery.
-pub(crate) enum CommittedEventEnrollmentResult {
+pub enum CommittedEventEnrollmentResult {
+    /// An event transition.
     Normal(EventEnrollmentTransition),
+    /// A reliability change, with any FAULT transition it made.
     Reliability(EventEnrollmentReliabilityResult),
 }
 
 /// One Event Enrollment commit plus policy captured under its database guard.
-pub(crate) struct CommittedEventEnrollmentDelivery {
-    pub(crate) result: CommittedEventEnrollmentResult,
-    pub(crate) ack_required: bool,
-    pub(crate) recipient_clock: SampledEventClock,
-    pub(crate) event_type: EventType,
-    pub(crate) event_values: CommittedNotificationPayload,
+pub struct CommittedEventEnrollmentDelivery {
+    /// What committed.
+    pub result: CommittedEventEnrollmentResult,
+    /// Whether the transition needs acknowledging.
+    pub ack_required: bool,
+    /// The clock its timestamp was taken from.
+    pub recipient_clock: SampledEventClock,
+    /// Its event type.
+    pub event_type: EventType,
+    /// Its notification payload.
+    pub event_values: CommittedNotificationPayload,
+}
+
+/// A state transition detected during event enrollment evaluation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EventEnrollmentTransition {
+    /// The EventEnrollment object that detected the transition.
+    pub enrollment_oid: ObjectIdentifier,
+    /// The monitored object whose property triggered the transition.
+    pub monitored_oid: ObjectIdentifier,
+    /// The detected state change. `from == to` is a genuine same-state
+    /// transition emitted by applicable event algorithms.
+    pub change: EventStateChange,
+    /// The event type that was evaluated.
+    pub event_type: EventType,
+    /// Whether `Event_Enable` permits distributing a notification for this
+    /// transition. The transition is reported and `Event_State` persisted
+    /// either way; a cleared bit suppresses only the outbound notification.
+    pub distribute: bool,
 }
 
 /// Public report plus the commit-order stream consumed only by the server.
-pub(crate) struct EventEnrollmentEvaluationBatch {
-    pub(crate) report: EventEnrollmentEvaluationReport,
-    pub(crate) deliveries: Vec<CommittedEventEnrollmentDelivery>,
+pub struct EventEnrollmentEvaluationBatch {
+    /// What the pass did.
+    pub report: EventEnrollmentEvaluationReport,
+    /// The committed transitions to distribute, in commit order.
+    pub deliveries: Vec<CommittedEventEnrollmentDelivery>,
     /// Committed transitions whose notification payload was refused, so
     /// they are not distributed, in commit order: what the commit once
     /// logged itself, for the host to log.
-    pub(crate) suppressed: Vec<SuppressedDelivery>,
+    pub suppressed: Vec<SuppressedDelivery>,
 }
 
 /// A committed transition whose notification payload was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct SuppressedDelivery {
+pub struct SuppressedDelivery {
     /// The enrollment.
-    pub(crate) enrollment_oid: ObjectIdentifier,
+    pub enrollment_oid: ObjectIdentifier,
     /// Its event type for an event transition; `None` for a reliability
     /// (CHANGE_OF_RELIABILITY) one.
-    pub(crate) event_type: Option<EventType>,
+    pub event_type: Option<EventType>,
 }
 
 /// Coalesced desired mutation for one enrollment and one evaluation pass.

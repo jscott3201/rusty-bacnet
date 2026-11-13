@@ -15,6 +15,18 @@ pub mod fault;
 #[doc(hidden)]
 pub mod reference;
 
+#[cfg(feature = "std")]
+mod pass;
+#[cfg(feature = "std")]
+pub use pass::{
+    CommittedEventEnrollmentDelivery, CommittedEventEnrollmentResult,
+    EventEnrollmentEvaluationBatch, EventEnrollmentEvaluationDiagnostic,
+    EventEnrollmentEvaluationOutcome, EventEnrollmentEvaluationReport,
+    EventEnrollmentEvaluationStage, EventEnrollmentReliabilityCause,
+    EventEnrollmentReliabilityResult, EventEnrollmentTransition, SuppressedDelivery,
+    evaluate_event_enrollments_for_delivery,
+};
+
 use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::{Error, RemoteError};
 
