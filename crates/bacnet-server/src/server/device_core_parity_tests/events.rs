@@ -12,7 +12,7 @@
 //! destination is unconfirmed, so the APDUs compare whole.
 use super::*;
 use crate::runtime_clock;
-use bacnet_device_core::cov::Delivery;
+use bacnet_device_core::cov::{Delivery, Token};
 use bacnet_device_core::event::{MessageTexts, read_committed_history_snapshot};
 use bacnet_device_core::report::{Bindings, Destination, InvokeIds};
 use bacnet_encoding::primitives::encode_property_value;
@@ -28,8 +28,14 @@ use bacnet_types::constructed::{BACnetAddress, BACnetDestination, BACnetRecipien
 use bacnet_types::enums::EventState;
 use bacnet_types::primitives::BACnetTimeStamp;
 
+#[path = "events_confirmed.rs"]
+mod confirmed_events;
+#[path = "events_device.rs"]
+mod device;
 #[path = "events_enrollment.rs"]
 mod enrollment;
+#[path = "events_more.rs"]
+mod more;
 
 /// What differs by design: without a Device clock the server judges a
 /// destination's window by the system clock's UTC day and time, and the
@@ -105,14 +111,12 @@ fn recipients() -> Vec<BACnetDestination> {
     ]
 }
 
-/// An Analog Value alarming over 80 (deadband 1) after `time_delay`
-/// seconds, back after one, through Notification Class 1 with
-/// `destinations`, whose TO_OFFNORMAL needs acknowledging.
-fn alarm_value(
-    time_delay: u64,
-    destinations: Vec<BACnetDestination>,
-) -> Vec<Box<dyn BACnetObject>> {
-    let mut value = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
+/// Analog Value `instance` alarming over 80 (deadband 1) after
+/// `time_delay` seconds, back after one, through Notification Class 1.
+fn alarm_object(instance: u32, time_delay: u64) -> AnalogValueObject {
+    let name = format!("AV-{instance}");
+    let mut value =
+        AnalogValueObject::new(instance, &name, EngineeringUnits::DEGREES_CELSIUS).unwrap();
     for (property, real) in [
         (P::HIGH_LIMIT, 80.0f32),
         (P::LOW_LIMIT, -10.0),
@@ -139,6 +143,12 @@ fn alarm_value(
             .write_property(property, None, unsigned, None)
             .unwrap();
     }
+    value
+}
+
+/// Notification Class 1 with `destinations`, whose TO_OFFNORMAL needs
+/// acknowledging, and event priorities other than 255.
+fn alarm_class(destinations: Vec<BACnetDestination>) -> NotificationClass {
     let mut class = NotificationClass::new(1, "NC-1").unwrap();
     class.ack_required = EventTransitionBits::TO_OFFNORMAL;
     // Event priorities other than 255, so the network priority is compared
@@ -147,6 +157,18 @@ fn alarm_value(
     for destination in destinations {
         class.add_destination(destination).unwrap();
     }
+    class
+}
+
+/// An Analog Value alarming over 80 (deadband 1) after `time_delay`
+/// seconds, back after one, through Notification Class 1 with
+/// `destinations`, whose TO_OFFNORMAL needs acknowledging.
+fn alarm_value(
+    time_delay: u64,
+    destinations: Vec<BACnetDestination>,
+) -> Vec<Box<dyn BACnetObject>> {
+    let value = alarm_object(1, time_delay);
+    let class = alarm_class(destinations);
     // The fixture's Analog Input reports through class 0.
     let class0 = NotificationClass::new(0, "NC-0").unwrap();
     vec![Box::new(value), Box::new(class), Box::new(class0)]
@@ -168,25 +190,69 @@ fn undelayed(identity: &bacnet_objects::DeviceIdentity) -> ObjectDatabase {
     database_with(identity, alarm_value(0, vec![always, unreal]))
 }
 
-/// The core side's invoke IDs; every destination here is unconfirmed.
-struct NoIds;
-
-impl InvokeIds for NoIds {
-    fn take(&mut self, _: &BACnetAddress, _: ConfirmedServiceChoice) -> Option<u8> {
-        None
-    }
-    fn release(&mut self, _: &BACnetAddress, _: u8) {}
+/// The core side's invoke IDs: the next free one in turn, so a late answer
+/// to an ended notification doesn't match the one after it.
+#[derive(Default)]
+struct Ids {
+    taken: Vec<(BACnetAddress, u8)>,
+    next: u8,
 }
 
-struct NoBindings;
-
-impl Bindings for NoBindings {
-    fn address_of(&self, _: ObjectIdentifier) -> Option<BACnetAddress> {
-        None
+impl InvokeIds for Ids {
+    fn take(&mut self, to: &BACnetAddress, _: ConfirmedServiceChoice) -> Option<u8> {
+        let id = (0..=u8::MAX)
+            .map(|step| self.next.wrapping_add(step))
+            .find(|id| !self.taken.contains(&(to.clone(), *id)))?;
+        self.next = id.wrapping_add(1);
+        self.taken.push((to.clone(), id));
+        Some(id)
+    }
+    fn release(&mut self, to: &BACnetAddress, id: u8) {
+        self.taken.retain(|taken| *taken != (to.clone(), id));
     }
 }
 
-/// One notification as it went out: link MAC, NPDU priority and APDU.
+/// The core side's Device bindings: what its host's Who-Is/I-Am cache holds.
+/// Empty, it resolves nothing.
+#[derive(Default)]
+struct Known(Vec<(ObjectIdentifier, BACnetAddress)>);
+
+impl Bindings for Known {
+    fn address_of(&self, device: ObjectIdentifier) -> Option<BACnetAddress> {
+        let found = self.0.iter().find(|known| known.0 == device);
+        found.map(|known| known.1.clone())
+    }
+}
+
+/// `apdu`'s invoke ID, zeroed in it when it is a confirmed request: each
+/// host lends its own, so the rest is what compares.
+fn strip(apdu: &mut [u8]) -> Option<u8> {
+    let confirmed = apdu[0] >> 4 == 0;
+    confirmed.then(|| core::mem::take(&mut apdu[2]))
+}
+
+/// The unconfirmed notifications of `sent`, in order.
+fn unconfirmed_ones<T>(sent: &[(Wire, Option<T>)]) -> Vec<Wire> {
+    let unconfirmed = sent.iter().filter(|sent| sent.1.is_none());
+    unconfirmed.map(|sent| sent.0.clone()).collect()
+}
+
+/// All of `sent`, in order.
+fn wires<T>(sent: &[(Wire, Option<T>)]) -> Vec<Wire> {
+    sent.iter().map(|sent| sent.0.clone()).collect()
+}
+
+/// A confirmed notification both sides sent, awaiting its answer: the
+/// recipient's link MAC and the invoke ID each side lent it.
+struct Outstanding {
+    mac: Vec<u8>,
+    server: u8,
+    core: u8,
+    token: Token,
+}
+
+/// One notification as it went out: link MAC, NPDU priority and APDU, a
+/// confirmed one's invoke ID zeroed.
 type Wire = (Vec<u8>, NetworkPriority, Vec<u8>);
 
 /// Both sides of one fixture, the `Reporter` with its event path on.
@@ -195,6 +261,13 @@ struct EventParity {
     /// The instant both started.
     begun: bacnet_time::Instant,
     invoke_id: u8,
+    /// The core side's invoke IDs and Device bindings.
+    ids: Ids,
+    bindings: Known,
+    /// The confirmed notifications neither side has been answered for.
+    outstanding: Vec<Outstanding>,
+    /// What the server sent at each comparison, which matched, until taken.
+    compared: Vec<Wire>,
 }
 
 impl EventParity {
@@ -266,13 +339,16 @@ impl EventParity {
         }
         parity.reporter = Reporter::new(responder, report).unwrap();
         // The server's task swept when it started.
-        parity
-            .reporter
-            .on_deadline(&mut parity.db, &mut NoIds, begun);
+        let mut ids = Ids::default();
+        parity.reporter.on_deadline(&mut parity.db, &mut ids, begun);
         Self {
             parity,
             begun,
             invoke_id: 0,
+            ids,
+            bindings: Known::default(),
+            outstanding: Vec::new(),
+            compared: Vec::new(),
         }
     }
 
@@ -287,19 +363,34 @@ impl EventParity {
 
     /// The `Reporter`'s notifications at `now`, each reported sent.
     fn core_sent(&mut self, now: bacnet_time::Instant) -> Vec<Wire> {
+        let sent = self.core_sent_ids(now);
+        sent.into_iter().map(|(wire, _)| wire).collect()
+    }
+
+    /// [`core_sent`](Self::core_sent), a confirmed one with its invoke ID
+    /// and token, and left outstanding for its answer.
+    fn core_sent_ids(&mut self, now: bacnet_time::Instant) -> Vec<(Wire, Option<(u8, Token)>)> {
         let mut sent = Vec::new();
         let reporter = &mut self.parity.reporter;
         loop {
             let mut out = BytesMut::new();
-            let Some(notification) = reporter.pop(&NoBindings, &mut NoIds, now, &mut out) else {
+            let Some(notification) = reporter.pop(&self.bindings, &mut self.ids, now, &mut out)
+            else {
                 return sent;
             };
             let Destination::Recipient(to) = notification.to else {
                 unreachable!("only event notifications here")
             };
             assert_eq!(to.network_number, 0, "a local recipient");
-            reporter.delivered(notification.token, Delivery::Sent, &mut NoIds, now);
-            sent.push((to.mac_address.to_vec(), notification.priority, out.to_vec()));
+            let mut apdu = out.to_vec();
+            let id = strip(&mut apdu);
+            assert_eq!(id, notification.invoke_id);
+            let token = notification.token;
+            if id.is_none() {
+                reporter.delivered(token, Delivery::Sent, &mut self.ids, now);
+            }
+            let wire = (to.mac_address.to_vec(), notification.priority, apdu);
+            sent.push((wire, id.map(|id| (id, token))));
         }
     }
 
@@ -313,25 +404,54 @@ impl EventParity {
         now: bacnet_time::Instant,
         skip: Option<[u8; 6]>,
     ) -> usize {
-        let mut server: Vec<Wire> = frames
+        let mut server: Vec<(Wire, Option<u8>)> = frames
             .iter()
             .map(|frame| {
                 let npdu = frame.decode_npdu();
                 assert!(npdu.destination.is_none(), "{what}: local");
-                (frame.mac.to_vec(), npdu.priority, npdu.payload.to_vec())
+                let mut apdu = npdu.payload.to_vec();
+                let id = strip(&mut apdu);
+                ((frame.mac.to_vec(), npdu.priority, apdu), id)
             })
             .collect();
         let count = server.len();
         if let Some(skip) = skip {
             let before = server.len();
-            server.retain(|wire| wire.0 != skip);
+            server.retain(|sent| sent.0.0 != skip);
             assert_eq!(server.len() + 1, before, "{what}: the pinned recipient");
         }
-        let mut core = self.core_sent(now);
-        let order = |wire: &Wire| (wire.0.clone(), wire.2.clone());
-        server.sort_by_key(order);
-        core.sort_by_key(order);
-        assert_eq!(server, core, "{what}: the notifications, server then core");
+        let mut core = self.core_sent_ids(now);
+        // The unconfirmed ones go out in the Recipient_List's order from
+        // both: one task sends them, the `Reporter`'s outbox keeps it.
+        let (first, second) = (unconfirmed_ones(&server), unconfirmed_ones(&core));
+        assert_eq!(
+            first, second,
+            "{what}: unconfirmed, in order, server then core"
+        );
+        // Between a confirmed one and another the server's order is its
+        // scheduling, each leaving from a worker of its own, and between a
+        // confirmed one and an unconfirmed one too: they are compared as a
+        // set.
+        server.sort_by_key(|sent| (sent.0.0.clone(), sent.0.2.clone()));
+        core.sort_by_key(|sent| (sent.0.0.clone(), sent.0.2.clone()));
+        assert_eq!(
+            wires(&server),
+            wires(&core),
+            "{what}: the notifications, server then core"
+        );
+        self.compared.extend(wires(&server));
+        for ((_, server), (wire, core)) in server.iter().zip(&core) {
+            if let (Some(server), Some((core, token))) = (server, core) {
+                // A resend is the same notification again: keep one record.
+                self.outstanding.retain(|out| out.token != *token);
+                self.outstanding.push(Outstanding {
+                    mac: wire.0.clone(),
+                    server: *server,
+                    core: *core,
+                    token: *token,
+                });
+            }
+        }
         count
     }
 
@@ -344,7 +464,9 @@ impl EventParity {
             .next_deadline()
             .is_some_and(|due| due <= now)
         {
-            parity.reporter.on_deadline(&mut parity.db, &mut NoIds, now);
+            parity
+                .reporter
+                .on_deadline(&mut parity.db, &mut self.ids, now);
             if parity.reporter.next_deadline() == Some(now) {
                 break;
             }
@@ -388,10 +510,24 @@ impl EventParity {
         body: &[u8],
         skip: Option<[u8; 6]>,
     ) -> (Apdu, usize) {
+        self.request_sized(what, millis, (service, body), 1476, skip)
+            .await
+    }
+
+    /// [`request`](Self::request), the requester accepting replies of up to
+    /// `max_apdu` octets.
+    async fn request_sized(
+        &mut self,
+        what: &str,
+        millis: u64,
+        (service, body): (ConfirmedServiceChoice, &[u8]),
+        max_apdu: u16,
+        skip: Option<[u8; 6]>,
+    ) -> (Apdu, usize) {
         let now = self.instant(millis);
         self.sleep_until(now).await;
         self.invoke_id = self.invoke_id.wrapping_add(1);
-        let apdu = confirmed(self.invoke_id, service, body, 1476);
+        let apdu = confirmed(self.invoke_id, service, body, max_apdu);
         let mut frames = self.parity.deliver(&apdu).await;
         let source = self.parity.source();
         let at = frames
@@ -400,7 +536,7 @@ impl EventParity {
             .unwrap_or_else(|| panic!("{what}: the server's reply"));
         let server = frames.remove(at).decode_npdu().payload;
         let peer = SubscriberEndpoint::new(&source, None);
-        let request = Inbound::new(apdu, 1476).with_source(self.parity.origin());
+        let request = Inbound::new(apdu, max_apdu).with_source(self.parity.origin());
         let mut out = BytesMut::new();
         let parity = &mut self.parity;
         let handled = parity
