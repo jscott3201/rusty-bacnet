@@ -430,9 +430,12 @@ impl Responder {
         request: Inbound,
         out: &mut BytesMut,
     ) -> Written {
-        // Without a clock, no Recipient_List entry the device can't honour
-        // (decision 14).
+        // Without a clock, no Recipient_List entry the device's event
+        // distribution couldn't honour (decision 14); a build without it
+        // sends no event notification, and the filter would only cost it.
+        #[cfg(feature = "event-reporting")]
         let mut clockless;
+        #[cfg(feature = "event-reporting")]
         let observer: Option<&mut dyn WriteCommitObserver> = if self.clock.is_none() {
             clockless = write::ClocklessRecipients(observer);
             Some(&mut clockless)

@@ -709,6 +709,36 @@
 # 49812 / 58112. core::fmt and the 64-bit division routines stay at 0 and
 # the memmove count doesn't move. Every row was within its budget, so
 # none moved.
+#
+# On 2026-11-12 (#2303, PR 3b part three, Rust 1.99.0, dev at 5e2da52a5)
+# the reporting image reports intrinsic events: `reporting` turns on
+# bacnet-device-core's `event-reporting` (and so bacnet-objects'), the
+# `Reporter` sweeps every second, and the scenario takes AI-3 over its
+# limit, sends the transition after its Time_Delay, answers a
+# GetEventInformation and acknowledges the alarm locally. As text /
+# rodata / flash, PR 3b part two then this change:
+#
+#   thumbv7m             183256 / 17812 / 202092
+#                        243240 / 21320 / 265584
+#   thumbv7em            183056 / 17812 / 201892
+#                        242992 / 21320 / 265336
+#   riscv32imac          220764 / 21596 / 242382
+#                        299100 / 26608 / 325730
+#
+# 63492 / 63444 / 83348 octets of flash; RAM unchanged (24680), and the
+# scenario's host heap peaks at 22360 of the 24 KiB arena. With LTO,
+# callers hold what they inline: `Reporter::handle` (the write path with
+# the event evaluation, GetEventInformation and AcknowledgeAlarm) is 25.8
+# KB of thumbv7m .text, `Reporter::report` 8.0 KB, the EventNotification
+# encoder 4.6 KB, distribution 4.5 KB and the intrinsic commit 2.4 KB; by
+# crate, bacnet-device-core 73.5 KB and bacnet-objects 56.4 KB (its
+# detectors, Notification Class and the event properties of every object
+# type). The image is over the shared 256 KiB layout on the thumb targets
+# too, so it takes riscv32imac's 512 KiB one on every target (build.rs).
+# core::fmt and the 64-bit division routines stay at 0; the memmove count
+# doesn't move. The objects rows didn't move: the clockless Recipient_List
+# filter compiles only with `event-reporting`. The reporting budgets are
+# --suggest's again.
 
 [thumbv7m-none-eabi.mstp]
 text = 18320
@@ -810,11 +840,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [thumbv7m-none-eabi.reporting]
-text = 203200
-rodata = 19952
+text = 272432
+rodata = 23888
 data = 64
 bss = 27648
-flash = 224288
+flash = 297456
 ram = 27648
 fmt_functions = 0
 div64_functions = 0
@@ -1107,11 +1137,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [thumbv7em-none-eabihf.reporting]
-text = 203424
-rodata = 19952
+text = 272160
+rodata = 23888
 data = 64
 bss = 27648
-flash = 224512
+flash = 297184
 ram = 27648
 fmt_functions = 0
 div64_functions = 0
@@ -1140,11 +1170,11 @@ div64_functions = 0
 memmove_functions = 2
 
 [riscv32imac-unknown-none-elf.reporting]
-text = 244768
-rodata = 24144
+text = 334992
+rodata = 29808
 data = 64
 bss = 27648
-flash = 268928
+flash = 364832
 ram = 27648
 fmt_functions = 0
 div64_functions = 0

@@ -153,7 +153,7 @@ objects = ["alloc", "dep:bacnet-objects", "dep:bacnet-device-core"]
 # bacnet-time's. bacnet-device-core has no `cov` feature: the linker drops
 # the COV code an image doesn't reach, so the objects image is no smaller
 # without it. On by default, as `objects` is, for the host builds.
-reporting = ["objects", "dep:bacnet-time"]
+reporting = ["objects", "dep:bacnet-time", "bacnet-device-core/event-reporting"]
 
 # `points`: the points image and its scenario (#2445), the objects image's
 # requests answered from a database bacnet-objects' point-list builder

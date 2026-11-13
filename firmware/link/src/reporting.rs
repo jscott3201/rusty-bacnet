@@ -89,23 +89,28 @@ use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, Time};
 use bytes::{Bytes, BytesMut};
 
+mod events;
+
+pub use events::{EVENT_AT, Events};
+
 /// The most subscriptions the table holds, all subscribers together.
 pub const CAP: usize = 8;
 
 /// The heap the scenario runs in, in octets: the objects image's
 /// ([`crate::objects::ARENA`]) and 8 KiB, which the subscriptions' baselines,
 /// the outbox and the confirmed table take (`tests/reporting.rs` prints the
-/// peak).
+/// peak: 22,360 octets on a 64-bit host with the event scenario, #2303).
 #[cfg(not(feature = "reporting-multiple"))]
 pub const ARENA: usize = crate::objects::ARENA + 8 * 1024;
 
 /// The heap the scenario runs in with a COV-multiple context (#2320), in
-/// octets: 12 KiB more, for that report's histories, reads, claim and
+/// octets: 16 KiB more, for that report's histories, reads, claim and
 /// notification while it is built (`tests/reporting.rs` prints a peak of
-/// 32,560 octets on a 64-bit host, where the scenario without it peaks at
-/// 19,768).
+/// 35,624 octets on a 64-bit host with the event scenario, #2303, where the
+/// scenario without the context peaks at 22,360; 4 KiB were added with the
+/// event scenario, which the arena's own allocator needs past the peak).
 #[cfg(feature = "reporting-multiple")]
-pub const ARENA: usize = crate::objects::ARENA + 20 * 1024;
+pub const ARENA: usize = crate::objects::ARENA + 24 * 1024;
 
 /// The requests [`run`] hands the reporter, in this order.
 pub const STEPS: usize = 12;
@@ -395,6 +400,8 @@ pub struct Summary {
     pub multiple: [Vec<u8>; 2],
     /// Subscriptions left at [`EXPIRY_AT`].
     pub left: usize,
+    /// The event scenario's ([`EVENT_AT`]).
+    pub events: Events,
     /// The reporter's counts: subscriptions created, cancelled, purged and
     /// refused for capacity; notifications sent, confirmed and
     /// unconfirmed; resends, failures and reports owed.
@@ -547,8 +554,14 @@ impl Device {
         let mut kept = Vec::new();
         let mut out = BytesMut::new();
         while let Some(sent) = self.reporter.pop(&NoBindings, &mut self.ids, now, &mut out) {
-            let Destination::Subscriber(to) = sent.to else {
-                continue;
+            let to = match sent.to {
+                Destination::Subscriber(to) => to,
+                // An event notification, unconfirmed: kept, and sent.
+                _ => {
+                    summary.events.sent.push(out.to_vec());
+                    out.clear();
+                    continue;
+                }
             };
             summary.sent.push((to.mac[0], sent.invoke_id, out.len()));
             if keep && kept.is_empty() {
@@ -591,6 +604,7 @@ fn device() -> Result<(DeviceIdentity, ObjectDatabase), Error> {
     use crate::objects::{ANALOG_VALUES, DEVICE, VENDOR};
     let services: Vec<_> = report::SERVICES
         .iter()
+        .chain(report::EVENT_SERVICES)
         .chain(clock::SERVICES)
         .copied()
         .collect();
@@ -606,6 +620,7 @@ fn device() -> Result<(DeviceIdentity, ObjectDatabase), Error> {
     let mut active = BinaryValueObject::new(2, "BV-2")?;
     active.set_relinquish_default(1)?;
     extra.push(Box::new(active));
+    events::objects(&mut extra)?;
     let db = build_database_with_extra(&identity, extra)?;
     Ok((identity, db))
 }
@@ -638,6 +653,7 @@ pub fn run(apdus: &[&[u8]; crate::objects::REQUESTS], requests: &[Request; STEPS
         #[cfg(feature = "reporting-multiple")]
         multiple: [Vec::new(), Vec::new()],
         left: 0,
+        events: Events::default(),
         counts: [0; 10],
         errors: 0,
     };
@@ -651,7 +667,8 @@ pub fn run(apdus: &[&[u8]; crate::objects::REQUESTS], requests: &[Request; STEPS
             max_subscriptions_global: CAP,
             ..CovPolicy::default()
         })
-        .with_outbox(OUTBOX);
+        .with_outbox(OUTBOX)
+        .with_sweep(Duration::from_secs(1));
         Ok((Reporter::new(responder, config)?, db))
     });
     let Ok((reporter, db)) = built else {
@@ -752,6 +769,7 @@ pub fn run(apdus: &[&[u8]; crate::objects::REQUESTS], requests: &[Request; STEPS
         .reporter
         .clock()
         .and_then(|clock| clock.clock().window(read_at));
+    events::run(&mut device, &mut summary);
     // A COV-multiple context with a timestamped reference, its initial
     // report, and a change it reports with the time it happened.
     #[cfg(feature = "reporting-multiple")]
@@ -864,8 +882,10 @@ pub fn expected() -> Summary {
             ],
         }),
         // The fault written, and reported at 24 s with the last reading:
-        // Status_Flags with FAULT, the second bit (0x40).
-        fault: (Ok(Applied::Written), notified(16, READINGS[3], 0x40)),
+        // Status_Flags with FAULT, the second bit (0x40), and IN_ALARM, the
+        // first (0x80): the event path commits AI-2's FAULT transition
+        // first, as the server does, though class 0 sends it nowhere.
+        fault: (Ok(Applied::Written), notified(16, READINGS[3], 0xC0)),
         // SimpleACK, invoke ID 13, WriteProperty (15).
         change: ack(13, 15),
         list: {
@@ -924,10 +944,11 @@ pub fn expected() -> Summary {
         // SimpleACKs: invoke ID 17, SubscribeCOVPropertyMultiple (30), and
         // invoke ID 18, WriteProperty.
         #[cfg(feature = "reporting-multiple")]
-        multiple: [ack(17, 30), ack(18, 15)],
+        multiple: [ack(18, 30), ack(19, 15)],
         // The six subscriptions of AI-2 lapsed at 40 s, and with
         // `reporting-multiple` the COV-multiple reference at 75 s.
         left: 0,
+        events: events::expected(),
         // Created 8, cancelled 2, purged 6, refused 1; sent 45 (2
         // confirmed, 43 unconfirmed, 30 of them the control loop's),
         // resent 3, failed 1, owed none.
