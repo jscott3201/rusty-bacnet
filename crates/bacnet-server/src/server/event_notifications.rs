@@ -90,65 +90,62 @@ pub(super) fn logged_intrinsic_commit(
     }
 }
 
-impl<T: TransportPort + 'static> BACnetServer<T> {
-    /// Evaluate intrinsic reporting on an object and send event notifications
-    /// to the recipients the object's NotificationClass names.
-    /// DCC gates network-message initiation (Clause 16.1), not the local
-    /// transition actions in Clause 13.2.2.1.4. The outbound sender below
-    /// suppresses distribution while communications are disabled.
-    ///
-    /// This is the per-write entry point: it probes the detector, which fires
-    /// immediately only when `Time_Delay == 0`. For a nonzero delay the probe
-    /// seeds a pending transition due when the delay ends (returning `None`,
-    /// so no notification is sent here), and the intrinsic-reporting task
-    /// ([`start`](Self::start)) sweeps at that instant and sends the
-    /// notification.
-    ///
-    /// A caller owes the object a COV fanout afterwards, as the periodic task
-    /// gives one, since a proposal can commit (changing Status_Flags) even
-    /// when its projection is refused.
-    pub(super) async fn fire_event_notifications_with_bindings(
-        ctx: &EventDelivery<'_, T>,
-        cov_table: &Arc<RwLock<CovSubscriptionTable>>,
-        oid: &ObjectIdentifier,
-    ) {
-        let db = ctx.db;
-        let resolved = {
-            let mut db = db.write().await;
-            let resolved = after_write(&mut db, oid, crate::runtime_clock::core_now())
-                .and_then(|result| logged_intrinsic_commit(oid, result));
-            // A committed transition changes Status_Flags: capture it at its
-            // own time for timestamped COV-multiple references.
-            if resolved.is_some() {
-                let capture = cov_table.read().await.timed_capture(*oid);
-                capture.run(&db);
-            }
-            resolved
+/// The per-write intrinsic evaluation of `oid`, made under `db`, the guard
+/// that committed the write, before it is dropped (#2530).
+///
+/// The write and the transition it causes then commit as one step: no
+/// reader, sweep or COV fanout sees the object half updated, with a new
+/// Reliability or value and the Event_State from before. The detector fires
+/// at once only for a `Time_Delay` of 0; a nonzero delay is seeded, due when
+/// it ends, and the intrinsic-reporting task ([`start`](BACnetServer::start))
+/// sweeps then and sends that notification. A committed transition is
+/// captured for timestamped COV-multiple references at its own time, the
+/// table read under `db` (database, then table).
+///
+/// A transition to send goes on `to_send`, for
+/// [`BACnetServer::send_written_transitions`] once `db` is dropped, ahead of
+/// the write's COV fanout (#889). One that committed but isn't distributed
+/// goes nowhere: Event_Enable or a refused projection stop only the
+/// notification, not the local transition actions (Clauses 13.2.2.1.4 and
+/// 13.2.5). Either way the caller owes the object its COV fanout, since a
+/// commit changes Status_Flags.
+///
+/// The transition is moved out before the table read is awaited, so the
+/// write's future holds no transition across it: the write handlers' futures
+/// sit in every confirmed request's, and would grow by its size.
+pub(super) async fn commit_written_transition(
+    db: &mut ObjectDatabase,
+    cov_table: &RwLock<CovSubscriptionTable>,
+    oid: ObjectIdentifier,
+    to_send: &mut Vec<(ObjectIdentifier, CommittedIntrinsicTransition)>,
+) {
+    {
+        let Some(committed) = after_write(db, &oid, crate::runtime_clock::core_now())
+            .and_then(|result| logged_intrinsic_commit(&oid, result))
+        else {
+            return;
         };
-
-        // Local transition actions commit before Event_Enable or DCC can suppress
-        // external distribution (Clauses 13.2.2.1.4 and 13.2.5).
-        if let Some(resolved) = resolved
-            && resolved.distribute
-            && resolved.event_values.is_some()
-        {
-            Self::build_and_send_event_notification_with_bindings(ctx, oid, resolved).await;
+        if committed.distribute && committed.event_values.is_some() {
+            to_send.push((oid, committed));
         }
     }
+    let capture = cov_table.read().await.timed_capture(oid);
+    capture.run(db);
+}
 
-    /// Run the per-write evaluation on every object a confirmed service
-    /// wrote. Each such service (WriteProperty, WritePropertyMultiple,
-    /// AddListElement and RemoveListElement) has already put every object it
-    /// wrote, Life Safety objects aside, in the COV fanout that runs after
-    /// this, so a committed transition's Status_Flags change reaches
-    /// subscribers.
-    pub(super) async fn fire_written_event_notifications(
+impl<T: TransportPort + 'static> BACnetServer<T> {
+    /// Send the transitions writes committed ([`commit_written_transition`]),
+    /// in the order they committed, before the COV fanout of those writes. A
+    /// confirmed service (WriteProperty, WritePropertyMultiple, AddListElement
+    /// and RemoveListElement) has already put every object it wrote, Life
+    /// Safety objects aside, in that fanout, so a committed transition's
+    /// Status_Flags change reaches subscribers.
+    pub(super) async fn send_written_transitions(
         ctx: &EventDelivery<'_, T>,
-        cov_table: &Arc<RwLock<CovSubscriptionTable>>,
-        written_oids: &[ObjectIdentifier],
+        written: Vec<(ObjectIdentifier, CommittedIntrinsicTransition)>,
     ) {
-        for oid in written_oids {
-            Self::fire_event_notifications_with_bindings(ctx, cov_table, oid).await;
+        for (oid, transition) in written {
+            Self::build_and_send_event_notification_with_bindings(ctx, &oid, transition).await;
         }
     }
 

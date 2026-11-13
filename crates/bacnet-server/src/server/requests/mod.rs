@@ -595,7 +595,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         };
 
         let MutationEffects {
-            written_oids,
+            written_transitions,
             coarse_cov_oids,
             life_safety_cov_changes,
             staging_plans,
@@ -665,12 +665,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             _ => drop(after_reply),
         }
         if issued == issue::Issued::Segmented {
-            Self::fire_written_event_notifications(
-                &services.event_delivery(),
-                cov_table,
-                &written_oids,
-            )
-            .await;
+            Self::send_written_transitions(&services.event_delivery(), written_transitions).await;
             Self::fire_post_write_cov_notifications(
                 &cov_ctx,
                 &coarse_cov_oids,
@@ -715,12 +710,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             .await;
         }
 
-        Self::fire_written_event_notifications(
-            &services.event_delivery(),
-            cov_table,
-            &written_oids,
-        )
-        .await;
+        Self::send_written_transitions(&services.event_delivery(), written_transitions).await;
 
         Self::fire_post_write_cov_notifications(
             &cov_ctx,
