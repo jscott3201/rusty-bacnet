@@ -9,13 +9,12 @@ mod log;
 
 pub(crate) use api::core_interval;
 pub use api::{evaluate_event_enrollments, evaluate_event_enrollments_report};
-pub(crate) use bacnet_device_core::event::enrollment::{
-    CommittedEventEnrollmentDelivery, SuppressedDelivery, SuppressionCause,
-    evaluate_event_enrollments_for_delivery,
-};
 pub use bacnet_device_core::event::enrollment::{
     EventEnrollmentEvaluationDiagnostic, EventEnrollmentEvaluationOutcome,
     EventEnrollmentEvaluationReport, EventEnrollmentEvaluationStage,
     EventEnrollmentReliabilityCause, EventEnrollmentReliabilityResult, EventEnrollmentTransition,
+};
+pub(crate) use bacnet_device_core::event::enrollment::{
+    SuppressedDelivery, SuppressionCause, evaluate_event_enrollments_for_delivery,
 };
 pub(crate) use log::{log_evaluation_report, log_suppressed_deliveries};

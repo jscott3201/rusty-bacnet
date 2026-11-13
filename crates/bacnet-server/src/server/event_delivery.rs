@@ -5,7 +5,8 @@ use super::*;
 /// object database, network, DCC communication state, learned routers,
 /// notification transactions, device bindings, the undelivered-notification
 /// counters, the confirmed retry timeout, the local APDU capacity and the
-/// Device the notifications name as their initiator.
+/// Device the notifications name as their initiator. Borrows and plain values
+/// only, so it copies.
 pub(super) struct EventDelivery<'a, T: TransportPort + 'static> {
     pub(super) db: &'a Arc<RwLock<ObjectDatabase>>,
     pub(super) network: &'a Arc<NetworkLayer<T>>,
@@ -21,6 +22,14 @@ pub(super) struct EventDelivery<'a, T: TransportPort + 'static> {
     /// naming this device names (#2217).
     pub(super) device: ObjectIdentifier,
 }
+
+impl<T: TransportPort + 'static> Clone for EventDelivery<'_, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T: TransportPort + 'static> Copy for EventDelivery<'_, T> {}
 
 /// The Device a hand-built test [`EventDelivery`] names: its database's one
 /// Device, as the identity of a server built on that database names it, or

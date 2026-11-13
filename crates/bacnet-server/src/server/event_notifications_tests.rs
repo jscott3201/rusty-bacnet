@@ -444,30 +444,33 @@ pub(super) async fn broadcasts_from_per_write_path(
     comm_state.set_for_test(state);
     let learned_routers = Arc::new(Mutex::new(LearnedRouterCache::new()));
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-    let mut transitions = Vec::new();
+    let transactions = NotificationTransactions::new();
+    let bindings = Arc::new(RwLock::new(
+        crate::server::device_bindings::DeviceBindingTable::new(),
+    ));
+    let suppressions = Default::default();
+    let delivery = crate::server::event_delivery::EventDelivery {
+        db,
+        network: &network,
+        comm_state: &comm_state,
+        learned_routers: &learned_routers,
+        notification_transactions: &transactions,
+        device_bindings: &bindings,
+        suppressions: &suppressions,
+        retry_timeout_ms: 1000,
+        local_apdu_capacity: 1476,
+        device: crate::server::event_delivery::fixture_device(db).await,
+    };
+    let mut settle = super::event_send::Settle::default();
     {
         let mut db = db.write().await;
-        super::event_notifications::commit_written_transition(&mut db, oid, &mut transitions);
+        let settle = &mut settle;
+        super::event_notifications::commit_written_transition(|| delivery, &mut db, oid, settle);
     }
-
-    BACnetServer::<TestTransport>::send_written_transitions(
-        &crate::server::event_delivery::EventDelivery {
-            db,
-            network: &network,
-            comm_state: &comm_state,
-            learned_routers: &learned_routers,
-            notification_transactions: &NotificationTransactions::new(),
-            device_bindings: &Arc::new(RwLock::new(
-                crate::server::device_bindings::DeviceBindingTable::new(),
-            )),
-            suppressions: &Default::default(),
-            retry_timeout_ms: 1000,
-            local_apdu_capacity: 1476,
-            device: crate::server::event_delivery::fixture_device(db).await,
-        },
-        transitions,
-    )
-    .await;
+    // The lanes send it; wait until they have (#2537).
+    if let Some(settled) = settle.into_wait() {
+        let _ = settled.await;
+    }
 
     sent.npdus()
 }

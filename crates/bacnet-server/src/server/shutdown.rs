@@ -138,6 +138,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         while let Some(result) = self.request_tasks.join_next().await {
             super::request_tasks::RequestTasks::observe(Some(result));
         }
+        // No request is left to push an event notification: seal the lanes
+        // and abort their tasks, dropping what they hold (#2537). A producer
+        // stopped below finds them sealed.
+        self.notification_transactions.shut_lanes().await;
         {
             let mut timer = self.dcc_timer.lock().await;
             super::dcc_timer::cancel(&mut timer).await;

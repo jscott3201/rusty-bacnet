@@ -166,7 +166,23 @@ impl Fixture {
     }
 
     async fn write_present_value_as(&self, value: PropertyValue) {
-        let mut transitions = Vec::new();
+        let bindings = Arc::new(RwLock::new(
+            crate::server::device_bindings::DeviceBindingTable::new(),
+        ));
+        let suppressions = Default::default();
+        let delivery = crate::server::event_delivery::EventDelivery {
+            db: &self.db,
+            network: &self.network,
+            comm_state: &self.comm_state,
+            learned_routers: &self.learned_routers,
+            notification_transactions: &self.notification_transactions,
+            device_bindings: &bindings,
+            suppressions: &suppressions,
+            retry_timeout_ms: 1000,
+            local_apdu_capacity: 1476,
+            device: crate::server::event_delivery::fixture_device(&self.db).await,
+        };
+        let mut settle = super::event_send::Settle::default();
         {
             let mut db = self.db.write().await;
             db.get_mut(&self.oid)
@@ -180,26 +196,18 @@ impl Fixture {
                 )
                 .expect("Out_Of_Service is TRUE, so Present_Value must be writable");
             let oid = self.oid;
-            super::event_notifications::commit_written_transition(&mut db, oid, &mut transitions);
+            let settle = &mut settle;
+            super::event_notifications::commit_written_transition(
+                || delivery,
+                &mut db,
+                oid,
+                settle,
+            );
         }
-        BACnetServer::<TestTransport>::send_written_transitions(
-            &crate::server::event_delivery::EventDelivery {
-                db: &self.db,
-                network: &self.network,
-                comm_state: &self.comm_state,
-                learned_routers: &self.learned_routers,
-                notification_transactions: &self.notification_transactions,
-                device_bindings: &Arc::new(RwLock::new(
-                    crate::server::device_bindings::DeviceBindingTable::new(),
-                )),
-                suppressions: &Default::default(),
-                retry_timeout_ms: 1000,
-                local_apdu_capacity: 1476,
-                device: crate::server::event_delivery::fixture_device(&self.db).await,
-            },
-            transitions,
-        )
-        .await;
+        // The lanes send it; wait until they have (#2537).
+        if let Some(settled) = settle.into_wait() {
+            let _ = settled.await;
+        }
     }
 
     /// Commission one Alarm_Values element through the AddListElement handler.
