@@ -746,7 +746,7 @@
     {
       "bit": 41,
       "clientSends": false,
-      "endpoint": null,
+      "endpoint": "with_cov",
       "kind": "confirmed",
       "label": "SubscribeCOVPropertyMultiple",
       "name": "SUBSCRIBE_COV_PROPERTY_MULTIPLE",

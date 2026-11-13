@@ -12430,9 +12430,9 @@ tests.
 ### Endpoint COV reporting
 
 `EndpointSession::with_cov(config)` (#2490), or `BipEndpointBuilder::cov(config)`
-on the B/IP builder, lets the endpoint execute SubscribeCOV and
-SubscribeCOVProperty for the objects of its database and send the COV
-notifications their subscriptions call for. The session runs
+on the B/IP builder, lets the endpoint execute SubscribeCOV,
+SubscribeCOVProperty and SubscribeCOVPropertyMultiple for the objects of its
+database and send the COV notifications their subscriptions call for. The session runs
 bacnet-device-core's `Reporter` (`bacnet_device_core::report`): the
 subscription table, change detection and confirmed delivery the core gives
 firmware. A subscription to an object or to one of its properties (with the
@@ -12442,6 +12442,21 @@ session's clock behave as on `BACnetServer`, and the notifications carry the
 same octets. An object subscription and a property subscription from one
 subscriber, even under one process identifier, are two subscriptions, each
 reported, listed and cancelled on its own.
+
+A SubscribeCOVPropertyMultiple subscription is one context: the subscriber's
+process, its references (each a property with its own COV increment and
+Timestamped flag), a lifetime and a Max_Notification_Delay. Its reports are
+the COV-multiple notifications, split to fit the Max-APDU-Length-Accepted the
+request stated, and what a context could not send yet goes out by its
+Max_Notification_Delay at the latest. A refusal names the first reference it
+couldn't take, and the references before it stay subscribed, as on
+`BACnetServer`. A timestamped reference needs a Device clock: the session
+installs none, so give the database a clock reader
+(`ObjectDatabase::set_clock_reader`) before handing it over. Without one a
+timestamped reference is refused with SERVICES /
+OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, and untimestamped ones are taken. With
+one, each change carries its time of change, and changes made while a
+confirmed report is out wait for its Ack and go together after it.
 
 ```rust
 use bacnet_device_core::cov::CovPolicy;
@@ -12517,17 +12532,15 @@ more silent subscribers are needed to fill the bound.
   could check at start.
 
 Startup requires a server role and a concrete built-in local Device, as the
-Device-write opt-in does. The Device and identity then advertise SubscribeCOV
-and SubscribeCOVProperty, and the Device lists Active_COV_Subscriptions, both
-kinds of subscription in it, read live from the table. It
-doesn't list Active_COV_Multiple_Subscriptions, which belongs to a device that
-executes SubscribeCOVPropertyMultiple (Table 12-13). Without a composed
+Device-write opt-in does. The Device and identity then advertise the three
+services, and the Device lists Active_COV_Subscriptions (object and property
+subscriptions) and Active_COV_Multiple_Subscriptions (the contexts), read live
+from the table (Table 12-13). Without a composed
 identity, the Device object supplies what the notifications carry of it: its
 identifier, as the initiating device, and for a confirmed one its
-Max_APDU_Length_Accepted. SubscribeCOVPropertyMultiple stays refused with
-UNRECOGNIZED_SERVICE, as SubscribeCOV and SubscribeCOVProperty are on a
-session without the opt-in. No event notification
-follows a change: the endpoint runs no event pass.
+Max_APDU_Length_Accepted. On a session without the opt-in the three services
+are refused with UNRECOGNIZED_SERVICE and the Device has neither list. No
+event notification follows a change: the endpoint runs no event pass.
 
 A subscriber ends with the current value even when a change takes the object
 back to what it last heard before the last change's notification went
@@ -12541,10 +12554,15 @@ invoke ID a notification holds.
 On paused time over an in-memory link, an endpoint and a `BACnetServer` with
 the same Device and object answer and notify with the same octets through a
 subscription, changes, a renewal, a cancellation and a lifetime running out,
-for an object subscription and for a property subscription with its own
-increment, refuse the same property subscriptions with the same replies, and
-list the same Active_COV_Subscriptions; their confirmed notifications carry
-the same parameters.
+for an object subscription, a property subscription with its own
+increment and a COV-multiple context (timestamped and untimestamped
+references, two contexts to one object, a report split for a small
+subscriber), refuse the same subscriptions with the same replies, and list
+the same Active_COV_Subscriptions and Active_COV_Multiple_Subscriptions; their
+confirmed notifications carry the same parameters. A context's
+Max_Notification_Delay backstop after a failed send is compared in
+bacnet-device-core's parity tests, not on the endpoint, whose in-memory link
+can't fail one send.
 
 ### Direct endpoint WriteProperty and source WRITE reporting
 
