@@ -1,6 +1,6 @@
 //! The Event Enrollment half of the projection: what an enrollment's
 //! evaluation captured, and the Event Values its committed transition
-//! reports. The evaluator itself stays in `bacnet-server` until #2319.
+//! reports. The pass that captures it is `event::enrollment` (#2319).
 
 use alloc::vec::Vec;
 use bacnet_encoding::constructed::{

@@ -230,3 +230,35 @@ async fn the_delay_counts_passes_at_two_intervals() {
         assert_eq!(both.run_to(&what, fires).await, 1, "{what}: fired");
     }
 }
+
+/// Two enrollments on AV-2, added EE-9 first: they trip at one pass.
+fn two_on_one(identity: &bacnet_objects::DeviceIdentity) -> ObjectDatabase {
+    let [first, second] =
+        [9, 8].map(|instance| enrollment(instance, (av(2), P::PRESENT_VALUE), out_of_range(0)));
+    database_with(
+        identity,
+        vec![value(2, 20.0), class(), Box::new(first), Box::new(second)],
+    )
+}
+
+/// Two transitions at one pass go out in the same order from both, the
+/// database's: compared in order here, not as sets.
+#[tokio::test(start_paused = true)]
+async fn two_transitions_at_one_pass_go_out_in_the_same_order() {
+    let mut both = EventParity::start_with(two_on_one, true, Some(1)).await;
+    assert_eq!(both.run_to("before", 1_500).await, 0);
+    let over = (av(2), P::PRESENT_VALUE);
+    assert_eq!(both.write_to("over", 1_500, over, real(90.0)).await, 0);
+    let at = both.instant(2_000);
+    both.sleep_until(at).await;
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    let frames = both.parity.sent.take();
+    let server: Vec<_> = frames
+        .iter()
+        .map(|frame| frame.decode_npdu().payload.to_vec())
+        .collect();
+    both.settle(at);
+    let core: Vec<_> = both.core_sent(at).into_iter().map(|wire| wire.2).collect();
+    assert_eq!(server.len(), 2, "both enrollments");
+    assert_eq!(server, core, "in order, server then core");
+}

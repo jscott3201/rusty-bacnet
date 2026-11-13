@@ -2,9 +2,12 @@
 //! sends and through which path, and what it leaves alone.
 
 use super::*;
+use bacnet_encoding::constructed::decode_event_notification;
 use bacnet_objects::event_enrollment::EventEnrollmentObject;
+use bacnet_services::alarm_event::AcknowledgeAlarmRequest;
 use bacnet_types::constructed::{BACnetDeviceObjectPropertyReference, BACnetEventParameter};
 use bacnet_types::enums::{EventState, EventType, Reliability};
+use bacnet_types::primitives::BACnetTimeStamp;
 
 /// Event Enrollment `instance` watching `property` of AI-1 (10 at first)
 /// with OUT_OF_RANGE over 80 after `time_delay` seconds, through
@@ -37,12 +40,24 @@ fn ee(instance: u32) -> ObjectIdentifier {
 fn enrolled(
     enrollments: Vec<EventEnrollmentObject>,
     destinations: Vec<BACnetDestination>,
+    timing: (u64, Duration),
+) -> Device {
+    enrolled_with(Vec::new(), enrollments, destinations, timing)
+}
+
+/// [`enrolled`], with `more` objects ahead of the enrollments. Notification
+/// Class 0's TO_OFFNORMAL needs acknowledging.
+fn enrolled_with(
+    more: Vec<Box<dyn bacnet_objects::traits::BACnetObject>>,
+    enrollments: Vec<EventEnrollmentObject>,
+    destinations: Vec<BACnetDestination>,
     (sweep, pass): (u64, Duration),
 ) -> Device {
     let identity = DeviceIdentity::new(9, 0x105)
         .unwrap()
         .with_services(SERVICES);
     let mut class = NotificationClass::new(0, "NC-0").unwrap();
+    class.ack_required = EventTransitionBits::TO_OFFNORMAL;
     for destination in destinations {
         class.add_destination(destination).unwrap();
     }
@@ -50,6 +65,7 @@ fn enrolled(
     sensor.set_present_value(10.0);
     let mut objects: Vec<Box<dyn bacnet_objects::traits::BACnetObject>> =
         vec![Box::new(sensor), Box::new(class)];
+    objects.extend(more);
     objects.extend(enrollments.into_iter().map(|ee| Box::new(ee) as Box<_>));
     let db = build_database_with_extra(&identity, objects).unwrap();
     let responder = Responder::new(identity, crate::responder::Limits::default()).unwrap();
@@ -263,4 +279,136 @@ fn without_a_period_no_pass_runs() {
     let object = db.get(&ee(1)).unwrap();
     let event_state = object.read_property(P::EVENT_STATE, None).unwrap();
     assert_eq!(event_state, state(EventState::NORMAL));
+}
+
+/// The Event Enrollment an event notification reports.
+fn reported(apdu: &Apdu) -> ObjectIdentifier {
+    let params = match apdu {
+        Apdu::UnconfirmedRequest(request) => &request.service_request,
+        Apdu::ConfirmedRequest(request) => &request.service_request,
+        other => panic!("not a notification: {other:?}"),
+    };
+    decode_event_notification(params)
+        .unwrap()
+        .event_object_identifier
+}
+
+/// Enrollments that trip at one pass go out in the database's order, the
+/// order they were added in, not by identifier.
+#[test]
+fn one_pass_sends_in_database_order() {
+    let enrollments = [3, 1, 2].map(|instance| enrollment(instance, P::PRESENT_VALUE, 0));
+    let mut device = enrolled(
+        enrollments.into(),
+        vec![address_destination(false)],
+        (60, TEN),
+    );
+    device.read(90.0, ms(500));
+    device.run_until(ms(10_000));
+    let popped: Vec<_> = core::iter::from_fn(|| device.pop(ms(10_000)))
+        .map(|(_, apdu)| reported(&apdu))
+        .collect();
+    assert_eq!(popped, [ee(3), ee(1), ee(2)]);
+}
+
+/// In one `on_deadline` the sweep runs before the pass: an intrinsic
+/// transition the sweep commits there sets the input's IN_ALARM, which an
+/// enrollment watching its Status_Flags sees in the same call.
+#[test]
+fn the_pass_sees_what_the_sweep_committed_in_the_same_call() {
+    let mut watching =
+        EventEnrollmentObject::new(1, "EE-1", EventType::CHANGE_OF_BITSTRING).unwrap();
+    let alarm3 = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 3).unwrap();
+    let reference =
+        BACnetDeviceObjectPropertyReference::new_local(alarm3, P::STATUS_FLAGS.to_raw());
+    watching
+        .set_object_property_reference(Some(reference))
+        .unwrap();
+    watching.set_event_parameters(BACnetEventParameter::ChangeOfBitstring {
+        time_delay: 0,
+        bitmask: (4, vec![0x80]),
+        list_of_values: vec![(4, vec![0x80])],
+    });
+    watching.set_event_enable(EventTransitionBits::all());
+    let second = Duration::from_secs(1);
+    let mut device = enrolled_with(
+        vec![intrinsic(3, 1)],
+        vec![watching],
+        vec![address_destination(false)],
+        (1, second),
+    );
+    // Due a second on, when the sweep and the pass both run.
+    device.raise(alarm3, T0);
+    assert_eq!(device.run_until(ms(1_000)), vec![ms(1_000)]);
+    let popped: Vec<_> = core::iter::from_fn(|| device.pop(ms(1_000)))
+        .map(|(_, apdu)| reported(&apdu))
+        .collect();
+    assert_eq!(
+        popped,
+        [alarm3, ee(1)],
+        "the intrinsic one, then the pass's"
+    );
+    assert_eq!(device.event_state(ee(1)), state(EventState::OFFNORMAL));
+}
+
+/// AcknowledgeAlarm through `handle` acknowledges an enrollment's
+/// transition: the SimpleACK, then its acknowledgement notification.
+#[test]
+fn acknowledge_alarm_takes_an_enrollments_transition() {
+    let mut device = enrolled(
+        vec![enrollment(1, P::PRESENT_VALUE, 0)],
+        vec![address_destination(false)],
+        (60, TEN),
+    );
+    device.read(90.0, ms(500));
+    device.run_until(ms(10_000));
+    assert_eq!(device.events(ms(10_000)), 1, "the transition");
+    let object = device.db.get(&ee(1)).unwrap();
+    let coordinate = bacnet_objects::event::EventTransition::ToOffnormal;
+    let optional = crate::event::MessageTexts::Optional;
+    let committed = crate::event::read_committed_history_snapshot(object, coordinate, optional);
+    let mut body = BytesMut::new();
+    AcknowledgeAlarmRequest {
+        acknowledging_process_identifier: 7,
+        event_object_identifier: ee(1),
+        event_state_acknowledged: EventState::HIGH_LIMIT,
+        timestamp: committed.unwrap().timestamp,
+        acknowledgment_source: "operator".into(),
+        time_of_acknowledgment: BACnetTimeStamp::SequenceNumber(9),
+    }
+    .encode(&mut body)
+    .unwrap();
+    let reply = device.request(ConfirmedServiceChoice::ACKNOWLEDGE_ALARM, &body, ms(11_000));
+    assert!(matches!(reply, Apdu::SimpleAck(_)), "{reply:?}");
+    let (_, apdu) = device.pop(ms(11_000)).expect("its acknowledgement");
+    assert_eq!(reported(&apdu), ee(1));
+    let params = match &apdu {
+        Apdu::UnconfirmedRequest(request) => request.service_request.clone(),
+        other => panic!("{other:?}"),
+    };
+    let notification = decode_event_notification(&params).unwrap();
+    let ack = bacnet_types::enums::NotifyType::ACK_NOTIFICATION;
+    assert_eq!(notification.notify_type, ack);
+}
+
+/// GetEventInformation through `handle` lists an enrollment in alarm.
+#[test]
+fn get_event_information_lists_an_enrollment() {
+    let mut device = enrolled(
+        vec![enrollment(1, P::PRESENT_VALUE, 0)],
+        vec![address_destination(false)],
+        (60, TEN),
+    );
+    device.read(90.0, ms(500));
+    device.run_until(ms(10_000));
+    let reply = device.request(
+        ConfirmedServiceChoice::GET_EVENT_INFORMATION,
+        &[],
+        ms(11_000),
+    );
+    let Apdu::ComplexAck(ack) = reply else {
+        panic!("{reply:?}")
+    };
+    let encoded = ee(1).encode();
+    assert!(ack.service_ack.windows(4).any(|window| window == encoded));
 }

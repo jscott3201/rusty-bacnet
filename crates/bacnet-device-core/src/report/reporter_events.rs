@@ -57,6 +57,9 @@ const REPORTED_FORMS: u32 = if cfg!(feature = "event-enrollment") {
 // Every form intrinsic reporting builds goes out: one left out of the mask
 // would be refused at the encoder and counted dropped.
 const _: () = assert!(REPORTED_FORMS & INTRINSIC_FORMS == INTRINSIC_FORMS);
+// So does every form the Event Enrollment pass builds (#2319).
+#[cfg(feature = "event-enrollment")]
+const _: () = assert!(REPORTED_FORMS & ENROLLMENT_FORMS == ENROLLMENT_FORMS);
 
 /// The Event Enrollment pass's schedule (#2319).
 #[cfg(feature = "event-enrollment")]
@@ -117,7 +120,7 @@ impl Events {
 
     /// When the next sweep runs: the next periodic one, or sooner the
     /// earliest due instant, floored a [`SWEEP_FLOOR`] after the last; or
-    /// the fault pass, when it comes first.
+    /// the fault pass or the Event Enrollment pass, when it comes first.
     pub(super) fn deadline(&self) -> Option<Instant> {
         bacnet_time::earliest([
             Some(self.wake()),
@@ -353,6 +356,9 @@ impl Reporter {
         let changed: Vec<_> = transitions
             .chain(reliability.map(|done| done.enrollment_oid))
             .collect();
+        // The one tail every committed change takes. It reports nothing
+        // today, as an Event Enrollment object takes no COV subscription,
+        // but keeps the pass on the path an object that did would need.
         self.report_committed(db, &changed, &LifeSafetyCovSnapshots::default(), now);
     }
 

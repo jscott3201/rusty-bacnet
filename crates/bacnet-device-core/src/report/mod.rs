@@ -348,9 +348,12 @@ pub struct ReporterCounters {
     /// Queued COV notifications an event notification evicted; each left
     /// its subscription owed, as [`owed`](Self::owed) counts.
     pub evicted: u64,
-    /// Event Enrollment transitions a pass committed but couldn't send:
-    /// their Event Values didn't project or their committed history didn't
-    /// read back (`bacnet-server` logs each at debug).
+    /// Event Enrollment transitions a pass committed with no notification
+    /// to build: their Event Values didn't project or their committed
+    /// history didn't read back, whether or not their Event_Enable bit
+    /// would have let them go (`bacnet-server` logs each at debug). One
+    /// whose notification was built but Event_Enable leaves out isn't
+    /// counted.
     #[cfg(feature = "event-enrollment")]
     pub enrollments_suppressed: u64,
 }
