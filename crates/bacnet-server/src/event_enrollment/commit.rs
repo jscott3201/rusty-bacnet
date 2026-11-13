@@ -145,33 +145,20 @@ pub(crate) struct CommittedEventEnrollmentDelivery {
 pub(crate) struct EventEnrollmentEvaluationBatch {
     pub(crate) report: EventEnrollmentEvaluationReport,
     pub(crate) deliveries: Vec<CommittedEventEnrollmentDelivery>,
+    /// Committed transitions whose notification payload was refused, so
+    /// they are not distributed, in commit order: what the commit once
+    /// logged itself, for the host to log.
+    pub(crate) suppressed: Vec<SuppressedDelivery>,
 }
 
-pub(crate) fn log_evaluation_report(report: &EventEnrollmentEvaluationReport) {
-    for result in &report.reliability_results {
-        tracing::debug!(
-            enrollment = %result.enrollment_oid,
-            monitored = ?result.monitored_oid,
-            previous = ?result.previous_reliability,
-            new = ?result.new_reliability,
-            state_change = ?result.state_change,
-            distribute = result.distribute,
-            cause = ?result.cause,
-            "Event enrollment: reliability committed"
-        );
-    }
-    for diagnostic in report
-        .diagnostics
-        .iter()
-        .filter(|diagnostic| diagnostic.outcome.is_failure())
-    {
-        tracing::warn!(
-            enrollment = %diagnostic.enrollment_oid,
-            stage = ?diagnostic.stage,
-            outcome = ?diagnostic.outcome,
-            "Event enrollment: internal commit failed"
-        );
-    }
+/// A committed transition whose notification payload was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SuppressedDelivery {
+    /// The enrollment.
+    pub(crate) enrollment_oid: ObjectIdentifier,
+    /// Its event type for an event transition; `None` for a reliability
+    /// (CHANGE_OF_RELIABILITY) one.
+    pub(crate) event_type: Option<EventType>,
 }
 
 /// Coalesced desired mutation for one enrollment and one evaluation pass.
@@ -342,6 +329,7 @@ pub(super) fn apply_updates_for_delivery(
 ) -> EventEnrollmentEvaluationBatch {
     let mut report = EventEnrollmentEvaluationReport::default();
     let mut deliveries = Vec::new();
+    let mut suppressed = Vec::new();
 
     for &oid in oids {
         let Some(update) = updates.remove(&oid) else {
@@ -508,10 +496,10 @@ pub(super) fn apply_updates_for_delivery(
                     event_values,
                 });
             } else {
-                tracing::debug!(
-                    enrollment = %oid,
-                    "Committed Event Enrollment reliability payload rejected; suppressing distribution"
-                );
+                suppressed.push(SuppressedDelivery {
+                    enrollment_oid: oid,
+                    event_type: None,
+                });
             }
             continue;
         }
@@ -601,13 +589,16 @@ pub(super) fn apply_updates_for_delivery(
                 event_values,
             });
         } else {
-            tracing::debug!(
-                enrollment = %oid,
-                ?event_type,
-                "Committed Event Enrollment payload rejected; suppressing distribution"
-            );
+            suppressed.push(SuppressedDelivery {
+                enrollment_oid: oid,
+                event_type: Some(event_type),
+            });
         }
     }
 
-    EventEnrollmentEvaluationBatch { report, deliveries }
+    EventEnrollmentEvaluationBatch {
+        report,
+        deliveries,
+        suppressed,
+    }
 }

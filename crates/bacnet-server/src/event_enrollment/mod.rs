@@ -57,6 +57,7 @@
 
 mod api;
 mod commit;
+mod log;
 mod support;
 
 use bacnet_objects::property_metadata::is_array_property;
@@ -77,9 +78,9 @@ use algorithms::{
     eval_out_of_range_struct, extract_bitstring, extract_property_state_value, extract_real,
     inhibited_arm,
 };
+pub(crate) use commit::SuppressedDelivery;
 #[cfg(test)]
 use commit::apply_updates;
-pub(crate) use commit::log_evaluation_report;
 pub(crate) use commit::{
     CommittedEventEnrollmentDelivery, CommittedEventEnrollmentResult,
     EventEnrollmentEvaluationBatch,
@@ -90,6 +91,7 @@ use fault::{
     evaluate_fault_algorithm, read_event_parameters, read_fault_algorithm,
     read_monitored_reliability,
 };
+pub(crate) use log::{log_evaluation_report, log_suppressed_deliveries};
 #[cfg(test)]
 use reference::MonitoredReference;
 use reference::{params_fingerprint, read_object_property_ref};

@@ -56,5 +56,7 @@ pub fn evaluate_event_enrollments_report(
     db: &mut ObjectDatabase,
     interval_secs: u64,
 ) -> EventEnrollmentEvaluationReport {
-    evaluate_event_enrollments_for_delivery(db, interval_secs).report
+    let evaluation = evaluate_event_enrollments_for_delivery(db, interval_secs);
+    super::log_suppressed_deliveries(&evaluation.suppressed);
+    evaluation.report
 }
