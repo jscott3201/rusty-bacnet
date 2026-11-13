@@ -1,7 +1,7 @@
 //! Sole accepted socket writer with bounded response/control scheduling.
 use super::*;
+use crate::sc::CLOSE_NORMAL;
 use crate::sc::npdu_admission::DirectPeer;
-use crate::sc::{CLOSE_GRACE, CLOSE_NORMAL};
 
 pub(super) async fn serve_npdu_loop<W>(
     write: &mut W,
@@ -28,8 +28,7 @@ pub(super) async fn serve_npdu_loop<W>(
     loop {
         if tokio::time::Instant::now() >= idle_deadline {
             debug!("direct idle timeout, closing {peer_addr}");
-            let _ =
-                tokio::time::timeout(config.connect_timeout, write.send_close(CLOSE_NORMAL)).await;
+            socket::close_with(write, Some(CLOSE_NORMAL)).await;
             return;
         }
         let next = tokio::select! {
@@ -43,10 +42,8 @@ pub(super) async fn serve_npdu_loop<W>(
             } => {
                 let mut buf = BytesMut::new();
                 encode_sc_message(&mut buf, &crate::sc::direct_membership::disconnect_request());
-                let _ = tokio::time::timeout(config.connect_timeout, async {
-                    let _ = write.send_data(&buf).await;
-                    let _ = write.send_close(CLOSE_NORMAL).await;
-                }).await;
+                let _ = tokio::time::timeout(config.connect_timeout, write.send_data(&buf)).await;
+                socket::close_with(write, Some(CLOSE_NORMAL)).await;
                 return;
             }
             next = next_event(read, responses, prefer_send, idle_deadline) => next,
@@ -107,9 +104,7 @@ pub(super) async fn serve_npdu_loop<W>(
             Ok(None) => return,
             Err(_) => {
                 debug!("direct idle timeout, closing {peer_addr}");
-                let _ =
-                    tokio::time::timeout(config.connect_timeout, write.send_close(CLOSE_NORMAL))
-                        .await;
+                socket::close_with(write, Some(CLOSE_NORMAL)).await;
                 return;
             }
         };
@@ -182,7 +177,7 @@ pub(super) async fn serve_npdu_loop<W>(
                 encode_sc_message(&mut buf, &ack);
                 let _ = tokio::time::timeout(config.connect_timeout, write.send_data(&buf)).await;
                 // Answered, the acceptor closes too (AB.6.2.3, #2520).
-                let _ = tokio::time::timeout(CLOSE_GRACE, write.send_close(CLOSE_NORMAL)).await;
+                socket::close_with(write, Some(CLOSE_NORMAL)).await;
                 return;
             }
             ScFunction::DisconnectAck => return,

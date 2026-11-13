@@ -559,16 +559,6 @@ async fn accept_loop(state: AcceptLoop) {
     peers.shutdown().await;
 }
 
-/// Resolves once `signal` reads true. A sender gone without setting it
-/// never raises it.
-pub(super) async fn raised(signal: &mut watch::Receiver<bool>) {
-    while !*signal.borrow_and_update() {
-        if signal.changed().await.is_err() {
-            std::future::pending::<()>().await;
-        }
-    }
-}
-
 // The chain comes only from rustls after a successful verifying handshake.
 pub(super) fn verified_leaf_sha256(
     chain: Option<&[rustls::pki_types::CertificateDer<'_>]>,
@@ -684,7 +674,14 @@ async fn serve_connection(
     .await
     {
         Ok(Some(member)) => member,
-        _ => return,
+        Ok(None) => return,
+        // The connect wait ran out: an orderly end, 1000, as the hub's
+        // (#2520). This outer bound fires before the handshake's own.
+        Err(_) => {
+            debug!("direct handshake timed out for {peer_addr}");
+            socket::close_with(&mut write, Some(crate::sc::CLOSE_NORMAL)).await;
+            return;
+        }
     };
     drop(pending);
     established.store(true, Ordering::Release);
@@ -747,14 +744,18 @@ where
         Ok(None) => return None,
         Err(_) => {
             debug!("direct handshake timed out for {peer_addr}");
+            socket::close_with(write, Some(crate::sc::CLOSE_NORMAL)).await;
             return None;
         }
     };
+    // From here each refusal closes: 1000 after a refusal NAK, no status
+    // for the peer's fault, as the hub's refusals do (#2520).
     if data.len() > config.max_bvlc_length as usize {
         crate::warn_throttled!(
             warnings.connection,
             "direct handshake frame exceeds local Max-BVLC-Length, closing {peer_addr}"
         );
+        socket::close_with(write, None).await;
         return None;
     }
     let msg = match decode_sc_message(&data) {
@@ -764,20 +765,21 @@ where
                 warnings.connection,
                 "direct handshake decode error from {peer_addr}: {e}"
             );
+            socket::close_with(write, None).await;
             return None;
         }
     };
     if msg.function != ScFunction::ConnectRequest {
         debug!("direct handshake expected Connect-Request from {peer_addr}, closing");
+        socket::close_with(write, None).await;
         return None;
     }
-    match validate_connect_request(&msg, &data) {
-        Ok(()) => {}
-        Err(Some(nak)) => {
+    if let Err(nak) = validate_connect_request(&msg, &data) {
+        if let Some(nak) = nak {
             let _ = write.send_data(&nak).await;
-            return None;
         }
-        Err(None) => return None,
+        socket::close_with(write, None).await;
+        return None;
     }
     let mut peer_vmac = [0u8; 6];
     peer_vmac.copy_from_slice(&msg.payload[0..6]);
@@ -796,7 +798,9 @@ where
             let nak = admission_nak(msg.message_id, refusal);
             let mut buf = BytesMut::new();
             encode_sc_message(&mut buf, &nak);
-            let _ = write.send_data(&buf).await;
+            if write.send_data(&buf).await.is_ok() {
+                socket::close_with(write, Some(crate::sc::CLOSE_NORMAL)).await;
+            }
             return None;
         }
     };
@@ -920,7 +924,7 @@ use response_loop::serve_npdu_loop;
 
 #[path = "direct_socket.rs"]
 mod socket;
-use socket::{DirectFrame, DirectWs, DirectWsRead};
+use socket::{DirectFrame, DirectWs, DirectWsRead, raised};
 
 #[cfg(test)]
 #[path = "direct_accept_tests.rs"]

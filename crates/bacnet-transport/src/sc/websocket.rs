@@ -44,6 +44,15 @@ pub trait WebSocketPort: Send + Sync + 'static {
         let _ = status;
         async { Ok(()) }
     }
+
+    /// Whether [`close`](Self::close) sends a close frame. When it does,
+    /// the transport gives the peer up to the close grace to answer its
+    /// Disconnect-Request before closing, as Annex AB.6.2.2 has the
+    /// requester wait; a port without one is dropped without that wait. The
+    /// default is `false`, matching the default `close`.
+    fn has_close_frame(&self) -> bool {
+        false
+    }
 }
 
 /// Send `ws` a close frame with `status`, giving it at most [`CLOSE_GRACE`].

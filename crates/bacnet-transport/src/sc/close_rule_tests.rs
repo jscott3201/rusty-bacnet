@@ -8,89 +8,22 @@
 //! socket it keeps is a lost hub's own when recovery will send the next
 //! Connect-Request on it, which it does with reconnect on and no connector
 //! for that hub; that socket gets no close.
-use std::future::pending;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use tokio::time::Instant;
 
 use super::STOP_SEND_BUDGET;
 use crate::port::TransportPort;
+use crate::sc::close_test_support::{Probe, Recorder, eventually, recorder};
 use crate::sc::data_attribute_tests::hub_accept;
 use crate::sc::test_waits::until;
 use crate::sc::{
-    CLOSE_GRACE, LoopbackWebSocket, ScDisconnectCause, ScEvent, ScReconnectConfig, ScTransport,
-    WebSocketPort,
+    CLOSE_GRACE, ScDisconnectCause, ScEvent, ScReconnectConfig, ScTransport, WebSocketPort,
 };
 use crate::sc_frame::{ScFunction, decode_sc_message};
 use bacnet_types::error::Error;
-
-type Closes = Arc<StdMutex<Vec<Option<u16>>>>;
-
-/// A loopback socket that records the closes asked of it. Once `hang_send`
-/// or `hang_close` is set, that operation never finishes, as against a hub
-/// that stopped reading.
-struct Recorder {
-    inner: LoopbackWebSocket,
-    closes: Closes,
-    hang_send: Arc<AtomicBool>,
-    hang_close: Arc<AtomicBool>,
-}
-
-/// The test's handles on a [`Recorder`].
-struct Probe {
-    hub: LoopbackWebSocket,
-    closes: Closes,
-    hang_send: Arc<AtomicBool>,
-    hang_close: Arc<AtomicBool>,
-}
-
-impl Probe {
-    fn closes(&self) -> Vec<Option<u16>> {
-        self.closes.lock().unwrap().clone()
-    }
-}
-
-fn recorder() -> (Recorder, Probe) {
-    let (inner, hub) = LoopbackWebSocket::pair();
-    let closes = Closes::default();
-    let (hang_send, hang_close) = (Arc::default(), Arc::default());
-    let probe = Probe {
-        hub,
-        closes: closes.clone(),
-        hang_send: Arc::clone(&hang_send),
-        hang_close: Arc::clone(&hang_close),
-    };
-    let socket = Recorder {
-        inner,
-        closes,
-        hang_send,
-        hang_close,
-    };
-    (socket, probe)
-}
-
-impl WebSocketPort for Recorder {
-    async fn send(&self, data: &[u8]) -> Result<(), Error> {
-        if self.hang_send.load(Ordering::Acquire) {
-            pending::<()>().await;
-        }
-        self.inner.send(data).await
-    }
-
-    async fn recv(&self) -> Result<Vec<u8>, Error> {
-        self.inner.recv().await
-    }
-
-    async fn close(&self, status: Option<u16>) -> Result<(), Error> {
-        self.closes.lock().unwrap().push(status);
-        if self.hang_close.load(Ordering::Acquire) {
-            pending::<()>().await;
-        }
-        Ok(())
-    }
-}
 
 const NODE_VMAC: [u8; 6] = [0x01; 6];
 
@@ -108,17 +41,23 @@ async fn started(transport: &mut ScTransport<Recorder>, probe: &Probe) {
     let _rx = started.unwrap();
 }
 
-/// `stop` spends at most its send budget against a hub that reads nothing,
-/// and at most the close grace when only the close stalls. Either way it
-/// asks for the close with 1000.
+/// `stop` spends at most its send budget against a hub that reads nothing:
+/// a Disconnect-Request that never goes out, or one the hub never answers
+/// (the close grace) followed by a close that never goes out. A hub that
+/// only stays silent costs the close grace. Each time `stop` asks for the
+/// close with 1000.
 #[tokio::test(start_paused = true)]
 async fn stop_is_bounded_against_a_hub_that_stopped_reading() {
-    for (hang_send, bound) in [(true, STOP_SEND_BUDGET), (false, CLOSE_GRACE)] {
+    for (hang_send, hang_close, bound) in [
+        (true, true, STOP_SEND_BUDGET),
+        (false, true, STOP_SEND_BUDGET),
+        (false, false, CLOSE_GRACE),
+    ] {
         let (socket, probe) = recorder();
         let mut transport = ScTransport::new(socket, NODE_VMAC).with_device_uuid([1; 16]);
         started(&mut transport, &probe).await;
         probe.hang_send.store(hang_send, Ordering::Release);
-        probe.hang_close.store(true, Ordering::Release);
+        probe.hang_close.store(hang_close, Ordering::Release);
         let began = Instant::now();
         tokio::time::timeout(Duration::from_secs(60), transport.stop())
             .await
@@ -127,7 +66,7 @@ async fn stop_is_bounded_against_a_hub_that_stopped_reading() {
         let took = began.elapsed();
         assert!(
             took >= bound && took < bound + Duration::from_millis(5),
-            "hang_send={hang_send}: {took:?}"
+            "hang_send={hang_send} hang_close={hang_close}: {took:?}"
         );
         assert_eq!(probe.closes(), [Some(1000)], "hang_send={hang_send}");
     }
@@ -248,8 +187,9 @@ async fn the_first_connect_and_a_primary_restore_close_the_sockets_they_give_up(
                 decode_sc_message(&leave).unwrap().function,
                 ScFunction::DisconnectRequest
             );
-            until("the failover socket's close", || async {
-                !failover_probe.closes.lock().unwrap().is_empty()
+            // The failover hub never answers: the close follows the grace.
+            eventually("the failover socket's close", || {
+                !failover_probe.closes().is_empty()
             })
             .await;
             assert_eq!(failover_probe.closes(), [Some(1000)]);
@@ -371,15 +311,76 @@ async fn an_unanswered_failover_after_reconnect_exhaustion_is_closed() {
         .await
         .expect("no failover dial")
         .unwrap();
-    // The close comes after the connect wait, so step the paused clock.
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while failover.closes().is_empty() {
-        assert!(
-            Instant::now() < deadline,
-            "the failover socket was not closed"
-        );
-        tokio::time::sleep(Duration::from_millis(1)).await;
-    }
+    eventually("the failover socket's close", || {
+        !failover.closes().is_empty()
+    })
+    .await;
     assert_eq!(failover.closes(), [None]);
+    transport.stop().await.unwrap();
+}
+
+/// A connector whose sockets reach hubs that never answer; each dialled
+/// socket's probe goes to the test, which keeps the hub end open.
+fn silent_connector(
+    dialled: tokio::sync::mpsc::UnboundedSender<Probe>,
+) -> impl Fn() -> std::future::Ready<Result<Recorder, Error>> + Send + Sync + 'static {
+    move || {
+        let (socket, probe) = recorder();
+        let _ = dialled.send(probe);
+        std::future::ready(Ok(socket))
+    }
+}
+
+/// A socket a reconnect dials afresh, and whose Connect-Request goes
+/// unanswered, is given up with a close that has no status, as the first
+/// connection's is. Here the hub stops answering heartbeats, then every
+/// redial.
+#[tokio::test(start_paused = true)]
+async fn an_unanswered_reconnect_dial_is_closed_without_a_status() {
+    let (socket, probe) = recorder();
+    let (dialled_tx, mut dialled) = tokio::sync::mpsc::unbounded_channel();
+    let mut transport = ScTransport::new(socket, NODE_VMAC)
+        .with_device_uuid([1; 16])
+        .with_connect_timeout_ms(100)
+        .with_test_heartbeat_timing_ms(100, 300)
+        .with_reconnect(reconnect())
+        .with_connector(silent_connector(dialled_tx));
+    started(&mut transport, &probe).await;
+    let redial = tokio::time::timeout(Duration::from_secs(5), dialled.recv())
+        .await
+        .expect("no redial")
+        .unwrap();
+    eventually("the redial's close", || !redial.closes().is_empty()).await;
+    assert_eq!(redial.closes(), [None]);
+    transport.stop().await.unwrap();
+}
+
+/// So is a socket a primary restore dials afresh: on the failover hub,
+/// each restore dial goes unanswered.
+#[tokio::test(start_paused = true)]
+async fn an_unanswered_restore_dial_is_closed_without_a_status() {
+    let (primary, primary_probe) = recorder();
+    let (failover, failover_probe) = recorder();
+    let (dialled_tx, mut dialled) = tokio::sync::mpsc::unbounded_channel();
+    let mut transport = ScTransport::new(primary, NODE_VMAC)
+        .with_device_uuid([1; 16])
+        .with_connect_timeout_ms(100)
+        .with_heartbeat_interval_ms(5_000)
+        .with_reconnect(reconnect())
+        .with_connector(silent_connector(dialled_tx))
+        .with_failover(failover);
+    let (started, ()) = tokio::join!(
+        transport.start(),
+        hub_accept(&failover_probe.hub, [0x20; 6])
+    );
+    let _rx = started.unwrap();
+    assert_eq!(primary_probe.closes(), [None]);
+    let restore = tokio::time::timeout(Duration::from_secs(5), dialled.recv())
+        .await
+        .expect("no restore dial")
+        .unwrap();
+    eventually("the restore dial's close", || !restore.closes().is_empty()).await;
+    assert_eq!(restore.closes(), [None]);
+    assert_eq!(failover_probe.closes(), []);
     transport.stop().await.unwrap();
 }

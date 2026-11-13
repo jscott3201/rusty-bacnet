@@ -56,15 +56,18 @@ impl<W: WebSocketPort> ScTransport<W> {
         Ok(())
     }
 
-    /// The orderly end of the hub connection: a Disconnect-Request when
-    /// connected, then a close with 1000 (Annex AB.7.5.5), all before
-    /// `budget`. Neither the Disconnect-ACK nor the answering close is
-    /// awaited. The close also goes out when no Disconnect-Request does, as
-    /// mid-reconnect, so the hub learns the socket is done with.
+    /// The orderly end of the hub connection, all before `budget`: a
+    /// Disconnect-Request when connected, a wait of at most the close grace
+    /// for its Disconnect-ACK (or NAK), which the receive task reads, then a
+    /// close with 1000, as the requester does in Annex AB.6.2.2. The
+    /// answering close is not awaited. The close also goes out when no
+    /// Disconnect-Request does, as mid-reconnect, so the hub learns the
+    /// socket is done with.
     async fn say_goodbye_to_hub(&self, budget: tokio::time::Instant) {
         let (Some(ws), Some(conn)) = (&self.ws_shared, &self.connection) else {
             return;
         };
+        let mut states = self.state_tx.subscribe();
         let (ws, disconnect_msg) = {
             let ws = ws.lock().await;
             let mut c = conn.lock().await;
@@ -77,7 +80,12 @@ impl<W: WebSocketPort> ScTransport<W> {
         if let Some(msg) = disconnect_msg {
             let mut buf = BytesMut::new();
             encode_sc_message(&mut buf, &msg);
-            let _ = tokio::time::timeout_at(budget, ws.send(&buf)).await;
+            let sent = tokio::time::timeout_at(budget, ws.send(&buf)).await;
+            if matches!(sent, Ok(Ok(()))) && ws.has_close_frame() {
+                let answered = states.wait_for(|state| *state == ScConnectionState::Disconnected);
+                let wait = budget.min(tokio::time::Instant::now() + super::CLOSE_GRACE);
+                let _ = tokio::time::timeout_at(wait, answered).await;
+            }
         }
         let grace = budget.min(tokio::time::Instant::now() + super::CLOSE_GRACE);
         let _ = tokio::time::timeout_at(grace, ws.close(Some(super::CLOSE_NORMAL))).await;
@@ -142,3 +150,7 @@ mod close_wire_tests;
 #[cfg(test)]
 #[path = "close_rule_tests.rs"]
 mod close_rule_tests;
+
+#[cfg(test)]
+#[path = "disconnect_wait_tests.rs"]
+mod disconnect_wait_tests;

@@ -12,13 +12,13 @@ use tokio::task::JoinHandle;
 use tokio::time::{Instant, Interval, MissedTickBehavior};
 use tracing::warn;
 
-use crate::sc_frame::{ScMessage, encode_sc_message};
+use crate::sc_frame::{ScFunction, ScMessage, encode_sc_message};
 
 use super::{
     HubLimits, ScActiveHub, ScConnection, ScConnectionState, ScTransport, TappedSocket,
     WebSocketConnector, WebSocketPort,
     connector::{dial_connector, dial_failover_ws},
-    handshake::{close_unanswered, perform_handshake},
+    handshake::{close_failed_connect, perform_handshake},
     observability::ScObserver,
 };
 
@@ -37,11 +37,11 @@ impl<W: WebSocketPort> ScTransport<W> {
     /// that fails and the failover hub may be tried, on the failover hub.
     /// Returns the connected socket and its hub, or the initial hub's error.
     ///
-    /// A socket whose Connect-Request went unanswered and that the
-    /// transport gives up gets a close with no status (#2520). The primary
-    /// socket stays open after a failover only when a primary restore would
-    /// try the Connect-Request on it again, which it does with reconnect on
-    /// and no primary connector.
+    /// A socket whose Connect exchange failed and that the transport gives
+    /// up gets the close for how it failed (#2520, `close_failed_connect`).
+    /// The primary socket stays open after a failover only when a primary
+    /// restore would try the Connect-Request on it again, which it does with
+    /// reconnect on and no primary connector.
     pub(super) async fn first_connect(
         &mut self,
         sockets: FirstSockets<'_, W>,
@@ -69,7 +69,7 @@ impl<W: WebSocketPort> ScTransport<W> {
         };
         let Some(failover) = failover else {
             self.local_vmac = conn.lock().await.local_vmac;
-            close_unanswered(&**primary, &primary_err).await;
+            close_failed_connect(&**primary, &primary_err).await;
             return Err(primary_err);
         };
         tracing::debug!("BACnet/SC primary connect failed, attempting failover");
@@ -90,14 +90,14 @@ impl<W: WebSocketPort> ScTransport<W> {
                     ScActiveHub::Primary,
                     connectors,
                 ) {
-                    close_unanswered(&**primary, &primary_err).await;
+                    close_failed_connect(&**primary, &primary_err).await;
                 }
                 Ok((failover, ScActiveHub::Failover))
             }
             Err(error) => {
                 observer.connect_failed(ScActiveHub::Failover, &error);
-                close_unanswered(&*failover, &error).await;
-                close_unanswered(&**primary, &primary_err).await;
+                close_failed_connect(&*failover, &error).await;
+                close_failed_connect(&**primary, &primary_err).await;
                 Err(primary_err)
             }
         }
@@ -124,6 +124,8 @@ pub(super) fn restore_interval(period: Duration) -> Interval {
 pub(super) struct PrimaryCandidate<W> {
     socket: Result<Arc<W>, Error>,
     connection: ScConnection,
+    /// Dialled for this attempt, not the kept primary socket.
+    fresh: bool,
 }
 
 pub(super) type PrimaryAttempt<W> = Pin<Box<dyn Future<Output = PrimaryCandidate<W>> + Send>>;
@@ -151,7 +153,7 @@ pub(super) async fn prepare_primary_restore<W: WebSocketPort>(
                 // A freshly dialled socket is given up; the kept primary
                 // is tried again at the next restore tick (#2520).
                 if fresh {
-                    close_unanswered(&*ws, &error).await;
+                    close_failed_connect(&*ws, &error).await;
                 }
                 Err(error)
             }
@@ -159,7 +161,11 @@ pub(super) async fn prepare_primary_restore<W: WebSocketPort>(
         Err(e) => Err(e),
     };
     let connection = probe.lock().await.clone();
-    PrimaryCandidate { socket, connection }
+    PrimaryCandidate {
+        socket,
+        connection,
+        fresh,
+    }
 }
 
 /// Live publication belongs exclusively to the receive loop.
@@ -183,6 +189,12 @@ pub(super) async fn publish_primary_restore<W: WebSocketPort>(
     // Stop can seal the live state while a candidate is finishing. Never
     // publish its success or failed-probe retry metadata after that boundary.
     if c.state != ScConnectionState::Connected || !Arc::ptr_eq(&current, current_ws) {
+        drop((c, current));
+        // A connected candidate dialled for this attempt is given up: an
+        // orderly end, 1000 (#2520). The kept primary stays open.
+        if let (Ok(ws), true) = (&candidate.socket, candidate.fresh) {
+            super::close_within_grace(&**ws, Some(super::CLOSE_NORMAL)).await;
+        }
         return Ok(None);
     }
     let restored_ws = match candidate.socket {
@@ -220,8 +232,9 @@ pub(super) async fn publish_primary_restore<W: WebSocketPort>(
 }
 
 /// Leave the failover hub once the primary is back: a Disconnect-Request,
-/// then a close with 1000, an orderly end (Annex AB.7.5.5, #2520). Neither
-/// the Disconnect-ACK nor the answering close is awaited.
+/// a wait of at most the close grace for its Disconnect-ACK (or NAK), then a
+/// close with 1000, as the requester does in Annex AB.6.2.2 (#2520). Nothing
+/// else reads this socket now. The answering close is not awaited.
 async fn send_disconnect_request<W: WebSocketPort>(
     ws: &W,
     disconnect_msg: Option<ScMessage>,
@@ -231,6 +244,9 @@ async fn send_disconnect_request<W: WebSocketPort>(
         let mut buf = BytesMut::new();
         encode_sc_message(&mut buf, &msg);
         match tokio::time::timeout(Duration::from_millis(timeout_ms), ws.send(&buf)).await {
+            Ok(Ok(())) if ws.has_close_frame() => {
+                let _ = tokio::time::timeout(super::CLOSE_GRACE, disconnect_answered(ws)).await;
+            }
             Ok(Ok(())) => {}
             Ok(Err(e)) => {
                 warn!(%e, "BACnet/SC failover disconnect request failed during primary restore");
@@ -241,6 +257,19 @@ async fn send_disconnect_request<W: WebSocketPort>(
         }
     }
     super::close_within_grace(ws, Some(super::CLOSE_NORMAL)).await;
+}
+
+/// Read until the peer answers a Disconnect-Request (an ACK, or a
+/// BVLC-Result, a NAK) or the socket fails.
+pub(super) async fn disconnect_answered<W: WebSocketPort>(ws: &W) {
+    while let Ok(data) = ws.recv().await {
+        let answer = crate::sc_frame::decode_sc_message(&data);
+        if answer
+            .is_ok_and(|m| matches!(m.function, ScFunction::DisconnectAck | ScFunction::Result))
+        {
+            return;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -277,6 +306,7 @@ mod tests {
                     Err(Error::Encoding("refused probe".into()))
                 },
                 connection: probe,
+                fresh: true,
             };
             let result = publish_primary_restore(
                 &PrimaryRestoreContext {

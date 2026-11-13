@@ -748,27 +748,40 @@ impl<W: WebSocketPort> DirectShared<W> {
                 super::handshake::perform_handshake(&ws, &probe, None, connect_timeout_ms.max(1))
                     .await
             {
-                super::handshake::close_unanswered(&ws, &error).await;
+                super::handshake::close_failed_connect(&ws, &error).await;
                 self.note_direct_failure(&uri).await;
                 continue;
             }
-            let (limits, local_limits, uuid, local_uuid, local_vmac) = {
+            // A connected socket this dial gives up from here on ends in
+            // order: Disconnect-Request, then close 1000 (#2520).
+            let goodbye = super::direct_pool::LinkEnd::Retired;
+            let identity = {
                 let p = probe.lock().await;
-                if p.hub_vmac != Some(dest) {
-                    continue;
-                }
-                (
-                    (p.hub_max_bvlc_length, p.hub_max_npdu_length),
-                    (p.max_bvlc_length, p.max_apdu_length),
-                    p.hub_device_uuid.ok_or(Failure::Unavailable)?,
-                    p.device_uuid,
-                    p.local_vmac,
-                )
+                (p.hub_vmac == Some(dest)).then(|| {
+                    p.hub_device_uuid.map(|uuid| {
+                        (
+                            (p.hub_max_bvlc_length, p.hub_max_npdu_length),
+                            (p.max_bvlc_length, p.max_apdu_length),
+                            uuid,
+                            p.device_uuid,
+                            p.local_vmac,
+                        )
+                    })
+                })
             };
-            let pooled = {
+            let Some(identity) = identity else {
+                goodbye.say_goodbye(&ws, wait).await;
+                continue;
+            };
+            let Some((limits, local_limits, uuid, local_uuid, local_vmac)) = identity else {
+                goodbye.say_goodbye(&ws, wait).await;
+                return Err(Failure::Unavailable);
+            };
+            let mut socket = Some(ws);
+            let pooled: Result<PooledDirect, Failure> = 'pooled: {
                 let mut pool = self.pool.lock().unwrap();
                 if !self.enabled.load(Ordering::Acquire) {
-                    return Err(Failure::Unavailable);
+                    break 'pooled Err(Failure::Unavailable);
                 }
                 pool.prune(Instant::now());
                 let mut reservation = self.membership.reserve(
@@ -790,12 +803,13 @@ impl<W: WebSocketPort> DirectShared<W> {
                         DIRECT_POOL_MAX_ENTRIES,
                     );
                 }
-                let member = reservation
-                    .map_err(|_| Failure::Unavailable)?
-                    .commit_with_limits(limits, wait);
+                let Ok(reservation) = reservation else {
+                    break 'pooled Err(Failure::Unavailable);
+                };
+                let member = reservation.commit_with_limits(limits, wait);
                 pool.prune(Instant::now());
                 let (pooled, worker) = PooledDirect::start(
-                    ws,
+                    socket.take().expect("the socket goes to its worker once"),
                     member,
                     physical,
                     #[cfg(feature = "sc-tls")]
@@ -807,7 +821,15 @@ impl<W: WebSocketPort> DirectShared<W> {
                 workers.retain(|task| !task.is_finished());
                 workers.push(worker);
                 pool.insert(dest, pooled.clone());
-                pooled
+                Ok(pooled)
+            };
+            let pooled = match (pooled, socket) {
+                (Ok(pooled), _) => pooled,
+                (Err(failure), Some(ws)) => {
+                    goodbye.say_goodbye(&ws, wait).await;
+                    return Err(failure);
+                }
+                (Err(failure), None) => return Err(failure),
             };
             let result = pooled.member.egress.send_npdu(npdu, attributes).await;
             if result.is_ok() {
@@ -828,6 +850,10 @@ impl<W: WebSocketPort> Drop for DirectShared<W> {
 #[cfg(all(test, feature = "sc-tls"))]
 #[path = "direct_membership_tls_tests.rs"]
 mod direct_membership_tls_tests;
+
+#[cfg(test)]
+#[path = "direct_dial_close_tests.rs"]
+mod direct_dial_close_tests;
 
 #[cfg(test)]
 #[path = "direct_discovery_pending_tests.rs"]

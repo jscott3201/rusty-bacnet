@@ -5,8 +5,8 @@ use futures_util::{SinkExt, StreamExt};
 pub(super) trait DirectWs {
     type Read: DirectWsRead;
     async fn send_data(&mut self, data: &[u8]) -> Result<(), ()>;
-    /// Send a close frame with status `code` (1000 or 1003, #2520).
-    async fn send_close(&mut self, code: u16) -> Result<(), ()>;
+    /// Send a close frame with `status`, or one with no status (#2520).
+    async fn send_close(&mut self, status: Option<u16>) -> Result<(), ()>;
 }
 
 pub(super) enum DirectFrame {
@@ -17,12 +17,27 @@ pub(super) enum DirectFrame {
     NonBinary,
 }
 
-/// Answer a data frame that is not binary with a 1003 close, within the
-/// close grace, as the hub does (Annex AB.7.5.3, #2520). The caller then
-/// drops the connection.
+/// Close with `status` within the close grace; the caller then drops the
+/// connection (#2520). 1000 ends it in order, and no status marks the
+/// peer's fault, as the hub's closes do.
+pub(super) async fn close_with<W: DirectWs>(write: &mut W, status: Option<u16>) {
+    let _ = tokio::time::timeout(crate::sc::CLOSE_GRACE, write.send_close(status)).await;
+}
+
+/// Answer a data frame that is not binary with a 1003 close, as the hub
+/// does (Annex AB.7.5.3, #2520).
 pub(super) async fn refuse_non_binary<W: DirectWs>(write: &mut W) {
-    let close = write.send_close(crate::sc::CLOSE_DATA_NOT_ACCEPTED);
-    let _ = tokio::time::timeout(crate::sc::CLOSE_GRACE, close).await;
+    close_with(write, Some(crate::sc::CLOSE_DATA_NOT_ACCEPTED)).await;
+}
+
+/// Resolves once `signal` reads true. A sender gone without setting it
+/// never raises it.
+pub(super) async fn raised(signal: &mut tokio::sync::watch::Receiver<bool>) {
+    while !*signal.borrow_and_update() {
+        if signal.changed().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    }
 }
 
 pub(super) trait DirectWsRead {
@@ -58,16 +73,15 @@ impl DirectWs
     /// 1000 when the acceptor ends the connection on purpose (an idle
     /// timeout, a retirement, an answered Disconnect-Request), as the hub's
     /// orderly closes do (#2463), and 1003 after a non-binary frame (#2520).
-    async fn send_close(&mut self, code: u16) -> Result<(), ()> {
+    async fn send_close(&mut self, status: Option<u16>) -> Result<(), ()> {
         use tokio_tungstenite::tungstenite::protocol::CloseFrame;
-        self.send(tokio_tungstenite::tungstenite::Message::Close(Some(
-            CloseFrame {
-                code: code.into(),
-                reason: "".into(),
-            },
-        )))
-        .await
-        .map_err(|_| ())
+        let frame = status.map(|code| CloseFrame {
+            code: code.into(),
+            reason: "".into(),
+        });
+        self.send(tokio_tungstenite::tungstenite::Message::Close(frame))
+            .await
+            .map_err(|_| ())
     }
 }
 

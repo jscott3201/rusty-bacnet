@@ -11,7 +11,7 @@ use super::direct_socket::{DirectFrame, DirectSocket};
 use super::heartbeat;
 #[cfg(feature = "sc-tls")]
 use super::npdu_admission::DirectPeer;
-use super::{CLOSE_NORMAL, WebSocketPort, close_within_grace};
+use super::{CLOSE_GRACE, CLOSE_NORMAL, WebSocketPort, close_within_grace};
 use crate::sc_frame::{
     ControlRecipient, ScFunction, ScMessage, Vmac, decode_sc_message, encode_sc_message,
     validate_control,
@@ -318,10 +318,10 @@ impl PooledDirect {
 }
 /// How an outbound direct link ended, which decides what goes out before
 /// the socket is dropped (Annex AB.6.2.2, #2520). Each send is bounded.
-enum LinkEnd {
+pub(super) enum LinkEnd {
     /// This node ended it (a stop, a replacement, the idle TTL, a write
-    /// that failed or was cut short): Disconnect-Request, then close 1000.
-    /// The Disconnect-ACK is not awaited.
+    /// that failed or was cut short): Disconnect-Request, a wait of at most
+    /// the close grace for its answer, then close 1000.
     Retired,
     /// After answering the peer's Disconnect-Request: close 1000.
     Answered,
@@ -336,12 +336,26 @@ enum LinkEnd {
 }
 
 impl LinkEnd {
-    async fn say_goodbye<W: WebSocketPort>(self, ws: &DirectSocket<W>, wait: std::time::Duration) {
+    pub(super) async fn say_goodbye<W: WebSocketPort>(
+        self,
+        ws: &DirectSocket<W>,
+        wait: std::time::Duration,
+    ) {
         let status = match self {
             Self::Retired => {
                 let mut bytes = bytes::BytesMut::new();
                 encode_sc_message(&mut bytes, &disconnect_request());
-                let _ = tokio::time::timeout(wait, ws.send(&bytes)).await;
+                let sent = tokio::time::timeout(wait, ws.send(&bytes)).await;
+                if matches!(sent, Ok(Ok(()))) && ws.has_close_frame() {
+                    let answered = async {
+                        while let Ok(frame) = ws.next_frame().await {
+                            if answers_disconnect(&frame) {
+                                return;
+                            }
+                        }
+                    };
+                    let _ = tokio::time::timeout(wait.min(CLOSE_GRACE), answered).await;
+                }
                 Some(CLOSE_NORMAL)
             }
             Self::Answered => Some(CLOSE_NORMAL),
@@ -354,6 +368,17 @@ impl LinkEnd {
             Self::Lost => return,
         };
         close_within_grace(ws, status).await;
+    }
+}
+
+/// A Disconnect-ACK, or a BVLC-Result (a NAK), the peer's answer to this
+/// node's Disconnect-Request.
+fn answers_disconnect(frame: &DirectFrame) -> bool {
+    match frame {
+        DirectFrame::Binary(wire) => decode_sc_message(wire)
+            .is_ok_and(|m| matches!(m.function, ScFunction::DisconnectAck | ScFunction::Result)),
+        #[cfg(feature = "sc-tls")]
+        _ => false,
     }
 }
 

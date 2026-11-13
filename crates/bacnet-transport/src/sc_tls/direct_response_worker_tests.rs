@@ -43,7 +43,7 @@ impl DirectWs for Write {
         }
         Ok(())
     }
-    async fn send_close(&mut self, _code: u16) -> Result<(), ()> {
+    async fn send_close(&mut self, _status: Option<u16>) -> Result<(), ()> {
         Ok(())
     }
 }
@@ -341,7 +341,7 @@ impl DirectWs for Recorder {
             .push(decode_sc_message(data).unwrap());
         Ok(())
     }
-    async fn send_close(&mut self, _code: u16) -> Result<(), ()> {
+    async fn send_close(&mut self, _status: Option<u16>) -> Result<(), ()> {
         Ok(())
     }
 }

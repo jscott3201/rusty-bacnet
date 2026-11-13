@@ -232,7 +232,7 @@ impl<W: WebSocketPort> Recovery<'_, W> {
                 }
                 Err(e) => {
                     self.observer.connect_failed(ScActiveHub::Failover, &e);
-                    handshake::close_unanswered(&*failover, &e).await;
+                    handshake::close_failed_connect(&*failover, &e).await;
                     absorb_failed_connect_probe(self.conn, &probe_conn).await;
                     // The terminal exhaustion notice below reports suppression.
                     warn!(%e, "SC failover connection failed");
@@ -328,7 +328,7 @@ impl<W: WebSocketPort> Recovery<'_, W> {
             Err(e) => {
                 self.observer.connect_failed(target, &e);
                 if fresh {
-                    handshake::close_unanswered(&*ws, &e).await;
+                    handshake::close_failed_connect(&*ws, &e).await;
                 }
                 absorb_failed_connect_probe(self.conn, &probe_conn).await;
                 if !self.conn.lock().await.connect_retry_allowed {

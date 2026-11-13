@@ -1686,20 +1686,27 @@ receiver subscribed that way (#1909).
 
 The node closes a WebSocket it is done with (#2520), as Annex AB.7.5.5 asks
 of an intentional close. `stop()` sends the Disconnect-Request when
-connected, then a close with status 1000, and drops the socket without
-waiting for the Disconnect-ACK or the answering close. Those sends, and each
+connected, waits up to one second for its Disconnect-ACK (or NAK), as the
+requester does in AB.6.2.2, then sends a close with status 1000 and drops the
+socket without waiting for the answering close. A hub that closes instead of
+acknowledging still leaves `LocalClose` as the cause. Those steps, and each
 outbound direct link's own, share a two-second budget, so a hub that never
 reads holds `stop()` up for two seconds at most; the close itself gets at most
-one second wherever it is sent. The node closes with 1000 after answering the
-hub's Disconnect-Request (AB.6.2.2) and when a primary restore leaves the
-failover hub. A hub that leaves a heartbeat or the Connect-Request unanswered
-gets a close with no status, the peer's fault. The one socket that gets no
-close is a lost hub's own when recovery will send its next Connect-Request on
-it, as it does with reconnect on and no connector for that hub. `abort()` and
-dropping the transport cannot wait, so they send nothing.
+one second wherever it is sent. Leaving the failover hub after a primary
+restore waits for the ACK the same way. The node closes with 1000 after
+answering the hub's Disconnect-Request, after a BVLC-Result NAK that ends the
+connection, and after a Connect-Request NAK. A hub that leaves a heartbeat or
+the Connect-Request unanswered, or answers it with a malformed or unexpected
+reply or sends a malformed BVLC-Result, gets a close with no status, the
+peer's fault. The one socket that gets no close is a lost hub's own when
+recovery will send its next Connect-Request on it, as it does with reconnect
+on and no connector for that hub. `abort()` and dropping the transport cannot
+wait, so they send nothing.
 `WebSocketPort::close(status)` is the hook: `TlsWebSocket` writes the frame,
 and the default, for an in-memory port such as `LoopbackWebSocket`, sends
-nothing.
+nothing. `WebSocketPort::has_close_frame()` says which: the ACK wait applies
+only to a port that has a close frame (`false` by default), so a custom port
+that implements `close` should return `true` there too.
 
 `ScTransport::connection_status()` returns an `ScLinkStatus` snapshot: the
 connection state, the active hub, the hub VMAC from Connect-Accept, the
@@ -1744,9 +1751,15 @@ otherwise a distinct valid Connect at accepted capacity receives the local
 `RESOURCES/OTHER` NAK. Saturation does not guarantee reconnect admission.
 
 Direct links close as hub connections do (#2520). An outbound link closes
-with 1000 after its Disconnect-Request, which `stop()` sends too, or after
-answering the peer's, and with no status after an unanswered heartbeat. The
-acceptor closes with 1000 after answering a Disconnect-Request, and
+with 1000 after its Disconnect-Request, which `stop()` sends too, once the
+peer answers or one second has passed, or after answering the peer's, and
+with no status after an unanswered heartbeat. A dial gives up a socket as the
+hub connection does: no status after an unanswered Connect-Request, 1000
+after a NAK, and a Disconnect-Request then 1000 when the connected peer turns
+out not to be the node dialled. The acceptor closes with 1000 after answering
+a Disconnect-Request, after a refusal NAK and when the connect wait runs out,
+and with no status after a malformed Connect-Request (its NAK first), a first
+frame that is not a Connect-Request, or one too long or undecodable.
 `DirectListener::stop()` sends each established peer a Disconnect-Request and
 a close with 1000 within one second; a peer still in its handshake is
 dropped. A data frame that is not binary ends a direct link, either side and

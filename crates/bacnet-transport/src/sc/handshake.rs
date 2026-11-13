@@ -39,13 +39,28 @@ fn malformed_bvlc_result_error(error: Error) -> Error {
 mod tests;
 
 /// Close a socket the transport gives up after [`perform_handshake`]
-/// failed, when the reason was the connect wait running out: the peer never
-/// answered, so the close carries no status, as the hub's does for a peer's
-/// fault (Annex AB.6.2.2, #2520). Bounded by the close grace. A socket that
-/// failed any other way is left to its owner, which drops it.
-pub(super) async fn close_unanswered<W: WebSocketPort>(ws: &W, error: &Error) {
-    if matches!(error, Error::Timeout(_)) {
-        super::close_within_grace(ws, None).await;
+/// failed, as the initiator does on leaving AWAITING_ACCEPT (Annex
+/// AB.6.2.2, #2520), within the close grace. See [`failed_connect_close`].
+pub(super) async fn close_failed_connect<W: WebSocketPort>(ws: &W, error: &Error) {
+    if let Some(status) = failed_connect_close(error) {
+        super::close_within_grace(ws, status).await;
+    }
+}
+
+/// The close for a failed Connect exchange: 1000 after the hub refused it
+/// with a NAK, an orderly end; no status when the reply never came, did not
+/// decode or made no sense, the peer's fault as the hub reads one. `None`
+/// when sending or receiving failed: the socket is gone already.
+fn failed_connect_close(error: &Error) -> Option<Option<u16>> {
+    if matches!(error, Error::Timeout(_) | Error::Decoding(_)) {
+        return Some(None);
+    }
+    match ScConnectError::from_error(error)? {
+        ScConnectError::HandshakeNak { .. } => Some(Some(super::CLOSE_NORMAL)),
+        ScConnectError::MalformedBvlcResult { .. }
+        | ScConnectError::UnexpectedResultAck { .. }
+        | ScConnectError::ConnectAcceptMismatch => Some(None),
+        _ => None,
     }
 }
 

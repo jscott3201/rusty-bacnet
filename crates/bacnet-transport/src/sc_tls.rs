@@ -370,16 +370,16 @@ impl WebSocketPort for TlsWebSocket {
                     continue;
                 }
                 Some(Ok(_)) => {
-                    // Non-binary data frames: close with 1003
-                    let mut w = self.write.lock().await;
-                    let _ = w
-                        .send(Message::Close(Some(
-                            tokio_tungstenite::tungstenite::protocol::CloseFrame {
-                                code: tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Unsupported,
-                                reason: "BACnet/SC requires binary frames".into(),
-                            },
-                        )))
-                        .await;
+                    // Non-binary data frames: close with 1003, within the
+                    // close grace as every close this node sends (#2520).
+                    let close = Message::Close(Some(
+                        tokio_tungstenite::tungstenite::protocol::CloseFrame {
+                            code: crate::sc::CLOSE_DATA_NOT_ACCEPTED.into(),
+                            reason: "BACnet/SC requires binary frames".into(),
+                        },
+                    ));
+                    let send = async { self.write.lock().await.send(close).await };
+                    let _ = tokio::time::timeout(crate::sc::CLOSE_GRACE, send).await;
                     return Err(ScConnectError::websocket(
                         ScWebSocketErrorKind::NonBinaryFrame,
                         "non-binary WebSocket frame received",
@@ -407,6 +407,10 @@ impl WebSocketPort for TlsWebSocket {
                 }
             }
         }
+    }
+
+    fn has_close_frame(&self) -> bool {
+        true
     }
 
     /// Write the close frame and return; the transport drops the socket next,

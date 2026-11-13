@@ -163,9 +163,10 @@ async fn connected(
     events
 }
 
-/// `stop` sends a Disconnect-Request, then a close with 1000, and returns
-/// at once against a hub that reads nothing until it has: neither the
-/// Disconnect-ACK nor the answering close is awaited.
+/// `stop` sends a Disconnect-Request, then a close with 1000, within its
+/// budget against a hub that reads nothing until it has: the
+/// Disconnect-ACK is awaited for the close grace only, and the answering
+/// close not at all.
 #[tokio::test]
 async fn stop_sends_a_disconnect_request_then_a_close_with_1000() {
     let hub = RawPeer::bind().await;
@@ -379,4 +380,122 @@ async fn a_text_frame_before_the_direct_connect_accept_is_closed_with_1003() {
         "{error}"
     );
     peer.await.unwrap();
+}
+
+/// The node's own `Disconnected` event.
+async fn disconnected(events: &mut tokio::sync::broadcast::Receiver<ScEvent>) -> ScDisconnectCause {
+    loop {
+        match tokio::time::timeout(WAIT, events.recv()).await.unwrap() {
+            Ok(ScEvent::Disconnected { cause, .. }) => return cause,
+            Ok(_) => continue,
+            Err(error) => panic!("no Disconnected event: {error}"),
+        }
+    }
+}
+
+/// How a hub answers the Disconnect-Request of a stopping node.
+#[derive(Debug, Clone, Copy)]
+enum StopAnswer {
+    /// A Disconnect-ACK, then it reads the node's close.
+    Ack,
+    /// A close of its own and no ACK, as some WebSocket layers answer.
+    HangUp,
+}
+
+/// However the hub answers, `stop` waits for that answer before it closes,
+/// and the node reports its own close, not the hub's (#2520).
+#[tokio::test]
+async fn a_stopping_node_reports_a_local_close_however_the_hub_answers() {
+    for answer in [StopAnswer::Ack, StopAnswer::HangUp] {
+        let hub = RawPeer::bind().await;
+        let (url, tls) = (hub.url(), hub.node_tls());
+        let hub = tokio::spawn(async move {
+            let mut ws = hub.accept(BACNET_SC_HUB_SUBPROTOCOL).await;
+            accept_connect(&mut ws).await;
+            let request = next_bvlc(&mut ws).await;
+            assert_eq!(request.function, ScFunction::DisconnectRequest);
+            match answer {
+                StopAnswer::Ack => {
+                    let ack = bare(ScFunction::DisconnectAck, request.message_id, Vec::new());
+                    send(&mut ws, &ack).await;
+                    assert_eq!(next(&mut ws).await, closed(Some(CloseCode::Normal)));
+                }
+                StopAnswer::HangUp => {
+                    let close = CloseFrame {
+                        code: CloseCode::Normal,
+                        reason: "".into(),
+                    };
+                    ws.close(Some(close)).await.unwrap();
+                    while let Some(Ok(_)) = ws.next().await {}
+                }
+            }
+        });
+        let mut transport =
+            ScTransport::new(dial(&url, tls).await, NODE_VMAC).with_device_uuid(NODE_UUID);
+        let mut events = connected(&mut transport).await;
+        let began = Instant::now();
+        transport.stop().await.unwrap();
+        assert!(began.elapsed() < crate::sc::CLOSE_GRACE, "{answer:?}");
+        assert_eq!(
+            disconnected(&mut events).await,
+            ScDisconnectCause::LocalClose,
+            "{answer:?}"
+        );
+        tokio::time::timeout(WAIT, hub).await.unwrap().unwrap();
+    }
+}
+
+/// How a hub answers the node's Connect-Request, and the close it then
+/// reads from the node: 1000 after a refusal, an orderly end, and no status
+/// after a reply that is no answer, the hub's fault (Annex AB.6.2.2).
+#[tokio::test]
+async fn a_failed_connect_exchange_closes_by_how_it_failed() {
+    use bacnet_types::enums::{ErrorClass, ErrorCode};
+    let class = ErrorClass::RESOURCES.to_raw().to_be_bytes();
+    let code = ErrorCode::OTHER.to_raw().to_be_bytes();
+    let nak = vec![0x06, 0x01, 0x00, class[0], class[1], code[0], code[1]];
+    for (reply, status) in [
+        (nak, Some(CloseCode::Normal)),
+        // A Result ACK to a Connect-Request: unexpected.
+        (vec![0x06, 0x00], None),
+        // A Result too short to decode.
+        (vec![0x06], None),
+    ] {
+        let shown = format!("{reply:02x?}");
+        let hub = RawPeer::bind().await;
+        let (url, tls) = (hub.url(), hub.node_tls());
+        let hub = tokio::spawn(async move {
+            let mut ws = hub.accept(BACNET_SC_HUB_SUBPROTOCOL).await;
+            let request = next_bvlc(&mut ws).await;
+            assert_eq!(request.function, ScFunction::ConnectRequest);
+            send(
+                &mut ws,
+                &bare(ScFunction::Result, request.message_id, reply),
+            )
+            .await;
+            next(&mut ws).await
+        });
+        let mut transport =
+            ScTransport::new(dial(&url, tls).await, NODE_VMAC).with_device_uuid(NODE_UUID);
+        let error = match tokio::time::timeout(WAIT, transport.start()).await.unwrap() {
+            Err(error) => error,
+            Ok(_) => panic!("{shown}: a refused node cannot connect"),
+        };
+        assert_eq!(
+            tokio::time::timeout(WAIT, hub).await.unwrap().unwrap(),
+            closed(status),
+            "{shown}"
+        );
+        if status.is_some() {
+            // The cause stays the NAK's class and code.
+            assert!(
+                matches!(
+                    ScDisconnectCause::from_error(&error),
+                    ScDisconnectCause::Nak { error_class, error_code, .. }
+                        if (error_class, error_code) == (ErrorClass::RESOURCES, ErrorCode::OTHER)
+                ),
+                "{error}"
+            );
+        }
+    }
 }

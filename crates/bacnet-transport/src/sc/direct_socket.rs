@@ -114,6 +114,13 @@ impl<W: WebSocketPort> WebSocketPort for DirectSocket<W> {
             Self::Verified(ws) => ws.close(status).await,
         }
     }
+    fn has_close_frame(&self) -> bool {
+        match self {
+            Self::Custom(ws) => ws.has_close_frame(),
+            #[cfg(feature = "sc-tls")]
+            Self::Verified(_) => true,
+        }
+    }
 }
 #[cfg(feature = "sc-tls")]
 impl<W: WebSocketPort> DirectSocket<W> {

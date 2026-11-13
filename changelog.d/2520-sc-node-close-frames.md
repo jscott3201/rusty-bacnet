@@ -1,7 +1,7 @@
 ---
 section: Changed
 ---
-- **Wire:** a BACnet/SC node closes the WebSockets it ends: 1000 on `stop()`,
-  after answering a Disconnect-Request and on leaving the failover hub, no
-  status when a hub or peer stops answering, and 1003 for a text frame on a
-  direct link, which the direct acceptor used to ignore (#2520).
+- **Wire:** a BACnet/SC node closes the WebSockets it ends: 1000 on `stop()`
+  (after the Disconnect-ACK, waited for up to a second), after any NAK or
+  answered Disconnect-Request, no status when a peer stops answering or
+  replies wrongly, and 1003 for a text frame on a direct link (#2520).

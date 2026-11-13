@@ -1360,9 +1360,11 @@ sends a status on every close it means (#2463): 1001 for a graceful
 shutdown and 1000 otherwise, such as for a replaced or retired node. A
 connected node still reads a graceful shutdown as `peer_close`, since the
 hub's Disconnect-Request comes first. The node closes its own end the same
-way (#2520): `stop()` sends a Disconnect-Request and then a close with 1000,
-giving a hub that never reads two seconds at most, and a hub that leaves a
-heartbeat or the Connect-Request unanswered gets a close with no status.
+way (#2520): `stop()` sends a Disconnect-Request, waits up to a second for
+its acknowledgement, then closes with 1000, giving a hub that never reads two
+seconds at most, and still reports `local_close`. A refused Connect-Request
+is closed with 1000 after the NAK, and a hub that leaves a heartbeat or the
+Connect-Request unanswered gets a close with no status.
 
 `cause_code` names the cause with an `ErrorCode` member where one applies
 (#2438): a NAK's own code, or the BACnet/SC connection code Annex AB.7.5

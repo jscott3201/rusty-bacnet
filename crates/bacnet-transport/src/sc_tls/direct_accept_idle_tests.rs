@@ -31,7 +31,7 @@ impl DirectWs for Sink {
             .push(decode_sc_message(data).unwrap().function);
         Ok(())
     }
-    async fn send_close(&mut self, _code: u16) -> Result<(), ()> {
+    async fn send_close(&mut self, _status: Option<u16>) -> Result<(), ()> {
         Ok(())
     }
 }

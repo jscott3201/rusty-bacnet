@@ -69,6 +69,10 @@ impl<W: WebSocketPort> WebSocketPort for TappedSocket<W> {
     async fn close(&self, status: Option<u16>) -> Result<(), Error> {
         self.inner.close(status).await
     }
+
+    fn has_close_frame(&self) -> bool {
+        self.inner.has_close_frame()
+    }
 }
 
 /// `connector`, with each socket it dials wrapped for `hub`.
