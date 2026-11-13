@@ -43,10 +43,19 @@ impl DirectWs
         .await
         .map_err(|_| ())
     }
+    /// Every caller ends the connection on purpose (an idle timeout or a
+    /// retirement after Disconnect-Request), so the frame says 1000, as the
+    /// hub's orderly closes do (#2463).
     async fn send_close(&mut self) -> Result<(), ()> {
-        self.send(tokio_tungstenite::tungstenite::Message::Close(None))
-            .await
-            .map_err(|_| ())
+        use tokio_tungstenite::tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
+        self.send(tokio_tungstenite::tungstenite::Message::Close(Some(
+            CloseFrame {
+                code: CloseCode::Normal,
+                reason: "".into(),
+            },
+        )))
+        .await
+        .map_err(|_| ())
     }
 }
 

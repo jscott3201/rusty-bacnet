@@ -34,10 +34,6 @@ fn connect_request_rejects_hub_vmac_as_duplicate() {
         )
     );
     assert_eq!(
-        connect_request_vmac_disposition([0x00; 6], [0x10; 6]),
-        ConnectRequestVmacDisposition::CloseReserved
-    );
-    assert_eq!(
         connect_request_vmac_disposition([0x01; 6], [0x10; 6]),
         ConnectRequestVmacDisposition::Accept
     );

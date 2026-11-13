@@ -52,9 +52,10 @@ class HubProbePolicyTests(mtls.MtlsFixture):
         self.assertNotEqual(second[2:4], first[2:4])
         wrong = ((int.from_bytes(second[2:4], "big") + 1) % 65536).to_bytes(2, "big")
         await self.send(endpoint[1], b"\x0b\0" + wrong)
-        # Expiry lands one scan after the 400 ms ack age.
-        header = await asyncio.wait_for(endpoint[0].readexactly(2), 2)
-        self.assertEqual(header[0], 0x88)
+        # Expiry lands one scan after the 400 ms ack age. A liveness
+        # retirement is an orderly close: status 1000 (#2463).
+        close = await asyncio.wait_for(endpoint[0].readexactly(4), 2)
+        self.assertEqual(close, b"\x88\x02\x03\xe8")
         self.assertEqual((await hub.status())["client_count"], 0)
         await self.stop_hub(hub)
 
@@ -79,8 +80,8 @@ class HubProbePolicyTests(mtls.MtlsFixture):
         # Silent from here: one more probe, never repeated, then retirement.
         probe = await asyncio.wait_for(self.binary(endpoint[0]), 2)
         self.assertEqual(probe[:2], b"\x0a\0")
-        header = await asyncio.wait_for(endpoint[0].readexactly(2), 5)
-        self.assertEqual(header[0], 0x88)
+        close = await asyncio.wait_for(endpoint[0].readexactly(4), 5)
+        self.assertEqual(close, b"\x88\x02\x03\xe8")  # Orderly: 1000 (#2463).
         self.assertEqual((await hub.status())["client_count"], 0)
         self.assertEqual((await hub.status())["outcomes"]["heartbeat_retirements"], 1)
         await self.stop_hub(hub)

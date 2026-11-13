@@ -100,7 +100,9 @@ class EmptyHubTests(mtls.MtlsFixture):
                 self.assertEqual(await self.binary(reader), b"\x0b\0\x66\x77")
                 await self.send(writer, b"\x08\0\x77\x88")
                 self.assertEqual(await self.binary(reader), b"\x09\0\x77\x88")
-                self.assertEqual(await asyncio.wait_for(reader.readexactly(2), 3), b"\x88\0")
+                # The hub's orderly close carries status 1000 (#2463).
+                self.assertEqual(await asyncio.wait_for(reader.readexactly(4), 3),
+                                 b"\x88\x02\x03\xe8")
         finally:
             for _, writer in connections:
                 writer.close()

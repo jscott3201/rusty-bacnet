@@ -240,6 +240,7 @@ async fn heartbeat_timeout_is_reported_with_its_cause_after_age_and_rtt() {
 /// the error class and code.
 #[tokio::test(start_paused = true)]
 async fn naks_report_their_error_class_and_code() {
+    let (logs, _guard) = crate::log_capture::LogCapture::start();
     let (client, hub) = LoopbackWebSocket::pair();
     let mut transport = ScTransport::new(client, [0x01; 6]).with_device_uuid([1; 16]);
     let mut events = transport.connection_events();
@@ -287,6 +288,15 @@ async fn naks_report_their_error_class_and_code() {
                 error_code: code,
             },
         }
+    );
+    // Its warning names the class and code too, not their numbers (#2463).
+    let warned = logs.matching("BACnet/SC BVLC-Result NAK: function=0xa ");
+    assert_eq!(warned.len(), 1, "{:?}", logs.warnings());
+    assert!(
+        warned[0].fields["message"]
+            .ends_with("error_class=COMMUNICATION error_code=BVLC_FUNCTION_UNKNOWN"),
+        "{:?}",
+        warned[0].fields
     );
     transport.stop().await.unwrap();
 }

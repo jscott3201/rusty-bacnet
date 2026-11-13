@@ -370,11 +370,15 @@ async fn a_missing_ca_fails_validation_by_path_and_nothing_dials_the_hub() {
 #[cfg(feature = "sc-tls")]
 #[tokio::test]
 async fn an_sc_profile_dials_its_failover_hub_when_the_primary_is_down() {
-    // A primary bound but never listening refuses the dial, and as the port
-    // stays held no other process can listen there (#2216).
-    let primary = tokio::net::TcpSocket::new_v4().unwrap();
-    primary.bind("127.0.0.1:0".parse().unwrap()).unwrap();
-    let down = primary.local_addr().unwrap().port();
+    // A freed port refuses the dial at once. A port only bound refuses
+    // nothing on macOS (the SYN goes unanswered), so the dial waited out its
+    // timeout (#2463). Should another process take the port first, the
+    // attempt still reaches the failover hub, only later.
+    let down = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
     let failover = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let root = tempfile::tempdir().unwrap();
     let files = tempfile::tempdir().unwrap();

@@ -106,9 +106,18 @@ fn websocket_code(kind: ScWebSocketErrorKind) -> Option<ErrorCode> {
         ScWebSocketErrorKind::HostLookup => ErrorCode::DNS_ERROR,
         // The peer turned the connection away (Annex AB.7.5.1, TCP table).
         ScWebSocketErrorKind::TcpRefused => ErrorCode::TCP_CONNECTION_REFUSED,
+        // No route to the address: the IP table's row, not the TCP one.
+        ScWebSocketErrorKind::AddressUnreachable => ErrorCode::IP_ADDRESS_NOT_REACHABLE,
         ScWebSocketErrorKind::TcpDial => ErrorCode::TCP_ERROR,
         ScWebSocketErrorKind::TlsHandshake => ErrorCode::TLS_ERROR,
         ScWebSocketErrorKind::WebSocketHandshake => ErrorCode::HTTP_ERROR,
+        // A fault in the Upgrade, Connection or Sec-WebSocket-Accept header.
+        // The HTTP table has rows for a missing header and for a wrong value,
+        // but the WebSocket library does not say which of the two it saw, so
+        // the table's row for any other header fault: this stack's reading.
+        ScWebSocketErrorKind::WebSocketHeader => ErrorCode::HTTP_WEBSOCKET_HEADER_ERROR,
+        ScWebSocketErrorKind::UpgradeResponseSyntax => ErrorCode::HTTP_RESPONSE_SYNTAX_ERROR,
+        ScWebSocketErrorKind::UpgradeResponseValue => ErrorCode::HTTP_RESPONSE_VALUE_ERROR,
         // The upgrade answer had no Sec-WebSocket-Protocol header at all, or
         // one whose value is not the subprotocol asked for. AB.7.5.1's HTTP
         // table names no header; giving a missing one the missing-header code
@@ -271,6 +280,27 @@ mod tests {
             code(ws_error(ScWebSocketErrorKind::TcpRefused, None)),
             Some(ErrorCode::TCP_CONNECTION_REFUSED)
         );
+        // #2463: no route, a WebSocket header fault and an unparsable answer.
+        for (kind, expected) in [
+            (
+                ScWebSocketErrorKind::AddressUnreachable,
+                ErrorCode::IP_ADDRESS_NOT_REACHABLE,
+            ),
+            (
+                ScWebSocketErrorKind::WebSocketHeader,
+                ErrorCode::HTTP_WEBSOCKET_HEADER_ERROR,
+            ),
+            (
+                ScWebSocketErrorKind::UpgradeResponseSyntax,
+                ErrorCode::HTTP_RESPONSE_SYNTAX_ERROR,
+            ),
+            (
+                ScWebSocketErrorKind::UpgradeResponseValue,
+                ErrorCode::HTTP_RESPONSE_VALUE_ERROR,
+            ),
+        ] {
+            assert_eq!(code(ws_error(kind, None)), Some(expected), "{kind}");
+        }
         // A wrong subprotocol value and a missing header each have a code.
         for (wrong, missing) in [
             (
