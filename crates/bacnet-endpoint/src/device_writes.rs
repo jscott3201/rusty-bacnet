@@ -312,14 +312,15 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         let enabled: Vec<_> = [
             (writes, "Device writes"),
             (reinitialize, "ReinitializeDevice"),
-            (self.cov.config.is_some(), "SubscribeCOV"),
+            // SubscribeCOV and SubscribeCOVProperty, enabled together.
+            (self.cov.config.is_some(), "COV"),
         ]
         .into_iter()
         .filter_map(|(on, name)| on.then_some(name))
         .collect();
         let capability = enabled.join(" and ");
         let subject = match enabled[..] {
-            ["ReinitializeDevice"] | ["SubscribeCOV"] => format!("{capability} requires"),
+            ["ReinitializeDevice"] | ["COV"] => format!("{capability} requires"),
             _ => format!("{capability} require"),
         };
         if self.role == SessionRole::ClientOnly {

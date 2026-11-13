@@ -12468,7 +12468,8 @@ the Device takes no subscription of either kind, on the endpoint as on
 OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, and a client's write notifies
 nobody. The B/IP builder's `build_transport` refuses `cov`, as it refuses the
 other session-owned options. The MS/TP and BACnet/SC builders take none of
-those options, so there `with_cov` goes on the session they build.
+the service opt-ins (Device writes, ReinitializeDevice, COV), so there
+`with_cov` goes on the session they build.
 
 Confirmed notifications lease their invoke IDs from the coordinator the
 client role draws from, so the two roles never hold one ID at once, and their

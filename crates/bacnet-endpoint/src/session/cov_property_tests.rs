@@ -407,9 +407,8 @@ async fn the_builder_option_is_the_session_opt_in() {
         .unwrap();
     let error = client.start().await.expect_err("a server role");
     assert!(
-        error
-            .to_string()
-            .contains("SubscribeCOV requires a server role"),
+        error.to_string().contains("COV requires a server role")
+            && !error.to_string().contains("SubscribeCOV"),
         "{error}"
     );
     let Err(error) = builder().build_transport() else {
