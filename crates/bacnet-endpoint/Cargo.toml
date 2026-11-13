@@ -29,7 +29,9 @@ bacnet-client.workspace = true
 # The source Reporter hands both capability features' accessors on to the
 # object it wraps (#2215); `std` implies them.
 bacnet-objects = { workspace = true, features = ["std", "event-reporting", "durable-writes"] }
-bacnet-device-core = { workspace = true, features = ["std"] }
+# `std` implies `cov-multiple`, named here because the endpoint routes
+# SubscribeCOVPropertyMultiple to the core's `Reporter` (#2490).
+bacnet-device-core = { workspace = true, features = ["std", "cov-multiple"] }
 # The COV Reporter's timeline is Tokio's clock (#2490).
 bacnet-time = { workspace = true, features = ["std"] }
 bacnet-server.workspace = true

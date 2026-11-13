@@ -542,10 +542,10 @@ impl bacnet_client::log_reader::LogRequester for ClientRoleHandle {
 ///
 /// Service scope stays narrow: `ReadProperty`, optionally authorized local
 /// Device.Description `WriteProperty`, optionally `ReinitializeDevice` through
-/// its handler, optionally `SubscribeCOV` and `SubscribeCOVProperty`
+/// its handler, optionally `SubscribeCOV`, `SubscribeCOVProperty` and
+/// `SubscribeCOVPropertyMultiple`
 /// ([`with_cov`](crate::session::EndpointSession::with_cov)), and
-/// `Reject`/`Abort`. Full
-/// `bacnet-server` parity is a later packet. No
+/// `Reject`/`Abort`. Full `bacnet-server` parity is a later packet. No
 /// lifecycle methods on this handle; the session owner drives dispatch +
 /// `close()`. `Send + Sync`; every method fails closed after shutdown.
 #[derive(Clone)]

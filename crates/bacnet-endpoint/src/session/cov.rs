@@ -5,9 +5,10 @@
 //! ([`EndpointSession::with_cov`]), the `Reporter` its preflight builds, and
 //! once it starts a [`CovHost`] and the task that sends what the host queues.
 //! The host keeps the `Reporter` under a std mutex, with the invoke IDs its
-//! confirmed notifications hold. The responder reaches it for SubscribeCOV
-//! and SubscribeCOVProperty, which the `Reporter` tells apart, and for reads
-//! of the Device's Active_COV_Subscriptions; the dispatch task
+//! confirmed notifications hold. The responder reaches it for SubscribeCOV,
+//! SubscribeCOVProperty and SubscribeCOVPropertyMultiple, which the
+//! `Reporter` tells apart, and for reads of the Device's two subscription
+//! lists; the dispatch task
 //! for the answers to its confirmed notifications; the local writes for the
 //! changes the application makes.
 //!
