@@ -413,7 +413,8 @@ fn the_responder_lists_match_what_each_session_executes() {
         session(false, false, true),
         [
             ServiceSupported::READ_PROPERTY,
-            ServiceSupported::SUBSCRIBE_COV
+            ServiceSupported::SUBSCRIBE_COV,
+            ServiceSupported::SUBSCRIBE_COV_PROPERTY
         ]
     );
 

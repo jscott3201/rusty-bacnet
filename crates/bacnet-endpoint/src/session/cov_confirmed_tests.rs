@@ -12,7 +12,7 @@ use bacnet_device_core::report::OutboxLimits;
 const NOTIFY: ConfirmedServiceChoice = ConfirmedServiceChoice::CONFIRMED_COV_NOTIFICATION;
 
 /// A ConfirmedCOVNotification's invoke ID and service parameters.
-fn confirmed_notification(apdu: &[u8]) -> (u8, Bytes) {
+pub(super) fn confirmed_notification(apdu: &[u8]) -> (u8, Bytes) {
     let Ok(Apdu::ConfirmedRequest(request)) = decode_apdu(Bytes::copy_from_slice(apdu)) else {
         panic!("a confirmed request: {apdu:02X?}");
     };
@@ -21,7 +21,7 @@ fn confirmed_notification(apdu: &[u8]) -> (u8, Bytes) {
 }
 
 /// A SimpleACK of ConfirmedCOVNotification under `invoke_id`.
-fn ack(invoke_id: u8) -> [u8; 3] {
+pub(super) fn ack(invoke_id: u8) -> [u8; 3] {
     [0x20, invoke_id, NOTIFY.to_raw()]
 }
 

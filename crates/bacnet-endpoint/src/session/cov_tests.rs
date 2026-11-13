@@ -31,6 +31,9 @@ use tokio::sync::mpsc;
 #[path = "cov_confirmed_tests.rs"]
 mod confirmed;
 
+#[path = "cov_property_tests.rs"]
+mod property;
+
 const DEVICE: u32 = 4321;
 const SUBSCRIBE_COV: ConfirmedServiceChoice = ConfirmedServiceChoice::SUBSCRIBE_COV;
 const READ_PROPERTY: ConfirmedServiceChoice = ConfirmedServiceChoice::READ_PROPERTY;
@@ -314,9 +317,9 @@ fn acked(invoke_id: u8) -> Bytes {
     Bytes::from(vec![0x20, invoke_id, SUBSCRIBE_COV.to_raw()])
 }
 
-/// Off, the opt-in leaves SubscribeCOV refused exactly as before (a Reject,
-/// UNRECOGNIZED_SERVICE), the Device declares no COV and has no
-/// Active_COV_Subscriptions. On, SubscribeCOVProperty is still refused.
+/// Off, the opt-in leaves SubscribeCOV and SubscribeCOVProperty refused
+/// exactly as before (a Reject, UNRECOGNIZED_SERVICE), the Device declares
+/// no COV and has no Active_COV_Subscriptions. On, both are answered.
 #[tokio::test(start_paused = true)]
 async fn cov_is_off_until_the_session_opts_in() {
     let mut node = Node::new().await;
@@ -325,6 +328,10 @@ async fn cov_is_off_until_the_session_opts_in() {
     node.request(&to, 1, SUBSCRIBE_COV, &subscribe(1, Some(false), Some(60)))
         .await;
     assert_eq!(node.quiet(&to).await, [Bytes::from_static(&[0x60, 1, 9])]);
+    let property = ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY;
+    let body = property::subscribe_property(ai1(), PropertyIdentifier::PRESENT_VALUE, 1, None);
+    node.request(&to, 3, property, &body).await;
+    assert_eq!(node.quiet(&to).await, [Bytes::from_static(&[0x60, 3, 9])]);
     node.request(
         &to,
         2,
@@ -337,24 +344,23 @@ async fn cov_is_off_until_the_session_opts_in() {
         node.quiet(&to).await,
         [Bytes::from_static(&[0x50, 2, 12, 0x91, 2, 0x91, 32])]
     );
-    assert!(
-        !off.executed_services()
-            .contains(&ServiceSupported::SUBSCRIBE_COV)
-    );
+    let services = off.executed_services();
+    assert!(!services.contains(&ServiceSupported::SUBSCRIBE_COV));
+    assert!(!services.contains(&ServiceSupported::SUBSCRIBE_COV_PROPERTY));
     off.stop().await.unwrap();
 
     let mut on = endpoint(SessionRole::ServerOnly, Some(ReportConfig::default())).await;
     let to = mac_of(&on);
-    let property = ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY;
-    node.request(&to, 3, property, &subscribe(1, Some(false), Some(60)))
-        .await;
-    assert_eq!(node.quiet(&to).await, [Bytes::from_static(&[0x60, 3, 9])]);
+    node.request(&to, 3, property, &body).await;
+    let sent = node.quiet(&to).await;
+    assert_eq!(sent.len(), 2, "the reply, then the first notification");
+    assert_eq!(sent[0], Bytes::from(vec![0x20, 3, property.to_raw()]));
     on.stop().await.unwrap();
 }
 
-/// On, the Device declares SubscribeCOV and lists Active_COV_Subscriptions,
-/// but not Active_COV_Multiple_Subscriptions, whose service it doesn't run
-/// (Table 12-13, notes 9 and 18).
+/// On, the Device declares SubscribeCOV and SubscribeCOVProperty and lists
+/// Active_COV_Subscriptions, but not Active_COV_Multiple_Subscriptions,
+/// whose service it doesn't run (Table 12-13, notes 9 and 18).
 #[tokio::test(start_paused = true)]
 async fn the_device_declares_subscribe_cov_and_its_list() {
     let mut node = Node::new().await;
@@ -393,7 +399,8 @@ async fn the_device_declares_subscribe_cov_and_its_list() {
     };
     assert!(bit(ServiceSupported::READ_PROPERTY));
     assert!(bit(ServiceSupported::SUBSCRIBE_COV));
-    assert!(!bit(ServiceSupported::SUBSCRIBE_COV_PROPERTY));
+    assert!(bit(ServiceSupported::SUBSCRIBE_COV_PROPERTY));
+    assert!(!bit(ServiceSupported::SUBSCRIBE_COV_PROPERTY_MULTIPLE));
     assert!(!bit(ServiceSupported::WRITE_PROPERTY));
 
     let listed = |property: PropertyIdentifier| {

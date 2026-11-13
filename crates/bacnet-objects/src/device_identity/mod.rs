@@ -106,7 +106,8 @@ impl DeviceIdentity {
     /// Default `[READ_PROPERTY]` matches the narrow endpoint responder.
     /// `EndpointSession::with_device_writes` adds `WRITE_PROPERTY`,
     /// `EndpointSession::with_reinitialize` adds `REINITIALIZE_DEVICE` and
-    /// `EndpointSession::with_cov` adds `SUBSCRIBE_COV`; other service bits
+    /// `EndpointSession::with_cov` adds `SUBSCRIBE_COV` and
+    /// `SUBSCRIBE_COV_PROPERTY`; other service bits
     /// are rejected. Server-role startup also rejects missing
     /// ReadProperty or unsupported bits with neither opt-in, before ingress starts.
     /// ClientOnly has no responder and retains this as a local declaration.

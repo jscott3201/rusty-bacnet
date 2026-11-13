@@ -6,7 +6,8 @@
 //! once it starts a [`CovHost`] and the task that sends what the host queues.
 //! The host keeps the `Reporter` under a std mutex, with the invoke IDs its
 //! confirmed notifications hold. The responder reaches it for SubscribeCOV
-//! and for reads of the Device's Active_COV_Subscriptions; the dispatch task
+//! and SubscribeCOVProperty, which the `Reporter` tells apart, and for reads
+//! of the Device's Active_COV_Subscriptions; the dispatch task
 //! for the answers to its confirmed notifications; the local writes for the
 //! changes the application makes.
 //!
@@ -22,7 +23,7 @@
 //!   [`COV_CONFIRMED_IN_FLIGHT`] are out at once, so silent subscribers
 //!   can't take every ID from the client role.
 //! - **Order.** The first notification of a subscription waits until the
-//!   SubscribeCOV's reply has been handed off ([`EndpointCov::replied`]).
+//!   subscribe request's reply has been handed off ([`EndpointCov::replied`]).
 //!
 //! [`EndpointSession::with_cov`]: super::EndpointSession::with_cov
 
@@ -110,12 +111,12 @@ impl CovRole {
         // nobody hears (#2303).
         if config.sweep.is_some() || config.fault_detection.is_some() {
             return Err(Error::Encoding(
-                "SubscribeCOV hosts COV only: a ReportConfig sweep or fault pass is refused".into(),
+                "an endpoint hosts COV only: a ReportConfig sweep or fault pass is refused".into(),
             ));
         }
         if config.outbox.entries == 0 || config.outbox.octets == 0 {
             return Err(Error::Encoding(
-                "SubscribeCOV requires an outbox of at least one entry and one octet".into(),
+                "COV requires an outbox of at least one entry and one octet".into(),
             ));
         }
         let identity = match identity {
@@ -196,7 +197,7 @@ impl CovRole {
 fn device_identity(db: &ObjectDatabase, device: ObjectIdentifier) -> Result<DeviceIdentity, Error> {
     let object = db
         .get(&device)
-        .ok_or_else(|| Error::Encoding("SubscribeCOV requires a local Device".into()))?;
+        .ok_or_else(|| Error::Encoding("COV requires a local Device".into()))?;
     let unsigned = |property| match object.read_property(property, None) {
         Ok(PropertyValue::Unsigned(value)) => u16::try_from(value).ok(),
         _ => None,
@@ -206,8 +207,7 @@ fn device_identity(db: &ObjectDatabase, device: ObjectIdentifier) -> Result<Devi
         unsigned(PropertyIdentifier::MAX_APDU_LENGTH_ACCEPTED),
     ) else {
         return Err(Error::Encoding(
-            "SubscribeCOV requires the local Device's Vendor_Identifier and Max_APDU_Length_Accepted"
-                .into(),
+            "COV requires the local Device's Vendor_Identifier and Max_APDU_Length_Accepted".into(),
         ));
     };
     DeviceIdentity::new(device.instance_number(), vendor)?.with_max_apdu(max_apdu)
@@ -229,7 +229,7 @@ pub(crate) struct CovHost {
 struct CovState {
     reporter: Reporter,
     leases: Leases,
-    /// SubscribeCOV replies not yet handed off: nothing is sent meanwhile,
+    /// Subscribe replies not yet handed off: nothing is sent meanwhile,
     /// so a first notification never overtakes its reply.
     held: usize,
     /// The session stopped: nothing more goes out.

@@ -12429,14 +12429,19 @@ tests.
 
 ### Endpoint COV reporting
 
-`EndpointSession::with_cov(config)` (#2490) lets the endpoint execute
-SubscribeCOV for the objects of its database and send the COV notifications
-its subscriptions call for. The session runs bacnet-device-core's `Reporter`
-(`bacnet_device_core::report`): the subscription table, change detection and
-confirmed delivery the core gives firmware. A subscription, its renewal, its
-cancellation (one that matches nothing succeeds) and a lifetime that runs out
-on the session's clock behave as on `BACnetServer`, and the notifications
-carry the same octets.
+`EndpointSession::with_cov(config)` (#2490), or `BipEndpointBuilder::cov(config)`
+on the B/IP builder, lets the endpoint execute SubscribeCOV and
+SubscribeCOVProperty for the objects of its database and send the COV
+notifications their subscriptions call for. The session runs
+bacnet-device-core's `Reporter` (`bacnet_device_core::report`): the
+subscription table, change detection and confirmed delivery the core gives
+firmware. A subscription to an object or to one of its properties (with the
+request's own COV increment when it gives one), its renewal, its cancellation
+(one that matches nothing succeeds) and a lifetime that runs out on the
+session's clock behave as on `BACnetServer`, and the notifications carry the
+same octets. An object subscription and a property subscription from one
+subscriber, even under one process identifier, are two subscriptions, each
+reported, listed and cancelled on its own.
 
 ```rust
 use bacnet_device_core::cov::CovPolicy;
@@ -12447,18 +12452,26 @@ let config = ReportConfig::new(policy).with_outbox(OutboxLimits { entries: 64, o
 let mut session = BipEndpointBuilder::new(Ipv4Addr::UNSPECIFIED, 47808, Ipv4Addr::BROADCAST)
     .role(SessionRole::ServerOnly)
     .database(db)
-    .build_session()?
-    .with_cov(config);
+    .cov(config)
+    .build_session()?;
 session.start().await?;
 // AI-1's subscribers hear of this.
 session.set_present_value_local(&ai1, PropertyValue::Real(21.5)).await?;
 ```
 
 What is reported: an accepted subscription's first notification, which follows
-the SubscribeCOV's reply; then each change the application makes through
+the subscribe request's reply; then each change the application makes through
 `write_local`, `set_present_value_local` and `set_reliability_local`. A
-change made to the database any other way, a client's Device write included,
-reports nothing.
+change made to the database any other way reports nothing. A client's write
+reaches only the Device's Description and Audit_Notification_Recipient
+([Authorized endpoint Device writes](#authorized-endpoint-device-writes)), and
+the Device takes no subscription of either kind, on the endpoint as on
+`BACnetServer`: it lends no COV reporting, so both services refuse it with
+OBJECT / OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, and a client's write notifies
+nobody. The B/IP builder's `build_transport` refuses `cov`, as it refuses the
+other session-owned options. The MS/TP and BACnet/SC builders take none of
+the service opt-ins (Device writes, ReinitializeDevice, COV), so there
+`with_cov` goes on the session they build.
 
 Confirmed notifications lease their invoke IDs from the coordinator the
 client role draws from, so the two roles never hold one ID at once, and their
@@ -12504,15 +12517,16 @@ more silent subscribers are needed to fill the bound.
   could check at start.
 
 Startup requires a server role and a concrete built-in local Device, as the
-Device-write opt-in does. The Device and identity then advertise SubscribeCOV,
-and the Device lists Active_COV_Subscriptions, read live from the table. It
+Device-write opt-in does. The Device and identity then advertise SubscribeCOV
+and SubscribeCOVProperty, and the Device lists Active_COV_Subscriptions, both
+kinds of subscription in it, read live from the table. It
 doesn't list Active_COV_Multiple_Subscriptions, which belongs to a device that
 executes SubscribeCOVPropertyMultiple (Table 12-13). Without a composed
 identity, the Device object supplies what the notifications carry of it: its
 identifier, as the initiating device, and for a confirmed one its
-Max_APDU_Length_Accepted. SubscribeCOVProperty and
-SubscribeCOVPropertyMultiple stay refused with UNRECOGNIZED_SERVICE, as
-SubscribeCOV is on a session without the opt-in. No event notification
+Max_APDU_Length_Accepted. SubscribeCOVPropertyMultiple stays refused with
+UNRECOGNIZED_SERVICE, as SubscribeCOV and SubscribeCOVProperty are on a
+session without the opt-in. No event notification
 follows a change: the endpoint runs no event pass.
 
 A subscriber ends with the current value even when a change takes the object
@@ -12527,7 +12541,9 @@ invoke ID a notification holds.
 On paused time over an in-memory link, an endpoint and a `BACnetServer` with
 the same Device and object answer and notify with the same octets through a
 subscription, changes, a renewal, a cancellation and a lifetime running out,
-and list the same Active_COV_Subscriptions; their confirmed notifications carry
+for an object subscription and for a property subscription with its own
+increment, refuse the same property subscriptions with the same replies, and
+list the same Active_COV_Subscriptions; their confirmed notifications carry
 the same parameters.
 
 ### Direct endpoint WriteProperty and source WRITE reporting

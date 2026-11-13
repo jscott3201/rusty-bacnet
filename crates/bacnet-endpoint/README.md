@@ -161,10 +161,13 @@ async fn main() -> Result<(), bacnet_types::error::Error> {
   [`EndpointSession::with_reinitialize`](session::EndpointSession::with_reinitialize)
   enables ReinitializeDevice through an application handler, each with
   deterministic and real B/IP loopback tests. Explicit
-  [`EndpointSession::with_cov`](session::EndpointSession::with_cov) enables
-  SubscribeCOV over bacnet-device-core's `Reporter`, with unconfirmed and
-  confirmed COV notifications whose octets and parameters match
-  `bacnet-server`'s on paused-time in-memory tests. Its confirmed
+  [`EndpointSession::with_cov`](session::EndpointSession::with_cov), or
+  [`BipEndpointBuilder::cov`](bip::BipEndpointBuilder::cov), enables
+  SubscribeCOV and SubscribeCOVProperty over bacnet-device-core's
+  `Reporter`, with unconfirmed and confirmed COV notifications whose octets
+  and parameters match `bacnet-server`'s on paused-time in-memory tests. The
+  Device takes no subscription, so a client's Device write notifies nobody.
+  Its confirmed
   notifications share the client role's 256 invoke IDs but hold at most
   [`COV_CONFIRMED_IN_FLIGHT`](session::COV_CONFIRMED_IN_FLIGHT) (64) at once,
   so subscribers that stop answering can't leave the client role without one;

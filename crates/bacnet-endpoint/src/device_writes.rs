@@ -38,6 +38,10 @@ pub const RESPONDER_OPT_IN_SERVICES: &[ResponderOptIn] = &[
         service: ServiceSupported::SUBSCRIBE_COV,
         method: "with_cov",
     },
+    ResponderOptIn {
+        service: ServiceSupported::SUBSCRIBE_COV_PROPERTY,
+        method: "with_cov",
+    },
 ];
 
 impl<T: TransportPort + 'static> EndpointSession<T> {
@@ -111,16 +115,19 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         self
     }
 
-    /// Enables SubscribeCOV for the objects of the session's database, and
-    /// the COV notifications its subscriptions call for (#2490), under
-    /// `config`.
+    /// Enables SubscribeCOV and SubscribeCOVProperty for the objects of the
+    /// session's database, and the COV notifications their subscriptions
+    /// call for (#2490), under `config`. The B/IP builder sets it as
+    /// [`BipEndpointBuilder::cov`](crate::bip::BipEndpointBuilder::cov).
     ///
     /// The session runs bacnet-device-core's
     /// [`Reporter`](bacnet_device_core::report::Reporter) over its database:
-    /// a subscription, its renewal and its cancellation, and the lifetime
-    /// running out on the session's clock. A subscriber hears first of the
-    /// object's values when it subscribes, after the SubscribeCOV's reply,
-    /// then of each change the application makes through
+    /// a subscription to an object or to one property of it (with the
+    /// request's own COV increment when it gives one), its renewal and its
+    /// cancellation, and the lifetime running out on the session's clock.
+    /// A subscriber hears first of the object's values, or the property's,
+    /// when it subscribes, after the reply, then of each change the
+    /// application makes through
     /// [`write_local`](Self::write_local),
     /// [`set_present_value_local`](Self::set_present_value_local) and
     /// [`set_reliability_local`](Self::set_reliability_local). A change
@@ -157,7 +164,11 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// gives way to the newer one, and a confirmed one's Ack brings a fresh
     /// look.
     ///
-    /// SubscribeCOVProperty and SubscribeCOVPropertyMultiple stay refused.
+    /// The Device itself takes no subscription of either kind, as on
+    /// `BACnetServer`: it lends no COV reporting, so a client's write to its
+    /// Description or Audit_Notification_Recipient
+    /// ([`with_device_writes`](Self::with_device_writes)) notifies nobody.
+    /// SubscribeCOVPropertyMultiple stays refused.
     /// Startup requirements and the advertised services are those of
     /// [`with_device_writes`](Self::with_device_writes). Without a composed
     /// identity, the Device object supplies what the notifications carry of
@@ -222,10 +233,16 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// this session: [`RESPONDER_SERVICES`], then each enabled entry of
     /// [`RESPONDER_OPT_IN_SERVICES`].
     pub(crate) fn executed_services(&self) -> Vec<ServiceSupported> {
+        let cov = |service| {
+            matches!(
+                service,
+                ServiceSupported::SUBSCRIBE_COV | ServiceSupported::SUBSCRIBE_COV_PROPERTY
+            )
+        };
         let enabled = |service: ServiceSupported| {
             (service == ServiceSupported::WRITE_PROPERTY && self.device_write_authorizer.is_some())
                 || (service == ServiceSupported::REINITIALIZE_DEVICE && self.reinitialize.is_some())
-                || (service == ServiceSupported::SUBSCRIBE_COV && self.cov.config.is_some())
+                || (cov(service) && self.cov.config.is_some())
         };
         let opt_in = RESPONDER_OPT_IN_SERVICES
             .iter()
@@ -295,14 +312,15 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
         let enabled: Vec<_> = [
             (writes, "Device writes"),
             (reinitialize, "ReinitializeDevice"),
-            (self.cov.config.is_some(), "SubscribeCOV"),
+            // SubscribeCOV and SubscribeCOVProperty, enabled together.
+            (self.cov.config.is_some(), "COV"),
         ]
         .into_iter()
         .filter_map(|(on, name)| on.then_some(name))
         .collect();
         let capability = enabled.join(" and ");
         let subject = match enabled[..] {
-            ["ReinitializeDevice"] | ["SubscribeCOV"] => format!("{capability} requires"),
+            ["ReinitializeDevice"] | ["COV"] => format!("{capability} requires"),
             _ => format!("{capability} require"),
         };
         if self.role == SessionRole::ClientOnly {
