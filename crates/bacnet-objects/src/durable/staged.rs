@@ -86,10 +86,11 @@ pub(crate) struct Step<N> {
     /// What the object takes as the write is made, in the form it holds it:
     /// the state the write leaves on top of the steps before it; or only
     /// what the write sets, made then on the state served (a Tags element or
-    /// size, #2526); or nothing of its own, for an object that works the
-    /// write out again or makes it on its own state (a Channel, a Timer and
-    /// a Load Control, #2526; a log, #2431; and the reporting rows, #2414,
-    /// whose last step keeps the snapshot its stage saved).
+    /// size, or an Access Rights rule or array size, #2526); or nothing of
+    /// its own, for an object that works the write out again or makes it on
+    /// its own state (a Channel, a Timer and a Load Control, #2526; a log,
+    /// #2431; and the reporting rows, #2414, whose last step keeps the
+    /// snapshot its stage saved).
     pub(crate) next: N,
 }
 
@@ -300,8 +301,8 @@ impl<S: Send + 'static, N> StagedSaves<S, N> {
     /// which the caller built with every step's state in it, and keeping
     /// `served` beside them: for steps that hold less than the state they
     /// leave, so a stage keeps one copy of it whatever the steps' number
-    /// (the reporting rows, #2414; Tags, a Channel, a Timer and a Load
-    /// Control, #2526).
+    /// (the reporting rows, #2414; Tags, a Channel, a Timer, a Load Control
+    /// and an Access Rights object, #2526).
     #[cfg(feature = "durable-writes")]
     pub(crate) fn stage_built(
         &mut self,
@@ -513,6 +514,25 @@ impl<S: Send + 'static, N> StagedSaves<S, N> {
             self.writer.submit_coalescing(served());
         } else if let Some(staged) = self.staged.as_mut() {
             staged.served = Some(served());
+        }
+    }
+
+    /// [`correct`](Self::correct), after a storage call that took one staged
+    /// step: a staged write still holding the object brings the served state
+    /// it keeps up to date with `follow`, in place, rather than having it
+    /// built again (Access Rights, #2526). A correction still due saves
+    /// `served()`, as `correct` does. The copy this saves is a release-build
+    /// property no test pins: the tests run in debug builds, where the
+    /// caller's own check builds the whole state anyway.
+    #[cfg(feature = "durable-writes")]
+    pub(crate) fn correct_with(&mut self, served: impl FnOnce() -> S, follow: impl FnOnce(&mut S)) {
+        if self.take_correction() {
+            self.writer.submit_coalescing(served());
+        } else if let Some(staged) = self.staged.as_mut() {
+            match staged.served.as_mut() {
+                Some(kept) => follow(kept),
+                None => staged.served = Some(served()),
+            }
         }
     }
 
