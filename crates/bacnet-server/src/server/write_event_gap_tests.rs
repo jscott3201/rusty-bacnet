@@ -23,6 +23,7 @@ use bacnet_objects::multistate::MultiStateInputObject;
 use bacnet_objects::staging::{StagingConfig, StagingObject};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_services::common::BACnetPropertyValue;
+use bacnet_services::cov::COVNotificationRequest;
 use bacnet_services::list_manipulation::ListElementRequest;
 use bacnet_services::read_property::{ReadPropertyAckRef, ReadPropertyRequest};
 use bacnet_services::wpm::{WriteAccessSpecification, WritePropertyMultipleRequest};
@@ -38,6 +39,7 @@ const FAULT: u8 = 0x40;
 const OUT_OF_SERVICE: u8 = 0x10;
 const WRITER: [u8; 6] = [10, 0, 0, 7, 0xBA, 0xC0];
 const READER: [u8; 6] = [10, 0, 0, 8, 0xBA, 0xC0];
+const SUBSCRIBER: [u8; 6] = [10, 0, 0, 9, 0xBA, 0xC0];
 const PV: PropertyIdentifier = PropertyIdentifier::PRESENT_VALUE;
 
 fn ai(instance: u32) -> ObjectIdentifier {
@@ -66,23 +68,59 @@ fn all_transitions() -> PropertyValue {
     }
 }
 
-/// Holds the next SimpleACK to the writer once armed, until released.
-struct AckHold {
+/// Holds the next send it is armed for in the transport, until released.
+/// The frame is logged before the hold, as the transport logs every send.
+struct Hold {
     armed: AtomicBool,
     held: Semaphore,
     release: Semaphore,
 }
 
-impl AckHold {
-    async fn on_send(&self, frame: SentFrame) {
-        if !frame.broadcast
-            && frame.mac.as_slice() == WRITER
-            && matches!(frame.apdu(), Apdu::SimpleAck(_))
-            && self.armed.swap(false, Ordering::SeqCst)
-        {
+impl Default for Hold {
+    fn default() -> Self {
+        Self {
+            armed: AtomicBool::new(false),
+            held: Semaphore::new(0),
+            release: Semaphore::new(0),
+        }
+    }
+}
+
+impl Hold {
+    async fn take(&self, matches: bool) {
+        if matches && self.armed.swap(false, Ordering::SeqCst) {
             self.held.add_permits(1);
             self.release.acquire().await.unwrap().forget();
         }
+    }
+
+    /// Wait, on the paused clock, until the armed send is held.
+    async fn engaged(&self) {
+        let held = tokio::time::timeout(Duration::from_secs(5), self.held.acquire());
+        held.await.expect("the send is held").unwrap().forget();
+    }
+}
+
+/// The transport's holds: the next SimpleACK to the writer, and the next
+/// EventNotification broadcast.
+#[derive(Default)]
+struct Holds {
+    ack: Hold,
+    event: Hold,
+}
+
+impl Holds {
+    async fn on_send(&self, frame: SentFrame) {
+        let apdu = frame.apdu();
+        let ack = !frame.broadcast
+            && frame.mac.as_slice() == WRITER
+            && matches!(apdu, Apdu::SimpleAck(_));
+        self.ack.take(ack).await;
+        let event = frame.broadcast
+            && matches!(&apdu, Apdu::UnconfirmedRequest(request)
+                if request.service_choice
+                    == UnconfirmedServiceChoice::UNCONFIRMED_EVENT_NOTIFICATION);
+        self.event.take(event).await;
     }
 }
 
@@ -90,7 +128,7 @@ struct Gap {
     server: BACnetServer<TestTransport>,
     tx: mpsc::Sender<ReceivedNpdu>,
     sent: SendLog,
-    hold: Arc<AckHold>,
+    holds: Arc<Holds>,
     invoke_id: AtomicU8,
 }
 
@@ -131,20 +169,16 @@ impl Gap {
         db.add(Box::new(notification_class_0_broadcasting()))
             .unwrap();
         extend(&mut db);
-        let hold = Arc::new(AckHold {
-            armed: AtomicBool::new(false),
-            held: Semaphore::new(0),
-            release: Semaphore::new(0),
-        });
-        let on_send = Arc::clone(&hold);
+        let holds = Arc::new(Holds::default());
+        let on_send = Arc::clone(&holds);
         let (tx, rx) = mpsc::channel(16);
         let transport = TestTransport::builder()
             .local_mac(&BIP_LOCAL_MAC)
             .inbound(rx)
             .on_send(move |frame| {
-                let hold = Arc::clone(&on_send);
+                let holds = Arc::clone(&on_send);
                 async move {
-                    hold.on_send(frame).await;
+                    holds.on_send(frame).await;
                     Ok(())
                 }
             })
@@ -159,7 +193,7 @@ impl Gap {
             server,
             tx,
             sent,
-            hold,
+            holds,
             invoke_id: AtomicU8::new(0),
         }
     }
@@ -398,6 +432,66 @@ impl Gap {
         }
     }
 
+    /// An unconfirmed whole-object SubscribeCOV from the subscriber.
+    async fn subscribe(&self, oid: ObjectIdentifier) {
+        let mut table = self.server.cov_table.write().await;
+        table
+            .subscribe(CovSubscription {
+                subscriber_mac: MacAddr::from_slice(&SUBSCRIBER),
+                subscriber_network: None,
+                subscriber_process_identifier: 1,
+                monitored_object_identifier: oid,
+                issue_confirmed_notifications: false,
+                expires_at: None,
+                last_notified_observation: None,
+                monitored_property: None,
+                monitored_property_array_index: None,
+                cov_increment: None,
+                notification_kind: CovNotificationKind::Single,
+                timestamped: false,
+            })
+            .unwrap();
+    }
+
+    /// The Status_Flags of each COV notification the subscriber got.
+    fn cov_flags(&self) -> Vec<u8> {
+        self.sent
+            .unicasts()
+            .into_iter()
+            .filter(|frame| frame.mac.as_slice() == SUBSCRIBER)
+            .filter_map(|frame| match frame.apdu() {
+                Apdu::UnconfirmedRequest(request)
+                    if request.service_choice
+                        == UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION =>
+                {
+                    let report = COVNotificationRequest::decode(&request.service_request);
+                    let report = report.unwrap();
+                    let flags = report
+                        .list_of_values
+                        .iter()
+                        .find(|value| value.property_identifier == PropertyIdentifier::STATUS_FLAGS)
+                        .expect("Status_Flags reported")
+                        .value
+                        .clone();
+                    Some(flags[2])
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// [`Self::events`] once at least `count` are out, on the paused clock.
+    async fn wait_for_events(&self, count: usize) -> Vec<(ObjectIdentifier, EventState)> {
+        for _ in 0..1_000 {
+            let events = self.events();
+            if events.len() >= count {
+                return events;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        panic!("fewer than {count} EventNotifications: {:?}", self.events());
+    }
+
     /// The object and to-state of each EventNotification broadcast, in
     /// order.
     fn events(&self) -> Vec<(ObjectIdentifier, EventState)> {
@@ -581,39 +675,86 @@ async fn a_write_and_the_staging_plan_it_starts_send_their_transitions_in_order(
     assert_eq!(gap.event_state(bv1()).await, EventState::NORMAL.to_raw());
 }
 
-/// Two peers fault and clear AI-1 while the first one's SimpleACK is held
-/// on its way out: the first one's FAULT is on the wire already, before its
-/// SimpleACK and before the second's NORMAL, so the last to-state sent is
-/// the state AI-1 is in.
+/// Two peers fault and clear AI-1 while the first one's SimpleACK is held on
+/// its way out. Each request sends its notification from a task of its own,
+/// apart from its response, so the first FAULT reaches the wire while that
+/// SimpleACK is still held. The test writes the clear only once the FAULT is
+/// out, so the wire then carries FAULT and NORMAL in that order and the last
+/// to-state sent is AI-1's. It doesn't pin the order of two requests' sends
+/// in general: nothing orders sends across requests.
 #[tokio::test(start_paused = true)]
-async fn two_peers_writes_send_their_transitions_in_commit_order() {
+async fn a_held_response_does_not_hold_back_its_notification() {
     let gap = Gap::start(true).await;
     let oid = ai(1);
-    gap.hold.armed.store(true, Ordering::SeqCst);
+    gap.holds.ack.armed.store(true, Ordering::SeqCst);
     let first = gap.send_reliability(oid, Reliability::NO_SENSOR).await;
-    let held = tokio::time::timeout(Duration::from_secs(5), gap.hold.held.acquire());
-    held.await
-        .expect("the first SimpleACK is held")
-        .unwrap()
-        .forget();
-    assert_eq!(
-        gap.events(),
-        [(oid, EventState::FAULT)],
-        "sent before its ACK"
-    );
+    gap.holds.ack.engaged().await;
+    let out = gap.wait_for_events(1).await;
+    assert_eq!(out, [(oid, EventState::FAULT)], "out while its ACK is held");
 
     let value = PropertyValue::Enumerated(Reliability::NO_FAULT_DETECTED.to_raw());
     let second = gap
         .send_write(&READER, oid, PropertyIdentifier::RELIABILITY, value)
         .await;
     gap.acknowledged(&READER, second).await;
-    gap.hold.release.add_permits(1);
+    gap.wait_for_events(2).await;
+    gap.holds.ack.release.add_permits(1);
     gap.acknowledged(&WRITER, first).await;
     tokio::time::sleep(Duration::from_millis(10)).await;
     assert_eq!(
         gap.events(),
         [(oid, EventState::FAULT), (oid, EventState::NORMAL)],
-        "the transitions in the order they committed"
+        "the FAULT, then the NORMAL written once it was out"
     );
     assert_eq!(gap.event_state(oid).await, EventState::NORMAL.to_raw());
+}
+
+/// A peer's write whose EventNotification stalls on its way out, as an
+/// unconfirmed copy can while its route waits for BACnet/SC address
+/// resolution: the writer's SimpleACK goes out anyway, and the COV fanout
+/// waits for the notification, which goes first (#889).
+#[tokio::test(start_paused = true)]
+async fn a_stalled_event_notification_does_not_hold_back_the_response() {
+    let gap = Gap::start(true).await;
+    let oid = ai(1);
+    gap.subscribe(oid).await;
+    gap.holds.event.armed.store(true, Ordering::SeqCst);
+    let id = gap.send_reliability(oid, Reliability::NO_SENSOR).await;
+    gap.holds.event.engaged().await;
+    // Answered within a second of the paused clock, the notification held.
+    gap.acknowledged(&WRITER, id).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(gap.cov_flags(), [], "no COV report before the notification");
+
+    gap.holds.event.release.add_permits(1);
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert_eq!(gap.events(), [(oid, EventState::FAULT)]);
+    let flags = IN_ALARM | FAULT | OUT_OF_SERVICE;
+    assert_eq!(gap.cov_flags(), [flags], "the COV report once it is sent");
+}
+
+/// The server stops while a write's EventNotification is stalled, after the
+/// response went out. `stop()` doesn't wait for the send: it aborts it with
+/// the request, so the notification handed to the transport never finishes
+/// and the COV fanout the request owed never runs. The transition stays
+/// committed, as a request stopped during its post-write work leaves it.
+#[tokio::test(start_paused = true)]
+async fn stop_aborts_a_stalled_event_notification_and_the_fanout_behind_it() {
+    let mut gap = Gap::start(true).await;
+    let oid = ai(1);
+    gap.subscribe(oid).await;
+    gap.holds.event.armed.store(true, Ordering::SeqCst);
+    let id = gap.send_reliability(oid, Reliability::NO_SENSOR).await;
+    gap.holds.event.engaged().await;
+    gap.acknowledged(&WRITER, id).await;
+
+    let stopped = tokio::time::timeout(Duration::from_secs(30), gap.server.stop());
+    stopped.await.expect("stop returns").expect("stop succeeds");
+    assert_eq!(gap.event_state(oid).await, EventState::FAULT.to_raw());
+    assert_eq!(
+        gap.events(),
+        [(oid, EventState::FAULT)],
+        "handed over, held"
+    );
+    assert_eq!(gap.cov_flags(), [], "no COV report");
 }
