@@ -96,12 +96,14 @@ fn on_each_config_object(
 trait Staging: DurableWrites {}
 #[cfg(feature = "durable-writes")]
 impl<T: DurableWrites> Staging for T {}
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 #[cfg(not(feature = "durable-writes"))]
 trait Staging {}
 #[cfg(not(feature = "durable-writes"))]
 impl<T> Staging for T {}
 
 /// An object with storage, as the server reaches it.
+#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 trait KeptObject: BACnetObject + Staging {
     fn object(&self) -> &dyn BACnetObject;
     fn object_mut(&mut self) -> &mut dyn BACnetObject;
@@ -117,6 +119,7 @@ impl<T: BACnetObject + Staging> KeptObject for T {
     }
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_written_description_survives_a_rebuild() {
     on_each_config_object(|open, _, _| {
@@ -130,6 +133,7 @@ fn a_written_description_survives_a_rebuild() {
     });
 }
 
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_description_whose_save_fails_is_refused_with_the_old_value_kept() {
     on_each_config_object(|open, _, _| {
@@ -150,6 +154,7 @@ fn a_description_whose_save_fails_is_refused_with_the_old_value_kept() {
 
 /// A NULL changes nothing and saves nothing; one past the cap, or of
 /// another type, is refused before anything is saved.
+#[cfg(feature = "durable-writes")]
 #[test]
 fn a_null_saves_nothing_and_a_refused_description_saves_nothing() {
     on_each_config_object(|open, _, _| {

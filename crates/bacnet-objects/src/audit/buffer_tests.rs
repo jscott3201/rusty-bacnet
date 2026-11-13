@@ -2,7 +2,6 @@
 
 use crate::traits::Timed;
 use std::sync::Arc;
-#[cfg_attr(not(feature = "durable-writes"), allow(unused_imports))]
 use std::sync::atomic::Ordering;
 
 use bacnet_types::bitstring::LogStatus;
@@ -52,7 +51,6 @@ fn read(log: &AuditLogObject, property: PropertyIdentifier) -> PropertyValue {
     log.read_property(property, None).unwrap()
 }
 
-#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 fn assert_operational_problem(error: Error) {
     assert!(
         matches!(error, Error::Remote(RemoteError::Error { class, code })

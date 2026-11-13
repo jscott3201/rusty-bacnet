@@ -333,7 +333,6 @@ fn an_access_object_clear_drops_what_was_saved() {
     assert_eq!(read(zone.as_ref(), P::NOTIFICATION_CLASS), class(0));
 }
 
-#[cfg_attr(not(feature = "durable-writes"), allow(dead_code))]
 fn notify_type(notify_type: NotifyType) -> PendingWrite {
     PendingWrite {
         property: P::NOTIFY_TYPE,
