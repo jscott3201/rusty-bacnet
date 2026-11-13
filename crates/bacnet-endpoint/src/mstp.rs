@@ -39,6 +39,7 @@
 
 use std::time::Duration;
 
+use bacnet_device_core::report::ReportConfig;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_transport::mstp::{MstpConfig, MstpExecutionMode, MstpTransport, SerialPort};
 use bacnet_types::MacAddr;
@@ -99,6 +100,7 @@ pub struct MstpEndpointBuilder<S: SerialPort> {
     session: SessionConfig,
     database: Option<ObjectDatabase>,
     identity: Option<crate::identity::DeviceIdentity>,
+    cov: Option<ReportConfig>,
     source_audit_bindings: Vec<(ObjectIdentifier, MacAddr)>,
     source_audit_routed: crate::session::RoutedBindings,
 }
@@ -128,6 +130,7 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
             session: SessionConfig::default(),
             database: None,
             identity: None,
+            cov: None,
             source_audit_bindings: Vec::new(),
             source_audit_routed: Vec::new(),
         }
@@ -296,6 +299,19 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
         self
     }
 
+    /// Enables SubscribeCOV, SubscribeCOVProperty and
+    /// SubscribeCOVPropertyMultiple for the objects of the database, with
+    /// the COV notifications they call for, under `config`, as
+    /// [`BipEndpointBuilder::cov`](crate::bip::BipEndpointBuilder::cov)
+    /// does. Its bounds, startup requirements and refusals are those of
+    /// [`EndpointSession::with_cov`].
+    /// [`build_transport`](Self::build_transport) refuses it, since a bare
+    /// transport can't keep it.
+    pub fn cov(mut self, config: ReportConfig) -> Self {
+        self.cov = Some(config);
+        self
+    }
+
     /// Validates the MS/TP configuration without consuming the serial owner.
     ///
     /// Runs the transport's own checks ([`MstpConfig::validate`]):
@@ -339,6 +355,9 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
                 "source Audit route data requires build_session()".into(),
             ));
         }
+        if self.cov.is_some() {
+            return Err(Error::Encoding("COV requires build_session()".into()));
+        }
         let config = self.config();
         let serial = self
             .serial
@@ -367,6 +386,7 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
         let session = self.session.clone();
         let database = self.database.take();
         let identity = self.identity.take();
+        let cov = self.cov.take();
         let transport = self.build_transport()?;
         let diagnostics = transport.diagnostics();
         let mut endpoint = EndpointSession::new(transport, role, session)?;
@@ -376,6 +396,9 @@ impl<S: SerialPort> MstpEndpointBuilder<S> {
         }
         if let Some(id) = identity {
             endpoint = endpoint.device(id);
+        }
+        if let Some(config) = cov {
+            endpoint = endpoint.with_cov(config);
         }
         Ok(endpoint.with_source_audit_device_bindings(bindings, routed))
     }

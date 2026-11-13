@@ -32,6 +32,7 @@ over a `TlsWebSocket` connected to a local constrained-TLS `ScHub` for RB-16 pro
 //! reuse them for the device lifetime; all-zero is rejected before any hub
 //! I/O.
 
+use bacnet_device_core::report::ReportConfig;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_transport::sc::{ScReconnectConfig, ScTransport};
 use bacnet_transport::sc_frame::Vmac;
@@ -73,6 +74,7 @@ pub struct ScEndpointBuilder {
     heartbeat_interval_ms: u64,
     heartbeat_timeout_ms: u64,
     reconnect: Option<ScReconnectConfig>,
+    cov: Option<ReportConfig>,
     source_audit_bindings: Vec<(ObjectIdentifier, MacAddr)>,
     source_audit_routed: crate::session::RoutedBindings,
 }
@@ -94,6 +96,7 @@ impl ScEndpointBuilder {
             heartbeat_interval_ms: 30_000,
             heartbeat_timeout_ms: 60_000,
             reconnect: None,
+            cov: None,
             source_audit_bindings: Vec::new(),
             source_audit_routed: Vec::new(),
         }
@@ -197,6 +200,17 @@ impl ScEndpointBuilder {
     /// caller-owned config.
     pub fn reconnect(mut self, config: ScReconnectConfig) -> Self {
         self.reconnect = Some(config);
+        self
+    }
+
+    /// Enables SubscribeCOV, SubscribeCOVProperty and
+    /// SubscribeCOVPropertyMultiple for the objects of the database, with
+    /// the COV notifications they call for, under `config`, as
+    /// [`BipEndpointBuilder::cov`](crate::bip::BipEndpointBuilder::cov)
+    /// does. Its bounds, startup requirements and refusals are those of
+    /// [`EndpointSession::with_cov`].
+    pub fn cov(mut self, config: ReportConfig) -> Self {
+        self.cov = Some(config);
         self
     }
 
@@ -398,6 +412,9 @@ impl ScEndpointBuilder {
         }
         if let Some(id) = self.identity.take() {
             endpoint = endpoint.device(id);
+        }
+        if let Some(config) = self.cov.take() {
+            endpoint = endpoint.with_cov(config);
         }
         Ok(endpoint.with_source_audit_device_bindings(
             std::mem::take(&mut self.source_audit_bindings),

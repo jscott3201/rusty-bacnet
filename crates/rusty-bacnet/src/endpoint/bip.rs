@@ -57,6 +57,8 @@ struct BipEndpointConfig {
     device_writes: crate::mutation_policy::DeviceWritePolicy,
     /// The source Audit Reporter keywords, if any (#2348).
     source_audit: Option<super::source_audit::SourceAuditKeywords>,
+    /// The `cov` keyword's configuration, when COV is on (#2490).
+    cov: Option<bacnet_device_core::report::ReportConfig>,
 }
 
 type BipSession = EndpointSession<BipTransport>;
@@ -101,6 +103,9 @@ impl BipEndpointConfig {
         }
         if let Some(source) = &config.source_audit {
             builder = source.bind(builder);
+        }
+        if let Some(cov) = config.cov.clone() {
+            builder = builder.cov(cov);
         }
         let mut session = builder.build_session().map_err(to_py_err)?;
         if let Some(source) = &config.source_audit {
@@ -222,6 +227,18 @@ impl PyBipEndpoint {
     ///         (#2371). A Reporter identifier of another type, and other
     ///         shapes construction can check, raise ValueError here; a
     ///         Reporter that wasn't added raises BacnetError at start.
+    ///     cov: Keyword-only (default None, no COV). An `EndpointCov` dict
+    ///         turns on SubscribeCOV, SubscribeCOVProperty and
+    ///         SubscribeCOVPropertyMultiple for the endpoint's objects, with
+    ///         the COV notifications their subscriptions call for after
+    ///         `set_present_value_local` and `set_reliability_local` (#2490).
+    ///         Its keys, all optional (`{}` takes the defaults), are
+    ///         `policy` (a `CovPolicy`, as `BACnetServer`'s `cov_policy`),
+    ///         `outbox_entries` (16), `outbox_octets` (2048),
+    ///         `confirmed_timeout_ms` (3000) and `confirmed_retries` (3).
+    ///         An unknown key or a wrong type raises TypeError, and a zero
+    ///         outbox or timeout ValueError. The endpoint has no clock, so
+    ///         a timestamped COV-multiple reference is refused.
     #[new]
     #[pyo3(signature = (
         device_instance,
@@ -254,7 +271,8 @@ impl PyBipEndpoint {
         device_write_policy=None,
         source_audit_reporter=None,
         audit_recipient=None,
-        audit_device_bindings=None
+        audit_device_bindings=None,
+        cov=None
     ))]
     fn new(
         device_instance: u32,
@@ -287,6 +305,7 @@ impl PyBipEndpoint {
         source_audit_reporter: Option<crate::types::PyObjectIdentifier>,
         audit_recipient: Option<&Bound<'_, PyAny>>,
         audit_device_bindings: Option<Vec<(crate::types::PyObjectIdentifier, String)>>,
+        cov: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<Self> {
         let reinitialize = crate::reinitialize::EndpointReinitialize::parse(
             on_reinitialize,
@@ -294,6 +313,7 @@ impl PyBipEndpoint {
             reinit_password,
         )?;
         let device_writes = crate::mutation_policy::DeviceWritePolicy::parse(device_write_policy)?;
+        let cov = super::cov::parse(cov)?;
         let mode = crate::bip_options::bip_mode("bip", bbmd, foreign_device)?;
         let multicast = crate::bip_options::bip_multicast(
             "bip",
@@ -374,6 +394,7 @@ impl PyBipEndpoint {
                 reinitialize,
                 device_writes,
                 source_audit,
+                cov,
             },
         })
     }
@@ -482,6 +503,7 @@ impl PyBipEndpoint {
         let inner = self.lifecycle.session.clone();
         let reinitialize = self.config.reinitialize.enabled();
         let device_writes = self.config.device_writes.enabled();
+        let cov = self.config.cov.is_some();
         crate::py_async::future_into_py(py, async move {
             let handle = {
                 let guard = inner.lock().await;
@@ -496,7 +518,12 @@ impl PyBipEndpoint {
                     )
                 })?
             };
-            Ok(PyEndpointServer::new(handle, reinitialize, device_writes))
+            Ok(PyEndpointServer::new(
+                handle,
+                reinitialize,
+                device_writes,
+                cov,
+            ))
         })
     }
 

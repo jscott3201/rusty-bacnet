@@ -3339,6 +3339,7 @@ dependencies = [
  "bacnet-ops",
  "bacnet-server",
  "bacnet-services",
+ "bacnet-time",
  "bacnet-transport",
  "bacnet-types",
  "bytes",

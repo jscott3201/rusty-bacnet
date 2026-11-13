@@ -71,8 +71,9 @@ class EndpointStubParityTests(unittest.TestCase):
     def test_endpoint_classes_present_in_runtime_and_stub(self):
         tree = installed_stub()
         classes = stub_classes(tree)
-        # TypedDicts (EndpointStatus) exist in the stub only, like ScHubStatus.
-        for name in ("EndpointStatus",):
+        # TypedDicts (EndpointStatus, EndpointCov) exist in the stub only,
+        # like ScHubStatus.
+        for name in ("EndpointStatus", "EndpointCov"):
             with self.subTest(symbol=name):
                 self.assertIn(name, classes)
         for name in (
@@ -99,7 +100,7 @@ class EndpointStubParityTests(unittest.TestCase):
                            "min_request_interval_ms", "bbmd", "foreign_device", "multicast",
                            "on_reinitialize", "after_reinitialize", "reinit_password",
                            "device_write_policy", "source_audit_reporter",
-                           "audit_recipient", "audit_device_bindings"]),
+                           "audit_recipient", "audit_device_bindings", "cov"]),
             (ScEndpoint, ["device_instance", "sc_hub", "sc_vmac", "sc_ca_cert",
                           "sc_client_cert", "sc_client_key", "sc_device_uuid",
                           "device_name", "vendor_id", "sc_heartbeat_interval_ms",
@@ -110,7 +111,7 @@ class EndpointStubParityTests(unittest.TestCase):
                           "after_reinitialize", "reinit_password",
                           "device_write_policy", "source_audit_reporter",
                           "audit_recipient", "audit_device_bindings", "reconnect",
-                          "sc_failover_hub", "sc_connect_timeout_ms"]),
+                          "sc_failover_hub", "sc_connect_timeout_ms", "cov"]),
             (MstpEndpoint, ["device_instance", "serial_port", "device_name", "vendor_id",
                             "mstp_baud", "mstp_mac", "mstp_max_master",
                             "mstp_max_info_frames", "max_apdu", "segmentation",
@@ -122,7 +123,7 @@ class EndpointStubParityTests(unittest.TestCase):
                             "mstp_reply_timeout_ms", "on_reinitialize",
                             "after_reinitialize", "reinit_password",
                             "device_write_policy", "source_audit_reporter",
-                            "audit_recipient", "audit_device_bindings"]),
+                            "audit_recipient", "audit_device_bindings", "cov"]),
         ]
         for cls, expected in cases:
             with self.subTest(cls=cls.__name__):

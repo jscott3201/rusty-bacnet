@@ -23,6 +23,8 @@ bacnet-npdu.workspace = true
 bacnet-ops = { workspace = true, features = ["sc-tls"] }
 bacnet-objects = { workspace = true, features = ["std"] }
 bacnet-device-core = { workspace = true, features = ["std"] }
+# The endpoints' `cov` keyword's confirmed-notification timeout (#2490).
+bacnet-time = { workspace = true, features = ["std"] }
 bacnet-services = { workspace = true, features = ["std"] }
 pyo3.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }

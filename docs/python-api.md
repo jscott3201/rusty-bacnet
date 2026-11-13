@@ -6035,7 +6035,8 @@ as `BACnetServer`'s (#1867), checked by the same code: `tags`,
 and `value_source_tracking` on the two Value builders (see
 [Object profiles and Value_Source](#object-profiles-and-value_source)).
 The endpoint serves those rows to ReadProperty, the one object service its
-server role answers. Peers can't write these objects through an endpoint, so
+server role answers besides the COV subscriptions `cov` turns on
+([Endpoint COV](#endpoint-cov)). Peers can't write these objects through an endpoint, so
 there `present_value_access` and `value_source_tracking` only describe the
 object: a tracked object's Value_Source reads null.
 
@@ -6083,11 +6084,59 @@ endpoint = BipEndpoint(1001, device_write_policy=device_writes)
 The endpoint answers requests on one dispatch task, so a slow callable stalls
 every request, and `close()` waits for a `device_write_policy` call that is
 still running. The callables run with no lock held (`on_reinitialize` aside),
-but starting a binding operation from one is refused. The roles expose
-neither Device COV list property. A supplied `services` list must include RP and
+but starting a binding operation from one is refused. Without `cov` the
+Device has neither COV list property. A supplied `services` list must include RP and
 cannot claim unsupported execution; incompatible server-role profiles fail
 startup before ingress.
 ClientOnly has no responder and keeps its service list as a local declaration.
+
+### Endpoint COV
+
+The keyword-only `cov` (#2490), an `EndpointCov` dict, turns on SubscribeCOV,
+SubscribeCOVProperty and SubscribeCOVPropertyMultiple for the endpoint's
+objects, on `BipEndpoint`, `ScEndpoint` and `MstpEndpoint` alike. The session
+runs the Rust endpoint's COV reporting: the notifications follow a
+subscription, its renewal and each change the application makes with
+`set_present_value_local` or `set_reliability_local`, which take the values
+and raise the errors of `BACnetServer`'s methods of the same names. The Device
+then advertises the three services and lists Active_COV_Subscriptions and
+Active_COV_Multiple_Subscriptions, and `service_scope()` lists
+`subscribe_cov`, `subscribe_cov_property` and
+`subscribe_cov_property_multiple`. Without `cov` the three services are
+refused with UNRECOGNIZED_SERVICE, as before.
+
+Every key is optional, so `cov={}` takes the Rust defaults:
+
+| Key | Default | What it sets |
+|---|---|---|
+| `policy` | `CovPolicy` defaults | the subscription caps and per-change budget, read as `BACnetServer(cov_policy=...)` is |
+| `outbox_entries` | 16 | notifications queued at once |
+| `outbox_octets` | 2048 | their octets, together |
+| `confirmed_timeout_ms` | 3000 | how long a confirmed notification waits for its answer |
+| `confirmed_retries` | 3 | resends after the first |
+
+An unknown key or a value of the wrong type raises `TypeError`, an integer out
+of range `OverflowError`, and a zero outbox or timeout `ValueError`, in the
+constructor. At most 64 confirmed notifications are out at once, so
+subscribers that stop answering can't take every invoke ID from the client
+role.
+
+```python
+endpoint = BipEndpoint(1001, cov={"policy": {"max_subscriptions_global": 256}})
+endpoint.add_analog_input(instance=1, name="Zone Temp", present_value=21.5)
+async with endpoint:
+    # AI-1's subscribers hear of this.
+    await endpoint.set_present_value_local(oid, PropertyValue.real(22.0))
+```
+
+A Python endpoint has no Device clock. A timestamped
+SubscribeCOVPropertyMultiple reference is therefore refused with SERVICES /
+OPTIONAL_FUNCTIONALITY_NOT_SUPPORTED, while an untimestamped one is taken, and
+no notification the endpoint sends carries a time of change. A client's write
+reaches only the Device's Description and Audit recipient, and the Device
+takes no subscription, so it notifies nobody. The endpoint runs no event pass:
+a Reliability set here shows FAULT in Status_Flags, but Event_State stays as it
+is.
 
 ### ScEndpoint reconnect, failover hub and link events
 

@@ -13,6 +13,7 @@ use pyo3::types::PyModuleMethods;
 mod bip;
 mod builders;
 mod common;
+mod cov;
 mod lifecycle;
 mod mstp;
 mod roles;

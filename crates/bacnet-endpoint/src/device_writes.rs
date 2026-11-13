@@ -122,8 +122,10 @@ impl<T: TransportPort + 'static> EndpointSession<T> {
     /// Enables SubscribeCOV, SubscribeCOVProperty and
     /// SubscribeCOVPropertyMultiple for the objects of the session's
     /// database, and the COV notifications their subscriptions call for
-    /// (#2490), under `config`. The B/IP builder sets it as
-    /// [`BipEndpointBuilder::cov`](crate::bip::BipEndpointBuilder::cov).
+    /// (#2490), under `config`. The builders set it as
+    /// [`BipEndpointBuilder::cov`](crate::bip::BipEndpointBuilder::cov),
+    /// [`MstpEndpointBuilder::cov`](crate::mstp::MstpEndpointBuilder::cov)
+    /// and [`ScEndpointBuilder::cov`](crate::sc::ScEndpointBuilder::cov).
     ///
     /// The session runs bacnet-device-core's
     /// [`Reporter`](bacnet_device_core::report::Reporter) over its database:

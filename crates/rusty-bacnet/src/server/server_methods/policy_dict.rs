@@ -1,4 +1,5 @@
-//! Reading the constructor's policy dicts (`cov_policy`, `time_sync_policy`):
+//! Reading the constructor's policy dicts (`cov_policy`, `time_sync_policy`,
+//! and the endpoints' `cov`):
 //! each key names a field, and the errors keep the exception types the
 //! constructor's other keywords raise.
 
@@ -8,7 +9,7 @@ use pyo3::types::PyDict;
 
 /// The dict's entries in order, each key read as a `str`; a non-str key
 /// raises TypeError. `None` has no entries.
-pub(super) fn entries<'py>(
+pub(crate) fn entries<'py>(
     policy: &str,
     dict: Option<&Bound<'py, PyDict>>,
 ) -> PyResult<Vec<(String, Bound<'py, PyAny>)>> {
@@ -24,13 +25,13 @@ pub(super) fn entries<'py>(
 }
 
 /// The TypeError for a key the policy does not have.
-pub(super) fn unexpected_key(policy: &str, key: &str) -> PyErr {
+pub(crate) fn unexpected_key(policy: &str, key: &str) -> PyErr {
     PyTypeError::new_err(format!("{policy} got an unexpected key '{key}'"))
 }
 
 /// Extract one value, naming its key in a TypeError or OverflowError while
 /// keeping the exception type.
-pub(super) fn field<'py, T: FromPyObjectOwned<'py>>(
+pub(crate) fn field<'py, T: FromPyObjectOwned<'py>>(
     policy: &str,
     key: &str,
     value: &Bound<'py, PyAny>,

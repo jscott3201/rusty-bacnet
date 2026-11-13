@@ -49,6 +49,8 @@ struct ScEndpointConfig {
     device_writes: crate::mutation_policy::DeviceWritePolicy,
     /// The source Audit Reporter keywords, if any (#2357).
     source_audit: Option<super::source_audit::SourceAuditKeywords>,
+    /// The `cov` keyword's configuration, when COV is on (#2490).
+    cov: Option<bacnet_device_core::report::ReportConfig>,
     /// The `reconnect` keyword's policy, if any (#1946).
     reconnect: Option<ScReconnectConfig>,
     /// The `sc_failover_hub` URL, if any; needs `reconnect`.
@@ -94,6 +96,9 @@ impl ScEndpointConfig {
             .device(config.identity.clone());
         if let Some(reconnect) = config.reconnect.clone() {
             builder = builder.reconnect(reconnect);
+        }
+        if let Some(cov) = config.cov.clone() {
+            builder = builder.cov(cov);
         }
         let session = Box::pin(builder.connect_hub_session(hubs))
             .await
@@ -213,6 +218,18 @@ impl PyScEndpoint {
     ///         (#1946): an `ScReconnect` to redial a lost hub, a failover
     ///         hub's URL (needs `reconnect`), and a bound of at least 1 ms
     ///         on each hub dial and Connect-Request (default 10000).
+    ///     cov: Keyword-only (default None, no COV). An `EndpointCov` dict
+    ///         turns on SubscribeCOV, SubscribeCOVProperty and
+    ///         SubscribeCOVPropertyMultiple for the endpoint's objects, with
+    ///         the COV notifications their subscriptions call for after
+    ///         `set_present_value_local` and `set_reliability_local` (#2490).
+    ///         Its keys, all optional (`{}` takes the defaults), are
+    ///         `policy` (a `CovPolicy`, as `BACnetServer`'s `cov_policy`),
+    ///         `outbox_entries` (16), `outbox_octets` (2048),
+    ///         `confirmed_timeout_ms` (3000) and `confirmed_retries` (3).
+    ///         An unknown key or a wrong type raises TypeError, and a zero
+    ///         outbox or timeout ValueError. The endpoint has no clock, so
+    ///         a timestamped COV-multiple reference is refused.
     #[new]
     #[pyo3(signature = (
         device_instance,
@@ -244,7 +261,8 @@ impl PyScEndpoint {
         audit_device_bindings=None,
         reconnect=None,
         sc_failover_hub=None,
-        sc_connect_timeout_ms=None
+        sc_connect_timeout_ms=None,
+        cov=None
     ))]
     fn new(
         device_instance: u32,
@@ -276,6 +294,7 @@ impl PyScEndpoint {
         reconnect: Option<PyRef<'_, crate::sc_reconnect::PyScReconnect>>,
         sc_failover_hub: Option<String>,
         sc_connect_timeout_ms: Option<u64>,
+        cov: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<Self> {
         let reinitialize = crate::reinitialize::EndpointReinitialize::parse(
             on_reinitialize,
@@ -283,6 +302,7 @@ impl PyScEndpoint {
             reinit_password,
         )?;
         let device_writes = crate::mutation_policy::DeviceWritePolicy::parse(device_write_policy)?;
+        let cov = super::cov::parse(cov)?;
         if queue_capacity == 0 {
             return Err(PyValueError::new_err(
                 "queue_capacity must be greater than zero",
@@ -374,6 +394,7 @@ impl PyScEndpoint {
                 reconnect: reconnect.map(|options| options.config.clone()),
                 failover_hub: sc_failover_hub,
                 connect_timeout_ms: sc_connect_timeout_ms,
+                cov,
             },
             first_events: Arc::default(),
         })
@@ -488,6 +509,7 @@ impl PyScEndpoint {
         let inner = self.lifecycle.session.clone();
         let reinitialize = self.config.reinitialize.enabled();
         let device_writes = self.config.device_writes.enabled();
+        let cov = self.config.cov.is_some();
         crate::py_async::future_into_py(py, async move {
             let handle = {
                 let guard = inner.lock().await;
@@ -502,7 +524,12 @@ impl PyScEndpoint {
                     )
                 })?
             };
-            Ok(PyEndpointServer::new(handle, reinitialize, device_writes))
+            Ok(PyEndpointServer::new(
+                handle,
+                reinitialize,
+                device_writes,
+                cov,
+            ))
         })
     }
 

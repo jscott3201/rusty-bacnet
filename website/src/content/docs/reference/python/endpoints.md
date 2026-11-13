@@ -73,8 +73,22 @@ def __init__(
     source_audit_reporter: Optional[ObjectIdentifier] = None,
     audit_recipient: Optional[AuditRecipientInput] = None,
     audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str]]] = None,
+    cov: EndpointCov | None = None,
 ) -> None
 ```
+
+`cov`: an `EndpointCov` turns on SubscribeCOV, SubscribeCOVProperty
+and SubscribeCOVPropertyMultiple for the endpoint's objects (#2490),
+with the notifications their subscriptions call for after
+`set_present_value_local` and `set_reliability_local`; without it
+all three are refused as unrecognized services. At most 64 confirmed
+notifications are out at once, so subscribers that stop answering
+leave the client role invoke IDs of its own. The endpoint has no
+Device clock: a timestamped COV-multiple reference is refused with
+SERVICES / OPTIONAL\_FUNCTIONALITY\_NOT\_SUPPORTED, untimestamped ones
+are taken, and nothing it sends carries a time of change. A client's
+write reaches only the Device, which takes no subscription, so it
+notifies nobody. `ScEndpoint` and `MstpEndpoint` take it too.
 
 `source_audit_reporter` / `audit_recipient` /
 `audit_device_bindings` (#2348): the Audit Reporter, added with
@@ -367,6 +381,37 @@ source and target, filtered by that Reporter's level and operations;
 without one, nothing. A peer's accepted restart is recorded already.
 RuntimeError when the endpoint is not running.
 
+### BipEndpoint.set_present_value_local
+
+```python
+def set_present_value_local(
+    self,
+    object_id: ObjectIdentifier,
+    value: PropertyValue,
+) -> Awaitable[None]
+```
+
+Supply an object's Present\_Value from the application, as
+`BACnetServer.set_present_value_local` does, with the same values
+taken and the same errors (#2490). With `cov`, the object's COV
+subscribers hear of the change. RuntimeError before `start()`.
+
+### BipEndpoint.set_reliability_local
+
+```python
+def set_reliability_local(
+    self,
+    object_id: ObjectIdentifier,
+    reliability: Reliability,
+) -> Awaitable[None]
+```
+
+Set the Reliability the application works out for an object, as
+`BACnetServer.set_reliability_local` does, with the same objects and
+errors (#2490). Status\_Flags' FAULT follows it, and with `cov` the
+object's COV subscribers hear of it. The endpoint runs no event pass,
+so Event\_State stays as it is. RuntimeError before `start()`.
+
 ## ScEndpoint
 
 SC endpoint: one hub connection that both initiates and executes.
@@ -416,12 +461,13 @@ def __init__(
     reconnect: Optional[ScReconnect] = None,
     sc_failover_hub: str | None = None,
     sc_connect_timeout_ms: int | None = None,
+    cov: EndpointCov | None = None,
 ) -> None
 ```
 
 `read_work_limit`, `min_request_interval_ms`,
-`on_reinitialize`, `after_reinitialize`, `reinit_password` and
-`device_write_policy` are as for `BipEndpoint`.
+`on_reinitialize`, `after_reinitialize`, `reinit_password`,
+`device_write_policy` and `cov` are as for `BipEndpoint`.
 
 `source_audit_reporter` / `audit_recipient` /
 `audit_device_bindings`: as on `BipEndpoint` (#2357), each
@@ -697,6 +743,37 @@ device as source and target, filtered by that Reporter's level and
 operations; without one, nothing. A peer's accepted restart is
 recorded already. RuntimeError when the endpoint is not running.
 
+### ScEndpoint.set_present_value_local
+
+```python
+def set_present_value_local(
+    self,
+    object_id: ObjectIdentifier,
+    value: PropertyValue,
+) -> Awaitable[None]
+```
+
+Supply an object's Present\_Value from the application, as
+`BACnetServer.set_present_value_local` does, with the same values
+taken and the same errors (#2490). With `cov`, the object's COV
+subscribers hear of the change. RuntimeError before `start()`.
+
+### ScEndpoint.set_reliability_local
+
+```python
+def set_reliability_local(
+    self,
+    object_id: ObjectIdentifier,
+    reliability: Reliability,
+) -> Awaitable[None]
+```
+
+Set the Reliability the application works out for an object, as
+`BACnetServer.set_reliability_local` does, with the same objects and
+errors (#2490). Status\_Flags' FAULT follows it, and with `cov` the
+object's COV subscribers hear of it. The endpoint runs no event pass,
+so Event\_State stays as it is. RuntimeError before `start()`.
+
 ## MstpEndpoint
 
 MS/TP endpoint: one serial owner that both initiates and executes.
@@ -747,12 +824,13 @@ def __init__(
     source_audit_reporter: Optional[ObjectIdentifier] = None,
     audit_recipient: Optional[AuditRecipientInput] = None,
     audit_device_bindings: Optional[list[tuple[ObjectIdentifier, str]]] = None,
+    cov: EndpointCov | None = None,
 ) -> None
 ```
 
 `read_work_limit`, `min_request_interval_ms`,
-`on_reinitialize`, `after_reinitialize`, `reinit_password` and
-`device_write_policy` are as for `BipEndpoint`. Here
+`on_reinitialize`, `after_reinitialize`, `reinit_password`,
+`device_write_policy` and `cov` are as for `BipEndpoint`. Here
 `after_reinitialize` runs once the SimpleACK is queued, before the
 token sends it: stopping the endpoint at once can drop the reply, so
 wait a short while first.
@@ -1012,6 +1090,37 @@ device as source and target, filtered by that Reporter's level and
 operations; without one, nothing. A peer's accepted restart is
 recorded already. RuntimeError when the endpoint is not running.
 
+### MstpEndpoint.set_present_value_local
+
+```python
+def set_present_value_local(
+    self,
+    object_id: ObjectIdentifier,
+    value: PropertyValue,
+) -> Awaitable[None]
+```
+
+Supply an object's Present\_Value from the application, as
+`BACnetServer.set_present_value_local` does, with the same values
+taken and the same errors (#2490). With `cov`, the object's COV
+subscribers hear of the change. RuntimeError before `start()`.
+
+### MstpEndpoint.set_reliability_local
+
+```python
+def set_reliability_local(
+    self,
+    object_id: ObjectIdentifier,
+    reliability: Reliability,
+) -> Awaitable[None]
+```
+
+Set the Reliability the application works out for an object, as
+`BACnetServer.set_reliability_local` does, with the same objects and
+errors (#2490). Status\_Flags' FAULT follows it, and with `cov` the
+object's COV subscribers hear of it. The endpoint runs no event pass,
+so Event\_State stays as it is. RuntimeError before `start()`.
+
 ## EndpointClient
 
 Client role cloned from a running endpoint (no lifecycle).
@@ -1193,8 +1302,32 @@ def service_scope(self) -> dict[str, Any]
 ```
 
 Narrow scope: executes `read_property`, plus `write_property`
-when the owner has `device_write_policy` and
-`reinitialize_device` when it has `on_reinitialize`.
+when the owner has `device_write_policy`, `reinitialize_device`
+when it has `on_reinitialize`, and `subscribe_cov`,
+`subscribe_cov_property` and `subscribe_cov_property_multiple`
+when it has `cov`.
+
+## EndpointCov
+
+`class EndpointCov(TypedDict, total=False)`
+
+`BipEndpoint`/`ScEndpoint`/`MstpEndpoint(cov=...)`: turns COV on
+for the endpoint's objects (#2490), checked at construction; omitted keys
+keep their defaults, so `{}` turns it on with them all. `policy` is
+read as `BACnetServer(cov_policy=...)` is. `outbox_entries` (16) and
+`outbox_octets` (2048) bound the notifications queued at once;
+`confirmed_timeout_ms` (3000) and `confirmed_retries` (3) time a
+confirmed notification. An unknown key or a wrong type raises TypeError,
+an integer out of range OverflowError, and a zero outbox or timeout
+ValueError.
+
+Keys:
+
+- `policy: CovPolicy`
+- `outbox_entries: int`
+- `outbox_octets: int`
+- `confirmed_timeout_ms: int`
+- `confirmed_retries: int`
 
 ## EndpointStatus
 

@@ -26,7 +26,16 @@ const POLICY: &str = "cov_policy";
 /// the policy uses `..`, so a field added to `CovPolicy` stops the bindings
 /// compiling until it is bound here, and a bound field no key assigns is an
 /// unneeded `mut`, which the warning gate rejects.
-pub(super) fn cov_policy(dict: Option<&Bound<'_, PyDict>>) -> PyResult<CovPolicy> {
+pub(crate) fn cov_policy(dict: Option<&Bound<'_, PyDict>>) -> PyResult<CovPolicy> {
+    cov_policy_named(POLICY, dict)
+}
+
+/// [`cov_policy`] for a dict the errors call `name`, such as an endpoint's
+/// `cov['policy']`.
+pub(crate) fn cov_policy_named(
+    name: &str,
+    dict: Option<&Bound<'_, PyDict>>,
+) -> PyResult<CovPolicy> {
     let CovPolicy {
         mut max_subscriptions_global,
         mut max_subscriptions_per_peer,
@@ -39,35 +48,37 @@ pub(super) fn cov_policy(dict: Option<&Bound<'_, PyDict>>) -> PyResult<CovPolicy
         mut max_notification_bytes_per_event,
         mut max_confirmed_in_flight_per_peer,
     } = CovPolicy::default();
-    for (key, value) in entries(POLICY, dict)? {
+    for (key, value) in entries(name, dict)? {
         match key.as_str() {
-            "max_subscriptions_global" => max_subscriptions_global = field(&key, &value)?,
-            "max_subscriptions_per_peer" => max_subscriptions_per_peer = field(&key, &value)?,
-            "reserved_capacity" => reserved_capacity = field(&key, &value)?,
+            "max_subscriptions_global" => max_subscriptions_global = field(name, &key, &value)?,
+            "max_subscriptions_per_peer" => max_subscriptions_per_peer = field(name, &key, &value)?,
+            "reserved_capacity" => reserved_capacity = field(name, &key, &value)?,
             "reserved_peers" => {
-                reserved_peers = field::<Vec<Vec<u8>>>(&key, &value)?
+                reserved_peers = field::<Vec<Vec<u8>>>(name, &key, &value)?
                     .iter()
                     .map(|mac| MacAddr::from_slice(mac))
                     .collect();
             }
             "reserved_recipients" => {
-                reserved_recipients = field::<Vec<(Option<u16>, Vec<u8>)>>(&key, &value)?
+                reserved_recipients = field::<Vec<(Option<u16>, Vec<u8>)>>(name, &key, &value)?
                     .into_iter()
                     .map(|(network, mac)| recipient(network, &mac))
                     .collect();
             }
             "allow_indefinite_subscriptions" => {
-                allow_indefinite_subscriptions = field(&key, &value)?;
+                allow_indefinite_subscriptions = field(name, &key, &value)?;
             }
-            "max_indefinite_per_peer" => max_indefinite_per_peer = field(&key, &value)?,
-            "max_notifications_per_event" => max_notifications_per_event = field(&key, &value)?,
+            "max_indefinite_per_peer" => max_indefinite_per_peer = field(name, &key, &value)?,
+            "max_notifications_per_event" => {
+                max_notifications_per_event = field(name, &key, &value)?
+            }
             "max_notification_bytes_per_event" => {
-                max_notification_bytes_per_event = field(&key, &value)?;
+                max_notification_bytes_per_event = field(name, &key, &value)?;
             }
             "max_confirmed_in_flight_per_peer" => {
-                max_confirmed_in_flight_per_peer = field(&key, &value)?;
+                max_confirmed_in_flight_per_peer = field(name, &key, &value)?;
             }
-            _ => return Err(unexpected_key(POLICY, &key)),
+            _ => return Err(unexpected_key(name, &key)),
         }
     }
     let policy = CovPolicy {
@@ -101,9 +112,14 @@ fn recipient(network: Option<u16>, mac: &[u8]) -> CovRecipient {
     }
 }
 
-/// Extract one `cov_policy` value; see [`super::policy_dict::field`].
-fn field<'py, T: FromPyObjectOwned<'py>>(key: &str, value: &Bound<'py, PyAny>) -> PyResult<T> {
-    super::policy_dict::field(POLICY, key, value)
+/// Extract one value of the policy the errors call `name`; see
+/// [`super::policy_dict::field`].
+fn field<'py, T: FromPyObjectOwned<'py>>(
+    name: &str,
+    key: &str,
+    value: &Bound<'py, PyAny>,
+) -> PyResult<T> {
+    super::policy_dict::field(name, key, value)
 }
 
 #[cfg(test)]
