@@ -8,10 +8,10 @@
 //!
 //! Split from `event_notifications_tests.rs`, which is near the 700-LOC cap.
 
-use super::event_recipient_route::network_priority_for_event;
 use super::event_recipient_routing_tests::{
     address_recipient, destination_for, distribute_with_priority,
 };
+use bacnet_device_core::event::network_priority as network_priority_for_event;
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_npdu::NetworkPriority;
 use bytes::Bytes;

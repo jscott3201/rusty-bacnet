@@ -42,13 +42,16 @@ mod profile;
 mod timestamp;
 
 pub use acknowledge::{
-    AcceptedAcknowledgeAlarm, AcknowledgmentNotificationContext, handle_acknowledge_alarm,
+    AcceptedAcknowledgeAlarm, AcknowledgmentNotificationContext, acknowledge,
+    handle_acknowledge_alarm,
 };
 pub use commit::{
     IntrinsicCommitRefusal, MessageTexts, commit_intrinsic_transition,
     read_committed_history_snapshot,
 };
-pub use distribute::{DistributionOutcome, EventDistribution, distribute_event};
+pub use distribute::{
+    DistributionOutcome, EventDistribution, RecipientWindow, distribute_event, network_priority,
+};
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub use event_information::handle_get_event_information_with_budget;

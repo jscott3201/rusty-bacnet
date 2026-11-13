@@ -8,15 +8,6 @@ use bacnet_types::primitives::Time;
 
 const GLOBAL_BROADCAST_NETWORK: u16 = 0xFFFF;
 
-pub(super) fn network_priority_for_event(priority: u8) -> NetworkPriority {
-    match priority {
-        0..=63 => NetworkPriority::LifeSafety,
-        64..=127 => NetworkPriority::CriticalEquipment,
-        128..=191 => NetworkPriority::Urgent,
-        192..=255 => NetworkPriority::Normal,
-    }
-}
-
 pub(super) fn system_utc_recipient_filter_time(now: Duration) -> (DaysOfWeek, Time) {
     let (today, mut current_time) = local_day_and_time(now.as_secs(), 0);
     current_time.hundredths = (now.subsec_millis() / 10) as u8;

@@ -44,12 +44,10 @@ fn push_for(outbox: &mut Outbox, ticket: u64, process: u32, params: &[u8]) -> Pu
 }
 
 fn pop(outbox: &mut Outbox) -> Option<(u64, Vec<u8>)> {
-    outbox
-        .pop(|entry, params| (entry.token, params.to_vec()))
-        .map(|(token, params)| {
-            assert_eq!(token, Token::for_test(u64::from(params[0])));
-            (u64::from(params[0]), params)
-        })
+    outbox.pop().map(|(_, entry, params)| {
+        assert_eq!(entry.token, Token::for_test(u64::from(params[0])));
+        (u64::from(params[0]), params)
+    })
 }
 
 #[test]
@@ -148,4 +146,102 @@ fn reservations_count_down_and_a_replacement_takes_only_its_growth() {
     assert!(room.take(1, Some(3)), "a shorter one gives octets back");
     assert!(room.take(4, Some(2)));
     assert!(!room.take(1, Some(0)));
+}
+
+/// Queue event notification `ticket` to the recipient at link MAC `mac`.
+#[cfg(feature = "event-reporting")]
+fn push_event(outbox: &mut Outbox, ticket: u64, mac: u8, params: &[u8]) -> bool {
+    let to = BACnetRecipient::Address(address(mac));
+    let begun = Instant::from_secs(0);
+    let priority = NetworkPriority::Normal;
+    outbox
+        .push_event(Token::for_test(ticket), (to, priority), true, begun, params)
+        .queued
+}
+
+#[cfg(feature = "event-reporting")]
+fn address(mac: u8) -> BACnetAddress {
+    BACnetAddress {
+        network_number: 0,
+        mac_address: MacAddr::from_slice(&[mac]),
+    }
+}
+
+#[cfg(feature = "event-reporting")]
+#[test]
+fn a_held_entry_keeps_its_place_and_pop_passes_it_by() {
+    let mut outbox = Outbox::new(OutboxLimits {
+        entries: 4,
+        octets: 64,
+    });
+    assert!(push_event(&mut outbox, 1, 9, &[1]));
+    assert!(push(&mut outbox, 2, &[2]));
+    assert!(push_event(&mut outbox, 3, 8, &[3]));
+    let (at, entry, params) = outbox.pop().expect("the event, oldest");
+    assert_eq!(
+        (at, entry.token, params.as_slice()),
+        (0, Token::for_test(1), &[1][..])
+    );
+    outbox.hold(at, entry, &params, true);
+    assert_eq!(outbox.held(), 1);
+    assert!(outbox.holds_for(&address(9)));
+    assert!(!outbox.holds_for(&address(8)));
+    assert_eq!(pop(&mut outbox).map(|(ticket, _)| ticket), Some(2));
+    assert_eq!(pop(&mut outbox).map(|(ticket, _)| ticket), Some(3));
+    assert!(pop(&mut outbox).is_none(), "held, passed by");
+    let held: Vec<_> = outbox
+        .held_entries()
+        .map(|(at, entry)| (at, entry.token))
+        .collect();
+    assert_eq!(held, vec![(0, Token::for_test(1))]);
+    let (entry, params) = outbox.take_at(0);
+    assert!(entry.counted);
+    assert_eq!(params, vec![1]);
+    assert!(outbox.is_empty());
+}
+
+#[cfg(feature = "event-reporting")]
+#[test]
+fn holding_an_entry_compacts_a_full_buffer_and_keeps_the_others() {
+    // Two entries fill the octets; the held one's parameters go back at
+    // the buffer's end, after the live ones move down.
+    let mut outbox = Outbox::new(OutboxLimits {
+        entries: 2,
+        octets: 4,
+    });
+    assert!(push_event(&mut outbox, 1, 9, &[1, 1]));
+    assert!(push(&mut outbox, 2, &[2, 2]));
+    let (at, entry, params) = outbox.pop().unwrap();
+    outbox.hold(at, entry, &params, false);
+    assert!(!push(&mut outbox, 3, &[3]), "both entries are taken");
+    assert_eq!(pop(&mut outbox), Some((2, vec![2, 2])));
+    let (entry, params) = outbox.take_at(0);
+    assert_eq!((entry.token, params), (Token::for_test(1), vec![1, 1]));
+    assert!(!entry.counted, "held behind another, not refused an ID");
+}
+
+#[cfg(feature = "event-reporting")]
+#[test]
+fn an_event_evicts_the_newest_cov_entry_not_a_held_one() {
+    let mut outbox = Outbox::new(OutboxLimits {
+        entries: 3,
+        octets: 64,
+    });
+    assert!(push_event(&mut outbox, 1, 9, &[1]));
+    let (at, entry, params) = outbox.pop().unwrap();
+    outbox.hold(at, entry, &params, true);
+    assert!(push(&mut outbox, 2, &[2]));
+    assert!(push(&mut outbox, 3, &[3]));
+    let to = (
+        BACnetRecipient::Address(address(8)),
+        NetworkPriority::Normal,
+    );
+    let begun = Instant::from_secs(0);
+    let pushed = outbox.push_event(Token::for_test(4), to, false, begun, &[4]);
+    assert!(pushed.queued);
+    let evicted: Vec<_> = pushed.evicted.iter().map(|entry| entry.token).collect();
+    assert_eq!(evicted, vec![Token::for_test(3)], "the newest COV entry");
+    assert_eq!(outbox.held(), 1);
+    assert_eq!(pop(&mut outbox).map(|(ticket, _)| ticket), Some(2));
+    assert_eq!(pop(&mut outbox).map(|(ticket, _)| ticket), Some(4));
 }

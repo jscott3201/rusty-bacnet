@@ -105,7 +105,7 @@ impl CovParity {
             .unwrap()
             .write_property(PV, None, value, None)
             .unwrap();
-        parity.reporter.changed(&parity.db, &[ai()], now);
+        parity.reporter.changed(&mut parity.db, &[ai()], now);
         if fail {
             let mut out = BytesMut::new();
             let unsent = parity
