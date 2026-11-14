@@ -10,7 +10,7 @@ use bacnet_transport::mstp::{Echo, MstpConfig, MstpTransport};
 use bacnet_transport::mstp_serial::{self, SerialConfig, TokioSerialPort};
 use bacnet_types::error::Error;
 
-const SUPPORTED_MSTP_BAUD_RATES: [u32; 6] = [9_600, 19_200, 38_400, 57_600, 76_800, 115_200];
+const SUPPORTED_MSTP_BAUD_RATES: [u32; 6] = bacnet_transport::mstp::STANDARD_BAUD_RATES;
 const SUPPORTED_MSTP_BAUD_ERROR: &str =
     "mstp_baud must be one of 9600, 19200, 38400, 57600, 76800, or 115200";
 
@@ -269,6 +269,38 @@ mod tests {
             "mstp_max_info_frames must be in 1..=255",
             true,
         );
+    }
+
+    /// Every Python owner of an MS/TP port starts from the host tools' rate
+    /// (#2560): the `mstp_baud` keyword's default, written as a literal in
+    /// each `#[pyo3(signature)]` so `help()` shows it, is
+    /// `bacnet_transport::mstp::HOST_BAUD_RATE`.
+    #[test]
+    fn the_mstp_baud_defaults_are_the_host_rate() {
+        use pyo3::types::PyAnyMethods;
+        Python::initialize();
+        Python::attach(|py| {
+            let inspect = py.import("inspect").unwrap();
+            let classes = [
+                py.get_type::<crate::client::BACnetClient>(),
+                py.get_type::<crate::server::BACnetServer>(),
+                py.get_type::<crate::endpoint::PyMstpEndpoint>(),
+            ];
+            for class in classes {
+                let default = inspect
+                    .call_method1("signature", (&class,))
+                    .unwrap()
+                    .getattr("parameters")
+                    .unwrap()
+                    .get_item("mstp_baud")
+                    .unwrap()
+                    .getattr("default")
+                    .unwrap()
+                    .extract::<u32>()
+                    .unwrap();
+                assert_eq!(default, bacnet_transport::mstp::HOST_BAUD_RATE, "{class}");
+            }
+        });
     }
 
     #[test]

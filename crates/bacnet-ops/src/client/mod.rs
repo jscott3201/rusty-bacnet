@@ -17,8 +17,16 @@
 //! abandoned to the client's transaction state machine. A `Client` is
 //! cheap to clone: clones share one client, one set of limits and one
 //! memory.
+//!
+//! An application connects with a builder that names its link
+//! ([`Client::bip`], [`Client::bip6`], `Client::sc` with `sc-tls`,
+//! `Client::mstp` with `serial`) and gets a client over the type-erased
+//! [`AnyTransport`], or wraps a low-level client it built itself
+//! ([`Client::over`]). [`Client::discover`] finds devices; its Who-Is is a
+//! local broadcast unless the [`Discover`] names another [`Scope`].
 
 pub(crate) mod batch;
+mod connect;
 mod discover;
 mod log;
 pub(crate) mod read;
@@ -29,12 +37,20 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
 use bacnet_client::client::{BACnetClient, DeviceEvent};
+use bacnet_transport::any::AnyTransport;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
 use tokio::sync::broadcast;
 
-pub use self::discover::WhoIsScope;
+#[cfg(feature = "serial")]
+#[cfg_attr(docsrs, doc(cfg(feature = "serial")))]
+pub use self::connect::MstpConnect;
+#[cfg(feature = "sc-tls")]
+#[cfg_attr(docsrs, doc(cfg(feature = "sc-tls")))]
+pub use self::connect::ScConnect;
+pub use self::connect::{Bip6Connect, BipConnect};
+pub use self::discover::{DISCOVER_WAIT, Discover, ResolveScope, Scope};
 pub use self::log::Naming;
 pub(crate) use self::log::PagedLog;
 pub(crate) use self::read::{Halt, Reader, RpmFailure, rpm_failure, timed_out, unreachable};
@@ -112,13 +128,22 @@ impl DeviceSummary {
 /// device queue at its gate, keyed by its address, one request outstanding
 /// at a time, and every request takes a slot under the global rate cap, so
 /// many callers can share a client without overrunning a device. Cheap to
-/// clone: clones share everything but how long a handle by instance waits
-/// for its device's I-Am ([`with_resolve_wait`](Self::with_resolve_wait)).
-pub struct Client<T: TransportPort + 'static> {
+/// clone: clones share everything but how a handle made from an instance
+/// looks for its device: how long it waits for an I-Am
+/// ([`with_resolve_wait`](Self::with_resolve_wait)) and where its Who-Is
+/// goes ([`with_resolve_scope`](Self::with_resolve_scope)).
+///
+/// The transport type defaults to [`AnyTransport`], which the connect
+/// builders ([`bip`](Client::bip) and the others) make, so an application
+/// that connects with one never names it.
+pub struct Client<T: TransportPort + 'static = AnyTransport> {
     pub(crate) shared: Arc<Shared<T>>,
     /// How long a handle by instance that no address claims waits for an
     /// I-Am; `None` sends no Who-Is at all. This clone's and its handles'.
     resolve_wait: Option<Duration>,
+    /// Where such a handle's Who-Is goes when its target names no
+    /// network. This clone's and its handles'.
+    resolve_scope: ResolveScope,
 }
 
 /// What a [`Client`]'s clones share. Each std mutex is held only to look up
@@ -159,6 +184,7 @@ impl<T: TransportPort + 'static> Clone for Client<T> {
         Self {
             shared: Arc::clone(&self.shared),
             resolve_wait: self.resolve_wait,
+            resolve_scope: self.resolve_scope,
         }
     }
 }
@@ -187,6 +213,7 @@ impl<T: TransportPort + 'static> Client<T> {
                 events: broadcast::channel(64).0,
             }),
             resolve_wait: Some(RESOLVE_WAIT),
+            resolve_scope: ResolveScope::default(),
         }
     }
 
@@ -228,8 +255,8 @@ impl<T: TransportPort + 'static> Client<T> {
     /// alone, and its clones' and handles': the other clones keep theirs.
     pub fn with_resolve_wait(&self, wait: Option<Duration>) -> Self {
         Self {
-            shared: Arc::clone(&self.shared),
             resolve_wait: wait,
+            ..self.clone()
         }
     }
 
@@ -237,6 +264,35 @@ impl<T: TransportPort + 'static> Client<T> {
     /// [`with_resolve_wait`](Self::with_resolve_wait).
     pub fn resolve_wait(&self) -> Option<Duration> {
         self.resolve_wait
+    }
+
+    /// A clone of this client whose handles made from a bare instance
+    /// (`1234`) that no address claims send their one Who-Is for it to
+    /// `scope`: this network alone for [`new`](Self::new)'s
+    /// ([`ResolveScope::Local`]), so a handle never makes every device on a
+    /// routed site answer unasked. A target that names its network
+    /// (`5:1234`) asks that network whatever this says, and a handle that
+    /// stops answering asks again on the network where its device was last
+    /// heard. A miss fails as
+    /// [`OpsError::UnknownDevice`](crate::OpsError::UnknownDevice), saying
+    /// where it asked. The setting is the clone's alone, as
+    /// [`with_resolve_wait`](Self::with_resolve_wait)'s is.
+    ///
+    /// `ResolveScope::Network(0)` is taken as [`ResolveScope::Local`] and
+    /// `ResolveScope::Network(65535)` as [`ResolveScope::Global`], the
+    /// scopes those numbers mean ([`ResolveScope::normalized`]), so every
+    /// setting is one a Who-Is can be sent to.
+    pub fn with_resolve_scope(&self, scope: ResolveScope) -> Self {
+        Self {
+            resolve_scope: scope.normalized(),
+            ..self.clone()
+        }
+    }
+
+    /// Where this clone's handles made from a bare instance ask for it;
+    /// see [`with_resolve_scope`](Self::with_resolve_scope).
+    pub fn resolve_scope(&self) -> ResolveScope {
+        self.resolve_scope
     }
 
     /// A receiver of this client's own events: a handle that follows an

@@ -156,6 +156,46 @@ async fn parallel_broad_calls_are_one_a_minute() {
     lab.stop().await;
 }
 
+/// The destination network of each Who-Is broadcast one discover call
+/// with `args` sends: `None` for a local broadcast.
+async fn who_is_destinations(lab: &mut Lab, args: Value) -> Vec<Option<u16>> {
+    use bacnet_encoding::apdu::Apdu;
+    use bacnet_types::enums::UnconfirmedServiceChoice;
+    let log = lab.inbox.sent();
+    log.clear();
+    let result = lab.agent.call("bacnet_discover", args.clone()).await;
+    assert_eq!(reason(&result), None, "{args}: {result}");
+    log.broadcasts()
+        .into_iter()
+        .filter(|frame| {
+            matches!(frame.apdu(), Apdu::UnconfirmedRequest(request)
+                if request.service_choice == UnconfirmedServiceChoice::WHO_IS)
+        })
+        .map(|frame| frame.decode_npdu().destination.map(|to| to.network))
+        .collect()
+}
+
+/// The tool's default scope is a local broadcast (#2560): its Who-Is
+/// names no destination network, so no router passes it on. Network and
+/// global are the agent's explicit choices, sent to that network's number
+/// and to every network's.
+#[tokio::test(start_paused = true)]
+async fn the_default_scope_is_a_local_broadcast_on_the_wire() {
+    let policy = Policy {
+        broad_discovery: true,
+        ..Policy::default()
+    };
+    let mut lab = Lab::start(policy).await;
+    lab.agent.initialize().await;
+    let narrow = json!({ "range": "1000-1999", "wait_s": 1 });
+    assert_eq!(who_is_destinations(&mut lab, narrow).await, [None]);
+    let remote = json!({ "scope": "network", "network": 5, "range": "1-5", "wait_s": 1 });
+    assert_eq!(who_is_destinations(&mut lab, remote).await, [Some(5)]);
+    let every = json!({ "scope": "global", "range": "1-5", "wait_s": 1 });
+    assert_eq!(who_is_destinations(&mut lab, every).await, [Some(0xFFFF)]);
+    lab.stop().await;
+}
+
 /// A network outside 1 to 65534 is refused before anything is charged.
 #[tokio::test(start_paused = true)]
 async fn a_network_number_is_checked_first() {
