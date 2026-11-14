@@ -32,5 +32,5 @@ pub use command::{Commandability, Effect, Occupancy, commands, effect};
 pub use policy::{WriteDenied, WritePolicy};
 pub use priority::{Priority, one_priority};
 pub use value::{IntoWriteValue, WriteValue};
-pub(crate) use view::PRIORITY_PROPERTIES;
+pub(crate) use view::{PRIORITY_PROPERTIES, unknown_property};
 pub use view::{PriorityView, WritePreview, Written};

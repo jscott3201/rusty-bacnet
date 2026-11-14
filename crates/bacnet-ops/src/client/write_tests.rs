@@ -72,6 +72,9 @@ async fn the_default_priority_follows_the_property() {
         (bv.priority, bv.commandable),
         (None, Commandability::Optional)
     );
+    // A value object's priority, when given, goes as given.
+    let bv8 = device.write("bv:1 pv", "active", Some(p(8))).await.unwrap();
+    assert_eq!(bv8.priority, Some(p(8)));
     let oos = device.write("ai:1 oos", "true", None).await.unwrap();
     assert_eq!(
         (oos.priority, oos.commandable),
@@ -94,6 +97,11 @@ async fn the_default_priority_follows_the_property() {
                 oid(ObjectType::BINARY_VALUE, 1),
                 PropertyIdentifier::PRESENT_VALUE,
                 None
+            ),
+            (
+                oid(ObjectType::BINARY_VALUE, 1),
+                PropertyIdentifier::PRESENT_VALUE,
+                Some(8)
             ),
             (
                 oid(ObjectType::ANALOG_INPUT, 1),
@@ -124,47 +132,57 @@ async fn guarded_priorities_are_refused_until_allowed() {
     let (client, server) = lab_on(forwards).await;
     let sent = log(&client);
     let device = lab_device(&client).await;
-    for guarded in WritePolicy::GUARDED {
-        let refused = device
-            .write("ao:1 pv", "50", Some(guarded))
-            .await
-            .unwrap_err();
-        assert!(
-            matches!(&refused, OpsError::Denied(denied) if denied.priority == guarded && !denied.relinquish),
-            "{refused:?}"
-        );
-        let text = format!("50@{guarded}");
-        let refused = device
-            .write("ao:1 pv", text.as_str(), None)
-            .await
-            .unwrap_err();
-        assert!(matches!(refused, OpsError::Denied(_)), "{refused:?}");
-        let refused = device.relinquish("ao:1", guarded).await.unwrap_err();
-        assert!(
-            matches!(&refused, OpsError::Denied(denied) if denied.relinquish),
-            "{refused:?}"
-        );
+    // An output, which the standard makes commandable, and a value object,
+    // which may be: the guard is the same for both.
+    let targets = [("ao:1", "50"), ("bv:1", "active")];
+    for (object, value) in targets {
+        let property = format!("{object} pv");
+        for guarded in WritePolicy::GUARDED {
+            let refused = device
+                .write(property.as_str(), value, Some(guarded))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&refused, OpsError::Denied(denied) if denied.priority == guarded && !denied.relinquish),
+                "{property}: {refused:?}"
+            );
+            let text = format!("{value}@{guarded}");
+            let refused = device
+                .write(property.as_str(), text.as_str(), None)
+                .await
+                .unwrap_err();
+            assert!(matches!(refused, OpsError::Denied(_)), "{refused:?}");
+            let refused = device.relinquish(object, guarded).await.unwrap_err();
+            assert!(
+                matches!(&refused, OpsError::Denied(denied) if denied.relinquish),
+                "{object}: {refused:?}"
+            );
+        }
     }
     assert!(
         services(&sent).is_empty(),
         "nothing sent: {:?}",
         services(&sent)
     );
-    for guarded in WritePolicy::GUARDED {
-        let allowed = client.with_write_policy(WritePolicy::default().allow_priorities([guarded]));
-        let opened = allowed.device(LAB).await.unwrap();
-        // The device may refuse priority 6 itself; it was sent either way.
-        let _ = opened.write("ao:1 pv", "50", Some(guarded)).await;
-        assert_eq!(
-            writes(&sent).last().map(|w| w.priority),
-            Some(Some(guarded.get()))
-        );
-        assert!(matches!(
-            device.write("ao:1 pv", "50", Some(guarded)).await,
-            Err(OpsError::Denied(_))
-        ));
+    for (object, value) in targets {
+        let property = format!("{object} pv");
+        for guarded in WritePolicy::GUARDED {
+            let allowed =
+                client.with_write_policy(WritePolicy::default().allow_priorities([guarded]));
+            let opened = allowed.device(LAB).await.unwrap();
+            // The device may refuse priority 6 itself; it was sent either way.
+            let _ = opened.write(property.as_str(), value, Some(guarded)).await;
+            assert_eq!(
+                writes(&sent).last().map(|w| w.priority),
+                Some(Some(guarded.get()))
+            );
+            assert!(matches!(
+                device.write(property.as_str(), value, Some(guarded)).await,
+                Err(OpsError::Denied(_))
+            ));
+        }
     }
-    assert_eq!(writes(&sent).len(), WritePolicy::GUARDED.len());
+    assert_eq!(writes(&sent).len(), 2 * WritePolicy::GUARDED.len());
     drop(device);
     stop(client, server).await;
 }
@@ -218,6 +236,16 @@ async fn refusals_send_nothing() {
         .await
         .unwrap_err();
     assert_eq!(what(priority), "priority");
+    // Raw octets holding NULL are refused as a typed NULL is.
+    let raw = PropertyValue::ApplicationData(vec![0x00]);
+    let raw_null = device.write("ao:1 pv", raw, Some(p(8))).await.unwrap_err();
+    assert_eq!(what(raw_null), "value");
+    let raw_list = PropertyValue::List(vec![PropertyValue::Null]);
+    let raw_null = device
+        .write("bv:1 pv", raw_list, Some(p(8)))
+        .await
+        .unwrap_err();
+    assert_eq!(what(raw_null), "value");
     let null = device
         .write("ao:1 pv", "null", Some(p(8)))
         .await
@@ -425,6 +453,120 @@ async fn a_preview_reads_the_slots_and_sends_nothing() {
     assert_eq!(oos.before.as_ref().map(|v| v.text.as_str()), Some("false"));
     assert_eq!(oos.effect, Effect::NotPresentValue);
     assert!(writes(&sent).is_empty());
+    drop(device);
+    stop(client, server).await;
+}
+
+/// An RPM answer saying the object has no Priority_Array or
+/// Relinquish_Default, with its Present_Value inactive: a value object
+/// built without priorities.
+fn no_priority_array() -> Vec<u8> {
+    use bacnet_services::rpm::{ReadAccessResult, ReadPropertyMultipleACK, ReadResultElement};
+    use bacnet_types::enums::{ErrorClass, ErrorCode};
+    let unknown = |property| ReadResultElement {
+        property_identifier: property,
+        property_array_index: None,
+        property_value: None,
+        error: Some((ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY)),
+    };
+    let ack = ReadPropertyMultipleACK {
+        list_of_read_access_results: vec![ReadAccessResult {
+            object_identifier: oid(ObjectType::BINARY_VALUE, 1),
+            list_of_results: vec![
+                unknown(PropertyIdentifier::PRIORITY_ARRAY),
+                unknown(PropertyIdentifier::RELINQUISH_DEFAULT),
+                ReadResultElement {
+                    property_identifier: PropertyIdentifier::PRESENT_VALUE,
+                    property_array_index: None,
+                    property_value: Some(vec![0x91, 0x00]),
+                    error: None,
+                },
+            ],
+        }],
+    };
+    let mut data = bytes::BytesMut::new();
+    ack.encode(&mut data).unwrap();
+    data.to_vec()
+}
+
+fn without_priorities(inner: bacnet_transport::loopback::LoopbackTransport) -> TestTransport {
+    scripted(inner, |service, _, _| match service {
+        Service::Rpm => Script::Ack(no_priority_array()),
+        Service::Rp => Script::Forward,
+    })
+}
+
+/// A relinquish the device takes as a no-op, because the object has no
+/// Priority_Array, says so, and says the NULL changed nothing; it went
+/// once. A read of the priorities says the same, and a preview finds the
+/// value object not commandable, while an output whose Priority_Array
+/// isn't given is previewed as the write would go, at 16, slots unknown.
+#[tokio::test(start_paused = true)]
+async fn an_object_without_a_priority_array_says_so() {
+    let (client, server) = lab_on(without_priorities).await;
+    let sent = log(&client);
+    let device = lab_device(&client).await;
+    let error = device.relinquish("bv:1", p(9)).await.unwrap_err();
+    let OpsError::NoPriorityArray {
+        object,
+        relinquished: Some(written),
+        ..
+    } = &error
+    else {
+        panic!("{error:?}");
+    };
+    assert_eq!(*object, oid(ObjectType::BINARY_VALUE, 1));
+    assert_eq!(written.priority, Some(p(9)));
+    assert_eq!(error.written().map(|w| w.priority), Some(Some(p(9))));
+    let text = error.to_string();
+    assert!(
+        text.contains("no Priority_Array") && text.contains("changed nothing"),
+        "{text}"
+    );
+    assert_eq!(writes(&sent).len(), 1);
+    let read = device.priority_array("bv:1").await.unwrap_err();
+    assert!(
+        matches!(
+            read,
+            OpsError::NoPriorityArray {
+                relinquished: None,
+                ..
+            }
+        ),
+        "{read:?}"
+    );
+    assert!(read.written().is_none());
+    let bv = device
+        .preview_write("bv:1 pv", "active", Some(p(8)))
+        .await
+        .unwrap();
+    assert_eq!(
+        (bv.priority, bv.occupancy),
+        (None, Occupancy::NotCommandable)
+    );
+    assert_eq!(bv.before.map(|v| v.text), Some("inactive".into()));
+    let ao = device.preview_write("ao:1 pv", "50", None).await.unwrap();
+    assert_eq!(
+        (ao.priority, ao.occupancy, ao.effect),
+        (Some(Priority::LOWEST), Occupancy::Unknown, Effect::Unknown)
+    );
+    assert_eq!(writes(&sent).len(), 1, "previews send nothing");
+    drop(device);
+    stop(client, server).await;
+}
+
+/// An element of a value object's Present_Value is no vendor's
+/// commandable property: its preview reads it and finds no slot.
+#[tokio::test(start_paused = true)]
+async fn an_indexed_present_value_preview_is_not_a_vendor_property() {
+    let (client, server) = lab_on(forwards).await;
+    let device = lab_device(&client).await;
+    let indexed = device
+        .preview_write("bv:1 pv[1]", "active", None)
+        .await
+        .unwrap();
+    assert_eq!(indexed.occupancy, Occupancy::NotCommandable);
+    assert_eq!(indexed.effect, Effect::NotPresentValue);
     drop(device);
     stop(client, server).await;
 }

@@ -110,8 +110,9 @@ pub enum Occupancy {
     /// The slot holds a command, which the write replaces without telling
     /// whoever sent it (Clause 19.2.1.5).
     Held,
-    /// A vendor's own commandable property, whose priorities aren't
-    /// Present_Value's: what its slots hold isn't read.
+    /// What the slots hold isn't known: a vendor's own commandable
+    /// property, whose priorities go by other names, or a Priority_Array
+    /// the device wouldn't give.
     Unknown,
 }
 
@@ -133,6 +134,8 @@ pub enum Effect {
     },
     /// The write is to another property.
     NotPresentValue,
+    /// Not known: the slots that decide it couldn't be read.
+    Unknown,
 }
 
 /// The sixteen commands a Priority_Array's octets hold, in order, each as

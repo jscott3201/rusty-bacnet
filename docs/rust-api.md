@@ -11962,7 +11962,8 @@ structured Error PDU's extra fields), `Paging(PagingFault)` for a device
 that breaks a paged read's rules (a GetEventInformation answer naming an
 object again, or saying more remain with no new object), and
 `Client(Error)` for any other low-level error, unchanged, and for writes
-`Denied(WriteDenied)` and `ReadBack { written, source }` ([writes and
+`Denied(WriteDenied)`, `ReadBack { written, source }` and
+`NoPriorityArray { device, object, relinquished }` ([writes and
 priorities](#writes-and-priorities)).
 `error.unreachable()`, `error.timed_out()` and `error.remote()` answer the
 usual questions. Its text is the low-level error's, and its `source()` that
@@ -12015,7 +12016,11 @@ a checked 1 to 16 (`Priority::new(8)?`, `"8".parse()`, constants such as
   NULL at that slot, then reads Priority_Array, Relinquish_Default and
   Present_Value back in one RPM: two requests. A relinquish acknowledged
   whose read back failed is `OpsError::ReadBack`, whose `written` says it
-  took effect; `unreachable()` is false for it, so nothing retries it.
+  took effect; `unreachable()` is false for it, so nothing retries it. A
+  read back saying the object has no Priority_Array (a value object built
+  without one) is `OpsError::NoPriorityArray`: the device took the NULL as
+  a write to a property that isn't commandable, which changes nothing.
+  `error.written()` returns the acknowledged write in both cases.
 - `priority_array(object) -> Result<PriorityView, OpsError>` reads the same
   three. `PriorityView { object, slots, in_control, relinquish_default,
   present_value }` holds sixteen `Option<Value>` slots (`slot(priority)`)
@@ -12028,14 +12033,32 @@ a checked 1 to 16 (`Priority::new(8)?`, `"8".parse()`, constants such as
   ReadProperty of anything else. `WritePreview` names the slot
   (`priority`), who holds it (`Occupancy::{NotCommandable, Empty, Held,
   Unknown}`), what the write replaces (`before`), the `Effect` on
-  Present_Value (`Changes { from, to }`, or `Unchanged { held_by }` when a
-  stronger slot keeps control), the `PriorityView`, and `denied` when the
-  policy would refuse it.
+  Present_Value (`Changes { from, to }`, `Unchanged { held_by }` when a
+  stronger slot keeps control, or `Unknown` when the device wouldn't give
+  the slots), the `PriorityView`, and `denied` when the policy would
+  refuse it.
 
 The client's `WritePolicy` refuses priorities 1, 2, 5 and 6 by default
 (`WritePolicy::GUARDED`): a write or relinquish there fails with
 `OpsError::Denied(WriteDenied { property, priority, relinquish })` and
-sends nothing. `client.with_write_policy(WritePolicy::default()
+sends nothing. Those four are the ones a program should not reach by
+accident. Table 19-1 sets 1 and 2 apart for life safety, manual and
+automatic, and 5 for critical equipment control, so a command there
+outranks almost everything a site runs. Priority 6 is not a commander's
+slot at all: a binary object's minimum on and off time logic writes it
+itself (Clause 19.2.3), and a device may refuse writes there (Clause
+19.2.2). The check costs no traffic, and an integrator who means it allows
+each priority once.
+
+The guard looks at one thing: the priority a WriteProperty request carries
+beside its value. A priority carried inside a value is sent unchecked: the priority
+field of a lighting command written to a Lighting Output's
+Lighting_Command or to a Channel (Clauses 12.54 and 12.53),
+Lighting_Command_Default_Priority, the Priority_For_Writing of a Schedule,
+Loop, Access Point or Staging object (Clauses 19.2.5 to 19.2.8), and a
+Command object's actions (Clause 19.2.4). A write with no priority to a
+property that may be commandable carries none, so nothing is checked,
+though the device takes it at 16 if the property is commandable. `client.with_write_policy(WritePolicy::default()
 .allow_priorities([Priority::MANUAL_LIFE_SAFETY]))` gives a clone, and its
 handles, the priorities it names; the other clones keep theirs. The connect
 builders take the same with `.write_policy(..)`. Nothing
@@ -12050,7 +12073,7 @@ makes, which the tool's planner shares.
 | `label::priority_label(n)` | `Priority::new(n)?.purpose()` |
 | `label::PRIORITIES` | `Priority::COUNT` |
 | `parse::parse_value_with_priority` and `parse_value_for_with_priority` returning `Option<u8>` | `Option<Priority>` |
-| `bacnet_tool::safety::Effect` with `held_by: Option<u8>` | `bacnet_ops::write::Effect` (re-exported there) with `held_by: Option<Priority>` |
+| `bacnet_tool::safety::Effect` with `held_by: Option<u8>` | `bacnet_ops::write::Effect` (re-exported there) with `held_by: Option<Priority>`, and `Effect::Unknown` |
 
 ### Moved to bacnet-tool
 

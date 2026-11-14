@@ -29,6 +29,19 @@ use crate::reading::PropertyRef;
 /// assert!(!life_safety.allows(Priority::MINIMUM_ON_OFF));
 /// ```
 ///
+/// How far it reaches: it checks the priority a WriteProperty carries as
+/// its own parameter, and nothing else. A priority that travels inside a
+/// value goes unchecked: the priority field of a BACnetLightingCommand
+/// written to a Lighting Output's Lighting_Command or to a Channel
+/// (Clauses 12.54 and 12.53), a Lighting_Command_Default_Priority, the
+/// Priority_For_Writing of a Schedule, Loop, Access Point or Staging object
+/// (Clauses 19.2.5 to 19.2.8), and the actions of a Command object (Clause
+/// 19.2.4): the policy doesn't look inside values. A write with no priority to a property that may be
+/// commandable ([`Commandability::Optional`](super::Commandability::Optional))
+/// carries none, so no priority is checked, though the device takes it at
+/// 16 if the property is commandable: a policy that refused 16 would not
+/// see it.
+///
 /// Nothing else is guarded: no read before a write, no rule about
 /// Out_Of_Service. The low-level `BACnetClient` has no policy at all, and
 /// the `bacnet` tool's writes go through it under the tool's own tiers.

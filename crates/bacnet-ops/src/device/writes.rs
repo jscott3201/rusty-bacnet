@@ -21,13 +21,13 @@ use bytes::BytesMut;
 use super::{Device, DeviceAddress};
 use crate::client::Wanted;
 use crate::error::OpsError;
-use crate::format::{Floats, StateTexts, Value, ValueFormat};
+use crate::format::{Floats, StateTexts, Value, ValueFormat, decode_all};
 use crate::label::{kebab, object_label};
 use crate::reading::{IntoObject, IntoProperty, PropertyRef, one_property};
 use crate::write::{
     Commandability, Effect, IntoWriteValue, Occupancy, PRIORITY_PROPERTIES, Priority, PriorityView,
     WriteDenied, WritePreview, WriteValue, Written, commands, effect, keeps_priorities,
-    one_priority,
+    one_priority, unknown_property,
 };
 
 /// A write checked and encoded, before anything is sent.
@@ -71,7 +71,9 @@ impl<T: TransportPort + 'static> Device<T> {
     /// - one that may be commandable (an Analog Value's Present_Value,
     ///   which is when the object has a Priority_Array) goes at the priority
     ///   given, or with none, which the device takes at 16 if it is
-    ///   commandable (Clause 19.2.1); nothing is read to find out;
+    ///   commandable (Clause 19.2.1); nothing is read to find out, and with
+    ///   no priority sent the [`WritePolicy`](crate::WritePolicy) has none
+    ///   to check;
     /// - one that isn't goes with no priority.
     ///
     /// # Errors
@@ -119,7 +121,10 @@ impl<T: TransportPort + 'static> Device<T> {
     /// refusal of the write, or no answer to it, as for
     /// [`write`](Self::write). A relinquish the device acknowledged whose
     /// read after it failed is [`OpsError::ReadBack`]: the slot is empty
-    /// now, so it needs no second send.
+    /// now, so it needs no second send. One whose read says the object has
+    /// no Priority_Array (a value object built without one) is
+    /// [`OpsError::NoPriorityArray`]: the device took the NULL and it
+    /// changed nothing. Both hold the write ([`OpsError::written`]).
     pub async fn relinquish(
         &self,
         object: impl IntoObject,
@@ -141,9 +146,18 @@ impl<T: TransportPort + 'static> Device<T> {
             .await
             .map_err(|error| OpsError::at(&at, error))
             .and_then(|(rows, _)| PriorityView::from_rows(object, &rows, &at));
-        read.map_err(|source| OpsError::ReadBack {
-            written: Box::new(order.written(at)),
-            source: Box::new(source),
+        read.map_err(|error| match error {
+            // The device took the NULL as a write to a property that isn't
+            // commandable, which changes nothing (Clause 19.2.1).
+            OpsError::NoPriorityArray { device, object, .. } => OpsError::NoPriorityArray {
+                device,
+                object,
+                relinquished: Some(Box::new(order.written(at))),
+            },
+            source => OpsError::ReadBack {
+                written: Box::new(order.written(at)),
+                source: Box::new(source),
+            },
         })
     }
 
@@ -154,9 +168,10 @@ impl<T: TransportPort + 'static> Device<T> {
     /// # Errors
     ///
     /// [`OpsError::Parse`], with nothing sent, for an object type that
-    /// keeps no Priority_Array; the device's refusal of Priority_Array or
-    /// Present_Value (an object without them) as [`OpsError::Refused`]; and
-    /// one that isn't sixteen values as [`OpsError::Client`].
+    /// keeps no Priority_Array; [`OpsError::NoPriorityArray`] when the
+    /// device says the object has none; its other refusals of
+    /// Priority_Array or Present_Value as [`OpsError::Refused`]; and one
+    /// that isn't sixteen values as [`OpsError::Client`].
     pub async fn priority_array(&self, object: impl IntoObject) -> Result<PriorityView, OpsError> {
         let object = object.into_object()?;
         keeping_priorities(object)?;
@@ -176,7 +191,10 @@ impl<T: TransportPort + 'static> Device<T> {
     ///
     /// Where a property's commandability rests on the object
     /// ([`Commandability::Optional`]), the read settles it: a Priority_Array
-    /// read makes it commandable, one refused makes it not.
+    /// read makes it commandable, an unknown property makes it not. A
+    /// Priority_Array refused any other way, or on an object the standard
+    /// makes commandable, leaves the slots unknown ([`Occupancy::Unknown`],
+    /// [`Effect::Unknown`]), with the priority the write would carry.
     ///
     /// # Errors
     ///
@@ -212,21 +230,31 @@ impl<T: TransportPort + 'static> Device<T> {
             let priority_array = rows
                 .iter()
                 .find(|(p, _)| *p == PropertyIdentifier::PRIORITY_ARRAY)
-                .and_then(|(_, value)| value.as_deref().ok());
-            if let Some(priority_array) = priority_array {
-                let slots = commands(priority_array).ok_or_else(|| {
-                    OpsError::Client(Error::decoding(0, "the Priority_Array is not 16 values"))
-                })?;
-                let view = PriorityView::from_rows(object, &rows, &at)?;
-                return Ok(commanded(order, view, &slots, at, denied));
+                .map(|(_, value)| value.as_deref());
+            match priority_array {
+                Some(Ok(priority_array)) => {
+                    let slots = commands(priority_array).ok_or_else(|| {
+                        OpsError::Client(Error::decoding(0, "the Priority_Array is not 16 values"))
+                    })?;
+                    let view = PriorityView::from_rows(object, &rows, &at)?;
+                    return Ok(commanded(order, view, &slots, at, denied));
+                }
+                // A value object without a Priority_Array: Present_Value is
+                // written as it is.
+                Some(Err(error))
+                    if order.commandable == Commandability::Optional && unknown_property(error) =>
+                {
+                    let now = rows
+                        .into_iter()
+                        .find(|(p, _)| *p == PropertyIdentifier::PRESENT_VALUE)
+                        .and_then(|(_, value)| value.ok());
+                    let before = now.map(|raw| encoded_raw(target, raw));
+                    return Ok(uncommanded(order, before, at, denied));
+                }
+                // Refused, or left out, otherwise: the write goes as it
+                // would, but what the slots hold isn't known.
+                _ => return Ok(unknown(order, at, denied)),
             }
-            // No Priority_Array: Present_Value is written as it is.
-            let now = rows
-                .into_iter()
-                .find(|(p, _)| *p == PropertyIdentifier::PRESENT_VALUE)
-                .and_then(|(_, value)| value.ok());
-            let before = now.map(|raw| encoded_raw(target, raw));
-            return Ok(uncommanded(order, before, at, denied));
         }
         let before = match self.read(target).await {
             Ok(value) => Some(value),
@@ -234,19 +262,13 @@ impl<T: TransportPort + 'static> Device<T> {
             Err(error) => return Err(error),
         };
         let at = self.address();
-        if order.commandable == Commandability::Optional {
+        if order.commandable == Commandability::Optional && !present_value {
             // A vendor's own commandable property: its slots go by other
             // names, so who holds them isn't read.
             return Ok(WritePreview {
-                device: at,
-                property: target,
-                priority: order.priority,
-                occupancy: Occupancy::Unknown,
                 before,
                 effect: Effect::NotPresentValue,
-                priorities: None,
-                denied,
-                value: order.value,
+                ..unknown(order, at, denied)
             });
         }
         Ok(uncommanded(order, before, at, denied))
@@ -326,9 +348,12 @@ fn order(
         priority: named,
     } = value.into_write_value(&property)?;
     let asked = one_priority(named, priority)?;
-    if value == PropertyValue::Null
-        && id == PropertyIdentifier::PRESENT_VALUE
+    // The octets as sent, however the value was given: a typed NULL, or
+    // raw octets that hold one, empty a slot all the same.
+    let value = encoded(property, &value)?;
+    if id == PropertyIdentifier::PRESENT_VALUE
         && keeps_priorities(object_type)
+        && all_null(&value.raw)
     {
         return Err(OpsError::parse(
             "value",
@@ -357,11 +382,19 @@ fn order(
         (_, asked) => asked,
     };
     Ok(Order {
-        value: encoded(property, &value)?,
+        value,
         property,
         priority,
         commandable,
     })
+}
+
+/// Whether `raw` is one or more application NULLs and nothing else.
+fn all_null(raw: &[u8]) -> bool {
+    matches!(
+        decode_all(raw).as_deref(),
+        Some(values) if !values.is_empty() && values.iter().all(|v| *v == PropertyValue::Null)
+    )
 }
 
 /// `value` encoded for a write of `property`, as a [`Value`].
@@ -435,6 +468,23 @@ fn commanded(
     }
 }
 
+/// The preview of `order` at `device` to a property that may take a
+/// priority, whose slots weren't read: the priority it would go at, and
+/// nothing known of its slots or of Present_Value.
+fn unknown(order: Order, device: DeviceAddress, denied: Option<WriteDenied>) -> WritePreview {
+    WritePreview {
+        device,
+        property: order.property,
+        value: order.value,
+        priority: order.priority,
+        occupancy: Occupancy::Unknown,
+        before: None,
+        effect: Effect::Unknown,
+        priorities: None,
+        denied,
+    }
+}
+
 /// The preview of `order` to a property that takes no priority, whose
 /// value reads as `before`, at `device`.
 fn uncommanded(
@@ -443,7 +493,8 @@ fn uncommanded(
     device: DeviceAddress,
     denied: Option<WriteDenied>,
 ) -> WritePreview {
-    let effect = if order.property.property == PropertyIdentifier::PRESENT_VALUE {
+    let whole = order.property.index.is_none();
+    let effect = if order.property.property == PropertyIdentifier::PRESENT_VALUE && whole {
         Effect::Changes {
             from: before
                 .as_ref()

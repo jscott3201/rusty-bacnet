@@ -13,11 +13,14 @@
 //! answering part way is the [`Readings::stopped`](crate::Readings::stopped)
 //! of what was read. A write the client's
 //! [`WritePolicy`](crate::WritePolicy) refuses is [`OpsError::Denied`],
-//! with nothing sent, and a relinquish that went through but whose read
-//! after it failed is [`OpsError::ReadBack`].
+//! with nothing sent; a relinquish that went through but whose read after
+//! it failed is [`OpsError::ReadBack`]; and an object the device says has
+//! no Priority_Array is [`OpsError::NoPriorityArray`].
+//! [`OpsError::written`] says whether a write went through first.
 
 use std::fmt;
 
+use bacnet_types::enums::{ErrorClass, ErrorCode};
 use bacnet_types::error::{Error, ErrorDetail, RemoteError};
 use bacnet_types::primitives::ObjectIdentifier;
 
@@ -124,6 +127,19 @@ pub enum OpsError {
         /// Why the read after it failed.
         source: Box<OpsError>,
     },
+    /// The device says the object has no Priority_Array (an unknown
+    /// property), so its Present_Value isn't commandable: a value object
+    /// built without one, say. For a relinquish, the device took the NULL
+    /// first as a write to a property that isn't commandable, which
+    /// changes nothing (Clause 19.2.1), and `relinquished` holds it.
+    NoPriorityArray {
+        /// Where the read went.
+        device: DeviceAddress,
+        /// The object.
+        object: ObjectIdentifier,
+        /// The relinquish acknowledged before the read, if one was.
+        relinquished: Option<Box<Written>>,
+    },
 }
 
 impl OpsError {
@@ -187,6 +203,23 @@ impl OpsError {
         match self {
             Self::Refused { error, .. } => Some(*error),
             Self::Client(error) => error.remote(),
+            Self::NoPriorityArray { .. } => Some(RemoteError::Error {
+                class: ErrorClass::PROPERTY,
+                code: ErrorCode::UNKNOWN_PROPERTY,
+            }),
+            _ => None,
+        }
+    }
+
+    /// The write the device acknowledged before the call failed, when one
+    /// was: it took effect, so it needs no second send. A
+    /// [`ReadBack`](Self::ReadBack)'s relinquish, whose view of the slots
+    /// after isn't known, and a [`NoPriorityArray`](Self::NoPriorityArray)
+    /// relinquish, which changed nothing.
+    pub fn written(&self) -> Option<&Written> {
+        match self {
+            Self::ReadBack { written, .. } => Some(written),
+            Self::NoPriorityArray { relinquished, .. } => relinquished.as_deref(),
             _ => None,
         }
     }
@@ -314,6 +347,25 @@ impl fmt::Display for OpsError {
                     crate::label::object_label(written.property.object),
                     kebab(written.property.property),
                 )
+            }
+            Self::NoPriorityArray {
+                device,
+                object,
+                relinquished,
+            } => {
+                write!(
+                    f,
+                    "{} at {device} has no Priority_Array, the device says, so its \
+                     present-value isn't commandable",
+                    crate::label::object_label(*object)
+                )?;
+                match relinquished.as_ref().and_then(|w| w.priority) {
+                    Some(p) => write!(
+                        f,
+                        "; the NULL sent at priority {p} was acknowledged and changed nothing"
+                    ),
+                    None => Ok(()),
+                }
             }
         }
     }

@@ -159,7 +159,7 @@ async fn two_priorities_or_one_out_of_range_are_refused() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("the value names priority 8 and the call priority 10"),
+        stderr.contains("the value names priority 8 and the priority argument 10"),
         "{stderr}"
     );
     assert_eq!(read(&target, "ao:1", "pv").await, before);

@@ -1,7 +1,7 @@
 //! What the write calls return: [`Written`], [`PriorityView`] and
 //! [`WritePreview`].
 
-use bacnet_types::enums::PropertyIdentifier;
+use bacnet_types::enums::{ErrorClass, ErrorCode, PropertyIdentifier};
 use bacnet_types::error::{DecodingKind, Error};
 use bacnet_types::primitives::ObjectIdentifier;
 
@@ -75,9 +75,11 @@ impl PriorityView {
     ///
     /// # Errors
     ///
-    /// The device's refusal of Priority_Array or Present_Value as
-    /// [`OpsError::Refused`], and a Priority_Array that isn't sixteen
-    /// values, or an answer that left one out, as [`OpsError::Client`].
+    /// [`OpsError::NoPriorityArray`] when the device says the object has
+    /// no Priority_Array; its other refusals of Priority_Array or
+    /// Present_Value as [`OpsError::Refused`]; and a Priority_Array that
+    /// isn't sixteen values, or an answer that left one out, as
+    /// [`OpsError::Client`].
     pub(crate) fn from_rows(
         object: ObjectIdentifier,
         rows: &[RawRow],
@@ -85,6 +87,17 @@ impl PriorityView {
     ) -> Result<Self, OpsError> {
         let texts = StateTexts::default();
         let format = ValueFormat::new(object.object_type(), &texts, Floats::Exact).whole_lists();
+        let none = rows.iter().any(|(property, value)| {
+            *property == PropertyIdentifier::PRIORITY_ARRAY
+                && value.as_ref().is_err_and(unknown_property)
+        });
+        if none {
+            return Err(OpsError::NoPriorityArray {
+                device: at.clone(),
+                object,
+                relinquished: None,
+            });
+        }
         let priority_array = row(rows, PropertyIdentifier::PRIORITY_ARRAY, at)?;
         let present_value = row(rows, PropertyIdentifier::PRESENT_VALUE, at)?;
         let relinquish_default = row(rows, PropertyIdentifier::RELINQUISH_DEFAULT, at).ok();
@@ -116,6 +129,11 @@ impl PriorityView {
             present_value: whole(PropertyIdentifier::PRESENT_VALUE, present_value),
         })
     }
+}
+
+/// Whether `error` is the device saying the property doesn't exist.
+pub(crate) fn unknown_property(error: &PropertyError) -> bool {
+    error.class_code() == Some((ErrorClass::PROPERTY, ErrorCode::UNKNOWN_PROPERTY))
 }
 
 /// The value of `property` among `rows`, or why there is none.

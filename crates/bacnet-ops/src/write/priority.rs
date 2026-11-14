@@ -158,7 +158,7 @@ pub fn one_priority(
             "priority",
             &format!("@{named}"),
             format!(
-                "the value names priority {named} and the call priority {given}: give one, or the same in both"
+                "the value names priority {named} and the priority argument {given}: give one, or the same in both"
             ),
         )),
         (named, given) => Ok(named.or(given)),
