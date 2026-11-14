@@ -78,6 +78,12 @@ fn changed(confirmed: &Preview, current: &[Entry], policy: &crate::Policy) -> Op
     let Some(now) = bacnet_tool::safety::plan::undo_preview(current, &confirmed.address) else {
         return Some("the entries confirmed have changed".into());
     };
+    let network = confirmed.address.network();
+    if !policy.allows_network(network) {
+        return Some(format!(
+            "network {network} is not in this server's [mcp] networks"
+        ));
+    }
     if !policy.allows_device(now.device) {
         return Some(format!(
             "device {} is not in this server's [mcp] devices",
@@ -384,4 +390,41 @@ fn ended(sending: &Sending) -> ToolError {
         "message": "the TUI's session ended during the write: it may or may not have been sent, \
                     and the ledger keeps its entries (do not retry it)",
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use bacnet_tool::safety::ledger::Entry;
+    use bacnet_tool::safety::plan::undo_preview;
+
+    use super::*;
+
+    /// A confirmed revert is checked again when its job runs: the address
+    /// its entry went to must be on a network the policy reaches (#2560).
+    #[test]
+    fn a_revert_to_a_network_the_policy_leaves_out_has_changed() {
+        let entry: Entry = serde_json::from_value(json!({
+            "id": 1, "run": "r", "at": "t", "device": 300, "address": "2001:0x0A",
+            "object_type": 1, "instance": 1, "property": 85, "priority": 12,
+            "commandable": true, "before": null,
+            "written": { "bytes": "4440a00000", "text": "5" }, "state": "applied",
+            "front_end": "mcp", "principal": "tester",
+        }))
+        .unwrap();
+        let address = entry.address.clone().unwrap();
+        let entries = std::slice::from_ref(&entry);
+        let confirmed = undo_preview(entries, &address).unwrap();
+        assert_eq!(
+            changed(&confirmed, entries, &crate::Policy::default()),
+            None
+        );
+        let narrowed = crate::Policy {
+            networks: Some([0].into()),
+            ..crate::Policy::default()
+        };
+        assert_eq!(
+            changed(&confirmed, entries, &narrowed).as_deref(),
+            Some("network 2001 is not in this server's [mcp] networks")
+        );
+    }
 }

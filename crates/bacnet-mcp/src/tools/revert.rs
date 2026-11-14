@@ -117,7 +117,7 @@ pub(crate) async fn run<T: TransportPort + 'static>(
             ));
         }
     };
-    ctx.client()?;
+    let client = ctx.client()?.low_level();
     let workspace =
         ctx.policy.writes.workspace.clone().ok_or_else(|| {
             ToolError::refused("write-not-granted", "no workspace for the ledger")
@@ -146,18 +146,33 @@ pub(crate) async fn run<T: TransportPort + 'static>(
             }
         }
     }
-    if let Some(entry) = entries.iter().find(|e| {
-        ours(e, &ctx.principal)
-            && wanted.as_ref().is_none_or(|ids| ids.contains(&e.id))
-            && !ctx.policy.allows_device(e.device)
-    }) {
-        return Err(ToolError::refused(
-            "device-not-allowed",
-            format!(
-                "device {} is not in this server's [mcp] devices",
-                entry.device
-            ),
-        ));
+    // The policy checks a device by its address's network and its instance
+    // (#2560): the address the entry's write went to, or for one written
+    // before addresses were kept, the one address claiming its instance now
+    // (nothing is sent to find it).
+    let chosen = |e: &&Entry| {
+        ours(e, &ctx.principal) && wanted.as_ref().is_none_or(|ids| ids.contains(&e.id))
+    };
+    for entry in entries.iter().filter(chosen) {
+        let address = match &entry.address {
+            Some(address) => Some(address.clone()),
+            None => bacnet_ops::DeviceAddress::claiming(client, entry.device)
+                .await
+                .ok(),
+        };
+        match address {
+            Some(address) => ctx.allow(&address, entry.device)?,
+            None if !ctx.policy.allows_device(entry.device) => {
+                return Err(ToolError::refused(
+                    "device-not-allowed",
+                    format!(
+                        "device {} is not in this server's [mcp] devices",
+                        entry.device
+                    ),
+                ));
+            }
+            None => {}
+        }
     }
     let mut fields = Map::new();
     fields.insert("tool".into(), json!(NAME));
@@ -188,6 +203,8 @@ pub(crate) async fn run<T: TransportPort + 'static>(
                         && wanted.as_ref().is_none_or(|ids| ids.contains(&entry.id))
                 })
                 .await;
+            // An entry the desk couldn't reach without a Who-Is is among
+            // `done`, not reverted, with why: MCP's caller never looks.
             ctx.writes.signals.ledger_settled(&before, &desk, false);
             let left = desk
                 .entries()

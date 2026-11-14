@@ -18,13 +18,13 @@ use crate::Policy;
 use crate::context::{Call, DeviceArg};
 
 /// An I-Am for `instance`, as a device on the local network sends it.
-fn i_am(instance: u32) -> BytesMut {
+pub(super) fn i_am(instance: u32) -> BytesMut {
     i_am_from(instance, None)
 }
 
 /// An I-Am for `instance`, from the station a router names as `source`
 /// when there is one.
-fn i_am_from(instance: u32, source: Option<NpduAddress>) -> BytesMut {
+pub(super) fn i_am_from(instance: u32, source: Option<NpduAddress>) -> BytesMut {
     let mut service_request = BytesMut::new();
     IAmRequest {
         object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap(),
@@ -50,7 +50,7 @@ fn i_am_from(instance: u32, source: Option<NpduAddress>) -> BytesMut {
 }
 
 /// Wait until `holds` is true of the lab, on the paused clock.
-async fn until(lab: &Lab, holds: impl Fn(&Lab) -> bool, what: &str) {
+pub(super) async fn until(lab: &Lab, holds: impl Fn(&Lab) -> bool, what: &str) {
     for _ in 0..1_000 {
         if holds(lab) {
             return;
@@ -188,11 +188,15 @@ async fn two_networks_holding_one_instance_are_two_devices() {
     let before = lab.sends().len();
 
     let read = |device: Value| json!({ "device": device, "reads": [{ "object": "ai:1" }] });
+    // Refused as ambiguous, as a resource is, naming the target once.
     let by_instance = lab.agent.call("bacnet_read", read(json!(LAB))).await;
-    let message = by_instance["structuredContent"]["message"]
-        .as_str()
-        .unwrap_or_default();
-    assert!(message.contains("2001:0x33"), "{by_instance}");
+    let body = &by_instance["structuredContent"];
+    assert_eq!(body["reason"], json!("ambiguous-device"), "{by_instance}");
+    let message = body["message"].as_str().unwrap_or_default();
+    assert_eq!(
+        message, "device 1201 is claimed by 10.0.0.2:47808 and 2001:0x33; name one by its address",
+        "{by_instance}"
+    );
     let routed = lab
         .agent
         .call("bacnet_read", read(json!(format!("2001:{LAB}"))))

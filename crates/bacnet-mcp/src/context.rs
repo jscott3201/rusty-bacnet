@@ -372,6 +372,7 @@ impl<T: TransportPort + 'static> Ctx<T> {
         // Named as written: `7`, `2:7` or an address.
         let failed = |error: Error| match error {
             Error::UnknownDevice { .. } => unknown(),
+            Error::AmbiguousDevice { candidates, .. } => ToolError::ambiguous(&text, &candidates),
             Error::OutOfRange(why) => ToolError::invalid("device", why),
             error => ToolError::Failed(format!("{text}: {error}")),
         };
@@ -427,7 +428,11 @@ impl<T: TransportPort + 'static> Ctx<T> {
     /// The rows of the discovery table claiming `instance`, on `network`
     /// when given (the client's own network, once it knows the number, is
     /// the local one, as its handles key it), ordered by address.
-    async fn claims(&self, instance: u32, network: Option<u16>) -> Vec<DiscoveredDevice> {
+    pub(crate) async fn claims(
+        &self,
+        instance: u32,
+        network: Option<u16>,
+    ) -> Vec<DiscoveredDevice> {
         let Some(client) = &self.client else {
             return Vec::new();
         };

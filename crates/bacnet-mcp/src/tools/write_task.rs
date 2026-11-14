@@ -138,9 +138,10 @@ pub(crate) async fn confirmed<T: TransportPort + 'static>(
     let fresh = match fresh {
         Ok(fresh) if preview_digest(&fresh) == state.preview => fresh,
         other => {
-            let detail = other
-                .err()
-                .unwrap_or_else(|| "the pre-image changed".into());
+            // The digest covers the address as well as the pre-images.
+            let detail = other.err().unwrap_or_else(|| {
+                "the device's address, a pre-image or a slot holder is not as previewed".into()
+            });
             let fields = json!({ "why": "stale", "detail": detail });
             desk.record(&caller, "declined", fields).await;
             return Err(ToolError::refused("stale", format!("{STALE}: {detail}")));

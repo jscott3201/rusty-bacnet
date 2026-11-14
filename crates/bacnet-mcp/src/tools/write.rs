@@ -548,9 +548,12 @@ pub(super) fn mcp_tier(preview: &Preview, tier: Tier) -> Tier {
 
 /// The `input_required` result: the confirmation form and the state.
 fn ask(preview: &Preview, tier: Tier, arm: Option<u32>, state: String) -> InputRequiredResult {
+    // The address too: the confirmation is bound to it (#2560).
     let mut message = format!(
-        "Confirm this {tier:?} BACnet write ({}):\n",
-        preview.service()
+        "Confirm this {tier:?} BACnet write ({}) to device {} at {}:\n",
+        preview.service(),
+        preview.device,
+        preview.address
     );
     for item in &preview.items {
         let before = item.before.as_ref().map_or("NULL", |b| b.text.as_str());

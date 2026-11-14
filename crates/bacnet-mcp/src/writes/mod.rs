@@ -355,8 +355,10 @@ impl Approver for PlanApprover<'_> {
     }
 }
 
-/// A digest of what a person confirmed: each write's target, value,
-/// pre-image, slot holder, commandability and tier.
+/// A digest of what a person confirmed: the device's address (#2560), and
+/// each write's target, value, pre-image, slot holder, commandability and
+/// tier. A target that names its device by instance resolves again on the
+/// retry, so a device that moved meanwhile fails the confirmation.
 pub(crate) fn preview_digest(preview: &Preview) -> String {
     let items: Vec<Value> = preview
         .items
@@ -372,7 +374,13 @@ pub(crate) fn preview_digest(preview: &Preview) -> String {
             ])
         })
         .collect();
-    let canonical = json!([preview.device, preview.batch, preview.gate.name(), items]);
+    let canonical = json!([
+        preview.device,
+        preview.address.to_string(),
+        preview.batch,
+        preview.gate.name(),
+        items
+    ]);
     hex(&Sha256::digest(canonical.to_string().as_bytes()))
 }
 
@@ -471,6 +479,13 @@ impl Caller for McpCaller<'_> {
             Some(host) => host.going(),
             None => Box::pin(std::future::pending()),
         }
+    }
+
+    /// Never, on the TUI's desk too: the server sends no Who-Is but
+    /// `bacnet_discover`'s, under its broad-discovery gate, so a revert
+    /// reports a device it can't reach without one as not reverted.
+    fn may_look(&self) -> bool {
+        false
     }
 
     fn ledger_changed<'a>(

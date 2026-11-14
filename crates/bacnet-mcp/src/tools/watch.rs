@@ -8,6 +8,7 @@
 
 use std::time::Duration;
 
+use bacnet_ops::DeviceAddress;
 use bacnet_ops::parse::{parse_object_specifier, parse_property};
 use bacnet_ops::watch::{Point, State, Watched};
 use bacnet_transport::port::TransportPort;
@@ -135,6 +136,45 @@ struct PointArg {
     property: Option<String>,
 }
 
+/// `device`, unless another address claims its instance too. The hub keys
+/// points by instance (#2560 leaves it so for now), so a device named by its
+/// address whose instance is contested can't be watched without reaching
+/// both: refused as ambiguous, naming every claimant. The discovery table
+/// says who claims it now, not the server's copy of it, which can lag.
+async fn contested<T: TransportPort + 'static>(
+    ctx: &Ctx<T>,
+    device: crate::context::Device<T>,
+) -> Result<crate::context::Device<T>, ToolError> {
+    let own = ctx.client()?.low_level().network_number();
+    let claims: Vec<DeviceAddress> = ctx
+        .claims(device.instance, None)
+        .await
+        .iter()
+        .filter_map(DeviceAddress::of)
+        .map(|at| at.localized(own))
+        .collect();
+    match claims.as_slice() {
+        [only] if *only == device.address => Ok(device),
+        [_, _, ..] => {
+            let claims: Vec<String> = claims.iter().map(ToString::to_string).collect();
+            Err(ToolError::refused(
+                "ambiguous-device",
+                format!(
+                    "device {} is claimed by {}, and the watch list names a device by its \
+                     instance: neither can be watched until one address alone claims it",
+                    device.instance,
+                    claims.join(" and ")
+                ),
+            ))
+        }
+        // The row went, or moved, since the call found it.
+        _ => Err(ToolError::UnknownDevice {
+            device: device.address.to_string(),
+            hint: "the discovery table changed during the call; call again".into(),
+        }),
+    }
+}
+
 /// What a point argument asks for, parsed: nothing is sent for a bad one.
 fn watched(arg: &PointArg) -> Result<(ObjectIdentifier, Watched), ToolError> {
     let (object_type, instance) =
@@ -180,25 +220,11 @@ pub(super) async fn run<T: TransportPort + 'static>(
     ctx.subs.expire_tool(TOOL_IDLE);
     let mut rows: Vec<Result<Point, (String, Value)>> = Vec::new();
     for (arg, (object, watched)) in args.points.iter().zip(parsed) {
-        let row = match ctx.device(call, &arg.device).await {
-            // The hub keys points by instance (#2560 leaves it so for
-            // now), so a device named by its address whose instance another
-            // address claims too can't be watched without reaching both.
-            Ok(device) if ctx.known_at(device.instance).as_ref() != Some(&device.address) => {
-                let object =
-                    crate::value::object_text(object.object_type(), object.instance_number());
-                let uri = format!("bacnet://device/{}/object/{object}", arg.device.text());
-                let error = ToolError::refused(
-                    "ambiguous-device",
-                    format!(
-                        "{}: device {} is claimed by more than one address, and the watch list \
-                         names a device by its instance",
-                        arg.device.text(),
-                        device.instance
-                    ),
-                );
-                Err((uri, error.json()))
-            }
+        let device = match ctx.device(call, &arg.device).await {
+            Ok(device) => contested(ctx, device).await,
+            Err(error) => Err(error),
+        };
+        let row = match device {
             Ok(device) => {
                 let point = Point {
                     device: device.instance,
