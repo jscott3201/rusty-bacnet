@@ -124,7 +124,8 @@ pub fn timed_out(error: &Error) -> bool {
 
 /// The network `device` is on, for limits that pace networks: its routed
 /// network, or 0 for the local one. `None` when the limits don't pace
-/// networks, so the lookup is skipped, or the device isn't known.
+/// networks, so the lookup is skipped, or the device isn't known, or two
+/// addresses claim it (the request then fails on that).
 pub async fn network_of<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     limits: &RequestLimits,
@@ -133,7 +134,7 @@ pub async fn network_of<T: TransportPort + 'static>(
     if !limits.paces_networks() {
         return None;
     }
-    let found = client.get_device(device).await?;
+    let found = client.get_device(device).await.ok()??;
     Some(found.source_network.unwrap_or(0))
 }
 

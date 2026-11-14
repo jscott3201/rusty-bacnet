@@ -242,7 +242,13 @@ async fn manual_routed_registration_honors_seeded_peer_limit() {
         .unwrap();
 
     // The registration must preserve every supplied field.
-    let row = client.device_table.lock().get(3003).cloned().unwrap();
+    let row = client
+        .device_table
+        .lock()
+        .find(3003)
+        .unwrap()
+        .cloned()
+        .unwrap();
     assert_eq!(row.mac_address.as_slice(), &router_mac);
     assert_eq!(row.source_network, Some(remote_network));
     assert_eq!(
@@ -370,7 +376,7 @@ async fn manual_routed_registration_rejects_empty_addresses() {
     }
 
     assert!(
-        client.device_table.lock().get(3003).is_none(),
+        client.device_table.lock().find(3003).unwrap().is_none(),
         "a refused registration must not create a row"
     );
 }
@@ -390,10 +396,10 @@ async fn legacy_add_device_creates_local_row_only() {
     client.add_device(1234, &mac).await.unwrap();
 
     let dt = client.device_table.lock();
-    let local = dt.get_by_mac(&mac).expect("local lookup must find the row");
+    let local = dt.get(0, &mac).expect("local lookup must find the row");
     assert_eq!(local.object_identifier.instance_number(), 1234);
     assert!(
-        dt.get_by_network_address(100, &mac).is_none(),
+        dt.get(100, &mac).is_none(),
         "the same bytes as SNET/SADR must not satisfy a routed lookup"
     );
 }

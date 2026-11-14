@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use super::{ALIASES, LAB, LAB_MAC, Lab};
+use super::{ALIASES, LAB, Lab};
 use crate::Policy;
 use crate::listen::MAX_DEVICE_PAGES;
 use crate::policy::Caps;
@@ -112,8 +112,9 @@ async fn a_device_found_between_pages_shifts_nothing() {
     let mut lab = Lab::start(paged(3)).await;
     let first = lab.agent.read("bacnet://devices").await.unwrap();
     assert_eq!(instances(&first), [300, 301, 302]);
-    for instance in [100, 1000] {
-        lab.client.add_device(instance, &LAB_MAC).await.unwrap();
+    for (instance, host) in [(100, 100), (1000, 101)] {
+        let mac = [10, 0, 0, host, 0xBA, 0xC0];
+        lab.client.add_device(instance, &mac).await.unwrap();
     }
     let next = first["next"].as_str().unwrap().to_string();
     let rest = follow(&mut lab, &next).await;

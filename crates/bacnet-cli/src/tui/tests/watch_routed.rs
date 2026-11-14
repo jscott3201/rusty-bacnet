@@ -85,7 +85,7 @@ async fn a_routed_row_is_cancelled_after_its_device_leaves_the_table() {
     let (routed, client) = routed_parts(LAB).await;
     let client = Arc::new(client);
     client.who_is(None).await.unwrap();
-    while client.get_device(LAB).await.is_none() {
+    while client.get_device(LAB).await.unwrap().is_none() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     let rate = Arc::new(RequestLimits::new(0));

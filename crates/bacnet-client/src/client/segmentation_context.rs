@@ -26,6 +26,10 @@ pub(super) struct SegmentedRequestLimits<'a> {
     pub(super) routed_forwarded_npci_len: Option<u16>,
     /// Routed-path lease to mark terminal when the request finishes.
     pub(super) routed_path_lease: Option<&'a RoutedPathLease>,
+    /// The network and MAC of the discovery-table row that sized the
+    /// request, whose age the device's answer restarts; `None` when no row
+    /// did (see `BACnetClient::note_answer`).
+    pub(super) sized_by: Option<(u16, &'a [u8])>,
 }
 
 /// Where and for whom a reassembly abort is sent and completed.

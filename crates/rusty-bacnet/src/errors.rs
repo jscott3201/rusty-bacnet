@@ -22,6 +22,7 @@ create_exception!(rusty_bacnet, BacnetLogNotAdvancingError, BacnetError);
 create_exception!(rusty_bacnet, BacnetReadRangeViolationError, BacnetError);
 create_exception!(rusty_bacnet, BacnetBvlcNakError, BacnetError);
 create_exception!(rusty_bacnet, BacnetBvlcUnexpectedResponseError, BacnetError);
+create_exception!(rusty_bacnet, BacnetAmbiguousDeviceError, BacnetError);
 
 /// `BacnetTransportError`, built at first use: pyo3's `create_exception!`
 /// takes one base, and this class derives from both `BacnetError` and
@@ -155,6 +156,25 @@ pub fn to_py_err(err: Error) -> PyErr {
                 let val = py_err.value(py);
                 let _ = val.setattr("requested", requested);
                 let _ = val.setattr("returned", returned);
+                Ok(())
+            });
+            py_err
+        }
+        Error::AmbiguousDevice {
+            instance,
+            ref candidates,
+        } => {
+            // Two or more addresses claim the instance a request named
+            // (#2560): each candidate is (network, MAC), network 0 local.
+            let py_err = BacnetAmbiguousDeviceError::new_err(err.to_string());
+            let candidates: Vec<(u16, Vec<u8>)> = candidates
+                .iter()
+                .map(|address| (address.network_number, address.mac_address.to_vec()))
+                .collect();
+            let _ = crate::py_async::attach(|py| {
+                let val = py_err.value(py);
+                let _ = val.setattr("instance", instance);
+                let _ = val.setattr("candidates", candidates);
                 Ok(())
             });
             py_err
@@ -397,6 +417,10 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     unexpected.setattr("expected", m.py().None())?;
     unexpected.setattr("got", m.py().None())?;
     m.add("BacnetBvlcUnexpectedResponseError", unexpected)?;
+    let ambiguous = m.py().get_type::<BacnetAmbiguousDeviceError>();
+    ambiguous.setattr("instance", m.py().None())?;
+    ambiguous.setattr("candidates", m.py().None())?;
+    m.add("BacnetAmbiguousDeviceError", ambiguous)?;
     Ok(())
 }
 

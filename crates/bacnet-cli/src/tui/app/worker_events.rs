@@ -177,11 +177,20 @@ impl App {
                 self.devices.upsert(row);
                 self.resolve_capture_devices();
             }
-            WorkerEvent::Lost(row) => self.devices.remove(row.instance),
-            WorkerEvent::Collision { retained, incoming } => {
-                self.duplicates.record(&retained, &incoming);
+            WorkerEvent::Lost(row) => self.devices.remove(&row),
+            WorkerEvent::Collision {
+                instance,
+                claimants,
+            } => {
+                self.duplicates.set(instance, &claimants);
+                // The one claimant left shows, if the purge took the row
+                // the table showed for the instance.
+                if let [left] = claimants.as_slice() {
+                    self.devices.upsert(left.clone());
+                }
             }
             WorkerEvent::Snapshot(rows) => {
+                self.duplicates.rebuild(&rows);
                 self.devices.replace_all(rows);
                 self.resolve_capture_devices();
             }

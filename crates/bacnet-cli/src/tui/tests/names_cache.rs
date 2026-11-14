@@ -57,8 +57,8 @@ fn an_i_have_flood_stays_at_the_cap() {
 }
 
 /// Two devices claim instance 7. Each address keeps its own name: the
-/// table shows the name of the one the client kept, and the other's
-/// once it takes over the row.
+/// table shows the name of the one it shows, and the other's once the
+/// first is purged and the contest ends.
 #[test]
 fn a_duplicate_instance_pair_keeps_each_devices_name() {
     let mut app = connected_app();
@@ -70,11 +70,13 @@ fn a_duplicate_instance_pair_keeps_each_devices_name() {
     names(&mut app, 7, vec![(device(7), named("Plant AHU"))]);
     // The other device's I-Have names its own Device object.
     i_have(&mut app, 7, device(7), "Lab AHU", &second.address);
+    // The second's I-Am, and the contest it starts.
+    worker(&mut app, WorkerEvent::Discovered(second.clone()));
     worker(
         &mut app,
         WorkerEvent::Collision {
-            retained: first.clone(),
-            incoming: second.clone(),
+            instance: 7,
+            claimants: vec![first.clone(), second.clone()],
         },
     );
     let text = screen(&mut app, 120, 40);
@@ -82,9 +84,16 @@ fn a_duplicate_instance_pair_keeps_each_devices_name() {
         text.contains("Plant AHU") && !text.contains("Lab AHU"),
         "{text}"
     );
-    // The first goes quiet and the client keeps the second.
+    // The first goes quiet: the purge takes it and the contest ends.
     worker(&mut app, WorkerEvent::Lost(first.clone()));
-    worker(&mut app, WorkerEvent::Discovered(second));
+    worker(
+        &mut app,
+        WorkerEvent::Collision {
+            instance: 7,
+            claimants: vec![second],
+        },
+    );
+    assert!(app.duplicates.banner().is_empty());
     assert!(
         frame_commands(&mut app, 120, 40).is_empty(),
         "known already"

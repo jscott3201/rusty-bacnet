@@ -482,48 +482,17 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 vendor = i_am.vendor_id,
                                 "Received IAm"
                             );
-                            let (src_net, src_addr) = match source_network {
-                                Some(npdu_addr) if !npdu_addr.mac_address.is_empty() => {
-                                    (Some(npdu_addr.network), Some(npdu_addr.mac_address.clone()))
-                                }
-                                _ => (None, None),
-                            };
-                            let device = DiscoveredDevice {
-                                object_identifier: i_am.object_identifier,
-                                mac_address: MacAddr::from_slice(source_mac),
-                                max_apdu_length: i_am.max_apdu_length,
-                                segmentation_supported: i_am.segmentation_supported,
-                                max_segments_accepted: None,
-                                vendor_id: i_am.vendor_id,
-                                last_seen: std::time::Instant::now(),
-                                source_network: src_net,
-                                source_address: src_addr,
-                            };
-                            let status = {
-                                let mut table = device_table.lock();
-                                table.upsert_with_result(device.clone())
-                            };
-                            match status {
-                                DeviceUpsertResult::Inserted => {
-                                    let _ = device_tx.send(DeviceEvent {
-                                        kind: DeviceEventKind::Discovered,
-                                        device,
-                                    });
-                                }
-                                DeviceUpsertResult::Updated => {
-                                    let _ = device_tx.send(DeviceEvent {
-                                        kind: DeviceEventKind::Updated,
-                                        device,
-                                    });
-                                }
-                                DeviceUpsertResult::Collision { retained } => {
-                                    let _ = device_collision_tx.send(DeviceCollisionEvent {
-                                        retained,
-                                        incoming: device,
-                                    });
-                                }
-                                DeviceUpsertResult::Dropped => {}
-                            }
+                            let this_network = network.local_network_number().get();
+                            device_events::heard_i_am(
+                                device_table,
+                                device_events::IAmSource {
+                                    mac: source_mac,
+                                    network: source_network,
+                                    this_network,
+                                },
+                                &i_am,
+                                (device_tx, device_collision_tx),
+                            );
                         }
                         Err(e) => {
                             warn_throttled!(decode_warning, error = %e, "Failed to decode IAm");

@@ -68,7 +68,11 @@ pub async fn resolve<T: TransportPort + 'static>(
     match parse_target_on(client.transport(), text)? {
         Target::Mac(mac) => Ok(Destination::Mac(mac)),
         Target::Bip6(peer) => Ok(Destination::Mac(bip6_vmac(client.transport(), peer).await?)),
-        Target::Instance(instance) => match client.get_device(instance).await {
+        Target::Instance(instance) => match client
+            .get_device(instance)
+            .await
+            .map_err(|e| e.to_string())?
+        {
             Some(_) => Ok(Destination::Device(instance)),
             None => Err(not_found(instance)),
         },
@@ -91,7 +95,11 @@ pub async fn resolve_mac<T: TransportPort + 'static>(
     match parse_target_on(client.transport(), text)? {
         Target::Mac(mac) => Ok(mac),
         Target::Bip6(peer) => bip6_vmac(client.transport(), peer).await,
-        Target::Instance(instance) => match client.get_device(instance).await {
+        Target::Instance(instance) => match client
+            .get_device(instance)
+            .await
+            .map_err(|e| e.to_string())?
+        {
             Some(device) if device.source_network.is_some() => Err(format!(
                 "Device {instance} is behind a router; only read, readm, read-range, alarms, \
                  alarm-summary, enrollment-summary, file-read, file-write, write, writem, subscribe, control, reinit, time-sync, create-object, delete-object and ack-alarm reach routed devices"
@@ -435,7 +443,7 @@ impl Destination {
     /// [`MAX_STATE_TEXT_OBJECTS`](crate::format::MAX_STATE_TEXT_OBJECTS).
     /// A reference that names a device is read only when it names this
     /// destination's device: one addressed by instance, or a MAC the
-    /// client's discovery table holds for exactly one device. A refused
+    /// client's discovery table holds a device at. A refused
     /// read leaves its columns named as before, a device that refuses
     /// ReadPropertyMultiple is read by ReadProperty for the rest of the
     /// objects, and a device that stops answering ends the reading (#2122).
@@ -446,18 +454,10 @@ impl Destination {
     ) {
         let log_device = match self {
             Self::Device(instance) => Some(*instance),
-            Self::Mac(mac) => {
-                let devices = client.discovered_devices().await;
-                let mut at_mac = devices.iter().filter(|device| {
-                    device.source_network.is_none()
-                        && device.mac_address.as_slice() == mac.as_slice()
-                });
-                // Two instances at one MAC: which one the log is on is unknown.
-                match (at_mac.next(), at_mac.next()) {
-                    (Some(device), None) => Some(device.object_identifier.instance_number()),
-                    _ => None,
-                }
-            }
+            Self::Mac(mac) => client
+                .get_device_at(0, mac)
+                .await
+                .map(|device| device.object_identifier.instance_number()),
         };
         let no_rpm = Cell::new(false);
         let no_rpm = &no_rpm;

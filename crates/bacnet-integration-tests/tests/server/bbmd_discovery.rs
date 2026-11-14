@@ -104,7 +104,7 @@ async fn bbmd_own_i_am_reaches_bdt_peer_device_and_foreign_device() {
     // The remote-subnet client discovers the BBMD's device at the BBMD's address.
     let discovered = timeout(Duration::from_secs(2), async {
         loop {
-            if let Some(device) = client.get_device(BBMD_DEVICE).await {
+            if let Some(device) = client.get_device(BBMD_DEVICE).await.unwrap() {
                 break device;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
