@@ -1,7 +1,8 @@
 //! Socket-free router ports whose sends finish only when the test allows it.
 
 use bacnet_npdu::NpduLimits;
-use bacnet_transport::port::{DataAttribute, ReceivedNpdu, TransportPort};
+use bacnet_transport::port::{DataAttribute, ReceivedNpdu};
+use bacnet_transport::test_transport::TestTransport;
 use bacnet_types::{MacAddr, error::Error};
 use bytes::Bytes;
 use std::sync::{
@@ -28,80 +29,37 @@ pub(super) struct Peer {
     pub(super) sent: mpsc::UnboundedReceiver<Sending>,
 }
 
-struct Port {
-    incoming: Option<mpsc::Receiver<ReceivedNpdu>>,
+/// A port at `mac` whose every send waits on the test: the hook hands it a
+/// [`Sending`] and finishes with whatever the test completes it with. The
+/// link carries `limit` octets each way, as the test changes it.
+fn port(
+    mac: u8,
+    incoming: mpsc::Receiver<ReceivedNpdu>,
     sent: mpsc::UnboundedSender<Sending>,
-    mac: [u8; 1],
     limit: Arc<AtomicU16>,
-}
-
-impl Port {
-    async fn send(
-        &self,
-        npdu: &[u8],
-        to: Option<&[u8]>,
-        attributes: &[DataAttribute],
-    ) -> Result<(), Error> {
-        let (complete, completion) = oneshot::channel();
-        self.sent
-            .send(Sending {
-                npdu: npdu.to_vec(),
-                to: to.map(<[u8]>::to_vec),
-                attributes: attributes.to_vec(),
-                complete,
-            })
-            .map_err(|_| Error::Encoding("test wire closed".into()))?;
-        completion
-            .await
-            .map_err(|_| Error::Encoding("test send refused".into()))?
-    }
-}
-
-impl TransportPort for Port {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        Ok(self.incoming.take().unwrap())
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.send(npdu, Some(mac), &[]).await
-    }
-
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.send(npdu, None, &[]).await
-    }
-
-    async fn send_unicast_with_data_attributes(
-        &self,
-        npdu: &[u8],
-        mac: &[u8],
-        attributes: &[DataAttribute],
-    ) -> Result<(), Error> {
-        self.send(npdu, Some(mac), attributes).await
-    }
-
-    async fn send_broadcast_with_data_attributes(
-        &self,
-        npdu: &[u8],
-        attributes: &[DataAttribute],
-    ) -> Result<(), Error> {
-        self.send(npdu, None, attributes).await
-    }
-
-    fn max_npdu(&self) -> NpduLimits {
-        NpduLimits::both(self.limit.load(Ordering::SeqCst))
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &self.mac
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
+) -> TestTransport {
+    TestTransport::builder()
+        .local_mac(&[mac])
+        .inbound(incoming)
+        .on_max_npdu(move || NpduLimits::both(limit.load(Ordering::SeqCst)))
+        .on_send(move |frame| {
+            let (complete, completion) = oneshot::channel();
+            let queued = sent
+                .send(Sending {
+                    npdu: frame.npdu.to_vec(),
+                    to: (!frame.broadcast).then(|| frame.mac.to_vec()),
+                    attributes: frame.attributes,
+                    complete,
+                })
+                .map_err(|_| Error::Encoding("test wire closed".into()));
+            async move {
+                queued?;
+                completion
+                    .await
+                    .map_err(|_| Error::Encoding("test send refused".into()))?
+            }
+        })
+        .build()
 }
 
 pub(super) async fn start(count: usize) -> (BACnetRouter, mpsc::Receiver<ReceivedApdu>, Vec<Peer>) {
@@ -128,12 +86,7 @@ pub(super) async fn start_any<A: super::LocalApduReceiver>(
             let limit = Arc::new(AtomicU16::new(1497));
             (
                 RouterPort {
-                    transport: Port {
-                        incoming: Some(incoming),
-                        sent,
-                        mac: [index as u8 + 1],
-                        limit: limit.clone(),
-                    },
+                    transport: port(index as u8 + 1, incoming, sent, limit.clone()),
                     network_number: (index as u16 + 1) * 1000,
                 },
                 Peer {

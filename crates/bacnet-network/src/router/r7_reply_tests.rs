@@ -1,59 +1,35 @@
 //! R7 responses retain the endpoint a strict requester addressed.
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use bacnet_encoding::npdu::{Npdu, NpduAddress, decode_npdu, encode_npdu};
 use bacnet_npdu::NetworkPriority;
-use bacnet_transport::port::{ReceivedNpdu, TransportPort};
-use bacnet_types::{MacAddr, error::Error};
+use bacnet_transport::port::ReceivedNpdu;
+use bacnet_transport::test_transport::{SendMode, TestTransport};
+use bacnet_types::MacAddr;
 use bytes::{Bytes, BytesMut};
 use tokio::sync::mpsc;
 
 use super::{BACnetRouter, RouterOptions, RouterPort};
 use crate::layer::{IssuedApdu, NetworkLayer};
 
-#[derive(Clone)]
-struct Port {
-    incoming: Arc<Mutex<Option<mpsc::Receiver<ReceivedNpdu>>>>,
-    wire: mpsc::UnboundedSender<(Bytes, Vec<u8>)>,
-    mac: [u8; 1],
-}
-
-impl TransportPort for Port {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        Ok(self.incoming.lock().unwrap().take().unwrap())
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.wire
-            .send((Bytes::copy_from_slice(npdu), mac.to_vec()))
-            .unwrap();
-        Ok(())
-    }
-    async fn send_broadcast(&self, _: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-    fn local_mac(&self) -> &[u8] {
-        &self.mac
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-}
-
 type WireReceiver = mpsc::UnboundedReceiver<(Bytes, Vec<u8>)>;
 
-fn port(mac: u8) -> (Port, mpsc::Sender<ReceivedNpdu>, WireReceiver) {
+/// A port at `mac` that hands the test each unicast it sends, and takes a
+/// broadcast without a trace.
+fn port(mac: u8) -> (TestTransport, mpsc::Sender<ReceivedNpdu>, WireReceiver) {
     let (frames, incoming) = mpsc::channel(8);
     let (wire, sent) = mpsc::unbounded_channel();
     (
-        Port {
-            incoming: Arc::new(Mutex::new(Some(incoming))),
-            wire,
-            mac: [mac],
-        },
+        TestTransport::builder()
+            .local_mac(&[mac])
+            .inbound(incoming)
+            .broadcast(SendMode::Ignore)
+            .on_send(move |frame| {
+                wire.send((frame.npdu, frame.mac.to_vec())).unwrap();
+                async { Ok(()) }
+            })
+            .build(),
         frames,
         sent,
     )
@@ -70,7 +46,7 @@ fn address(network: u16, mac: &[u8]) -> NpduAddress {
 async fn r7_response_matches_addressed_endpoint_and_invoke_id() {
     let (a, frames, mut wire_a) = port(1);
     let (b, _, mut wire_b) = port(2);
-    let network = NetworkLayer::new(a.clone());
+    let network = NetworkLayer::new(TestTransport::new());
     let mut started = BACnetRouter::start(
         vec![
             RouterPort {
