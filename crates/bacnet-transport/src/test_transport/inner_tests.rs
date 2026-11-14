@@ -140,7 +140,8 @@ fn a_network_port_lease_goes_to_whoever_reported_the_port() {
     drop(outer);
     assert_eq!(Arc::strong_count(&lease), 1);
 
-    // The test transport reported it: it holds the lease itself.
+    // The test transport reported it: it holds the lease itself, until a
+    // stop (even a failing one) or the drop releases it.
     let mut outer = TestTransport::builder().normal_bip(endpoint).build();
     outer
         .retain_network_port_lease_internal(Arc::clone(&lease))

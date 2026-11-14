@@ -72,6 +72,8 @@ type StartedHook = Arc<dyn Fn(Started<'_>) + Send + Sync>;
 type MacPredicate = Arc<dyn Fn(&[u8]) -> bool + Send + Sync>;
 type EndpointHook = Arc<dyn Fn() -> Option<SocketAddrV4> + Send + Sync>;
 type LimitsHook = Arc<dyn Fn() -> NpduLimits + Send + Sync>;
+type BipPortHook = Arc<dyn Fn(Option<BipPort>) -> Option<BipPort> + Send + Sync>;
+type LeaseHook = Arc<dyn Fn(&Arc<()>) + Send + Sync>;
 
 /// A B/IP-shaped local MAC (127.0.0.1:47808) for tests that want six octets.
 pub const BIP_LOCAL_MAC: [u8; 6] = [127, 0, 0, 1, 0xBA, 0xC0];
@@ -85,6 +87,11 @@ pub enum StartMode {
     /// Return this receiver, which the test feeds. `start` takes it, so a
     /// second start fails.
     Inbound(Option<mpsc::Receiver<ReceivedNpdu>>),
+    /// Start the [`inner`](TestTransportBuilder::inner) transport, drop the
+    /// receiver it returns, and return this one instead: the test takes over a
+    /// real link's inbound stream. A second start fails, as for `Inbound`;
+    /// without an inner transport every start fails.
+    Replace(Option<mpsc::Receiver<ReceivedNpdu>>),
     /// Make a new channel of this capacity on every start. The handle keeps
     /// the sender ([`TestTransportHandle::inbound`]) until `stop` (after its
     /// hook and inner stop) or `abort` drops it, so the link closes when the stack stops it.
@@ -135,7 +142,14 @@ struct Hooks {
     /// holds, or fails.
     start_gate: Option<StopHook>,
     on_started: Option<StartedHook>,
+    /// Awaited after `on_started`: a start the test holds open once the link
+    /// is up, or fails.
+    after_start: Option<StopHook>,
+    on_bip_port: Option<BipPortHook>,
+    on_retain_lease: Option<LeaseHook>,
     on_send: Option<SendHook>,
+    before_stop: Option<StopHook>,
+    after_stop: Option<StopHook>,
     on_stop: Option<StopHook>,
     on_abort: Option<Callback>,
     on_drop: Option<Callback>,
@@ -174,7 +188,7 @@ pub struct TestTransport {
     inner: Option<Box<dyn inner::InnerPort>>,
     /// See [`TestTransportBuilder::skip_prepare_for_routing`].
     prepare_inner: bool,
-    /// A registered Network Port's lease, held until the transport drops.
+    /// A registered Network Port's lease, held until `stop` or the drop.
     port_lease: Option<Arc<()>>,
 }
 
@@ -350,9 +364,14 @@ impl TransportPort for TestTransport {
     }
 
     fn bip_port(&self) -> Option<BipPort> {
-        self.bip_port
+        let port = self
+            .bip_port
             .clone()
-            .or_else(|| self.inner.as_ref().and_then(|i| i.bip_port()))
+            .or_else(|| self.inner.as_ref().and_then(|i| i.bip_port()));
+        match &self.hooks.on_bip_port {
+            Some(hook) => hook(port),
+            None => port,
+        }
     }
 
     fn bip6_port(&self) -> Option<Bip6Port> {
@@ -362,6 +381,9 @@ impl TransportPort for TestTransport {
     }
 
     fn retain_network_port_lease_internal(&mut self, lease: Arc<()>) -> Result<(), Error> {
+        if let Some(hook) = &self.hooks.on_retain_lease {
+            hook(&lease);
+        }
         if self.bip_port.is_some() || self.bip6_port.is_some() {
             self.port_lease = Some(lease);
             return Ok(());
@@ -405,6 +427,15 @@ impl TransportPort for TestTransport {
             StartMode::Inbound(receiver) => receiver
                 .take()
                 .ok_or_else(|| Error::Encoding("test transport already started".into()))?,
+            StartMode::Replace(receiver) => {
+                let inner = self.inner.as_mut().ok_or_else(|| {
+                    Error::Encoding("test transport has no inner transport to start".into())
+                })?;
+                let _real = inner.start().await?;
+                receiver
+                    .take()
+                    .ok_or_else(|| Error::Encoding("test transport already started".into()))?
+            }
             StartMode::Fresh(capacity) => {
                 let (tx, rx) = mpsc::channel(*capacity);
                 *self
@@ -425,17 +456,30 @@ impl TransportPort for TestTransport {
                 egress_limit: self.egress_apdu_limit(),
             });
         }
+        if let Some(hook) = self.hooks.after_start.clone() {
+            hook().await?;
+        }
         Ok(received)
     }
 
     async fn stop(&mut self) -> Result<(), Error> {
         self.shared.stops.fetch_add(1, Ordering::SeqCst);
+        if let Some(hook) = &self.hooks.before_stop {
+            hook().await?;
+        }
         let result = match (&self.hooks.on_stop, &mut self.inner) {
             (Some(hook), _) => hook().await,
             (None, Some(inner)) => inner.stop().await,
             (None, None) => Ok(()),
         };
+        let result = match (result, &self.hooks.after_stop) {
+            (Ok(()), Some(hook)) => hook().await,
+            (result, _) => result,
+        };
         self.close_fresh_channel();
+        // Stopping releases a Network Port lease the transport holds, as a
+        // real transport's stop does; a failing stop releases it too.
+        self.port_lease = None;
         self.refresh_inner_limits();
         result
     }
@@ -594,6 +638,8 @@ impl TransportPort for TestTransport {
     }
 }
 
+#[cfg(test)]
+mod hook_tests;
 #[cfg(test)]
 mod inner_tests;
 #[cfg(test)]
