@@ -105,6 +105,14 @@ async fn lab_on<C: TransportPort + 'static>(
     (client, server)
 }
 
+/// The lab device by its instance, at its MAC, as `resolve` makes it.
+fn by_instance(instance: u32) -> Destination {
+    Destination {
+        address: DeviceAddress::local(&[2]).unwrap(),
+        instance: Some(instance),
+    }
+}
+
 async fn stop<C: TransportPort + 'static>(
     mut client: BACnetClient<C>,
     mut server: BACnetServer<LoopbackTransport>,
@@ -191,7 +199,7 @@ fn active(columns: &LogColumns, column: usize) -> Option<&str> {
 #[tokio::test(start_paused = true)]
 async fn log_columns_name_the_referenced_property() {
     let (client, server) = lab().await;
-    let to = Destination::Device(LAB);
+    let to = by_instance(LAB);
     let named = to.log_columns(&client, oid(ObjectType::TREND_LOG, 2)).await;
     assert_eq!(
         named.column(0).map(|column| column.property),
@@ -209,7 +217,7 @@ async fn log_columns_name_the_referenced_property() {
 async fn a_refused_rpm_is_tried_once_a_read() {
     let (client, server) = lab_on(refuses_rpm).await;
     let mut columns: LogColumns = [binary(1, None), binary(2, None)].into_iter().collect();
-    Destination::Device(LAB)
+    by_instance(LAB)
         .log_state_texts(&client, &mut columns)
         .await;
     assert_eq!(rejections(client.transport()), 1);
@@ -226,7 +234,7 @@ async fn a_refused_rpm_is_tried_once_a_read() {
 #[tokio::test(start_paused = true)]
 async fn a_device_qualified_reference_needs_one_device_at_the_mac() {
     let (client, server) = lab().await;
-    let to = Destination::Mac(vec![2]);
+    let to = Destination::local(&[2]).unwrap();
     let wanted = [
         binary(1, Some(LAB)),
         binary(2, Some(LAB + 1)),
@@ -253,7 +261,7 @@ async fn a_device_qualified_reference_needs_one_device_at_the_mac() {
 #[tokio::test(start_paused = true)]
 async fn one_objects_state_texts_fall_back_to_none() {
     let (client, server) = lab_on(refuses_rpm).await;
-    let to = Destination::Device(LAB);
+    let to = by_instance(LAB);
     let no_rpm = Cell::new(false);
     let texts = to
         .state_texts(&client, oid(ObjectType::BINARY_VALUE, 2), &no_rpm)
