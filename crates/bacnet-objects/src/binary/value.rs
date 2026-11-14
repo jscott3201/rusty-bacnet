@@ -158,7 +158,7 @@ impl BinaryValueObject {
 
 crate::io_core::impl_profile!(BinaryValueObject);
 crate::io_core::impl_reliability_eval!(BinaryValueObject);
-crate::write_config::reporting::impl_reporting_persistence!(BinaryValueObject, in core);
+crate::write_config::reporting::impl_reporting_persistence!(BinaryValueObject);
 super::impl_state_texts!(BinaryValueObject);
 
 impl BACnetObject for BinaryValueObject {
@@ -349,11 +349,7 @@ crate::traits::impl_audit_policy!(BinaryValueObject);
 
 crate::event::impl_builtin_intrinsic_reporting!(
     BinaryValueObject,
-    event_detector,
-    core.event_history,
     [present_value],
-    core.reliability,
-    core.event_detection_enable,
     ChangeOfStateDetector::ALGORITHM
 );
 

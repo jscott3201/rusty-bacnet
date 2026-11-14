@@ -74,7 +74,7 @@ impl AnalogOutputObject {
 
 crate::io_core::impl_profile!(AnalogOutputObject);
 super::impl_analog_properties!(AnalogOutputObject);
-crate::write_config::reporting::impl_reporting_persistence!(AnalogOutputObject, in core);
+crate::write_config::reporting::impl_reporting_persistence!(AnalogOutputObject);
 
 impl BACnetObject for AnalogOutputObject {
     fn object_identifier(&self) -> ObjectIdentifier {
@@ -216,11 +216,7 @@ crate::io_core::impl_reliability_eval!(AnalogOutputObject);
 
 crate::event::impl_builtin_intrinsic_reporting!(
     AnalogOutputObject,
-    event_detector,
-    core.event_history,
     [present_value],
-    core.reliability,
-    core.event_detection_enable,
     OutOfRangeDetector::ALGORITHM
 );
 

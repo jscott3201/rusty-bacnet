@@ -468,6 +468,40 @@ fn multistate_evaluator_recovers_only_faults_it_owns() {
 }
 
 #[test]
+fn a_reliability_set_over_an_evaluated_fault_takes_it_from_the_evaluator() {
+    // Each type faults by its own evaluation when its states shrink past
+    // what it holds; the Reliability then set over that fault is the
+    // setter's, so the states coming back leave it.
+    let mut msi = MultiStateInputObject::new(1, "MSI-taken", 2).unwrap();
+    msi.set_present_value(2);
+    let mut mso = MultiStateOutputObject::new(1, "MSO-taken", 2).unwrap();
+    mso.set_relinquish_default(2).unwrap();
+    let mut msv = MultiStateValueObject::new(1, "MSV-taken", 2).unwrap();
+    msv.set_relinquish_default(2).unwrap();
+    macro_rules! taken {
+        ($object:ident, $fault:expr) => {{
+            $object.set_number_of_states(1).unwrap();
+            assert_eq!(read_reliability(&$object), $fault.to_raw());
+            $object
+                .reliability_eval()
+                .unwrap()
+                .set_reliability(Reliability::NO_SENSOR)
+                .unwrap();
+            $object.set_number_of_states(2).unwrap();
+            assert_eq!(
+                read_reliability(&$object),
+                Reliability::NO_SENSOR.to_raw(),
+                "{}: the evaluator no longer owns the fault",
+                stringify!($object)
+            );
+        }};
+    }
+    taken!(msi, Reliability::MULTI_STATE_OUT_OF_RANGE);
+    taken!(mso, Reliability::CONFIGURATION_ERROR);
+    taken!(msv, Reliability::CONFIGURATION_ERROR);
+}
+
+#[test]
 fn oos_and_inhibit_suppress_mutations_then_release_current_state_synchronously() {
     let mut inhibited = MultiStateInputObject::new(1, "MSI-inhibited", 2).unwrap();
     write_bool(

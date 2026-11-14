@@ -76,7 +76,7 @@ impl BinaryInputObject {
 
 crate::io_core::impl_profile!(BinaryInputObject);
 crate::io_core::impl_reliability_eval!(BinaryInputObject);
-crate::write_config::reporting::impl_reporting_persistence!(BinaryInputObject, in core);
+crate::write_config::reporting::impl_reporting_persistence!(BinaryInputObject);
 super::impl_state_texts!(BinaryInputObject);
 
 impl BACnetObject for BinaryInputObject {
@@ -174,11 +174,7 @@ impl crate::traits::CovReporting for BinaryInputObject {}
 
 crate::event::impl_builtin_intrinsic_reporting!(
     BinaryInputObject,
-    event_detector,
-    core.event_history,
     [present_value],
-    core.reliability,
-    core.event_detection_enable,
     ChangeOfStateDetector::ALGORITHM
 );
 

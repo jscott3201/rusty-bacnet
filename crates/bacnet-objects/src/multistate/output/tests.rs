@@ -312,7 +312,7 @@ fn detection_enable_is_a_disabled_by_default_invariant() {
     assert_eq!(mso.evaluate_intrinsic_reporting(test_now()), None);
     assert_eq!(mso.tick_intrinsic_reporting(test_tick()), None);
 
-    mso.reliability = Reliability::NO_SENSOR;
+    mso.core.reliability = Reliability::NO_SENSOR;
     assert_eq!(
         mso.read_property(PropertyIdentifier::STATUS_FLAGS, None)
             .unwrap(),

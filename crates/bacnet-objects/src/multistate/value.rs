@@ -1,10 +1,9 @@
 use super::*;
-use crate::object_profile::{ObjectProfile, ProfileState, TagsPersistence};
+use crate::object_profile::TagsPersistence;
 use crate::present_value_access::PresentValueAccess;
 use crate::property_metadata::PropertyMetadata;
 use alloc::sync::Arc;
-
-mod metadata;
+use bacnet_types::enums::PropertyIdentifier as P;
 
 // ---------------------------------------------------------------------------
 // MultiStateValue (type 19)
@@ -14,33 +13,14 @@ mod metadata;
 ///
 /// Present_Value is Unsigned, range 1..=number_of_states.
 pub struct MultiStateValueObject {
-    profile: ProfileState,
-    oid: ObjectIdentifier,
-    name: String,
-    description: String,
+    pub(super) core: IoCore,
+    /// CHANGE_OF_STATE event detector.
+    event_detector: ChangeOfStateDetector,
+    multistate: MultiStateProperties,
     present_value: u32,
-    number_of_states: u32,
-    out_of_service: bool,
-    status_flags: StatusFlags,
     access: PresentValueAccess,
     priority_array: [Option<u32>; 16],
     relinquish_default: u32,
-    /// Reliability; NO_FAULT_DETECTED until a fault is evaluated or simulated.
-    reliability: Reliability,
-    reliability_before_out_of_service: Option<Reliability>,
-    reliability_inhibit: common::ReliabilityInhibitState,
-    reliability_evaluator: MultiStateReliabilityState,
-    state_text: Vec<String>,
-    /// CHANGE_OF_STATE event detector.
-    event_detector: ChangeOfStateDetector,
-    /// Event_Detection_Enable (Clause 12.20). A FALSE value suspends
-    /// event-state-machine evaluation under Clause 13.2.2.1.
-    event_detection_enable: bool,
-    pub(crate) event_history: EventHistory,
-    /// The reporting settings a write set, kept in storage once the
-    /// object opts in (#2331).
-    #[cfg(feature = "event-reporting")]
-    reporting_store: crate::write_config::reporting::ReportingStore,
     /// Implemented paired command-source tracking (Clause 19.5).
     value_source: crate::command_source::ValueSourceTracking,
     /// The last writer of a noncommandable Present_Value, once tracked (#1552).
@@ -69,30 +49,15 @@ impl MultiStateValueObject {
         number_of_states: u32,
         access: PresentValueAccess,
     ) -> Result<Self, Error> {
-        let oid = ObjectIdentifier::new(ObjectType::MULTI_STATE_VALUE, instance)?;
-        require_nonzero_states(number_of_states)?;
+        let core = IoCore::new(ObjectType::MULTI_STATE_VALUE, instance, name.into())?;
         Ok(Self {
-            profile: ProfileState::default(),
-            oid,
-            name: name.into(),
-            description: String::new(),
+            core,
+            event_detector: ChangeOfStateDetector::default(),
+            multistate: MultiStateProperties::new(number_of_states)?,
             present_value: 1,
-            number_of_states,
-            out_of_service: false,
-            status_flags: StatusFlags::empty(),
             access,
             priority_array: [None; 16],
             relinquish_default: 1,
-            reliability: Reliability::NO_FAULT_DETECTED,
-            reliability_before_out_of_service: None,
-            reliability_inhibit: common::ReliabilityInhibitState::default(),
-            reliability_evaluator: MultiStateReliabilityState::default(),
-            state_text: default_state_text(number_of_states),
-            event_detector: ChangeOfStateDetector::default(),
-            event_detection_enable: true,
-            event_history: EventHistory::default(),
-            #[cfg(feature = "event-reporting")]
-            reporting_store: Default::default(),
             value_source: crate::command_source::ValueSourceTracking::default(),
             write_source: crate::command_source::SingleValueSource::default(),
         })
@@ -110,22 +75,8 @@ impl MultiStateValueObject {
         persistence: Arc<dyn TagsPersistence>,
     ) -> Result<Self, Error> {
         let mut object = Self::with_access(instance, name, number_of_states, access)?;
-        object.profile = ProfileState::persistent(object.oid, persistence, false)?;
+        object.core.keep_tags(persistence)?;
         Ok(object)
-    }
-
-    /// Provision independent optional Tags, Profile_Location and Profile_Name
-    /// rows before registration, in every Present_Value access mode. Tags is
-    /// writable; the text rows are network read-only. Invalid configuration
-    /// leaves the previous profile and its attached storage unchanged.
-    pub fn set_profile(&mut self, profile: ObjectProfile) -> Result<(), Error> {
-        self.profile.provision(profile)
-    }
-
-    /// Wait for queued save attempts to finish; writes report their own outcomes.
-    /// This is not a success receipt. Unstaged synchronous writes block their caller.
-    pub fn wait_for_tag_saves(&self) {
-        self.profile.wait_for_saves();
     }
 
     /// Track the source of a noncommandable Present_Value (Clause 19.5,
@@ -142,8 +93,10 @@ impl MultiStateValueObject {
         let _ = self.recompute_reliability();
     }
 
+    /// Whether a command, Relinquish_Default or an Alarm_Values entry names
+    /// a state the object doesn't have.
     fn configuration_invalid(&self) -> bool {
-        let is_invalid = |value: u32| !(1..=self.number_of_states).contains(&value);
+        let is_invalid = |value: u32| !(1..=self.multistate.number_of_states).contains(&value);
         self.priority_array
             .iter()
             .flatten()
@@ -156,64 +109,6 @@ impl MultiStateValueObject {
                 .iter()
                 .copied()
                 .any(is_invalid)
-    }
-
-    fn recompute_reliability(&mut self) -> ReliabilityEvaluation {
-        if self.out_of_service || self.reliability_inhibit.enabled() {
-            return ReliabilityEvaluation::Unchanged;
-        }
-        let configuration_invalid = self.configuration_invalid();
-        self.reliability_evaluator.evaluate(
-            configuration_invalid,
-            self.present_value,
-            self.number_of_states,
-            &mut self.reliability,
-        )
-    }
-
-    /// Change the locally configured number of states.
-    ///
-    /// The BACnet `Number_Of_States` property remains read-only. A successful
-    /// local change resizes State_Text and immediately re-evaluates Reliability;
-    /// retained commands, defaults, alarms, and Present_Value are not repaired.
-    /// On an object keeping its reporting settings, a State_Text a write
-    /// saved wins, and with it its count: zero is still refused, and the
-    /// saved texts stay, until `clear_written_reporting` (#2414).
-    pub fn set_number_of_states(&mut self, number_of_states: u32) -> Result<(), Error> {
-        require_nonzero_states(number_of_states)?;
-        #[cfg(feature = "event-reporting")]
-        if self.kept_over_setter(PropertyIdentifier::STATE_TEXT) {
-            return Ok(());
-        }
-        resize_state_text(
-            &mut self.number_of_states,
-            &mut self.state_text,
-            number_of_states,
-        )?;
-        let _ = self.recompute_reliability();
-        Ok(())
-    }
-
-    /// Set State_Text, one label per state, state 1 first (#2445), as
-    /// [`MultiStateInputObject::set_state_texts`](crate::multistate::MultiStateInputObject::set_state_texts)
-    /// does. The states a new count may not strand are Present_Value's,
-    /// Relinquish_Default's, those Priority_Array commands and Alarm_Values.
-    pub fn set_state_texts(&mut self, texts: Vec<String>) -> Result<(), Error> {
-        #[cfg(feature = "event-reporting")]
-        if self.kept_over_setter(PropertyIdentifier::STATE_TEXT) {
-            return kept_state_texts_check(&texts);
-        }
-        let count = whole_state_text_count(
-            self.number_of_states,
-            texts.len(),
-            self.held_states(&self.event_detector.alarm_values),
-        )?;
-        #[cfg(feature = "event-reporting")]
-        storable_state_texts(&self.reporting_store, &texts)?;
-        self.state_text = texts;
-        self.number_of_states = count;
-        let _ = self.recompute_reliability();
-        Ok(())
     }
 
     /// Set the alarm values and synchronously re-evaluate configuration Reliability.
@@ -236,7 +131,7 @@ impl MultiStateValueObject {
             // The saved list wins, so the count it would meet doesn't matter.
             return check_alarm_values(&values, u32::MAX);
         }
-        check_alarm_values(&values, self.number_of_states)?;
+        check_alarm_values(&values, self.multistate.number_of_states)?;
         self.event_detector.alarm_values = values;
         let _ = self.recompute_reliability();
         Ok(())
@@ -266,7 +161,7 @@ impl MultiStateValueObject {
         if self.access != PresentValueAccess::Commandable {
             return Err(common::unknown_property_error());
         }
-        if value < 1 || value > self.number_of_states {
+        if value < 1 || value > self.multistate.number_of_states {
             return Err(common::value_out_of_range_error());
         }
         self.relinquish_default = value;
@@ -297,6 +192,11 @@ impl MultiStateValueObject {
             .chain(alarm_values.iter().copied())
     }
 
+    /// Alarm_Values, which names states too.
+    fn alarm_values(&self) -> &[u32] {
+        &self.event_detector.alarm_values
+    }
+
     /// A noncommandable Present_Value write, network-equivalent.
     fn write_direct_present_value(
         &mut self,
@@ -306,7 +206,7 @@ impl MultiStateValueObject {
         if array_index.is_some() {
             return Err(common::property_is_not_an_array_error());
         }
-        if self.access == PresentValueAccess::ReadOnly && !self.out_of_service {
+        if self.access == PresentValueAccess::ReadOnly && !self.core.out_of_service {
             return Err(common::write_access_denied_error());
         }
         // Clause 19.2: an otherwise permitted noncommandable NULL is a no-op.
@@ -317,24 +217,42 @@ impl MultiStateValueObject {
     }
 
     fn set_present_value_directly(&mut self, value: PropertyValue) -> Result<(), Error> {
-        self.present_value = Self::checked_present_value(self.number_of_states, value)?;
+        self.present_value = Self::checked_present_value(self.multistate.number_of_states, value)?;
         let _ = self.recompute_reliability();
         Ok(())
     }
+
+    /// The rows before the access projects them: Table 12-23's, then the
+    /// profile's.
+    fn rows(&self) -> Cow<'_, [PropertyMetadata]> {
+        let mut rows = Cow::Borrowed(metadata::VALUE);
+        self.core.add_profile_rows(&mut rows);
+        rows
+    }
+
+    /// Whether `property` is absent under the object's Present_Value access.
+    fn excludes(&self, property: PropertyIdentifier) -> bool {
+        self.access != PresentValueAccess::Commandable
+            && self
+                .access
+                .excludes(&self.rows(), property, self.write_source.is_enabled())
+    }
 }
 
+crate::io_core::impl_profile!(MultiStateValueObject);
+super::impl_multistate!(MultiStateValueObject);
 crate::write_config::reporting::impl_reporting_persistence!(
     MultiStateValueObject,
-    states: state_text
+    states: multistate
 );
 
 impl BACnetObject for MultiStateValueObject {
     fn object_identifier(&self) -> ObjectIdentifier {
-        self.oid
+        self.core.oid
     }
 
     fn object_name(&self) -> &str {
-        &self.name
+        &self.core.name
     }
 
     crate::traits::lend_cov_reporting!();
@@ -347,7 +265,7 @@ impl BACnetObject for MultiStateValueObject {
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
         crate::property_metadata::check_read_array_index(self, property, array_index)?;
-        if metadata::excludes(self, property) {
+        if self.excludes(property) {
             return Err(common::unknown_property_error());
         }
         let source = match self.access {
@@ -360,74 +278,29 @@ impl BACnetObject for MultiStateValueObject {
         if let Some(result) = source {
             return result;
         }
-        if let Some(result) = self.profile.read(property, array_index) {
+        if property == P::PRESENT_VALUE {
+            return Ok(PropertyValue::Unsigned(self.present_value as u64));
+        }
+        if let Some(result) = self.core.read(&self.event_detector, property, array_index) {
             return result;
         }
-
-        if property == PropertyIdentifier::STATUS_FLAGS {
-            return Ok(common::compute_status_flags(
-                self.status_flags,
-                self.reliability,
-                self.out_of_service,
-                self.event_detector.event_state,
-            ));
-        }
-        if let Some(value) = self.reliability_inhibit.read(property) {
-            return Ok(value);
-        }
-        if let Some(result) = read_common_properties!(self, property, array_index) {
-            return result;
-        }
-        if property == PropertyIdentifier::EVENT_DETECTION_ENABLE {
-            return Ok(PropertyValue::Boolean(self.event_detection_enable));
-        }
-        if let Some(result) = read_generic_event_properties!(self.event_detector, property) {
-            return result;
-        }
-        if let Some(result) = self.event_history.read(property, array_index) {
+        if let Some(result) = self.multistate.read(property, array_index) {
             return result;
         }
         match property {
-            p if p == PropertyIdentifier::OBJECT_TYPE => Ok(PropertyValue::Enumerated(
-                ObjectType::MULTI_STATE_VALUE.to_raw(),
-            )),
-            p if p == PropertyIdentifier::PRESENT_VALUE => {
-                Ok(PropertyValue::Unsigned(self.present_value as u64))
-            }
-            p if p == PropertyIdentifier::NUMBER_OF_STATES => {
-                Ok(PropertyValue::Unsigned(self.number_of_states as u64))
-            }
-            p if p == PropertyIdentifier::PRIORITY_ARRAY => {
+            P::PRIORITY_ARRAY => {
                 common::read_priority_array!(self, array_index, |v: u32| PropertyValue::Unsigned(
                     v as u64
                 ))
             }
-            p if p == PropertyIdentifier::RELINQUISH_DEFAULT => {
-                Ok(PropertyValue::Unsigned(self.relinquish_default as u64))
-            }
-            p if p == PropertyIdentifier::CURRENT_COMMAND_PRIORITY => {
+            P::RELINQUISH_DEFAULT => Ok(PropertyValue::Unsigned(self.relinquish_default as u64)),
+            P::CURRENT_COMMAND_PRIORITY => {
                 Ok(common::current_command_priority(&self.priority_array))
             }
-            p if p == PropertyIdentifier::STATE_TEXT => match array_index {
-                None => Ok(PropertyValue::List(
-                    self.state_text
-                        .iter()
-                        .map(|s| PropertyValue::CharacterString(s.clone()))
-                        .collect(),
-                )),
-                Some(0) => Ok(PropertyValue::Unsigned(self.state_text.len() as u64)),
-                Some(idx) if idx >= 1 && (idx as usize) <= self.state_text.len() => Ok(
-                    PropertyValue::CharacterString(self.state_text[(idx - 1) as usize].clone()),
-                ),
-                _ => Err(common::invalid_array_index_error()),
-            },
-            p if p == PropertyIdentifier::ALARM_VALUES => Ok(PropertyValue::List(
-                self.event_detector
-                    .alarm_values
-                    .iter()
-                    .map(|v| PropertyValue::Unsigned(*v as u64))
-                    .collect(),
-            )),
+            P::ALARM_VALUES => Ok(read_alarm_values(&self.event_detector)),
+            P::PROPERTY_LIST => {
+                crate::property_metadata::read_property_list(&self.property_metadata(), array_index)
+            }
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -441,7 +314,7 @@ impl BACnetObject for MultiStateValueObject {
         origin: &crate::command_source::CommandOrigin,
     ) -> Result<(), Error> {
         crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
-        if property == PropertyIdentifier::VALUE_SOURCE {
+        if property == P::VALUE_SOURCE {
             return match self.access {
                 PresentValueAccess::Commandable => {
                     self.value_source.correct(value, priority, origin)
@@ -449,8 +322,8 @@ impl BACnetObject for MultiStateValueObject {
                 _ => self.write_source.correct(array_index, value, origin),
             };
         }
-        if property == PropertyIdentifier::PRESENT_VALUE {
-            let number_of_states = self.number_of_states;
+        if property == P::PRESENT_VALUE {
+            let number_of_states = self.multistate.number_of_states;
             return match self.access {
                 PresentValueAccess::Commandable => {
                     crate::command_source::write_sourced_priority!(
@@ -485,13 +358,10 @@ impl BACnetObject for MultiStateValueObject {
     ) -> Result<(), Error> {
         crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         crate::write_config::reporting::admit(self, property, array_index, &value)?;
-        if metadata::excludes(self, property) {
+        if self.excludes(property) {
             return Err(common::unknown_property_error());
         }
-        if let Some(result) = self.profile.write(property, array_index, &value) {
-            return result;
-        }
-        if property == PropertyIdentifier::PRESENT_VALUE {
+        if property == P::PRESENT_VALUE {
             if self.access == PresentValueAccess::Commandable {
                 return Err(common::write_access_denied_error());
             }
@@ -499,106 +369,39 @@ impl BACnetObject for MultiStateValueObject {
             self.write_source.unsourced()?;
             return self.write_direct_present_value(array_index, value);
         }
-        if property == PropertyIdentifier::VALUE_SOURCE {
+        if property == P::VALUE_SOURCE {
             return Err(common::write_access_denied_error());
         }
-        if property == PropertyIdentifier::STATE_TEXT {
-            // Written whole, State_Text sets Number_Of_States too (#1443).
-            let held: Vec<u32> = self
-                .held_states(&self.event_detector.alarm_values)
-                .collect();
-            write_state_text(
-                &mut self.number_of_states,
-                &mut self.state_text,
-                held,
-                array_index,
-                value,
-            )?;
-            let _ = self.recompute_reliability();
-            return Ok(());
-        }
-        if property == PropertyIdentifier::ALARM_VALUES {
-            write_alarm_values(
-                &mut self.event_detector,
-                array_index,
-                value,
-                self.number_of_states,
-            )?;
-            let _ = self.recompute_reliability();
-            return Ok(());
-        }
-        if property == PropertyIdentifier::EVENT_DETECTION_ENABLE {
-            if let PropertyValue::Boolean(v) = value {
-                self.event_detection_enable = v;
-                if !v {
-                    self.event_detector.event_state = bacnet_types::enums::EventState::NORMAL;
-                    self.event_detector.acked_transitions =
-                        bacnet_types::bitstring::EventTransitionBits::all();
-                    self.event_detector.pending = None;
-                    self.event_detector.fault_reliability = None;
-                    self.event_history.reset();
-                }
-                return Ok(());
-            }
-            return Err(common::invalid_data_type_error());
-        }
-        // Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair (#1329).
-        if let Some(result) =
-            self.event_history
-                .write(property, array_index, &value, self.event_detection_enable)
-        {
-            return result;
-        }
-        if let Some(result) = write_generic_event_properties!(self.event_detector, property, &value)
-        {
-            return result;
-        }
-        if let Some(result) = self.reliability_inhibit.write_inhibit(
-            &mut self.reliability,
-            self.out_of_service,
-            property,
-            &value,
-        ) {
-            result?;
-            let _ = self.recompute_reliability();
-            return Ok(());
-        }
-        if let Some(result) = self.reliability_inhibit.write_out_of_service(
-            &mut self.out_of_service,
-            &mut self.reliability,
-            &mut self.reliability_before_out_of_service,
-            property,
-            &value,
-        ) {
-            if result? == crate::reliability_inhibit::OutOfServiceWrite::Applied {
-                let _ = self.recompute_reliability();
-            }
-            return Ok(());
-        }
-        if let Some(result) = common::write_object_name(&mut self.name, property, &value) {
-            return result;
-        }
-        if let Some(result) = common::write_description(&mut self.description, property, &value) {
-            return result;
-        }
-        // Clause 12.20 requires simulation/test writes while Out_Of_Service is TRUE:
-        // Present_Value is writable, as is Reliability when that property exists
-        // and supports values beyond NO_FAULT_DETECTED.
-        // `is_writable_property` stays statically true because it describes capability.
-        if let Some(result) = self.reliability_inhibit.write_client_reliability(
-            self.out_of_service,
-            &mut self.reliability,
-            property,
-            &value,
-        ) {
-            return result;
-        }
-        if property == PropertyIdentifier::RELINQUISH_DEFAULT {
+        if property == P::RELINQUISH_DEFAULT {
             if let PropertyValue::Unsigned(u) = value {
                 let v = common::u64_to_u32(u)?;
                 return self.set_relinquish_default(v);
             }
             return Err(common::invalid_data_type_error());
+        }
+        // Clause 12.20 requires simulation/test writes while Out_Of_Service is TRUE:
+        // Present_Value is writable, as is Reliability when that property exists
+        // and supports values beyond NO_FAULT_DETECTED; the core takes the
+        // Reliability write. `is_writable_property` stays statically true
+        // because it describes capability.
+        if let Some(result) =
+            self.core
+                .write(&mut self.event_detector, property, array_index, &value)
+        {
+            return self.core_written(result);
+        }
+        if property == P::STATE_TEXT {
+            return self.write_state_text(array_index, value);
+        }
+        if property == P::ALARM_VALUES {
+            write_alarm_values(
+                &mut self.event_detector,
+                array_index,
+                value,
+                self.multistate.number_of_states,
+            )?;
+            let _ = self.recompute_reliability();
+            return Ok(());
         }
         Err(crate::common::unhandled_write_error(
             self.property_metadata().as_ref(),
@@ -612,7 +415,8 @@ impl BACnetObject for MultiStateValueObject {
     }
 
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
-        metadata::for_object(self)
+        self.access
+            .project(self.rows(), self.write_source.is_enabled())
     }
 
     crate::traits::lend_reliability_eval!();
@@ -622,60 +426,11 @@ impl BACnetObject for MultiStateValueObject {
     }
 }
 
-impl crate::creation::Creatable for MultiStateValueObject {
-    const CREATION_ONLY_PROPERTIES: &'static [PropertyIdentifier] = CREATION_ONLY;
-
-    fn initialize_property(
-        &mut self,
-        property: PropertyIdentifier,
-        value: PropertyValue,
-    ) -> Result<(), Error> {
-        let held: Vec<u32> = self
-            .held_states(&self.event_detector.alarm_values)
-            .collect();
-        initialize_states(
-            &mut self.number_of_states,
-            &mut self.state_text,
-            held,
-            property,
-            value,
-        )?;
-        let _ = self.recompute_reliability();
-        Ok(())
-    }
-}
-
 impl crate::traits::CovReporting for MultiStateValueObject {}
-
-impl crate::traits::ReliabilityEval for MultiStateValueObject {
-    fn set_reliability(&mut self, reliability: Reliability) -> Result<(), Error> {
-        if self.out_of_service || self.reliability_inhibit.enabled() {
-            return Err(common::write_access_denied_error());
-        }
-        if !common::is_reliability_value_valid(reliability) {
-            return Err(common::value_out_of_range_error());
-        }
-        self.reliability = reliability;
-        self.reliability_evaluator.clear_ownership();
-        Ok(())
-    }
-
-    fn evaluate_reliability(&mut self) -> Result<ReliabilityEvaluation, Error> {
-        Ok(self.recompute_reliability())
-    }
-
-    fn reliability_evaluation_inhibited(&self) -> bool {
-        self.reliability_inhibit.enabled()
-    }
-}
 
 crate::event::impl_builtin_intrinsic_reporting!(
     MultiStateValueObject,
-    event_detector,
-    event_history,
     [present_value],
-    reliability,
-    event_detection_enable,
     ChangeOfStateDetector::ALGORITHM
 );
 
@@ -703,7 +458,7 @@ impl MultiStateValueObject {
     fn apply_local_present_value(&mut self, value: PropertyValue) -> Result<(), Error> {
         match self.access {
             PresentValueAccess::Commandable => Err(crate::traits::not_supported()),
-            _ if self.out_of_service => Err(common::write_access_denied_error()),
+            _ if self.core.out_of_service => Err(common::write_access_denied_error()),
             PresentValueAccess::ReadOnly | PresentValueAccess::Writable => {
                 self.set_present_value_directly(value)?;
                 self.write_source.forget();
@@ -805,7 +560,7 @@ mod reliability_evaluator_tests {
             .evaluate_reliability()
             .unwrap();
         assert_eq!(
-            msv.reliability,
+            msv.core.reliability,
             Reliability::CONFIGURATION_ERROR,
             "invalid configuration must dominate invalid Present_Value"
         );
@@ -814,10 +569,10 @@ mod reliability_evaluator_tests {
             .unwrap()
             .evaluate_reliability()
             .unwrap();
-        assert_eq!(msv.reliability, Reliability::MULTI_STATE_OUT_OF_RANGE);
+        assert_eq!(msv.core.reliability, Reliability::MULTI_STATE_OUT_OF_RANGE);
         msv.set_number_of_states(3).unwrap();
         assert_eq!(
-            msv.reliability,
+            msv.core.reliability,
             Reliability::NO_FAULT_DETECTED,
             "count growth must synchronously recover the retained Present_Value"
         );

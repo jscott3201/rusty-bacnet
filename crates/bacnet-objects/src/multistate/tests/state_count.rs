@@ -290,3 +290,32 @@ fn a_count_at_index_0_that_would_strand_a_held_state_is_refused() {
         assert_eq!(count(&*object), PropertyValue::Unsigned(3), "{what}");
     }
 }
+
+#[test]
+fn an_output_relinquish_default_alone_blocks_a_shrink_past_it() {
+    // A command at state 1 keeps Present_Value off the default, so the
+    // default is the only held state past a count of 3.
+    let mut output = MultiStateOutputObject::new(1, "MSO-1", 4).unwrap();
+    output.set_relinquish_default(4).unwrap();
+    output
+        .write_property_from(
+            P::PRESENT_VALUE,
+            None,
+            PropertyValue::Unsigned(1),
+            Some(8),
+            &test_origin(),
+        )
+        .unwrap();
+    assert_eq!(
+        output.read_property(P::PRESENT_VALUE, None).unwrap(),
+        PropertyValue::Unsigned(1)
+    );
+    let before = snapshot(&output);
+    assert_eq!(
+        code(output.write_property(P::STATE_TEXT, None, labels(3), None)),
+        ErrorCode::VALUE_OUT_OF_RANGE
+    );
+    assert_eq!(snapshot(&output), before);
+    assert_eq!(code(resize(&mut output, 3)), ErrorCode::VALUE_OUT_OF_RANGE);
+    assert_eq!(snapshot(&output), before);
+}
