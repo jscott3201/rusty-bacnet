@@ -420,8 +420,9 @@ pub(crate) fn restore_state_text(
     *number_of_states = saved.len() as u32;
 }
 
+/// A fault the object's own evaluation reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum OwnedMultiStateFault {
+enum OwnedMultiStateFault {
     ConfigurationError,
     MultiStateOutOfRange,
 }
@@ -435,27 +436,42 @@ impl OwnedMultiStateFault {
     }
 }
 
-/// Private first-stage Reliability ownership shared by MSI, MSO, and MSV.
-#[derive(Debug, Default)]
-struct MultiStateReliabilityState {
-    pub(crate) owned_fault: Option<OwnedMultiStateFault>,
+/// Number_Of_States and State_Text, one label per state, and the fault the
+/// object's own Reliability evaluation over them set: what the three share
+/// beyond their [`IoCore`].
+struct MultiStateProperties {
+    number_of_states: u32,
+    state_text: Vec<String>,
+    /// The fault Reliability shows because the evaluation set it, until a
+    /// client's `set_reliability` takes Reliability over (first-stage
+    /// ownership).
+    owned_fault: Option<OwnedMultiStateFault>,
 }
 
-impl MultiStateReliabilityState {
-    fn clear_ownership(&mut self) {
-        self.owned_fault = None;
+impl MultiStateProperties {
+    /// `number_of_states` states labelled `State 1` on; zero is refused.
+    fn new(number_of_states: u32) -> Result<Self, Error> {
+        require_nonzero_states(number_of_states)?;
+        Ok(Self {
+            number_of_states,
+            state_text: default_state_text(number_of_states),
+            owned_fault: None,
+        })
     }
 
+    /// Work `reliability` out: CONFIGURATION_ERROR while
+    /// `configuration_invalid`, else MULTI_STATE_OUT_OF_RANGE for a
+    /// `present_value` outside the states. A fault is set only over
+    /// NO_FAULT_DETECTED, and cleared only when the evaluation set it.
     fn evaluate(
         &mut self,
         configuration_invalid: bool,
         present_value: u32,
-        number_of_states: u32,
         reliability: &mut Reliability,
     ) -> ReliabilityEvaluation {
         let observed_fault = if configuration_invalid {
             Some(OwnedMultiStateFault::ConfigurationError)
-        } else if !(1..=number_of_states).contains(&present_value) {
+        } else if !(1..=self.number_of_states).contains(&present_value) {
             Some(OwnedMultiStateFault::MultiStateOutOfRange)
         } else {
             None
@@ -491,27 +507,6 @@ impl MultiStateReliabilityState {
             old_reliability,
             new_reliability,
         }
-    }
-}
-
-/// Number_Of_States and State_Text, one label per state, and the
-/// Reliability evaluation over them: what the three share beyond their
-/// [`IoCore`].
-struct MultiStateProperties {
-    number_of_states: u32,
-    state_text: Vec<String>,
-    reliability_evaluator: MultiStateReliabilityState,
-}
-
-impl MultiStateProperties {
-    /// `number_of_states` states labelled `State 1` on; zero is refused.
-    fn new(number_of_states: u32) -> Result<Self, Error> {
-        require_nonzero_states(number_of_states)?;
-        Ok(Self {
-            number_of_states,
-            state_text: default_state_text(number_of_states),
-            reliability_evaluator: MultiStateReliabilityState::default(),
-        })
     }
 
     /// Read Number_Of_States or State_Text, whole, by element or its size
@@ -666,10 +661,9 @@ macro_rules! impl_multistate {
                     return $crate::traits::ReliabilityEvaluation::Unchanged;
                 }
                 let configuration_invalid = self.configuration_invalid();
-                self.multistate.reliability_evaluator.evaluate(
+                self.multistate.evaluate(
                     configuration_invalid,
                     self.present_value,
-                    self.multistate.number_of_states,
                     &mut self.core.reliability,
                 )
             }
@@ -703,7 +697,7 @@ macro_rules! impl_multistate {
                 reliability: bacnet_types::enums::Reliability,
             ) -> Result<(), bacnet_types::error::Error> {
                 self.core.set_reliability(reliability)?;
-                self.multistate.reliability_evaluator.clear_ownership();
+                self.multistate.owned_fault = None;
                 Ok(())
             }
 

@@ -243,7 +243,6 @@ crate::io_core::impl_profile!(MultiStateValueObject);
 super::impl_multistate!(MultiStateValueObject);
 crate::write_config::reporting::impl_reporting_persistence!(
     MultiStateValueObject,
-    in core,
     states: multistate
 );
 
@@ -431,11 +430,7 @@ impl crate::traits::CovReporting for MultiStateValueObject {}
 
 crate::event::impl_builtin_intrinsic_reporting!(
     MultiStateValueObject,
-    event_detector,
-    core.event_history,
     [present_value],
-    core.reliability,
-    core.event_detection_enable,
     ChangeOfStateDetector::ALGORITHM
 );
 

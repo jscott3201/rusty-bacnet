@@ -2,7 +2,7 @@
 //! with the `event-reporting` feature; see the [parent module](super).
 
 /// Implement reporting persistence for `$object`, which holds a
-/// [`ReportingStore`](super::ReportingStore) in `reporting_store`. It gets
+/// [`ReportingStore`](super::ReportingStore). It gets
 /// `with_reporting_persistence`, `written_reporting`,
 /// `clear_written_reporting` and `wait_for_reporting_saves`, and
 /// [`DurableWrites`](crate::durable::DurableWrites) staging its reporting
@@ -10,14 +10,14 @@
 /// its `write_property` offers each write to [`admit`](super::admit) once the
 /// array index is checked.
 ///
-/// - `impl_reporting_persistence!(T)`: an object that holds the kept rows in
-///   the usual fields (`event_detector`, `event_detection_enable`,
-///   `event_history`) and its Tags storage in `profile`. It also gets the
-///   three setters, [`KeepsReporting`](super::KeepsReporting), and staging
-///   of its Tags beside its reporting settings. Its algorithm parameters
-///   are its detector's
-///   ([`AlgorithmDetector`](super::parameters::AlgorithmDetector)), and a
-///   staged write of one is checked on a detector of that type.
+/// - `impl_reporting_persistence!(T)`: an analog, binary or multi-state
+///   Input, Output or Value, which holds the kept rows, its Tags storage and
+///   the store in its [`IoCore`](crate::io_core::IoCore) `core`, and its
+///   detector in `event_detector`. It also gets the three setters,
+///   [`KeepsReporting`](super::KeepsReporting), and staging of its Tags
+///   beside its reporting settings. Its algorithm parameters are its
+///   detector's ([`AlgorithmDetector`](super::parameters::AlgorithmDetector)),
+///   and a staged write of one is checked on a detector of that type.
 /// - `impl_reporting_persistence!(T, states: field)`: the same, for a
 ///   multi-state object whose State_Text and its count are in `field`, its
 ///   `MultiStateProperties`. It keeps a written State_Text, and with it the
@@ -25,15 +25,13 @@
 ///   entries it takes, at a stage the count the request's own State_Text
 ///   writes leave. Its `held_states` names the states a new count may not
 ///   strand.
-/// - `impl_reporting_persistence!(T, in core)`: either of the two above, for
-///   an object that holds those fields, all but `event_detector`, in its
-///   [`IoCore`](crate::io_core::IoCore) `core`.
-/// - `impl_reporting_persistence!(T, without_tags)`: an object that
-///   implements `KeepsReporting` itself, has no Tags storage, and guards
-///   its own setters with [`setter_gives_way`](super::setter_gives_way).
+/// - `impl_reporting_persistence!(T, without_tags)`: an object that holds
+///   the store in `reporting_store`, implements `KeepsReporting` itself, has
+///   no Tags storage, and guards its own setters with
+///   [`setter_gives_way`](super::setter_gives_way).
 macro_rules! impl_reporting_persistence {
-    ($object:ty $(, in $core:ident)? $(, states: $states:ident)?) => {
-        $crate::write_config::reporting::impl_reporting_persistence!(@builder $object $(, in $core)?);
+    ($object:ty $(, states: $states:ident)?) => {
+        $crate::write_config::reporting::impl_reporting_persistence!(@builder $object, core.reporting_store);
 
         impl $object {
             /// Set Notification_Class. On an object keeping its reporting
@@ -63,30 +61,30 @@ macro_rules! impl_reporting_persistence {
             /// (#2364).
             pub fn set_description(&mut self, desc: impl Into<String>) {
                 if !self.kept_over_setter(bacnet_types::enums::PropertyIdentifier::DESCRIPTION) {
-                    self$(.$core)?.description = desc.into();
+                    self.core.description = desc.into();
                 }
             }
 
             fn kept_over_setter(&self, property: bacnet_types::enums::PropertyIdentifier) -> bool {
-                $crate::write_config::reporting::setter_gives_way(&self$(.$core)?.reporting_store, self$(.$core)?.oid, property)
+                $crate::write_config::reporting::setter_gives_way(&self.core.reporting_store, self.core.oid, property)
             }
 
             /// The staging this object lends: its Tags and its reporting
             /// settings, whichever it keeps.
             #[cfg(feature = "durable-writes")]
             fn durable_capability(&mut self) -> Option<&mut dyn $crate::durable::DurableWrites> {
-                let keeps = self$(.$core)?.profile.capability().is_some() || self$(.$core)?.reporting_store.attached();
+                let keeps = self.core.profile.capability().is_some() || self.core.reporting_store.attached();
                 keeps.then_some(self as _)
             }
         }
 
         impl $crate::write_config::reporting::KeepsReporting for $object {
             fn reporting_store(&mut self) -> &mut $crate::write_config::reporting::ReportingStore {
-                &mut self$(.$core)?.reporting_store
+                &mut self.core.reporting_store
             }
 
             fn reporting_store_ref(&self) -> &$crate::write_config::reporting::ReportingStore {
-                &self$(.$core)?.reporting_store
+                &self.core.reporting_store
             }
 
             fn reporting_rows(&self) -> $crate::write_config::reporting::ReportingRows {
@@ -94,9 +92,9 @@ macro_rules! impl_reporting_persistence {
                     notification_class: self.event_detector.notification_class,
                     event_enable: self.event_detector.event_enable,
                     notify_type: self.event_detector.notify_type,
-                    event_detection_enable: self$(.$core)?.event_detection_enable,
-                    options: self$(.$core)?.event_history.options.clone(),
-                    description: self$(.$core)?.description.clone(),
+                    event_detection_enable: self.core.event_detection_enable,
+                    options: self.core.event_history.options.clone(),
+                    description: self.core.description.clone(),
                     algorithm: {
                         #[allow(unused_mut)]
                         let mut algorithm =
@@ -114,9 +112,9 @@ macro_rules! impl_reporting_persistence {
                     notification_class: &mut self.event_detector.notification_class,
                     event_enable: &mut self.event_detector.event_enable,
                     notify_type: &mut self.event_detector.notify_type,
-                    event_detection_enable: &mut self$(.$core)?.event_detection_enable,
-                    options: &mut self$(.$core)?.event_history.options,
-                    description: &mut self$(.$core)?.description,
+                    event_detection_enable: &mut self.core.event_detection_enable,
+                    options: &mut self.core.event_history.options,
+                    description: &mut self.core.description,
                 }
                 .restore(saved);
                 $crate::write_config::reporting::parameters::AlgorithmDetector::restore_parameters(
@@ -166,28 +164,28 @@ macro_rules! impl_reporting_persistence {
                 &mut self,
                 writes: &[$crate::durable::PendingWrite],
             ) -> $crate::durable::StageStep {
-                let tags = $crate::durable::DurableWrites::stage_writes(&mut self$(.$core)?.profile, writes);
+                let tags = $crate::durable::DurableWrites::stage_writes(&mut self.core.profile, writes);
                 if matches!(tags, $crate::durable::StageStep::Busy(_)) {
                     return tags;
                 }
                 let reporting = $crate::write_config::reporting::stage_writes(self, writes);
                 $crate::write_config::reporting::joined(tags, reporting, |tags| {
-                    $crate::durable::DurableWrites::release_staged_write(&mut self$(.$core)?.profile, tags);
+                    $crate::durable::DurableWrites::release_staged_write(&mut self.core.profile, tags);
                 })
             }
 
             fn release_staged_write(&mut self, staged: &$crate::durable::SaveWait) {
-                $crate::durable::DurableWrites::release_staged_write(&mut self$(.$core)?.profile, staged);
+                $crate::durable::DurableWrites::release_staged_write(&mut self.core.profile, staged);
                 $crate::write_config::reporting::release(self, staged);
             }
 
             fn has_staged_write(&self) -> bool {
-                $crate::durable::DurableWrites::has_staged_write(&self$(.$core)?.profile)
-                    || $crate::write_config::reporting::has_staged(&self$(.$core)?.reporting_store)
+                $crate::durable::DurableWrites::has_staged_write(&self.core.profile)
+                    || $crate::write_config::reporting::has_staged(&self.core.reporting_store)
             }
 
             fn settle_forgotten_writes(&mut self) -> Option<$crate::durable::SaveWait> {
-                let tags = $crate::durable::DurableWrites::settle_forgotten_writes(&mut self$(.$core)?.profile);
+                let tags = $crate::durable::DurableWrites::settle_forgotten_writes(&mut self.core.profile);
                 match (tags, $crate::write_config::reporting::settle(self)) {
                     (Some(tags), Some(reporting)) => Some(tags.and(reporting)),
                     (tags, reporting) => tags.or(reporting),
@@ -195,14 +193,14 @@ macro_rules! impl_reporting_persistence {
             }
 
             fn expire_staged(&mut self, now: core::time::Duration) {
-                $crate::durable::DurableWrites::expire_staged(&mut self$(.$core)?.profile, now);
+                $crate::durable::DurableWrites::expire_staged(&mut self.core.profile, now);
                 $crate::write_config::reporting::expire(self, now);
             }
         }
     };
 
     ($object:ty, without_tags) => {
-        $crate::write_config::reporting::impl_reporting_persistence!(@builder $object);
+        $crate::write_config::reporting::impl_reporting_persistence!(@builder $object, reporting_store);
 
         impl $object {
             /// The staging this object lends, once it keeps its reporting
@@ -253,7 +251,7 @@ macro_rules! impl_reporting_persistence {
         }
     };
 
-    (@builder $object:ty $(, in $core:ident)?) => {
+    (@builder $object:ty, $($store:ident).+) => {
         impl $object {
             /// Keep the reporting settings peers write (Notification_Class,
             /// Event_Enable, Notify_Type, Event_Detection_Enable,
@@ -336,7 +334,7 @@ macro_rules! impl_reporting_persistence {
             /// Block until the reporting saves queued so far have run.
             /// Dropping the object waits for them too.
             pub fn wait_for_reporting_saves(&self) {
-                self$(.$core)?.reporting_store.wait_idle();
+                self.$($store).+.wait_idle();
             }
         }
     };

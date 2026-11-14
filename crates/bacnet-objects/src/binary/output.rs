@@ -81,7 +81,7 @@ impl BinaryOutputObject {
 
 crate::io_core::impl_profile!(BinaryOutputObject);
 crate::io_core::impl_reliability_eval!(BinaryOutputObject);
-crate::write_config::reporting::impl_reporting_persistence!(BinaryOutputObject, in core);
+crate::write_config::reporting::impl_reporting_persistence!(BinaryOutputObject);
 super::impl_state_texts!(BinaryOutputObject);
 
 impl BACnetObject for BinaryOutputObject {
@@ -238,11 +238,7 @@ impl crate::traits::CovReporting for BinaryOutputObject {}
 
 crate::event::impl_builtin_intrinsic_reporting!(
     BinaryOutputObject,
-    event_detector,
-    core.event_history,
     [present_value, feedback_value],
-    core.reliability,
-    core.event_detection_enable,
     CommandFailureDetector::ALGORITHM
 );
 

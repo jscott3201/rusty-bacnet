@@ -110,37 +110,31 @@ impl<'a> EventTransitionState<'a> {
     }
 }
 
-/// Implement proposal-and-commit intrinsic reporting for built-in object
-/// families: the [`EventReporting`](crate::traits::EventReporting) of
-/// `$object`, which lends it with `crate::traits::lend_event_reporting!()`.
+/// Implement proposal-and-commit intrinsic reporting for the analog,
+/// binary and multi-state Input, Output and Value objects: the
+/// [`EventReporting`](crate::traits::EventReporting) of `$object`, which
+/// lends it with `crate::traits::lend_event_reporting!()`.
+///
+/// `$object` holds its detector in `event_detector` beside an
+/// [`IoCore`](crate::io_core::IoCore) in `core`, which holds the event
+/// history, Reliability and Event_Detection_Enable. The `[...]` fields are
+/// the values the algorithm watches, as the detector's `propose` takes
+/// them, and `$algorithm` is its event type.
 ///
 /// The evaluation hooks only propose transitions. The commit hook lends the
 /// detector and object history to the shared kernel and finalizes private
 /// detector state only after that kernel succeeds. The gated arms, and the
 /// kernel's own detection check on the commit, enforce Clause 13.2.2.1's
 /// Event_Detection_Enable state-machine gate.
-///
-/// Each field is named by its path from `self`. An object holding an
-/// [`IoCore`](crate::io_core::IoCore) keeps its detector in `event_detector`
-/// and names the rest in the core: `core.event_history`,
-/// `core.reliability` and `core.event_detection_enable`.
 macro_rules! impl_builtin_intrinsic_reporting {
-    (
-        $object:ty,
-        $($detector_field:ident).+,
-        $($history_field:ident).+,
-        [$($input_field:ident),+],
-        $($reliability_field:ident).+,
-        $($event_detection_enable_field:ident).+,
-        $algorithm:expr_2021
-    ) => {
+    ($object:ty, [$($input_field:ident),+], $algorithm:expr_2021) => {
         impl $crate::traits::EventReporting for $object {
             fn enrollment_summary_capability(
                 &self,
             ) -> Option<$crate::event::EnrollmentSummaryCapability> {
                 Some($crate::event::EnrollmentSummaryCapability {
                     event_type: $algorithm,
-                    last_transition: self.$($history_field).+.last_transition(),
+                    last_transition: self.core.event_history.last_transition(),
                 })
             }
 
@@ -148,13 +142,13 @@ macro_rules! impl_builtin_intrinsic_reporting {
                 &mut self,
                 now: bacnet_time::Instant,
             ) -> Option<$crate::event::TransitionOutcome> {
-                if !self.$($event_detection_enable_field).+ {
+                if !self.core.event_detection_enable {
                     return None;
                 }
-                self.$($detector_field).+.propose(
+                self.event_detector.propose(
                     $(self.$input_field,)+
-                    self.$($reliability_field).+,
-                    self.$($history_field).+.options.inhibited(),
+                    self.core.reliability,
+                    self.core.event_history.options.inhibited(),
                     now,
                 )
             }
@@ -163,32 +157,32 @@ macro_rules! impl_builtin_intrinsic_reporting {
                 &mut self,
                 now: bacnet_time::Instant,
             ) -> Option<$crate::event::TransitionOutcome> {
-                if !self.$($event_detection_enable_field).+ {
+                if !self.core.event_detection_enable {
                     return None;
                 }
-                self.$($detector_field).+.tick_proposal(
+                self.event_detector.tick_proposal(
                     $(self.$input_field,)+
-                    self.$($reliability_field).+,
-                    self.$($history_field).+.options.inhibited(),
+                    self.core.reliability,
+                    self.core.event_history.options.inhibited(),
                     now,
                 )
             }
 
             fn next_due(&self) -> Option<bacnet_time::Instant> {
-                if !self.$($event_detection_enable_field).+ {
+                if !self.core.event_detection_enable {
                     return None;
                 }
-                self.$($detector_field).+.next_due()
+                self.event_detector.next_due()
             }
 
             fn event_algorithm_inhibit_reference(
                 &self,
             ) -> Option<bacnet_types::constructed::BACnetObjectPropertyReference> {
-                self.$($history_field).+.options.inhibit_reference().cloned()
+                self.core.event_history.options.inhibit_reference().cloned()
             }
 
             fn follow_event_algorithm_inhibit(&mut self, inhibit: bool) -> bool {
-                self.$($history_field).+.options.follow(inhibit)
+                self.core.event_history.options.follow(inhibit)
             }
 
             fn commit_event_transition(
@@ -197,15 +191,15 @@ macro_rules! impl_builtin_intrinsic_reporting {
             ) -> Result<(), $crate::event::EventTransitionCommitError> {
                 let change = commit.change.clone();
                 $crate::event::history::EventTransitionState::new(
-                    self.$($event_detection_enable_field).+,
-                    &mut self.$($detector_field).+.event_state,
-                    &mut self.$($detector_field).+.acked_transitions,
-                    &mut self.$($history_field).+,
+                    self.core.event_detection_enable,
+                    &mut self.event_detector.event_state,
+                    &mut self.event_detector.acked_transitions,
+                    &mut self.core.event_history,
                 )
                 .commit(commit)?;
-                self.$($detector_field).+.confirm_transition(
+                self.event_detector.confirm_transition(
                     &change,
-                    self.$($reliability_field).+,
+                    self.core.reliability,
                 );
                 Ok(())
             }
@@ -215,11 +209,11 @@ macro_rules! impl_builtin_intrinsic_reporting {
                 event_state: bacnet_types::enums::EventState,
                 timestamp: &bacnet_types::primitives::BACnetTimeStamp,
             ) -> Result<Option<$crate::event::EventStateChange>, bacnet_types::error::Error> {
-                if !self.$($event_detection_enable_field).+ {
+                if !self.core.event_detection_enable {
                     return Err($crate::traits::no_alarm_configured());
                 }
-                self.$($history_field).+.acknowledge_correlated(
-                    &mut self.$($detector_field).+.acked_transitions,
+                self.core.event_history.acknowledge_correlated(
+                    &mut self.event_detector.acked_transitions,
                     event_state,
                     timestamp,
                 )

@@ -125,7 +125,6 @@ crate::io_core::impl_profile!(MultiStateInputObject);
 super::impl_multistate!(MultiStateInputObject);
 crate::write_config::reporting::impl_reporting_persistence!(
     MultiStateInputObject,
-    in core,
     states: multistate
 );
 
@@ -231,11 +230,7 @@ impl crate::traits::CovReporting for MultiStateInputObject {}
 
 crate::event::impl_builtin_intrinsic_reporting!(
     MultiStateInputObject,
-    event_detector,
-    core.event_history,
     [present_value],
-    core.reliability,
-    core.event_detection_enable,
     ChangeOfStateDetector::ALGORITHM
 );
 

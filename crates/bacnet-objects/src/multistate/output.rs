@@ -137,7 +137,6 @@ crate::io_core::impl_profile!(MultiStateOutputObject);
 super::impl_multistate!(MultiStateOutputObject);
 crate::write_config::reporting::impl_reporting_persistence!(
     MultiStateOutputObject,
-    in core,
     states: multistate
 );
 
@@ -309,11 +308,7 @@ impl crate::traits::CovReporting for MultiStateOutputObject {}
 
 crate::event::impl_builtin_intrinsic_reporting!(
     MultiStateOutputObject,
-    event_detector,
-    core.event_history,
     [present_value, feedback_value],
-    core.reliability,
-    core.event_detection_enable,
     CommandFailureDetector::ALGORITHM
 );
 
