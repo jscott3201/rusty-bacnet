@@ -24,10 +24,10 @@ use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::loopback::LoopbackTransport;
-use bacnet_transport::port::{ReceivedNpdu, TransportPort};
+use bacnet_transport::port::TransportPort;
+use bacnet_transport::test_transport::{SendMode, TestTransport};
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier, Segmentation};
-use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use tokio::sync::{mpsc, watch};
 use tokio::time::sleep;
@@ -45,55 +45,29 @@ const ROUTER_ON_1: u8 = 1;
 const SMALL_APDU: u16 = 128;
 
 /// A loopback link end that reports what it sends, and whose NPDU limit
-/// the test sets.
-struct Link {
+/// the test sets through the returned sender.
+fn link(
     link: LoopbackTransport,
-    sent: mpsc::UnboundedSender<Vec<u8>>,
-    limits: watch::Sender<NpduLimits>,
-}
-
-impl Link {
-    fn new(link: LoopbackTransport) -> (Self, mpsc::UnboundedReceiver<Vec<u8>>) {
-        let (sent, rx) = mpsc::unbounded_channel();
-        let limits = watch::Sender::new(NpduLimits::STANDARD);
-        (Self { link, sent, limits }, rx)
-    }
-}
-
-impl TransportPort for Link {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        self.link.start().await
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        self.link.stop().await
-    }
-
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        let _ = self.sent.send(npdu.to_vec());
-        self.link.send_unicast(npdu, mac).await
-    }
-
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        let _ = self.sent.send(npdu.to_vec());
-        self.link.send_broadcast(npdu).await
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        self.link.local_mac()
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        self.link.local_receive_apdu_capacity()
-    }
-
-    fn max_npdu(&self) -> NpduLimits {
-        *self.limits.borrow()
-    }
-
-    fn max_npdu_changes(&self) -> Option<watch::Receiver<NpduLimits>> {
-        Some(self.limits.subscribe())
-    }
+) -> (
+    TestTransport,
+    mpsc::UnboundedReceiver<Vec<u8>>,
+    watch::Sender<NpduLimits>,
+) {
+    let (sent, rx) = mpsc::unbounded_channel();
+    let limits = watch::Sender::new(NpduLimits::STANDARD);
+    let (current, changes) = (limits.clone(), limits.subscribe());
+    let transport = TestTransport::builder()
+        .inner(link)
+        .unicast(SendMode::Forward)
+        .broadcast(SendMode::Forward)
+        .on_max_npdu(move || *current.borrow())
+        .max_npdu_changes(changes)
+        .on_send(move |frame| {
+            let _ = sent.send(frame.npdu.to_vec());
+            async { Ok(()) }
+        })
+        .build();
+    (transport, rx, limits)
 }
 
 struct Site {
@@ -118,9 +92,8 @@ async fn site() -> Site {
 async fn site_with(client_max_apdu: u16) -> Site {
     let (near, far_client) = LoopbackTransport::pair(vec![ROUTER_ON_1], vec![REMOTE_CLIENT]);
     let (far, station) = LoopbackTransport::pair(vec![2], vec![STATION]);
-    let (near, to_client) = Link::new(near);
-    let (far, to_station) = Link::new(far);
-    let station_limits = far.limits.clone();
+    let (near, to_client, _) = link(near);
+    let (far, to_station, station_limits) = link(far);
     let started = BACnetRouter::start(
         vec![
             RouterPort {

@@ -3,6 +3,7 @@ use super::*;
 use bacnet_transport::{
     sc::{LoopbackWebSocket, ScConnectionState, ScReconnectConfig, ScTransport, WebSocketPort},
     sc_frame::{ScFunction, ScMessage, decode_sc_message, encode_sc_message},
+    test_transport::{SendMode, TestTransport},
 };
 use bytes::{Bytes, BytesMut};
 
@@ -50,39 +51,29 @@ async fn assert_iam(hub: &LoopbackWebSocket) {
         1476
     );
 }
-struct ObservedSc {
+/// `inner` behind a test transport that notes, at each broadcast, the
+/// receive capacity and egress limit `inner` reports then.
+fn observed_sc(
     inner: ScTransport<LoopbackWebSocket>,
     sends: Arc<std::sync::Mutex<Vec<(u16, u16)>>>,
-}
-impl TransportPort for ObservedSc {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        self.inner.start().await
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        self.inner.stop().await
-    }
-    fn abort(&mut self) {
-        self.inner.abort();
-    }
-    async fn send_unicast(&self, bytes: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.inner.send_unicast(bytes, mac).await
-    }
-    async fn send_broadcast(&self, bytes: &[u8]) -> Result<(), Error> {
-        self.sends.lock().unwrap().push((
-            self.inner.local_receive_apdu_capacity(),
-            self.inner.egress_apdu_limit(),
-        ));
-        self.inner.send_broadcast(bytes).await
-    }
-    fn local_mac(&self) -> &[u8] {
-        self.inner.local_mac()
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        self.inner.local_receive_apdu_capacity()
-    }
-    fn egress_apdu_limit(&self) -> u16 {
-        self.inner.egress_apdu_limit()
-    }
+) -> TestTransport {
+    let builder = TestTransport::builder()
+        .inner(inner)
+        .unicast(SendMode::Forward)
+        .broadcast(SendMode::Forward);
+    let handle = builder.handle();
+    builder
+        .on_send(move |frame| {
+            if frame.broadcast {
+                let limits = handle.inner_limits().expect("the inner transport's limits");
+                sends
+                    .lock()
+                    .unwrap()
+                    .push((limits.receive_capacity, limits.egress_limit));
+            }
+            async { Ok(()) }
+        })
+        .build()
 }
 
 #[tokio::test]
@@ -99,10 +90,7 @@ async fn sc_server_egress_1474_then_failover_keeps_device_and_iam_1476() {
         .with_failover(backup);
     let mut states = transport.connection_state_changes();
     let sends = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let transport = ObservedSc {
-        inner: transport,
-        sends: Arc::clone(&sends),
-    };
+    let transport = observed_sc(transport, Arc::clone(&sends));
     let start = BACnetServer::start(
         ServerConfig {
             device: bacnet_objects::DeviceIdentity::new(893, 0).unwrap(),

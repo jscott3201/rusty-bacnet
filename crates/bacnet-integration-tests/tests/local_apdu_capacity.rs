@@ -61,50 +61,26 @@ async fn raw_1474_device_and_server_declaration_emit_iam_1474() {
 }
 
 use bacnet_transport::port::ReceivedNpdu;
-use bacnet_types::{enums::ObjectType, error::Error, primitives::ObjectIdentifier};
+use bacnet_transport::test_transport::{SendMode, TestTransport};
+use bacnet_types::{enums::ObjectType, primitives::ObjectIdentifier};
 use std::{
     future::{Future, poll_fn},
-    sync::{
-        Arc,
-        atomic::{AtomicU16, AtomicUsize, Ordering},
-    },
+    sync::Arc,
     task::Poll,
 };
 use tokio::sync::mpsc;
 
-/// A deliberately asymmetric link: changing remote egress never changes intake.
-struct CapacityPort {
-    inner: LoopbackTransport,
-    local: u16,
-    remote: Arc<AtomicU16>,
-    starts: Arc<AtomicUsize>,
-}
-impl TransportPort for CapacityPort {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        self.starts.fetch_add(1, Ordering::SeqCst);
-        self.inner.start().await
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        self.inner.stop().await
-    }
-    fn abort(&mut self) {
-        self.inner.abort();
-    }
-    async fn send_unicast(&self, bytes: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.inner.send_unicast(bytes, mac).await
-    }
-    async fn send_broadcast(&self, bytes: &[u8]) -> Result<(), Error> {
-        self.inner.send_broadcast(bytes).await
-    }
-    fn local_mac(&self) -> &[u8] {
-        self.inner.local_mac()
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        self.local
-    }
-    fn egress_apdu_limit(&self) -> u16 {
-        self.remote.load(Ordering::SeqCst)
-    }
+/// A deliberately asymmetric link: changing remote egress never changes
+/// intake. Its receive capacity is fixed at `local`, and its egress limit
+/// (206 at first) is set through the transport's handle.
+fn capacity_port(inner: LoopbackTransport, local: u16) -> TestTransport {
+    TestTransport::builder()
+        .inner(inner)
+        .unicast(SendMode::Forward)
+        .broadcast(SendMode::Forward)
+        .receive_capacity(local)
+        .egress_limit(206)
+        .build()
 }
 fn device(raw: u32) -> DeviceObject {
     DeviceObject::new(DeviceConfig {
@@ -123,17 +99,9 @@ fn database(raw: Option<u32>) -> ObjectDatabase {
     }
     db
 }
-fn port(local: u16) -> (CapacityPort, LoopbackTransport) {
+fn port(local: u16) -> (TestTransport, LoopbackTransport) {
     let (inner, peer) = LoopbackTransport::pair(vec![1], vec![2]);
-    (
-        CapacityPort {
-            inner,
-            local,
-            remote: Arc::new(AtomicU16::new(206)),
-            starts: Arc::new(AtomicUsize::new(0)),
-        },
-        peer,
-    )
+    (capacity_port(inner, local), peer)
 }
 async fn iam(incoming: &mut mpsc::Receiver<ReceivedNpdu>) -> IAmRequest {
     let bytes = tokio::time::timeout(Duration::from_secs(2), incoming.recv())
@@ -158,7 +126,7 @@ async fn local_capacity_clamps_ceiling_and_never_tracks_remote_egress() {
         (1476, 127, 127),
     ] {
         let (transport, mut peer) = port(local);
-        let remote = Arc::clone(&transport.remote);
+        let remote = transport.handle();
         let mut incoming = peer.start().await.unwrap();
         let mut server = BACnetServer::start(
             ServerConfig {
@@ -174,7 +142,7 @@ async fn local_capacity_clamps_ceiling_and_never_tracks_remote_egress() {
         .await
         .unwrap();
         for outgoing in [50, 480, 1476] {
-            remote.store(outgoing, Ordering::SeqCst);
+            remote.set_egress_limit(outgoing);
             server.broadcast_i_am().await.unwrap();
             assert_eq!(iam(&mut incoming).await.max_apdu_length, effective);
         }
@@ -191,7 +159,7 @@ async fn invalid_raw_and_mismatched_device_fail_before_transport_start() {
     );
     for (local, ceiling, declared) in [(49, 1476, 1476), (480, 1476, 1476), (1476, 1474, 1476)] {
         let (transport, _peer) = port(local);
-        let starts = Arc::clone(&transport.starts);
+        let starts = transport.handle();
         assert!(
             BACnetServer::start(
                 ServerConfig {
@@ -207,7 +175,7 @@ async fn invalid_raw_and_mismatched_device_fail_before_transport_start() {
             .await
             .is_err()
         );
-        assert_eq!(starts.load(Ordering::SeqCst), 0);
+        assert_eq!(starts.starts(), 0);
     }
 }
 

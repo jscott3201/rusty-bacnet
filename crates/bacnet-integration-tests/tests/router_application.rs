@@ -28,6 +28,7 @@ use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
+use bacnet_transport::test_transport::{SendMode, TestTransport};
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::enums::{
     AbortReason, EngineeringUnits, ObjectType, PropertyIdentifier, Segmentation,
@@ -52,61 +53,32 @@ const CLIENT_MAX_APDU: u16 = 128;
 const APDU_TIMEOUT_MS: u64 = 1_000;
 const RETRIES: u8 = 2;
 
-/// A loopback link end that reports each NPDU it sends.
-struct Tap {
-    link: LoopbackTransport,
-    sent: Option<mpsc::UnboundedSender<Vec<u8>>>,
-}
-
-impl Tap {
-    fn new(link: LoopbackTransport) -> (Self, mpsc::UnboundedReceiver<Vec<u8>>) {
-        let (tx, rx) = mpsc::unbounded_channel();
-        (
-            Self {
-                link,
-                sent: Some(tx),
-            },
-            rx,
-        )
-    }
-
-    fn untapped(link: LoopbackTransport) -> Self {
-        Self { link, sent: None }
-    }
-
-    fn note(&self, npdu: &[u8]) {
-        if let Some(sent) = &self.sent {
-            let _ = sent.send(npdu.to_vec());
-        }
+/// A loopback link end, reporting each NPDU it sends when `sent` is given.
+fn tapped(link: LoopbackTransport, sent: Option<mpsc::UnboundedSender<Vec<u8>>>) -> TestTransport {
+    let builder = TestTransport::builder()
+        .inner(link)
+        .unicast(SendMode::Forward)
+        .broadcast(SendMode::Forward);
+    match sent {
+        Some(sent) => builder
+            .on_send(move |frame| {
+                let _ = sent.send(frame.npdu.to_vec());
+                async { Ok(()) }
+            })
+            .build(),
+        None => builder.build(),
     }
 }
 
-impl TransportPort for Tap {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        self.link.start().await
-    }
+/// A link end that reports each NPDU it sends.
+fn tap(link: LoopbackTransport) -> (TestTransport, mpsc::UnboundedReceiver<Vec<u8>>) {
+    let (tx, rx) = mpsc::unbounded_channel();
+    (tapped(link, Some(tx)), rx)
+}
 
-    async fn stop(&mut self) -> Result<(), Error> {
-        self.link.stop().await
-    }
-
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.note(npdu);
-        self.link.send_unicast(npdu, mac).await
-    }
-
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.note(npdu);
-        self.link.send_broadcast(npdu).await
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        self.link.local_mac()
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        self.link.local_receive_apdu_capacity()
-    }
+/// A link end that reports nothing.
+fn untapped(link: LoopbackTransport) -> TestTransport {
+    tapped(link, None)
 }
 
 struct Site {
@@ -122,7 +94,7 @@ struct Site {
     to_next_router: mpsc::UnboundedReceiver<Vec<u8>>,
 }
 
-fn port(transport: Tap, network_number: u16) -> RouterPort<Tap> {
+fn port(transport: TestTransport, network_number: u16) -> RouterPort<TestTransport> {
     RouterPort {
         transport,
         network_number,
@@ -134,21 +106,18 @@ async fn site() -> Site {
     let (far, station) = LoopbackTransport::pair(vec![2], vec![STATION]);
     let (link, next_near) = LoopbackTransport::pair(LONG_MAC.to_vec(), vec![NEXT_ROUTER]);
     let (next_far, remote_station) = LoopbackTransport::pair(vec![9], vec![REMOTE_STATION]);
-    let (far, to_station) = Tap::new(far);
-    let (link, to_next_router) = Tap::new(link);
+    let (far, to_station) = tap(far);
+    let (link, to_next_router) = tap(link);
     // This router's local receiver is the tracked one.
     let started = BACnetRouter::start(
-        vec![port(Tap::untapped(near), 1), port(far, 2), port(link, 3)],
+        vec![port(untapped(near), 1), port(far, 2), port(link, 3)],
         RouterOptions::new().track_admission(),
     )
     .await
     .unwrap();
     // Started second, so its announcement of network 4 teaches the first.
     let next_router = BACnetRouter::start(
-        vec![
-            port(Tap::untapped(next_near), 3),
-            port(Tap::untapped(next_far), 4),
-        ],
+        vec![port(untapped(next_near), 3), port(untapped(next_far), 4)],
         RouterOptions::new(),
     )
     .await

@@ -27,6 +27,7 @@ bacnet-transport.workspace = true
 
 [dev-dependencies]
 bacnet-bip-codec.workspace = true
+bacnet-transport = { workspace = true, features = ["test-support"] }
 # The source a local write takes (`write::local::LocalCommandSource`).
 bacnet-device-core = { workspace = true, features = ["std"] }
 bacnet-mstp-codec.workspace = true

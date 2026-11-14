@@ -9,19 +9,16 @@ use bacnet_transport::{
     any::AnyTransport,
     bip::BipTransport,
     bvll::decode_bip_mac,
-    port::{ReceivedNpdu, TransportPort},
+    port::TransportPort,
+    test_transport::{SendMode, TestTransport},
 };
 use bacnet_types::enums::EngineeringUnits;
-use bacnet_types::error::Error;
 use std::{
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     sync::Arc,
     time::Duration,
 };
-use tokio::{
-    net::UdpSocket,
-    sync::{Semaphore, mpsc},
-};
+use tokio::{net::UdpSocket, sync::Semaphore};
 
 pub const BROADCAST: Ipv4Addr = Ipv4Addr::new(127, 255, 255, 255);
 pub const QUERY: &[u8] = &[1, 0x80, 0x12];
@@ -141,60 +138,43 @@ impl Drop for Signal<'_> {
         self.0.add_permits(1);
     }
 }
-pub struct ObservedBip {
-    inner: AnyTransport,
-    gates: Option<Arc<Gates>>,
+/// `inner` behind a test transport whose stop and local Number control
+/// broadcast `gates` can hold: a held stop tells `stop_entered` and waits for
+/// `stop_release`; a Number broadcast tells `entered` and never finishes,
+/// signalling `dropped` when it is dropped.
+pub fn observed_bip(inner: AnyTransport, gates: Option<Arc<Gates>>) -> TestTransport {
+    let stop_gates = gates.clone();
+    TestTransport::builder()
+        .inner(inner)
+        .unicast(SendMode::Forward)
+        .broadcast(SendMode::Forward)
+        .before_stop(move || {
+            let gates = stop_gates.clone();
+            async move {
+                if let Some(gates) = &gates {
+                    gates.stop_entered.add_permits(1);
+                    gates.stop_release.acquire().await.unwrap().forget();
+                }
+                Ok(())
+            }
+        })
+        .on_send(move |frame| {
+            let gates = gates.clone();
+            async move {
+                if let Some(gates) = &gates
+                    && frame.broadcast
+                    && frame.npdu.starts_with(&[1, 0x80, 0x13])
+                {
+                    let _drop = Signal(&gates.dropped);
+                    gates.entered.add_permits(1);
+                    std::future::pending::<()>().await;
+                }
+                Ok(())
+            }
+        })
+        .build()
 }
-impl TransportPort for ObservedBip {
-    fn supports_local_nonrouter_number_controls(&self) -> bool {
-        self.inner.supports_local_nonrouter_number_controls()
-    }
-    fn bip_port(&self) -> Option<bacnet_transport::port::BipPort> {
-        self.inner.bip_port()
-    }
-    fn bip_broadcast_endpoint(&self) -> Option<SocketAddrV4> {
-        self.inner.bip_broadcast_endpoint()
-    }
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        self.inner.start().await
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        if let Some(gates) = &self.gates {
-            gates.stop_entered.add_permits(1);
-            gates.stop_release.acquire().await.unwrap().forget();
-        }
-        self.inner.stop().await
-    }
-    fn abort(&mut self) {
-        self.inner.abort();
-    }
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.inner.send_unicast(npdu, mac).await
-    }
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        if let Some(gates) = &self.gates
-            && npdu.starts_with(&[1, 0x80, 0x13])
-        {
-            let _drop = Signal(&gates.dropped);
-            gates.entered.add_permits(1);
-            std::future::pending::<()>().await;
-        }
-        self.inner.send_broadcast(npdu).await
-    }
-    fn local_mac(&self) -> &[u8] {
-        self.inner.local_mac()
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        self.inner.local_receive_apdu_capacity()
-    }
-    fn egress_apdu_limit(&self) -> u16 {
-        self.inner.egress_apdu_limit()
-    }
-    fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
-        self.inner.is_broadcast_mac(mac)
-    }
-}
-pub type Server = BACnetServer<ObservedBip>;
+pub type Server = BACnetServer<TestTransport>;
 /// Starts the server and returns its start error as the I/O error
 /// `rerun_on_lost_port` judges: a start on an [`observer`] port can lose it to
 /// another process after the observer's bind (#2425). A start on port 0
@@ -229,7 +209,7 @@ pub async fn start(
     let server = bounded(BACnetServer::start(
         ServerConfig::default(),
         db,
-        ObservedBip { inner, gates },
+        observed_bip(inner, gates),
     ))
     .await
     .map_err(crate::port_retry::bind_error)?;
