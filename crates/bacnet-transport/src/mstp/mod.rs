@@ -243,6 +243,12 @@ pub const HOST_REPLY_TIMEOUT: std::time::Duration =
 /// and the operator names the trunk's rate when it differs.
 pub const HOST_BAUD_RATE: u32 = 38_400;
 
+/// The baud rates Clause 9.2.3 lists for an MS/TP trunk, slowest first: the
+/// ones the `bacnet` CLI, the Python bindings and
+/// `bacnet_ops::Client::mstp` accept. [`MstpConfig::validate`] alone takes
+/// any rate its timing allows.
+pub const STANDARD_BAUD_RATES: [u32; 6] = [9_600, 19_200, 38_400, 57_600, 76_800, 115_200];
+
 /// The transmit-latency pad for a USB serial adapter, and
 /// [`MstpConfig::transmit_latency_pad`]'s default on Windows: 4 ms.
 ///

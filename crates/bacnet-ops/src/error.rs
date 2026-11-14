@@ -61,10 +61,12 @@ pub enum OpsError {
         /// The device as it was named: an instance (`1234`, `2:1234`) or an
         /// address (`2:0x05`).
         target: String,
-        /// Where the one Who-Is for it went unanswered, or `None` when none
-        /// was sent: the text then says how to reach further, from a bare
-        /// instance asked on this network alone (the client's default
-        /// [`ResolveScope`]).
+        /// Where the one Who-Is for it went unanswered: the network a
+        /// target or address named, or for a bare instance the client's
+        /// [`ResolveScope`]; `None` when none was sent. For
+        /// `Some(ResolveScope::Local)`, a bare instance asked on this
+        /// network alone (the default), the text says how to reach
+        /// further.
         asked: Option<ResolveScope>,
     },
     /// Two or more addresses claim the instance named, so which device is

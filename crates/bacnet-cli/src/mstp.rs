@@ -17,7 +17,7 @@ use bacnet_types::error::Error;
 use crate::output::OutputFormat;
 
 /// The baud rates an MS/TP port may run at (Clause 9.2.3).
-pub(crate) const BAUD_RATES: [u32; 6] = [9_600, 19_200, 38_400, 57_600, 76_800, 115_200];
+pub(crate) const BAUD_RATES: [u32; 6] = bacnet_transport::mstp::STANDARD_BAUD_RATES;
 
 /// `--mstp-baud`'s default: the host tools' rate, the Python bindings' and
 /// `bacnet_ops::Client::mstp`'s too.

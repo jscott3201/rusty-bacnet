@@ -73,6 +73,20 @@ async fn a_low_level_client_wraps_over() {
         .unwrap();
     let client: Client<BipTransport> = Client::over(low);
     assert!(client.low_level().transport().local_mac().len() == 6);
+    assert_eq!(client.resolve_scope(), ResolveScope::Local);
+}
+
+/// A builder's client resolves a bare instance on this network alone
+/// unless the builder says otherwise, as a client made by hand does.
+#[tokio::test]
+async fn a_builder_client_resolves_locally_by_default() {
+    let client = Client::bip()
+        .interface(Ipv4Addr::LOCALHOST)
+        .port(0)
+        .connect()
+        .await
+        .unwrap();
+    assert_eq!(client.resolve_scope(), ResolveScope::Local);
 }
 
 /// The B/IPv6 builder takes its settings and makes a connect future;
@@ -127,6 +141,7 @@ async fn the_mstp_builder_checks_then_opens_its_port() {
         Client::mstp(port, 200),
         Client::mstp(port, 5).max_master(3),
         Client::mstp(port, 5).max_info_frames(0),
+        Client::mstp(port, 5).baud(50_000),
     ] {
         let Err(refused) = builder.connect().await else {
             panic!("refused settings joined");

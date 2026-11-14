@@ -302,3 +302,57 @@ async fn a_routed_device_is_asked_for_again_on_its_network() {
     );
     lab.stop().await;
 }
+
+/// A target naming the client's own network keeps its text and says that
+/// network was asked, with no hint to widen the resolve scope: only a bare
+/// instance gets that. Both go out as local broadcasts.
+#[tokio::test(start_paused = true)]
+async fn a_miss_on_the_own_network_keeps_the_target_as_written() {
+    let lab = Routed::new(|near| near.numbered_port(1)).await;
+    let low = lab.client.low_level();
+    low.what_is_network_number(None).await.unwrap();
+    for _ in 0..50 {
+        if low.network_number().is_some() {
+            break;
+        }
+        settle().await;
+    }
+    assert_eq!(low.network_number(), Some(1), "the router said");
+    lab.sent.clear();
+    let named = lab.client.device("1:4242").await.unwrap_err();
+    assert!(
+        matches!(
+            &named,
+            crate::OpsError::UnknownDevice { target, asked: Some(ResolveScope::Network(1)) }
+                if target == "1:4242"
+        ),
+        "{named:?}"
+    );
+    assert!(!named.to_string().contains("resolve scope"), "{named}");
+    assert_eq!(super::discover_tests::the_who_is(&lab.sent), (None, true));
+    let bare = lab.client.device(4242).await.unwrap_err();
+    assert!(bare.to_string().contains("resolve scope"), "{bare}");
+    assert_eq!(super::discover_tests::the_who_is(&lab.sent), (None, true));
+    lab.stop().await;
+}
+
+/// A bare instance whose one row in the table is behind the router follows
+/// it there, on the default local resolve scope, sending no Who-Is: the
+/// table is asked before the network.
+#[tokio::test(start_paused = true)]
+async fn a_bare_instance_with_a_remote_row_needs_no_who_is() {
+    let mut lab = Routed::new(|near| near.port(1)).await;
+    lab.servers
+        .push(server(lab.three.port(7), 2002, "on three").await);
+    lab.discover().await;
+    lab.sent.clear();
+    assert_eq!(lab.client.resolve_scope(), ResolveScope::Local);
+    let device = lab.client.device(2002).await.unwrap();
+    assert_eq!(device.address(), DeviceAddress::new(3, &mac(7)).unwrap());
+    assert!(device.follows());
+    assert!(
+        super::discover_tests::who_is_frames(&lab.sent).is_empty(),
+        "no Who-Is"
+    );
+    lab.stop().await;
+}

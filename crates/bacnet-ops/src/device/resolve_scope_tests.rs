@@ -130,3 +130,48 @@ async fn the_re_ask_goes_where_the_device_was_last_heard() {
     assert_eq!(the_who_is(&sent), (None, true));
     stop(vec![lab]).await;
 }
+
+/// A resolve scope of network 0 or 65535 is the scope that number means,
+/// this network or every network, so a lookup goes out instead of failing
+/// as text to fix.
+#[tokio::test(start_paused = true)]
+async fn network_0_and_65535_resolve_scopes_are_local_and_global() {
+    let bus = Bus::new();
+    let (client, sent) = client(&bus).await;
+    for (set, is, to) in [
+        (ResolveScope::Network(0), ResolveScope::Local, None),
+        (
+            ResolveScope::Network(0xFFFF),
+            ResolveScope::Global,
+            remote(0xFFFF),
+        ),
+    ] {
+        let scoped = client.with_resolve_scope(set);
+        assert_eq!(scoped.resolve_scope(), is);
+        let error = scoped.device(4242).await.unwrap_err();
+        assert!(
+            matches!(&error, OpsError::UnknownDevice { asked: Some(asked), .. } if *asked == is),
+            "{error:?}"
+        );
+        assert_eq!(the_who_is(&sent), (to, true), "{set:?}");
+    }
+}
+
+/// A remote address the table holds no row for asks its network, and a
+/// miss says so: the network named, with no hint to widen anything.
+#[tokio::test(start_paused = true)]
+async fn a_remote_address_miss_says_its_network_was_asked() {
+    let bus = Bus::new();
+    let (client, sent) = client(&bus).await;
+    let error = client.device("5:0x05").await.unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            OpsError::UnknownDevice { target, asked: Some(ResolveScope::Network(5)) }
+                if target == "5:0x05"
+        ),
+        "{error:?}"
+    );
+    assert!(!error.to_string().contains("resolve scope"), "{error}");
+    assert_eq!(the_who_is(&sent), (remote(5), true));
+}

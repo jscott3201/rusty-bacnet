@@ -205,7 +205,7 @@ impl<T: TransportPort + 'static> Client<T> {
                 events: broadcast::channel(64).0,
             }),
             resolve_wait: Some(RESOLVE_WAIT),
-            resolve_scope: ResolveScope::Local,
+            resolve_scope: ResolveScope::default(),
         }
     }
 
@@ -269,9 +269,14 @@ impl<T: TransportPort + 'static> Client<T> {
     /// [`OpsError::UnknownDevice`](crate::OpsError::UnknownDevice), saying
     /// where it asked. The setting is the clone's alone, as
     /// [`with_resolve_wait`](Self::with_resolve_wait)'s is.
+    ///
+    /// `ResolveScope::Network(0)` is taken as [`ResolveScope::Local`] and
+    /// `ResolveScope::Network(65535)` as [`ResolveScope::Global`], the
+    /// scopes those numbers mean ([`ResolveScope::normalized`]), so every
+    /// setting is one a Who-Is can be sent to.
     pub fn with_resolve_scope(&self, scope: ResolveScope) -> Self {
         Self {
-            resolve_scope: scope,
+            resolve_scope: scope.normalized(),
             ..self.clone()
         }
     }

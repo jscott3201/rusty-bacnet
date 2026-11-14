@@ -6,4 +6,4 @@ section: Migration notes
   and `client.who_is(scope, range)` as `discover`, or as
   `bacnet_ops::raw::who_is(client.low_level(), &scope, range)`, which
   carries no rate cap. `Scope::Directed` takes a `DeviceAddress`: build it
-  from `client.station_mac(text)`.
+  with `DeviceAddress::local(&client.station_mac(text).await?)`.

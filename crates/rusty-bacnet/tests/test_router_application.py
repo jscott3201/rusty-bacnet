@@ -104,6 +104,24 @@ class RouterApplicationTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(rb.BacnetError, "no network of its own"):
             await asyncio.wait_for(client.read_property(ports[0].address, AI0, PV), 10)
 
+    async def test_a_who_is_to_one_attached_network_finds_its_devices(self):
+        # The router's application has no network of its own: a Who-Is
+        # naming one of its networks reaches that network's devices only.
+        router = rb.BACnetRouter([bbmd_port(1), bbmd_port(5)], application="client")
+        await router.start()
+        self.addAsyncCleanup(cleanup, router.close)
+        ports = await router.ports()
+        for network, port in zip((1, 5), ports):
+            await self.device(BASE + 10 + network, port.address, 20.5 + network)
+        client = await self.router_client(router)
+        low, high = BASE + 11, BASE + 15
+
+        async def found():
+            devices = await client.discover(timeout_ms=500, low_limit=low, high_limit=high,
+                                            scope=5)
+            return [(d.object_identifier.instance, d.source_network) for d in devices]
+        self.assertEqual(await eventually(found, seconds=10), [(BASE + 15, 5)])
+
     async def test_the_client_reads_a_device_behind_a_second_router(self):
         near = rb.BACnetRouter([bbmd_port(1), bbmd_port(5)], application="client")
         await near.start()

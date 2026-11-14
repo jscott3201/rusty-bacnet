@@ -10,7 +10,7 @@ use bacnet_transport::mstp::{Echo, MstpConfig, MstpTransport};
 use bacnet_transport::mstp_serial::{self, SerialConfig, TokioSerialPort};
 use bacnet_types::error::Error;
 
-const SUPPORTED_MSTP_BAUD_RATES: [u32; 6] = [9_600, 19_200, 38_400, 57_600, 76_800, 115_200];
+const SUPPORTED_MSTP_BAUD_RATES: [u32; 6] = bacnet_transport::mstp::STANDARD_BAUD_RATES;
 const SUPPORTED_MSTP_BAUD_ERROR: &str =
     "mstp_baud must be one of 9600, 19200, 38400, 57600, 76800, or 115200";
 

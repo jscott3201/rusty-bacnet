@@ -133,7 +133,7 @@ impl<T: TransportPort + 'static> Device<T> {
             Elsewhere::Moved(to) => Ok(self.client.move_to(key, followed, &here, to)),
             // It claims the instance again by now.
             Elsewhere::Shared { .. } => Ok(here),
-            Elsewhere::Nowhere => Err(unknown(*instance, key.0)),
+            Elsewhere::Nowhere => Err(unknown(*instance, *network)),
             Elsewhere::Contested(claims) => Err(ambiguous(*instance, &claims)),
         }
     }

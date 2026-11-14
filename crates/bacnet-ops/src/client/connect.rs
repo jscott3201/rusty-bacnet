@@ -39,7 +39,7 @@ impl Default for Kept {
     fn default() -> Self {
         Self {
             limits: RequestLimits::new(0),
-            resolve_scope: ResolveScope::Local,
+            resolve_scope: ResolveScope::default(),
         }
     }
 }
@@ -318,7 +318,7 @@ pub use self::sc::ScConnect;
 mod mstp {
     use bacnet_client::client::ClientBuilder;
     use bacnet_transport::any::AnyTransport;
-    use bacnet_transport::mstp::{HOST_BAUD_RATE, MstpConfig, MstpTransport};
+    use bacnet_transport::mstp::{HOST_BAUD_RATE, MstpConfig, MstpTransport, STANDARD_BAUD_RATES};
     use bacnet_transport::mstp_serial::{SerialConfig, TokioSerialPort};
 
     use super::*;
@@ -355,8 +355,10 @@ mod mstp {
     common_settings!(MstpConnect);
 
     impl MstpConnect {
-        /// The trunk's baud rate: 9600, 19200, 38400, 57600, 76800 or
-        /// 115200 ([`HOST_BAUD_RATE`] by default).
+        /// The trunk's baud rate: one of [`STANDARD_BAUD_RATES`], 9600,
+        /// 19200, 38400, 57600, 76800 or 115200 ([`HOST_BAUD_RATE`] by
+        /// default), as the `bacnet` CLI and the Python bindings take it.
+        /// [`connect`](Self::connect) refuses any other.
         #[must_use]
         pub fn baud(mut self, baud: u32) -> Self {
             self.config.baud_rate = baud;
@@ -385,9 +387,10 @@ mod mstp {
         ///
         /// # Errors
         ///
-        /// [`OpsError::Parse`] for settings the MS/TP transport refuses (a
-        /// MAC above Max_Master, a baud rate too low), before the port is
-        /// opened; [`OpsError::Client`] for a port that can't be opened,
+        /// [`OpsError::Parse`] for a baud rate not in
+        /// [`STANDARD_BAUD_RATES`] and settings the MS/TP transport refuses
+        /// (a MAC above Max_Master, no information frame per token), before
+        /// the port is opened; [`OpsError::Client`] for a port that can't be opened,
         /// naming it, then as the low-level builder's `build`.
         pub async fn connect(self) -> Result<Client, OpsError> {
             let settings = format!(
@@ -397,9 +400,16 @@ mod mstp {
                 self.config.max_info_frames,
                 self.config.baud_rate
             );
+            let refused = |reason: String| OpsError::parse("MS/TP settings", &settings, reason);
+            if !STANDARD_BAUD_RATES.contains(&self.config.baud_rate) {
+                return Err(refused(format!(
+                    "{} baud is no MS/TP rate: use 9600, 19200, 38400, 57600, 76800 or 115200",
+                    self.config.baud_rate
+                )));
+            }
             self.config
                 .validate()
-                .map_err(|error| OpsError::parse("MS/TP settings", &settings, error.to_string()))?;
+                .map_err(|error| refused(error.to_string()))?;
             let serial = TokioSerialPort::open(&SerialConfig {
                 port_name: self.port.clone(),
                 baud_rate: self.config.baud_rate,

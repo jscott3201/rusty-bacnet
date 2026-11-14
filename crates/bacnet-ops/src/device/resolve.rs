@@ -129,18 +129,18 @@ impl<T: TransportPort + 'static> Client<T> {
     }
 
     /// A handle following `instance`, from the one address claiming it
-    /// (on `network` when one is named, network 0 for this client's own),
-    /// or the one that answers a Who-Is, so long as no other answered it
-    /// too.
-    async fn following(&self, instance: u32, network: Option<u16>) -> Result<Device<T>, OpsError> {
-        let network = self.scope(network);
+    /// (on `named` when the target names a network, network 0 for this
+    /// client's own), or the one that answers a Who-Is, so long as no other
+    /// answered it too.
+    async fn following(&self, instance: u32, named: Option<u16>) -> Result<Device<T>, OpsError> {
+        let network = self.scope(named);
         let claims = self.claims(instance, network).await;
         let address = match claims.as_slice() {
             [] => {
-                let row = self.find_instance(instance, network).await?;
+                let row = self.find_instance(instance, named).await?;
                 let address = DeviceAddress::of(&row)
                     .map(|address| self.localized(address))
-                    .ok_or_else(|| OpsError::from(unknown(instance, network)))?;
+                    .ok_or_else(|| OpsError::from(unknown(instance, named)))?;
                 // A second device answers the one Who-Is a little after
                 // the first, not with it: `find_instance` listened on for
                 // SETTLE past the first answer, so one in that time is in
@@ -157,9 +157,10 @@ impl<T: TransportPort + 'static> Client<T> {
         let at = self.follow((network, instance), address);
         Ok(Device {
             client: self.clone(),
+            // As named: the follow key localizes it where it is used.
             pin: Pin::Follows {
                 instance,
-                network,
+                network: named,
                 at,
             },
             instance: Some(instance),
@@ -196,19 +197,23 @@ impl<T: TransportPort + 'static> Client<T> {
     }
 
     /// The device claiming `instance` that answers one Who-Is for it, to
-    /// `network` when named (this one for 0) and to this clone's
-    /// [`resolve_scope`](Self::resolve_scope) otherwise, listening
-    /// [`SETTLE`] past its answer for a second. A miss says where it asked.
+    /// the network the target `named` (this client's own as a local
+    /// broadcast) and to this clone's [`resolve_scope`](Self::resolve_scope)
+    /// otherwise, listening [`SETTLE`] past its answer for a second. A miss
+    /// names the target as written and says where it asked: the network
+    /// named, or the resolve scope.
     async fn find_instance(
         &self,
         instance: u32,
-        network: Option<u16>,
+        named: Option<u16>,
     ) -> Result<DiscoveredDevice, OpsError> {
         let range = DeviceInstanceRange::single(instance)?;
         let own = self.low_level().network_number();
-        let asked = network.map_or(self.resolve_scope(), ResolveScope::on);
+        let network = self.scope(named);
+        let sent_to = network.map_or(self.resolve_scope(), ResolveScope::on);
+        let asked = named.map_or(sent_to, ResolveScope::Network);
         let found = self
-            .wait_for(asked, Some(range), SETTLE, |row| {
+            .wait_for(sent_to, Some(range), SETTLE, |row| {
                 row.object_identifier.instance_number() == instance
                     && network.is_none_or(|n| {
                         DeviceAddress::of(row)
@@ -218,7 +223,7 @@ impl<T: TransportPort + 'static> Client<T> {
             .await?;
         found.ok_or_else(|| {
             let sent = self.resolve_wait().is_some();
-            match OpsError::from(unknown(instance, network)) {
+            match OpsError::from(unknown(instance, named)) {
                 OpsError::UnknownDevice { target, .. } => OpsError::UnknownDevice {
                     target,
                     asked: sent.then_some(asked),
@@ -412,8 +417,8 @@ pub(super) fn ambiguous(instance: u32, claims: &[DeviceAddress]) -> Error {
     }
 }
 
-/// The unknown-device error for `instance`, named as the caller did (on
-/// this client's own network, by the instance alone).
+/// The unknown-device error for `instance`, named as the caller did: with
+/// the network the target named, or by the instance alone.
 pub(super) fn unknown(instance: u32, network: Option<u16>) -> Error {
     Error::UnknownDevice {
         device: match network {

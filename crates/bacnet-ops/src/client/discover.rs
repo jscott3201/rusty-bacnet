@@ -58,7 +58,9 @@ pub enum ResolveScope {
     /// This network alone: a local broadcast.
     #[default]
     Local,
-    /// One remote network, 1 to 65534, through its router.
+    /// One remote network, 1 to 65534, through its router; 0 and 65535
+    /// are taken as [`Local`](Self::Local) and [`Global`](Self::Global)
+    /// ([`normalized`](Self::normalized)).
     Network(u16),
     /// Every network: a global broadcast.
     Global,
@@ -75,11 +77,22 @@ impl From<ResolveScope> for Scope {
 }
 
 impl ResolveScope {
-    /// To `network`: this one for 0, one remote network otherwise.
+    /// To `network`: this one for 0, every one for 65535, one remote
+    /// network otherwise.
     pub(crate) fn on(network: u16) -> Self {
-        match network {
-            0 => Self::Local,
-            network => Self::Network(network),
+        Self::Network(network).normalized()
+    }
+
+    /// The scope as a Who-Is goes: `Network(0)` is this network
+    /// ([`Local`](Self::Local)) and `Network(65535)` every network
+    /// ([`Global`](Self::Global)); any other is itself.
+    /// [`Client::with_resolve_scope`] stores a setting this way.
+    #[must_use]
+    pub fn normalized(self) -> Self {
+        match self {
+            Self::Network(0) => Self::Local,
+            Self::Network(u16::MAX) => Self::Global,
+            scope => scope,
         }
     }
 }
@@ -219,7 +232,16 @@ impl Discover {
         Self::from(Scope::Global)
     }
 
-    /// The station at `address` on this network, by unicast.
+    /// The station at `address` on this network, by unicast. From text in
+    /// the target grammar, [`Client::station_mac`] finds the MAC:
+    ///
+    /// ```no_run
+    /// use bacnet_ops::{Client, DeviceAddress, Discover};
+    /// # async fn example(client: Client) -> Result<(), Box<dyn std::error::Error>> {
+    /// let station = DeviceAddress::local(&client.station_mac("192.168.1.20").await?)?;
+    /// let found = client.discover(Discover::directed(station)).await?;
+    /// # let _ = found; Ok(()) }
+    /// ```
     pub fn directed(address: DeviceAddress) -> Self {
         Self::from(Scope::Directed(address))
     }
