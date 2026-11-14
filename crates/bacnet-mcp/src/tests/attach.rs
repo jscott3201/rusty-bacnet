@@ -108,7 +108,7 @@ fn writes_offered(dir: &Path) -> Policy {
 
 impl Lab {
     /// The lab client's engine, on the lab's limits: the TUI's shared one.
-    pub(super) fn engine(&self) -> Arc<Engine<super::Recording>> {
+    pub(super) fn engine(&self) -> Arc<Engine<bacnet_transport::test_transport::TestTransport>> {
         Arc::new(Engine::new(
             Arc::clone(&self.client),
             Arc::clone(&self.limits),

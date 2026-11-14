@@ -13,11 +13,12 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 
-use super::{Agent, Lab, Recording};
+use super::{Agent, Lab};
 use crate::Policy;
 use crate::follow::Follow;
 use crate::policy::Caps;
 use crate::resources::uri::{self, Uri};
+use bacnet_transport::test_transport::TestTransport;
 
 const AI1: &str = "bacnet://device/1201/object/analog-input:1";
 const AI3: &str = "bacnet://device/1201/object/ai:3";
@@ -202,7 +203,7 @@ async fn a_point_watched_again_is_followed_on_its_new_watch() {
     let second = hub.watch(point).unwrap();
     assert!(!second.changes().same(&follow.signal(AI1).unwrap().clone()));
     follow.set(
-        None::<&Engine<Recording>>,
+        None::<&Engine<TestTransport>>,
         &signals,
         vec![(AI1.to_string(), Some(second.changes()))],
     );
