@@ -241,15 +241,15 @@ pub(super) async fn run<T: TransportPort + 'static>(
             && let Some(engine) = &ctx.engine
         {
             let object = found.object_identifier;
-            let name = engine
-                .read(
-                    instance,
-                    object,
-                    Wanted::List(&[PropertyIdentifier::OBJECT_NAME]),
-                )
-                .await
-                .ok()
-                .and_then(|read| row_text(&read.rows, PropertyIdentifier::OBJECT_NAME));
+            // By its instance, as before: one claimed twice gets no name.
+            let read = match engine.device(instance).await {
+                Ok(device) => device
+                    .read(object, Wanted::List(&[PropertyIdentifier::OBJECT_NAME]))
+                    .await
+                    .ok(),
+                Err(_) => None,
+            };
+            let name = read.and_then(|read| row_text(&read.rows, PropertyIdentifier::OBJECT_NAME));
             let source = format!("device {instance} device:{instance} object-name");
             row["name"] = name.map_or(Value::Null, |name| envelope(&name, source, cap));
         }

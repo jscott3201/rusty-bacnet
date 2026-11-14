@@ -56,17 +56,16 @@ pub(super) async fn point<T: TransportPort + 'static>(
     call: &Call,
     point: Point,
 ) -> Result<Value, ToolError> {
-    ctx.device(call, &DeviceArg::Number(point.device)).await?;
+    let device = ctx.device(call, &DeviceArg::Number(point.device)).await?;
     if let Some(snapshot) = ctx.hub.as_ref().and_then(|hub| hub.peek(&point)) {
         return Ok(point_body(ctx, &point, &snapshot.rows, Some(&snapshot)));
     }
-    let engine = ctx.engine()?;
     let failed = |error| ToolError::device(point.device, &error);
     let rows: Vec<RawRow> = match point.watched {
         Watched::Object => {
-            engine
+            device
+                .handle
                 .read(
-                    point.device,
                     point.object,
                     Wanted::List(&bacnet_ops::watch::POINT_PROPERTIES),
                 )
@@ -75,8 +74,9 @@ pub(super) async fn point<T: TransportPort + 'static>(
                 .rows
         }
         Watched::Property { property, index } => {
-            match engine
-                .read_property(point.device, point.object, property, index)
+            match device
+                .handle
+                .read_property(point.object, property, index)
                 .await
             {
                 Ok(data) => vec![(property, Ok(data))],

@@ -13,6 +13,7 @@ use bacnet_ops::limits::{Account, TokenBucket};
 use bacnet_ops::target::{self, Target};
 use bacnet_ops::watch::{Hub, Point};
 use bacnet_transport::port::TransportPort;
+use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -288,11 +289,14 @@ impl DeviceArg {
 }
 
 /// A device the policy lets the call reach, from the discovery table.
-pub(crate) struct Device {
+pub(crate) struct Device<T: TransportPort + 'static> {
     pub(crate) instance: u32,
     /// Its network, 0 for the local one.
     pub(crate) network: u16,
     pub(crate) entry: DiscoveredDevice,
+    /// The handle the call reads through: following the instance it named,
+    /// or pinned to the station a `dnet:0xMAC` named (#2560).
+    pub(crate) handle: bacnet_ops::Device<T>,
 }
 
 const DISCOVER_HINT: &str = "call bacnet_discover first (with a range or network that includes it)";
@@ -309,9 +313,16 @@ impl<T: TransportPort + 'static> Ctx<T> {
     }
 
     /// The device `arg` names, if the discovery table holds it and the
-    /// policy allows it. Targets are numeric: a device is never found by
-    /// name, and an address is no device.
-    pub(crate) async fn device(&self, call: &Call, arg: &DeviceArg) -> Result<Device, ToolError> {
+    /// policy allows it, with the handle the call reads through. Targets
+    /// are numeric: a device is never found by name, and a local address is
+    /// no device. Nothing is sent to find one (the server's client looks
+    /// for no device), and an instance two addresses claim is refused,
+    /// naming both, also as `dnet:instance`.
+    pub(crate) async fn device(
+        &self,
+        call: &Call,
+        arg: &DeviceArg,
+    ) -> Result<Device<T>, ToolError> {
         let engine = self.engine()?;
         let text = arg.text();
         let unknown = || ToolError::UnknownDevice {
@@ -319,28 +330,12 @@ impl<T: TransportPort + 'static> Ctx<T> {
             hint: DISCOVER_HINT.into(),
         };
         let parsed = target::parse_target(&text).map_err(|e| ToolError::invalid("device", e))?;
-        // Two addresses claiming the instance refuse it, naming both.
-        let claimed = async |instance| {
-            engine
-                .device(instance)
-                .await
-                .map_err(|error| ToolError::device(instance, &error))
-        };
-        let entry = match parsed {
-            Target::Instance(instance) => claimed(instance).await?.ok_or_else(unknown)?,
-            Target::Routed { dnet, instance } => claimed(instance)
-                .await?
-                .filter(|found| found.source_network == Some(dnet))
-                .ok_or_else(unknown)?,
-            Target::RoutedMac { dnet, mac } => engine
-                .devices()
-                .await
-                .into_iter()
-                .find(|found| {
-                    found.source_network == Some(dnet)
-                        && found.source_address.as_deref() == Some(&mac[..])
-                })
-                .ok_or_else(unknown)?,
+        let (handle, instance, network) = match parsed {
+            Target::Instance(instance) => (engine.device(instance).await, instance, None),
+            Target::Routed { dnet, instance } => {
+                (engine.device(instance).await, instance, Some(dnet))
+            }
+            Target::RoutedMac { .. } => (engine.device(text.as_str()).await, 0, None),
             Target::Mac(_) | Target::Bip6(_) => {
                 return Err(ToolError::invalid(
                     "device",
@@ -348,10 +343,25 @@ impl<T: TransportPort + 'static> Ctx<T> {
                 ));
             }
         };
+        let handle = match handle {
+            Ok(handle) => handle,
+            Err(Error::UnknownDevice { .. }) => return Err(unknown()),
+            Err(error) => return Err(ToolError::device(instance, &error)),
+        };
+        let at = handle.address();
+        if network.is_some_and(|network| network != at.network()) {
+            return Err(unknown());
+        }
+        let entry = engine
+            .low_level()
+            .get_device_at(at.network(), at.mac())
+            .await
+            .ok_or_else(unknown)?;
         let device = Device {
             instance: entry.object_identifier.instance_number(),
-            network: entry.source_network.unwrap_or(0),
+            network: at.network(),
             entry,
+            handle,
         };
         self.allow(device.instance, device.network)?;
         self.remember(&device.entry);
@@ -443,7 +453,7 @@ impl<T: TransportPort + 'static> Ctx<T> {
                 Ok(event) if event.kind == DeviceEventKind::Lost => {
                     // Another address may still claim the instance.
                     let instance = event.device.object_identifier.instance_number();
-                    match engine.device(instance).await {
+                    match engine.low_level().get_device(instance).await {
                         Ok(Some(left)) => self.remember(&left),
                         Ok(None) => {
                             self.known

@@ -238,6 +238,11 @@ impl<T: TransportPort + 'static> McpServer<T> {
         ),
     ) -> Self {
         let writes = crate::writes::Writes::new(&policy.writes);
+        // A tool names a device the discovery table holds: resolving one
+        // never sends a Who-Is (#2560).
+        if let Some(engine) = &engine {
+            engine.set_resolve_wait(None);
+        }
         Self {
             ctx: Arc::new(Ctx {
                 engine,

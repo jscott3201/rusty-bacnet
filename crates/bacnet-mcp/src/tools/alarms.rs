@@ -156,7 +156,6 @@ pub(crate) async fn run<T: TransportPort + 'static>(
         return Err(ToolError::invalid("max", format!("1 to {MAX_EVENTS}")));
     }
     let device = ctx.device(call, &args.device).await?;
-    let engine = ctx.engine()?;
     let resume = after(start(ctx, NAME, args.cursor.as_deref(), raw)?)?;
     let instance = device.instance;
     // The first answer continues from the cursor's object; later ones
@@ -166,7 +165,7 @@ pub(crate) async fn run<T: TransportPort + 'static>(
     let (summaries, more) = read_event_information_until(
         max,
         || call.out_of_time(),
-        |next_after| engine.alarms(instance, next_after.or(resume)),
+        |next_after| device.handle.alarms(next_after.or(resume)),
     )
     .await
     .map_err(|e| ToolError::device(instance, &e))?;
@@ -202,7 +201,7 @@ pub(crate) async fn run<T: TransportPort + 'static>(
     } else if args.summaries && args.cursor.is_none() {
         let mut errors = Map::new();
 
-        match engine.alarm_summary(instance).await {
+        match device.handle.alarm_summary().await {
             Ok(ack) => {
                 let source = format!("device {instance} alarm-summary");
                 let entries: Vec<Value> = ack
@@ -224,7 +223,7 @@ pub(crate) async fn run<T: TransportPort + 'static>(
             priority_filter: None,
             notification_class_filter: None,
         };
-        match engine.enrollment_summary(instance, &request).await {
+        match device.handle.enrollment_summary(&request).await {
             Ok(ack) => {
                 let source = format!("device {instance} enrollment-summary");
                 let entries: Vec<Value> = ack

@@ -218,7 +218,6 @@ pub(super) async fn run<T: TransportPort + 'static>(
     raw: &Map<String, Value>,
 ) -> Result<Value, ToolError> {
     let device = ctx.device(call, &args.device).await?;
-    let engine = ctx.engine()?;
     let plans = plans(device.instance, &args)?;
     let first = start(ctx, NAME, args.cursor.as_deref(), raw)? as usize;
     let cap = ctx.policy.caps.values;
@@ -241,7 +240,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
             } else {
                 Wanted::List(&plan.list)
             };
-            match engine.read(device.instance, plan.object, wanted).await {
+            match device.handle.read(plan.object, wanted).await {
                 Ok(read) => {
                     vias.push(read.via);
                     for (property, value) in read.rows {
@@ -255,8 +254,9 @@ pub(super) async fn run<T: TransportPort + 'static>(
             if failed.is_some() {
                 break;
             }
-            match engine
-                .read_property(device.instance, plan.object, property, Some(index))
+            match device
+                .handle
+                .read_property(plan.object, property, Some(index))
                 .await
             {
                 Ok(data) => rows.push((property, Some(index), Ok(data))),

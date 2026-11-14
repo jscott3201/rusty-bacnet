@@ -36,7 +36,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::class::Class;
 use bacnet_ops::octets::hex;
 
-pub use send::{find, item_json};
+pub use send::{find, item_json, turn};
 
 /// Default write session length, in minutes.
 pub const DEFAULT_MINUTES: u32 = 15;

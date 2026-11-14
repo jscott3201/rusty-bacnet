@@ -12,6 +12,8 @@ use bacnet_types::error::{Error, ErrorDetail, RemoteError};
 use serde_json::{Value, json};
 
 use super::{Outcome, Planned, Preview};
+use bacnet_ops::DeviceAddress;
+use bacnet_ops::limits::{RequestLimits, Turn};
 use bacnet_ops::octets::hex;
 
 /// How long a revert waits for a device it had to look for.
@@ -98,6 +100,19 @@ pub(crate) fn batch_outcomes(items: &[Planned], result: &Result<(), Error>) -> V
             _ => outcome.clone(),
         })
         .collect()
+}
+
+/// The turn at the gate of the address `device` (an instance) has in the
+/// discovery table now, which its reads take too (#2560). `None` when no
+/// one address claims it: the write then fails at the client before
+/// anything is sent, as it did before the gates were keyed by address.
+pub async fn turn<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    rate: &RequestLimits,
+    device: u32,
+) -> Option<Turn> {
+    let address = DeviceAddress::claiming(client, device).await.ok()?;
+    Some(rate.turn(&address).await)
 }
 
 /// Make sure the client knows where `device` is before writing to it: a

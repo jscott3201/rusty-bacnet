@@ -123,8 +123,9 @@ pub(crate) async fn run<T: TransportPort + 'static>(
 ) -> Result<Value, ToolError> {
     let device = ctx.device(call, &args.device).await?;
     let engine = ctx.engine()?;
-    let summary = engine
-        .describe_device(device.instance)
+    let summary = device
+        .handle
+        .describe_device()
         .await
         .map_err(|e| ToolError::device(device.instance, &e))?;
     let rows = &summary.rows;

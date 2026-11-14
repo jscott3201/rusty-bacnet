@@ -5,7 +5,7 @@
 //! the next call.
 
 use bacnet_client::log_reader::{LogCursor, LogPage};
-use bacnet_ops::Client;
+use bacnet_ops::Device;
 use bacnet_ops::engine::timed_out;
 use bacnet_ops::parse::parse_weekday_digit;
 use bacnet_transport::port::TransportPort;
@@ -379,7 +379,7 @@ impl Pager {
     /// failed (kept as `stopped`). A first page that fails fails the call.
     pub(super) async fn next<T: TransportPort + 'static>(
         &mut self,
-        engine: &Client<T>,
+        device: &Device<T>,
         call: &Call,
     ) -> Result<Option<LogPage>, ToolError> {
         if self.full() || (self.pages > 0 && call.out_of_time()) {
@@ -387,10 +387,7 @@ impl Pager {
             return Ok(None);
         }
         let want = u16::try_from((self.limit - self.count).min(PAGE)).unwrap_or(1);
-        let page = match engine
-            .read_trend(self.device, self.log, self.cursor, want)
-            .await
-        {
+        let page = match device.read_trend(self.log, self.cursor, want).await {
             Ok(page) => page,
             Err(error) if self.pages == 0 => return Err(ToolError::device(self.device, &error)),
             Err(error) => {

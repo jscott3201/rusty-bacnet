@@ -33,8 +33,9 @@ fn ai1() -> ObjectIdentifier {
 /// which the limits sit idle a second.
 async fn spacing(limits: &RequestLimits) -> u128 {
     let start = Instant::now();
-    for device in 7_000..7_003 {
-        drop(limits.turn(device).await);
+    for device in 7_000u32..7_003 {
+        let at = bacnet_ops::DeviceAddress::local(&device.to_be_bytes()).unwrap();
+        drop(limits.turn(&at).await);
     }
     let spent = Instant::now() - start;
     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -118,9 +119,10 @@ async fn agents_share_one_budget_and_the_tui_keeps_its_share() {
     }
     let engine = lab.engine();
     let start = Instant::now();
+    let lab_device = engine.device(LAB).await.unwrap();
     for _ in 0..20 {
-        engine
-            .read_property(LAB, ai1(), PropertyIdentifier::PRESENT_VALUE, None)
+        lab_device
+            .read_property(ai1(), PropertyIdentifier::PRESENT_VALUE, None)
             .await
             .unwrap();
     }
@@ -134,7 +136,7 @@ async fn agents_share_one_budget_and_the_tui_keeps_its_share() {
         bridge.await.unwrap().unwrap();
     }
     listener.shutdown().await;
-    drop(engine);
+    drop((lab_device, engine));
     lab.stop().await;
 }
 
