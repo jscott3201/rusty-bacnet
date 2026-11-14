@@ -14,7 +14,7 @@ use bacnet_types::error::Error;
 
 use super::test_bus::{Bus, N, client_on, mac, name_of, server, settle, stop};
 use super::*;
-use crate::client::WhoIsScope;
+use crate::client::Discover;
 
 /// The client at station 1 of network 1, a router at station 254 of
 /// networks 1, 2 and 3, and on network 2 station 5 and on network 3
@@ -60,7 +60,7 @@ impl Routed {
     /// Discover every network.
     async fn discover(&self) -> Vec<Discovered> {
         self.client
-            .discover(WhoIsScope::Global, None, Duration::from_millis(500))
+            .discover(Discover::global().wait(Duration::from_millis(500)))
             .await
             .unwrap()
     }
@@ -90,6 +90,24 @@ async fn a_routed_station_is_reached_by_its_address() {
     let following = client.device("3:1001").await.unwrap();
     assert!(following.follows());
     assert_eq!(name_of(&following).await.unwrap(), "on three");
+    lab.stop().await;
+}
+
+/// A discovery that names no scope stays on the client's network, which
+/// the router doesn't pass a local broadcast from: neither routed device
+/// answers it. Network 2 named reaches station 5 alone, and every network
+/// reaches both.
+#[tokio::test(start_paused = true)]
+async fn the_default_discovery_stays_on_this_network() {
+    let lab = Routed::new(|near| near.port(1)).await;
+    let quick = |request: Discover| request.wait(Duration::from_millis(500));
+    let near = lab.client.discover(quick(Discover::default())).await;
+    assert!(near.unwrap().is_empty(), "a routed device answered");
+    let two = lab.client.discover(quick(Discover::network(2))).await;
+    let two: Vec<_> = two.unwrap().into_iter().map(|f| f.address).collect();
+    assert_eq!(two, [DeviceAddress::new(2, &mac(5)).unwrap()]);
+    let every = lab.client.discover(quick(Discover::global())).await;
+    assert_eq!(every.unwrap().len(), 2);
     lab.stop().await;
 }
 

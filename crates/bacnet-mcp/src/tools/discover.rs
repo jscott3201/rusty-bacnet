@@ -4,9 +4,9 @@ use std::sync::PoisonError;
 use std::time::Duration;
 
 use bacnet_client::discovery::DiscoveredDevice;
-use bacnet_ops::client::{Wanted, WhoIsScope};
+use bacnet_ops::DeviceAddress;
+use bacnet_ops::client::{Discover, Wanted};
 use bacnet_ops::label::kebab;
-use bacnet_services::who_is::DeviceInstanceRange;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::ObjectIdentifier;
@@ -204,8 +204,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
         }
     };
     if send {
-        who_is(ctx, &args, network, range).await?;
-        tokio::time::sleep(wait).await;
+        who_is(ctx, &args, network, range, wait).await?;
     }
     let mut devices = match &ctx.client {
         Some(client) => client.devices().await,
@@ -294,26 +293,34 @@ pub(crate) fn device_row<T: TransportPort + 'static>(
     })
 }
 
-/// Send the Who-Is the arguments ask for, if the policy allows it.
+/// Send the Who-Is the arguments ask for, if the policy allows it, and
+/// listen `wait` for the answers, which land in the discovery table.
 async fn who_is<T: TransportPort + 'static>(
     ctx: &Ctx<T>,
     args: &Args,
     network: Option<u16>,
     range: Option<(u32, u32)>,
+    wait: Duration,
 ) -> Result<(), ToolError> {
     let client = ctx.client()?;
-    let scope = match (args.scope, network, &args.address) {
+    let request = match (args.scope, network, &args.address) {
         (Scope::Local, ..) => {
             ctx.allow_network(0)?;
-            WhoIsScope::Local
+            Discover::local()
         }
         (Scope::Network, Some(network), _) => {
             ctx.allow_network(network)?;
-            WhoIsScope::Network(network)
+            Discover::network(network)
         }
         (Scope::Directed, _, Some(address)) => {
             ctx.allow_network(0)?;
-            WhoIsScope::Directed(address)
+            // The address, checked before anything is charged.
+            let invalid = |message: String| ToolError::invalid("address", message);
+            let mac = client.station_mac(address).await.map_err(|e| match e {
+                bacnet_types::error::Error::Encoding(message) => invalid(message),
+                other => invalid(other.to_string()),
+            })?;
+            Discover::directed(DeviceAddress::local(&mac).map_err(invalid)?)
         }
         (Scope::Global, ..) => {
             if ctx.policy.networks.is_some() {
@@ -323,39 +330,35 @@ async fn who_is<T: TransportPort + 'static>(
                      limit which it may reach",
                 ));
             }
-            WhoIsScope::Global
+            Discover::global()
         }
         _ => unreachable!("checked by the caller"),
     };
-    // A directed Who-Is's address, checked before anything is charged, and
-    // whether the discovery table knows a device there.
-    let known_station = match scope {
-        WhoIsScope::Directed(address) => {
-            let mac = client.station_mac(address).await.map_err(|e| match e {
-                bacnet_types::error::Error::Encoding(message) => {
-                    ToolError::invalid("address", message)
-                }
-                other => ToolError::invalid("address", other.to_string()),
-            })?;
-            client
-                .devices()
-                .await
-                .iter()
-                .any(|found| found.is_local() && found.mac_address.as_slice() == mac.as_slice())
-        }
+    // Whether the discovery table knows a device at a directed Who-Is's
+    // station.
+    let known_station = match request.scope() {
+        bacnet_ops::Scope::Directed(station) => client
+            .devices()
+            .await
+            .iter()
+            .any(|found| found.is_local() && found.mac_address.as_slice() == station.mac()),
         _ => false,
     };
     if broad(ctx, args.scope, range, known_station)? {
         broad_allowed(ctx)?;
     }
-    let range = range
-        .map(|(low, high)| DeviceInstanceRange::new(low, high))
-        .transpose()
-        .map_err(|e| ToolError::invalid("range", e.to_string()))?;
-    client.who_is(scope, range).await.map_err(|e| match e {
-        bacnet_types::error::Error::Encoding(message) => ToolError::invalid("address", message),
-        other => ToolError::Failed(other.to_string()),
-    })
+    let request = match range {
+        Some((low, high)) => request.range(low..=high),
+        None => request,
+    };
+    client
+        .discover(request.wait(wait))
+        .await
+        .map(drop)
+        .map_err(|e| match e {
+            bacnet_types::error::Error::Encoding(message) => ToolError::invalid("address", message),
+            other => ToolError::Failed(other.to_string()),
+        })
 }
 
 /// Whether a Who-Is is broad, after refusing one that would make devices

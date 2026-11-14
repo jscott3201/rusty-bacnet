@@ -4081,9 +4081,19 @@ class BACnetClient:
         self,
         low_limit: Optional[int] = None,
         high_limit: Optional[int] = None,
+        scope: Literal["local", "global"] | int = "local",
     ) -> Awaitable[None]:
         """Broadcast a Who-Is request. Responses are collected asynchronously;
         use ``discovered_devices()`` to retrieve them.
+
+        ``scope`` says where the broadcast goes (#2560): ``"local"``, the
+        default, is this network alone, which no router passes on;
+        ``"global"`` is every network, which on a large routed site every
+        device answers; a number from 1 to 65534 is that remote network,
+        through its router. Another name or number raises ``ValueError``,
+        and another type ``TypeError``, before anything is sent. A client on
+        ``transport="router"`` has no network of its own, so its Who-Is
+        names one, or every one.
 
         Give ``low_limit`` and ``high_limit`` together or not at all, each from
         0 to 4194303: one alone, ``low_limit`` above ``high_limit``, or a limit
@@ -4096,8 +4106,13 @@ class BACnetClient:
         timeout_ms: int = 3000,
         low_limit: Optional[int] = None,
         high_limit: Optional[int] = None,
+        scope: Literal["local", "global"] | int = "local",
     ) -> Awaitable[list[DiscoveredDevice]]:
         """Convenience: send WhoIs, wait ``timeout_ms``, return discovered devices.
+
+        The Who-Is goes where ``scope`` says, as for ``who_is()``: this
+        network alone unless it names every network (``"global"``) or one
+        remote network by its number.
 
         Give ``low_limit`` and ``high_limit`` together or not at all, each from
         0 to 4194303: one alone, ``low_limit`` above ``high_limit``, or a limit

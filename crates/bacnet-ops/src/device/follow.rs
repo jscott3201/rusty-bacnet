@@ -18,7 +18,7 @@ use tokio::sync::broadcast::error::TryRecvError;
 
 use super::resolve::{ambiguous, unknown};
 use super::{ClientEvent, Device, DeviceAddress, Pin, QUIET};
-use crate::client::{Client, WhoIsScope, lock, timed_out};
+use crate::client::{Client, Scope, lock, timed_out};
 
 /// Where the handles following one instance on one network reach it, and
 /// when they last asked where it went. They share it, so one that moves
@@ -296,7 +296,7 @@ impl<T: TransportPort + 'static> Client<T> {
             }
             place.asked = Some(asked);
         }
-        if let Err(error) = self.who_is(WhoIsScope::on(network), Some(range)).await {
+        if let Err(error) = self.who_is(&Scope::on(network), Some(range)).await {
             tracing::debug!("asking where device {instance} went: {error}");
         }
     }

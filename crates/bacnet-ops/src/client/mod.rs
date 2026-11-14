@@ -16,7 +16,15 @@
 //! abandoned to the client's transaction state machine. A `Client` is
 //! cheap to clone: clones share one client, one set of limits and one
 //! memory.
+//!
+//! An application connects with a builder that names its link
+//! ([`Client::bip`], [`Client::bip6`], `Client::sc` with `sc-tls`,
+//! `Client::mstp` with `serial`) and gets a client over the type-erased
+//! [`AnyTransport`], or wraps a low-level client it built itself
+//! ([`Client::over`]). [`Client::discover`] finds devices; its Who-Is is a
+//! local broadcast unless the [`Discover`] names another [`Scope`].
 
+mod connect;
 mod discover;
 mod log;
 mod read;
@@ -27,13 +35,19 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use bacnet_client::client::{BACnetClient, DeviceEvent};
+use bacnet_transport::any::AnyTransport;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use tokio::sync::broadcast;
 
-pub use self::discover::WhoIsScope;
+#[cfg(feature = "serial")]
+pub use self::connect::MstpConnect;
+#[cfg(feature = "sc-tls")]
+pub use self::connect::ScConnect;
+pub use self::connect::{Bip6Connect, BipConnect};
+pub use self::discover::{DISCOVER_WAIT, Discover, Scope};
 pub use self::log::Naming;
 pub(crate) use self::log::PagedLog;
 pub use self::read::{
@@ -115,7 +129,11 @@ impl DeviceSummary {
 /// many callers can share a client without overrunning a device. Cheap to
 /// clone: clones share everything but how long a handle by instance waits
 /// for its device's I-Am ([`with_resolve_wait`](Self::with_resolve_wait)).
-pub struct Client<T: TransportPort + 'static> {
+///
+/// The transport type defaults to [`AnyTransport`], which the connect
+/// builders ([`bip`](Client::bip) and the others) make, so an application
+/// that connects with one never names it.
+pub struct Client<T: TransportPort + 'static = AnyTransport> {
     pub(crate) shared: Arc<Shared<T>>,
     /// How long a handle by instance that no address claims waits for an
     /// I-Am; `None` sends no Who-Is at all. This clone's and its handles'.

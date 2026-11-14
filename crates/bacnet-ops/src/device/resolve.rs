@@ -12,7 +12,7 @@ use bacnet_types::error::Error;
 use tokio::sync::broadcast::error::RecvError;
 
 use super::{Device, DeviceAddress, DeviceRef, Discovered, Duplicate, Pin};
-use crate::client::{Client, WhoIsScope};
+use crate::client::{Client, Discover, Scope};
 use crate::target::{Target, bip6_vmac, check_local_mac, parse_target_on};
 
 /// How long the one Who-Is for an instance no address claims listens on
@@ -242,7 +242,7 @@ impl<T: TransportPort + 'static> Client<T> {
         };
         // Subscribed before asking, so the answer can't slip in between.
         let mut events = self.device_events();
-        self.who_is(WhoIsScope::on(network), range).await?;
+        self.who_is(&Scope::on(network), range).await?;
         let mut deadline = tokio::time::Instant::now() + wait;
         let mut first: Option<DiscoveredDevice> = None;
         loop {
@@ -279,22 +279,37 @@ impl<T: TransportPort + 'static> Client<T> {
         }
     }
 
-    /// Send one Who-Is to `scope` for `range` and collect, for `wait`, the
-    /// devices that answer: one [`Discovered`] per address, flagged when
-    /// another address claims its instance too.
-    pub async fn discover(
-        &self,
-        scope: WhoIsScope<'_>,
-        range: Option<DeviceInstanceRange>,
-        wait: Duration,
-    ) -> Result<Vec<Discovered>, Error> {
+    /// Send the one Who-Is `request` describes, under the rate cap, and
+    /// collect for its wait the devices that answer: one [`Discovered`]
+    /// per address, flagged when another address claims its instance too.
+    /// With no scope named ([`Discover::default`], [`Discover::local`]) the
+    /// Who-Is is a local broadcast: no router passes it on.
+    ///
+    /// ```no_run
+    /// use std::net::Ipv4Addr;
+    /// use bacnet_ops::{Client, Discover};
+    /// # async fn example() -> Result<(), bacnet_types::error::Error> {
+    /// let client = Client::bip().interface(Ipv4Addr::new(192, 168, 1, 50)).connect().await?;
+    /// for found in client.discover(Discover::local().range(1000..=2000)).await? {
+    ///     println!("{} device {}", found.address, found.instance);
+    /// }
+    /// # Ok(()) }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Before anything is sent, an instance range that is empty or past
+    /// instance 4194303, and the errors of [`Scope::who_is`]; then the
+    /// transport's error.
+    pub async fn discover(&self, request: Discover) -> Result<Vec<Discovered>, Error> {
+        let range = request.instances()?;
         let mut events = self.device_events();
-        self.who_is(scope, range).await?;
+        self.who_is(request.scope(), range).await?;
         let in_range = |row: &DiscoveredDevice| {
             range.is_none_or(|r| r.contains(row.object_identifier.instance_number()))
         };
         let mut heard = std::collections::BTreeSet::new();
-        let deadline = tokio::time::Instant::now() + wait;
+        let deadline = tokio::time::Instant::now() + request.wait;
         loop {
             match tokio::time::timeout_at(deadline, events.recv()).await {
                 Err(_) | Ok(Err(RecvError::Closed)) => break,

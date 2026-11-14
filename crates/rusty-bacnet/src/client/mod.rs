@@ -88,6 +88,38 @@ fn device_range(
     })
 }
 
+/// Where the `scope` keyword of `who_is()` and `discover()` sends the
+/// Who-Is (#2560): `"local"`, the default, is this network alone, which no
+/// router passes on; `"global"` is every network; a number from 1 to 65534
+/// is that remote network. Anything else raises before anything is sent:
+/// `ValueError` for another name or number, `TypeError` for another type.
+fn discovery_scope(scope: Option<&Bound<'_, PyAny>>) -> PyResult<bacnet_ops::Scope> {
+    use bacnet_ops::Scope;
+    use pyo3::exceptions::PyTypeError;
+    use pyo3::types::{PyBool, PyInt, PyString};
+    const EXPECTED: &str = "scope is 'local', 'global' or a network number from 1 to 65534";
+    let Some(scope) = scope.filter(|scope| !scope.is_none()) else {
+        return Ok(Scope::Local);
+    };
+    if let Ok(name) = scope.cast::<PyString>() {
+        return match name.to_str()? {
+            "local" => Ok(Scope::Local),
+            "global" => Ok(Scope::Global),
+            other => Err(PyValueError::new_err(format!("{EXPECTED}, not '{other}'"))),
+        };
+    }
+    if scope.is_instance_of::<PyInt>() && !scope.is_instance_of::<PyBool>() {
+        return match scope.extract::<u16>() {
+            Ok(network @ 1..=65534) => Ok(Scope::Network(network)),
+            _ => Err(PyValueError::new_err(format!("{EXPECTED}, not {scope}"))),
+        };
+    }
+    Err(PyTypeError::new_err(format!(
+        "{EXPECTED}, not {}",
+        scope.get_type().name()?
+    )))
+}
+
 /// Async BACnet client for reading/writing properties on remote devices.
 ///
 /// Usage:

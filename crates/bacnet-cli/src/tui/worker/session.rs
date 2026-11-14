@@ -7,15 +7,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bacnet_client::client::BACnetClient;
-use bacnet_ops::Client;
 use bacnet_ops::limits::RequestLimits;
 use bacnet_ops::target::AddressStyle;
-use bacnet_services::who_is::WhoIsRequest;
+use bacnet_ops::{Client, DeviceAddress, Scope};
 use bacnet_transport::port::TransportPort;
 use bacnet_transport::sc::ScEvent;
-use bacnet_types::enums::UnconfirmedServiceChoice;
 use bacnet_types::error::Error;
-use bytes::BytesMut;
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
@@ -740,31 +737,28 @@ async fn failed_who_is(sink: &EventSink, op: OpId, error: String) {
     .await;
 }
 
-/// Send the Who-Is `spec` describes. A directed one to a B/IPv6 address
-/// must have had its VMAC found first ([`WhoIsSpec::with_vmac`]).
-async fn send_who_is<T: TransportPort + 'static>(
+/// Send the Who-Is `spec` describes, through the scope every front end
+/// shares (#2560). A directed one to a B/IPv6 address must have had its
+/// VMAC found first ([`WhoIsSpec::with_vmac`]).
+pub(crate) async fn send_who_is<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     spec: &WhoIsSpec,
 ) -> Result<(), String> {
-    let range = spec.range;
-    let sent = match &spec.scope {
-        WhoIsScope::Local => {
-            let mut buf = BytesMut::new();
-            WhoIsRequest { range }.encode(&mut buf);
-            client
-                .broadcast_unconfirmed(UnconfirmedServiceChoice::WHO_IS, &buf)
-                .await
-        }
-        WhoIsScope::Global => client.who_is(range).await,
+    let scope = match &spec.scope {
+        WhoIsScope::Local => Scope::Local,
+        WhoIsScope::Global => Scope::Global,
         WhoIsScope::Directed {
             to: DirectedTo::Mac(mac),
             ..
-        } => client.who_is_directed(mac, range).await,
+        } => Scope::Directed(DeviceAddress::local(mac)?),
         WhoIsScope::Directed {
             to: DirectedTo::Bip6(peer),
             ..
         } => return Err(format!("the VMAC at {peer} has not been found")),
-        WhoIsScope::Network(dnet) => client.who_is_network(*dnet, range).await,
+        WhoIsScope::Network(dnet) => Scope::Network(*dnet),
     };
-    sent.map_err(|error| error.to_string())
+    scope
+        .who_is(client, spec.range)
+        .await
+        .map_err(|error| error.to_string())
 }

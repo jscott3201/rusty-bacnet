@@ -74,6 +74,7 @@ mod route;
 use std::time::Duration;
 
 use bacnet_client::discovery::DiscoveredDevice;
+use bacnet_transport::any::AnyTransport;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::error::Error;
 
@@ -219,7 +220,8 @@ enum Pin {
 
 /// One device, as a [`Client`] reaches it: by address, pinned, or by
 /// instance, following it. Cheap to clone; a handle carries its client.
-pub struct Device<T: TransportPort + 'static> {
+/// The transport type defaults to the connect builders' [`AnyTransport`].
+pub struct Device<T: TransportPort + 'static = AnyTransport> {
     client: Client<T>,
     pin: Pin,
     /// The instance when known: a following handle's own, or a pinned
@@ -323,6 +325,9 @@ impl<T: TransportPort + 'static> Device<T> {
 
 #[cfg(test)]
 mod ask_tests;
+
+#[cfg(test)]
+mod discover_tests;
 
 #[cfg(test)]
 mod follow_tests;

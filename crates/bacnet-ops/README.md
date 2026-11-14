@@ -19,7 +19,10 @@ targets, values and devices the same way and obey the same request limits.
   properties (by ReadPropertyMultiple, falling back to ReadProperty),
   the object list, a device summary, trend log pages, alarms and the
   alarm and enrollment summaries, and Who-Is and Who-Is-Router-To-Network
-  with the discovery table.
+  with the discovery table. `Client::bip()`, `bip6()`, `sc(..)` and
+  `mstp(..)` connect without naming a transport type. A discovery
+  (`Discover`) sends a local broadcast, which no router passes on, unless
+  it names one network or every network.
 - `export`: a device's objects in another model's terms. So far
   `export::s223`, an experimental point list in the terms of proposed
   ASHRAE Standard 223, as Turtle: an inventory read through the client
@@ -36,7 +39,8 @@ frame decoding and the BBMD survey) are the
 [`bacnet-tool`](https://crates.io/crates/bacnet-tool) crate.
 
 It is a hosted crate: it needs `std` and Tokio, and has no terminal or MCP
-dependency. Its `sc-tls` feature turns on the BACnet/SC transport underneath;
+dependency. Its `sc-tls` feature turns on the BACnet/SC transport underneath
+and `Client::sc`, `serial` MS/TP over a serial port and `Client::mstp`;
 `test-support` adds the 223 export's structural check for the MCP server's
 tests and is not a stable API.
 

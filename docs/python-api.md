@@ -187,7 +187,9 @@ async with router:
     hosted.add_analog_input(0, "Supply temperature", 62, 18.5)
     await hosted.start()
     async with BACnetClient(transport="router", router=router) as client:
-        for device in await client.discover(timeout_ms=3000):
+        # The router's application has no network of its own, so its
+        # Who-Is names every network, or one.
+        for device in await client.discover(timeout_ms=3000, scope="global"):
             print(device.object_identifier.instance, device.source_network)
         value = await client.read_property_from_device(
             1005, ObjectIdentifier(ObjectType.ANALOG_INPUT, 0),
@@ -1798,13 +1800,24 @@ async for notif in notifications:
 
 ### Discovery
 
-#### `who_is(low_limit=None, high_limit=None)`
+#### `who_is(low_limit=None, high_limit=None, scope="local")`
 
-Broadcast a WhoIs request.
+Broadcast a WhoIs request. By default it goes to this network alone: a
+local broadcast, which reaches the whole BACnet network (across BBMDs, and
+to foreign devices) but which no router passes on (#2560). `scope="global"`
+sends it to every network, and a network number from 1 to 65534 to that
+remote network through its router. On a large routed site every device
+answers a global Who-Is, so give it a range, or name the network. Another
+name or number raises `ValueError`, and another type `TypeError`, before
+anything is sent. A client on a router's application
+(`transport="router"`) has no network of its own, so its Who-Is names one,
+or every one.
 
 ```python
-await client.who_is()                    # all devices
+await client.who_is()                    # all devices on this network
 await client.who_is(1000, 2000)          # instance range
+await client.who_is(scope=5)             # the devices on network 5
+await client.who_is(1000, 2000, scope="global")  # every network
 ```
 
 The limits go together, each from 0 to 4194303 (Clauses 16.9 and 16.10).
@@ -1949,9 +1962,11 @@ async with BACnetClient(transport="ipv6", port=0, ipv6_device_instance=4321) as 
     name = await client.read_property(vmac, device, PropertyIdentifier.OBJECT_NAME)
 ```
 
-#### `discover(timeout_ms=3000, low_limit=None, high_limit=None) -> list[DiscoveredDevice]`
+#### `discover(timeout_ms=3000, low_limit=None, high_limit=None, scope="local") -> list[DiscoveredDevice]`
 
-Convenience method: send WhoIs, wait, return devices.
+Convenience method: send WhoIs, wait, return devices. `scope` is
+`who_is()`'s: this network alone unless it says `"global"` or names a
+network.
 
 ```python
 devices = await client.discover(timeout_ms=5000)

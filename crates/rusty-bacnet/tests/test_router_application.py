@@ -77,10 +77,10 @@ class RouterApplicationTests(unittest.IsolatedAsyncioTestCase):
         return client
 
     async def find(self, client, instance):
-        """Discover `instance` and return its network."""
+        """Discover `instance` on every network and return its network."""
         async def found():
             devices = await client.discover(timeout_ms=500, low_limit=instance,
-                                            high_limit=instance)
+                                            high_limit=instance, scope="global")
             return [d for d in devices if d.object_identifier.instance == instance]
         [device] = await eventually(found, seconds=10)
         return device.source_network
@@ -221,8 +221,10 @@ class RouterApplicationTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(rb.BacnetTransportError) as caught:
             await asyncio.wait_for(client.read_property_from_device(BASE + 1, AI0, PV), 1)
         self.assertEqual(caught.exception.errno, errno.ENOTCONN)
+        # The application has no network of its own: its Who-Is names one,
+        # or every one.
         with self.assertRaises(rb.BacnetTransportError):
-            await asyncio.wait_for(client.who_is(), 1)
+            await asyncio.wait_for(client.who_is(scope="global"), 1)
         await asyncio.wait_for(client.stop(), 10)
 
     async def test_a_dropped_router_leaves_the_client_failing_cleanly(self):
@@ -232,7 +234,7 @@ class RouterApplicationTests(unittest.IsolatedAsyncioTestCase):
         del router
         async def stopped():
             try:
-                await asyncio.wait_for(client.who_is(), 1)
+                await asyncio.wait_for(client.who_is(scope="global"), 1)
             except rb.BacnetTransportError as error:
                 return error.errno == errno.ENOTCONN
             return False

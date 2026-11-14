@@ -32,7 +32,7 @@ The router's own application can be a client or a server too. `StartedRouter::in
 A node finds the router to a network with Who-Is-Router-To-Network, and each router answers with I-Am-Router-To-Network and the networks it reaches (Clauses 6.4.1 and 6.4.2):
 
 - Rust's `client.discover_routers(Some(network), wait)` and Python's `await client.discover_routers(network, timeout_ms=...)` broadcast the question and return each router that answered, with the networks it lists. Leave the network out to hear every router.
-- A client's Who-Is goes out as a global broadcast, so routers carry it to every network, and each answer records the network the device is on. `read_property_from_device(instance, ...)` then sends the read through the router that answered.
+- A global Who-Is reaches every network, since routers carry it on, and each answer records the network the device is on. Rust's low-level `client.who_is(range)` sends one; Python's `who_is()` and `discover()` and the CLI's `discover` stay on the client's own network unless told otherwise, with `scope="global"` (or a network number) and `--global` (or `--dnet`). `read_property_from_device(instance, ...)` then sends the read through the router that answered.
 - Rust's `read_property_routed(router_mac, network, device_mac, ...)` addresses a device on another network directly, when you already know the router's address and the device's address on its own network.
 
 From the CLI, `whois-router` lists the routers and the networks they reach, and `discover --dnet` asks one network for its devices. Replace the network number and device instance with your site's:
@@ -76,7 +76,7 @@ At the route limit, the router stops learning new routes. See <a href={`${reposi
 
 It routes between B/IP networks only. It uses the native defaults, including the permissive policy for routing messages, and exposes none of the options above.
 
-The router's own application entity can host Python stacks too. Build the router with `application="client"` for one `BACnetClient`, or `application="client_and_server"` for a `BACnetClient` and a `BACnetServer`, and build each stack with `transport="router", router=router`. Each takes its share when it starts, once per router start. The client reaches every device through the router's table, so it names each one by its network: find devices with a Who-Is, then use the `_from_device` methods. The server answers at the router's address on each network. Closing the router ends both shares, and their requests then fail at once.
+The router's own application entity can host Python stacks too. Build the router with `application="client"` for one `BACnetClient`, or `application="client_and_server"` for a `BACnetClient` and a `BACnetServer`, and build each stack with `transport="router", router=router`. Each takes its share when it starts, once per router start. The client reaches every device through the router's table, so it names each one by its network: find devices with a Who-Is to every network or to one (`scope="global"` or a network number; the application has no network of its own for a local one), then use the `_from_device` methods. The server answers at the router's address on each network. Closing the router ends both shares, and their requests then fail at once.
 
 ## Example: two B/IP networks on one host
 

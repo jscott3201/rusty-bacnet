@@ -12,7 +12,7 @@ use bacnet_types::error::Error;
 
 use super::test_bus::{Bus, N, at, client, client_on, name_of, requests, server, settle, stop};
 use super::*;
-use crate::client::{WhoIsScope, unreachable};
+use crate::client::{Discover, unreachable};
 
 /// From an address a handle is pinned, from an instance claimed once it
 /// follows, from a discovery result it is pinned and knows the instance;
@@ -23,7 +23,7 @@ async fn handles_from_each_source_send_nothing() {
     let (client, sent) = client(&bus).await;
     let lab = server(bus.port(2), N, "A").await;
     let found = client
-        .discover(WhoIsScope::Local, None, Duration::from_millis(500))
+        .discover(Discover::local().wait(Duration::from_millis(500)))
         .await
         .unwrap();
     assert_eq!(found.len(), 1);
@@ -120,7 +120,7 @@ async fn a_shared_instance_is_reached_by_address() {
         server(bus.port(3), N, "B").await,
     ];
     let found = client
-        .discover(WhoIsScope::Local, None, Duration::from_millis(500))
+        .discover(Discover::local().wait(Duration::from_millis(500)))
         .await
         .unwrap();
     assert!(found.iter().all(|found| found.duplicate), "{found:?}");

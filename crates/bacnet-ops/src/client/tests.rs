@@ -550,7 +550,7 @@ async fn a_who_is_fills_the_table() {
     let (client, server) = lab().await;
     client.low_level().clear_devices().await;
     assert!(client.low_level().get_device(LAB).await.unwrap().is_none());
-    client.who_is(WhoIsScope::Local, None).await.unwrap();
+    client.who_is(&Scope::Local, None).await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     let found = client
         .low_level()
@@ -566,10 +566,7 @@ async fn a_who_is_fills_the_table() {
             .iter()
             .any(|d| d.object_identifier.instance_number() == LAB)
     );
-    let refused = client
-        .who_is(WhoIsScope::Directed("1234"), None)
-        .await
-        .unwrap_err();
+    let refused = client.station_mac("1234").await.unwrap_err();
     assert!(refused.to_string().contains("station address"), "{refused}");
     stop(client, server).await;
 }
@@ -591,7 +588,7 @@ async fn a_refused_who_is_is_not_charged() {
     use crate::limits::{Account, charged};
     let (client, server) = lab_on(refuses_broadcasts).await;
     let account = Arc::new(Account::new(None));
-    let sent = charged(Arc::clone(&account), client.who_is(WhoIsScope::Local, None)).await;
+    let sent = charged(Arc::clone(&account), client.who_is(&Scope::Local, None)).await;
     assert!(sent.is_err());
     assert_eq!(account.requests(), 0);
     stop(client, server).await;

@@ -14,9 +14,10 @@
 //!   properties and priorities are named;
 //! - [`limits`]: the global request-rate cap, the one-request-per-device
 //!   gate, rates per network and per-caller accounts;
-//! - [`client`](mod@client): [`Client`], the high-level client: Who-Is and
-//!   discovery over those limits, and the reading strategy
-//!   ([`client::Reader`]);
+//! - [`client`](mod@client): [`Client`], the high-level client: its connect
+//!   builders ([`Client::bip`] and the others), discovery over those limits
+//!   ([`Discover`], a local broadcast unless it names another [`Scope`]),
+//!   and the reading strategy ([`client::Reader`]);
 //! - [`device`]: [`DeviceAddress`], where a device answers, and the
 //!   [`Device`] handle, pinned to an address or following an instance, whose
 //!   methods are the read operations (properties, the object list, a device
@@ -41,5 +42,5 @@ pub mod parse;
 pub mod target;
 pub mod watch;
 
-pub use client::Client;
+pub use client::{Client, Discover, Scope};
 pub use device::{Device, DeviceAddress};

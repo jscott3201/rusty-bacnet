@@ -360,7 +360,9 @@ pub(crate) enum Command {
         action: McpAction,
     },
 
-    /// Discover BACnet devices (WhoIs).
+    /// Discover BACnet devices (WhoIs): a broadcast on this network alone,
+    /// which no router passes on, unless --dnet, --global or --target says
+    /// where else.
     #[command(alias = "whois")]
     Discover {
         /// Device instance range (e.g., "1000-2000").
@@ -369,16 +371,22 @@ pub(crate) enum Command {
         #[arg(long, default_value_t = 3)]
         wait: u64,
         /// Send directed WhoIs to a specific address instead of broadcasting.
-        #[arg(long, conflicts_with = "dnet")]
+        #[arg(long, conflicts_with_all = ["dnet", "global"])]
         target: Option<String>,
         /// Register as foreign device with a BBMD before discovering, once
         /// (for --ttl seconds). --foreign-bbmd also renews and sends the
         /// Who-Is through the BBMD.
         #[arg(long)]
         bbmd: Option<String>,
-        /// Target a specific remote network number.
-        #[arg(long)]
+        /// Broadcast on one remote network (1 to 65534) instead, through
+        /// its router.
+        #[arg(long, conflicts_with = "global")]
         dnet: Option<u16>,
+        /// Broadcast on every network instead: a global broadcast, which
+        /// every router passes on. On a large routed site every device
+        /// answers it.
+        #[arg(long)]
+        global: bool,
     },
 
     /// Find objects by name (WhoHas).
