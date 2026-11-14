@@ -20,7 +20,8 @@ impl<W: WebSocketPort> ScTransport<W> {
     pub const LOCAL_RECEIVE_APDU_CAPACITY: u16 = crate::sc_limits::LOCAL_RECEIVE_APDU_CAPACITY;
 
     /// Create an unstarted transport with an unconfigured, zero UUID placeholder.
-    /// Call [`Self::with_device_uuid`] before [`TransportPort::start`].
+    /// Call [`Self::with_device_uuid`] before
+    /// [`TransportPort::start`](crate::port::TransportPort::start).
     /// The supplied local VMAC must be neither all-zero nor broadcast.
     pub fn new(ws: W, local_vmac: Vmac) -> Self {
         let (state_tx, _) = watch::channel(ScConnectionState::Disconnected);
