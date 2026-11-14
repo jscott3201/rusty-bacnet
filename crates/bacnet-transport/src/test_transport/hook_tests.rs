@@ -193,3 +193,108 @@ async fn bip_port_and_lease_hooks_and_a_start_held_after_the_link_is_up() {
         .build();
     assert!(failing.start().await.is_err());
 }
+
+#[tokio::test]
+async fn intercept_decides_what_reaches_the_inner_transport() {
+    for mode in [SendMode::Forward, SendMode::ForwardFirst] {
+        let inner = TestTransport::new();
+        let seen = inner.handle();
+        let outer = TestTransport::builder()
+            .inner(inner)
+            .unicast(mode)
+            .intercept(|frame| async move { frame.mac.as_slice() != [9] })
+            .build();
+        outer.send_unicast(&[1], &[9]).await.unwrap();
+        assert_eq!(seen.sent().len(), 0, "{mode:?}: the dropped frame");
+        outer.send_unicast(&[2], &[8]).await.unwrap();
+        assert_eq!(seen.sent().len(), 1, "{mode:?}");
+        assert_eq!(seen.sent().frame(0).npdu.as_ref(), &[2]);
+        assert_eq!(outer.sent().len(), 2, "both are recorded here");
+    }
+}
+
+#[tokio::test]
+async fn relay_passes_the_inner_frames_through_the_hook_and_takes_injected_ones() {
+    let (a, mut b) = crate::loopback::LoopbackTransport::pair(vec![1], vec![2]);
+    let _ = b.start().await.unwrap();
+    let mut outer = TestTransport::builder()
+        .inner(a)
+        .start(StartMode::Relay(8))
+        .on_inbound(|frame| async move { (frame.npdu[0] != 0).then_some(frame) })
+        .build();
+    let handle = outer.handle();
+    assert!(handle.inbound().is_none());
+    let mut received = outer.start().await.unwrap();
+    b.send_unicast(&[0], &[1]).await.unwrap();
+    b.send_unicast(&[5], &[1]).await.unwrap();
+    assert_eq!(
+        &received.recv().await.unwrap().npdu[..],
+        &[5],
+        "the 0 frame was swallowed"
+    );
+
+    // A test can inject a frame beside the link's own.
+    handle
+        .inbound()
+        .unwrap()
+        .send(ReceivedNpdu::unverified(
+            Bytes::from_static(&[7]),
+            MacAddr::from_slice(&[3]),
+            false,
+            Vec::new(),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(&received.recv().await.unwrap().npdu[..], &[7]);
+
+    // Stopping drops the handle's sender; the relay ends with the link.
+    outer.stop().await.unwrap();
+    assert!(handle.inbound().is_none());
+
+    // Without an inner transport a relay start fails.
+    let mut bare = TestTransport::builder().start(StartMode::Relay(1)).build();
+    assert!(bare.start().await.is_err());
+}
+
+#[tokio::test]
+async fn started_reaches_the_concrete_inner_transport_and_sends_see_its_current_limits() {
+    let (a, _b) = crate::loopback::LoopbackTransport::pair(vec![1], vec![2]);
+    let macs = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (seen, other) = (Arc::clone(&macs), Arc::clone(&macs));
+    let inner = TestTransport::builder().receive_capacity(100).build();
+    let inner_handle = inner.handle();
+    let builder = TestTransport::builder()
+        .inner(a)
+        .on_started(move |started| {
+            seen.lock().unwrap().push(
+                started
+                    .inner::<crate::loopback::LoopbackTransport>()
+                    .map(|link| link.local_mac().to_vec()),
+            );
+            assert!(started.inner::<TestTransport>().is_none(), "another type");
+        });
+    let mut outer = builder.build();
+    let _ = outer.start().await.unwrap();
+    assert_eq!(*other.lock().unwrap(), vec![Some(vec![1])]);
+
+    // A send's hook sees the inner transport's limits as they are now.
+    let sampled = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = Arc::clone(&sampled);
+    let builder = TestTransport::builder()
+        .inner(inner)
+        .unicast(SendMode::Forward);
+    let handle = builder.handle();
+    let outer = builder
+        .on_send(move |_| {
+            log.lock()
+                .unwrap()
+                .push(handle.inner_limits().map(|limits| limits.receive_capacity));
+            async { Ok(()) }
+        })
+        .build();
+    outer.send_unicast(&[1], &[2]).await.unwrap();
+    inner_handle.set_receive_capacity(40);
+    outer.send_unicast(&[1], &[2]).await.unwrap();
+    assert_eq!(*sampled.lock().unwrap(), vec![Some(100), Some(40)]);
+}

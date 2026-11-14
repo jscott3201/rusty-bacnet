@@ -49,6 +49,7 @@ pub(super) trait InnerPort: Send + Sync {
     fn bip6_port(&self) -> Option<Bip6Port>;
     fn number_controls(&self) -> bool;
     fn retain_lease(&mut self, lease: Arc<()>) -> Result<(), Error>;
+    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 impl<T: TransportPort + 'static> InnerPort for T {
@@ -124,5 +125,8 @@ impl<T: TransportPort + 'static> InnerPort for T {
     }
     fn retain_lease(&mut self, lease: Arc<()>) -> Result<(), Error> {
         TransportPort::retain_network_port_lease_internal(self, lease)
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }

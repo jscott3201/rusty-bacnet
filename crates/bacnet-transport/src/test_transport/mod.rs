@@ -72,6 +72,13 @@ type StartedHook = Arc<dyn Fn(Started<'_>) + Send + Sync>;
 type MacPredicate = Arc<dyn Fn(&[u8]) -> bool + Send + Sync>;
 type EndpointHook = Arc<dyn Fn() -> Option<SocketAddrV4> + Send + Sync>;
 type LimitsHook = Arc<dyn Fn() -> NpduLimits + Send + Sync>;
+type InterceptHook =
+    Arc<dyn Fn(SentFrame) -> Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync>;
+type InboundHook = Arc<
+    dyn Fn(ReceivedNpdu) -> Pin<Box<dyn Future<Output = Option<ReceivedNpdu>> + Send>>
+        + Send
+        + Sync,
+>;
 type BipPortHook = Arc<dyn Fn(Option<BipPort>) -> Option<BipPort> + Send + Sync>;
 type LeaseHook = Arc<dyn Fn(&Arc<()>) + Send + Sync>;
 
@@ -92,6 +99,14 @@ pub enum StartMode {
     /// real link's inbound stream. A second start fails, as for `Inbound`;
     /// without an inner transport every start fails.
     Replace(Option<mpsc::Receiver<ReceivedNpdu>>),
+    /// Start the [`inner`](TestTransportBuilder::inner) transport and relay
+    /// its frames through a new channel of this capacity, each passed through
+    /// the [`on_inbound`](TestTransportBuilder::on_inbound) hook when there
+    /// is one. The handle keeps the channel's sender
+    /// ([`TestTransportHandle::inbound`]) until `stop` or `abort` drops it,
+    /// so the test can inject frames beside the link's own. Without an inner
+    /// transport every start fails.
+    Relay(usize),
     /// Make a new channel of this capacity on every start. The handle keeps
     /// the sender ([`TestTransportHandle::inbound`]) until `stop` (after its
     /// hook and inner stop) or `abort` drops it, so the link closes when the stack stops it.
@@ -133,6 +148,16 @@ pub struct Started<'a> {
     pub receive_capacity: u16,
     /// The egress limit, as reported after the start.
     pub egress_limit: u16,
+    inner: Option<&'a dyn std::any::Any>,
+}
+
+impl Started<'_> {
+    /// The inner transport, when there is one and it is a `T`: for a test
+    /// that reads something only the concrete transport knows, such as the
+    /// address it bound.
+    pub fn inner<T: std::any::Any>(&self) -> Option<&T> {
+        self.inner.and_then(|inner| inner.downcast_ref::<T>())
+    }
 }
 
 #[derive(Default)]
@@ -145,6 +170,8 @@ struct Hooks {
     /// Awaited after `on_started`: a start the test holds open once the link
     /// is up, or fails.
     after_start: Option<StopHook>,
+    intercept: Option<InterceptHook>,
+    on_inbound: Option<InboundHook>,
     on_bip_port: Option<BipPortHook>,
     on_retain_lease: Option<LeaseHook>,
     on_send: Option<SendHook>,
@@ -302,18 +329,28 @@ impl TestTransport {
             SendMode::Ignore => return Ok(()),
             SendMode::Panic(message) => panic!("{message}"),
         };
+        self.refresh_inner_limits();
         self.shared.sent.push(frame.clone());
-        if forward && first {
+        if forward && first && self.forwards(&frame).await {
             self.forward(&frame).await?;
         }
         if let Some(hook) = &self.hooks.on_send {
             hook(frame.clone()).await?;
         }
         self.shared.controls().await?;
-        if forward && !first {
+        if forward && !first && self.forwards(&frame).await {
             return self.forward(&frame).await;
         }
         Ok(())
+    }
+
+    /// Whether the intercept hook, if any, lets the frame go on to the inner
+    /// transport.
+    async fn forwards(&self, frame: &SentFrame) -> bool {
+        match &self.hooks.intercept {
+            Some(hook) => hook(frame.clone()).await,
+            None => true,
+        }
     }
 
     async fn forward(&self, frame: &SentFrame) -> Result<(), Error> {
@@ -436,6 +473,33 @@ impl TransportPort for TestTransport {
                     .take()
                     .ok_or_else(|| Error::Encoding("test transport already started".into()))?
             }
+            StartMode::Relay(capacity) => {
+                let inner = self.inner.as_mut().ok_or_else(|| {
+                    Error::Encoding("test transport has no inner transport to start".into())
+                })?;
+                let mut from_link = inner.start().await?;
+                let (tx, rx) = mpsc::channel(*capacity);
+                *self
+                    .shared
+                    .inbound
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner) = Some(tx.clone());
+                let hook = self.hooks.on_inbound.clone();
+                tokio::spawn(async move {
+                    while let Some(frame) = from_link.recv().await {
+                        let frame = match &hook {
+                            Some(hook) => hook(frame).await,
+                            None => Some(frame),
+                        };
+                        if let Some(frame) = frame
+                            && tx.send(frame).await.is_err()
+                        {
+                            break;
+                        }
+                    }
+                });
+                rx
+            }
             StartMode::Fresh(capacity) => {
                 let (tx, rx) = mpsc::channel(*capacity);
                 *self
@@ -454,6 +518,7 @@ impl TransportPort for TestTransport {
                 local_mac: self.local_mac(),
                 receive_capacity: self.local_receive_apdu_capacity(),
                 egress_limit: self.egress_apdu_limit(),
+                inner: self.inner.as_deref().map(|inner| inner.as_any()),
             });
         }
         if let Some(hook) = self.hooks.after_start.clone() {

@@ -229,6 +229,34 @@ impl TestTransportBuilder {
         self
     }
 
+    /// Decide, per send, whether a [`SendMode::Forward`] or
+    /// [`SendMode::ForwardFirst`] send goes on to the inner transport: the
+    /// hook runs just before the forward (after the hook and controls for
+    /// `Forward`) and `false` ends the send as a success with nothing
+    /// forwarded, as a lossy link, or one that fakes the answer itself, does.
+    /// The hook may keep state and inject frames.
+    pub fn intercept<F>(
+        mut self,
+        hook: impl Fn(super::SentFrame) -> F + Send + Sync + 'static,
+    ) -> Self
+    where
+        F: Future<Output = bool> + Send + 'static,
+    {
+        self.transport.hooks.intercept = Some(Arc::new(move |frame| Box::pin(hook(frame))));
+        self
+    }
+
+    /// Pass each frame of a [`StartMode::Relay`] link through this hook: it
+    /// returns the frame to deliver, or `None` to swallow it. The hook may
+    /// wait, which holds up the frames behind it.
+    pub fn on_inbound<F>(mut self, hook: impl Fn(ReceivedNpdu) -> F + Send + Sync + 'static) -> Self
+    where
+        F: Future<Output = Option<ReceivedNpdu>> + Send + 'static,
+    {
+        self.transport.hooks.on_inbound = Some(Arc::new(move |frame| Box::pin(hook(frame))));
+        self
+    }
+
     /// Await this hook's future at the end of a `start` that succeeded, after
     /// `on_started`: a start the test holds open once the link is up (its
     /// error fails the start, but the link was started).
