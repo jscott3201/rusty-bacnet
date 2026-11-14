@@ -1,15 +1,9 @@
 use super::*;
-use crate::common::{
-    read_analog_event_properties, read_generic_event_properties, write_analog_event_properties,
-    write_generic_event_properties,
-};
-use crate::object_profile::{ObjectProfile, ProfileState, TagsPersistence};
+use crate::object_profile::TagsPersistence;
 use crate::prelude::*;
 use crate::property_metadata::PropertyMetadata;
 use alloc::sync::Arc;
-use bacnet_types::enums::EngineeringUnits;
-
-mod metadata;
+use bacnet_types::enums::PropertyIdentifier as P;
 
 // ---------------------------------------------------------------------------
 // AnalogOutput (type 1)
@@ -17,34 +11,12 @@ mod metadata;
 
 /// BACnet Analog Output object.
 pub struct AnalogOutputObject {
-    profile: ProfileState,
-    oid: ObjectIdentifier,
-    name: String,
-    description: String,
+    pub(super) core: IoCore,
+    event_detector: OutOfRangeDetector,
+    analog: AnalogProperties,
     present_value: f32,
-    units: EngineeringUnits,
-    out_of_service: bool,
-    status_flags: StatusFlags,
     priority_array: [Option<f32>; 16],
     relinquish_default: f32,
-    /// COV_Increment: minimum change threshold for COV notifications.
-    /// Default 0.0 means notify on any write (including no-change).
-    /// Set to a positive value for delta-based filtering.
-    cov_increment: f32,
-    event_detector: OutOfRangeDetector,
-    /// Event_Detection_Enable (Clause 12.3). A FALSE value suspends
-    /// event-state-machine evaluation under Clause 13.2.2.1.
-    event_detection_enable: bool,
-    reliability: Reliability,
-    reliability_before_out_of_service: Option<Reliability>,
-    reliability_inhibit: common::ReliabilityInhibitState,
-    min_pres_value: Option<f32>,
-    max_pres_value: Option<f32>,
-    pub(crate) event_history: EventHistory,
-    /// The reporting settings a write set, kept in storage once the
-    /// object opts in (#2331).
-    #[cfg(feature = "event-reporting")]
-    reporting_store: crate::write_config::reporting::ReportingStore,
     /// Value source tracking.
     value_source: crate::command_source::ValueSourceTracking,
 }
@@ -56,29 +28,13 @@ impl AnalogOutputObject {
         name: impl Into<String>,
         units: EngineeringUnits,
     ) -> Result<Self, Error> {
-        let oid = ObjectIdentifier::new(ObjectType::ANALOG_OUTPUT, instance)?;
         Ok(Self {
-            profile: ProfileState::default(),
-            oid,
-            name: name.into(),
-            description: String::new(),
+            core: IoCore::new(ObjectType::ANALOG_OUTPUT, instance, name.into())?,
+            event_detector: OutOfRangeDetector::default(),
+            analog: AnalogProperties::new(units),
             present_value: 0.0,
-            units,
-            out_of_service: false,
-            status_flags: StatusFlags::empty(),
             priority_array: [None; 16],
             relinquish_default: 0.0,
-            cov_increment: 0.0,
-            event_detector: OutOfRangeDetector::default(),
-            event_detection_enable: true,
-            reliability: Reliability::NO_FAULT_DETECTED,
-            reliability_before_out_of_service: None,
-            reliability_inhibit: common::ReliabilityInhibitState::default(),
-            min_pres_value: None,
-            max_pres_value: None,
-            event_history: EventHistory::default(),
-            #[cfg(feature = "event-reporting")]
-            reporting_store: Default::default(),
             value_source: crate::command_source::ValueSourceTracking::default(),
         })
     }
@@ -93,40 +49,8 @@ impl AnalogOutputObject {
         persistence: Arc<dyn TagsPersistence>,
     ) -> Result<Self, Error> {
         let mut object = Self::new(instance, name, units)?;
-        object.profile = ProfileState::persistent(object.oid, persistence, false)?;
+        object.core.keep_tags(persistence)?;
         Ok(object)
-    }
-
-    /// Provision independent optional Tags, Profile_Location and Profile_Name
-    /// rows before registration. Tags is writable independently of commands and
-    /// Out_Of_Service; the text rows are network read-only. Invalid configuration
-    /// leaves the previous profile and its attached storage unchanged.
-    pub fn set_profile(&mut self, profile: ObjectProfile) -> Result<(), Error> {
-        self.profile.provision(profile)
-    }
-
-    /// Wait for queued save attempts to finish; writes report their own outcomes.
-    /// This is not a success receipt. Unstaged synchronous writes block their caller.
-    pub fn wait_for_tag_saves(&self) {
-        self.profile.wait_for_saves();
-    }
-
-    /// Set COV_Increment, as
-    /// [`AnalogInputObject::set_cov_increment`](crate::analog::AnalogInputObject::set_cov_increment)
-    /// does (#2445).
-    pub fn set_cov_increment(&mut self, increment: f32) -> Result<(), Error> {
-        self.cov_increment = common::checked_cov_increment(increment)?;
-        Ok(())
-    }
-
-    /// Set minimum engineering-bound metadata; this is not a reliability fault limit.
-    pub fn set_min_pres_value(&mut self, value: f32) {
-        self.min_pres_value = Some(value);
-    }
-
-    /// Set maximum engineering-bound metadata; this is not a reliability fault limit.
-    pub fn set_max_pres_value(&mut self, value: f32) {
-        self.max_pres_value = Some(value);
     }
 
     /// Recalculate present-value from the priority array.
@@ -148,15 +72,17 @@ impl AnalogOutputObject {
     }
 }
 
-crate::write_config::reporting::impl_reporting_persistence!(AnalogOutputObject);
+crate::io_core::impl_profile!(AnalogOutputObject);
+super::impl_analog_properties!(AnalogOutputObject);
+crate::write_config::reporting::impl_reporting_persistence!(AnalogOutputObject, in core);
 
 impl BACnetObject for AnalogOutputObject {
     fn object_identifier(&self) -> ObjectIdentifier {
-        self.oid
+        self.core.oid
     }
 
     fn object_name(&self) -> &str {
-        &self.name
+        &self.core.name
     }
 
     fn read_property(
@@ -171,66 +97,24 @@ impl BACnetObject for AnalogOutputObject {
         {
             return result;
         }
-
-        if property == PropertyIdentifier::STATUS_FLAGS {
-            return Ok(common::compute_status_flags(
-                self.status_flags,
-                self.reliability,
-                self.out_of_service,
-                self.event_detector.event_state,
-            ));
-        }
-        if let Some(value) = self.reliability_inhibit.read(property) {
-            return Ok(value);
-        }
-        if let Some(result) = read_common_properties!(self, property, array_index) {
+        if let Some(result) = self.core.read(&self.event_detector, property, array_index) {
             return result;
         }
-        if let Some(result) = read_analog_event_properties!(self, property) {
-            return result;
-        }
-        if let Some(result) = self.event_history.read(property, array_index) {
-            return result;
-        }
-        if let Some(result) = read_generic_event_properties!(self, property) {
-            return result;
-        }
-        if property == PropertyIdentifier::EVENT_DETECTION_ENABLE {
-            return Ok(PropertyValue::Boolean(self.event_detection_enable));
-        }
-        if let Some(result) = self.profile.read(property, array_index) {
+        if let Some(result) = self.analog.read(property) {
             return result;
         }
         match property {
-            p if p == PropertyIdentifier::OBJECT_TYPE => Ok(PropertyValue::Enumerated(
-                ObjectType::ANALOG_OUTPUT.to_raw(),
-            )),
-            p if p == PropertyIdentifier::PRESENT_VALUE => {
-                Ok(PropertyValue::Real(self.present_value))
-            }
-            p if p == PropertyIdentifier::UNITS => {
-                Ok(PropertyValue::Enumerated(self.units.to_raw()))
-            }
-            p if p == PropertyIdentifier::PRIORITY_ARRAY => {
+            P::PRESENT_VALUE => Ok(PropertyValue::Real(self.present_value)),
+            P::PRIORITY_ARRAY => {
                 common::read_priority_array!(self, array_index, PropertyValue::Real)
             }
-            p if p == PropertyIdentifier::RELINQUISH_DEFAULT => {
-                Ok(PropertyValue::Real(self.relinquish_default))
-            }
-            p if p == PropertyIdentifier::CURRENT_COMMAND_PRIORITY => {
+            P::RELINQUISH_DEFAULT => Ok(PropertyValue::Real(self.relinquish_default)),
+            P::CURRENT_COMMAND_PRIORITY => {
                 Ok(common::current_command_priority(&self.priority_array))
             }
-            p if p == PropertyIdentifier::COV_INCREMENT => {
-                Ok(PropertyValue::Real(self.cov_increment))
+            P::PROPERTY_LIST => {
+                crate::property_metadata::read_property_list(&self.property_metadata(), array_index)
             }
-            p if p == PropertyIdentifier::MIN_PRES_VALUE => match self.min_pres_value {
-                Some(v) => Ok(PropertyValue::Real(v)),
-                None => Err(common::unknown_property_error()),
-            },
-            p if p == PropertyIdentifier::MAX_PRES_VALUE => match self.max_pres_value {
-                Some(v) => Ok(PropertyValue::Real(v)),
-                None => Err(common::unknown_property_error()),
-            },
             _ => Err(common::unknown_property_error()),
         }
     }
@@ -244,10 +128,10 @@ impl BACnetObject for AnalogOutputObject {
         origin: &crate::command_source::CommandOrigin,
     ) -> Result<(), Error> {
         crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
-        if property == PropertyIdentifier::VALUE_SOURCE {
+        if property == P::VALUE_SOURCE {
             return self.value_source.correct(value, priority, origin);
         }
-        if property == PropertyIdentifier::PRESENT_VALUE {
+        if property == P::PRESENT_VALUE {
             return crate::command_source::write_sourced_priority!(
                 self,
                 value,
@@ -277,86 +161,27 @@ impl BACnetObject for AnalogOutputObject {
     ) -> Result<(), Error> {
         crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         crate::write_config::reporting::admit(self, property, array_index, &value)?;
-        if matches!(
-            property,
-            PropertyIdentifier::PRESENT_VALUE | PropertyIdentifier::VALUE_SOURCE
-        ) {
+        if matches!(property, P::PRESENT_VALUE | P::VALUE_SOURCE) {
             return Err(common::write_access_denied_error());
         }
-        if let Some(result) = self.reliability_inhibit.write_inhibit(
-            &mut self.reliability,
-            self.out_of_service,
-            property,
-            &value,
-        ) {
-            return result;
-        }
-        if let Some(result) = self.reliability_inhibit.write_out_of_service(
-            &mut self.out_of_service,
-            &mut self.reliability,
-            &mut self.reliability_before_out_of_service,
-            property,
-            &value,
-        ) {
-            return result.map(|_| ());
-        }
-        if let Some(result) = common::write_object_name(&mut self.name, property, &value) {
-            return result;
-        }
-        if let Some(result) = common::write_description(&mut self.description, property, &value) {
-            return result;
-        }
-        // Clause 12.3 requires simulation/test writes while Out_Of_Service is TRUE:
-        // Present_Value is writable, as is Reliability when that property exists
-        // and supports values beyond NO_FAULT_DETECTED.
-        // `is_writable_property` stays statically true because it describes capability.
-        if let Some(result) = self.reliability_inhibit.write_client_reliability(
-            self.out_of_service,
-            &mut self.reliability,
-            property,
-            &value,
-        ) {
-            return result;
-        }
-        if property == PropertyIdentifier::RELINQUISH_DEFAULT {
+        if property == P::RELINQUISH_DEFAULT {
             if let PropertyValue::Real(v) = value {
                 return self.set_relinquish_default(v);
             }
             return Err(common::invalid_data_type_error());
         }
-        if let Some(result) = common::write_cov_increment(&mut self.cov_increment, property, &value)
-        {
-            return result;
-        }
-        if property == PropertyIdentifier::EVENT_DETECTION_ENABLE {
-            if let PropertyValue::Boolean(v) = value {
-                self.event_detection_enable = v;
-                if !v {
-                    self.event_detector.event_state = bacnet_types::enums::EventState::NORMAL;
-                    self.event_detector.acked_transitions =
-                        bacnet_types::bitstring::EventTransitionBits::all();
-                    self.event_detector.pending = None;
-                    self.event_detector.fault_reliability = None;
-                    self.event_history.reset();
-                }
-                return Ok(());
-            }
-            return Err(common::invalid_data_type_error());
-        }
-        if let Some(result) = write_analog_event_properties!(self, property, value) {
-            return result;
-        }
-        // Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair (#1329).
+        // Clause 12.3 requires simulation/test writes while Out_Of_Service is TRUE:
+        // Present_Value is writable, as is Reliability when that property exists
+        // and supports values beyond NO_FAULT_DETECTED; the core takes the
+        // Reliability write. `is_writable_property` stays statically true
+        // because it describes capability.
         if let Some(result) =
-            self.event_history
-                .write(property, array_index, &value, self.event_detection_enable)
+            self.core
+                .write(&mut self.event_detector, property, array_index, &value)
         {
             return result;
         }
-        if let Some(result) = write_generic_event_properties!(self, property, value) {
-            return result;
-        }
-        if let Some(result) = self.profile.write(property, array_index, &value) {
+        if let Some(result) = self.analog.write(property, &value) {
             return result;
         }
         Err(crate::common::unhandled_write_error(
@@ -371,7 +196,11 @@ impl BACnetObject for AnalogOutputObject {
     }
 
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
-        metadata::for_object(self)
+        // Only independently configured engineering bounds: AO has no fault limits.
+        let mut rows = Cow::Borrowed(metadata::OUTPUT);
+        self.analog.add_rows(&mut rows);
+        self.core.add_profile_rows(&mut rows);
+        rows
     }
 
     crate::traits::lend_cov_reporting!();
@@ -381,48 +210,23 @@ impl BACnetObject for AnalogOutputObject {
     crate::traits::lend_reliability_eval!();
 }
 
-impl crate::creation::Creatable for AnalogOutputObject {
-    const CREATION_ONLY_PROPERTIES: &'static [PropertyIdentifier] = super::CREATION_ONLY;
-
-    fn initialize_property(
-        &mut self,
-        property: PropertyIdentifier,
-        value: PropertyValue,
-    ) -> Result<(), Error> {
-        super::initialize_units(&mut self.units, property, value)
-    }
-}
-
-impl crate::traits::CovReporting for AnalogOutputObject {
-    fn cov_increment(&self) -> Option<f64> {
-        Some(f64::from(self.cov_increment))
-    }
-}
-
 impl crate::traits::ReliabilityEval for AnalogOutputObject {
     fn set_reliability(&mut self, reliability: Reliability) -> Result<(), Error> {
-        if self.out_of_service || self.reliability_inhibit.enabled() {
-            return Err(common::write_access_denied_error());
-        }
-        if !common::is_reliability_value_valid(reliability) {
-            return Err(common::value_out_of_range_error());
-        }
-        self.reliability = reliability;
-        Ok(())
+        self.core.set_reliability(reliability)
     }
 
     fn reliability_evaluation_inhibited(&self) -> bool {
-        self.reliability_inhibit.enabled()
+        self.core.reliability_inhibit.enabled()
     }
 }
 
 crate::event::impl_builtin_intrinsic_reporting!(
     AnalogOutputObject,
     event_detector,
-    event_history,
+    core.event_history,
     [present_value],
-    reliability,
-    event_detection_enable,
+    core.reliability,
+    core.event_detection_enable,
     OutOfRangeDetector::ALGORITHM
 );
 
@@ -447,12 +251,12 @@ mod detection_enable_reset_tests {
             due: crate::event::test_clock::in_seconds(2),
         });
         ao.event_detector.fault_reliability = Some(bacnet_types::enums::Reliability::NO_SENSOR);
-        ao.event_history.time_stamps = [
+        ao.core.event_history.time_stamps = [
             BACnetTimeStamp::SequenceNumber(1),
             BACnetTimeStamp::SequenceNumber(2),
             BACnetTimeStamp::SequenceNumber(3),
         ];
-        ao.event_history.message_texts = ["offnormal".into(), "fault".into(), "normal".into()];
+        ao.core.event_history.message_texts = ["offnormal".into(), "fault".into(), "normal".into()];
 
         ao.write_property(
             PropertyIdentifier::EVENT_DETECTION_ENABLE,
@@ -478,7 +282,7 @@ mod detection_enable_reset_tests {
         assert!(ao.event_detector.pending.is_none());
         assert!(ao.event_detector.fault_reliability.is_none());
         assert_eq!(
-            ao.event_history.time_stamps,
+            ao.core.event_history.time_stamps,
             [
                 BACnetTimeStamp::SequenceNumber(0),
                 BACnetTimeStamp::SequenceNumber(0),
@@ -486,7 +290,7 @@ mod detection_enable_reset_tests {
             ]
         );
         assert_eq!(
-            ao.event_history.message_texts,
+            ao.core.event_history.message_texts,
             [String::new(), String::new(), String::new()]
         );
     }

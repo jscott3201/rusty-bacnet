@@ -48,6 +48,7 @@ pub mod event_enrollment;
 pub mod event_log;
 pub mod file;
 pub mod group;
+pub(crate) mod io_core;
 pub mod life_safety;
 pub mod lighting;
 pub mod load_control;

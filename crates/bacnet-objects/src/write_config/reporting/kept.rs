@@ -132,10 +132,6 @@ pub(crate) struct Kept {
 
 /// The detector fields `write_generic_event_properties!` writes, around
 /// the three kept rows it takes.
-struct DetectorRows {
-    event_detector: DetectorFields,
-}
-
 struct DetectorFields {
     notification_class: u32,
     event_enable: EventTransitionBits,
@@ -144,21 +140,17 @@ struct DetectorFields {
     time_delay_normal: Option<u32>,
 }
 
-impl DetectorRows {
+impl DetectorFields {
     fn of(rows: &ReportingRows) -> Self {
         Self {
-            event_detector: DetectorFields {
-                notification_class: rows.notification_class,
-                event_enable: rows.event_enable,
-                notify_type: rows.notify_type,
-                time_delay: 0,
-                time_delay_normal: None,
-            },
+            notification_class: rows.notification_class,
+            event_enable: rows.event_enable,
+            notify_type: rows.notify_type,
+            time_delay: 0,
+            time_delay_normal: None,
         }
     }
-}
 
-impl DetectorFields {
     fn apply_to(self, rows: &mut ReportingRows) {
         rows.notification_class = self.notification_class;
         rows.event_enable = self.event_enable;
@@ -199,10 +191,10 @@ impl Kept {
             P::NOTIFICATION_CLASS | P::EVENT_ENABLE | P::NOTIFY_TYPE => {
                 // The objects' own event-row macro, so the step refuses
                 // exactly what the object will.
-                let mut scratch = DetectorRows::of(rows);
-                common::write_generic_event_properties!(scratch, write.property, value.clone())
+                let mut scratch = DetectorFields::of(rows);
+                common::write_generic_event_properties!(scratch, write.property, value)
                     .unwrap_or_else(|| Err(common::unknown_property_error()))?;
-                scratch.event_detector.apply_to(rows);
+                scratch.apply_to(rows);
                 if write.property == P::NOTIFY_TYPE && !object.takes_notify_type(rows.notify_type) {
                     return Err(common::value_out_of_range_error());
                 }

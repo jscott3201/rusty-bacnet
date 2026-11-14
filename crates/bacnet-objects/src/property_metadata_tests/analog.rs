@@ -3,8 +3,15 @@ use crate::property_metadata::is_writable_property;
 use bacnet_types::error::RemoteError;
 
 use crate::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
-use bacnet_types::enums::EngineeringUnits;
+use crate::audit::{AuditPriorityPolicy, ObjectAuditPolicy};
+use crate::object_profile::ObjectProfile;
+use bacnet_types::bitstring::AuditOperationFlags;
+use bacnet_types::constructed::BACnetNameValue;
+use bacnet_types::enums::{AuditLevel, EngineeringUnits};
 
+/// The three objects, with configuration's bits on: 1 the fault limits, 2
+/// Min_Pres_Value, 4 Max_Pres_Value, 8 every profile row, and 16 the
+/// Analog Value's three audit rows.
 fn analog_objects(configuration: u8) -> [Box<dyn BACnetObject>; 3] {
     let mut ai = AnalogInputObject::new(1, "AI-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
     let mut av = AnalogValueObject::new(1, "AV-1", EngineeringUnits::DEGREES_CELSIUS).unwrap();
@@ -26,6 +33,26 @@ fn analog_objects(configuration: u8) -> [Box<dyn BACnetObject>; 3] {
     bounds!(ai);
     bounds!(av);
     bounds!(ao);
+    if configuration & 8 != 0 {
+        let profile = || ObjectProfile {
+            tags: Some(vec![BACnetNameValue {
+                name: "zone".into(),
+                value: None,
+            }]),
+            profile_location: Some("bacnet://profiles/analog".into()),
+            profile_name: Some("555-analog".into()),
+        };
+        ai.set_profile(profile()).unwrap();
+        av.set_profile(profile()).unwrap();
+        ao.set_profile(profile()).unwrap();
+    }
+    if configuration & 16 != 0 {
+        av.set_audit_policy(ObjectAuditPolicy {
+            level: Some(AuditLevel::DEFAULT),
+            operations: Some(AuditOperationFlags::empty()),
+            priority_filter: Some(AuditPriorityPolicy::Inherit),
+        });
+    }
     [Box::new(ai), Box::new(av), Box::new(ao)]
 }
 
@@ -96,7 +123,7 @@ fn property_metadata_analog_exact_required_and_instance_projections() {
         P::EVENT_ALGORITHM_INHIBIT_REF,
         P::EVENT_ALGORITHM_INHIBIT,
     ];
-    for configuration in 0..8 {
+    for configuration in 0..32 {
         for object in analog_objects(configuration) {
             let kind = object.object_identifier().object_type();
             let mut requires = base_required.to_vec();
@@ -121,6 +148,15 @@ fn property_metadata_analog_exact_required_and_instance_projections() {
                 expected.extend([P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]);
                 requires.extend([P::VALUE_SOURCE, P::VALUE_SOURCE_ARRAY, P::LAST_COMMAND_TIME]);
             }
+            // The rows an instance adds follow the table's, audit rows
+            // first and profile rows last.
+            if configuration & 16 != 0 && kind == ObjectType::ANALOG_VALUE {
+                expected.extend([
+                    P::AUDIT_LEVEL,
+                    P::AUDITABLE_OPERATIONS,
+                    P::AUDIT_PRIORITY_FILTER,
+                ]);
+            }
             if configuration & 1 != 0 && kind != ObjectType::ANALOG_OUTPUT {
                 expected.extend([P::FAULT_HIGH_LIMIT, P::FAULT_LOW_LIMIT]);
             }
@@ -129,6 +165,9 @@ fn property_metadata_analog_exact_required_and_instance_projections() {
             }
             if configuration & 4 != 0 {
                 expected.push(P::MAX_PRES_VALUE);
+            }
+            if configuration & 8 != 0 {
+                expected.extend([P::TAGS, P::PROFILE_LOCATION, P::PROFILE_NAME]);
             }
             // Metadata order is the list's.
             let mut required: Vec<_> = expected
