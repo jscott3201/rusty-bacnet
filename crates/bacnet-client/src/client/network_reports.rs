@@ -115,6 +115,15 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .await
     }
 
+    /// The number of the network this client is on, once a
+    /// Network-Number-Is has taught it ([`Self::what_is_network_number`]
+    /// asks); `None` until then, and always on a link that takes no
+    /// network number controls. A routed address naming this network is a
+    /// station on this one.
+    pub fn network_number(&self) -> Option<u16> {
+        self.network.local_network_number().get()
+    }
+
     /// Send a What-Is-Network-Number (Clause 6.4.19), broadcast when
     /// `destination_mac` is `None`. Any node holding this network's number,
     /// a router in particular, broadcasts a Network-Number-Is in reply,
