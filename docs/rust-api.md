@@ -10147,7 +10147,7 @@ let ack = AcknowledgeAlarmRequest {
     acknowledgment_source: "operator".into(),
     time_of_acknowledgment: now,
 };
-client.acknowledge_alarm_request(&mac, &ack).await?;
+client.acknowledge_alarm(&mac, &ack).await?;
 ```
 
 `get_event_information`, `get_alarm_summary` and `get_enrollment_summary`

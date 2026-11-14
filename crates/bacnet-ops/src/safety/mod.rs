@@ -34,6 +34,7 @@ use bacnet_types::primitives::ObjectIdentifier;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::class::Class;
+use crate::octets::hex;
 
 pub use send::{find, item_json};
 
@@ -215,11 +216,6 @@ impl Stored {
 
 fn to_hex<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
     serializer.serialize_str(&hex(bytes))
-}
-
-/// `bytes` as lower-case hex.
-pub fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn from_hex<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {

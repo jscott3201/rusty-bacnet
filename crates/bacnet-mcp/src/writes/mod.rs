@@ -17,8 +17,9 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use bacnet_ops::octets::hex;
 use bacnet_ops::safety::desk::{Caller, Waiting};
-use bacnet_ops::safety::{DEFAULT_MINUTES, Level, Preview, Tier, hex};
+use bacnet_ops::safety::{DEFAULT_MINUTES, Level, Preview, Tier};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use tokio::time::Instant;

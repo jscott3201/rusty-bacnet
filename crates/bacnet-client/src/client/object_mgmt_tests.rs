@@ -286,7 +286,7 @@ async fn object_mgmt_alarm_preserves_every_field_and_timestamp_choice() {
         {
             let expected = alarm_request(index as u32, timestamp, acknowledged_at);
             let (result, ()) = tokio::join!(
-                client.acknowledge_alarm_request_from_device(INSTANCE, &expected),
+                client.acknowledge_alarm_from_device(INSTANCE, &expected),
                 async {
                     let request = peer
                         .request(ConfirmedServiceChoice::ACKNOWLEDGE_ALARM)
@@ -357,7 +357,7 @@ async fn object_mgmt_routed_structured_error_protocol_error_reject_and_abort_sur
     let expected = alarm_request(0, time(), date_time());
     for abort in [false, true] {
         let (result, ()) = tokio::join!(
-            client.acknowledge_alarm_request_from_device(INSTANCE, &expected),
+            client.acknowledge_alarm_from_device(INSTANCE, &expected),
             async {
                 let request = peer
                     .request(ConfirmedServiceChoice::ACKNOWLEDGE_ALARM)
@@ -421,14 +421,14 @@ async fn object_mgmt_unknown_device_and_oversized_alarm_send_nothing() {
     );
     assert!(
         client
-            .acknowledge_alarm_request_from_device(INSTANCE + 1, &request)
+            .acknowledge_alarm_from_device(INSTANCE + 1, &request)
             .await
             .is_err()
     );
     peer.empty();
     request.acknowledgment_source = "x".repeat(2048);
     let result = client
-        .acknowledge_alarm_request_from_device(INSTANCE, &request)
+        .acknowledge_alarm_from_device(INSTANCE, &request)
         .await;
     assert!(matches!(
         result,

@@ -278,8 +278,7 @@ fn operation_flags(value: &Bound<'_, PyAny>, name: &str) -> PyResult<AuditOperat
 /// The mapping accepts the raw `BACnetSuccessFilter` values 0 (all), 1
 /// (successes-only), and 2 (failures-only) as an integer. The pre-RB-02
 /// Boolean `successful-actions-only` meaning is not accepted here: `True`
-/// used to mean successes-only and `False` meant all (see
-/// `BACnetSuccessFilter::from_legacy_bool`). Pass 1 for the old `True` and 0
+/// used to mean successes-only and `False` meant all. Pass 1 for the old `True` and 0
 /// for the old `False`. In particular a `bool` is never accepted as an
 /// arbitrary enum integer: it raises `TypeError`, while an out-of-range
 /// integer raises `ValueError`.

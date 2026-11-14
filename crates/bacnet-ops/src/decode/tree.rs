@@ -20,6 +20,8 @@ use bacnet_npdu::{NetworkPriority, Npdu as NpduView};
 use bacnet_types::primitives::PropertyValue;
 use bytes::Bytes;
 
+use crate::octets::hex_upper;
+
 use super::frame::{Framing, Link, Npdu, kebab, link};
 
 #[path = "service.rs"]
@@ -69,10 +71,6 @@ impl Field {
             child.relocate(range);
         }
     }
-}
-
-fn hex(octets: &[u8]) -> String {
-    octets.iter().map(|b| format!("{b:02X}")).collect()
 }
 
 /// Decode `frame` into its fields, link layer first.
@@ -281,7 +279,7 @@ fn mstp(frame: &[u8], link: &Link) -> Field {
                 "Data CRC"
             };
             kids.push(Field::leaf(
-                format!("{crc}: {}", hex(&frame[end..])),
+                format!("{crc}: {}", hex_upper(&frame[end..])),
                 end..frame.len(),
             ));
         }
@@ -341,7 +339,7 @@ fn npdu(npdu: &[u8], base: usize) -> Vec<Field> {
             ));
             if len > 0 {
                 kids.push(Field::leaf(
-                    format!("{name}ADR: {}", hex(address.mac)),
+                    format!("{name}ADR: {}", hex_upper(address.mac)),
                     at(pos + 3..pos + 3 + len),
                 ));
             }
@@ -628,9 +626,9 @@ fn walk(data: &[u8], base: usize, start: usize, end: usize, depth: usize) -> (Ve
                     .then(|| octets.iter().fold(0u32, |n, b| (n << 8) | u32::from(*b)));
                 match number {
                     Some(n) if !octets.is_empty() => {
-                        format!("[{}] {} ({n})", tag.number, hex(octets))
+                        format!("[{}] {} ({n})", tag.number, hex_upper(octets))
                     }
-                    _ => format!("[{}] {}", tag.number, hex(octets)),
+                    _ => format!("[{}] {}", tag.number, hex_upper(octets)),
                 }
             }
         };

@@ -6,8 +6,9 @@ use bacnet_encoding::primitives::decode_application_value;
 use bacnet_encoding::tags::{TagClass, decode_tag};
 use bacnet_types::enums::PropertyIdentifier;
 
-use super::primitive::{hex, text};
+use super::primitive::text;
 use super::{Datum, Fields, Floats, raw_text};
+use crate::octets::hex;
 
 /// The element kind the data names an unknown choice by.
 const UNKNOWN_CHOICE: &str = "unknown-choice";
@@ -33,7 +34,7 @@ pub fn unknown_choice(tag: u8, constructed: bool, data: &[u8], floats: Floats) -
     let fields = Fields::new(vec![
         ("tag".into(), Datum::Unsigned(u64::from(tag))),
         ("constructed".into(), Datum::Boolean(constructed)),
-        ("data".into(), Datum::Raw { raw: hex(data, "") }),
+        ("data".into(), Datum::Raw { raw: hex(data) }),
     ]);
     let datum = Datum::Constructed {
         element: UNKNOWN_CHOICE.into(),

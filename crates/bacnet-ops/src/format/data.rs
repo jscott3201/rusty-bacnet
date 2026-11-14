@@ -13,9 +13,10 @@ use bacnet_types::enums::{
 use bacnet_types::primitives::PropertyValue;
 use serde::Serialize;
 
-use super::primitive::{date_text, hex, plain_bits, time_text};
+use super::primitive::{date_text, plain_bits, time_text};
 use super::{ValueFormat, constructed, decode_all, event_parameter, holds_state, is_binary};
 use crate::label::kebab;
+use crate::octets::hex;
 
 /// A property value as typed data. Serialized untagged, so each form is
 /// told apart by its JSON type and keys.
@@ -256,7 +257,7 @@ impl ValueFormat<'_> {
             };
         }
         let Some(values) = decode_all(data) else {
-            return Datum::Raw { raw: hex(data, "") };
+            return Datum::Raw { raw: hex(data) };
         };
         match values.as_slice() {
             [one] => self.element_data(property, one),
@@ -280,9 +281,7 @@ impl ValueFormat<'_> {
             PropertyValue::Real(v) => non_finite(f64::from(*v)),
             PropertyValue::Double(v) => non_finite(*v),
             PropertyValue::CharacterString(text) => Datum::Text(text.clone()),
-            PropertyValue::OctetString(bytes) => Datum::Octets {
-                octets: hex(bytes, ""),
-            },
+            PropertyValue::OctetString(bytes) => Datum::Octets { octets: hex(bytes) },
             PropertyValue::Enumerated(raw) => Datum::Enumerated {
                 value: *raw,
                 name: self.enum_name(property, value),
@@ -319,9 +318,7 @@ impl ValueFormat<'_> {
                         time: time_text(&time),
                     },
                 ]),
-                None => Datum::Raw {
-                    raw: hex(bytes, ""),
-                },
+                None => Datum::Raw { raw: hex(bytes) },
             },
         }
     }

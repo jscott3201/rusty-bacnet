@@ -9,6 +9,7 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use bacnet_ops::octets::hex;
 use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -135,10 +136,6 @@ fn sorted(value: Value) -> Value {
         Value::Array(items) => Value::Array(items.into_iter().map(sorted).collect()),
         other => other,
     }
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn unhex(text: &str) -> Option<Vec<u8>> {
