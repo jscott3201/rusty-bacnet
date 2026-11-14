@@ -2,7 +2,7 @@
 //! tests (`admission_tests` and the modules under it).
 //!
 //! The router's dispatch and sender tasks run as in production, but each port
-//! is an [`IngressTransport`]: the test hands it received frames through a
+//! is a [`wire_port`]: the test hands it received frames through a
 //! [`Peer`] and reads back what the router queued for the wire, with no
 //! sockets or shared port numbers.
 
@@ -10,78 +10,47 @@ use super::*;
 use bacnet_encoding::npdu::{NpduAddress, decode_npdu};
 use bacnet_npdu::RejectMessageReason;
 use bacnet_transport::port::ReceivedNpdu;
+use bacnet_transport::test_transport::TestTransport;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 
-// Injection moves ReceivedNpdu, preserving the non-cloneable reply sender.
-pub(super) struct IngressTransport {
-    incoming: Option<mpsc::Receiver<ReceivedNpdu>>,
+/// A port at `mac` fed by `incoming`, whose sends land in `outgoing` as the
+/// requests the router queued, with their data attributes. Injection moves
+/// `ReceivedNpdu`, preserving the non-cloneable reply sender. A full queue
+/// refuses the send.
+pub(super) fn wire_port(
+    mac: u8,
+    incoming: mpsc::Receiver<ReceivedNpdu>,
     outgoing: mpsc::Sender<SendRequest>,
-    mac: [u8; 1],
+) -> TestTransport {
+    TestTransport::builder()
+        .local_mac(&[mac])
+        .inbound(incoming)
+        .on_send(move |frame| {
+            let request = if frame.broadcast {
+                SendRequest::Broadcast {
+                    npdu: frame.npdu,
+                    data_attributes: frame.attributes,
+                    reject_origin: None,
+                }
+            } else {
+                SendRequest::Unicast {
+                    npdu: frame.npdu,
+                    mac: frame.mac,
+                    data_attributes: frame.attributes,
+                    response: None,
+                    reject_origin: None,
+                }
+            };
+            let queued = outgoing
+                .try_send(request)
+                .map_err(|_| Error::Encoding("test wire queue unavailable".into()));
+            async move { queued }
+        })
+        .build()
 }
 
-impl TransportPort for IngressTransport {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        self.incoming
-            .take()
-            .ok_or_else(|| Error::Encoding("already started".into()))
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.send_unicast_with_data_attributes(npdu, mac, &[]).await
-    }
-
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.send_broadcast_with_data_attributes(npdu, &[]).await
-    }
-
-    async fn send_unicast_with_data_attributes(
-        &self,
-        npdu: &[u8],
-        mac: &[u8],
-        data_attributes: &[DataAttribute],
-    ) -> Result<(), Error> {
-        self.outgoing
-            .try_send(SendRequest::Unicast {
-                npdu: Bytes::copy_from_slice(npdu),
-                mac: MacAddr::from_slice(mac),
-                data_attributes: data_attributes.to_vec(),
-
-                response: None,
-                reject_origin: None,
-            })
-            .map_err(|_| Error::Encoding("test wire queue unavailable".into()))
-    }
-
-    async fn send_broadcast_with_data_attributes(
-        &self,
-        npdu: &[u8],
-        data_attributes: &[DataAttribute],
-    ) -> Result<(), Error> {
-        self.outgoing
-            .try_send(SendRequest::Broadcast {
-                npdu: Bytes::copy_from_slice(npdu),
-                data_attributes: data_attributes.to_vec(),
-
-                reject_origin: None,
-            })
-            .map_err(|_| Error::Encoding("test wire queue unavailable".into()))
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &self.mac
-    }
-}
-
-/// The test's side of one [`IngressTransport`] port.
+/// The test's side of one [`wire_port`].
 pub(super) struct Peer {
     pub(super) tx: mpsc::Sender<ReceivedNpdu>,
     pub(super) wire: mpsc::Receiver<SendRequest>,
@@ -91,7 +60,7 @@ pub(super) fn network(port: usize) -> u16 {
     100 + port as u16
 }
 
-pub(super) fn fixture(count: usize) -> (Vec<RouterPort<IngressTransport>>, Vec<Peer>) {
+pub(super) fn fixture(count: usize) -> (Vec<RouterPort<TestTransport>>, Vec<Peer>) {
     (0..count)
         .map(|port| {
             // Only injected transport backlog is larger than the production
@@ -100,11 +69,7 @@ pub(super) fn fixture(count: usize) -> (Vec<RouterPort<IngressTransport>>, Vec<P
             let (outgoing, wire) = mpsc::channel(32);
             (
                 RouterPort {
-                    transport: IngressTransport {
-                        incoming: Some(rx),
-                        outgoing,
-                        mac: [port as u8 + 1],
-                    },
+                    transport: wire_port(port as u8 + 1, rx, outgoing),
                     network_number: network(port),
                 },
                 Peer { tx, wire },
@@ -115,7 +80,7 @@ pub(super) fn fixture(count: usize) -> (Vec<RouterPort<IngressTransport>>, Vec<P
 
 /// Start a router on `ports`, set up as `options` asks.
 pub(super) async fn launch<A: LocalApduReceiver>(
-    ports: Vec<RouterPort<IngressTransport>>,
+    ports: Vec<RouterPort<TestTransport>>,
     options: RouterOptions<A>,
 ) -> (BACnetRouter, A) {
     let started = BACnetRouter::start(ports, options).await.unwrap();

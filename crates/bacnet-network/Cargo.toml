@@ -29,6 +29,7 @@ tracing.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }
 
 [dev-dependencies]
+bacnet-transport = { workspace = true, features = ["test-support"] }
 tokio = { workspace = true, features = ["test-util"] }
 
 [lints]

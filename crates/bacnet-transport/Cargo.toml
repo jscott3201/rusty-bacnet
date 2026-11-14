@@ -76,7 +76,8 @@ ethernet = []
 # The scripted MS/TP line and token ring the monitor's own tests use, as
 # `mstp::monitor::script`, for tools built on the monitor (#1854); and
 # `MstpThreadConfig::with_test_time`, which runs a dedicated-thread MS/TP
-# node on a paused test runtime's time (#2284).
+# node on a paused test runtime's time (#2284); and `test_transport`, the one
+# `TransportPort` double the workspace's tests share (#2557).
 test-support = []
 
 [dev-dependencies]

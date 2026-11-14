@@ -263,12 +263,12 @@ async fn start_refuses_what_the_engine_cannot_run() {
 /// be an SNET (Clause 6.2.2.1).
 #[tokio::test]
 async fn start_refuses_a_reserved_network_before_any_transport_starts() {
-    use super::driven_port::Driven;
+    use super::driven_port::driven;
     use std::sync::atomic::Ordering;
 
     for reserved in [0, 0xFFFF] {
-        let (first, first_handle) = Driven::new(1, 1497);
-        let (second, second_handle) = Driven::new(2, 1497);
+        let (first, first_handle) = driven(1, 1497);
+        let (second, second_handle) = driven(2, 1497);
         let ports = vec![
             RouterPort {
                 transport: first,

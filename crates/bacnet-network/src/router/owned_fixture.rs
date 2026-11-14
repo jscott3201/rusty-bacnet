@@ -1,12 +1,15 @@
 //! Gated owners prove attempted starts, explicit cleanup, and child destruction.
+//!
+//! The port is a [`TestTransport`] whose start, stop, abort and send hooks
+//! spawn and tear down a child task that owns a drop-counted resource, and
+//! report each step to the test through a [`Probe`].
 
 use super::RouterPort;
-use bacnet_npdu::NpduLimits;
-use bacnet_transport::port::{ReceivedNpdu, TransportPort};
+use bacnet_transport::test_transport::{StartMode, TestTransport};
 use bacnet_types::error::Error;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use tokio::sync::{mpsc, oneshot};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 struct Resource(Arc<AtomicUsize>, Option<oneshot::Sender<()>>);
@@ -19,27 +22,18 @@ impl Drop for Resource {
     }
 }
 
-pub(super) struct OwnedPort {
-    pub(super) stopped: Arc<AtomicUsize>,
-    pub(super) aborted: Arc<AtomicUsize>,
-    pub(super) dropped: Arc<AtomicUsize>,
-    pub(super) stop_entered: Option<oneshot::Sender<()>>,
-    pub(super) stop_release: Option<oneshot::Receiver<()>>,
-    pub(super) send_entered: Mutex<Option<oneshot::Sender<()>>>,
-    pending_send: bool,
-    child: Option<JoinHandle<()>>,
-    incoming: Option<mpsc::Sender<ReceivedNpdu>>,
-    pub(super) starts: Arc<AtomicUsize>,
-    pub(super) start_entered: Option<oneshot::Sender<()>>,
-    pub(super) start_release: Option<oneshot::Receiver<()>>,
-    pub(super) pending_start: bool,
-    pub(super) start_error: Option<Error>,
-    pub(super) stop_error: Option<Error>,
-    pub(super) panic_send: bool,
-    pub(super) panic_stop: bool,
-    resource_drop: Option<oneshot::Sender<()>>,
-    pub(super) mac: Vec<u8>,
-    completed: Option<oneshot::Sender<()>>,
+/// Faults a test arms on a port, before the router starts it.
+#[derive(Default)]
+struct Knobs {
+    start_error: Mutex<Option<Error>>,
+    stop_error: Mutex<Option<Error>>,
+    pending_start: AtomicBool,
+    panic_send: AtomicBool,
+    panic_stop: AtomicBool,
+}
+
+fn take<T>(slot: &Mutex<Option<T>>) -> Option<T> {
+    slot.lock().unwrap_or_else(PoisonError::into_inner).take()
 }
 
 pub(super) struct Probe {
@@ -54,9 +48,42 @@ pub(super) struct Probe {
     pub(super) start_release: oneshot::Sender<()>,
     pub(super) completed: oneshot::Receiver<()>,
     pub(super) resource_drop: oneshot::Receiver<()>,
+    knobs: Arc<Knobs>,
 }
 
-pub(super) fn port(pending_send: bool) -> (RouterPort<OwnedPort>, Probe) {
+impl Probe {
+    /// Make the start fail with `error`, after its child is spawned.
+    pub(super) fn fail_start(&self, error: Error) {
+        *self.knobs.start_error.lock().unwrap() = Some(error);
+    }
+
+    /// Hold the start until `start_release` is sent (or dropped).
+    pub(super) fn hold_start(&self) {
+        self.knobs.pending_start.store(true, Ordering::SeqCst);
+    }
+
+    /// Make the stop return `error`, after it cleans up.
+    pub(super) fn fail_stop(&self, error: Error) {
+        *self.knobs.stop_error.lock().unwrap() = Some(error);
+    }
+
+    /// Make the first send panic.
+    pub(super) fn panic_on_send(&self) {
+        self.knobs.panic_send.store(true, Ordering::SeqCst);
+    }
+
+    /// Make the stop panic, once released.
+    pub(super) fn panic_on_stop(&self) {
+        self.knobs.panic_stop.store(true, Ordering::SeqCst);
+    }
+}
+
+pub(super) fn port(pending_send: bool) -> (RouterPort<TestTransport>, Probe) {
+    port_at(pending_send, &[1])
+}
+
+/// [`port`], reporting `mac` as its local MAC.
+pub(super) fn port_at(pending_send: bool, mac: &[u8]) -> (RouterPort<TestTransport>, Probe) {
     let starts = Arc::new(AtomicUsize::new(0));
     let (start_tx, start_entered) = oneshot::channel();
     let (start_release, start_rx) = oneshot::channel();
@@ -68,31 +95,98 @@ pub(super) fn port(pending_send: bool) -> (RouterPort<OwnedPort>, Probe) {
     let (stop_tx, stop_entered) = oneshot::channel();
     let (stop_release, stop_rx) = oneshot::channel();
     let (send_tx, send_entered) = oneshot::channel();
+    let knobs = Arc::new(Knobs::default());
+    let child: Arc<Mutex<Option<JoinHandle<()>>>> = Arc::default();
+    let (start_tx, start_rx) = (Mutex::new(Some(start_tx)), Mutex::new(Some(start_rx)));
+    let resource_tx = Mutex::new(Some(resource_tx));
+    let (stop_tx, stop_rx) = (Mutex::new(Some(stop_tx)), Mutex::new(Some(stop_rx)));
+    let (send_tx, completed_tx) = (Mutex::new(Some(send_tx)), Mutex::new(Some(completed_tx)));
+    let transport = TestTransport::builder()
+        .local_mac(mac)
+        .start(StartMode::Fresh(1))
+        .on_start({
+            let starts = Arc::clone(&starts);
+            move || {
+                starts.fetch_add(1, Ordering::SeqCst);
+            }
+        })
+        .start_gate({
+            let (knobs, dropped, child) = (Arc::clone(&knobs), Arc::clone(&dropped), child.clone());
+            let (start_tx, start_rx) = (Arc::new(start_tx), Arc::new(start_rx));
+            let resource_tx = Arc::new(resource_tx);
+            move || {
+                let resource = Resource(Arc::clone(&dropped), take(&resource_tx));
+                *child.lock().unwrap() = Some(tokio::spawn(async move {
+                    let _resource = resource;
+                    std::future::pending::<()>().await;
+                }));
+                let _ = take(&start_tx).unwrap().send(());
+                let (knobs, start_rx) = (Arc::clone(&knobs), Arc::clone(&start_rx));
+                async move {
+                    if knobs.pending_start.load(Ordering::SeqCst) {
+                        let _ = take(&start_rx).unwrap().await;
+                    }
+                    take(&knobs.start_error).map_or(Ok(()), Err)
+                }
+            }
+        })
+        .on_stop({
+            let (knobs, stopped, child) = (Arc::clone(&knobs), Arc::clone(&stopped), child.clone());
+            let (stop_tx, stop_rx) = (Arc::new(stop_tx), Arc::new(stop_rx));
+            let completed_tx = Arc::new(completed_tx);
+            move || {
+                stopped.fetch_add(1, Ordering::SeqCst);
+                let _ = take(&stop_tx).unwrap().send(());
+                let (knobs, stop_rx, child) =
+                    (Arc::clone(&knobs), Arc::clone(&stop_rx), child.clone());
+                let completed_tx = Arc::clone(&completed_tx);
+                async move {
+                    let _ = take(&stop_rx).unwrap().await;
+                    assert!(
+                        !knobs.panic_stop.load(Ordering::SeqCst),
+                        "named transport stop panic"
+                    );
+                    let child = take(&child).unwrap();
+                    child.abort();
+                    assert!(child.await.unwrap_err().is_cancelled());
+                    let _ = take(&completed_tx).unwrap().send(());
+                    take(&knobs.stop_error).map_or(Ok(()), Err)
+                }
+            }
+        })
+        .on_abort({
+            let (aborted, child) = (Arc::clone(&aborted), child.clone());
+            move || {
+                aborted.fetch_add(1, Ordering::SeqCst);
+                if let Some(child) = take(&child) {
+                    child.abort();
+                }
+            }
+        })
+        .on_send({
+            let knobs = Arc::clone(&knobs);
+            let send_tx = Arc::new(send_tx);
+            move |_| {
+                if let Some(entered) = take(&send_tx) {
+                    let _ = entered.send(());
+                }
+                assert!(
+                    !knobs.panic_send.load(Ordering::SeqCst),
+                    "named sender panic"
+                );
+                async move {
+                    if pending_send {
+                        std::future::pending::<()>().await;
+                    }
+                    Ok(())
+                }
+            }
+        })
+        .build();
     (
         RouterPort {
             network_number: 1,
-            transport: OwnedPort {
-                stopped: Arc::clone(&stopped),
-                aborted: Arc::clone(&aborted),
-                dropped: Arc::clone(&dropped),
-                stop_entered: Some(stop_tx),
-                stop_release: Some(stop_rx),
-                send_entered: Mutex::new(Some(send_tx)),
-                pending_send,
-                child: None,
-                incoming: None,
-                starts: Arc::clone(&starts),
-                start_entered: Some(start_tx),
-                start_release: Some(start_rx),
-                pending_start: false,
-                start_error: None,
-                stop_error: None,
-                panic_send: false,
-                panic_stop: false,
-                resource_drop: Some(resource_tx),
-                mac: vec![1],
-                completed: Some(completed_tx),
-            },
+            transport,
         },
         Probe {
             starts,
@@ -106,77 +200,7 @@ pub(super) fn port(pending_send: bool) -> (RouterPort<OwnedPort>, Probe) {
             stop_entered,
             stop_release,
             send_entered,
+            knobs,
         },
     )
-}
-
-impl OwnedPort {
-    async fn send(&self) -> Result<(), Error> {
-        if let Some(entered) = self.send_entered.lock().unwrap().take() {
-            let _ = entered.send(());
-        }
-        assert!(!self.panic_send, "named sender panic");
-        if self.pending_send {
-            std::future::pending::<()>().await;
-        }
-        Ok(())
-    }
-}
-
-impl TransportPort for OwnedPort {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        self.starts.fetch_add(1, Ordering::SeqCst);
-        let resource = Resource(Arc::clone(&self.dropped), self.resource_drop.take());
-        self.child = Some(tokio::spawn(async move {
-            let _resource = resource;
-            std::future::pending::<()>().await;
-        }));
-        let _ = self.start_entered.take().unwrap().send(());
-        if self.pending_start {
-            let _ = self.start_release.take().unwrap().await;
-        }
-        if let Some(error) = self.start_error.take() {
-            return Err(error);
-        }
-        let (tx, rx) = mpsc::channel(1);
-        self.incoming = Some(tx);
-        Ok(rx)
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        self.stopped.fetch_add(1, Ordering::SeqCst);
-        let _ = self.stop_entered.take().unwrap().send(());
-        let _ = self.stop_release.take().unwrap().await;
-        assert!(!self.panic_stop, "named transport stop panic");
-        self.incoming.take();
-        let child = self.child.take().unwrap();
-        child.abort();
-        assert!(child.await.unwrap_err().is_cancelled());
-        let _ = self.completed.take().unwrap().send(());
-        match self.stop_error.take() {
-            Some(error) => Err(error),
-            None => Ok(()),
-        }
-    }
-    async fn send_unicast(&self, _: &[u8], _: &[u8]) -> Result<(), Error> {
-        self.send().await
-    }
-    async fn send_broadcast(&self, _: &[u8]) -> Result<(), Error> {
-        self.send().await
-    }
-    fn abort(&mut self) {
-        self.aborted.fetch_add(1, Ordering::SeqCst);
-        self.incoming.take();
-        if let Some(child) = self.child.take() {
-            child.abort();
-        }
-    }
-    fn local_mac(&self) -> &[u8] {
-        &self.mac
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-    fn max_npdu(&self) -> NpduLimits {
-        NpduLimits::default()
-    }
 }

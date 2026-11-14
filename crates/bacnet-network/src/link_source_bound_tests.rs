@@ -12,9 +12,9 @@
 //! [`MAX_MAC_LEN`]: bacnet_npdu::MAX_MAC_LEN
 
 use bacnet_npdu::{NetworkMessageType, RejectMessageReason};
-use bacnet_transport::port::{ReceivedNpdu, TransportPort};
+use bacnet_transport::port::ReceivedNpdu;
+use bacnet_transport::test_transport::TestTransport;
 use bacnet_types::MacAddr;
-use bacnet_types::error::Error;
 use bytes::Bytes;
 use tokio::sync::mpsc;
 
@@ -24,18 +24,7 @@ use crate::loopback_fixture::{
 };
 use crate::router::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
 
-/// A port whose received frames the test supplies. What the stack sends
-/// through it comes back out of `sent`, as a [`ReceivedNpdu`] whose
-/// `link_layer_group` marks a broadcast, with each unicast's MAC, so the
-/// loopback fixture's helpers read it.
-struct Injector {
-    received: Option<mpsc::Receiver<ReceivedNpdu>>,
-    sent: mpsc::Sender<ReceivedNpdu>,
-    unicast_macs: mpsc::UnboundedSender<MacAddr>,
-    mac: [u8; 1],
-}
-
-/// The test's side of an [`Injector`].
+/// The test's side of an [`injector`] port.
 struct Link {
     deliver: mpsc::Sender<ReceivedNpdu>,
     sent: FromRouter,
@@ -54,66 +43,38 @@ impl Link {
     }
 }
 
-fn injector(mac: u8) -> (Injector, Link) {
+/// A port whose received frames the test supplies. What the stack sends
+/// through it comes back out of the link's `sent`, as a [`ReceivedNpdu`]
+/// whose `link_layer_group` marks a broadcast, with each unicast's MAC, so
+/// the loopback fixture's helpers read it.
+fn injector(mac: u8) -> (TestTransport, Link) {
     let (deliver, received) = mpsc::channel(16);
     let (sent_tx, sent) = mpsc::channel(64);
     let (unicast_macs, macs) = mpsc::unbounded_channel();
-    let port = Injector {
-        received: Some(received),
-        sent: sent_tx,
-        unicast_macs,
-        mac: [mac],
-    };
+    let port = TestTransport::builder()
+        .local_mac(&[mac])
+        .inbound(received)
+        .on_send(move |frame| {
+            // Queue the frame for the test: to `unicast` when given, or as a
+            // broadcast. A full queue drops it, with its MAC.
+            let unicast = (!frame.broadcast).then(|| frame.mac.clone());
+            let queued = ReceivedNpdu::unverified(
+                frame.npdu,
+                MacAddr::from_slice(&[mac]),
+                unicast.is_none(),
+                Vec::new(),
+                None,
+            );
+            if sent_tx.try_send(queued).is_ok()
+                && let Some(destination) = unicast
+            {
+                let _ = unicast_macs.send(destination);
+            }
+            async { Ok(()) }
+        })
+        .build();
     let sent = FromRouter::new(sent, macs);
     (port, Link { deliver, sent })
-}
-
-impl Injector {
-    /// Queue `npdu` for the test: to `unicast` when given, or as a broadcast.
-    fn record(&self, npdu: &[u8], unicast: Option<&[u8]>) {
-        let frame = ReceivedNpdu::unverified(
-            Bytes::copy_from_slice(npdu),
-            MacAddr::from_slice(&self.mac),
-            unicast.is_none(),
-            Vec::new(),
-            None,
-        );
-        if self.sent.try_send(frame).is_ok()
-            && let Some(mac) = unicast
-        {
-            let _ = self.unicast_macs.send(MacAddr::from_slice(mac));
-        }
-    }
-}
-
-impl TransportPort for Injector {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        self.received
-            .take()
-            .ok_or_else(|| Error::Encoding("already started".into()))
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.record(npdu, Some(mac));
-        Ok(())
-    }
-
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.record(npdu, None);
-        Ok(())
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &self.mac
-    }
 }
 
 /// A link-layer source MAC of `length` octets.
