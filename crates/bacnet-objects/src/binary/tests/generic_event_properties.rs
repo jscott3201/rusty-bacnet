@@ -464,8 +464,9 @@ macro_rules! assert_seeded_binary_event_history {
                 },
             },
         ];
-        object.event_history.time_stamps = expected_timestamps.clone();
-        object.event_history.message_texts = ["offnormal".into(), "fault".into(), "normal".into()];
+        object.core.event_history.time_stamps = expected_timestamps.clone();
+        object.core.event_history.message_texts =
+            ["offnormal".into(), "fault".into(), "normal".into()];
 
         assert_timestamp_array(
             object
@@ -545,8 +546,8 @@ fn binary_seeded_event_history_preserves_array_order_and_timestamp_choices() {
 macro_rules! assert_binary_history_reset {
     ($object:expr_2021, $label:literal) => {{
         let mut object = $object;
-        object.event_history.time_stamps[0] = BACnetTimeStamp::SequenceNumber(91);
-        object.event_history.message_texts[1] = "seeded".into();
+        object.core.event_history.time_stamps[0] = BACnetTimeStamp::SequenceNumber(91);
+        object.core.event_history.message_texts[1] = "seeded".into();
         object
             .write_property(
                 PropertyIdentifier::EVENT_DETECTION_ENABLE,

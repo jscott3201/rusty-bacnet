@@ -1,12 +1,9 @@
 use super::*;
-use crate::object_profile::{ObjectProfile, ProfileState, TagsPersistence};
-use crate::prelude::*;
+use crate::object_profile::TagsPersistence;
 use crate::present_value_access::PresentValueAccess;
 use crate::property_metadata::PropertyMetadata;
 use alloc::sync::Arc;
-
-#[path = "value/metadata.rs"]
-mod metadata;
+use bacnet_types::enums::PropertyIdentifier as P;
 
 // ---------------------------------------------------------------------------
 // BinaryValue (type 5)
@@ -16,33 +13,15 @@ mod metadata;
 ///
 /// Uses Enumerated values: 0 = inactive, 1 = active.
 pub struct BinaryValueObject {
-    profile: ProfileState,
-    audit_policy: crate::audit::ObjectAuditPolicy,
-    oid: ObjectIdentifier,
-    name: String,
-    description: String,
+    pub(super) core: IoCore,
+    /// CHANGE_OF_STATE event detector.
+    event_detector: ChangeOfStateDetector,
+    binary: BinaryProperties,
     present_value: u32, // 0 = inactive, 1 = active
-    out_of_service: bool,
-    status_flags: StatusFlags,
+    audit_policy: crate::audit::ObjectAuditPolicy,
     access: PresentValueAccess,
     priority_array: [Option<u32>; 16],
     relinquish_default: u32,
-    /// Reliability; NO_FAULT_DETECTED until a fault is evaluated or simulated.
-    reliability: Reliability,
-    reliability_before_out_of_service: Option<Reliability>,
-    reliability_inhibit: common::ReliabilityInhibitState,
-    active_text: String,
-    inactive_text: String,
-    /// CHANGE_OF_STATE event detector.
-    event_detector: ChangeOfStateDetector,
-    /// Event_Detection_Enable (Clause 12.8). A FALSE value suspends
-    /// event-state-machine evaluation under Clause 13.2.2.1.
-    event_detection_enable: bool,
-    pub(crate) event_history: EventHistory,
-    /// The reporting settings a write set, kept in storage once the
-    /// object opts in (#2331).
-    #[cfg(feature = "event-reporting")]
-    reporting_store: crate::write_config::reporting::ReportingStore,
     /// Implemented paired command-source tracking (Clause 19.5).
     value_source: crate::command_source::ValueSourceTracking,
     /// The last writer of a noncommandable Present_Value, once tracked (#1552).
@@ -68,32 +47,15 @@ impl BinaryValueObject {
         name: impl Into<String>,
         access: PresentValueAccess,
     ) -> Result<Self, Error> {
-        let oid = ObjectIdentifier::new(ObjectType::BINARY_VALUE, instance)?;
         Ok(Self {
-            profile: ProfileState::default(),
-            audit_policy: crate::audit::ObjectAuditPolicy::default(),
-            oid,
-            name: name.into(),
-            description: String::new(),
+            core: IoCore::new(ObjectType::BINARY_VALUE, instance, name.into())?,
+            event_detector: alarm_value_detector(),
+            binary: BinaryProperties::new(),
             present_value: 0, // inactive
-            out_of_service: false,
-            status_flags: StatusFlags::empty(),
+            audit_policy: crate::audit::ObjectAuditPolicy::default(),
             access,
             priority_array: [None; 16],
             relinquish_default: 0,
-            reliability: Reliability::NO_FAULT_DETECTED,
-            reliability_before_out_of_service: None,
-            reliability_inhibit: common::ReliabilityInhibitState::default(),
-            active_text: "Active".into(),
-            inactive_text: "Inactive".into(),
-            event_detector: ChangeOfStateDetector {
-                alarm_values: vec![1],
-                ..Default::default()
-            },
-            event_detection_enable: true,
-            event_history: EventHistory::default(),
-            #[cfg(feature = "event-reporting")]
-            reporting_store: Default::default(),
             value_source: crate::command_source::ValueSourceTracking::default(),
             write_source: crate::command_source::SingleValueSource::default(),
         })
@@ -110,22 +72,8 @@ impl BinaryValueObject {
         persistence: Arc<dyn TagsPersistence>,
     ) -> Result<Self, Error> {
         let mut object = Self::with_access(instance, name, access)?;
-        object.profile = ProfileState::persistent(object.oid, persistence, false)?;
+        object.core.keep_tags(persistence)?;
         Ok(object)
-    }
-
-    /// Provision independent optional Tags, Profile_Location and Profile_Name
-    /// rows before registration, in every Present_Value access mode. Tags is
-    /// writable; the text rows are network read-only. Invalid configuration
-    /// leaves the previous profile and its attached storage unchanged.
-    pub fn set_profile(&mut self, profile: ObjectProfile) -> Result<(), Error> {
-        self.profile.provision(profile)
-    }
-
-    /// Wait for queued save attempts to finish; writes report their own outcomes.
-    /// This is not a success receipt. Unstaged synchronous writes block their caller.
-    pub fn wait_for_tag_saves(&self) {
-        self.profile.wait_for_saves();
     }
 
     /// Track the source of a noncommandable Present_Value (Clause 19.5,
@@ -167,7 +115,7 @@ impl BinaryValueObject {
         if array_index.is_some() {
             return Err(common::property_is_not_an_array_error());
         }
-        if self.access == PresentValueAccess::ReadOnly && !self.out_of_service {
+        if self.access == PresentValueAccess::ReadOnly && !self.core.out_of_service {
             return Err(common::write_access_denied_error());
         }
         // Clause 19.2: an otherwise permitted noncommandable NULL is a no-op.
@@ -187,20 +135,41 @@ impl BinaryValueObject {
         }
         Ok(e)
     }
+
+    /// The rows before the access projects them: Table 12-10's, then the
+    /// audit rows when provisioned and the profile's.
+    fn rows(&self) -> Cow<'_, [PropertyMetadata]> {
+        let mut rows = Cow::Borrowed(metadata::VALUE);
+        if self.audit_policy != crate::audit::ObjectAuditPolicy::default() {
+            rows.to_mut().extend(self.audit_policy.metadata());
+        }
+        self.core.add_profile_rows(&mut rows);
+        rows
+    }
+
+    /// Whether `property` is absent under the object's Present_Value access.
+    fn excludes(&self, property: PropertyIdentifier) -> bool {
+        self.access != PresentValueAccess::Commandable
+            && self
+                .access
+                .excludes(&self.rows(), property, self.write_source.is_enabled())
+    }
 }
 
-crate::write_config::reporting::impl_reporting_persistence!(BinaryValueObject);
+crate::io_core::impl_profile!(BinaryValueObject);
+crate::io_core::impl_reliability_eval!(BinaryValueObject);
+crate::write_config::reporting::impl_reporting_persistence!(BinaryValueObject, in core);
 super::impl_state_texts!(BinaryValueObject);
 
 impl BACnetObject for BinaryValueObject {
     crate::traits::lend_audit_policy!();
 
     fn object_identifier(&self) -> ObjectIdentifier {
-        self.oid
+        self.core.oid
     }
 
     fn object_name(&self) -> &str {
-        &self.name
+        &self.core.name
     }
 
     crate::traits::lend_cov_reporting!();
@@ -213,7 +182,7 @@ impl BACnetObject for BinaryValueObject {
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
         crate::property_metadata::check_read_array_index(self, property, array_index)?;
-        if metadata::excludes(self, property) {
+        if self.excludes(property) {
             return Err(common::unknown_property_error());
         }
         let source = match self.access {
@@ -226,68 +195,27 @@ impl BACnetObject for BinaryValueObject {
         if let Some(result) = source {
             return result;
         }
-        if let Some(result) = self.profile.read(property, array_index) {
-            return result;
-        }
-
         if let Some(result) = self.audit_policy.read(property, array_index) {
             return result;
         }
-        if property == PropertyIdentifier::STATUS_FLAGS {
-            return Ok(common::compute_status_flags(
-                self.status_flags,
-                self.reliability,
-                self.out_of_service,
-                self.event_detector.event_state,
-            ));
+        if let Some(result) = self.core.read(&self.event_detector, property, array_index) {
+            return result;
         }
-        if let Some(value) = self.reliability_inhibit.read(property) {
+        if let Some(value) = self.binary.read(property) {
             return Ok(value);
         }
-        if let Some(result) = read_common_properties!(self, property, array_index) {
-            return result;
-        }
-        if property == PropertyIdentifier::EVENT_DETECTION_ENABLE {
-            return Ok(PropertyValue::Boolean(self.event_detection_enable));
-        }
-        if let Some(result) = read_generic_event_properties!(self.event_detector, property) {
-            return result;
-        }
-        if let Some(result) = self.event_history.read(property, array_index) {
-            return result;
-        }
         match property {
-            p if p == PropertyIdentifier::OBJECT_TYPE => {
-                Ok(PropertyValue::Enumerated(ObjectType::BINARY_VALUE.to_raw()))
-            }
-            p if p == PropertyIdentifier::PRESENT_VALUE => {
-                Ok(PropertyValue::Enumerated(self.present_value))
-            }
-            p if p == PropertyIdentifier::PRIORITY_ARRAY => {
+            P::PRESENT_VALUE => Ok(PropertyValue::Enumerated(self.present_value)),
+            P::PRIORITY_ARRAY => {
                 common::read_priority_array!(self, array_index, PropertyValue::Enumerated)
             }
-            p if p == PropertyIdentifier::RELINQUISH_DEFAULT => {
-                Ok(PropertyValue::Enumerated(self.relinquish_default))
-            }
-            p if p == PropertyIdentifier::CURRENT_COMMAND_PRIORITY => {
+            P::RELINQUISH_DEFAULT => Ok(PropertyValue::Enumerated(self.relinquish_default)),
+            P::CURRENT_COMMAND_PRIORITY => {
                 Ok(common::current_command_priority(&self.priority_array))
             }
-            p if p == PropertyIdentifier::ACTIVE_TEXT => {
-                Ok(PropertyValue::CharacterString(self.active_text.clone()))
-            }
-            p if p == PropertyIdentifier::INACTIVE_TEXT => {
-                Ok(PropertyValue::CharacterString(self.inactive_text.clone()))
-            }
-            p if p == PropertyIdentifier::ALARM_VALUE => {
-                // Construction and writes keep exactly one value; ACTIVE is the
-                // defensive construction default if a future reset empties it.
-                Ok(PropertyValue::Enumerated(
-                    self.event_detector
-                        .alarm_values
-                        .first()
-                        .copied()
-                        .unwrap_or(1),
-                ))
+            P::ALARM_VALUE => Ok(read_alarm_value(&self.event_detector)),
+            P::PROPERTY_LIST => {
+                crate::property_metadata::read_property_list(&self.property_metadata(), array_index)
             }
             _ => Err(common::unknown_property_error()),
         }
@@ -302,7 +230,7 @@ impl BACnetObject for BinaryValueObject {
         origin: &crate::command_source::CommandOrigin,
     ) -> Result<(), Error> {
         crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
-        if property == PropertyIdentifier::VALUE_SOURCE {
+        if property == P::VALUE_SOURCE {
             return match self.access {
                 PresentValueAccess::Commandable => {
                     self.value_source.correct(value, priority, origin)
@@ -310,7 +238,7 @@ impl BACnetObject for BinaryValueObject {
                 _ => self.write_source.correct(array_index, value, origin),
             };
         }
-        if property == PropertyIdentifier::PRESENT_VALUE {
+        if property == P::PRESENT_VALUE {
             return match self.access {
                 PresentValueAccess::Commandable => {
                     crate::command_source::write_sourced_priority!(
@@ -345,11 +273,8 @@ impl BACnetObject for BinaryValueObject {
     ) -> Result<(), Error> {
         crate::property_metadata::check_write_array_index(&*self, property, array_index)?;
         crate::write_config::reporting::admit(self, property, array_index, &value)?;
-        if metadata::excludes(self, property) {
+        if self.excludes(property) {
             return Err(common::unknown_property_error());
-        }
-        if let Some(result) = self.profile.write(property, array_index, &value) {
-            return result;
         }
         if let Some(result) = self
             .audit_policy
@@ -357,8 +282,7 @@ impl BACnetObject for BinaryValueObject {
         {
             return result;
         }
-
-        if property == PropertyIdentifier::PRESENT_VALUE {
+        if property == P::PRESENT_VALUE {
             if self.access == PresentValueAccess::Commandable {
                 return Err(common::write_access_denied_error());
             }
@@ -366,91 +290,30 @@ impl BACnetObject for BinaryValueObject {
             self.write_source.unsourced()?;
             return self.write_direct_present_value(array_index, value);
         }
-        if property == PropertyIdentifier::VALUE_SOURCE {
+        if property == P::VALUE_SOURCE {
             return Err(common::write_access_denied_error());
         }
-        if property == PropertyIdentifier::ACTIVE_TEXT {
-            if let PropertyValue::CharacterString(s) = value {
-                self.active_text = s;
-                return Ok(());
-            }
-            return Err(common::invalid_data_type_error());
-        }
-        if property == PropertyIdentifier::INACTIVE_TEXT {
-            if let PropertyValue::CharacterString(s) = value {
-                self.inactive_text = s;
-                return Ok(());
-            }
-            return Err(common::invalid_data_type_error());
-        }
-        if property == PropertyIdentifier::ALARM_VALUE {
-            return super::write_alarm_value(&mut self.event_detector, value);
-        }
-        if property == PropertyIdentifier::EVENT_DETECTION_ENABLE {
-            if let PropertyValue::Boolean(v) = value {
-                self.event_detection_enable = v;
-                if !v {
-                    self.event_detector.event_state = bacnet_types::enums::EventState::NORMAL;
-                    self.event_detector.acked_transitions =
-                        bacnet_types::bitstring::EventTransitionBits::all();
-                    self.event_detector.pending = None;
-                    self.event_detector.fault_reliability = None;
-                    self.event_history.reset();
-                }
-                return Ok(());
-            }
-            return Err(common::invalid_data_type_error());
-        }
-        if property == PropertyIdentifier::RELINQUISH_DEFAULT {
+        if property == P::RELINQUISH_DEFAULT {
             if let PropertyValue::Enumerated(e) = value {
                 return self.set_relinquish_default(e);
             }
             return Err(common::invalid_data_type_error());
         }
-        // Event_Message_Texts_Config and the Event_Algorithm_Inhibit pair (#1329).
-        if let Some(result) =
-            self.event_history
-                .write(property, array_index, &value, self.event_detection_enable)
-        {
-            return result;
-        }
-        if let Some(result) = write_generic_event_properties!(self.event_detector, property, &value)
-        {
-            return result;
-        }
-        if let Some(result) = self.reliability_inhibit.write_inhibit(
-            &mut self.reliability,
-            self.out_of_service,
-            property,
-            &value,
-        ) {
-            return result;
-        }
-        if let Some(result) = self.reliability_inhibit.write_out_of_service(
-            &mut self.out_of_service,
-            &mut self.reliability,
-            &mut self.reliability_before_out_of_service,
-            property,
-            &value,
-        ) {
-            return result.map(|_| ());
-        }
-        if let Some(result) = common::write_object_name(&mut self.name, property, &value) {
-            return result;
-        }
-        if let Some(result) = common::write_description(&mut self.description, property, &value) {
-            return result;
-        }
         // Clause 12.8 requires simulation/test writes while Out_Of_Service is TRUE:
         // Present_Value is writable, as is Reliability when that property exists
-        // and supports values beyond NO_FAULT_DETECTED.
-        // `is_writable_property` stays statically true because it describes capability.
-        if let Some(result) = self.reliability_inhibit.write_client_reliability(
-            self.out_of_service,
-            &mut self.reliability,
-            property,
-            &value,
-        ) {
+        // and supports values beyond NO_FAULT_DETECTED; the core takes the
+        // Reliability write. `is_writable_property` stays statically true
+        // because it describes capability.
+        if let Some(result) =
+            self.core
+                .write(&mut self.event_detector, property, array_index, &value)
+        {
+            return result.map(drop);
+        }
+        if property == P::ALARM_VALUE {
+            return write_alarm_value(&mut self.event_detector, value);
+        }
+        if let Some(result) = self.binary.write(property, value) {
             return result;
         }
         Err(crate::common::unhandled_write_error(
@@ -465,7 +328,8 @@ impl BACnetObject for BinaryValueObject {
     }
 
     fn property_metadata(&self) -> Cow<'_, [PropertyMetadata]> {
-        metadata::for_object(self)
+        self.access
+            .project(self.rows(), self.write_source.is_enabled())
     }
 
     crate::traits::lend_reliability_eval!();
@@ -481,30 +345,13 @@ impl crate::traits::CovReporting for BinaryValueObject {}
 
 crate::traits::impl_audit_policy!(BinaryValueObject);
 
-impl crate::traits::ReliabilityEval for BinaryValueObject {
-    fn set_reliability(&mut self, reliability: Reliability) -> Result<(), Error> {
-        if self.out_of_service || self.reliability_inhibit.enabled() {
-            return Err(common::write_access_denied_error());
-        }
-        if !common::is_reliability_value_valid(reliability) {
-            return Err(common::value_out_of_range_error());
-        }
-        self.reliability = reliability;
-        Ok(())
-    }
-
-    fn reliability_evaluation_inhibited(&self) -> bool {
-        self.reliability_inhibit.enabled()
-    }
-}
-
 crate::event::impl_builtin_intrinsic_reporting!(
     BinaryValueObject,
     event_detector,
-    event_history,
+    core.event_history,
     [present_value],
-    reliability,
-    event_detection_enable,
+    core.reliability,
+    core.event_detection_enable,
     ChangeOfStateDetector::ALGORITHM
 );
 
@@ -532,7 +379,7 @@ impl BinaryValueObject {
     fn apply_local_present_value(&mut self, value: PropertyValue) -> Result<(), Error> {
         match self.access {
             PresentValueAccess::Commandable => Err(crate::traits::not_supported()),
-            _ if self.out_of_service => Err(common::write_access_denied_error()),
+            _ if self.core.out_of_service => Err(common::write_access_denied_error()),
             PresentValueAccess::ReadOnly | PresentValueAccess::Writable => {
                 self.present_value = Self::checked_present_value(value)?;
                 self.write_source.forget();

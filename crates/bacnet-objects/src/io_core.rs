@@ -10,41 +10,48 @@
 //! (Present_Value, Units, a priority array, state texts) and hands every
 //! other property to [`IoCore::read`] and [`IoCore::write`]. Property_List
 //! and the answer for a property nobody serves stay with the object, which
-//! owns its metadata.
+//! owns its metadata. A write the core takes says what it did
+//! ([`CoreWrite`]), for an object that follows one up.
 //!
 //! The detector stays a field of the object, `event_detector`, beside the
 //! core: the core's own code is the same for every detector, so all nine
 //! objects share one copy of it, and only the small entry points that reach
-//! the detector are made once per detector type. The shared macros that
+//! the detector are made once per detector type. [`impl_io_detector!`]
+//! makes a detector an [`IoDetector`]; the change-of-state and
+//! command-failure detectors are made one below, and the analog module
+//! makes OUT_OF_RANGE one with its parameter rows. The shared macros that
 //! wire an object's reporting name the core's fields by their path
 //! (`core.event_history` for
 //! [`impl_builtin_intrinsic_reporting!`](crate::event::impl_builtin_intrinsic_reporting),
 //! `in core` for
 //! [`impl_reporting_persistence!`](crate::write_config::reporting::impl_reporting_persistence)).
+//!
+//! The row groups below are the stretches the nine property tables share;
+//! each table joins them with its own rows ([`joined_rows!`](crate::property_metadata::joined_rows)).
 
 use alloc::borrow::Cow;
 use alloc::sync::Arc;
 
-use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{EventState, ObjectType, PropertyIdentifier as P, Reliability};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue, StatusFlags};
 
-use crate::common::{
-    self, ReliabilityInhibitState, read_analog_event_properties, read_generic_event_properties,
-    write_analog_event_properties, write_generic_event_properties,
-};
-use crate::event::OutOfRangeDetector;
+use crate::common::{self, ReliabilityInhibitState};
 use crate::event::history::EventHistory;
 use crate::event::options::REPORTING_OPTION_METADATA;
+use crate::event::{ChangeOfStateDetector, CommandFailureDetector};
 use crate::object_profile::{ProfileState, TagsPersistence};
 use crate::prelude::*;
 use crate::property_metadata::{
     PropertyConformance::{Optional, RequiredRead},
     PropertyMetadata,
-    PropertyPresenceCondition::{IntrinsicReportingOptional, IntrinsicReportingRequired},
-    PropertyWriteCapability::{Always, ReadOnly, WhenOutOfService},
+    PropertyPresenceCondition::{
+        Commandable, CommandableValueSourceTracking, IntrinsicReportingOptional,
+        IntrinsicReportingRequired, ValueSourceTracking,
+    },
+    PropertyWriteCapability::{Always, ReadOnly, WhenCommandOwner, WhenOutOfService},
 };
+use crate::reliability_inhibit::OutOfServiceWrite;
 
 /// The state an analog, binary or multi-state Input, Output or Value holds
 /// beside its event detector and its Present_Value.
@@ -69,6 +76,22 @@ pub(crate) struct IoCore {
     /// opts in (#2331).
     #[cfg(feature = "event-reporting")]
     pub(crate) reporting_store: crate::write_config::reporting::ReportingStore,
+}
+
+/// What a write [`IoCore::write`] took did. An object that works out its
+/// own Reliability does so again after Reliability_Evaluation_Inhibit or a
+/// Boolean Out_Of_Service takes a value, which may hand Reliability to it
+/// or away from it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CoreWrite {
+    /// Reliability_Evaluation_Inhibit took a Boolean.
+    Inhibit,
+    /// Out_Of_Service took a Boolean, the value it held included.
+    OutOfService,
+    /// Out_Of_Service took a NULL, a relinquish that changes nothing.
+    Relinquished,
+    /// Any other property the core serves.
+    Other,
 }
 
 impl IoCore {
@@ -133,11 +156,11 @@ impl IoCore {
     ///
     /// Only this entry and [`Self::write`] are made per detector type; the
     /// rest is one copy for every object, as far as the inliner leaves it
-    /// one. An image with a single I/O type gets [`Self::read_own`] and
-    /// [`Self::write_own`] inlined into that type's own routes, which costs a
-    /// few dozen octets there; check the shared copy once all nine objects
-    /// are on the core, and mark the two `#[inline(never)]` if the images
-    /// need it.
+    /// one. In the firmware images, which hold analog and binary objects,
+    /// [`Self::read_own`] and [`Self::write_own`] are one copy each; an
+    /// image with a single I/O type gets them inlined into that type's own
+    /// routes instead. Check again once all nine objects are on the core,
+    /// and mark the two `#[inline(never)]` only if the images need it.
     pub(crate) fn read<D: IoDetector>(
         &self,
         detector: &D,
@@ -186,7 +209,8 @@ impl IoCore {
     }
 
     /// Take a write of one of the properties the core or `detector` serves;
-    /// `None` for any other. A refused write changes nothing.
+    /// `None` for any other. A refused write changes nothing; a write taken
+    /// says what it did.
     ///
     /// Out_Of_Service hands Reliability to a client and back
     /// ([`ReliabilityInhibitState::write_out_of_service`]); Reliability
@@ -197,16 +221,17 @@ impl IoCore {
         property: P,
         array_index: Option<u32>,
         value: &PropertyValue,
-    ) -> Option<Result<(), Error>> {
+    ) -> Option<Result<CoreWrite, Error>> {
         if property == P::EVENT_DETECTION_ENABLE {
             return Some(self.write_detection_enable(value).map(|disabled| {
                 if disabled {
                     detector.reset();
                 }
+                CoreWrite::Other
             }));
         }
         if let Some(result) = detector.write(property, value) {
-            return Some(result);
+            return Some(result.map(|()| CoreWrite::Other));
         }
         self.write_own(property, array_index, value)
     }
@@ -217,12 +242,12 @@ impl IoCore {
         property: P,
         array_index: Option<u32>,
         value: &PropertyValue,
-    ) -> Option<Result<(), Error>> {
+    ) -> Option<Result<CoreWrite, Error>> {
         let inhibit = &mut self.reliability_inhibit;
         if let Some(result) =
             inhibit.write_inhibit(&mut self.reliability, self.out_of_service, property, value)
         {
-            return Some(result);
+            return Some(result.map(|()| CoreWrite::Inhibit));
         }
         if let Some(result) = inhibit.write_out_of_service(
             &mut self.out_of_service,
@@ -231,15 +256,30 @@ impl IoCore {
             property,
             value,
         ) {
-            return Some(result.map(drop));
+            return Some(result.map(|write| match write {
+                OutOfServiceWrite::Applied => CoreWrite::OutOfService,
+                OutOfServiceWrite::Relinquished => CoreWrite::Relinquished,
+            }));
         }
+        self.write_row(property, array_index, value)
+            .map(|result| result.map(|()| CoreWrite::Other))
+    }
+
+    /// [`Self::write_own`] past Reliability's two owners: the names, a
+    /// client's Reliability, the event history and the profile rows.
+    fn write_row(
+        &mut self,
+        property: P,
+        array_index: Option<u32>,
+        value: &PropertyValue,
+    ) -> Option<Result<(), Error>> {
         if let Some(result) = common::write_object_name(&mut self.name, property, value) {
             return Some(result);
         }
         if let Some(result) = common::write_description(&mut self.description, property, value) {
             return Some(result);
         }
-        if let Some(result) = inhibit.write_client_reliability(
+        if let Some(result) = self.reliability_inhibit.write_client_reliability(
             self.out_of_service,
             &mut self.reliability,
             property,
@@ -273,10 +313,10 @@ impl IoCore {
 }
 
 /// The intrinsic-reporting detector an I/O object holds beside its
-/// [`IoCore`]: OUT_OF_RANGE on the analog objects. Its event rows are the
-/// ones every detector has (Event_State, Event_Enable, Notify_Type,
-/// Notification_Class, the two time delays and Acked_Transitions) and its
-/// algorithm's parameters.
+/// [`IoCore`]. Its event rows are the ones every detector has (Event_State,
+/// Event_Enable, Notify_Type, Notification_Class, the two time delays and
+/// Acked_Transitions) and those of its algorithm's parameters it serves
+/// itself. [`impl_io_detector!`] makes one.
 pub(crate) trait IoDetector {
     /// Event_State, as Status_Flags' IN_ALARM reads it.
     fn event_state(&self) -> EventState;
@@ -295,32 +335,58 @@ pub(crate) trait IoDetector {
     fn write(&mut self, property: P, value: &PropertyValue) -> Option<Result<(), Error>>;
 }
 
-impl IoDetector for OutOfRangeDetector {
-    fn event_state(&self) -> EventState {
-        self.event_state
-    }
+/// Make `$detector` an [`IoDetector`]. It holds the four fields a
+/// transition moves (`event_state`, `acked_transitions`, `pending` and
+/// `fault_reliability`), which [`IoDetector::reset`] puts back, and the
+/// fields the generic event-row macros
+/// ([`read_generic_event_properties!`](crate::common::read_generic_event_properties))
+/// serve. `$read` and `$write`, when given, are the macros of the
+/// algorithm's own rows, in scope where this is invoked and tried first.
+macro_rules! impl_io_detector {
+    ($detector:ty $(, $read:ident, $write:ident)?) => {
+        impl $crate::io_core::IoDetector for $detector {
+            fn event_state(&self) -> bacnet_types::enums::EventState {
+                self.event_state
+            }
 
-    fn reset(&mut self) {
-        self.event_state = EventState::NORMAL;
-        self.acked_transitions = EventTransitionBits::all();
-        self.pending = None;
-        self.fault_reliability = None;
-    }
+            fn reset(&mut self) {
+                self.event_state = bacnet_types::enums::EventState::NORMAL;
+                self.acked_transitions = bacnet_types::bitstring::EventTransitionBits::all();
+                self.pending = None;
+                self.fault_reliability = None;
+            }
 
-    fn read(&self, property: P) -> Option<Result<PropertyValue, Error>> {
-        if let Some(result) = read_analog_event_properties!(self, property) {
-            return Some(result);
+            fn read(
+                &self,
+                property: bacnet_types::enums::PropertyIdentifier,
+            ) -> Option<Result<bacnet_types::primitives::PropertyValue, bacnet_types::error::Error>>
+            {
+                $(if let Some(result) = $read!(self, property) {
+                    return Some(result);
+                })?
+                $crate::common::read_generic_event_properties!(self, property)
+            }
+
+            fn write(
+                &mut self,
+                property: bacnet_types::enums::PropertyIdentifier,
+                value: &bacnet_types::primitives::PropertyValue,
+            ) -> Option<Result<(), bacnet_types::error::Error>> {
+                $(if let Some(result) = $write!(self, property, value) {
+                    return Some(result);
+                })?
+                $crate::common::write_generic_event_properties!(self, property, value)
+            }
         }
-        read_generic_event_properties!(self, property)
-    }
-
-    fn write(&mut self, property: P, value: &PropertyValue) -> Option<Result<(), Error>> {
-        if let Some(result) = write_analog_event_properties!(self, property, value) {
-            return Some(result);
-        }
-        write_generic_event_properties!(self, property, value)
-    }
+    };
 }
+pub(crate) use impl_io_detector;
+
+// The binary and multi-state objects' detectors serve the generic rows
+// alone: Alarm_Value, Alarm_Values and Feedback_Value stay with the objects,
+// which hold and check them each in their own way.
+impl_io_detector!(ChangeOfStateDetector);
+impl_io_detector!(CommandFailureDetector);
 
 /// Object_Identifier, Object_Name, Description and Object_Type: the rows
 /// each of the nine tables opens with.
@@ -330,6 +396,10 @@ pub(crate) const IDENTITY_ROWS: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::DESCRIPTION, Optional, None, Always),
     PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
 ];
+
+/// Out_Of_Service, which every one of the nine takes a write of.
+pub(crate) const OUT_OF_SERVICE_ROW: PropertyMetadata =
+    PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always);
 
 /// Reliability, which a client writes while Out_Of_Service is TRUE, and
 /// Reliability_Evaluation_Inhibit.
@@ -366,6 +436,50 @@ pub(crate) const EVENT_HISTORY_ROWS: &[PropertyMetadata] = &[
     REPORTING_OPTION_METADATA[2],
 ];
 
+/// Priority_Array, Relinquish_Default and Current_Command_Priority of an
+/// Output, which is always commandable.
+pub(crate) const COMMANDED_ROWS: &[PropertyMetadata] = &[
+    PropertyMetadata::new(P::PRIORITY_ARRAY, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::RELINQUISH_DEFAULT, RequiredRead, None, Always),
+    PropertyMetadata::new(P::CURRENT_COMMAND_PRIORITY, RequiredRead, None, ReadOnly),
+];
+
+/// The same three rows of a Value, there while it is commandable.
+pub(crate) const COMMANDABLE_ROWS: &[PropertyMetadata] = &[
+    PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
+    PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
+    PropertyMetadata::new(
+        P::CURRENT_COMMAND_PRIORITY,
+        Optional,
+        Some(Commandable),
+        ReadOnly,
+    ),
+];
+
+/// Value_Source, which its tracking makes present, and the two rows a
+/// commandable object's tracking adds: the last rows before Property_List
+/// on every Output and Value.
+pub(crate) const VALUE_SOURCE_ROWS: &[PropertyMetadata] = &[
+    PropertyMetadata::new(
+        P::VALUE_SOURCE,
+        Optional,
+        Some(ValueSourceTracking),
+        WhenCommandOwner,
+    ),
+    PropertyMetadata::new(
+        P::VALUE_SOURCE_ARRAY,
+        Optional,
+        Some(CommandableValueSourceTracking),
+        ReadOnly,
+    ),
+    PropertyMetadata::new(
+        P::LAST_COMMAND_TIME,
+        Optional,
+        Some(CommandableValueSourceTracking),
+        ReadOnly,
+    ),
+];
+
 /// Give `$object`, which holds an [`IoCore`] in `core`, the profile setters
 /// every one of the nine has: `set_profile` and `wait_for_tag_saves`.
 macro_rules! impl_profile {
@@ -374,9 +488,9 @@ macro_rules! impl_profile {
             /// Provision independent optional Tags, Profile_Location and
             /// Profile_Name rows before registration. Tags is writable over
             /// the network whatever Out_Of_Service or a command says, and on
-            /// an Analog Value in every Present_Value access mode; the text
-            /// rows are network read-only. Invalid configuration leaves the
-            /// previous profile and its attached storage unchanged.
+            /// a Value in every Present_Value access mode; the text rows are
+            /// network read-only. Invalid configuration leaves the previous
+            /// profile and its attached storage unchanged.
             pub fn set_profile(
                 &mut self,
                 profile: $crate::object_profile::ObjectProfile,
@@ -394,3 +508,29 @@ macro_rules! impl_profile {
     };
 }
 pub(crate) use impl_profile;
+
+/// Give `$object`, which holds an [`IoCore`] in `core` and runs no fault
+/// algorithm of its own, its `ReliabilityEval`: Reliability set through
+/// [`IoCore::set_reliability`], nothing to evaluate, and inhibited while
+/// Reliability_Evaluation_Inhibit is TRUE.
+macro_rules! impl_reliability_eval {
+    ($object:ty) => {
+        impl $crate::traits::ReliabilityEval for $object {
+            fn set_reliability(
+                &mut self,
+                reliability: bacnet_types::enums::Reliability,
+            ) -> Result<(), bacnet_types::error::Error> {
+                self.core.set_reliability(reliability)
+            }
+
+            fn reliability_evaluation_inhibited(&self) -> bool {
+                self.core.reliability_inhibit.enabled()
+            }
+        }
+    };
+}
+pub(crate) use impl_reliability_eval;
+
+#[cfg(test)]
+#[path = "io_core/tests.rs"]
+mod tests;

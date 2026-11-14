@@ -323,7 +323,7 @@ impl BACnetObject for AnalogValueObject {
             self.core
                 .write(&mut self.event_detector, property, array_index, &value)
         {
-            return result;
+            return result.map(drop);
         }
         if let Some(result) = self.analog.write(property, &value) {
             return result;

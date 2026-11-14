@@ -18,7 +18,7 @@ use bacnet_types::{
     primitives::BACnetTimeStamp,
 };
 
-use crate::common;
+use crate::common::{self, read_analog_event_properties, write_analog_event_properties};
 use crate::event::OutOfRangeDetector;
 use crate::io_core::IoCore;
 use crate::property_metadata::{
@@ -27,6 +27,13 @@ use crate::property_metadata::{
 use crate::traits::{BACnetObject, ReliabilityEvaluation};
 
 mod metadata;
+
+// OUT_OF_RANGE serves its four parameters beside the rows every detector has.
+crate::io_core::impl_io_detector!(
+    OutOfRangeDetector,
+    read_analog_event_properties,
+    write_analog_event_properties
+);
 
 #[derive(Clone, Copy)]
 struct FaultOutOfRangeLimits {

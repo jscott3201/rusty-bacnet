@@ -179,7 +179,7 @@ impl BACnetObject for AnalogOutputObject {
             self.core
                 .write(&mut self.event_detector, property, array_index, &value)
         {
-            return result;
+            return result.map(drop);
         }
         if let Some(result) = self.analog.write(property, &value) {
             return result;
@@ -210,15 +210,7 @@ impl BACnetObject for AnalogOutputObject {
     crate::traits::lend_reliability_eval!();
 }
 
-impl crate::traits::ReliabilityEval for AnalogOutputObject {
-    fn set_reliability(&mut self, reliability: Reliability) -> Result<(), Error> {
-        self.core.set_reliability(reliability)
-    }
-
-    fn reliability_evaluation_inhibited(&self) -> bool {
-        self.core.reliability_inhibit.enabled()
-    }
-}
+crate::io_core::impl_reliability_eval!(AnalogOutputObject);
 
 crate::event::impl_builtin_intrinsic_reporting!(
     AnalogOutputObject,
