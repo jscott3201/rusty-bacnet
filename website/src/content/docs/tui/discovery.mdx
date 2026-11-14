@@ -40,7 +40,7 @@ Each row is one device: its instance, name, address, network, vendor ID, Max APD
 - **Via.** The router a routed device was heard through, such as `127.0.0.1:53180`. The column appears only when the whole of it fits, so on a narrow terminal with long addresses it is left out.
 - **Network.** `local`, or the remote network number.
 - **Vendor.** The vendor ID from the I-Am.
-- **Duplicates.** When two addresses answer for one instance, a `DUPLICATE` banner names both. For a routed device it names the station with each router, such as `2:0x05 via 10.0.1.1:47808`.
+- **Duplicates.** When two addresses answer for one instance, each is a row of its own, opened at its own address, and a `DUPLICATE` banner names both. For a routed device it names the station with each router, such as `2:0x05 via 10.0.1.1:47808`.
 
 Each column is as wide as its header or its widest entry, so on a wide terminal the spare room stays at the right. The instance and the address are never cut. Below 120 columns the headers are shortened (`Net`, `APDU`, `Seg`, `Seen`).
 
