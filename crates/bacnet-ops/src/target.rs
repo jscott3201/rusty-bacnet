@@ -4,13 +4,13 @@
 //! Resolving a target to something a request can go to is in
 //! [`super::destination`].
 
-use std::any::Any;
 use std::net::{Ipv4Addr, SocketAddrV6};
 
 use bacnet_transport::bip6::{
     Bip6Transport, DEFAULT_BACNET6_PORT, VMAC_TEXT_PREFIX, parse_vmac_text,
 };
 use bacnet_transport::port::TransportPort;
+use bacnet_types::data_link::DataLink;
 use bacnet_types::error::Error;
 
 use crate::octets::{hex_sep, hex_upper};
@@ -199,30 +199,17 @@ fn parse_bip6_address(s: &str) -> Result<SocketAddrV6, String> {
         .map_err(|_| format!("invalid B/IPv6 address '{s}': expected [IPv6] or [IPv6]:port"))
 }
 
-/// `transport` as the B/IPv6 transport, when it is one. The commands are
-/// generic over the transport; only B/IPv6 maps addresses to VMACs.
-pub fn as_bip6<T: TransportPort + 'static>(transport: &T) -> Option<&Bip6Transport> {
-    (transport as &dyn Any).downcast_ref()
-}
-
-/// True when `transport` is the BACnet/SC transport the CLI builds.
-fn is_sc<T: TransportPort + 'static>(transport: &T) -> bool {
-    #[cfg(feature = "sc-tls")]
-    {
-        (transport as &dyn Any)
-            .is::<bacnet_transport::sc::ScTransport<bacnet_transport::sc_tls::TlsWebSocket>>()
-    }
-    #[cfg(not(feature = "sc-tls"))]
-    {
-        let _ = transport;
-        false
-    }
+/// `transport` as the B/IPv6 transport, when it is one or wraps one. The
+/// commands are generic over the transport; only B/IPv6 maps addresses to
+/// VMACs.
+pub fn as_bip6<T: TransportPort>(transport: &T) -> Option<&Bip6Transport> {
+    transport.bip6_transport()
 }
 
 /// True when `transport` is MS/TP: the only data link the CLI uses whose
 /// MACs are one octet.
-pub fn is_mstp<T: TransportPort + 'static>(transport: &T) -> bool {
-    transport.local_mac().len() == 1
+pub fn is_mstp<T: TransportPort>(transport: &T) -> bool {
+    transport.data_link() == Some(DataLink::Mstp)
 }
 
 /// [`parse_target`] for a command on `transport`. A `bip6:` VMAC names a
@@ -319,14 +306,11 @@ pub enum AddressStyle {
 impl AddressStyle {
     /// The style of `transport`'s addresses.
     pub fn of<T: TransportPort + 'static>(transport: &T) -> Self {
-        if as_bip6(transport).is_some() {
-            Self::Bip6
-        } else if is_mstp(transport) {
-            Self::Mstp
-        } else if is_sc(transport) {
-            Self::Hex
-        } else {
-            Self::Bip
+        match transport.data_link() {
+            Some(DataLink::Bip6) => Self::Bip6,
+            Some(DataLink::Mstp) => Self::Mstp,
+            Some(DataLink::Sc) => Self::Hex,
+            _ => Self::Bip,
         }
     }
 

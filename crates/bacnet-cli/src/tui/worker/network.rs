@@ -11,7 +11,6 @@
 //! up to [`SURVEY_AT_ONCE`](bacnet_ops::bbmd::SURVEY_AT_ONCE) BDTs at once
 //! (#1823).
 
-use std::any::Any;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::net::{Ipv4Addr, SocketAddrV4};
@@ -41,16 +40,6 @@ pub(crate) use bacnet_ops::bbmd::{MAX_SURVEY, SURVEY_AT_ONCE};
 /// Requests waiting behind the running one.
 const MAX_QUEUED: usize = 8;
 
-/// The B/IP transport, when the client has one.
-fn as_bip<T: TransportPort + 'static>(transport: &T) -> Option<&BipTransport> {
-    (transport as &dyn Any).downcast_ref()
-}
-
-/// The B/IPv6 transport, when the client has one.
-fn as_bip6<T: TransportPort + 'static>(transport: &T) -> Option<&Bip6Transport> {
-    (transport as &dyn Any).downcast_ref()
-}
-
 /// The running request's event. Never ready while there is none.
 async fn finished<F: Future<Output = NetworkEvent> + Unpin>(job: &mut Option<F>) -> NetworkEvent {
     match job {
@@ -65,8 +54,8 @@ pub(crate) async fn run<T: TransportPort + 'static>(
     sink: &EventSink,
     mut commands: mpsc::Receiver<NetworkCommand>,
 ) {
-    let bip = as_bip(client.transport());
-    let bip6 = as_bip6(client.transport());
+    let bip = client.transport().bip_transport();
+    let bip6 = client.transport().bip6_transport();
     let local =
         address_of(client.local_mac()).unwrap_or(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
     let mut status = tokio::time::interval(STATUS_EVERY);

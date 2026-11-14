@@ -40,14 +40,14 @@ libc.workspace = true
 [dev-dependencies]
 bacnet-objects = { workspace = true, features = ["std"] }
 bacnet-server.workspace = true
+bacnet-transport = { workspace = true, features = ["test-support"] }
 # The text-form round trips of the parsers (`parse::rdf_tests`).
 proptest.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 tempfile = "3"
 
 [features]
-# The BACnet/SC transport, so the target grammar can tell an SC link from
-# B/IP when it formats addresses (`AddressStyle::of`).
+# The BACnet/SC transport, passed through to the layers below.
 sc-tls = ["bacnet-transport/sc-tls", "bacnet-client/sc-tls"]
 # Frame builders for decode tests (`decode::testing`), for the CLI's
 # capture tests, and the 223 export's structural check

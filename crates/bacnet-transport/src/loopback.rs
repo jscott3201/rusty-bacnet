@@ -22,6 +22,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use bacnet_types::MacAddr;
+use bacnet_types::data_link::DataLink;
 use bacnet_types::error::Error;
 use bytes::Bytes;
 use tokio::sync::mpsc;
@@ -217,6 +218,10 @@ fn peer_closed() -> Error {
 }
 
 impl TransportPort for LoopbackTransport {
+    fn data_link(&self) -> Option<DataLink> {
+        Some(DataLink::Loopback)
+    }
+
     async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
         self.self_rx
             .take()

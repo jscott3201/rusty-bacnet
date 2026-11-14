@@ -7,9 +7,13 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use bacnet_npdu::NpduLimits;
+use bacnet_types::data_link::DataLink;
 use bacnet_types::error::Error;
 use tokio::sync::{mpsc, watch};
 
+use crate::bip::BipTransport;
+#[cfg(feature = "ipv6")]
+use crate::bip6::Bip6Transport;
 use crate::port::{
     Bip6Port, BipPort, DataAttribute, GroupDestinations, ReceivedNpdu, TransportPort,
 };
@@ -48,6 +52,10 @@ pub(super) trait InnerPort: Send + Sync {
     fn bip_port(&self) -> Option<BipPort>;
     fn bip6_port(&self) -> Option<Bip6Port>;
     fn number_controls(&self) -> bool;
+    fn data_link(&self) -> Option<DataLink>;
+    fn bip_transport(&self) -> Option<&BipTransport>;
+    #[cfg(feature = "ipv6")]
+    fn bip6_transport(&self) -> Option<&Bip6Transport>;
     fn retain_lease(&mut self, lease: Arc<()>) -> Result<(), Error>;
 }
 
@@ -121,6 +129,16 @@ impl<T: TransportPort + 'static> InnerPort for T {
     }
     fn number_controls(&self) -> bool {
         TransportPort::supports_local_nonrouter_number_controls(self)
+    }
+    fn data_link(&self) -> Option<DataLink> {
+        TransportPort::data_link(self)
+    }
+    fn bip_transport(&self) -> Option<&BipTransport> {
+        TransportPort::bip_transport(self)
+    }
+    #[cfg(feature = "ipv6")]
+    fn bip6_transport(&self) -> Option<&Bip6Transport> {
+        TransportPort::bip6_transport(self)
     }
     fn retain_lease(&mut self, lease: Arc<()>) -> Result<(), Error> {
         TransportPort::retain_network_port_lease_internal(self, lease)

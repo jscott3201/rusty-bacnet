@@ -659,7 +659,7 @@ parsing, the value formatter).
   `device_collision_events()` and `discovered_devices()`.
 - **APIs later screens will use:** RP and RPM, WP and WPM (local and routed);
   `subscribe_cov`, `manage_cov_subscription` and `cov_notifications()`; the BBMD
-  helpers on any `BACnetClient` whose transport is `AsBip` (`BipTransport`, or
+  helpers on any `BACnetClient` whose transport reports a B/IP link (`BipTransport`, or
   `AnyTransport` with a `Bip` variant); `ScConnectError` and
   `ScWebSocketErrorKind`; the MS/TP `diagnostics()` handle and the
   `MstpMonitor` frame stream.
@@ -863,7 +863,7 @@ cargo nextest run -p bacnet-cli --release -E 'test(drawing_a_full_device_table)'
 
 | Issue | Gap | Needed by |
 |---|---|---|
-| #956 | Done: `BACnetClient::transport()` and the `AsBip` BBMD helpers. Was: no access to transport handles from a built `BACnetClient`: the SC state watch, SC drop counts and BIP counters are unreachable after build, and the BBMD helpers exist only on `BACnetClient<BipTransport>`, so `AnyTransport` loses them | #967, #957, #959 |
+| #956 | Done: `BACnetClient::transport()` and the BBMD helpers. Was: no access to transport handles from a built `BACnetClient`: the SC state watch, SC drop counts and BIP counters are unreachable after build, and the BBMD helpers exist only on `BACnetClient<BipTransport>`, so `AnyTransport` loses them | #967, #957, #959 |
 | #957 | Done: `bacnet_transport::tap::FrameTap`, reached with each transport's `frame_tap()`. Was: no link-level frame tap on any transport, so BVLC control traffic, SC control messages and MS/TP Token, PFM and Reply-Postponed frames are invisible | #971 |
 | #958 | Done: `mstp::monitor::MstpMonitor` and the `diagnostics()` handle. Was: no MS/TP passive monitor, per-station statistics or master list; `MstpDiagnostics` not exposed from builders | #970, #971 |
 | #959 | Done: `ScClientBuilder::failover_hub_url` and `reconnect`, with connection-state changes. Was: SC reconnect, failover and disconnect causes appear only as tracing lines; no active-hub indication, heartbeat statistics or peer certificate; no failover or reconnect options on `ScClientBuilder` | #967 |
