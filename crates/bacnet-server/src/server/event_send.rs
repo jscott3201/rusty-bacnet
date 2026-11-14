@@ -20,7 +20,8 @@ mod lanes;
 #[cfg(test)]
 pub(super) use lanes::lanes_drained;
 pub(super) use lanes::{
-    LaneEntry, LaneHandles, LanePayload, LaneState, Settle, join_sealed, lanes, made_lanes, settled,
+    LaneEntry, LaneHandles, LanePayload, LaneState, Settle, join_sealed, lanes, made_lanes,
+    settled, settled_by,
 };
 
 /// Why a confirmed notification ended at an attempt with nothing sent.

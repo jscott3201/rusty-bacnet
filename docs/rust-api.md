@@ -11667,12 +11667,19 @@ a Device recipient's I-Am included; `cov_wait_expired` counts the changes for
 which they went out at that limit instead. The intrinsic-reporting sweep
 doesn't wait itself: each pass's COV fanout goes in sweep order, within the
 APDU timeout of that pass's commit. A sweep's COV report carries the object's
-state when it goes, so passes behind a held lane merge into one report, after
-the last one's notifications: a state that came and went while the lane was
-held is told by its event notifications, not by COV, as a write's own fanout
-beside the sweep can already merge. A pass that finds 64 others waiting fans
-out at once, and counts in `cov_wait_expired` when its own notifications are
-still waiting.
+state when it goes. When a pass's notifications go in time, an object that a
+pass still waiting also reports is left to the first such pass and reported
+with it, after that pass's notifications when they go and at its deadline
+when they don't, so two passes behind a held lane merge into one report: a
+state that came and went while the lane was held is told by its event
+notifications, not by COV, as a write's own fanout beside the sweep can
+already merge. An object is handed on once at most, and a pass whose wait ran
+out hands nothing on, so an object that keeps changing is still reported
+within two APDU timeouts of the commit that first wanted a report. A pass
+that commits while an earlier pass's fanout is already reading the object can
+still be reported by that earlier fanout, with the state it reads. A pass that
+finds 64 others waiting fans out at once, and counts in `cov_wait_expired`
+when its own notifications are still waiting.
 
 The three route fields (#1160) count destinations that matched the transition
 but were skipped while their route was resolved, once per destination; the

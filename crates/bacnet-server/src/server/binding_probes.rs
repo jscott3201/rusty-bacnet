@@ -254,7 +254,7 @@ impl BindingProbes {
 }
 
 /// `wait` after `now`, or far in the future for a wait too long to add.
-fn after(now: TokioInstant, wait: Duration) -> TokioInstant {
+pub(super) fn after(now: TokioInstant, wait: Duration) -> TokioInstant {
     now.checked_add(wait).unwrap_or(now + FAR_FUTURE)
 }
 

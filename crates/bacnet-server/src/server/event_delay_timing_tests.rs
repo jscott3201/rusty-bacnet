@@ -12,6 +12,9 @@ use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_objects::traits::BACnetObject;
 use bacnet_types::enums::{EngineeringUnits, EventState};
 
+#[path = "sweep_hand_off_tests.rs"]
+mod hand_off;
+
 /// Analog Inputs AI-1, AI-2, ... reading 50, inside their limits, each
 /// reporting every transition of OUT_OF_RANGE through a broadcasting
 /// Notification Class 0 after its own Time_Delay.
@@ -573,18 +576,19 @@ async fn passes_behind_a_held_lane_merge_their_reports_of_one_object() {
 }
 
 /// Past 64 passes waiting behind a held lane, a pass fans out at its
-/// commit, its wait counted since its own notification is held; `stop()`
-/// with the queue full returns, and nothing goes out after it.
+/// commit, its wait counted only when its own notification is held (AI-66's
+/// is; AI-67 sends none); `stop()` with the queue full returns, and nothing
+/// goes out after it.
 #[tokio::test(start_paused = true)]
-async fn past_the_bound_a_pass_fans_out_at_once_and_counts() {
+async fn past_the_bound_a_pass_fans_out_at_once_counted_only_if_held() {
     let (transport, sent, _held) = sweep_transport(true);
-    let (mut db, oids) = database(&[1; 66]);
-    // AI-2 to AI-65 commit with no notification to wait for.
+    let (mut db, oids) = database(&[1; 67]);
+    // AI-2 to AI-65, and AI-67, commit with no notification to wait for.
     let off = PropertyValue::BitString {
         unused_bits: 5,
         data: vec![0],
     };
-    for oid in &oids[1..65] {
+    for oid in oids[1..65].iter().chain(&oids[66..]) {
         let object = db.get_mut(oid).unwrap();
         object
             .write_property(PropertyIdentifier::EVENT_ENABLE, None, off.clone(), None)
@@ -597,17 +601,18 @@ async fn past_the_bound_a_pass_fans_out_at_once_and_counts() {
     let mut server = BACnetServer::start(config, db, transport)
         .await
         .expect("server should start");
-    subscribe(&server, &[oids[0], oids[1], oids[64], oids[65]]).await;
+    subscribe(&server, &[oids[0], oids[1], oids[64], oids[65], oids[66]]).await;
     let start = tokio::time::Instant::now();
     let at = |millis| start + Duration::from_millis(millis);
     for (k, oid) in (0..).zip(&oids) {
         tokio::time::sleep_until(at(100 + 200 * k)).await;
         begin_condition(&server, oid).await;
     }
-    // AI-66's pass commits at 14.1 s, with AI-1's waiting and 64 behind it.
+    // AI-66's pass commits at 14.1 s, with AI-1's waiting and 64 behind it,
+    // and AI-67's at 14.3 s.
     let before = sent.len();
-    tokio::time::sleep_until(at(14_300)).await;
-    assert_eq!(reports(&sent.frames()[before..]), [(66, true)]);
+    tokio::time::sleep_until(at(14_500)).await;
+    assert_eq!(reports(&sent.frames()[before..]), [(66, true), (67, true)]);
     assert_eq!(server.event_notification_counters().cov_wait_expired, 1);
     tokio::time::timeout(Duration::from_secs(30), server.stop())
         .await

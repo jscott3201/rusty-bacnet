@@ -164,19 +164,39 @@ impl Settle {
 }
 
 /// Wait for `settle`, at most `timeout_ms` (the APDU timeout), so a change's
-/// event notifications are handed off before its COV fanout (#889). When the
-/// time runs out the fanout goes on, and the wait is counted in
-/// `cov_wait_expired`, so a stalled destination can't hold every writer's
-/// request for longer.
+/// event notifications are handed off before its COV fanout (#889): whether
+/// they were. When the time runs out the fanout goes on, and the wait is
+/// counted in `cov_wait_expired`, so a stalled destination can't hold every
+/// writer's request for longer.
 pub(in crate::server) async fn settled(
     settle: Option<oneshot::Receiver<()>>,
     timeout_ms: u64,
     transactions: &NotificationTransactions,
-) {
-    if !settled_within(settle, timeout_ms).await {
+) -> bool {
+    counted(settled_within(settle, timeout_ms).await, transactions)
+}
+
+/// [`settled`] until `deadline`, for a wait that began before the call: the
+/// sweep's, which runs from its pass's commit (#2537).
+pub(in crate::server) async fn settled_by(
+    settle: Option<oneshot::Receiver<()>>,
+    deadline: tokio::time::Instant,
+    transactions: &NotificationTransactions,
+) -> bool {
+    let in_time = match settle {
+        Some(receiver) => tokio::time::timeout_at(deadline, receiver).await.is_ok(),
+        None => true,
+    };
+    counted(in_time, transactions)
+}
+
+/// `in_time`, once a wait that ran out is counted in `cov_wait_expired`.
+fn counted(in_time: bool, transactions: &NotificationTransactions) -> bool {
+    if !in_time {
         let mut lanes = lanes(transactions);
         lanes.counts.cov_wait_expired = lanes.counts.cov_wait_expired.saturating_add(1);
     }
+    in_time
 }
 
 /// Wait for `settle`, at most `timeout_ms`: whether it settled in time. For
