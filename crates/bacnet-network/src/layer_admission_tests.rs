@@ -1,48 +1,27 @@
 use super::*;
 use bacnet_npdu::NetworkMessageType;
 use bacnet_transport::port::ReceivedNpdu;
+use bacnet_transport::test_transport::TestTransport;
 use tokio::sync::mpsc;
 use tokio::time::{Duration, timeout};
 
 // Injection retains real ReceivedNpdu ownership, including the non-cloneable
 // reply sender. No socket, wall clock, or additional dispatch task is involved.
-struct IngressTransport {
-    incoming: Option<mpsc::Receiver<ReceivedNpdu>>,
-    outgoing: mpsc::Sender<Bytes>,
-}
-
-impl TransportPort for IngressTransport {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        self.incoming
-            .take()
-            .ok_or_else(|| Error::Encoding("already started".into()))
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_unicast(&self, npdu: &[u8], _mac: &[u8]) -> Result<(), Error> {
-        self.outgoing
-            .try_send(Bytes::copy_from_slice(npdu))
-            .map_err(|_| Error::Encoding("outgoing queue unavailable".into()))
-    }
-
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.send_unicast(npdu, &[]).await
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &[1]
-    }
+// What the layer sends lands in `outgoing`, which refuses a frame when full.
+fn ingress(incoming: mpsc::Receiver<ReceivedNpdu>, outgoing: mpsc::Sender<Bytes>) -> TestTransport {
+    TestTransport::builder()
+        .inbound(incoming)
+        .on_send(move |frame| {
+            let queued = outgoing
+                .try_send(frame.npdu)
+                .map_err(|_| Error::Encoding("outgoing queue unavailable".into()));
+            async move { queued }
+        })
+        .build()
 }
 
 fn fixture() -> (
-    NetworkLayer<IngressTransport>,
+    NetworkLayer<TestTransport>,
     mpsc::Sender<ReceivedNpdu>,
     mpsc::Receiver<Bytes>,
 ) {
@@ -50,14 +29,7 @@ fn fixture() -> (
     // capacities remain 256. This can hold both saturated queues plus barriers.
     let (tx, rx) = mpsc::channel(1024);
     let (outgoing, wire) = mpsc::channel(8);
-    (
-        NetworkLayer::new(IngressTransport {
-            incoming: Some(rx),
-            outgoing,
-        }),
-        tx,
-        wire,
-    )
+    (NetworkLayer::new(ingress(rx, outgoing)), tx, wire)
 }
 
 fn incoming(control: bool, id: u16) -> ReceivedNpdu {

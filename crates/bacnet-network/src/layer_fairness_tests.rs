@@ -1,41 +1,26 @@
 use super::*;
 use bacnet_transport::port::ReceivedNpdu;
 use bacnet_transport::port::TransportProvenance;
+use bacnet_transport::test_transport::{SendMode, TestTransport};
 use tokio::time::{Duration, timeout};
 
 // Same owned-NPDU fake-transport pattern as layer_admission_tests: the real
 // dispatch task receives payload, provenance, attributes and the reply sender.
-struct IngressTransport(Option<mpsc::Receiver<ReceivedNpdu>>);
-
-impl TransportPort for IngressTransport {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        Ok(self.0.take().expect("transport already started"))
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_unicast(&self, _npdu: &[u8], _mac: &[u8]) -> Result<(), Error> {
-        panic!("admission must not send wire replies or rejections")
-    }
-
-    async fn send_broadcast(&self, _npdu: &[u8]) -> Result<(), Error> {
-        panic!("admission must not send wire replies or rejections")
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &[1]
-    }
+fn ingress(rx: mpsc::Receiver<ReceivedNpdu>) -> TestTransport {
+    TestTransport::builder()
+        .inbound(rx)
+        .unicast(SendMode::Panic(
+            "admission must not send wire replies or rejections",
+        ))
+        .broadcast(SendMode::Panic(
+            "admission must not send wire replies or rejections",
+        ))
+        .build()
 }
 
-fn fixture() -> (NetworkLayer<IngressTransport>, mpsc::Sender<ReceivedNpdu>) {
+fn fixture() -> (NetworkLayer<TestTransport>, mpsc::Sender<ReceivedNpdu>) {
     let (tx, rx) = mpsc::channel(1024);
-    (NetworkLayer::new(IngressTransport(Some(rx))), tx)
+    (NetworkLayer::new(ingress(rx)), tx)
 }
 
 fn incoming(source: &[u8], id: u16) -> ReceivedNpdu {

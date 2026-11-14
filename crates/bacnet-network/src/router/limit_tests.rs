@@ -12,8 +12,9 @@ use std::sync::atomic::Ordering;
 use tokio::sync::watch;
 use tokio::time::{Duration, timeout};
 
-use super::driven_port::{Driven, Handle, Sent};
+use super::driven_port::{Handle, Sent, driven, driven_publishing};
 use super::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
+use bacnet_transport::test_transport::TestTransport;
 
 /// The node on network 1000 that sends, and the one on 2000 it sends to.
 const NODE: &[u8] = &[7];
@@ -40,7 +41,7 @@ fn to_peer(apdu: usize) -> Vec<u8> {
 }
 
 /// A router on two driven ports, networks 1000 and 2000.
-async fn start(ports: [Driven; 2]) -> BACnetRouter {
+async fn start(ports: [TestTransport; 2]) -> BACnetRouter {
     let [first, second] = ports;
     let ports = vec![
         RouterPort {
@@ -98,9 +99,9 @@ fn is_reason_4(sent: &Sent) -> bool {
 #[tokio::test(start_paused = true)]
 async fn a_published_limit_routes_every_later_frame() {
     let (changes_tx, changes) = watch::channel(NpduLimits::STANDARD);
-    let (first, mut node) = Driven::new(1, 1497);
-    let (second, mut peer) = Driven::new(2, 1497);
-    let router = start([first, second.publishing(changes)]).await;
+    let (first, mut node) = driven(1, 1497);
+    let (second, mut peer) = driven_publishing(2, 1497, changes);
+    let router = start([first, second]).await;
     let limit = |router: &BACnetRouter| router.shared.engine.lock().ports()[1].max_npdu;
 
     changes_tx.send_replace(NpduLimits::both(480));
@@ -128,8 +129,8 @@ async fn a_published_limit_routes_every_later_frame() {
 /// `refused`, and returns reason 4; an unrelated failure does not.
 #[tokio::test(start_paused = true)]
 async fn a_send_the_port_refuses_as_too_long_returns_reason_4() {
-    let (first, mut node) = Driven::new(1, 1497);
-    let (second, mut peer) = Driven::new(2, 1497);
+    let (first, mut node) = driven(1, 1497);
+    let (second, mut peer) = driven(2, 1497);
     let router = start([first, second]).await;
     assert!(node.started.load(Ordering::SeqCst) && peer.started.load(Ordering::SeqCst));
 
@@ -164,15 +165,15 @@ async fn an_application_port_keeps_its_declaration_when_a_path_shrinks() {
     use bacnet_types::error::Error;
 
     let (changes_tx, changes) = watch::channel(NpduLimits::STANDARD);
-    let (first, mut node) = Driven::new(1, 1497);
-    let (second, _peer) = Driven::new(2, 1497);
+    let (first, mut node) = driven(1, 1497);
+    let (second, _peer) = driven_publishing(2, 1497, changes);
     let ports = vec![
         RouterPort {
             transport: first,
             network_number: 1000,
         },
         RouterPort {
-            transport: second.publishing(changes),
+            transport: second,
             network_number: 2000,
         },
     ];

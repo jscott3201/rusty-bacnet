@@ -1,51 +1,29 @@
 //! One-shot exclusive rebind supplements the causal child-owner regressions.
 
 use super::{BACnetRouter, RouterOptions, RouterPort};
-use bacnet_npdu::NpduLimits;
 use bacnet_transport::bip::BipTransport;
-use bacnet_transport::port::{ReceivedNpdu, TransportPort};
-use bacnet_types::error::Error;
+use bacnet_transport::test_transport::{SendMode, TestTransport};
 use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
-use tokio::sync::{mpsc, oneshot};
+use std::sync::Mutex;
+use tokio::sync::oneshot;
 
-struct ObservedBip {
-    inner: BipTransport,
-    bound: Option<oneshot::Sender<SocketAddrV4>>,
-}
-
-impl TransportPort for ObservedBip {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        let rx = self.inner.start().await?;
-        let mac = self.inner.local_mac();
-        let address = SocketAddrV4::new(
-            Ipv4Addr::new(mac[0], mac[1], mac[2], mac[3]),
-            u16::from_be_bytes([mac[4], mac[5]]),
-        );
-        self.bound.take().unwrap().send(address).unwrap();
-        Ok(rx)
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        self.inner.stop().await
-    }
-    fn abort(&mut self) {
-        self.inner.abort();
-    }
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.inner.send_unicast(npdu, mac).await
-    }
-    // Startup announcements need no external datagrams for this lifecycle test.
-    async fn send_broadcast(&self, _: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-    fn local_mac(&self) -> &[u8] {
-        self.inner.local_mac()
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        self.inner.local_receive_apdu_capacity()
-    }
-    fn max_npdu(&self) -> NpduLimits {
-        self.inner.max_npdu()
-    }
+/// A B/IP port that reports its bound address once started, and takes the
+/// startup announcements without sending datagrams (broadcasts stop here).
+fn observed(inner: BipTransport, bound: oneshot::Sender<SocketAddrV4>) -> TestTransport {
+    let bound = Mutex::new(Some(bound));
+    TestTransport::builder()
+        .inner(inner)
+        .unicast(SendMode::Forward)
+        .broadcast(SendMode::Ignore)
+        .on_started(move |started| {
+            let mac = started.local_mac;
+            let address = SocketAddrV4::new(
+                Ipv4Addr::new(mac[0], mac[1], mac[2], mac[3]),
+                u16::from_be_bytes([mac[4], mac[5]]),
+            );
+            bound.lock().unwrap().take().unwrap().send(address).unwrap();
+        })
+        .build()
 }
 
 async fn rebind_after_stop(bbmd: bool) {
@@ -54,12 +32,11 @@ async fn rebind_after_stop(bbmd: bool) {
         inner.enable_bbmd(Vec::new());
     }
     let (bound, address) = oneshot::channel();
+    let transport = observed(inner, bound);
+    let handle = transport.handle();
     let port = RouterPort {
         network_number: 1,
-        transport: ObservedBip {
-            inner,
-            bound: Some(bound),
-        },
+        transport,
     };
     let mut started = BACnetRouter::start(vec![port], RouterOptions::new())
         .await
@@ -80,6 +57,9 @@ async fn rebind_after_stop(bbmd: bool) {
         "the running ephemeral port is exclusive"
     );
     started.router.stop().await.unwrap();
+    // The router stopped the transport itself: a socket released by the
+    // drop-time abort would also pass the rebind below.
+    assert_eq!((handle.stops(), handle.aborts()), (1, 0));
     assert_eq!(started.router.ports(), snapshots);
     // No retries or scheduling waits: an awaited successful stop is the barrier.
     let rebound = UdpSocket::bind(address)

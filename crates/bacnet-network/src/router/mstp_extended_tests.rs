@@ -7,10 +7,9 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
 
-use bacnet_npdu::NpduLimits;
 use bacnet_transport::mstp::{LoopbackSerial, MstpConfig, MstpTransport};
-use bacnet_transport::port::{GroupDestinations, ReceivedNpdu, TransportPort};
-use bacnet_types::error::Error;
+use bacnet_transport::port::{ReceivedNpdu, TransportPort};
+use bacnet_transport::test_transport::{SendMode, TestTransport};
 use tokio::sync::mpsc;
 use tokio::time::{Duration, timeout};
 
@@ -80,60 +79,18 @@ async fn a_routers_mstp_ports_take_extended_frames() {
 }
 
 /// An MS/TP port that records the APDU limits it reports once started,
-/// after the router has prepared it.
-struct Watched {
-    inner: MstpTransport<LoopbackSerial>,
-    /// `local_receive_apdu_capacity` and `egress_apdu_limit` at start.
-    limits: Arc<[AtomicU16; 2]>,
-}
-
-impl TransportPort for Watched {
-    fn prepare_for_routing(&mut self) {
-        self.inner.prepare_for_routing();
-    }
-
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        let received = self.inner.start().await?;
-        self.limits[0].store(self.inner.local_receive_apdu_capacity(), Ordering::SeqCst);
-        self.limits[1].store(self.inner.egress_apdu_limit(), Ordering::SeqCst);
-        Ok(received)
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        self.inner.stop().await
-    }
-
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.inner.send_unicast(npdu, mac).await
-    }
-
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.inner.send_broadcast(npdu).await
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        self.inner.local_mac()
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        self.inner.local_receive_apdu_capacity()
-    }
-
-    fn egress_apdu_limit(&self) -> u16 {
-        self.inner.egress_apdu_limit()
-    }
-
-    fn max_npdu(&self) -> NpduLimits {
-        self.inner.max_npdu()
-    }
-
-    fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
-        self.inner.is_broadcast_mac(mac)
-    }
-
-    fn group_destinations(&self) -> GroupDestinations {
-        self.inner.group_destinations()
-    }
+/// after the router has prepared it: `local_receive_apdu_capacity` and
+/// `egress_apdu_limit`, in `limits`.
+fn watched(inner: MstpTransport<LoopbackSerial>, limits: Arc<[AtomicU16; 2]>) -> TestTransport {
+    TestTransport::builder()
+        .inner(inner)
+        .unicast(SendMode::Forward)
+        .broadcast(SendMode::Forward)
+        .on_started(move |started| {
+            limits[0].store(started.receive_capacity, Ordering::SeqCst);
+            limits[1].store(started.egress_limit, Ordering::SeqCst);
+        })
+        .build()
 }
 
 /// The router forwards a 1000-octet NPDU from network 2 to station 1 on
@@ -150,17 +107,17 @@ async fn a_routers_mstp_port_sends_extended_frames() {
         .collect();
     let ports = vec![
         RouterPort {
-            transport: Watched {
-                inner: MstpTransport::new(router_serial_1, standard(0)),
-                limits: limits[0].clone(),
-            },
+            transport: watched(
+                MstpTransport::new(router_serial_1, standard(0)),
+                limits[0].clone(),
+            ),
             network_number: 1,
         },
         RouterPort {
-            transport: Watched {
-                inner: MstpTransport::new(router_serial_2, standard(0)),
-                limits: limits[1].clone(),
-            },
+            transport: watched(
+                MstpTransport::new(router_serial_2, standard(0)),
+                limits[1].clone(),
+            ),
             network_number: 2,
         },
     ];
@@ -215,48 +172,15 @@ async fn a_routers_mstp_port_sends_extended_frames() {
 /// An MS/TP port that a router may prepare, or not: one it doesn't keeps
 /// standard frames, so it carries NPDUs of at most 501 octets, as an MS/TP
 /// port behind a wrapper that skips `prepare_for_routing` would.
-struct Routed {
-    inner: MstpTransport<LoopbackSerial>,
-    prepare: bool,
-}
-
-impl TransportPort for Routed {
-    fn prepare_for_routing(&mut self) {
-        if self.prepare {
-            self.inner.prepare_for_routing();
-        }
-    }
-
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        self.inner.start().await
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        self.inner.stop().await
-    }
-
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.inner.send_unicast(npdu, mac).await
-    }
-
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.inner.send_broadcast(npdu).await
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        self.inner.local_mac()
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        self.inner.local_receive_apdu_capacity()
-    }
-
-    fn max_npdu(&self) -> NpduLimits {
-        self.inner.max_npdu()
-    }
-
-    fn group_destinations(&self) -> GroupDestinations {
-        self.inner.group_destinations()
+fn routed(inner: MstpTransport<LoopbackSerial>, prepare: bool) -> TestTransport {
+    let builder = TestTransport::builder()
+        .inner(inner)
+        .unicast(SendMode::Forward)
+        .broadcast(SendMode::Forward);
+    if prepare {
+        builder.build()
+    } else {
+        builder.skip_prepare_for_routing().build()
     }
 }
 
@@ -272,10 +196,7 @@ async fn two_links(prepare: [bool; 2]) -> (BACnetRouter, [Peer; 2]) {
     let ports = [(router_1, 1, prepare[0]), (router_2, 2, prepare[1])]
         .into_iter()
         .map(|(serial, network_number, prepare)| RouterPort {
-            transport: Routed {
-                inner: MstpTransport::new(serial, standard(0)),
-                prepare,
-            },
+            transport: routed(MstpTransport::new(serial, standard(0)), prepare),
             network_number,
         })
         .collect();
