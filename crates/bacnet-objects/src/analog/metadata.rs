@@ -12,16 +12,16 @@
 
 use bacnet_types::enums::PropertyIdentifier as P;
 
-use crate::io_core::{EVENT_HISTORY_ROWS, IDENTITY_ROWS, RELIABILITY_ROWS};
+use crate::io_core::{
+    COMMANDABLE_ROWS, COMMANDED_ROWS, EVENT_HISTORY_ROWS, IDENTITY_ROWS, OUT_OF_SERVICE_ROW,
+    RELIABILITY_ROWS, VALUE_SOURCE_ROWS, intrinsic,
+};
 use crate::property_metadata::{
     COV_INCREMENT_ROW, PROPERTY_LIST_ROW,
     PropertyConformance::{Optional, RequiredRead, RequiredWrite},
     PropertyMetadata,
-    PropertyPresenceCondition::{
-        Commandable, CommandableValueSourceTracking, IntrinsicReportingOptional,
-        IntrinsicReportingRequired, ValueSourceTracking,
-    },
-    PropertyWriteCapability::{Always, ReadOnly, WhenCommandOwner, WhenOutOfService},
+    PropertyPresenceCondition::{IntrinsicReportingOptional, IntrinsicReportingRequired},
+    PropertyWriteCapability::{Always, ReadOnly, WhenOutOfService},
     joined_rows,
 };
 
@@ -35,7 +35,7 @@ const STATUS_ROWS: &[PropertyMetadata] = &[
         Some(IntrinsicReportingRequired),
         Always,
     ),
-    PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always),
+    OUT_OF_SERVICE_ROW,
     PropertyMetadata::new(P::UNITS, RequiredRead, None, ReadOnly),
 ];
 
@@ -54,34 +54,6 @@ const OUT_OF_RANGE_ROWS: &[PropertyMetadata] = &[
         Optional,
         Some(IntrinsicReportingOptional),
         Always,
-    ),
-];
-
-/// A writable row intrinsic reporting requires.
-const fn intrinsic(property: P) -> PropertyMetadata {
-    PropertyMetadata::new(property, Optional, Some(IntrinsicReportingRequired), Always)
-}
-
-/// Value_Source, which its tracking makes present, and the two rows a
-/// commandable object's tracking adds.
-const VALUE_SOURCE_ROWS: &[PropertyMetadata] = &[
-    PropertyMetadata::new(
-        P::VALUE_SOURCE,
-        Optional,
-        Some(ValueSourceTracking),
-        WhenCommandOwner,
-    ),
-    PropertyMetadata::new(
-        P::VALUE_SOURCE_ARRAY,
-        Optional,
-        Some(CommandableValueSourceTracking),
-        ReadOnly,
-    ),
-    PropertyMetadata::new(
-        P::LAST_COMMAND_TIME,
-        Optional,
-        Some(CommandableValueSourceTracking),
-        ReadOnly,
     ),
 ];
 
@@ -112,12 +84,8 @@ pub(super) const OUTPUT: &[PropertyMetadata] = joined_rows![
         Always
     )],
     STATUS_ROWS,
-    &[
-        PropertyMetadata::new(P::PRIORITY_ARRAY, RequiredRead, None, ReadOnly),
-        PropertyMetadata::new(P::RELINQUISH_DEFAULT, RequiredRead, None, Always),
-        PropertyMetadata::new(P::CURRENT_COMMAND_PRIORITY, RequiredRead, None, ReadOnly),
-        COV_INCREMENT_ROW,
-    ],
+    COMMANDED_ROWS,
+    &[COV_INCREMENT_ROW],
     OUT_OF_RANGE_ROWS,
     RELIABILITY_ROWS,
     EVENT_HISTORY_ROWS,
@@ -136,17 +104,8 @@ pub(super) const VALUE: &[PropertyMetadata] = joined_rows![
         Always
     )],
     STATUS_ROWS,
-    &[
-        PropertyMetadata::new(P::PRIORITY_ARRAY, Optional, Some(Commandable), ReadOnly),
-        PropertyMetadata::new(P::RELINQUISH_DEFAULT, Optional, Some(Commandable), Always),
-        PropertyMetadata::new(
-            P::CURRENT_COMMAND_PRIORITY,
-            Optional,
-            Some(Commandable),
-            ReadOnly,
-        ),
-        COV_INCREMENT_ROW,
-    ],
+    COMMANDABLE_ROWS,
+    &[COV_INCREMENT_ROW],
     OUT_OF_RANGE_ROWS,
     RELIABILITY_ROWS,
     EVENT_HISTORY_ROWS,

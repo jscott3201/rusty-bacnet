@@ -97,6 +97,9 @@ impl BACnetObject for AnalogOutputObject {
         {
             return result;
         }
+        if property == P::PRESENT_VALUE {
+            return Ok(PropertyValue::Real(self.present_value));
+        }
         if let Some(result) = self.core.read(&self.event_detector, property, array_index) {
             return result;
         }
@@ -104,7 +107,6 @@ impl BACnetObject for AnalogOutputObject {
             return result;
         }
         match property {
-            P::PRESENT_VALUE => Ok(PropertyValue::Real(self.present_value)),
             P::PRIORITY_ARRAY => {
                 common::read_priority_array!(self, array_index, PropertyValue::Real)
             }
@@ -179,7 +181,7 @@ impl BACnetObject for AnalogOutputObject {
             self.core
                 .write(&mut self.event_detector, property, array_index, &value)
         {
-            return result;
+            return result.map(drop);
         }
         if let Some(result) = self.analog.write(property, &value) {
             return result;
@@ -210,15 +212,7 @@ impl BACnetObject for AnalogOutputObject {
     crate::traits::lend_reliability_eval!();
 }
 
-impl crate::traits::ReliabilityEval for AnalogOutputObject {
-    fn set_reliability(&mut self, reliability: Reliability) -> Result<(), Error> {
-        self.core.set_reliability(reliability)
-    }
-
-    fn reliability_evaluation_inhibited(&self) -> bool {
-        self.core.reliability_inhibit.enabled()
-    }
-}
+crate::io_core::impl_reliability_eval!(AnalogOutputObject);
 
 crate::event::impl_builtin_intrinsic_reporting!(
     AnalogOutputObject,
