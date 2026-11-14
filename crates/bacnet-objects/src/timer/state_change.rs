@@ -95,6 +95,34 @@ pub(crate) struct TimerSet {
     pub(super) written: bool,
 }
 
+impl TimerSet {
+    /// Whether the set already holds these, as the application gave them:
+    /// each value bit for bit, as its own encoding holds it (`==` on a REAL
+    /// fails for a NaN and passes for the two zeros). The encodings are
+    /// compared one by one: joined, two different sets can encode to the
+    /// same octets (#2552).
+    fn is(
+        &self,
+        values: &StateChangeValues,
+        references: &[BACnetDeviceObjectPropertyReference],
+        priority: u8,
+    ) -> bool {
+        let encoded = |value: &BACnetTimerStateChangeValue| {
+            let mut octets = BytesMut::new();
+            // `check_set` has seen every value encode.
+            encode_timer_state_change_value(&mut octets, value)
+                .is_ok()
+                .then_some(octets)
+        };
+        self.priority == priority
+            && self.references == references
+            && self.values.iter().zip(values).all(|(held, given)| {
+                let held = encoded(held);
+                held.is_some() && held == encoded(given)
+            })
+    }
+}
+
 /// The run the three properties drive. A Timer without them never starts
 /// one.
 pub(super) struct StateChangeRun {
@@ -136,6 +164,13 @@ impl TimerObject {
             log_debug!(timer = %self.oid, "Saved State_Change_Values kept over a configured set");
             return Ok(());
         }
+        // The run restarts either way. It isn't saved and no staged step
+        // is worked out from it, so only a different set is a counted change.
+        let unchanged = self
+            .config
+            .set
+            .as_ref()
+            .is_some_and(|set| set.is(&values, &references, priority));
         self.config.set = Some(TimerSet {
             values,
             references,
@@ -143,7 +178,9 @@ impl TimerObject {
             written: false,
         });
         self.run = StateChangeRun::new();
-        self.config_changed();
+        if !unchanged {
+            self.config_changed();
+        }
         Ok(())
     }
 

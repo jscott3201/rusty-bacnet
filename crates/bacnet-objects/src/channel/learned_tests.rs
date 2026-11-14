@@ -5,7 +5,7 @@ use super::*;
 use PropertyIdentifier as P;
 
 /// AV-`instance`'s Present_Value in Device 9.
-fn remote(instance: u32) -> BACnetDeviceObjectPropertyReference {
+pub(super) fn remote(instance: u32) -> BACnetDeviceObjectPropertyReference {
     BACnetDeviceObjectPropertyReference {
         device_identifier: Some(device(9)),
         ..member(instance)
@@ -13,7 +13,7 @@ fn remote(instance: u32) -> BACnetDeviceObjectPropertyReference {
 }
 
 /// What each member of the next distribution carries as learned.
-fn learned(channel: &mut ChannelObject) -> Vec<Option<MemberDatatype>> {
+pub(super) fn learned(channel: &mut ChannelObject) -> Vec<Option<MemberDatatype>> {
     channel
         .write_property(P::PRESENT_VALUE, None, PropertyValue::Real(1.0), None)
         .unwrap();
@@ -30,7 +30,7 @@ fn learned(channel: &mut ChannelObject) -> Vec<Option<MemberDatatype>> {
         .collect()
 }
 
-fn learn(channel: &mut ChannelObject, slot: usize, instance: u32) {
+pub(super) fn learn(channel: &mut ChannelObject, slot: usize, instance: u32) {
     let datatype = MemberDatatype::Enumerated;
     channel.remember_member_datatype(slot, &remote(instance), Some(datatype));
 }
