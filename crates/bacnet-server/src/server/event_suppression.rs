@@ -152,8 +152,8 @@ pub struct EventNotificationCounters {
     /// Changes whose COV notifications went out before every event
     /// notification the change made was handed to the network, because the
     /// wait for them ran past the APDU timeout (#889, #2537), or, for an
-    /// intrinsic-reporting sweep pass, because 64 earlier passes' fanouts
-    /// were already waiting.
+    /// intrinsic-reporting sweep pass that found 64 others waiting and went
+    /// at once, because its own notifications were still waiting.
     pub cov_wait_expired: u64,
 }
 

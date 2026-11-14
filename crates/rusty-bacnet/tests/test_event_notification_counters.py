@@ -140,7 +140,7 @@ class EventNotificationCountersTests(unittest.IsolatedAsyncioTestCase):
 
             async def counted():
                 counters = await server.event_notification_counters()
-                del counters["cov_wait_expired"]
+                self.assertIn(counters.pop("cov_wait_expired"), (0, 1))
                 return counters
 
             deadline = loop.time() + 10

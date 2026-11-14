@@ -734,8 +734,10 @@ async fn stop_and_the_drop_end_a_lane_waiting_for_the_i_am() {
 /// probe is never lost: the table starts the probe under the guard it finds
 /// no binding under. The test holds a read guard, so the lane passes
 /// `resolve()` and queues `start()`'s write guard, then queues the I-Am's
-/// write behind it and lets the read guard go; split in two, the check and
-/// the probe would let the I-Am in between, and the lane wait a minute.
+/// write behind it and lets the read guard go. A split that checks under one
+/// write guard and starts the probe under another lets the I-Am in between,
+/// and the lane waits a minute; one that checks under a read guard first is
+/// not caught here.
 #[tokio::test(start_paused = true)]
 async fn an_i_am_queued_behind_the_start_of_the_wait_still_ends_it() {
     let owned = Arc::new(OwnedDelivery {

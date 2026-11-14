@@ -5,7 +5,6 @@ use super::super::event_send::{Settle, settled};
 use super::*;
 use crate::committed_cov::CommittedCov;
 use bacnet_device_core::event::{next_due, sweep};
-use tokio::sync::mpsc::error::TrySendError;
 
 /// The sweep's period: the standing duties (FAULT from Reliability,
 /// Event_Algorithm_Inhibit references) run this often. It must not exceed
@@ -25,29 +24,59 @@ const DUE_WAKE_FLOOR: Duration = Duration::from_millis(100);
 /// `cov_wait_expired`.
 const MAX_WAITING_FANOUTS: usize = 64;
 
-/// One sweep pass's COV fanout, and what it waits for first: its event
-/// notifications' hand-off, when it pushed any (#889).
-type Tail = (Option<oneshot::Receiver<()>>, CommittedCov);
+/// One sweep pass's COV fanout, what it waits for first (its event
+/// notifications' hand-off, when it pushed any, #889), and when that wait
+/// ends at the latest: the APDU timeout after the pass committed.
+type Tail = (
+    Option<oneshot::Receiver<()>>,
+    CommittedCov,
+    tokio::time::Instant,
+);
+
+/// The passes waiting behind the one [`fan_out`] is on, in sweep order: a
+/// lock never held across an await, and the wake for a pass pushed.
+#[derive(Default)]
+struct Tails {
+    queue: std::sync::Mutex<std::collections::VecDeque<Tail>>,
+    pushed: tokio::sync::Notify,
+}
+
+impl Tails {
+    fn lock(&self) -> std::sync::MutexGuard<'_, std::collections::VecDeque<Tail>> {
+        self.queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
 
 /// The intrinsic-reporting task (#2303).
 ///
 /// Each pass's COV fanout waits for that pass's event notifications in a
-/// second future of this task, one pass at a time in the order the sweep
-/// made them ([`fan_out`]), so a destination that holds its lane (a Device
-/// recipient waiting for its I-Am, a stalled send, every invoke ID leased)
-/// holds up no later sweep (#2537). One join polls both, so neither sits
-/// unpolled while the other waits, and stopping the task ends both.
+/// second future of this task, at most the APDU timeout from the pass's
+/// commit, one pass at a time in the order the sweep made them
+/// ([`fan_out`]), so a destination that holds its lane (a Device recipient
+/// waiting for its I-Am, a stalled send, every invoke ID leased) holds up no
+/// later sweep (#2537). One join polls both, so neither sits unpolled while
+/// the other waits, and stopping the task ends both.
+///
+/// A report carries the object's state when it goes, so an object that
+/// passes still queued fan out for again is left to the latest of them:
+/// passes behind a held lane merge into one report, after the last one's
+/// notifications, and a state that came and went meanwhile is told by its
+/// event notifications, not by COV (a write's own fanout beside the sweep
+/// can merge the same way).
 pub(super) async fn run<T: TransportPort + 'static>(
     fanout: CovFanout<T>,
     learned_routers: Arc<Mutex<LearnedRouterCache>>,
     device_bindings: Arc<RwLock<DeviceBindingTable>>,
 ) {
-    let (tails, waiting) = mpsc::channel(MAX_WAITING_FANOUTS);
-    let timeout_ms = fanout
+    let tails = Tails::default();
+    let cap = fanout
         .event_delivery(&learned_routers, &device_bindings)
         .retry_timeout_ms;
-    let sweeps = sweeps(&fanout, &learned_routers, &device_bindings, tails);
-    tokio::join!(sweeps, fan_out(&fanout, timeout_ms, waiting));
+    let cap = Duration::from_millis(cap);
+    let sweeps = sweeps(&fanout, &learned_routers, &device_bindings, &tails, cap);
+    tokio::join!(sweeps, fan_out(&fanout, &tails));
 }
 
 /// The sweeps, each pass's COV fanout handed to [`fan_out`].
@@ -74,7 +103,8 @@ async fn sweeps<T: TransportPort + 'static>(
     fanout: &CovFanout<T>,
     learned_routers: &Arc<Mutex<LearnedRouterCache>>,
     device_bindings: &Arc<RwLock<DeviceBindingTable>>,
-    tails: mpsc::Sender<Tail>,
+    tails: &Tails,
+    cap: Duration,
 ) {
     let mut next_sweep = tokio::time::Instant::now();
     let mut last_sweep = next_sweep;
@@ -152,12 +182,22 @@ async fn sweeps<T: TransportPort + 'static>(
         // the earlier passes' and off this loop. Past the bound it goes now,
         // ahead of the passes still waiting, and counts as a wait that ran
         // out unless its notifications are out already.
-        if let Err(
-            TrySendError::Full((settle, committed)) | TrySendError::Closed((settle, committed)),
-        ) = tails.try_send((settle, committed))
-        {
-            settled(settle, 0, &fanout.notification_transactions).await;
-            fanout.fire(&committed).await;
+        let deadline = tokio::time::Instant::now() + cap;
+        let overflow = {
+            let mut queue = tails.lock();
+            if queue.len() < MAX_WAITING_FANOUTS {
+                queue.push_back((settle, committed, deadline));
+                None
+            } else {
+                Some((settle, committed))
+            }
+        };
+        match overflow {
+            None => tails.pushed.notify_one(),
+            Some((settle, committed)) => {
+                settled(settle, 0, &fanout.notification_transactions).await;
+                fanout.fire(&committed).await;
+            }
         }
     }
 }
@@ -165,13 +205,41 @@ async fn sweeps<T: TransportPort + 'static>(
 /// Each pass's COV fanout, in the order the sweep made them, once that
 /// pass's event notifications are handed off or the APDU timeout has passed
 /// (#889). Nothing is held across the wait.
-async fn fan_out<T: TransportPort + 'static>(
-    fanout: &CovFanout<T>,
-    timeout_ms: u64,
-    mut waiting: mpsc::Receiver<Tail>,
-) {
-    while let Some((settle, committed)) = waiting.recv().await {
-        settled(settle, timeout_ms, &fanout.notification_transactions).await;
+async fn fan_out<T: TransportPort + 'static>(fanout: &CovFanout<T>, tails: &Tails) {
+    loop {
+        let next = tails.lock().pop_front();
+        let Some((settle, mut committed, deadline)) = next else {
+            tails.pushed.notified().await;
+            continue;
+        };
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let left = u64::try_from(left.as_millis()).unwrap_or(u64::MAX);
+        settled(settle, left, &fanout.notification_transactions).await;
+        leave_to_later(&mut committed, &mut tails.lock());
         fanout.fire(&committed).await;
     }
+}
+
+/// Leave out of `pass`'s fanout each object a pass queued behind it fans out
+/// for too: its report goes with that pass, after its notifications. A Life
+/// Safety object's changed properties go along.
+fn leave_to_later(pass: &mut CommittedCov, later: &mut std::collections::VecDeque<Tail>) {
+    pass.coarse
+        .retain(|oid| !later.iter().any(|(_, next, _)| next.coarse.contains(oid)));
+    pass.life_safety.retain(|change| {
+        let oid = change.object_identifier;
+        let Some(next) = later.iter_mut().find_map(|(_, next, _)| {
+            next.life_safety
+                .iter_mut()
+                .find(|next| next.object_identifier == oid)
+        }) else {
+            return true;
+        };
+        for property in &change.changed_properties {
+            if !next.changed_properties.contains(property) {
+                next.changed_properties.push(*property);
+            }
+        }
+        false
+    });
 }

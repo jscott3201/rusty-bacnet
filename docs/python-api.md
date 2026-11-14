@@ -5725,7 +5725,7 @@ counters["confirmed_unanswered"]        # confirmed notifications never acknowle
 | `lane_full` | Notifications dropped because their destination already had 64 waiting in its lane to go out in order, a Device recipient's waiting for its I-Am included (#2537); the newest is dropped |
 | `lanes_entries_full` | Notifications dropped because 1,024 were already waiting across every destination's lane |
 | `lanes_full` | Notifications dropped because 256 destinations already had notifications waiting |
-| `cov_wait_expired` | Changes whose COV notifications went out before every event notification the change made, because that wait, one for a Device recipient's I-Am included, ran past the APDU timeout, or because 64 earlier intrinsic-reporting sweep passes' fanouts were waiting |
+| `cov_wait_expired` | Changes whose COV notifications went out before every event notification the change made, because that wait, one for a Device recipient's I-Am included, ran past the APDU timeout, or, for an intrinsic-reporting sweep pass that found 64 others waiting and went at once, because its own notifications were still waiting |
 
 The first four count event and acknowledgment notifications alike, once per
 transition. A class whose list is empty, or whose destinations all filter the

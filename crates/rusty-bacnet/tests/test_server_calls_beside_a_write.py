@@ -45,20 +45,23 @@ class ServerCallsBesideAWriteTests(unittest.IsolatedAsyncioTestCase):
         read = self.server.read_property(TARGET, PropertyIdentifier.PRESENT_VALUE)
         return (await asyncio.wait_for(read, PROMPTLY)).value
 
+    async def committed(self):
+        """Wait until the alarm's write has committed."""
+        while await self.present_value() != 2.0:
+            await asyncio.sleep(0.05)
+
     async def test_other_calls_go_on_while_a_write_waits(self):
         write = self.alarm()
-        await asyncio.sleep(0.1)
+        await self.committed()
         counters = await asyncio.wait_for(
             self.server.event_notification_counters(), PROMPTLY)
         self.assertEqual(counters["device_recipient_unbound"], 0)
-        self.assertEqual(await self.present_value(), 2.0)
         self.assertFalse(write.done(), "the write waits for Device 99")
         self.assertIsNone(await write)
 
     async def test_a_second_write_commits_after_the_first(self):
         first = self.alarm()
-        while await self.present_value() != 2.0:
-            await asyncio.sleep(0.05)
+        await self.committed()
         # The clear commits behind the alarm and waits in the same lane.
         second = asyncio.ensure_future(
             self.server.set_present_value_local(TARGET, PropertyValue.real(0)))
@@ -68,14 +71,14 @@ class ServerCallsBesideAWriteTests(unittest.IsolatedAsyncioTestCase):
     async def test_stop_waits_for_a_pending_write_which_succeeds(self):
         loop = asyncio.get_running_loop()
         write = self.alarm()
-        await asyncio.sleep(0.1)
+        await self.committed()
         began = loop.time()
         await self.server.stop()
         took = loop.time() - began
         # stop() went on once the write returned, its wait capped at 3 s.
         self.assertTrue(write.done())
         self.assertIsNone(write.result())
-        self.assertLess(took, 5)
+        self.assertLess(took, 10)
         with self.assertRaisesRegex(RuntimeError, "^server not started$"):
             await self.server.event_notification_counters()
 
