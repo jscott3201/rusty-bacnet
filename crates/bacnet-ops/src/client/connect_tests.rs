@@ -45,9 +45,11 @@ async fn a_bip_client_connects_and_reads_over_loopback() {
         .apdu_timeout(Duration::from_secs(2))
         .apdu_retries(1)
         .limits(RequestLimits::new(50))
+        .resolve_scope(ResolveScope::Network(5))
         .connect()
         .await
         .unwrap();
+    assert_eq!(client.resolve_scope(), ResolveScope::Network(5));
     let device: Device = client.device(address.as_str()).await.unwrap();
     assert_eq!(device.resolve_instance().await.unwrap(), 2560);
     let ai = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
@@ -118,10 +120,29 @@ fn the_sc_builder_takes_its_settings() {
 #[tokio::test]
 async fn the_mstp_builder_checks_then_opens_its_port() {
     let port = "/dev/no-such-bacnet-port";
-    let Err(above) = Client::mstp(port, 200).connect().await else {
-        panic!("MAC 200 joined");
-    };
-    assert!(!above.to_string().contains(port), "{above}");
+    // Settings the transport refuses are text to fix, and the port is
+    // never opened for them: a MAC above Max_Master (the default 127, or
+    // one set lower) and no information frame per token.
+    for builder in [
+        Client::mstp(port, 200),
+        Client::mstp(port, 5).max_master(3),
+        Client::mstp(port, 5).max_info_frames(0),
+    ] {
+        let Err(refused) = builder.connect().await else {
+            panic!("refused settings joined");
+        };
+        assert!(
+            matches!(
+                &refused,
+                OpsError::Parse {
+                    what: "MS/TP settings",
+                    ..
+                }
+            ),
+            "{refused:?}"
+        );
+        assert!(!refused.to_string().contains(port), "{refused}");
+    }
     let Err(missing) = Client::mstp(port, 5)
         .baud(76_800)
         .apdu_timeout(Duration::from_secs(2))
