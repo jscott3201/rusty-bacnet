@@ -9,10 +9,10 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 
 use super::fields::{FieldList, encoded_value, named, property_state_value};
-use super::primitive::hex;
 use super::tagged::fields_text;
 use super::{Datum, Fields, ValueFormat};
 use crate::label::kebab;
+use crate::octets::hex;
 
 /// The choice tag `decode_event_parameter` gives the forms that aren't the
 /// wire CHOICE (an application octet string, and a legacy wrapper); those
@@ -262,7 +262,7 @@ pub(super) fn render(
         EP::Opaque { data, .. } => fields.field(
             "data",
             fields_text(data, format.floats),
-            Datum::Raw { raw: hex(data, "") },
+            Datum::Raw { raw: hex(data) },
         ),
     }
     let (details, fields) = fields.finish();

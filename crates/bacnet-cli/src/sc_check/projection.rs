@@ -108,11 +108,7 @@ pub(super) fn completed(report: &ScPemInspection) -> Document<Inspection<'_>> {
                 .map(|value| Certificate {
                     role: value.role.as_str(),
                     index: value.index,
-                    sha256: value
-                        .sha256
-                        .iter()
-                        .map(|byte| format!("{byte:02x}"))
-                        .collect(),
+                    sha256: bacnet_ops::octets::hex(&value.sha256),
                     metadata: value.metadata.as_ref().map(Metadata::from),
                     validity: value.validity.as_str(),
                     expiry: value.expiry.as_str(),

@@ -8,10 +8,11 @@ use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::primitives::{PropertyValue, StatusFlags};
 
 use super::constructed::{on_device, reference};
-use super::primitive::{hex, plain_bits};
+use super::primitive::plain_bits;
 use super::recipients::property_state_text;
 use super::tagged::fields_text;
 use super::{Datum, Fields, ValueFormat, decode_all};
+use crate::octets::hex;
 
 /// A property with no enumeration, named bits or state: the values here
 /// are named by the field, not by a property.
@@ -83,9 +84,7 @@ pub(super) fn encoded_value(format: &ValueFormat<'_>, octets: &[u8]) -> (String,
         }
         _ => (
             fields_text(octets, format.floats),
-            Datum::Raw {
-                raw: hex(octets, ""),
-            },
+            Datum::Raw { raw: hex(octets) },
         ),
     }
 }

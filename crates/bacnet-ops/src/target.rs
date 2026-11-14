@@ -13,6 +13,8 @@ use bacnet_transport::bip6::{
 use bacnet_transport::port::TransportPort;
 use bacnet_types::error::Error;
 
+use crate::octets::{hex_sep, hex_upper};
+
 /// A parsed target for a BACnet command.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
@@ -333,7 +335,7 @@ impl AddressStyle {
         match (self, mac) {
             (Self::Mstp, [station]) => format!("{MSTP_TEXT_PREFIX}{station}"),
             (Self::Bip, [_, _, _, _, _, _]) | (Self::Bip6, [_, _, _]) => format_mac(mac),
-            _ => hex(mac),
+            _ => hex_sep(mac, ":"),
         }
     }
 
@@ -361,43 +363,35 @@ pub fn routed_station(network: u16, mac: &[u8]) -> Option<String> {
     if mac.is_empty() {
         return None;
     }
-    let mut out = format!("{network}:0x");
-    for b in mac {
-        out.push_str(&format!("{b:02X}"));
-    }
-    Some(out)
+    Some(format!("{network}:0x{}", hex_upper(mac)))
 }
 
 /// Format a MAC address as a target the CLI reads back: a BIP MAC (6 bytes:
 /// 4 IP + 2 port) as `ip:port`, and a B/IPv6 VMAC (3 bytes, the only
 /// 3-byte MAC the CLI's transports use) as `bip6:0x0004D2`. Falls back to
-/// hex display for other MACs. A routed station is written with its network
-/// by [`routed_station`] instead.
+/// colon-separated hex for other MACs. A routed station is written with its
+/// network by [`routed_station`] instead. [`format_sc_mac`] is the same for a
+/// BACnet/SC peer, where six octets are a VMAC.
 pub fn format_mac(mac: &[u8]) -> String {
-    if mac.len() == 6 {
-        let ip = Ipv4Addr::new(mac[0], mac[1], mac[2], mac[3]);
-        let port = u16::from_be_bytes([mac[4], mac[5]]);
+    mac_text(mac, true)
+}
+
+/// Like [`format_mac`], for a BACnet/SC peer: six octets are a VMAC, not an
+/// IPv4 address and port, so they stay colon-separated hex.
+pub fn format_sc_mac(mac: &[u8]) -> String {
+    mac_text(mac, false)
+}
+
+fn mac_text(mac: &[u8], six_is_ip_port: bool) -> String {
+    if let (true, [a, b, c, d, hi, lo]) = (six_is_ip_port, mac) {
+        let ip = Ipv4Addr::new(*a, *b, *c, *d);
+        let port = u16::from_be_bytes([*hi, *lo]);
         format!("{ip}:{port}")
     } else if let Ok(vmac) = <[u8; 3]>::try_from(mac) {
         bacnet_transport::bip6::format_vmac_text(bacnet_transport::bip6::Bip6Vmac::new(vmac))
     } else {
-        mac.iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<Vec<_>>()
-            .join(":")
+        hex_sep(mac, ":")
     }
-}
-
-/// Colon-separated lowercase hex.
-pub fn hex(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 3);
-    for (i, b) in bytes.iter().enumerate() {
-        if i > 0 {
-            out.push(':');
-        }
-        out.push_str(&format!("{b:02x}"));
-    }
-    out
 }
 
 #[cfg(test)]

@@ -20,10 +20,11 @@ use super::constructed::object_reference;
 use super::fields::{
     FieldList, bits_value, encoded_value, named, property_state_value, reference_value,
 };
-use super::primitive::{date_time, hex};
+use super::primitive::date_time;
 use super::tagged::fields_text;
 use super::{Datum, Fields, Floats, StateTexts, ValueFormat, raw_text};
 use crate::label::kebab;
+use crate::octets::hex;
 
 /// The element kind the JSON names the values by.
 const ELEMENT: &str = "notification-parameters";
@@ -471,9 +472,7 @@ fn render(
                 None => f.field(
                     "property_values",
                     format!("values {}", super::raw_text(octets)),
-                    Datum::Raw {
-                        raw: hex(octets, ""),
-                    },
+                    Datum::Raw { raw: hex(octets) },
                 ),
             }
         }
@@ -533,7 +532,7 @@ fn render(
                 (false, false) => raw_text(data),
             };
             f.quiet("constructed", Datum::Boolean(opaque.constructed));
-            f.field("data", text, Datum::Raw { raw: hex(data, "") });
+            f.field("data", text, Datum::Raw { raw: hex(data) });
         }
     }
     let (details, fields) = f.finish();

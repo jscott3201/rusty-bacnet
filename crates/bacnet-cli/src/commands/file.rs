@@ -548,12 +548,7 @@ pub async fn file_read_cmd<T: TransportPort + 'static>(
             format,
         ),
         (FileReadAccess::Stream, None) => {
-            let hex = summary
-                .display_data
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<Vec<_>>()
-                .join(" ");
+            let hex = bacnet_ops::octets::hex_sep(&summary.display_data, " ");
             output::print_success(&format!("Read {} bytes: {hex}", summary.octets), format);
         }
         (FileReadAccess::Record, Some(path)) => output::print_success(

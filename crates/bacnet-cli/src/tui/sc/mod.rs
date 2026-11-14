@@ -386,15 +386,12 @@ pub(crate) fn hub_name(hub: ScActiveHub) -> &'static str {
 
 /// A VMAC as `02:00:00:00:00:01`.
 pub(crate) fn vmac_text(vmac: &[u8]) -> String {
-    vmac.iter()
-        .map(|octet| format!("{octet:02x}"))
-        .collect::<Vec<_>>()
-        .join(":")
+    bacnet_ops::octets::hex_sep(vmac, ":")
 }
 
 /// A UUID in its 8-4-4-4-12 form.
 pub(crate) fn uuid_text(uuid: &[u8; 16]) -> String {
-    let hex: String = uuid.iter().map(|octet| format!("{octet:02x}")).collect();
+    let hex = bacnet_ops::octets::hex(uuid);
     format!(
         "{}-{}-{}-{}-{}",
         &hex[..8],

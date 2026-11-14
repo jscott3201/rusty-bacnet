@@ -3,6 +3,8 @@
 
 use bacnet_types::primitives::PropertyValue;
 
+use crate::octets::hex_sep;
+
 /// A `PropertyValue` as plain text, with no property context: the
 /// capture decode tree and the CLI's tag views use it; read values go
 /// through [`ValueFormat`](super::ValueFormat), which knows the property.
@@ -15,8 +17,7 @@ pub fn format_property_value(value: &PropertyValue) -> String {
         PropertyValue::Real(v) => format!("{v}"),
         PropertyValue::Double(v) => format!("{v}"),
         PropertyValue::OctetString(bytes) => {
-            let hex: Vec<String> = bytes.iter().map(|b| format!("{b:02x}")).collect();
-            format!("[{}]", hex.join(" "))
+            format!("[{}]", hex_sep(bytes, " "))
         }
         PropertyValue::CharacterString(s) => format!("\"{s}\""),
         PropertyValue::BitString { unused_bits, data } => {
@@ -83,8 +84,7 @@ pub fn format_property_value(value: &PropertyValue) -> String {
             format!("[{}]", formatted.join(", "))
         }
         PropertyValue::ApplicationData(bytes) => {
-            let hex: Vec<String> = bytes.iter().map(|b| format!("{b:02x}")).collect();
-            format!("application-data([{}])", hex.join(" "))
+            format!("application-data([{}])", hex_sep(bytes, " "))
         }
     }
 }

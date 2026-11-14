@@ -152,10 +152,7 @@ pub(super) fn format_items(
 
 /// Octets as space-separated lowercase hex.
 pub(super) fn hex(data: &[u8]) -> String {
-    data.iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<Vec<_>>()
-        .join(" ")
+    bacnet_ops::octets::hex_sep(data, " ")
 }
 
 /// Read a single property and print its value.
