@@ -1,65 +1,18 @@
-//! Handles from each source, pinned and following, and the address as the
-//! key (#2560), against real servers on an in-memory link (`test_bus`) and,
-//! for routed stations, behind an in-process router.
+//! Handles from each source, pinned against following, and the address as
+//! the key (#2560), against real servers on an in-memory link
+//! (`test_bus`). Following handles that move are `follow_tests`, routed
+//! stations `routed_tests`.
 
-use std::sync::Arc;
 use std::time::Duration;
 
-use bacnet_client::client::{BACnetClient, ClientConfig};
-use bacnet_server::server::BACnetServer;
-use bacnet_transport::test_transport::{SendLog, TestTransport};
-use bacnet_types::enums::{ConfirmedServiceChoice, ObjectType, PropertyIdentifier};
+use bacnet_transport::test_transport::TestTransport;
+use bacnet_types::data_link::DataLink;
+use bacnet_types::enums::ConfirmedServiceChoice;
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
-use super::test_bus::{Bus, at, requests, server};
+use super::test_bus::{Bus, N, at, client, client_on, name_of, requests, server, settle, stop};
 use super::*;
-use crate::client::{Client, WhoIsScope, unreachable};
-use crate::format::decode_all;
-use crate::limits::RequestLimits;
-
-/// The instance the tests' devices share.
-const N: u32 = 1001;
-
-fn ai() -> ObjectIdentifier {
-    ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap()
-}
-
-/// A client at station 1 of `bus`, timing out in one second, and its sends.
-async fn client(bus: &Arc<Bus>) -> (Client<TestTransport>, SendLog) {
-    let port = bus.port(1);
-    let sent = port.sent();
-    let config = ClientConfig {
-        apdu_timeout_ms: 1_000,
-        apdu_retries: 0,
-        ..ClientConfig::default()
-    };
-    let low = BACnetClient::start(config, port).await.unwrap();
-    let client = Client::new(Arc::new(low), Arc::new(RequestLimits::new(0)));
-    (client, sent)
-}
-
-/// The analog input's name, as `device` reads it.
-async fn name_of<T: TransportPort + 'static>(device: &Device<T>) -> Result<String, Error> {
-    let data = device
-        .read_property(ai(), PropertyIdentifier::OBJECT_NAME, None)
-        .await?;
-    match decode_all(&data).as_deref() {
-        Some([PropertyValue::CharacterString(name)]) => Ok(name.clone()),
-        other => panic!("a name: {other:?}"),
-    }
-}
-
-/// Let the link's frames land.
-async fn settle() {
-    tokio::time::sleep(Duration::from_millis(100)).await;
-}
-
-async fn stop(servers: Vec<BACnetServer<TestTransport>>) {
-    for mut server in servers {
-        server.stop().await.unwrap();
-    }
-}
+use crate::client::{WhoIsScope, unreachable};
 
 /// From an address a handle is pinned, from an instance claimed once it
 /// follows, from a discovery result it is pinned and knows the instance;
@@ -117,6 +70,26 @@ async fn the_wildcard_read_happens_once() {
     stop(vec![lab]).await;
 }
 
+/// The instance read by the wildcard goes when the discovery table loses
+/// a row at the address: another device may answer there now.
+#[tokio::test(start_paused = true)]
+async fn a_lost_row_forgets_the_wildcard_read() {
+    let bus = Bus::new();
+    let (client, _) = client(&bus).await;
+    let lab = server(bus.port(2), N, "A").await;
+    let device = client.device(at(2)).await.unwrap();
+    assert_eq!(device.resolve_instance().await.unwrap(), N);
+    bus.i_am(2, N);
+    settle().await;
+    assert_eq!(device.instance(), Some(N), "a row found is no loss");
+    // Station 2 now announces another instance: its row for N is lost.
+    bus.i_am(2, 2002);
+    settle().await;
+    assert_eq!(device.instance(), None, "forgotten with its row");
+    assert_eq!(client.device(at(2)).await.unwrap().instance(), Some(2002));
+    stop(vec![lab]).await;
+}
+
 /// Two devices sharing an instance: each is reached by its address, and
 /// the instance alone is refused, naming both.
 #[tokio::test(start_paused = true)]
@@ -151,64 +124,6 @@ async fn a_shared_instance_is_reached_by_address() {
     let b = client.device(at(3)).await.unwrap();
     assert_eq!(name_of(&a).await.unwrap(), "A");
     assert_eq!(name_of(&b).await.unwrap(), "B");
-    stop(servers).await;
-}
-
-/// A following handle whose device stops answering moves to the one other
-/// address claiming its instance, says so, and reads there.
-#[tokio::test(start_paused = true)]
-async fn a_following_handle_moves_to_the_one_other_claim() {
-    let bus = Bus::new();
-    let (client, _) = client(&bus).await;
-    let old = server(bus.port(2), N, "A").await;
-    bus.i_am(2, N);
-    settle().await;
-    let device = client.device(N).await.unwrap();
-    assert_eq!(name_of(&device).await.unwrap(), "A");
-    let new = server(bus.port(3), N, "B").await;
-    bus.i_am(3, N);
-    settle().await;
-    bus.silence(2);
-    let mut events = client.events();
-    assert_eq!(name_of(&device).await.unwrap(), "B");
-    assert_eq!(device.address(), at(3));
-    assert_eq!(
-        events.try_recv().unwrap(),
-        ClientEvent::Moved {
-            instance: N,
-            from: at(2),
-            to: at(3),
-        }
-    );
-    stop(vec![old, new]).await;
-}
-
-/// Two other addresses claiming the instance leave a following handle where
-/// it was, with the ambiguity as its error, and nothing moved.
-#[tokio::test(start_paused = true)]
-async fn a_following_handle_stays_when_two_others_claim_it() {
-    let bus = Bus::new();
-    let (client, _) = client(&bus).await;
-    let servers = vec![
-        server(bus.port(2), N, "A").await,
-        server(bus.port(3), N, "B").await,
-        server(bus.port(4), N, "C").await,
-    ];
-    bus.i_am(2, N);
-    settle().await;
-    let device = client.device(N).await.unwrap();
-    bus.i_am(3, N);
-    bus.i_am(4, N);
-    settle().await;
-    bus.silence(2);
-    let mut events = client.events();
-    let error = name_of(&device).await.unwrap_err();
-    assert!(
-        matches!(error, Error::AmbiguousDevice { instance: N, .. }),
-        "{error}"
-    );
-    assert_eq!(device.address(), at(2));
-    assert!(events.try_recv().is_err(), "nothing moved");
     stop(servers).await;
 }
 
@@ -293,7 +208,8 @@ async fn one_gate_per_address_however_named() {
 }
 
 /// No address claims the instance: one Who-Is finds the device, or the
-/// handle fails as unknown, sending nothing when the client may not ask.
+/// handle fails as unknown. A clone that may not ask sends nothing, and
+/// the other clones still ask.
 #[tokio::test(start_paused = true)]
 async fn an_unclaimed_instance_is_asked_for_once() {
     let bus = Bus::new();
@@ -304,9 +220,55 @@ async fn an_unclaimed_instance_is_asked_for_once() {
     assert_eq!(sent.broadcasts().len(), 1, "one Who-Is");
     let error = client.device(4242).await.unwrap_err();
     assert!(matches!(&error, Error::UnknownDevice { device } if device == "4242"));
-    client.set_resolve_wait(None);
+    let silent = client.with_resolve_wait(None);
+    assert_eq!(silent.clone().resolve_wait(), None, "kept by its clones");
     let before = sent.len();
-    assert!(client.device(4243).await.is_err());
+    assert!(silent.device(4243).await.is_err());
+    assert!(silent.device("5:0x05").await.is_err());
     assert_eq!(sent.len(), before, "no Who-Is");
+    assert_eq!(client.resolve_wait(), Some(crate::client::RESOLVE_WAIT));
+    assert!(client.device(4244).await.is_err());
+    assert_eq!(sent.len(), before + 1, "the other clone still asks");
     stop(vec![lab]).await;
+}
+
+/// Two devices answering the one Who-Is for an instance no address
+/// claimed: the handle is refused as ambiguous, not made for whichever
+/// answered first.
+#[tokio::test(start_paused = true)]
+async fn two_answers_to_the_one_who_is_are_ambiguous() {
+    let bus = Bus::new();
+    let (client, _) = client(&bus).await;
+    let servers = vec![
+        server(bus.port(2), N, "A").await,
+        server(bus.port(3), N, "B").await,
+    ];
+    let error = client.device(N).await.unwrap_err();
+    assert!(
+        matches!(&error, Error::AmbiguousDevice { instance: N, candidates } if candidates.len() == 2),
+        "{error}"
+    );
+    stop(servers).await;
+}
+
+/// An address is checked against the link as a target written for it is:
+/// a one-octet MAC is an MS/TP station, which this link can't reach.
+#[tokio::test(start_paused = true)]
+async fn an_address_the_link_cant_reach_is_refused() {
+    let bus = Bus::new();
+    let (client, sent) = client(&bus).await;
+    let station = DeviceAddress::local(&[5]).unwrap();
+    let error = client.device(station.clone()).await.unwrap_err();
+    assert!(
+        matches!(&error, Error::OutOfRange(why) if why.contains("mstp:5")),
+        "{error}"
+    );
+    let port = TestTransport::builder()
+        .local_mac(&[1])
+        .data_link(DataLink::Mstp)
+        .build();
+    let (mstp, _) = client_on(port).await;
+    assert_eq!(mstp.device(station).await.unwrap().address().mac(), [5]);
+    assert!(mstp.device(at(2)).await.is_err(), "six octets on MS/TP");
+    assert!(sent.is_empty());
 }

@@ -181,6 +181,18 @@ async fn errors_are_structured_and_say_what_was_sent() {
         )
         .await;
     assert_eq!(error(&unknown)["error"], json!("unknown-device"));
+    // A station the table doesn't hold is named as the call wrote it.
+    let station = lab
+        .agent
+        .call(
+            "bacnet_read",
+            json!({ "device": "2001:0x99", "reads": [{ "object": "ai:1" }] }),
+        )
+        .await;
+    let station = error(&station);
+    assert_eq!(station["error"], json!("unknown-device"));
+    assert_eq!(station["target"], json!("2001:0x99"), "{station}");
+    assert_eq!(station["cost"]["requests"], json!(0));
     let bad = lab
         .agent
         .call(

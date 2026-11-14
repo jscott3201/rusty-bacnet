@@ -71,7 +71,10 @@ async fn send<T: TransportPort + 'static>(
 ) -> Outcome {
     let device = request.device;
     find(client, device).await;
-    let held = turn(client, rate, device).await;
+    let held = match turn(client, rate, device).await {
+        Ok(held) => held,
+        Err(error) => return Outcome::NotSent(error.to_string()),
+    };
     let password = request.password.as_ref().map(|p| p.expose().to_owned());
     let result = match request.action {
         Action::Dcc { state, time } => {

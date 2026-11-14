@@ -26,10 +26,20 @@ fn an_address_reads_back_from_its_text() {
     assert_eq!(bare.to_string(), "10.0.0.1:47808");
     let sc: DeviceAddress = "02:00:00:00:00:01".parse().unwrap();
     assert_eq!(sc.mac(), [2, 0, 0, 0, 0, 1]);
-    // No local form for other lengths: written, but not read back.
-    let odd = DeviceAddress::local(&[1, 2]).unwrap();
-    assert_eq!(odd.to_string(), "0x0102");
-    assert!(odd.to_string().parse::<DeviceAddress>().is_err());
+    // The grammar has no local form for other lengths, so no address
+    // takes one, and every address reads back.
+    for length in [2, 4, 5, 7, 18] {
+        assert!(DeviceAddress::local(&vec![1; length]).is_err(), "{length}");
+        assert!(DeviceAddress::new(2, &vec![1; length]).is_ok(), "{length}");
+    }
+    // An SC VMAC shows as hex on an SC link, and reads back either way.
+    assert_eq!(sc.styled(AddressStyle::Hex), "02:00:00:00:00:01");
+    assert_eq!(sc.styled(AddressStyle::Bip), sc.to_string());
+    for text in [sc.styled(AddressStyle::Hex), sc.to_string()] {
+        assert_eq!(text.parse::<DeviceAddress>().unwrap(), sc, "{text}");
+    }
+    let routed = DeviceAddress::new(2, &[5]).unwrap();
+    assert_eq!(routed.styled(AddressStyle::Hex), "2:0x05");
 }
 
 /// An instance, a B/IPv6 socket address and a broadcast are no address.
@@ -51,7 +61,8 @@ fn only_a_station_is_an_address() {
     assert!(DeviceAddress::new(1, &[0; 18]).is_ok());
 }
 
-/// Serde writes the text and reads it back.
+/// Serde writes the text and reads it back, for every MAC length an
+/// address takes.
 #[test]
 fn serde_uses_the_text() {
     let address = DeviceAddress::new(2, &[5]).unwrap();
@@ -62,4 +73,14 @@ fn serde_uses_the_text() {
         address
     );
     assert!(serde_json::from_str::<DeviceAddress>("\"1234\"").is_err());
+    for network in [0, 7] {
+        for length in 1..=BACnetAddress::MAX_MAC_LEN {
+            let Ok(address) = DeviceAddress::new(network, &vec![0x2A; length]) else {
+                continue;
+            };
+            let json = serde_json::to_string(&address).unwrap();
+            let back: DeviceAddress = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, address, "{json}");
+        }
+    }
 }

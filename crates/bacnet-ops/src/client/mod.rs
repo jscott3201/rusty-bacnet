@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use bacnet_client::client::BACnetClient;
+use bacnet_client::client::{BACnetClient, DeviceEvent};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::Error;
@@ -40,7 +40,7 @@ pub use self::read::{
     Halt, ListRead, MAX_OBJECTS, ReadVia, Reader, RpmFailure, Wanted, rpm_failure, rpm_rows,
     timed_out, unreachable,
 };
-use crate::device::{ClientEvent, DeviceAddress};
+use crate::device::{ClientEvent, DeviceAddress, Follows};
 use crate::format::{RawRow, object_name};
 use crate::limits::RequestLimits;
 
@@ -66,7 +66,7 @@ pub const DEVICE_PROPERTIES: [PropertyIdentifier; 13] = [
 ];
 
 /// How long a handle made from an instance no address claims waits for
-/// the device's I-Am, unless [`Client::set_resolve_wait`] says otherwise.
+/// the device's I-Am, unless [`Client::with_resolve_wait`] says otherwise.
 pub const RESOLVE_WAIT: Duration = Duration::from_secs(3);
 
 /// The stop flag of the client's readers. Nothing sets it: a call is
@@ -113,9 +113,13 @@ impl DeviceSummary {
 /// device queue at its gate, keyed by its address, one request outstanding
 /// at a time, and every request takes a slot under the global rate cap, so
 /// many callers can share a client without overrunning a device. Cheap to
-/// clone: clones share everything.
+/// clone: clones share everything but how long a handle by instance waits
+/// for its device's I-Am ([`with_resolve_wait`](Self::with_resolve_wait)).
 pub struct Client<T: TransportPort + 'static> {
     pub(crate) shared: Arc<Shared<T>>,
+    /// How long a handle by instance that no address claims waits for an
+    /// I-Am; `None` sends no Who-Is at all. This clone's and its handles'.
+    resolve_wait: Option<Duration>,
 }
 
 /// What a [`Client`]'s clones share. Each std mutex is held only to look up
@@ -129,14 +133,16 @@ pub(crate) struct Shared<T: TransportPort + 'static> {
     /// Watch hubs made on this client, so each takes its own range of
     /// subscriber process identifiers (#2185).
     hubs: AtomicU32,
-    /// Where each instance a handle follows was last reached.
-    pub(crate) follows: Mutex<HashMap<u32, DeviceAddress>>,
+    /// Where each instance a handle follows is reached now, while one does
+    /// (at most [`REMEMBERED`](crate::device::follow::REMEMBERED)).
+    pub(crate) follows: Mutex<Follows>,
     /// The instances devices named for their address, from the one read by
-    /// the wildcard instance a handle made from an address needed.
+    /// the wildcard instance a handle made from an address needed (at most
+    /// [`REMEMBERED`](crate::device::follow::REMEMBERED)); one goes when the
+    /// discovery table loses a row at its address.
     pub(crate) instances: Mutex<HashMap<DeviceAddress, u32>>,
-    /// How long a handle by instance waits for an I-Am; `None` sends no
-    /// Who-Is at all.
-    resolve_wait: Mutex<Option<Duration>>,
+    /// The discovery table's changes, for the rows it loses.
+    pub(crate) lost: Mutex<broadcast::Receiver<DeviceEvent>>,
     pub(crate) events: broadcast::Sender<ClientEvent>,
 }
 
@@ -144,6 +150,7 @@ impl<T: TransportPort + 'static> Clone for Client<T> {
     fn clone(&self) -> Self {
         Self {
             shared: Arc::clone(&self.shared),
+            resolve_wait: self.resolve_wait,
         }
     }
 }
@@ -157,6 +164,7 @@ impl<T: TransportPort + 'static> Client<T> {
     /// A client over the low-level `client`, under `limits` (shared with
     /// any other worker on the same low-level client).
     pub fn new(client: Arc<BACnetClient<T>>, limits: Arc<RequestLimits>) -> Self {
+        let lost = Mutex::new(client.device_events());
         Self {
             shared: Arc::new(Shared {
                 client,
@@ -165,9 +173,10 @@ impl<T: TransportPort + 'static> Client<T> {
                 hubs: AtomicU32::new(0),
                 follows: Mutex::new(HashMap::new()),
                 instances: Mutex::new(HashMap::new()),
-                resolve_wait: Mutex::new(Some(RESOLVE_WAIT)),
+                lost,
                 events: broadcast::channel(64).0,
             }),
+            resolve_wait: Some(RESOLVE_WAIT),
         }
     }
 
@@ -197,18 +206,24 @@ impl<T: TransportPort + 'static> Client<T> {
         &self.shared.client
     }
 
-    /// How long a handle made from an instance that no address claims
-    /// waits for the device's I-Am after one Who-Is ([`RESOLVE_WAIT`] at
-    /// first). `None` sends no Who-Is: such a handle fails at once with
-    /// [`Error::UnknownDevice`], as does a routed address the discovery
-    /// table holds no router for. Applies to every clone.
-    pub fn set_resolve_wait(&self, wait: Option<Duration>) {
-        *lock(&self.shared.resolve_wait) = wait;
+    /// A clone of this client whose handles made from an instance that no
+    /// address claims wait `wait` for the device's I-Am after one Who-Is
+    /// ([`RESOLVE_WAIT`] for [`new`](Self::new)'s). `None` sends no
+    /// Who-Is: such a handle fails at once with [`Error::UnknownDevice`],
+    /// as does a routed address the discovery table holds no router for.
+    /// The setting is the clone's alone, and its clones' and handles':
+    /// the other clones keep theirs.
+    pub fn with_resolve_wait(&self, wait: Option<Duration>) -> Self {
+        Self {
+            shared: Arc::clone(&self.shared),
+            resolve_wait: wait,
+        }
     }
 
-    /// See [`set_resolve_wait`](Self::set_resolve_wait).
+    /// How long this clone's handles wait for an I-Am; see
+    /// [`with_resolve_wait`](Self::with_resolve_wait).
     pub fn resolve_wait(&self) -> Option<Duration> {
-        *lock(&self.shared.resolve_wait)
+        self.resolve_wait
     }
 
     /// A receiver of this client's own events: a handle that follows an

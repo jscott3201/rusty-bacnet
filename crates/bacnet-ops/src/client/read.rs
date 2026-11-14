@@ -24,6 +24,7 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use crate::device::{DeviceAddress, Path};
 use crate::format::{RawRow, RowError, decode_all};
 use crate::limits::{RequestLimits, Turn};
+use crate::target::AddressStyle;
 
 /// How a property list was read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,6 +110,8 @@ pub fn rpm_failure(error: &Error) -> RpmFailure {
 
 /// True when `error` says the device, or the way to it, isn't answering: a
 /// timeout or a transport failure. Reading on would only time out again.
+/// Only a timeout makes a following handle look for its device elsewhere
+/// ([`Device`](crate::Device)).
 pub fn unreachable(error: &Error) -> bool {
     timed_out(error) || matches!(error, Error::Transport(_))
 }
@@ -165,8 +168,16 @@ impl<T: TransportPort + 'static> Reader<'_, T> {
     /// Wait for this request's turn at the device, unless the job was
     /// stopped. Hold it for the one request (see [`RequestLimits::turn`]).
     /// A scheduling hook for the TUI's own request loops; the read methods
-    /// take their turns themselves.
+    /// take their turns themselves. A device with no path, a routed one the
+    /// discovery table has no row for, fails first, taking no turn, slot or
+    /// charge.
     pub async fn turn(&self) -> Result<Turn, Halt> {
+        self.path().await?;
+        self.take_turn().await
+    }
+
+    /// [`turn`](Self::turn), for a request whose path is already known.
+    async fn take_turn(&self) -> Result<Turn, Halt> {
         if self.cancel.load(Ordering::Relaxed) {
             return Err(Halt::Cancelled);
         }
@@ -229,6 +240,12 @@ impl<T: TransportPort + 'static> Reader<'_, T> {
         Ok(instance)
     }
 
+    /// The device's address as this client's link writes it.
+    fn shown(&self) -> String {
+        self.device
+            .styled(AddressStyle::of(self.client.transport()))
+    }
+
     /// The path to the device, from the client's discovery table for one
     /// behind a router.
     async fn path(&self) -> Result<Path, Halt> {
@@ -237,17 +254,17 @@ impl<T: TransportPort + 'static> Reader<'_, T> {
             .map_err(Halt::Device)
     }
 
-    /// ReadProperty, routed if the device is.
+    /// ReadProperty, routed if the device is. The path comes first, so a
+    /// device with none takes no turn.
     pub async fn rp(
         &self,
         object: ObjectIdentifier,
         property: PropertyIdentifier,
         index: Option<u32>,
     ) -> Result<Vec<u8>, Halt> {
-        let _turn = self.turn().await?;
-        self.path()
-            .await?
-            .read_property(self.client, object, property, index)
+        let path = self.path().await?;
+        let _turn = self.take_turn().await?;
+        path.read_property(self.client, object, property, index)
             .await
             .map(|ack| ack.property_value)
             .map_err(Halt::Device)
@@ -287,8 +304,12 @@ impl<T: TransportPort + 'static> Reader<'_, T> {
                 })
                 .collect(),
         };
-        let turn = self.turn().await?;
-        let ack = self.rpm_in(&turn, vec![spec]).await?;
+        let path = self.path().await?;
+        let _turn = self.take_turn().await?;
+        let ack = path
+            .read_property_multiple(self.client, vec![spec])
+            .await
+            .map_err(Halt::Device)?;
         Ok(rpm_rows(ack))
     }
 
@@ -306,7 +327,7 @@ impl<T: TransportPort + 'static> Reader<'_, T> {
                     RpmFailure::Refused => {
                         tracing::info!(
                             "device {} refused ReadPropertyMultiple ({error}); reading one property at a time",
-                            self.device
+                            self.shown()
                         );
                         self.rpm = false;
                     }
@@ -395,7 +416,7 @@ impl<T: TransportPort + 'static> Reader<'_, T> {
         };
         tracing::info!(
             "device {}: Object_List not readable whole ({whole}); reading it element by element",
-            self.device
+            self.shown()
         );
         let total = match self.rp(device, list, Some(0)).await {
             Ok(data) => match decode_all(&data).as_deref() {

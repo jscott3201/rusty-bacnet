@@ -395,8 +395,9 @@ pub(super) async fn run<T: TransportPort + 'static>(
         call.reached(instance);
         page.searched.push(instance);
         // By its instance, as the other tools name it: one claimed twice is
-        // skipped, naming both addresses.
-        let handle = match client.device(instance).await {
+        // skipped, naming both addresses. Pinned to the row the policy let
+        // through above.
+        let handle = match crate::context::pinned(client, &entry).await {
             Ok(handle) => handle,
             Err(error) => {
                 let error = ToolError::device(instance, &error).json();

@@ -470,9 +470,12 @@ mod giveback_tests;
 pub(super) mod tests {
     use super::*;
 
-    /// Device `device` on `network`, as a test names it.
+    /// Device `device` on `network`, as a test names it: a six-octet MAC
+    /// holding the number.
     pub(in crate::limits) fn at(network: u16, device: u32) -> DeviceAddress {
-        DeviceAddress::new(network, &device.to_be_bytes()).unwrap()
+        let mut mac = [0; 6];
+        mac[2..].copy_from_slice(&device.to_be_bytes());
+        DeviceAddress::new(network, &mac).unwrap()
     }
 
     /// Requests are spaced `1 / per_second` apart, whatever the caller,

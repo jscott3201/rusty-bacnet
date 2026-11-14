@@ -1,20 +1,28 @@
 //! The server's known devices follow the client's table, one device per
-//! address (#2560).
+//! address, and a call reads the device the policy checked (#2560).
 
 use std::time::Duration;
 
 use bacnet_encoding::apdu::{Apdu, UnconfirmedRequest, encode_apdu};
-use bacnet_encoding::npdu::{Npdu, encode_npdu};
+use bacnet_encoding::npdu::{Npdu, NpduAddress, encode_npdu};
 use bacnet_services::who_is::IAmRequest;
+use bacnet_types::MacAddr;
 use bacnet_types::enums::{ObjectType, Segmentation, UnconfirmedServiceChoice};
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
+use serde_json::json;
 
-use super::{ALIASES, Lab, alias_mac};
+use super::{ALIASES, LAB, LAB_MAC, Lab, alias_mac};
 use crate::Policy;
 
 /// An I-Am for `instance`, as a device on the local network sends it.
 fn i_am(instance: u32) -> BytesMut {
+    i_am_from(instance, None)
+}
+
+/// An I-Am for `instance`, from the station a router names as `source`
+/// when there is one.
+fn i_am_from(instance: u32, source: Option<NpduAddress>) -> BytesMut {
     let mut service_request = BytesMut::new();
     IAmRequest {
         object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap(),
@@ -31,6 +39,7 @@ fn i_am(instance: u32) -> BytesMut {
     encode_apdu(&mut payload, &apdu).unwrap();
     let mut npdu = BytesMut::new();
     let message = Npdu {
+        source,
         payload: payload.freeze(),
         ..Npdu::default()
     };
@@ -67,5 +76,56 @@ async fn an_address_announcing_another_instance_forgets_the_old_one() {
     )
     .await;
     assert!(lab.low.get_device(alias).await.unwrap().is_none());
+    lab.stop().await;
+}
+
+/// A call reads the device the policy let it reach, and no other: while a
+/// read of the lab device times out, a station on a network the policy
+/// leaves out announces the lab's instance, and the call doesn't follow
+/// the instance there.
+#[tokio::test(start_paused = true)]
+async fn a_read_stays_on_the_device_the_policy_checked() {
+    let policy = Policy {
+        networks: Some([0].into()),
+        ..Policy::default()
+    };
+    let mut lab = Lab::start(policy).await;
+    lab.agent.initialize().await;
+    lab.go_silent_after(0);
+    let before = lab.sends().len();
+    let arguments =
+        json!({ "device": LAB, "reads": [{ "object": "ai:1", "properties": ["present-value"] }] });
+    let call = lab
+        .agent
+        .post(
+            "tools/call",
+            json!({ "name": "bacnet_read", "arguments": arguments }),
+        )
+        .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let elsewhere = NpduAddress {
+        network: 2001,
+        mac_address: MacAddr::from_slice(&[0x33]),
+    };
+    lab.inject(&i_am_from(LAB, Some(elsewhere)), &LAB_MAC).await;
+    for _ in 0..100 {
+        if lab.low.get_device_at(2001, &[0x33]).await.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    assert!(
+        lab.low.get_device_at(2001, &[0x33]).await.is_some(),
+        "the other claim is in the table"
+    );
+    let answer = lab.agent.answer(call).await;
+    let result = &answer["result"];
+    assert_eq!(result["isError"], json!(true), "{answer}");
+    assert_eq!(
+        result["structuredContent"]["error"],
+        json!("timeout"),
+        "{answer}"
+    );
+    assert_eq!(lab.sends().len() - before, 1, "one request, to the lab");
     lab.stop().await;
 }

@@ -239,10 +239,9 @@ impl<T: TransportPort + 'static> McpServer<T> {
     ) -> Self {
         let writes = crate::writes::Writes::new(&policy.writes);
         // A tool names a device the discovery table holds: resolving one
-        // never sends a Who-Is (#2560).
-        if let Some(client) = &client {
-            client.set_resolve_wait(None);
-        }
+        // never sends a Who-Is (#2560). The setting is this clone's, so a
+        // TUI sharing the client keeps its own.
+        let client = client.map(|client| client.with_resolve_wait(None));
         Self {
             ctx: Arc::new(Ctx {
                 client,

@@ -34,7 +34,9 @@ fn ai1() -> ObjectIdentifier {
 async fn spacing(limits: &RequestLimits) -> u128 {
     let start = Instant::now();
     for device in 7_000u32..7_003 {
-        let at = bacnet_ops::DeviceAddress::local(&device.to_be_bytes()).unwrap();
+        let mut mac = [0; 6];
+        mac[2..].copy_from_slice(&device.to_be_bytes());
+        let at = bacnet_ops::DeviceAddress::local(&mac).unwrap();
         drop(limits.turn(&at).await);
     }
     let spent = Instant::now() - start;

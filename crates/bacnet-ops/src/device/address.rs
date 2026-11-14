@@ -12,8 +12,9 @@ use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::error::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::octets::hex_upper;
-use crate::target::{MSTP_TEXT_PREFIX, Target, format_mac, parse_target, routed_station};
+use crate::target::{
+    AddressStyle, MSTP_TEXT_PREFIX, Target, format_mac, format_sc_mac, parse_target, routed_station,
+};
 
 /// Where a device answers: its network (0 for the local one) and its MAC
 /// there. Two devices sharing an instance are two addresses, and one device
@@ -27,12 +28,12 @@ use crate::target::{MSTP_TEXT_PREFIX, Target, format_mac, parse_target, routed_s
 /// ([`parse_target`]): `192.168.1.10:47808`, `bip6:0x0004D2`, `mstp:5` or
 /// six hex octets on the local network, and `2:0x05` behind a router.
 /// [`Display`](fmt::Display) writes a local MAC by its length, the forms
-/// [`Error::AmbiguousDevice`]
-/// prints: one octet as `mstp:N`, three as a B/IPv6 VMAC and six as
-/// `ip:port` (also for an SC VMAC or an Ethernet MAC, the same six octets),
-/// all of which read back; a local MAC of any other length, which none of
-/// this stack's links uses, is written as `0x` and hex, which doesn't.
-/// Serde uses the same text.
+/// [`Error::AmbiguousDevice`] prints: one octet as `mstp:N`, three as a
+/// B/IPv6 VMAC and six as `ip:port` (also for an SC VMAC or an Ethernet
+/// MAC, the same six octets; [`styled`](Self::styled) writes an SC VMAC as
+/// hex). Those are the only local MAC lengths the grammar writes, and so
+/// the only ones an address takes: every address reads back, and serde
+/// uses the same text.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DeviceAddress {
     network: u16,
@@ -45,8 +46,10 @@ impl DeviceAddress {
     /// # Errors
     ///
     /// Network 65535 (every network), an empty MAC (a broadcast), a MAC
-    /// longer than [`BACnetAddress::MAX_MAC_LEN`] octets, and the MS/TP
-    /// broadcast `0xFF` as a one-octet MAC name no one station.
+    /// longer than [`BACnetAddress::MAX_MAC_LEN`] octets, a local MAC of a
+    /// length the target grammar has no form for (one of 1, 3 or 6
+    /// octets), and the MS/TP broadcast `0xFF` as a one-octet MAC name no
+    /// one station.
     pub fn new(network: u16, mac: &[u8]) -> Result<Self, String> {
         if network == u16::MAX {
             return Err("network 65535 is every network, not a station's".into());
@@ -55,6 +58,12 @@ impl DeviceAddress {
             return Err(format!(
                 "a station's MAC has 1 to {} octets, not {}",
                 BACnetAddress::MAX_MAC_LEN,
+                mac.len()
+            ));
+        }
+        if network == 0 && !matches!(mac.len(), 1 | 3 | 6) {
+            return Err(format!(
+                "a MAC on the local network has 1 (MS/TP), 3 (B/IPv6) or 6 octets, not {}",
                 mac.len()
             ));
         }
@@ -119,14 +128,25 @@ impl DeviceAddress {
     pub fn is_local(&self) -> bool {
         self.network == 0
     }
+
+    /// The address as a link of `style` shows it: as [`Display`](fmt::Display)
+    /// writes it, but six local octets on BACnet/SC are a VMAC, written as
+    /// hex (`02:00:00:00:00:01`), as the TUI shows them. Both forms read
+    /// back.
+    pub fn styled(&self, style: AddressStyle) -> String {
+        match (style, self.network, self.mac.as_slice()) {
+            (AddressStyle::Hex, 0, mac @ [_, _, _, _, _, _]) => format_sc_mac(mac),
+            _ => self.to_string(),
+        }
+    }
 }
 
 impl fmt::Display for DeviceAddress {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match (self.network, self.mac.as_slice()) {
             (0, [station]) => write!(f, "{MSTP_TEXT_PREFIX}{station}"),
-            (0, mac @ ([_, _, _] | [_, _, _, _, _, _])) => f.write_str(&format_mac(mac)),
-            (0, mac) => write!(f, "0x{}", hex_upper(mac)),
+            // Three or six octets: `new` takes no other local length.
+            (0, mac) => f.write_str(&format_mac(mac)),
             // Never `None`: the MAC isn't empty.
             (network, mac) => f.write_str(&routed_station(network, mac).unwrap_or_default()),
         }

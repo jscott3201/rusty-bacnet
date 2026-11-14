@@ -294,9 +294,23 @@ pub(crate) struct Device<T: TransportPort + 'static> {
     /// Its network, 0 for the local one.
     pub(crate) network: u16,
     pub(crate) entry: DiscoveredDevice,
-    /// The handle the call reads through: following the instance it named,
-    /// or pinned to the station a `dnet:0xMAC` named (#2560).
+    /// The handle the call reads through, pinned to `entry`'s address
+    /// however the call named the device: a request never follows the
+    /// instance to an address the policy didn't check (#2560).
     pub(crate) handle: bacnet_ops::Device<T>,
+}
+
+/// A handle pinned to `entry`, a row of the discovery table, for a call
+/// that names devices by instance: an instance another row claims too is
+/// refused as ambiguous, naming both, and the handle never follows the
+/// instance elsewhere (#2560). Sends nothing.
+pub(crate) async fn pinned<T: TransportPort + 'static>(
+    client: &Client<T>,
+    entry: &DiscoveredDevice,
+) -> Result<bacnet_ops::Device<T>, Error> {
+    let instance = entry.object_identifier.instance_number();
+    client.low_level().get_device(instance).await?;
+    client.device(entry).await
 }
 
 const DISCOVER_HINT: &str = "call bacnet_discover first (with a range or network that includes it)";
@@ -317,7 +331,8 @@ impl<T: TransportPort + 'static> Ctx<T> {
     /// are numeric: a device is never found by name, and a local address is
     /// no device. Nothing is sent to find one (the server's client looks
     /// for no device), and an instance two addresses claim is refused,
-    /// naming both, also as `dnet:instance`.
+    /// naming both, also as `dnet:instance`. The handle is pinned to the
+    /// row the policy checks, so no request in the call goes elsewhere.
     pub(crate) async fn device(
         &self,
         call: &Call,
@@ -329,13 +344,45 @@ impl<T: TransportPort + 'static> Ctx<T> {
             device: text.clone(),
             hint: DISCOVER_HINT.into(),
         };
+        // An instance names itself; a station is named by the text given.
+        let failed = |instance: Option<u32>, error: Error| match (instance, error) {
+            (_, Error::UnknownDevice { .. }) => unknown(),
+            (_, Error::OutOfRange(why)) => ToolError::invalid("device", why),
+            (Some(instance), error) => ToolError::device(instance, &error),
+            (None, error) => ToolError::Failed(format!("{text}: {error}")),
+        };
         let parsed = target::parse_target(&text).map_err(|e| ToolError::invalid("device", e))?;
-        let (handle, instance, network) = match parsed {
-            Target::Instance(instance) => (client.device(instance).await, instance, None),
-            Target::Routed { dnet, instance } => {
-                (client.device(instance).await, instance, Some(dnet))
+        let (handle, entry) = match parsed {
+            Target::Instance(instance) | Target::Routed { instance, .. } => {
+                let entry = match client.low_level().get_device(instance).await {
+                    Ok(Some(entry)) => entry,
+                    Ok(None) => return Err(unknown()),
+                    Err(error) => return Err(failed(Some(instance), error)),
+                };
+                if let Target::Routed { dnet, .. } = parsed
+                    && entry.source_network.unwrap_or(0) != dnet
+                {
+                    return Err(unknown());
+                }
+                let handle = client
+                    .device(&entry)
+                    .await
+                    .map_err(|error| failed(Some(instance), error))?;
+                (handle, entry)
             }
-            Target::RoutedMac { .. } => (client.device(text.as_str()).await, 0, None),
+            Target::RoutedMac { .. } => {
+                let handle = client
+                    .device(text.as_str())
+                    .await
+                    .map_err(|error| failed(None, error))?;
+                let at = handle.address();
+                let entry = client
+                    .low_level()
+                    .get_device_at(at.network(), at.mac())
+                    .await
+                    .ok_or_else(unknown)?;
+                (handle, entry)
+            }
             Target::Mac(_) | Target::Bip6(_) => {
                 return Err(ToolError::invalid(
                     "device",
@@ -343,23 +390,9 @@ impl<T: TransportPort + 'static> Ctx<T> {
                 ));
             }
         };
-        let handle = match handle {
-            Ok(handle) => handle,
-            Err(Error::UnknownDevice { .. }) => return Err(unknown()),
-            Err(error) => return Err(ToolError::device(instance, &error)),
-        };
-        let at = handle.address();
-        if network.is_some_and(|network| network != at.network()) {
-            return Err(unknown());
-        }
-        let entry = client
-            .low_level()
-            .get_device_at(at.network(), at.mac())
-            .await
-            .ok_or_else(unknown)?;
         let device = Device {
             instance: entry.object_identifier.instance_number(),
-            network: at.network(),
+            network: handle.address().network(),
             entry,
             handle,
         };

@@ -9,26 +9,32 @@
 //!
 //! - **From an address** (`192.168.1.10`, `mstp:5`, `2:0x05`, a
 //!   [`DeviceAddress`]): pinned to it and made at once, sending nothing for
-//!   a local address. A remote one the discovery table holds no router for
-//!   asks its network with a Who-Is first. Its instance, when a call needs
-//!   it and the table doesn't say, comes from one read of the Device object
-//!   by the wildcard instance, remembered by the client.
-//! - **From an instance** (`1234`, `2:1234`): one address claiming it in
-//!   the discovery table gives a handle that follows the instance; none
-//!   sends one Who-Is for it and waits ([`Client::set_resolve_wait`]); two
-//!   or more fail with [`Error::AmbiguousDevice`], listing them.
+//!   a local address. One on the client's own network, once the client
+//!   knows that network's number, is the local station. A remote one the
+//!   discovery table holds no router for asks its network with a Who-Is
+//!   first. Its instance, when a call needs it and the table doesn't say,
+//!   comes from one read of the Device object by the wildcard instance,
+//!   remembered by the client.
+//! - **From an instance** (`1234`, or `2:1234` on one network): one
+//!   address claiming it in the discovery table gives a handle that
+//!   follows the instance; none sends one Who-Is for it and waits
+//!   ([`Client::with_resolve_wait`]); two or more, before or after that
+//!   wait, fail with [`Error::AmbiguousDevice`], listing them.
 //! - **From a discovery result** ([`Discovered`]): pinned, knowing the
 //!   instance.
 //!
 //! A pinned handle never moves: [`Device::moved_to`] says when its
 //! instance is heard at one other address while its own has gone quiet. A
-//! following handle whose request finds the device unreachable looks again,
-//! once: when exactly one other address claims the instance it moves
-//! there, tells [`Client::events`] ([`ClientEvent::Moved`]) and retries;
-//! two or more fail as ambiguous, and none leaves the error as it was.
+//! following handle looks again, once, when a request times out, or finds
+//! no route left to a routed address: when exactly one other address on
+//! its network claims the instance and its own has gone quiet the same
+//! way, it moves there, tells [`Client::events`] ([`ClientEvent::Moved`])
+//! and retries; two or more fail as ambiguous, and otherwise the error
+//! stays as it was. Handles following one instance on one network share
+//! where it is, so one moving takes the others with it.
 
 /// Evaluate `$body` with `$at` the device's address, and for a following
-/// handle whose request found the device unreachable once more where it
+/// handle whose request timed out or found no route once more where it
 /// moved to ([`Device::retry`]). For a function returning `Result<_, Error>`.
 macro_rules! sent {
     ($device:expr, |$at:ident| $body:expr) => {{
@@ -54,19 +60,24 @@ mod reads;
 mod resolve;
 mod route;
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use bacnet_client::discovery::DiscoveredDevice;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::error::Error;
 
 pub use self::address::DeviceAddress;
+pub(crate) use self::follow::Follows;
+use self::follow::{Elsewhere, Followed};
 pub(crate) use self::route::Path;
 use crate::client::{Client, lock};
 
-/// How long a pinned handle's own address must have been quiet before
-/// another address announcing its instance counts as a move: two devices
-/// sharing an instance both answer one Who-Is within this of each other.
+/// How long an address must have been quiet before another announcing its
+/// instance counts as the device moving there, for [`Device::moved_to`]
+/// and a following handle alike: two devices sharing an instance both
+/// answer one Who-Is within this of each other. A duplicate that boots
+/// and announces itself longer than this after the last Who-Is the first
+/// answered reads as a move, until a Who-Is hears them both again.
 pub const QUIET: Duration = Duration::from_secs(30);
 
 /// What names a device for [`Client::device`].
@@ -162,12 +173,20 @@ pub enum ClientEvent {
 }
 
 /// How a handle names its device.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 enum Pin {
     /// Pinned to an address.
     At(DeviceAddress),
-    /// Following an instance, to the address the client's registry holds.
-    Follows(u32),
+    /// Following `instance`, on `network` when it was named with one.
+    Follows {
+        /// The instance followed.
+        instance: u32,
+        /// The network its claims are looked for on; any for `None`.
+        network: Option<u16>,
+        /// Where it is reached now, shared with the other handles
+        /// following it on that network.
+        at: Followed,
+    },
 }
 
 /// One device, as a [`Client`] reaches it: by address, pinned, or by
@@ -206,10 +225,7 @@ impl<T: TransportPort + 'static> Device<T> {
     pub fn address(&self) -> DeviceAddress {
         match &self.pin {
             Pin::At(address) => address.clone(),
-            Pin::Follows(instance) => lock(&self.client.shared.follows)
-                .get(instance)
-                .cloned()
-                .expect("a following handle's instance is registered when it is made"),
+            Pin::Follows { at, .. } => lock(at).clone(),
         }
     }
 
@@ -218,14 +234,14 @@ impl<T: TransportPort + 'static> Device<T> {
     /// instance made earlier ([`resolve_instance`](Self::resolve_instance)).
     pub fn instance(&self) -> Option<u32> {
         self.instance.or_else(|| match &self.pin {
-            Pin::At(address) => lock(&self.client.shared.instances).get(address).copied(),
-            Pin::Follows(instance) => Some(*instance),
+            Pin::At(address) => self.client.remembered(address),
+            Pin::Follows { instance, .. } => Some(*instance),
         })
     }
 
     /// True when the handle follows its instance rather than an address.
     pub fn follows(&self) -> bool {
-        matches!(self.pin, Pin::Follows(_))
+        matches!(self.pin, Pin::Follows { .. })
     }
 
     /// The client the handle reaches its device through.
@@ -236,7 +252,8 @@ impl<T: TransportPort + 'static> Device<T> {
     /// The device instance: as known ([`instance`](Self::instance)), or
     /// from one ReadProperty of the Device object's Object_Identifier by
     /// the wildcard instance, which the client remembers for the address,
-    /// so it is read once.
+    /// so it is read once: until the discovery table loses a row at that
+    /// address, which may mean another device has it now.
     pub async fn resolve_instance(&self) -> Result<u32, Error> {
         if let Some(instance) = self.instance() {
             return Ok(instance);
@@ -247,7 +264,7 @@ impl<T: TransportPort + 'static> Device<T> {
             .instance()
             .await
             .map_err(crate::client::device_error)?;
-        lock(&self.client.shared.instances).insert(address, instance);
+        self.client.remember(address, instance);
         Ok(instance)
     }
 
@@ -263,33 +280,15 @@ impl<T: TransportPort + 'static> Device<T> {
         let (Pin::At(here), Some(instance)) = (&self.pin, self.instance()) else {
             return None;
         };
-        let table = self.client.low_level().discovered_devices().await;
-        let rows = table
-            .iter()
-            .filter_map(|row| Some((DeviceAddress::of(row)?, row)));
-        let claims = |row: &&DiscoveredDevice| row.object_identifier.instance_number() == instance;
-        let mut others = rows.clone().filter(|(at, row)| at != here && claims(row));
-        let (Some((other, row)), None) = (others.next(), others.next()) else {
-            return None;
-        };
-        let own = rows.clone().find(|(at, _)| at == here).map(|(_, own)| own);
-        let quiet = match own.filter(claims) {
-            None => true,
-            Some(own) => announced_before(own.last_announced, row.last_announced),
-        };
-        quiet.then_some(other)
+        match self.client.elsewhere(instance, None, here).await {
+            Elsewhere::Moved(to) => Some(to),
+            Elsewhere::Nowhere | Elsewhere::Duplicate | Elsewhere::Contested(_) => None,
+        }
     }
 }
 
-/// Whether an announcement at `own` came at least [`QUIET`] before one at
-/// `other`; a row never announced counts as quiet.
-fn announced_before(own: Option<Instant>, other: Option<Instant>) -> bool {
-    match (own, other) {
-        (None, _) => true,
-        (Some(_), None) => false,
-        (Some(own), Some(other)) => other.checked_duration_since(own) >= Some(QUIET),
-    }
-}
+#[cfg(test)]
+mod follow_tests;
 
 #[cfg(test)]
 mod routed_tests;
