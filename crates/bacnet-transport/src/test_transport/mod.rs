@@ -13,6 +13,11 @@
 //! Builder methods that take a closure erase it at once, so no closure type
 //! ever reaches `TestTransport` or the stack above it.
 //!
+//! Before adding to it: compose the hooks, modes and controls that exist. A
+//! new one must be general (several fixtures need it), small, and pinned by
+//! its own test here; behaviour only one test needs belongs in that test's
+//! hook closure, not in this type.
+//!
 //! A transport can stand in front of another: [`TestTransportBuilder::inner`]
 //! takes any `TransportPort` (a real link, a double, another `TestTransport`)
 //! behind an object-safe adapter, so the type stays concrete. The inner

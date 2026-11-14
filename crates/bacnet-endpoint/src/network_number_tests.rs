@@ -17,7 +17,7 @@ mod sc_network_number_tests;
 fn selected() -> ObjectIdentifier {
     ObjectIdentifier::new(ObjectType::NETWORK_PORT, 2).unwrap()
 }
-/// A real B/IP link whose broadcasts are observed in `sent` as they reach it
+/// A real B/IP link whose broadcasts are observed in `sent` before they are forwarded to it
 /// (a held send waits first), whose stop `gates` can hold, and whose
 /// received frames come from `input_override` when given.
 fn observed_bip(

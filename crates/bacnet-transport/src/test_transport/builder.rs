@@ -289,8 +289,10 @@ impl TestTransportBuilder {
 
     /// Await this hook's future at the top of every `stop`, before the
     /// `on_stop` hook or the inner transport's stop; its error ends the stop
-    /// with the inner transport untouched. A stop the test holds open, to
-    /// drop or release it there, with the rest of the stop still running.
+    /// with the inner transport untouched, a fresh inbound channel still
+    /// open and any held Network Port lease still held. A stop the test
+    /// holds open, to drop or release it there, with the rest of the stop
+    /// still running.
     pub fn before_stop<F>(mut self, hook: impl Fn() -> F + Send + Sync + 'static) -> Self
     where
         F: Future<Output = Result<(), Error>> + Send + 'static,
