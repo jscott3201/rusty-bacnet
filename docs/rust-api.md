@@ -10113,6 +10113,15 @@ claiming one instance each keep a row, reachable by its address, while
 with `Error::AmbiguousDevice`, which lists both. `device_collision_events()`
 reports each change to such a contest, the end included.
 
+An I-Am that a router relays back from the client's own network, with that
+network's number as its SNET, names a local device: once the client has
+learned the number, it lands on the device's local row (#1358). A relay heard
+before then made a routed row for the same device, and the instance is
+ambiguous until the next relay folds that row into the local one, reported
+`Lost`; `add_routed_device` naming the client's own network stores a local
+row the same way. If the number is never learned, the routed row stays until
+the purge takes it.
+
 Who-Has answers and router discovery (#960):
 
 ```rust

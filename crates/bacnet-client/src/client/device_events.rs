@@ -23,17 +23,25 @@ pub(super) fn heard_i_am(
     ),
 ) {
     // A router relaying back an I-Am from this client's own network names a
-    // local device: one row, as it is one peer (#1358, #1465).
-    let (mac_address, source_network, source_address) = match from.network {
+    // local device: one row, as it is one peer (#1358, #1465). A relay heard
+    // before the client learned the number made a routed row for the same
+    // peer, which this one folds into the local row. While the number stays
+    // unknown, the routed row stays until the purge takes it.
+    let (mac_address, source_network, source_address, fold) = match from.network {
         Some(routed) if !routed.mac_address.is_empty() => {
             if Some(routed.network) == from.this_network {
-                (routed.mac_address.clone(), None, None)
+                (routed.mac_address.clone(), None, None, Some(routed.network))
             } else {
                 let station = Some(routed.mac_address.clone());
-                (MacAddr::from_slice(from.mac), Some(routed.network), station)
+                (
+                    MacAddr::from_slice(from.mac),
+                    Some(routed.network),
+                    station,
+                    None,
+                )
             }
         }
-        _ => (MacAddr::from_slice(from.mac), None, None),
+        _ => (MacAddr::from_slice(from.mac), None, None, None),
     };
     let device = DiscoveredDevice {
         object_identifier: i_am.object_identifier,
@@ -47,12 +55,15 @@ pub(super) fn heard_i_am(
         source_address,
     };
     let mut table = table.lock();
+    // Folded first, so it frees its place in a full table.
+    let folded = fold.and_then(|network| table.remove(network, &device.mac_address));
     let heard = table.heard(device.clone());
-    if let Some(old) = heard.replaced {
-        // Another device took the address's place.
+    let lost = folded.as_ref().map(|f| &f.device).into_iter();
+    // The routed row folded in, then the device that left the address.
+    for old in lost.chain(heard.replaced.as_ref()) {
         let _ = device_tx.send(DeviceEvent {
             kind: DeviceEventKind::Lost,
-            device: old,
+            device: old.clone(),
         });
     }
     let kind = match heard.change {
@@ -63,7 +74,11 @@ pub(super) fn heard_i_am(
     if let Some(kind) = kind {
         let _ = device_tx.send(DeviceEvent { kind, device });
     }
-    for &instance in &heard.contested {
+    // One notice per instance, each with the claimants left at the end.
+    let shrank = folded
+        .and_then(|f| f.contested)
+        .filter(|instance| !heard.contested.contains(instance));
+    for instance in shrank.into_iter().chain(heard.contested) {
         let _ = collision_tx.send(DeviceCollisionEvent::of(&table, instance));
     }
 }

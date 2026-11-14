@@ -3,9 +3,9 @@
 //! a unicast to the destination MAC, or a local broadcast, with no DNET. A
 //! routed confirmed request is then answered from that MAC with no SNET, or
 //! relayed back by a router with this network as its SNET and that MAC as
-//! its SADR, and either answer completes it (#1465). The peer's limits still
-//! come from its routed device-table row, and a request past them is refused
-//! or segmented locally. Another network keeps its DNET, and so does every
+//! its SADR, and either answer completes it (#1465). The peer's limits come
+//! from its routed device-table row, or from its local row when it has only
+//! that, and a request past them is refused or segmented locally. Another network keeps its DNET, and so does every
 //! network while the number is unknown.
 //!
 //! The peer is `[3]`, behind router `[9]` when routed. The number is learned
@@ -64,13 +64,37 @@ async fn client(
 ) {
     let (client, inbound, mut outbound, _) = harness(false).await;
     if learned {
-        inject(&inbound, &number(THIS_NETWORK, 0), true).await;
-        // The worker takes controls in order: once it answers, it holds the
-        // number the announcement gave.
-        inject(&inbound, QUERY, false).await;
-        reply(&mut outbound, THIS_NETWORK).await;
+        learn(&inbound, &mut outbound).await;
     }
     (client, inbound, outbound)
+}
+
+/// Have the client learn `THIS_NETWORK` through its Network-Number-Is intake.
+async fn learn(inbound: &mpsc::Sender<ReceivedNpdu>, outbound: &mut mpsc::Receiver<Sent>) {
+    inject(inbound, &number(THIS_NETWORK, 0), true).await;
+    // The worker takes controls in order: once it answers, it holds the
+    // number the announcement gave.
+    inject(inbound, QUERY, false).await;
+    reply(outbound, THIS_NETWORK).await;
+}
+
+/// An I-Am from device `instance`.
+fn i_am(instance: u32) -> Apdu {
+    use bacnet_encoding::apdu::UnconfirmedRequest;
+    use bacnet_services::who_is::IAmRequest;
+    use bacnet_types::enums::UnconfirmedServiceChoice;
+    let mut service_request = BytesMut::new();
+    IAmRequest {
+        object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap(),
+        max_apdu_length: 480,
+        segmentation_supported: Segmentation::NO_SEGMENTATION,
+        vendor_id: 260,
+    }
+    .encode(&mut service_request);
+    Apdu::UnconfirmedRequest(UnconfirmedRequest {
+        service_choice: UnconfirmedServiceChoice::I_AM,
+        service_request: service_request.freeze(),
+    })
 }
 
 /// Take the confirmed request sent next and answer it with a SimpleACK the
@@ -238,7 +262,8 @@ const LONG_WRITE: [u8; 300] = [0x44; 300];
 
 /// A client that has learned `THIS_NETWORK` and holds Device 9 as routed
 /// through `ROUTER` on it, accepting APDUs of at most 128 octets and
-/// `segmentation`.
+/// `segmentation`: registered before the number was learned, as a
+/// registration naming a known number stores a local row.
 async fn client_with_routed_row(
     segmentation: Segmentation,
 ) -> (
@@ -246,7 +271,7 @@ async fn client_with_routed_row(
     mpsc::Sender<ReceivedNpdu>,
     mpsc::Receiver<Sent>,
 ) {
-    let (client, inbound, outbound) = client(true).await;
+    let (client, inbound, mut outbound) = client(false).await;
     client
         .add_routed_device(RoutedDeviceConfig {
             instance: 9,
@@ -259,6 +284,7 @@ async fn client_with_routed_row(
         })
         .await
         .unwrap();
+    learn(&inbound, &mut outbound).await;
     (client, inbound, outbound)
 }
 
@@ -462,9 +488,7 @@ async fn a_request_routed_before_the_number_was_learned_completes_on_its_relayed
         let Apdu::ConfirmedRequest(request) = decode_apdu(npdu.payload).unwrap() else {
             panic!("a confirmed request")
         };
-        inject(&inbound, &number(THIS_NETWORK, 0), true).await;
-        inject(&inbound, QUERY, false).await;
-        reply(&mut outbound, THIS_NETWORK).await;
+        learn(&inbound, &mut outbound).await;
         let relayed = relayed_from(THIS_NETWORK, &PEER);
         send_to_client(&inbound, &simple_ack(&request), &ROUTER, relayed).await;
     };
@@ -478,26 +502,14 @@ async fn a_request_routed_before_the_number_was_learned_completes_on_its_relayed
 /// SNET, names a local device, as its answers do (#1465): it lands on the
 /// device's local row, so the device and its relayed I-Am are one device,
 /// not an ambiguous instance (#2560). While the number is unknown the relay
-/// is a routed station of its own.
+/// is a routed station of its own, and the instance is ambiguous: when the
+/// number is learned, the next relay folds that row into the local one
+/// (below); a number never learned leaves it until the purge takes it.
 #[tokio::test]
 async fn an_i_am_relayed_from_this_network_is_the_local_device() {
     use crate::client::DeviceEventKind;
-    use bacnet_encoding::apdu::UnconfirmedRequest;
-    use bacnet_services::who_is::IAmRequest;
-    use bacnet_types::enums::UnconfirmedServiceChoice;
 
-    let mut service_request = BytesMut::new();
-    IAmRequest {
-        object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 9).unwrap(),
-        max_apdu_length: 480,
-        segmentation_supported: Segmentation::NO_SEGMENTATION,
-        vendor_id: 260,
-    }
-    .encode(&mut service_request);
-    let i_am = Apdu::UnconfirmedRequest(UnconfirmedRequest {
-        service_choice: UnconfirmedServiceChoice::I_AM,
-        service_request: service_request.freeze(),
-    });
+    let i_am = i_am(9);
     for (learned, rows) in [(true, 1), (false, 2)] {
         let (mut client, inbound, _outbound) = client(learned).await;
         let mut events = client.device_events();
@@ -526,4 +538,130 @@ async fn an_i_am_relayed_from_this_network_is_the_local_device() {
         }
         client.stop().await.unwrap();
     }
+}
+
+/// The number learned a minute after start-up, with a router echoing the
+/// device's I-Am back: the routed row the first echo made folds into the
+/// local row at the next echo, reported lost, and the instance names one
+/// device again then, not only once the purge takes the routed row (#2560).
+#[tokio::test(start_paused = true)]
+async fn the_next_relay_after_the_number_is_learned_folds_the_routed_row() {
+    use crate::client::DeviceEventKind;
+
+    let (mut client, inbound, mut outbound) = client(false).await;
+    let echo = || relayed_from(THIS_NETWORK, &PEER);
+    send_to_client(&inbound, &i_am(9), &PEER, None).await;
+    send_to_client(&inbound, &i_am(9), &ROUTER, echo()).await;
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    assert!(matches!(
+        client.get_device(9).await,
+        Err(Error::AmbiguousDevice { instance: 9, .. })
+    ));
+
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    learn(&inbound, &mut outbound).await;
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    let mut events = client.device_events();
+    let mut collisions = client.device_collision_events();
+    send_to_client(&inbound, &i_am(9), &ROUTER, echo()).await;
+    let lost = bounded(events.recv()).await.unwrap();
+    assert_eq!(lost.kind, DeviceEventKind::Lost);
+    assert_eq!(lost.device.source_network, Some(THIS_NETWORK));
+    let updated = bounded(events.recv()).await.unwrap();
+    assert_eq!(updated.kind, DeviceEventKind::Updated);
+    assert!(updated.device.is_local());
+    let contest = bounded(collisions.recv()).await.unwrap();
+    assert!(contest.is_resolved(), "{contest:?}");
+
+    let device = client.get_device(9).await.unwrap().expect("one device");
+    assert!(device.is_local());
+    assert_eq!(device.mac_address.as_slice(), PEER);
+    assert_eq!(client.discovered_devices().await.len(), 1);
+    client.stop().await.unwrap();
+}
+
+/// A device registered as routed on this network, once its number is
+/// learned, is the local device at its MAC: it takes the place of the
+/// routed row a relay heard before the number made (#2560).
+#[tokio::test(start_paused = true)]
+async fn a_routed_registration_on_this_network_folds_to_the_local_row() {
+    let (mut client, inbound, mut outbound) = client(false).await;
+    let relayed = relayed_from(THIS_NETWORK, &PEER);
+    send_to_client(&inbound, &i_am(9), &ROUTER, relayed).await;
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    learn(&inbound, &mut outbound).await;
+    client
+        .add_routed_device(RoutedDeviceConfig {
+            instance: 9,
+            router_mac: ROUTER.to_vec(),
+            remote_network: THIS_NETWORK,
+            remote_mac: PEER.to_vec(),
+            max_apdu_length: 480,
+            segmentation_supported: Segmentation::NO_SEGMENTATION,
+            max_segments_accepted: None,
+        })
+        .await
+        .unwrap();
+    let devices = client.discovered_devices().await;
+    assert_eq!(devices.len(), 1, "{devices:?}");
+    assert!(devices[0].is_local());
+    assert_eq!(devices[0].mac_address.as_slice(), PEER);
+    client.stop().await.unwrap();
+}
+
+/// A request named by the routed station on this network, when the device
+/// has only its local row (as its relayed I-Am makes it), is sized by that
+/// row: one too long for it is refused before anything is sent. A short
+/// one's answer restarts that row's age (#2560).
+#[tokio::test(start_paused = true)]
+async fn the_local_row_sizes_and_is_refreshed_by_a_routed_named_request() {
+    let (mut client, inbound, mut outbound) = client(true).await;
+    let seen = crate::discovery::now();
+    client
+        .device_table
+        .lock()
+        .upsert(crate::discovery::DiscoveredDevice {
+            object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 9).unwrap(),
+            mac_address: MacAddr::from_slice(&PEER),
+            max_apdu_length: 128,
+            segmentation_supported: Segmentation::NO_SEGMENTATION,
+            max_segments_accepted: None,
+            vendor_id: 1,
+            last_seen: seen,
+            source_network: None,
+            source_address: None,
+        });
+    let result = bounded(client.confirmed_request_routed(
+        &ROUTER,
+        THIS_NETWORK,
+        &PEER,
+        ConfirmedServiceChoice::WRITE_PROPERTY,
+        &LONG_WRITE,
+    ))
+    .await;
+    assert!(
+        matches!(result, Err(Error::Segmentation(_))),
+        "sized by the local row: {result:?}"
+    );
+    assert!(outbound.try_recv().is_err(), "nothing was sent");
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let (result, route) = bounded(async {
+        tokio::join!(
+            client.confirmed_request_routed(
+                &ROUTER,
+                THIS_NETWORK,
+                &PEER,
+                ConfirmedServiceChoice::WRITE_PROPERTY,
+                &[0x0C, 0x00, 0x80, 0x00, 0x01],
+            ),
+            answer(&inbound, &mut outbound),
+        )
+    })
+    .await;
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(route, local());
+    let last_seen = client.device_table.lock().get(0, &PEER).unwrap().last_seen;
+    assert!(last_seen > seen, "the local row's age did not restart");
+    client.stop().await.unwrap();
 }

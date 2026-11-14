@@ -1891,6 +1891,12 @@ device stays listed while it answers the client's confirmed requests, I-Am or
 not, and leaves 10 to 15 minutes after it was last heard from (the purge
 runs every 5 minutes and takes devices silent for more than 10).
 
+An I-Am that a router relays back from the client's own network, with that
+network's number as its source, is the local device once the client has
+learned the number. A relay heard before then is listed as a routed device of
+its own, and the instance is ambiguous until the next relay folds it into the
+local one; if the number is never learned, it stays until the purge.
+
 ```python
 await client.who_is()
 await asyncio.sleep(2)  # wait for responses

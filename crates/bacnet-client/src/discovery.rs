@@ -224,6 +224,16 @@ pub(crate) struct Heard {
     pub(crate) contested: Vec<u32>,
 }
 
+/// [`DeviceTable::remove`]'s outcome.
+#[derive(Debug)]
+pub(crate) struct Removed {
+    /// The row taken out.
+    pub(crate) device: DiscoveredDevice,
+    /// Its instance, when other rows still claim it: a contest shrank or
+    /// ended.
+    pub(crate) contested: Option<u32>,
+}
+
 /// [`DeviceTable::purge_stale_collect`]'s outcome.
 #[derive(Debug, Default)]
 pub(crate) struct Purged {
@@ -405,6 +415,23 @@ impl DeviceTable {
         if let Some(entry) = self.rows.get_mut(&Key::at(network, mac)) {
             entry.device.last_seen = entry.device.last_seen.max(now());
         }
+    }
+
+    /// Take the row at `mac` on `network` out of the table.
+    pub(crate) fn remove(&mut self, network: u16, mac: &[u8]) -> Option<Removed> {
+        let key = Key::at(network, mac);
+        let entry = self.rows.remove(&key)?;
+        let instance = entry.device.object_identifier.instance_number();
+        self.claims.remove(&(instance, key));
+        let contested = self
+            .claims_of(instance)
+            .next()
+            .is_some()
+            .then_some(instance);
+        Some(Removed {
+            device: entry.device,
+            contested,
+        })
     }
 
     /// Clear all entries.

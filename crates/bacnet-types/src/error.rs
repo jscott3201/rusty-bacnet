@@ -56,12 +56,14 @@ impl fmt::Display for NotAdvancing {
     }
 }
 
-/// [`Error::AmbiguousDevice`]'s addresses, each written as the CLI's
-/// target grammar reads it back: a routed station as `2:0x05`; on the local
+/// [`Error::AmbiguousDevice`]'s addresses, in the CLI's target grammar where
+/// it has a form for one: a routed station as `2:0x05`; on the local
 /// network, by the MAC's length, which names its link among this stack's
 /// transports: `mstp:5` (MS/TP), `bip6:0x0004D2` (a B/IPv6 VMAC), and
 /// six octets as `10.0.0.1:47808`, the same six octets for an SC VMAC or an
-/// Ethernet MAC too. Any other length is `0x` and hex.
+/// Ethernet MAC too. Those read back as the same station. A local MAC of any
+/// other length, which none of this stack's transports uses, is written as
+/// `0x` and hex, which the grammar refuses.
 #[cfg(feature = "std")]
 struct Candidates<'a>(&'a [BACnetAddress]);
 

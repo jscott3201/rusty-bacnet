@@ -182,6 +182,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// `remote_network` outside 1..=65534 or a `remote_mac` longer than
     /// [`MAX_MAC_LEN`](bacnet_npdu::MAX_MAC_LEN) is refused the same way, since
     /// [`BACnetClient::confirmed_request_routed`] refuses that destination.
+    ///
+    /// A `remote_network` that is this client's own network, once the client
+    /// has learned its number, names a local device: it is stored as the
+    /// local row at `remote_mac`, replacing a routed row for that station,
+    /// as requests to it go out locally (#1358). Like the other manual
+    /// registrations, this sends no device or collision notices.
     pub async fn add_routed_device(&self, config: RoutedDeviceConfig) -> Result<(), Error> {
         if config.router_mac.is_empty() {
             return Err(Error::Encoding(
@@ -198,18 +204,34 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             bacnet_types::enums::ObjectType::DEVICE,
             config.instance,
         )?;
+        // A station on this client's own network is the local device at that
+        // MAC (#1358): it takes the place of a routed row registered or
+        // heard for it before the number was learned.
+        let this_network = self.network.local_network_number().get();
+        let local = this_network == Some(config.remote_network);
+        let remote_mac = MacAddr::from_slice(&config.remote_mac);
+        let (mac_address, source_network, source_address) = if local {
+            (remote_mac, None, None)
+        } else {
+            let router = MacAddr::from_slice(&config.router_mac);
+            (router, Some(config.remote_network), Some(remote_mac))
+        };
         let device = DiscoveredDevice {
             object_identifier: oid,
-            mac_address: MacAddr::from_slice(&config.router_mac),
+            mac_address,
             max_apdu_length: config.max_apdu_length,
             segmentation_supported: config.segmentation_supported,
             max_segments_accepted: config.max_segments_accepted,
             vendor_id: 0,
             last_seen: crate::discovery::now(),
-            source_network: Some(config.remote_network),
-            source_address: Some(MacAddr::from_slice(&config.remote_mac)),
+            source_network,
+            source_address,
         };
-        self.device_table.lock().upsert(device);
+        let mut table = self.device_table.lock();
+        if local {
+            let _ = table.remove(config.remote_network, &config.remote_mac);
+        }
+        table.upsert(device);
         Ok(())
     }
 }

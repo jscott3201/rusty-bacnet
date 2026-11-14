@@ -82,8 +82,10 @@ pub enum DeviceEventKind {
     /// A later I-Am from the same address, for the same instance, refreshed
     /// its row.
     Updated,
-    /// A device left the table: purged as stale, or replaced at its address
-    /// by a device announcing another instance.
+    /// A device left the table: purged as stale, replaced at its address
+    /// by a device announcing another instance, or, as a routed station on
+    /// this client's own network, folded into its local row once the client
+    /// learned the network's number.
     Lost,
 }
 
@@ -102,8 +104,9 @@ pub struct DeviceEvent {
 /// The discovery table keeps a row for every claimant (see
 /// [`DeviceTable`]). A contest begins or grows when an I-Am from another
 /// address claims the instance, and shrinks or ends when the purge removes a
-/// claimant or a claimant announces another instance. Each notice describes
-/// the table after that change.
+/// claimant, a claimant announces another instance, or a routed row on this
+/// client's own network folds into its local row. Each notice describes the
+/// table after that change.
 #[derive(Debug, Clone)]
 pub struct DeviceCollisionEvent {
     /// The Device instance claimed.

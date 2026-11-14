@@ -105,9 +105,10 @@ fn protocol_error_display() {
     );
 }
 
-/// An ambiguous instance names every claimant as the CLI's target grammar
-/// reads it back: a local one by its MAC's length, a routed one as its
-/// station on its network (#2560). bacnet-ops reads each back.
+/// An ambiguous instance names every claimant: a routed one as its station
+/// on its network, and a local one by its MAC's length, in the CLI's target
+/// grammar for 1, 3 or 6 octets, which bacnet-ops reads back, and as bare
+/// hex for any other length, which the grammar refuses (#2560).
 #[cfg(feature = "std")]
 #[test]
 fn ambiguous_device_names_every_candidate() {
