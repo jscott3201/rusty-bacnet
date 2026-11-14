@@ -97,6 +97,9 @@ impl BACnetObject for AnalogOutputObject {
         {
             return result;
         }
+        if property == P::PRESENT_VALUE {
+            return Ok(PropertyValue::Real(self.present_value));
+        }
         if let Some(result) = self.core.read(&self.event_detector, property, array_index) {
             return result;
         }
@@ -104,7 +107,6 @@ impl BACnetObject for AnalogOutputObject {
             return result;
         }
         match property {
-            P::PRESENT_VALUE => Ok(PropertyValue::Real(self.present_value)),
             P::PRIORITY_ARRAY => {
                 common::read_priority_array!(self, array_index, PropertyValue::Real)
             }

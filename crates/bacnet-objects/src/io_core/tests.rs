@@ -1,9 +1,13 @@
-//! What [`IoCore::write`] reports, and the one reset every detector shares.
+//! What [`IoCore::write`] reports, the one reset every detector shares, and
+//! the Reliability route of the objects without a fault algorithm.
 
 use super::*;
+use crate::analog::AnalogOutputObject;
+use crate::binary::{BinaryInputObject, BinaryOutputObject, BinaryValueObject};
 use crate::event::{OutOfRangeDetector, PendingTransition};
+use crate::traits::{BACnetObject, ReliabilityEvaluation};
 use bacnet_types::bitstring::EventTransitionBits;
-use bacnet_types::enums::NotifyType;
+use bacnet_types::enums::{EngineeringUnits, NotifyType};
 
 fn core() -> IoCore {
     IoCore::new(ObjectType::BINARY_VALUE, 1, "BV-1".into()).unwrap()
@@ -131,4 +135,49 @@ fn detection_off_resets_every_detector_the_same_way() {
     assert_reset!(CommandFailureDetector);
     let range = assert_reset!(OutOfRangeDetector, high_limit: 80.0);
     assert_eq!(range.high_limit, 80.0);
+}
+
+/// The objects [`impl_reliability_eval!`] serves: a Reliability the
+/// application sets stays, since nothing of theirs evaluates it, and
+/// Reliability_Evaluation_Inhibit is what the capability reports.
+#[test]
+fn reliability_set_by_the_application_stays_on_the_objects_without_a_fault_algorithm() {
+    let objects: [Box<dyn BACnetObject>; 4] = [
+        Box::new(AnalogOutputObject::new(1, "AO-1", EngineeringUnits::DEGREES_CELSIUS).unwrap()),
+        Box::new(BinaryInputObject::new(1, "BI-1").unwrap()),
+        Box::new(BinaryOutputObject::new(1, "BO-1").unwrap()),
+        Box::new(BinaryValueObject::new(1, "BV-1").unwrap()),
+    ];
+    let no_sensor = PropertyValue::Enumerated(Reliability::NO_SENSOR.to_raw());
+    for mut object in objects {
+        let kind = object.object_identifier().object_type();
+        let eval = object.reliability_eval().unwrap();
+        eval.set_reliability(Reliability::NO_SENSOR).unwrap();
+        assert_eq!(
+            eval.evaluate_reliability().unwrap(),
+            ReliabilityEvaluation::Unchanged,
+            "{kind:?}"
+        );
+        assert!(!eval.reliability_evaluation_inhibited(), "{kind:?}");
+        assert_eq!(
+            object.read_property(P::RELIABILITY, None).unwrap(),
+            no_sensor,
+            "{kind:?}"
+        );
+        object
+            .write_property(
+                P::RELIABILITY_EVALUATION_INHIBIT,
+                None,
+                PropertyValue::Boolean(true),
+                None,
+            )
+            .unwrap();
+        let eval = object.reliability_eval().unwrap();
+        assert!(eval.reliability_evaluation_inhibited(), "{kind:?}");
+        // Inhibited, the object no longer takes the application's either.
+        assert!(
+            eval.set_reliability(Reliability::NO_SENSOR).is_err(),
+            "{kind:?}"
+        );
+    }
 }

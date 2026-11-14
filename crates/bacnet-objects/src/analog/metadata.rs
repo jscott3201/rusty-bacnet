@@ -14,7 +14,7 @@ use bacnet_types::enums::PropertyIdentifier as P;
 
 use crate::io_core::{
     COMMANDABLE_ROWS, COMMANDED_ROWS, EVENT_HISTORY_ROWS, IDENTITY_ROWS, OUT_OF_SERVICE_ROW,
-    RELIABILITY_ROWS, VALUE_SOURCE_ROWS,
+    RELIABILITY_ROWS, VALUE_SOURCE_ROWS, intrinsic,
 };
 use crate::property_metadata::{
     COV_INCREMENT_ROW, PROPERTY_LIST_ROW,
@@ -56,11 +56,6 @@ const OUT_OF_RANGE_ROWS: &[PropertyMetadata] = &[
         Always,
     ),
 ];
-
-/// A writable row intrinsic reporting requires.
-const fn intrinsic(property: P) -> PropertyMetadata {
-    PropertyMetadata::new(property, Optional, Some(IntrinsicReportingRequired), Always)
-}
 
 /// Table 12-2: Present_Value takes writes only out of service.
 pub(super) const INPUT: &[PropertyMetadata] = joined_rows![

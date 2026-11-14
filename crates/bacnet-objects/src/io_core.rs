@@ -397,6 +397,31 @@ pub(crate) const IDENTITY_ROWS: &[PropertyMetadata] = &[
     PropertyMetadata::new(P::OBJECT_TYPE, RequiredRead, None, ReadOnly),
 ];
 
+/// A writable row intrinsic reporting requires.
+pub(crate) const fn intrinsic(property: P) -> PropertyMetadata {
+    PropertyMetadata::new(property, Optional, Some(IntrinsicReportingRequired), Always)
+}
+
+/// Status_Flags, Event_State and Event_Detection_Enable, then the rows
+/// every detector has, in the order the binary and multi-state tables keep
+/// them. The analog tables keep their own order, with Out_Of_Service and
+/// Units between and OUT_OF_RANGE's parameters first.
+pub(crate) const DETECTOR_ROWS: &[PropertyMetadata] = &[
+    PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
+    PropertyMetadata::new(P::EVENT_STATE, RequiredRead, None, ReadOnly),
+    intrinsic(P::EVENT_DETECTION_ENABLE),
+    intrinsic(P::EVENT_ENABLE),
+    intrinsic(P::TIME_DELAY),
+    PropertyMetadata::new(
+        P::TIME_DELAY_NORMAL,
+        Optional,
+        Some(IntrinsicReportingOptional),
+        Always,
+    ),
+    intrinsic(P::NOTIFY_TYPE),
+    intrinsic(P::NOTIFICATION_CLASS),
+];
+
 /// Out_Of_Service, which every one of the nine takes a write of.
 pub(crate) const OUT_OF_SERVICE_ROW: PropertyMetadata =
     PropertyMetadata::new(P::OUT_OF_SERVICE, RequiredRead, None, Always);

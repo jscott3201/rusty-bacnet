@@ -109,6 +109,9 @@ impl BACnetObject for BinaryInputObject {
         array_index: Option<u32>,
     ) -> Result<PropertyValue, Error> {
         crate::property_metadata::check_read_array_index(self, property, array_index)?;
+        if property == P::PRESENT_VALUE {
+            return Ok(PropertyValue::Enumerated(self.present_value));
+        }
         if let Some(result) = self.core.read(&self.event_detector, property, array_index) {
             return result;
         }
@@ -116,7 +119,6 @@ impl BACnetObject for BinaryInputObject {
             return Ok(value);
         }
         match property {
-            P::PRESENT_VALUE => Ok(PropertyValue::Enumerated(self.present_value)),
             P::POLARITY => Ok(PropertyValue::Enumerated(self.polarity)),
             P::ALARM_VALUE => Ok(read_alarm_value(&self.event_detector)),
             P::PROPERTY_LIST => {

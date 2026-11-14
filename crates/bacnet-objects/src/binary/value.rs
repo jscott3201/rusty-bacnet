@@ -195,6 +195,9 @@ impl BACnetObject for BinaryValueObject {
         if let Some(result) = source {
             return result;
         }
+        if property == P::PRESENT_VALUE {
+            return Ok(PropertyValue::Enumerated(self.present_value));
+        }
         if let Some(result) = self.audit_policy.read(property, array_index) {
             return result;
         }
@@ -205,7 +208,6 @@ impl BACnetObject for BinaryValueObject {
             return Ok(value);
         }
         match property {
-            P::PRESENT_VALUE => Ok(PropertyValue::Enumerated(self.present_value)),
             P::PRIORITY_ARRAY => {
                 common::read_priority_array!(self, array_index, PropertyValue::Enumerated)
             }

@@ -12,42 +12,17 @@
 use bacnet_types::enums::PropertyIdentifier as P;
 
 use crate::io_core::{
-    COMMANDABLE_ROWS, COMMANDED_ROWS, EVENT_HISTORY_ROWS, IDENTITY_ROWS, OUT_OF_SERVICE_ROW,
-    RELIABILITY_ROWS, VALUE_SOURCE_ROWS,
+    COMMANDABLE_ROWS, COMMANDED_ROWS, DETECTOR_ROWS, EVENT_HISTORY_ROWS, IDENTITY_ROWS,
+    OUT_OF_SERVICE_ROW, RELIABILITY_ROWS, VALUE_SOURCE_ROWS, intrinsic,
 };
 use crate::property_metadata::{
     PROPERTY_LIST_ROW,
     PropertyConformance::{Optional, RequiredRead, RequiredWrite},
     PropertyMetadata,
-    PropertyPresenceCondition::{
-        IntrinsicReportingOptional, IntrinsicReportingRequired, PairedText,
-    },
+    PropertyPresenceCondition::PairedText,
     PropertyWriteCapability::{Always, ReadOnly, WhenOutOfService},
     joined_rows,
 };
-
-/// Status_Flags, Event_State and Event_Detection_Enable, then the rows
-/// every detector has, in the order the binary tables keep them.
-const DETECTOR_ROWS: &[PropertyMetadata] = &[
-    PropertyMetadata::new(P::STATUS_FLAGS, RequiredRead, None, ReadOnly),
-    PropertyMetadata::new(P::EVENT_STATE, RequiredRead, None, ReadOnly),
-    intrinsic(P::EVENT_DETECTION_ENABLE),
-    intrinsic(P::EVENT_ENABLE),
-    intrinsic(P::TIME_DELAY),
-    PropertyMetadata::new(
-        P::TIME_DELAY_NORMAL,
-        Optional,
-        Some(IntrinsicReportingOptional),
-        Always,
-    ),
-    intrinsic(P::NOTIFY_TYPE),
-    intrinsic(P::NOTIFICATION_CLASS),
-];
-
-/// A writable row intrinsic reporting requires.
-const fn intrinsic(property: P) -> PropertyMetadata {
-    PropertyMetadata::new(property, Optional, Some(IntrinsicReportingRequired), Always)
-}
 
 /// Polarity, which the Input and the Output keep at normal.
 const POLARITY_ROW: PropertyMetadata =
