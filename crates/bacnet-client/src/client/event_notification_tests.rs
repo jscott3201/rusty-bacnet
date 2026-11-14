@@ -6,6 +6,7 @@ use bacnet_encoding::tags::{TagClass, encode_tag};
 use bacnet_services::alarm_event::NotificationParameters;
 use bacnet_transport::port::ReceivedNpdu;
 use bacnet_transport::port::TransportProvenance;
+use bacnet_transport::test_transport::{SendMode, TestTransport};
 use bacnet_types::constructed::OpaqueChoice;
 use bacnet_types::enums::{EventState, EventType, NotifyType, ObjectType, RejectReason};
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, StatusFlags};
@@ -90,43 +91,30 @@ fn inbound(apdu: Apdu, source: Option<NpduAddress>) -> ReceivedNpdu {
     }
 }
 
-struct ReceiveTransport {
-    input: Option<mpsc::Receiver<ReceivedNpdu>>,
+/// A link fed by `input`, whose unicasts land in `output`; a broadcast is
+/// a test failure, since the client must not broadcast an event response.
+fn receive_transport(
+    input: mpsc::Receiver<ReceivedNpdu>,
     output: mpsc::Sender<(Bytes, MacAddr)>,
-}
-
-impl TransportPort for ReceiveTransport {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        Ok(self.input.take().unwrap())
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.output
-            .send((Bytes::copy_from_slice(npdu), MacAddr::from_slice(mac)))
-            .await
-            .unwrap();
-        Ok(())
-    }
-
-    async fn send_broadcast(&self, _npdu: &[u8]) -> Result<(), Error> {
-        panic!("client must not broadcast an event response")
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &[0x11]
-    }
+) -> TestTransport {
+    TestTransport::builder()
+        .local_mac(&[0x11])
+        .inbound(input)
+        .broadcast(SendMode::Panic(
+            "client must not broadcast an event response",
+        ))
+        .on_send(move |frame| {
+            let output = output.clone();
+            async move {
+                output.send((frame.npdu, frame.mac)).await.unwrap();
+                Ok(())
+            }
+        })
+        .build()
 }
 
 struct Harness {
-    client: BACnetClient<ReceiveTransport>,
+    client: BACnetClient<TestTransport>,
     input: mpsc::Sender<ReceivedNpdu>,
     output: mpsc::Receiver<(Bytes, MacAddr)>,
 }
@@ -136,10 +124,7 @@ impl Harness {
         let (input, input_rx) = mpsc::channel(8);
         let (output_tx, output) = mpsc::channel(8);
         let client = BACnetClient::generic_builder()
-            .transport(ReceiveTransport {
-                input: Some(input_rx),
-                output: output_tx,
-            })
+            .transport(receive_transport(input_rx, output_tx))
             .event_channel_capacity(capacity)
             .confirmed_cov_notification_ack_policy(|_| {
                 panic!("event notifications must not invoke the COV policy")
@@ -678,10 +663,7 @@ async fn event_options_defaults_bounds_and_builders() {
         assert!(matches!(
             BACnetClient::start_with_options(
                 ClientConfig::default(),
-                ReceiveTransport {
-                    input: Some(receiver),
-                    output: input
-                },
+                receive_transport(receiver, input),
                 options,
             )
             .await,

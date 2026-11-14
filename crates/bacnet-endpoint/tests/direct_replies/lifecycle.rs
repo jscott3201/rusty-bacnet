@@ -10,8 +10,8 @@ use bacnet_types::{MacAddr, enums::PropertyIdentifier};
 #[tokio::test]
 async fn checked_response_queue_is_bounded_caller_owned_and_does_not_retarget() {
     let ca = TestCa::new();
-    let (mut f, mut port) = Fixture::new(&ca).await;
-    let gate = port.hold_sends();
+    let (mut f, port) = Fixture::new(&ca).await;
+    let gate = f.hold_sends();
     let mut ingress = EndpointIngress::new(port, 1);
     let queues = ingress.start().await.unwrap();
     let mut a = f.peer(ca.tls("A"), None).await;
@@ -91,8 +91,8 @@ async fn checked_response_queue_is_bounded_caller_owned_and_does_not_retarget() 
 
 async fn session_pending_response(stop: bool) {
     let ca = TestCa::new();
-    let (mut f, mut port) = Fixture::new(&ca).await;
-    let _gate = port.hold_sends();
+    let (mut f, port) = Fixture::new(&ca).await;
+    let _gate = f.hold_sends();
     let mut session = EndpointSession::new(
         port,
         SessionRole::Both,
@@ -153,8 +153,8 @@ async fn live_session_drop_cancels_queued_original_response_and_retained_handle(
 #[tokio::test]
 async fn canceling_live_responder_waiter_retracts_queued_reply_before_replacement() {
     let ca = TestCa::new();
-    let (mut f, mut port) = Fixture::new(&ca).await;
-    let gate = port.hold_sends();
+    let (mut f, port) = Fixture::new(&ca).await;
+    let gate = f.hold_sends();
     let mut session =
         EndpointSession::new(port, SessionRole::Both, SessionConfig::default()).unwrap();
     session.start().await.unwrap();

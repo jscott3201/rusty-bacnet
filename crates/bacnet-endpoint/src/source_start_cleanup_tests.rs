@@ -1,47 +1,32 @@
 //! Post-start validation failure owns cleanup even when the caller cancels it.
 use super::*;
+use bacnet_transport::test_transport::SendMode;
 use tokio::sync::{Notify, Semaphore};
 
-struct BlockingStop {
-    inner: ObservedTransport,
+/// `inner` with a stop that tells `entered` and waits for a permit from
+/// `gate` before the inner stop, and a drop counted in `drops`.
+fn blocking_stop(
+    inner: TestTransport,
     entered: Arc<Notify>,
     gate: Arc<Semaphore>,
     drops: Arc<AtomicUsize>,
-}
-impl Drop for BlockingStop {
-    fn drop(&mut self) {
-        self.drops.fetch_add(1, Ordering::SeqCst);
-    }
-}
-impl TransportPort for BlockingStop {
-    fn bip_broadcast_endpoint(&self) -> Option<std::net::SocketAddrV4> {
-        self.inner.bip_broadcast_endpoint()
-    }
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        self.inner.start().await
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        self.entered.notify_one();
-        self.gate.acquire().await.unwrap().forget();
-        self.inner.stop().await
-    }
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.inner.send_unicast(npdu, mac).await
-    }
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.inner.send_broadcast(npdu).await
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        self.inner.local_receive_apdu_capacity()
-    }
-
-    fn egress_apdu_limit(&self) -> u16 {
-        self.inner.egress_apdu_limit()
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        self.inner.local_mac()
-    }
+) -> TestTransport {
+    TestTransport::builder()
+        .inner(inner)
+        .unicast(SendMode::Forward)
+        .broadcast(SendMode::Forward)
+        .before_stop(move || {
+            entered.notify_one();
+            let gate = Arc::clone(&gate);
+            async move {
+                gate.acquire().await.unwrap().forget();
+                Ok(())
+            }
+        })
+        .on_drop(move || {
+            drops.fetch_add(1, Ordering::SeqCst);
+        })
+        .build()
 }
 
 #[tokio::test]
@@ -54,15 +39,12 @@ async fn canceled_failed_start_retains_cleanup_until_stop_or_drop() {
         let entered = Arc::new(Notify::new());
         let gate = Arc::new(Semaphore::new(0));
         let drops = Arc::new(AtomicUsize::new(0));
-        let transport = BlockingStop {
-            inner: ObservedTransport {
-                inner,
-                observed: observed.clone(),
-            },
-            entered: entered.clone(),
-            gate: gate.clone(),
-            drops: drops.clone(),
-        };
+        let transport = blocking_stop(
+            observed_transport(inner, observed.clone()),
+            entered.clone(),
+            gate.clone(),
+            drops.clone(),
+        );
         let mut db = database();
         if !after_install {
             db.get_mut(&oid(ObjectType::DEVICE, 123))
@@ -146,10 +128,7 @@ async fn post_profile_requester_failure_uninstalls_source_owner_and_releases_dat
     let (inner, _peer) = LoopbackTransport::pair(vec![1], vec![2]);
     let observed = Arc::new(Observations::default());
     let mut session = EndpointSession::new(
-        ObservedTransport {
-            inner,
-            observed: observed.clone(),
-        },
+        observed_transport(inner, observed.clone()),
         SessionRole::ClientOnly,
         SessionConfig {
             max_apdu_length: 1,

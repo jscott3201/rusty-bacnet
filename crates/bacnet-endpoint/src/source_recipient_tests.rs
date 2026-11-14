@@ -2,6 +2,7 @@
 use super::*;
 use bacnet_encoding::apdu::ConfirmedRequest;
 use bacnet_services::write_property::WritePropertyRequest;
+use bacnet_transport::test_transport::TestTransport;
 use bacnet_types::constructed::{AuditPropertyReference, BACnetAddress};
 
 fn device(n: u32) -> BACnetRecipient {
@@ -12,13 +13,16 @@ fn value(recipient: &BACnetRecipient) -> Vec<u8> {
     bacnet_encoding::constructed::encode_recipient(&mut data, recipient).unwrap();
     data.to_vec()
 }
-fn direct(network: &NetworkLayer<BusPort>) -> BACnetRecipient {
+fn direct(network: &NetworkLayer<TestTransport>) -> BACnetRecipient {
     BACnetRecipient::Address(BACnetAddress {
         network_number: 0,
         mac_address: MacAddr::from_slice(network.local_mac()),
     })
 }
-async fn local(session: &EndpointSession<BusPort>, value: PropertyValue) -> Result<(), Error> {
+async fn local(
+    session: &EndpointSession<TestTransport>,
+    value: PropertyValue,
+) -> Result<(), Error> {
     session
         .database
         .as_ref()
@@ -34,7 +38,7 @@ async fn local(session: &EndpointSession<BusPort>, value: PropertyValue) -> Resu
             None,
         )
 }
-async fn current(session: &EndpointSession<BusPort>) -> PropertyValue {
+async fn current(session: &EndpointSession<TestTransport>) -> PropertyValue {
     session
         .database
         .as_ref()
@@ -47,8 +51,8 @@ async fn current(session: &EndpointSession<BusPort>) -> PropertyValue {
         .unwrap()
 }
 async fn wire(
-    session: &EndpointSession<BusPort>,
-    peer: &NetworkLayer<BusPort>,
+    session: &EndpointSession<TestTransport>,
+    peer: &NetworkLayer<TestTransport>,
     replies: &mut bacnet_network::layer::ApduReceiver,
     bytes: Vec<u8>,
     invoke: u8,

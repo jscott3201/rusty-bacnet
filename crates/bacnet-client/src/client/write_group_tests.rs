@@ -2,6 +2,7 @@ use super::*;
 use bacnet_encoding::npdu::decode_npdu;
 use bacnet_services::write_group::GroupChannelValue;
 use bacnet_transport::port::ReceivedNpdu;
+use bacnet_transport::test_transport::TestTransport;
 use std::num::NonZeroU32;
 
 const PEER: [u8; 6] = [10, 0, 0, 5, 0xBA, 0xC0];
@@ -14,58 +15,31 @@ struct Sent {
 }
 
 /// Records every frame instead of sending it.
-struct Capture {
-    inbound: Option<mpsc::Receiver<ReceivedNpdu>>,
+fn capture(
+    inbound: mpsc::Receiver<ReceivedNpdu>,
     sent: mpsc::UnboundedSender<Sent>,
-}
-
-impl TransportPort for Capture {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        self.inbound
-            .take()
-            .ok_or_else(|| Error::Encoding("capture transport already started".into()))
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        let _ = self.sent.send(Sent {
-            npdu: Bytes::copy_from_slice(npdu),
-            to: Some(MacAddr::from_slice(mac)),
-        });
-        Ok(())
-    }
-
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        let _ = self.sent.send(Sent {
-            npdu: Bytes::copy_from_slice(npdu),
-            to: None,
-        });
-        Ok(())
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &[10, 0, 0, 2, 0xBA, 0xC0]
-    }
+) -> TestTransport {
+    TestTransport::builder()
+        .local_mac(&[10, 0, 0, 2, 0xBA, 0xC0])
+        .inbound(inbound)
+        .on_send(move |frame| {
+            let _ = sent.send(Sent {
+                npdu: frame.npdu,
+                to: (!frame.broadcast).then_some(frame.mac),
+            });
+            async { Ok(()) }
+        })
+        .build()
 }
 
 async fn client() -> (
-    BACnetClient<Capture>,
+    BACnetClient<TestTransport>,
     mpsc::Sender<ReceivedNpdu>,
     mpsc::UnboundedReceiver<Sent>,
 ) {
     let (inbound_tx, inbound) = mpsc::channel(4);
     let (sent, sent_rx) = mpsc::unbounded_channel();
-    let transport = Capture {
-        inbound: Some(inbound),
-        sent,
-    };
+    let transport = capture(inbound, sent);
     let client = BACnetClient::start(ClientConfig::default(), transport)
         .await
         .unwrap();

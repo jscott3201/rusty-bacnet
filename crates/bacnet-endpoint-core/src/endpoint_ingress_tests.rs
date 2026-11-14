@@ -5,6 +5,7 @@ use bacnet_encoding::npdu::{Npdu, NpduAddress, decode_npdu, encode_npdu};
 use bacnet_npdu::NetworkPriority;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::{DataAttribute, ReceivedNpdu, TransportPort, TransportProvenance};
+use bacnet_transport::test_transport::{SendMode, TestTransport, TestTransportHandle};
 use bacnet_types::MacAddr;
 use bacnet_types::error::Error;
 use bytes::{Bytes, BytesMut};
@@ -15,142 +16,91 @@ use super::*;
 
 const WAIT: Duration = Duration::from_secs(1);
 
-struct TestTransport {
-    receiver: Option<mpsc::Receiver<ReceivedNpdu>>,
-    sent: mpsc::Sender<(Vec<u8>, Vec<u8>)>,
-    starts: Arc<AtomicUsize>,
-    stops: Arc<AtomicUsize>,
-    local_mac: MacAddr,
-}
-
-struct TestTransportHandle {
+/// The test's side of a [`test_transport`] or [`blocking_transport`] link.
+struct Link {
     sender: mpsc::Sender<ReceivedNpdu>,
     sent: mpsc::Receiver<(Vec<u8>, Vec<u8>)>,
-    starts: Arc<AtomicUsize>,
-    stops: Arc<AtomicUsize>,
+    counters: TestTransportHandle,
 }
 
-fn test_transport() -> (TestTransport, TestTransportHandle) {
+impl Link {
+    fn starts(&self) -> usize {
+        self.counters.starts()
+    }
+
+    fn stops(&self) -> usize {
+        self.counters.stops()
+    }
+}
+
+/// A link at MAC 0xaa whose unicasts land in the link's `sent` (a full or
+/// closed queue fails the send), whose broadcasts vanish, and for which
+/// MAC 0xFF reaches a group of nodes.
+fn test_transport() -> (TestTransport, Link) {
     let (sender, receiver) = mpsc::channel(32);
     let (sent_tx, sent_rx) = mpsc::channel(32);
-    let starts = Arc::new(AtomicUsize::new(0));
-    let stops = Arc::new(AtomicUsize::new(0));
+    let transport = TestTransport::builder()
+        .local_mac(&[0xaa])
+        .inbound(receiver)
+        .broadcast(SendMode::Ignore)
+        .on_is_group_destination(|mac| mac == [0xFF])
+        .on_send(move |frame| {
+            let sent = sent_tx.clone();
+            async move {
+                sent.send((frame.npdu.to_vec(), frame.mac.to_vec()))
+                    .await
+                    .map_err(|_| Error::Encoding("test sent-frame receiver closed".into()))
+            }
+        })
+        .build();
+    let counters = transport.handle();
     (
-        TestTransport {
-            receiver: Some(receiver),
-            sent: sent_tx,
-            starts: Arc::clone(&starts),
-            stops: Arc::clone(&stops),
-            local_mac: MacAddr::from_slice(&[0xaa]),
-        },
-        TestTransportHandle {
+        transport,
+        Link {
             sender,
             sent: sent_rx,
-            starts,
-            stops,
+            counters,
         },
     )
 }
 
-impl TransportPort for TestTransport {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        self.starts.fetch_add(1, Ordering::SeqCst);
-        self.receiver
-            .take()
-            .ok_or_else(|| Error::Encoding("test transport already started".into()))
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        self.stops.fetch_add(1, Ordering::SeqCst);
-        Ok(())
-    }
-
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.sent
-            .send((npdu.to_vec(), mac.to_vec()))
-            .await
-            .map_err(|_| Error::Encoding("test sent-frame receiver closed".into()))
-    }
-
-    async fn send_broadcast(&self, _npdu: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &self.local_mac
-    }
-
-    /// MAC 0xFF reaches a group of nodes.
-    fn is_group_destination(&self, mac: &[u8]) -> bool {
-        mac == [0xFF]
-    }
-}
-
-struct BlockingTransport {
-    receiver: Option<mpsc::Receiver<ReceivedNpdu>>,
-    entered_send: Arc<Notify>,
-    stops: Arc<AtomicUsize>,
-    local_mac: MacAddr,
-}
-
-struct BlockingTransportHandle {
+/// The test's side of a [`blocking_transport`] link.
+struct BlockingLink {
     sender: mpsc::Sender<ReceivedNpdu>,
     entered_send: Arc<Notify>,
-    stops: Arc<AtomicUsize>,
+    counters: TestTransportHandle,
 }
 
-fn blocking_transport() -> (BlockingTransport, BlockingTransportHandle) {
+impl BlockingLink {
+    fn stops(&self) -> usize {
+        self.counters.stops()
+    }
+}
+
+/// A link whose every unicast tells `entered_send` and then never finishes;
+/// broadcasts vanish.
+fn blocking_transport() -> (TestTransport, BlockingLink) {
     let (sender, receiver) = mpsc::channel(1);
     let entered_send = Arc::new(Notify::new());
-    let stops = Arc::new(AtomicUsize::new(0));
+    let entered = Arc::clone(&entered_send);
+    let transport = TestTransport::builder()
+        .local_mac(&[0xaa])
+        .inbound(receiver)
+        .broadcast(SendMode::Ignore)
+        .on_send(move |_| {
+            entered.notify_one();
+            std::future::pending()
+        })
+        .build();
+    let counters = transport.handle();
     (
-        BlockingTransport {
-            receiver: Some(receiver),
-            entered_send: Arc::clone(&entered_send),
-            stops: Arc::clone(&stops),
-            local_mac: MacAddr::from_slice(&[0xaa]),
-        },
-        BlockingTransportHandle {
+        transport,
+        BlockingLink {
             sender,
             entered_send,
-            stops,
+            counters,
         },
     )
-}
-
-impl TransportPort for BlockingTransport {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        self.receiver
-            .take()
-            .ok_or_else(|| Error::Encoding("blocking transport already started".into()))
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        self.stops.fetch_add(1, Ordering::SeqCst);
-        Ok(())
-    }
-
-    async fn send_unicast(&self, _npdu: &[u8], _mac: &[u8]) -> Result<(), Error> {
-        self.entered_send.notify_one();
-        std::future::pending::<()>().await;
-        unreachable!("blocking test send is cancelled by endpoint stop")
-    }
-
-    async fn send_broadcast(&self, _npdu: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &self.local_mac
-    }
 }
 
 fn npdu_bytes(apdu: &[u8]) -> Bytes {
@@ -177,7 +127,7 @@ fn received_npdu(apdu: &[u8]) -> ReceivedNpdu {
     }
 }
 
-async fn inject(handle: &TestTransportHandle, apdu: &[u8]) {
+async fn inject(handle: &Link, apdu: &[u8]) {
     handle.sender.send(received_npdu(apdu)).await.unwrap();
 }
 
@@ -326,7 +276,7 @@ async fn saturated_egress_is_bounded_and_stop_cancels_accepted_commands() {
         timeout(WAIT, endpoint.stop()).await.unwrap().unwrap(),
         ClassifierExit::Cancelled
     ));
-    assert_eq!(handle.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(handle.stops(), 1);
     for result in [first.await.unwrap(), second.await.unwrap()] {
         assert!(matches!(
             result,
@@ -460,17 +410,17 @@ async fn duplicate_start_is_rejected_before_transport_and_stop_is_single_owner()
     let (transport, handle) = test_transport();
     let mut endpoint = EndpointIngress::new(transport, 1);
     let mut ingress = endpoint.start().await.unwrap();
-    assert_eq!(handle.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(handle.starts(), 1);
 
     assert!(endpoint.start().await.is_err());
-    assert_eq!(handle.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(handle.starts(), 1);
     assert!(matches!(
         endpoint.stop().await.unwrap(),
         ClassifierExit::Cancelled
     ));
-    assert_eq!(handle.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(handle.stops(), 1);
     assert!(endpoint.stop().await.is_err());
-    assert_eq!(handle.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(handle.stops(), 1);
     assert!(ingress.inbound_requests.recv().await.is_none());
     assert!(ingress.terminal_or_segment.recv().await.is_none());
     assert!(ingress.policy_outcomes.recv().await.is_none());
@@ -482,8 +432,8 @@ async fn zero_capacity_is_rejected_before_transport_start() {
     let mut endpoint = EndpointIngress::new(transport, 0);
 
     assert!(endpoint.start().await.is_err());
-    assert_eq!(handle.starts.load(Ordering::SeqCst), 0);
-    assert_eq!(handle.stops.load(Ordering::SeqCst), 0);
+    assert_eq!(handle.starts(), 0);
+    assert_eq!(handle.stops(), 0);
 }
 
 #[tokio::test]
@@ -517,7 +467,7 @@ async fn full_and_closed_role_routes_are_explicit_and_stop_does_not_block() {
         .await
         .expect("stop blocked on a saturated role route")
         .unwrap();
-    assert_eq!(handle.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(handle.stops(), 1);
     assert_eq!(inbound.recv().await.unwrap().apdu[2], 1);
     assert!(inbound.recv().await.is_none());
     assert!(policies.recv().await.is_none());
@@ -551,7 +501,7 @@ async fn full_policy_route_returns_the_unrouted_envelope_on_reclaim() {
         }
         other => panic!("unexpected classifier exit: {other:?}"),
     }
-    assert_eq!(handle.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(handle.stops(), 1);
     drop(ingress);
 }
 
