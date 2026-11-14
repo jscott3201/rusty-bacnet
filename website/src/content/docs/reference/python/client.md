@@ -853,10 +853,10 @@ Send ReinitializeDevice to a remote device.
 Raises ValueError, before anything is sent, for a password over 20
 characters or an empty one (pass None to send no password).
 
-### BACnetClient.acknowledge_alarm_request
+### BACnetClient.acknowledge_alarm
 
 ```python
-def acknowledge_alarm_request(
+def acknowledge_alarm(
     self,
     address: str,
     acknowledging_process_identifier: int,

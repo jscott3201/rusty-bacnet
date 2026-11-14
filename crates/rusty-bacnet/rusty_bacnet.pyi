@@ -4444,7 +4444,7 @@ class BACnetClient:
 
     # --- Alarms and events ---
 
-    def acknowledge_alarm_request(
+    def acknowledge_alarm(
         self,
         address: str,
         acknowledging_process_identifier: int,

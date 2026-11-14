@@ -119,7 +119,7 @@ class BACnetTimeStampArtifactTests(unittest.TestCase):
         self.assertIn("BACnetTimeStamp", classes)
 
         runtime_parameters = list(
-            inspect.signature(BACnetClient.acknowledge_alarm_request).parameters.values()
+            inspect.signature(BACnetClient.acknowledge_alarm).parameters.values()
         )
         expected = [
             "self",
@@ -136,7 +136,7 @@ class BACnetTimeStampArtifactTests(unittest.TestCase):
             all(parameter.default is inspect.Parameter.empty for parameter in runtime_parameters)
         )
 
-        client_method = method(classes["BACnetClient"], "acknowledge_alarm_request")
+        client_method = method(classes["BACnetClient"], "acknowledge_alarm")
         stub_args = [*client_method.args.posonlyargs, *client_method.args.args]
         self.assertEqual([arg.arg for arg in stub_args], expected)
         event_state_annotation = stub_args[4].annotation
@@ -155,7 +155,7 @@ class BACnetTimeStampArtifactTests(unittest.TestCase):
         client = BACnetClient()
         oid = ObjectIdentifier(ObjectType.ANALOG_INPUT, 1)
         timestamp = BACnetTimeStamp.sequence_number(1)
-        call: Any = client.acknowledge_alarm_request
+        call: Any = client.acknowledge_alarm
         with self.assertRaises(TypeError):
             call("127.0.0.1:47808", 7, oid, EventState.FAULT, timestamp, "operator")
         with self.assertRaises(TypeError):

@@ -2179,7 +2179,7 @@ await client.reinitialize_device(
 
 ### Alarms & Events
 
-#### `acknowledge_alarm_request(address, acknowledging_process_identifier, event_object_identifier, event_state_acknowledged, timestamp, acknowledgment_source, time_of_acknowledgment)`
+#### `acknowledge_alarm(address, acknowledging_process_identifier, event_object_identifier, event_state_acknowledged, timestamp, acknowledgment_source, time_of_acknowledgment)`
 
 Sends exactly the given fields. `timestamp` must echo the event notification's
 timestamp, and `time_of_acknowledgment` is the acknowledging device's time.
@@ -2187,7 +2187,7 @@ timestamp, and `time_of_acknowledgment` is the acknowledging device's time.
 ```python
 from rusty_bacnet import BACnetTimeStamp, EventState
 
-await client.acknowledge_alarm_request(
+await client.acknowledge_alarm(
     "192.168.1.100:47808",
     acknowledging_process_identifier=1,
     event_object_identifier=ObjectIdentifier(ObjectType.ANALOG_INPUT, 1),

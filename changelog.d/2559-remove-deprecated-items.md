@@ -1,4 +1,4 @@
 ---
 section: Removed
 ---
-- **Breaking (Rust API, Python API):** `BACnetClient::acknowledge_alarm` and the Python `acknowledge_alarm` (both made up zero timestamps) and `BACnetSuccessFilter::from_legacy_bool` are gone; use `acknowledge_alarm_request` and the named `BACnetSuccessFilter` constants (#2559).
+- **Breaking (Rust API, Python API):** the timestamp-inventing `acknowledge_alarm` is gone; `acknowledge_alarm` (and `acknowledge_alarm_from_device`) now takes the caller's correlation timestamps. `BACnetSuccessFilter::from_legacy_bool` is removed too (#2559).

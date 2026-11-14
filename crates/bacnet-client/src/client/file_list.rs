@@ -44,7 +44,7 @@ fn validate_atomic_read_file_ack(
 
 impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Send a caller-supplied AcknowledgeAlarm request without fabricating fields.
-    pub async fn acknowledge_alarm_request(
+    pub async fn acknowledge_alarm(
         &self,
         destination_mac: &[u8],
         request: &bacnet_services::alarm_event::AcknowledgeAlarmRequest,
@@ -66,8 +66,8 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// Send exact caller-supplied alarm acknowledgment fields to a discovered device.
     ///
     /// Routes when needed and preserves both timestamps, confirmation and errors
-    /// from [`Self::acknowledge_alarm_request`]. A missing device fails before sending.
-    pub async fn acknowledge_alarm_request_from_device(
+    /// from [`Self::acknowledge_alarm`]. A missing device fails before sending.
+    pub async fn acknowledge_alarm_from_device(
         &self,
         device_instance: u32,
         request: &bacnet_services::alarm_event::AcknowledgeAlarmRequest,
@@ -86,7 +86,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             .await?;
             Ok(())
         } else {
-            self.acknowledge_alarm_request(&mac, request).await
+            self.acknowledge_alarm(&mac, request).await
         }
     }
 

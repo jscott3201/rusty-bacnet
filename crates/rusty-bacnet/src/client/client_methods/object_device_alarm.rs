@@ -1,7 +1,7 @@
 use super::super::*;
 use bacnet_services::alarm_event::GetEventInformationAck;
 
-fn build_acknowledge_alarm_request(
+fn build_acknowledge_alarm(
     acknowledging_process_identifier: u32,
     event_object_identifier: bacnet_types::primitives::ObjectIdentifier,
     event_state_acknowledged: bacnet_types::enums::EventState,
@@ -219,7 +219,7 @@ impl BACnetClient {
     /// `timestamp` must exactly echo the original event-notification timestamp;
     /// `time_of_acknowledgment` is the caller-selected acknowledgment time.
     #[pyo3(signature = (address, acknowledging_process_identifier, event_object_identifier, event_state_acknowledged, timestamp, acknowledgment_source, time_of_acknowledgment))]
-    fn acknowledge_alarm_request<'py>(
+    fn acknowledge_alarm<'py>(
         &self,
         py: Python<'py>,
         address: String,
@@ -233,7 +233,7 @@ impl BACnetClient {
         let inner = self.inner.clone();
         let peers = PeerAddresses::for_transport(&self.transport_type);
         let mac = peers.parse(&address)?;
-        let request = build_acknowledge_alarm_request(
+        let request = build_acknowledge_alarm(
             acknowledging_process_identifier,
             event_object_identifier.to_rust(),
             event_state_acknowledged.to_rust(),
@@ -244,7 +244,7 @@ impl BACnetClient {
 
         let future = async move {
             let c = started(&inner).await?;
-            c.acknowledge_alarm_request(&mac, &request)
+            c.acknowledge_alarm(&mac, &request)
                 .await
                 .map_err(to_py_err)?;
             Ok(())
@@ -315,7 +315,7 @@ mod acknowledgment_request_tests {
             },
         };
 
-        let request = build_acknowledge_alarm_request(
+        let request = build_acknowledge_alarm(
             0x1020_3040,
             oid,
             EventState::HIGH_LIMIT,
