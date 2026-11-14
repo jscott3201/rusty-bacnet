@@ -181,6 +181,24 @@ pub(super) async fn run<T: TransportPort + 'static>(
     let mut rows: Vec<Result<Point, (String, Value)>> = Vec::new();
     for (arg, (object, watched)) in args.points.iter().zip(parsed) {
         let row = match ctx.device(call, &arg.device).await {
+            // The hub keys points by instance (#2560 leaves it so for
+            // now), so a device named by its address whose instance another
+            // address claims too can't be watched without reaching both.
+            Ok(device) if ctx.known_at(device.instance).as_ref() != Some(&device.address) => {
+                let object =
+                    crate::value::object_text(object.object_type(), object.instance_number());
+                let uri = format!("bacnet://device/{}/object/{object}", arg.device.text());
+                let error = ToolError::refused(
+                    "ambiguous-device",
+                    format!(
+                        "{}: device {} is claimed by more than one address, and the watch list \
+                         names a device by its instance",
+                        arg.device.text(),
+                        device.instance
+                    ),
+                );
+                Err((uri, error.json()))
+            }
             Ok(device) => {
                 let point = Point {
                     device: device.instance,

@@ -207,6 +207,11 @@ async fn two_networks_holding_one_instance_are_two_devices() {
         .await;
     assert_ne!(local["isError"], json!(true), "{local}");
     assert_eq!(local["structuredContent"]["device"], json!(LAB), "{local}");
+    // The watch list names devices by instance, so the local one by its
+    // address is refused while the instance is contested.
+    let points = json!({ "points": [{ "device": "10.0.0.2:47808", "object": "ai:1" }] });
+    let watch = lab.agent.call("bacnet_watch", points).await;
+    assert!(watch.to_string().contains("ambiguous-device"), "{watch}");
     lab.stop().await;
 }
 

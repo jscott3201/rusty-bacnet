@@ -127,9 +127,13 @@ fn refused<V: std::fmt::Debug>(result: Result<V, Error>) -> bool {
     )
 }
 
+/// One unicast: its link MAC, its DNET and DADR when routed, and its
+/// confirmed service.
+type Sent = (Vec<u8>, Option<(u16, Vec<u8>)>, Option<S>);
+
 /// Where each unicast went, and its service: through the router to the
 /// station, never to the local device claiming the same instance.
-fn routed(sent: &SendLog) -> Vec<(Vec<u8>, Option<(u16, Vec<u8>)>, Option<S>)> {
+fn routed(sent: &SendLog) -> Vec<Sent> {
     sent.unicasts()
         .iter()
         .map(|frame| {
