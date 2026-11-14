@@ -13,7 +13,7 @@ use bacnet_transport::test_transport::{SendLog, TestTransport};
 
 use super::test_bus::{Bus, N, client_on, mac, name_of, server, settle, stop};
 use super::*;
-use crate::client::WhoIsScope;
+use crate::client::{Discover, ResolveScope};
 
 /// The client at station 1 of network 1, a router at station 254 of
 /// networks 1, 2 and 3, and on network 2 station 5 and on network 3
@@ -59,7 +59,7 @@ impl Routed {
     /// Discover every network.
     async fn discover(&self) -> Vec<Discovered> {
         self.client
-            .discover(WhoIsScope::Global, None, Duration::from_millis(500))
+            .discover(Discover::global().wait(Duration::from_millis(500)))
             .await
             .unwrap()
     }
@@ -89,6 +89,24 @@ async fn a_routed_station_is_reached_by_its_address() {
     let following = client.device("3:1001").await.unwrap();
     assert!(following.follows());
     assert_eq!(name_of(&following).await.unwrap(), "on three");
+    lab.stop().await;
+}
+
+/// A discovery that names no scope stays on the client's network, which
+/// the router doesn't pass a local broadcast from: neither routed device
+/// answers it. Network 2 named reaches station 5 alone, and every network
+/// reaches both.
+#[tokio::test(start_paused = true)]
+async fn the_default_discovery_stays_on_this_network() {
+    let lab = Routed::new(|near| near.port(1)).await;
+    let quick = |request: Discover| request.wait(Duration::from_millis(500));
+    let near = lab.client.discover(quick(Discover::default())).await;
+    assert!(near.unwrap().is_empty(), "a routed device answered");
+    let two = lab.client.discover(quick(Discover::network(2))).await;
+    let two: Vec<_> = two.unwrap().into_iter().map(|f| f.address).collect();
+    assert_eq!(two, [DeviceAddress::new(2, &mac(5)).unwrap()]);
+    let every = lab.client.discover(quick(Discover::global())).await;
+    assert_eq!(every.unwrap().len(), 2);
     lab.stop().await;
 }
 
@@ -228,5 +246,113 @@ async fn handles_named_before_the_number_is_learned_are_local_after() {
     drop(held);
     assert_eq!(name_of(&pinned).await.unwrap(), "near");
     assert_eq!(name_of(&following).await.unwrap(), "near");
+    lab.stop().await;
+}
+
+/// A directed Who-Is to an address written in routed form on the client's
+/// own network, once it knows the number, goes to that station as a local
+/// unicast: no destination network, and nothing through the router.
+#[tokio::test(start_paused = true)]
+async fn a_directed_who_is_on_the_own_network_is_a_local_unicast() {
+    let lab = Routed::new(|near| near.numbered_port(1)).await;
+    let low = lab.client.low_level();
+    low.what_is_network_number(None).await.unwrap();
+    for _ in 0..50 {
+        if low.network_number().is_some() {
+            break;
+        }
+        settle().await;
+    }
+    assert_eq!(low.network_number(), Some(1), "the router said");
+    lab.sent.clear();
+    let station = DeviceAddress::new(1, &mac(9)).unwrap();
+    lab.client
+        .discover(Discover::directed(station).wait(Duration::ZERO))
+        .await
+        .unwrap();
+    let frames = super::discover_tests::who_is_frames(&lab.sent);
+    let [frame] = frames.as_slice() else {
+        panic!("one Who-Is, not {frames:?}");
+    };
+    assert!(!frame.broadcast);
+    assert_eq!(frame.mac.as_slice(), mac(9));
+    assert_eq!(frame.decode_npdu().destination, None);
+    lab.stop().await;
+}
+
+/// A following handle on a device behind the router, made from its bare
+/// instance on a client resolving on every network, asks for it again on
+/// that device's network after a timeout, never on every network.
+#[tokio::test(start_paused = true)]
+async fn a_routed_device_is_asked_for_again_on_its_network() {
+    let mut lab = Routed::new(|near| near.port(1)).await;
+    lab.servers
+        .push(server(lab.three.port(7), 2002, "on three").await);
+    let wide = lab.client.with_resolve_scope(ResolveScope::Global);
+    let device = wide.device(2002).await.unwrap();
+    assert_eq!(device.address().network(), 3);
+    assert_eq!(name_of(&device).await.unwrap(), "on three");
+    lab.sent.clear();
+    lab.three.silence(7);
+    let error = name_of(&device).await.unwrap_err();
+    assert!(error.timed_out(), "{error}");
+    assert_eq!(
+        super::discover_tests::the_who_is(&lab.sent),
+        (super::discover_tests::remote(3), true)
+    );
+    lab.stop().await;
+}
+
+/// A target naming the client's own network keeps its text and says that
+/// network was asked, with no hint to widen the resolve scope: only a bare
+/// instance gets that. Both go out as local broadcasts.
+#[tokio::test(start_paused = true)]
+async fn a_miss_on_the_own_network_keeps_the_target_as_written() {
+    let lab = Routed::new(|near| near.numbered_port(1)).await;
+    let low = lab.client.low_level();
+    low.what_is_network_number(None).await.unwrap();
+    for _ in 0..50 {
+        if low.network_number().is_some() {
+            break;
+        }
+        settle().await;
+    }
+    assert_eq!(low.network_number(), Some(1), "the router said");
+    lab.sent.clear();
+    let named = lab.client.device("1:4242").await.unwrap_err();
+    assert!(
+        matches!(
+            &named,
+            crate::OpsError::UnknownDevice { target, asked: Some(ResolveScope::Network(1)) }
+                if target == "1:4242"
+        ),
+        "{named:?}"
+    );
+    assert!(!named.to_string().contains("resolve scope"), "{named}");
+    assert_eq!(super::discover_tests::the_who_is(&lab.sent), (None, true));
+    let bare = lab.client.device(4242).await.unwrap_err();
+    assert!(bare.to_string().contains("resolve scope"), "{bare}");
+    assert_eq!(super::discover_tests::the_who_is(&lab.sent), (None, true));
+    lab.stop().await;
+}
+
+/// A bare instance whose one row in the table is behind the router follows
+/// it there, on the default local resolve scope, sending no Who-Is: the
+/// table is asked before the network.
+#[tokio::test(start_paused = true)]
+async fn a_bare_instance_with_a_remote_row_needs_no_who_is() {
+    let mut lab = Routed::new(|near| near.port(1)).await;
+    lab.servers
+        .push(server(lab.three.port(7), 2002, "on three").await);
+    lab.discover().await;
+    lab.sent.clear();
+    assert_eq!(lab.client.resolve_scope(), ResolveScope::Local);
+    let device = lab.client.device(2002).await.unwrap();
+    assert_eq!(device.address(), DeviceAddress::new(3, &mac(7)).unwrap());
+    assert!(device.follows());
+    assert!(
+        super::discover_tests::who_is_frames(&lab.sent).is_empty(),
+        "no Who-Is"
+    );
     lab.stop().await;
 }

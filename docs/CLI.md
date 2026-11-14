@@ -526,7 +526,7 @@ expires according to its TTL plus grace (J.5.2.2–J.5.2.3).
 
 | Field | Values |
 |---|---|
-| Scope | Local broadcast, global broadcast, directed (one address), or remote network |
+| Scope | Local broadcast (the default), global broadcast, directed (one address), or remote network |
 | Target | For directed: `IP` or `IP:port` on BACnet/IP; `bip6:N`, `bip6:0xVMAC` or `[IPv6]:port` on BACnet/IPv6, where the address is resolved to the VMAC of the node there before the Who-Is goes; an SC VMAC as 12 hex digits on BACnet/SC. For remote network: the network number |
 | Range | Blank for every instance, `N`, or `LOW-HIGH` (0 to 4194303) |
 | Listen | Seconds to show the request as running while replies arrive (1 to 60, default 3) |
@@ -1214,14 +1214,21 @@ walks through setting up an agent host.
 ### Device Discovery
 
 ```bash
-bacnet discover                          # discover all devices
+bacnet discover                          # discover the devices on this network
 bacnet discover 1000-2000                # discover devices in instance range
 bacnet discover --wait 5                 # wait 5 seconds for responses (default: 3)
 bacnet discover --target 192.168.1.100   # directed (unicast) WhoIs
-bacnet discover --dnet 2                 # target a specific remote network
+bacnet discover --dnet 2                 # one remote network, through its router
+bacnet discover --global 1000-2000       # every network: a global broadcast
 bacnet discover --bbmd 10.0.0.1          # register once as a foreign device, then discover
 bacnet --foreign-bbmd 10.0.0.1 discover  # discover through the BBMD as a foreign device
 ```
+
+With no scope flag the Who-Is is a local broadcast: it reaches every device
+on this BACnet network, across BBMDs and to foreign devices, but no router
+passes it on, so devices behind routers don't hear it (#2560). `--dnet N`
+asks one remote network and `--global` every network. On a large routed site
+every device answers a global Who-Is, so give it a range, or name the network.
 
 **Discover flags:**
 
@@ -1229,8 +1236,11 @@ bacnet --foreign-bbmd 10.0.0.1 discover  # discover through the BBMD as a foreig
 |------|---------|-------------|
 | `--wait <N>` | `3` | Seconds to wait for responses |
 | `--target <ADDR>` | | Send directed WhoIs to a specific IP address |
-| `--dnet <N>` | | Target a specific remote network number |
+| `--dnet <N>` | | Broadcast on one remote network (1 to 65534) instead, through its router |
+| `--global` | | Broadcast on every network instead: a global broadcast, which every router passes on |
 | `--bbmd <ADDR>` | | Register once as a foreign device with this BBMD, for the global `--ttl`, before discovering (BIP only). The Who-Is still goes out as a local broadcast; `--foreign-bbmd` sends it through the BBMD |
+
+`--target`, `--dnet` and `--global` are one choice: give at most one.
 
 ```bash
 bacnet find "Zone Temp"           # find objects by name (WhoHas)

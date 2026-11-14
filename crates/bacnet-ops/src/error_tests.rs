@@ -166,7 +166,7 @@ fn lookups_are_unknown_or_ambiguous() {
     let text = unknown.to_string();
     let sorted = OpsError::at(&at(), unknown);
     assert!(
-        matches!(&sorted, OpsError::UnknownDevice { target } if target == "2:1234"),
+        matches!(&sorted, OpsError::UnknownDevice { target, asked: None } if target == "2:1234"),
         "{sorted:?}"
     );
     assert_eq!(sorted.to_string(), text);

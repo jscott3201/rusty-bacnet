@@ -188,6 +188,45 @@ fn who_is_flow_warns_sends_listens_and_counts_replies() {
     assert_eq!(form.validate(AddressStyle::Bip).unwrap(), *spec);
 }
 
+/// The Who-Is form's default, sent as the worker sends it, is a local
+/// broadcast on the wire (#2560): no destination network, so no router
+/// passes it on. Global, chosen on the form, is the broadcast to every
+/// network.
+#[tokio::test]
+async fn the_default_who_is_is_a_local_broadcast_on_the_wire() {
+    use bacnet_client::client::{BACnetClient, ClientConfig};
+    use bacnet_transport::test_transport::{BIP_LOCAL_MAC, TestTransport};
+
+    let mut app = connected_app();
+    press(&mut app, KeyCode::Char('d'));
+    press(&mut app, KeyCode::Enter);
+    let commands = press(&mut app, KeyCode::Enter);
+    let [Command::WhoIs { spec, .. }] = commands.as_slice() else {
+        panic!("expected one WhoIs, got {commands:?}");
+    };
+    let port = TestTransport::builder().local_mac(&BIP_LOCAL_MAC).build();
+    let sent = port.sent();
+    let mut client = BACnetClient::start(ClientConfig::default(), port)
+        .await
+        .unwrap();
+    let global = WhoIsSpec {
+        scope: WhoIsScope::Global,
+        ..spec.clone()
+    };
+    for spec in [spec, &global] {
+        crate::tui::worker::session::send_who_is(&client, spec)
+            .await
+            .unwrap();
+    }
+    let destinations: Vec<_> = sent
+        .broadcasts()
+        .iter()
+        .map(|frame| frame.decode_npdu().destination.map(|to| to.network))
+        .collect();
+    assert_eq!(destinations, [None, Some(0xFFFF)]);
+    client.stop().await.unwrap();
+}
+
 #[test]
 fn who_is_form_waits_for_the_link() {
     let mut app = new_app(None);
