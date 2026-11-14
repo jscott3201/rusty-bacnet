@@ -275,6 +275,7 @@ mod tests {
             error: RemoteError::Reject {
                 reason: RejectReason::UNRECOGNIZED_SERVICE,
             },
+            detail: None,
         };
         assert!(matches!(
             ToolError::device(7, &refused),

@@ -1,7 +1,9 @@
 //! What a [`Device`](crate::Device) read names and returns (#2560): a
 //! [`PropertyRef`], from text or a tuple ([`IntoProperty`]), and a
-//! [`Reading`] a property, gathered into [`Readings`] by the bulk reads.
+//! [`Reading`] a property, gathered into [`Readings`] by a bulk read and
+//! into an [`ObjectRead`] by an object's read.
 
+use std::collections::HashMap;
 use std::str::FromStr;
 
 use bacnet_types::enums::{EngineeringUnits, PropertyIdentifier};
@@ -10,6 +12,7 @@ use bacnet_types::primitives::ObjectIdentifier;
 use crate::client::ReadVia;
 use crate::error::OpsError;
 use crate::format::{Floats, PropertyError, RawRow, StateTexts, Value, ValueFormat, units};
+use crate::label::kebab;
 use crate::parse::{parse_object_specifier, parse_property};
 
 /// One property of one object, or one element of an array property.
@@ -108,6 +111,12 @@ impl IntoProperty for PropertyRef {
     }
 }
 
+impl IntoProperty for &PropertyRef {
+    fn into_property(self) -> Result<PropertyRef, OpsError> {
+        Ok(*self)
+    }
+}
+
 impl IntoProperty for &str {
     fn into_property(self) -> Result<PropertyRef, OpsError> {
         self.parse()
@@ -153,39 +162,81 @@ pub struct Reading {
     pub value: Result<Value, PropertyError>,
 }
 
-/// What a bulk read read: a [`Reading`] each property, in the order asked
-/// for, and why it stopped early, if it did. It never fails as a whole.
+/// What [`Device::read_many`](crate::Device::read_many) read: a
+/// [`Reading`] each property, in the order asked for, and whether the
+/// device stopped answering part way. A property the device refused is an
+/// error in its own row, not a stop.
+///
+/// Not `Clone`: `stopped` holds the low-level client's error, which can
+/// hold the operating system's.
 #[derive(Debug, Default)]
 pub struct Readings {
-    /// The properties read, each its value or its own error.
+    /// The properties read, each its value or its own error. A row the
+    /// device's answer left out reads as [`PropertyError::NoValue`].
     pub readings: Vec<Reading>,
     /// How the values were read: [`ReadVia::Mixed`] when some went by
     /// ReadPropertyMultiple and some by ReadProperty; `None` when nothing
     /// was read.
     pub via: Option<ReadVia>,
-    /// Why the read ended before every property was read: the device
-    /// stopped answering ([`OpsError::unreachable`]), it couldn't be
-    /// placed, or a property's text didn't parse (then nothing was sent).
-    /// `readings` holds what was read before it.
+    /// The device stopped answering after the read began, so the
+    /// properties after `readings` weren't read: always
+    /// [`OpsError::unreachable`]. `readings` keeps what was read before it,
+    /// possibly nothing, an object's properties read before it included.
     pub stopped: Option<OpsError>,
 }
 
 impl Readings {
-    /// Nothing read, for `why`.
-    pub(crate) fn nothing_read(why: OpsError) -> Self {
-        Self {
-            readings: Vec::new(),
-            via: None,
-            stopped: Some(why),
-        }
-    }
-
-    /// The first reading of the whole of `property` of `object`.
+    /// The first reading of the whole of `property` of `object`, when the
+    /// read asked for it more than once.
     pub fn get(&self, object: ObjectIdentifier, property: PropertyIdentifier) -> Option<&Reading> {
         self.readings
             .iter()
             .find(|r| r.object == object && r.property == property && r.index.is_none())
     }
+}
+
+/// What [`Device::read_object`](crate::Device::read_object) read of one
+/// object: a [`Reading`] each property, a property the device refused an
+/// error in its own row.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObjectRead {
+    /// The object read.
+    pub object: ObjectIdentifier,
+    /// Its properties as read: those asked for, or for ALL those the
+    /// device gave (or its Property_List names, by ReadProperty).
+    pub readings: Vec<Reading>,
+    /// Whether the read went by ReadPropertyMultiple or ReadProperty.
+    pub via: ReadVia,
+}
+
+impl ObjectRead {
+    /// The reading of `property`, the first when the device gave it twice.
+    pub fn get(&self, property: PropertyIdentifier) -> Option<&Reading> {
+        self.readings
+            .iter()
+            .find(|r| r.property == property && r.index.is_none())
+    }
+}
+
+/// The properties no one read names: ALL, REQUIRED and OPTIONAL stand for
+/// many, which only an object's whole read takes.
+pub(crate) fn one_property(wanted: PropertyRef) -> Result<PropertyRef, OpsError> {
+    let many = [
+        PropertyIdentifier::ALL,
+        PropertyIdentifier::REQUIRED,
+        PropertyIdentifier::OPTIONAL,
+    ];
+    if !many.contains(&wanted.property) {
+        return Ok(wanted);
+    }
+    let name = kebab(wanted.property);
+    Err(OpsError::Parse {
+        what: "property",
+        input: name.clone(),
+        reason: format!(
+            "'{name}' names many properties; read every property of an object with read_object"
+        ),
+    })
 }
 
 /// A raw row of `object`, read at `index`.
@@ -196,33 +247,28 @@ pub(crate) type RawReading = (ObjectIdentifier, Option<u32>, RawRow);
 /// element, with the object's Units and state texts when the same read
 /// holds them (the whole property, not an element).
 pub(crate) fn readings(raw: Vec<RawReading>) -> Vec<Reading> {
-    let mut names: Vec<(ObjectIdentifier, Option<EngineeringUnits>, StateTexts)> = Vec::new();
-    for (object, _, _) in &raw {
-        if names.iter().any(|(named, ..)| named == object) {
-            continue;
+    // One pass for the rows that name values, one for the values.
+    let mut naming: HashMap<ObjectIdentifier, Vec<RawRow>> = HashMap::new();
+    for (object, index, row @ (property, _)) in &raw {
+        let names = *property == PropertyIdentifier::UNITS
+            || StateTexts::properties(object.object_type()).contains(property);
+        if index.is_none() && names {
+            naming.entry(*object).or_default().push(row.clone());
         }
-        let wanted = StateTexts::properties(object.object_type());
-        let rows: Vec<RawRow> = raw
-            .iter()
-            .filter(|(o, index, (p, _))| {
-                o == object
-                    && index.is_none()
-                    && (*p == PropertyIdentifier::UNITS || wanted.contains(p))
-            })
-            .map(|(_, _, row)| row.clone())
-            .collect();
-        names.push((
-            *object,
-            units(&rows),
-            StateTexts::from_rows(&rows).cleaned(),
-        ));
     }
+    let names: HashMap<ObjectIdentifier, (Option<EngineeringUnits>, StateTexts)> = naming
+        .into_iter()
+        .map(|(object, rows)| {
+            (
+                object,
+                (units(&rows), StateTexts::from_rows(&rows).cleaned()),
+            )
+        })
+        .collect();
+    let unnamed = (None, StateTexts::default());
     raw.into_iter()
         .map(|(object, index, (property, value))| {
-            let (_, units, texts) = names
-                .iter()
-                .find(|(named, ..)| *named == object)
-                .expect("every object is named above");
+            let (units, texts) = names.get(&object).unwrap_or(&unnamed);
             let format = ValueFormat::new(object.object_type(), texts, Floats::Exact).whole_lists();
             Reading {
                 object,

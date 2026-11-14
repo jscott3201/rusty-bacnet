@@ -384,11 +384,12 @@ pub(super) async fn run<T: TransportPort + 'static>(
         let text = object_text(object.object_type(), object.instance_number());
         let mut row = json!({ "object": text });
         if args.names {
-            let read = device
+            let name = device
                 .handle
                 .read_object(*object, Wanted::List(&[PropertyIdentifier::OBJECT_NAME]))
-                .await;
-            let name = reading_text(&read.readings, PropertyIdentifier::OBJECT_NAME);
+                .await
+                .ok()
+                .and_then(|read| reading_text(&read.readings, PropertyIdentifier::OBJECT_NAME));
             let source = format!("device {} {text} object-name", device.instance);
             row["name"] = name.map_or(Value::Null, |name| envelope(&name, source, cap));
         }

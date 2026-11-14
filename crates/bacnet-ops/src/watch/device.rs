@@ -513,14 +513,18 @@ impl<T: TransportPort + 'static> Device<T> {
             State::Failed
         };
         let seq = &self.inner.registry.seq;
-        let Polled { read, unread } = polled;
-        let stopped = read.stopped.map(|error| error.to_string());
+        let Polled {
+            rows,
+            stopped,
+            unread,
+        } = polled;
+        let stopped = stopped.map(|error| error.to_string());
         let failed = |row: &Row, error: String| {
             let shared = &row.shared;
             shared.set_state(seq, Some(Source::Poll), state, Some(error.clone()));
             shared.sample(Err(error), Via::Poll);
         };
-        for (process, rows) in read.rows {
+        for (process, rows) in rows {
             let Some(row) = self.rows.get(&process) else {
                 continue;
             };

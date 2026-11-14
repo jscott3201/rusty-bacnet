@@ -237,13 +237,12 @@ pub(super) async fn run<T: TransportPort + 'static>(
             } else {
                 Wanted::List(&plan.list)
             };
-            let read = device.handle.read_object(plan.object, wanted).await;
-            match read.stopped {
-                None => {
-                    vias.extend(read.via);
+            match device.handle.read_object(plan.object, wanted).await {
+                Ok(read) => {
+                    vias.push(read.via);
                     rows.extend(read.readings);
                 }
-                Some(error) => failed = Some(error),
+                Err(error) => failed = Some(error),
             }
         }
         for &(property, index) in &plan.elements {

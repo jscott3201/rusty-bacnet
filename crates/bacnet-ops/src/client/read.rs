@@ -18,7 +18,7 @@ use bacnet_services::rpm::ReadPropertyMultipleACK;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
 use bacnet_types::enums::{AbortReason, ErrorClass, ObjectType, PropertyIdentifier, RejectReason};
-use bacnet_types::error::{DecodeError, DecodingKind, Error, RemoteError};
+use bacnet_types::error::{Error, RangeError, RemoteError};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use crate::device::{DeviceAddress, Path};
@@ -34,8 +34,11 @@ pub enum ReadVia {
     /// ReadProperty per property: the device refused RPM, or an answer
     /// would have been too large for it.
     Rp,
-    /// Some of a bulk read by each ([`Readings`](crate::Readings)): an RPM
-    /// a batch failed as a whole is read again by ReadProperty.
+    /// A bulk read ([`Device::read_many`](crate::Device::read_many)) only:
+    /// some of its objects by ReadPropertyMultiple, others by ReadProperty,
+    /// because the device failed one batch's RPM as a whole, or a single
+    /// object's answer was too large for one RPM, or it refused RPM part
+    /// way through the read.
     Mixed,
 }
 
@@ -487,17 +490,13 @@ pub fn rpm_rows(ack: ReadPropertyMultipleACK) -> Vec<RawRow> {
 }
 
 /// The error for an Object_List that claims `total` elements, more than
-/// [`MAX_OBJECTS`]: a count past what the reader takes, as a decoder
-/// refuses one.
+/// [`MAX_OBJECTS`]: a count past a limit, which the client's errors hold
+/// best as a refused value with its numbers ([`Error::Range`]) until the
+/// raw layer has typed errors of its own (#1833).
 fn too_many(total: u32) -> Error {
-    Error::Decoding(
-        DecodeError::new(
-            DecodingKind::Overflow,
-            0,
-            "{} elements claimed; at most {} are read",
-        )
-        .within("Object_List")
-        .with_values(u64::from(total), u64::from(MAX_OBJECTS)),
+    Error::Range(
+        RangeError::new("Object_List claims {} objects; at most {} are read")
+            .with_values(u64::from(total), u64::from(MAX_OBJECTS)),
     )
 }
 

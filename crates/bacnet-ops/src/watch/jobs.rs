@@ -24,7 +24,7 @@ use super::first::first_read;
 use super::options::{Fallback, Reads};
 use super::shared::Shared;
 use super::{Inner, Point, Watched};
-use crate::client::batch::{self, BatchRow, Batched};
+use crate::client::batch::{self, BatchRow, Missing};
 use crate::client::{device_error, unreachable};
 use crate::device::DeviceAddress;
 use crate::format::{PropertyError, RawRow};
@@ -240,16 +240,21 @@ async fn subscribe<T: TransportPort + 'static>(
 /// One poll of a device's rows.
 #[derive(Debug)]
 pub(super) struct Polled {
-    /// The rows read, and why the rest weren't.
-    pub(super) read: Batched<u32>,
-    /// The rows not read, when the poll stopped early; empty otherwise.
+    /// The rows read, in the order asked for: each its properties as read,
+    /// or missing from the device's answer.
+    pub(super) rows: Vec<(u32, Result<Vec<RawRow>, Missing>)>,
+    /// Why the rows in `unread` weren't read: the device stopped answering,
+    /// or it couldn't be reached at all (no row for it, or no route).
+    pub(super) stopped: Option<Error>,
+    /// The rows not read, one read only in part included; empty when every
+    /// row was.
     pub(super) unread: Vec<u32>,
 }
 
 impl Polled {
     /// The device stopped answering: the poll gave up on the rows left.
     pub(super) fn unreachable(&self) -> bool {
-        self.read.stopped.as_ref().is_some_and(unreachable)
+        self.stopped.as_ref().is_some_and(unreachable)
     }
 }
 
@@ -265,18 +270,34 @@ pub(super) async fn poll<T: TransportPort + 'static>(
         Ok(address) => {
             let rpm = !client.refused_rpm(&address);
             let read = batch::read(client.low_level(), client.limits(), &address, &rows, rpm).await;
-            if read.refused_rpm {
+            if read.as_ref().is_ok_and(|read| read.refused_rpm) {
                 client.refuse_rpm(&address);
             }
             read
         }
-        Err(error) => Batched::stopped(error),
+        Err(error) => Err(error),
     };
-    let unread = match read.stopped {
-        Some(_) => rows[read.rows.len()..].iter().map(|row| row.key).collect(),
+    let (read_rows, stopped) = match read {
+        Ok(read) => {
+            let mut read_rows = read.rows;
+            // A row read only in part counts as not read: its point gets
+            // the poll's error, not half a reading.
+            if read.partial {
+                read_rows.pop();
+            }
+            (read_rows, read.stopped)
+        }
+        Err(error) => (Vec::new(), Some(error)),
+    };
+    let unread = match stopped {
+        Some(_) => rows[read_rows.len()..].iter().map(|row| row.key).collect(),
         None => Vec::new(),
     };
-    Polled { read, unread }
+    Polled {
+        rows: read_rows,
+        stopped,
+        unread,
+    }
 }
 
 /// Cancel `point`'s subscription, held or possibly made: stop renewing it,

@@ -2,6 +2,6 @@
 section: Changed
 ---
 - **Breaking (Rust API):** `bacnet-ops` reads return a `Value` (typed data,
-  text and the octets sent) or `Readings`, and its calls fail with
-  `OpsError`; `RowError` is `PropertyError`, and a refused target is no
-  longer an encoding or range error (#2560).
+  text and the octets sent), `Readings` or an `ObjectRead`, and its calls
+  fail with `OpsError`; the raw readers move to `bacnet_ops::raw`, and
+  `RowError` is `PropertyError` (#2560).

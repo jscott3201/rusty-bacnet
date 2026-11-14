@@ -1,12 +1,13 @@
 //! The read operations every front end shares, over one client and one set
 //! of request limits.
 //!
-//! [`Reader`] is the reading strategy for one device at its address: each
-//! request waits for its turn at the device's gate and the global rate cap
-//! ([`RequestLimits`]), a property list goes by ReadPropertyMultiple with a
-//! ReadProperty fallback, and the Object_List falls back to element-by-element
-//! reads. The TUI's browser, watch list and write previews use it directly,
-//! with their own stop flags.
+//! [`Reader`] is the reading strategy for one device
+//! at its address: each request waits for its turn at the device's gate
+//! and the global rate cap ([`RequestLimits`]), a property list goes by
+//! ReadPropertyMultiple with a ReadProperty fallback, and the Object_List
+//! falls back to element-by-element reads. The TUI's browser, watch list
+//! and write previews use it directly ([`raw`](crate::raw)), with their own
+//! stop flags.
 //!
 //! [`Client`] is the facade the MCP server builds on: it owns the
 //! low-level client, the limits and the per-address memory of RPM
@@ -20,7 +21,7 @@
 pub(crate) mod batch;
 mod discover;
 mod log;
-mod read;
+pub(crate) mod read;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -36,10 +37,8 @@ use tokio::sync::broadcast;
 pub use self::discover::WhoIsScope;
 pub use self::log::Naming;
 pub(crate) use self::log::PagedLog;
-pub use self::read::{
-    Halt, ListRead, MAX_OBJECTS, ReadVia, Reader, RpmFailure, Wanted, rpm_failure, rpm_rows,
-    timed_out, unreachable,
-};
+pub(crate) use self::read::{Halt, Reader, RpmFailure, rpm_failure, timed_out, unreachable};
+pub use self::read::{ListRead, MAX_OBJECTS, ReadVia, Wanted};
 use crate::device::{ClientEvent, DeviceAddress, Follows};
 use crate::format::Value;
 use crate::limits::RequestLimits;
@@ -285,3 +284,6 @@ mod tests;
 
 #[cfg(test)]
 mod read_many_tests;
+
+#[cfg(test)]
+mod read_many_more_tests;

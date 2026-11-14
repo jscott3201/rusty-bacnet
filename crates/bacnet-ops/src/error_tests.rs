@@ -40,7 +40,6 @@ fn a_timeout_is_unreachable_never_refused() {
         assert_eq!(sorted.remote(), None, "{sorted:?}");
         // The text is the client's own.
         assert_eq!(sorted.to_string(), text);
-        assert!(std::error::Error::source(&sorted).is_some());
     }
 }
 
@@ -50,39 +49,83 @@ fn a_timeout_is_unreachable_never_refused() {
 fn a_device_answer_is_refused() {
     let detail = ErrorDetail::FirstFailedElementNumber(2);
     let cases = [
-        (Error::Remote(unknown_property()), unknown_property()),
+        (Error::Remote(unknown_property()), unknown_property(), None),
         (
             Error::reject(RejectReason::UNRECOGNIZED_SERVICE),
             RemoteError::Reject {
                 reason: RejectReason::UNRECOGNIZED_SERVICE,
             },
+            None,
         ),
         (
             Error::abort(AbortReason::SEGMENTATION_NOT_SUPPORTED),
             RemoteError::Abort {
                 reason: AbortReason::SEGMENTATION_NOT_SUPPORTED,
             },
+            None,
         ),
+        // A structured Error PDU keeps its extra fields.
         (
             Error::with_detail(
                 ErrorClass::PROPERTY,
                 ErrorCode::UNKNOWN_PROPERTY,
-                Some(detail),
+                Some(detail.clone()),
             ),
             unknown_property(),
+            Some(detail),
         ),
     ];
-    for (error, remote) in cases {
+    for (error, remote, kept) in cases {
+        let text = error.to_string();
         let sorted = OpsError::at(&at(), error);
-        assert!(
-            matches!(&sorted, OpsError::Refused { device, error } if *device == at() && *error == remote),
-            "{sorted:?}"
-        );
+        let OpsError::Refused {
+            device,
+            error,
+            detail,
+        } = &sorted
+        else {
+            panic!("{sorted:?}");
+        };
+        assert_eq!((device, *error), (&at(), remote));
+        assert_eq!(detail.as_deref(), kept.as_ref());
         assert!(!sorted.unreachable());
         assert!(!sorted.timed_out());
         assert_eq!(sorted.remote(), Some(remote));
-        assert_eq!(sorted.to_string(), remote.to_string());
+        // The text is the client's own, the detail's included.
+        assert_eq!(sorted.to_string(), text);
+        assert!(std::error::Error::source(&sorted).is_none());
     }
+}
+
+/// The texts of `error` and each source after it.
+fn chain(error: &(dyn std::error::Error + 'static)) -> Vec<String> {
+    let mut texts = vec![error.to_string()];
+    let mut next = error.source();
+    while let Some(cause) = next {
+        texts.push(cause.to_string());
+        next = cause.source();
+    }
+    texts
+}
+
+/// A chain prints each cause once: an error's text is the client's
+/// error's, and its source that error's own source, so the chain reads as
+/// the client error's does, with no link repeated.
+#[test]
+fn a_chain_prints_its_cause_once() {
+    let errors = || {
+        [
+            Error::Transport(std::io::Error::other("cable out")),
+            Error::Timeout(Duration::from_secs(3)),
+            Error::Remote(unknown_property()),
+        ]
+    };
+    for (error, client) in errors().into_iter().zip(errors()) {
+        let sorted = OpsError::at(&at(), error);
+        assert_eq!(chain(&sorted), chain(&client), "{sorted:?}");
+    }
+    let timeout = OpsError::at(&at(), Error::Timeout(Duration::from_secs(3)));
+    assert_eq!(chain(&timeout).len(), 1);
 }
 
 /// Any other client error passes through unchanged, whether or not a

@@ -27,8 +27,8 @@ use bacnet_types::primitives::ObjectIdentifier;
 use tokio::sync::broadcast::error::RecvError;
 
 use bacnet_ops::DeviceAddress;
-use bacnet_ops::client::{RpmFailure, rpm_failure, rpm_rows, unreachable};
 use bacnet_ops::format::{LogColumns, PropertyError, RawRow, StateTexts};
+use bacnet_ops::raw::{RpmFailure, rpm_failure, rpm_rows, unreachable};
 use bacnet_ops::target::{Target, bip6_vmac, parse_target_on};
 
 mod services;
@@ -63,7 +63,11 @@ pub async fn resolve<T: TransportPort + 'static>(
 ) -> Result<Destination, String> {
     match parse_target_on(client.transport(), text)? {
         Target::Mac(mac) => Destination::local(&mac),
-        Target::Bip6(peer) => Destination::local(&bip6_vmac(client.transport(), peer).await?),
+        Target::Bip6(peer) => Destination::local(
+            &bip6_vmac(client.transport(), peer)
+                .await
+                .map_err(|e| e.to_string())?,
+        ),
         Target::Instance(instance) => match client
             .get_device(instance)
             .await
@@ -111,7 +115,9 @@ pub async fn resolve_mac<T: TransportPort + 'static>(
 ) -> Result<Vec<u8>, String> {
     match parse_target_on(client.transport(), text)? {
         Target::Mac(mac) => Ok(mac),
-        Target::Bip6(peer) => bip6_vmac(client.transport(), peer).await,
+        Target::Bip6(peer) => bip6_vmac(client.transport(), peer)
+            .await
+            .map_err(|e| e.to_string()),
         Target::Instance(instance) => match client
             .get_device(instance)
             .await

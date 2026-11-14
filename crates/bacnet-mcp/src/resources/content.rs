@@ -76,10 +76,8 @@ pub(super) async fn point<T: TransportPort + 'static>(
                     point.object,
                     Wanted::List(&bacnet_ops::watch::POINT_PROPERTIES),
                 )
-                .await;
-            if let Some(error) = read.stopped {
-                return Err(failed(error));
-            }
+                .await
+                .map_err(failed)?;
             read.readings
                 .into_iter()
                 .map(|reading| (reading.property, reading.value.map(|value| value.raw)))

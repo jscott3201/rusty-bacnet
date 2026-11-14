@@ -173,9 +173,9 @@ async fn reads_properties_by_rpm_and_formats_them() {
             ai,
             Wanted::List(&[PropertyIdentifier::PRESENT_VALUE, PropertyIdentifier::UNITS]),
         )
-        .await;
-    assert!(read.stopped.is_none(), "{read:?}");
-    assert_eq!(read.via, Some(ReadVia::Rpm));
+        .await
+        .unwrap();
+    assert_eq!(read.via, ReadVia::Rpm);
     let reading = &read.readings[0];
     assert_eq!(
         (reading.object, reading.property, reading.index),
@@ -300,8 +300,9 @@ async fn a_refusal_of_rpm_is_remembered_per_device() {
     let first = lab_device(&client)
         .await
         .read_object(ai, Wanted::List(&wanted))
-        .await;
-    assert_eq!(first.via, Some(ReadVia::Rp));
+        .await
+        .unwrap();
+    assert_eq!(first.via, ReadVia::Rp);
     assert!(client.refused_rpm(&lab_at()), "the refusal is remembered");
     assert!(!client.refused_rpm(&DeviceAddress::local(&[3]).unwrap()));
     let rejected = rejections(client.low_level().transport());
@@ -309,8 +310,9 @@ async fn a_refusal_of_rpm_is_remembered_per_device() {
     let second = lab_device(&client)
         .await
         .read_object(ai, Wanted::List(&wanted))
-        .await;
-    assert_eq!(second.via, Some(ReadVia::Rp));
+        .await
+        .unwrap();
+    assert_eq!(second.via, ReadVia::Rp);
     assert_eq!(
         rejections(client.low_level().transport()),
         rejected,
@@ -340,8 +342,9 @@ async fn a_missing_property_is_a_typed_error_row() {
     let read = lab_device(&client)
         .await
         .read_object(ai, Wanted::List(&wanted))
-        .await;
-    assert_eq!(read.via, Some(ReadVia::Rpm));
+        .await
+        .unwrap();
+    assert_eq!(read.via, ReadVia::Rpm);
     let error = read.readings[0].value.as_ref().unwrap_err();
     assert_eq!(
         *error,

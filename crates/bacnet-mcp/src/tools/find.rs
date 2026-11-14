@@ -496,8 +496,8 @@ async fn search<T: TransportPort + 'static>(
                 .handle
                 .read_object(*object, Wanted::List(&properties))
                 .await;
-            match read.stopped {
-                None => {
+            match read {
+                Ok(read) => {
                     let kept = |property| {
                         reading_text(&read.readings, property).map(|text| {
                             let (text, truncated) = clean(&text, MATCH_CAP);
@@ -519,7 +519,7 @@ async fn search<T: TransportPort + 'static>(
                 // next device, with no cursor back to it, so a silent device
                 // doesn't make every later page wait out its timeout again.
                 // Search it alone (range) to try it again.
-                Some(error) if error.unreachable() => {
+                Err(error) if error.unreachable() => {
                     if error.timed_out() {
                         call.timed_out();
                     }
@@ -532,7 +532,7 @@ async fn search<T: TransportPort + 'static>(
                     return;
                 }
                 // The object has no name to give: no text match.
-                Some(_) => names = Some(Names::default()),
+                Err(_) => names = Some(Names::default()),
             }
         }
         let names = names.unwrap_or_default();

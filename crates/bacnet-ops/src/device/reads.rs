@@ -1,5 +1,5 @@
 //! A [`Device`]'s read operations: the same requests the client's
-//! [`Reader`](crate::client::Reader) sends, one at a time at the device's
+//! [`Reader`](crate::raw::Reader) sends, one at a time at the device's
 //! gate, with the client's memory of an RPM refusal. A following handle
 //! checks where its device is before each request ([`Device::target`]),
 //! and looks for it again after one times out or finds no route
@@ -20,33 +20,37 @@ use bacnet_types::primitives::ObjectIdentifier;
 use super::{Device, DeviceAddress, Path};
 use crate::client::batch::{self, BatchRow, Batched, Missing};
 use crate::client::{
-    DEVICE_PROPERTIES, DeviceSummary, ListRead, Naming, PagedLog, ReadVia, Wanted, device_error,
+    DEVICE_PROPERTIES, DeviceSummary, Halt, ListRead, Naming, PagedLog, ReadVia, RpmFailure,
+    Wanted, device_error, rpm_failure, unreachable,
 };
 use crate::error::OpsError;
 use crate::format::{Floats, LogColumns, PropertyError, RawRow, StateTexts, Value, ValueFormat};
 use crate::limits::Turn;
-use crate::reading::{IntoProperty, PropertyRef, RawReading, Readings, readings};
+use crate::reading::{
+    IntoProperty, ObjectRead, PropertyRef, RawReading, Readings, one_property, readings,
+};
 
 impl<T: TransportPort + 'static> Device<T> {
     /// One property of one object, or one element of an array property
     /// (index 0 is an array's size): one ReadProperty. `property` is a
     /// [`PropertyRef`], text such as `"ai:1 pv"` or a tuple
-    /// ([`IntoProperty`]). The value names no units or state texts, which
-    /// the one property doesn't hold; [`read_many`](Self::read_many) with
-    /// the object's Units or state texts too names them.
+    /// ([`IntoProperty`]). Its text names no units and no state, since the
+    /// one property holds neither: [`read_many`](Self::read_many) with the
+    /// object's Units, Active_Text and Inactive_Text, or State_Text, in the
+    /// same call names them.
     ///
     /// # Errors
     ///
-    /// [`OpsError::Parse`] for text that doesn't name a property (nothing
-    /// is sent), and the device's refusal of the property as
-    /// [`OpsError::Refused`].
+    /// [`OpsError::Parse`] for text that doesn't name one property, ALL,
+    /// REQUIRED and OPTIONAL included ([`read_object`](Self::read_object)
+    /// reads those), with nothing sent; and the device's refusal of the
+    /// property as [`OpsError::Refused`].
     pub async fn read(&self, property: impl IntoProperty) -> Result<Value, OpsError> {
-        let wanted = property.into_property()?;
         let PropertyRef {
             object,
             property,
             index,
-        } = wanted;
+        } = one_property(property.into_property()?)?;
         let raw = sent!(self, |at| {
             let reader = self.client.reader(at, self.instance());
             reader
@@ -66,91 +70,104 @@ impl<T: TransportPort + 'static> Device<T> {
     /// RPM. A batch whose answer would be too large is asked again an
     /// object at a time, and any other batch the device fails as a whole is
     /// read by ReadProperty, so one bad object can't put errors on its
-    /// neighbours. The readings come in the order asked for, a value named
-    /// with its object's Units and state texts when the same call reads
-    /// them.
+    /// neighbours. The readings come in the order asked for. A value's text
+    /// names its object's Units (after a whole property's number) and its
+    /// state by the object's Active_Text and Inactive_Text, or State_Text,
+    /// when the same call reads them.
     ///
-    /// It never fails as a whole. A property the device refuses, or one of
-    /// an object it doesn't have, is an error in its own row. A device that
-    /// stops answering ends the read with what was read before it, and
-    /// [`Readings::stopped`] says why; so does a device that can't be
-    /// placed, or a property whose text doesn't parse (then nothing is
-    /// sent). A following handle whose read stopped before anything was
-    /// read looks for its device as any other read does, and reads again
-    /// where it moved to. Every property of an object (ALL) is
-    /// [`read_object`](Self::read_object)'s.
+    /// A property the device refuses, or one of an object it doesn't have,
+    /// is an error in its own row, and so is one its answer leaves out
+    /// ([`PropertyError::NoValue`]). A device that stops answering ends the
+    /// read with what was read before it, an object's properties read
+    /// before it included, and [`Readings::stopped`] says so. A following
+    /// handle whose read stopped before anything was read looks for its
+    /// device as any other read does, and reads again where it moved to.
+    ///
+    /// # Errors
+    ///
+    /// Whatever is decided before a request is sent, with nothing sent:
+    /// text that doesn't name one property, ALL, REQUIRED and OPTIONAL
+    /// included ([`read_object`](Self::read_object) reads those)
+    /// ([`OpsError::Parse`]); and a device that can't be placed, an
+    /// instance two addresses claim, or a routed address with no route
+    /// ([`OpsError::UnknownDevice`], [`OpsError::Ambiguous`]).
     pub async fn read_many<P: IntoProperty>(
         &self,
         properties: impl IntoIterator<Item = P>,
-    ) -> Readings {
-        let mut wanted = Vec::new();
-        for property in properties {
-            match property.into_property() {
-                Ok(property) => wanted.push(property),
-                Err(error) => return Readings::nothing_read(error),
-            }
-        }
+    ) -> Result<Readings, OpsError> {
+        let wanted = properties
+            .into_iter()
+            .map(|property| one_property(property.into_property()?))
+            .collect::<Result<Vec<_>, _>>()?;
         if wanted.is_empty() {
-            return Readings::default();
+            return Ok(Readings::default());
         }
         let rows = batch_rows(&wanted);
-        let mut address = match self.target().await {
-            Ok(address) => address,
-            Err(error) => return Readings::nothing_read(OpsError::from(error)),
-        };
-        let mut read = self.batch_at(&address, &rows).await;
+        let mut address = self.target().await?;
+        let mut read = self.batch_at(&address, &rows).await?;
         if read.rows.is_empty()
             && let Some(error) = read.stopped.take()
         {
             let stopped = Err::<(), _>(error);
-            match self.retry(&address, &stopped).await {
-                Ok(Some(to)) => {
-                    read = self.batch_at(&to, &rows).await;
+            match self.retry(&address, &stopped).await? {
+                Some(to) => {
+                    read = self.batch_at(&to, &rows).await?;
                     address = to;
                 }
-                Ok(None) => read.stopped = stopped.err(),
-                Err(error) => return Readings::nothing_read(OpsError::from(error)),
+                None => read.stopped = stopped.err(),
             }
         }
         let via = read.via();
         let stopped = read.stopped.map(|error| OpsError::at(&address, error));
-        Readings {
-            readings: readings(raw_readings(&rows, read.rows)),
+        Ok(Readings {
+            readings: readings(raw_readings(&rows, read.rows, read.partial)),
             via,
             stopped,
-        }
+        })
     }
 
     /// `rows` read by batches at `at`, remembering a refusal of RPM.
-    async fn batch_at(&self, at: &DeviceAddress, rows: &[BatchRow<usize>]) -> Batched<usize> {
+    async fn batch_at(
+        &self,
+        at: &DeviceAddress,
+        rows: &[BatchRow<usize>],
+    ) -> Result<Batched<usize>, OpsError> {
         let client = &self.client;
         let rpm = !client.refused_rpm(at);
-        let read = batch::read(client.low_level(), client.limits(), at, rows, rpm).await;
+        let read = batch::read(client.low_level(), client.limits(), at, rows, rpm)
+            .await
+            .map_err(|error| OpsError::at(at, error))?;
         if read.refused_rpm {
             client.refuse_rpm(at);
         }
-        read
+        Ok(read)
     }
 
     /// The properties `wanted` of `object`: one ReadPropertyMultiple, or
-    /// ReadProperty each once the device has refused RPM. For
+    /// ReadProperty each once the device has refused RPM, or when it failed
+    /// this RPM as a whole (with an Error PDU, say), as
+    /// [`read_many`](Self::read_many) reads a batch it fails. For
     /// [`Wanted::All`], by ReadProperty the object's Property_List names
-    /// them. Each value is named with the object's Units and state texts
-    /// when the read holds them.
+    /// them. A property the device can't give is an error in its own row.
+    /// A value's text names its object's Units and its state by the
+    /// object's texts when the read holds them.
     ///
-    /// It never fails as a whole: a property the device can't give is an
-    /// error row, and a device that fails the read, or stops answering
-    /// part way through it, leaves no readings and says why in
-    /// [`Readings::stopped`].
-    pub async fn read_object(&self, object: ObjectIdentifier, wanted: Wanted<'_>) -> Readings {
-        match self.rows(object, wanted).await {
-            Ok((rows, via)) => Readings {
-                readings: readings(rows.into_iter().map(|row| (object, None, row)).collect()),
-                via: Some(via),
-                stopped: None,
-            },
-            Err(error) => Readings::nothing_read(error),
-        }
+    /// # Errors
+    ///
+    /// A device that can't be placed, or stops answering ([`OpsError`]'s
+    /// `unreachable()`): nothing read is kept, since the object's rows go
+    /// together.
+    pub async fn read_object(
+        &self,
+        object: ObjectIdentifier,
+        wanted: Wanted<'_>,
+    ) -> Result<ObjectRead, OpsError> {
+        let (rows, via) = self.rows(object, wanted).await?;
+        Ok(ObjectRead {
+            object,
+            readings: readings(rows.into_iter().map(|row| (object, None, row)).collect()),
+            via,
+        })
     }
 
     /// [`read_object`](Self::read_object)'s rows, undecoded.
@@ -171,7 +188,24 @@ impl<T: TransportPort + 'static> Device<T> {
         let mut reader = self.client.reader(at, self.instance());
         let read = reader.properties(object, wanted).await;
         self.client.settle(&reader);
-        read.map_err(device_error)
+        match read {
+            // An RPM the device failed as a whole, not by refusing the
+            // service or for its size: read this object by ReadProperty
+            // this time, as a bulk read reads such a batch.
+            Err(Halt::Device(error))
+                if reader.rpm
+                    && !unreachable(&error)
+                    && rpm_failure(&error) == RpmFailure::Other =>
+            {
+                tracing::debug!(
+                    "{object}: the RPM failed as a whole ({error}); reading one property at a time"
+                );
+                let mut once = self.client.reader(at, self.instance());
+                once.rpm = false;
+                once.properties(object, wanted).await.map_err(device_error)
+            }
+            read => read.map_err(device_error),
+        }
     }
 
     /// The device's Object_List: whole, or element by element when the
@@ -358,13 +392,17 @@ fn batch_rows(wanted: &[PropertyRef]) -> Vec<BatchRow<usize>> {
 /// it asked for. An answer's properties are matched to the ones asked for
 /// in order, by property; one the answer left out reads as
 /// [`PropertyError::NoValue`], and so does each property of a row it left
-/// out.
+/// out. The last row read only in part (`partial`) gives the properties it
+/// read and no others.
 fn raw_readings(
     asked: &[BatchRow<usize>],
     read: Vec<(usize, Result<Vec<RawRow>, Missing>)>,
+    partial: bool,
 ) -> Vec<RawReading> {
     let mut out = Vec::new();
-    for (row, (_, answer)) in asked.iter().zip(read) {
+    let last = read.len().checked_sub(1);
+    for (at, (row, (_, answer))) in asked.iter().zip(read).enumerate() {
+        let partial = partial && Some(at) == last;
         let mut answer: Vec<Option<RawRow>> = answer
             .map(|rows| rows.into_iter().map(Some).collect())
             .unwrap_or_default();
@@ -373,8 +411,12 @@ fn raw_readings(
                 .iter_mut()
                 .find(|slot| slot.as_ref().is_some_and(|(p, _)| *p == property))
                 .and_then(Option::take);
-            let value = found.map_or(Err(PropertyError::NoValue), |(_, value)| value);
-            out.push((row.object, index, (property, value)));
+            match found {
+                Some((_, value)) => out.push((row.object, index, (property, value))),
+                // Not read before the device stopped answering.
+                None if partial => break,
+                None => out.push((row.object, index, (property, Err(PropertyError::NoValue)))),
+            }
         }
     }
     out

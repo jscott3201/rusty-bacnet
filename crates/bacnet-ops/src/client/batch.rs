@@ -8,6 +8,7 @@
 //! other batch the device fails as a whole is read by ReadProperty for
 //! this read only, so one bad object can't put errors on its neighbours. A
 //! device that stops answering ends the read, keeping the rows read before
+//! it, and of a row read property by property the properties read before
 //! it. Every request takes its own turn at the device's gate under the
 //! shared [`RequestLimits`].
 //!
@@ -16,9 +17,10 @@
 use std::collections::VecDeque;
 
 use bacnet_client::client::BACnetClient;
+use bacnet_services::rpm::ReadAccessResult;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::constructed::{PropertyReference, ReadAccessSpecification};
-use bacnet_types::enums::PropertyIdentifier;
+use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::ObjectIdentifier;
 
@@ -50,7 +52,8 @@ pub(crate) struct BatchRow<K> {
     pub(crate) one_by_one: usize,
 }
 
-/// A row the device's ReadPropertyMultiple answer left out.
+/// A row the device's ReadPropertyMultiple answer left out: no result for
+/// its object where the answer should have had one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Missing;
 
@@ -62,10 +65,11 @@ pub(crate) struct Batched<K> {
     pub(crate) rows: Vec<(K, Result<Vec<RawRow>, Missing>)>,
     /// The device refused RPM during this read.
     pub(crate) refused_rpm: bool,
-    /// Why the rows after `rows` weren't read: the device stopped
-    /// answering, or a routed address has no path, and then nothing was
-    /// sent.
+    /// The device stopped answering: the rows after `rows` weren't read.
     pub(crate) stopped: Option<Error>,
+    /// The last of `rows` was read property by property when the device
+    /// stopped answering, so it holds only the properties read before.
+    pub(crate) partial: bool,
     /// Some rows were read by ReadPropertyMultiple.
     by_rpm: bool,
     /// Some rows were read by ReadProperty.
@@ -73,17 +77,6 @@ pub(crate) struct Batched<K> {
 }
 
 impl<K> Batched<K> {
-    /// Nothing read, for `error`.
-    pub(crate) fn stopped(error: Error) -> Self {
-        Self {
-            rows: Vec::new(),
-            refused_rpm: false,
-            stopped: Some(error),
-            by_rpm: false,
-            by_rp: false,
-        }
-    }
-
     /// How the rows were read; `None` when none was.
     pub(crate) fn via(&self) -> Option<ReadVia> {
         match (self.by_rpm, self.by_rp) {
@@ -96,25 +89,27 @@ impl<K> Batched<K> {
 }
 
 /// Read every row in `rows` of the device at `device`, by RPM while `rpm`
-/// holds. A routed address the discovery table holds no router for reads
-/// nothing, with nothing sent.
+/// holds.
+///
+/// # Errors
+///
+/// A routed address the discovery table holds no router for has no path
+/// ([`Error::UnknownDevice`]); nothing is sent.
 pub(crate) async fn read<K: Copy, T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     limits: &RequestLimits,
     device: &DeviceAddress,
     rows: &[BatchRow<K>],
     mut rpm: bool,
-) -> Batched<K> {
+) -> Result<Batched<K>, Error> {
     let started_rpm = rpm;
-    let path = match Path::to(client, device).await {
-        Ok(path) => path,
-        Err(error) => return Batched::stopped(error),
-    };
+    let path = Path::to(client, device).await?;
     let path = &path;
     let mut read = Batched {
         rows: Vec::with_capacity(rows.len()),
         refused_rpm: false,
         stopped: None,
+        partial: false,
         by_rpm: false,
         by_rp: false,
     };
@@ -154,20 +149,33 @@ pub(crate) async fn read<K: Copy, T: TransportPort + 'static>(
             }
         }
         for row in batch {
-            match one_by_one(client, limits, (device, path), row).await {
-                Ok(rows) => {
-                    read.by_rp = true;
-                    read.rows.push((row.key, Ok(rows)));
-                }
-                Err(error) => {
-                    read.stopped = Some(error);
-                    break 'batches;
-                }
+            let (rows, stopped) = one_by_one(client, limits, (device, path), row).await;
+            let some = !rows.is_empty();
+            if some {
+                read.by_rp = true;
+                read.rows.push((row.key, Ok(rows)));
+            }
+            if let Some(error) = stopped {
+                // Some of this row's properties, never all: it stopped on one.
+                read.partial = some;
+                read.stopped = Some(error);
+                break 'batches;
             }
         }
     }
     read.refused_rpm = started_rpm && !rpm;
-    read
+    Ok(read)
+}
+
+/// Whether `result` answers a read of `object`: it names that object, or
+/// a Device object for one asked by the wildcard instance, which the
+/// device answers as its own.
+fn answers(object: ObjectIdentifier, result: &ReadAccessResult) -> bool {
+    let named = result.object_identifier;
+    named == object
+        || (object.object_type() == ObjectType::DEVICE
+            && object.instance_number() == ObjectIdentifier::WILDCARD_INSTANCE
+            && named.object_type() == ObjectType::DEVICE)
 }
 
 /// `rows` in batches of at most [`MAX_BATCH`] rows and
@@ -195,14 +203,14 @@ fn batches<K>(rows: &[BatchRow<K>]) -> impl Iterator<Item = &[BatchRow<K>]> {
     })
 }
 
-/// `row`'s first [`BatchRow::one_by_one`] properties by ReadProperty each;
-/// the error of a device that stopped answering.
+/// `row`'s first [`BatchRow::one_by_one`] properties by ReadProperty each,
+/// those read before a device that stopped answering, and its error.
 async fn one_by_one<K, T: TransportPort + 'static>(
     client: &BACnetClient<T>,
     limits: &RequestLimits,
     (device, path): (&DeviceAddress, &Path),
     row: &BatchRow<K>,
-) -> Result<Vec<RawRow>, Error> {
+) -> (Vec<RawRow>, Option<Error>) {
     let mut rows = Vec::with_capacity(row.one_by_one);
     for &(property, index) in row.wanted.iter().take(row.one_by_one.max(1)) {
         let turn = limits.turn(device).await;
@@ -212,12 +220,12 @@ async fn one_by_one<K, T: TransportPort + 'static>(
         drop(turn);
         let value = match read {
             Ok(ack) => Ok(ack.property_value),
-            Err(error) if unreachable(&error) => return Err(error),
+            Err(error) if unreachable(&error) => return (rows, Some(error)),
             Err(error) => Err(PropertyError::from(error)),
         };
         rows.push((property, value));
     }
-    Ok(rows)
+    (rows, None)
 }
 
 /// One ReadPropertyMultiple for `batch`, one access specification per row.
@@ -248,12 +256,13 @@ async fn rpm_batch<K: Copy, T: TransportPort + 'static>(
     drop(turn);
     let ack = ack?;
     // The answer lists the objects in the order they were asked for; a row
-    // it leaves out gets an error.
-    let mut results = ack.list_of_read_access_results.into_iter();
+    // whose object isn't next in it, left out, is missing, and the rows
+    // after it still find theirs.
+    let mut results = ack.list_of_read_access_results.into_iter().peekable();
     Ok(batch
         .iter()
         .map(|row| {
-            let Some(result) = results.next() else {
+            let Some(result) = results.next_if(|result| answers(row.object, result)) else {
                 return (row.key, Err(Missing));
             };
             let rows: Vec<RawRow> = result

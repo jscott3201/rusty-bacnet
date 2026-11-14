@@ -18,11 +18,11 @@ use bacnet_services::alarm_summary::AlarmSummaryEntry;
 use bacnet_services::enrollment_summary::EnrollmentSummaryEntry;
 use bacnet_types::bitstring::EventTransitionBits;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
-use bacnet_types::error::{DecodeError, DecodingKind, Error};
 use bacnet_types::primitives::{BACnetTimeStamp, ObjectIdentifier, PropertyValue};
 use serde::Serialize;
 
 use super::{Datum, Floats, StateTexts, ValueFormat, constructed};
+use crate::error::PagingFault;
 
 /// One value for each of the three event transitions, in their wire
 /// order: to-offnormal, to-fault, to-normal.
@@ -346,13 +346,13 @@ pub fn cell(datum: &Datum) -> String {
 /// a time: `fetch` asks for the objects after its argument (`None` for
 /// the first answer), and the reading goes on while the device says more
 /// remain, up to `max` summaries. It returns the summaries and whether
-/// the device holds more than them. `fetch`'s error passes through: the
-/// low-level client's, or a [`Device::alarms`](crate::Device::alarms)
-/// [`OpsError`](crate::OpsError).
+/// the device holds more than them. `fetch`'s error passes through, a
+/// [`Device::alarms`](crate::Device::alarms) [`OpsError`](crate::OpsError) or one the caller
+/// sorts the low-level client's into.
 ///
 /// A device that names an object twice, or says more remain but sends
 /// nothing, would show duplicates or page forever, so either is an error:
-/// a decoding error ([`Error::Decoding`]) in `E`.
+/// a [`PagingFault`] in `E` ([`OpsError::Paging`](crate::OpsError::Paging)).
 pub async fn read_event_information<F, Fut, E>(
     max: usize,
     fetch: F,
@@ -360,7 +360,7 @@ pub async fn read_event_information<F, Fut, E>(
 where
     F: FnMut(Option<ObjectIdentifier>) -> Fut,
     Fut: Future<Output = Result<GetEventInformationAck, E>>,
-    E: From<Error>,
+    E: From<PagingFault>,
 {
     read_event_information_until(max, || false, fetch).await
 }
@@ -378,7 +378,7 @@ where
     S: FnMut() -> bool,
     F: FnMut(Option<ObjectIdentifier>) -> Fut,
     Fut: Future<Output = Result<GetEventInformationAck, E>>,
-    E: From<Error>,
+    E: From<PagingFault>,
 {
     let mut summaries: Vec<EventSummary> = Vec::new();
     let mut seen = HashSet::new();
@@ -390,7 +390,11 @@ where
         let ack = fetch(after).await?;
         for summary in ack.list_of_event_summaries {
             if !seen.insert(summary.object_identifier.encode()) {
-                return Err(named_twice(summary.object_identifier).into());
+                return Err(PagingFault::Repeated {
+                    service: SERVICE,
+                    object: summary.object_identifier,
+                }
+                .into());
             }
             summaries.push(summary);
         }
@@ -406,33 +410,13 @@ where
         // empty.
         match summaries.last().map(|summary| summary.object_identifier) {
             Some(last) if after != Some(last) => after = Some(last),
-            _ => {
-                return Err(Error::decoding(
-                    0,
-                    "GetEventInformation said more events remain but sent no new object",
-                )
-                .into());
-            }
+            _ => return Err(PagingFault::Stalled { service: SERVICE }.into()),
         }
     }
 }
 
-/// The error for a GetEventInformation answer that names `object` again:
-/// its type and instance numbers, as a decoder's refusal holds them.
-fn named_twice(object: ObjectIdentifier) -> Error {
-    Error::Decoding(
-        DecodeError::new(
-            DecodingKind::InvalidEncoding,
-            0,
-            "object type {} instance {} named again",
-        )
-        .within("GetEventInformation")
-        .with_values(
-            u64::from(object.object_type().to_raw()),
-            u64::from(object.instance_number()),
-        ),
-    )
-}
+/// The service the reads page through.
+const SERVICE: &str = "GetEventInformation";
 
 #[cfg(test)]
 #[path = "alarms_tests.rs"]

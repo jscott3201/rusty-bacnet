@@ -278,3 +278,32 @@ fn keep_room_bounds_a_table() {
     keep_room(&mut map, |alive| *alive);
     assert_eq!(map.len(), REMEMBERED - 1, "room for one more");
 }
+
+/// A bulk read of a following handle whose device moved reads again where
+/// it went: the first batch timed out with nothing read, the handle moved
+/// to the one other address that answered the Who-Is an earlier timeout
+/// sent, and the readings come from there, with no stop.
+#[tokio::test(start_paused = true)]
+async fn a_bulk_read_follows_a_device_that_moved() {
+    let bus = Bus::new();
+    let (client, _) = client(&bus).await;
+    let old = server(bus.port(2), N, "A").await;
+    bus.i_am(2, N);
+    settle().await;
+    let device = client.device(N).await.unwrap();
+    assert_eq!(name_of(&device).await.unwrap(), "A");
+    tokio::time::sleep(QUIET * 2).await;
+    let new = server(bus.port(3), N, "B").await;
+    bus.i_am(3, N);
+    settle().await;
+    bus.silence(2);
+    // The first timeout asks where the device went, and stays.
+    assert!(name_of(&device).await.unwrap_err().timed_out());
+    tokio::time::sleep(RESOLVE_WAIT).await;
+    let read = device.read_many(["ai:1 object-name"]).await.unwrap();
+    assert!(read.stopped.is_none(), "{read:?}");
+    let name = read.readings[0].value.as_ref().map(|v| v.as_str());
+    assert_eq!(name, Ok(Some("B")), "{read:?}");
+    assert_eq!(device.address(), at(3));
+    stop(vec![old, new]).await;
+}

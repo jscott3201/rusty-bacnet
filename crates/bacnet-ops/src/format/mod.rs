@@ -53,7 +53,7 @@ use bacnet_types::primitives::{Date, PropertyValue, Time};
 use units::unit_symbol;
 
 /// A property as read: its raw application-tagged value, or why the device
-/// gave none. The rows the raw readers ([`Reader`](crate::client::Reader))
+/// gave none. The rows the raw readers ([`Reader`](crate::raw::Reader))
 /// and the watch hub keep, undecoded; a [`Device`](crate::Device) read
 /// returns each as a [`Reading`](crate::Reading).
 pub type RawRow = (PropertyIdentifier, Result<Vec<u8>, PropertyError>);

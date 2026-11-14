@@ -245,11 +245,10 @@ pub(super) async fn run<T: TransportPort + 'static>(
             // By its instance, as before: one claimed twice gets no name.
             // Pinned to the row the policy let through above.
             let read = match crate::context::pinned(client, found).await {
-                Ok(device) => Some(
-                    device
-                        .read_object(object, Wanted::List(&[PropertyIdentifier::OBJECT_NAME]))
-                        .await,
-                ),
+                Ok(device) => device
+                    .read_object(object, Wanted::List(&[PropertyIdentifier::OBJECT_NAME]))
+                    .await
+                    .ok(),
                 Err(_) => None,
             };
             let name =

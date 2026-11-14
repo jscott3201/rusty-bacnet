@@ -14,7 +14,7 @@ use tokio::sync::broadcast::error::RecvError;
 use super::{Device, DeviceAddress, DeviceRef, Discovered, Duplicate, Pin};
 use crate::client::{Client, WhoIsScope};
 use crate::error::OpsError;
-use crate::target::{Target, bip6_vmac, check_local_mac, parse_target_on};
+use crate::target::{Target, VmacLookup, bip6_vmac, check_local_mac, parse_target_on};
 
 /// How long the one Who-Is for an instance no address claims listens on
 /// past the first answer, for a second device claiming it too (within the
@@ -33,11 +33,11 @@ impl<T: TransportPort + 'static> Client<T> {
     /// # Errors
     ///
     /// A target the grammar refuses on this transport, a local address its
-    /// link can't reach, or a B/IPv6 socket address whose node doesn't say
-    /// its VMAC ([`OpsError::Parse`]); an instance two or more addresses
-    /// claim ([`OpsError::Ambiguous`]); and an instance no address answered
-    /// for, or a remote address with no router known
-    /// ([`OpsError::UnknownDevice`]).
+    /// link can't reach, or a B/IPv6 socket address on another link
+    /// ([`OpsError::Parse`]); an instance two or more addresses claim
+    /// ([`OpsError::Ambiguous`]); and an instance no address answered for,
+    /// a remote address with no router known, or a B/IPv6 socket address
+    /// whose node doesn't say its VMAC ([`OpsError::UnknownDevice`]).
     pub async fn device<'a>(
         &self,
         target: impl Into<DeviceRef<'a>>,
@@ -54,7 +54,12 @@ impl<T: TransportPort + 'static> Client<T> {
                             .await
                     }
                     Target::Bip6(peer) => {
-                        let vmac = bip6_vmac(transport, peer).await.map_err(parse)?;
+                        let vmac = bip6_vmac(transport, peer).await.map_err(|why| match why {
+                            VmacLookup::NoAnswer { .. } => OpsError::UnknownDevice {
+                                target: text.to_string(),
+                            },
+                            why => parse(why.to_string()),
+                        })?;
                         self.at(local(&vmac).map_err(parse)?).await
                     }
                     Target::Instance(instance) => self.following(instance, None).await,
