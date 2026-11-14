@@ -3,7 +3,6 @@
 use super::*;
 use crate::app_transport::AppTransport;
 use bacnet_network::router::{RouterOptions, RouterPort};
-use bacnet_transport::bip::AsBip;
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::error::Error;
@@ -85,6 +84,8 @@ async fn the_wrapped_port_is_the_router_port_and_has_no_link() {
     let mut transport = AppTransport::Router(slots.take(Role::Client).unwrap());
     assert!(transport.link().is_none());
     assert!(matches!(transport.as_bip(), Err(Error::Encoding(_))));
+    assert!(transport.bip_transport().is_none());
+    assert!(transport.bip6_transport().is_none());
     // The longest of the router's MACs is the port's own.
     assert_eq!(transport.local_mac(), [0x12, 0x02]);
     assert!(transport.max_npdu_changes().is_some());
@@ -119,4 +120,32 @@ async fn a_link_passes_through() {
     ));
     let _receiver = transport.start().await.unwrap();
     transport.stop().await.unwrap();
+}
+
+/// A link's concrete B/IP and B/IPv6 transports are reachable through the
+/// wrapper, and the kind with them (#2560).
+#[test]
+fn a_link_lends_its_concrete_transport() {
+    use bacnet_transport::any::AnyTransport;
+    use bacnet_transport::bip::BipTransport;
+    use bacnet_transport::bip6::Bip6Transport;
+    use bacnet_types::data_link::DataLink;
+
+    let bip = AppTransport::from(AnyTransport::from(BipTransport::new(
+        std::net::Ipv4Addr::LOCALHOST,
+        0,
+        std::net::Ipv4Addr::BROADCAST,
+    )));
+    assert_eq!(bip.data_link(), Some(DataLink::Bip));
+    assert!(bip.bip_transport().is_some());
+    assert!(bip.bip6_transport().is_none());
+
+    let bip6 = AppTransport::from(AnyTransport::Bip6(Bip6Transport::new(
+        std::net::Ipv6Addr::LOCALHOST,
+        0,
+        Some(1),
+    )));
+    assert_eq!(bip6.data_link(), Some(DataLink::Bip6));
+    assert!(bip6.bip6_transport().is_some());
+    assert!(bip6.bip_transport().is_none());
 }

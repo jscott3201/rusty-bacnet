@@ -202,7 +202,7 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     }
 }
 
-impl<T: TransportPort + bacnet_transport::bip::AsBip + 'static> BACnetServer<T> {
+impl<T: TransportPort + 'static> BACnetServer<T> {
     /// How this server's foreign-device registration is going (#938):
     /// whether it holds a live lease, the time left on it, and the last
     /// attempt's result and outcome, a BBMD's refusal included. It reads

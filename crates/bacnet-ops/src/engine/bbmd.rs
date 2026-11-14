@@ -2,7 +2,6 @@
 //! of BVLL only (Annex J.2.3 and J.2.7), never a table write or a
 //! registration.
 
-use std::any::Any;
 use std::net::SocketAddrV4;
 
 use bacnet_transport::bip::{BipTransport, BvlcExchangeError};
@@ -14,7 +13,7 @@ use crate::bbmd::{BdtRow, FdtRow, Outcome, Probe, mac};
 impl<T: TransportPort + 'static> Engine<T> {
     /// The client's B/IP transport, when it has one: the BBMD reads need it.
     pub fn bip(&self) -> Option<&BipTransport> {
-        (self.client.transport() as &dyn Any).downcast_ref()
+        self.client.transport().bip_transport()
     }
 
     /// The BBMD the client last tried to register with as a foreign device,
