@@ -4,7 +4,7 @@
 //! fail with the low-level client's [`Error`] in a [`Halt`]; the turn
 //! hooks; and what classifies those errors. The [`Client`](crate::Client)
 //! and [`Device`](crate::Device) calls are the high-level layer over it,
-//! failing with [`OpsError`](crate::OpsError) instead, which answers the
+//! failing with [`OpsError`] instead, which answers the
 //! same questions with its own methods.
 //!
 //! [`who_is`] sends a discovery's Who-Is straight from a low-level client,

@@ -406,7 +406,7 @@ device answers; a number from 1 to 65534 is that remote network,
 through its router. Another name or number raises `ValueError`,
 and another type `TypeError`, before anything is sent. A client on
 `transport="router"` has no network of its own, so its Who-Is
-names one, or every one.
+names one, or every one: a local one raises `ValueError` saying so.
 
 Give `low_limit` and `high_limit` together or not at all, each from
 0 to 4194303: one alone, `low_limit` above `high_limit`, or a limit

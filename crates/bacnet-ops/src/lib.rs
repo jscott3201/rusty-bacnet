@@ -56,7 +56,7 @@ pub mod reading;
 pub mod target;
 pub mod watch;
 
-pub use client::{Client, Discover, Scope};
+pub use client::{Client, Discover, ResolveScope, Scope};
 pub use device::{Device, DeviceAddress};
 pub use error::OpsError;
 pub use format::{PropertyError, Value};

@@ -64,7 +64,7 @@ pub enum OpsError {
         /// Where the one Who-Is for it went unanswered, or `None` when none
         /// was sent: the text then says how to reach further, from a bare
         /// instance asked on this network alone (the client's default
-        /// [`ResolveScope`](crate::client::ResolveScope)).
+        /// [`ResolveScope`]).
         asked: Option<ResolveScope>,
     },
     /// Two or more addresses claim the instance named, so which device is
