@@ -2031,7 +2031,12 @@ To release:
    names it, and the crate map marks a crate whose Cargo.toml sets
    `[package.metadata.website] first-release` to a later release as
    unreleased, linking its source instead of docs.rs. Set that key on a
-   crate that is new since the last release. Each script rewrites the
+   crate that is new since the last release. Pages that link to source
+   files at the release tag (`v${release}/crates/...`) follow the tag too,
+   and no test checks that those paths exist: when files have moved between
+   crates since the last release, retarget the links in the same PR (for
+   0.16.0: `tui/network.mdx` and `tui/writes.mdx` link `bbmd` and `safety`
+   files that moved from `bacnet-ops` to `bacnet-tool`, #2560). Each script rewrites the
    generated part of its pages and leaves the authored text around it;
    `--check` changes nothing and fails when a page is stale:
 
