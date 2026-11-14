@@ -24,6 +24,13 @@ pub(super) struct SentFrame {
 
 /// A link with `max_apdu` as its egress limit, fed by the returned sender,
 /// whose every send (either kind) comes out of the returned receiver.
+///
+/// The receiver holds every frame, retransmissions included. A test that runs
+/// the client on a short APDU timeout (40 or 100 ms) runs on paused time:
+/// there the timers move only when every task is idle, so a stalled runner
+/// cannot expire one before the scripted reply lands. On the wall clock a
+/// stall past 40 ms let the client resend a segment, as it should, and the
+/// test read that copy as its next request.
 pub(super) fn harness(
     local_mac: &[u8],
     max_apdu: u16,
@@ -350,7 +357,8 @@ async fn configured_capacity_exhaustion_fails_before_registration_or_emission() 
     client.stop().await.unwrap();
 }
 
-#[tokio::test]
+// Paused time: see `harness`.
+#[tokio::test(start_paused = true)]
 async fn reason_4_completes_exact_caller_learns_bound_and_does_not_retry() {
     let router = vec![2];
     let dadr = vec![3];
@@ -603,7 +611,8 @@ async fn same_path_serializes_while_a_second_router_remains_concurrent() {
     client.stop().await.unwrap();
 }
 
-#[tokio::test]
+// Paused time: see `harness`.
+#[tokio::test(start_paused = true)]
 async fn cancelled_generation_quarantines_delayed_reason_4_before_next_send() {
     let router = vec![2];
     let dadr = vec![3];

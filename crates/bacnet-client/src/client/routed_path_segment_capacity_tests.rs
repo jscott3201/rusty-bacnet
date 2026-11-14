@@ -1,7 +1,8 @@
 //! Segmented outgoing path limits retain their independent egress budget.
 use super::*;
 
-#[tokio::test]
+// Paused time: see `harness`.
+#[tokio::test(start_paused = true)]
 async fn reason_4_during_segmented_send_prevents_window_retransmission() {
     let router = vec![2];
     let dadr = vec![3];
