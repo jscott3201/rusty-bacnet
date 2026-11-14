@@ -6,6 +6,7 @@ use bacnet_encoding::apdu::{self, Apdu, ComplexAck, encode_apdu};
 use bacnet_encoding::npdu::{Npdu, decode_npdu, encode_npdu};
 use bacnet_transport::loopback::LoopbackTransport;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort, TransportProvenance};
+use bacnet_transport::test_transport::TestTransport;
 use bacnet_types::MacAddr;
 use bacnet_types::enums::{AbortReason, ConfirmedServiceChoice};
 use bacnet_types::error::{Error, RemoteError};
@@ -58,54 +59,40 @@ fn response_segment(invoke_id: u8, sequence_number: u8, more_follows: bool) -> A
     })
 }
 
-struct BlockingRetryTransport {
-    local_mac: MacAddr,
-    inbound_rx: Option<mpsc::Receiver<ReceivedNpdu>>,
+/// A link whose second unicast blocks on `release_retry`, after telling
+/// `retry_started`, and then fails; every other send lands in `outbound_tx`.
+fn blocking_retry_transport(
+    inbound_rx: mpsc::Receiver<ReceivedNpdu>,
     outbound_tx: mpsc::UnboundedSender<Bytes>,
     send_count: Arc<AtomicUsize>,
     retry_started: Arc<Notify>,
     release_retry: Arc<Notify>,
-}
-
-impl TransportPort for BlockingRetryTransport {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        Ok(self.inbound_rx.take().expect("transport started once"))
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_unicast(&self, npdu: &[u8], _mac: &[u8]) -> Result<(), Error> {
-        let send_number = self.send_count.fetch_add(1, Ordering::SeqCst) + 1;
-        if send_number == 2 {
-            self.retry_started.notify_one();
-            self.release_retry.notified().await;
-            return Err(Error::Transport(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "injected retry failure",
-            )));
-        }
-        self.outbound_tx
-            .send(Bytes::copy_from_slice(npdu))
-            .expect("outbound observer remains open");
-        Ok(())
-    }
-
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.outbound_tx
-            .send(Bytes::copy_from_slice(npdu))
-            .expect("outbound observer remains open");
-        Ok(())
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &self.local_mac
-    }
+) -> TestTransport {
+    TestTransport::builder()
+        .local_mac(CLIENT_MAC)
+        .inbound(inbound_rx)
+        .on_send(move |frame| {
+            let blocked = !frame.broadcast && send_count.fetch_add(1, Ordering::SeqCst) + 1 == 2;
+            if !blocked {
+                outbound_tx
+                    .send(frame.npdu)
+                    .expect("outbound observer remains open");
+            }
+            let (retry_started, release_retry) =
+                (Arc::clone(&retry_started), Arc::clone(&release_retry));
+            async move {
+                if blocked {
+                    retry_started.notify_one();
+                    release_retry.notified().await;
+                    return Err(Error::Transport(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "injected retry failure",
+                    )));
+                }
+                Ok(())
+            }
+        })
+        .build()
 }
 
 // Loopback uses only Tokio channels, so advance retry timers without depending
@@ -156,14 +143,13 @@ async fn retry_send_failure_precedes_final_timeout_indication() {
     let retry_started = Arc::new(Notify::new());
     let release_retry = Arc::new(Notify::new());
     let send_count = Arc::new(AtomicUsize::new(0));
-    let transport = BlockingRetryTransport {
-        local_mac: MacAddr::from_slice(CLIENT_MAC),
-        inbound_rx: Some(inbound_rx),
+    let transport = blocking_retry_transport(
+        inbound_rx,
         outbound_tx,
-        send_count: Arc::clone(&send_count),
+        Arc::clone(&send_count),
         retry_started,
-        release_retry: Arc::clone(&release_retry),
-    };
+        Arc::clone(&release_retry),
+    );
     let config = ClientConfig {
         apdu_timeout_ms: 10,
         apdu_retries: 1,
@@ -198,14 +184,13 @@ async fn blocked_retry_does_not_block_segment_admission_or_cancel_on_send_failur
     let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel();
     let retry_started = Arc::new(Notify::new());
     let release_retry = Arc::new(Notify::new());
-    let transport = BlockingRetryTransport {
-        local_mac: MacAddr::from_slice(CLIENT_MAC),
-        inbound_rx: Some(inbound_rx),
+    let transport = blocking_retry_transport(
+        inbound_rx,
         outbound_tx,
-        send_count: Arc::new(AtomicUsize::new(0)),
-        retry_started: Arc::clone(&retry_started),
-        release_retry: Arc::clone(&release_retry),
-    };
+        Arc::new(AtomicUsize::new(0)),
+        Arc::clone(&retry_started),
+        Arc::clone(&release_retry),
+    );
     let config = ClientConfig {
         apdu_timeout_ms: 50,
         apdu_retries: 1,

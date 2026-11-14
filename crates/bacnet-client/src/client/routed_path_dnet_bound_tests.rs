@@ -1,6 +1,7 @@
 //! A routed confirmed request names one device on one remote network (#1278).
 use super::*;
 use crate::discovery::{DiscoveredDevice, RoutedDeviceConfig};
+use bacnet_transport::test_transport::TestTransport;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier, Segmentation, UnconfirmedServiceChoice};
 use bacnet_types::primitives::ObjectIdentifier;
 
@@ -18,7 +19,7 @@ fn not_one_device() -> [(u16, Vec<u8>); 3] {
 }
 
 async fn client() -> (
-    BACnetClient<CaptureTransport>,
+    BACnetClient<TestTransport>,
     mpsc::Sender<ReceivedNpdu>,
     mpsc::UnboundedReceiver<SentFrame>,
 ) {
