@@ -6,9 +6,11 @@ use serde_json::{Map, Value, json};
 pub(super) fn device() -> Value {
     json!({
         "type": ["string", "integer"],
-        "pattern": "^([0-9]+|[0-9]+:[0-9]+|[0-9]+:0[xX][0-9a-fA-F]+)$",
-        "description": "Device instance (0-4194302), or dnet:instance or dnet:0xMAC for a device \
-                        behind a router. Find devices with bacnet_discover first.",
+        "pattern": "^([0-9]+|[0-9]+:[0-9]+|[0-9]+:0[xX][0-9a-fA-F]+|[0-9]{1,3}(\\.[0-9]{1,3}){3}(:[0-9]+)?|mstp:(0[xX][0-9a-fA-F]{1,2}|[0-9]{1,3})|bip6:(0[xX][0-9a-fA-F]{6}|[0-9]+)|[0-9a-fA-F]{12}|[0-9a-fA-F]{2}([:-][0-9a-fA-F]{2}){5})$",
+        "description": "Device instance (0-4194302), dnet:instance for one on that network, or the \
+                        address of a device in the discovery table: ip:port, mstp:N, bip6:0xVMAC, \
+                        six hex octets, or dnet:0xMAC behind a router. An instance two addresses \
+                        claim needs its address. Find devices with bacnet_discover first.",
     })
 }
 

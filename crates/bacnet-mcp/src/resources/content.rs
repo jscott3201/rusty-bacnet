@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+use bacnet_ops::DeviceAddress;
 use bacnet_ops::client::{Wanted, unreachable};
 use bacnet_ops::format::{self, RawRow, RowError};
 use bacnet_ops::label::kebab;
@@ -28,25 +29,31 @@ const DEVICE_TTL: Duration = Duration::from_secs(300);
 /// device page is larger keeps that many, so a full alarm sweep fits.
 const CACHE_CAP: usize = 64;
 
-/// A cache of resource bodies by device, at most [`CACHE_CAP`] or the
-/// device page of them.
-pub(crate) type Cache = Mutex<HashMap<u32, (Instant, Value)>>;
+/// A cache of resource bodies by the device's address (#2560), at most
+/// [`CACHE_CAP`] or the device page of them. A resource names a device by
+/// its instance; the body is kept under the address that instance named
+/// when it was read, so another device taking the instance later is read
+/// afresh.
+pub(crate) type Cache = Mutex<HashMap<DeviceAddress, (Instant, Value)>>;
 
-fn cached(cache: &Cache, device: u32, ttl: Duration) -> Option<Value> {
+fn cached(cache: &Cache, device: &DeviceAddress, ttl: Duration) -> Option<Value> {
     let cache = cache.lock().unwrap_or_else(PoisonError::into_inner);
-    let (at, body) = cache.get(&device)?;
+    let (at, body) = cache.get(device)?;
     (at.elapsed() < ttl).then(|| body.clone())
 }
 
-fn keep(cache: &Cache, cap: usize, device: u32, body: &Value) {
+fn keep(cache: &Cache, cap: usize, device: &DeviceAddress, body: &Value) {
     let mut cache = cache.lock().unwrap_or_else(PoisonError::into_inner);
     if cache.len() >= cap.max(CACHE_CAP)
-        && !cache.contains_key(&device)
-        && let Some(oldest) = cache.iter().min_by_key(|(_, (at, _))| *at).map(|(d, _)| *d)
+        && !cache.contains_key(device)
+        && let Some(oldest) = cache
+            .iter()
+            .min_by_key(|(_, (at, _))| *at)
+            .map(|(d, _)| d.clone())
     {
         cache.remove(&oldest);
     }
-    cache.insert(device, (Instant::now(), body.clone()));
+    cache.insert(device.clone(), (Instant::now(), body.clone()));
 }
 
 /// A point: from the watch hub when it is watched (nothing is sent),
@@ -222,13 +229,13 @@ pub(super) async fn device<T: TransportPort + 'static>(
     call: &Call,
     device: u32,
 ) -> Result<Value, ToolError> {
-    ctx.device(call, &DeviceArg::Number(device)).await?;
-    if let Some(mut body) = cached(&ctx.described, device, DEVICE_TTL) {
+    let at = ctx.device(call, &DeviceArg::Number(device)).await?.address;
+    if let Some(mut body) = cached(&ctx.described, &at, DEVICE_TTL) {
         body["cached"] = json!(true);
         return Ok(body);
     }
     let mut body = describe::run(ctx, call, describe::Args::of(device)).await?;
-    keep(&ctx.described, ctx.policy.caps.devices, device, &body);
+    keep(&ctx.described, ctx.policy.caps.devices, &at, &body);
     body["cached"] = json!(false);
     Ok(body)
 }
@@ -239,7 +246,6 @@ pub(super) async fn device_alarms<T: TransportPort + 'static>(
     call: &Call,
     device: u32,
 ) -> Result<Value, ToolError> {
-    ctx.device(call, &DeviceArg::Number(device)).await?;
     alarms_of(ctx, call, device, ALARMS_EVERY).await
 }
 
@@ -249,7 +255,8 @@ async fn alarms_of<T: TransportPort + 'static>(
     device: u32,
     ttl: Duration,
 ) -> Result<Value, ToolError> {
-    if let Some(body) = cached(&ctx.alarms, device, ttl) {
+    let at = ctx.device(call, &DeviceArg::Number(device)).await?.address;
+    if let Some(body) = cached(&ctx.alarms, &at, ttl) {
         return Ok(body);
     }
     let mut body = alarms::run(ctx, call, alarms::Args::of(device), &Map::new()).await?;
@@ -264,7 +271,7 @@ async fn alarms_of<T: TransportPort + 'static>(
             map.remove(key);
         }
     }
-    keep(&ctx.alarms, ctx.policy.caps.devices, device, &body);
+    keep(&ctx.alarms, ctx.policy.caps.devices, &at, &body);
     Ok(body)
 }
 
@@ -293,7 +300,10 @@ pub(super) async fn alarms<T: TransportPort + 'static>(
     let mut unread = Vec::new();
     let mut errors = Map::new();
     for device in devices {
-        if call.out_of_time() && cached(&ctx.alarms, device, ALARMS_EVERY).is_none() {
+        let fresh = ctx
+            .known_at(device)
+            .and_then(|at| cached(&ctx.alarms, &at, ALARMS_EVERY));
+        if call.out_of_time() && fresh.is_none() {
             unread.push(device);
             continue;
         }
@@ -321,8 +331,10 @@ pub(crate) async fn refresh_alarms<T: TransportPort + 'static>(ctx: &Ctx<T>, tex
     };
     let account = ctx.account();
     let call = Call::new(ctx.policy.caps.budget, Arc::clone(&account));
-    let events =
-        |device: u32| cached(&ctx.alarms, device, Duration::MAX).map(|body| body["events"].clone());
+    let events = |device: u32| {
+        let at = ctx.known_at(device)?;
+        cached(&ctx.alarms, &at, Duration::MAX).map(|body| body["events"].clone())
+    };
     let work = async {
         let mut changed = false;
         for device in devices {

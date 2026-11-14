@@ -11,10 +11,11 @@ use bacnet_types::MacAddr;
 use bacnet_types::enums::{ObjectType, Segmentation, UnconfirmedServiceChoice};
 use bacnet_types::primitives::ObjectIdentifier;
 use bytes::BytesMut;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::{ALIASES, LAB, LAB_MAC, Lab, alias_mac};
 use crate::Policy;
+use crate::context::{Call, DeviceArg};
 
 /// An I-Am for `instance`, as a device on the local network sends it.
 fn i_am(instance: u32) -> BytesMut {
@@ -153,5 +154,105 @@ async fn the_own_network_number_names_the_local_network() {
     until(&lab, |lab| lab.low.network_number() == Some(7), "learned").await;
     let result = lab.agent.call("bacnet_describe_device", arguments).await;
     assert_ne!(result["isError"], json!(true), "{result}");
+    lab.stop().await;
+}
+
+/// Two networks hold one instance (#2560): the lab device on this one, and
+/// a station on network 2001 behind it that announces the same instance.
+/// The server knows them as two devices; the instance alone names neither,
+/// `2001:instance` names the routed one and is refused by a policy that
+/// leaves its network out, and the local one is reached by its address.
+/// Nothing is sent to resolve any of them.
+#[tokio::test(start_paused = true)]
+async fn two_networks_holding_one_instance_are_two_devices() {
+    let policy = Policy {
+        networks: Some([0].into()),
+        ..Policy::default()
+    };
+    let mut lab = Lab::start(policy).await;
+    lab.agent.initialize().await;
+    let elsewhere = NpduAddress {
+        network: 2001,
+        mac_address: MacAddr::from_slice(&[0x33]),
+    };
+    lab.inject(&i_am_from(LAB, Some(elsewhere)), &LAB_MAC).await;
+    let claims = |lab: &Lab| {
+        let known = lab.mcp.ctx().known.lock().unwrap();
+        known.values().filter(|instance| **instance == LAB).count()
+    };
+    until(&lab, |lab| claims(lab) == 2, "both claims are known").await;
+    assert!(
+        !lab.mcp.ctx().reach_known(LAB),
+        "an instance alone names neither"
+    );
+    let before = lab.sends().len();
+
+    let read = |device: Value| json!({ "device": device, "reads": [{ "object": "ai:1" }] });
+    let by_instance = lab.agent.call("bacnet_read", read(json!(LAB))).await;
+    let message = by_instance["structuredContent"]["message"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(message.contains("2001:0x33"), "{by_instance}");
+    let routed = lab
+        .agent
+        .call("bacnet_read", read(json!(format!("2001:{LAB}"))))
+        .await;
+    let routed = &routed["structuredContent"];
+    assert_eq!(routed["reason"], json!("network-not-allowed"), "{routed}");
+    assert_eq!(lab.sends().len(), before, "nothing sent to resolve them");
+
+    let local = lab
+        .agent
+        .call("bacnet_read", read(json!("10.0.0.2:47808")))
+        .await;
+    assert_ne!(local["isError"], json!(true), "{local}");
+    assert_eq!(local["structuredContent"]["device"], json!(LAB), "{local}");
+    lab.stop().await;
+}
+
+/// With both networks allowed, `2001:instance` resolves within its
+/// network to the routed station, and the local one is still its own
+/// device: each call is pinned to the address it named.
+#[tokio::test(start_paused = true)]
+async fn a_scoped_instance_names_the_claim_on_its_network() {
+    let mut lab = Lab::start(Policy::default()).await;
+    lab.agent.initialize().await;
+    let elsewhere = NpduAddress {
+        network: 2001,
+        mac_address: MacAddr::from_slice(&[0x33]),
+    };
+    lab.inject(&i_am_from(LAB, Some(elsewhere)), &LAB_MAC).await;
+    let routed = |lab: &Lab| {
+        let known = lab.mcp.ctx().known.lock().unwrap();
+        known
+            .keys()
+            .any(|address| address.to_string() == "2001:0x33")
+    };
+    until(&lab, routed, "the routed claim is known").await;
+    let ctx = lab.mcp.ctx();
+    let call = Call::new(Duration::from_secs(5), ctx.account());
+    let routed = ctx
+        .device(&call, &DeviceArg::Text(format!("2001:{LAB}")))
+        .await
+        .map_err(|e| e.json())
+        .unwrap();
+    assert_eq!(routed.address.to_string(), "2001:0x33");
+    assert_eq!((routed.instance, routed.network), (LAB, 2001));
+    assert_eq!(routed.handle.address(), routed.address, "pinned there");
+    let local = ctx
+        .device(&call, &DeviceArg::Text("10.0.0.2:47808".into()))
+        .await
+        .map_err(|e| e.json())
+        .unwrap();
+    assert_eq!(local.address.to_string(), "10.0.0.2:47808");
+    assert_eq!(local.instance, LAB);
+    let missing = ctx
+        .device(&call, &DeviceArg::Text(format!("2002:{LAB}")))
+        .await
+        .map(|_| ())
+        .unwrap_err()
+        .json();
+    assert_eq!(missing["target"], json!(format!("2002:{LAB}")), "{missing}");
+    drop((routed, local));
     lab.stop().await;
 }

@@ -2,6 +2,7 @@
 
 use std::sync::{Arc, PoisonError};
 
+use bacnet_ops::DeviceAddress;
 use bacnet_ops::client::{MAX_OBJECTS, Wanted, unreachable};
 use bacnet_ops::format::decode_all;
 use bacnet_ops::parse::parse_object_type;
@@ -204,14 +205,14 @@ pub(super) async fn listing<T: TransportPort + 'static>(
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         locks.retain(|_, lock| Arc::strong_count(lock) > 1);
-        Arc::clone(locks.entry(device.instance).or_default())
+        Arc::clone(locks.entry(device.address.clone()).or_default())
     };
     let _turn = lock.lock().await;
     let failed = |e: &Error| ToolError::device(device.instance, e);
     let kept = {
         let lists = ctx.lists.lock().unwrap_or_else(PoisonError::into_inner);
         lists
-            .get(&device.instance)
+            .get(&device.address)
             .filter(|kept| kept.fresh())
             .cloned()
     };
@@ -265,7 +266,7 @@ pub(super) async fn listing<T: TransportPort + 'static>(
                     indexed: None,
                     gaps: Vec::new(),
                 };
-                store(ctx, device.instance, whole.clone());
+                store(ctx, &device.address, whole.clone());
                 return Ok(Listing::from_cache(&whole, false, None));
             }
             Err(e) if unreachable(&e) => return Err(failed(&e)),
@@ -306,7 +307,7 @@ pub(super) async fn listing<T: TransportPort + 'static>(
         // from when it completed, so a slow read finishes and is then kept.
         state.at = Instant::now();
     }
-    store(ctx, device.instance, state.clone());
+    store(ctx, &device.address, state.clone());
     Ok(Listing::from_cache(&state, cached, stopped))
 }
 
@@ -322,14 +323,14 @@ fn fresh_partial(total: u32) -> CachedList {
 
 /// Keep what was read of `device`'s list, evicting the oldest list past
 /// [`LIST_CAP`] devices.
-fn store<T: TransportPort + 'static>(ctx: &Ctx<T>, device: u32, list: CachedList) {
+fn store<T: TransportPort + 'static>(ctx: &Ctx<T>, device: &DeviceAddress, list: CachedList) {
     let mut lists = ctx.lists.lock().unwrap_or_else(PoisonError::into_inner);
-    lists.insert(device, list);
+    lists.insert(device.clone(), list);
     while lists.len() > LIST_CAP {
         let oldest = lists
             .iter()
             .min_by_key(|(_, kept)| kept.at)
-            .map(|(device, _)| *device);
+            .map(|(device, _)| device.clone());
         match oldest {
             Some(oldest) => drop(lists.remove(&oldest)),
             None => break,
