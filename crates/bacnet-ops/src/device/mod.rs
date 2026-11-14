@@ -83,8 +83,9 @@ pub const QUIET: Duration = Duration::from_secs(30);
 /// What names a device for [`Client::device`].
 #[derive(Debug, Clone)]
 pub enum DeviceRef<'a> {
-    /// A target in the grammar ([`parse_target_on`]): an address, an
-    /// instance or a routed instance.
+    /// A target in the grammar
+    /// ([`parse_target_on`](crate::target::parse_target_on)): an address,
+    /// an instance or a routed instance.
     Text(&'a str),
     /// A device instance: the handle follows it.
     Instance(u32),

@@ -134,12 +134,12 @@ pub(crate) struct Shared<T: TransportPort + 'static> {
     /// subscriber process identifiers (#2185).
     hubs: AtomicU32,
     /// Where each instance a handle follows is reached now, while one does
-    /// (at most [`REMEMBERED`](crate::device::follow::REMEMBERED)).
+    /// (at most `device::follow::REMEMBERED`).
     pub(crate) follows: Mutex<Follows>,
     /// The instances devices named for their address, from the one read by
     /// the wildcard instance a handle made from an address needed (at most
-    /// [`REMEMBERED`](crate::device::follow::REMEMBERED)); one goes when the
-    /// discovery table loses a row at its address.
+    /// `device::follow::REMEMBERED`); one goes when the discovery table
+    /// loses a row at its address.
     pub(crate) instances: Mutex<HashMap<DeviceAddress, u32>>,
     /// The discovery table's changes, for the rows it loses.
     pub(crate) lost: Mutex<broadcast::Receiver<DeviceEvent>>,
