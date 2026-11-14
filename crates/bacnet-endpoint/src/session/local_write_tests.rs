@@ -12,13 +12,14 @@
 
 use super::*;
 use crate::DeviceIdentity;
-use crate::session::bus_port::BusPort;
+use crate::session::bus_port::bus_port;
 use crate::session::device_write_tests::bus_client;
 use bacnet_objects::analog::AnalogOutputObject;
 use bacnet_objects::channel::ChannelObject;
 use bacnet_objects::clock::{ClockFrame, ClockReader};
 use bacnet_objects::command::CommandObject;
 use bacnet_objects::timer::TimerObject;
+use bacnet_transport::test_transport::TestTransport;
 use bacnet_types::constructed::{
     BACnetActionCommand, BACnetActionList, BACnetDeviceObjectPropertyReference,
     BACnetTimerStateChangeValue,
@@ -75,12 +76,12 @@ fn fixture() -> ObjectDatabase {
 
 /// A running server-role session over `db` on the in-memory link, and its
 /// B/IP MAC.
-async fn endpoint(db: ObjectDatabase) -> (EndpointSession<BusPort>, [u8; 6]) {
+async fn endpoint(db: ObjectDatabase) -> (EndpointSession<TestTransport>, [u8; 6]) {
     let mut session =
         crate::bip::BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
             .role(SessionRole::ServerOnly)
             .database(db)
-            .build_session_over(BusPort::new())
+            .build_session_over(bus_port())
             .unwrap();
     session.start().await.unwrap();
     let port = session.bip_local_address().unwrap().port();
@@ -92,7 +93,7 @@ async fn endpoint(db: ObjectDatabase) -> (EndpointSession<BusPort>, [u8; 6]) {
 
 /// `change` to `object` through the endpoint call the case names.
 async fn call(
-    session: &EndpointSession<BusPort>,
+    session: &EndpointSession<TestTransport>,
     object: ObjectIdentifier,
     change: Change,
 ) -> Result<(), Error> {
@@ -124,7 +125,7 @@ fn row(db: &ObjectDatabase, object: ObjectIdentifier, property: PropertyIdentifi
 /// `core`, or the object is on neither.
 async fn same_rows(
     what: &str,
-    session: &EndpointSession<BusPort>,
+    session: &EndpointSession<TestTransport>,
     core: &ObjectDatabase,
     object: ObjectIdentifier,
 ) {
@@ -199,7 +200,7 @@ fn flags(flags: u8) -> PropertyValue {
 }
 
 async fn read(
-    session: &EndpointSession<BusPort>,
+    session: &EndpointSession<TestTransport>,
     object: ObjectIdentifier,
     property: PropertyIdentifier,
 ) -> PropertyValue {
@@ -309,7 +310,7 @@ fn with_output(more: Box<dyn bacnet_objects::traits::BACnetObject>) -> ObjectDat
 
 /// AO-1 as no write has left it: Present_Value at its default, no slot
 /// commanded.
-async fn assert_ao1_unwritten(session: &EndpointSession<BusPort>) {
+async fn assert_ao1_unwritten(session: &EndpointSession<TestTransport>) {
     assert_eq!(read(session, ao1(), P_PV).await, PropertyValue::Real(0.0));
     let db = session.database.as_ref().unwrap().read().await;
     let slots = db
@@ -460,7 +461,7 @@ async fn the_calls_need_a_running_session_with_a_database() {
         crate::bip::BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
             .role(SessionRole::ServerOnly)
             .database(fixture())
-            .build_session_over(BusPort::new())
+            .build_session_over(bus_port())
             .unwrap();
     let before = session.set_present_value_local(&ai, pv.clone()).await;
     assert_eq!(encoding(before.unwrap_err()), not_running);
@@ -480,7 +481,7 @@ async fn the_calls_need_a_running_session_with_a_database() {
     let mut client_only =
         crate::bip::BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
             .role(SessionRole::ClientOnly)
-            .build_session_over(BusPort::new())
+            .build_session_over(bus_port())
             .unwrap();
     client_only.start().await.unwrap();
     let refused = client_only.set_present_value_local(&ai, pv).await;
@@ -519,7 +520,7 @@ async fn an_audit_recipient_without_a_source_reporter_is_unknown() {
 
 /// A client's ReadProperty against `mac`'s `property` of `object`.
 async fn wire_read(
-    client: &bacnet_client::client::BACnetClient<BusPort>,
+    client: &bacnet_client::client::BACnetClient<TestTransport>,
     mac: &[u8],
     object: ObjectIdentifier,
     property: PropertyIdentifier,
@@ -540,7 +541,7 @@ async fn wire_read(
 /// What a client reads of `object`: Present_Value, Status_Flags and
 /// Reliability.
 async fn seen(
-    client: &bacnet_client::client::BACnetClient<BusPort>,
+    client: &bacnet_client::client::BACnetClient<TestTransport>,
     mac: &[u8],
     object: ObjectIdentifier,
 ) -> Vec<PropertyValue> {

@@ -1,6 +1,7 @@
 use super::super::{BACnetClient, ClientConfig};
-use bacnet_transport::port::{ReceivedNpdu, TransportPort, TransportProvenance};
-use bacnet_types::{MacAddr, error::Error};
+use bacnet_transport::port::{ReceivedNpdu, TransportProvenance};
+use bacnet_transport::test_transport::TestTransport;
+use bacnet_types::MacAddr;
 use bytes::Bytes;
 use std::sync::{
     Arc,
@@ -33,59 +34,55 @@ impl Drop for Signal<'_> {
         self.0.add_permits(1);
     }
 }
-pub struct Capture {
-    inbound: Option<mpsc::Receiver<ReceivedNpdu>>,
+/// A link that takes the local Number controls, records every send (either
+/// kind) in `outbound`, and holds the stop and, with `hold_number`, each
+/// broadcast, on `gates`.
+pub fn capture(
+    inbound: mpsc::Receiver<ReceivedNpdu>,
     outbound: mpsc::Sender<Sent>,
     gates: Arc<Gates>,
     hold_number: bool,
-}
-impl TransportPort for Capture {
-    fn supports_local_nonrouter_number_controls(&self) -> bool {
-        true
-    }
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        Ok(self.inbound.take().unwrap())
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        self.gates.stop_entered.add_permits(1);
-        if self.gates.hold_stop.load(Ordering::SeqCst) {
-            self.gates.stop_release.acquire().await.unwrap().forget();
-        }
-        Ok(())
-    }
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.outbound
-            .send(Sent {
-                npdu: Bytes::copy_from_slice(npdu),
-                destination: MacAddr::from_slice(mac),
-            })
-            .await
-            .unwrap();
-        Ok(())
-    }
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        if self.hold_number {
-            let gates = &self.gates;
-            let _drop = Signal(&gates.dropped);
-            gates.entered.add_permits(1);
-            gates.release.acquire().await.unwrap().forget();
-        }
-        self.send_unicast(npdu, &[]).await
-    }
-    fn local_mac(&self) -> &[u8] {
-        &[1]
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-    fn egress_apdu_limit(&self) -> u16 {
-        1476
-    }
+) -> TestTransport {
+    let (stop_gates, drop_gates) = (gates.clone(), gates.clone());
+    TestTransport::builder()
+        .local_mac(&[1])
+        .inbound(inbound)
+        .number_controls()
+        .on_stop(move || {
+            let gates = stop_gates.clone();
+            async move {
+                gates.stop_entered.add_permits(1);
+                if gates.hold_stop.load(Ordering::SeqCst) {
+                    gates.stop_release.acquire().await.unwrap().forget();
+                }
+                Ok(())
+            }
+        })
+        .on_send(move |frame| {
+            let (outbound, gates) = (outbound.clone(), gates.clone());
+            async move {
+                if frame.broadcast && hold_number {
+                    let _drop = Signal(&gates.dropped);
+                    gates.entered.add_permits(1);
+                    gates.release.acquire().await.unwrap().forget();
+                }
+                outbound
+                    .send(Sent {
+                        npdu: frame.npdu,
+                        destination: frame.mac,
+                    })
+                    .await
+                    .unwrap();
+                Ok(())
+            }
+        })
+        .on_drop(move || drop_gates.transport_dropped.add_permits(1))
+        .build()
 }
 pub async fn harness(
     hold: bool,
 ) -> (
-    BACnetClient<Capture>,
+    BACnetClient<TestTransport>,
     mpsc::Sender<ReceivedNpdu>,
     mpsc::Receiver<Sent>,
     Arc<Gates>,
@@ -106,12 +103,7 @@ pub async fn harness(
             apdu_timeout_ms: 5000,
             ..Default::default()
         },
-        Capture {
-            inbound: Some(rx),
-            outbound,
-            gates: gates.clone(),
-            hold_number: hold,
-        },
+        capture(rx, outbound, gates.clone(), hold),
     )
     .await
     .unwrap();
@@ -139,11 +131,6 @@ async fn deliver(inbound: &mpsc::Sender<ReceivedNpdu>, npdu: &[u8], source: &[u8
         .unwrap();
 }
 
-impl Drop for Capture {
-    fn drop(&mut self) {
-        self.gates.transport_dropped.add_permits(1);
-    }
-}
 pub fn number(value: u16, flag: u8) -> Vec<u8> {
     vec![1, 0x80, 0x13, (value >> 8) as u8, value as u8, flag]
 }

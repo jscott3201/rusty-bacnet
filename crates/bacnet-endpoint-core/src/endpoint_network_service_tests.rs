@@ -1,10 +1,8 @@
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 use bacnet_encoding::apdu::{Apdu, ConfirmedRequest, UnconfirmedRequest, decode_apdu, encode_apdu};
 use bacnet_encoding::npdu::{NpduAddress, decode_npdu};
 use bacnet_npdu::NetworkPriority;
 use bacnet_transport::port::{DataAttribute, ReceivedNpdu, TransportPort};
+use bacnet_transport::test_transport::{TestTransport, TestTransportHandle};
 use bacnet_types::MacAddr;
 use bacnet_types::enums::{ConfirmedServiceChoice, UnconfirmedServiceChoice};
 use bacnet_types::error::Error;
@@ -30,127 +28,62 @@ struct CapturedSend {
     data_attributes: Vec<DataAttribute>,
 }
 
-struct CaptureTransport {
-    receiver: Option<mpsc::Receiver<ReceivedNpdu>>,
-    sent: mpsc::Sender<CapturedSend>,
-    stops: Arc<AtomicUsize>,
-    local_mac: MacAddr,
-}
-
 struct CaptureHandle {
     _sender: mpsc::Sender<ReceivedNpdu>,
     sent: mpsc::Receiver<CapturedSend>,
-    stops: Arc<AtomicUsize>,
+    counters: TestTransportHandle,
 }
 
-fn capture_transport() -> (CaptureTransport, CaptureHandle) {
+impl CaptureHandle {
+    fn stops(&self) -> usize {
+        self.counters.stops()
+    }
+}
+
+/// A link at MAC 0xaa whose every send (either kind, with its data
+/// attributes) lands in the handle's `sent`. Its broadcast MAC is 0xff, as on
+/// MS/TP, and it also counts every group form a B/IP link with broadcast
+/// address 192.168.1.255 recognises (#1479).
+fn capture_transport() -> (TestTransport, CaptureHandle) {
     let (sender, receiver) = mpsc::channel(1);
     let (sent_tx, sent_rx) = mpsc::channel(8);
-    let stops = Arc::new(AtomicUsize::new(0));
+    let bip = bacnet_transport::bip::BipTransport::new(
+        std::net::Ipv4Addr::LOCALHOST,
+        0xBAC0,
+        std::net::Ipv4Addr::new(192, 168, 1, 255),
+    );
+    let transport = TestTransport::builder()
+        .local_mac(&[0xaa])
+        .inbound(receiver)
+        .on_is_broadcast_mac(|mac| mac == BROADCAST_MAC)
+        .on_is_group_destination(move |mac| bip.is_group_destination(mac))
+        .on_send(move |frame| {
+            let sent = sent_tx.clone();
+            async move {
+                let destination = if frame.broadcast {
+                    LinkDestination::Broadcast
+                } else {
+                    LinkDestination::Unicast(frame.mac)
+                };
+                sent.send(CapturedSend {
+                    npdu: frame.npdu,
+                    destination,
+                    data_attributes: frame.attributes,
+                })
+                .await
+                .map_err(|_| Error::Encoding("capture receiver closed".into()))
+            }
+        })
+        .build();
+    let counters = transport.handle();
     (
-        CaptureTransport {
-            receiver: Some(receiver),
-            sent: sent_tx,
-            stops: Arc::clone(&stops),
-            local_mac: MacAddr::from_slice(&[0xaa]),
-        },
+        transport,
         CaptureHandle {
             _sender: sender,
             sent: sent_rx,
-            stops,
+            counters,
         },
     )
-}
-
-impl CaptureTransport {
-    async fn capture(
-        &self,
-        npdu: &[u8],
-        destination: LinkDestination,
-        data_attributes: &[DataAttribute],
-    ) -> Result<(), Error> {
-        self.sent
-            .send(CapturedSend {
-                npdu: Bytes::copy_from_slice(npdu),
-                destination,
-                data_attributes: data_attributes.to_vec(),
-            })
-            .await
-            .map_err(|_| Error::Encoding("capture receiver closed".into()))
-    }
-}
-
-impl TransportPort for CaptureTransport {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        self.receiver
-            .take()
-            .ok_or_else(|| Error::Encoding("capture transport already started".into()))
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        self.stops.fetch_add(1, Ordering::SeqCst);
-        Ok(())
-    }
-
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.capture(
-            npdu,
-            LinkDestination::Unicast(MacAddr::from_slice(mac)),
-            &[],
-        )
-        .await
-    }
-
-    async fn send_unicast_with_data_attributes(
-        &self,
-        npdu: &[u8],
-        mac: &[u8],
-        data_attributes: &[DataAttribute],
-    ) -> Result<(), Error> {
-        self.capture(
-            npdu,
-            LinkDestination::Unicast(MacAddr::from_slice(mac)),
-            data_attributes,
-        )
-        .await
-    }
-
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.capture(npdu, LinkDestination::Broadcast, &[]).await
-    }
-
-    async fn send_broadcast_with_data_attributes(
-        &self,
-        npdu: &[u8],
-        data_attributes: &[DataAttribute],
-    ) -> Result<(), Error> {
-        self.capture(npdu, LinkDestination::Broadcast, data_attributes)
-            .await
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &self.local_mac
-    }
-
-    fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
-        mac == BROADCAST_MAC
-    }
-
-    /// Its broadcast MAC, and every group form a B/IP link with broadcast
-    /// address 192.168.1.255 recognises (#1479).
-    fn is_group_destination(&self, mac: &[u8]) -> bool {
-        mac == BROADCAST_MAC
-            || bacnet_transport::bip::BipTransport::new(
-                std::net::Ipv4Addr::LOCALHOST,
-                0xBAC0,
-                std::net::Ipv4Addr::new(192, 168, 1, 255),
-            )
-            .is_group_destination(mac)
-    }
 }
 
 /// The capture link's broadcast MAC, as on MS/TP.
@@ -367,7 +300,7 @@ async fn network_service_delegates_every_apdu_destination_with_attributes() {
     .await;
 
     endpoint.stop().await.unwrap();
-    assert_eq!(handle.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(handle.stops(), 1);
 }
 
 #[tokio::test]
@@ -435,7 +368,7 @@ async fn effective_group_destinations_reject_confirmed_and_malformed_apdus_witho
     );
 
     endpoint.stop().await.unwrap();
-    assert_eq!(handle.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(handle.stops(), 1);
 }
 
 /// A routed destination with no DADR is a remote broadcast, so a confirmed
@@ -552,7 +485,7 @@ async fn routed_via_local_broadcast_accepts_confirmed_request_for_ultimate_unica
     ));
 
     endpoint.stop().await.unwrap();
-    assert_eq!(handle.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(handle.stops(), 1);
 }
 
 #[test]

@@ -2,6 +2,7 @@
 //! refusals, and a session whose recipient Device sits behind a
 //! `BACnetRouter`, every link an in-memory loopback on paused time.
 use super::*;
+use crate::session::bus_port::bus_port;
 use crate::source_audit::routers::SourceRoute;
 use bacnet_endpoint_core::endpoint_ingress::EndpointApduDestination;
 use bacnet_network::router::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
@@ -107,7 +108,7 @@ fn the_builders_check_routed_bindings() {
             .map(drop);
         let bip = crate::bip::BipEndpointBuilder::new(Ipv4Addr::LOCALHOST, 0, Ipv4Addr::BROADCAST)
             .source_audit_routed_device_binding(device, network, mac)
-            .build_session_over(BusPort::new())
+            .build_session_over(bus_port())
             .map(drop);
         let expected = network == REMOTE;
         for (link, result) in [("SC", sc), ("MS/TP", mstp), ("B/IP", bip)] {

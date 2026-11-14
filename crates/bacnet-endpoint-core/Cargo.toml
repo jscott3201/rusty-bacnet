@@ -24,6 +24,7 @@ bacnet-network.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "macros", "time"] }
 
 [dev-dependencies]
+bacnet-transport = { workspace = true, features = ["test-support"] }
 bytes = { workspace = true, features = ["std"] }
 
 [lints]

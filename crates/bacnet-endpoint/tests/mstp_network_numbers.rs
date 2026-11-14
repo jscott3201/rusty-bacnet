@@ -12,6 +12,7 @@ use bacnet_encoding::{
 };
 use bacnet_transport::{
     mstp::MstpExecutionMode, mstp::MstpThreadConfig, mstp::codec::FrameType, port::TransportPort,
+    test_transport::TestTransport,
 };
 use bacnet_types::{
     enums::{ObjectType, PropertyIdentifier},
@@ -127,7 +128,7 @@ async fn responder_progress(peer: &mut Peer) {
 
 /// A standalone client has no responder role; its own confirmed request to the
 /// peer must complete through the same serial owner instead.
-async fn requester_progress(client: &BACnetClient<GatedTransport>, peer: &mut Peer) {
+async fn requester_progress(client: &BACnetClient<TestTransport>, peer: &mut Peer) {
     let link = peer.link.clone();
     let object = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
     let request = client.read_property(&[PEER], object, PropertyIdentifier::PRESENT_VALUE, None);

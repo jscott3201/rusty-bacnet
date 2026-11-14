@@ -6,6 +6,7 @@
 use super::*;
 use bacnet_encoding::npdu::{Npdu, decode_npdu};
 use bacnet_transport::port::ReceivedNpdu;
+use bacnet_transport::test_transport::{SendMode, TestTransport};
 
 /// The binding's network, which the session's own number becomes.
 const BOUND: u16 = 7;
@@ -13,45 +14,27 @@ const BOUND: u16 = 7;
 /// A loopback link whose node takes the local Number controls, as B/IP,
 /// SC and MS/TP do, so the session reads network messages. Each send takes
 /// a permit from its gate, so a test can hold sends in the transport.
-struct ControlLink(LoopbackTransport, Arc<tokio::sync::Semaphore>);
-
-impl ControlLink {
-    async fn pass(&self) {
-        self.1.acquire().await.unwrap().forget();
-    }
-}
-
-impl TransportPort for ControlLink {
-    async fn start(&mut self) -> Result<tokio::sync::mpsc::Receiver<ReceivedNpdu>, Error> {
-        self.0.start().await
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        self.0.stop().await
-    }
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.pass().await;
-        self.0.send_unicast(npdu, mac).await
-    }
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.pass().await;
-        self.0.send_broadcast(npdu).await
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        self.0.local_receive_apdu_capacity()
-    }
-    fn local_mac(&self) -> &[u8] {
-        self.0.local_mac()
-    }
-    fn supports_local_nonrouter_number_controls(&self) -> bool {
-        true
-    }
+fn control_link(inner: LoopbackTransport, gate: Arc<tokio::sync::Semaphore>) -> TestTransport {
+    TestTransport::builder()
+        .inner(inner)
+        .unicast(SendMode::Forward)
+        .broadcast(SendMode::Forward)
+        .number_controls()
+        .on_send(move |_| {
+            let gate = Arc::clone(&gate);
+            async move {
+                gate.acquire().await.unwrap().forget();
+                Ok(())
+            }
+        })
+        .build()
 }
 
 /// The session at `SESSION`, its Reporter confirmed and bound to Device
 /// 999 as station 5 on network 7, and the bare peer at station 5 on the
 /// same link.
 struct Link {
-    session: EndpointSession<ControlLink>,
+    session: EndpointSession<TestTransport>,
     peer: LoopbackTransport,
     rx: tokio::sync::mpsc::Receiver<ReceivedNpdu>,
     /// The session's sends' gate, open until a test closes it.
@@ -81,7 +64,7 @@ impl Link {
             .unwrap();
         let gate = Arc::new(tokio::sync::Semaphore::new(1 << 20));
         let mut session = EndpointSession::new(
-            ControlLink(near, Arc::clone(&gate)),
+            control_link(near, Arc::clone(&gate)),
             SessionRole::ClientOnly,
             SessionConfig::default(),
         )

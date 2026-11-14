@@ -5,6 +5,7 @@
 use super::*;
 use bacnet_encoding::apdu::ConfirmedRequest;
 use bacnet_services::device_mgmt::ReinitializeDeviceRequest;
+use bacnet_transport::test_transport::TestTransport;
 use bacnet_types::constructed::BACnetAddress;
 use bacnet_types::enums::ReinitializedState;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -50,8 +51,8 @@ const FAIL: u8 = 3;
 
 /// The session's own address, learned from a frame it sends `peer`.
 async fn session_mac(
-    session: &EndpointSession<BusPort>,
-    peer: &NetworkLayer<BusPort>,
+    session: &EndpointSession<TestTransport>,
+    peer: &NetworkLayer<TestTransport>,
     replies: &mut bacnet_network::layer::ApduReceiver,
 ) -> MacAddr {
     session
@@ -73,7 +74,7 @@ async fn session_mac(
 }
 
 async fn reinitialize(
-    peer: &NetworkLayer<BusPort>,
+    peer: &NetworkLayer<TestTransport>,
     session: &[u8],
     replies: &mut bacnet_network::layer::ApduReceiver,
     state: ReinitializedState,
@@ -204,7 +205,7 @@ async fn endpoint_records_accepted_reinitialize_requests_only() {
 
 /// Point the session's Reporter at `level` and `operations`.
 async fn configure_reporter(
-    session: &EndpointSession<BusPort>,
+    session: &EndpointSession<TestTransport>,
     level: AuditLevel,
     operations: &[AuditOperation],
 ) {
