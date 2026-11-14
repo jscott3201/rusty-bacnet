@@ -80,7 +80,7 @@ The older `_spec/rusty-bacnet-compliance-execution-plan/` documents are historic
   - Use `CARGO_INCREMENTAL=0` for gate runs.
   - Never share a target directory across worktrees.
 - **`cargo clean`.** Run it between PRs. The root owns this step: finish validation and review, make sure no Cargo or rustc job is using the target, then clean it before the next PR's build. Keep the registry and download caches, and never clean during another agent's build or tests.
-- **Measurements.** Run performance measurements with no competing workload, one benchmark suite at a time. For a change on the request path, run the instruction counts (`perf-counts.yml`, or `scripts/perf/perf_counts.py`; `--aim none` when the change is not an optimization). A row can move by about 200 instructions on heap layout alone with equal allocation calls (#2555), so attribute a failing row before acting on it.
+- **Measurements.** Run performance measurements with no competing workload, one benchmark suite at a time. For a change on the request path, run the instruction counts (`perf-counts.yml`, or `scripts/perf/perf_counts.py`; `--aim none` when the change is not an optimization). The gate judges each row without the system allocator's own instructions, which move by about 200 per request on heap layout alone (#2555); they are reported in their own column, and allocation calls stay gated. Attribute a failing row (`perf_counts.py attribute`) before acting on it.
 - **Linux-only code** (MS/TP real-time, AF_PACKET Ethernet, kernel RS-485) is checked in local Docker. See `_spec/roadmap-0.15/06-gates-ci-and-commands.md`.
 
 ## Skills

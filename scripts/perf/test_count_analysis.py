@@ -18,40 +18,51 @@ import perf_counts
 DATA = Path(__file__).resolve().parent / "testdata"
 
 
-def runs_for(label, slopes, workload, runtime, calls=22.0, bytes_=2196.0, base=5_000_000, harness=42.0):
-    """Runs whose slopes are exactly `slopes`: each ordinal's short run costs
-    `base + slope * short`, its long run `base + slope * long`. `harness` is
-    the counting allocator's share per request, added on top."""
+ALLOCATOR = 1_500.0  # the system allocator's share per request in the fixtures
+
+
+def runs_for(label, slopes, workload, runtime, calls=22.0, bytes_=2196.0, base=5_000_000, harness=42.0,
+             allocator=ALLOCATOR):
+    """Runs whose gated slopes are exactly `slopes`: each ordinal's short run
+    costs `base + slope * short`, its long run `base + slope * long`.
+    `harness` is the counting allocator's share per request and `allocator`
+    the system allocator's (one value, or one per ordinal), added on top."""
     short, long = ca.lengths(workload)
     out = []
     for ordinal, slope in enumerate(slopes, 1):
+        alloc = allocator[ordinal - 1] if isinstance(allocator, (list, tuple)) else allocator
         for n in (short, long):
             out.append({
                 "name": f"{workload}-{runtime}-{label}{ordinal}-{n}",
                 "workload": workload, "runtime": runtime, "label": label, "ordinal": ordinal, "n": n,
-                "instructions": round(base + (slope + harness) * n), "harness_ir": round(harness * n),
+                "instructions": round(base + (slope + harness + alloc) * n), "harness_ir": round(harness * n),
+                "allocator_ir": round(200_000 + alloc * n), "allocator_symbols": sorted(ca.ALLOCATOR_REQUIRED),
+                "allocator_unlisted": [],
                 "allocs": round(calls * n), "bytes": round(bytes_ * n),
             })
     return out
 
 
 def manifest(slopes_a, slopes_b, workload="rp", runtime="ct", calls=(22.0, 22.0), bytes_=(2196.0, 2196.0),
-             mode="compare", slopes_p=None, cells=None, harness=42.0):
+             mode="compare", slopes_p=None, cells=None, harness=42.0, allocator=(ALLOCATOR, ALLOCATOR)):
     """A completed manifest. A comparison has A, A' (P) and B; a noise run A
     and P (`slopes_b` are P's). `cells` lists extra (workload, runtime)
-    pairs given the same slopes, for coverage."""
+    pairs given the same slopes, for coverage. `allocator` is the system
+    allocator's share of A (and A' in a comparison), then of B (of A' in a
+    noise run)."""
     runs = []
     labels = ("A", "P") if mode == "noise" else ("A", "P", "B")
     for w, r in [(workload, runtime)] + list(cells or []):
         for label in labels:
             if label == "A":
-                values, rate, byte_rate = slopes_a, calls[0], bytes_[0]
+                values, rate, byte_rate, alloc = slopes_a, calls[0], bytes_[0], allocator[0]
             elif label == "P":
                 values = slopes_b if mode == "noise" else (slopes_p or slopes_a)
                 rate, byte_rate = calls[0], bytes_[0]
+                alloc = allocator[1] if mode == "noise" else allocator[0]
             else:
-                values, rate, byte_rate = slopes_b, calls[1], bytes_[1]
-            runs += runs_for(label, values, w, r, rate, byte_rate, harness=harness)
+                values, rate, byte_rate, alloc = slopes_b, calls[1], bytes_[1], allocator[1]
+            runs += runs_for(label, values, w, r, rate, byte_rate, harness=harness, allocator=alloc)
     variants = {label: {"sha": label * 40, "ref": label, "binaries": {"counts": "same"}} for label in labels}
     order = ("APPA" if mode == "noise" else "ABPPBA") * (len(slopes_a) // 2)
     return {"mode": mode, "variants": variants, "runs": runs, "completed": True, "order": order}
@@ -92,6 +103,45 @@ class Parsing(unittest.TestCase):
                  "<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<u8>>>"
         self.assertEqual(symbols[extend], 1000)
         self.assertNotIn("PROGRAM TOTALS", symbols)
+
+    def test_system_allocator_self_cost(self):
+        files = {}
+        text = (DATA / "alloc.cg").read_text()
+        _lines, functions, edges = ca.parse_callgrind(text, files)
+        self.assertEqual(sum(functions.values()), ca.parse_summary(text))
+        self.assertEqual(files["malloc"], "./malloc/./malloc/malloc.c")
+        self.assertEqual(files["main"], "src/main.rs")
+        record = ca.allocator_record(functions, files)
+        # Self cost only: malloc 100 (not the 200 its call to _int_malloc
+        # costs), _int_malloc 200 (its inlined header line too), free and
+        # free'2 50, the tunable callback 5; _int_realloc's memcpy (80), the
+        # scratch-buffer utility (15) and the counting allocator (20) aren't
+        # the allocator.
+        self.assertEqual(record["allocator_ir"], 100 + 200 + 30 + 50 + 45 + 60 + 5)
+        self.assertEqual(record["allocator_symbols"], ["_dl_tunable_set_tcache_count", "_int_free", "_int_malloc",
+                                                       "_int_realloc", "free", "malloc", "unlink_chunk"])
+        self.assertEqual(record["allocator_unlisted"], [])
+        # The harness's share and the allocator's don't overlap.
+        self.assertEqual(ca.harness_ir(functions, edges), 20)
+
+    def test_unlisted_allocator_function_is_reported(self):
+        # A newer glibc's split of an internal: defined in malloc.c, not listed.
+        text = (DATA / "alloc.cg").read_text().replace("unlink_chunk.isra.0", "unlink_chunk_v2.isra.0")
+        files = {}
+        functions = ca.parse_callgrind(text, files)[1]
+        record = ca.allocator_record(functions, files)
+        self.assertEqual(record["allocator_unlisted"], ["unlink_chunk_v2.isra.0"])
+        self.assertEqual(record["allocator_ir"], 100 + 200 + 50 + 45 + 60 + 5)
+
+    def test_allocator_names_take_clone_suffixes_and_versions_only(self):
+        for name in ("malloc", "unlink_chunk.isra.0", "_int_free_maybe_consolidate.part.0", "free@@GLIBC_2.17",
+                     "_mid_memalign.isra.0", "__libc_malloc", "__GI___libc_free", "__posix_memalign",
+                     "cfree@GLIBC_2.17", "systrim.constprop.0", "_dl_tunable_set_tcache_count"):
+            self.assertTrue(ca.ALLOCATOR_RE.match(name), name)
+        for name in ("memcpy", "__GI_memcpy", "mallocx", "<alloc::raw_vec::RawVec<u8>>::grow_one", "free_list",
+                     "__libc_scratch_buffer_set_array_size", "__libc_thread_freeres", "__aarch64_swp8_acq",
+                     "__libc__int_malloc", "<bacnet_counts::CountingAlloc as GlobalAlloc>::alloc"):
+            self.assertFalse(ca.ALLOCATOR_RE.match(name), name)
 
     def test_normalize(self):
         self.assertEqual(ca.normalize_symbol("tokio[1a2b3c4d5e6f7a8b]::spawn"), "tokio::spawn")
@@ -180,7 +230,97 @@ class Gates(unittest.TestCase):
         s = self.summary([x - 520 for x in self.A], harness=545.0)
         row = self.row(s)
         self.assertAlmostEqual(row["a_median"], median(self.A), places=3)
-        self.assertAlmostEqual(row["a_median_with_harness"], median(self.A) + 545.0, places=3)
+        self.assertAlmostEqual(row["a_total"], median(self.A) + ALLOCATOR, places=3)
+        self.assertAlmostEqual(row["a_median_with_harness"], median(self.A) + ALLOCATOR + 545.0, places=3)
+
+    # The system allocator is reported, not gated (#2555).
+
+    def test_allocator_only_move_passes_and_is_reported(self):
+        # (a) A start-up allocation in another bin: +190 inside glibc only,
+        # every B ordinal, with equal calls and bytes. The total (the old
+        # gate) rises 27 floors; the gated figure doesn't move.
+        s = self.summary(list(self.P), aimed=("none",), allocator=(ALLOCATOR, ALLOCATOR + 190.0))
+        row = self.row(s)
+        self.assertEqual(row["verdict"], "PASS")
+        self.assertTrue(s["accepted"])
+        self.assertAlmostEqual(row["allocator_delta"], 190.0, places=3)
+        self.assertAlmostEqual(row["total_delta"], row["delta"] + 190.0, places=3)
+        self.assertGreater(row["total_delta"], row["total_noise_floor"])
+        self.assertAlmostEqual(row["b_allocator"], ALLOCATOR + 190.0, places=3)
+
+    def test_non_allocator_rise_past_the_floor_fails(self):
+        # (b) Eight more instructions outside the allocator, floor 7: fails,
+        # also when the allocator falls by as much and the total is flat.
+        for allocator in ((ALLOCATOR, ALLOCATOR), (ALLOCATOR, ALLOCATOR - 8.0)):
+            s = self.summary([x + 8 for x in self.A], aimed=("none",), allocator=allocator)
+            with self.subTest(allocator=allocator):
+                row = self.row(s)
+                self.assertEqual(row["verdict"], "FAIL")
+                self.assertFalse(row["instructions_ok"])
+                self.assertFalse(s["accepted"])
+        self.assertAlmostEqual(row["total_delta"], 0.0, places=3)
+
+    def test_allocation_calls_still_gate_with_flat_instructions(self):
+        # (c) 0.02 more allocation calls per request, instructions flat.
+        s = self.summary(list(self.P), aimed=("none",), calls=(22.0, 22.02))
+        row = self.row(s)
+        self.assertTrue(row["instructions_ok"])
+        self.assertFalse(row["allocations_ok"])
+        self.assertEqual(row["verdict"], "FAIL")
+        self.assertFalse(s["accepted"])
+
+    def test_aimed_saving_inside_the_allocator_is_no_saving(self):
+        # (d) rp saves 520 per request, all of it inside glibc: no saving.
+        s = self.summary(list(self.A), allocator=(ALLOCATOR, ALLOCATOR - 520.0))
+        row = self.row(s)
+        self.assertAlmostEqual(row["total_delta"], -520.0, places=3)
+        self.assertAlmostEqual(row["delta"], 0.0, places=3)
+        self.assertFalse(row["instructions_ok"])
+        self.assertFalse(s["accepted"])
+        # The same saving outside the allocator passes.
+        self.assertTrue(self.summary([x - 520 for x in self.A])["accepted"])
+
+    def test_noise_floor_leaves_out_the_allocator_spread(self):
+        # A' spreads 60 inside the allocator only: the gated floor stays 7.
+        spread = [ALLOCATOR, ALLOCATOR + 60.0] + [ALLOCATOR] * 4
+        s = ca.analyze(manifest(self.A, list(self.P), mode="noise", allocator=(ALLOCATOR, spread)))
+        row = s["rows"][0]
+        self.assertAlmostEqual(row["noise_floor"], 7.0, places=3)
+        # A' ordinal 2 at 40,000 + 60 against A ordinal 4 at 39,998.
+        self.assertAlmostEqual(row["total_noise_floor"], 62.0, places=3)
+        self.assertEqual(s["figure"], ca.GATED_FIGURE)
+        self.assertIn("| Allocator A / A' (report only) | Allocator A' - A |", ca.verdict_table(s))
+
+    def test_runs_without_allocator_symbols_are_refused(self):
+        # (e) A run that allocated with none of glibc's allocator functions
+        # (another libc, a static or stripped one), or with an allocator
+        # function the list doesn't name, or recorded without the share.
+        cases = {
+            "no symbols": {"allocator_symbols": [], "allocator_ir": 0},
+            "no internals": {"allocator_symbols": ["free", "malloc"]},
+            "unlisted": {"allocator_unlisted": ["_int_free_chunk"]},
+            "not recorded": {"allocator_ir": None},
+        }
+        for case, fields in cases.items():
+            m = self.full()
+            m["runs"][0].update(fields)
+            with self.subTest(case=case), self.assertRaisesRegex(ValueError, "allocator"):
+                ca.analyze(m, None, ("none",))
+        quiet = self.full()
+        for run in quiet["runs"]:
+            run.update(allocs=0, bytes=0, allocator_symbols=[], allocator_ir=0)
+        # A loop that doesn't allocate needs no allocator.
+        self.assertIn("rows", ca.analyze(quiet, None, ("none",)))
+
+    def test_table_rows_keep_their_first_cells_and_gain_the_columns(self):
+        s = self.summary(list(self.P), aimed=("none",), allocator=(ALLOCATOR, ALLOCATOR + 190.0))
+        text = ca.verdict_table(s)
+        header = text.splitlines()[0]
+        for column in ("Allocator A / B (report only)", "Allocator B - A", "Total A / B", "Total B - A (its floor)"):
+            self.assertIn(column, header)
+        row = next(line for line in text.splitlines() if line.startswith("| rp | ct |"))
+        self.assertIn("| 1,500.0 / 1,690.0 | 190.0 |", row)
+        self.assertTrue(row.endswith("| PASS |"))
 
     def test_other_workloads_must_not_rise_beyond_the_floor(self):
         b = [x - 520 for x in self.A]
@@ -379,6 +519,38 @@ class Runner(unittest.TestCase):
             with self.subTest(**kwargs), self.assertRaises(ValueError):
                 perf_counts.plan(self.args(**kwargs))
 
+    def test_quick_mode_refuses_floors_of_another_figure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "floors.json"
+            # A noise run from before #2555: its floors hold the allocator's spread.
+            path.write_text(json.dumps({"noise_floors": {"rp/ct": 128.2, "rp/mt": 57.8}}))
+            with self.assertRaisesRegex(ValueError, "another figure"):
+                perf_counts.plan(self.args(workloads="rp", noise_floors=[path]))
+
+    def test_older_runs_take_the_allocator_share_from_their_callgrind_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            raw = Path(tmp)
+            (raw / "rp-ct-01-A1-1000.cg").write_text((DATA / "alloc.cg").read_text())
+            m = {"runs": [{"name": "rp-ct-01-A1-1000", "instructions": 890},
+                          {"name": "rp-ct-02-B1-1000", "instructions": 890},
+                          {"name": "rp-ct-03-P1-1000", "instructions": 1, "allocator_ir": 7}]}
+            perf_counts.fill_allocator(m, raw)
+            self.assertEqual(m["runs"][0]["allocator_ir"], 490)
+            self.assertIn("_int_malloc", m["runs"][0]["allocator_symbols"])
+            self.assertNotIn("allocator_ir", m["runs"][1])  # no file: the analysis refuses it
+            self.assertEqual(m["runs"][2]["allocator_ir"], 7)  # recorded: kept
+
+    def test_attribution_lists_the_allocator_alone(self):
+        self_a = {"malloc": 1133.0, "_int_malloc": 522.0, "unlink_chunk.isra.0": 100.0, "memcpy": 800.0}
+        self_b = {"malloc": 1133.0, "_int_malloc": 652.0, "unlink_chunk.isra.0": 140.0, "memcpy": 800.0}
+        text = "\n".join(perf_counts.allocator_attribution({"malloc": 21.0}, {"malloc": 21.0}, self_a, self_b,
+                                                           "rpm", "ct", "B"))
+        self.assertIn("change +170.0", text)
+        self.assertIn("Counted as the system allocator: `_int_malloc`, `unlink_chunk.isra.0`, `malloc`", text)
+        self.assertNotIn("memcpy", text)
+        self.assertEqual(perf_counts.function_cell("free"), "`free` (allocator)")
+        self.assertEqual(perf_counts.function_cell("memcpy"), "`memcpy`")
+
     def test_quick_mode_needs_every_floor(self):
         floors = DATA / "floors-rp.json"
         mode, refs, order, *_rest, recorded = perf_counts.plan(self.args(workloads="rp", noise_floors=[floors]))
@@ -445,7 +617,7 @@ class Runner(unittest.TestCase):
             perf_counts.plan(self.args(workloads="rp", noise_floors=[DATA / "floors-rp.json"], glibc_tunables=tuned))
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "floors.json"
-            path.write_text(json.dumps({"environment": {"GLIBC_TUNABLES": tuned},
+            path.write_text(json.dumps({"environment": {"GLIBC_TUNABLES": tuned}, "figure": ca.GATED_FIGURE,
                                         "noise_floors": {"rp/ct": 11.4, "rp/mt": 14.8}}))
             self.assertEqual(perf_counts.plan(self.args(workloads="rp", noise_floors=[path],
                                                         glibc_tunables=tuned))[-1]["rp/ct"], 11.4)

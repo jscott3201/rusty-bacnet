@@ -30,7 +30,8 @@ its noise floor and no allocation calls are added.
 4. runs each workload and runtime in the order A B A' A' B A (A A' A' A for
    a noise run), --blocks times, each position at the short and the long
    loop length under callgrind; every run first checks its binary's SHA-256
-   and runs without a network;
+   and runs without a network, and records its total, the harness's
+   counting allocator's share and the system allocator's (#2555);
 5. writes callgrind_annotate's per-function view of every run, then
    analyzes: OUT/summary.json, OUT/summary.md (the verdict table),
    OUT/profiles/*.md (per-function and per-line slopes) and OUT/items.md;
@@ -39,6 +40,9 @@ its noise floor and no allocation calls are added.
 A comparison exits 1 when it isn't accepted, 2 on a usage error. Quick mode
 (--noise-floors FILE) skips the A' build and takes the floors from an
 earlier noise run on the same machine; use it only for local iteration.
+`analyze` of a run recorded before #2555 takes the system allocator's share
+from the run's raw callgrind files. `attribute` marks the system allocator's
+functions and lists them alone, with the share the gate leaves out.
 """
 
 import argparse
@@ -324,16 +328,19 @@ def run_matrix(manifest, out, save):
                     if (result["workload"], result["runtime"], result["n"]) != (workload, runtime, n):
                         raise RuntimeError(f"{name}: RESULT line doesn't match the run")
                     cg_text = (raw / f"{name}.cg").read_text()
-                    _lines, functions, edges = ca.parse_callgrind(cg_text)
+                    files = {}
+                    _lines, functions, edges = ca.parse_callgrind(cg_text, files)
                     record.update(
                         instructions=ca.parse_summary(cg_text),
                         harness_ir=ca.harness_ir(functions, edges),
+                        **ca.allocator_record(functions, files),
                         allocs=result["allocs"],
                         bytes=result["bytes"],
                     )
                     save()
                     ca.check_harness_ir(record)
-                    log("RUN", name, record["instructions"], record["allocs"], record["bytes"])
+                    ca.check_allocator_ir(record)
+                    log("RUN", name, record["instructions"], record["allocator_ir"], record["allocs"], record["bytes"])
 
 
 CALLER_DEPTH = 8
@@ -467,19 +474,48 @@ def attribute(out, workload, runtime, top=25, threshold=0.5):
         _lines, functions, edges = ca.parse_callgrind(text)
         selves[run["name"]], calls[run["name"]] = functions, ca.calls_in(edges)
     lines = []
+    slopes = {}
     for title, data in (("Calls in per request", calls), ("Self instructions per request", selves)):
         a = ca.symbol_slopes(data, runs, workload, runtime, "A")
         b = ca.symbol_slopes(data, runs, workload, runtime, other)
+        slopes[title] = (a, b)
         changes = ca.function_changes(a, b, threshold)
         lines += [f"## {title}, {workload}/{runtime}: {ca.LABELS[other]} - A "
                   f"(total over the {len(changes)} functions that moved by {threshold:g} or more: "
                   f"{sum(r[0] for r in changes):+.1f}; the largest {min(top, len(changes))} listed)", ""]
         lines.append(ca.table(["A", ca.LABELS[other], "Change", "Function"], [
-            [f"{x:,.2f}", f"{y:,.2f}", f"{d:+,.2f}", f"`{name[:150]}`"] for d, x, y, name in changes[:top]]))
+            [f"{x:,.2f}", f"{y:,.2f}", f"{d:+,.2f}", function_cell(name)] for d, x, y, name in changes[:top]]))
         lines.append("")
+    lines += allocator_attribution(*slopes["Calls in per request"], *slopes["Self instructions per request"],
+                                   workload, runtime, other)
     text = "\n".join(lines)
     print(text)
     return text
+
+
+def function_cell(name):
+    """A function in the attribution tables; the system allocator's are
+    marked, since the gated figure leaves them out (#2555)."""
+    return f"`{name[:150]}`" + (" (allocator)" if ca.ALLOCATOR_RE.match(name) else "")
+
+
+def allocator_attribution(calls_a, calls_b, self_a, self_b, workload, runtime, other):
+    """The system allocator's functions alone: every one that ran, with its
+    calls in and self instructions per request, and the total the gated
+    figure leaves out (#2555)."""
+    names = sorted({f for f in set(self_a) | set(self_b) if ca.ALLOCATOR_RE.match(f)},
+                   key=lambda f: (-abs(self_b.get(f, 0.0) - self_a.get(f, 0.0)), f))
+    total_a = sum(self_a.get(f, 0.0) for f in names)
+    total_b = sum(self_b.get(f, 0.0) for f in names)
+    label = ca.LABELS[other]
+    lines = [f"## System allocator, {workload}/{runtime}: {label} - A (reported, not gated; self instructions "
+             f"{total_a:,.1f} / {total_b:,.1f}, change {total_b - total_a:+.1f})", ""]
+    lines.append(ca.table(["Calls in A", f"Calls in {label}", "Self A", f"Self {label}", "Change", "Function"], [
+        [f"{calls_a.get(f, 0.0):,.2f}", f"{calls_b.get(f, 0.0):,.2f}", f"{self_a.get(f, 0.0):,.2f}",
+         f"{self_b.get(f, 0.0):,.2f}", f"{self_b.get(f, 0.0) - self_a.get(f, 0.0):+,.2f}", f"`{f}`"]
+        for f in names]))
+    lines += ["", "Counted as the system allocator: " + (", ".join(f"`{f}`" for f in names) or "none"), ""]
+    return lines
 
 
 def read_cg(raw, name):
@@ -510,9 +546,12 @@ def summary_markdown(summary):
     lines += [
         "",
         "Instructions are callgrind instruction reads per request (per iteration for the codec",
-        "workloads), without the harness's counting allocator: the median over six ordinals of the",
-        "slope between the short and the long run. Calls are allocator calls per request (gated);",
-        "bytes are requested bytes per request (reported only).",
+        "workloads): the median over six ordinals of the slope between the short and the long run.",
+        "The gated figure (the medians, their change and the floor) leaves out the harness's counting",
+        "allocator and the system allocator's own instructions (glibc's malloc, free and their",
+        "internals, #2555). Allocator is that share, reported only; Total is the two together, the",
+        "figure gated before #2555, with its own A vs A' floor. Calls are allocator calls per request",
+        "(gated); bytes are requested bytes per request (reported only).",
         "",
         ca.verdict_table(summary),
         "",
@@ -525,10 +564,24 @@ def summary_markdown(summary):
     return "\n".join(lines) + "\n"
 
 
+def fill_allocator(manifest, raw):
+    """A run recorded before #2555 has no system-allocator share: take it
+    from the run's callgrind file, kept in raw/ (gzipped or not), in memory
+    only. A run without one keeps none, and the analysis refuses it."""
+    for run in manifest["runs"]:
+        if run.get("instructions") is None or run.get("allocator_ir") is not None:
+            continue
+        text = read_cg(raw, run["name"])
+        if text is not None:
+            files = {}
+            run.update(ca.allocator_record(ca.parse_callgrind(text, files)[1], files))
+
+
 def analyze(out, floors_paths=None, aim=("rp",)):
     manifest = ca.load_json(out / "manifest.json")
     if not manifest.get("completed"):
         raise RuntimeError("the matrix didn't complete; no verdict")
+    fill_allocator(manifest, out / "raw")
     floors = dict(manifest.get("recorded_floors") or {})
     for path in floors_paths or []:
         floors.update(ca.load_json(path)["noise_floors"])
@@ -597,6 +650,10 @@ def plan(args):
                 if recorded.get("environment", {}) != environment:
                     raise ValueError(f"{path} was recorded with allocator settings {recorded.get('environment', {})}, "
                                      f"not this run's {environment}; its floors don't apply")
+                # Floors from before #2555 hold the system allocator's spread.
+                if recorded.get("figure") != ca.GATED_FIGURE:
+                    raise ValueError(f"{path} holds floors of another figure ({recorded.get('figure', 'the total')}), "
+                                     f"not the gated one ({ca.GATED_FIGURE}); measure them again")
                 floors.update(recorded["noise_floors"])
             missing = [f"{w}/{r}" for w in workloads for r in (runtimes if w in ca.ROUND_TRIP else ["none"])
                        if f"{w}/{r}" not in floors]
