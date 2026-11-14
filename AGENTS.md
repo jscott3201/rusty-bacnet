@@ -5,12 +5,11 @@ Rusty BACnet is a BACnet protocol stack (ASHRAE 135-2020) in Rust, with Python (
 ## Start here
 
 1. **Read the local handoff.** It lives at `_spec/roadmap-0.15/README.md` (gitignored, local-only). It holds:
-   - project state after 0.14.0;
-   - the 0.15.0 roadmap;
+   - project state and the current roadmap (0.15.0 shipped 2026-10-29);
    - the open-issue map;
    - pending and taken decisions;
    - gates, gotchas, working patterns and the release process.
-2. **Refresh live state before acting on any snapshot:** `git fetch`, `gh run list --branch dev`, `gh issue list --milestone 0.15.0`.
+2. **Refresh live state before acting on any snapshot:** `git fetch`, `gh run list --branch dev`, `gh issue list --state open`.
 3. **Confirm this session's permissions with the maintainer** (jscott3201). Merge permission is per session. It never authorizes tagging or publishing a release.
 
 The older `_spec/rusty-bacnet-compliance-execution-plan/` documents are historical evidence, not current instructions.
@@ -25,7 +24,7 @@ The older `_spec/rusty-bacnet-compliance-execution-plan/` documents are historic
 - **CI on PRs and pushes to `dev`/`main`:**
   - `.github/workflows/ci.yml` runs Linux; its aggregate check is `CI OK`.
   - `.github/workflows/native-tests.yml` runs macOS and Windows; its aggregate check is `Native OK`.
-  - **Merge evidence:** both checks green on the PR's exact head SHA ([docs/ci.md](docs/ci.md)).
+  - **Merge evidence:** both checks green on the PR's exact head SHA ([docs/ci.md](docs/ci.md)). A PR that touches `website/**`, the Python stub (`crates/rusty-bacnet/rusty_bacnet.pyi`), a `Cargo.toml` or a firmware budget file also needs `Docs validation` green.
   - **Skipped dev runs:** on a dev merge that could have been a fast-forward, with no cache-key change, a Plan job skips the heavy jobs (#1466).
 - **Checks that run only for `main`:** `Cargo Audit + Deny` and `MSRV` run only on PRs into `main` and on `main` pushes. Run `cargo audit` and `cargo deny check` locally before any release.
 - **Tests:** use cargo-nextest 0.9.145 or later (`cargo nextest run`, configured in `.config/nextest.toml`), plus `cargo test --doc`, since nextest skips doctests. `scripts/ci/local-macos.sh` is optional local verification, not merge evidence.
@@ -43,7 +42,7 @@ The older `_spec/rusty-bacnet-compliance-execution-plan/` documents are historic
 - **Hard limits.**
   - Every `.rs` file stays under 700 lines (`scripts/ci/check-file-size.sh`).
   - `missing_docs` is deny, and clippy warnings are errors.
-  - `bacnet-server` in-crate tests share one `TestTransport`.
+  - Tests use one shared test transport, `bacnet_transport::test_transport::TestTransport` (feature `test-support`, dev-dependencies only). Don't write another `impl TransportPort` in tests: each one compiles the generic stack into the test binary again (#904, #2557). `bacnet-server`'s in-crate tests still share their own `TestTransport` until #2557 folds it onto the shared one.
 - **Timing tests.** Use Tokio's paused clock, not real sleeps or short real-time budgets.
 - **Async review checklist.**
   - Server lock order: `ObjectDatabase` before `COVTable`.
@@ -57,11 +56,7 @@ The older `_spec/rusty-bacnet-compliance-execution-plan/` documents are historic
 
 - Use read-only exploration first.
 - **Delegation:** run independent research or verification questions in parallel when that materially improves speed or confidence and useful root work can proceed. Handle small, coupled tasks locally; the available roles are a menu, not a required panel. Keep subagent prompts scoped and evidence-led.
-- **Reviews:** reuse a completed review for its exact immutable target. If the head changes, follow `pr-gate-loop`:
-  - both required reviewers acknowledge the new target in the permitted final cycle;
-  - unchanged evidence is reused, and inspection focuses on the repair's impact.
-
-  A clean informational review does not reopen a stopped delivery gate.
+- **Reviews:** one independent reviewer per change per round, on the exact commits. A fix commit that changes behaviour gets a focused review of that commit, which looks for what the fix newly enables and reuses the unchanged evidence. A fix that only touches tests, comments or a debug check can be read by the lead instead. Reviews of different changes run in parallel.
 - Synthesize findings into a single decision or plan, and record the commands, files, symbols and sources used as evidence.
 - **PR size:** keep PRs bounded. Group closely related issues (one BACnet layer, state-machine family or measured hotspot) when one review can cover them.
 - **CI and claims:** don't add new CI unless asked, and don't broaden README or public support claims without tests and evidence.
@@ -69,7 +64,7 @@ The older `_spec/rusty-bacnet-compliance-execution-plan/` documents are historic
 ## Pre-1.0 design and cleanup
 
 - **APIs are unfrozen before 1.0.0.**
-  - Prefer a coherent greenfield design, and remove obsolete paths. Don't add compatibility shims, deprecated aliases, duplicate configuration hooks or speculative extension layers just to preserve pre-1.0 callers.
+  - Prefer a coherent greenfield design, and remove obsolete paths. Don't add `#[deprecated]`, compatibility shims, aliases, warning wrappers, duplicate configuration hooks or speculative extension layers to preserve pre-1.0 callers, and don't keep an old method, counter or parameter beside its replacement. Remove or rename outright and say so in the changelog.
   - Update every in-repository Rust and Python caller, test, example and doc affected by an API change together, and describe the break in the PR.
   - Protocol correctness, required platform support, persisted-data integrity and security boundaries still apply.
 - **Scope of each PR:**
@@ -85,7 +80,7 @@ The older `_spec/rusty-bacnet-compliance-execution-plan/` documents are historic
   - Use `CARGO_INCREMENTAL=0` for gate runs.
   - Never share a target directory across worktrees.
 - **`cargo clean`.** Run it between PRs. The root owns this step: finish validation and review, make sure no Cargo or rustc job is using the target, then clean it before the next PR's build. Keep the registry and download caches, and never clean during another agent's build or tests.
-- **Measurements.** Run performance measurements with no competing workload, one benchmark suite at a time.
+- **Measurements.** Run performance measurements with no competing workload, one benchmark suite at a time. For a change on the request path, run the instruction counts (`perf-counts.yml`, or `scripts/perf/perf_counts.py`; `--aim none` when the change is not an optimization). A row can move by about 200 instructions on heap layout alone with equal allocation calls (#2555), so attribute a failing row before acting on it.
 - **Linux-only code** (MS/TP real-time, AF_PACKET Ethernet, kernel RS-485) is checked in local Docker. See `_spec/roadmap-0.15/06-gates-ci-and-commands.md`.
 
 ## Skills
