@@ -243,8 +243,7 @@ async fn pipeline_order(mode: SendMode, fail_next: bool) -> Vec<&'static str> {
     }
     let result = outer.send_unicast(&[1], &[2]).await;
     assert_eq!(result.is_err(), fail_next);
-    let order = order.lock().unwrap().clone();
-    order
+    std::mem::take(&mut *order.lock().unwrap())
 }
 
 #[tokio::test]
@@ -361,9 +360,11 @@ async fn started_reports_the_b_ipv6_port_the_inner_transport_does_and_sends_see_
         .on_started(move |started| with_port.lock().unwrap().push(started.bip6_port))
         .build();
     let _ = outer.start().await.unwrap();
-    let seen = seen.lock().unwrap();
-    assert!(seen[0].is_none());
-    assert_eq!(seen[1].as_ref().map(|p| p.endpoint), Some(port.endpoint));
+    {
+        let seen = seen.lock().unwrap();
+        assert!(seen[0].is_none());
+        assert_eq!(seen[1].as_ref().map(|p| p.endpoint), Some(port.endpoint));
+    }
 
     let inner = TestTransport::builder().receive_capacity(100).build();
     let inner_handle = inner.handle();
