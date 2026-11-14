@@ -336,7 +336,7 @@ impl BACnetServer {
             let srv = builder.build().await.map_err(to_py_err)?;
 
             // No fallible step once the server runs: it must reach `inner`.
-            let mut published = inner.lock().await;
+            let mut published = inner.write().await;
             *live_forwarder_save_counters
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = forwarder_save_counters;
@@ -348,7 +348,9 @@ impl BACnetServer {
         crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
-    /// Stop admitted work and release the owned transport.
+    /// Stop admitted work and release the owned transport, once the calls in
+    /// flight have returned: a local write waiting for its event
+    /// notifications returns within the COV retry timeout.
     /// Cancellation keeps shutdown available for a later stop to join.
     /// Waits, with no limit, for the saves durable objects have queued, and
     /// warns while storage holds it up (#1363).
@@ -356,7 +358,7 @@ impl BACnetServer {
         let inner = self.inner.clone();
         let started = self.started.clone();
         let future = async move {
-            let mut guard = inner.lock().await;
+            let mut guard = inner.write().await;
             if let Some(srv) = guard.as_mut() {
                 srv.stop().await.map_err(to_py_err)?;
             }
@@ -377,7 +379,7 @@ impl BACnetServer {
         let inner = self.inner.clone();
         let transport_type = self.transport_type.clone();
         crate::py_async::future_into_py(py, async move {
-            let guard = inner.lock().await;
+            let guard = inner.read().await;
             let srv = guard
                 .as_ref()
                 .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
@@ -441,8 +443,9 @@ impl BACnetServer {
     ///
     /// The value is encoded as the server sends it and decoded by the
     /// client's rules, so it has the shape a network `read_property` of the
-    /// same property returns. The server lock is held for the read, as for
-    /// [`write_property_local`](Self::write_property_local).
+    /// same property returns. It holds a read guard of the server, as
+    /// [`write_property_local`](Self::write_property_local) does, so it runs
+    /// beside a local write still waiting for its notifications.
     #[pyo3(signature = (object_id, property_id, array_index=None))]
     fn read_property<'py>(
         &self,
@@ -457,7 +460,7 @@ impl BACnetServer {
 
         crate::py_async::future_into_py(py, async move {
             let value = {
-                let guard = inner.lock().await;
+                let guard = inner.read().await;
                 let srv = guard
                     .as_ref()
                     .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
@@ -499,12 +502,12 @@ impl BACnetServer {
     /// array index on a property that isn't an array yields
     /// `PROPERTY_IS_NOT_AN_ARRAY`.
     ///
-    /// The server lock is held for the whole call (including the post-write
-    /// COV/event sends), so concurrent Python calls on the same `BACnetServer`
-    /// serialize behind a local write. This is deliberate: it prevents a
-    /// `stop()` racing the notification sends mid-flight. A confirmed-COV send
-    /// to an unresponsive subscriber can therefore stall other Python calls
-    /// for up to the COV retry timeout.
+    /// A read guard of the server is held for the whole call, the post-write
+    /// COV and event sends included, so `stop()`, which takes the write
+    /// guard, never races those sends mid-flight; it waits for the call. Other
+    /// calls on the same `BACnetServer` take read guards too and go on beside
+    /// it, however long it waits for its event notifications (an unbound
+    /// Device recipient's I-Am, up to the COV retry timeout, #2537).
     #[pyo3(signature = (object_id, property_id, value, priority=None, array_index=None, *, source_object))]
     fn write_property_local<'py>(
         &self,
@@ -532,7 +535,7 @@ impl BACnetServer {
             // Hold the server guard for the duration of the call: the write
             // borrows `srv` and runs the post-write COV/event trigger path,
             // so the server must stay alive across the await.
-            let guard = inner.lock().await;
+            let guard = inner.read().await;
             let srv = guard
                 .as_ref()
                 .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
@@ -564,7 +567,7 @@ impl BACnetServer {
         let prop_value = value.inner;
 
         let future = async move {
-            let guard = inner.lock().await;
+            let guard = inner.read().await;
             let srv = guard
                 .as_ref()
                 .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;
@@ -583,7 +586,7 @@ impl BACnetServer {
         let inner = self.inner.clone();
 
         crate::py_async::future_into_py(py, async move {
-            let guard = inner.lock().await;
+            let guard = inner.read().await;
             let srv = guard
                 .as_ref()
                 .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;

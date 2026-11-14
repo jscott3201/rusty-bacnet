@@ -233,7 +233,7 @@ impl BACnetServer {
             // Take the database handle and let go of the server first, so
             // the read holds one lock.
             let db = {
-                let guard = inner.lock().await;
+                let guard = inner.read().await;
                 let srv = guard
                     .as_ref()
                     .ok_or_else(|| PyRuntimeError::new_err("server not started"))?;

@@ -114,18 +114,39 @@ class EventNotificationCountersTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await server.event_notification_counters(), expected)
 
             # NORMAL -> HIGH_LIMIT matches all three destinations and skips each.
-            # The two that can never be routed count at once.
-            await server.set_present_value_local(target, PropertyValue.real(2))
+            # Device 99 is looked for first with a Who-Is (#1368) and never
+            # answers, and the write waits for it, up to the APDU timeout (3 s),
+            # before its COV fanout and its return (#2537). The two that can
+            # never be routed count at once, while the write still waits.
+            loop = asyncio.get_running_loop()
+            began = loop.time()
+            write = asyncio.ensure_future(
+                server.set_present_value_local(target, PropertyValue.real(2)))
             expected.update(recipient_unroutable=1, confirmed_broadcast_recipient=1)
-            self.assertEqual(await server.event_notification_counters(), expected)
-            # Device 99 is looked for first with a Who-Is (#1368); it never
-            # answers, so it counts once the APDU timeout (3 s) has passed.
-            expected.update(device_recipient_unbound=1)
-            deadline = asyncio.get_running_loop().time() + 10
+            deadline = began + 2
             while (await server.event_notification_counters() != expected
-                   and asyncio.get_running_loop().time() < deadline):
+                   and loop.time() < deadline):
                 await asyncio.sleep(0.05)
+            self.assertFalse(write.done(), "the write waits for Device 99")
             self.assertEqual(await server.event_notification_counters(), expected)
+            await write
+            self.assertGreaterEqual(loop.time() - began, 2.5)
+
+            # Device 99 counts once the APDU timeout has passed. Whether the
+            # write's wait ran out first (cov_wait_expired) isn't asserted here;
+            # the Rust lane tests pin both orders.
+            expected.update(device_recipient_unbound=1)
+            del expected["cov_wait_expired"]
+
+            async def counted():
+                counters = await server.event_notification_counters()
+                self.assertIn(counters.pop("cov_wait_expired"), (0, 1))
+                return counters
+
+            deadline = loop.time() + 10
+            while await counted() != expected and loop.time() < deadline:
+                await asyncio.sleep(0.05)
+            self.assertEqual(await counted(), expected)
         finally:
             await server.stop()
 

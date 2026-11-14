@@ -2167,7 +2167,10 @@ Join admitted work and release the owned transport.
 
 Cancelling the returned Future retains shutdown ownership. Call stop()
 again to join it; a cleanup error also retains the owner for retry.
-Local mutation is rejected once shutdown starts.
+Local mutation is rejected once shutdown starts. Calls already running
+return first: a local write waiting for its event notifications (a
+Device recipient's I-Am) does so within cov\_retry\_timeout\_ms. Other
+calls run beside such a write rather than waiting for it.
 
 A Notification Forwarder, Notification Class or Audit Log write staged
 for a request that stop() cut short is dropped, and stop() waits, with

@@ -5361,7 +5361,8 @@ unknown object or property raises `BacnetProtocolError` with the error a
 network read gets (`UNKNOWN_OBJECT`, for example). A Group whose member rows
 exceed `rpm_max_result_elements` raises `BacnetAbortError` with
 `reason == 9` (OUT_OF_RESOURCES), the abort a network read of it gets. The
-server lock is held for the read, as for `write_property_local`.
+read goes on beside other calls, a local write still waiting for its event
+notifications included.
 
 ```python
 value = await server.read_property(
@@ -5727,10 +5728,10 @@ counters["confirmed_unanswered"]        # confirmed notifications never acknowle
 | `recipient_list_unavailable` | Transitions sent nowhere because reading the class's Recipient_List failed |
 | `recipient_list_invalid` | Transitions sent nowhere because the Recipient_List did not decode as a whole (no decodable prefix is used) |
 | `recipient_list_too_long` | Transitions sent nowhere because a custom class served more than 32 destinations |
-| `device_recipient_unbound` | Matched Device recipients skipped because no binding was configured or observed, or the observed one expired, and a targeted Who-Is drew no I-Am within the APDU timeout (or none could go out, within a minute of one that drew nothing); also a confirmed notification ended at a retry because the observed binding had expired by then |
+| `device_recipient_unbound` | Matched Device recipients skipped because no binding was configured or observed, or the observed one expired, and a targeted Who-Is drew no I-Am within the APDU timeout, each notification that waited for it counted once (or none could go out, within a minute of one that drew nothing); also a confirmed notification ended at an attempt because the observed binding had expired by then |
 | `recipient_unroutable` | Matched recipients skipped because they can't be routed as written: a Device identifier that isn't a Device (or a binding unusable on this link), or a MAC on network 65535 |
 | `confirmed_broadcast_recipient` | Matched recipients skipped because they ask for confirmed notifications at a broadcast address, or another group address such as a multicast one, which only unconfirmed requests may use (Clause 6.3) |
-| `confirmed_waited_for_invoke_id` | Confirmed notifications that found every invoke ID in use and waited for one, once each; none is dropped for want of an ID, and only its destination waits: its lane, or a Device recipient's queue (#2537) |
+| `confirmed_waited_for_invoke_id` | Confirmed notifications that found every invoke ID in use and waited for one, once each; none is dropped for want of an ID, and only its destination's lane waits (#2537) |
 | `confirmed_rejected` | Confirmed notifications the recipient answered with an Error, Reject or Abort |
 | `confirmed_unanswered` | Confirmed notifications with no acknowledgment after the last retry |
 | `unconfirmed_send_failed` | Unconfirmed notifications the transport refused to send, once per destination; the other destinations are still served |
@@ -5738,10 +5739,10 @@ counters["confirmed_unanswered"]        # confirmed notifications never acknowle
 | `received_not_forwarded` | Received event notifications that decoded but that no Notification Forwarder took; a confirmed one is still acknowledged |
 | `forwarding_cap_dropped` | Destinations a notification was not forwarded to because 64 copies were already on their way across the Notification Forwarders, one per destination dropped; destinations the loop rules refuse take no room |
 | `received_not_logged` | Received event notifications an Event Log collecting them would have taken, but their source had used its 5 records for that second; one per notification |
-| `lane_full` | Notifications dropped because their destination already had 64 waiting in its lane to go out in order, or a Device recipient's queue held 64 for its I-Am or an invoke ID (#2537); the newest is dropped |
+| `lane_full` | Notifications dropped because their destination already had 64 waiting in its lane to go out in order, a Device recipient's waiting for its I-Am included (#2537); the newest is dropped |
 | `lanes_entries_full` | Notifications dropped because 1,024 were already waiting across every destination's lane |
 | `lanes_full` | Notifications dropped because 256 destinations already had notifications waiting |
-| `cov_wait_expired` | Changes whose COV notifications went out before every event notification the change made, because that wait ran past the APDU timeout |
+| `cov_wait_expired` | Changes whose COV notifications went out before every event notification the change made, because that wait, one for a Device recipient's I-Am included, ran past the APDU timeout, or, for an intrinsic-reporting sweep pass that found 64 others waiting and went at once, because its own notifications were still waiting |
 
 The first four count event and acknowledgment notifications alike, once per
 transition. A class whose list is empty, or whose destinations all filter the

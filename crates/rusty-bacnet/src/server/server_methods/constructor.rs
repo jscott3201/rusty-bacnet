@@ -250,7 +250,7 @@ impl BACnetServer {
         }
         let sc_device_uuid = crate::sc_identity::device_uuid(transport, sc_device_uuid)?;
         Ok(Self {
-            inner: Arc::new(Mutex::new(None)),
+            inner: Arc::new(RwLock::new(None)),
             device_instance,
             segmentation_supported,
             apdu_segment_timeout_ms,
