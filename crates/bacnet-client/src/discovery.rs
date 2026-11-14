@@ -229,14 +229,15 @@ pub(crate) struct Heard {
     pub(crate) contested: Vec<u32>,
 }
 
-/// [`DeviceTable::remove`]'s outcome.
-#[derive(Debug)]
-pub(crate) struct Removed {
-    /// The row taken out.
-    pub(crate) device: DiscoveredDevice,
-    /// Its instance, when other rows still claim it: a contest shrank or
-    /// ended.
-    pub(crate) contested: Option<u32>,
+/// [`DeviceTable::localize`]'s outcome.
+#[derive(Debug, Default)]
+pub(crate) struct Localized {
+    /// Each routed row taken out, as it was, with the local row it became
+    /// when its station had none.
+    pub(crate) rows: Vec<(DiscoveredDevice, Option<DiscoveredDevice>)>,
+    /// Instances whose claimants changed while two or more claimed them,
+    /// before or after.
+    pub(crate) contested: Vec<u32>,
 }
 
 /// [`DeviceTable::purge_stale_collect`]'s outcome.
@@ -422,21 +423,62 @@ impl DeviceTable {
         }
     }
 
-    /// Take the row at `mac` on `network` out of the table.
-    pub(crate) fn remove(&mut self, network: u16, mac: &[u8]) -> Option<Removed> {
-        let key = Key::at(network, mac);
-        let entry = self.rows.remove(&key)?;
-        let instance = entry.device.object_identifier.instance_number();
-        self.claims.remove(&(instance, key));
-        let contested = self
-            .claims_of(instance)
-            .next()
-            .is_some()
-            .then_some(instance);
-        Some(Removed {
-            device: entry.device,
-            contested,
-        })
+    /// Take `network` as the local network: each routed row on it is the
+    /// local station at its remote MAC, as a client finds when it learns its
+    /// network's number (#2572). Where that station has a local row, the
+    /// routed one is taken out; where it has none, the routed row becomes
+    /// it, keeping its capabilities, its ages and its segmentation's
+    /// provenance. Network 0 is local already, and changes nothing.
+    pub(crate) fn localize(&mut self, network: u16) -> Localized {
+        let mut localized = Localized::default();
+        if network == 0 {
+            return localized;
+        }
+        let first = Key {
+            network,
+            mac: MacAddr::new(),
+        };
+        let routed: Vec<Key> = self
+            .rows
+            .range(first..)
+            .take_while(|(key, _)| key.network == network)
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in routed {
+            let Some(entry) = self.rows.remove(&key) else {
+                continue;
+            };
+            let instance = entry.device.object_identifier.instance_number();
+            self.claims.remove(&(instance, key.clone()));
+            let local = Key::at(0, &key.mac);
+            let found = if self.rows.contains_key(&local) {
+                None
+            } else {
+                let device = DiscoveredDevice {
+                    mac_address: key.mac,
+                    source_network: None,
+                    source_address: None,
+                    ..entry.device.clone()
+                };
+                let row = TableEntry {
+                    device: device.clone(),
+                    segmentation: entry.segmentation,
+                };
+                self.rows.insert(local.clone(), row);
+                self.claims.insert((instance, local));
+                Some(device)
+            };
+            // Taken out, the instance kept another claimant; moved, it
+            // still has another besides.
+            let others = usize::from(found.is_some());
+            if self.claims_of(instance).nth(others).is_some() {
+                localized.contested.push(instance);
+            }
+            localized.rows.push((entry.device, found));
+        }
+        localized.contested.sort_unstable();
+        localized.contested.dedup();
+        localized
     }
 
     /// Clear all entries.

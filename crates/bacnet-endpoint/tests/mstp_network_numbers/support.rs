@@ -296,6 +296,14 @@ impl Peer {
             .await
             .unwrap();
     }
+    /// The What-Is-Network-Number a standalone client broadcasts as it
+    /// starts (#2572), its first data frame.
+    pub async fn asked(&mut self) {
+        let frame = self.data().await;
+        assert_eq!(frame.frame_type, FrameType::BACNET_DATA_NOT_EXPECTING_REPLY);
+        assert_eq!(frame.destination, BROADCAST);
+        assert_eq!(frame.data.as_ref(), [1, 0x80, 0x12]);
+    }
     pub async fn number(&mut self, number: u16) {
         let frame = self.data().await;
         assert_eq!(frame.frame_type, FrameType::BACNET_DATA_NOT_EXPECTING_REPLY);
@@ -451,6 +459,10 @@ pub async fn transport(mode: MstpExecutionMode, gates: Arc<Gates>) -> (TestTrans
     )
 }
 pub async fn fixture(role: Role, mode: MstpExecutionMode, gates: Arc<Gates>) -> (Owner, Peer) {
-    let (transport, peer) = transport(mode, gates).await;
-    (Owner::start(role, transport, &peer.link).await, peer)
+    let (transport, mut peer) = transport(mode, gates).await;
+    let owner = Owner::start(role, transport, &peer.link).await;
+    if let Role::Client = role {
+        peer.asked().await;
+    }
+    (owner, peer)
 }

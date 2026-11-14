@@ -349,6 +349,11 @@ impl Lab {
             ..ClientConfig::default()
         };
         let low = Arc::new(BACnetClient::start(config, recording).await.unwrap());
+        assert_eq!(
+            sent.lock().unwrap().drain(..).count(),
+            1,
+            "the What-Is-Network-Number broadcast at start (#2572)"
+        );
         // Each alias's answers reach the client's receive channel beside the
         // lab device's own.
         let mut forwarding = Vec::new();

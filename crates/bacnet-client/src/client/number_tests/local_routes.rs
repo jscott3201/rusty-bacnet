@@ -4,12 +4,14 @@
 //! routed confirmed request is then answered from that MAC with no SNET, or
 //! relayed back by a router with this network as its SNET and that MAC as
 //! its SADR, and either answer completes it (#1465). The peer's limits come
-//! from its routed device-table row, or from its local row when it has only
-//! that, and a request past them is refused or segmented locally. Another network keeps its DNET, and so does every
-//! network while the number is unknown.
+//! from its local device-table row, which a routed row on this network
+//! becomes when the number is learned (#2572), and a request past them is
+//! refused or segmented locally. Another network keeps its DNET, and so does
+//! every network while the number is unknown.
 //!
 //! The peer is `[3]`, behind router `[9]` when routed. The number is learned
-//! through the client's own Network-Number-Is intake.
+//! through the client's own Network-Number-Is intake, after the
+//! What-Is-Network-Number the client sends as it starts.
 use super::*;
 use crate::client::BACnetClient;
 use crate::discovery::RoutedDeviceConfig;
@@ -28,10 +30,10 @@ use tokio::sync::mpsc;
 use tokio::time::Duration;
 
 /// The number of the network this client is attached to.
-const THIS_NETWORK: u16 = 77;
-const REMOTE_NETWORK: u16 = 5;
-const PEER: [u8; 1] = [3];
-const ROUTER: [u8; 1] = [9];
+pub(super) const THIS_NETWORK: u16 = 77;
+pub(super) const REMOTE_NETWORK: u16 = 5;
+pub(super) const PEER: [u8; 1] = [3];
+pub(super) const ROUTER: [u8; 1] = [9];
 
 /// Where a request went: the link MAC and the NPDU's DNET, if any.
 #[derive(Debug, PartialEq, Eq)]
@@ -79,7 +81,7 @@ async fn learn(inbound: &mpsc::Sender<ReceivedNpdu>, outbound: &mut mpsc::Receiv
 }
 
 /// An I-Am from device `instance`.
-fn i_am(instance: u32) -> Apdu {
+pub(super) fn i_am(instance: u32) -> Apdu {
     use bacnet_encoding::apdu::UnconfirmedRequest;
     use bacnet_services::who_is::IAmRequest;
     use bacnet_types::enums::UnconfirmedServiceChoice;
@@ -134,7 +136,7 @@ fn simple_ack(request: &ConfirmedRequest) -> Apdu {
 
 /// Hand the client `apdu` from link MAC `link`, with `source` as its SNET/SADR
 /// when routed.
-async fn send_to_client(
+pub(super) async fn send_to_client(
     inbound: &mpsc::Sender<ReceivedNpdu>,
     apdu: &Apdu,
     link: &[u8],
@@ -260,10 +262,10 @@ async fn a_who_is_on_this_network_by_number_goes_as_a_local_broadcast() {
 /// A WriteProperty longer than one 128-octet APDU.
 const LONG_WRITE: [u8; 300] = [0x44; 300];
 
-/// A client that has learned `THIS_NETWORK` and holds Device 9 as routed
-/// through `ROUTER` on it, accepting APDUs of at most 128 octets and
-/// `segmentation`: registered before the number was learned, as a
-/// registration naming a known number stores a local row.
+/// A client that has learned `THIS_NETWORK` and holds Device 9, accepting
+/// APDUs of at most 128 octets and `segmentation`: registered as routed
+/// through `ROUTER` on that network before the number was learned, so the
+/// routed row became its local row when it was (#2572).
 async fn client_with_routed_row(
     segmentation: Segmentation,
 ) -> (
@@ -288,9 +290,9 @@ async fn client_with_routed_row(
     (client, inbound, outbound)
 }
 
-/// The routed row the device was added with still sets the peer's limits
-/// when the request goes locally: a peer that takes no segmented request
-/// gets nothing too long for it.
+/// The limits the device was added with as routed still bound a request
+/// that goes locally: a peer that takes no segmented request gets nothing
+/// too long for it.
 #[tokio::test]
 async fn a_routed_row_on_this_network_still_bounds_a_local_request() {
     let (mut client, _inbound, mut outbound) =
@@ -354,7 +356,7 @@ async fn a_long_request_to_this_network_is_segmented_to_the_peer() {
 }
 
 /// `station` on `network`, as the SNET/SADR a router adds when it relays.
-fn relayed_from(network: u16, station: &[u8]) -> Option<NpduAddress> {
+pub(super) fn relayed_from(network: u16, station: &[u8]) -> Option<NpduAddress> {
     Some(NpduAddress {
         network,
         mac_address: MacAddr::from_slice(station),
@@ -502,9 +504,9 @@ async fn a_request_routed_before_the_number_was_learned_completes_on_its_relayed
 /// SNET, names a local device, as its answers do (#1465): it lands on the
 /// device's local row, so the device and its relayed I-Am are one device,
 /// not an ambiguous instance (#2560). While the number is unknown the relay
-/// is a routed station of its own, and the instance is ambiguous: when the
-/// number is learned, the next relay folds that row into the local one
-/// (below); a number never learned leaves it until the purge takes it.
+/// is a routed station of its own, and the instance is ambiguous: learning
+/// the number folds that row into the local one (below, #2572); a number
+/// never learned leaves it until the purge takes it.
 #[tokio::test]
 async fn an_i_am_relayed_from_this_network_is_the_local_device() {
     use crate::client::DeviceEventKind;
@@ -541,11 +543,12 @@ async fn an_i_am_relayed_from_this_network_is_the_local_device() {
 }
 
 /// The number learned a minute after start-up, with a router echoing the
-/// device's I-Am back: the routed row the first echo made folds into the
-/// local row at the next echo, reported lost, and the instance names one
-/// device again then, not only once the purge takes the routed row (#2560).
+/// device's I-Am back: learning it folds the routed row the first echo made
+/// into the local row at once, reported lost, and the instance names one
+/// device again then, not only at the next echo or once the purge takes the
+/// routed row (#2572). The next echo refreshes the local row.
 #[tokio::test(start_paused = true)]
-async fn the_next_relay_after_the_number_is_learned_folds_the_routed_row() {
+async fn learning_the_number_folds_the_routed_row_an_echo_made() {
     use crate::client::DeviceEventKind;
 
     let (mut client, inbound, mut outbound) = client(false).await;
@@ -559,30 +562,32 @@ async fn the_next_relay_after_the_number_is_learned_folds_the_routed_row() {
     ));
 
     tokio::time::sleep(Duration::from_secs(60)).await;
-    learn(&inbound, &mut outbound).await;
-    tokio::time::sleep(Duration::from_secs(60)).await;
     let mut events = client.device_events();
     let mut collisions = client.device_collision_events();
-    send_to_client(&inbound, &i_am(9), &ROUTER, echo()).await;
+    learn(&inbound, &mut outbound).await;
     let lost = bounded(events.recv()).await.unwrap();
     assert_eq!(lost.kind, DeviceEventKind::Lost);
     assert_eq!(lost.device.source_network, Some(THIS_NETWORK));
-    let updated = bounded(events.recv()).await.unwrap();
-    assert_eq!(updated.kind, DeviceEventKind::Updated);
-    assert!(updated.device.is_local());
     let contest = bounded(collisions.recv()).await.unwrap();
     assert!(contest.is_resolved(), "{contest:?}");
-
     let device = client.get_device(9).await.unwrap().expect("one device");
     assert!(device.is_local());
     assert_eq!(device.mac_address.as_slice(), PEER);
     assert_eq!(client.discovered_devices().await.len(), 1);
+
+    send_to_client(&inbound, &i_am(9), &ROUTER, echo()).await;
+    let updated = bounded(events.recv()).await.unwrap();
+    assert_eq!(updated.kind, DeviceEventKind::Updated);
+    assert!(updated.device.is_local());
+    assert_eq!(client.discovered_devices().await.len(), 1);
+    assert!(collisions.try_recv().is_err(), "no contest left to report");
     client.stop().await.unwrap();
 }
 
 /// A device registered as routed on this network, once its number is
-/// learned, is the local device at its MAC: it takes the place of the
-/// routed row a relay heard before the number made (#2560).
+/// learned, is the local device at its MAC (#2560): the routed row a relay
+/// heard before the number made became that local row when the number was
+/// learned (#2572), and the registration refreshes it.
 #[tokio::test(start_paused = true)]
 async fn a_routed_registration_on_this_network_folds_to_the_local_row() {
     let (mut client, inbound, mut outbound) = client(false).await;

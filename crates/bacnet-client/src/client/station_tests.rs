@@ -47,6 +47,12 @@ async fn site() -> Site {
         ..ClientConfig::default()
     };
     let client = BACnetClient::start(config, transport).await.unwrap();
+    // The What-Is-Network-Number the client asked as it started (#2572),
+    // taken so each test's sends count from zero.
+    let asked = sent.take();
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    assert!(asked[0].broadcast);
+    assert_eq!(asked[0].npdu.as_ref(), [0x01, 0x80, 0x12]);
     Site {
         client,
         sent,

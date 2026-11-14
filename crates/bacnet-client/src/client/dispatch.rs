@@ -482,13 +482,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 vendor = i_am.vendor_id,
                                 "Received IAm"
                             );
-                            let this_network = network.local_network_number().get();
                             device_events::heard_i_am(
                                 device_table,
                                 device_events::IAmSource {
                                     mac: source_mac,
                                     network: source_network,
-                                    this_network,
+                                    this_network: network.local_network_number(),
                                 },
                                 &i_am,
                                 (device_tx, device_collision_tx),

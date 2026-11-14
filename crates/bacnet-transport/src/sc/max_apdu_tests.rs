@@ -246,6 +246,9 @@ async fn sc_publishes_its_npdu_limit_when_a_failover_changes_it() {
         let mut changes = changes;
         assert_eq!(*changes.borrow_and_update(), NpduLimits::both(480));
         assert_eq!(transport.max_npdu(), NpduLimits::both(480));
+        // The first connection is no return: the link was never lost.
+        let returns = transport.link_returns().expect("SC reports its returns");
+        assert_eq!(*returns.borrow(), 0);
 
         let mut states = transport.connection_state_changes();
         let failover_task = tokio::spawn(async move {
@@ -272,6 +275,9 @@ async fn sc_publishes_its_npdu_limit_when_a_failover_changes_it() {
             "{bvlc}/{npdu}"
         );
         assert_eq!(*changes.borrow_and_update(), NpduLimits::both(after));
+        // The failover after the primary was lost brings the link back once
+        // (#2572), whatever its limit.
+        assert_eq!(*returns.borrow(), 1, "{bvlc}/{npdu}");
 
         transport.stop().await.unwrap();
         drop(failover_hub);

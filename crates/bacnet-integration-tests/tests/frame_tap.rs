@@ -51,6 +51,23 @@ fn drain(frames: &mut FrameTapReceiver) -> Vec<TappedFrame> {
     std::iter::from_fn(|| frames.try_recv()).collect()
 }
 
+/// Every frame queued so far but the client's own start-up
+/// What-Is-Network-Number (#2572) come back to its socket: a host can hand
+/// a broadcast or multicast to its sender too, and the copy can arrive
+/// after the tap subscribed. `npdu` takes a frame to its NPDU.
+fn drain_past_own_ask(
+    frames: &mut FrameTapReceiver,
+    npdu: impl Fn(&[u8]) -> Option<&[u8]>,
+) -> Vec<TappedFrame> {
+    let own_ask = |frame: &TappedFrame| {
+        frame.direction == TapDirection::Inbound && npdu(&frame.bytes) == Some(&[1, 0x80, 0x12])
+    };
+    drain(frames)
+        .into_iter()
+        .filter(|frame| !own_ask(frame))
+        .collect()
+}
+
 /// What an NPDU carries, if it is a ReadProperty request or answer:
 /// whether it is the request, and its invoke ID.
 fn read_property(npdu: &[u8]) -> Option<(bool, u8)> {
@@ -119,7 +136,7 @@ async fn bip_read_property_and_bvlc_control_are_tapped() {
     .await
     .unwrap()
     .unwrap();
-    let tapped = drain(&mut frames);
+    let tapped = drain_past_own_ask(&mut frames, bip_npdu);
     assert_exchange(&tapped, DataLink::Bip, bip_npdu);
     let server_addr = bacnet_bip_codec::address_from_slice(&server_mac).unwrap();
     for frame in &tapped {
@@ -134,7 +151,7 @@ async fn bip_read_property_and_bvlc_control_are_tapped() {
         matches!(refused, Err(BvlcExchangeError::Nak(_))),
         "{refused:?}"
     );
-    let control = drain(&mut frames);
+    let control = drain_past_own_ask(&mut frames, bip_npdu);
     let control: Vec<_> = control
         .iter()
         .map(|frame| {
@@ -245,7 +262,10 @@ async fn bip6_read_property_and_address_resolution_are_tapped() {
     .unwrap()
     .unwrap();
 
-    let tapped = drain(&mut frames);
+    fn bip6_npdu(bytes: &[u8]) -> Option<&[u8]> {
+        bacnet_bip_codec::ipv6::decode(bytes).ok()?.npdu()
+    }
+    let tapped = drain_past_own_ask(&mut frames, bip6_npdu);
     let resolution: Vec<_> = tapped
         .iter()
         .filter_map(
@@ -263,9 +283,7 @@ async fn bip6_read_property_and_address_resolution_are_tapped() {
             (TapDirection::Inbound, false)
         ]
     );
-    assert_exchange(&tapped, DataLink::Bip6, |bytes| {
-        bacnet_bip_codec::ipv6::decode(bytes).ok()?.npdu()
-    });
+    assert_exchange(&tapped, DataLink::Bip6, bip6_npdu);
     for frame in &tapped {
         assert_eq!(frame.peer, TapPeer::Udp(server_address.into()));
     }

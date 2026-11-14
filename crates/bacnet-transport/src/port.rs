@@ -779,6 +779,29 @@ pub trait TransportPort: Send + Sync {
         None
     }
 
+    /// How many times the link has come back after it was lost while the
+    /// transport runs, for a transport that can tell, or `None`, the
+    /// default, for one that can't.
+    ///
+    /// The receiver's value is a count that rises by one each time the link
+    /// is back; a change is all a stack needs to read from it. Anything the
+    /// stack broadcast while the link was down went nowhere, so it may redo
+    /// what it does once at start: `bacnet_client`'s `BACnetClient` asks
+    /// for the local network's number again then, if no answer has taught
+    /// it yet (#2572).
+    ///
+    /// BACnet/SC returns one, counting each hub connection its recovery
+    /// makes after the connection it had was lost, to the same hub or the
+    /// failover hub. A move back to the primary hub while the failover hub
+    /// still serves is no return. The other built-in transports keep the
+    /// default: a B/IP foreign device registering again after its lease
+    /// lapsed and an MS/TP node rejoining the token ring are not reported.
+    ///
+    /// Wrappers must delegate.
+    fn link_returns(&self) -> Option<watch::Receiver<u64>> {
+        None
+    }
+
     /// Whether `mac` is this data link's broadcast address.
     ///
     /// A destination can spell a broadcast two ways: the network-layer form

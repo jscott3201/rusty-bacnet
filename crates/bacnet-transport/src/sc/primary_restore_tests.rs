@@ -122,6 +122,7 @@ async fn primary_restore_duplicate_vmac_reseed_is_reused_by_next_probe() {
     let _failover_hub = failover_task.await.unwrap();
     let conn = transport.connection().unwrap().clone();
     assert_eq!(conn.lock().await.hub_vmac, Some(failover_hub_vmac));
+    let returns = transport.link_returns().unwrap();
 
     let primary_restore_task = tokio::spawn(async move {
         let stale = primary_hub.recv().await.unwrap();
@@ -162,6 +163,9 @@ async fn primary_restore_duplicate_vmac_reseed_is_reused_by_next_probe() {
 
     wait_for_hub_vmac(&conn, primary_hub_vmac, Duration::from_secs(1)).await;
     assert_eq!(conn.lock().await.local_vmac, retry_vmac);
+    // A move back to the primary while the failover hub served is no
+    // return of the link (#2572).
+    assert_eq!(*returns.borrow(), 0);
 
     transport.stop().await.unwrap();
 }

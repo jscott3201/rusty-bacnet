@@ -1,12 +1,21 @@
 use super::*;
+use bacnet_network::network_number::LocalNetworkNumber;
+use bacnet_types::network_number::NetworkNumber;
 
 /// Where an I-Am came from: the link MAC, the SNET/SADR a router added, and
-/// the number of this client's network, when it has learned one.
+/// this client's network number, read under the table's lock.
 pub(super) struct IAmSource<'a> {
     pub(super) mac: &'a [u8],
     pub(super) network: &'a Option<NpduAddress>,
-    pub(super) this_network: Option<u16>,
+    pub(super) this_network: &'a LocalNetworkNumber,
 }
+
+/// The discovery table's subscribers: device notices, then collision
+/// notices.
+pub(super) type TableNotices<'a> = (
+    &'a broadcast::Sender<DeviceEvent>,
+    &'a broadcast::Sender<DeviceCollisionEvent>,
+);
 
 /// Take an I-Am into the discovery table and tell the subscribers what it
 /// changed. The notices go out under the table's lock, as the purge's do (a
@@ -17,31 +26,25 @@ pub(super) fn heard_i_am(
     table: &SyncMutex<DeviceTable>,
     from: IAmSource<'_>,
     i_am: &bacnet_services::who_is::IAmRequest,
-    (device_tx, collision_tx): (
-        &broadcast::Sender<DeviceEvent>,
-        &broadcast::Sender<DeviceCollisionEvent>,
-    ),
+    (device_tx, collision_tx): TableNotices<'_>,
 ) {
+    let mut table = table.lock();
     // A router relaying back an I-Am from this client's own network names a
-    // local device: one row, as it is one peer (#1358, #1465). A relay heard
-    // before the client learned the number made a routed row for the same
-    // peer, which this one folds into the local row. While the number stays
-    // unknown, the routed row stays until the purge takes it.
-    let (mac_address, source_network, source_address, fold) = match from.network {
+    // local device: one row, as it is one peer (#1358, #1465). The number is
+    // read under the lock its learning folds the table under, so a routed
+    // row made before then is folded by that, and none is made after it
+    // (#2572). While the number is unknown the relay is a routed station.
+    let this_network = from.this_network.get();
+    let (mac_address, source_network, source_address) = match from.network {
         Some(routed) if !routed.mac_address.is_empty() => {
-            if Some(routed.network) == from.this_network {
-                (routed.mac_address.clone(), None, None, Some(routed.network))
+            if Some(routed.network) == this_network {
+                (routed.mac_address.clone(), None, None)
             } else {
                 let station = Some(routed.mac_address.clone());
-                (
-                    MacAddr::from_slice(from.mac),
-                    Some(routed.network),
-                    station,
-                    None,
-                )
+                (MacAddr::from_slice(from.mac), Some(routed.network), station)
             }
         }
-        _ => (MacAddr::from_slice(from.mac), None, None, None),
+        _ => (MacAddr::from_slice(from.mac), None, None),
     };
     let now = crate::discovery::now();
     let device = DiscoveredDevice {
@@ -56,16 +59,12 @@ pub(super) fn heard_i_am(
         source_network,
         source_address,
     };
-    let mut table = table.lock();
-    // Folded first, so it frees its place in a full table.
-    let folded = fold.and_then(|network| table.remove(network, &device.mac_address));
     let heard = table.heard(device.clone());
-    let lost = folded.as_ref().map(|f| &f.device).into_iter();
-    // The routed row folded in, then the device that left the address.
-    for old in lost.chain(heard.replaced.as_ref()) {
+    // The device that left the address, then the one now there.
+    if let Some(old) = heard.replaced {
         let _ = device_tx.send(DeviceEvent {
             kind: DeviceEventKind::Lost,
-            device: old.clone(),
+            device: old,
         });
     }
     let kind = match heard.change {
@@ -77,10 +76,42 @@ pub(super) fn heard_i_am(
         let _ = device_tx.send(DeviceEvent { kind, device });
     }
     // One notice per instance, each with the claimants left at the end.
-    let shrank = folded
-        .and_then(|f| f.contested)
-        .filter(|instance| !heard.contested.contains(instance));
-    for instance in shrank.into_iter().chain(heard.contested) {
+    for instance in heard.contested {
+        let _ = collision_tx.send(DeviceCollisionEvent::of(&table, instance));
+    }
+}
+
+/// Learn this client's network number `number`, and fold the discovery
+/// table to it in the same locked call (#2572): every routed row on that
+/// network names a local station, so it is taken out where the station has
+/// a local row, or becomes that row. Each routed row taken out is reported
+/// `Lost`, the local row it became `Discovered`, then one collision notice
+/// per instance whose claimants changed, as the I-Am path and the purge
+/// report theirs. The number is published under the lock, so an I-Am taken
+/// in after this sees it, and one taken in before has made the routed row
+/// this folds.
+pub(super) fn learned_number(
+    table: &SyncMutex<DeviceTable>,
+    this_network: &LocalNetworkNumber,
+    number: NetworkNumber,
+    (device_tx, collision_tx): TableNotices<'_>,
+) {
+    let mut table = table.lock();
+    this_network.publish(number);
+    let localized = table.localize(number.snapshot().0);
+    for (routed, local) in localized.rows {
+        let _ = device_tx.send(DeviceEvent {
+            kind: DeviceEventKind::Lost,
+            device: routed,
+        });
+        if let Some(device) = local {
+            let _ = device_tx.send(DeviceEvent {
+                kind: DeviceEventKind::Discovered,
+                device,
+            });
+        }
+    }
+    for instance in localized.contested {
         let _ = collision_tx.send(DeviceCollisionEvent::of(&table, instance));
     }
 }

@@ -1,6 +1,7 @@
 //! The BACnet/SC frame tap over a real hub and TLS (#957): a client's
-//! handshake and a ReadProperty to another node on the hub reach the tap
-//! as BVLC-SC messages in plaintext, though the socket under them is TLS.
+//! handshake, the What-Is-Network-Number it asks as it starts (#2572) and a
+//! ReadProperty to another node on the hub reach the tap as BVLC-SC
+//! messages in plaintext, though the socket under them is TLS.
 #![cfg(feature = "sc-tls")]
 
 use std::time::Duration;
@@ -8,6 +9,7 @@ use std::time::Duration;
 use bacnet_client::client::BACnetClient;
 use bacnet_encoding::apdu::{Apdu, decode_apdu};
 use bacnet_encoding::npdu::decode_npdu;
+use bacnet_npdu::NetworkMessageType;
 use bacnet_transport::port::TransportPort;
 use bacnet_transport::sc::{ScActiveHub, ScTransport};
 use bacnet_transport::sc_frame::{ScFunction, decode_sc_message};
@@ -18,6 +20,14 @@ use bacnet_types::data_link::DataLink;
 use bacnet_types::enums::{ConfirmedServiceChoice, ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::ObjectIdentifier;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
+
+/// What an encapsulated NPDU carries: a network message, or a confirmed
+/// service's request or answer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Carried {
+    Message(NetworkMessageType),
+    Service(ConfirmedServiceChoice),
+}
 
 const HUB_VMAC: [u8; 6] = [0x10; 6];
 const CLIENT_VMAC: [u8; 6] = [0x02, 0, 0, 0, 0, 0x01];
@@ -96,6 +106,13 @@ async fn a_read_property_over_tls_is_tapped_in_plaintext() {
 
     let device = ObjectIdentifier::new(ObjectType::DEVICE, 1234).unwrap();
     let answer = tokio::spawn(async move {
+        // The hub relays the client's start-up question ahead of its request.
+        let asked = tokio::time::timeout(WAIT, requests.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(asked.link_layer_group, "a broadcast");
+        assert_eq!(asked.npdu.as_ref(), [1, 0x80, 0x12]);
         let request = tokio::time::timeout(WAIT, requests.recv())
             .await
             .unwrap()
@@ -151,21 +168,27 @@ async fn a_read_property_over_tls_is_tapped_in_plaintext() {
         assert_eq!(frame.link, DataLink::Sc);
         assert_eq!(frame.peer, TapPeer::ScHub(ScActiveHub::Primary));
         let message = decode_sc_message(&frame.bytes).expect("plaintext BVLC-SC");
-        let apdu = (message.function == ScFunction::EncapsulatedNpdu).then(|| {
-            match decode_apdu(decode_npdu(message.payload.clone()).unwrap().payload).unwrap() {
-                Apdu::ConfirmedRequest(request) => request.service_choice,
-                Apdu::ComplexAck(ack) => ack.service_choice,
+        let carried = (message.function == ScFunction::EncapsulatedNpdu).then(|| {
+            let npdu = decode_npdu(message.payload.clone()).unwrap();
+            if let Some(message) = npdu.message_type {
+                return Carried::Message(message);
+            }
+            match decode_apdu(npdu.payload).unwrap() {
+                Apdu::ConfirmedRequest(request) => Carried::Service(request.service_choice),
+                Apdu::ComplexAck(ack) => Carried::Service(ack.service_choice),
                 other => panic!("unexpected {other:?}"),
             }
         });
-        seen.push((frame.direction, message.function, apdu));
+        seen.push((frame.direction, message.function, carried));
     }
-    let read_property = Some(ConfirmedServiceChoice::READ_PROPERTY);
+    let asked = Some(Carried::Message(NetworkMessageType::WHAT_IS_NETWORK_NUMBER));
+    let read_property = Some(Carried::Service(ConfirmedServiceChoice::READ_PROPERTY));
     assert_eq!(
         seen,
         [
             (TapDirection::Outbound, ScFunction::ConnectRequest, None),
             (TapDirection::Inbound, ScFunction::ConnectAccept, None),
+            (TapDirection::Outbound, ScFunction::EncapsulatedNpdu, asked),
             (
                 TapDirection::Outbound,
                 ScFunction::EncapsulatedNpdu,

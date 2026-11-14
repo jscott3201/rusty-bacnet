@@ -75,7 +75,13 @@ async fn client_number_worker_queue_is_bounded_and_closes_on_abort() {
     use super::super::network_number;
     use bacnet_network::network_number::NumberControl;
     let (mut client, _, mut outbound, gates) = harness(true).await;
-    let (tx, task) = network_number::spawn(&client.network);
+    let owner = network_number::Owner {
+        table: std::sync::Arc::clone(&client.device_table),
+        device_tx: client.device_tx.clone(),
+        collision_tx: client.device_collision_tx.clone(),
+        link_returns: None,
+    };
+    let (tx, task) = network_number::spawn(&client.network, owner);
     tx.try_send(NumberControl::NumberIs {
         number: 77,
         flag: 1,

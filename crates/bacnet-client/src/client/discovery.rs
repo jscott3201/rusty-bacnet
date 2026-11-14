@@ -186,9 +186,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     ///
     /// A `remote_network` that is this client's own network, once the client
     /// has learned its number, names a local device: it is stored as the
-    /// local row at `remote_mac`, replacing a routed row for that station,
-    /// as requests to it go out locally (#1358). Like the other manual
-    /// registrations, this sends no device or collision notices.
+    /// local row at `remote_mac`, as requests to it go out locally (#1358).
+    /// One registered before the number was learned became that local row
+    /// when it was (#2572). Like the other manual registrations, this sends
+    /// no device or collision notices.
     pub async fn add_routed_device(&self, config: RoutedDeviceConfig) -> Result<(), Error> {
         if config.router_mac.is_empty() {
             return Err(Error::Encoding(
@@ -206,8 +207,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             config.instance,
         )?;
         // A station on this client's own network is the local device at that
-        // MAC (#1358): it takes the place of a routed row registered or
-        // heard for it before the number was learned.
+        // MAC (#1358). The number is read under the lock its learning folds
+        // the table under (#2572): a routed row registered before then has
+        // become the local row, and none is registered after.
+        let mut table = self.device_table.lock();
         let this_network = self.network.local_network_number().get();
         let local = this_network == Some(config.remote_network);
         let remote_mac = MacAddr::from_slice(&config.remote_mac);
@@ -217,7 +220,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             let router = MacAddr::from_slice(&config.router_mac);
             (router, Some(config.remote_network), Some(remote_mac))
         };
-        let device = DiscoveredDevice {
+        table.upsert(DiscoveredDevice {
             object_identifier: oid,
             mac_address,
             max_apdu_length: config.max_apdu_length,
@@ -228,12 +231,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             last_announced: None,
             source_network,
             source_address,
-        };
-        let mut table = self.device_table.lock();
-        if local {
-            let _ = table.remove(config.remote_network, &config.remote_mac);
-        }
-        table.upsert(device);
+        });
         Ok(())
     }
 }

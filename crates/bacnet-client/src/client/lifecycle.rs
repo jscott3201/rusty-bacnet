@@ -159,18 +159,27 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             network.transport().egress_apdu_limit(),
         )?;
         let local_mac = MacAddr::from_slice(network.local_mac());
+        // On a link that takes the local Number controls, ask this network's
+        // number before anything else goes out, and again when the link
+        // comes back while it is still unknown (#2572): until then a device
+        // a router relays back from this network is a routed station of its
+        // own. Sent before any task starts, so a start dropped here leaves
+        // none running.
+        let numbers = network
+            .transport()
+            .supports_local_nonrouter_number_controls();
+        let link_returns = numbers
+            .then(|| network.transport().link_returns())
+            .flatten()
+            .map(|mut returns| {
+                returns.mark_unchanged();
+                returns
+            });
+        if numbers {
+            network_number::ask(&network).await;
+        }
 
         let network = Arc::new(network);
-        let (number_tx, network_number_task) = if network
-            .transport()
-            .supports_local_nonrouter_number_controls()
-        {
-            let (tx, task) = network_number::spawn(&network);
-            (Some(tx), Some(task))
-        } else {
-            (None, None)
-        };
-
         let coordinator = Arc::new(OutboundTransactionCoordinator::new());
         let tsm = Arc::new(SyncMutex::new(new_coordinated_tsm(&config, coordinator)));
         let tsm_dispatch = Arc::clone(&tsm);
@@ -189,6 +198,18 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let (device_collision_tx, _) =
             broadcast::channel::<DeviceCollisionEvent>(DEVICE_EVENT_CHANNEL_CAPACITY);
         let device_collision_tx_dispatch = device_collision_tx.clone();
+        let (number_tx, network_number_task) = if numbers {
+            let owner = network_number::Owner {
+                table: Arc::clone(&device_table),
+                device_tx: device_tx.clone(),
+                collision_tx: device_collision_tx.clone(),
+                link_returns,
+            };
+            let (tx, task) = network_number::spawn(&network, owner);
+            (Some(tx), Some(task))
+        } else {
+            (None, None)
+        };
         let (i_have_tx, _) = broadcast::channel::<ReceivedIHave>(I_HAVE_CHANNEL_CAPACITY);
         let i_have_tx_dispatch = i_have_tx.clone();
         let (network_report_tx, _) = broadcast::channel(NETWORK_REPORT_CHANNEL_CAPACITY);

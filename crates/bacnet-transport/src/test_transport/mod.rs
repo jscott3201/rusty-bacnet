@@ -220,6 +220,8 @@ pub struct TestTransport {
     bip6_port: Option<Bip6Port>,
     /// See [`TestTransportBuilder::max_npdu_changes`].
     max_npdu_changes: Option<watch::Receiver<NpduLimits>>,
+    /// See [`TestTransportBuilder::link_returns`].
+    link_returns: Option<watch::Receiver<u64>>,
     /// See [`TestTransportBuilder::inner`].
     inner: Option<Box<dyn inner::InnerPort>>,
     /// See [`TestTransportBuilder::skip_prepare_for_routing`].
@@ -267,6 +269,7 @@ impl TestTransport {
                 bip6_port: None,
                 data_link: None,
                 max_npdu_changes: None,
+                link_returns: None,
                 inner: None,
                 prepare_inner: true,
                 port_lease: None,
@@ -663,6 +666,12 @@ impl TransportPort for TestTransport {
         self.max_npdu_changes
             .clone()
             .or_else(|| self.inner.as_ref().and_then(|i| i.max_npdu_changes()))
+    }
+
+    fn link_returns(&self) -> Option<watch::Receiver<u64>> {
+        self.link_returns
+            .clone()
+            .or_else(|| self.inner.as_ref().and_then(|i| i.link_returns()))
     }
 
     /// The hook, else the broadcast MAC list, else the inner transport's

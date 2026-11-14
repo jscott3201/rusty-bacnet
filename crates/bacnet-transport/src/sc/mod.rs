@@ -797,6 +797,12 @@ impl<W: WebSocketPort> TransportPort for ScTransport<W> {
         Some(self.hub_limits.npdu_changes())
     }
 
+    /// One more each time recovery connects to a hub after losing the
+    /// connection: a reconnect or a failover, not a primary restore.
+    fn link_returns(&self) -> Option<watch::Receiver<u64>> {
+        Some(self.hub_limits.returns())
+    }
+
     fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
         mac == BROADCAST_VMAC
     }

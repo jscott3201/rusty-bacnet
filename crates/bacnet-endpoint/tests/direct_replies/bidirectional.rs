@@ -172,6 +172,14 @@ impl Peer {
         self.listener.stop().await;
         self.local.stop().await;
     }
+    /// Take the What-Is-Network-Number a standard client sends through the
+    /// hub as it starts (#2572): a broadcast, before any request.
+    async fn asked(&self) {
+        let frame = decode_sc_message(&bounded(self.hub.recv()).await.unwrap()).unwrap();
+        assert_eq!(frame.function, ScFunction::EncapsulatedNpdu);
+        assert_eq!(frame.destination_vmac, Some([0xFF; 6]));
+        assert_eq!(frame.payload.as_ref(), [1, 0x80, 0x12]);
+    }
 }
 async fn start_port(
     ca: &TestCa,
@@ -231,6 +239,7 @@ async fn outbound_tls_public_client_notification_and_reject_use_original_socket(
     let mut client = BACnetClient::start(ClientConfig::default(), port)
         .await
         .unwrap();
+    peer.asked().await;
     let mut notifications = client.cov_notifications();
     peer.send(&super::notifications::cov(71)).await;
     assert_eq!(
@@ -284,6 +293,7 @@ async fn standard_client_direct_request_accepts_matching_hub_response() {
     let mut client = BACnetClient::start(ClientConfig::default(), port)
         .await
         .unwrap();
+    peer.asked().await;
     let request = client.read_property(&REMOTE, csv_oid(), PropertyIdentifier::OBJECT_NAME, None);
     let remote = async {
         let Apdu::ConfirmedRequest(request) = peer.receive().await else {
@@ -304,6 +314,7 @@ async fn standard_client_pending_direct_request_accepts_replacement_peer_termina
     let mut client = BACnetClient::start(ClientConfig::default(), port)
         .await
         .unwrap();
+    peer.asked().await;
     let request = client.read_property(&REMOTE, csv_oid(), PropertyIdentifier::OBJECT_NAME, None);
     let remote = async {
         let Apdu::ConfirmedRequest(request) = peer.receive().await else {
@@ -362,6 +373,7 @@ async fn standard_client_hub_request_accepts_matching_direct_response() {
     let mut client = BACnetClient::start(ClientConfig::default(), port)
         .await
         .unwrap();
+    peer.asked().await;
     let request = client.read_property(&REMOTE, csv_oid(), PropertyIdentifier::OBJECT_NAME, None);
     let remote = async {
         let frame = decode_sc_message(&bounded(peer.hub.recv()).await.unwrap()).unwrap();
