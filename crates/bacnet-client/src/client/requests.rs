@@ -757,7 +757,11 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
         let mut buf = BytesMut::with_capacity(2 + service_data.len());
         encode_apdu(&mut buf, &pdu)?;
 
-        self.ask_before(service_choice).await;
+        // Network 0 and 65535 are refused below, before anything goes: a
+        // refused Who-Is asks nothing.
+        if matches!(dest_network, 1..=0xFFFE) {
+            self.ask_before(service_choice).await;
+        }
         if self.network.local_network_number().get() == Some(dest_network) {
             return self
                 .network

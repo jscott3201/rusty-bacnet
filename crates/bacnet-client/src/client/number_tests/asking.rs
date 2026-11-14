@@ -501,3 +501,22 @@ async fn a_question_the_caller_sent_counts() {
     assert_who_is(&frames[1]);
     site.client.stop().await.unwrap();
 }
+
+/// A Who-Is the network layer refuses, to network 0 or 65535, sends
+/// nothing, its question included; the next Who-Is is still the first to
+/// ask.
+#[tokio::test(start_paused = true)]
+async fn a_refused_who_is_asks_nothing() {
+    let mut site = open_site(true).await;
+    for network in [0, u16::MAX] {
+        let refused = site.client.who_is_network(network, None).await;
+        assert!(refused.is_err(), "network {network}");
+    }
+    assert!(site.settled().await.is_empty(), "nothing sent");
+    site.client.who_is(None).await.unwrap();
+    let frames = site.settled().await;
+    assert_eq!(frames.len(), 2, "{frames:?}");
+    assert_ask(&frames[0]);
+    assert_who_is(&frames[1]);
+    site.client.stop().await.unwrap();
+}
