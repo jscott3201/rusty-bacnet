@@ -204,6 +204,42 @@ def to_raw(self) -> int
 
 The raw integer value.
 
+## Polarity
+
+`class Polarity(enum.IntEnum)`
+
+BACnet polarity of a Binary Input or Output (Clause 12, BACnetPolarity).
+
+An `enum.IntEnum` (#2580): members are ints, compare equal to their
+numbers and hash like them, so an int works wherever a member does, as in
+`add_binary_input(polarity=...)`, `add_binary_output(polarity=...)`
+and `set_polarity_local`. A value without a name is a pseudo-member:
+`Polarity(7)` and `Polarity.from_raw(7)` both give one, equal to 7,
+with `name` None and repr `Polarity(7)`, which those calls refuse
+with VALUE\_OUT\_OF\_RANGE. A number outside 0 to 4294967295 raises
+ValueError.
+
+2 constants:
+
+`NORMAL`, `REVERSE`
+
+### Polarity.from_raw
+
+```python
+@classmethod
+def from_raw(cls, value: int) -> Polarity
+```
+
+The member for `value`; a pseudo-member when it has no name.
+
+### Polarity.to_raw
+
+```python
+def to_raw(self) -> int
+```
+
+The raw integer value.
+
 ## EngineeringUnits
 
 `class EngineeringUnits(enum.IntEnum)`

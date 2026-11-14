@@ -7,11 +7,19 @@
 //! the Input and the Output add Polarity, the Input and the Value an
 //! Alarm_Value, the Output a Feedback_Value, and the Output and the Value a
 //! priority array.
+//!
+//! The Input and the Output also have a physical side (#2580): the Input
+//! takes the state its physical input reads and derives Present_Value from
+//! it, and the Output gives the state to drive its physical output to,
+//! derived from Present_Value. Polarity relates the two (Tables 12-7 and
+//! 12-9), and Out_Of_Service decouples them (Clauses 12.6.10 and 12.7.10).
+//! Everything else the objects do, their event algorithms, Feedback_Value
+//! and COV included, works on the logical Present_Value.
 
 use alloc::borrow::Cow;
 #[cfg(test)]
 use bacnet_types::enums::Reliability;
-use bacnet_types::enums::{ObjectType, PropertyIdentifier};
+use bacnet_types::enums::{ObjectType, Polarity, PropertyIdentifier};
 use bacnet_types::error::Error;
 #[cfg(test)]
 use bacnet_types::primitives::BACnetTimeStamp;
@@ -56,6 +64,28 @@ fn alarm_value_detector() -> ChangeOfStateDetector {
         alarm_values: vec![1],
         ..Default::default()
     }
+}
+
+/// A Polarity a Binary Input or Output can take: NORMAL or REVERSE, and
+/// VALUE_OUT_OF_RANGE for any other value.
+fn checked_polarity(polarity: Polarity) -> Result<Polarity, Error> {
+    if polarity == Polarity::NORMAL || polarity == Polarity::REVERSE {
+        Ok(polarity)
+    } else {
+        Err(common::value_out_of_range_error())
+    }
+}
+
+/// Carry a state across Polarity, either way (Tables 12-7 and 12-9):
+/// `true` is ON on the physical side and ACTIVE on the logical one. NORMAL
+/// keeps the state and REVERSE inverts it.
+fn across_polarity(state: bool, polarity: Polarity) -> bool {
+    state != (polarity == Polarity::REVERSE)
+}
+
+/// Whether a binary Present_Value is ACTIVE.
+fn is_active(present_value: u32) -> bool {
+    present_value == bacnet_types::enums::BinaryPV::ACTIVE.to_raw()
 }
 
 /// Active_Text and Inactive_Text, the labels of a binary Present_Value's
@@ -140,6 +170,9 @@ mod generic_event_properties_tests;
 #[cfg(test)]
 #[path = "tests/metadata.rs"]
 mod metadata_tests;
+#[cfg(test)]
+#[path = "tests/polarity.rs"]
+mod polarity_tests;
 #[cfg(all(test, feature = "std"))]
 #[path = "tests/saved_files.rs"]
 mod saved_files_tests;

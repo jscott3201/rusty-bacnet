@@ -191,7 +191,8 @@ class EndpointStubParityTests(unittest.TestCase):
                                  profile_keywords + analog),
             "add_analog_value": (["instance", "name", "units"],
                                  value_keywords + profile_keywords + analog),
-            "add_binary_input": (["instance", "name"], profile_keywords + binary),
+            "add_binary_input": (["instance", "name"],
+                                 ["polarity"] + profile_keywords + binary),
             "add_binary_value": (["instance", "name"],
                                  value_keywords + profile_keywords + binary),
         }

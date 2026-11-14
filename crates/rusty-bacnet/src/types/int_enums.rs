@@ -1,11 +1,12 @@
-//! `EngineeringUnits`, `ErrorClass`, `ErrorCode`, `RejectReason` and
-//! `AbortReason` as Python `enum.IntEnum` classes (#1816).
+//! `EngineeringUnits`, `ErrorClass`, `ErrorCode`, `RejectReason`,
+//! `AbortReason` and `Polarity` as Python `enum.IntEnum` classes (#1816,
+//! #2580).
 //!
-//! These five travel as plain integers in much of the API (the `units=`
-//! arguments, a raised error's `error_class`, `error_code` and `reason`), so
-//! their members must be `int`s: a member compares equal to its number, hashes
-//! like it and passes wherever an `int` does. The other enumerations stay
-//! frozen classes (see `enums.rs`).
+//! These six travel as plain integers in much of the API (the `units=` and
+//! `polarity=` arguments, a raised error's `error_class`, `error_code` and
+//! `reason`), so their members must be `int`s: a member compares equal to its
+//! number, hashes like it and passes wherever an `int` does. The other
+//! enumerations stay frozen classes (see `enums.rs`).
 //!
 //! A value without a name (a proprietary code, or one the stack doesn't know)
 //! is a pseudo-member of its class: `ErrorCode(300)` or `ErrorCode.from_raw(300)`
@@ -23,7 +24,7 @@ use bacnet_types::enums as bacnet_enums;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
-use pyo3::types::{PyBool, PyDict, PyList, PyType};
+use pyo3::types::{PyBool, PyDict, PyInt, PyList, PyType};
 
 /// The shared base class: the pseudo-members, `from_raw`, `to_raw` and the
 /// repr the frozen enum classes use (`ErrorClass.PROPERTY`).
@@ -137,6 +138,11 @@ py_int_enum!(
     u8,
     "BACnet abort reason (Clause 18.10). Members are ints."
 );
+py_int_enum!(
+    Polarity,
+    u32,
+    "BACnet polarity of a Binary Input or Output (Clause 12, BACnetPolarity). Members are ints."
+);
 
 fn base_class(py: Python<'_>) -> PyResult<&Bound<'_, PyType>> {
     BASE_CLASS
@@ -205,6 +211,30 @@ pub(crate) fn from_py<T: PyIntEnum>(value: &Bound<'_, PyAny>) -> PyResult<T> {
     }
 }
 
+/// A `polarity` argument (#2580): a `Polarity` member or an int, as its raw
+/// value. Anything but NORMAL (0) or REVERSE (1), however large or negative,
+/// raises the BacnetProtocolError PROPERTY / VALUE_OUT_OF_RANGE that the
+/// objects' `set_polarity` raises; a bool or anything that isn't an int is a
+/// TypeError.
+pub(crate) fn polarity_arg(value: &Bound<'_, PyAny>) -> PyResult<u32> {
+    if value.is_instance_of::<PyBool>() || !value.is_instance_of::<PyInt>() {
+        return Err(PyTypeError::new_err(
+            "polarity must be a Polarity or an int",
+        ));
+    }
+    value
+        .extract::<i64>()
+        .ok()
+        .and_then(|raw| u32::try_from(raw).ok())
+        .filter(|raw| *raw <= bacnet_enums::Polarity::REVERSE.to_raw())
+        .ok_or_else(|| {
+            crate::errors::to_py_err(bacnet_types::error::Error::protocol(
+                bacnet_enums::ErrorClass::PROPERTY,
+                bacnet_enums::ErrorCode::VALUE_OUT_OF_RANGE,
+            ))
+        })
+}
+
 /// A value converted to its IntEnum member when it goes to Python.
 #[derive(Clone, Copy)]
 pub(crate) struct IntEnumValue<T>(pub(crate) T);
@@ -219,7 +249,7 @@ impl<'py, T: PyIntEnum> IntoPyObject<'py> for IntEnumValue<T> {
     }
 }
 
-/// Add the five classes to the module.
+/// Add the six classes to the module.
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = m.py();
     m.add(
@@ -241,6 +271,10 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add(
         bacnet_enums::AbortReason::NAME,
         class::<bacnet_enums::AbortReason>(py)?,
+    )?;
+    m.add(
+        bacnet_enums::Polarity::NAME,
+        class::<bacnet_enums::Polarity>(py)?,
     )?;
     Ok(())
 }

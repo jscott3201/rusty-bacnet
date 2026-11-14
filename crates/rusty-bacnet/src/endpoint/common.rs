@@ -227,6 +227,7 @@ pub(crate) enum PendingObject {
     BinaryInput {
         instance: u32,
         name: String,
+        polarity: bacnet_types::enums::Polarity,
         profile: Option<ObjectProfile>,
         parameters: AlgorithmKeywords,
     },
@@ -297,10 +298,12 @@ impl PendingObject {
             Self::BinaryInput {
                 instance,
                 name,
+                polarity,
                 profile,
                 parameters,
             } => {
                 let mut object = BinaryInputObject::new(*instance, name).map_err(to_py_err)?;
+                object.set_polarity(*polarity).map_err(to_py_err)?;
                 parameters.apply(&mut object).map_err(to_py_err)?;
                 apply_profile(profile.clone(), |p| object.set_profile(p))?;
                 Ok(Box::new(object))

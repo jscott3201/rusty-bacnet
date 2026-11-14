@@ -10,7 +10,7 @@ use crate::catalogue::representatives;
 use crate::load_control::LoadControlSetting;
 use crate::traits::{BACnetObject, LocalInputValue, not_supported};
 use bacnet_types::constructed::BACnetAuthenticationFactor;
-use bacnet_types::enums::{AccessEvent, AuthenticationFactorType, ObjectType};
+use bacnet_types::enums::{AccessEvent, AuthenticationFactorType, ObjectType, Polarity};
 use bacnet_types::primitives::PropertyValue;
 
 /// Each kind of input, by name, with a value of its own datatype.
@@ -66,6 +66,8 @@ fn inputs() -> Vec<(&'static str, LocalInputValue)> {
                 "shedding".into(),
             ))),
         ),
+        ("PhysicalInput", LocalInputValue::PhysicalInput(true)),
+        ("Polarity", LocalInputValue::Polarity(Polarity::REVERSE)),
     ]
 }
 
@@ -73,7 +75,11 @@ fn inputs() -> Vec<(&'static str, LocalInputValue)> {
 const MODELS: &[(ObjectType, &[&str])] = &[
     (ObjectType::ANALOG_INPUT, &["PresentValue"]),
     (ObjectType::ANALOG_VALUE, &["PresentValue"]),
-    (ObjectType::BINARY_INPUT, &["PresentValue"]),
+    (
+        ObjectType::BINARY_INPUT,
+        &["PresentValue", "PhysicalInput", "Polarity"],
+    ),
+    (ObjectType::BINARY_OUTPUT, &["Polarity"]),
     (ObjectType::BINARY_VALUE, &["PresentValue"]),
     (ObjectType::MULTI_STATE_INPUT, &["PresentValue"]),
     (ObjectType::MULTI_STATE_VALUE, &["PresentValue"]),

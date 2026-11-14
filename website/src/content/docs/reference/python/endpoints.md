@@ -205,6 +205,7 @@ def add_binary_input(
     instance: int,
     name: str,
     *,
+    polarity: Polarity | int = 0,
     tags: Optional[list[NameValue]] = None,
     profile_location: Optional[str] = None,
     profile_name: Optional[str] = None,
@@ -214,8 +215,8 @@ def add_binary_input(
 ) -> None
 ```
 
-Profile keywords as on `add_analog_input`, `alarm_value` and
-the delays as on `BACnetServer.add_binary_input`.
+Profile keywords as on `add_analog_input`, `polarity`,
+`alarm_value` and the delays as on `BACnetServer.add_binary_input`.
 
 ### BipEndpoint.add_binary_value
 
@@ -552,6 +553,7 @@ def add_binary_input(
     instance: int,
     name: str,
     *,
+    polarity: Polarity | int = 0,
     tags: Optional[list[NameValue]] = None,
     profile_location: Optional[str] = None,
     profile_name: Optional[str] = None,
@@ -561,8 +563,8 @@ def add_binary_input(
 ) -> None
 ```
 
-Profile keywords as on `add_analog_input`, `alarm_value` and
-the delays as on `BACnetServer.add_binary_input`.
+Profile keywords as on `add_analog_input`, `polarity`,
+`alarm_value` and the delays as on `BACnetServer.add_binary_input`.
 
 ### ScEndpoint.add_binary_value
 
@@ -923,6 +925,7 @@ def add_binary_input(
     instance: int,
     name: str,
     *,
+    polarity: Polarity | int = 0,
     tags: Optional[list[NameValue]] = None,
     profile_location: Optional[str] = None,
     profile_name: Optional[str] = None,
@@ -932,8 +935,8 @@ def add_binary_input(
 ) -> None
 ```
 
-Profile keywords as on `add_analog_input`, `alarm_value` and
-the delays as on `BACnetServer.add_binary_input`.
+Profile keywords as on `add_analog_input`, `polarity`,
+`alarm_value` and the delays as on `BACnetServer.add_binary_input`.
 
 ### MstpEndpoint.add_binary_value
 
