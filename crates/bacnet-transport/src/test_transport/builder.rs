@@ -44,7 +44,9 @@ impl TestTransportBuilder {
     }
 
     /// Add a MAC that `is_broadcast_mac` recognises (unless a hook overrides).
-    /// With one set, the inner transport's broadcast rule no longer applies.
+    /// Setting this or an `on_is_broadcast_mac` hook ends the inner
+    /// transport's broadcast rule, and with it its group rules, unless the
+    /// test also sets a group rule.
     pub fn broadcast_mac(mut self, mac: &[u8]) -> Self {
         self.transport.broadcast_macs.push(MacAddr::from_slice(mac));
         self
@@ -53,7 +55,11 @@ impl TestTransportBuilder {
     /// Add a MAC that reaches a group of nodes without being the link's
     /// broadcast, such as a B/IP multicast address: `is_group_destination`
     /// and `group_destinations` recognise it, `is_broadcast_mac` doesn't.
-    /// With one set, the inner transport's group rule no longer applies.
+    /// With one set (or an `on_is_group_destination` hook), the inner
+    /// transport's group rules no longer apply; its broadcast rule does for
+    /// `is_broadcast_mac` and `is_group_destination`. The owned
+    /// `group_destinations` copy cannot call the inner transport, so it then
+    /// holds only the test's own broadcast and group MACs.
     pub fn group_mac(mut self, mac: &[u8]) -> Self {
         self.transport.group_macs.push(MacAddr::from_slice(mac));
         self
@@ -184,8 +190,13 @@ impl TestTransportBuilder {
     /// `stop` and `abort` (unless a [`StartMode::Inbound`] or
     /// [`StartMode::Fresh`], or an `on_stop` hook, replaces them), receives
     /// `prepare_for_routing`, and takes the sends whose mode is
-    /// [`SendMode::Forward`]. A Network Port lease goes to it when the port
-    /// came from it.
+    /// [`SendMode::Forward`] or [`SendMode::ForwardFirst`]. A Network Port
+    /// lease goes to it when the port came from it.
+    ///
+    /// What replaces what: `Inbound` and `Fresh` replace only `start`; `stop`
+    /// and `abort` still reach the inner transport. An `on_stop` hook
+    /// replaces the inner `stop`, while `on_abort` is additive (the inner
+    /// `abort` still runs).
     pub fn inner(mut self, inner: impl TransportPort + 'static) -> Self {
         self.transport.inner = Some(Box::new(inner));
         self
@@ -239,7 +250,8 @@ impl TestTransportBuilder {
     }
 
     /// Replace `stop`'s default (the inner transport's stop, or `Ok(())`)
-    /// with this hook's result.
+    /// with this hook's result. The inner `stop` is not called; a
+    /// [`StartMode::Fresh`] channel still closes afterwards.
     pub fn on_stop<F>(mut self, hook: impl Fn() -> F + Send + Sync + 'static) -> Self
     where
         F: Future<Output = Result<(), Error>> + Send + 'static,

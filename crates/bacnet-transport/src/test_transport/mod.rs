@@ -32,7 +32,7 @@
 //!    `release_sends` permit; then the send fails if `fail_next_send` was
 //!    taken.
 //! 5. `Forward` only: the send goes on to the inner transport and returns its
-//!    result.
+//!    result. `ForwardFirst` instead forwards between steps 2 and 3.
 
 use std::any::Any;
 use std::future::Future;
@@ -101,6 +101,12 @@ pub enum SendMode {
     /// Run the full pipeline, then hand the send to the inner transport and
     /// return its result. Without an inner transport the send fails.
     Forward,
+    /// Record the frame, hand it to the inner transport first, and only then
+    /// run the hook and the built-in controls, returning their result: a
+    /// link that has put the frame on the wire when a later step holds or
+    /// fails the send. The inner transport's own error ends the send before
+    /// the hook. Without an inner transport the send fails.
+    ForwardFirst,
     /// Record the frame, then fail with an error carrying this message,
     /// skipping the hook and the built-in controls.
     Fail(&'static str),
@@ -271,9 +277,10 @@ impl TestTransport {
     }
 
     async fn send_frame(&self, mode: SendMode, frame: SentFrame) -> Result<(), Error> {
-        let forward = match mode {
-            SendMode::Record => false,
-            SendMode::Forward => true,
+        let (forward, first) = match mode {
+            SendMode::Record => (false, false),
+            SendMode::Forward => (true, false),
+            SendMode::ForwardFirst => (true, true),
             SendMode::Fail(message) => {
                 self.shared.sent.push(frame);
                 return Err(Error::Encoding(message.into()));
@@ -282,13 +289,20 @@ impl TestTransport {
             SendMode::Panic(message) => panic!("{message}"),
         };
         self.shared.sent.push(frame.clone());
+        if forward && first {
+            self.forward(&frame).await?;
+        }
         if let Some(hook) = &self.hooks.on_send {
             hook(frame.clone()).await?;
         }
         self.shared.controls().await?;
-        if !forward {
-            return Ok(());
+        if forward && !first {
+            return self.forward(&frame).await;
         }
+        Ok(())
+    }
+
+    async fn forward(&self, frame: &SentFrame) -> Result<(), Error> {
         let inner = self
             .inner
             .as_ref()
@@ -552,11 +566,12 @@ impl TransportPort for TestTransport {
     }
 
     /// The broadcast and group MAC lists, copied, so the rule never calls a
-    /// hook; the inner transport's rule when the test set no list.
+    /// hook (a hook-only rule gives an empty one); the inner transport's rule
+    /// when the test set no broadcast or group rule at all, list or hook.
     fn group_destinations(&self) -> GroupDestinations {
         if let Some(inner) = &self.inner
-            && self.broadcast_macs.is_empty()
-            && self.group_macs.is_empty()
+            && !self.own_group_rule()
+            && !self.own_broadcast_rule()
         {
             return inner.group_destinations();
         }
@@ -571,7 +586,7 @@ impl TransportPort for TestTransport {
 
     fn local_broadcast_destinations(&self) -> GroupDestinations {
         match &self.inner {
-            Some(inner) if self.broadcast_macs.is_empty() && self.group_macs.is_empty() => {
+            Some(inner) if !self.own_group_rule() && !self.own_broadcast_rule() => {
                 inner.local_broadcast_destinations()
             }
             _ => self.group_destinations(),
