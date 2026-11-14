@@ -190,6 +190,7 @@ impl App {
                 }
             }
             WorkerEvent::Snapshot(rows) => {
+                self.duplicates.rebuild(&rows);
                 self.devices.replace_all(rows);
                 self.resolve_capture_devices();
             }

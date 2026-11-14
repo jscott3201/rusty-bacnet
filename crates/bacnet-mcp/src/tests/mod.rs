@@ -17,6 +17,7 @@ mod confirm;
 mod discovery;
 mod export;
 mod handoff;
+mod known;
 mod legacy;
 mod limits;
 mod listen;
@@ -133,6 +134,24 @@ impl Recording {
             ] if control & 0x28 == 0 && apdu & 0xF0 == 0x00 => Some(*invoke_id),
             _ => None,
         }
+    }
+}
+
+impl Recording {
+    /// Hand the client `npdu` as the link MAC `source` sent it.
+    pub(crate) async fn inject(&self, npdu: &[u8], source: &[u8]) {
+        let inbox = self.inbox.lock().unwrap().clone().expect("started");
+        let npdu = bytes::Bytes::copy_from_slice(npdu);
+        let source = bacnet_types::MacAddr::from_slice(source);
+        let _ = inbox
+            .send(ReceivedNpdu::unverified(
+                npdu,
+                source,
+                false,
+                Vec::new(),
+                None,
+            ))
+            .await;
     }
 }
 

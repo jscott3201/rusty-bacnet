@@ -105,9 +105,9 @@ fn protocol_error_display() {
     );
 }
 
-/// An ambiguous instance names every claimant, local ones by MAC alone and
-/// routed ones with their network, as the CLI's target grammar writes a
-/// routed station (#2560).
+/// An ambiguous instance names every claimant as the CLI's target grammar
+/// reads it back: a local one by its MAC's length, a routed one as its
+/// station on its network (#2560). bacnet-ops reads each back.
 #[cfg(feature = "std")]
 #[test]
 fn ambiguous_device_names_every_candidate() {
@@ -117,12 +117,18 @@ fn ambiguous_device_names_every_candidate() {
     };
     let error = Error::AmbiguousDevice {
         instance: 1001,
-        candidates: vec![at(0, &[10, 0, 0, 1, 0xBA, 0xC0]), at(2, &[0x05])],
+        candidates: vec![
+            at(0, &[5]),
+            at(0, &[0x00, 0x04, 0xD2]),
+            at(0, &[10, 0, 0, 1, 0xBA, 0xC0]),
+            at(0, &[1, 2]),
+            at(2, &[0x05]),
+        ],
     };
     assert_eq!(
         error.to_string(),
-        "device 1001 is claimed by 2 addresses: 0x0a000001bac0, 2:0x05; \
-         name one by its address"
+        "device 1001 is claimed by 5 addresses: mstp:5, bip6:0x0004D2, \
+         10.0.0.1:47808, 0x0102, 2:0x05; name one by its address"
     );
 }
 

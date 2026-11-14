@@ -426,6 +426,25 @@ impl Duplicates {
         self.rebuild_banner();
     }
 
+    /// Rebuild every duplicate from a snapshot of the client's table, which
+    /// lists each claimant, after notices were missed.
+    pub(crate) fn rebuild(&mut self, rows: &[DeviceRow]) {
+        let mut by_instance: BTreeMap<u32, Vec<DeviceRow>> = BTreeMap::new();
+        for row in rows {
+            by_instance
+                .entry(row.instance)
+                .or_default()
+                .push(row.clone());
+        }
+        self.by_instance = by_instance
+            .into_iter()
+            .filter(|(_, claimants)| claimants.len() >= 2)
+            .take(MAX_INSTANCES)
+            .map(|(instance, claimants)| (instance, Claims::of(&claimants)))
+            .collect();
+        self.rebuild_banner();
+    }
+
     /// True when no duplicate has been seen.
     #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {

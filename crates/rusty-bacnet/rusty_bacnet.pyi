@@ -4351,7 +4351,12 @@ class BACnetClient:
     def add_device(
         self, device_instance: int, address: str
     ) -> Awaitable[None]:
-        """Add a device to the discovery table manually (useful when address is known without WhoIs)."""
+        """Add a device to the discovery table manually (useful when address is known without WhoIs).
+
+        The table holds one device per address: adding an instance at an
+        address that holds another replaces it, so ``get_device()`` no longer
+        finds the instance that was there (#2560).
+        """
         ...
 
     # --- COV subscriptions ---

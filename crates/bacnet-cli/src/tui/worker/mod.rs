@@ -254,8 +254,11 @@ impl DeviceFeed {
                 instance: event.instance,
                 claimants: event.claimants.iter().map(|d| self.row(d)).collect(),
             }),
+            // A missed notice may have been a contest's end; the snapshot
+            // lists every claimant, so the banner is rebuilt from it.
             Err(RecvError::Lagged(missed)) => {
                 sink.add_dropped(missed);
+                self.needs_resync = true;
                 None
             }
             Err(RecvError::Closed) => {

@@ -10096,7 +10096,12 @@ The discovery table is keyed by address: the network number, 0 for the
 local network, and the MAC on it (#2560). An I-Am from a known address
 refreshes its row, and so does any answer to a confirmed request, so a device
 that keeps answering stays in the table without repeating its I-Am; a silent
-one is purged about ten minutes after it was last heard. Two addresses
+one is purged 10 to 15 minutes after it was last heard (the purge runs
+every 5 minutes and takes rows silent for more than 10). The table holds
+one device per address: an I-Am, `add_device` or `DeviceTable::upsert`
+naming another instance at a known address replaces its row; for an I-Am,
+`device_events()` reports `Lost` for the old instance and `Discovered` for
+the new. Two addresses
 claiming one instance each keep a row, reachable by its address, while
 `get_device` and every `_from_device`/`_to_device` call refuse the instance
 with `Error::AmbiguousDevice`, which lists both. `device_collision_events()`

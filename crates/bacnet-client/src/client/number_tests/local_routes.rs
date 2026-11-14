@@ -472,3 +472,57 @@ async fn a_request_routed_before_the_number_was_learned_completes_on_its_relayed
     assert!(outbound.try_recv().is_err(), "sent once");
     client.stop().await.unwrap();
 }
+
+/// An I-Am a router relays back from this network, with its number as
+/// SNET, names a local device, as its answers do (#1465): it lands on the
+/// device's local row, so the device and its relayed I-Am are one device,
+/// not an ambiguous instance (#2560). While the number is unknown the relay
+/// is a routed station of its own.
+#[tokio::test]
+async fn an_i_am_relayed_from_this_network_is_the_local_device() {
+    use crate::client::DeviceEventKind;
+    use bacnet_encoding::apdu::UnconfirmedRequest;
+    use bacnet_services::who_is::IAmRequest;
+    use bacnet_types::enums::UnconfirmedServiceChoice;
+
+    let mut service_request = BytesMut::new();
+    IAmRequest {
+        object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, 9).unwrap(),
+        max_apdu_length: 480,
+        segmentation_supported: Segmentation::NO_SEGMENTATION,
+        vendor_id: 260,
+    }
+    .encode(&mut service_request);
+    let i_am = Apdu::UnconfirmedRequest(UnconfirmedRequest {
+        service_choice: UnconfirmedServiceChoice::I_AM,
+        service_request: service_request.freeze(),
+    });
+    for (learned, rows) in [(true, 1), (false, 2)] {
+        let (mut client, inbound, _outbound) = client(learned).await;
+        let mut events = client.device_events();
+        send_to_client(&inbound, &i_am, &PEER, None).await;
+        let relayed = relayed_from(THIS_NETWORK, &PEER);
+        send_to_client(&inbound, &i_am, &ROUTER, relayed).await;
+        let kinds = [
+            bounded(events.recv()).await.unwrap().kind,
+            bounded(events.recv()).await.unwrap().kind,
+        ];
+        let devices = client.discovered_devices().await;
+        assert_eq!(devices.len(), rows, "learned {learned}");
+        if learned {
+            assert_eq!(
+                kinds,
+                [DeviceEventKind::Discovered, DeviceEventKind::Updated]
+            );
+            let device = client.get_device(9).await.unwrap().expect("one device");
+            assert!(device.is_local());
+            assert_eq!(device.mac_address.as_slice(), PEER);
+        } else {
+            assert!(matches!(
+                client.get_device(9).await,
+                Err(Error::AmbiguousDevice { instance: 9, .. })
+            ));
+        }
+        client.stop().await.unwrap();
+    }
+}

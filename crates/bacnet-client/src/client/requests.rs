@@ -214,8 +214,16 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             // carried its I-Am, never by the router's MAC (Clause 5.2.1.2
             // term (c) binds the peer's Max APDU Length Accepted regardless
             // of how the peer is reached).
-            let (network, mac) = named.station();
-            let (device, peer_segmentation) = dt.peer(network, mac).unzip();
+            // A routed target on this client's own network is the local
+            // device it is sent to, whose row sizes it when it has no
+            // routed row (#1358).
+            let mut sized_by = named.station();
+            let mut found = dt.peer(sized_by.0, sized_by.1);
+            if found.is_none() && target.station() != sized_by {
+                sized_by = target.station();
+                found = dt.peer(sized_by.0, sized_by.1);
+            }
+            let (device, peer_segmentation) = found.unzip();
             let max_apdu = device
                 .map(|d| u16::try_from(d.max_apdu_length).unwrap_or(u16::MAX))
                 .unwrap_or(self.config.max_apdu_length);
@@ -225,7 +233,7 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             } else {
                 LengthBoundedBy::LocalConfig(max_apdu)
             };
-            let sized_by = device.is_some().then_some((network, mac));
+            let sized_by = device.is_some().then_some(sized_by);
             (max_apdu, max_seg, advertised, peer_segmentation, sized_by)
         };
         check_transmittable_length(advertised, target_transport_max_apdu)?;

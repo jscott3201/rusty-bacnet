@@ -228,3 +228,43 @@ async fn device_events_emit_lost_when_purge_removes_stale_device() {
 
     client.stop().await.unwrap();
 }
+
+/// One address announcing another instance: one device took the place of
+/// another, so subscribers hear the old one lost and then the new one
+/// discovered, and the old instance is gone from the table (#2560).
+#[tokio::test]
+async fn an_address_announcing_another_instance_loses_the_old_one() {
+    let (client_transport, sender_transport) = LoopbackTransport::pair(vec![0x01], vec![0x02]);
+    let mut client = BACnetClient::generic_builder()
+        .transport(client_transport)
+        .build()
+        .await
+        .unwrap();
+    let mut events = client.device_events();
+    for instance in [7, 8] {
+        sender_transport
+            .send_unicast(&i_am_npdu(instance, 1), client.local_mac())
+            .await
+            .unwrap();
+    }
+    let mut seen = Vec::new();
+    for _ in 0..3 {
+        let event = timeout(Duration::from_secs(1), events.recv())
+            .await
+            .expect("timed out waiting for a device event")
+            .expect("device event channel closed");
+        seen.push((event.kind, event.device.object_identifier.instance_number()));
+    }
+    assert_eq!(
+        seen,
+        [
+            (DeviceEventKind::Discovered, 7),
+            (DeviceEventKind::Lost, 7),
+            (DeviceEventKind::Discovered, 8),
+        ]
+    );
+    assert!(client.get_device(7).await.unwrap().is_none());
+    assert!(client.get_device(8).await.unwrap().is_some());
+    assert_eq!(client.discovered_devices().await.len(), 1);
+    client.stop().await.unwrap();
+}

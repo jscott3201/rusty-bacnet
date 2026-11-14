@@ -204,8 +204,11 @@ pub struct DeviceTable {
 pub(crate) enum Change {
     /// A row for a new address.
     Inserted,
-    /// The address's row, refreshed.
+    /// The address's row, refreshed: the same instance.
     Updated,
+    /// The address announced another instance: one device at the address
+    /// took the place of another, whose row is [`Heard::replaced`].
+    Replaced,
     /// Not stored: the table is full, or the device names no address.
     Dropped,
 }
@@ -214,6 +217,8 @@ pub(crate) enum Change {
 #[derive(Debug)]
 pub(crate) struct Heard {
     pub(crate) change: Change,
+    /// The row a [`Change::Replaced`] took the place of.
+    pub(crate) replaced: Option<DiscoveredDevice>,
     /// Instances whose claimants changed while two or more claimed them,
     /// before or after the change.
     pub(crate) contested: Vec<u32>,
@@ -266,6 +271,7 @@ impl DeviceTable {
     fn insert(&mut self, device: DiscoveredDevice, segmentation: PeerSegmentation) -> Heard {
         let mut heard = Heard {
             change: Change::Dropped,
+            replaced: None,
             contested: Vec::new(),
         };
         let Some(key) = Key::of(&device) else {
@@ -279,12 +285,14 @@ impl DeviceTable {
         let full = self.rows.len() >= MAX_DEVICE_TABLE_ENTRIES;
         let previous = match self.rows.get_mut(&key) {
             Some(row) => {
-                let previous = row.device.object_identifier.instance_number();
-                *row = entry;
-                heard.change = Change::Updated;
+                let old = std::mem::replace(row, entry).device;
+                let previous = old.object_identifier.instance_number();
                 if previous == instance {
+                    heard.change = Change::Updated;
                     return heard;
                 }
+                heard.change = Change::Replaced;
+                heard.replaced = Some(old);
                 self.claims.remove(&(previous, key.clone()));
                 Some(previous)
             }

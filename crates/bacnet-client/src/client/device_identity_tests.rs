@@ -26,7 +26,7 @@ use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, timeout};
 
-use super::{BACnetClient, DeviceEventKind};
+use super::{BACnetClient, DeviceEventKind, DeviceReadRequest};
 
 const CLIENT: [u8; 1] = [0x01];
 const PEER: [u8; 1] = [0x02];
@@ -57,6 +57,13 @@ impl Peer {
     /// An I-Am for `instance` from the local device, or from the routed
     /// station when `routed`.
     async fn i_am(&self, routed: bool, instance: u32) {
+        let source = routed.then(|| (NETWORK, MacAddr::from_slice(&STATION)));
+        self.i_am_from(source, instance).await;
+    }
+
+    /// An I-Am for `instance` from the routed station `source` names, or
+    /// else from the local device.
+    async fn i_am_from(&self, source: Destination, instance: u32) {
         let mut service_request = BytesMut::new();
         IAmRequest {
             object_identifier: ObjectIdentifier::new(ObjectType::DEVICE, instance).unwrap(),
@@ -69,7 +76,6 @@ impl Peer {
             service_choice: UnconfirmedServiceChoice::I_AM,
             service_request: service_request.freeze(),
         });
-        let source = routed.then(|| (NETWORK, MacAddr::from_slice(&STATION)));
         send(&self.transport, source, &apdu).await;
     }
 
@@ -289,6 +295,69 @@ async fn a_device_that_keeps_answering_outlives_a_silent_one() {
         .read_property_from_device(INSTANCE, object(), present, None)
         .await
         .unwrap();
+
+    client.stop().await.unwrap();
+}
+
+/// Every entry point refuses an ambiguous instance: a batch fails that
+/// entry alone and reads the others, and ReadPropertyMultiple sends nothing
+/// for it either.
+#[tokio::test]
+async fn every_entry_point_refuses_an_ambiguous_instance() {
+    let (mut client, peer) = start().await;
+    let mut events = client.device_events();
+    let other = Some((NETWORK, MacAddr::from_slice(&[0x08])));
+    peer.i_am(false, INSTANCE).await;
+    peer.i_am(true, INSTANCE).await;
+    peer.i_am_from(other.clone(), 3003).await;
+    for _ in 0..3 {
+        assert_eq!(recv(&mut events).await.kind, DeviceEventKind::Discovered);
+    }
+    let read = |device_instance| DeviceReadRequest {
+        device_instance,
+        object_identifier: object(),
+        property_identifier: PropertyIdentifier::PRESENT_VALUE,
+        property_array_index: None,
+    };
+
+    let mut results = client
+        .read_property_from_devices(vec![read(INSTANCE), read(3003)], None)
+        .await;
+    results.sort_by_key(|result| result.request_index);
+    assert!(
+        matches!(
+            &results[0].result,
+            Err(Error::AmbiguousDevice {
+                instance: INSTANCE,
+                ..
+            })
+        ),
+        "{:?}",
+        results[0].result
+    );
+    assert!(results[1].result.is_ok(), "{:?}", results[1].result);
+    let spec = bacnet_types::constructed::ReadAccessSpecification {
+        object_identifier: object(),
+        list_of_property_references: vec![bacnet_types::constructed::PropertyReference {
+            property_identifier: PropertyIdentifier::PRESENT_VALUE,
+            property_array_index: None,
+        }],
+    };
+    let refused = client
+        .read_property_multiple_from_device(INSTANCE, vec![spec])
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(
+            refused,
+            Error::AmbiguousDevice {
+                instance: INSTANCE,
+                ..
+            }
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(peer.requests(), [other], "only device 3003 was asked");
 
     client.stop().await.unwrap();
 }

@@ -56,24 +56,42 @@ impl fmt::Display for NotAdvancing {
     }
 }
 
-/// [`Error::AmbiguousDevice`]'s addresses: `0x0a000001bac0` on the local
-/// network, `2:0x05` on network 2.
+/// [`Error::AmbiguousDevice`]'s addresses, each written as the CLI's
+/// target grammar reads it back: a routed station as `2:0x05`; on the local
+/// network, by the MAC's length, which names its link among this stack's
+/// transports: `mstp:5` (MS/TP), `bip6:0x0004D2` (a B/IPv6 VMAC), and
+/// six octets as `10.0.0.1:47808`, the same six octets for an SC VMAC or an
+/// Ethernet MAC too. Any other length is `0x` and hex.
 #[cfg(feature = "std")]
 struct Candidates<'a>(&'a [BACnetAddress]);
 
 #[cfg(feature = "std")]
 impl fmt::Display for Candidates<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let hex = |f: &mut fmt::Formatter<'_>, mac: &[u8]| {
+            f.write_str("0x")?;
+            mac.iter().try_for_each(|octet| write!(f, "{octet:02X}"))
+        };
         for (i, address) in self.0.iter().enumerate() {
             if i > 0 {
                 f.write_str(", ")?;
             }
-            if address.network_number != 0 {
-                write!(f, "{}:", address.network_number)?;
-            }
-            f.write_str("0x")?;
-            for octet in address.mac_address.iter() {
-                write!(f, "{octet:02x}")?;
+            let mac = address.mac_address.as_slice();
+            match (address.network_number, mac) {
+                (0, [station]) => write!(f, "mstp:{station}")?,
+                (0, [_, _, _]) => {
+                    f.write_str("bip6:")?;
+                    hex(f, mac)?;
+                }
+                (0, [a, b, c, d, hi, lo]) => {
+                    let ip = std::net::Ipv4Addr::new(*a, *b, *c, *d);
+                    write!(f, "{ip}:{}", u16::from_be_bytes([*hi, *lo]))?;
+                }
+                (0, _) => hex(f, mac)?,
+                (network, _) => {
+                    write!(f, "{network}:")?;
+                    hex(f, mac)?;
+                }
             }
         }
         Ok(())

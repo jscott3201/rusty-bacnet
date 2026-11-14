@@ -337,7 +337,9 @@ fn the_cap_counts_one_row_per_address() {
 
     let mut refreshed = local_at(9_999, &mac(1));
     refreshed.vendor_id = 7;
-    assert_eq!(table.heard(refreshed).change, Change::Updated);
+    let heard = table.heard(refreshed);
+    assert_eq!(heard.change, Change::Replaced);
+    assert_eq!(instance_of(heard.replaced.as_ref()), Some(0));
     assert_eq!(table.get(0, &mac(1)).unwrap().vendor_id, 7);
     assert_eq!(table.len(), MAX_DEVICE_TABLE_ENTRIES);
 }

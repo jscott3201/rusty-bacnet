@@ -75,11 +75,15 @@ pub const DEVICE_EVENT_CHANNEL_CAPACITY: usize = 64;
 /// Type of change observed in the device discovery table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceEventKind {
-    /// An I-Am from a new address added a row to the discovery table.
+    /// An I-Am added a device to the discovery table: from a new address,
+    /// or from a known one announcing another instance, after that
+    /// address's old device is reported `Lost`.
     Discovered,
-    /// A later I-Am from the same address refreshed its row.
+    /// A later I-Am from the same address, for the same instance, refreshed
+    /// its row.
     Updated,
-    /// A previously discovered device was purged as stale.
+    /// A device left the table: purged as stale, or replaced at its address
+    /// by a device announcing another instance.
     Lost,
 }
 
@@ -965,6 +969,8 @@ pub use write_group::WriteGroupDestination;
 
 #[cfg(test)]
 mod acknowledge_alarm_tests;
+#[cfg(test)]
+mod answer_refresh_tests;
 #[cfg(test)]
 mod audit_tests;
 #[cfg(test)]

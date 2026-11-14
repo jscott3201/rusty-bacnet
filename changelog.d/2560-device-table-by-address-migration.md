@@ -6,4 +6,5 @@ section: Migration notes
   claimant); call `DeviceTable::find` for `get(instance)` and
   `get(network, mac)`, network 0 local, for `get_by_mac` and
   `get_by_network_address`; read `instance` and `claimants` from
-  `DeviceCollisionEvent`. Python: catch `BacnetAmbiguousDeviceError`.
+  `DeviceCollisionEvent`; give each device its own address, as one MAC
+  holds one. Python: catch `BacnetAmbiguousDeviceError`.

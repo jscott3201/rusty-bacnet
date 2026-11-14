@@ -1888,7 +1888,8 @@ to finish.
 Get all discovered devices (populated by WhoIs/IAm), one per address: a
 device instance that two addresses claim is listed once for each (#2560). A
 device stays listed while it answers the client's confirmed requests, I-Am or
-not, and leaves about ten minutes after it was last heard from.
+not, and leaves 10 to 15 minutes after it was last heard from (the purge
+runs every 5 minutes and takes devices silent for more than 10).
 
 ```python
 await client.who_is()
@@ -1962,7 +1963,9 @@ await client.who_is_directed("192.168.1.100:47808")
 
 #### `add_device(device_instance, address)`
 
-Manually add a device to the discovery table.
+Manually add a device to the discovery table. The table holds one device
+per address: adding an instance at an address that holds another replaces
+it, so `get_device()` no longer finds the instance that was there (#2560).
 
 ```python
 await client.add_device(1234, "192.168.1.100:47808")

@@ -260,7 +260,12 @@ fn a_claimant_announcing_another_instance_moves_between_contests() {
     table.heard(local_device(2002, &[0x03], now));
 
     let heard = table.heard(local_device(2002, &[0x02], now));
-    assert_eq!(heard.change, Change::Updated);
+    assert_eq!(heard.change, Change::Replaced);
+    let replaced = heard
+        .replaced
+        .as_ref()
+        .expect("the row it took the place of");
+    assert_eq!(replaced.object_identifier.instance_number(), 1001);
     assert_eq!(heard.contested, [1001, 2002]);
     assert_eq!(
         table.find(1001).unwrap().unwrap().mac_address.as_slice(),

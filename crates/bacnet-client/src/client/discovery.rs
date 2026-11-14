@@ -136,6 +136,10 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
     /// routed lookups by SNET/SADR will not match it. Like a discovered
     /// row, it is one claim on `instance`: another address claiming it too
     /// makes the instance ambiguous (see [`DeviceTable`]).
+    ///
+    /// The table holds one device per address: registering `instance` at
+    /// a MAC that holds another instance replaces that row, so
+    /// [`Self::get_device`] no longer finds the instance it held there.
     pub async fn add_device(&self, instance: u32, mac: &[u8]) -> Result<(), Error> {
         let oid = bacnet_types::primitives::ObjectIdentifier::new(
             bacnet_types::enums::ObjectType::DEVICE,
