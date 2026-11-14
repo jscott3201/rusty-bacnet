@@ -52,11 +52,11 @@ Runtime and application roles
 
 Operations core (UI-free, for the front ends)
   bacnet-ops            Target and value grammar, value formatting, request
-                        limits, read engine over bacnet-client, watch hub
+                        limits, high-level client over bacnet-client, watch hub
   bacnet-tool           The tool's own layer over bacnet-ops: write-safety core
                         (plan, ledger, audit), command classes, frame decoder,
                         BBMD survey (#2560)
-  bacnet-mcp            MCP server over the bacnet-ops engine; read-only unless
+  bacnet-mcp            MCP server over the bacnet-ops client; read-only unless
                         a profile offers writes (rmcp SDK; the CLI's `mcp` feature)
 
 Selected direct dependencies

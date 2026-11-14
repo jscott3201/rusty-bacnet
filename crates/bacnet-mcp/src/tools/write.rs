@@ -475,13 +475,13 @@ async fn preview<T: TransportPort + 'static>(
     raw: &Map<String, Value>,
     peer: &Peer,
 ) -> Result<Step, ToolError> {
-    let engine = ctx.engine()?;
+    let client = ctx.client()?;
     // Without the workspace's lock: the ledger file says which slots are
     // ours, and the retry reads everything again under the lock.
     let ledger = Ledger::open(&workspace.dir).ok();
     let preview = desk::prepare(
-        engine.low_level(),
-        engine.limits(),
+        client.low_level(),
+        client.limits(),
         caller,
         specs,
         args.batch,

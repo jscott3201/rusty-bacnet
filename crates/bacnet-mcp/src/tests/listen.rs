@@ -309,7 +309,7 @@ async fn the_device_list_is_announced_when_a_device_arrives() {
     let mut lab = Lab::start(Policy::default()).await;
     let (_, accepted) = lab.agent.listen(&["bacnet://devices"]).await;
     assert_eq!(accepted, ["bacnet://devices"]);
-    lab.client.clear_devices().await;
+    lab.low.clear_devices().await;
     for _ in 0..3 {
         lab.server.broadcast_i_am().await.unwrap();
     }

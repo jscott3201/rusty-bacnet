@@ -7,7 +7,7 @@ use bacnet_types::enums::{ErrorClass, PropertyIdentifier};
 use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::ObjectIdentifier;
 
-use crate::engine::{Halt, Reader, Wanted};
+use crate::client::{Halt, Reader, Wanted};
 use crate::format::{RawRow, StateTexts};
 
 /// Read `wanted` of `object` once; the first of `wanted` is the watched

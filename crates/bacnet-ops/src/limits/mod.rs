@@ -222,7 +222,7 @@ impl RequestLimits {
     /// Let `overlay` join these limits until it is replaced or cleared
     /// (`None`): requests then keep to the stricter of the two global
     /// rates, and per network to the stricter of the two. The switch
-    /// takes effect from the next request; no engine is rebuilt.
+    /// takes effect from the next request; no client is rebuilt.
     pub fn set_overlay(&self, overlay: Option<&Overlay>) {
         let layer = overlay.map(|overlay| {
             let networks = Networks::new(overlay.network, overlay.rates.iter().copied());

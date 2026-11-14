@@ -35,7 +35,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 use tokio::sync::broadcast::error::RecvError;
 
-use bacnet_ops::engine::{RpmFailure, rpm_failure, rpm_rows, unreachable};
+use bacnet_ops::client::{RpmFailure, rpm_failure, rpm_rows, unreachable};
 use bacnet_ops::format::{LogColumns, RawRow, RowError, StateTexts};
 use bacnet_ops::target::{Target, bip6_vmac, parse_target_on};
 

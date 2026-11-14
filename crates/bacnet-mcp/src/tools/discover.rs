@@ -4,7 +4,7 @@ use std::sync::PoisonError;
 use std::time::Duration;
 
 use bacnet_client::discovery::DiscoveredDevice;
-use bacnet_ops::engine::{Wanted, WhoIsScope};
+use bacnet_ops::client::{Wanted, WhoIsScope};
 use bacnet_ops::label::kebab;
 use bacnet_services::who_is::DeviceInstanceRange;
 use bacnet_transport::port::TransportPort;
@@ -176,8 +176,8 @@ pub(super) async fn run<T: TransportPort + 'static>(
     let first = start(ctx, NAME, args.cursor.as_deref(), raw)? as usize;
     // A later page lists what the first one found; it sends nothing. A
     // passive server sends nothing either, so it only lists.
-    let send = args.send.unwrap_or(ctx.engine.is_some()) && args.cursor.is_none();
-    if send && ctx.engine.is_none() {
+    let send = args.send.unwrap_or(ctx.client.is_some()) && args.cursor.is_none();
+    if send && ctx.client.is_none() {
         return Err(ToolError::refused(
             "passive",
             "the server is passive: it sends no Who-Is and only lists devices already heard, \
@@ -207,8 +207,8 @@ pub(super) async fn run<T: TransportPort + 'static>(
         who_is(ctx, &args, network, range).await?;
         tokio::time::sleep(wait).await;
     }
-    let mut devices = match &ctx.engine {
-        Some(engine) => engine.devices().await,
+    let mut devices = match &ctx.client {
+        Some(client) => client.devices().await,
         // Passive: no client, so nothing is known.
         None => Vec::new(),
     };
@@ -238,11 +238,11 @@ pub(super) async fn run<T: TransportPort + 'static>(
         let instance = found.object_identifier.instance_number();
         let mut row = device_row(ctx, found);
         if args.names
-            && let Some(engine) = &ctx.engine
+            && let Some(client) = &ctx.client
         {
             let object = found.object_identifier;
             // By its instance, as before: one claimed twice gets no name.
-            let read = match engine.device(instance).await {
+            let read = match client.device(instance).await {
                 Ok(device) => device
                     .read(object, Wanted::List(&[PropertyIdentifier::OBJECT_NAME]))
                     .await
@@ -264,7 +264,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
         "next_cursor": resume.map(|at| next(ctx, NAME, raw, at as u64)),
         "limits": ctx.limits(Some(page)),
     });
-    if ctx.engine.is_none() {
+    if ctx.client.is_none() {
         body["note"] = json!("passive: nothing is sent, and only devices already heard are listed");
     }
     Ok(body)
@@ -277,8 +277,8 @@ pub(crate) fn device_row<T: TransportPort + 'static>(
     found: &DiscoveredDevice,
 ) -> Value {
     let routed = found.source_network.zip(found.source_address.as_deref());
-    let (address, router) = match &ctx.engine {
-        Some(engine) => engine.address_style().locate(&found.mac_address, routed),
+    let (address, router) = match &ctx.client {
+        Some(client) => client.address_style().locate(&found.mac_address, routed),
         None => (String::new(), None),
     };
     json!({
@@ -300,7 +300,7 @@ async fn who_is<T: TransportPort + 'static>(
     network: Option<u16>,
     range: Option<(u32, u32)>,
 ) -> Result<(), ToolError> {
-    let engine = ctx.engine()?;
+    let client = ctx.client()?;
     let scope = match (args.scope, network, &args.address) {
         (Scope::Local, ..) => {
             ctx.allow_network(0)?;
@@ -330,13 +330,13 @@ async fn who_is<T: TransportPort + 'static>(
     // whether the discovery table knows a device there.
     let known_station = match scope {
         WhoIsScope::Directed(address) => {
-            let mac = engine.station_mac(address).await.map_err(|e| match e {
+            let mac = client.station_mac(address).await.map_err(|e| match e {
                 bacnet_types::error::Error::Encoding(message) => {
                     ToolError::invalid("address", message)
                 }
                 other => ToolError::invalid("address", other.to_string()),
             })?;
-            engine
+            client
                 .devices()
                 .await
                 .iter()
@@ -351,7 +351,7 @@ async fn who_is<T: TransportPort + 'static>(
         .map(|(low, high)| DeviceInstanceRange::new(low, high))
         .transpose()
         .map_err(|e| ToolError::invalid("range", e.to_string()))?;
-    engine.who_is(scope, range).await.map_err(|e| match e {
+    client.who_is(scope, range).await.map_err(|e| match e {
         bacnet_types::error::Error::Encoding(message) => ToolError::invalid("address", message),
         other => ToolError::Failed(other.to_string()),
     })

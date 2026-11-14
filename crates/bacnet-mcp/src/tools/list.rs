@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, PoisonError};
 
-use bacnet_ops::engine::{MAX_OBJECTS, Wanted, unreachable};
+use bacnet_ops::client::{MAX_OBJECTS, Wanted, unreachable};
 use bacnet_ops::format::decode_all;
 use bacnet_ops::parse::parse_object_type;
 use bacnet_transport::port::TransportPort;

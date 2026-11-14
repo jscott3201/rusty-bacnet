@@ -1,4 +1,4 @@
-//! The engine half of a write, shared by the TUI's write worker and the MCP
+//! The client half of a write, shared by the TUI's write worker and the MCP
 //! server (#2068): read what a write needs and plan it, send a confirmed
 //! preview through the ledger and the audit log, and revert ledger entries.
 //!
@@ -29,7 +29,7 @@ use super::plan::{self, PRE_READ, PreRead};
 use super::send::{find, item_json, send, turn};
 use super::{Gate, Level, Outcome, Planned, Preview, WriteSpec, run_id};
 use bacnet_ops::DeviceAddress;
-use bacnet_ops::engine::{Halt, Reader, Wanted, unreachable};
+use bacnet_ops::client::{Halt, Reader, Wanted, unreachable};
 use bacnet_ops::limits::RequestLimits;
 
 /// Why a passive session refuses anything that transmits.

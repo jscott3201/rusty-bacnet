@@ -14,8 +14,9 @@
 //!   properties and priorities are named;
 //! - [`limits`]: the global request-rate cap, the one-request-per-device
 //!   gate, rates per network and per-caller accounts;
-//! - [`engine`]: [`Client`], the high-level client: Who-Is and discovery
-//!   over those limits, and the reading strategy ([`engine::Reader`]);
+//! - [`client`](mod@client): [`Client`], the high-level client: Who-Is and
+//!   discovery over those limits, and the reading strategy
+//!   ([`client::Reader`]);
 //! - [`device`]: [`DeviceAddress`], where a device answers, and the
 //!   [`Device`] handle, pinned to an address or following an instance, whose
 //!   methods are the read operations (properties, the object list, a device
@@ -29,8 +30,8 @@
 //! classes, frame decoding and the BBMD survey) are the `bacnet-tool`
 //! crate (#2560).
 
+pub mod client;
 pub mod device;
-pub mod engine;
 pub mod export;
 pub mod format;
 pub mod label;
@@ -40,5 +41,5 @@ pub mod parse;
 pub mod target;
 pub mod watch;
 
+pub use client::Client;
 pub use device::{Device, DeviceAddress};
-pub use engine::Client;

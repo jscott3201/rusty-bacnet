@@ -20,8 +20,8 @@ use bacnet_types::enums::PropertyIdentifier;
 use bacnet_types::error::{Error, RemoteError};
 use bacnet_types::primitives::ObjectIdentifier;
 
+use crate::client::{RpmFailure, rpm_failure, unreachable};
 use crate::device::{DeviceAddress, Path};
-use crate::engine::{RpmFailure, rpm_failure, unreachable};
 use crate::format::{RawRow, RowError};
 use crate::limits::RequestLimits;
 

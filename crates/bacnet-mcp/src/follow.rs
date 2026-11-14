@@ -68,13 +68,13 @@ impl Follow {
     /// Follow `uris`, each point URI with its change signal. A point
     /// already followed on the same watch keeps the signal it had, so
     /// nothing is announced twice.
-    /// `engine` gives the discovery table's events, when the device list
+    /// `client` gives the discovery table's events, when the device list
     /// is followed, and `signals` the session's and the ledger's changes.
     /// A session or ledger URI followed already keeps its receiver, so a
     /// change not yet announced isn't lost.
     pub(crate) fn set<T: TransportPort + 'static>(
         &mut self,
-        engine: Option<&Client<T>>,
+        client: Option<&Client<T>>,
         signals: &Signals,
         uris: Vec<(String, Option<Changes>)>,
     ) {
@@ -110,7 +110,7 @@ impl Follow {
             self.devices = None;
             self.devices_due = None;
         } else if self.devices.is_none() {
-            self.devices = engine.map(Client::device_events);
+            self.devices = client.map(Client::device_events);
         }
     }
 

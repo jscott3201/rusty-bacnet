@@ -6,7 +6,7 @@
 
 use bacnet_client::log_reader::{LogCursor, LogPage};
 use bacnet_ops::Device;
-use bacnet_ops::engine::timed_out;
+use bacnet_ops::client::timed_out;
 use bacnet_ops::parse::parse_weekday_digit;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::ObjectType;

@@ -13,7 +13,7 @@ Turtle, and, when a profile allows it, write and revert values.
 
 - Built on the official `rmcp` SDK; targets the 2026-07-28 revision of MCP
   and still answers the older `initialize` handshake.
-- Every request goes through the `bacnet-ops` engine and its limits: one
+- Every request goes through the `bacnet-ops` client and its limits: one
   request at a time per device, a global rate, a rate per network and a
   token bucket per principal. Each result reports what it cost.
 - Device-supplied text comes back in an untrusted envelope: cleaned of

@@ -1,7 +1,7 @@
 //! `bacnet mcp connect` as an agent host launches it (#2185, #2201): its
 //! stdin and stdout bridged to the socket a TUI listens on in the
 //! profile's workspace (on Windows, the named pipe named after it). Here
-//! the listener runs in the test, on a lab device's engine, as the TUI
+//! the listener runs in the test, on a lab device's client, as the TUI
 //! runs it; stdout carries only the server's JSON-RPC.
 #![cfg(feature = "mcp")]
 
@@ -73,7 +73,7 @@ fn nothing_listening_is_an_error_on_stderr() {
     assert!(stderr.contains("no TUI is listening"), "{stderr}");
 }
 
-/// The lab device on a loopback link, and an engine on its client.
+/// The lab device on a loopback link, and a client over its low-level one.
 async fn lab() -> (BACnetServer<LoopbackTransport>, Client<LoopbackTransport>) {
     let (client_port, server_port) =
         LoopbackTransport::pair(vec![10, 0, 0, 1, 0xBA, 0xC0], LAB_MAC.to_vec());
@@ -84,14 +84,14 @@ async fn lab() -> (BACnetServer<LoopbackTransport>, Client<LoopbackTransport>) {
         .build()
         .await
         .unwrap();
-    let client = BACnetClient::generic_builder()
+    let low = BACnetClient::generic_builder()
         .transport(client_port)
         .build()
         .await
         .unwrap();
-    client.add_device(LAB, &LAB_MAC).await.unwrap();
-    let engine = Client::new(Arc::new(client), Arc::new(RequestLimits::new(20)));
-    (server, engine)
+    low.add_device(LAB, &LAB_MAC).await.unwrap();
+    let client = Client::new(Arc::new(low), Arc::new(RequestLimits::new(20)));
+    (server, client)
 }
 
 /// Run `connect` with `args`, send `requests` one line each (waiting for
@@ -148,14 +148,14 @@ fn requests() -> Vec<Value> {
 
 /// Acceptance: through `connect` (with the profile named, then found as
 /// the only one listening), an agent reads the lab on the listener's
-/// engine, which its rate meter shows; stdout carries only JSON-RPC, and
+/// client, which its rate meter shows; stdout carries only JSON-RPC, and
 /// the tools are read-only though the policy offers writes. When the TUI
 /// shuts its listener, `connect` exits cleanly.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn connect_bridges_an_agent_to_the_listener() {
     let root = config();
     let workspace = root.path().join("workspaces/site");
-    let (mut server, engine) = lab().await;
+    let (mut server, client) = lab().await;
     for args in [&["--profile", "site"][..], &[]] {
         let policy = Policy {
             writes: WritePolicy {
@@ -173,10 +173,10 @@ async fn connect_bridges_an_agent_to_the_listener() {
             local: "10.0.0.1:47808".into(),
         };
         let own = SessionRuntime::Own;
-        let listener = Listener::bind(engine.clone(), policy, "tester", place, own, None)
+        let listener = Listener::bind(client.clone(), policy, "tester", place, own, None)
             .await
             .unwrap();
-        let before = engine.limits().recent();
+        let before = client.limits().recent();
         let config = root.path().to_path_buf();
         let args: Vec<String> = args.iter().map(ToString::to_string).collect();
         let (child, lines) = tokio::task::spawn_blocking(move || {
@@ -201,7 +201,7 @@ async fn connect_bridges_an_agent_to_the_listener() {
         assert!(!names.contains(&"bacnet_write") && !names.contains(&"bacnet_revert"));
         let read: Value = serde_json::from_str(lines[2].trim_end_matches('\r')).unwrap();
         assert_eq!(read["result"]["isError"], json!(false), "{read}");
-        assert!(engine.limits().recent() > before, "the listener's meter");
+        assert!(client.limits().recent() > before, "the listener's meter");
 
         listener.shutdown().await;
         let output = tokio::task::spawn_blocking(move || child.wait_with_output())
@@ -210,12 +210,12 @@ async fn connect_bridges_an_agent_to_the_listener() {
             .unwrap();
         assert!(output.status.success(), "exit {:?}", output.status);
     }
-    // Every session has let go of the engine, and with it the client.
-    let low_level = Arc::clone(engine.low_level());
-    drop(engine);
-    let client = Arc::try_unwrap(low_level)
+    // Every session has let go of the client, and with it the low-level one.
+    let low_level = Arc::clone(client.low_level());
+    drop(client);
+    let low = Arc::try_unwrap(low_level)
         .ok()
         .expect("the listener let go");
-    drop(client);
+    drop(low);
     server.stop().await.unwrap();
 }

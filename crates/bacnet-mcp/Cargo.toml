@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 readme = "README.md"
-description = "A Model Context Protocol server for BACnet sites, over the bacnet-ops engine, read-only unless a profile offers guarded writes"
+description = "A Model Context Protocol server for BACnet sites, over the bacnet-ops client, read-only unless a profile offers guarded writes"
 keywords = ["bacnet", "mcp", "building-automation", "hvac"]
 categories = ["network-programming"]
 

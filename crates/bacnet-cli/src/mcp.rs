@@ -382,10 +382,10 @@ async fn serve_on<T: TransportPort + 'static>(
     policy: Policy,
 ) -> crate::CliResult {
     let client = Arc::new(client);
-    let engine = Client::new(Arc::clone(&client), Arc::new(policy.request_limits()));
-    let server = McpServer::new(Some(engine), policy, principal())?;
+    let ops = Client::new(Arc::clone(&client), Arc::new(policy.request_limits()));
+    let server = McpServer::new(Some(ops), policy, principal())?;
     let served = server.serve_stdio_until(shutdown_signal()).await;
-    // The server has let go of the engine, and with it the client.
+    // The server has let go of its `bacnet_ops` client, and with it this one.
     if let Ok(mut client) = Arc::try_unwrap(client) {
         client.stop().await?;
     }

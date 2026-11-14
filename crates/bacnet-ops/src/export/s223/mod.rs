@@ -14,7 +14,7 @@
 //! The work comes in two halves:
 //!
 //! - [`Device::inventory`](crate::Device::inventory) (or
-//!   [`read_inventory`] over a [`Reader`](crate::engine::Reader)) reads
+//!   [`read_inventory`] over a [`Reader`](crate::client::Reader)) reads
 //!   what the export needs into plain data, an [`Inventory`]: the device's
 //!   name, its Object_List, then one request for each exported object, all
 //!   one at a time through the reader's gate and rate cap;

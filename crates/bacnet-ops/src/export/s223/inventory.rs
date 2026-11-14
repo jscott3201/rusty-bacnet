@@ -49,8 +49,8 @@ use super::{
     Access, Analog, Binary, Detail, DeviceInfo, Entry, Integer, Inventory, InventoryOptions,
     MultiState, Point, PointKind,
 };
+use crate::client::{Halt, Reader, Wanted, device_error, unreachable};
 use crate::device::{Device, sent};
-use crate::engine::{Halt, Reader, Wanted, device_error, unreachable};
 use crate::format::{RawRow, StateTexts, decode_all};
 use crate::label::{kebab, object_label};
 

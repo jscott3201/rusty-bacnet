@@ -9,7 +9,7 @@ use std::sync::atomic::AtomicBool;
 use crate::destination::Destination;
 use bacnet_client::client::BACnetClient;
 use bacnet_ops::DeviceAddress;
-use bacnet_ops::engine::{Halt, Reader};
+use bacnet_ops::client::{Halt, Reader};
 use bacnet_ops::export::s223::{
     InventoryOptions, TurtleOptions, WritePriority, read_inventory, write_turtle,
 };

@@ -77,7 +77,7 @@ async fn a_batch_too_large_is_asked_a_row_at_a_time() {
 }
 
 /// A device that refuses RPM is read by ReadProperty, remembered by the
-/// engine; under [`Reads::value`] a poll reads only the watched property.
+/// client; under [`Reads::value`] a poll reads only the watched property.
 #[tokio::test(start_paused = true)]
 async fn a_device_refusing_rpm_is_polled_by_readproperty() {
     let options = WatchOptions {
@@ -90,7 +90,7 @@ async fn a_device_refusing_rpm_is_polled_by_readproperty() {
         .map(|n| lab.hub.watch(object(nc(n))).unwrap())
         .collect();
     settle().await;
-    assert!(lab.engine.refused_rpm(&lab_at()));
+    assert!(lab.client.refused_rpm(&lab_at()));
     let from = Instant::now();
     tokio::time::sleep(Duration::from_secs(10)).await;
     assert_eq!(lab.sent(RPM, from), 0, "{:?}", lab.services());
@@ -112,7 +112,7 @@ async fn a_failed_batch_is_read_one_property_at_a_time() {
     tokio::time::sleep(Duration::from_secs(11)).await;
     assert_eq!(lab.sent(RPM, from), 1);
     assert_eq!(lab.sent(RP, from), 3 * POINT_PROPERTIES.len());
-    assert!(!lab.engine.refused_rpm(&lab_at()));
+    assert!(!lab.client.refused_rpm(&lab_at()));
     for lease in &leases {
         let snapshot = lease.snapshot();
         assert_eq!((snapshot.polls, snapshot.state), (1, State::Live));
@@ -277,7 +277,7 @@ async fn a_missing_device_can_be_given_up() {
     let snapshot = lease.snapshot();
     assert_eq!(snapshot.state, State::Gone);
     assert!(snapshot.note.unwrap().contains("device table"));
-    lab.engine.low_level().add_device(2002, &[2]).await.unwrap();
+    lab.client.low_level().add_device(2002, &[2]).await.unwrap();
     tokio::time::sleep(Duration::from_secs(120)).await;
     assert!(lab.services().is_empty(), "{:?}", lab.services());
     assert_eq!(lease.snapshot().polls, 0);

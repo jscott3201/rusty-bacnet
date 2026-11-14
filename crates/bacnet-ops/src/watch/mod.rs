@@ -69,7 +69,7 @@ pub use self::options::{
 };
 pub use self::sample::{Sample, Samples, Via};
 use self::shared::{Arrival, DeviceSlot, Registry, Running, Shared};
-use crate::engine::Client;
+use crate::client::Client;
 use crate::format::RawRow;
 use crate::limits::Account;
 
@@ -409,7 +409,7 @@ impl std::fmt::Debug for Lease {
 }
 
 struct Inner<T: TransportPort + 'static> {
-    engine: Client<T>,
+    client: Client<T>,
     options: WatchOptions,
     registry: Arc<Registry>,
     account: Arc<Account>,
@@ -431,18 +431,18 @@ impl<T: TransportPort + 'static> Clone for Hub<T> {
 }
 
 impl<T: TransportPort + 'static> Hub<T> {
-    /// A hub over `engine`, under checked `options`. It starts its
+    /// A hub over `client`, under checked `options`. It starts its
     /// notification receiver, so it must be made inside a Tokio runtime.
-    pub fn new(engine: Client<T>, options: WatchOptions) -> Result<Self, String> {
+    pub fn new(client: Client<T>, options: WatchOptions) -> Result<Self, String> {
         options.validate()?;
         let registry = Arc::new(Registry::new(
-            process_base(engine.next_hub()),
+            process_base(client.next_hub()),
             options.coalesce,
             options.reads.object.clone(),
             options.reads.property_flags,
         ));
         let (stop_dispatch, stopped) = watch::channel(false);
-        let notifications = engine.low_level().cov_notifications();
+        let notifications = client.low_level().cov_notifications();
         let dispatcher = tokio::spawn(dispatch::run(Arc::clone(&registry), notifications, stopped));
         let bucket = options.bucket.clone();
         let account = Arc::new(match options.agent {
@@ -451,7 +451,7 @@ impl<T: TransportPort + 'static> Hub<T> {
         });
         Ok(Self {
             inner: Arc::new(Inner {
-                engine,
+                client,
                 options,
                 registry,
                 account,

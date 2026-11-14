@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::PoisonError;
 
-use bacnet_ops::engine::{Wanted, timed_out, unreachable};
+use bacnet_ops::client::{Wanted, timed_out, unreachable};
 use bacnet_ops::parse::{parse_object_specifier, parse_object_type};
 use bacnet_transport::port::TransportPort;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
@@ -364,8 +364,8 @@ pub(super) async fn run<T: TransportPort + 'static>(
     let query = Query::parse(&args)?;
     let range = args.range.as_deref().map(parse_range).transpose()?;
     let (from_device, from_index) = unpack(start(ctx, NAME, args.cursor.as_deref(), raw)?);
-    let engine = ctx.engine()?;
-    let mut devices = engine.devices().await;
+    let client = ctx.client()?;
+    let mut devices = client.devices().await;
     devices.retain(|found| {
         let instance = found.object_identifier.instance_number();
         range.is_none_or(|(low, high)| (low..=high).contains(&instance))
@@ -396,7 +396,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
         page.searched.push(instance);
         // By its instance, as the other tools name it: one claimed twice is
         // skipped, naming both addresses.
-        let handle = match engine.device(instance).await {
+        let handle = match client.device(instance).await {
             Ok(handle) => handle,
             Err(error) => {
                 let error = ToolError::device(instance, &error).json();

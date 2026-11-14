@@ -64,7 +64,7 @@ use tokio::sync::broadcast::error::RecvError;
 
 pub use self::address::DeviceAddress;
 pub(crate) use self::route::Path;
-use crate::engine::{Client, lock, unreachable};
+use crate::client::{Client, lock, unreachable};
 use crate::target::{Target, bip6_vmac, parse_target_on};
 
 /// How long a pinned handle's own address must have been quiet before
@@ -249,7 +249,7 @@ impl<T: TransportPort + 'static> Device<T> {
         let instance = reader
             .instance()
             .await
-            .map_err(crate::engine::device_error)?;
+            .map_err(crate::client::device_error)?;
         lock(&self.client.shared.instances).insert(address, instance);
         Ok(instance)
     }
@@ -511,8 +511,8 @@ impl<T: TransportPort + 'static> Client<T> {
         // Subscribed before asking, so the answer can't slip in between.
         let mut events = self.device_events();
         let scope = match network {
-            Some(network) => crate::engine::WhoIsScope::Network(network),
-            None => crate::engine::WhoIsScope::Global,
+            Some(network) => crate::client::WhoIsScope::Network(network),
+            None => crate::client::WhoIsScope::Global,
         };
         self.who_is(scope, range).await?;
         let deadline = tokio::time::Instant::now() + wait;
@@ -539,7 +539,7 @@ impl<T: TransportPort + 'static> Client<T> {
     /// another address claims its instance too.
     pub async fn discover(
         &self,
-        scope: crate::engine::WhoIsScope<'_>,
+        scope: crate::client::WhoIsScope<'_>,
         range: Option<DeviceInstanceRange>,
         wait: Duration,
     ) -> Result<Vec<Discovered>, Error> {

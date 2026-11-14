@@ -450,8 +450,8 @@ async fn serve_with<T: TransportPort + 'static>(
         let (sc_stop, sc_stop_rx) = mpsc::channel::<()>(1);
         // Likewise for the MCP listener, which ends its agents' sessions.
         let (attach_stop, attach_stop_rx) = mpsc::channel::<()>(1);
-        // The watch list and attached agents read through one engine.
-        let engine = Client::new(Arc::clone(&client), Arc::clone(&rate));
+        // The watch list and attached agents read through one `bacnet_ops` client.
+        let ops = Client::new(Arc::clone(&client), Arc::clone(&rate));
         let quiet = options.safety.passive;
         // The browser and the watch list run beside this loop under
         // `join!`, so their jobs keep being polled while an arm here awaits;
@@ -591,7 +591,7 @@ async fn serve_with<T: TransportPort + 'static>(
                 }
             }
         };
-        let watch_hub = super::watch::hub(&engine, &options.watch);
+        let watch_hub = super::watch::hub(&ops, &options.watch);
         tokio::join!(
             Box::pin(session),
             Box::pin(super::browse::run(&client, &sink, browse_rx, &rate)),
@@ -616,7 +616,7 @@ async fn serve_with<T: TransportPort + 'static>(
             Box::pin(crate::tui::capture::worker::run(
                 &*client, &sink, capture_rx, style
             )),
-            Box::pin(attached(&engine, &sink, &options, (attach_stop_rx, lend)))
+            Box::pin(attached(&ops, &sink, &options, (attach_stop_rx, lend)))
         );
     }
     stop_shared(client).await;
@@ -646,7 +646,7 @@ fn lent_desk() -> ((), Option<mpsc::Receiver<std::convert::Infallible>>) {
 /// The MCP listener, while the session runs.
 #[cfg(feature = "mcp")]
 async fn attached<T: TransportPort + 'static>(
-    engine: &Client<T>,
+    client: &Client<T>,
     sink: &EventSink,
     options: &SessionOptions,
     (stop, desk): (
@@ -654,13 +654,13 @@ async fn attached<T: TransportPort + 'static>(
         mpsc::Sender<bacnet_mcp::attach::DeskJob<T>>,
     ),
 ) {
-    crate::tui::attach::run(engine, options.attach.as_ref(), sink, stop, desk).await;
+    crate::tui::attach::run(client, options.attach.as_ref(), sink, stop, desk).await;
 }
 
 /// No MCP listener without the `mcp` feature.
 #[cfg(not(feature = "mcp"))]
 async fn attached<T: TransportPort + 'static>(
-    _engine: &Client<T>,
+    _client: &Client<T>,
     _sink: &EventSink,
     _options: &SessionOptions,
     _: (mpsc::Receiver<()>, ()),

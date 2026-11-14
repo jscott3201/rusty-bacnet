@@ -1,6 +1,6 @@
 //! A [Model Context Protocol](https://modelcontextprotocol.io) server for
 //! BACnet sites (#2066), so an AI agent host (Claude Code, Codex and
-//! others) can discover devices and read them through the same engine and
+//! others) can discover devices and read them through the same client and
 //! request limits as the `bacnet` tool's terminal UI, and, when a profile
 //! opts in, write through the TUI's preview tiers, ledger and audit log
 //! (#2068).
@@ -24,7 +24,7 @@
 //!   names; T2 and T3 need a verifiable approver. The confirmation state is
 //!   sealed for its caller, single use and short-lived.
 //! - `attach::Listener` serves agents over a local socket (on Windows, a
-//!   named pipe) in the terminal UI's process, on the TUI's own engine,
+//!   named pipe) in the terminal UI's process, on the TUI's own client,
 //!   read-only, to this OS user only (#2185, #2201); `attach::bridge` is
 //!   `bacnet mcp connect`'s side of it.
 //!

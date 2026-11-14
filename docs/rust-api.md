@@ -11767,7 +11767,7 @@ terminal UI and its MCP server share: no terminal or MCP dependency, just a
 (`format`, `label`; `format::alarms` renders alarm and event summaries),
 request limits (`limits`: the global rate cap, the one request per device
 gate and per-caller accounts), the watch hub (`watch`), the high-level
-client (`engine`) and device identity (`device`). `Client::new(client,
+client (`client`) and device identity (`device`). `Client::new(client,
 limits)` wraps an `Arc<BACnetClient<T>>` and an `Arc<RequestLimits>`
 (`RequestLimits::new(per_second)`, 0 for no cap), and is cheap to clone.
 `client.device(target).await?` gives a `Device` handle: from an address
@@ -11800,6 +11800,7 @@ with no aliases left behind:
 | Was | Now |
 |---|---|
 | `bacnet_ops::engine::Engine<T>`, held in an `Arc` | `bacnet_ops::Client<T>`, cheap to clone; `Hub::new` and `McpServer::new` take it by value |
+| the module `bacnet_ops::engine` (`Reader`, `Wanted`, `WhoIsScope`, `ReadVia`, `unreachable`, ...) | `bacnet_ops::client` |
 | `engine.client()` | `client.low_level()` |
 | `engine.read(device, object, wanted)` and `read_property`, `list_objects`, `describe_device`, `read_trend`, `alarms`, `alarm_summary`, `enrollment_summary`, `log_columns`, `log_state_texts`, `inventory`, `inventory_device`, `inventory_object` with the instance first | the same method on `client.device(device).await?`, without it |
 | `engine.device(instance)`, the discovery table's row | `client.low_level().get_device(instance)` |
@@ -11827,10 +11828,10 @@ behind. Add a `bacnet-tool` dependency and change the paths:
 | `bacnet_ops::destination` | private to `bacnet-cli`, its only user |
 
 `bacnet-ops` itself gains three public items the moved code reads:
-`engine::rpm_rows`, `format::timestamp_text` and `format::alarms::cell`.
+`client::rpm_rows`, `format::timestamp_text` and `format::alarms::cell`.
 
 `bacnet-mcp` (#2066, experimental) is a Model Context Protocol server over
-that engine, run by `bacnet mcp serve --stdio` (the CLI's `mcp` feature).
+that client, run by `bacnet mcp serve --stdio` (the CLI's `mcp` feature).
 `McpServer::new(client, policy, principal)` takes an
 `Option<Client<T>>` (`None` for passive mode, which sends nothing), a
 `Policy` it validates, and the caller's principal; `serve_stdio()` or

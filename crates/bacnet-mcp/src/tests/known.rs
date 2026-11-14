@@ -66,6 +66,6 @@ async fn an_address_announcing_another_instance_forgets_the_old_one() {
         "7 replaces the alias",
     )
     .await;
-    assert!(lab.client.get_device(alias).await.unwrap().is_none());
+    assert!(lab.low.get_device(alias).await.unwrap().is_none());
     lab.stop().await;
 }

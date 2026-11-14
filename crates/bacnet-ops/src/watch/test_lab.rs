@@ -29,7 +29,7 @@ use bytes::Bytes;
 use tokio::time::Instant;
 
 use super::{Hub, Point, WatchOptions, Watched};
-use crate::engine::Client;
+use crate::client::Client;
 use crate::limits::RequestLimits;
 
 pub(super) const LAB: u32 = 1001;
@@ -186,7 +186,7 @@ fn forwards(
 
 pub(super) struct Lab {
     pub(super) hub: Hub<TestTransport>,
-    pub(super) engine: Client<TestTransport>,
+    pub(super) client: Client<TestTransport>,
     pub(super) server: BACnetServer<LoopbackTransport>,
     pub(super) quirks: Arc<Quirks>,
     sent: Arc<Mutex<Vec<(u8, Instant)>>>,
@@ -252,13 +252,13 @@ impl Lab {
             ..ClientConfig::default()
         };
         let link = link(client_port, Arc::clone(&quirks), Arc::clone(&sent));
-        let client = BACnetClient::start(config, link).await.unwrap();
-        client.add_device(LAB, &[2]).await.unwrap();
-        let engine = Client::new(Arc::new(client), Arc::new(RequestLimits::new(0)));
-        let hub = Hub::new(engine.clone(), options).unwrap();
+        let low = BACnetClient::start(config, link).await.unwrap();
+        low.add_device(LAB, &[2]).await.unwrap();
+        let client = Client::new(Arc::new(low), Arc::new(RequestLimits::new(0)));
+        let hub = Hub::new(client.clone(), options).unwrap();
         Self {
             hub,
-            engine,
+            client,
             server,
             quirks,
             sent,
@@ -318,13 +318,13 @@ impl Lab {
     pub(super) async fn stop(self) {
         assert!(self.hub.shutdown(Duration::from_secs(30)).await);
         drop(self.hub);
-        let Some(client) = self.engine.into_low_level() else {
+        let Some(low) = self.client.into_low_level() else {
             panic!("the hub let go of the client");
         };
-        let Ok(mut client) = Arc::try_unwrap(client) else {
+        let Ok(mut low) = Arc::try_unwrap(low) else {
             panic!("the client holds the only low-level client");
         };
-        client.stop().await.unwrap();
+        low.stop().await.unwrap();
         let mut server = self.server;
         server.stop().await.unwrap();
     }

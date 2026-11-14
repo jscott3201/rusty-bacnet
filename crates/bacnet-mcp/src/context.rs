@@ -1,4 +1,4 @@
-//! What every tool call shares: the engine, the policy, the cursors and
+//! What every tool call shares: the client, the policy, the cursors and
 //! caches ([`Ctx`]), and one call's budget and cost ([`Call`]).
 
 use std::collections::{BTreeMap, HashMap};
@@ -30,8 +30,8 @@ use crate::resources::Cache;
 
 /// The server's state, shared by every call.
 pub(crate) struct Ctx<T: TransportPort + 'static> {
-    /// The engine; `None` in passive mode, where no client is built.
-    pub(crate) engine: Option<Client<T>>,
+    /// The client; `None` in passive mode, where no client is built.
+    pub(crate) client: Option<Client<T>>,
     pub(crate) policy: Policy,
     /// The one principal of a stdio server: the process's OS user.
     pub(crate) principal: String,
@@ -302,9 +302,9 @@ pub(crate) struct Device<T: TransportPort + 'static> {
 const DISCOVER_HINT: &str = "call bacnet_discover first (with a range or network that includes it)";
 
 impl<T: TransportPort + 'static> Ctx<T> {
-    /// The engine, or a refusal in passive mode.
-    pub(crate) fn engine(&self) -> Result<&Client<T>, ToolError> {
-        self.engine.as_ref().ok_or_else(|| {
+    /// The client, or a refusal in passive mode.
+    pub(crate) fn client(&self) -> Result<&Client<T>, ToolError> {
+        self.client.as_ref().ok_or_else(|| {
             ToolError::refused(
                 "passive",
                 "the server is passive: it builds no client and sends nothing",
@@ -323,7 +323,7 @@ impl<T: TransportPort + 'static> Ctx<T> {
         call: &Call,
         arg: &DeviceArg,
     ) -> Result<Device<T>, ToolError> {
-        let engine = self.engine()?;
+        let client = self.client()?;
         let text = arg.text();
         let unknown = || ToolError::UnknownDevice {
             device: text.clone(),
@@ -331,11 +331,11 @@ impl<T: TransportPort + 'static> Ctx<T> {
         };
         let parsed = target::parse_target(&text).map_err(|e| ToolError::invalid("device", e))?;
         let (handle, instance, network) = match parsed {
-            Target::Instance(instance) => (engine.device(instance).await, instance, None),
+            Target::Instance(instance) => (client.device(instance).await, instance, None),
             Target::Routed { dnet, instance } => {
-                (engine.device(instance).await, instance, Some(dnet))
+                (client.device(instance).await, instance, Some(dnet))
             }
-            Target::RoutedMac { .. } => (engine.device(text.as_str()).await, 0, None),
+            Target::RoutedMac { .. } => (client.device(text.as_str()).await, 0, None),
             Target::Mac(_) | Target::Bip6(_) => {
                 return Err(ToolError::invalid(
                     "device",
@@ -352,7 +352,7 @@ impl<T: TransportPort + 'static> Ctx<T> {
         if network.is_some_and(|network| network != at.network()) {
             return Err(unknown());
         }
-        let entry = engine
+        let entry = client
             .low_level()
             .get_device_at(at.network(), at.mac())
             .await
@@ -418,15 +418,15 @@ impl<T: TransportPort + 'static> Ctx<T> {
     /// after a burst the receiver missed). It also lets `bacnet_watch`
     /// points go once nobody has asked for them in [`TOOL_IDLE`].
     pub(crate) async fn follow_devices(&self) {
-        let Some(engine) = &self.engine else {
+        let Some(client) = &self.client else {
             return;
         };
-        let mut events = engine.device_events();
+        let mut events = client.device_events();
         let mut resync = true;
         let mut sweep = tokio::time::interval(Duration::from_secs(60));
         loop {
             if resync {
-                let devices = engine.devices().await;
+                let devices = client.devices().await;
                 let mut known = self.known.lock().unwrap_or_else(PoisonError::into_inner);
                 known.clear();
                 for found in &devices {
@@ -453,7 +453,7 @@ impl<T: TransportPort + 'static> Ctx<T> {
                 Ok(event) if event.kind == DeviceEventKind::Lost => {
                     // Another address may still claim the instance.
                     let instance = event.device.object_identifier.instance_number();
-                    match engine.low_level().get_device(instance).await {
+                    match client.low_level().get_device(instance).await {
                         Ok(Some(left)) => self.remember(&left),
                         Ok(None) => {
                             self.known

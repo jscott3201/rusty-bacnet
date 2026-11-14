@@ -331,7 +331,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use bacnet_ops::engine::ReadVia;
+    use bacnet_ops::client::ReadVia;
     use bacnet_types::enums::ObjectType;
 
     use super::*;

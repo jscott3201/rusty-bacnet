@@ -22,7 +22,7 @@ use std::collections::BTreeMap;
 
 use sha2::{Digest, Sha256};
 
-use bacnet_ops::engine::timed_out;
+use bacnet_ops::client::timed_out;
 use bacnet_ops::export::s223::{
     Counts, DEFAULT_BASE_IRI, Detail, DeviceInfo, Entry, Inventory, InventoryOptions,
     TurtleOptions, WritePriority, write_turtle,

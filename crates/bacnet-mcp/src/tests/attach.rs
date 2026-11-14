@@ -1,5 +1,5 @@
 //! TUI-attached mode (#2185): agents on the workspace's socket, through
-//! the bridge, on the lab's shared engine; the socket's security checks;
+//! the bridge, on the lab's shared client; the socket's security checks;
 //! and the listener's shutdown.
 
 #[cfg(unix)]
@@ -107,16 +107,17 @@ fn writes_offered(dir: &Path) -> Policy {
 }
 
 impl Lab {
-    /// The lab client's engine, on the lab's limits: the TUI's shared one.
-    pub(super) fn engine(&self) -> Client<bacnet_transport::test_transport::TestTransport> {
-        Client::new(Arc::clone(&self.client), Arc::clone(&self.limits))
+    /// A client over the lab's low-level one, on the lab's limits: the TUI's
+    /// shared one.
+    pub(super) fn client(&self) -> Client<bacnet_transport::test_transport::TestTransport> {
+        Client::new(Arc::clone(&self.low), Arc::clone(&self.limits))
     }
 
-    /// A listener on `dir` over the lab's engine.
+    /// A listener on `dir` over the lab's client.
     pub(super) async fn attach(&self, dir: &Path, policy: Policy) -> Result<Listener, AttachError> {
         let callers = SessionRuntime::Callers;
         Listener::bind(
-            self.engine(),
+            self.client(),
             policy,
             "tester",
             workspace(dir),
@@ -171,15 +172,15 @@ fn tool_names(reply: &Value) -> Vec<String> {
 }
 
 /// Acceptance: an agent attached through the bridge surveys the lab on
-/// the shared engine, so its reads show on the engine's rate meter; the
+/// the shared client, so its reads show on the client's rate meter; the
 /// tool list has no write tool though the profile offers writes; the
 /// connection's open and close are audited with the peer's uid.
 #[tokio::test(start_paused = true)]
-async fn an_attached_agent_reads_on_the_shared_engine() {
+async fn an_attached_agent_reads_on_the_shared_client() {
     let lab = lab().await;
     let dir = private_dir();
     let offered = writes_offered(dir.path());
-    let direct = McpServer::new(Some(lab.engine()), offered.clone(), "x").unwrap();
+    let direct = McpServer::new(Some(lab.client()), offered.clone(), "x").unwrap();
     assert!(
         direct.tool_names().contains(&"bacnet_write"),
         "writes offered"
@@ -272,7 +273,7 @@ async fn another_users_connection_is_refused_and_audited() {
     let lab = lab().await;
     let dir = private_dir();
     let listener = Listener::bind_with(
-        lab.engine(),
+        lab.client(),
         Policy::default(),
         "tester".into(),
         workspace(dir.path()),

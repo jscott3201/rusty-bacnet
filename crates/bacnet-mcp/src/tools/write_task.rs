@@ -121,14 +121,14 @@ pub(crate) async fn confirmed<T: TransportPort + 'static>(
     fields: Map<String, Value>,
     sending: Sending,
 ) -> Result<Value, ToolError> {
-    let engine = ctx.engine()?;
+    let client = ctx.client()?;
     let mut caller = McpCaller::new(&ctx.writes, &ctx.policy.writes, Some(via), fields);
     caller.sending = Some(sending);
     let mut desk = open(&ctx, &workspace, &caller).await?;
     let fresh = desk
         .prepare(
-            engine.low_level(),
-            engine.limits(),
+            client.low_level(),
+            client.limits(),
             &caller,
             &specs,
             args.batch,
@@ -153,7 +153,7 @@ pub(crate) async fn confirmed<T: TransportPort + 'static>(
     }
     let before = desk.entries();
     let sent = desk
-        .commit(engine.low_level(), engine.limits(), &caller, &fresh)
+        .commit(client.low_level(), client.limits(), &caller, &fresh)
         .await;
     ctx.writes
         .signals
@@ -171,13 +171,13 @@ pub(crate) async fn planned<T: TransportPort + 'static>(
     fields: Map<String, Value>,
     sending: Sending,
 ) -> Result<Value, ToolError> {
-    let engine = ctx.engine()?;
+    let client = ctx.client()?;
     let refusing = McpCaller::new(&ctx.writes, &ctx.policy.writes, None, fields.clone());
     let mut desk = open(&ctx, &workspace, &refusing).await?;
     let preview = desk
         .prepare(
-            engine.low_level(),
-            engine.limits(),
+            client.low_level(),
+            client.limits(),
             &refusing,
             &specs,
             args.batch,
@@ -213,7 +213,7 @@ pub(crate) async fn planned<T: TransportPort + 'static>(
     caller.sending = Some(sending);
     let before = desk.entries();
     let sent = desk
-        .commit(engine.low_level(), engine.limits(), &caller, &preview)
+        .commit(client.low_level(), client.limits(), &caller, &preview)
         .await;
     ctx.writes
         .signals

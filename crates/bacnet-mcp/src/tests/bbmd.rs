@@ -99,10 +99,10 @@ async fn hostile_bbmd(peer: SocketAddrV4, extra: &[SocketAddrV4]) -> SocketAddrV
     own
 }
 
-/// A server over `client`, under `policy`, and an agent connected to it.
-fn serve(client: &Arc<BACnetClient<BipTransport>>, policy: Policy) -> Agent {
-    let engine = Client::new(Arc::clone(client), Arc::new(policy.request_limits()));
-    let mcp = McpServer::new(Some(engine), policy, "tester").unwrap();
+/// A server over `low`, under `policy`, and an agent connected to it.
+fn serve(low: &Arc<BACnetClient<BipTransport>>, policy: Policy) -> Agent {
+    let client = Client::new(Arc::clone(low), Arc::new(policy.request_limits()));
+    let mcp = McpServer::new(Some(client), policy, "tester").unwrap();
     Agent::connect(mcp).0
 }
 

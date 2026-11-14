@@ -2,7 +2,7 @@
 //! card, an object's properties, its health badges and its priority pane,
 //! each value written by the shared formatter ([`bacnet_ops::format`]).
 
-use bacnet_ops::engine::ReadVia;
+use bacnet_ops::client::ReadVia;
 use bacnet_ops::format::{Floats, RawRow, StateTexts, ValueFormat, decode_all, object_name, units};
 use bacnet_ops::label::PRIORITIES;
 use bacnet_types::enums::{ObjectType, PropertyIdentifier, ResolvedBits, resolve_bits};

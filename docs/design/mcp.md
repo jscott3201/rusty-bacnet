@@ -103,10 +103,10 @@ Layer 6.5: bacnet-ops    the operations core: no UI, no MCP dependency
              decode       frames, NPDUs and APDUs as summaries and field trees (phase 1)
              label        object, property and priority names
              limits       RequestLimits: global rate cap, one request per device
-             engine       Reader, and the Client facade over BACnetClient
+             client       Reader, and the Client facade over BACnetClient
              safety       plan, ledger, audit, lock, desk            (phase 3)
              watch        ref-counted COV and poll hub               (phase 2)
-           bacnet-mcp    the MCP surface over bacnet-ops::engine     (phase 1)
+           bacnet-mcp    the MCP surface over bacnet-ops::client     (phase 1)
              tools/, resources/, prompts/, untrusted text, approvers,
              policy, integrity-protected request state, signed cursors
 Layer 7:   bacnet-cli    `bacnet mcp serve` (feature `mcp`), later `connect`
@@ -146,7 +146,7 @@ From `bacnet-cli` into `bacnet-ops`, without behaviour changes (#2065):
 | `format` | `tui/format/` |
 | `label` | `kebab` and `object_label` from `tui/app/objects.rs`; `PRIORITIES` and `priority_label` from `tui/point.rs` |
 | `limits` | `RequestLimits` from `tui/worker/browse/limits.rs` (the browser's scheduler stays, as `browse/schedule.rs`) |
-| `engine` | the reader from `tui/worker/browse/read.rs`, `ReadVia`, and the device card's property list |
+| `client` | the reader from `tui/worker/browse/read.rs`, `ReadVia`, and the device card's property list |
 
 Phase 1 moved the capture screen's decoder the same way, for
 `bacnet_decode`: `decode/frame.rs`, `decode/tree.rs` and the network and
@@ -155,14 +155,14 @@ application layer reader became `bacnet_ops::decode` (`bacnet_tool::decode` sinc
 
 Every item the CLI or MCP needs is `pub` and documented; helpers private to
 a module stay private. The TUI's browser, watch list and write previews use
-`engine::Reader` directly with their own stop flags. The new `Client`
+`client::Reader` directly with their own stop flags. The new `Client`
 facade (`Engine` until #2560) is not yet used by the CLI: the one-shot `alarms` prints the raw
 acknowledgment, which the facade decodes, so switching it would change the
 output. MCP is the facade's first caller. (Since phase 2 the TUI's watch
 worker also runs on `Client`, for the shared watch hub; the one-shot
 commands still don't use it.)
 
-### 4.3 The engine
+### 4.3 The client
 
 `Client<T>` owns an `Arc<BACnetClient<T>>`, an `Arc<RequestLimits>` shared
 with any other worker on the client, and the set of addresses whose
@@ -201,19 +201,19 @@ Phase 1 adds two layers to `RequestLimits`: a rate per network
 network's slot before the global one), and a per-caller `Account`, carried
 in a task-local by `limits::charged`, that counts each request and its wait
 and first takes a token from the caller's `TokenBucket`. The TUI uses
-neither, so its requests are unchanged. The engine also sends Who-Is under
+neither, so its requests are unchanged. The client also sends Who-Is under
 the rate cap (`who_is`) and reads the discovery table (`devices`,
 `device`).
 
-Phase 3 put the write half beside the engine rather than in it: the
+Phase 3 put the write half beside the client rather than in it: the
 `bacnet_tool::safety::desk::Desk` (in `bacnet-ops` until #2560) holds a workspace's ledger, audit log and
 lock, and its `prepare`, `execute`, `commit` and `revert` take the
-engine's client and limits. Phase 2 added the watch hub (§6) beside the
-engine, and `device_events`.
+client's low-level client and limits. Phase 2 added the watch hub (§6) beside the
+client, and `device_events`.
 
 ### 4.4 One client, many sessions
 
-- Each profile has one `BACnetClient`, owned by the engine. MCP handlers
+- Each profile has one `BACnetClient`, owned by its `Client`. MCP handlers
   never touch the transport.
 - The per-device gate means many sessions can't exhaust a device's invoke
   IDs; requests queue at the gate instead.
@@ -447,7 +447,7 @@ model that device-reported strings are data and that writes need approval.
 1. **Reads by default, writes by grant, dangerous almost never.** This is
    the TUI's model carried over.
 2. **Policy lives in one place, on the server, and is checked twice**: when
-   the plan is made and again by the engine before sending, as the TUI's
+   the plan is made and again by the client before sending, as the TUI's
    write worker does today.
 3. **Annotations and elicitation are UX, not enforcement.**
 4. **Nothing returned from the network may drive a write without a person
@@ -532,7 +532,7 @@ Every approval is audited with `via` and `by`.
 The TUI's prepare, preview and execute steps map onto the 2026-07-28
 multi round-trip requests (MRTR):
 
-1. **First call.** The engine checks the grant, the level and the profile
+1. **First call.** The client checks the grant, the level and the profile
    policy, reads the pre-image, builds the preview and computes the tier. A
    blocked write is refused with nothing sent.
 2. **Approval.** Unless a plan grant covers the write, the server returns an
@@ -785,10 +785,10 @@ the slow-network default matters.
 
 **TUI-attached mode (phase 4).** While the TUI is open, MCP requests enter
 as another command source through a local socket listener in the TUI
-process. Reads go to the shared engine, so agent load shows on the TUI's rate
+process. Reads go to the shared client, so agent load shows on the TUI's rate
 meter. A write's preview goes to a `TuiApprover`, which opens the existing
 preview dialog with a banner naming the agent request. On confirmation the
-engine executes, settles the ledger and audits, and the MCP call returns the
+client executes, settles the ledger and audits, and the MCP call returns the
 outcome; a decline or the 120 s timeout returns `declined`. This is the
 verifiable approver for T2 and T3: a person on a UI the server controls, one
 transport, one ledger, one rate budget, and no contention for UDP 47808.
@@ -822,12 +822,12 @@ raising the host's tool timeout where it has one.
 The agents' sessions run on a Tokio runtime of the listener's own, whose
 threads the TUI's panic hook recognizes by name: a bug an agent's request
 reaches ends that agent's session, audited, without restoring the terminal
-(#2203). The engine, client and transport stay on the TUI's runtime; the
+(#2203). The client, its low-level client and transport stay on the TUI's runtime; the
 sessions reach them through Tokio's synchronization primitives, which work
 across runtimes.
 
 **Background daemon (phase 4b, optional).** One background process per
-profile owns the transport, the client, the engine and the MCP endpoints,
+profile owns the transport, the low-level client, the `Client` and the MCP endpoints,
 and the TUI attaches and detaches. It survives the TUI exiting and is
 reattached on the next start. Defaults: no network endpoint (agents connect
 through `bacnet mcp connect`), read-only while unattended (write tools return
@@ -848,7 +848,7 @@ image, and a `.mcpb` bundle for Claude Desktop.
 | 0 | #2065 | `bacnet-ops` read side; this document | CLI and TUI suites pass unchanged (insta snapshots, the in-process lab, the class-table pin test, which moved with the table); `bacnet-ops` passes `check-default-features.sh` and the file-size cap; no snapshot churn |
 | 1 | #2066 | `bacnet-mcp` with `stdio`; `bacnet mcp serve` behind `mcp`; the nine read tools; untrusted envelope; error mapping; signed cursors; per-call caps; per-principal and per-network limits; the `[mcp]` profile table; `survey_site` and `investigate_point`; `mcp` classified `Read` | a stdio integration test drives a site survey against the in-process lab; `tools/list` has no write tool in any configuration; `--passive` builds no client and sends nothing; 500 reads stay within the caps and a slow network is held to 2 a second; an injection fixture comes back sanitised, enveloped and capped; stdout carries only JSON-RPC; trend paging survives three pages and `summary` matches a brute-force computation; a docs page and changelog |
 | 2 (done) | #2067 | the watch hub; resources and templates; `subscriptions/listen` with caps; the alarm, session and ledger resources; `bacnet_watch` | two listeners on one point make one BACnet subscription and the last one leaving cancels it; a device refusing COV falls back to polling with `source: poll`; no lifetime-0 subscription; a notification storm is coalesced and drops counted; shutdown completes each listen stream and cancels every subscription |
-| 3 (done) | #2068 | `tui/safety/*` and the engine half of the write worker move to `bacnet-ops::safety`, since #2560 `bacnet-tool::safety` (the TUI keeps an adapter); `bacnet_write`, `bacnet_revert`; the `Approver` trait with `ClientElicitation`, `PlanGrant` and `Deny`; integrity-protected state; `mcp_writes = "never" \| "elicit"` (default `never`); the new audit fields | with `never` the write tools are absent; with `elicit` a T1 write is previewed, confirmed, sent and ledgered while T2, T3 and priority 6 are refused; tampered, expired, replayed or cross-principal state is refused and nothing sent; a stale pre-image gives `refused: stale`, audited; a timeout leaves an `unknown` entry; revert restores the pre-image; the TUI lists MCP entries marked `front_end: mcp`; plan-grant writes run without prompts and are audited; the TUI's write tests still pass |
+| 3 (done) | #2068 | `tui/safety/*` and the client half of the write worker move to `bacnet-ops::safety`, since #2560 `bacnet-tool::safety` (the TUI keeps an adapter); `bacnet_write`, `bacnet_revert`; the `Approver` trait with `ClientElicitation`, `PlanGrant` and `Deny`; integrity-protected state; `mcp_writes = "never" \| "elicit"` (default `never`); the new audit fields | with `never` the write tools are absent; with `elicit` a T1 write is previewed, confirmed, sent and ledgered while T2, T3 and priority 6 are refused; tampered, expired, replayed or cross-principal state is refused and nothing sent; a stale pre-image gives `refused: stale`, audited; a timeout leaves an `unknown` entry; revert restores the pre-image; the TUI lists MCP entries marked `front_end: mcp`; plan-grant writes run without prompts and are audited; the TUI's write tests still pass |
 | 4 (done) | #2185, #2201 | TUI-attached mode: the socket (Unix) and named pipe (Windows) listener, `bacnet mcp connect`, `TuiApprover` and the agent pane | an agent's T2 or T3 write executes only after the TUI confirmation; another uid is refused and audited; agent reads share the rate meter, attributed to the agents as the pane counts them; frame tests cover the banner, the queue and the agent pane; disarming refuses the queue at once |
 | 4b | after 0.15, optional | background daemon | survives TUI exit and reattaches with the same ledger; a crash mid-write leaves `sending`, which becomes `unknown` on restart; a protocol mismatch is handled as specified |
 | 5 | after 0.15 | Streamable HTTP and OAuth, multi-user | conformance against an SDK client; wrong audience 401, missing scope 403; cross-user redemption refused; starts only with TLS and OAuth or an explicit loopback bind; interop with a real provider as a manual check |

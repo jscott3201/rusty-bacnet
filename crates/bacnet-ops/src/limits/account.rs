@@ -5,11 +5,11 @@
 //! call sends through [`RequestLimits`](super::RequestLimits) then counts
 //! against it, with the time it waited for the limits, and first takes a
 //! token from the caller's [`TokenBucket`], when the account has one. The
-//! account rides in a task-local, so the engine's read paths charge it
+//! account rides in a task-local, so the client's read paths charge it
 //! without passing it along; a request made outside [`charged`] (the TUI's)
 //! charges nothing. An [`agent`](Account::agent)'s account marks its
 //! requests on the request-rate meter as an agent's, so a front end that
-//! shares its engine with agents (the TUI, #2185) shows their share.
+//! shares its client with agents (the TUI, #2185) shows their share.
 
 use std::future::Future;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};

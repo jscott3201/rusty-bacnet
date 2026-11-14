@@ -6,7 +6,7 @@ use std::sync::atomic::AtomicBool;
 
 use bacnet_client::client::BACnetClient;
 use bacnet_ops::DeviceAddress;
-use bacnet_ops::engine::{Halt, Reader};
+use bacnet_ops::client::{Halt, Reader};
 use bacnet_ops::export::s223::{
     Access, DEFAULT_BASE_IRI, Entry, Inventory, InventoryOptions, Point, PointKind, TurtleOptions,
     WritePriority, read_inventory, to_turtle,

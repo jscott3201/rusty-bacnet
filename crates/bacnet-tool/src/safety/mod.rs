@@ -1,7 +1,7 @@
 //! The write-safety core every front end shares (#964, #2068;
 //! `docs/design/tui.md` section 5, `docs/design/mcp.md` section 7):
 //! session levels, confirmation tiers, previews, the ledger, the audit log
-//! and the workspace lock, with the engine half of a write.
+//! and the workspace lock, with the client half of a write.
 //!
 //! - [`plan`]: a requested write turned into a preview: the value to send,
 //!   the pre-image, what Present_Value will do, and the tier.
@@ -10,7 +10,7 @@
 //! - [`audit`]: the append-only `audit.jsonl`.
 //! - [`lock`]: the workspace's lock, so one process at a time changes the
 //!   ledger.
-//! - [`desk`]: the engine half: read the pre-images and plan, send a
+//! - [`desk`]: the client half: read the pre-images and plan, send a
 //!   confirmed preview through the ledger and the audit log, and revert.
 //!
 //! The TUI and the MCP server decide who may confirm what; [`desk`] checks

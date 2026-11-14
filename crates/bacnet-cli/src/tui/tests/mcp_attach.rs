@@ -121,7 +121,7 @@ pub(super) fn plan(dir: &Path) -> Plan {
     }
 }
 
-/// Acceptance: the agent's reads go through the session's engine, on its
+/// Acceptance: the agent's reads go through the session's client, on its
 /// rate meter; the bar shows `MCP n`; quitting the TUI ends the agent's
 /// connection, removes the socket, and leaves its open and close audited.
 #[tokio::test(start_paused = true)]
@@ -288,7 +288,7 @@ fn the_bar_follows_the_listeners_count() {
     assert!(text.contains("MCP 3") && !text.contains("MCP 2"), "{text}");
 }
 
-/// With the listener running, the watch list's hub keeps the engine's
+/// With the listener running, the watch list's hub keeps the client's
 /// first range of subscriber process identifiers: its first SubscribeCOV
 /// carries the hub's base, 0x4D43_0000, as it does without a listener.
 #[tokio::test(start_paused = true)]

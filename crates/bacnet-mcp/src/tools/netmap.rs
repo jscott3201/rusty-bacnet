@@ -150,13 +150,13 @@ pub(super) async fn run<T: TransportPort + 'static>(
     if let Some(network) = network {
         ctx.allow_network(network)?;
     }
-    let engine = ctx.engine()?;
+    let client = ctx.client()?;
     if !args.bbmd && !args.bbmds.is_empty() {
         return Err(ToolError::invalid("bbmds", "bbmds needs bbmd: true"));
     }
     // Checked before anything is sent, so a refusal sends nothing.
     let plan = match args.bbmd {
-        true => Some(bbmd::plan(ctx, engine, &args.bbmds).await?),
+        true => Some(bbmd::plan(ctx, client, &args.bbmds).await?),
         false => None,
     };
     if args.send
@@ -167,7 +167,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
         }
         return Err(error);
     }
-    let style = engine.address_style();
+    let style = client.address_style();
     let address = |mac: &[u8]| style.locate(mac, None).0;
     let (heard, known) = {
         let routers = ctx.routers.lock().unwrap_or_else(PoisonError::into_inner);
@@ -199,7 +199,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
         }
         routers.push(json!({ "address": at, "networks": reach }));
     }
-    for found in engine.devices().await {
+    for found in client.devices().await {
         let on = found.source_network.unwrap_or(0);
         let instance = found.object_identifier.instance_number();
         if !wanted(on) || !ctx.policy.allows_device(instance) {
@@ -244,7 +244,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
         "limits": ctx.limits(None),
     });
     if let Some(plan) = &plan {
-        body["bbmd"] = bbmd::run(ctx, engine, call, plan).await;
+        body["bbmd"] = bbmd::run(ctx, client, call, plan).await;
     }
     Ok(body)
 }
@@ -266,7 +266,7 @@ async fn ask_routers<T: TransportPort + 'static>(
     network: Option<u16>,
     wait_s: Option<u64>,
 ) -> Result<(), ToolError> {
-    let engine = ctx.engine()?;
+    let client = ctx.client()?;
     ctx.allow_network(0)?;
     if !ctx.policy.broad_discovery {
         return Err(ToolError::refused(
@@ -293,7 +293,7 @@ async fn ask_routers<T: TransportPort + 'static>(
         }
         routers.asked.replace(asked)
     };
-    match engine
+    match client
         .discover_routers(network, wanted, Some(call.deadline))
         .await
     {

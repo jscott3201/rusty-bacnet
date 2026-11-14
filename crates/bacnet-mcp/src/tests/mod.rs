@@ -224,7 +224,7 @@ fn delayed(inner: LoopbackTransport, delay: Duration) -> TestTransport {
 /// through gates of their own.
 pub(crate) const ALIASES: std::ops::Range<u32> = 1202..1206;
 
-/// A running lab: the device, the client's engine, the MCP server on a
+/// A running lab: the device, the client, the MCP server on a
 /// pipe, and the agent's end of the pipe.
 pub(crate) struct Lab {
     pub(crate) agent: Agent,
@@ -233,14 +233,14 @@ pub(crate) struct Lab {
     server: BACnetServer<TestTransport>,
     /// The [`ALIASES`]' devices, in order.
     aliases: Vec<BACnetServer<TestTransport>>,
-    client: Arc<BACnetClient<TestTransport>>,
+    low: Arc<BACnetClient<TestTransport>>,
     /// The client's receive side, for [`Lab::inject`].
     inbox: TestTransportHandle,
     /// Carry each alias device's frames to the client.
     forwarding: Vec<JoinHandle<()>>,
     serving: JoinHandle<()>,
     mute: Arc<Mutex<Option<usize>>>,
-    /// The engine's request limits, to hold a device's gate from a test.
+    /// The client's request limits, to hold a device's gate from a test.
     pub(crate) limits: Arc<bacnet_ops::limits::RequestLimits>,
     /// A handle on the server, for calling its handler directly.
     pub(crate) mcp: McpServer<TestTransport>,
@@ -344,7 +344,7 @@ impl Lab {
             apdu_retries: 0,
             ..ClientConfig::default()
         };
-        let client = Arc::new(BACnetClient::start(config, recording).await.unwrap());
+        let low = Arc::new(BACnetClient::start(config, recording).await.unwrap());
         // Each alias's answers reach the client's receive channel beside the
         // lab device's own.
         let mut forwarding = Vec::new();
@@ -360,27 +360,26 @@ impl Lab {
                 }
             }));
         }
-        client.add_device(LAB, &LAB_MAC).await.unwrap();
+        low.add_device(LAB, &LAB_MAC).await.unwrap();
         for alias in ALIASES {
-            client.add_device(alias, &alias_mac(alias)).await.unwrap();
+            low.add_device(alias, &alias_mac(alias)).await.unwrap();
         }
         for instance in 300..305 {
-            client
-                .add_routed_device(RoutedDeviceConfig {
-                    instance,
-                    router_mac: LAB_MAC.to_vec(),
-                    remote_network: 2001,
-                    remote_mac: vec![u8::try_from(instance - 290).unwrap()],
-                    max_apdu_length: 480,
-                    segmentation_supported: Segmentation::NO_SEGMENTATION,
-                    max_segments_accepted: None,
-                })
-                .await
-                .unwrap();
+            low.add_routed_device(RoutedDeviceConfig {
+                instance,
+                router_mac: LAB_MAC.to_vec(),
+                remote_network: 2001,
+                remote_mac: vec![u8::try_from(instance - 290).unwrap()],
+                max_apdu_length: 480,
+                segmentation_supported: Segmentation::NO_SEGMENTATION,
+                max_segments_accepted: None,
+            })
+            .await
+            .unwrap();
         }
         let limits = Arc::new(policy.request_limits());
-        let engine = Client::new(Arc::clone(&client), Arc::clone(&limits));
-        let mcp = McpServer::new(Some(engine), policy, "tester").unwrap();
+        let client = Client::new(Arc::clone(&low), Arc::clone(&limits));
+        let mcp = McpServer::new(Some(client), policy, "tester").unwrap();
         let (agent, serving, shutdown) = Agent::connect_until(mcp.clone());
         Self {
             agent,
@@ -388,7 +387,7 @@ impl Lab {
             received,
             server,
             aliases,
-            client,
+            low,
             inbox,
             forwarding,
             serving,
@@ -473,10 +472,10 @@ impl Lab {
             self.serving.await.unwrap();
         }
         drop(self.mcp);
-        let Ok(mut client) = Arc::try_unwrap(self.client) else {
+        let Ok(mut low) = Arc::try_unwrap(self.low) else {
             panic!("the server let go of the client");
         };
-        client.stop().await.unwrap();
+        low.stop().await.unwrap();
         let mut server = self.server;
         server.stop().await.unwrap();
         for mut alias in self.aliases {

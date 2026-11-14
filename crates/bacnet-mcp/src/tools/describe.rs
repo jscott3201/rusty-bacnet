@@ -122,7 +122,7 @@ pub(crate) async fn run<T: TransportPort + 'static>(
     args: Args,
 ) -> Result<Value, ToolError> {
     let device = ctx.device(call, &args.device).await?;
-    let engine = ctx.engine()?;
+    let client = ctx.client()?;
     let summary = device
         .handle
         .describe_device()
@@ -157,7 +157,7 @@ pub(crate) async fn run<T: TransportPort + 'static>(
         .collect();
     let entry = &device.entry;
     let routed = entry.source_network.zip(entry.source_address.as_deref());
-    let (address, router) = engine.address_style().locate(&entry.mac_address, routed);
+    let (address, router) = client.address_style().locate(&entry.mac_address, routed);
     let mut body = json!({
         "device": device.instance,
         "address": address,
@@ -178,8 +178,8 @@ pub(crate) async fn run<T: TransportPort + 'static>(
         "object_types_supported": set_bits(rows, PropertyIdentifier::PROTOCOL_OBJECT_TYPES_SUPPORTED),
         "errors": errors,
         "via": match summary.via {
-            bacnet_ops::engine::ReadVia::Rpm => "rpm",
-            bacnet_ops::engine::ReadVia::Rp => "rp",
+            bacnet_ops::client::ReadVia::Rpm => "rpm",
+            bacnet_ops::client::ReadVia::Rp => "rp",
         },
         "limits": ctx.limits(None),
     });

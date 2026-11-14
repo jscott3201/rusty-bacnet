@@ -1,5 +1,5 @@
 //! A [`Device`]'s read operations: the same requests the client's
-//! [`Reader`](crate::engine::Reader) sends, one at a time at the device's
+//! [`Reader`](crate::client::Reader) sends, one at a time at the device's
 //! gate, with the client's memory of an RPM refusal. A following handle
 //! looks for its device again after a request finds it unreachable
 //! ([`Device::retry`]).
@@ -17,7 +17,7 @@ use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
 
 use super::{Device, DeviceAddress, Path};
-use crate::engine::{
+use crate::client::{
     DEVICE_PROPERTIES, DeviceSummary, ListRead, Naming, PagedLog, PropertyRead, Wanted,
     device_error, timed_out, unreachable,
 };
@@ -68,7 +68,7 @@ impl<T: TransportPort + 'static> Device<T> {
 
     /// The device's Object_List: whole, or element by element when the
     /// device can't send it in one answer (at most
-    /// [`MAX_OBJECTS`](crate::engine::MAX_OBJECTS)). Read by the wildcard
+    /// [`MAX_OBJECTS`](crate::client::MAX_OBJECTS)). Read by the wildcard
     /// instance while the device's own isn't known.
     pub async fn list_objects(&self) -> Result<ListRead, Error> {
         sent!(self, |at| {

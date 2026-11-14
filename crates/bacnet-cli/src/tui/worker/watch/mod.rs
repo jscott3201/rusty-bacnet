@@ -377,14 +377,14 @@ fn csv_line(point: &Point, written: &Written) -> String {
     )
 }
 
-/// The watch list's hub over `engine`. The session makes it before the
-/// MCP listener's, so it takes the engine's first range of subscriber
+/// The watch list's hub over `client`. The session makes it before the
+/// MCP listener's, so it takes the client's first range of subscriber
 /// process identifiers whatever order the workers start in (#2185).
 pub(crate) fn hub<T: TransportPort + 'static>(
-    engine: &Client<T>,
+    client: &Client<T>,
     options: &WatchOptions,
 ) -> Result<Hub<T>, String> {
-    Hub::new(engine.clone(), hub_options(options))
+    Hub::new(client.clone(), hub_options(options))
 }
 
 /// Serve watch commands on `hub` until `commands` closes or the session

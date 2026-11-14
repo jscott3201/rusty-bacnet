@@ -89,13 +89,13 @@ async fn a_routed_row_is_cancelled_after_its_device_leaves_the_table() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     let rate = Arc::new(RequestLimits::new(0));
-    let engine = Client::new(Arc::clone(&client), rate);
+    let ops = Client::new(Arc::clone(&client), rate);
     let options = WatchOptions {
         lifetime: 60,
         request_budget: Duration::from_secs(8),
         ..WatchOptions::default()
     };
-    let hub = Hub::new(engine, hub_options(&options)).unwrap();
+    let hub = Hub::new(ops, hub_options(&options)).unwrap();
     let point = Point {
         device: LAB,
         network: Some(super::site::ROUTED_NETWORK),

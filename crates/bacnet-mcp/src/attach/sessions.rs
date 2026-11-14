@@ -1,8 +1,8 @@
 //! The attached agents' sessions: one MCP server each over the shared
-//! engine, all sharing one watch hub (so one point cap) and one principal
+//! client, all sharing one watch hub (so one point cap) and one principal
 //! bucket, counted, and audited when they open and close and when a peer
 //! is refused. While any is attached, the profile's `[mcp]` limits join
-//! the engine's. They serve any byte stream: the Unix socket's and the
+//! the client's. They serve any byte stream: the Unix socket's and the
 //! Windows named pipe's.
 
 use std::panic::AssertUnwindSafe;
@@ -38,7 +38,7 @@ const REFUSALS_PER_MINUTE: u32 = 10;
 
 /// What every session of one listener shares.
 pub(super) struct Sessions<T: TransportPort + 'static> {
-    pub(super) engine: Client<T>,
+    pub(super) client: Client<T>,
     /// Read-only, unless the TUI lends its desk.
     pub(super) policy: Policy,
     /// The TUI's approval queue and its desk, when writes go through it.
@@ -48,7 +48,7 @@ pub(super) struct Sessions<T: TransportPort + 'static> {
     )>,
     /// Where each session records its calls (#2185).
     pub(super) board: super::Board,
-    /// The `[mcp]` limits, joined to the engine's while an agent is in.
+    /// The `[mcp]` limits, joined to the client's while an agent is in.
     pub(super) overlay: Overlay,
     /// The watch hub and principal bucket every session shares.
     pub(super) shared: Shared<T>,
@@ -94,9 +94,9 @@ impl Refusals {
     }
 }
 
-/// Join the `[mcp]` limits to the engine's, or take them off, and say so.
-fn join_limits<T: TransportPort + 'static>(engine: &Client<T>, overlay: Option<&Overlay>) {
-    engine.limits().set_overlay(overlay);
+/// Join the `[mcp]` limits to the client's, or take them off, and say so.
+fn join_limits<T: TransportPort + 'static>(client: &Client<T>, overlay: Option<&Overlay>) {
+    client.limits().set_overlay(overlay);
     match overlay {
         Some(overlay) => tracing::info!(
             "MCP: an agent is attached, so the [mcp] limits join the session's: at most {} \
@@ -114,7 +114,7 @@ fn join_limits<T: TransportPort + 'static>(engine: &Client<T>, overlay: Option<&
 /// the last one out takes the `[mcp]` limits off.
 struct Seat<T: TransportPort + 'static> {
     agents: watch::Sender<usize>,
-    engine: Client<T>,
+    client: Client<T>,
 }
 
 impl<T: TransportPort + 'static> Drop for Seat<T> {
@@ -122,7 +122,7 @@ impl<T: TransportPort + 'static> Drop for Seat<T> {
         self.agents.send_modify(|n| {
             *n = n.saturating_sub(1);
             if *n == 0 {
-                join_limits(&self.engine, None);
+                join_limits(&self.client, None);
             }
         });
     }
@@ -141,7 +141,7 @@ impl<T: TransportPort + 'static> Sessions<T> {
             admitted = *n < MAX_AGENTS;
             if admitted {
                 if *n == 0 {
-                    join_limits(&self.engine, Some(&self.overlay));
+                    join_limits(&self.client, Some(&self.overlay));
                 }
                 *n += 1;
             }
@@ -152,7 +152,7 @@ impl<T: TransportPort + 'static> Sessions<T> {
         }
         let seat = Seat {
             agents: self.agents.clone(),
-            engine: self.engine.clone(),
+            client: self.client.clone(),
         };
         let connection = self.next.fetch_add(1, Ordering::Relaxed);
         let lending =
@@ -164,7 +164,7 @@ impl<T: TransportPort + 'static> Sessions<T> {
                     agent: connection,
                 });
         let server = match McpServer::attached(
-            self.engine.clone(),
+            self.client.clone(),
             self.policy.clone(),
             self.principal.clone(),
             (&self.shared, INITIALIZE_WAIT),

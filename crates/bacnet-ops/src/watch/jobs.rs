@@ -25,8 +25,8 @@ use super::options::{Fallback, Reads};
 use super::poll::{self, PollRow, Polled};
 use super::shared::Shared;
 use super::{Inner, Point, Watched};
+use crate::client::{Halt, unreachable};
 use crate::device::DeviceAddress;
-use crate::engine::{Halt, unreachable};
 use crate::format::{RawRow, RowError};
 
 /// How long one cancel may take before it is given up.
@@ -96,7 +96,7 @@ async fn find<T: TransportPort + 'static>(
     inner: &Inner<T>,
     instance: u32,
 ) -> Result<DeviceAddress, Error> {
-    DeviceAddress::claiming(inner.engine.low_level(), instance).await
+    DeviceAddress::claiming(inner.client.low_level(), instance).await
 }
 
 /// Look `shared`'s device up and note where it is, read the point once,
@@ -106,8 +106,8 @@ pub(super) async fn start<T: TransportPort + 'static>(
     shared: Arc<Shared>,
 ) -> Started {
     let (process, point) = (shared.process, shared.point);
-    let engine = &inner.engine;
-    let found = engine.low_level().get_device(point.device).await;
+    let client = &inner.client;
+    let found = client.low_level().get_device(point.device).await;
     let device = match found {
         Ok(Some(device)) if DeviceAddress::of(&device).is_some() => device,
         found => {
@@ -157,10 +157,10 @@ async fn read<T: TransportPort + 'static>(
     point: &Point,
     address: &DeviceAddress,
 ) -> Result<Vec<RawRow>, Error> {
-    let engine = &inner.engine;
+    let client = &inner.client;
     let reads = &inner.options.reads;
     let mut wanted = wanted(reads, point);
-    let mut reader = engine.reader(address, Some(point.device));
+    let mut reader = client.reader(address, Some(point.device));
     let alone = wanted.len() == 1 && reads.first.is_empty() && !reads.name;
     if let Watched::Property { property, index } = point.watched
         && (alone || index.is_some())
@@ -182,7 +182,7 @@ async fn read<T: TransportPort + 'static>(
         reads.state_texts,
     )
     .await;
-    engine.settle(&reader);
+    client.settle(&reader);
     read.map_err(|halt| match halt {
         Halt::Device(error) => error,
         Halt::Cancelled => Error::Encoding("the read was stopped".into()),
@@ -197,10 +197,9 @@ async fn subscribe<T: TransportPort + 'static>(
     process: u32,
     point: Point,
 ) -> Result<ManagedCOVSubscription, Error> {
-    let engine = &inner.engine;
     let options = &inner.options;
-    let client = engine.low_level();
-    let limits = engine.limits();
+    let client = inner.client.low_level();
+    let limits = inner.client.limits();
     let managed = ManagedCOVSubscriptionOptions::default()
         .with_renewal_margin(options.renewal_margin)
         .with_renewal_gate(limits.gate(address));
@@ -244,7 +243,7 @@ pub(super) async fn poll<T: TransportPort + 'static>(
     device: u32,
     rows: Vec<PollRow<u32>>,
 ) -> Polled<u32> {
-    let engine = &inner.engine;
+    let client = &inner.client;
     let address = match find(&inner, device).await {
         Ok(address) => address,
         Err(error) => {
@@ -258,10 +257,10 @@ pub(super) async fn poll<T: TransportPort + 'static>(
             };
         }
     };
-    let rpm = !engine.refused_rpm(&address);
-    let polled = poll::poll(engine.low_level(), engine.limits(), &address, &rows, rpm).await;
+    let rpm = !client.refused_rpm(&address);
+    let polled = poll::poll(client.low_level(), client.limits(), &address, &rows, rpm).await;
     if polled.refused_rpm {
-        engine.refuse_rpm(&address);
+        client.refuse_rpm(&address);
     }
     polled
 }
@@ -278,9 +277,8 @@ pub(super) async fn cancel<T: TransportPort + 'static>(
     target: CovTarget,
     managed: Option<ManagedCOVSubscription>,
 ) {
-    let engine = &inner.engine;
-    let client = engine.low_level();
-    let limits = engine.limits();
+    let client = inner.client.low_level();
+    let limits = inner.client.limits();
     let cancel = async {
         let address = match address_of(&target) {
             Some(address) => address,

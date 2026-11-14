@@ -182,10 +182,10 @@ async fn read_back(
     options: &InventoryOptions,
 ) -> (Inventory, usize) {
     let database = build_database(list, &identity()).unwrap();
-    let (engine, server) = serve(faults, identity(), database).await;
-    let inventory = lab_device(&engine).await.inventory(options).await.unwrap();
-    let requests = engine.limits().recent();
-    stop(engine, server).await;
+    let (client, server) = serve(faults, identity(), database).await;
+    let inventory = lab_device(&client).await.inventory(options).await.unwrap();
+    let requests = client.limits().recent();
+    stop(client, server).await;
     (inventory, requests)
 }
 

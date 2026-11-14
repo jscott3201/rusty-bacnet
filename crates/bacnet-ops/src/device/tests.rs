@@ -14,7 +14,7 @@ use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 
 use super::test_bus::{Bus, at, requests, server};
 use super::*;
-use crate::engine::{Client, WhoIsScope};
+use crate::client::{Client, WhoIsScope};
 use crate::format::decode_all;
 use crate::limits::RequestLimits;
 

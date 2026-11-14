@@ -55,7 +55,7 @@ pub(super) async fn agents_are(listener: &Listener, agents: usize) {
 async fn the_mcp_limits_apply_only_while_an_agent_is_attached() {
     let lab = lab().await;
     let limits = Arc::new(RequestLimits::new(50));
-    let engine = Client::new(Arc::clone(&lab.client), Arc::clone(&limits));
+    let client = Client::new(Arc::clone(&lab.low), Arc::clone(&limits));
     let dir = private_dir();
     let policy = Policy {
         rates: Rates {
@@ -65,7 +65,7 @@ async fn the_mcp_limits_apply_only_while_an_agent_is_attached() {
         ..Policy::default()
     };
     let listener = Listener::bind(
-        engine.clone(),
+        client.clone(),
         policy,
         "tester",
         workspace(dir.path()),
@@ -84,7 +84,7 @@ async fn the_mcp_limits_apply_only_while_an_agent_is_attached() {
     agents_are(&listener, 0).await;
     assert_eq!(spacing(&limits).await, 40, "its own again");
     listener.shutdown().await;
-    drop(engine);
+    drop(client);
     lab.stop().await;
 }
 
@@ -117,9 +117,9 @@ async fn agents_share_one_budget_and_the_tui_keeps_its_share() {
     while lab.sends().len() < 8 {
         tokio::time::sleep(Duration::from_millis(1)).await;
     }
-    let engine = lab.engine();
+    let client = lab.client();
     let start = Instant::now();
-    let lab_device = engine.device(LAB).await.unwrap();
+    let lab_device = client.device(LAB).await.unwrap();
     for _ in 0..20 {
         lab_device
             .read_property(ai1(), PropertyIdentifier::PRESENT_VALUE, None)
@@ -136,22 +136,22 @@ async fn agents_share_one_budget_and_the_tui_keeps_its_share() {
         bridge.await.unwrap().unwrap();
     }
     listener.shutdown().await;
-    drop((lab_device, engine));
+    drop((lab_device, client));
     lab.stop().await;
 }
 
-/// Acceptance: the TUI's watch hub and the agents' hub on one engine use
+/// Acceptance: the TUI's watch hub and the agents' hub on one client use
 /// different subscriber process ids, so an agent leaving a point the TUI
 /// watches too cancels only its own subscription, and the TUI's keeps
 /// its COV notifications.
 #[tokio::test(start_paused = true)]
 async fn the_tui_keeps_its_cov_when_an_agent_leaves_the_same_point() {
     let lab = lab().await;
-    let engine = lab.engine();
-    let tui = Hub::new(engine.clone(), WatchOptions::default()).unwrap();
+    let client = lab.client();
+    let tui = Hub::new(client.clone(), WatchOptions::default()).unwrap();
     let dir = private_dir();
     let listener = Listener::bind(
-        engine.clone(),
+        client.clone(),
         Policy::default(),
         "tester",
         workspace(dir.path()),
@@ -194,7 +194,7 @@ async fn the_tui_keeps_its_cov_when_an_agent_leaves_the_same_point() {
     drop(lease);
     tui.shutdown(Duration::from_secs(5)).await;
     listener.shutdown().await;
-    drop((tui, engine));
+    drop((tui, client));
     lab.stop().await;
 }
 
@@ -239,7 +239,7 @@ async fn unreadable_credentials_are_refused() {
     ] {
         let dir = private_dir();
         let listener = Listener::bind_with(
-            lab.engine(),
+            lab.client(),
             Policy::default(),
             "tester".into(),
             workspace(dir.path()),

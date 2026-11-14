@@ -450,7 +450,7 @@ async fn a_device_that_appears_later_is_subscribed() {
     let snapshot = lease.snapshot();
     assert_eq!(snapshot.state, State::Unreachable);
     assert!(snapshot.note.as_deref().unwrap().contains("device table"));
-    lab.engine.low_level().add_device(2002, &[2]).await.unwrap();
+    lab.client.low_level().add_device(2002, &[2]).await.unwrap();
     tokio::time::sleep(Duration::from_secs(30)).await;
     let snapshot = lease.snapshot();
     assert_eq!(snapshot.source, Some(Source::Cov), "{snapshot:?}");

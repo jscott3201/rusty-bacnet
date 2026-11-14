@@ -25,11 +25,11 @@ fn system() -> Sid {
     Sid(vec![1, 1, 0, 0, 0, 0, 0, 5, 18, 0, 0, 0])
 }
 
-/// A listener on `dir` over the lab's engine, its clients identified by
+/// A listener on `dir` over the lab's client, its clients identified by
 /// `credentials`.
 async fn listener_with(lab: &super::Lab, dir: &Path, credentials: attach::Credentials) -> Listener {
     Listener::bind_with(
-        lab.engine(),
+        lab.client(),
         Policy::default(),
         "tester".into(),
         workspace(dir),

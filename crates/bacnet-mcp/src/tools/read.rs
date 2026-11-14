@@ -1,7 +1,7 @@
 //! `bacnet_read`: properties of one device's objects, by
-//! ReadPropertyMultiple with the engine's ReadProperty fallback.
+//! ReadPropertyMultiple with the client's ReadProperty fallback.
 
-use bacnet_ops::engine::{DEVICE_PROPERTIES, ReadVia, Wanted, timed_out, unreachable};
+use bacnet_ops::client::{DEVICE_PROPERTIES, ReadVia, Wanted, timed_out, unreachable};
 use bacnet_ops::format::{self, RawRow};
 use bacnet_ops::label::kebab;
 use bacnet_ops::parse::{parse_object_specifier, parse_property};

@@ -15,14 +15,14 @@ targets, values and devices the same way and obey the same request limits.
 - `limits`: a global request-rate cap, one outstanding confirmed request
   per device, optional rates per network, and per-caller accounts with
   their own token buckets.
-- `engine`: the read operations over a `BACnetClient`: properties (by
-  ReadPropertyMultiple, falling back to ReadProperty), the object list, a
-  device summary, trend log pages, alarms and the alarm and enrollment
-  summaries, and Who-Is and Who-Is-Router-To-Network with the discovery
-  table.
+- `client`: `Client`, the read operations over a `BACnetClient`:
+  properties (by ReadPropertyMultiple, falling back to ReadProperty),
+  the object list, a device summary, trend log pages, alarms and the
+  alarm and enrollment summaries, and Who-Is and Who-Is-Router-To-Network
+  with the discovery table.
 - `export`: a device's objects in another model's terms. So far
   `export::s223`, an experimental point list in the terms of proposed
-  ASHRAE Standard 223, as Turtle: an inventory read through the engine
+  ASHRAE Standard 223, as Turtle: an inventory read through the client
   into the point-list types of `bacnet_types::points`, then a writer with
   no I/O.
 - `watch`: the watch hub. One managed COV subscription per point (finite
