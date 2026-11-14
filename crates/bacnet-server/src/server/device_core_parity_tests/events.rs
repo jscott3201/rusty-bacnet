@@ -34,6 +34,8 @@ mod confirmed_events;
 mod device;
 #[path = "events_enrollment.rs"]
 mod enrollment;
+#[path = "events_fault.rs"]
+mod fault;
 #[path = "events_more.rs"]
 mod more;
 
@@ -276,7 +278,7 @@ impl EventParity {
     /// server's fixed reader does: windows are judged by its synchronized
     /// state, and timestamps read alike.
     async fn start(fixture: fn(&bacnet_objects::DeviceIdentity) -> ObjectDatabase) -> Self {
-        Self::start_with(fixture, true, None).await
+        Self::start_with(fixture, true, None, false).await
     }
 
     /// Both sides of `fixture`, the core's `Responder` with no clock: it
@@ -285,26 +287,30 @@ impl EventParity {
     async fn start_clockless(
         fixture: fn(&bacnet_objects::DeviceIdentity) -> ObjectDatabase,
     ) -> Self {
-        Self::start_with(fixture, false, None).await
+        Self::start_with(fixture, false, None, false).await
     }
 
     /// Both sides of `fixture`, clocked, each running the Event Enrollment
     /// pass every `enrollment` seconds when given (#2319); without it the
-    /// server keeps its default and the `Reporter` runs none.
+    /// server keeps its default and the `Reporter` runs none. With `fault`,
+    /// each runs the fault pass every 10 s, the server's period.
     async fn start_with(
         fixture: fn(&bacnet_objects::DeviceIdentity) -> ObjectDatabase,
         clocked: bool,
         enrollment: Option<u64>,
+        fault: bool,
     ) -> Self {
         let begun = runtime_clock::core_now();
-        let interval = enrollment.unwrap_or(ServerConfig::default().event_enrollment_interval_secs);
-        let mut parity = Parity::start_enrolling(
-            ReadPropertyMultipleBudget::default(),
-            Segmentation::NO_SEGMENTATION,
-            fixture,
-            interval,
-        )
-        .await;
+        let default = ServerConfig::default();
+        let tasks = ServerConfig {
+            event_enrollment_interval_secs: enrollment
+                .unwrap_or(default.event_enrollment_interval_secs),
+            enable_fault_detection: fault,
+            ..default
+        };
+        let budget = ReadPropertyMultipleBudget::default();
+        let segmentation = Segmentation::NO_SEGMENTATION;
+        let mut parity = Parity::start_enrolling(budget, segmentation, fixture, tasks).await;
         let settled = begun + bacnet_time::Duration::from_millis(50);
         assert_eq!(runtime_clock::core_now(), settled, "started at `begun`");
         let config = &parity.server.config;
@@ -324,6 +330,11 @@ impl EventParity {
         let report = match enrollment {
             Some(secs) => report.with_event_enrollment(bacnet_time::Duration::from_secs(secs)),
             None => report,
+        };
+        let report = if fault {
+            report.with_fault_detection(bacnet_time::Duration::from_secs(10))
+        } else {
+            report
         };
         let mut responder = Responder::new(identity, limits).unwrap();
         if clocked {
@@ -378,10 +389,18 @@ impl EventParity {
             else {
                 return sent;
             };
-            let Destination::Recipient(to) = notification.to else {
-                unreachable!("only event notifications here")
+            let mac = match notification.to {
+                Destination::Recipient(to) => {
+                    assert_eq!(to.network_number, 0, "a local recipient");
+                    to.mac_address
+                }
+                // A COV report, where a fixture subscribes (#2535).
+                Destination::Subscriber(to) => {
+                    assert!(to.network.is_none(), "a local subscriber");
+                    to.mac
+                }
+                other => unreachable!("{other:?}"),
             };
-            assert_eq!(to.network_number, 0, "a local recipient");
             let mut apdu = out.to_vec();
             let id = strip(&mut apdu);
             assert_eq!(id, notification.invoke_id);
@@ -389,7 +408,7 @@ impl EventParity {
             if id.is_none() {
                 reporter.delivered(token, Delivery::Sent, &mut self.ids, now);
             }
-            let wire = (to.mac_address.to_vec(), notification.priority, apdu);
+            let wire = (mac.to_vec(), notification.priority, apdu);
             sent.push((wire, id.map(|id| (id, token))));
         }
     }

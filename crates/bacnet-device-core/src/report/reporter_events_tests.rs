@@ -488,8 +488,31 @@ fn faulting_value() -> Box<dyn BACnetObject> {
     Box::new(value)
 }
 
+/// The Status_Flags a COV notification carries.
+fn reported_flags(apdu: &Apdu) -> u8 {
+    let Apdu::UnconfirmedRequest(request) = apdu else {
+        panic!("not an unconfirmed notification: {apdu:?}");
+    };
+    let values = COVNotificationRequest::decode(&request.service_request)
+        .unwrap()
+        .list_of_values;
+    let flags = values
+        .iter()
+        .find(|value| value.property_identifier == P::STATUS_FLAGS)
+        .expect("Status_Flags reported");
+    assert_eq!(&flags.value[..2], &[0x82, 0x04], "four-bit Status_Flags");
+    flags.value[2]
+}
+
+/// The fault pass commits the FAULT transition a new Reliability causes
+/// with it (#2535): its event notification first, then one COV report with
+/// FAULT and IN_ALARM together, and the next sweep has nothing left to do.
+/// Before, the report carried FAULT alone and the sweep sent the
+/// transition after it.
 #[test]
-fn the_fault_pass_reports_to_cov_and_the_sweep_sends_the_fault() {
+fn the_fault_pass_commits_the_fault_and_reports_it_settled() {
+    const IN_ALARM: u8 = 0x80;
+    const FAULT: u8 = 0x40;
     let identity = DeviceIdentity::new(9, 0x105)
         .unwrap()
         .with_services(SERVICES);
@@ -529,16 +552,23 @@ fn the_fault_pass_reports_to_cov_and_the_sweep_sends_the_fault() {
         .delivered(change.token, Delivery::Sent, &mut device.ids, ms(100));
     device.run_until(ms(2_499));
     assert!(device.pop(ms(2_499)).is_none(), "nothing has looked yet");
-    // The pass finds the fault: COV at once.
+    // The pass finds the fault and commits its transition with it.
     assert!(device.run_until(ms(2_500)).contains(&ms(2_500)));
-    let (cov, _) = device.pop(ms(2_500)).expect("the fault's COV report");
-    assert_eq!(cov.service, NotifyService::Cov);
-    assert!(device.pop(ms(2_500)).is_none(), "the transition waits");
-    // The next sweep turns the Reliability into its FAULT transition.
-    device.run_until(ms(3_000));
-    let (fault, apdu) = device.pop(ms(3_000)).expect("the FAULT transition");
+    let (fault, apdu) = device.pop(ms(2_500)).expect("the FAULT transition");
     assert_eq!(fault.service, NotifyService::Event);
     assert!(is_event(&apdu), "{apdu:?}");
+    device
+        .reporter
+        .delivered(fault.token, Delivery::Sent, &mut device.ids, ms(2_500));
+    let (cov, apdu) = device.pop(ms(2_500)).expect("the fault's COV report");
+    assert_eq!(cov.service, NotifyService::Cov);
+    assert_eq!(reported_flags(&apdu), FAULT | IN_ALARM, "settled flags");
+    device
+        .reporter
+        .delivered(cov.token, Delivery::Sent, &mut device.ids, ms(2_500));
+    // The next sweep finds the transition made.
+    device.run_until(ms(3_000));
+    assert!(device.pop(ms(3_000)).is_none(), "nothing more");
 }
 
 #[test]

@@ -38,6 +38,8 @@ use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicU8;
 use tokio::sync::{Semaphore, mpsc};
 
+#[path = "event_lanes_background_tests.rs"]
+mod background;
 #[path = "event_lanes_device_tests.rs"]
 mod device;
 #[path = "event_lanes_fault_tests.rs"]
@@ -175,6 +177,9 @@ struct Probe {
     hold_ack: StdMutex<Option<u8>>,
     release_ack: Semaphore,
     wire: StdMutex<Vec<Sent>>,
+    /// `wire` again, each with when it went out and, for a COV report, the
+    /// Status_Flags it carried.
+    stamped: StdMutex<Vec<(tokio::time::Instant, Sent, u8)>>,
 }
 
 impl Default for Probe {
@@ -188,6 +193,7 @@ impl Default for Probe {
             hold_ack: StdMutex::new(None),
             release_ack: Semaphore::new(0),
             wire: StdMutex::new(Vec::new()),
+            stamped: StdMutex::new(Vec::new()),
         }
     }
 }
@@ -226,6 +232,7 @@ impl Probe {
         let Apdu::UnconfirmedRequest(request) = frame.apdu() else {
             return;
         };
+        let mut flags = 0;
         let sent = if request.service_choice
             == UnconfirmedServiceChoice::UNCONFIRMED_EVENT_NOTIFICATION
         {
@@ -238,6 +245,13 @@ impl Probe {
             }
         } else if request.service_choice == UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION {
             let n = COVNotificationRequest::decode(&request.service_request).unwrap();
+            let status = n
+                .list_of_values
+                .iter()
+                .find(|value| value.property_identifier == PropertyIdentifier::STATUS_FLAGS);
+            flags = status
+                .and_then(|value| value.value.get(2).copied())
+                .unwrap_or(0);
             Sent::Cov(n.monitored_object_identifier)
         } else {
             return;
@@ -273,6 +287,11 @@ impl Probe {
             self.held.add_permits(1);
             self.release.acquire().await.unwrap().forget();
         }
+        let now = tokio::time::Instant::now();
+        self.stamped
+            .lock()
+            .unwrap()
+            .push((now, sent.clone(), flags));
         self.wire.lock().unwrap().push(sent);
     }
 

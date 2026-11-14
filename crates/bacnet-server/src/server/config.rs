@@ -140,7 +140,8 @@ pub struct ServerConfig {
     /// Enable periodic fault detection / reliability evaluation.
     /// When true, the server invokes every object's opt-in, object-owned
     /// reliability evaluation hook every 10 seconds. Stock objects currently
-    /// inherit the no-op default.
+    /// inherit the no-op default. A Reliability a hook changes commits the
+    /// event transition it causes in the same pass, as a write does.
     ///
     /// This governs reliability evaluation only. Event Enrollment evaluation
     /// is configured separately via [`enable_event_enrollment`](Self::enable_event_enrollment).

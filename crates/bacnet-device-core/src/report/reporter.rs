@@ -932,7 +932,8 @@ enum Tail {
     /// A request's write, its timestamped changes captured as each attempt
     /// committed.
     Request,
-    /// A change the host made or tells of.
+    /// A change the host made or tells of, or the fault pass's, whose
+    /// transitions are evaluated here.
     Host,
     /// A background pass's changes, its transitions committed and
     /// distributed already.

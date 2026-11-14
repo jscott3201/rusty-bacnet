@@ -1,6 +1,9 @@
 use super::cov_fanout::CovFanout;
+use super::event_notifications::committing;
+use super::event_send::Settle;
+use super::lifecycle::tail::{FanoutTail, Snapshot};
 use super::*;
-use crate::committed_cov::BackgroundCommit;
+use crate::committed_cov::{BackgroundCommit, CommitTransition};
 use tokio::time::{Instant, MissedTickBehavior};
 
 /// Spawn the task that drives every object's monotonic operation deadlines.
@@ -10,9 +13,11 @@ use tokio::time::{Instant, MissedTickBehavior};
 /// property its Input_Reference names (#1341), then asks every object with
 /// staged writes to drop the ones that waited too long
 /// (`DurableWrites::expire_staged`) and every timed object to expire what is
-/// due (`Timed::advance_monotonic_time`) and to report its next deadline, and
-/// fans COV out for each object that changed once the database guard is
-/// dropped. Binary Lighting Output egress, Lighting Output
+/// due (`Timed::advance_monotonic_time`) and to report its next deadline.
+/// Each object that changed commits the intrinsic transition its new state
+/// causes under the same guard (#2535), and the pass's COV fanout goes to the
+/// task's [`FanoutTail`], behind the pass's event notifications and off its
+/// loop (#2537). Binary Lighting Output egress, Lighting Output
 /// fades, ramps and egress (#1384), Color and Color Temperature fades and
 /// ramps (#1474), Access Door pulse relock (#1073), Averaging sampling and
 /// Pulse Converter counting all run on it; the name predates the others.
@@ -41,99 +46,134 @@ pub(super) fn spawn_binary_lighting_operation_task<T: TransportPort + 'static>(
     let deadline_armed = monotonic.deadline_armed;
     super::heap_futures::spawn_boxed(move || async move {
         let _owner = owner;
-        let mut interval = tokio::time::interval(Duration::from_secs(1));
-        interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
-        let mut next_deadline: Option<Duration> = None;
-        loop {
-            let deadline = async {
-                match next_deadline {
-                    Some(deadline) => tokio::time::sleep_until(monotonic_origin + deadline).await,
-                    None => std::future::pending().await,
-                }
-            };
-            tokio::select! {
-                _ = interval.tick() => {}
-                _ = deadline => {}
-                _ = deadline_armed.notified() => {}
-            }
-            let now = Instant::now().saturating_duration_since(monotonic_origin);
-
-            let (changed, sampled, runs) = {
-                let mut database = fanout.db.write().await;
-                // Sampling first steps each due schedule, so the deadlines
-                // gathered below are the next ones. The samples fan out as a
-                // background commit, like a schedule write.
-                let mut sampled = BackgroundCommit::new();
-                for oid in database.sample_due_averaging_objects(now) {
-                    sampled.changed(oid);
-                }
-                for oid in database.count_pulse_inputs() {
-                    sampled.changed(oid);
-                }
-                let finest = fanout
-                    .cov_table
-                    .read()
-                    .await
-                    .finest_increments(PropertyIdentifier::TRACKING_VALUE);
-                let mut changed = Vec::new();
-                let mut advanced = Vec::new();
-                next_deadline = None;
-                database.for_each_object_mut(|oid, object| {
-                    if let Some(timed) = object.timed() {
-                        timed.set_tracking_cov_increment(finest.get(&oid).copied());
+        let tail = FanoutTail::new(&fanout, None);
+        let passes = async {
+            let mut interval = tokio::time::interval(Duration::from_secs(1));
+            interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+            let mut next_deadline: Option<Duration> = None;
+            loop {
+                let deadline = async {
+                    match next_deadline {
+                        Some(deadline) => {
+                            tokio::time::sleep_until(monotonic_origin + deadline).await
+                        }
+                        None => std::future::pending().await,
                     }
-                    if let Some(durable) = object.durable_writes() {
-                        durable.expire_staged(now);
+                };
+                tokio::select! {
+                    _ = interval.tick() => {}
+                    _ = deadline => {}
+                    _ = deadline_armed.notified() => {}
+                }
+                let now = Instant::now().saturating_duration_since(monotonic_origin);
+                let mut settle = Settle::default();
+                let (changed, sampled, runs) = {
+                    let mut database = fanout.db.write().await;
+                    let database = &mut *database;
+                    // Sampling first steps each due schedule, so the deadlines
+                    // gathered below are the next ones. The samples fan out as
+                    // a background commit, like a schedule write.
+                    let mut sampled = BackgroundCommit::new();
+                    for oid in database.sample_due_averaging_objects(now) {
+                        sampled.changed(oid);
                     }
-                    let Some(timed) = object.timed() else {
-                        return;
-                    };
-                    if timed.advance_monotonic_time(now) {
-                        advanced.push(oid);
-                        if let Some(snapshot) = timed.cov_snapshot() {
-                            changed.push((oid, snapshot));
+                    for oid in database.count_pulse_inputs() {
+                        sampled.changed(oid);
+                    }
+                    let finest = fanout
+                        .cov_table
+                        .read()
+                        .await
+                        .finest_increments(PropertyIdentifier::TRACKING_VALUE);
+                    let mut changed = Vec::new();
+                    let mut advanced = Vec::new();
+                    next_deadline = None;
+                    database.for_each_object_mut(|oid, object| {
+                        if let Some(timed) = object.timed() {
+                            timed.set_tracking_cov_increment(finest.get(&oid).copied());
+                        }
+                        if let Some(durable) = object.durable_writes() {
+                            durable.expire_staged(now);
+                        }
+                        let Some(timed) = object.timed() else {
+                            return;
+                        };
+                        if timed.advance_monotonic_time(now) {
+                            advanced.push(oid);
+                            if let Some(snapshot) = timed.cov_snapshot() {
+                                changed.push((oid, snapshot));
+                            }
+                        }
+                        if let Some(deadline) = timed.next_monotonic_deadline() {
+                            next_deadline =
+                                Some(next_deadline.map_or(deadline, |next| next.min(deadline)));
+                        }
+                    });
+                    // A deadline this pass left due would wake the task at
+                    // once, over and over, without letting paused or real time
+                    // move on; look at it again a millisecond later instead.
+                    next_deadline = next_deadline
+                        .map(|deadline: Duration| deadline.max(now + Duration::from_millis(1)));
+                    let mut transition = committing(|| fanout.event_delivery(), &mut settle);
+                    transitions(
+                        database,
+                        &advanced,
+                        &mut changed,
+                        &mut sampled,
+                        &mut transition,
+                    );
+                    if !changed.is_empty() {
+                        let captures: Vec<_> = {
+                            let table = fanout.cov_table.read().await;
+                            changed
+                                .iter()
+                                .map(|(oid, _)| table.timed_capture(*oid))
+                                .collect()
+                        };
+                        for capture in captures {
+                            capture.run(database);
                         }
                     }
-                    if let Some(deadline) = timed.next_monotonic_deadline() {
-                        next_deadline =
-                            Some(next_deadline.map_or(deadline, |next| next.min(deadline)));
-                    }
-                });
-                // A deadline this pass left due would wake the task at once,
-                // over and over, without letting paused or real time move on;
-                // look at it again a millisecond later instead.
-                next_deadline = next_deadline
-                    .map(|deadline: Duration| deadline.max(now + Duration::from_millis(1)));
-                if !changed.is_empty() {
-                    let captures: Vec<_> = {
-                        let table = fanout.cov_table.read().await;
-                        changed
-                            .iter()
-                            .map(|(oid, _)| table.timed_capture(*oid))
-                            .collect()
-                    };
-                    for capture in captures {
-                        capture.run(&database);
-                    }
-                }
-                let runs =
-                    crate::command_lists::TakenRuns::take(&fanout.db, &mut database, &advanced);
-                let sampled = sampled
-                    .finish(&fanout.db, &mut database, &fanout.cov_table)
-                    .await;
-                (changed, sampled, runs)
-            };
+                    let runs =
+                        crate::command_lists::TakenRuns::take(&fanout.db, database, &advanced);
+                    let (db, table) = (&fanout.db, &fanout.cov_table);
+                    let sampled = sampled.finish(db, database, table, &mut transition).await;
+                    (changed, sampled, runs)
+                };
 
-            runner.start(runs);
-            fanout.fire(&sampled).await;
-            for (oid, snapshot) in changed {
-                BACnetServer::<T>::fire_cov_notifications_from_snapshot(
-                    &fanout.notify_context(),
-                    &oid,
-                    snapshot.as_ref(),
-                )
-                .await;
+                runner.start(runs);
+                // The samples' fanout, then each changed object's from its
+                // frozen copy, behind the pass's event notifications.
+                tail.hand_off(settle, sampled, changed).await;
             }
-        }
+        };
+        tokio::join!(passes, tail.run());
     })
+}
+
+/// Commit, under the pass's guard `db`, the intrinsic transition each object
+/// in `advanced` causes (#2535). One that commits takes its frozen copy in
+/// `changed` again, after the commit, so its report carries its new
+/// Status_Flags, or joins `sampled`'s fanout when it lends no copy.
+fn transitions(
+    db: &mut ObjectDatabase,
+    advanced: &[ObjectIdentifier],
+    changed: &mut [Snapshot],
+    sampled: &mut BackgroundCommit,
+    transition: CommitTransition<'_>,
+) {
+    for oid in advanced {
+        if !transition(db, *oid) {
+            continue;
+        }
+        match changed.iter_mut().find(|(changed, _)| changed == oid) {
+            Some((_, snapshot)) => {
+                let again = db.get_mut(oid).and_then(|object| object.timed());
+                if let Some(again) = again.and_then(|timed| timed.cov_snapshot()) {
+                    *snapshot = again;
+                }
+            }
+            None => sampled.changed(*oid),
+        }
+    }
 }

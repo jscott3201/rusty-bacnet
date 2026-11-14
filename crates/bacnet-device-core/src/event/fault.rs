@@ -1,8 +1,10 @@
 //! The fault pass: each object's opt-in reliability evaluation
 //! ([`ReliabilityEval`](bacnet_objects::traits::ReliabilityEval)), visited
-//! once. A host fans COV out for the objects whose Reliability changed;
-//! the next [`sweep`](super::sweep) turns such a change into a FAULT
-//! transition (Clause 13.2.2).
+//! once. A host evaluates each object whose Reliability changed as after a
+//! write ([`after_write`](super::after_write)), which commits the FAULT
+//! transition, or the return from it, that the change causes (Clause
+//! 13.2.2), then fans COV out for it (#2535); a [`sweep`](super::sweep)
+//! would find the change too, later.
 
 use alloc::vec::Vec;
 use bacnet_objects::database::ObjectDatabase;

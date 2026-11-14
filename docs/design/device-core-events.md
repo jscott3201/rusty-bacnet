@@ -903,7 +903,9 @@ object's `ReliabilityEval` every 10 s while `enable_fault_detection` is on
 into a returned list and its unused `comm_timeout` dropped. The objects
 whose Reliability changed feed COV in the same call; the next sweep turns
 the changed Reliability into its FAULT transition, as the server's task
-does (decision 21).
+does (decision 21). Since #2535 both evaluate each changed object in the
+pass instead, as after a write, so the transition commits with the
+Reliability and its notification goes ahead of the COV report.
 
 ### 6.8 Event-state persistence
 

@@ -142,12 +142,32 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
         if bacnet_device_core::cov::life_safety::is_life_safety_object(*oid) {
             commit.changed(*oid);
         }
-        let fanout =
-            super::cov_fanout::CovFanout::new(&self.local_cov_context(), &self.event_suppressions);
+        let fanout = super::cov_fanout::CovFanout::new(
+            &self.local_cov_context(),
+            &self.event_suppressions,
+            &self.learned_routers,
+            &self.device_bindings,
+        );
         self.finish_in_task(&runtime, async move {
-            // Under the change's guard: the database, then the COV table.
-            let committed = commit.finish(&fanout.db, &mut db, &fanout.cov_table).await;
+            // Under the change's guard: the transition it causes (#2535; the
+            // built-in Life Safety objects report none), the database, then
+            // the COV table. The fanout waits for its notifications, capped.
+            let mut settle = super::event_send::Settle::default();
+            let committed = {
+                let delivery = || fanout.event_delivery();
+                let mut transition = super::event_notifications::committing(delivery, &mut settle);
+                let (database, table) = (&fanout.db, &fanout.cov_table);
+                commit
+                    .finish(database, &mut db, table, &mut transition)
+                    .await
+            };
             drop(db);
+            let delivery = fanout.event_delivery();
+            let (timeout_ms, transactions) = (
+                delivery.retry_timeout_ms,
+                delivery.notification_transactions,
+            );
+            super::event_send::settled(settle.into_wait(), timeout_ms, transactions).await;
             fanout.fire(&committed).await;
         })
         .await

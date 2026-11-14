@@ -93,6 +93,19 @@ pub(super) fn commit_written_transition<'a, T: TransportPort + 'static>(
     }
 }
 
+/// [`commit_written_transition`] for each object a background commit changed
+/// ([`BackgroundCommit::finish`](crate::committed_cov::BackgroundCommit::finish)),
+/// its pushes counted in `settle`: a fault-detection, Schedule, membership or
+/// operation pass commits the transitions its changes cause with them, as a
+/// write does (#2535). `delivery` is called only for a transition to
+/// distribute.
+pub(super) fn committing<'a, T: TransportPort + 'static>(
+    delivery: impl Fn() -> EventDelivery<'a, T> + Send + 'a,
+    settle: &'a mut Settle,
+) -> impl FnMut(&mut ObjectDatabase, ObjectIdentifier) -> bool + Send + 'a {
+    move |db, oid| commit_written_transition(&delivery, db, oid, settle)
+}
+
 /// What the per-write evaluation committed.
 enum WrittenTransition {
     /// No transition.

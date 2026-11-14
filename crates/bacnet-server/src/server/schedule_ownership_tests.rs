@@ -151,8 +151,12 @@ async fn replacement_written_before_the_settle_is_not_cleared() {
         db.remove(&sch5()).unwrap();
         db.add(fresh_sch5()).unwrap();
     }
-    let _ =
-        crate::schedule::tick_schedules_committed(h.server.database(), &h.server.cov_table).await;
+    let _ = crate::schedule::tick_schedules_committed(
+        h.server.database(),
+        &h.server.cov_table,
+        &mut |_, _| false,
+    )
+    .await;
     assert_eq!(slot(&h, av1(), 16).await, PropertyValue::Real(20.0));
     h.settle().await;
     assert_eq!(slot(&h, av1(), 16).await, PropertyValue::Real(20.0));
@@ -166,8 +170,12 @@ async fn an_add_that_replaces_a_schedule_relinquishes_its_slots() {
     assert_eq!(notification.list_of_values[0].value, real(0.0));
     assert_eq!(slot(&h, av1(), 16).await, PropertyValue::Null);
     // The new SCH-5 commands the slot at its first pass.
-    let _ =
-        crate::schedule::tick_schedules_committed(h.server.database(), &h.server.cov_table).await;
+    let _ = crate::schedule::tick_schedules_committed(
+        h.server.database(),
+        &h.server.cov_table,
+        &mut |_, _| false,
+    )
+    .await;
     assert_eq!(slot(&h, av1(), 16).await, PropertyValue::Real(20.0));
 }
 

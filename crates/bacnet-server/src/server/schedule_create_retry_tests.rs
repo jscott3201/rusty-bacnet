@@ -88,7 +88,7 @@ async fn the_retry_writes_the_created_object_and_owes_cov_for_it() {
     let committed = {
         let mut db_w = db.write().await;
         db_w.add(multi_state_value(9)).unwrap();
-        crate::membership::settle(&db, &mut db_w, &cov_table).await
+        crate::membership::settle(&db, &mut db_w, &cov_table, &mut |_, _| false).await
     };
     // No pass ran, yet MSV-9 holds the value and the fault is gone; both
     // changed, so both are owed a COV pass. MSV-1, which took the value
