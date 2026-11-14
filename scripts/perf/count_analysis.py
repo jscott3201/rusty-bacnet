@@ -12,27 +12,85 @@ Definitions (all per request, or per iteration for the codec workloads):
 
 - slope: (Ir at the long run - Ir at the short run) / (long - short), for
   one ordinal (the i-th run of a variant in the matrix order). Setup,
-  oracles and shutdown cancel out. The gated figure excludes the harness's
+  oracles and shutdown cancel out.
+- the gated figure: the slope of the instructions without the harness's
   counting allocator (its functions' own instructions and the atomic
-  helpers they call); the figure with it is reported beside it.
+  helpers they call) and without the system allocator's work (#2555),
+  which is three parts (`allocator_record`):
+  - the self cost of glibc's malloc, free and their internals, the
+    functions ALLOCATOR_RE names;
+  - the copy a moving realloc makes: the calls to memcpy or memmove whose
+    caller is `_int_malloc` or `_int_realloc` (ALLOCATOR_COPY_CALLERS;
+    callgrind books most of them to `_int_malloc`, which `_int_realloc`
+    has just called). Not the calls out of the entry points (`malloc`,
+    `free`, `realloc`): Rust reaches those with tail calls, so callgrind
+    books the program's own copies after them to the entry point (about
+    710 instructions per WriteProperty on `malloc -> __GI_memcpy`), and
+    those stay gated. A run whose allocator-booked copies outnumber
+    `_int_realloc`'s calls to `_int_malloc` (one per moving realloc) is
+    refused, since some of them would then be the program's;
+  - the outline atomic helpers (`__aarch64_*`, arm64 only) an allocator
+    function calls in libc.so.6 itself, for its arena locks and fastbins.
+    The binary's own copies of those helpers stay gated, even when
+    callgrind books a call to them to `malloc` after a tail call.
+  Each part is taken once: a function's self cost, or the inclusive cost
+  of a call edge into a function that isn't in ALLOCATOR_RE. Every other
+  memcpy, memmove and memset stays in the gated figure. Reported beside
+  it: the allocator's slope, the total (the two together: the figure gated
+  before #2555) and, in summary.json, the figure with the harness's share.
 - allocations: the counted loop's allocator calls and requested bytes at the
   long run, divided by its length (the harness's RESULT line).
-- noise floor: the range (max - min) of the twelve slopes of two clean
+- noise floor: the range (max - min) of the twelve gated slopes of two clean
   builds of the baseline (A and A') in the same matrix as the verdict.
   Counts differ between machines and sessions, so a floor from another run
   is used only when asked for (quick mode), and each row names its source.
 
-Gates (#1979 decision, 2026-11-02), for a comparison (A, A' and B):
+Gates (#1979 decision, 2026-11-02; the gated figure from #2555's,
+2026-11-14), for a comparison (A, A' and B):
 
-- aimed round trips (rp by default): the median slope falls by at least 100
-  instructions and by more than 3 times the noise floor, and every A and B
-  ordinal pair falls; an aimed codec workload has the same rule without the
-  100-instruction minimum;
-- every other row: the median slope rises by no more than the noise floor;
+- aimed round trips (rp by default): the median gated slope falls by at
+  least 100 instructions and by more than 3 times the noise floor, and every
+  A and B ordinal pair falls; an aimed codec workload has the same rule
+  without the 100-instruction minimum;
+- every other row: the median gated slope rises by no more than the noise
+  floor;
 - every row: allocation calls per request rise by no more than 0.01;
   requested bytes are reported, not gated;
+- the system allocator's instructions are reported, not gated (maintainer's
+  decision on #2555, 2026-11-14). Which free chunk serves a request depends
+  on where earlier allocations landed in the heap, which differs between
+  builds whose request path is the same, and on ReadPropertyMultiple
+  between runs of one binary too: a struct 16 bytes larger moved that row
+  by about 200 instructions per request, all inside glibc, with equal
+  allocation calls and bytes. Allocation calls stay gated, so allocating
+  more still fails; a change that makes each allocation dearer without
+  adding calls (a size crossing a bin) is reported only, with a note under
+  the table when the allocator's change exceeds the total's own floor;
 - acceptance needs every row to pass, rp, wp and rpm on both runtimes when
   any round trip runs, and only known, requested aimed workloads.
+
+The allocator's functions are glibc's, as the image scripts/perf/Dockerfile
+pins names them: its valgrind package depends on libc6-dbg, which gives the
+internal functions (`_int_malloc`, `unlink_chunk`) their names. Three
+checks refuse a run rather than gate a figure that still holds the
+allocator (a fourth, on the copies, is above):
+- a run that allocated must show ALLOCATOR_REQUIRED: with another libc
+  (musl, static or stripped) or a glibc without its debugging symbols,
+  those names are missing;
+- a function glibc's allocator sources define (ALLOCATOR_FILE_RE) must be
+  in ALLOCATOR_RE: a newer glibc that renames or splits an internal stops
+  here;
+- a variant whose loop makes at least GUARD_MIN_CALLS allocation calls
+  per request must spend at least MIN_ALLOCATOR_PER_CALL of the
+  allocator's instructions per call (medians over its ordinals; glibc's
+  own: 182 to 208 on the round trips). glibc's own functions run
+  at start-up whatever serves the program, so the names alone don't show
+  that the program's allocations reach glibc; a Rust global allocator of
+  another kind (jemalloc, mimalloc) would leave the per-call figure near
+  zero.
+After a deliberate glibc bump, update ALLOCATOR_INTERNALS (and
+ALLOCATOR_REQUIRED, if an internal it names was renamed) from the new
+image's `nm -l` listing of libc6-dbg.
 
 The no-regression check (`--aim none`, #2314) aims at nothing: every row
 must stay within its floor and keep its allocation calls, for a change that
@@ -64,6 +122,19 @@ LENGTHS = {"round_trip": (1_000, 10_000), "codec": (100_000, 1_000_000)}
 MIN_SAVING = 100.0  # instructions per request
 FLOOR_FACTOR = 3.0  # the saving must exceed this many noise floors
 ALLOC_TOLERANCE = 0.01  # calls or bytes per request
+# What the noise floors and the instruction gates measure. A noise run's
+# summary.json records it, a quick comparison's manifest records the one its
+# floors are of, and both the plan and the analysis refuse floors of another
+# figure: before #2555 they held the system allocator's spread, and before
+# its fix round the block copies and atomic helpers the allocator runs.
+GATED_FIGURE = ("instructions without the harness's counting allocator and the system allocator "
+                "(its functions, realloc's block copies, libc's atomic helpers; #2555)")
+# Allocator instructions per allocation call below which a loop's
+# allocations can't be glibc's (its own run 182 to 208 per call on the round
+# trips over 17 matrices, 2026-11-14), checked where the loop makes at least
+# GUARD_MIN_CALLS allocation calls per request or iteration.
+MIN_ALLOCATOR_PER_CALL = 10.0
+GUARD_MIN_CALLS = 0.5
 
 
 def lengths(workload):
@@ -145,17 +216,24 @@ def parse_annotate(text):
     return out
 
 
-def parse_callgrind(text):
+def parse_callgrind(text, files=None, object_edges=None):
     """Self Ir per source line and per function, and call edges, from a
     callgrind output file (positions: line).
 
     Returns (lines, functions, edges): lines is {(file, line): Ir}, functions
     {normalized function: Ir}, edges {(caller, callee): [calls, inclusive Ir]}.
-    A call's inclusive cost (the line after `calls=`) isn't self cost.
+    A call's inclusive cost (the line after `calls=`) isn't self cost. A
+    `files` dict, when given, gets {normalized function: the source file
+    callgrind names for it}; an `object_edges` dict gets the edges keyed by
+    the callee's object too, {(caller, callee, callee object): [calls,
+    inclusive Ir]}. Callgrind writes `cob=` before a call only when the
+    callee's object isn't the caller's, so a call without one is into the
+    caller's object (`ob=`).
     """
     names = {"fl": {}, "fn": {}, "ob": {}}
     lines, functions, edges = {}, {}, {}
     file = sub_file = function = callee = None
+    obj = callee_obj = None
     last_line = 0
     pending_calls = None
 
@@ -190,14 +268,19 @@ def parse_callgrind(text):
             elif key == "fn":
                 function = normalize_symbol(name("fn", value))
                 sub_file = file
+                callee_obj = None
+                if files is not None:
+                    files.setdefault(function, file)
             elif key in ("cfl", "cfi"):
                 name("fl", value)
             elif key == "cfn":
                 callee = normalize_symbol(name("fn", value))
             elif key == "calls":
                 pending_calls = int(value.split()[0])
-            elif key in ("ob", "cob"):
-                name("ob", value)
+            elif key == "ob":
+                obj = name("ob", value)
+            elif key == "cob":
+                callee_obj = name("ob", value)
             continue
         if not (raw[0].isdigit() or raw[0] in "+-*"):
             continue  # headers: version, events, summary, totals...
@@ -208,7 +291,12 @@ def parse_callgrind(text):
             edge = edges.setdefault((function, callee), [0, 0])
             edge[0] += pending_calls
             edge[1] += cost
+            if object_edges is not None:
+                edge = object_edges.setdefault((function, callee, callee_obj or obj), [0, 0])
+                edge[0] += pending_calls
+                edge[1] += cost
             pending_calls = None
+            callee_obj = None
             continue
         key = (sub_file, line_no)
         lines[key] = lines.get(key, 0) + cost
@@ -228,6 +316,145 @@ def harness_ir(functions, edges):
     helpers = sum(inclusive for (caller, callee), (_calls, inclusive) in edges.items()
                   if _HARNESS_RE.search(caller) and callee.startswith("__aarch64_"))
     return own + helpers
+
+
+# The system allocator's functions (#2555): every function the image's
+# glibc 2.39 debugging symbols (libc6-dbg, `nm -l`) place in its allocator
+# sources, malloc/malloc.c and the arena.c, hooks.c and morecore.c it
+# includes. A full matrix's 216 runs (2026-11-14) ran 28 of them: the entry
+# points malloc, free, calloc, realloc and posix_memalign, and _mid_memalign,
+# the _int_* internals, unlink_chunk, malloc_consolidate, sysmalloc,
+# alloc_perturb, __glibc_morecore, the cache and arena set-up and the four
+# tunable callbacks GLIBC_TUNABLES reaches. An entry point may carry one of
+# glibc's alias prefixes (__libc_malloc), any name GCC's clone suffixes
+# (.isra.0, .part.0, .constprop.0, and .cold with or without a number) or a
+# symbol version. A function those sources define that the
+# list doesn't name stops the run (ALLOCATOR_FILE_RE), so a newer glibc's
+# renamed or split internals can't stay in the gated figure unnoticed.
+# The libc utilities elsewhere in malloc/ (dynarrays, scratch buffers,
+# thread and process freeres) call the allocator like any other code.
+ALLOCATOR_FILE_RE = re.compile(r"/malloc/(?:malloc|arena|hooks|morecore)\.c$")
+ALLOCATOR_ENTRY_POINTS = (
+    "malloc", "free", "cfree", "calloc", "realloc", "memalign", "aligned_alloc", "posix_memalign", "valloc",
+    "pvalloc", "malloc_usable_size", "malloc_trim", "malloc_info", "malloc_stats", "mallinfo", "mallinfo2",
+    "mallopt",
+)
+ALLOCATOR_INTERNALS = (
+    "_int_malloc", "_int_free", "_int_free_merge_chunk", "_int_free_create_chunk", "_int_free_maybe_consolidate",
+    "_int_realloc", "_int_memalign", "_mid_memalign", "unlink_chunk", "malloc_consolidate", "sysmalloc",
+    "sysmalloc_mmap", "sysmalloc_mmap_fallback", "systrim", "munmap_chunk", "alloc_perturb", "malloc_printerr",
+    "int_mallinfo", "__glibc_morecore", "__default_morecore",
+    # Per-thread caches and arenas (the multi-thread runtime's workers), fork.
+    "ptmalloc_init", "tcache_init", "arena_get2", "arena_get_retry", "detach_arena", "new_heap", "alloc_new_heap",
+    "__malloc_arena_thread_freeres", "__malloc_fork_lock_parent", "__malloc_fork_unlock_parent",
+    "__malloc_fork_unlock_child",
+    # The GLIBC_TUNABLES callbacks (start-up only).
+    "_dl_tunable_set_mmap_threshold", "_dl_tunable_set_mmaps_max", "_dl_tunable_set_top_pad",
+    "_dl_tunable_set_perturb_byte", "_dl_tunable_set_trim_threshold", "_dl_tunable_set_arena_max",
+    "_dl_tunable_set_arena_test", "_dl_tunable_set_tcache_max", "_dl_tunable_set_tcache_count",
+    "_dl_tunable_set_tcache_unsorted_limit", "_dl_tunable_set_mxfast", "_dl_tunable_set_hugetlb",
+)
+ALLOCATOR_RE = re.compile(
+    r"^(?:(?:__GI___libc_|__libc_|__)?(?:" + "|".join(map(re.escape, ALLOCATOR_ENTRY_POINTS)) + ")"
+    r"|(?:" + "|".join(map(re.escape, ALLOCATOR_INTERNALS)) + "))"
+    r"(?:\.(?:isra|part|constprop)\.\d+|\.cold(?:\.\d+)?)*(?:@@?GLIBC_[\d.]+)?$")
+# A run that allocated reaches these; missing, the allocator isn't glibc's
+# with its symbols, and the run is refused.
+ALLOCATOR_REQUIRED = ("malloc", "free", "_int_malloc", "_int_free")
+# A moving realloc's copy: memcpy or memmove called by these (glibc's
+# `_int_realloc` calls `_int_malloc` for the new block, then copies; most
+# copies are booked to `_int_malloc`). The callee is matched by its base
+# name's family, since the variant glibc's IFUNC picks differs per CPU:
+# memcpy, memmove, glibc's internal aliases (`__GI_memcpy`) and the
+# variants (`__memcpy_generic`, `__memcpy_simd` and the like on arm64;
+# `__memmove_avx_unaligned_erms`, `__memcpy_sse2_unaligned` and the like
+# on x86_64, whose memcpy is often its memmove). Not mempcpy or memset,
+# which the allocator doesn't call for a move.
+ALLOCATOR_COPY_CALLERS = ("_int_malloc", "_int_realloc")
+COPY_RE = re.compile(r"^(?:__GI_)?(?:__)?mem(?:cpy|move)(?:_\w+)?(?:@@?GLIBC_[\d.]+)?$")
+# The outline atomic helpers GCC's -moutline-atomics emits on arm64
+# (`__aarch64_cas4_acq`, `__aarch64_swp8_acq`...): libc.so.6 links its own
+# copies, and the program binary its own. x86_64 has none (its atomics are
+# inline), so this part is zero there.
+HELPER_PREFIX = "__aarch64_"
+LIBC_RE = re.compile(r"(?:^|/)libc\.so\.6$")
+
+
+def allocator_costs(functions):
+    """The system allocator's self Ir per function in one run: {function:
+    Ir} for the functions ALLOCATOR_RE names that ran. Self cost, so a
+    function they call (memcpy from `_int_realloc`) isn't included."""
+    return {f: v for f, v in functions.items() if v and ALLOCATOR_RE.match(f)}
+
+
+def base_symbol(function):
+    """A C function's name without GCC's clone suffix or a symbol version."""
+    return re.sub(r"[.@].*$", "", function)
+
+
+def allocator_copies(edges):
+    """A moving realloc's copies in one run: (calls, inclusive Ir) of the
+    memcpy and memmove calls `_int_malloc` and `_int_realloc` make, and the
+    calls `_int_realloc` makes to `_int_malloc` (one per moving realloc, so
+    no fewer than the copies)."""
+    calls = cost = moves = 0
+    for (caller, callee), (count, inclusive) in edges.items():
+        caller_base = base_symbol(caller)
+        if caller_base in ALLOCATOR_COPY_CALLERS and COPY_RE.match(callee):
+            calls += count
+            cost += inclusive
+        elif caller_base == "_int_realloc" and base_symbol(callee) == "_int_malloc":
+            moves += count
+    return calls, cost, moves
+
+
+def allocator_helpers(object_edges):
+    """Inclusive Ir of the atomic helpers libc.so.6's own allocator
+    functions call in libc.so.6 (the binary's copies of the helpers aren't
+    the allocator's, whoever callgrind books the call to)."""
+    return sum(inclusive for (caller, callee, callee_obj), (_count, inclusive) in object_edges.items()
+               if callee.startswith(HELPER_PREFIX) and callee_obj and LIBC_RE.search(callee_obj)
+               and ALLOCATOR_RE.match(caller))
+
+
+# The allocator fields every run record carries; a run missing one was
+# recorded before the figure it belongs to, and `perf_counts.fill_allocator`
+# takes them all again from the run's callgrind file.
+ALLOCATOR_FIELDS = ("allocator_ir", "allocator_self_ir", "allocator_copy_ir", "allocator_copy_calls",
+                    "allocator_realloc_moves", "allocator_helpers_ir", "allocator_symbols", "allocator_unlisted")
+
+
+def allocator_record(functions, files, edges, object_edges):
+    """The run record's allocator fields: `allocator_ir`, the system
+    allocator's share the gate leaves out (its functions' self Ir, a moving
+    realloc's copies and libc's atomic helpers it calls, each also recorded
+    alone), the copy calls and `_int_realloc`'s calls to `_int_malloc`, the
+    functions counted (base names), and any function the allocator's
+    sources define that ALLOCATOR_RE doesn't name. The arguments are
+    `parse_callgrind`'s, with its `files` and `object_edges`."""
+    costs = allocator_costs(functions)
+    unlisted = sorted({f for f, path in files.items()
+                       if path and ALLOCATOR_FILE_RE.search(path) and not ALLOCATOR_RE.match(f)})
+    copy_calls, copy_ir, moves = allocator_copies(edges)
+    helpers_ir = allocator_helpers(object_edges)
+    own = sum(costs.values())
+    return {
+        "allocator_ir": own + copy_ir + helpers_ir,
+        "allocator_self_ir": own,
+        "allocator_copy_ir": copy_ir,
+        "allocator_copy_calls": copy_calls,
+        "allocator_realloc_moves": moves,
+        "allocator_helpers_ir": helpers_ir,
+        "allocator_symbols": sorted({base_symbol(f) for f in costs}),
+        "allocator_unlisted": unlisted,
+    }
+
+
+def allocator_record_of(cg_text):
+    """`allocator_record` of one callgrind file's text."""
+    files, object_edges = {}, {}
+    _lines, functions, edges = parse_callgrind(cg_text, files, object_edges)
+    return allocator_record(functions, files, edges, object_edges)
 
 
 def calls_in(edges):
@@ -277,6 +504,52 @@ def check_harness_ir(run):
         raise ValueError(f"{run['name']}: {run['allocs']} allocations but no counting-allocator cost found")
 
 
+GLIBC_BUMP = ("after a deliberate glibc bump, update ALLOCATOR_INTERNALS and ALLOCATOR_REQUIRED in "
+              "scripts/perf/count_analysis.py from the new image's libc6-dbg symbols (`nm -l`)")
+
+
+def check_allocator_ir(run):
+    """A run that allocated must show the system allocator's entry points and
+    internals, the allocator's sources no function the list misses, and no
+    more allocator-booked copies than moving reallocs: otherwise the gated
+    figure would quietly keep the allocator's cost (another libc, a static
+    or stripped one, a newer glibc's internals) or lose the program's own
+    copies."""
+    missing_fields = [k for k in ALLOCATOR_FIELDS if run.get(k) is None]
+    if missing_fields:
+        raise ValueError(f"{run['name']}: no system-allocator figures recorded ({', '.join(missing_fields)}) and "
+                         "no callgrind file in raw/ to take them from")
+    if run["allocator_unlisted"]:
+        raise ValueError(f"{run['name']}: glibc's allocator sources define functions ALLOCATOR_RE doesn't name "
+                         f"({', '.join(run['allocator_unlisted'])}); if they are allocator code, add them to "
+                         f"ALLOCATOR_INTERNALS; {GLIBC_BUMP}")
+    found = set(run["allocator_symbols"])
+    missing = [s for s in ALLOCATOR_REQUIRED if s not in found]
+    if run["allocs"] > 0 and missing:
+        raise ValueError(f"{run['name']}: {run['allocs']} allocations but no cost in the system allocator's "
+                         f"{', '.join(missing)}: the gate needs glibc's allocator with its symbols, as in "
+                         f"scripts/perf/Dockerfile's image; {GLIBC_BUMP}")
+    if run["allocator_copy_calls"] > run["allocator_realloc_moves"]:
+        raise ValueError(f"{run['name']}: callgrind books {run['allocator_copy_calls']} memcpy/memmove calls to "
+                         f"{' and '.join(ALLOCATOR_COPY_CALLERS)} but _int_realloc calls _int_malloc only "
+                         f"{run['allocator_realloc_moves']} times (once per moving realloc), so some of those "
+                         "copies are the program's and the allocator's can't be told apart; look at the edges "
+                         "into memcpy with callgrind_annotate --tree=caller before changing ALLOCATOR_COPY_CALLERS")
+
+
+def check_allocator_per_call(where, allocator_slope, call_slope):
+    """A loop that allocates must spend glibc-like allocator instructions on
+    each call: glibc's functions run at start-up whatever allocator the
+    program uses, so ALLOCATOR_REQUIRED alone doesn't show that the loop's
+    allocations reach glibc. Medians of a variant's ordinals, per request."""
+    if call_slope >= GUARD_MIN_CALLS and allocator_slope < MIN_ALLOCATOR_PER_CALL * call_slope:
+        raise ValueError(f"{where}: {allocator_slope / call_slope:.1f} system-allocator instructions per allocation "
+                         f"call ({call_slope:.2f} calls per request), under {MIN_ALLOCATOR_PER_CALL:g} (glibc's own: "
+                         "182 to 208 on the round trips): the loop's allocations don't reach glibc's allocator "
+                         "(another global allocator?), so the gated figure would still hold the allocator's cost; "
+                         "the gate needs glibc's allocator, as in scripts/perf/Dockerfile's image")
+
+
 def check_shape(manifest, runs):
     """Every workload and runtime has, per build, exactly as many ordinals as
     the matrix order gives it, and no run appears twice."""
@@ -298,12 +571,15 @@ def check_shape(manifest, runs):
 def variant_metrics(runs, workload, runtime, label):
     """Slopes and allocation rates of one variant's ordinals.
 
-    `instructions` excludes the harness's own counting allocator (each run's
-    `harness_ir`, from its profile); `instructions_with_harness` doesn't.
+    `instructions`, the gated figure, excludes the harness's own counting
+    allocator (each run's `harness_ir`, from its profile) and the system
+    allocator's self cost (`allocator_ir`); `allocator` is the latter's
+    slope, `total` the two together (instructions without the harness's
+    share), and `instructions_with_harness` the raw count's slope.
     """
     short_n, long_n = lengths(workload)
     by_ordinal = ordinal_runs(runs, workload, runtime, label)
-    slopes, raw, calls, bytes_, call_slopes = [], [], [], [], []
+    slopes, allocator, total, raw, calls, bytes_, call_slopes = [], [], [], [], [], [], []
     for ordinal in sorted(by_ordinal):
         pair = by_ordinal[ordinal]
         if short_n not in pair or long_n not in pair:
@@ -311,16 +587,22 @@ def variant_metrics(runs, workload, runtime, label):
         short, long = pair[short_n], pair[long_n]
         for run in (short, long):
             check_harness_ir(run)
+            check_allocator_ir(run)
         raw.append(slope(short["instructions"], long["instructions"], short_n, long_n))
-        slopes.append(slope(short["instructions"] - short["harness_ir"],
-                            long["instructions"] - long["harness_ir"], short_n, long_n))
+        total.append(slope(short["instructions"] - short["harness_ir"],
+                           long["instructions"] - long["harness_ir"], short_n, long_n))
+        allocator.append(slope(short["allocator_ir"], long["allocator_ir"], short_n, long_n))
+        slopes.append(total[-1] - allocator[-1])
         calls.append(long["allocs"] / long_n)
         bytes_.append(long["bytes"] / long_n)
         call_slopes.append(slope(short["allocs"], long["allocs"], short_n, long_n))
     if not slopes:
         raise ValueError(f"{workload}/{runtime}/{label}: no runs")
+    check_allocator_per_call(f"{workload}/{runtime}/{label}", median(allocator), median(call_slopes))
     return {
         "instructions": describe(slopes),
+        "allocator": describe(allocator),
+        "total": describe(total),
         "instructions_with_harness": describe(raw),
         "alloc_calls": describe(calls),
         "alloc_bytes": describe(bytes_),
@@ -328,10 +610,25 @@ def variant_metrics(runs, workload, runtime, label):
     }
 
 
-def noise_floor(metrics_a, metrics_p):
-    """The range of all slopes of the two builds of the baseline."""
-    values = metrics_a["instructions"]["values"] + metrics_p["instructions"]["values"]
+def noise_floor(metrics_a, metrics_p, figure="instructions"):
+    """The range of all slopes of the two builds of the baseline: of the
+    gated figure, or of another one `figure` names (the total)."""
+    values = metrics_a[figure]["values"] + metrics_p[figure]["values"]
     return max(values) - min(values)
+
+
+def reported_figures(metrics_a, metrics_b):
+    """The row fields beside the gated figure: the system allocator's and
+    the total's medians and changes, and the figure with the harness's
+    share."""
+    a_alloc, b_alloc = metrics_a["allocator"]["median"], metrics_b["allocator"]["median"]
+    a_total, b_total = metrics_a["total"]["median"], metrics_b["total"]["median"]
+    return {
+        "a_allocator": a_alloc, "b_allocator": b_alloc, "allocator_delta": b_alloc - a_alloc,
+        "a_total": a_total, "b_total": b_total, "total_delta": b_total - a_total,
+        "a_median_with_harness": metrics_a["instructions_with_harness"]["median"],
+        "b_median_with_harness": metrics_b["instructions_with_harness"]["median"],
+    }
 
 
 # `--aim none`: the no-regression check, for a change that isn't an
@@ -368,7 +665,9 @@ def judge(workload, runtime, metrics_a, metrics_b, floor, floor_source, aimed):
     FLOOR_FACTOR floors, every pair lower. Codec workloads aimed at: the
     same without the 100-instruction minimum, which is a per-request bar.
     Others: no rise beyond the floor. All: allocation calls up by at most
-    ALLOC_TOLERANCE. Requested bytes are reported, not gated.
+    ALLOC_TOLERANCE. Every instruction rule judges the gated figure; the
+    system allocator's instructions and requested bytes are reported, not
+    gated (#2555).
     """
     a, b = metrics_a["instructions"], metrics_b["instructions"]
     delta = b["median"] - a["median"]
@@ -378,8 +677,7 @@ def judge(workload, runtime, metrics_a, metrics_b, floor, floor_source, aimed):
         "runtime": runtime,
         "a_median": a["median"],
         "b_median": b["median"],
-        "a_median_with_harness": metrics_a["instructions_with_harness"]["median"],
-        "b_median_with_harness": metrics_b["instructions_with_harness"]["median"],
+        **reported_figures(metrics_a, metrics_b),
         "delta": delta,
         "pair_deltas": pairs,
         "noise_floor": floor,
@@ -426,6 +724,30 @@ def coverage_problems(rows, aimed):
 RUNTIMES = ("ct", "mt")
 
 
+def check_floors_figure(figure, source):
+    """Recorded floors apply only to the figure they were measured on."""
+    if figure != GATED_FIGURE:
+        raise ValueError(f"{source} holds floors of another figure ({figure or 'the total, before #2555'}), "
+                         f"not the gated one ({GATED_FIGURE}); measure them again with a noise run")
+
+
+def allocator_notes(rows):
+    """One line per row whose system-allocator share rose by more than the
+    total's own A vs A' floor: a dearer allocation (a size moving to a
+    larger bin, say) shows only in that column, since it isn't gated. A
+    note, not a verdict; quick mode has no such floor and no notes."""
+    notes = []
+    for row in rows:
+        floor = row.get("total_noise_floor")
+        if floor is not None and row["allocator_delta"] > floor:
+            notes.append(f"Note (reported, not gated): on {row['workload']}/{row['runtime']} the system allocator's "
+                         f"instructions rose by {fmt(row['allocator_delta'])} per request, more than the total's "
+                         f"noise floor ({fmt(floor)}); allocation calls {row['a_calls']:.4f} / "
+                         f"{row['b_calls']:.4f}. Dearer allocations aren't gated; `perf_counts.py attribute` "
+                         "lists the allocator's functions.")
+    return notes
+
+
 def analyze(manifest, recorded_floors=None, aimed=("rp",)):
     """The summary of a completed matrix manifest.
 
@@ -458,8 +780,7 @@ def analyze(manifest, recorded_floors=None, aimed=("rp",)):
                 "workload": workload, "runtime": runtime, "noise_floor": floor, "noise_floor_source": source,
                 "a_median": metrics["A"]["instructions"]["median"],
                 "b_median": metrics["P"]["instructions"]["median"],
-                "a_median_with_harness": metrics["A"]["instructions_with_harness"]["median"],
-                "b_median_with_harness": metrics["P"]["instructions_with_harness"]["median"],
+                **reported_figures(metrics["A"], metrics["P"]),
                 "delta": metrics["P"]["instructions"]["median"] - metrics["A"]["instructions"]["median"],
                 "pair_deltas": [p - a for a, p in zip(metrics["A"]["instructions"]["values"],
                                                       metrics["P"]["instructions"]["values"])],
@@ -469,6 +790,9 @@ def analyze(manifest, recorded_floors=None, aimed=("rp",)):
             }
         else:
             row = judge(workload, runtime, metrics["A"], metrics["B"], floor, source, aimed)
+        # The total's own floor, for comparison with the gated figure's
+        # (reported only; quick mode has no A' and no such floor).
+        row["total_noise_floor"] = noise_floor(metrics["A"], metrics["P"], "total") if "P" in metrics else None
         row["metrics"] = metrics
         rows.append(row)
     summary = {
@@ -476,6 +800,9 @@ def analyze(manifest, recorded_floors=None, aimed=("rp",)):
         "variants": {label: {k: v for k, v in variant.items() if k != "root"}
                      for label, variant in manifest["variants"].items()},
         "rows": rows,
+        "allocator_notes": allocator_notes(rows),
+        # Floors of the gated figure; quick mode refuses floors of another.
+        "figure": GATED_FIGURE,
         "noise_floors": {f"{r['workload']}/{r['runtime']}": r["noise_floor"] for r in rows},
         # The allocator settings the floors hold for; quick mode checks them.
         "environment": manifest.get("environment", {}),
@@ -546,19 +873,29 @@ def function_changes(a, b, threshold=0.5):
 
 
 def verdict_table(summary):
-    """Instructions exclude the harness's counting allocator; the floor's
-    source is on every row. Requested bytes are reported, not gated."""
+    """One row per workload and runtime, the first two cells naming it.
+    The gated figure excludes the harness's counting allocator and the
+    system allocator; the allocator's figure and the total (the two
+    together) follow, reported only, the total with its own floor where the
+    matrix has A'. The floor's source is on every row. Requested bytes are
+    reported, not gated."""
     other = "A'" if summary["mode"] == "noise" else "B"
-    headers = ["Workload", "Runtime", "A median", f"{other} median", f"{other} - A", "Noise floor (source)",
-               "Change / floor", "Pairs lower", "Calls A / " + other, "Bytes A / " + other + " (report only)",
-               "Verdict"]
+    headers = ["Workload", "Runtime", "Gated A median", f"Gated {other} median", f"Gated {other} - A",
+               "Noise floor (source)", "Change / floor", "Pairs lower", f"Allocator A / {other} (report only)",
+               f"Allocator {other} - A (report only)", f"Total A / {other} (report only)",
+               f"Total {other} - A, its floor (report only)", f"Calls A / {other}",
+               f"Bytes A / {other} (report only)", "Verdict"]
     rows = []
     for row in summary["rows"]:
         lower = sum(1 for p in row["pair_deltas"] if p < 0)
+        total_floor = row.get("total_noise_floor")
         rows.append([
             row["workload"], row["runtime"], fmt(row["a_median"]), fmt(row["b_median"]), fmt(row["delta"]),
             f"{fmt(row['noise_floor'])} ({row['noise_floor_source']})", change_over_floor(row),
             f"{lower} of {len(row['pair_deltas'])}",
+            f"{fmt(row['a_allocator'])} / {fmt(row['b_allocator'])}", fmt(row["allocator_delta"]),
+            f"{fmt(row['a_total'])} / {fmt(row['b_total'])}",
+            fmt(row["total_delta"]) + (f" ({fmt(total_floor)})" if total_floor is not None else ""),
             f"{row['a_calls']:.4f} / {row['b_calls']:.4f}", f"{row['a_bytes']:.2f} / {row['b_bytes']:.2f}",
             row["verdict"],
         ])
