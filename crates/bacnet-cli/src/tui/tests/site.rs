@@ -23,9 +23,9 @@ use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::port::{ReceivedNpdu, TransportPort};
+use bacnet_transport::test_transport::TestTransport;
 use bacnet_types::MacAddr;
 use bacnet_types::enums::ConfirmedServiceChoice;
-use bacnet_types::error::Error;
 use bytes::Bytes;
 use ratatui::crossterm::event::KeyCode;
 use tokio::sync::mpsc;
@@ -201,204 +201,179 @@ fn simple_ack_service(npdu: &[u8]) -> Option<u8> {
     (apdu.first()? >> 4 == 2).then(|| apdu.get(2).copied())?
 }
 
-pub(super) struct HubPort {
-    hub: Arc<Hub>,
-    mac: MacAddr,
-    rx: Option<mpsc::Receiver<ReceivedNpdu>>,
-}
-
-impl HubPort {
-    pub(super) fn join(hub: &Arc<Hub>, ip: [u8; 4], quirks: Quirks) -> Self {
-        let mac = MacAddr::from_slice(&[ip[0], ip[1], ip[2], ip[3], 0xBA, 0xC0]);
-        let (inbox, rx) = mpsc::channel(256);
-        hub.inner.lock().unwrap().ports.push(Port {
-            mac: mac.clone(),
-            inbox,
-            quirks,
-            cov_answered: 0,
-        });
-        Self {
-            hub: Arc::clone(hub),
-            mac,
-            rx: Some(rx),
-        }
-    }
-
-    fn deliver(&self, npdu: &[u8], to: Option<&[u8]>) {
-        let kind = apdu_kind(npdu);
-        let mut inner = self.hub.inner.lock().unwrap();
-        *inner.sent.entry(self.mac.clone()).or_default() += 1;
-        if let (Some(to), Some((pdu_type, request))) = (to, kind) {
-            let to = MacAddr::from_slice(to);
-            match (pdu_type, request) {
-                (0, Some((invoke_id, service))) => {
-                    inner
-                        .requests
-                        .push((to.clone(), service, tokio::time::Instant::now()));
-                    // An unsegmented request's service data follows its
-                    // four-octet header.
-                    if let Ok(decoded) = decode_npdu(Bytes::copy_from_slice(npdu)) {
-                        let body = decoded.payload.get(4..).unwrap_or_default().to_vec();
-                        inner.bodies.push((to.clone(), service, body));
-                    }
-                    let rpm = service == ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE.to_raw();
-                    let cov = [
-                        ConfirmedServiceChoice::SUBSCRIBE_COV.to_raw(),
-                        ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY.to_raw(),
-                    ]
-                    .contains(&service);
-                    let Some(port) = inner.ports.iter_mut().find(|port| port.mac == to) else {
-                        return;
-                    };
-                    let write = [
-                        ConfirmedServiceChoice::WRITE_PROPERTY.to_raw(),
-                        ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE.to_raw(),
-                    ]
-                    .contains(&service);
-                    if port.quirks.silent || (write && port.quirks.swallow_writes) {
-                        return;
-                    }
-                    if port.quirks.swallow_first > 0 {
-                        port.quirks.swallow_first -= 1;
-                        return;
-                    }
-                    if cov && port.quirks.swallow_first_cov > 0 {
-                        port.quirks.swallow_first_cov -= 1;
-                        return;
-                    }
-                    if service == ConfirmedServiceChoice::SUBSCRIBE_COV.to_raw() {
-                        if port.cov_answered > 0 && port.quirks.lose_cov_after_first > 0 {
-                            port.quirks.lose_cov_after_first -= 1;
-                            return;
-                        }
-                        port.cov_answered += 1;
-                    }
-                    // Answer for the device, with no NPDU options.
-                    let read = rpm || service == ConfirmedServiceChoice::READ_PROPERTY.to_raw();
-                    // State_Text (110) as an RPM [0] or an RP [1] property.
-                    let state_text = [[0x09, 110], [0x19, 110]]
-                        .iter()
-                        .any(|tag| npdu.windows(2).any(|pair| pair == tag));
-                    // Object_Name (77), likewise.
-                    let object_name = [[0x09, 77], [0x19, 77]]
-                        .iter()
-                        .any(|tag| npdu.windows(2).any(|pair| pair == tag));
-                    let refused = (port.quirks.refuse_state_text && state_text)
-                        || (port.quirks.refuse_object_name && object_name);
-                    let answer =
-                        if (rpm && port.quirks.refuse_rpm) || (cov && port.quirks.refuse_cov) {
-                            Some(vec![0x01, 0x00, 0x60, invoke_id, UNRECOGNIZED_SERVICE])
-                        } else if read && refused {
-                            // Error PDU: class PROPERTY (2), code UNKNOWN_PROPERTY (32).
-                            Some(vec![
-                                0x01, 0x00, 0x50, invoke_id, service, 0x91, 2, 0x91, 32,
-                            ])
-                        } else if rpm && port.quirks.abort_first_rpm {
-                            port.quirks.abort_first_rpm = false;
-                            Some(vec![
-                                0x01,
-                                0x00,
-                                0x71,
-                                invoke_id,
-                                SEGMENTATION_NOT_SUPPORTED,
-                            ])
-                        } else if rpm && port.quirks.fail_rpm {
-                            // Error PDU: class OBJECT (1), code UNKNOWN_OBJECT (31).
-                            Some(vec![
-                                0x01, 0x00, 0x50, invoke_id, service, 0x91, 1, 0x91, 31,
-                            ])
-                        } else {
-                            None
-                        };
-                    if let Some(answer) = answer {
-                        let back = ReceivedNpdu::unverified(
-                            Bytes::copy_from_slice(&answer),
-                            to,
-                            false,
-                            Vec::new(),
-                            None,
-                        );
-                        if let Some(me) = inner.ports.iter().find(|port| port.mac == self.mac) {
-                            let _ = me.inbox.try_send(back);
-                        }
-                        return;
-                    }
-                    let (now, most) = inner.outstanding.entry(to).or_default();
-                    *now += 1;
-                    *most = (*most).max(*now);
-                }
-                // A reply ends the request outstanding at its sender.
-                (2 | 3 | 5 | 6 | 7, _) => {
-                    if let Some((now, _)) = inner.outstanding.get_mut(&self.mac) {
-                        *now = now.saturating_sub(1);
-                    }
-                }
-                _ => {}
+/// A port on the hub at `ip`: it takes what the hub hands it, and every send
+/// (either kind) is delivered through the hub, with the quirks of the port it
+/// reaches.
+pub(super) fn hub_port(hub: &Arc<Hub>, ip: [u8; 4], quirks: Quirks) -> TestTransport {
+    let mac = MacAddr::from_slice(&[ip[0], ip[1], ip[2], ip[3], 0xBA, 0xC0]);
+    let (inbox, rx) = mpsc::channel(256);
+    hub.inner.lock().unwrap().ports.push(Port {
+        mac: mac.clone(),
+        inbox,
+        quirks,
+        cov_answered: 0,
+    });
+    let (hub, source) = (Arc::clone(hub), mac.clone());
+    TestTransport::builder()
+        .local_mac(&mac)
+        .inbound(rx)
+        .on_send(move |frame| {
+            #[cfg(feature = "mcp")]
+            if !frame.broadcast {
+                super::mcp_attach::panic_if_armed();
             }
-        }
-        let cov_ack =
-            simple_ack_service(npdu) == Some(ConfirmedServiceChoice::SUBSCRIBE_COV.to_raw());
-        let slow = inner
-            .ports
-            .iter()
-            .find(|port| cov_ack && port.mac == self.mac)
-            .map_or(Duration::ZERO, |port| port.quirks.slow_cov_ack);
-        let targets: Vec<_> = inner
-            .ports
-            .iter()
-            .filter(|port| port.mac != self.mac && to.is_none_or(|to| port.mac.as_slice() == to))
-            .map(|port| (port.inbox.clone(), port.quirks.latency + slow))
-            .collect();
-        drop(inner);
-        for (tx, latency) in targets {
-            let npdu = ReceivedNpdu::unverified(
-                Bytes::copy_from_slice(npdu),
-                self.mac.clone(),
-                to.is_none(),
-                Vec::new(),
-                None,
+            deliver(
+                &hub,
+                &source,
+                &frame.npdu,
+                (!frame.broadcast).then_some(frame.mac.as_slice()),
             );
-            if latency.is_zero() {
-                let _ = tx.try_send(npdu);
-            } else {
-                tokio::spawn(async move {
-                    tokio::time::sleep(latency).await;
-                    let _ = tx.send(npdu).await;
-                });
-            }
-        }
-    }
+            async { Ok(()) }
+        })
+        .build()
 }
 
-impl TransportPort for HubPort {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        self.rx
-            .take()
-            .ok_or_else(|| Error::Encoding("hub port already started".into()))
+fn deliver(hub: &Hub, source: &MacAddr, npdu: &[u8], to: Option<&[u8]>) {
+    let mac = source.clone();
+    let kind = apdu_kind(npdu);
+    let mut inner = hub.inner.lock().unwrap();
+    *inner.sent.entry(mac.clone()).or_default() += 1;
+    if let (Some(to), Some((pdu_type, request))) = (to, kind) {
+        let to = MacAddr::from_slice(to);
+        match (pdu_type, request) {
+            (0, Some((invoke_id, service))) => {
+                inner
+                    .requests
+                    .push((to.clone(), service, tokio::time::Instant::now()));
+                // An unsegmented request's service data follows its
+                // four-octet header.
+                if let Ok(decoded) = decode_npdu(Bytes::copy_from_slice(npdu)) {
+                    let body = decoded.payload.get(4..).unwrap_or_default().to_vec();
+                    inner.bodies.push((to.clone(), service, body));
+                }
+                let rpm = service == ConfirmedServiceChoice::READ_PROPERTY_MULTIPLE.to_raw();
+                let cov = [
+                    ConfirmedServiceChoice::SUBSCRIBE_COV.to_raw(),
+                    ConfirmedServiceChoice::SUBSCRIBE_COV_PROPERTY.to_raw(),
+                ]
+                .contains(&service);
+                let Some(port) = inner.ports.iter_mut().find(|port| port.mac == to) else {
+                    return;
+                };
+                let write = [
+                    ConfirmedServiceChoice::WRITE_PROPERTY.to_raw(),
+                    ConfirmedServiceChoice::WRITE_PROPERTY_MULTIPLE.to_raw(),
+                ]
+                .contains(&service);
+                if port.quirks.silent || (write && port.quirks.swallow_writes) {
+                    return;
+                }
+                if port.quirks.swallow_first > 0 {
+                    port.quirks.swallow_first -= 1;
+                    return;
+                }
+                if cov && port.quirks.swallow_first_cov > 0 {
+                    port.quirks.swallow_first_cov -= 1;
+                    return;
+                }
+                if service == ConfirmedServiceChoice::SUBSCRIBE_COV.to_raw() {
+                    if port.cov_answered > 0 && port.quirks.lose_cov_after_first > 0 {
+                        port.quirks.lose_cov_after_first -= 1;
+                        return;
+                    }
+                    port.cov_answered += 1;
+                }
+                // Answer for the device, with no NPDU options.
+                let read = rpm || service == ConfirmedServiceChoice::READ_PROPERTY.to_raw();
+                // State_Text (110) as an RPM [0] or an RP [1] property.
+                let state_text = [[0x09, 110], [0x19, 110]]
+                    .iter()
+                    .any(|tag| npdu.windows(2).any(|pair| pair == tag));
+                // Object_Name (77), likewise.
+                let object_name = [[0x09, 77], [0x19, 77]]
+                    .iter()
+                    .any(|tag| npdu.windows(2).any(|pair| pair == tag));
+                let refused = (port.quirks.refuse_state_text && state_text)
+                    || (port.quirks.refuse_object_name && object_name);
+                let answer = if (rpm && port.quirks.refuse_rpm) || (cov && port.quirks.refuse_cov) {
+                    Some(vec![0x01, 0x00, 0x60, invoke_id, UNRECOGNIZED_SERVICE])
+                } else if read && refused {
+                    // Error PDU: class PROPERTY (2), code UNKNOWN_PROPERTY (32).
+                    Some(vec![
+                        0x01, 0x00, 0x50, invoke_id, service, 0x91, 2, 0x91, 32,
+                    ])
+                } else if rpm && port.quirks.abort_first_rpm {
+                    port.quirks.abort_first_rpm = false;
+                    Some(vec![
+                        0x01,
+                        0x00,
+                        0x71,
+                        invoke_id,
+                        SEGMENTATION_NOT_SUPPORTED,
+                    ])
+                } else if rpm && port.quirks.fail_rpm {
+                    // Error PDU: class OBJECT (1), code UNKNOWN_OBJECT (31).
+                    Some(vec![
+                        0x01, 0x00, 0x50, invoke_id, service, 0x91, 1, 0x91, 31,
+                    ])
+                } else {
+                    None
+                };
+                if let Some(answer) = answer {
+                    let back = ReceivedNpdu::unverified(
+                        Bytes::copy_from_slice(&answer),
+                        to,
+                        false,
+                        Vec::new(),
+                        None,
+                    );
+                    if let Some(me) = inner.ports.iter().find(|port| port.mac == mac) {
+                        let _ = me.inbox.try_send(back);
+                    }
+                    return;
+                }
+                let (now, most) = inner.outstanding.entry(to).or_default();
+                *now += 1;
+                *most = (*most).max(*now);
+            }
+            // A reply ends the request outstanding at its sender.
+            (2 | 3 | 5 | 6 | 7, _) => {
+                if let Some((now, _)) = inner.outstanding.get_mut(&mac) {
+                    *now = now.saturating_sub(1);
+                }
+            }
+            _ => {}
+        }
     }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        #[cfg(feature = "mcp")]
-        super::mcp_attach::panic_if_armed();
-        self.deliver(npdu, Some(mac));
-        Ok(())
-    }
-
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.deliver(npdu, None);
-        Ok(())
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        &self.mac
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
+    let cov_ack = simple_ack_service(npdu) == Some(ConfirmedServiceChoice::SUBSCRIBE_COV.to_raw());
+    let slow = inner
+        .ports
+        .iter()
+        .find(|port| cov_ack && port.mac == mac)
+        .map_or(Duration::ZERO, |port| port.quirks.slow_cov_ack);
+    let targets: Vec<_> = inner
+        .ports
+        .iter()
+        .filter(|port| port.mac != mac && to.is_none_or(|to| port.mac.as_slice() == to))
+        .map(|port| (port.inbox.clone(), port.quirks.latency + slow))
+        .collect();
+    drop(inner);
+    for (tx, latency) in targets {
+        let npdu = ReceivedNpdu::unverified(
+            Bytes::copy_from_slice(npdu),
+            mac.clone(),
+            to.is_none(),
+            Vec::new(),
+            None,
+        );
+        if latency.is_zero() {
+            let _ = tx.try_send(npdu);
+        } else {
+            tokio::spawn(async move {
+                tokio::time::sleep(latency).await;
+                let _ = tx.send(npdu).await;
+            });
+        }
     }
 }
 
@@ -487,7 +462,7 @@ impl Default for ClientLimits {
 /// A site: servers on the hub, the client's worker, and the UI state.
 pub(super) struct Site {
     pub(super) hub: Arc<Hub>,
-    servers: Vec<BACnetServer<HubPort>>,
+    servers: Vec<BACnetServer<TestTransport>>,
     pub(super) app: App,
     events: mpsc::Receiver<WorkerEvent>,
     commands: Option<mpsc::Sender<Command>>,
@@ -538,7 +513,7 @@ impl Site {
             };
             let builder = BACnetServer::generic_builder()
                 .device(identity)
-                .transport(HubPort::join(&hub, [10, 0, 0, server.octet], server.quirks))
+                .transport(hub_port(&hub, [10, 0, 0, server.octet], server.quirks))
                 .database(database)
                 .mutation_policy(policy);
             let builder = match server.password {
@@ -552,7 +527,7 @@ impl Site {
             started.push(bounded(Box::pin(builder.build())).await.unwrap());
         }
         let client = BACnetClient::generic_builder()
-            .transport(HubPort::join(&hub, [10, 0, 0, 1], Quirks::default()))
+            .transport(hub_port(&hub, [10, 0, 0, 1], Quirks::default()))
             .apdu_timeout_ms(2_000)
             .max_apdu_length(limits.max_apdu)
             .segmented_response_accepted(limits.segmented);
@@ -564,7 +539,7 @@ impl Site {
     /// and wait until it is connected.
     async fn launch<T: TransportPort + 'static>(
         hub: Arc<Hub>,
-        servers: Vec<BACnetServer<HubPort>>,
+        servers: Vec<BACnetServer<TestTransport>>,
         client: BACnetClient<T>,
         options: SessionOptions,
     ) -> Self {
@@ -695,7 +670,7 @@ impl Site {
     }
 
     /// The server at index `i` of those the site started with.
-    pub(super) fn server(&self, i: usize) -> &BACnetServer<HubPort> {
+    pub(super) fn server(&self, i: usize) -> &BACnetServer<TestTransport> {
         &self.servers[i]
     }
 
