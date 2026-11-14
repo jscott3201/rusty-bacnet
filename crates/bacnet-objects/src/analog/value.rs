@@ -208,6 +208,9 @@ impl BACnetObject for AnalogValueObject {
         if let Some(result) = source {
             return result;
         }
+        if property == P::PRESENT_VALUE {
+            return Ok(PropertyValue::Real(self.present_value));
+        }
         if let Some(result) = self.audit_policy.read(property, array_index) {
             return result;
         }
@@ -221,7 +224,6 @@ impl BACnetObject for AnalogValueObject {
             return Ok(value);
         }
         match property {
-            P::PRESENT_VALUE => Ok(PropertyValue::Real(self.present_value)),
             P::PRIORITY_ARRAY => {
                 common::read_priority_array!(self, array_index, PropertyValue::Real)
             }
@@ -323,7 +325,7 @@ impl BACnetObject for AnalogValueObject {
             self.core
                 .write(&mut self.event_detector, property, array_index, &value)
         {
-            return result;
+            return result.map(drop);
         }
         if let Some(result) = self.analog.write(property, &value) {
             return result;

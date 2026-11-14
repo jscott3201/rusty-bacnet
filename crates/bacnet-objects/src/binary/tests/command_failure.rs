@@ -305,7 +305,7 @@ fn bo_detection_enable_is_a_disabled_by_default_invariant() {
     bo.event_detector.time_delay = 2;
     set_detection_enabled(&mut bo, true);
     assert_eq!(bo.evaluate_intrinsic_reporting(test_now()), None);
-    bo.event_detection_enable = false;
+    bo.core.event_detection_enable = false;
     let pending = bo.event_detector.pending.clone();
     assert_eq!(bo.tick_intrinsic_reporting(test_tick()), None);
     assert_eq!(bo.event_detector.pending, pending);
@@ -338,7 +338,7 @@ fn bo_detection_enable_is_a_disabled_by_default_invariant() {
     assert_eq!(bo.evaluate_intrinsic_reporting(test_now()), None);
     assert_eq!(bo.tick_intrinsic_reporting(test_tick()), None);
 
-    bo.reliability = Reliability::NO_SENSOR;
+    bo.core.reliability = Reliability::NO_SENSOR;
     assert_eq!(
         bo.read_property(PropertyIdentifier::STATUS_FLAGS, None)
             .unwrap(),
