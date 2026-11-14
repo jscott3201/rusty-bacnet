@@ -19,11 +19,10 @@ use crate::format::{ValueFormat, decode_all};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Commandability {
-    /// The standard makes it commandable: the Present_Value of an Access
-    /// Door, Analog Output, Binary Output, Multi-state Output, Lighting
-    /// Output or Binary Lighting Output, and of a Channel, which has no
-    /// Priority_Array of its own and passes the priority on to its members
-    /// (Clause 19.2.1.6).
+    /// The standard makes it commandable: Present_Value on the three
+    /// output types (analog, binary, multi-state), the two lighting output
+    /// types, Access Door, and Channel, which keeps no Priority_Array and
+    /// hands the priority to its members (Clause 19.2.1.6).
     Always,
     /// It is commandable only if the object has a Priority_Array, which
     /// only a read can tell: the Present_Value of the value objects (Analog,
@@ -32,8 +31,8 @@ pub enum Commandability {
     /// type this release doesn't know or a vendor defines; and a
     /// proprietary property, which a vendor may make commandable.
     Optional,
-    /// Never commandable: every other standard property of a standard
-    /// object type.
+    /// Never commandable: any other property the standard defines, on an
+    /// object type it defines.
     Never,
 }
 

@@ -38,8 +38,8 @@ impl Priority {
     /// 5, critical equipment control (Table 19-1).
     pub const CRITICAL_EQUIPMENT: Self = Self(5);
 
-    /// 6, which the minimum on and off time algorithm of a binary object
-    /// writes itself (Clause 19.2.3): nothing else should use it.
+    /// 6, which a binary object's own minimum on/off timing logic writes
+    /// (Clause 19.2.3): nothing else should use it.
     pub const MINIMUM_ON_OFF: Self = Self(6);
 
     /// 8, manual operator (Table 19-1).
