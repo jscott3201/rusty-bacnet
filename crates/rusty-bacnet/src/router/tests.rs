@@ -6,38 +6,24 @@ use super::{
 };
 use bacnet_network::router::{BACnetRouter, RouterOptions, RouterPort, RouterStopError};
 use bacnet_network::router_table::{Duration, PortId, Reachability};
-use bacnet_transport::port::{ReceivedNpdu, TransportPort};
+use bacnet_transport::test_transport::{StartMode, TestTransport};
 use bacnet_types::enums::{AbortReason, ErrorClass, ErrorCode, RejectReason};
 use bacnet_types::error::{Error, RemoteError};
 use pyo3::prelude::*;
-use tokio::sync::mpsc;
+use std::sync::Mutex;
 
-struct FailingPort {
-    error: Option<Error>,
-    incoming: Option<mpsc::Sender<ReceivedNpdu>>,
-}
-impl TransportPort for FailingPort {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        let (tx, rx) = mpsc::channel(4);
-        self.incoming = Some(tx);
-        Ok(rx)
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        self.incoming.take();
-        self.error.take().map_or(Ok(()), Err)
-    }
-    async fn send_unicast(&self, _: &[u8], _: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-    async fn send_broadcast(&self, _: &[u8]) -> Result<(), Error> {
-        Ok(())
-    }
-    fn local_mac(&self) -> &[u8] {
-        &[127, 0, 0, 1, 0, 9]
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        1476
-    }
+/// A port at 127.0.0.1:9 whose link closes when it stops, and whose stop
+/// fails with `error` the first time.
+fn failing_port(error: Option<Error>) -> TestTransport {
+    let error = Mutex::new(error);
+    TestTransport::builder()
+        .local_mac(&[127, 0, 0, 1, 0, 9])
+        .start(StartMode::Fresh(4))
+        .on_stop(move || {
+            let error = error.lock().unwrap().take();
+            async move { error.map_or(Ok(()), Err) }
+        })
+        .build()
 }
 struct Running(BACnetRouter);
 impl Session for Running {
@@ -57,10 +43,7 @@ async fn native(errors: Vec<Option<Error>>) -> BACnetRouter {
             .enumerate()
             .map(|(i, error)| RouterPort {
                 network_number: 1 + i as u16 * 4,
-                transport: FailingPort {
-                    error,
-                    incoming: None,
-                },
+                transport: failing_port(error),
             })
             .collect(),
         RouterOptions::new(),

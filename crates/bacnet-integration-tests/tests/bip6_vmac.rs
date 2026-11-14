@@ -10,14 +10,14 @@ use std::sync::{Arc, OnceLock};
 
 use bacnet_client::client::BACnetClient;
 use bacnet_network::router::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
-use bacnet_npdu::NpduLimits;
 use bacnet_objects::database::ObjectDatabase;
 use bacnet_objects::device::{DeviceConfig, DeviceObject};
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::any::AnyTransport;
 use bacnet_transport::bip6::Bip6Transport;
 use bacnet_transport::loopback::LoopbackTransport;
-use bacnet_transport::port::{DataAttribute, GroupDestinations, ReceivedNpdu, TransportPort};
+use bacnet_transport::port::{ReceivedNpdu, TransportPort};
+use bacnet_transport::test_transport::{SendMode, TestTransport};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::error::Error;
 use bacnet_types::primitives::ObjectIdentifier;
@@ -41,70 +41,17 @@ const REPLY: [u8; 3] = [0x20, 0x01, 0x0C];
 /// A router port that, once started, reports its B/IPv6 transport's bound
 /// address, so the transport can take an ephemeral port rather than one
 /// guessed free beforehand.
-struct Reporting {
-    inner: AnyTransport,
-    bound: Arc<OnceLock<SocketAddrV6>>,
-}
-
-impl TransportPort for Reporting {
-    fn prepare_for_routing(&mut self) {
-        self.inner.prepare_for_routing();
-    }
-
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        let received = self.inner.start().await?;
-        if let AnyTransport::Bip6(bip6) = &self.inner {
-            let _ = self.bound.set(bip6.local_address().expect("started"));
-        }
-        Ok(received)
-    }
-
-    async fn stop(&mut self) -> Result<(), Error> {
-        self.inner.stop().await
-    }
-
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        self.inner.send_unicast(npdu, mac).await
-    }
-
-    async fn send_unicast_with_data_attributes(
-        &self,
-        npdu: &[u8],
-        mac: &[u8],
-        attributes: &[DataAttribute],
-    ) -> Result<(), Error> {
-        self.inner
-            .send_unicast_with_data_attributes(npdu, mac, attributes)
-            .await
-    }
-
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.inner.send_broadcast(npdu).await
-    }
-
-    fn local_mac(&self) -> &[u8] {
-        self.inner.local_mac()
-    }
-
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        self.inner.local_receive_apdu_capacity()
-    }
-
-    fn max_npdu(&self) -> NpduLimits {
-        self.inner.max_npdu()
-    }
-
-    fn is_broadcast_mac(&self, mac: &[u8]) -> bool {
-        self.inner.is_broadcast_mac(mac)
-    }
-
-    fn is_group_destination(&self, mac: &[u8]) -> bool {
-        self.inner.is_group_destination(mac)
-    }
-
-    fn group_destinations(&self) -> GroupDestinations {
-        self.inner.group_destinations()
-    }
+fn reporting(inner: AnyTransport, bound: Arc<OnceLock<SocketAddrV6>>) -> TestTransport {
+    TestTransport::builder()
+        .inner(inner)
+        .unicast(SendMode::Forward)
+        .broadcast(SendMode::Forward)
+        .on_started(move |started| {
+            if let Some(port) = started.bip6_port {
+                let _ = bound.set(port.endpoint);
+            }
+        })
+        .build()
 }
 
 /// A Original-Unicast-NPDU from VMAC `source` to VMAC `destination`.
@@ -151,10 +98,7 @@ async fn router() -> (BACnetRouter, LoopbackTransport, SocketAddrV6) {
     let (router_end, node) = LoopbackTransport::pair(ROUTER_ON_1.to_vec(), NODE_ON_1.to_vec());
     let bound = Arc::new(OnceLock::new());
     let port = |inner, network_number| RouterPort {
-        transport: Reporting {
-            inner,
-            bound: Arc::clone(&bound),
-        },
+        transport: reporting(inner, Arc::clone(&bound)),
         network_number,
     };
     let ports = vec![

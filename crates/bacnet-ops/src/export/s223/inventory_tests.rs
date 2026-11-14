@@ -3,8 +3,8 @@
 //! refuses RPM), and what a silent device or a cancel leaves. The round
 //! trip from a point list is in `round_trip_tests`, over the same link.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 
 use bacnet_client::client::{BACnetClient, ClientConfig};
 use bacnet_objects::analog::{AnalogInputObject, AnalogOutputObject, AnalogValueObject};
@@ -20,13 +20,12 @@ use bacnet_objects::trend::TrendLogObject;
 use bacnet_objects::value_types::IntegerValueObject;
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::loopback::LoopbackTransport;
-use bacnet_transport::port::{ReceivedNpdu, TransportPort};
+use bacnet_transport::port::ReceivedNpdu;
+use bacnet_transport::test_transport::{SendMode, StartMode, TestTransport};
 use bacnet_types::MacAddr;
 use bacnet_types::enums::{EngineeringUnits, ObjectType, PropertyIdentifier};
-use bacnet_types::error::Error;
 use bacnet_types::primitives::PropertyValue;
 use bytes::Bytes;
-use tokio::sync::mpsc;
 
 use super::tests::oid;
 use super::*;
@@ -66,95 +65,75 @@ impl Default for Faults {
     }
 }
 
-pub(super) struct Link {
-    inner: LoopbackTransport,
-    faults: Faults,
-    sent: AtomicUsize,
-    /// Feeds the client's receive channel, for the Rejects and Errors.
-    inbox: Mutex<Option<mpsc::Sender<ReceivedNpdu>>>,
-}
-
-impl Link {
-    /// A local unsegmented confirmed request's invoke ID, service and
-    /// service request.
-    fn request(npdu: &[u8]) -> Option<(u8, u8, &[u8])> {
-        match npdu {
-            [0x01, control, apdu, _, invoke_id, service, rest @ ..]
-                if control & 0x28 == 0 && apdu & 0xF8 == 0x00 =>
-            {
-                Some((*invoke_id, *service, rest))
-            }
-            _ => None,
-        }
-    }
-
-    /// The device's answer the faults put in place of `npdu`'s, if any.
-    fn refused(&self, npdu: &[u8]) -> Option<Vec<u8>> {
-        let (invoke_id, service, rest) = Self::request(npdu)?;
-        // RPM is service 14; ReadProperty 12, here of Object_List (76)
-        // with no array index.
-        if self.faults.error_rpm && service == 14 {
-            // An Error PDU: class PROPERTY (2), code UNKNOWN_PROPERTY (32).
-            return Some(vec![0x01, 0x00, 0x50, invoke_id, 14, 0x91, 2, 0x91, 32]);
-        }
-        let rpm = self.faults.reject_rpm && service == 14;
-        let whole_list = self.faults.reject_whole_list
-            && service == 12
-            && matches!(rest, [0x0C, _, _, _, _, 0x19, 0x4C]);
-        // A Reject PDU for UNRECOGNIZED_SERVICE (9).
-        (rpm || whole_list).then(|| vec![0x01, 0x00, 0x60, invoke_id, 9])
-    }
-}
-
-impl TransportPort for Link {
-    async fn start(&mut self) -> Result<mpsc::Receiver<ReceivedNpdu>, Error> {
-        let mut from_peer = self.inner.start().await?;
-        let (tx, rx) = mpsc::channel(256);
-        *self.inbox.lock().unwrap() = Some(tx.clone());
-        tokio::spawn(async move {
-            while let Some(npdu) = from_peer.recv().await {
-                if tx.send(npdu).await.is_err() {
-                    break;
-                }
-            }
-        });
-        Ok(rx)
-    }
-    async fn stop(&mut self) -> Result<(), Error> {
-        self.inbox.lock().unwrap().take();
-        self.inner.stop().await
-    }
-    async fn send_unicast(&self, npdu: &[u8], mac: &[u8]) -> Result<(), Error> {
-        let sent = self.sent.fetch_add(1, Ordering::Relaxed) + 1;
-        if let Some((after, flag)) = &self.faults.cancel
-            && sent >= *after
+/// A local unsegmented confirmed request's invoke ID, service and service
+/// request.
+fn request(npdu: &[u8]) -> Option<(u8, u8, &[u8])> {
+    match npdu {
+        [0x01, control, apdu, _, invoke_id, service, rest @ ..]
+            if control & 0x28 == 0 && apdu & 0xF8 == 0x00 =>
         {
-            flag.store(true, Ordering::Relaxed);
+            Some((*invoke_id, *service, rest))
         }
-        if sent > self.faults.pass {
-            return Ok(());
-        }
-        let Some(answer) = self.refused(npdu) else {
-            return self.inner.send_unicast(npdu, mac).await;
-        };
-        let reject = Bytes::from(answer);
-        let inbox = self.inbox.lock().unwrap().clone();
-        if let Some(inbox) = inbox {
-            let source = MacAddr::from_slice(mac);
-            let back = ReceivedNpdu::unverified(reject, source, false, Vec::new(), None);
-            let _ = inbox.send(back).await;
-        }
-        Ok(())
+        _ => None,
     }
-    async fn send_broadcast(&self, npdu: &[u8]) -> Result<(), Error> {
-        self.inner.send_broadcast(npdu).await
+}
+
+/// The device's answer the faults put in place of `npdu`'s, if any.
+fn refusal(faults: &Faults, npdu: &[u8]) -> Option<Vec<u8>> {
+    let (invoke_id, service, rest) = request(npdu)?;
+    // RPM is service 14; ReadProperty 12, here of Object_List (76)
+    // with no array index.
+    if faults.error_rpm && service == 14 {
+        // An Error PDU: class PROPERTY (2), code UNKNOWN_PROPERTY (32).
+        return Some(vec![0x01, 0x00, 0x50, invoke_id, 14, 0x91, 2, 0x91, 32]);
     }
-    fn local_mac(&self) -> &[u8] {
-        self.inner.local_mac()
-    }
-    fn local_receive_apdu_capacity(&self) -> u16 {
-        self.inner.local_receive_apdu_capacity()
-    }
+    let rpm = faults.reject_rpm && service == 14;
+    let whole_list =
+        faults.reject_whole_list && service == 12 && matches!(rest, [0x0C, _, _, _, _, 0x19, 0x4C]);
+    // A Reject PDU for UNRECOGNIZED_SERVICE (9).
+    (rpm || whole_list).then(|| vec![0x01, 0x00, 0x60, invoke_id, 9])
+}
+
+/// The client's side of the lab link: `inner`, relayed through a channel the
+/// link feeds the Rejects and Errors of `faults` into.
+fn link(inner: LoopbackTransport, faults: Faults) -> TestTransport {
+    let builder = TestTransport::builder()
+        .inner(inner)
+        .unicast(SendMode::Forward)
+        .broadcast(SendMode::Forward)
+        .start(StartMode::Relay(256));
+    let inbox = builder.handle();
+    let sent = Arc::new(AtomicUsize::new(0));
+    let faults = Arc::new(faults);
+    builder
+        .intercept(move |frame| {
+            let (faults, inbox) = (Arc::clone(&faults), inbox.clone());
+            let count = (!frame.broadcast).then(|| sent.fetch_add(1, Ordering::Relaxed) + 1);
+            async move {
+                let Some(sent) = count else {
+                    return true;
+                };
+                if let Some((after, flag)) = &faults.cancel
+                    && sent >= *after
+                {
+                    flag.store(true, Ordering::Relaxed);
+                }
+                if sent > faults.pass {
+                    return false;
+                }
+                let Some(answer) = refusal(&faults, &frame.npdu) else {
+                    return true;
+                };
+                let reject = Bytes::from(answer);
+                if let Some(inbox) = inbox.inbound() {
+                    let source = MacAddr::from_slice(&frame.mac);
+                    let back = ReceivedNpdu::unverified(reject, source, false, Vec::new(), None);
+                    let _ = inbox.send(back).await;
+                }
+                false
+            }
+        })
+        .build()
 }
 
 fn text(value: &str) -> PropertyValue {
@@ -211,7 +190,7 @@ fn objects() -> Vec<Box<dyn BACnetObject>> {
 
 /// The lab device and an engine over a client paired with it, through a
 /// link with `faults`.
-async fn lab(faults: Faults) -> (Engine<Link>, BACnetServer<LoopbackTransport>) {
+async fn lab(faults: Faults) -> (Engine<TestTransport>, BACnetServer<LoopbackTransport>) {
     let identity = DeviceIdentity::new(LAB, 42)
         .unwrap()
         .with_name("Lab \"AHU\"");
@@ -225,7 +204,7 @@ pub(super) async fn serve(
     faults: Faults,
     identity: DeviceIdentity,
     database: ObjectDatabase,
-) -> (Engine<Link>, BACnetServer<LoopbackTransport>) {
+) -> (Engine<TestTransport>, BACnetServer<LoopbackTransport>) {
     let instance = identity.instance();
     let (client_port, server_port) = LoopbackTransport::pair(vec![1], vec![2]);
     let server = BACnetServer::generic_builder()
@@ -240,12 +219,7 @@ pub(super) async fn serve(
         apdu_retries: 0,
         ..ClientConfig::default()
     };
-    let link = Link {
-        inner: client_port,
-        faults,
-        sent: AtomicUsize::new(0),
-        inbox: Mutex::new(None),
-    };
+    let link = link(client_port, faults);
     let client = BACnetClient::start(config, link).await.unwrap();
     client.add_device(instance, &[2]).await.unwrap();
     let engine = Engine::new(Arc::new(client), Arc::new(RequestLimits::new(0)));
@@ -267,7 +241,10 @@ fn passing(pass: usize) -> Faults {
     }
 }
 
-pub(super) async fn stop(engine: Engine<Link>, mut server: BACnetServer<LoopbackTransport>) {
+pub(super) async fn stop(
+    engine: Engine<TestTransport>,
+    mut server: BACnetServer<LoopbackTransport>,
+) {
     let Ok(mut client) = Arc::try_unwrap(engine.client) else {
         panic!("the engine holds the only client");
     };
