@@ -44,9 +44,9 @@ pub(crate) fn parse_discover_range(
     Ok(Some(range))
 }
 
-/// `discover --dnet`: a remote network from 1 to 65534. Network 0 is this
-/// one and 65535 every one, so each is refused with the option that says
-/// it (#2560).
+/// `discover --dnet` and `find --dnet`: a remote network from 1 to 65534.
+/// Network 0 is this one and 65535 every one, so each is refused with the
+/// option that says it (#2560, #2596).
 pub(crate) fn parse_dnet(text: &str) -> Result<u16, String> {
     match text.trim().parse::<u16>() {
         Ok(0) => Err("network 0 is this network: leave --dnet out for a local broadcast".into()),

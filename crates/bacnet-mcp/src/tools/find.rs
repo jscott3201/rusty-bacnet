@@ -35,7 +35,9 @@ pub(super) const SPEC: Spec = Spec {
                   reads each candidate's name, one request an object, so narrow with types or \
                   range. Paged: call again with next_cursor. A device whose list couldn't be \
                   read whole is listed under incomplete, and one that failed under skipped. \
-                  Read-only.",
+                  It sends no Who-Has: it searches the devices bacnet_discover found, which by \
+                  default asks this network alone, so a search that matches nothing carries a \
+                  note saying how to reach devices behind routers. Read-only.",
     input,
     output,
     idempotent: true,
@@ -121,6 +123,11 @@ fn output() -> Value {
                 },
                 "required": ["device", "why"],
             },
+        },
+        "note": {
+            "type": "string",
+            "description": "When nothing matched: the search covered only the devices \
+                            discovered so far, and how to discover further",
         },
         "skipped": {
             "type": "array",
@@ -346,6 +353,12 @@ fn remember<T: TransportPort + 'static>(
     }
 }
 
+/// What an empty search says (#2596): the miss is the discovered devices',
+/// not the site's, and a discovery that names its scope reaches further.
+pub(crate) const NOTHING_FOUND: &str = "nothing matched on the devices discovered so far: \
+     bacnet_discover asks this network alone unless its scope is network or global, so a \
+     device behind a router is searched only once a discovery has reached it";
+
 /// What a page found, and where it stopped.
 #[derive(Default)]
 struct Page {
@@ -420,7 +433,9 @@ pub(super) async fn run<T: TransportPort + 'static>(
             break;
         }
     }
-    Ok(json!({
+    // The whole search, not one page of it, found nothing.
+    let nothing = args.cursor.is_none() && page.matches.is_empty() && page.resume.is_none();
+    let mut body = json!({
         "matches": page.matches,
         "devices": total,
         "searched": page.searched,
@@ -429,7 +444,11 @@ pub(super) async fn run<T: TransportPort + 'static>(
         "truncated": page.resume.is_some(),
         "next_cursor": page.resume.map(|(device, index)| next(ctx, NAME, raw, pack(device, index))),
         "limits": ctx.limits(Some(page_size(ctx))),
-    }))
+    });
+    if nothing {
+        body["note"] = json!(NOTHING_FOUND);
+    }
+    Ok(body)
 }
 
 /// Search one device from its `first` candidate, adding to `page`; sets

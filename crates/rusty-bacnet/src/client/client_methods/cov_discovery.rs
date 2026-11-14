@@ -75,51 +75,58 @@ impl BACnetClient {
     // Discovery
     // -----------------------------------------------------------------------
 
-    /// Send a WhoHas broadcast to find an object by identifier. Give both
-    /// limits or neither, each from 0 to 4194303; one alone, `low_limit`
-    /// above `high_limit`, or a limit past 4194303 raises `ValueError` before
-    /// anything is sent.
-    #[pyo3(signature = (object_id, low_limit=None, high_limit=None))]
+    /// Send a WhoHas to find an object by identifier: on this network alone
+    /// unless `scope` names every network (`"global"`) or one remote
+    /// network by its number, as for `who_is()` (#2596). Give both limits
+    /// or neither, each from 0 to 4194303; one alone, `low_limit` above
+    /// `high_limit`, or a limit past 4194303 raises `ValueError` before
+    /// anything is sent, as does a scope that is none of those.
+    #[pyo3(
+        signature = (object_id, low_limit=None, high_limit=None, scope=None),
+        text_signature = "($self, object_id, low_limit=None, high_limit=None, scope='local')"
+    )]
     fn who_has_by_id<'py>(
         &self,
         py: Python<'py>,
         object_id: PyObjectIdentifier,
         low_limit: Option<u32>,
         high_limit: Option<u32>,
+        scope: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let range = device_range(low_limit, high_limit)?;
+        let scope = discovery_scope(scope.as_ref(), &self.transport_type, "Who-Has")?;
         let inner = self.inner.clone();
-        let oid = object_id.to_rust();
+        let object = WhoHasObject::Identifier(object_id.to_rust());
 
         let future = async move {
             let c = started(&inner).await?;
-            c.who_has(WhoHasObject::Identifier(oid), range)
-                .await
-                .map_err(to_py_err)?;
-            Ok(())
+            send_who_has(&c, &scope, &object, range).await
         };
         crate::py_async::future_into_py(py, crate::unit_result(future))
     }
 
-    /// Send a WhoHas broadcast to find an object by name, with the same
-    /// limits rule as `who_has_by_id()`.
-    #[pyo3(signature = (name, low_limit=None, high_limit=None))]
+    /// Send a WhoHas to find an object by name, with the same limits and
+    /// `scope` rules as `who_has_by_id()`: this network alone by default.
+    #[pyo3(
+        signature = (name, low_limit=None, high_limit=None, scope=None),
+        text_signature = "($self, name, low_limit=None, high_limit=None, scope='local')"
+    )]
     fn who_has_by_name<'py>(
         &self,
         py: Python<'py>,
         name: String,
         low_limit: Option<u32>,
         high_limit: Option<u32>,
+        scope: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let range = device_range(low_limit, high_limit)?;
+        let scope = discovery_scope(scope.as_ref(), &self.transport_type, "Who-Has")?;
         let inner = self.inner.clone();
+        let object = WhoHasObject::Name(name);
 
         let future = async move {
             let c = started(&inner).await?;
-            c.who_has(WhoHasObject::Name(name), range)
-                .await
-                .map_err(to_py_err)?;
-            Ok(())
+            send_who_has(&c, &scope, &object, range).await
         };
         crate::py_async::future_into_py(py, crate::unit_result(future))
     }

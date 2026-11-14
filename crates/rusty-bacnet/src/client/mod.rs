@@ -89,27 +89,30 @@ fn device_range(
 }
 
 /// Where the `scope` keyword of `who_is()` and `discover()` sends the
-/// Who-Is (#2560): `"local"`, the default, is this network alone, which no
-/// router passes on; `"global"` is every network; a number from 1 to 65534
-/// is that remote network. Anything else raises before anything is sent:
+/// Who-Is (#2560), and that of `who_has_by_id()`, `who_has_by_name()` and
+/// `who_has_replies()` the Who-Has (#2596), `service` naming which:
+/// `"local"`, the default, is this network alone, which no router passes
+/// on; `"global"` is every network; a number from 1 to 65534 is that
+/// remote network. Anything else raises before anything is sent:
 /// `ValueError` for another name or number, `TypeError` for another type.
 /// A client on a router's application (`transport`, `"router"`) has no
-/// network of its own, so a local Who-Is raises `ValueError` there, saying
+/// network of its own, so a local request raises `ValueError` there, saying
 /// which scopes it can use.
 fn discovery_scope(
     scope: Option<&Bound<'_, PyAny>>,
     transport: &str,
+    service: &str,
 ) -> PyResult<bacnet_ops::Scope> {
     use bacnet_ops::Scope;
     use pyo3::exceptions::PyTypeError;
     use pyo3::types::{PyBool, PyInt, PyString};
     const EXPECTED: &str = "scope is 'local', 'global' or a network number from 1 to 65534";
     let local = || match transport {
-        "router" => Err(PyValueError::new_err(
-            "a client on transport='router' has no network of its own for a local Who-Is: \
+        "router" => Err(PyValueError::new_err(format!(
+            "a client on transport='router' has no network of its own for a local {service}: \
              pass scope=<network number> for one of the router's networks, or \
-             scope='global' for every network",
-        )),
+             scope='global' for every network"
+        ))),
         _ => Ok(Scope::Local),
     };
     let Some(scope) = scope.filter(|scope| !scope.is_none()) else {
@@ -134,6 +137,15 @@ fn discovery_scope(
     )))
 }
 
+/// A scoped send's error as Python sees it: the link's as the client
+/// raises it, a refused scope as `ValueError`.
+fn scoped_error(error: bacnet_ops::OpsError) -> PyErr {
+    match error {
+        bacnet_ops::OpsError::Client(error) => to_py_err(error),
+        other => PyValueError::new_err(other.to_string()),
+    }
+}
+
 /// Send one Who-Is to `scope` on `client`, for `range`: the scope was
 /// checked when the call was made, so a failure here is the link's.
 async fn send_who_is(
@@ -143,10 +155,20 @@ async fn send_who_is(
 ) -> PyResult<()> {
     bacnet_ops::raw::who_is(client, scope, range)
         .await
-        .map_err(|error| match error {
-            bacnet_ops::OpsError::Client(error) => to_py_err(error),
-            other => PyValueError::new_err(other.to_string()),
-        })
+        .map_err(scoped_error)
+}
+
+/// Send one Who-Has for `object` to `scope` on `client`, for `range`, as
+/// [`send_who_is`] sends a Who-Is.
+async fn send_who_has(
+    client: &CoreClient,
+    scope: &bacnet_ops::Scope,
+    object: &WhoHasObject,
+    range: Option<DeviceInstanceRange>,
+) -> PyResult<()> {
+    bacnet_ops::raw::who_has(client, scope, object, range)
+        .await
+        .map_err(scoped_error)
 }
 
 /// Async BACnet client for reading/writing properties on remote devices.

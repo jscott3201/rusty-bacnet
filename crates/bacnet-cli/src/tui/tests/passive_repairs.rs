@@ -96,6 +96,23 @@ fn passive_repair_failed_populated_search_is_retained_and_stopped() {
 fn passive_repair_failed_empty_search_is_stopped() {
     failed_search(false);
 }
+/// A passive session sends no Who-Has, so `:find` there takes no scope:
+/// one named is refused with a flash, and nothing is searched (#2596).
+#[test]
+fn passive_find_refuses_a_scope() {
+    let mut app = ready();
+    press(&mut app, KeyCode::Char(':'));
+    type_text(&mut app, "find --global Supply");
+    assert!(press(&mut app, KeyCode::Enter).is_empty());
+    assert_eq!(app.who_has, None);
+    assert!(
+        app.flash
+            .as_ref()
+            .unwrap()
+            .text
+            .contains("sends no Who-Has")
+    );
+}
 #[test]
 fn passive_repair_refused_transmit_cannot_mark_local_search_not_sent() {
     let mut app = ready();
@@ -105,6 +122,7 @@ fn passive_repair_refused_transmit_cannot_mark_local_search_not_sent() {
         WorkerEvent::Discovery(DiscoveryEvent::Refused {
             command: DiscoveryCommand::WhoHas {
                 name: "Supply".into(),
+                scope: bacnet_ops::Scope::Local,
             },
             reason: "passive".into(),
         }),

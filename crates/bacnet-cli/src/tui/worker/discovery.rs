@@ -1,6 +1,6 @@
-//! The discovery worker (#960): sends Who-Has and Who-Is-Router-To-Network
-//! when asked, and passes on every I-Have and network report the client
-//! hears, asked for or not.
+//! The discovery worker (#960): sends Who-Has (to the scope `:find`
+//! named, #2596) and Who-Is-Router-To-Network when asked, and passes on
+//! every I-Have and network report the client hears, asked for or not.
 //!
 //! It runs beside the session loop under `join!`. A send is one datagram
 //! and holds no lock. Answers are not collected here: the client's
@@ -10,6 +10,7 @@
 
 use bacnet_client::client::{BACnetClient, ReceivedIHave};
 use bacnet_network::layer::{NetworkReport, ReceivedNetworkReport};
+use bacnet_ops::Scope;
 use bacnet_ops::target::AddressStyle;
 use bacnet_services::who_has::WhoHasObject;
 use bacnet_transport::port::TransportPort;
@@ -64,6 +65,19 @@ pub(super) fn report(
     })
 }
 
+/// Send `:find`'s Who-Has for `name` to `scope`, through the scope every
+/// front end shares (#2596): this network alone unless the command named
+/// another.
+pub(crate) async fn send_who_has<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    name: &str,
+    scope: &Scope,
+) -> Result<(), String> {
+    bacnet_ops::raw::who_has(client, scope, &WhoHasObject::Name(name.into()), None)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 /// Serve Who-Has and router discovery until the session ends.
 pub(crate) async fn run<T: TransportPort + 'static>(
     client: &BACnetClient<T>,
@@ -80,13 +94,13 @@ pub(crate) async fn run<T: TransportPort + 'static>(
             command = commands.recv() => {
                 let Some(command) = command else { break };
                 let sent = match &command {
-                    DiscoveryCommand::WhoHas { name } => {
-                        client.who_has(WhoHasObject::Name(name.clone()), None).await
-                    }
-                    DiscoveryCommand::WhoIsRouter => client.who_is_router_to_network(None, None).await,
+                    DiscoveryCommand::WhoHas { name, scope } => send_who_has(client, name, scope).await,
+                    DiscoveryCommand::WhoIsRouter => client
+                        .who_is_router_to_network(None, None)
+                        .await
+                        .map_err(|error| error.to_string()),
                 };
-                if let Err(error) = sent {
-                    let reason = error.to_string();
+                if let Err(reason) = sent {
                     let event = DiscoveryEvent::Refused { command, reason };
                     sink.deliver(WorkerEvent::Discovery(event)).await;
                 }

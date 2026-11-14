@@ -367,6 +367,7 @@ async fn zero_send_attempts() -> std::io::Result<()> {
         DiscoveryCommand::WhoIsRouter,
         DiscoveryCommand::WhoHas {
             name: "marker".into(),
+            scope: bacnet_ops::Scope::Local,
         },
     ] {
         net.commands

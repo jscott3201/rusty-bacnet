@@ -13,7 +13,7 @@ use bacnet_transport::test_transport::{SendLog, TestTransport};
 
 use super::test_bus::{Bus, N, client_on, mac, name_of, server, settle, stop};
 use super::*;
-use crate::client::{Discover, ResolveScope};
+use crate::client::{Discover, Find, ResolveScope, Scope};
 
 /// The client at station 1 of network 1, a router at station 254 of
 /// networks 1, 2 and 3, and on network 2 station 5 and on network 3
@@ -107,6 +107,38 @@ async fn the_default_discovery_stays_on_this_network() {
     assert_eq!(two, [DeviceAddress::new(2, &mac(5)).unwrap()]);
     let every = lab.client.discover(quick(Discover::global())).await;
     assert_eq!(every.unwrap().len(), 2);
+    lab.stop().await;
+}
+
+/// A search that names no scope stays on this network as a discovery does
+/// (#2596): neither routed device hears its Who-Has, so it comes back
+/// empty, though one has the object. Network 2 named finds station 5's,
+/// and every network finds the object both have, each at its station on
+/// its network.
+#[tokio::test(start_paused = true)]
+async fn the_default_search_stays_on_this_network() {
+    let lab = Routed::new(|near| near.port(1)).await;
+    let find = |request: Find| lab.client.find(request.wait(Duration::from_millis(500)));
+    let near = find(Find::name("on two")).await.unwrap();
+    assert!(near.is_empty(), "a routed device answered: {near:?}");
+    let two: Vec<_> = find(Find::name("on two").within(Scope::Network(2)))
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|found| (found.device, found.address))
+        .collect();
+    assert_eq!(two, [(N, DeviceAddress::new(2, &mac(5)).unwrap())]);
+    // By identifier, which both devices have.
+    let ai = bacnet_types::primitives::ObjectIdentifier::new(
+        bacnet_types::enums::ObjectType::ANALOG_INPUT,
+        1,
+    )
+    .unwrap();
+    let every = find(Find::object(ai).within(Scope::Global)).await;
+    let mut every: Vec<_> = every.unwrap().into_iter().map(|f| f.address).collect();
+    every.sort();
+    let stations = [(2, mac(5)), (3, mac(6))].map(|(n, m)| DeviceAddress::new(n, &m).unwrap());
+    assert_eq!(every, stations);
     lab.stop().await;
 }
 

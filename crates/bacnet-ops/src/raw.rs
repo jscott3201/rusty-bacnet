@@ -8,16 +8,21 @@
 //! same questions with its own methods.
 //!
 //! [`who_is`] sends a discovery's Who-Is straight from a low-level client,
-//! for a front end that holds one and no [`Client`](crate::Client): it
-//! checks its [`Scope`] as [`Client::discover`](crate::Client::discover)
-//! does, but takes no rate slot and charges no account.
+//! for a front end that holds one and no [`Client`](crate::Client), and
+//! [`who_has`] and [`who_has_replies`] a search's Who-Has: each checks its
+//! [`Scope`] as [`Client::discover`](crate::Client::discover) and
+//! [`Client::find`](crate::Client::find) do, but takes no rate slot and
+//! charges no account.
 
-use bacnet_client::client::BACnetClient;
+use std::time::Duration;
+
+use bacnet_client::client::{BACnetClient, ReceivedIHave};
+use bacnet_services::who_has::WhoHasObject;
 use bacnet_services::who_is::DeviceInstanceRange;
 use bacnet_transport::port::TransportPort;
 use bacnet_types::error::Error;
 
-use crate::client::Scope;
+use crate::client::{Ask, Scope, find};
 use crate::error::OpsError;
 
 pub use crate::client::read::{
@@ -60,9 +65,53 @@ pub async fn who_is<T: TransportPort + 'static>(
     scope: &Scope,
     range: Option<DeviceInstanceRange>,
 ) -> Result<(), OpsError> {
-    let station = scope.station(client)?;
+    let station = scope.station(client, Ask::WhoIs)?;
     scope
         .send(client, station.as_deref(), range)
+        .await
+        .map_err(OpsError::Client)
+}
+
+/// Send one Who-Has for `object` to `scope` over `client`, asking the
+/// devices in `range` (all for `None`). The answers come through
+/// `client`'s [`i_have_events`](BACnetClient::i_have_events). Unlike
+/// [`Client::find`](crate::Client::find) it carries no rate cap: the
+/// caller paces it.
+///
+/// # Errors
+///
+/// As [`who_is`]: [`OpsError::Parse`] for a scope that can't be sent,
+/// before anything is; then [`OpsError::Client`] for a send the link
+/// refused.
+pub async fn who_has<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    scope: &Scope,
+    object: &WhoHasObject,
+    range: Option<DeviceInstanceRange>,
+) -> Result<(), OpsError> {
+    let station = find::station(client, scope)?;
+    scope
+        .send_who_has(client, station.as_deref(), object, range)
+        .await
+        .map_err(OpsError::Client)
+}
+
+/// Send one Who-Has as [`who_has`] does, then collect the I-Haves that
+/// answer it ([`ReceivedIHave::answers`]) for `wait`: one per device,
+/// object and source, in the order they came. No answer is an empty list.
+///
+/// # Errors
+///
+/// As [`who_has`].
+pub async fn who_has_replies<T: TransportPort + 'static>(
+    client: &BACnetClient<T>,
+    scope: &Scope,
+    object: &WhoHasObject,
+    range: Option<DeviceInstanceRange>,
+    wait: Duration,
+) -> Result<Vec<ReceivedIHave>, OpsError> {
+    let station = find::station(client, scope)?;
+    find::replies(client, scope, station.as_deref(), object, range, wait)
         .await
         .map_err(OpsError::Client)
 }

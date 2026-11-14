@@ -389,7 +389,9 @@ pub(crate) enum Command {
         global: bool,
     },
 
-    /// Find objects by name (WhoHas).
+    /// Find objects by name (WhoHas): a broadcast on this network alone,
+    /// which no router passes on, unless --dnet, --global or --target says
+    /// where else.
     #[command(alias = "whohas")]
     Find {
         /// Object name to find (quote a name with spaces). `--name NAME`
@@ -406,6 +408,19 @@ pub(crate) enum Command {
         /// Seconds to wait for responses.
         #[arg(long, default_value_t = 3)]
         wait: u64,
+        /// Send a directed WhoHas to one station on this network instead
+        /// of broadcasting.
+        #[arg(long, conflicts_with_all = ["dnet", "global"])]
+        target: Option<String>,
+        /// Broadcast on one remote network (1 to 65534) instead, through
+        /// its router.
+        #[arg(long, conflicts_with = "global", value_parser = crate::core::range::parse_dnet)]
+        dnet: Option<u16>,
+        /// Broadcast on every network instead: a global broadcast, which
+        /// every router passes on, and every device that hears it
+        /// searches its objects.
+        #[arg(long)]
+        global: bool,
     },
 
     /// Read a property.

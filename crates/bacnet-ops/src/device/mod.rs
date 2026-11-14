@@ -343,6 +343,9 @@ mod ask_tests;
 mod discover_tests;
 
 #[cfg(test)]
+mod find_tests;
+
+#[cfg(test)]
 mod follow_tests;
 
 #[cfg(test)]

@@ -302,6 +302,25 @@ async fn objects_are_found_by_name_type_and_object() {
     assert_eq!(devices, [&json!(1201), &json!(1202)], "{body}");
     assert_eq!(body["skipped"], json!([]));
 
+    // A search that finds something carries no note; one that matches
+    // nothing says the miss is the discovered devices', not the site's,
+    // and how a discovery reaches further (#2596).
+    assert!(body.get("note").is_none(), "{body}");
+    let missed = lab
+        .agent
+        .call(
+            "bacnet_find_object",
+            json!({ "name": "no such point", "range": "1201" }),
+        )
+        .await;
+    let missed = ok(&missed);
+    assert_eq!(missed["matches"], json!([]), "{missed}");
+    let note = missed["note"].as_str().unwrap_or_default();
+    assert!(
+        note.contains("discovered so far") && note.contains("network or global"),
+        "{missed}"
+    );
+
     let nothing = lab
         .agent
         .call("bacnet_find_object", json!({ "range": "1201" }))

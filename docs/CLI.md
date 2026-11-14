@@ -560,7 +560,7 @@ table is refreshed from the client's discovery table afterwards.
 | `/` | Filter rows by instance, address, network or vendor; Enter keeps the filter, Esc clears it |
 | `Enter` | Browse the selected device |
 | `1` / `2` / `3` / `4` / `5` / `6` / `7` / `8` | The devices / Browse, the open device's browser / the watch list / the Network screen (BBMD tables on B/IP; the Networks tab on every transport) / the SC screen / the MS/TP screen / Capture / the agent pane, the attached agents' MCP calls and the write requests waiting for you (only while the profile's MCP listener runs; otherwise `8` stays and says so). The status bar's strip numbers those that apply to the session (Network once connected, SC on SC, MS/TP with a serial port, Agents with a listener), with the one shown in brackets. `1` keeps an open browser as it was, and `2` shows it again; with no device open, `2` stays on the devices and says so |
-| `:` | Command bar: `watch DEVICE OBJECT [PROPERTY]`, `csv on`, `csv off`, `writem DEVICE OBJECT PROPERTY VALUE[@P] ...`, `bbmd [ADDRESS]`, `find NAME`, `mstp rotation MS`, `mstp hold MS`, `mstp listen SECS`, `mstp scan SECS`, `mstp scan cancel`, `dcc enable`, `dcc ACTION [MINUTES|forever]`, `reinit STATE`; the footer shows the syntax of the commands matching what is typed |
+| `:` | Command bar: `watch DEVICE OBJECT [PROPERTY]`, `csv on`, `csv off`, `writem DEVICE OBJECT PROPERTY VALUE[@P] ...`, `bbmd [ADDRESS]`, `find NAME`, `find --dnet N NAME`, `find --global NAME`, `mstp rotation MS`, `mstp hold MS`, `mstp listen SECS`, `mstp scan SECS`, `mstp scan cancel`, `dcc enable`, `dcc ACTION [MINUTES|forever]`, `reinit STATE`; the footer shows the syntax of the commands matching what is typed |
 | `W` | Arm a write session, or disarm the armed one |
 | `w` / `n` | On an open object, in a write session: write a property / relinquish a priority slot |
 | `u` | The session ledger |
@@ -673,10 +673,15 @@ matches BBMDs by address, so a BBMD reached at an address other than its own
 BDT entry (behind NAT, its global address in peers' tables and its private one
 in its own) shows as two rows, one flagged with no entry for itself.
 
-**Who-Has and the Networks tab.** `:find NAME` broadcasts a Who-Has for the
-object named NAME (the rest of the line, exactly as typed, apostrophes and
-runs of spaces included; a name that is one quoted word, `"Zone  Temp"`, is
-unwrapped, and `:find ""` closes the panel like `:find` alone) and lists the
+**Who-Has and the Networks tab.** `:find NAME` broadcasts a Who-Has on this
+network alone for the object named NAME (the rest of the line, exactly as
+typed, apostrophes and runs of spaces included; a name that is one quoted
+word, `"Zone  Temp"`, is unwrapped, and `:find ""` closes the panel like
+`:find` alone). `:find --dnet N NAME` asks one remote network and
+`:find --global NAME` every network, as the one-shot `find` does (#2596); a
+name that starts with `--` is quoted. With no answer yet, the panel of a
+search of this network alone says that only this network was asked and how to
+widen it. The panel lists the
 devices whose I-Have answers it in a panel below the device table (beside
 it from 160 columns, when both fit at their content widths): the
 device, the object as the browser labels it (`analog-input 3`), the object's
@@ -950,7 +955,7 @@ in a batch, because a failed batch names the failing write without its
 priority.
 
 The command bar splits its line into words itself (all but `:find`, which
-takes the rest of the line). Single or double quotes group words, and a
+takes the rest of the line after a `--dnet N` or `--global`). Single or double quotes group words, and a
 backslash makes the quote, whitespace character or backslash after it plain
 text; a quote left open is an error. A quoted or escaped VALUE is a
 CharacterString, with any priority after the last quote or escape:
@@ -1061,8 +1066,8 @@ status bar shows `PASSIVE`. On B/IP (broadcast or unicast, not multicast) it
 binds a receive-only UDP listener on the chosen interface and port, and the
 link state reads `listening` once the bind succeeds. Router announcements
 fill the Networks tab, and `:find NAME` filters the I-Haves overheard so far,
-and new ones, by exact name without sending a Who-Has; object names are
-learned from those I-Haves. Foreign-device settings are
+and new ones, by exact name without sending a Who-Has (so `--dnet` and
+`--global` are refused there); object names are learned from those I-Haves. Foreign-device settings are
 ignored: there is no registration, renewal, responder or send path. B/IPv6,
 BACnet/SC, B/IP multicast and participant MS/TP sessions are refused in this
 mode; the MS/TP monitor (`--mstp-monitor`) still works. The listener sees only
@@ -1243,20 +1248,46 @@ every device answers a global Who-Is, so give it a range, or name the network.
 `--target`, `--dnet` and `--global` are one choice: give at most one.
 
 ```bash
-bacnet find "Zone Temp"           # find objects by name (WhoHas)
-bacnet find "Zone Temp" --wait 5  # wait 5 seconds for responses
+bacnet find "Zone Temp"                 # find objects by name on this network (WhoHas)
+bacnet find "Zone Temp" --wait 5        # wait 5 seconds for responses
+bacnet find "Zone Temp" --dnet 2        # one remote network, through its router
+bacnet find "Zone Temp" --global        # every network: a global broadcast
+bacnet find "Zone Temp" --target 192.168.1.100   # directed (unicast) WhoHas
 ```
 
 The name is one word: quote one with spaces. `--name "Zone Temp"` says the
 same; giving both, or neither, is a usage error (exit 2).
 
-`find` sends its Who-Has as a global broadcast, so routers pass it to every
-network, and prints every I-Have that answers within the wait, one row per device
+`find` takes the scope flags `discover` takes (#2596). With none, the Who-Has
+is a local broadcast: it reaches every device on this BACnet network, across
+BBMDs and to foreign devices, but no router passes it on. `--dnet N` asks one
+remote network, `--global` every network, and `--target` one station on this
+network; give at most one, and `--dnet` refuses 0 and 65535 as `discover`
+does. Every device that hears a Who-Has searches its objects for the name, so
+on a large routed site ask the network that holds the object.
+
+`find` prints every I-Have that answers within the wait, one row per device
 and object. With `--json` it prints an array, empty when nothing answered:
 
 ```json
 [{ "device": 1234, "object": "ANALOG_INPUT:7", "name": "Zone Temp" }]
 ```
+
+When a search of this network alone finds nothing, `find` adds a note on
+stderr, in either output format, that only this network was asked and that
+`--dnet` or `--global` asks further: a miss there doesn't mean the site has no
+such object. The JSON on stdout stays the array, and the exit status is 0, as
+for a `discover` that finds nothing.
+
+**Find flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--name <NAME>` | | The object name, as a flag instead of the positional NAME |
+| `--wait <N>` | `3` | Seconds to wait for responses |
+| `--target <ADDR>` | | Send a directed WhoHas to one station on this network |
+| `--dnet <N>` | | Broadcast on one remote network (1 to 65534) instead, through its router |
+| `--global` | | Broadcast on every network instead: a global broadcast, which every router passes on |
 
 ```bash
 bacnet whois-router                      # routers and the networks they reach

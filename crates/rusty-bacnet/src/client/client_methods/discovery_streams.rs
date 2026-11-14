@@ -22,13 +22,17 @@ fn who_has_object(object: &Bound<'_, PyAny>) -> PyResult<WhoHasObject> {
 
 #[pymethods]
 impl BACnetClient {
-    /// Broadcast a Who-Has for `object` (an `ObjectIdentifier`, or a name
-    /// as `str`) and collect the I-Haves that answer it for `timeout_ms`:
-    /// one per device and object, in the order they came. No answer is an
-    /// empty list. The limits follow `who_has_by_id()`'s rule. It holds the
-    /// started client for the whole wait, so `stop()` (or leaving
+    /// Send a Who-Has for `object` (an `ObjectIdentifier`, or a name as
+    /// `str`) and collect the I-Haves that answer it for `timeout_ms`: one
+    /// per device, object and source address, in the order they came. No
+    /// answer is an empty list. The limits and `scope` follow
+    /// `who_has_by_id()`'s rules: this network alone by default (#2596). It
+    /// holds the started client for the whole wait, so `stop()` (or leaving
     /// `async with`) waits up to `timeout_ms` for it.
-    #[pyo3(signature = (object, low_limit=None, high_limit=None, timeout_ms=3000))]
+    #[pyo3(
+        signature = (object, low_limit=None, high_limit=None, timeout_ms=3000, scope=None),
+        text_signature = "($self, object, low_limit=None, high_limit=None, timeout_ms=3000, scope='local')"
+    )]
     fn who_has_replies<'py>(
         &self,
         py: Python<'py>,
@@ -36,16 +40,18 @@ impl BACnetClient {
         low_limit: Option<u32>,
         high_limit: Option<u32>,
         timeout_ms: u64,
+        scope: Option<Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let object = who_has_object(&object)?;
         let range = device_range(low_limit, high_limit)?;
+        let scope = discovery_scope(scope.as_ref(), &self.transport_type, "Who-Has")?;
         let inner = self.inner.clone();
         crate::py_async::future_into_py(py, async move {
-            let replies = started(&inner)
-                .await?
-                .who_has_replies(object, range, std::time::Duration::from_millis(timeout_ms))
+            let c = started(&inner).await?;
+            let wait = std::time::Duration::from_millis(timeout_ms);
+            let replies = bacnet_ops::raw::who_has_replies(&c, &scope, &object, range, wait)
                 .await
-                .map_err(to_py_err)?;
+                .map_err(scoped_error)?;
             Ok(replies.into_iter().map(PyIHave).collect::<Vec<_>>())
         })
     }

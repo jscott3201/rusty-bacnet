@@ -22,12 +22,15 @@
 //! ([`Client::bip`], [`Client::bip6`], `Client::sc` with `sc-tls`,
 //! `Client::mstp` with `serial`) and gets a client over the type-erased
 //! [`AnyTransport`], or wraps a low-level client it built itself
-//! ([`Client::over`]). [`Client::discover`] finds devices; its Who-Is is a
-//! local broadcast unless the [`Discover`] names another [`Scope`].
+//! ([`Client::over`]). [`Client::discover`] finds devices and
+//! [`Client::find`] the devices that hold an object; each one's Who-Is or
+//! Who-Has is a local broadcast unless the [`Discover`] or [`Find`] names
+//! another [`Scope`].
 
 pub(crate) mod batch;
 mod connect;
 mod discover;
+pub(crate) mod find;
 mod log;
 pub(crate) mod read;
 
@@ -50,7 +53,9 @@ pub use self::connect::MstpConnect;
 #[cfg_attr(docsrs, doc(cfg(feature = "sc-tls")))]
 pub use self::connect::ScConnect;
 pub use self::connect::{Bip6Connect, BipConnect};
+pub(crate) use self::discover::Ask;
 pub use self::discover::{DISCOVER_WAIT, Discover, ResolveScope, Scope};
+pub use self::find::{FIND_WAIT, Find, FoundObject};
 pub use self::log::Naming;
 pub(crate) use self::log::PagedLog;
 pub(crate) use self::read::{Halt, Reader, RpmFailure, rpm_failure, timed_out, unreachable};

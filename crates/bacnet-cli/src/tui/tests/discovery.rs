@@ -6,6 +6,7 @@ use std::net::Ipv4Addr;
 
 use bacnet_network::router::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
 use bacnet_objects::analog::AnalogInputObject;
+use bacnet_ops::Scope;
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::any::AnyTransport;
 use bacnet_transport::bbmd::ForeignDevicePolicy;
@@ -56,7 +57,8 @@ fn find_sends_a_who_has_and_keeps_the_answers_to_it() {
     assert_eq!(
         commands,
         [Command::Discovery(DiscoveryCommand::WhoHas {
-            name: NAME.into()
+            name: NAME.into(),
+            scope: Scope::Local,
         })]
     );
     discovery(&mut app, DiscoveryEvent::IHave(found(40, 3, NAME)));
@@ -79,13 +81,81 @@ fn find_sends_a_who_has_and_keeps_the_answers_to_it() {
     assert_eq!(app.who_has, None);
 }
 
+/// `:find NAME` sends its Who-Has to this network alone (#2596): sent as
+/// the worker sends it, its NPDU names no destination network, so no
+/// router passes it on. `--global` first is the broadcast to every
+/// network, and `--dnet 5` the one to network 5.
+#[tokio::test]
+async fn the_default_find_is_a_local_broadcast_on_the_wire() {
+    use bacnet_client::client::{BACnetClient, ClientConfig};
+    use bacnet_transport::test_transport::{BIP_LOCAL_MAC, TestTransport};
+
+    let port = TestTransport::builder().local_mac(&BIP_LOCAL_MAC).build();
+    let sent = port.sent();
+    let mut client = BACnetClient::start(ClientConfig::default(), port)
+        .await
+        .unwrap();
+    let mut app = connected_app();
+    for line in ["", "--global ", "--dnet 5 "] {
+        press(&mut app, KeyCode::Char(':'));
+        type_text(&mut app, &format!("find {line}{NAME}"));
+        let commands = press(&mut app, KeyCode::Enter);
+        let [Command::Discovery(DiscoveryCommand::WhoHas { name, scope })] = commands.as_slice()
+        else {
+            panic!("{line}: one Who-Has, not {commands:?}");
+        };
+        assert_eq!(name, NAME);
+        crate::tui::worker::discovery::send_who_has(&client, name, scope)
+            .await
+            .unwrap();
+    }
+    let destinations: Vec<_> = sent
+        .broadcasts()
+        .iter()
+        .map(|frame| frame.decode_npdu().destination.map(|to| to.network))
+        .collect();
+    assert_eq!(destinations, [None, Some(0xFFFF), Some(5)]);
+    client.stop().await.unwrap();
+}
+
+/// With no answer, a Who-Has on this network alone says on its panel that
+/// it went no further and how to widen it; one that named its scope says
+/// where it went in the title, and only that nothing answered (#2596).
+#[test]
+fn a_local_find_with_no_answer_says_how_to_widen_it() {
+    let mut app = connected_app();
+    for (flag, widen, title) in [
+        ("", true, "Who-Has \"Fan\" | 0 found"),
+        ("--global ", false, "Who-Has \"Fan\" on every network"),
+        ("--dnet 5 ", false, "Who-Has \"Fan\" on network 5"),
+    ] {
+        press(&mut app, KeyCode::Char(':'));
+        type_text(&mut app, &format!("find {flag}Fan"));
+        press(&mut app, KeyCode::Enter);
+        let frame = screen(&mut app, 200, 40);
+        assert_eq!(
+            frame.contains("Only this network was asked"),
+            widen,
+            "{flag}: {frame}"
+        );
+        assert!(frame.contains(title), "{flag}: {frame}");
+        assert!(frame.contains("No I-Have yet"), "{flag}: {frame}");
+    }
+    discovery(&mut app, DiscoveryEvent::IHave(found(40, 3, "Fan")));
+    let frame = screen(&mut app, 200, 40);
+    assert!(!frame.contains("Only this network was asked"), "{frame}");
+}
+
 #[test]
 fn a_refused_who_has_is_shown_and_a_reject_is_flashed() {
     let mut app = connected_app();
     press(&mut app, KeyCode::Char(':'));
     type_text(&mut app, "find Fan");
     press(&mut app, KeyCode::Enter);
-    let command = DiscoveryCommand::WhoHas { name: "Fan".into() };
+    let command = DiscoveryCommand::WhoHas {
+        name: "Fan".into(),
+        scope: Scope::Local,
+    };
     let reason = "no active connection".to_string();
     discovery(&mut app, DiscoveryEvent::Refused { command, reason });
     assert_eq!(
