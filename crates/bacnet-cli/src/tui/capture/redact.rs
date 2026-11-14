@@ -50,7 +50,7 @@ use bacnet_types::enums::ConfirmedServiceChoice;
 use bytes::Bytes;
 
 use super::CaptureFrame;
-use bacnet_ops::decode::frame::{Framing, Npdu, link};
+use bacnet_tool::decode::frame::{Framing, Npdu, link};
 
 /// Redact `frame`'s password, if it carries one, whichever way it went.
 pub(crate) fn scrub(mut frame: CaptureFrame) -> CaptureFrame {

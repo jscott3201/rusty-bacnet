@@ -1,4 +1,4 @@
-//! The TUI's side of `audit.jsonl`: the shared log (`bacnet_ops::safety::audit`),
+//! The TUI's side of `audit.jsonl`: the shared log (`bacnet_tool::safety::audit`),
 //! the [`Secret`] a device management password lives in from the masked
 //! prompt to the request, and the record of a confirmed MS/TP trunk join.
 //!
@@ -8,8 +8,8 @@
 use std::path::Path;
 
 #[cfg(test)]
-pub(crate) use bacnet_ops::safety::audit::FILE;
-pub(crate) use bacnet_ops::safety::audit::{Audit, Context, REDACTED, utc};
+pub(crate) use bacnet_tool::safety::audit::FILE;
+pub(crate) use bacnet_tool::safety::audit::{Audit, Context, REDACTED, utc};
 use serde::{Serialize, Serializer};
 use serde_json::json;
 

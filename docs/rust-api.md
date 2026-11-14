@@ -28,8 +28,8 @@ firmware can run without the server
 ([bacnet-device-core](#bacnet-device-core)).
 Above them, `bacnet-endpoint` (on `bacnet-endpoint-core`) runs client and
 server roles through one transport ([bacnet-endpoint](#bacnet-endpoint)), and
-`bacnet-ops` and `bacnet-mcp` sit on `bacnet-client`
-([bacnet-ops and bacnet-mcp](#bacnet-ops-and-bacnet-mcp)).
+`bacnet-ops`, `bacnet-tool` and `bacnet-mcp` sit on `bacnet-client`
+([bacnet-ops, bacnet-tool and bacnet-mcp](#bacnet-ops-bacnet-tool-and-bacnet-mcp)).
 
 The portable `no_std` crates sit apart, below `bacnet-transport` and
 `bacnet-network`: `bacnet-time`, `bacnet-npdu` and the two codecs depend on
@@ -11758,23 +11758,47 @@ fixes them, and the warning logged with each skip gives the finer reason:
 
 ---
 
-## bacnet-ops and bacnet-mcp
+## bacnet-ops, bacnet-tool and bacnet-mcp
 
 `bacnet-ops` (#2065) is the UI-free operations core the `bacnet` CLI, its
 terminal UI and its MCP server share: no terminal or MCP dependency, just a
 `BACnetClient` and plain data. Its modules cover the target grammar
-(`target`, `destination`), object, property and value parsing (`parse`),
-display text (`format`, `label`; `format::alarms` renders alarm and event
-summaries), request limits (`limits`: the global rate cap, the one request
-per device gate and per-caller accounts), frame decoding with no traffic
-(`decode`), B/IP BBMD table reads and checks (`bbmd`), the watch hub
-(`watch`), and the write-safety core the TUI and MCP share (`safety`: tiers,
-previews, the ledger and the audit log, #2068). `engine::Engine::new(client,
+(`target`), object, property and value parsing (`parse`), display text
+(`format`, `label`; `format::alarms` renders alarm and event summaries),
+request limits (`limits`: the global rate cap, the one request per device
+gate and per-caller accounts), the watch hub (`watch`) and the read engine
+(`engine`). `engine::Engine::new(client,
 limits)` wraps an `Arc<BACnetClient<T>>` and an `Arc<RequestLimits>`
 (`RequestLimits::new(per_second)`, 0 for no cap); its async reads take a
 device instance: `read`, `read_property`, `list_objects`, `describe_device`,
 `read_trend` (trend, event and audit log pages), `alarms`, `alarm_summary`
 and `enrollment_summary`.
+
+`bacnet-tool` (#2560) holds what only the tool's front ends use, on top of
+`bacnet-ops`: the write-safety core the TUI and MCP share (`safety`: tiers,
+previews, the ledger and the audit log, #2068), the command classes
+(`class`), frame decoding with no traffic (`decode`), and B/IP BBMD table
+reads through an `Engine` and the checks over them (`bbmd`). An application
+on `bacnet-ops` doesn't need it.
+
+### Moved to bacnet-tool
+
+The tool-only modules left `bacnet-ops` in #2560, with no re-exports left
+behind. Add a `bacnet-tool` dependency and change the paths:
+
+| Was | Now |
+|---|---|
+| `bacnet_ops::safety` and its modules (`audit`, `desk`, `file`, `ledger`, `lock`, `plan`) | `bacnet_tool::safety` |
+| `bacnet_ops::class` | `bacnet_tool::class` |
+| `bacnet_ops::decode` (`frame`, `tree`, `decode_npdu_layer`) | `bacnet_tool::decode` |
+| `bacnet_ops::decode::testing` (feature `test-support`) | `bacnet_tool::decode::testing` (`bacnet-tool`'s `test-support`) |
+| `bacnet_ops::bbmd` (rows, `survey`, `matrix`) | `bacnet_tool::bbmd` |
+| `engine.bip()`, `engine.registration_bbmd()` | `bacnet_tool::bbmd::bip(&engine)`, `bacnet_tool::bbmd::registration_bbmd(&engine)` |
+| `engine.read_bdt(bbmd)`, `engine.read_fdt(bbmd)` | `bacnet_tool::bbmd::read_bdt(&engine, bbmd)`, `bacnet_tool::bbmd::read_fdt(&engine, bbmd)` |
+| `bacnet_ops::destination` | private to `bacnet-cli`, its only user |
+
+`bacnet-ops` itself gains three public items the moved code reads:
+`engine::rpm_rows`, `format::timestamp_text` and `format::alarms::cell`.
 
 `bacnet-mcp` (#2066, experimental) is a Model Context Protocol server over
 that engine, run by `bacnet mcp serve --stdio` (the CLI's `mcp` feature).

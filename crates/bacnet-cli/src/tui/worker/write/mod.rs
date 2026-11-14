@@ -1,5 +1,5 @@
 //! The write session's worker side: the TUI's adapter over the shared
-//! write desk (`bacnet_ops::safety::desk`, #2068). The desk reads the
+//! write desk (`bacnet_tool::safety::desk`, #2068). The desk reads the
 //! pre-image, sends the writes, and owns the ledger and the audit log; this
 //! side keeps the session's arming, answers the app's commands, and sends
 //! the device management requests ([`manage`]), which only the TUI offers.
@@ -11,7 +11,7 @@
 //! even if the UI never hears of it. Requests still queued when the session
 //! ends are recorded as not sent.
 //!
-//! While it runs it holds the workspace's lock (`bacnet_ops::safety::lock`),
+//! While it runs it holds the workspace's lock (`bacnet_tool::safety::lock`),
 //! so a second session on the same profile can't arm. An agent attached
 //! to the TUI (#2185) writes through this desk, which it lends: a
 //! [`Lent`] job runs here between the app's commands, at this session's
@@ -23,13 +23,13 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use bacnet_client::client::BACnetClient;
-use bacnet_ops::class::Class;
 use bacnet_ops::limits::RequestLimits;
-use bacnet_ops::safety::audit::Audit;
-use bacnet_ops::safety::desk::{Caller, Desk, Sent, Waiting};
-use bacnet_ops::safety::ledger::Origin;
-use bacnet_ops::safety::lock::lock;
-use bacnet_ops::safety::{item_json, run_id};
+use bacnet_tool::class::Class;
+use bacnet_tool::safety::audit::Audit;
+use bacnet_tool::safety::desk::{Caller, Desk, Sent, Waiting};
+use bacnet_tool::safety::ledger::Origin;
+use bacnet_tool::safety::lock::lock;
+use bacnet_tool::safety::{item_json, run_id};
 use bacnet_transport::port::TransportPort;
 use serde_json::{Map, Value, json};
 use tokio::sync::mpsc;
@@ -42,9 +42,9 @@ use crate::tui::safety::audit::Context;
 use crate::tui::safety::ledger::{Entry, Ledger};
 use crate::tui::safety::{Change, Level, MAX_MINUTES, Outcome, SafetyCommand, SafetyEvent};
 
-pub(crate) use bacnet_ops::safety::desk::PASSIVE;
+pub(crate) use bacnet_tool::safety::desk::PASSIVE;
 #[cfg(test)]
-pub(crate) use bacnet_ops::safety::desk::{STALE, UNKNOWN_PRE_IMAGE};
+pub(crate) use bacnet_tool::safety::desk::{STALE, UNKNOWN_PRE_IMAGE};
 
 /// What the write session needs from the session's settings.
 #[derive(Debug, Clone)]

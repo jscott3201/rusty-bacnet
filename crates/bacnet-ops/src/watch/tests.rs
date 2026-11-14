@@ -58,14 +58,12 @@ async fn two_leases_share_one_subscription_until_the_last_goes() {
     lab.stop().await;
 }
 
-/// No lifetime-0 subscription can be built: the type refuses zero, and
-/// the class table calls zero a write.
+/// No lifetime-0 subscription can be built: the type refuses zero (the
+/// `bacnet` tool's class table calls zero a write, `bacnet_tool::class`).
 #[test]
 fn no_lifetime_is_indefinite() {
     assert!(Lifetime::new(0).is_none());
     assert_eq!(Lifetime::new(1).unwrap().secs(), 1);
-    assert_eq!(class::of_subscribe(Lifetime::DEFAULT.secs()), Class::Read);
-    assert_eq!(class::of_subscribe(0), Class::Write);
     let fast = WatchOptions {
         poll_every: Duration::from_secs(9),
         ..WatchOptions::default()

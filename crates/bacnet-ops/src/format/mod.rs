@@ -34,7 +34,7 @@ mod units;
 mod wire;
 
 pub use clean::{MAX_NAME_CHARS, clean_name, clean_text};
-pub(crate) use constructed::timestamp_text;
+pub use constructed::timestamp_text;
 pub use data::{Datum, Fields, PLAIN_ELEMENTS};
 pub use logged::{LogColumns, LoggedProperty, MAX_STATE_TEXT_OBJECTS};
 pub use tagged::unknown_choice;

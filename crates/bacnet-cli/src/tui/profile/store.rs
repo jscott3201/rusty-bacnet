@@ -177,14 +177,14 @@ impl Store {
 }
 
 /// The atomic publish profiles and the session ledger share; it lives
-/// beside the ledger in `bacnet_ops::safety::file`.
-pub(crate) use bacnet_ops::safety::file::{in_place, publish};
+/// beside the ledger in `bacnet_tool::safety::file`.
+pub(crate) use bacnet_tool::safety::file::{in_place, publish};
 
-/// [`bacnet_ops::safety::file::sync_parent`], counted for the tests.
+/// [`bacnet_tool::safety::file::sync_parent`], counted for the tests.
 fn sync_parent(path: &Path) -> std::io::Result<()> {
     #[cfg(test)]
     tests::count_sync();
-    bacnet_ops::safety::file::sync_parent(path)
+    bacnet_tool::safety::file::sync_parent(path)
 }
 
 #[cfg(test)]
@@ -202,7 +202,7 @@ pub(super) mod tests {
     /// Fail the directory syncs that follow on this thread, the publish's
     /// own included, or stop.
     pub(in crate::tui::profile) fn fail_syncs(fail: bool) {
-        bacnet_ops::safety::file::testing::fail_directory_syncs(fail);
+        bacnet_tool::safety::file::testing::fail_directory_syncs(fail);
     }
 
     pub(super) fn count_sync() {

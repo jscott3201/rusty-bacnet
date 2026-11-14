@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use bacnet_ops::safety::ledger::{Ledger, State};
+use bacnet_tool::safety::ledger::{Ledger, State};
 use bacnet_types::enums::{ObjectType, PropertyIdentifier};
 use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
 use serde_json::{Value, json};
@@ -455,7 +455,7 @@ async fn unarmed_unsupported_and_locked_writes_are_refused() {
     );
     // A confirmed write, with the TUI holding the workspace's lock.
     let first = call(&mut lab, "bacnet_write", one(json!(2), 16), json!({})).await;
-    let held = bacnet_ops::safety::lock::lock(dir.path(), "tui").unwrap();
+    let held = bacnet_tool::safety::lock::lock(dir.path(), "tui").unwrap();
     let reply = call(
         &mut lab,
         "bacnet_write",

@@ -323,7 +323,7 @@ Depend on the highest layer that covers your task; the
 - **Protocol** (`no_std`, allocator optional): `bacnet-types`, `bacnet-encoding`, `bacnet-services`
 - **Transports and network:** `bacnet-transport`, `bacnet-network`
 - **Roles:** `bacnet-objects` and `bacnet-device-core` (also `no_std` with an allocator), `bacnet-client`, `bacnet-server`, `bacnet-endpoint-core`, `bacnet-endpoint`
-- **Tools:** `bacnet-cli`; new in 0.15.0, `bacnet-ops` (shared by the CLI, TUI and MCP server) and `bacnet-mcp`
+- **Tools:** `bacnet-cli`; new in 0.15.0, `bacnet-ops` (shared by the CLI, TUI and MCP server) and `bacnet-mcp`; after 0.15.0, `bacnet-tool` (the tool-only part of `bacnet-ops`: write safety, decoding, the BBMD survey)
 - **Python:** [`crates/rusty-bacnet`](crates/rusty-bacnet), built with [maturin](https://www.maturin.rs/)
 
 ## Find it in the docs

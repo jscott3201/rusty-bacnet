@@ -8,7 +8,7 @@
 //!   router announcements heard.
 //!
 //! The table rows, the survey and the BDT consistency matrix are
-//! [`bacnet_ops::bbmd`]'s, shared with the MCP server's network map.
+//! [`bacnet_tool::bbmd`]'s, shared with the MCP server's network map.
 
 pub(crate) mod discovery;
 pub(crate) mod routers;
@@ -16,8 +16,8 @@ pub(crate) mod routers;
 use std::net::SocketAddrV4;
 use std::time::Duration;
 
-pub(crate) use bacnet_ops::bbmd::{BdtRow, FdtRow, address_of, mac, probe_error};
-use bacnet_ops::bbmd::{Probe, Unfollowed, unreachable_reason};
+pub(crate) use bacnet_tool::bbmd::{BdtRow, FdtRow, address_of, mac, probe_error};
+use bacnet_tool::bbmd::{Probe, Unfollowed, unreachable_reason};
 use bacnet_transport::bip::{BvlcExchangeError, ForeignBbmd, ForeignRegistrationSnapshot};
 use bacnet_transport::bip6::Bip6ForeignStatus;
 

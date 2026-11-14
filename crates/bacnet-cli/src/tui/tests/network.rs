@@ -30,7 +30,7 @@ use crate::tui::network::address_of;
 use crate::tui::profile::Profile;
 use crate::tui::worker::session::{ConnectPlan, TransportKind};
 use crate::tui::worker::{EVENT_CHANNEL_CAPACITY, EventSink, coordinator};
-use bacnet_ops::bbmd::{Cell, Finding};
+use bacnet_tool::bbmd::{Cell, Finding};
 
 /// Long enough for any step here, short of a hang.
 const STEP: Duration = Duration::from_secs(10);
@@ -197,7 +197,7 @@ pub(super) fn local(app: &App) -> SocketAddrV4 {
 }
 
 /// Survey from `a` and return the matrix the app built.
-async fn survey(a: SocketAddrV4) -> bacnet_ops::bbmd::Matrix {
+async fn survey(a: SocketAddrV4) -> bacnet_tool::bbmd::Matrix {
     let mut net = Net::start(plan(None)).await;
     net.press(KeyCode::Char('4')).await;
     assert_eq!(net.app.screen, Screen::Network);

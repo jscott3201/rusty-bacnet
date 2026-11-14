@@ -312,7 +312,7 @@ impl EnrollmentSummaryData {
 /// names, comma separated to read apart from the table's bars, or `none`,
 /// a timestamp as its text, and an absent value as `-`: the formatter's
 /// text for each (a test pins them together).
-pub(crate) fn cell(datum: &Datum) -> String {
+pub fn cell(datum: &Datum) -> String {
     match datum {
         Datum::Null => "-".into(),
         Datum::Unsigned(n) => n.to_string(),

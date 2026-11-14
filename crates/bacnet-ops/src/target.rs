@@ -1,8 +1,8 @@
 //! The target grammar shared by the one-shot commands and the TUI,
 //! and the way each transport's MAC addresses are shown so they read back.
 //!
-//! Resolving a target to something a request can go to is in
-//! [`super::destination`].
+//! Resolving a target to something a request can go to is the `bacnet`
+//! CLI's (its `destination` module).
 
 use std::net::{Ipv4Addr, SocketAddrV6};
 

@@ -387,8 +387,10 @@ impl<T: TransportPort + 'static> Reader<'_, T> {
 }
 
 /// The properties an RPM answer holds, each its value or the device's
-/// error for it.
-pub(crate) fn rpm_rows(ack: ReadPropertyMultipleACK) -> Vec<RawRow> {
+/// error for it, as the rows every read here returns. For a caller that
+/// sends ReadPropertyMultiple itself through the client, such as the CLI's
+/// one-shot reads.
+pub fn rpm_rows(ack: ReadPropertyMultipleACK) -> Vec<RawRow> {
     ack.list_of_read_access_results
         .into_iter()
         .flat_map(|result| result.list_of_results)

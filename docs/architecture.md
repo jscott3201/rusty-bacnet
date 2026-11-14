@@ -52,8 +52,10 @@ Runtime and application roles
 
 Operations core (UI-free, for the front ends)
   bacnet-ops            Target and value grammar, value formatting, request
-                        limits, read engine over bacnet-client, frame decoder,
-                        watch hub, write-safety core (plan, ledger, audit)
+                        limits, read engine over bacnet-client, watch hub
+  bacnet-tool           The tool's own layer over bacnet-ops: write-safety core
+                        (plan, ledger, audit), command classes, frame decoder,
+                        BBMD survey (#2560)
   bacnet-mcp            MCP server over the bacnet-ops engine; read-only unless
                         a profile offers writes (rmcp SDK; the CLI's `mcp` feature)
 
@@ -61,15 +63,16 @@ Selected direct dependencies
   bacnet-server   -> bacnet-device-core, bacnet-objects, bacnet-network
   bacnet-endpoint -> bacnet-client, bacnet-server, bacnet-endpoint-core,
                      bacnet-network, bacnet-objects
-  bacnet-ops     -> bacnet-client, bacnet-transport, bacnet-npdu
-  bacnet-mcp     -> bacnet-ops, bacnet-client, rmcp
-  bacnet-cli     -> bacnet-ops, bacnet-client, bacnet-mcp (with `mcp`)  (CLI application)
+  bacnet-ops     -> bacnet-client, bacnet-transport
+  bacnet-tool    -> bacnet-ops, bacnet-client, bacnet-npdu
+  bacnet-mcp     -> bacnet-ops, bacnet-tool, bacnet-client, rmcp
+  bacnet-cli     -> bacnet-ops, bacnet-tool, bacnet-client, bacnet-mcp (with `mcp`)  (CLI application)
   rusty-bacnet   -> bacnet-client, bacnet-server, bacnet-endpoint
                                               (PyO3 bindings)
 ```
 
 `bacnet-client`, `bacnet-server` and `bacnet-endpoint` are all workspace
-`default-members`, along with the foundational crates, endpoint-core, `bacnet-ops`,
+`default-members`, along with the foundational crates, endpoint-core, `bacnet-ops`, `bacnet-tool`,
 integration tests, the MS/TP bus simulator and benchmarks. The CLI
 (`bacnet-cli`), the MCP server (`bacnet-mcp`) and PyO3 binding (`rusty-bacnet`)
 are excluded from default builds: the CLI and the MCP server pull in heavier

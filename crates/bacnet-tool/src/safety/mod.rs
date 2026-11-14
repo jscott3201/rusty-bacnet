@@ -34,7 +34,7 @@ use bacnet_types::primitives::ObjectIdentifier;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::class::Class;
-use crate::octets::hex;
+use bacnet_ops::octets::hex;
 
 pub use send::{find, item_json};
 
@@ -333,8 +333,8 @@ pub fn label(
     index: Option<u32>,
     priority: Option<u8>,
 ) -> String {
-    let object = crate::label::object_label(object);
-    let property = crate::label::kebab(property);
+    let object = bacnet_ops::label::object_label(object);
+    let property = bacnet_ops::label::kebab(property);
     let index = index.map(|i| format!("[{i}]")).unwrap_or_default();
     let priority = priority.map(|p| format!(" @{p}")).unwrap_or_default();
     format!("device {device} {object} {property}{index}{priority}")

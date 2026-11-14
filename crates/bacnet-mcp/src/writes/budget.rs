@@ -117,7 +117,7 @@ pub(crate) fn write(workspace: &Path, plan: &PlanGrant, used: u32) -> Result<(),
         std::process::id(),
         NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
     ));
-    bacnet_ops::safety::file::publish(&temp, &path, &text, false)
+    bacnet_tool::safety::file::publish(&temp, &path, &text, false)
         .map_err(|e| format!("cannot save {}: {e}", path.display()))
 }
 

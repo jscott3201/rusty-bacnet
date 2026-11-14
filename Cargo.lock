@@ -318,6 +318,7 @@ dependencies = [
  "bacnet-ops",
  "bacnet-server",
  "bacnet-services",
+ "bacnet-tool",
  "bacnet-transport",
  "bacnet-types",
  "bytes",
@@ -475,6 +476,7 @@ dependencies = [
  "bacnet-ops",
  "bacnet-server",
  "bacnet-services",
+ "bacnet-tool",
  "bacnet-transport",
  "bacnet-types",
  "bytes",
@@ -570,19 +572,15 @@ version = "0.15.0"
 dependencies = [
  "bacnet-client",
  "bacnet-encoding",
- "bacnet-npdu",
  "bacnet-objects",
  "bacnet-server",
  "bacnet-services",
  "bacnet-transport",
  "bacnet-types",
  "bytes",
- "futures-util",
- "libc",
  "proptest",
  "serde",
  "serde_json",
- "tempfile",
  "tokio",
  "tracing",
 ]
@@ -639,6 +637,28 @@ name = "bacnet-time"
 version = "0.13.1"
 dependencies = [
  "proptest",
+]
+
+[[package]]
+name = "bacnet-tool"
+version = "0.15.0"
+dependencies = [
+ "bacnet-client",
+ "bacnet-encoding",
+ "bacnet-npdu",
+ "bacnet-objects",
+ "bacnet-ops",
+ "bacnet-services",
+ "bacnet-transport",
+ "bacnet-types",
+ "bytes",
+ "futures-util",
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -39,8 +39,8 @@ export const LAYERS = [
     ['bacnet-transport', 'bacnet-network']],
   ['Objects and roles', 'The object database, the sans-IO request core that answers from it, the client and server roles, and the shared endpoint that runs both on one transport.',
     ['bacnet-objects', 'bacnet-device-core', 'bacnet-endpoint-core', 'bacnet-client', 'bacnet-server', 'bacnet-endpoint']],
-  ['Tools', 'The operations core, the MCP server for AI agent hosts, and the command-line tool.',
-    ['bacnet-ops', 'bacnet-mcp', 'bacnet-cli']],
+  ['Tools', 'The operations core, the tool layer over it (write safety, decoding, the BBMD survey), the MCP server for AI agent hosts, and the command-line tool.',
+    ['bacnet-ops', 'bacnet-tool', 'bacnet-mcp', 'bacnet-cli']],
 ];
 
 /** Whether version `a` (x.y.z) comes after `b`. */

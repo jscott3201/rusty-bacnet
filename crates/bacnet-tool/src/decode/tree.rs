@@ -20,7 +20,7 @@ use bacnet_npdu::{NetworkPriority, Npdu as NpduView};
 use bacnet_types::primitives::PropertyValue;
 use bytes::Bytes;
 
-use crate::octets::hex_upper;
+use bacnet_ops::octets::hex_upper;
 
 use super::frame::{Framing, Link, Npdu, kebab, link};
 
@@ -544,7 +544,7 @@ fn value_text(value: &PropertyValue) -> String {
             )
         }
         // TODO(#1888): the TUI's float cap applies here once it lands.
-        value => crate::format::format_property_value(value),
+        value => bacnet_ops::format::format_property_value(value),
     }
 }
 
