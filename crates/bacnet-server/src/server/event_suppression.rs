@@ -1,14 +1,17 @@
-//! Lifetime counters for event notifications the server did not deliver (#1142).
+//! Lifetime counters for event notifications the server did not deliver
+//! (#1142), and for the waits that keep their order (#2537).
 use super::*;
 use bacnet_objects::notification_class::RecipientLookupOutcome;
 use std::sync::atomic::AtomicU64;
 
-/// Lifetime totals of event notifications that were not delivered, each
-/// saturating at `u64::MAX`. A new server starts at zero, and the totals stay
-/// readable after `stop()`. Fields are sampled independently, not as one
-/// atomic aggregate. Each refusal also logs a warning (the forwarding cap's
-/// at most once a minute); these totals are the
-/// running signal, not an audit log.
+/// Lifetime totals of event notifications that were not delivered, and of
+/// two waits that keep their order (`confirmed_waited_for_invoke_id` and
+/// `cov_wait_expired`), each saturating at `u64::MAX`. A new server starts at
+/// zero, and the totals stay readable after `stop()`. Fields are sampled
+/// independently, not as one atomic aggregate. Each refusal also logs a
+/// warning (the forwarding cap's at most once a minute), and each wait for
+/// an invoke ID a debug line; these totals are the running signal, not an
+/// audit log.
 ///
 /// The first four count transitions (event or acknowledgment notifications)
 /// whose Notification Class lookup failed closed, so no recipient received
@@ -26,8 +29,9 @@ use std::sync::atomic::AtomicU64;
 /// recipient at a broadcast or other group address. The warning logged with
 /// each skip names the finer reason.
 ///
-/// The next three count confirmed notifications to one recipient that were
-/// never acknowledged.
+/// The next three count confirmed notifications to one recipient: the first,
+/// those that waited for an invoke ID, which are not dropped (each logged at
+/// debug), and the two after it, those never acknowledged.
 ///
 /// The next one counts unconfirmed notifications whose send failed at the
 /// transport, once per destination. The transition's other destinations are
@@ -90,10 +94,12 @@ pub struct EventNotificationCounters {
     /// broadcast, and sending one unconfirmed would drop the acknowledgment
     /// the destination asks for. No invoke ID is reserved for them.
     pub confirmed_broadcast_recipient: u64,
-    /// Confirmed notifications not sent because no confirmed transaction
-    /// could be reserved, normally because every invoke ID was in use.
-    /// Reservations refused while the server stops are not counted.
-    pub confirmed_no_invoke_id: u64,
+    /// Confirmed notifications that found every invoke ID in use and waited
+    /// for one to come back, counted once each as its wait starts (#2537).
+    /// None is dropped for want of an ID: it waits in its destination's
+    /// lane, or a Device recipient's in its device's queue, and holds up
+    /// only that destination.
+    pub confirmed_waited_for_invoke_id: u64,
     /// Confirmed notifications the recipient answered with an Error, Reject
     /// or Abort.
     pub confirmed_rejected: u64,
@@ -132,9 +138,10 @@ pub struct EventNotificationCounters {
     /// logs. Notifications no Event Log collects are not counted.
     pub received_not_logged: u64,
     /// Notifications dropped because their destination's lane already held
-    /// 64 waiting to go (#2537): a destination that stalls drops its own
-    /// newest notifications, and the next From State it is sent shows the
-    /// gap.
+    /// 64 waiting to go (#2537), or, for a Device recipient waiting for its
+    /// I-Am or an invoke ID, its device's queue did: a destination that
+    /// stalls drops its own newest notifications, and the next From State
+    /// it is sent shows the gap.
     pub lane_full: u64,
     /// Notifications dropped because 1,024 were already waiting across
     /// every destination's lane.
@@ -148,8 +155,8 @@ pub struct EventNotificationCounters {
     pub cov_wait_expired: u64,
 }
 
-/// One undelivered event notification, as counted in
-/// [`EventNotificationCounters`].
+/// One undelivered event notification, or one that waited for an invoke ID,
+/// as counted in [`EventNotificationCounters`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum EventSuppression {
     NotificationClassMissing,
@@ -159,7 +166,7 @@ pub(crate) enum EventSuppression {
     DeviceRecipientUnbound,
     RecipientUnroutable,
     ConfirmedBroadcastRecipient,
-    ConfirmedNoInvokeId,
+    ConfirmedWaitedForInvokeId,
     ConfirmedRejected,
     ConfirmedUnanswered,
     UnconfirmedSendFailed,
@@ -218,7 +225,7 @@ impl EventSuppressions {
             device_recipient_unbound,
             recipient_unroutable,
             confirmed_broadcast_recipient,
-            confirmed_no_invoke_id,
+            confirmed_waited_for_invoke_id,
             confirmed_rejected,
             confirmed_unanswered,
             unconfirmed_send_failed,
@@ -235,7 +242,7 @@ impl EventSuppressions {
             device_recipient_unbound,
             recipient_unroutable,
             confirmed_broadcast_recipient,
-            confirmed_no_invoke_id,
+            confirmed_waited_for_invoke_id,
             confirmed_rejected,
             confirmed_unanswered,
             unconfirmed_send_failed,
@@ -280,7 +287,7 @@ mod tests {
         EventSuppression::DeviceRecipientUnbound,
         EventSuppression::RecipientUnroutable,
         EventSuppression::ConfirmedBroadcastRecipient,
-        EventSuppression::ConfirmedNoInvokeId,
+        EventSuppression::ConfirmedWaitedForInvokeId,
         EventSuppression::ConfirmedRejected,
         EventSuppression::ConfirmedUnanswered,
         EventSuppression::UnconfirmedSendFailed,
@@ -308,7 +315,7 @@ mod tests {
                 device_recipient_unbound: 5,
                 recipient_unroutable: 6,
                 confirmed_broadcast_recipient: 7,
-                confirmed_no_invoke_id: 8,
+                confirmed_waited_for_invoke_id: 8,
                 confirmed_rejected: 9,
                 confirmed_unanswered: 10,
                 unconfirmed_send_failed: 11,

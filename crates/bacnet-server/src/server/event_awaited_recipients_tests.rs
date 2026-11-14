@@ -10,6 +10,7 @@
 use crate::server::command_remote_write_tests::{deliver, device, disable_initiation};
 use crate::server::cov_wire_test_support::*;
 use crate::server::event_recipient_routing_tests::{address_recipient, destination_for};
+use crate::server::event_send::lanes::tests::LaneLockSpy;
 use crate::server::remote_write_discovery_tests::{
     everywhere, i_am, next_who_is, targeted, who_is_sent,
 };
@@ -39,6 +40,15 @@ async fn start_with(config: ServerConfig, confirmed: bool) -> Harness {
 /// it is sent confirmed, as the process numbered as the instance, then to
 /// [`OTHER`] as process 7.
 async fn start_for(config: ServerConfig, devices: &[(u32, bool)]) -> Harness {
+    start_for_and(config, devices, |_| {}).await
+}
+
+/// [`start_for`], then `extend` on the database.
+async fn start_for_and(
+    config: ServerConfig,
+    devices: &[(u32, bool)],
+    extend: impl FnOnce(&mut ObjectDatabase) + Send + 'static,
+) -> Harness {
     let devices = devices.to_vec();
     Harness::start_with(config, move |db| {
         let mut nc = bacnet_objects::notification_class::NotificationClass::new(0, "NC-0").unwrap();
@@ -52,34 +62,40 @@ async fn start_for(config: ServerConfig, devices: &[(u32, bool)]) -> Harness {
         to_other.process_identifier = 7;
         nc.add_destination(to_other).unwrap();
         db.add(Box::new(nc)).unwrap();
-        let object = db.get_mut(&av1()).unwrap();
-        for (property, value) in [
-            (PropertyIdentifier::HIGH_LIMIT, 80.0f32),
-            (PropertyIdentifier::LOW_LIMIT, 0.0),
-            (PropertyIdentifier::DEADBAND, 1.0),
-        ] {
-            object
-                .write_property(property, None, PropertyValue::Real(value), None)
-                .unwrap();
-        }
-        for (property, unused_bits, bits) in [
-            (PropertyIdentifier::LIMIT_ENABLE, 6, 0xC0),
-            (PropertyIdentifier::EVENT_ENABLE, 5, 0xE0),
-        ] {
-            object
-                .write_property(
-                    property,
-                    None,
-                    PropertyValue::BitString {
-                        unused_bits,
-                        data: vec![bits],
-                    },
-                    None,
-                )
-                .unwrap();
-        }
+        alarms_above_80(db, av1());
+        extend(db);
     })
     .await
+}
+
+/// Make `object`, an Analog Value, report a high-limit alarm above 80.
+fn alarms_above_80(db: &mut ObjectDatabase, object: ObjectIdentifier) {
+    let object = db.get_mut(&object).unwrap();
+    for (property, value) in [
+        (PropertyIdentifier::HIGH_LIMIT, 80.0f32),
+        (PropertyIdentifier::LOW_LIMIT, 0.0),
+        (PropertyIdentifier::DEADBAND, 1.0),
+    ] {
+        object
+            .write_property(property, None, PropertyValue::Real(value), None)
+            .unwrap();
+    }
+    for (property, unused_bits, bits) in [
+        (PropertyIdentifier::LIMIT_ENABLE, 6, 0xC0),
+        (PropertyIdentifier::EVENT_ENABLE, 5, 0xE0),
+    ] {
+        object
+            .write_property(
+                property,
+                None,
+                PropertyValue::BitString {
+                    unused_bits,
+                    data: vec![bits],
+                },
+                None,
+            )
+            .unwrap();
+    }
 }
 
 /// `(MAC, process identifier, confirmed)` of every event notification sent.
@@ -282,7 +298,8 @@ async fn notifications_to_one_device_go_out_in_the_order_they_were_made() {
 #[tokio::test(start_paused = true)]
 async fn past_the_cap_a_notification_is_skipped_and_counted_at_once() {
     let mut h = start(false).await;
-    // Notifications for Device 50 take every place.
+    // Notifications for Devices 50 to 65, 64 each (a device's own cap),
+    // take every place.
     {
         let mut awaiting = super::awaiting(&h.server.notification_transactions);
         let filler = || super::Pending {
@@ -294,8 +311,9 @@ async fn past_the_cap_a_notification_is_skipped_and_counted_at_once() {
             admits: Arc::new(|_: &super::super::super::event_recipient_route::RecipientRoute| true),
             budget: None,
         };
-        for _ in 0..super::MAX_AWAITING_NOTIFICATIONS {
-            awaiting.enqueue(device(50), true, filler());
+        for at in 0..super::MAX_AWAITING_NOTIFICATIONS {
+            let instance = 50 + (at / super::MAX_LANE_ENTRIES) as u32;
+            awaiting.enqueue(device(instance), true, filler());
         }
         assert_eq!(awaiting.waiting(), super::MAX_AWAITING_NOTIFICATIONS);
     }
@@ -385,5 +403,134 @@ async fn each_device_drains_on_its_own() {
     tokio::time::sleep(WAIT * 2).await;
     assert_eq!(counted(&h), (1, 0));
     assert_eq!(notifications(&h).len(), 2);
+    h.server.stop().await.unwrap();
+}
+
+/// Device 10's MAC, from which it answers.
+const DEVICE_10: [u8; 6] = [10, 0, 0, 10, 0xBA, 0xC0];
+
+/// AV-2, which alarms through Notification Class 1 to Device 10 alone.
+fn av2() -> ObjectIdentifier {
+    ObjectIdentifier::new(ObjectType::ANALOG_VALUE, 2).unwrap()
+}
+
+/// [`start`] with Device 9 confirmed, and AV-2 alarming to Device 10,
+/// unconfirmed, as process 10.
+async fn start_with_av2() -> Harness {
+    start_for_and(ServerConfig::default(), &[(9, true)], |db| {
+        let mut nc = bacnet_objects::notification_class::NotificationClass::new(1, "NC-1").unwrap();
+        let mut to_device = destination_for(BACnetRecipient::Device(device(10)), false);
+        to_device.process_identifier = 10;
+        nc.add_destination(to_device).unwrap();
+        db.add(Box::new(nc)).unwrap();
+        let mut av = bacnet_objects::analog::AnalogValueObject::new(
+            2,
+            "AV-2",
+            bacnet_types::enums::EngineeringUnits::DEGREES_CELSIUS,
+        )
+        .unwrap();
+        bacnet_objects::traits::BACnetObject::write_property(
+            &mut av,
+            PropertyIdentifier::NOTIFICATION_CLASS,
+            None,
+            PropertyValue::Unsigned(1),
+            None,
+        )
+        .unwrap();
+        db.add(Box::new(av)).unwrap();
+        alarms_above_80(db, av2());
+    })
+    .await
+}
+
+/// Device 9 answers its Who-Is, and its drain then waits for an invoke ID
+/// with the first transition: every one is leased.
+async fn hold_device_9(h: &Harness) {
+    h.write_local(85.0).await;
+    next_who_is(h).await;
+    deliver(h, &i_am(9), &DEVICE_9, None).await;
+    h.settle().await;
+}
+
+/// `count` more transitions of AV-1, alternating.
+async fn transitions(h: &Harness, count: usize) {
+    for at in 0..count {
+        h.write_local(if at % 2 == 0 { 50.0 } else { 85.0 }).await;
+    }
+}
+
+/// A device's queue whose drain waits for an invoke ID (#2537) holds at
+/// most 64, as its lane would: past them the newest are dropped and counted
+/// in `lane_full`, and none is counted as unbound.
+#[tokio::test(start_paused = true)]
+async fn a_device_queue_waiting_for_an_invoke_id_holds_64() {
+    let mut h = start(true).await;
+    let (spy, _guard) = LaneLockSpy::install(&h.server.notification_transactions);
+    let leases = h.server.notification_transactions.lease_every_invoke_id();
+    hold_device_9(&h).await;
+    transitions(&h, 1_100).await;
+    let counters = h.server.event_notification_counters();
+    assert_eq!(waiting(&h), super::MAX_LANE_ENTRIES);
+    assert_eq!(
+        (counters.lane_full, counters.device_recipient_unbound),
+        (1_100 - super::MAX_LANE_ENTRIES as u64, 0)
+    );
+    assert_eq!(counters.confirmed_waited_for_invoke_id, 1);
+    // The drops' warning went out after the lanes' lock was let go.
+    spy.assert_logged_unlocked(1);
+    drop(leases);
+    h.server.stop().await.unwrap();
+}
+
+/// While Device 9's queue waits for an invoke ID, a notification for Device
+/// 10, which needs a Who-Is, still gets its place: one held device takes at
+/// most 64 of the 1,024 (#2537).
+#[tokio::test(start_paused = true)]
+async fn a_held_device_leaves_room_for_another_to_be_looked_for() {
+    let mut h = start_with_av2().await;
+    let leases = h.server.notification_transactions.lease_every_invoke_id();
+    hold_device_9(&h).await;
+    transitions(&h, 1_100).await;
+    h.write_local_to(av2(), 85.0).await;
+    let (_, looked_for) = next_who_is(&h).await;
+    assert_eq!(looked_for, targeted(10));
+    deliver(&h, &i_am(10), &DEVICE_10, None).await;
+    h.settle().await;
+    assert!(notifications(&h).contains(&(DEVICE_10.to_vec(), 10, false)));
+    let counters = h.server.event_notification_counters();
+    assert_eq!(counters.device_recipient_unbound, 0);
+    drop(leases);
+    h.server.stop().await.unwrap();
+}
+
+/// A device's queue holds 64 while it waits for the device's I-Am too: past
+/// them the newest are dropped and counted in `lane_full`, none as unbound,
+/// and the 64 go out in order once the I-Am comes (#2537).
+#[tokio::test(start_paused = true)]
+async fn a_device_queue_waiting_for_its_i_am_holds_64() {
+    let mut h = start(false).await;
+    h.write_local(85.0).await;
+    next_who_is(&h).await;
+    transitions(&h, 69).await;
+    assert_eq!(waiting(&h), super::MAX_LANE_ENTRIES);
+    let counters = h.server.event_notification_counters();
+    assert_eq!(
+        (counters.lane_full, counters.device_recipient_unbound),
+        (70 - super::MAX_LANE_ENTRIES as u64, 0)
+    );
+    deliver(&h, &i_am(9), &DEVICE_9, None).await;
+    h.settle().await;
+    let sent = to_states(&h, &DEVICE_9);
+    assert_eq!(sent.len(), super::MAX_LANE_ENTRIES, "the 64 held");
+    let alternating = sent.iter().enumerate().all(|(at, state)| {
+        *state
+            == if at % 2 == 0 {
+                bacnet_types::enums::EventState::HIGH_LIMIT
+            } else {
+                bacnet_types::enums::EventState::NORMAL
+            }
+    });
+    assert!(alternating, "in the order they were made: {sent:?}");
+    assert_eq!(waiting(&h), 0);
     h.server.stop().await.unwrap();
 }
