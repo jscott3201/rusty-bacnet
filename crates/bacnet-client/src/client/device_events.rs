@@ -1,5 +1,73 @@
 use super::*;
 
+/// Where an I-Am came from: the link MAC, the SNET/SADR a router added, and
+/// the number of this client's network, when it has learned one.
+pub(super) struct IAmSource<'a> {
+    pub(super) mac: &'a [u8],
+    pub(super) network: &'a Option<NpduAddress>,
+    pub(super) this_network: Option<u16>,
+}
+
+/// Take an I-Am into the discovery table and tell the subscribers what it
+/// changed. The notices go out under the table's lock, as the purge's do (a
+/// broadcast send never waits), so the two can't interleave out of order.
+/// Kept out of line: the dispatch loop's hot path is the replies.
+#[inline(never)]
+pub(super) fn heard_i_am(
+    table: &SyncMutex<DeviceTable>,
+    from: IAmSource<'_>,
+    i_am: &bacnet_services::who_is::IAmRequest,
+    (device_tx, collision_tx): (
+        &broadcast::Sender<DeviceEvent>,
+        &broadcast::Sender<DeviceCollisionEvent>,
+    ),
+) {
+    // A router relaying back an I-Am from this client's own network names a
+    // local device: one row, as it is one peer (#1358, #1465).
+    let (mac_address, source_network, source_address) = match from.network {
+        Some(routed) if !routed.mac_address.is_empty() => {
+            if Some(routed.network) == from.this_network {
+                (routed.mac_address.clone(), None, None)
+            } else {
+                let station = Some(routed.mac_address.clone());
+                (MacAddr::from_slice(from.mac), Some(routed.network), station)
+            }
+        }
+        _ => (MacAddr::from_slice(from.mac), None, None),
+    };
+    let device = DiscoveredDevice {
+        object_identifier: i_am.object_identifier,
+        mac_address,
+        max_apdu_length: i_am.max_apdu_length,
+        segmentation_supported: i_am.segmentation_supported,
+        max_segments_accepted: None,
+        vendor_id: i_am.vendor_id,
+        last_seen: crate::discovery::now(),
+        source_network,
+        source_address,
+    };
+    let mut table = table.lock();
+    let heard = table.heard(device.clone());
+    if let Some(old) = heard.replaced {
+        // Another device took the address's place.
+        let _ = device_tx.send(DeviceEvent {
+            kind: DeviceEventKind::Lost,
+            device: old,
+        });
+    }
+    let kind = match heard.change {
+        Change::Inserted | Change::Replaced => Some(DeviceEventKind::Discovered),
+        Change::Updated => Some(DeviceEventKind::Updated),
+        Change::Dropped => None,
+    };
+    if let Some(kind) = kind {
+        let _ = device_tx.send(DeviceEvent { kind, device });
+    }
+    for &instance in &heard.contested {
+        let _ = collision_tx.send(DeviceCollisionEvent::of(&table, instance));
+    }
+}
+
 impl DeviceCollisionEvent {
     /// The rows that claim `instance` in `table` now.
     pub(super) fn of(table: &DeviceTable, instance: u32) -> Self {

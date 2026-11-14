@@ -482,62 +482,17 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
                                 vendor = i_am.vendor_id,
                                 "Received IAm"
                             );
-                            // A router relaying back an I-Am from this
-                            // client's own network names a local device: one
-                            // row, as it is one peer (#1358, #1465).
                             let this_network = network.local_network_number().get();
-                            let (mac_address, src_net, src_addr) = match source_network {
-                                Some(from) if !from.mac_address.is_empty() => {
-                                    if Some(from.network) == this_network {
-                                        (from.mac_address.clone(), None, None)
-                                    } else {
-                                        let station = Some(from.mac_address.clone());
-                                        (
-                                            MacAddr::from_slice(source_mac),
-                                            Some(from.network),
-                                            station,
-                                        )
-                                    }
-                                }
-                                _ => (MacAddr::from_slice(source_mac), None, None),
-                            };
-                            let device = DiscoveredDevice {
-                                object_identifier: i_am.object_identifier,
-                                mac_address,
-                                max_apdu_length: i_am.max_apdu_length,
-                                segmentation_supported: i_am.segmentation_supported,
-                                max_segments_accepted: None,
-                                vendor_id: i_am.vendor_id,
-                                last_seen: crate::discovery::now(),
-                                source_network: src_net,
-                                source_address: src_addr,
-                            };
-                            // The notices go out under the table's lock, as
-                            // the purge's do (a broadcast send never waits),
-                            // so the two can't interleave out of order.
-                            let mut table = device_table.lock();
-                            let heard = table.heard(device.clone());
-                            if let Some(old) = heard.replaced {
-                                // Another device took the address's place.
-                                let _ = device_tx.send(DeviceEvent {
-                                    kind: DeviceEventKind::Lost,
-                                    device: old,
-                                });
-                            }
-                            let kind = match heard.change {
-                                Change::Inserted | Change::Replaced => {
-                                    Some(DeviceEventKind::Discovered)
-                                }
-                                Change::Updated => Some(DeviceEventKind::Updated),
-                                Change::Dropped => None,
-                            };
-                            if let Some(kind) = kind {
-                                let _ = device_tx.send(DeviceEvent { kind, device });
-                            }
-                            for &instance in &heard.contested {
-                                let _ = device_collision_tx
-                                    .send(DeviceCollisionEvent::of(&table, instance));
-                            }
+                            device_events::heard_i_am(
+                                device_table,
+                                device_events::IAmSource {
+                                    mac: source_mac,
+                                    network: source_network,
+                                    this_network,
+                                },
+                                &i_am,
+                                (device_tx, device_collision_tx),
+                            );
                         }
                         Err(e) => {
                             warn_throttled!(decode_warning, error = %e, "Failed to decode IAm");

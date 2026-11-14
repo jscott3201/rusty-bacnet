@@ -219,9 +219,12 @@ impl<T: TransportPort + 'static> BACnetClient<T> {
             // routed row (#1358).
             let mut sized_by = named.station();
             let mut found = dt.peer(sized_by.0, sized_by.1);
-            if found.is_none() && target.station() != sized_by {
-                sized_by = target.station();
-                found = dt.peer(sized_by.0, sized_by.1);
+            if found.is_none()
+                && let (ConfirmedTarget::Routed { .. }, ConfirmedTarget::Local { mac }) =
+                    (named, target)
+            {
+                sized_by = (0, mac);
+                found = dt.peer(0, mac);
             }
             let (device, peer_segmentation) = found.unzip();
             let max_apdu = device
