@@ -42,6 +42,8 @@ use tokio::sync::{Semaphore, mpsc};
 mod fault;
 #[path = "event_lanes_hold_time_tests.rs"]
 mod hold_time;
+#[path = "event_lanes_invoke_id_tests.rs"]
+mod invoke_id;
 #[path = "event_lanes_wire_tests.rs"]
 mod wire;
 
@@ -87,14 +89,14 @@ enum Sent {
 /// layer, so the lanes log only after letting it go. Install it on a
 /// current-thread runtime, where only the logging thread can hold it.
 #[derive(Clone)]
-struct LaneLockSpy {
+pub(in crate::server) struct LaneLockSpy {
     transactions: Arc<NotificationTransactions>,
     /// Events seen, and the messages of those that found the lock held.
     seen: Arc<StdMutex<(usize, Vec<String>)>>,
 }
 
 impl LaneLockSpy {
-    fn install(
+    pub(in crate::server) fn install(
         transactions: &Arc<NotificationTransactions>,
     ) -> (Self, tracing::subscriber::DefaultGuard) {
         let spy = Self {
@@ -107,7 +109,7 @@ impl LaneLockSpy {
 
     /// Every event this crate logged so far, and whether any found the
     /// lanes' lock held.
-    fn assert_logged_unlocked(&self, at_least: usize) {
+    pub(in crate::server) fn assert_logged_unlocked(&self, at_least: usize) {
         let (events, held) = &*self.seen.lock().unwrap();
         assert!(*events >= at_least, "{events} events logged");
         assert!(held.is_empty(), "logged under the lanes' lock: {held:?}");
@@ -202,6 +204,21 @@ impl Probe {
             if hold {
                 self.release_ack.acquire().await.unwrap().forget();
             }
+            return;
+        }
+        // A confirmed transition's send panics as `panic_on` asks; nothing
+        // else is done with it.
+        if let Apdu::ConfirmedRequest(request) = frame.apdu()
+            && request.service_choice == ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION
+        {
+            let n = decode_event_notification(&request.service_request).unwrap();
+            let mut slot = self.panic_on.lock().unwrap();
+            let once = *slot == Some(n.to_state.to_raw());
+            if once {
+                *slot = None;
+            }
+            drop(slot);
+            assert!(!once, "a test transport's confirmed send panics");
             return;
         }
         let Apdu::UnconfirmedRequest(request) = frame.apdu() else {

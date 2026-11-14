@@ -3,7 +3,6 @@
 
 use super::*;
 use crate::server::EventNotificationCounters;
-use crate::server::notification_transactions::canonical_direct_peer;
 
 const TARGET: [u8; 6] = [192, 168, 1, 50, 0xBA, 0xC0];
 
@@ -119,31 +118,29 @@ async fn unanswered_confirmed_notification_counts_once_after_its_last_retry() {
     );
 }
 
-#[tokio::test]
-async fn confirmed_notification_without_a_free_invoke_id_counts_once() {
+/// A confirmed notification that finds every invoke ID leased waits in its
+/// lane for one, uncounted, and goes once one comes back (#2537).
+#[tokio::test(start_paused = true)]
+async fn confirmed_notification_without_a_free_invoke_id_waits_for_one() {
     let harness = confirmed_local_harness(60_000).await;
     // Lease every device-wide invoke ID to another peer.
-    let held: Vec<_> = (0..256)
-        .map(|_| {
-            harness
-                .notification_transactions
-                .reserve(
-                    canonical_direct_peer(&[1]),
-                    ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION,
-                )
-                .expect("a free invoke ID")
-        })
-        .collect();
-    harness.distribute().await;
+    let mut held = harness.notification_transactions.lease_every_invoke_id();
+    let distribute = harness.distribute();
+    tokio::pin!(distribute);
+    let waited = tokio::time::timeout(Duration::from_secs(10), &mut distribute).await;
+    assert!(waited.is_err(), "it waits for an invoke ID");
     assert!(harness.unicast_frames().is_empty());
-    assert_eq!(
-        counters(&harness),
-        EventNotificationCounters {
-            confirmed_no_invoke_id: 1,
-            ..Default::default()
-        }
-    );
-    drop(held);
+    let counted_once = EventNotificationCounters {
+        confirmed_waited_for_invoke_id: 1,
+        ..Default::default()
+    };
+    assert_eq!(counters(&harness), counted_once);
+    drop(held.pop());
+    tokio::time::timeout(Duration::from_secs(10), distribute)
+        .await
+        .expect("it goes once an invoke ID comes back");
+    sent_invoke_id(&harness);
+    assert_eq!(counters(&harness), counted_once);
 }
 
 #[tokio::test]

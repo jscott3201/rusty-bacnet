@@ -4997,7 +4997,7 @@ class ForwarderSaveCounters(TypedDict):
     failed_saves: int
 
 class EventNotificationCounters(TypedDict):
-    """Undelivered event notifications, zero at each start; independent u64 totals, saturating at 2**64-1."""
+    """Undelivered event notifications, and confirmed ones that waited for an invoke ID or COV fanouts that stopped waiting; zero at each start; independent u64 totals, saturating at 2**64-1."""
     notification_class_missing: int
     recipient_list_unavailable: int
     recipient_list_invalid: int
@@ -5005,7 +5005,7 @@ class EventNotificationCounters(TypedDict):
     device_recipient_unbound: int
     recipient_unroutable: int
     confirmed_broadcast_recipient: int
-    confirmed_no_invoke_id: int
+    confirmed_waited_for_invoke_id: int
     confirmed_rejected: int
     confirmed_unanswered: int
     unconfirmed_send_failed: int
