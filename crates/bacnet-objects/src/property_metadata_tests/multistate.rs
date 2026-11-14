@@ -145,6 +145,7 @@ fn property_metadata_multistate_exact_required_and_instance_projections() {
                     requires.push(P::VALUE_SOURCE);
                 }
                 // The rows a profile adds follow the table's, each on its own.
+                let before_profile = expected.len();
                 if configuration & 1 != 0 {
                     expected.push(P::TAGS);
                 }
@@ -172,6 +173,18 @@ fn property_metadata_multistate_exact_required_and_instance_projections() {
                 );
                 let metadata = object.property_metadata();
                 assert_eq!(metadata.len(), expected.len() + 1, "{what}");
+                // Every row in order: Property_List closes the table's rows,
+                // ahead of the ones a profile adds.
+                let mut ordered = expected.clone();
+                ordered.insert(before_profile, P::PROPERTY_LIST);
+                assert_eq!(
+                    metadata
+                        .iter()
+                        .map(|r| r.property_identifier)
+                        .collect::<Vec<_>>(),
+                    ordered,
+                    "{what}"
+                );
                 for row in metadata.iter() {
                     let p = row.property_identifier;
                     if intrinsic_required.contains(&p) {
