@@ -10,7 +10,6 @@ use std::time::Duration;
 use bacnet_network::router::{BACnetRouter, RouterOptions, RouterPort, StartedRouter};
 use bacnet_server::server::BACnetServer;
 use bacnet_transport::test_transport::{SendLog, TestTransport};
-use bacnet_types::error::Error;
 
 use super::test_bus::{Bus, N, client_on, mac, name_of, server, settle, stop};
 use super::*;
@@ -81,7 +80,7 @@ async fn a_routed_station_is_reached_by_its_address() {
     assert_eq!(lab.discover().await.len(), 2);
     assert!(matches!(
         client.device(N).await,
-        Err(Error::AmbiguousDevice { instance: N, .. })
+        Err(OpsError::Ambiguous { instance: N, .. })
     ));
     let station = client.device("2:0x0A000005BAC0").await.unwrap();
     assert_eq!(station.address(), DeviceAddress::new(2, &mac(5)).unwrap());

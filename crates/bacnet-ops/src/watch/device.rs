@@ -26,12 +26,12 @@ use bacnet_transport::port::TransportPort;
 use tokio::sync::broadcast::{self, error::TryRecvError};
 use tokio::time::Instant;
 
-use super::jobs::{self, Started};
+use super::jobs::{self, Polled, Started};
 use super::options::MissingDevice;
-use super::poll::Polled;
 use super::sample::Via;
 use super::shared::{Arrival, DeviceSlot, FirstSample, Running, Shared};
-use super::{Inner, Source, State, Why};
+use super::{Inner, MISSING, Source, State, Why};
+use crate::client::batch::Missing;
 use crate::client::unreachable;
 use crate::limits::charged;
 
@@ -94,7 +94,7 @@ enum Holder {
 enum Done {
     Started { process: u32, started: Box<Started> },
     Cancelled(Holder),
-    Polled(Polled<u32>),
+    Polled(Polled),
 }
 
 type Job = Pin<Box<dyn Future<Output = Done> + Send>>;
@@ -491,10 +491,11 @@ impl<T: TransportPort + 'static> Device<T> {
         }
     }
 
-    fn polled(&mut self, polled: Polled<u32>) {
+    fn polled(&mut self, polled: Polled) {
         let now = Instant::now();
         self.last_polled = Some(now);
-        if polled.unreachable {
+        let unreachable = polled.unreachable();
+        if unreachable {
             self.backoff = self.inner.options.poll_backoff.next(self.backoff);
             self.retry_at = Some(now + self.backoff);
             tracing::info!(
@@ -506,22 +507,36 @@ impl<T: TransportPort + 'static> Device<T> {
             self.backoff = Duration::ZERO;
             self.retry_at = None;
         }
+        let state = if unreachable {
+            State::Unreachable
+        } else {
+            State::Failed
+        };
         let seq = &self.inner.registry.seq;
-        for (process, read) in polled.rows {
+        let Polled {
+            rows,
+            stopped,
+            unread,
+        } = polled;
+        let stopped = stopped.map(|error| error.to_string());
+        let failed = |row: &Row, error: String| {
+            let shared = &row.shared;
+            shared.set_state(seq, Some(Source::Poll), state, Some(error.clone()));
+            shared.sample(Err(error), Via::Poll);
+        };
+        for (process, rows) in rows {
             let Some(row) = self.rows.get(&process) else {
                 continue;
             };
-            let shared = &row.shared;
-            match read {
-                Ok(rows) => shared.read(seq, rows, true, None),
-                Err(error) => {
-                    let state = if polled.unreachable {
-                        State::Unreachable
-                    } else {
-                        State::Failed
-                    };
-                    shared.set_state(seq, Some(Source::Poll), state, Some(error.clone()));
-                    shared.sample(Err(error), Via::Poll);
+            match rows {
+                Ok(rows) => row.shared.read(seq, rows, true, None),
+                Err(Missing) => failed(row, MISSING.to_string()),
+            }
+        }
+        if let Some(error) = stopped {
+            for process in unread {
+                if let Some(row) = self.rows.get(&process) {
+                    failed(row, error.clone());
                 }
             }
         }

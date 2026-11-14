@@ -124,7 +124,7 @@ async fn agents_share_one_budget_and_the_tui_keeps_its_share() {
     let lab_device = client.device(LAB).await.unwrap();
     for _ in 0..20 {
         lab_device
-            .read_property(ai1(), PropertyIdentifier::PRESENT_VALUE, None)
+            .read((ai1(), PropertyIdentifier::PRESENT_VALUE))
             .await
             .unwrap();
     }

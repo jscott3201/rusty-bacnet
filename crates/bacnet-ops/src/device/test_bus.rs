@@ -25,13 +25,13 @@ use bacnet_types::enums::{
     UnconfirmedServiceChoice,
 };
 use bacnet_types::error::Error;
-use bacnet_types::primitives::{ObjectIdentifier, PropertyValue};
+use bacnet_types::primitives::ObjectIdentifier;
 use bytes::{Bytes, BytesMut};
 use tokio::sync::mpsc;
 
 use crate::client::Client;
 use crate::device::{Device, DeviceAddress};
-use crate::format::decode_all;
+use crate::error::OpsError;
 use crate::limits::RequestLimits;
 
 /// The instance the tests' devices share.
@@ -60,14 +60,12 @@ pub(super) async fn client(bus: &Arc<Bus>) -> (Client<TestTransport>, SendLog) {
 }
 
 /// The analog input's name, as `device` reads it.
-pub(super) async fn name_of(device: &Device<TestTransport>) -> Result<String, Error> {
+pub(super) async fn name_of(device: &Device<TestTransport>) -> Result<String, OpsError> {
     let ai = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
-    let data = device
-        .read_property(ai, PropertyIdentifier::OBJECT_NAME, None)
-        .await?;
-    match decode_all(&data).as_deref() {
-        Some([PropertyValue::CharacterString(name)]) => Ok(name.clone()),
-        other => panic!("a name: {other:?}"),
+    let value = device.read((ai, PropertyIdentifier::OBJECT_NAME)).await?;
+    match value.as_str() {
+        Some(name) => Ok(name.to_string()),
+        None => panic!("a name: {value:?}"),
     }
 }
 

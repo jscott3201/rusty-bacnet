@@ -20,6 +20,11 @@ targets, values and devices the same way and obey the same request limits.
   the object list, a device summary, trend log pages, alarms and the
   alarm and enrollment summaries, and Who-Is and Who-Is-Router-To-Network
   with the discovery table.
+- `reading` and `error`: what a read returns, a `Value` (typed data,
+  display text and the octets sent) a property, gathered into `Readings`
+  by a bulk read, which keeps a refused property's error in its row and
+  what was read when the device stops answering; and `OpsError`, why a
+  call failed.
 - `export`: a device's objects in another model's terms. So far
   `export::s223`, an experimental point list in the terms of proposed
   ASHRAE Standard 223, as Turtle: an inventory read through the client

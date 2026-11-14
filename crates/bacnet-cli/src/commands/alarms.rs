@@ -5,6 +5,7 @@
 
 use crate::destination::Destination;
 use bacnet_client::client::BACnetClient;
+use bacnet_ops::OpsError;
 use bacnet_ops::format::alarms::{
     AlarmSummaryData, EnrollmentSummaryData, EventInformationData, EventSummaryData,
     read_event_information,
@@ -165,8 +166,13 @@ pub async fn alarms_cmd<T: TransportPort + 'static>(
     format: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let cap = usize::try_from(max).unwrap_or(usize::MAX);
-    let (summaries, more_events) =
-        read_event_information(cap, |after| to.get_event_information(client, after)).await?;
+    // A device that breaks the paging rules fails as `OpsError::Paging`.
+    let (summaries, more_events) = read_event_information(cap, |after| async move {
+        to.get_event_information(client, after)
+            .await
+            .map_err(OpsError::from)
+    })
+    .await?;
     let data = EventInformationData::from_summaries(&summaries, more_events);
     match format {
         OutputFormat::Table => println!("{}", event_information_text(&data, max)),

@@ -7,11 +7,9 @@
 
 use std::time::Duration;
 
-use bacnet_types::error::Error;
-
 use super::test_bus::{Bus, N, at, client, mac, name_of, server, settle, stop, who_is};
 use super::*;
-use crate::client::{RESOLVE_WAIT, timed_out};
+use crate::client::RESOLVE_WAIT;
 
 /// A device that moves soon after its last I-Am, within `QUIET` of it, is
 /// followed all the same: the timeout asks once where it went, and the
@@ -33,7 +31,7 @@ async fn a_move_soon_after_an_i_am_is_followed() {
     settle().await;
     let mut events = client.events();
     let error = name_of(&device).await.unwrap_err();
-    assert!(timed_out(&error), "{error}");
+    assert!(error.timed_out(), "{error}");
     assert_eq!(device.address(), at(2), "one timeout moves nothing");
     assert_eq!(who_is(&sent), 1, "one Who-Is asks where it went");
     // A second timeout before the Who-Is has had the resolve wait for its
@@ -70,7 +68,7 @@ async fn a_gone_device_is_asked_for_once_each_quiet() {
     bus.silence(2);
     for handle in [&device, &alongside, &device, &alongside, &device] {
         let error = name_of(handle).await.unwrap_err();
-        assert!(timed_out(&error), "{error}");
+        assert!(error.timed_out(), "{error}");
     }
     assert_eq!(who_is(&sent), 1, "one Who-Is for five reads by two handles");
     tokio::time::sleep(QUIET).await;
@@ -100,7 +98,7 @@ async fn a_clone_that_sends_nothing_goes_by_the_announcements() {
     settle().await;
     bus.silence(2);
     let error = name_of(&device).await.unwrap_err();
-    assert!(timed_out(&error), "{error}");
+    assert!(error.timed_out(), "{error}");
     assert_eq!(device.address(), at(2), "announced together: no move");
     tokio::time::sleep(QUIET * 2).await;
     bus.i_am(3, N);
@@ -134,7 +132,7 @@ async fn a_late_duplicate_does_not_take_the_handle_on_a_missed_read() {
     let mut events = client.events();
     bus.silence(2);
     let error = name_of(&device).await.unwrap_err();
-    assert!(timed_out(&error), "{error}");
+    assert!(error.timed_out(), "{error}");
     assert_eq!(
         device.address(),
         at(2),
@@ -154,7 +152,7 @@ async fn a_late_duplicate_does_not_take_the_handle_on_a_missed_read() {
     assert!(events.try_recv().is_err(), "nothing moved");
     assert!(matches!(
         client.device(N).await,
-        Err(Error::AmbiguousDevice { instance: N, .. })
+        Err(OpsError::Ambiguous { instance: N, .. })
     ));
     stop(servers).await;
 }
@@ -182,7 +180,7 @@ async fn a_row_registered_by_hand_is_not_quiet_on_its_own() {
     bus.silence(2);
     for handle in [&silent, &asking] {
         let error = name_of(handle).await.unwrap_err();
-        assert!(timed_out(&error), "{error}");
+        assert!(error.timed_out(), "{error}");
         assert_eq!(handle.address(), at(2), "{handle:?}");
     }
     stop(servers).await;

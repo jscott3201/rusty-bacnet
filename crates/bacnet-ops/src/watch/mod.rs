@@ -9,7 +9,8 @@
 //! object, SubscribeCOVProperty for one property) through the client's
 //! managed subscriptions, which renew it before it lapses. Points the
 //! device won't subscribe are polled instead, all of a device's together
-//! in batched ReadPropertyMultiple requests ([`poll`]), never faster than
+//! in batched ReadPropertyMultiple requests (the batches
+//! [`Device::read_many`](crate::Device::read_many) reads in), never faster than
 //! [`WatchOptions::poll_floor`]; a device that stops answering is polled
 //! after a backoff. Later leases on the point share the entry; the last
 //! one dropped stops it, and the scheduler cancels its subscription the
@@ -47,7 +48,6 @@ mod dispatch;
 pub mod first;
 mod jobs;
 mod options;
-pub mod poll;
 mod sample;
 mod shared;
 
@@ -87,6 +87,11 @@ pub const POINT_PROPERTIES: [PropertyIdentifier; 10] = [
     PropertyIdentifier::RELINQUISH_DEFAULT,
     PropertyIdentifier::COV_INCREMENT,
 ];
+
+/// Why a polled point has no reading: the device's ReadPropertyMultiple
+/// answer left its object out, or its rows don't hold the watched
+/// property.
+pub const MISSING: &str = "missing from the device's answer";
 
 /// Subscriber process identifiers start here, clear of the small numbers
 /// the one-shot commands use.

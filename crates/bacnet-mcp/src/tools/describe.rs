@@ -2,11 +2,11 @@
 
 use std::collections::BTreeMap;
 
-use bacnet_ops::format::{RawRow, decode_all};
+use bacnet_ops::client::{DeviceSummary, ReadVia};
+use bacnet_ops::format::Datum;
 use bacnet_ops::label::kebab;
 use bacnet_transport::port::TransportPort;
-use bacnet_types::enums::{PropertyIdentifier, ResolvedEnum, resolve_enum};
-use bacnet_types::primitives::PropertyValue;
+use bacnet_types::enums::PropertyIdentifier;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
@@ -14,7 +14,7 @@ use super::{Spec, list::listing, schema};
 use crate::context::{Call, Ctx, DeviceArg};
 use crate::errors::{ToolError, row_error_json};
 use crate::untrusted::envelope;
-use crate::value::{bit_names, row_text};
+use crate::value::reading_text;
 
 pub(super) const NAME: &str = "bacnet_describe_device";
 
@@ -95,23 +95,20 @@ impl Args {
     }
 }
 
-/// The value of `property` among `rows`, decoded.
-fn values(rows: &[RawRow], property: PropertyIdentifier) -> Option<Vec<PropertyValue>> {
-    let (_, value) = rows.iter().find(|(p, _)| *p == property)?;
-    decode_all(value.as_deref().ok()?)
-}
-
-fn unsigned(rows: &[RawRow], property: PropertyIdentifier) -> Option<u64> {
-    match values(rows, property)?.as_slice() {
-        [PropertyValue::Unsigned(n)] => Some(*n),
+/// `property`'s value in `summary` as an Unsigned.
+fn unsigned(summary: &DeviceSummary, property: PropertyIdentifier) -> Option<u64> {
+    match summary.value(property)?.data {
+        Datum::Unsigned(n) => Some(n),
         _ => None,
     }
 }
 
 /// The names of a bit string's set bits (services, object types).
-fn set_bits(rows: &[RawRow], property: PropertyIdentifier) -> Vec<String> {
-    match values(rows, property).as_deref() {
-        Some([bits @ PropertyValue::BitString { .. }]) => bit_names(property, bits),
+fn set_bits(summary: &DeviceSummary, property: PropertyIdentifier) -> Vec<String> {
+    match summary.value(property).map(|value| &value.data) {
+        Some(Datum::Bits {
+            names: Some(names), ..
+        }) => names.clone(),
         _ => Vec::new(),
     }
 }
@@ -128,7 +125,7 @@ pub(crate) async fn run<T: TransportPort + 'static>(
         .describe_device()
         .await
         .map_err(|e| ToolError::device(device.instance, &e))?;
-    let rows = &summary.rows;
+    let readings = &summary.readings;
     let cap = ctx.policy.caps.text;
     let text = |property: PropertyIdentifier| {
         let source = format!(
@@ -137,22 +134,22 @@ pub(crate) async fn run<T: TransportPort + 'static>(
             device.instance,
             kebab(property)
         );
-        row_text(rows, property).map_or(Value::Null, |text| envelope(&text, source, cap))
+        reading_text(readings, property).map_or(Value::Null, |text| envelope(&text, source, cap))
     };
-    let segmentation = match values(rows, PropertyIdentifier::SEGMENTATION_SUPPORTED).as_deref() {
-        Some([value @ PropertyValue::Enumerated(raw)]) => {
-            match resolve_enum(PropertyIdentifier::SEGMENTATION_SUPPORTED, value) {
-                Some(ResolvedEnum::Unknown(_)) | None => Some(raw.to_string()),
-                Some(named) => Some(kebab(named)),
-            }
+    let segmentation = match summary
+        .value(PropertyIdentifier::SEGMENTATION_SUPPORTED)
+        .map(|value| &value.data)
+    {
+        Some(Datum::Enumerated { value, name }) => {
+            Some(name.clone().unwrap_or_else(|| value.to_string()))
         }
         _ => None,
     };
-    let errors: Map<String, Value> = rows
+    let errors: Map<String, Value> = readings
         .iter()
-        .filter_map(|(property, value)| {
-            let error = value.as_ref().err()?;
-            Some((kebab(property), row_error_json(error)))
+        .filter_map(|reading| {
+            let error = reading.value.as_ref().err()?;
+            Some((kebab(reading.property), row_error_json(error)))
         })
         .collect();
     let entry = &device.entry;
@@ -168,18 +165,19 @@ pub(crate) async fn run<T: TransportPort + 'static>(
         "model_name": text(PropertyIdentifier::MODEL_NAME),
         "firmware_revision": text(PropertyIdentifier::FIRMWARE_REVISION),
         "application_software_version": text(PropertyIdentifier::APPLICATION_SOFTWARE_VERSION),
-        "vendor_id": unsigned(rows, PropertyIdentifier::VENDOR_IDENTIFIER),
-        "protocol_version": unsigned(rows, PropertyIdentifier::PROTOCOL_VERSION),
-        "protocol_revision": unsigned(rows, PropertyIdentifier::PROTOCOL_REVISION),
-        "max_apdu": unsigned(rows, PropertyIdentifier::MAX_APDU_LENGTH_ACCEPTED),
+        "vendor_id": unsigned(&summary, PropertyIdentifier::VENDOR_IDENTIFIER),
+        "protocol_version": unsigned(&summary, PropertyIdentifier::PROTOCOL_VERSION),
+        "protocol_revision": unsigned(&summary, PropertyIdentifier::PROTOCOL_REVISION),
+        "max_apdu": unsigned(&summary, PropertyIdentifier::MAX_APDU_LENGTH_ACCEPTED),
         "segmentation": segmentation,
-        "database_revision": unsigned(rows, PropertyIdentifier::DATABASE_REVISION),
-        "services_supported": set_bits(rows, PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED),
-        "object_types_supported": set_bits(rows, PropertyIdentifier::PROTOCOL_OBJECT_TYPES_SUPPORTED),
+        "database_revision": unsigned(&summary, PropertyIdentifier::DATABASE_REVISION),
+        "services_supported": set_bits(&summary, PropertyIdentifier::PROTOCOL_SERVICES_SUPPORTED),
+        "object_types_supported": set_bits(&summary, PropertyIdentifier::PROTOCOL_OBJECT_TYPES_SUPPORTED),
         "errors": errors,
         "via": match summary.via {
-            bacnet_ops::client::ReadVia::Rpm => "rpm",
-            bacnet_ops::client::ReadVia::Rp => "rp",
+            ReadVia::Rpm => "rpm",
+            ReadVia::Rp => "rp",
+            ReadVia::Mixed => "mixed",
         },
         "limits": ctx.limits(None),
     });
