@@ -11658,7 +11658,9 @@ destination's lane is sending, 1,024 across the lanes and 256 destinations.
 A change's COV notifications wait for its event notifications to be handed
 off (#889) for at most the APDU timeout (`cov_retry_timeout_ms`), a wait for
 a Device recipient's I-Am included; `cov_wait_expired` counts the changes for
-which they went out at that limit instead.
+which they went out at that limit instead. The intrinsic-reporting sweep
+doesn't wait itself: each pass's COV fanout waits behind the earlier passes',
+and one with 64 already waiting goes at once, counted there too.
 
 The three route fields (#1160) count destinations that matched the transition
 but were skipped while their route was resolved, once per destination; the

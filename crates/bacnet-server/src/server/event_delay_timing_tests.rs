@@ -334,3 +334,109 @@ async fn the_floor_never_delays_the_periodic_sweep() {
         assert_eq!(notified(&sent), expected, "at {millis} ms");
     }
 }
+
+/// A database whose AI-1 alarms through Notification Class 1 to Device 9,
+/// which the server holds no binding for and which never answers, and whose
+/// AI-2 alarms through the broadcasting class 0; both after 1 s.
+fn database_with_a_silent_device() -> (ObjectDatabase, Vec<ObjectIdentifier>) {
+    let (mut db, oids) = database(&[1, 1]);
+    let mut nc1 = bacnet_objects::notification_class::NotificationClass::new(1, "NC-1").unwrap();
+    let device_9 = ObjectIdentifier::new(ObjectType::DEVICE, 9).unwrap();
+    let recipient = bacnet_types::constructed::BACnetRecipient::Device(device_9);
+    let to_device = super::event_recipient_routing_tests::destination_for(recipient, false);
+    nc1.add_destination(to_device).unwrap();
+    db.add(Box::new(nc1)).unwrap();
+    let class = PropertyValue::Unsigned(1);
+    let ai1 = db.get_mut(&oids[0]).unwrap();
+    ai1.write_property(PropertyIdentifier::NOTIFICATION_CLASS, None, class, None)
+        .unwrap();
+    (db, oids)
+}
+
+/// A sweep pass whose notification waits in a lane (here for a Device
+/// recipient's I-Am, #2537) holds up no later pass: AI-2's alarm, due at
+/// 2.5 s, goes out then, while AI-1's lane still waits for Device 9.
+#[tokio::test(start_paused = true)]
+async fn a_pass_waiting_on_a_lane_holds_up_no_later_sweep() {
+    let (transport, sent) = recording_transport();
+    let (db, oids) = database_with_a_silent_device();
+    let server = BACnetServer::start(ServerConfig::default(), db, transport)
+        .await
+        .expect("server should start");
+    let start = tokio::time::Instant::now();
+    let at = |millis| start + Duration::from_millis(millis);
+    tokio::time::sleep_until(at(100)).await;
+    begin_condition(&server, &oids[0]).await; // due at 1.1 s, to Device 9
+    tokio::time::sleep_until(at(1_500)).await;
+    begin_condition(&server, &oids[1]).await; // due at 2.5 s, broadcast
+    for (millis, expected) in [(2_490, &[][..]), (2_610, &[2])] {
+        tokio::time::sleep_until(at(millis)).await;
+        assert_eq!(notified(&sent), expected, "at {millis} ms");
+    }
+}
+
+/// The COV fanouts of sweep passes go in the order the passes ran, each
+/// behind its own pass's event notifications: AI-2's alarm is out at 2.5 s,
+/// but its COV report waits behind AI-1's, which waits for Device 9's lane.
+#[tokio::test(start_paused = true)]
+async fn sweep_cov_fanouts_keep_sweep_order_behind_a_waiting_lane() {
+    const SUBSCRIBER: [u8; 6] = [10, 0, 0, 5, 0xBA, 0xC0];
+    let transport = TestTransport::builder()
+        .local_mac(&crate::server::test_transport::BIP_LOCAL_MAC)
+        .build();
+    let sent = transport.sent();
+    let (db, oids) = database_with_a_silent_device();
+    let server = BACnetServer::start(ServerConfig::default(), db, transport)
+        .await
+        .expect("server should start");
+    for (process, oid) in (1..).zip(&oids) {
+        let subscription = bacnet_device_core::cov::CovSubscription {
+            subscriber_mac: MacAddr::from_slice(&SUBSCRIBER),
+            subscriber_network: None,
+            subscriber_process_identifier: process,
+            monitored_object_identifier: *oid,
+            issue_confirmed_notifications: false,
+            expires_at: None,
+            last_notified_observation: None,
+            monitored_property: None,
+            monitored_property_array_index: None,
+            cov_increment: None,
+            notification_kind: CovNotificationKind::Single,
+            timestamped: false,
+        };
+        server
+            .cov_table
+            .write()
+            .await
+            .subscribe(subscription)
+            .unwrap();
+    }
+    let start = tokio::time::Instant::now();
+    let at = |millis| start + Duration::from_millis(millis);
+    tokio::time::sleep_until(at(100)).await;
+    begin_condition(&server, &oids[0]).await;
+    tokio::time::sleep_until(at(1_500)).await;
+    begin_condition(&server, &oids[1]).await;
+    let before = sent.len();
+    // The COV reports since: the objects they name, in the order they went.
+    let reported = || {
+        sent.frames()[before..]
+            .iter()
+            .filter_map(|frame| match frame.apdu() {
+                Apdu::UnconfirmedRequest(request)
+                    if request.service_choice
+                        == UnconfirmedServiceChoice::UNCONFIRMED_COV_NOTIFICATION =>
+                {
+                    let n = COVNotificationRequest::decode(&request.service_request).unwrap();
+                    Some(n.monitored_object_identifier.instance_number())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    tokio::time::sleep_until(at(2_610)).await;
+    assert_eq!(notified(&sent), [2], "AI-2's alarm is out");
+    assert_eq!(reported(), [], "its COV report waits behind AI-1's");
+    tokio::time::sleep_until(at(4_500)).await;
+    assert_eq!(reported(), [1, 2]);
+}

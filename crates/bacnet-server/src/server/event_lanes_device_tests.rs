@@ -730,44 +730,78 @@ async fn stop_and_the_drop_end_a_lane_waiting_for_the_i_am() {
     assert!(!log.frames().iter().any(to_device));
 }
 
-/// An I-Am that races the start of the lane's wait is never lost: the table
-/// starts the probe under the guard it finds no binding under, so the I-Am
-/// either comes first, and the look finds the binding, or after, and wakes
-/// the wait. Looped on two worker threads.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_i_am_racing_the_start_of_the_wait_still_ends_it() {
-    for round in 0..2_000 {
-        // A minute's wait, so a lost wake-up shows as a timeout.
-        let owned = Arc::new(OwnedDelivery {
-            db: Arc::new(RwLock::new(ObjectDatabase::new())),
-            network: Arc::new(NetworkLayer::new(TestTransport::new())),
-            comm_state: Arc::default(),
-            learned_routers: Arc::new(Mutex::new(LearnedRouterCache::new())),
-            notification_transactions: NotificationTransactions::new(),
-            device_bindings: Arc::new(RwLock::new(DeviceBindingTable::new())),
-            suppressions: Arc::default(),
-            retry_timeout_ms: 60_000,
-            local_apdu_capacity: 1476,
-            device: device(1),
-        });
-        let bindings = Arc::clone(&owned.device_bindings);
-        let lane = tokio::spawn(async move {
-            let recipient = BACnetRecipient::Device(device(9));
-            let ctx = owned.delivery();
-            BACnetServer::<TestTransport>::device_route(&ctx, &recipient, device(9), 0).await
-        });
-        let answer = tokio::spawn(async move {
-            let now = crate::runtime_clock::now();
-            let mut table = bindings.write().await;
-            table.observe_i_am_at(device(9), &DEVICE_9, None, now, |_| false)
-        });
-        assert_eq!(answer.await.unwrap(), ObservationOutcome::Inserted);
-        let routed = tokio::time::timeout(Duration::from_secs(5), lane).await;
-        assert!(
-            matches!(routed, Ok(Ok(Some(DeviceResolution::ResolvedLocal { .. })))),
-            "round {round}: the wait missed the I-Am: {routed:?}"
-        );
+/// An I-Am that lands between the lane's look at the binding table and its
+/// probe is never lost: the table starts the probe under the guard it finds
+/// no binding under. The test holds a read guard, so the lane passes
+/// `resolve()` and queues `start()`'s write guard, then queues the I-Am's
+/// write behind it and lets the read guard go; split in two, the check and
+/// the probe would let the I-Am in between, and the lane wait a minute.
+#[tokio::test(start_paused = true)]
+async fn an_i_am_queued_behind_the_start_of_the_wait_still_ends_it() {
+    let owned = Arc::new(OwnedDelivery {
+        db: Arc::new(RwLock::new(ObjectDatabase::new())),
+        network: Arc::new(NetworkLayer::new(TestTransport::new())),
+        comm_state: Arc::default(),
+        learned_routers: Arc::new(Mutex::new(LearnedRouterCache::new())),
+        notification_transactions: NotificationTransactions::new(),
+        device_bindings: Arc::new(RwLock::new(DeviceBindingTable::new())),
+        suppressions: Arc::default(),
+        retry_timeout_ms: 60_000,
+        local_apdu_capacity: 1476,
+        device: device(1),
+    });
+    let bindings = Arc::clone(&owned.device_bindings);
+    let gate = bindings.read().await;
+    let lane = tokio::spawn(async move {
+        let recipient = BACnetRecipient::Device(device(9));
+        let ctx = owned.delivery();
+        BACnetServer::<TestTransport>::device_route(&ctx, &recipient, device(9), 0).await
+    });
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
     }
+    let answering = Arc::clone(&bindings);
+    let answer = tokio::spawn(async move {
+        let now = crate::runtime_clock::now();
+        let mut table = answering.write().await;
+        table.observe_i_am_at(device(9), &DEVICE_9, None, now, |_| false)
+    });
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    drop(gate);
+    assert_eq!(answer.await.unwrap(), ObservationOutcome::Inserted);
+    let started = Instant::now();
+    let routed = lane.await.unwrap();
+    assert!(
+        matches!(routed, Some(DeviceResolution::ResolvedLocal { .. })),
+        "{routed:?}"
+    );
+    assert!(started.elapsed() < Duration::from_secs(1), "lost wake-up");
+}
+
+/// An I-Am that comes while the lane's Who-Is is still being sent (held in
+/// the transport) ends the wait as soon as the send returns.
+#[tokio::test(start_paused = true)]
+async fn an_i_am_during_the_who_is_send_still_ends_the_wait() {
+    let mut h = start_for(ServerConfig::default(), &[(9, false)], &[]).await;
+    let transport = h.server.test_network().transport().handle();
+    // The only send before the I-Am is the Who-Is: hold it.
+    transport.block_next_send();
+    let started = Instant::now();
+    let writer = async {
+        h.write_local(85.0).await;
+        started.elapsed()
+    };
+    let (held, ()) = tokio::join!(writer, async {
+        transport.wait_blocked().await;
+        deliver(&h, &i_am(9), &DEVICE_9, None).await;
+        transport.release_sends(1);
+    });
+    assert!(held < Duration::from_millis(100), "{held:?}");
+    h.settle().await;
+    assert_eq!(notifications(&h), vec![(DEVICE_9.to_vec(), 9, false)]);
+    h.server.stop().await.unwrap();
 }
 
 /// A bound Device recipient whose confirmed notification waits for an

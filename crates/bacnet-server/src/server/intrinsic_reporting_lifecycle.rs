@@ -3,11 +3,13 @@ use super::super::cov_fanout::CovFanout;
 use super::super::event_notifications::logged_intrinsic_commit;
 use super::super::event_send::{Settle, settled};
 use super::*;
+use crate::committed_cov::CommittedCov;
 use bacnet_device_core::event::{next_due, sweep};
+use tokio::sync::mpsc::error::TrySendError;
 
 /// The sweep's period: the standing duties (FAULT from Reliability,
 /// Event_Algorithm_Inhibit references) run this often. It must not exceed
-/// the shortest nonzero Time_Delay, one second; see [`run`].
+/// the shortest nonzero Time_Delay, one second; see [`sweeps`].
 const SWEEP_PERIOD: Duration = Duration::from_secs(1);
 
 /// The least time from one sweep to the next when the next is woken for a
@@ -18,7 +20,37 @@ const SWEEP_PERIOD: Duration = Duration::from_secs(1);
 /// to this long after its due instant.
 const DUE_WAKE_FLOOR: Duration = Duration::from_millis(100);
 
+/// The most sweep passes whose COV fanout waits for their event notifications
+/// at once (#2537); a pass past them fans out at once, its wait counted in
+/// `cov_wait_expired`.
+const MAX_WAITING_FANOUTS: usize = 64;
+
+/// One sweep pass's COV fanout, and what it waits for first: its event
+/// notifications' hand-off, when it pushed any (#889).
+type Tail = (Option<oneshot::Receiver<()>>, CommittedCov);
+
 /// The intrinsic-reporting task (#2303).
+///
+/// Each pass's COV fanout waits for that pass's event notifications in a
+/// second future of this task, one pass at a time in the order the sweep
+/// made them ([`fan_out`]), so a destination that holds its lane (a Device
+/// recipient waiting for its I-Am, a stalled send, every invoke ID leased)
+/// holds up no later sweep (#2537). One join polls both, so neither sits
+/// unpolled while the other waits, and stopping the task ends both.
+pub(super) async fn run<T: TransportPort + 'static>(
+    fanout: CovFanout<T>,
+    learned_routers: Arc<Mutex<LearnedRouterCache>>,
+    device_bindings: Arc<RwLock<DeviceBindingTable>>,
+) {
+    let (tails, waiting) = mpsc::channel(MAX_WAITING_FANOUTS);
+    let timeout_ms = fanout
+        .event_delivery(&learned_routers, &device_bindings)
+        .retry_timeout_ms;
+    let sweeps = sweeps(&fanout, &learned_routers, &device_bindings, tails);
+    tokio::join!(sweeps, fan_out(&fanout, timeout_ms, waiting));
+}
+
+/// The sweeps, each pass's COV fanout handed to [`fan_out`].
 ///
 /// It sweeps every [`SWEEP_PERIOD`], and between those sweeps when the
 /// database's next Time_Delay ends ([`next_due`]), no sooner than
@@ -38,10 +70,11 @@ const DUE_WAKE_FLOOR: Duration = Duration::from_millis(100);
 /// time, and a period after it ran when it ran late, so a stall runs one
 /// sweep, not one per missed second. A sweep woken for a due instant leaves
 /// the cadence as it was.
-pub(super) async fn run<T: TransportPort + 'static>(
-    fanout: CovFanout<T>,
-    learned_routers: Arc<Mutex<LearnedRouterCache>>,
-    device_bindings: Arc<RwLock<DeviceBindingTable>>,
+async fn sweeps<T: TransportPort + 'static>(
+    fanout: &CovFanout<T>,
+    learned_routers: &Arc<Mutex<LearnedRouterCache>>,
+    device_bindings: &Arc<RwLock<DeviceBindingTable>>,
+    tails: mpsc::Sender<Tail>,
 ) {
     let mut next_sweep = tokio::time::Instant::now();
     let mut last_sweep = next_sweep;
@@ -90,7 +123,7 @@ pub(super) async fn run<T: TransportPort + 'static>(
                     && resolved.event_values.is_some()
                 {
                     BACnetServer::<T>::enqueue_event_notification(
-                        &fanout.event_delivery(&learned_routers, &device_bindings),
+                        &fanout.event_delivery(learned_routers, device_bindings),
                         &mut db,
                         &oid,
                         resolved,
@@ -111,17 +144,34 @@ pub(super) async fn run<T: TransportPort + 'static>(
                 commit.finish(&fanout.db, &mut db, &fanout.cov_table).await,
             )
         };
-        // The fanout waits for those notifications, capped (#889).
-        if let Some(waiting) = settle.into_wait() {
-            let delivery = fanout.event_delivery(&learned_routers, &device_bindings);
-            let timeout_ms = delivery.retry_timeout_ms;
-            settled(
-                Some(waiting),
-                timeout_ms,
-                delivery.notification_transactions,
-            )
-            .await;
+        let settle = settle.into_wait();
+        if settle.is_none() && committed.is_empty() {
+            continue;
         }
+        // The fanout waits for those notifications, capped (#889), behind
+        // the earlier passes' and off this loop. Past the bound it goes now,
+        // ahead of the passes still waiting, and counts as a wait that ran
+        // out unless its notifications are out already.
+        if let Err(
+            TrySendError::Full((settle, committed)) | TrySendError::Closed((settle, committed)),
+        ) = tails.try_send((settle, committed))
+        {
+            settled(settle, 0, &fanout.notification_transactions).await;
+            fanout.fire(&committed).await;
+        }
+    }
+}
+
+/// Each pass's COV fanout, in the order the sweep made them, once that
+/// pass's event notifications are handed off or the APDU timeout has passed
+/// (#889). Nothing is held across the wait.
+async fn fan_out<T: TransportPort + 'static>(
+    fanout: &CovFanout<T>,
+    timeout_ms: u64,
+    mut waiting: mpsc::Receiver<Tail>,
+) {
+    while let Some((settle, committed)) = waiting.recv().await {
+        settled(settle, timeout_ms, &fanout.notification_transactions).await;
         fanout.fire(&committed).await;
     }
 }

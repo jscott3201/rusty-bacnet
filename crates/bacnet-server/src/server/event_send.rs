@@ -150,7 +150,9 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             Ok(resolution) => Some(resolution),
             Err(LookupMiss::Disabled) => None,
             Err(LookupMiss::Undiscovered) => {
-                // Those behind it waited for the same I-Am.
+                // Those behind it waited for the same I-Am, and this one
+                // `found()` decides for them all: an I-Am that lands between
+                // the miss and the drop still drops them.
                 let behind = lanes::drop_waiting(ctx.notification_transactions, recipient);
                 for _ in 0..=behind {
                     ctx.suppressions
