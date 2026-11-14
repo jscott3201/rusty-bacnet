@@ -379,6 +379,65 @@ impl NotificationTransactions {
             .reserve(LeaseMetadata::notification(peer, service_choice))
     }
 
+    /// [`Self::reserve`], waiting while every invoke ID is leased: a
+    /// confirmed event notification holds its lane until one comes back
+    /// (#2537). The server's 256 IDs are one pool, shared by its event, COV,
+    /// audit and command-run requests, so each release wakes every waiter.
+    /// Whichever runs first takes the ID and the rest wait again: there is
+    /// no order among waiters. `waits` is called once, as the wait starts.
+    /// Any other refusal returns at once. It holds no lock while it waits,
+    /// so it can be cancelled.
+    pub(super) async fn reserve_waiting(
+        &self,
+        peer: CanonicalPeer,
+        service_choice: ConfirmedServiceChoice,
+        waits: impl FnOnce(),
+    ) -> Result<NotificationReservation, NotificationReserveError> {
+        let mut waits = Some(waits);
+        loop {
+            // Made before the attempt, so a lease released after it fails
+            // still ends this wait: the coordinator's wake reaches every
+            // waiter already made, polled or not, and stores no permit.
+            let released = self.core.coordinator.released();
+            match self.reserve(peer.clone(), service_choice) {
+                Err(NotificationReserveError::Coordinator(ReserveError::Exhausted)) => {
+                    if let Some(waits) = waits.take() {
+                        waits();
+                    }
+                    released.await;
+                }
+                result => return result,
+            }
+        }
+    }
+
+    /// Poison the transaction state, as a panic under its lock would, for
+    /// tests of a state that can lease no invoke ID at all.
+    #[cfg(test)]
+    pub(super) fn poison_state_for_test(self: &Arc<Self>) {
+        let transactions = Arc::clone(self);
+        let _ = std::thread::spawn(move || {
+            let _held = transactions.core.state.lock().unwrap();
+            panic!("poison the notification state");
+        })
+        .join();
+    }
+
+    /// Lease every invoke ID to another peer, for tests that need none
+    /// free.
+    #[cfg(test)]
+    pub(super) fn lease_every_invoke_id(&self) -> Vec<NotificationReservation> {
+        (0..256)
+            .map(|_| {
+                self.reserve(
+                    canonical_direct_peer(&[1]),
+                    ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION,
+                )
+                .expect("a free invoke ID")
+            })
+            .collect()
+    }
+
     /// Lease an invoke ID for a read this server sends, answered by an
     /// unsegmented ComplexAck whose service data reaches the receiver
     /// ([`LeaseMetadata::server_read`]).

@@ -5687,13 +5687,16 @@ and how each limit behaves.
 
 #### `event_notification_counters() -> EventNotificationCounters`
 
-Sample the totals of event notifications the server did not deliver: a dict
+Sample the totals of event notifications the server did not deliver, and of
+two waits that keep their order (`confirmed_waited_for_invoke_id`,
+`cov_wait_expired`): a dict
 holding every field of the Rust `EventNotificationCounters` under the same name,
 typed as the `EventNotificationCounters` TypedDict in the stub. Every field is a
 running total that starts at zero on each `start()` and saturates at 2**64-1.
 Each field is read on its own, so one sample is not an atomic aggregate. Like
 `cov_counters()`, it raises `RuntimeError` before start and after stop. Each
-counted refusal also logs a warning; the counters are the running signal.
+counted refusal also logs a warning, and each wait for an invoke ID a debug
+line; the counters are the running signal.
 
 ```python
 counters = await server.event_notification_counters()
@@ -5710,7 +5713,7 @@ counters["confirmed_unanswered"]        # confirmed notifications never acknowle
 | `device_recipient_unbound` | Matched Device recipients skipped because no binding was configured or observed, or the observed one expired, and a targeted Who-Is drew no I-Am within the APDU timeout (or none could go out, within a minute of one that drew nothing); also a confirmed notification ended at a retry because the observed binding had expired by then |
 | `recipient_unroutable` | Matched recipients skipped because they can't be routed as written: a Device identifier that isn't a Device (or a binding unusable on this link), or a MAC on network 65535 |
 | `confirmed_broadcast_recipient` | Matched recipients skipped because they ask for confirmed notifications at a broadcast address, or another group address such as a multicast one, which only unconfirmed requests may use (Clause 6.3) |
-| `confirmed_no_invoke_id` | Confirmed notifications to one recipient not sent because no invoke ID was free |
+| `confirmed_waited_for_invoke_id` | Confirmed notifications that found every invoke ID in use and waited for one, once each; none is dropped for want of an ID, and only its destination waits: its lane, or a Device recipient's queue (#2537) |
 | `confirmed_rejected` | Confirmed notifications the recipient answered with an Error, Reject or Abort |
 | `confirmed_unanswered` | Confirmed notifications with no acknowledgment after the last retry |
 | `unconfirmed_send_failed` | Unconfirmed notifications the transport refused to send, once per destination; the other destinations are still served |
@@ -5718,7 +5721,7 @@ counters["confirmed_unanswered"]        # confirmed notifications never acknowle
 | `received_not_forwarded` | Received event notifications that decoded but that no Notification Forwarder took; a confirmed one is still acknowledged |
 | `forwarding_cap_dropped` | Destinations a notification was not forwarded to because 64 copies were already on their way across the Notification Forwarders, one per destination dropped; destinations the loop rules refuse take no room |
 | `received_not_logged` | Received event notifications an Event Log collecting them would have taken, but their source had used its 5 records for that second; one per notification |
-| `lane_full` | Notifications dropped because their destination already had 64 waiting in its lane to go out in order (#2537); the newest is dropped |
+| `lane_full` | Notifications dropped because their destination already had 64 waiting in its lane to go out in order, or a Device recipient's queue held 64 for its I-Am or an invoke ID (#2537); the newest is dropped |
 | `lanes_entries_full` | Notifications dropped because 1,024 were already waiting across every destination's lane |
 | `lanes_full` | Notifications dropped because 256 destinations already had notifications waiting |
 | `cov_wait_expired` | Changes whose COV notifications went out before every event notification the change made, because that wait ran past the APDU timeout |

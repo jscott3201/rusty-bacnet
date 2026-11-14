@@ -8,7 +8,9 @@
 //! handed to the network in the order they were pushed, whichever task
 //! committed them, and a destination that stalls (an offline peer, a slow
 //! route) holds up its own lane only. A confirmed entry holds its lane until
-//! its first attempt is handed off; its retries run in its worker.
+//! its first attempt is handed off; its retries run in its worker. With
+//! every invoke ID leased, it holds the lane, the destination's later
+//! entries behind it, until one comes back.
 //!
 //! The lane map is a `std::sync::Mutex`, taken after the database guard and
 //! never held across an await, nor while anything is logged, since a
@@ -191,12 +193,24 @@ pub(in crate::server) async fn settled_within(
 }
 
 /// The lanes behind their lock, made the first time they are needed, and
-/// the throttle on the warning for a dropped notification beside it, so the
-/// warning goes out after the lock is let go.
+/// the throttles on their warnings beside it, so a warning goes out after
+/// the lock is let go.
 #[derive(Default)]
 pub(in crate::server) struct LaneState {
     lanes: std::sync::Mutex<EventLanes>,
+    /// For a notification dropped at a bound.
     warning: bacnet_transport::warn_throttle::WarnThrottle,
+    /// For a confirmed notification dropped because the transaction state
+    /// can lease no invoke ID at all.
+    unleasable: bacnet_transport::warn_throttle::WarnThrottle,
+}
+
+impl LaneState {
+    /// The throttle on the warning for a confirmed notification the
+    /// transaction state can lease no invoke ID for.
+    pub(super) fn unleasable(&self) -> &bacnet_transport::warn_throttle::WarnThrottle {
+        &self.unleasable
+    }
 }
 
 /// The lanes: each destination's waiting entries, and the tasks that drain
@@ -414,6 +428,23 @@ pub(in crate::server) fn lanes_held(transactions: &NotificationTransactions) -> 
     })
 }
 
+/// Count a notification dropped because its Device recipient's queue, which
+/// waits for the device's I-Am or for an invoke ID, already held
+/// [`MAX_LANE_ENTRIES`], as the device's lane would (#2537); warned once the
+/// lock is let go.
+pub(super) fn dropped_from_device_queue(
+    transactions: &NotificationTransactions,
+    device: ObjectIdentifier,
+) {
+    let state = lane_state(transactions);
+    state.lock().dropped(LaneDrop::OwnLane);
+    warn_throttled!(
+        state.warning,
+        %device,
+        "A Device recipient's queue is full; notification dropped"
+    );
+}
+
 /// Log a lane task that panicked, as it is reaped.
 fn observe(result: Result<(), tokio::task::JoinError>) {
     if let Err(error) = result
@@ -425,7 +456,7 @@ fn observe(result: Result<(), tokio::task::JoinError>) {
 
 /// `transactions`' lane state, made the first time it is needed: one
 /// structure, whichever caller gets there first.
-fn lane_state(transactions: &NotificationTransactions) -> &LaneState {
+pub(super) fn lane_state(transactions: &NotificationTransactions) -> &LaneState {
     transactions.event_lanes.get_or_init(Box::default)
 }
 
@@ -598,4 +629,4 @@ impl<T: TransportPort + 'static> Drop for LaneTask<T> {
 
 #[cfg(test)]
 #[path = "event_lanes_tests.rs"]
-mod tests;
+pub(super) mod tests;

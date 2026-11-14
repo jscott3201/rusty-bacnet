@@ -79,7 +79,8 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
     ///
     /// For a confirmed notification it returns a receiver that resolves once
     /// the notification's first attempt is handed to the network, or once it
-    /// ends without one.
+    /// ends without one. One that finds every invoke ID leased waits here
+    /// for one to come back, which holds its lane (#2537).
     pub(super) async fn send_to_recipient(
         ctx: &EventDelivery<'_, T>,
         outbound: &OutboundNotification<'_>,
@@ -237,10 +238,20 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
             freshness,
         }) = confirmed_route
         {
-            let (operation, result_rx) = match notification_transactions.reserve(
+            // With every invoke ID leased, the notification waits here for
+            // one, counted once, so its lane (or its device's queue) holds
+            // and the destination's later entries stay behind it (#2537).
+            // Should DCC restrict initiation meanwhile, the first attempt
+            // withdraws it, uncounted.
+            let reservation = notification_transactions.reserve_waiting(
                 canonical_peer,
                 ConfirmedServiceChoice::CONFIRMED_EVENT_NOTIFICATION,
-            ) {
+                || {
+                    suppressions.record(EventSuppression::ConfirmedWaitedForInvokeId);
+                    debug!("Every invoke ID is leased; the EventNotification waits for one");
+                },
+            );
+            let (operation, result_rx) = match reservation.await {
                 Ok(reservation) => reservation,
                 // Stopping closes the adapter, which is not a delivery
                 // failure, so it is not counted.
@@ -248,9 +259,15 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     debug!("Server stopping; confirmed EventNotification not sent");
                     return None;
                 }
+                // The transaction state can lease no ID at all, poisoned by
+                // a panic or out of generations, so nothing would end a
+                // wait: dropped, and said, at most once per interval.
                 Err(error) => {
-                    suppressions.record(EventSuppression::ConfirmedNoInvokeId);
-                    warn!(%error, "No free invoke ID for confirmed EventNotification");
+                    warn_throttled!(
+                        lanes::lane_state(notification_transactions).unleasable(),
+                        %error,
+                        "No confirmed transaction for an EventNotification; dropped"
+                    );
                     return None;
                 }
             };

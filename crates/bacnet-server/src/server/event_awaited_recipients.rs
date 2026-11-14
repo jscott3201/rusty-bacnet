@@ -31,6 +31,9 @@
 //!
 //! At most [`MAX_AWAITING_NOTIFICATIONS`] notifications wait at once, across
 //! every device; one more is skipped and counted at once, with no Who-Is.
+//! One device's queue holds at most [`MAX_LANE_ENTRIES`], as its lane would
+//! (#2537): its drain may wait for an invoke ID, and one more is dropped and
+//! counted in `lane_full`.
 //!
 //! The counters stay as they were for one destination: a recipient whose
 //! device stays silent counts once in `device_recipient_unbound`, as does
@@ -43,6 +46,7 @@ use super::super::binding_probes::{
     DeviceLookup, LookupMiss, LookupStart, ProbeWait, can_look_for,
 };
 use super::super::device_bindings::DeviceResolution;
+use super::lanes::MAX_LANE_ENTRIES;
 use super::*;
 use std::collections::VecDeque;
 
@@ -118,6 +122,8 @@ enum Enqueued {
     NoQueue,
     /// Not queued: [`MAX_AWAITING_NOTIFICATIONS`] are waiting.
     Full,
+    /// Not queued: the device's queue holds [`MAX_LANE_ENTRIES`].
+    DeviceFull,
 }
 
 impl AwaitingRecipients {
@@ -137,6 +143,13 @@ impl AwaitingRecipients {
         let opened = !self.has_queue(&device);
         if opened && !open {
             return Enqueued::NoQueue;
+        }
+        if self
+            .queues
+            .get(&device)
+            .is_some_and(|queue| queue.len() >= MAX_LANE_ENTRIES)
+        {
+            return Enqueued::DeviceFull;
         }
         if self.is_full() {
             return Enqueued::Full;
@@ -345,6 +358,10 @@ impl<T: TransportPort + 'static> BACnetServer<T> {
                     cap = MAX_AWAITING_NOTIFICATIONS,
                     "Skipping Device recipient: too many notifications wait for their devices"
                 );
+                DeviceRoute::Done
+            }
+            (Enqueued::DeviceFull, _) => {
+                super::lanes::dropped_from_device_queue(ctx.notification_transactions, device);
                 DeviceRoute::Done
             }
             // Opening takes a probe to wait on, and a queue never opens
