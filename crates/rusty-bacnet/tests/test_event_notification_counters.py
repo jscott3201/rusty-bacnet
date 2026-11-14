@@ -114,18 +114,25 @@ class EventNotificationCountersTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await server.event_notification_counters(), expected)
 
             # NORMAL -> HIGH_LIMIT matches all three destinations and skips each.
-            # The two that can never be routed count at once.
-            await server.set_present_value_local(target, PropertyValue.real(2))
-            expected.update(recipient_unroutable=1, confirmed_broadcast_recipient=1)
-            self.assertEqual(await server.event_notification_counters(), expected)
             # Device 99 is looked for first with a Who-Is (#1368); it never
-            # answers, so it counts once the APDU timeout (3 s) has passed.
-            expected.update(device_recipient_unbound=1)
+            # answers, so it counts once the APDU timeout (3 s) has passed. The
+            # write waits for it as long before its COV fanout (#2537), and
+            # that wait may end first, counted in cov_wait_expired.
+            await server.set_present_value_local(target, PropertyValue.real(2))
+            expected.update(recipient_unroutable=1, confirmed_broadcast_recipient=1,
+                            device_recipient_unbound=1)
+            del expected["cov_wait_expired"]
+
+            async def counted():
+                counters = await server.event_notification_counters()
+                self.assertIn(counters.pop("cov_wait_expired"), (0, 1))
+                return counters
+
             deadline = asyncio.get_running_loop().time() + 10
-            while (await server.event_notification_counters() != expected
+            while (await counted() != expected
                    and asyncio.get_running_loop().time() < deadline):
                 await asyncio.sleep(0.05)
-            self.assertEqual(await server.event_notification_counters(), expected)
+            self.assertEqual(await counted(), expected)
         finally:
             await server.stop()
 

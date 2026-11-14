@@ -67,6 +67,27 @@ pub(super) fn is_who_is(frame: &crate::server::test_transport::SentFrame) -> boo
     )
 }
 
+/// Run `send` while every probe it starts runs out at once, as for devices
+/// that stay silent: an unbound Device recipient's lane waits for the I-Am
+/// (#1368, #2537), which these tests on the wall clock don't wait out.
+pub(super) async fn with_silent_devices(
+    device_bindings: &RwLock<super::device_bindings::DeviceBindingTable>,
+    send: impl std::future::Future<Output = ()>,
+) {
+    let sent = std::cell::Cell::new(false);
+    let send = async {
+        send.await;
+        sent.set(true);
+    };
+    let run_out = async {
+        while !sent.get() {
+            tokio::task::yield_now().await;
+            device_bindings.write().await.probes.run_out_for_test();
+        }
+    };
+    tokio::join!(send, run_out);
+}
+
 /// Split broadcast NPDUs into the Who-Is requests among them, which looks
 /// for unbound Device recipients send (#1368), and the rest.
 pub(super) fn split_who_is(broadcasts: Vec<Bytes>) -> (Vec<WhoIsRequest>, Vec<Bytes>) {
@@ -205,19 +226,24 @@ pub(super) async fn distribute_counted_through(
     let db = Arc::new(RwLock::new(db));
     let oid = ObjectIdentifier::new(ObjectType::ANALOG_INPUT, 1).unwrap();
     let notifications = NotificationTransactions::new();
-    BACnetServer::<TestTransport>::build_and_send_event_notification_with_bindings(
-        &EventDelivery {
-            db: &db,
-            network,
-            comm_state: &comm_state,
-            learned_routers: &learned_routers,
-            notification_transactions: &notifications,
-            device_bindings: &device_bindings,
-            suppressions: &suppressions,
-            retry_timeout_ms: 1000,
-            local_apdu_capacity: 1476,
-            device: crate::server::event_delivery::fixture_device(&db).await,
-        },
+    let device = crate::server::event_delivery::fixture_device(&db).await;
+    // A Device recipient with no binding is looked for with a Who-Is first
+    // (#1368). Its device stays silent here: its probe runs out at once, and
+    // the notification waiting on it is skipped and counted.
+    let ctx = EventDelivery {
+        db: &db,
+        network,
+        comm_state: &comm_state,
+        learned_routers: &learned_routers,
+        notification_transactions: &notifications,
+        device_bindings: &device_bindings,
+        suppressions: &suppressions,
+        retry_timeout_ms: 1000,
+        local_apdu_capacity: 1476,
+        device,
+    };
+    let send = BACnetServer::<TestTransport>::build_and_send_event_notification_with_bindings(
+        &ctx,
         &oid,
         (
             EventStateChange {
@@ -226,19 +252,12 @@ pub(super) async fn distribute_counted_through(
             },
             EventType::OUT_OF_RANGE,
         ),
-    )
-    .await;
+    );
+    with_silent_devices(&device_bindings, send).await;
 
     // The confirmed path spawns its send, so a test that sampled the transport
     // straight after the await would pass whether or not anything was sent.
     // Yield until the spawned task has reached its first send.
-    for _ in 0..16 {
-        tokio::task::yield_now().await;
-    }
-    // A Device recipient with no binding is looked for with a Who-Is first
-    // (#1368). Its device stays silent here: its probe runs out now, and the
-    // notification waiting on it is skipped and counted.
-    device_bindings.write().await.probes.run_out_for_test();
     for _ in 0..16 {
         tokio::task::yield_now().await;
     }

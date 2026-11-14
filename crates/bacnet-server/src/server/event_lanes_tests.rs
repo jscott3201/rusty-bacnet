@@ -38,6 +38,8 @@ use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicU8;
 use tokio::sync::{Semaphore, mpsc};
 
+#[path = "event_lanes_device_tests.rs"]
+mod device;
 #[path = "event_lanes_fault_tests.rs"]
 mod fault;
 #[path = "event_lanes_hold_time_tests.rs"]

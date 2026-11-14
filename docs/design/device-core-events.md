@@ -838,7 +838,7 @@ as all day as the window test already has it (`:309-311`). A clockless
 can't keep (decision 22: PROPERTY / VALUE_OUT_OF_RANGE, on WriteProperty,
 WritePropertyMultiple and the `Reporter`'s local writes, with
 `event-reporting`). Routing stays the host's
-(`event_awaited_recipients.rs`, `event_forwarding.rs:216-256`; `Bindings`).
+(`event_send.rs`, `event_forwarding.rs:216-256`; `Bindings`).
 
 Firmware with a `clock::DeviceClock` (#2321, decision 14) passes
 `SyncedClock::window(now)`, through `Reporter::clock`: `None` until a
@@ -945,7 +945,7 @@ in PR 2 to keep PR 1 under that line.
   `notification_transactions.rs`, `notification_attempts.rs`,
   `event_delivery.rs`, `event_suppression.rs`.
 - Addresses and receiving: `event_recipient_route.rs`,
-  `event_awaited_recipients.rs`, the bindings, `event_forwarding*.rs`,
+  `event_lanes.rs`, the bindings, `event_forwarding*.rs`,
   `received_event_log.rs`, `server/clock.rs`; GetAlarmSummary and
   GetEnrollmentSummary. Of the Multiple fanout
   (`cov_notifications/multiple.rs`) the sends stay: its decisions are the

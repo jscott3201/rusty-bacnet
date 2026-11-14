@@ -149,14 +149,13 @@ async fn confirmed_notification_is_acknowledged_whatever_forwarding_finds() {
     let (reply, answered) = oneshot::channel();
     dispatch(services, encoded(&notification(5)), reply).await;
     assert!(is_simple_ack(&reply_apdu(answered.await.unwrap())));
-    // The copy's lane asks for the device and leaves it waiting (#1368).
-    super::event_send::lanes_drained(&transactions).await;
+    // The copy's lane asks for the device and waits for it (#1368, #2537).
+    sent.wait_for_len(1).await;
     let frames = sent.frames();
     assert!(frames.len() == 1 && super::event_recipient_routing_tests::is_who_is(&frames[0]));
+    // It stays silent: the probe runs out now, and the lane drops the copy.
     bindings.write().await.probes.run_out_for_test();
-    for _ in 0..16 {
-        tokio::task::yield_now().await;
-    }
+    super::event_send::lanes_drained(&transactions).await;
     assert_eq!(sent.len(), 1);
     assert_eq!(suppressions.snapshot().device_recipient_unbound, 1);
 

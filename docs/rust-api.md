@@ -11601,7 +11601,7 @@ counters.recipient_list_too_long;        // a custom class served more than 32 d
 counters.device_recipient_unbound;       // a Device recipient with no current binding
 counters.recipient_unroutable;           // a recipient no binding or retry can route
 counters.confirmed_broadcast_recipient;  // confirmed requested at a broadcast or group address
-counters.confirmed_waited_for_invoke_id; // waited for a free invoke ID, in its lane or its device's queue
+counters.confirmed_waited_for_invoke_id; // waited for a free invoke ID, in its lane
 counters.confirmed_rejected;             // the recipient answered Error, Reject or Abort
 counters.confirmed_unanswered;           // no acknowledgment after the last retry
 counters.unconfirmed_send_failed;        // an unconfirmed send the transport refused
@@ -11650,15 +11650,15 @@ task per destination, so one destination's notifications go out in commit
 order whichever task committed them, and a destination that stalls holds up
 only its own lane (#2537). A confirmed one holds its lane until its first
 attempt is handed off, and, with every invoke ID in use, until one comes back,
-counted once in `confirmed_waited_for_invoke_id`. Notifications to a Device
-recipient whose I-Am the server waits for go to that device's queue instead,
-which holds 64 as a lane does and waits for an ID the same way. `lane_full`,
-`lanes_entries_full` and `lanes_full` count notifications dropped, the newest,
-at 64 entries for one destination, 1,024 across the lanes and 256
-destinations. A change's COV notifications wait for its
-event notifications to be handed off (#889) for at most the APDU timeout
-(`cov_retry_timeout_ms`); `cov_wait_expired` counts the changes for which
-they went out at that limit instead.
+counted once in `confirmed_waited_for_invoke_id`. A Device recipient the
+server holds no binding for holds its lane the same way while its device is
+looked for (below). `lane_full`, `lanes_entries_full` and `lanes_full` count
+notifications dropped, the newest, at 64 entries waiting behind the one a
+destination's lane is sending, 1,024 across the lanes and 256 destinations.
+A change's COV notifications wait for its event notifications to be handed
+off (#889) for at most the APDU timeout (`cov_retry_timeout_ms`), a wait for
+a Device recipient's I-Am included; `cov_wait_expired` counts the changes for
+which they went out at that limit instead.
 
 The three route fields (#1160) count destinations that matched the transition
 but were skipped while their route was resolved, once per destination; the
@@ -11671,22 +11671,18 @@ fixes them, and the warning logged with each skip gives the finer reason:
   Command's remote write (#1368): one Who-Is limited to its instance, at most
   one a minute per device, none under DCC, and the notification waits up to
   `cov_retry_timeout_ms` (a minute at most) from that Who-Is for the I-Am.
-  It waits in a queue for its device, which a task of its own drains, so the
-  transition's other recipients aren't held up; while the queue holds
-  anything, the device's later notifications join it, and each device drains
-  on its own. Notifications the server makes for one device one after
-  another reach it in that order, across the wait too. Notifications made at
-  once from different tasks have no order between them, and a confirmed
-  notification's attempts run in a transaction task of their own, so two
-  confirmed ones may start in either order. A device that answers gets the
-  notification, which then counts as any other send does, DCC checked again
-  before each send; one that stays silent, or can't be looked for within the
-  minute after a fruitless Who-Is, counts here once. At most 1,024
-  notifications wait at once across every device; one more is skipped and
-  counts here at once, with no Who-Is. Observing the device's I-Am again, or
-  configuring a binding, clears it. A confirmed notification whose observed
-  binding expires before a retry ends at that retry, its invoke ID freed, and
-  counts here, not in `confirmed_unanswered` (#1371).
+  It waits at the head of its lane, the device's later notifications behind
+  it in commit order, so the transition's other recipients aren't held up
+  and each device waits on its own (#2537); the change that made it holds
+  its COV fanout until the I-Am or the APDU timeout, as above. A device that
+  answers gets them, each counting as any other send does, DCC checked again
+  after the wait. When one stays silent, every notification waiting for it
+  counts here once; one that can't be looked for within the minute after a
+  fruitless Who-Is counts here at once. Observing the device's I-Am again,
+  or configuring a binding, clears it. A confirmed notification whose
+  observed binding expires before an attempt (a retry, or a first one that
+  waited for its invoke ID) ends there, its invoke ID freed, and counts here,
+  not in `confirmed_unanswered` (#1371).
 - `recipient_unroutable`: the entry can't be routed as written. Its Device
   identifier names an object that isn't a Device (or its binding is unusable on
   this link), or its address puts a MAC on network 65535.
