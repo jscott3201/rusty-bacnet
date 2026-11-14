@@ -11771,19 +11771,25 @@ client (`client`) and device identity (`device`). `Client::new(client,
 limits)` wraps an `Arc<BACnetClient<T>>` and an `Arc<RequestLimits>`
 (`RequestLimits::new(per_second)`, 0 for no cap), and is cheap to clone.
 `client.device(target).await?` gives a `Device` handle: from an address
-(`192.168.1.10`, `2:0x05` or a `DeviceAddress`) it is pinned there, from an
-instance (`1234`, `2:1234`) it follows the one address claiming it (none:
-one Who-Is; two or more: `Error::AmbiguousDevice`), and from a discovery
+(`192.168.1.10`, `2:0x05` or a `DeviceAddress`) it is pinned there (an
+address on the client's own network, once `BACnetClient::network_number`
+knows it, is the local station), from an instance (`1234`, or `2:1234` on
+one network) it follows the one address claiming it (none: one Who-Is,
+waiting `with_resolve_wait`'s time, a clone's own setting; two or more,
+then or after the wait: `Error::AmbiguousDevice`), and from a discovery
 result it is pinned and knows the instance. The handle's async reads are
 `read`, `read_property`, `list_objects`, `describe_device`, `read_trend`
 (trend, event and audit log pages), `alarms`, `alarm_summary`,
 `enrollment_summary` and the 223 inventory's. A device's gate, turns and
 memory of an RPM refusal key on its `DeviceAddress` (network and MAC), so
 two devices sharing an instance stay apart and one device named two ways
-waits at one gate. A following handle that finds its device unreachable
-moves to the one other address claiming the instance and tells
-`Client::events` (`ClientEvent::Moved`); a pinned one stays, and
-`Device::moved_to` says where its instance is heard now.
+waits at one gate. A following handle whose request times out, or finds no
+route to a routed address, moves to the one other address on its network
+claiming the instance once its own has gone quiet (its row gone, claiming
+another instance, or announced `QUIET` before the other's) and tells
+`Client::events` (`ClientEvent::Moved`); a duplicate claim is no move. A
+pinned one stays, and `Device::moved_to` says where its instance is heard
+now, by the same rule.
 
 `bacnet-tool` (#2560) holds what only the tool's front ends use, on top of
 `bacnet-ops`: the write-safety core the TUI and MCP share (`safety`: tiers,
@@ -11837,8 +11843,10 @@ that client, run by `bacnet mcp serve --stdio` (the CLI's `mcp` feature).
 `Policy` it validates, and the caller's principal; `serve_stdio()` or
 `serve(reader, writer)` run it. Build the client's limits from
 `Policy::request_limits()` so the policy's rates hold. The server's client
-never sends a Who-Is to find a device (`set_resolve_wait(None)`): a tool
-names one the discovery table holds. It is read-only unless a
+never sends a Who-Is to find a device (`with_resolve_wait(None)`, on its
+own clone, so a TUI sharing the client keeps its own): a tool names one the
+discovery table holds, and each call reads through a handle pinned to the
+row the policy checked. It is read-only unless a
 profile opts into writes. The [MCP server guide](mcp.md) covers its tools
 and profiles, and [its design](design/mcp.md) the reasoning.
 

@@ -1,5 +1,5 @@
 ---
-section: Added
+section: Changed
 ---
 - **Breaking (Rust API):** `DiscoveredDevice::last_announced` is when the
   row's address last sent an I-Am, which answers to requests don't move;
